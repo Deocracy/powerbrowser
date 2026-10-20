@@ -79,6 +79,8 @@ FORBIDDEN_PATTERNS=(
   'JSWindowActorParent'
   'JSWindowActorChild'
   'gBrowser'
+  # Phase 27 gBrowser stand-in policy: the browser.xhtml globals later v1.5 phases shim; a shim defined outside PowerBrowserAPI.sys.mjs would be a second boundary.
+  'PopupNotifications' 'nsContextMenu' 'browserDOMWindow' 'openLinkIn' 'FullScreen' 'XULBrowserWindow'
 )
 
 is_conditional_pattern() {
@@ -359,12 +361,15 @@ EOF
   # The IOUtils plant uses destructuring and the gBrowser plant is the shell
   # stand-in's definition line outside powerbrowser.js: neither may pass.
   local plant_name plant_body
-  for plant_name in wrappedJSObject drawSnapshot IOUtils gBrowser; do
+  # The Phase 27 shim globals are each planted as a one-line shim assignment.
+  for plant_name in wrappedJSObject drawSnapshot IOUtils gBrowser \
+      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow; do
     case "$plant_name" in
       wrappedJSObject) plant_body='  return win.wrappedJSObject.JSON.parse(text);' ;;
       drawSnapshot) plant_body='  return browser.drawSnapshot(0, 0, 1, 1, 1, "white");' ;;
       IOUtils) plant_body='  const { remove } = IOUtils; return remove(text);' ;;
       gBrowser) plant_body='  window.gBrowser = {' ;;
+      *) plant_body="  window.$plant_name = {};" ;;
     esac
     printf '// planted %s fixture\nexport function planted(win, browser, text) {\n%s\n}\n' "$plant_name" "$plant_body" > "$tmp/planted-$plant_name.sys.mjs"
     if scan_internals_boundary "$tmp" >/dev/null 2>"$tmp/self-test-$plant_name.err"; then
