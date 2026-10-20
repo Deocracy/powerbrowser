@@ -5,17 +5,17 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 27
 current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
 status: executing
-stopped_at: Completed 27-02-PLAN.md
-last_updated: "2026-10-20T23:27:15.308Z"
+stopped_at: Completed 27-03-PLAN.md
+last_updated: "2026-10-20T23:36:39.373Z"
 last_activity: 2026-10-20
-last_activity_desc: 27-02 complete (history, selection, coalesced state, hard reload, background open on the web-tab channel)
-state_head: 154cadf79686136b0b033ee1b8254a783c1235ba
+last_activity_desc: 27-03 complete (gBrowser stand-in call sites derived with reasoned absences; six shim globals forbidden outside the boundary file)
+state_head: 355f2a5d2d887a6d49e3b554ff82696aa6f1ed3d
 progress:
   total_phases: 12
   completed_phases: 0
   total_plans: 8
-  completed_plans: 2
-  percent: 25
+  completed_plans: 3
+  percent: 38
 ---
 
 # Project State
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 27 (Groundwork, Navigation Buttons and Page-Focus Keys) — EXECUTING
-Plan: 3 of 8
-Status: Executing (27-02 complete)
-Last activity: 2026-10-20 — 27-02 complete: webTabHistory/GotoIndex/Activated, coalesced state push, bypass-cache reload, openInBackground, bridge parity rules
+Plan: 4 of 8
+Status: Executing (27-03 complete)
+Last activity: 2026-10-20 — 27-03 complete: gBrowser stand-in gate derives call sites from every actor parent with 5 reasoned absences (refreshBlocked known gap); six shim globals forbidden outside the boundary file
 
-Progress: [██░░░░░░░░] 25%
+Progress: [███░░░░░░░] 38%
 
 ## Performance Metrics
 
@@ -149,6 +149,7 @@ Progress: [██░░░░░░░░] 25%
 | Phase 17 P04 | 20min | 2 tasks | 5 files |
 | Phase 27 P01 | 13min | 3 tasks | 11 files |
 | Phase 27 P02 | 37min | 3 tasks | 7 files |
+| Phase 27 P03 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -376,6 +377,7 @@ Recent decisions affecting current work:
 - [Phase 27]: A7 held: shell-window requestAnimationFrame flushes coalesced state pushes headless; no setTimeout fallback
 - [Phase 27]: history()/gotoIndex() fold only unknown-tab into lost view, so a refusal or timeout never blanks a live page
 - [Phase 27]: hard-reload-channel runs first in verify-nav-keys-live; pre-existing reload-on-shared-process GUI-02 defect deferred
+- [Phase 27]: 27-03: the gBrowser stand-in implements no new member; the five newly derived calls are recorded in DELIBERATELY_ABSENT with reasons, refreshBlocked as a known gap for Phase 37
 
 ### Pending Todos
 
@@ -477,8 +479,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-20T23:27:15.275Z
-Stopped at: Completed 27-02-PLAN.md
+Last session: 2026-10-20T23:36:39.339Z
+Stopped at: Completed 27-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
