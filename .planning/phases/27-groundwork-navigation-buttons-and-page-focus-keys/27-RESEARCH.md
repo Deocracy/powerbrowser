@@ -513,14 +513,16 @@ Gecko dispatches `mouseenter`/`mouseover` to disabled buttons (nsGenericHTMLElem
 | A8 | `navigator.platform` in the chrome document is usable to pick `alt` (Linux/GNOME) vs `accel` (Windows/macOS) for Alt+1..9 and Alt+Left; v1.5 ships and verifies Linux only | Key Table | Wrong modifiers on non-Linux builds (none exist today) |
 | A9 | Theia's `DynamicMenuWidget` renders `isToggled` as the stock check mark on the current history entry | Pattern 5 | Use a disabled current item; cosmetic only |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **F6 if A2 fails.** Recommendation: try Pattern 4 first in the live probe. If `defaultPreventedByContent` does not discriminate, the only working route is a page-scoped reserved F6 row. That deviates from "only unblockable keys reserved", so get Chris's acceptance before switching (autonomous mode: this is a stop point only if Pattern 4 fails).
-2. **Ctrl+L contract change.** Moving it to the reply path follows the ruling but retires 14.1-UI-SPEC A13's "guaranteed exit" wording. Recommendation: follow the ruling and record the A13 supersession in the plan.
-3. **Plain-text drops.** They cannot be classified at dragover. Recommendation: accept `text/uri-list`/`text/x-moz-url` with the ring. For plain-text-only drags, set `dropEffect='copy'` without the ring and validate at drop (Phase 29 adds search). This needs a one-line UI-SPEC note.
-4. **`about:blank` history entries.** Recommendation: label them "New Tab".
-5. **"Widened WebTabState" content.** No field is needed by NAV/KEY. Recommendation: widen structurally (coalesced push, one parser) and add no field; later phases append fields (security, zoom, audible) in one place.
-6. **Middle-click duplicate depth.** Recommendation: URL-only duplicate (the target entry's URL in a new background tab). The history-carrying duplicate through NG-034 arming is a follow-up.
+All six are resolved in 27-CONTEXT.md "Decided after research (autonomous, recommended, 2026-10-20)"; items 3-6 take the recommendation stated here.
+
+1. RESOLVED (27-CONTEXT.md) — **F6 if A2 fails.** Recommendation: try Pattern 4 first in the live probe. If `defaultPreventedByContent` does not discriminate, the only working route is a page-scoped reserved F6 row. That deviates from "only unblockable keys reserved", so get Chris's acceptance before switching (autonomous mode: this is a stop point only if Pattern 4 fails).
+2. RESOLVED (27-CONTEXT.md) — **Ctrl+L contract change.** Moving it to the reply path follows the ruling but retires 14.1-UI-SPEC A13's "guaranteed exit" wording. Recommendation: follow the ruling and record the A13 supersession in the plan.
+3. RESOLVED (27-CONTEXT.md) — **Plain-text drops.** They cannot be classified at dragover. Recommendation: accept `text/uri-list`/`text/x-moz-url` with the ring. For plain-text-only drags, set `dropEffect='copy'` without the ring and validate at drop (Phase 29 adds search). This needs a one-line UI-SPEC note.
+4. RESOLVED (27-CONTEXT.md) — **`about:blank` history entries.** Recommendation: label them "New Tab".
+5. RESOLVED (27-CONTEXT.md) — **"Widened WebTabState" content.** No field is needed by NAV/KEY. Recommendation: widen structurally (coalesced push, one parser) and add no field; later phases append fields (security, zoom, audible) in one place.
+6. RESOLVED (27-CONTEXT.md) — **Middle-click duplicate depth.** Recommendation: URL-only duplicate (the target entry's URL in a new background tab). The history-carrying duplicate through NG-034 arming is a follow-up.
 
 ## Environment Availability
 

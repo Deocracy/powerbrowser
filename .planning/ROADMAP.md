@@ -149,7 +149,17 @@ forces a decision). Coverage: 87/87 v1.5 requirements, each in exactly one phase
   4. With focus inside a web page, Ctrl+T, Ctrl+W, Ctrl+R, F5, Alt+Left, Alt+Right, Alt+D, Ctrl+L, F6, Shift+F6, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp, Ctrl+PageDown, Alt+1..9 and mouse buttons 4 and 5 do what they do in Firefox
   5. In an editor, a terminal or any other non-web tab, F5, F6, F11, Ctrl+P, Ctrl+K and the other clashing keys keep Theia's meaning
 
-**Plans**: TBD
+**Plans**: 8 plans (strictly sequential waves 1-8: no worktrees, and every plan's `--quick` reads the whole tree)
+
+Plans:
+- [ ] 27-01-PLAN.md — Tracer: Esc in a loading page stops it end to end (page-scoped key row, shortcut push, onPush router, relay, webTabStop); the single Reload/Stop element; live-probe harness and nav-keys-live rows
+- [ ] 27-02-PLAN.md — Groundwork: webTabHistory, webTabGotoIndex, webTabActivated, coalesced state push, bypass-cache reload, openInBackground; append-only and privileged-kind rules; push-kind parity in the bridge gate
+- [ ] 27-03-PLAN.md — Policies: gBrowser stand-in call sites derived from upstream with reasoned absences; shell shim globals in FORBIDDEN_PATTERNS
+- [ ] 27-04-PLAN.md — Buttons: Back/Forward history menu, press-and-hold, 650 ms guard, Shift+click hard reload, middle-click and Ctrl+click background tab, link drop on New Tab
+- [ ] 27-05-PLAN.md — Home button and its two settings, empty and failure cases
+- [ ] 27-06-PLAN.md — Page keys: the full shortcut table both sides (Ctrl+T/W/R, F5, hard reload, Alt+arrows, Alt+Home, Alt+D, Ctrl+L, tab switching) and verify-shortcut-relay.mjs
+- [ ] 27-07-PLAN.md — F6/Shift+F6 both ways, mouse buttons 4/5, Esc in the pill, Theia keeps its keys; old focus-address path removed
+- [ ] 27-08-PLAN.md — Tooltips with shortcuts from the table via HoverService, never over the page
 **UI hint**: yes
 
 ### Phase 28: WebExtension Tab Route Spike
