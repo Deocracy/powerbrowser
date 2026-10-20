@@ -10,7 +10,7 @@ import { PowerBrowserTerminalFrontendContribution, PowerBrowserTerminalWidget } 
 import { TerminalUriOpenHandler } from './terminal-open-handler';
 import { PowerBrowserOutputOpenHandler, PowerBrowserWebviewOpenHandler } from './existing-scheme-coverage';
 import { BrowserWindowCommandContribution } from './browser-window-command';
-import { WEB_TAB_FACTORY_ID, WebTabChannel, WebTabOpenHandler, WebTabOptions, WebTabWidget, isCurrentSessionTabId } from './web-tab';
+import { WEB_TAB_FACTORY_ID, WebTabActivationContribution, WebTabChannel, WebTabOpenHandler, WebTabOptions, WebTabWidget, isCurrentSessionTabId } from './web-tab';
 import { LocalStorageService } from '@theia/core/lib/browser/storage-service';
 import { ProfileStorageService, ShellStateFlushContribution } from './profile-storage';
 
@@ -116,6 +116,8 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
     })).inSingletonScope();
     bind(WebTabOpenHandler).toSelf().inSingletonScope();
     bind(OpenHandler).toService(WebTabOpenHandler);
+    bind(WebTabActivationContribution).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(WebTabActivationContribution);
 
     // GUI-01 (01-05): the palette-reachable "Open Browser Window" command.
     // Bound statically at module load for the same reason the open-handler

@@ -22,6 +22,9 @@
  *   history-channel  After /h1 -> /h2 -> /h3, history() replies the three
  *                    entries with index 2; gotoIndex(0) lands on /h1;
  *                    gotoIndex(99) is refused and moves nothing.
+ *   activation       Activating tab A, then B, makes chrome's activeTabIdOf
+ *                    report each; Settings current makes it null; a third
+ *                    tab's coalesced load push still drives the pill.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -39,6 +42,7 @@ import {
     chromeActiveTabId,
     focusOverlay,
     focusTheiaFrame,
+    inChrome,
     keyRoute,
     openWebTab,
     pageKeyDisabled,
@@ -63,6 +67,9 @@ const PAGES = {
     '/h1': { title: 'History One', body: '<p>one</p>' },
     '/h2': { title: 'History Two', body: '<p>two</p>' },
     '/h3': { title: 'History Three', body: '<p>three</p>' },
+    '/act-a': { title: 'Activation A', body: '<p>a</p>' },
+    '/act-b': { title: 'Activation B', body: '<p>b</p>' },
+    '/act-c': { title: 'Activation C', body: '<p>c</p>' },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
@@ -259,11 +266,61 @@ async function historyChannel({ app, pages, fail }) {
     }
 }
 
+// Chrome's record of the selected web tab for the shell's Theia frame.
+// JSON on the wire: the BiDi result reader maps a null result to undefined.
+const chromeSelectedTabId = async app =>
+    JSON.parse(await inChrome(app, "return JSON.stringify(W.activeTabIdOf(document.getElementById('powerbrowser-content')));"));
+
+async function waitSelected(app, want) {
+    let seen;
+    try {
+        await pollFor(async () => (seen = await chromeSelectedTabId(app)) === want, 5000, 'chrome to record the selection');
+    } catch {
+        // judged by the caller on `seen`
+    }
+    return seen;
+}
+
+async function activation({ app, pages, fail }) {
+    const a = await openWebTab(app, pages.url('/act-a'));
+    const b = await openWebTab(app, pages.url('/act-b'));
+    for (const tabId of [a, b]) {
+        await probe(app, `await get('ApplicationShell').activateWidget(get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).id); return true;`);
+        const seen = await waitSelected(app, tabId);
+        if (seen !== tabId) {
+            return fail(`after activating ${tabId} chrome's activeTabIdOf reported ${JSON.stringify(seen)}`);
+        }
+    }
+    const opened = await probe(app, `await get('CommandRegistry').executeCommand('preferences:open'); return true;`);
+    if (opened !== true) {
+        return fail(`${BROKEN} the stock preferences command did not run: ${JSON.stringify(opened)}`);
+    }
+    const afterSettings = await waitSelected(app, null);
+    if (afterSettings !== null) {
+        return fail(`with Settings current chrome's activeTabIdOf must be null; got ${JSON.stringify(afterSettings)}`);
+    }
+    const url = pages.url('/act-c');
+    const c = await openWebTab(app, url);
+    if (await waitForPush(app, loadedAt(c, '/act-c')) < 0) {
+        return fail('no loaded state push arrived for the third tab (the coalesced push did not flush)');
+    }
+    let pill = '';
+    try {
+        await pollFor(async () => (pill = await app.evaluate(`document.querySelector('.pb-chrome-bar-pill input')?.value ?? ''`)) === url, 5000, 'the pill to show the address');
+    } catch {
+        // judged below
+    }
+    if (pill !== url) {
+        return fail(`after the third tab's load push the pill must show ${url}; it shows ${JSON.stringify(pill)}`);
+    }
+}
+
 const SCENARIOS = {
     'esc-stop': escStop,
     'theia-keeps-esc': theiaKeepsEsc,
     'stop-button': stopButton,
     'history-channel': historyChannel,
+    activation,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */

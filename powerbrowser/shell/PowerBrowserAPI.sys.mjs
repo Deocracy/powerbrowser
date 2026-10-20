@@ -3321,7 +3321,7 @@ export const PowerBrowserAPI = Object.freeze({
             PowerBrowserAPI.log("error", `[web-tab] writeTabRow failed for ${entry.uri}: ${err && err.message ? err.message : err}`);
           });
         }
-        PowerBrowserAPI.webTabPush(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
+        scheduleWebTabState(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
       },
       onStateChange(webProgress, request, stateFlags) {
         if (!webProgress.isTopLevel || !(stateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK)) {
@@ -3337,7 +3337,7 @@ export const PowerBrowserAPI = Object.freeze({
         if (!starting && (stateFlags & Ci.nsIWebProgressListener.STATE_STOP) && /^https?:\/\//i.test(browser.currentURI.spec)) {
           PowerBrowserAPI.scheduleSettleCapture(entry.uri, win);
         }
-        PowerBrowserAPI.webTabPush(theiaBrowser, tabId, browser, starting);
+        scheduleWebTabState(theiaBrowser, tabId, browser, starting);
       },
     };
     browser.addProgressListener(entry.listener, Ci.nsIWebProgress.NOTIFY_LOCATION | Ci.nsIWebProgress.NOTIFY_STATE_NETWORK);
@@ -3351,7 +3351,7 @@ export const PowerBrowserAPI = Object.freeze({
           PowerBrowserAPI.log("error", `[web-tab] writeTabRow failed for ${entry.uri}: ${err && err.message ? err.message : err}`);
         });
       }
-      PowerBrowserAPI.webTabPush(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
+      scheduleWebTabState(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
     };
     browser.addEventListener("pagetitlechanged", entry.titleListener);
     webTabs.set(tabId, entry);
@@ -4103,7 +4103,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated"]);
 
 async function handleWebTabAction(data, actorRef) {
   if (!groupSenderIsTheia(actorRef)) {
@@ -4169,6 +4169,16 @@ async function handleWebTabAction(data, actorRef) {
       entry.browser.gotoIndex(data.index);
       return { ok: true, kind, where: "done" };
     }
+    // The selected web tab of this Theia frame (null: a non-web widget is
+    // current). Keyed by the sender's own embedder element, never by an id
+    // the frame supplies, so a frame can only name its own selection.
+    case "webTabActivated": {
+      if (data.tabId !== null && !webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      activeTabByFrame.set(actorRef.browsingContext.top.embedderElement, data.tabId);
+      return { ok: true, kind, where: "applied" };
+    }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
   }
@@ -4204,8 +4214,41 @@ function tabIdOfBrowser(element) {
 // lands on the same answer sends one push, not two.
 const lastPageFocusByFrame = new WeakMap();
 
+// The selected web tab per Theia frame <browser>, from webTabActivated.
+const activeTabByFrame = new WeakMap();
+
+// The state-push coalescer: one pending record per tab (latest call wins),
+// flushed once per animation frame of the shell window. The flush reads
+// URL, title and history flags live (webTabPush) and skips a tab whose
+// overlay is gone or was replaced. ownerDocument, not ownerGlobal: see the
+// store section's note.
+const pendingStatesByWindow = new WeakMap();
+
+function scheduleWebTabState(frame, tabId, browser, loading) {
+  const win = frame.ownerDocument.defaultView;
+  let pending = pendingStatesByWindow.get(win);
+  if (!pending) {
+    pending = new Map();
+    pendingStatesByWindow.set(win, pending);
+    win.requestAnimationFrame(() => {
+      pendingStatesByWindow.delete(win);
+      for (const [id, rec] of pending) {
+        if (webTabs.get(id)?.browser === rec.browser) {
+          PowerBrowserAPI.webTabPush(rec.theiaBrowser, id, rec.browser, rec.loading);
+        }
+      }
+    });
+  }
+  pending.set(tabId, { theiaBrowser: frame, browser, loading });
+}
+
 export const PowerBrowserWebTabs = Object.freeze({
   tabIdOfBrowser,
+
+  /** The web tab the Theia frame `theiaBrowser` last reported selected, or null. */
+  activeTabIdOf(theiaBrowser) {
+    return activeTabByFrame.get(theiaBrowser) ?? null;
+  },
 
   /** Tells the Theia frame which page has focus (`tabId`) or that none has (`null`). */
   pushPageFocus(theiaBrowser, tabId) {

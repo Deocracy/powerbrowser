@@ -4,7 +4,7 @@ import { FrontendApplication, FrontendApplicationContribution } from '@theia/cor
 import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
 import { ShellLayoutRestorer } from '@theia/core/lib/browser/shell/shell-layout-restorer';
 import { LocalStorageService } from '@theia/core/lib/browser/storage-service';
-import { WEB_TAB_STATE_EVENT } from './web-tab';
+import { WebTabChannel } from './web-tab';
 
 /**
  * NG-033: Theia's storage, kept in the browser profile instead of the frontend
@@ -282,13 +282,15 @@ export class ShellStateFlushContribution implements FrontendApplicationContribut
     @inject(FrontendApplicationStateService)
     protected readonly stateService: FrontendApplicationStateService;
 
+    @inject(WebTabChannel)
+    protected readonly channel: WebTabChannel;
+
+    /** Subscribed through the channel's router: one window listener serves every push kind. */
     onStart(app: FrontendApplication): void {
-        window.addEventListener(WEB_TAB_STATE_EVENT, event => {
-            const detail = (event as CustomEvent).detail as { kind?: unknown; flushId?: unknown } | undefined;
-            if (!detail || detail.kind !== SHELL_FLUSH_KIND || typeof detail.flushId !== 'string') {
-                return;
+        this.channel.onPush(SHELL_FLUSH_KIND, detail => {
+            if (typeof detail.flushId === 'string') {
+                void this.flush(app, detail.flushId);
             }
-            void this.flush(app, detail.flushId);
         });
     }
 

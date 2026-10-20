@@ -1,5 +1,5 @@
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
-import { ApplicationShell, BaseWidget, Message, OpenHandler, OpenerOptions, Widget, WidgetManager } from '@theia/core/lib/browser';
+import { ApplicationShell, BaseWidget, FrontendApplicationContribution, Message, OpenHandler, OpenerOptions, Widget, WidgetManager } from '@theia/core/lib/browser';
 import { Disposable, Emitter, Event as TheiaEvent } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
 // Resolved through src/, not './': the build is `tsc -b` alone, which emits
@@ -96,6 +96,15 @@ const LOST_VIEW_COPY = "PowerBrowser can't show this page right now. Choose Relo
  * during a drag the frame is the topmost thing again, exactly as it is while
  * a menu is open.
  */
+// The overlay layer policy (Phase 27, UI-SPEC), binding on every chrome-bar
+// layer later phases add:
+//   rule (a): a chrome-bar-anchored layer that would overlap the page rect is
+//     listed in the selector below and hides the overlay while it is open;
+//     the `.lm-Menu` entry already covers the session-history menu.
+//   rule (c): a hover or tooltip never extends over the page rect, so every
+//     chrome-bar hover requests `position: 'top'`.
+//   focus rule: a Theia popup opened by a key while a page has focus first
+//     moves focus to the Theia frame, and returns it to the page on close.
 const BLOCKING_LAYER_SELECTOR = '.pb-chrome-bar-dropdown, .quick-input-widget, .lm-Widget.dialogOverlay, .lm-Menu, .lm-mod-drag-image';
 
 function blockingLayerOpen(): boolean {
@@ -171,7 +180,8 @@ export type WebTabMessage =
     | { kind: 'webTabFocus'; tabId: string }
     | { kind: 'webTabStop'; tabId: string }
     | { kind: 'webTabHistory'; tabId: string }
-    | { kind: 'webTabGotoIndex'; tabId: string; index: number };
+    | { kind: 'webTabGotoIndex'; tabId: string; index: number }
+    | { kind: 'webTabActivated'; tabId: string | null };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -672,6 +682,39 @@ export class WebTabWidget extends BaseWidget {
         this.refreshTitle();
         this.renderState();
         this.stateEmitter.fire(state);
+    }
+}
+
+/**
+ * Tells chrome which web tab is SELECTED in the main area (not merely
+ * visible), or null when a non-web widget is current: one `webTabActivated`
+ * per change of `mainPanel`'s current title, deduped against the last value
+ * sent. Chrome keys the answer by this frame's own embedder element.
+ */
+@injectable()
+export class WebTabActivationContribution implements FrontendApplicationContribution {
+
+    @inject(ApplicationShell)
+    protected readonly shell: ApplicationShell;
+
+    @inject(WebTabChannel)
+    protected readonly channel: WebTabChannel;
+
+    protected lastSent: string | null | undefined;
+
+    onStart(): void {
+        this.shell.mainPanel.onDidChangeCurrent(() => this.sync());
+        this.sync();
+    }
+
+    protected sync(): void {
+        const owner = this.shell.mainPanel.currentTitle?.owner;
+        const tabId = owner instanceof WebTabWidget ? owner.tabId : null;
+        if (tabId === this.lastSent) {
+            return;
+        }
+        this.lastSent = tabId;
+        this.channel.send({ kind: 'webTabActivated', tabId });
     }
 }
 
