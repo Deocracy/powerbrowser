@@ -522,6 +522,7 @@ function check(targetPath) {
 const MODES_SERVICE_REL = "theia/extensions/modes/src/browser/mode-service.ts";
 const MODES_COMMANDS_REL = "theia/extensions/modes/src/browser/modes-commands.ts";
 const MODES_WIDGET_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx";
+const NAV_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts";
 
 /**
  * The declared modes copy contract, with ${...} interpolations normalized
@@ -559,6 +560,21 @@ const EXPECTED_WIDGET_COPY = new Set([
   "PowerBrowser couldn&apos;t load suggestions. Press Enter to visit what you typed.",
   "PowerBrowser couldn&apos;t open that address. Press Enter to try again.",
 ]);
+
+/**
+ * Phase 27 chrome-bar copy (chrome-bar-copy.ts), interpolations normalized to
+ * ${name}. Hand-kept on purpose, like EXPECTED_MODES_COPY: editing it is how a
+ * deliberate copy change is made. The product is never a literal here -- the
+ * subject is the configured application name, interpolated.
+ */
+const EXPECTED_NAV_COPY = new Set([
+  "The browser",
+  "Untitled page",
+  "${name} couldn't read this tab's history. Use Back and Forward to move one page at a time.",
+]);
+
+/** The brand literal the configured-name ruling bans from chrome-bar copy. */
+const NAV_BRAND_LITERAL = "PowerBrowser";
 
 function normalizeInterp(value) {
   return value.replace(/\$\{[^}]+\}/g, "${name}");
@@ -614,9 +630,76 @@ function deriveWidgetCopy(widgetSrc) {
   return out;
 }
 
+/**
+ * Raw literals inside the `CHROME_BAR_COPY = Object.freeze({ ... })` object
+ * only: imports and helper code are not copy. Null when the object is gone.
+ */
+function deriveNavCopyRaw(src) {
+  const code = stripComments(src);
+  const at = code.indexOf("CHROME_BAR_COPY = Object.freeze({");
+  if (at < 0) {
+    return null;
+  }
+  const body = braceBody(code, code.indexOf("{", at)) ?? "";
+  return [...body.matchAll(/`(?:[^`\\]|\\.)*`|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g)].map((m) => m[0].slice(1, -1));
+}
+
+/** The internal-identifier rules every copy surface shares. */
+function leakFailures(surface, value) {
+  const out = [];
+  for (const hit of value.match(ALL_CAPS_TOKEN) ?? []) {
+    out.push(
+      `${surface} ${JSON.stringify(value)} leaks the internal identifier "${hit}" (all-caps underscored token) ` +
+        `into user-facing text -- it belongs in a diagnostics field row`
+    );
+  }
+  for (const hit of value.match(DOTTED_KEY) ?? []) {
+    out.push(
+      `${surface} ${JSON.stringify(value)} leaks the internal identifier "${hit}" (dotted multi-segment key) ` +
+        `into user-facing text -- it belongs in a diagnostics field row`
+    );
+  }
+  for (const m of value.matchAll(/\$\{([^}]+)\}/g)) {
+    if (!/^[A-Za-z_$][\w$]*$/.test(m[1])) {
+      out.push(
+        `${surface} ${JSON.stringify(value)} interpolates \`${m[0]}\` -- only a single plain identifier ` +
+          `rendered as text may interpolate; a dotted or complex expression carries runtime internals`
+      );
+    }
+  }
+  return out;
+}
+
+/** @returns {string[]} failure messages for the chrome-bar-copy.ts surface. */
+function checkNavCopy(src) {
+  const raw = deriveNavCopyRaw(src);
+  if (!raw || raw.length === 0) {
+    return [`nav copy: derived ZERO strings from the CHROME_BAR_COPY object in ${NAV_COPY_REL} -- the object is gone or empty, so this comparison proves nothing`];
+  }
+  const out = [];
+  const normalized = new Set(raw.map(normalizeInterp));
+  for (const value of normalized) {
+    if (!EXPECTED_NAV_COPY.has(value)) {
+      out.push(`nav copy: string NOT in EXPECTED_NAV_COPY (unreviewed chrome-bar copy): ${JSON.stringify(value)}`);
+    }
+  }
+  for (const value of EXPECTED_NAV_COPY) {
+    if (!normalized.has(value)) {
+      out.push(`nav copy: EXPECTED_NAV_COPY string is GONE (drifted or reworded copy): ${JSON.stringify(value)}`);
+    }
+  }
+  for (const value of new Set(raw)) {
+    if (value.includes(NAV_BRAND_LITERAL)) {
+      out.push(`nav copy ${JSON.stringify(value)} spells the product name as a literal -- chrome-bar copy names the configured application name, interpolated`);
+    }
+    out.push(...leakFailures("nav copy", value));
+  }
+  return out;
+}
+
 function readModesSources() {
   const out = {};
-  for (const rel of [MODES_SERVICE_REL, MODES_COMMANDS_REL, MODES_WIDGET_REL]) {
+  for (const rel of [MODES_SERVICE_REL, MODES_COMMANDS_REL, MODES_WIDGET_REL, NAV_COPY_REL]) {
     try {
       out[rel] = readFileSync(join(REPO_ROOT, rel), "utf8");
     } catch {
@@ -646,27 +729,9 @@ function checkModesCopy(sources) {
     }
   }
   for (const value of new Set(raw)) {
-    for (const hit of value.match(ALL_CAPS_TOKEN) ?? []) {
-      copyFailures.push(
-        `modes copy ${JSON.stringify(value)} leaks the internal identifier "${hit}" (all-caps underscored token) ` +
-          `into user-facing text -- it belongs in a diagnostics field row`
-      );
-    }
-    for (const hit of value.match(DOTTED_KEY) ?? []) {
-      copyFailures.push(
-        `modes copy ${JSON.stringify(value)} leaks the internal identifier "${hit}" (dotted multi-segment key) ` +
-          `into user-facing text -- it belongs in a diagnostics field row`
-      );
-    }
-    for (const m of value.matchAll(/\$\{([^}]+)\}/g)) {
-      if (!/^[A-Za-z_$][\w$]*$/.test(m[1])) {
-        copyFailures.push(
-          `modes copy ${JSON.stringify(value)} interpolates \`${m[0]}\` -- only a single plain identifier (a mode name ` +
-            `rendered as text) may interpolate; a dotted or complex expression carries runtime internals`
-        );
-      }
-    }
+    copyFailures.push(...leakFailures("modes copy", value));
   }
+  copyFailures.push(...checkNavCopy(sources[NAV_COPY_REL] ?? ""));
   const widget = deriveWidgetCopy(sources[MODES_WIDGET_REL] ?? "");
   if (widget.size === 0) {
     copyFailures.push("widget copy: derived ZERO user-facing strings from the chrome-bar widget -- the enumeration matches nothing, so this comparison proves nothing");
@@ -743,6 +808,30 @@ const MODES_COPY_FAULTS = [
       ),
     }),
     expect: "Halt loading",
+  },
+  {
+    name: "chrome-bar copy spells the product name as a literal",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("noAppName: 'The browser'", "noAppName: 'PowerBrowser'"),
+    }),
+    expect: "spells the product name as a literal",
+  },
+  {
+    name: "chrome-bar copy interpolates a member expression",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("`${subject} couldn't", "`${error.message} couldn't"),
+    }),
+    expect: "${error.message}",
+  },
+  {
+    name: "chrome-bar history sentence drifted",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("move one page at a time.", "go back."),
+    }),
+    expect: "Use Back and Forward to go back.",
   },
 ];
 

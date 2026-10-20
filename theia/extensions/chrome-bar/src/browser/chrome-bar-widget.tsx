@@ -3,12 +3,13 @@ import { createPortal } from '@theia/core/shared/react-dom';
 import { injectable, inject } from '@theia/core/shared/inversify';
 import {
     ApplicationShell,
+    ContextMenuRenderer,
     FrontendApplicationContribution,
     OpenerService,
     ReactWidget,
     Widget,
 } from '@theia/core/lib/browser';
-import { CommandRegistry, Disposable } from '@theia/core/lib/common';
+import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
@@ -28,6 +29,7 @@ import {
     setCurrentWebTab,
 } from './chrome-bar-commands';
 import { CHROME_SUGGESTION_LIMIT, ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
+import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 // The organising placeholder's own id, imported for the same const-discipline
@@ -39,6 +41,9 @@ import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
 import '../../src/browser/chrome-bar.css';
+
+/** NAV-03: the session-history menu's path. The menu is built per request from the history reply, never registered. */
+const HISTORY_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-history'];
 
 /**
  * Maps raw typed text onto the contracted search-or-address routing.
@@ -135,6 +140,10 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(TabUriRegistry)
     protected readonly tabUris: TabUriRegistry;
 
+    /** NAV-03: renders the Back/Forward session-history menu as a stock `.lm-Menu`. */
+    @inject(ContextMenuRenderer)
+    protected readonly menus: ContextMenuRenderer;
+
     /** The active web tab's state-push subscription; replaced on every current-widget change. */
     protected stateSubscription: Disposable | undefined;
 
@@ -192,6 +201,71 @@ export class ChromeBarWidget extends ReactWidget {
             return;
         }
         await this.runCommand(CHROME_BAR_RELOAD_COMMAND_ID)();
+    };
+
+    /**
+     * NAV-03: the active tab's session history as a stock `.lm-Menu` at the
+     * button's bottom-left, newest entry at the top and the current one
+     * checked. It opens when the reply arrives (no spinner); a failed read
+     * shows the one disabled error item. `.lm-Menu` is in the overlay's
+     * blocking-layer selector, so the page hides while it is open.
+     */
+    protected async openHistoryMenu(button: HTMLElement): Promise<void> {
+        const tab = currentWebTab();
+        if (!tab) {
+            return;
+        }
+        const reply = await tab.history().catch(() => undefined);
+        const entries = reply?.ok && reply.where === 'done' ? reply.entries ?? [] : [];
+        let chosen = false;
+        const children: CommandMenu[] = entries.length
+            ? [...entries].reverse().map((entry, position) => ({
+                id: `history-entry-${entry.index}`,
+                label: historyLabel(entry),
+                sortString: String(position).padStart(2, '0'),
+                isVisible: () => true,
+                isEnabled: () => true,
+                isToggled: () => entry.index === reply?.index,
+                run: async () => {
+                    if (entry.index === reply?.index) {
+                        return;
+                    }
+                    chosen = true;
+                    await tab.gotoIndex(entry.index);
+                    tab.focusPage();
+                },
+            }))
+            : [{
+                id: 'history-error',
+                label: CHROME_BAR_COPY.historyReadFailed(appSubject()),
+                sortString: '00',
+                isVisible: () => true,
+                isEnabled: () => false,
+                isToggled: () => false,
+                run: async () => undefined,
+            }];
+        const menu: CompoundMenuNode = { id: 'history', sortString: '0', children, isVisible: () => true, isEmpty: () => false };
+        const rect = button.getBoundingClientRect();
+        this.menus.render({
+            menuPath: HISTORY_MENU_PATH,
+            menu,
+            anchor: { x: rect.left, y: rect.bottom },
+            context: button,
+            includeAnchorArg: false,
+            // Deferred past the stock focus restore, which runs on the same close
+            // signal; an entry that ran has already sent focus to the page.
+            onHide: () => setTimeout(() => {
+                if (!chosen) {
+                    button.focus();
+                }
+            }),
+        });
+    }
+
+    /** Right-click, the context-menu key and Shift+F10 all arrive as `contextmenu`. */
+    protected onHistoryContextMenu = (e: React.MouseEvent<HTMLButtonElement>): void => {
+        e.preventDefault();
+        this.openHistoryMenu(e.currentTarget);
     };
 
     protected runCommand = (id: string) => async (): Promise<void> => {
@@ -667,6 +741,7 @@ export class ChromeBarWidget extends ReactWidget {
                 aria-label='Back'
                 disabled={!canNavigate || !tab?.canGoBack}
                 onClick={this.runCommand(CHROME_BAR_BACK_COMMAND_ID)}
+                onContextMenu={this.onHistoryContextMenu}
             >
                 <span className='codicon codicon-chevron-left' />
             </button>
@@ -676,6 +751,7 @@ export class ChromeBarWidget extends ReactWidget {
                 aria-label='Forward'
                 disabled={!canNavigate || !tab?.canGoForward}
                 onClick={this.runCommand(CHROME_BAR_FORWARD_COMMAND_ID)}
+                onContextMenu={this.onHistoryContextMenu}
             >
                 <span className='codicon codicon-chevron-right' />
             </button>

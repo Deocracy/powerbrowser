@@ -29,6 +29,10 @@
  *                    GET does not (both observed by the page server).
  *   background-open  openInBackground(url, A) puts the new tab directly after A,
  *                    A stays current, and the new tab loads /bg.
+ *   history          A contextmenu on Back opens one .lm-Menu listing the three
+ *                    served titles newest first with /h3 checked, the overlay
+ *                    hidden; choosing /h1 in the menu's own DOM lands there,
+ *                    closes the menu, shows the overlay and focuses it.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -393,6 +397,126 @@ async function backgroundOpen({ app, pages, fail }) {
     }
 }
 
+// Chrome-bar and menu reads in the Theia frame.
+const navButtonExpr = label => `[...document.querySelectorAll('.pb-chrome-bar button')].find(b => b.getAttribute('aria-label') === ${JSON.stringify(label)})`;
+const VISIBLE_MENUS = `[...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0)`;
+const readMenus = app => app.evaluate(`JSON.stringify(${VISIBLE_MENUS}.map(m => [...m.querySelectorAll('.lm-Menu-item')].map(i => ({
+    label: i.querySelector('.lm-Menu-itemLabel')?.textContent ?? '',
+    toggled: i.classList.contains('lm-mod-toggled'),
+    disabled: i.classList.contains('lm-mod-disabled'),
+}))))`).then(JSON.parse);
+const overlayVisibility = (app, tabId) => inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o ? o.style.visibility : 'gone';`);
+
+/** Polls `read` until `ok(value)`; returns the last value read either way. */
+async function settle(read, ok, timeoutMs = 5000) {
+    let seen;
+    try {
+        await pollFor(async () => ok(seen = await read()), timeoutMs, 'a settled read');
+    } catch {
+        // judged by the caller on `seen`
+    }
+    return seen;
+}
+
+/**
+ * A trusted key in the page, so its session-history entry counts as
+ * user-interacted. browser.navigation.requireUserInteraction (default on)
+ * makes canGoBack skip entries nobody interacted with, so without this a
+ * scripted /h1 -> /h2 -> /h3 leaves Back disabled, as it would in Firefox.
+ */
+async function interactWith(app, tabId) {
+    if (await focusOverlay(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused to interact with it`);
+    }
+    await pressKey(app, { key: 'a', code: 'KeyA', keyCode: 65 });
+    await sleep(200);
+}
+
+/** A tab on /h1 -> /h2 -> /h3, current, with Back enabled; returns its tab id or a failure string. */
+async function threeStepTab(app, pages, paths = ['/h1', '/h2', '/h3']) {
+    const tabId = await openWebTab(app, pages.url(paths[0]));
+    if (await waitForPush(app, loadedAt(tabId, paths[0])) < 0) {
+        return { error: `no loaded state push for ${paths[0]} arrived` };
+    }
+    for (const path of paths.slice(1)) {
+        await interactWith(app, tabId);
+        const mark = (await pushes(app)).length;
+        await widgetCall(app, tabId, 'navigate', pages.url(path));
+        if (await waitForPush(app, loadedAt(tabId, path), { from: mark }) < 0) {
+            return { error: `navigating to ${path} produced no loaded state push` };
+        }
+    }
+    const enabled = await settle(() => app.evaluate(`!(${navButtonExpr('Back')})?.disabled`), v => v === true);
+    if (enabled !== true) {
+        return { error: `${BROKEN} Back never became enabled after ${paths.length} loads` };
+    }
+    return { tabId };
+}
+
+/** Opens the history menu on `label` by a bubbling cancelable contextmenu; true when the event was default-prevented. */
+const contextMenuOn = (app, label) => app.evaluate(`(() => {
+    const b = ${navButtonExpr(label)};
+    if (!b) return 'no button';
+    const r = b.getBoundingClientRect();
+    return !b.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: r.left + 4, clientY: r.top + 4 }));
+})()`);
+
+async function historyMenu({ app, pages, fail }) {
+    const setup = await threeStepTab(app, pages);
+    if (setup.error) {
+        return fail(setup.error);
+    }
+    const { tabId } = setup;
+    // Focus starts outside the page, so the final focus read measures the entry's focusPage.
+    if (await focusTheiaFrame(app) !== true || await chromeActiveTabId(app) === tabId) {
+        return fail(`${BROKEN} focus could not be moved off the page before opening the menu`);
+    }
+    const prevented = await contextMenuOn(app, 'Back');
+    if (prevented !== true) {
+        return fail(`the contextmenu on Back was not default-prevented (${JSON.stringify(prevented)}), so the browser's own menu would show`);
+    }
+    const menus = await settle(() => readMenus(app), m => m.length === 1 && m[0].length > 0);
+    const want = ['History Three', 'History Two', 'History One'];
+    if (!menus || menus.length !== 1 || JSON.stringify(menus[0].map(i => i.label)) !== JSON.stringify(want)) {
+        return fail(`right-click on Back must open one menu listing ${JSON.stringify(want)} newest first; saw ${JSON.stringify(menus)}`);
+    }
+    if (JSON.stringify(menus[0].map(i => i.toggled)) !== '[true,false,false]') {
+        return fail(`only the current entry (/h3) may be check-marked; saw ${JSON.stringify(menus[0])}`);
+    }
+    const hidden = await settle(() => overlayVisibility(app, tabId), v => v === 'hidden');
+    if (hidden !== 'hidden') {
+        return fail(`the page overlay must be hidden while the history menu is open; its visibility is ${JSON.stringify(hidden)}`);
+    }
+    const mark = (await pushes(app)).length;
+    const chose = await app.evaluate(`(() => {
+        const menu = ${VISIBLE_MENUS}[0];
+        const item = [...menu.querySelectorAll('.lm-Menu-item')][2];
+        const r = item.getBoundingClientRect();
+        const at = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+        item.dispatchEvent(new MouseEvent('mousemove', at));
+        item.dispatchEvent(new MouseEvent('mouseup', { ...at, button: 0 }));
+        return true;
+    })()`);
+    if (chose !== true) {
+        return fail(`${BROKEN} the /h1 menu item could not be driven`);
+    }
+    if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && String(p.url).endsWith('/h1'), { from: mark }) < 0) {
+        return fail('choosing the /h1 entry produced no state push for /h1');
+    }
+    const left = await settle(() => readMenus(app), m => m.length === 0);
+    if (left.length) {
+        return fail(`the menu is still open after choosing an entry: ${JSON.stringify(left)}`);
+    }
+    const shown = await settle(() => overlayVisibility(app, tabId), v => v === 'visible');
+    if (shown !== 'visible') {
+        return fail(`after the menu closed the page overlay must be visible again; its visibility is ${JSON.stringify(shown)}`);
+    }
+    const focused = await settle(() => chromeActiveTabId(app), v => v === tabId);
+    if (focused !== tabId) {
+        return fail(`choosing an entry must put focus in the page; chrome's active overlay is ${JSON.stringify(focused)}`);
+    }
+}
+
 // hard-reload-channel runs first, on the session's first web tab: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
@@ -406,6 +530,7 @@ const SCENARIOS = {
     'history-channel': historyChannel,
     activation,
     'background-open': backgroundOpen,
+    history: historyMenu,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */

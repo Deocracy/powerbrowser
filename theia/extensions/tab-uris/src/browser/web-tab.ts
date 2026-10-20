@@ -67,7 +67,7 @@ const GROUP_REQUEST_EVENT = 'PowerBrowserGroupRequest';
 const GROUP_RESPONSE_EVENT = 'PowerBrowserGroupResponse';
 
 /** Copywriting Contract, verbatim. Text nodes only, never markup. */
-const NEW_TAB_LABEL = 'New Tab';
+export const NEW_TAB_LABEL = 'New Tab';
 const EMPTY_STATE_COPY = 'Type an address above to get started.';
 const LOST_VIEW_COPY = "PowerBrowser can't show this page right now. Choose Reload to try again, or close this tab.";
 
