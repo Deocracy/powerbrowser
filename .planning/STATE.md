@@ -4,15 +4,16 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 27
 current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
-status: planning
-stopped_at: v1.5 roadmap created (Phases 27–38)
-last_updated: "2026-10-20T20:59:51.000Z"
+status: executing
+stopped_at: Phase 27 UI-SPEC approved
+last_updated: "2026-10-20T22:32:16.095Z"
 last_activity: 2026-10-20
-state_head: 486271276f7fcc448263450adb3ef7dbd023b6de
+last_activity_desc: v1.5 roadmap created (12 phases, 87/87 requirements mapped)
+state_head: f4a86f518ff6ea189be7e4146644a971b41960e3
 progress:
   total_phases: 12
   completed_phases: 0
-  total_plans: 0
+  total_plans: 8
   completed_plans: 0
   percent: 0
 ---
@@ -28,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 ## Current Position
 
-Phase: 27 of Phases 27–38 (Groundwork, Navigation Buttons and Page-Focus Keys)
+Phase: 27 (Groundwork, Navigation Buttons and Page-Focus Keys) — READY TO EXECUTE
 Plan: —
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-10-20 — v1.5 roadmap created (12 phases, 87/87 requirements mapped)
 
 Progress: [░░░░░░░░░░] 0%
@@ -468,9 +469,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-17T07:55:37.022Z
-Stopped at: v1.5 roadmap created (Phases 27–38), awaiting Chris's approval
-Resume file: None
+Last session: 2026-10-20T21:17:59.150Z
+Stopped at: Phase 27 UI-SPEC approved
+Resume file: .planning/phases/27-groundwork-navigation-buttons-and-page-focus-keys/27-UI-SPEC.md
 
 ## Operator Next Steps
 
