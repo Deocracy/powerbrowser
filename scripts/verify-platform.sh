@@ -331,6 +331,18 @@ check_tab_uris_typecheck() {
   "$tsc" --noEmit -p "$REPO_ROOT/theia/extensions/tab-uris"
 }
 
+# Phase 27: the chrome-bar typecheck. chrome-bar imports tab-uris through its
+# gitignored lib/ declarations, so `tsc -b` over tab-uris refreshes them first
+# (the one write this check makes); then chrome-bar's own tsc, --noEmit.
+check_chrome_bar_typecheck() {
+  local tsc="$REPO_ROOT/theia/node_modules/.bin/tsc"
+  if [ ! -x "$tsc" ]; then
+    echo "chrome-bar-typecheck: FAIL -- $tsc absent (run yarn install in theia/ first)" >&2
+    return 1
+  fi
+  "$tsc" -b "$REPO_ROOT/theia/extensions/tab-uris" && "$tsc" --noEmit -p "$REPO_ROOT/theia/extensions/chrome-bar"
+}
+
 # ============================================================================
 # SHARED HELPERS  (ported verbatim from verify-phase-05.sh, whose copies were
 # already the supersets: its start_shell takes the optional profile override
@@ -4590,6 +4602,10 @@ run_own_checks() {
     # --quick per the function comment above: the extension's own tsc over
     # its own project, --noEmit, seconds, no build/browser/display/network.
     "tab-uris-typecheck|check_tab_uris_typecheck"
+    # NEW (Phase 27): the chrome-bar typecheck. Honestly --quick: tsc over
+    # tab-uris (-b, refreshing the lib/ declarations chrome-bar imports) and
+    # over chrome-bar (--noEmit); seconds, no build of the app, no browser.
+    "chrome-bar-typecheck|check_chrome_bar_typecheck"
     # NEW (Phase 19, UPD-10): judge() of the live first-boot check against planted faults
     # (surplus tab, getting-started, startup editor, telemetry copy, boot errors). Honestly
     # --quick: text reads of the tree and pure comparisons, no build, browser or network.
@@ -4941,6 +4957,15 @@ run_own_checks() {
       # other self-test row gives.
       "gui02-web-tab-live|node $REPO_ROOT/scripts/verify-web-tab-live.mjs"
       "gui02-web-tab-live-self-test|node $REPO_ROOT/scripts/verify-web-tab-live.mjs --self-test"
+
+      # NEW (Phase 27): the navigation buttons and the page-focus keys, driven
+      # in the built shell with keys synthesised at the parent and the startup
+      # cache purged (MOZ_PURGE_CACHES=1). Needs the built binary and the last
+      # Theia app build, so never --quick. Its scenario list grows in later
+      # Phase 27 plans. The self-test runs a clean control session, then one
+      # session per planted fault, each scored on the scenario it targets.
+      "nav-keys-live|node $REPO_ROOT/scripts/verify-nav-keys-live.mjs"
+      "nav-keys-live-self-test|node $REPO_ROOT/scripts/verify-nav-keys-live.mjs --self-test"
 
       # NG-029..NG-038 (non-GUI wave C): the built shell driven through the
       # command registry, the actor channel, the core window's close button in

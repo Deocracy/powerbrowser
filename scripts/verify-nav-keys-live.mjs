@@ -22,6 +22,12 @@
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
+ *   node scripts/verify-nav-keys-live.mjs --self-test
+ *
+ * --self-test runs a clean control session over every scenario (must be
+ * green), then one session per planted fault, scored only on the scenario
+ * the plant targets: it must print a FAIL naming the expected text, and a
+ * plant whose mutation did not apply fails the self-test.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -55,7 +61,7 @@ const PAGES = {
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
 
-async function escStop({ app, pages, fail, note }) {
+async function escStop({ app, pages, plant, fail, note }) {
     const tabId = await openWebTab(app, pages.url('/slow-esc'));
     if (await waitForPush(app, isState(tabId, true)) < 0) {
         return fail('no state push with loading: true arrived for the slow page, so there was no load to stop');
@@ -70,6 +76,12 @@ async function escStop({ app, pages, fail, note }) {
     if (disabled !== false) {
         return fail('the stop row stayed disabled while the page had focus (the focus tracker did not enable it)');
     }
+    if (plant === 'relay-row-removed') {
+        const removed = await probe(app, `return get('ChromeBarShortcutRelay').actions.delete('stop');`);
+        if (removed === true) {
+            note('PLANT relay-row-removed applied');
+        }
+    }
     const mark = (await pushes(app)).length;
     await pressKey(app, ESCAPE);
     note(`keys: ${keyRoute.last}`);
@@ -82,13 +94,24 @@ async function escStop({ app, pages, fail, note }) {
     }
 }
 
-async function theiaKeepsEsc({ app, fail, results }) {
+async function theiaKeepsEsc({ app, plant, fail, note, results }) {
     const control = results.find(r => r.name === 'esc-stop');
     if (!control || control.failures.length) {
         return 'not-scored';
     }
     if (await focusTheiaFrame(app) !== true) {
         return fail(`${BROKEN} the Theia frame could not be made chrome's active element`);
+    }
+    if (plant === 'row-enabled-under-theia') {
+        const enabled = await app.evaluateIn(app.chrome, `(() => {
+            const k = document.getElementById('powerbrowser-page-key-stop');
+            if (!k || !k.hasAttribute('disabled')) return false;
+            k.removeAttribute('disabled');
+            return true;
+        })()`);
+        if (enabled === true) {
+            note('PLANT row-enabled-under-theia applied');
+        }
     }
     const disabled = await pageKeyDisabled(app, 'stop');
     if (disabled === null) {
@@ -254,6 +277,59 @@ function selectedScenarios(args) {
     return names;
 }
 
+const PLANTS = [
+    { plant: 'second-stop-element', target: 'stop-button', run: ['stop-button'], expect: 'exactly one' },
+    { plant: 'row-enabled-under-theia', target: 'theia-keeps-esc', run: ['esc-stop', 'theia-keeps-esc'], expect: 'while the Theia frame had focus' },
+    { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
+];
+
+async function selfTest() {
+    let failed = 0;
+    try {
+        const clean = await runSession(Object.keys(SCENARIOS));
+        const red = clean.filter(r => r.failures.length || r.notScored);
+        if (red.length) {
+            failed++;
+            console.error(`${NAME} --self-test: FAIL -- the clean control is not green: ${red.map(r => `${r.name}: ${r.failures.join(' | ') || 'not scored'}`).join('; ')}`);
+        } else {
+            console.log('  ok  clean control (no plant) -> green');
+        }
+    } catch (error) {
+        console.error(`${NAME} --self-test: FAIL -- harness: the clean control could not be driven: ${error.message}`);
+        return 1;
+    }
+    for (const c of PLANTS) {
+        let results;
+        try {
+            results = await runSession(c.run, c.plant);
+        } catch (error) {
+            failed++;
+            console.error(`${NAME} --self-test: FAIL -- harness: '${c.plant}' could not be driven: ${error.message}`);
+            continue;
+        }
+        const target = results.find(r => r.name === c.target);
+        if (!target || !target.notes.some(n => n.startsWith('PLANT'))) {
+            failed++;
+            console.error(`${NAME} --self-test: FAIL -- '${c.plant}' never applied its fault (the plant site drifted), so a red or green here would mean nothing`);
+            continue;
+        }
+        const scored = target.failures.filter(f => f.includes(c.expect) && !f.includes(BROKEN) && !f.startsWith('harness:'));
+        if (scored.length) {
+            console.log(`  ok  ${c.plant} -> red on ${c.target}, naming '${c.expect}'`);
+            console.log(`      ${c.target}: FAIL -- ${scored[0]}`);
+        } else {
+            failed++;
+            console.error(`${NAME} --self-test: FAIL -- '${c.plant}' stayed green on ${c.target} or went red for another reason; got: ${target.failures.join(' | ') || '(no failures at all)'}`);
+        }
+    }
+    if (failed) {
+        console.error(`${NAME} --self-test: FAIL -- ${failed} case(s) did not behave as required`);
+        return 1;
+    }
+    console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${PLANTS.length} planted faults went red: ${PLANTS.map(c => c.plant).join(', ')}`);
+    return 0;
+}
+
 async function main(args) {
     try {
         return report(await runSession(selectedScenarios(args)));
@@ -265,7 +341,7 @@ async function main(args) {
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
-    console.log(`Usage: node scripts/${NAME}.mjs [--scenario ${Object.keys(SCENARIOS).join(',')}]`);
+    console.log(`Usage: node scripts/${NAME}.mjs [--scenario ${Object.keys(SCENARIOS).join(',')}] | --self-test`);
     process.exit(0);
 }
-process.exit(await main(args));
+process.exit(args.includes('--self-test') ? await selfTest() : await main(args));
