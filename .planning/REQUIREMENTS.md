@@ -192,16 +192,103 @@ deliberately, in the phase that ships them.
 
 ## Traceability
 
-Filled by the roadmap.
+Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no v1.5 requirement.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| SMODE-01 | Phase 30 | Pending |
+| SMODE-02 | Phase 30 | Pending |
+| SMODE-03 | Phase 30 | Pending |
+| SMODE-04 | Phase 30 | Pending |
+| SMODE-05 | Phase 30 | Pending |
+| SMODE-06 | Phase 30 | Pending |
+| SMODE-07 | Phase 33 | Pending |
+| BAR-01 | Phase 29 | Pending |
+| BAR-02 | Phase 29 | Pending |
+| BAR-03 | Phase 29 | Pending |
+| BAR-04 | Phase 29 | Pending |
+| BAR-05 | Phase 29 | Pending |
+| BAR-06 | Phase 29 | Pending |
+| BAR-07 | Phase 29 | Pending |
+| BAR-08 | Phase 29 | Pending |
+| BAR-09 | Phase 29 | Pending |
+| BAR-10 | Phase 29 | Pending |
+| BAR-11 | Phase 29 | Pending |
+| BAR-12 | Phase 29 | Pending |
+| BAR-13 | Phase 29 | Pending |
+| BAR-14 | Phase 29 | Pending |
+| NAV-01 | Phase 27 | Pending |
+| NAV-02 | Phase 27 | Pending |
+| NAV-03 | Phase 27 | Pending |
+| NAV-04 | Phase 27 | Pending |
+| NAV-05 | Phase 27 | Pending |
+| NAV-06 | Phase 27 | Pending |
+| KEY-01 | Phase 27 | Pending |
+| KEY-02 | Phase 27 | Pending |
+| KEY-03 | Phase 27 | Pending |
+| KEY-04 | Phase 27 | Pending |
+| KEY-05 | Phase 27 | Pending |
+| SITE-01 | Phase 31 | Pending |
+| SITE-02 | Phase 31 | Pending |
+| SITE-03 | Phase 31 | Pending |
+| SITE-04 | Phase 31 | Pending |
+| SITE-05 | Phase 31 | Pending |
+| SITE-06 | Phase 31 | Pending |
+| SITE-07 | Phase 31 | Pending |
+| SITE-08 | Phase 31 | Pending |
+| MENU-01 | Phase 31 | Pending |
+| MENU-02 | Phase 31 | Pending |
+| MENU-03 | Phase 33 | Pending |
+| MENU-04 | Phase 31 | Pending |
+| PAGE-01 | Phase 32 | Pending |
+| PAGE-02 | Phase 32 | Pending |
+| PAGE-03 | Phase 32 | Pending |
+| PAGE-04 | Phase 32 | Pending |
+| PAGE-05 | Phase 32 | Pending |
+| PAGE-06 | Phase 32 | Pending |
+| PAGE-07 | Phase 35 | Pending |
+| PAGE-08 | Phase 32 | Pending |
+| PAGE-09 | Phase 32 | Pending |
+| PAGE-10 | Phase 32 | Pending |
+| PAGE-11 | Phase 32 | Pending |
+| BMK-01 | Phase 33 | Pending |
+| BMK-02 | Phase 33 | Pending |
+| BMK-03 | Phase 33 | Pending |
+| BMK-04 | Phase 33 | Pending |
+| BMK-05 | Phase 33 | Pending |
+| BMK-06 | Phase 33 | Pending |
+| BMK-07 | Phase 34 | Pending |
+| TAB-01 | Phase 34 | Pending |
+| TAB-02 | Phase 34 | Pending |
+| TAB-03 | Phase 34 | Pending |
+| TAB-04 | Phase 34 | Pending |
+| TAB-05 | Phase 34 | Pending |
+| TAB-06 | Phase 34 | Pending |
+| TAB-07 | Phase 34 | Pending |
+| TAB-08 | Phase 34 | Pending |
+| TAB-09 | Phase 34 | Pending |
+| EXT-04 | Phase 28 | Pending |
+| EXT-05 | Phase 38 | Pending |
+| EXT-06 | Phase 38 | Pending |
+| EXT-07 | Phase 38 | Pending |
+| EXT-08 | Phase 38 | Pending |
+| EXT-09 | Phase 38 | Pending |
+| EXT-10 | Phase 38 | Pending |
+| PROMPT-01 | Phase 37 | Pending |
+| PROMPT-02 | Phase 37 | Pending |
+| PROMPT-03 | Phase 37 | Pending |
+| PROMPT-04 | Phase 35 | Pending |
+| PROMPT-05 | Phase 36 | Pending |
+| PROMPT-06 | Phase 35 | Pending |
+| PROMPT-07 | Phase 37 | Pending |
+| PROMPT-08 | Phase 35 | Pending |
+| PROMPT-09 | Phase 37 | Pending |
 
 **Coverage:**
 - v1.5 requirements: 87 total
-- Mapped to phases: 0
-- Unmapped: 87 ⚠️
+- Mapped to phases: 87 (Phases 27–38)
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-10-20*
-*Last updated: 2026-10-20 after v1.5 scoping*
+*Last updated: 2026-10-20 after v1.5 roadmap (Phases 27–38)*

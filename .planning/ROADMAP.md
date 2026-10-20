@@ -7,8 +7,8 @@
 - ✅ **v1.2 Sign-off Closeout and SQL Store** — Phases 10–12 (shipped 2026-09-05, override closeout — see `.planning/milestones/v1.2-ROADMAP.md`)
 - ✅ **v1.3 Browser GUI** — Phases 13–15, inserted 14.1 and 14.1.1, retired 16 (shipped 2026-09-06, verifications deferred — see `.planning/milestones/v1.3-ROADMAP.md`)
 - ✅ **v1.4 Platform Updates and GUI Close-out** — Phases 17–25 (shipped 2026-10-19, override closeout: live UAT deferred by Chris under NG-089 — see `.planning/milestones/v1.4-ROADMAP.md`)
-- 📋 **v1.5 Coding Workbench Layout** — sketch 005's VS Code layout for Coding mode, all four changes: one title row, centred address box, right cluster of layout toggles, activity icons across the top of the sidebar (SK-01, adopted 2026-10-17; Browsing and Organising unchanged)
-- 📋 **Future** — GUI-05 unified tab strip, W6 canvas search, release and distribution (backlog 999.2), deferred seeds (bookmarks strip, per-tab close/mute, browser menu, gui-component-dnd, firefox-parity-tabs) (v1.5+)
+- 🚧 **v1.5 Chrome Bar Firefox Parity** — Phases 27–38 (active: the chrome bar brought to Firefox-toolbar parity against the 2026-10-20 gap list, including the tab strip, page prompts and full WebExtension support)
+- 📋 **Future** — GUI-05 unified tab strip, W6 canvas search, release and distribution (backlog 999.2), sketch 005 items 1–2 (one title row, centred address box), the 12 defects in `.planning/milestones/v1.4-phases/24-live-uat-pass/24-GAPS.md`, custom modes driven by mode data instead of hard-coded mode ids, deferred seeds (gui-component-dnd, firefox-parity-tabs) (v1.6+)
 
 ## Phases
 
@@ -100,9 +100,270 @@ Archive: `.planning/milestones/v1.4-ROADMAP.md` · Requirements: `.planning/mile
 
 </details>
 
+### 🚧 v1.5 Chrome Bar Firefox Parity
+
+**Milestone Goal:** The chrome bar does what Firefox's toolbar does, measured against the
+2026-10-20 gap list (`.planning/research/chrome-bar-firefox-gap.md`), on Gecko 153.5.0esr and
+Theia 1.76.0 with no upstream re-pinned.
+
+Order follows the research's dependency order (`.planning/research/SUMMARY.md`): shared
+groundwork with navigation and keys, then the address bar, modes, site identity and the app
+menu, page tools, bookmarks, the tab strip, the three shell-window phases in rising risk, and
+extensions last. The EXT-04 spike runs second, so the signed-off tab route is known before
+any phase fixes how web tabs look to Firefox code. Most phases edit
+`PowerBrowserAPI.sys.mjs` (catalogue churn; other sessions commit on `main`), so phases run
+strictly in order, never in parallel. Phase 26 is reserved for NG-089 (Chris's own live GUI
+checks, deferred from v1.4) and is not part of v1.5.
+
+Research needed at planning: 30, 32 (probes), 34, 36, 37, 38; Phase 28 is a `/gsd-spike`.
+UI spec before planning: Phase 30 (`/gsd-ui-phase 30` with mockups). Waiting on Chris:
+28 (route sign-off), 30 (Browsing and Organising default modes), 37 (only if the dialog probe
+forces a decision). Coverage: 87/87 v1.5 requirements, each in exactly one phase.
+
+- [ ] **Phase 27: Groundwork, Navigation Buttons and Page-Focus Keys** - Stop, hard reload, history menus and Home; Firefox keys from inside a page; the shared push, action kinds and live-probe harness
+- [ ] **Phase 28: WebExtension Tab Route Spike** - How web tabs become tabs WebExtensions can see, recorded and signed off by Chris before Phase 38 is planned
+- [ ] **Phase 29: Address Bar Search and Fixup** - Search fallback, localhost and host:port, suggestions, engines, switch-to-tab, autofill, pill editing, configured app name in copy
+- [ ] **Phase 30: Address-Bar Modes and Command Centre** - Modes dropdown, mode chip and tokens; Theia's command centre in the pill as the Coding default
+- [ ] **Phase 31: Site Identity, Permissions and App Menu** - Real lock and "Not Secure", site panel with permissions and clear site data, tracking shield, hamburger menu, Quit
+- [ ] **Phase 32: Page Tools** - Find, zoom, print, save, edit commands, favicons, audio and mute, downloads, source, reader view, devtools, crashed tab
+- [ ] **Phase 33: Bookmarks, History and the Full Menu** - Star and editor, reopen closed tab, bookmarks toolbar, history menu, clear history; every app-menu and Actions entry
+- [ ] **Phase 34: Tab Strip** - Tab menu, drag reorder, middle-click, overflow, pin, multiselect, preview card, attention mark
+- [ ] **Phase 35: Shell Furniture and Page Context Menu** - Page context menu, form autocomplete, tooltips and link status, page fullscreen with its warning
+- [ ] **Phase 36: New-Window Links as Web Tabs** - `target=_blank` and `window.open` open web tabs next to the opener; GUI-01 kept (alone, because it is the one phase that can break GUI-01)
+- [ ] **Phase 37: Permission Prompts and Dialogs** - Permission doorhangers, sharing indicator, page dialogs, password save, notification bars
+- [ ] **Phase 38: WebExtensions** - Extensions see web tabs; toolbar buttons and puzzle menu; AMO install; popular extensions checked live
+
+## Phase Details
+
+### Phase 27: Groundwork, Navigation Buttons and Page-Focus Keys
+
+**Goal**: The navigation buttons and Firefox's browser keys work while a web page has focus, built on the shared channel every later v1.5 phase extends
+**Depends on**: Nothing in v1.5 (first phase; v1.4 shipped; Phase 26 is reserved for NG-089)
+**Requirements**: NAV-01, NAV-02, NAV-03, NAV-04, NAV-05, NAV-06, KEY-01, KEY-02, KEY-03, KEY-04, KEY-05
+**Groundwork**: lands here because NAV and KEY need it first — the push router (one push name, kinds routed by a table); `webTabActivated` (selected, not merely visible, since the dock split shows two tabs); the widened `WebTabState` push, coalesced per tab per frame; the `webTab*` action kinds behind `webTabIdIsValid`, with push-kind parity in `verify-web-tab-bridge.mjs`; the append-only rule for `INTERNAL-APIS.md` rows; the overlay layer policy; the `gBrowser` stand-in policy (call sites derived from `upstream/`, every shim global in `FORBIDDEN_PATTERNS`); the privileged-kind rule (state-changing kinds run only from widget event handlers, never as command ids); the page-focus context key; and the live-probe harness (`-purgecaches` launcher, push recorder, page-focus probe). Keys follow the 2026-10-20 ruling: a key that clashes with Theia takes the browser meaning only while a web page has focus, so only Firefox's unblockable keys are reserved and the rest use the reply path; `verify-shortcut-relay.mjs` with `--self-test` guards the table
+**Success Criteria** (what must be TRUE):
+
+  1. While a page loads, Reload shows as Stop, and the button or Esc stops the load; Shift+click on Reload, Ctrl+Shift+R and Ctrl+F5 reload the page without the cache
+  2. Right-click or long-press on Back or Forward lists the tab's session history, and choosing an entry goes to it; middle-click on Back, Forward or Reload opens the result in a new tab; a link dropped on New Tab opens; every button's tooltip names its keyboard shortcut
+  3. With the Home button turned on in settings, the button and Alt+Home load the home page set in settings
+  4. With focus inside a web page, Ctrl+T, Ctrl+W, Ctrl+R, F5, Alt+Left, Alt+Right, Alt+D, Ctrl+L, F6, Shift+F6, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp, Ctrl+PageDown, Alt+1..9 and mouse buttons 4 and 5 do what they do in Firefox
+  5. In an editor, a terminal or any other non-web tab, F5, F6, F11, Ctrl+P, Ctrl+K and the other clashing keys keep Theia's meaning
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 28: WebExtension Tab Route Spike
+
+**Goal**: Chris has signed off the route by which web tabs become tabs that WebExtensions can see, before Phase 38 is planned and before later phases fix how web tabs are presented to Firefox code
+**Depends on**: Phase 27 (the live-probe harness)
+**Requirements**: EXT-04
+**Needs Chris**: sign-off on one route, recorded before Phase 38 is planned
+**Research**: this phase is a `/gsd-spike`; spike code is throwaway and never lands in `PowerBrowserAPI.sys.mjs`
+**Success Criteria** (what must be TRUE):
+
+  1. A live probe records what an installed extension's `tabs.query`, tab events and content scripts see while a web tab is active today (research probe 10)
+  2. The spike record compares the three routes (a patch in `patches/`, the GUI-04 bridge, a chrome-side tab model) and states for each whether it needs a Gecko patch, whether it needs the GUI-05 bridge (out of scope today), and which v1.5 phases it changes (favicons through `getTabForBrowser`, the prompt and context-menu actors, pinned tabs, new-window adoption)
+  3. Chris's sign-off on one route is recorded in the spike record, together with the scope consequence if that route needs GUI-05
+
+**Plans**: TBD
+
+### Phase 29: Address Bar Search and Fixup
+
+**Goal**: The pill searches typed text, opens development addresses, and handles typing, picking and editing results the way Firefox's address bar does
+**Depends on**: Phase 28 (serial; the push router and action kinds come from Phase 27)
+**Requirements**: BAR-01, BAR-02, BAR-03, BAR-04, BAR-05, BAR-06, BAR-07, BAR-08, BAR-09, BAR-10, BAR-11, BAR-12, BAR-13, BAR-14
+**Notes**: one `resolveTypedAddress` kind (URI fixup, then the engine submission, then the http(s) wall applied to the result; `SearchService` initialises without a stock window, research probe 11); the default engine and engine set come from `configuration.toml` through `distribution/policies.json` `SearchEngines`, so a rebrand still edits one file; the configured engines' suggest hosts get `powerbrowser/endpoint-allowlist.json` rows in this phase, on purpose; Shift+Del is the first chrome-bar Places write, through `PowerBrowserAPI`; overlay loads to other loopback ports never carry the Theia token cookie (technical ruling 2026-10-20, research probe 13)
+**Success Criteria** (what must be TRUE):
+
+  1. Words followed by Enter search the default engine; `localhost`, `localhost:4000`, a `host:port` and an IP address open as addresses; Ctrl+Enter completes `name` to `www.name.com`; a dropped link loads and dropped text searches
+  2. Engine suggestions appear while typing (on by default, off through a setting); a typed origin autofills inline and Enter or Tab accepts it; result rows show favicons and type icons; a result row runs a one-off search with another engine; the default engine can be changed among the engines `configuration.toml` supplies
+  3. Choosing an open-tab result switches to that tab without loading it again; Alt+Enter, Ctrl+click and middle-click open in a new tab; Shift+Del removes a history row; right-click on the pill offers Cut, Copy, Paste and Paste & Go
+  4. The first click selects the whole address, IME composition never commits early, and text typed but not submitted is still there after switching to another tab and back
+  5. Every chrome-bar message names the configured application name: a sidecar run with a different configured name shows that name, and no chrome-bar source carries a brand literal
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 30: Address-Bar Modes and Command Centre
+
+**Goal**: The pill has a modes dropdown, and in Coding it is Theia's command centre without losing the address bar
+**Depends on**: Phase 29 (the engines and the "Go to" heuristic row)
+**Requirements**: SMODE-01, SMODE-02, SMODE-03, SMODE-04, SMODE-05, SMODE-06
+**Needs Chris**: the Browsing and Organising default modes, chosen from visual mockups in the UI spec (Coding = Command centre is decided)
+**UI spec**: `/gsd-ui-phase 30` before planning, with visual mockups of the Browsing and Organising defaults for Chris to choose from
+**Research**: yes — calling `QuickAccessRegistry` `getPicks()` from the chrome bar outside the quick-input widget (research probe 7); the fallback is `QuickInputService.open`, which hides the page while typing
+**Notes**: the pill first moves out of `chrome-bar-widget.tsx` into `address-bar/` with an `AddressBarModeContribution` point; Command centre renders the registry's picks under the pill and hands only `@` and `:` to Theia (research D1); actions that open UI are commands, actions that change state run only from that UI (research D7). SMODE-07 is in Phase 33, where the actions it names exist
+**Success Criteria** (what must be TRUE):
+
+  1. The dropdown at the left end of the pill lists Command centre, each search engine, Bookmarks, Tabs, History, Actions and Search Settings; the active mode shows as an icon and label chip; one click on the chip, or Backspace at the start of the input, returns to the mode's default
+  2. In Coding the bar starts in Command centre; in Browsing and Organising it starts in the defaults the UI spec fixed
+  3. Typing `*`, `%`, `^`, `>` or `@alias` followed by a space enters that mode; Accel+Up/Down cycles modes; Alt+Up/Down opens the dropdown
+  4. In Command centre, file search, `>` commands and the `#`, `?`, `edt`, `term`, `task`, `debug` and `view` prefixes show Theia's results under the pill while the page stays visible, with no engine suggestion row; `@` and `:` open Theia's symbol and go-to-line pickers
+  5. From Command centre, Ctrl+L, Alt+D and F6 switch the pill to address mode, and an unambiguous URL (scheme, localhost, host:port, IP) gets a "Go to" first row
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 31: Site Identity, Permissions and App Menu
+
+**Goal**: The identity box reports the page's real connection and permissions, and a Firefox-ordered app menu opens in every mode
+**Depends on**: Phase 30 (serial; the widened push from Phase 27 carries the security state)
+**Requirements**: SITE-01, SITE-02, SITE-03, SITE-04, SITE-05, SITE-06, SITE-07, SITE-08, MENU-01, MENU-02, MENU-04
+**Notes**: the security state is computed chrome-side from the overlay's `securityUI.state`, in the same push as `url`, and reset on every location change; the display host and IDN form come from `nsIIDNService`; Settings, Passwords and Add-ons open through an `openStockPage` enum, never a URL (it lands earlier if Phase 30's Search Settings needs it); permission reads and writes are keyed by the overlay's own principal; the `127.0.0.1` token cookie is exempt from every clear-data kind, with a planted-clear check (research probe 13)
+**Success Criteria** (what must be TRUE):
+
+  1. An https page shows a lock taken from the page's real connection state, an http page shows "Not Secure", and mixed content or a certificate error shows the warning state; typing in the pill never changes the lock, and editor tabs show no indicator
+  2. The host shows with its registrable domain highlighted, a spoofable IDN shows as punycode, and `https://` is trimmed only on a secure page
+  3. Clicking the lock opens a site information panel with the connection details and the certificate, where the user changes this site's camera, microphone, location, notifications, autoplay and popup permissions; a site with non-default permissions shows their icons in the identity box
+  4. Clear cookies and site data removes the current site's data and the IDE stays signed in, including after clearing on a `localhost` tab; the tracking-protection shield shows what was blocked and turns protection off for the site
+  5. The hamburger menu opens from the chrome bar in Coding, Browsing and Organising, in Firefox's order, and opens Settings, Passwords and Add-ons; Ctrl+Q and the menu's Quit item quit the application
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 32: Page Tools
+
+**Goal**: The tools Firefox offers around a web page (find, zoom, print, save, edit, audio, downloads, source, reader view, crash recovery) work on web tabs
+**Depends on**: Phase 31 (the app menu and `openStockPage`)
+**Requirements**: PAGE-01, PAGE-02, PAGE-03, PAGE-04, PAGE-05, PAGE-06, PAGE-08, PAGE-09, PAGE-10, PAGE-11
+**Research**: partly — the downloads, print and edit-command probes run first (research probes 4, 6 and 9); if page-started downloads save silently today, that is fixed before anything else in the phase
+**Notes**: browser-element methods only (`finder`, `fullZoom`, `mute`, `stop`, `reloadWithFlags`, `gotoIndex`); never load `browser-fullZoom.js`, `printUtils.js` or another `browser.xhtml` script; favicons come from Places and `getTabForBrowser` keeps returning null (technical ruling 2026-10-20) unless the Phase 28 route changes it; PAGE-07 is in Phase 35 with the fullscreen furniture
+**Success Criteria** (what must be TRUE):
+
+  1. Ctrl+F and F3 open a find bar that shrinks the page instead of covering it, with highlight all, match case, whole words and a match count; Ctrl+plus, Ctrl+minus and Ctrl+0 zoom the page, and a chip in the pill shows the level and resets it
+  2. Ctrl+P on a web page opens the system print dialog; Ctrl+S saves the page to a place the user picks; cut, copy, paste and undo work in a focused page from the Edit menu and the usual keys
+  3. Site favicons show on tabs, the strip and the pill; a tab playing audio shows it, and the user mutes or unmutes that tab from the tab or with Ctrl+M
+  4. A downloads button and panel list each download, which the user can open, show in its folder, cancel or retry; no page-started download is saved without appearing there
+  5. Reader view opens on article pages, Ctrl+U shows the page source, F12 opens the page's developer tools, and a crashed tab shows a reload button instead of a blank page
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 33: Bookmarks, History and the Full Menu
+
+**Goal**: The user bookmarks, reopens and clears from the chrome bar, and the app menu and Actions mode reach every browser action v1.5 ships
+**Depends on**: Phase 32 (Downloads, Print, Save Page As, Find and Zoom exist for the menu and Actions mode)
+**Requirements**: BMK-01, BMK-02, BMK-03, BMK-04, BMK-05, BMK-06, MENU-03, SMODE-07
+**Notes**: Places writes go only through `PowerBrowserAPI` (never raw SQL, never a second writer in the Theia backend), and the bookmarks toolbar refreshes from a Places observer push; one `clearHistory` kind fans out to every store, the token cookie stays exempt; MENU-03 and SMODE-07 sit here because their entries are the features Phases 32 and 33 build
+**Success Criteria** (what must be TRUE):
+
+  1. The star or Ctrl+D bookmarks the page, and the star is filled on bookmarked pages; the star's popover edits the bookmark's name and folder or removes it
+  2. Ctrl+Shift+T reopens the last closed tab with its back/forward history, and a history menu lists recently closed tabs and recent pages
+  3. Ctrl+Shift+B shows a bookmarks toolbar that updates at once when a bookmark is added or removed anywhere else
+  4. Ctrl+Shift+Del clears history over a chosen time range, also clears PowerBrowser's closed tabs, thumbnails, saved pages and web-tab history, and leaves the IDE signed in
+  5. The app menu reaches New Tab, New Window, Bookmarks, History, Downloads, Print, Save Page As, Find in Page, Zoom, Full Screen, More Tools and Help; Actions mode runs print, downloads, clear history, settings and the other browser actions, and Command centre still never sends typed text to a search engine
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 34: Tab Strip
+
+**Goal**: The tab strip handles tabs the way Firefox's does: tab menu, drag, pin, overflow, multiselect, preview and attention
+**Depends on**: Phase 33 (the tab menu's Mute and Bookmark items come from Phases 32 and 33)
+**Requirements**: TAB-01, TAB-02, TAB-03, TAB-04, TAB-05, TAB-06, TAB-07, TAB-08, TAB-09, BMK-07
+**Research**: yes — the tab-strip rows were outside the v1.5 research until Chris's 2026-10-20 ruling; reorder (drop index plus `setTabPosition`), pin persistence across restarts and the title-change push need a look at how each mode's strip is built
+**Success Criteria** (what must be TRUE):
+
+  1. Right-clicking a tab offers Reload, Duplicate, Pin, Mute, Bookmark, Bookmark All Tabs, Move, Close Others, Close Tabs to the Left, Close Tabs to the Right and Close Duplicates, and each item does what it says
+  2. Dragging a tab reorders the strip; middle-click closes a tab; double-clicking the empty strip opens a new tab; a link dropped on the strip opens as a tab
+  3. An overflowing strip scrolls, and List All Tabs picks any tab; a pinned tab shrinks to its icon and is still pinned after a restart
+  4. The user selects several tabs and closes, moves, mutes or bookmarks them together; hovering a tab shows a preview card; a background tab whose title changes shows an attention mark
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 35: Shell Furniture and Page Context Menu
+
+**Goal**: The stock Firefox furniture that page actors look for is present on the shell window, so the page context menu, form autocomplete, tooltips and page fullscreen work in web tabs
+**Depends on**: Phase 34 (serial; `webTabActivated` and the layer policy come from Phase 27)
+**Requirements**: PROMPT-04, PROMPT-06, PROMPT-08, PAGE-07
+**Research**: probes first — right-click in an overlay today, the freeze-frame latency and the page clipboard paste popup (research probes 3, 8 and 12); the G4b freeze-frame spike is part of the phase
+**Notes**: `PowerBrowserAPI.installShellFurniture(window)` is the one installer, checked by a derived `verify-shell-furniture.mjs` with `--self-test`; stock toolkit popups with stock strings in `powerbrowser.xhtml` are shell furniture (rule 5 ruling, 2026-10-20); every new `gBrowser` member or shim global follows the Phase 27 policy; `windowtype` never changes
+**Success Criteria** (what must be TRUE):
+
+  1. Right-clicking inside a web page shows Firefox's context menu (open link in new tab, copy link, save image, inspect and the rest) and each item works; right-clicking in the IDE still shows Theia's own menu
+  2. Page forms show the form-history and saved-login autocomplete popup under the field
+  3. Hovering an element with a `title` shows its tooltip, and hovering a link shows the link status text
+  4. F11 on a web page makes the window full screen, and a page video that enters fullscreen shows Firefox's fullscreen warning and leaves fullscreen on Esc
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 36: New-Window Links as Web Tabs
+
+**Goal**: Links and scripts that open a new window open a web tab next to the opener, and the stock browser window stays reachable (GUI-01)
+**Depends on**: Phase 35 (the furniture installer)
+**Requirements**: PROMPT-05
+**Research**: yes — the adoption lifecycle of chrome-created overlays and the GUI-01 design (research probe 5)
+**Notes**: alone because it is the only v1.5 phase that can break GUI-01. `nsIBrowserDOMWindow` on the shell branches on the opener (the Theia frame shares the window with the overlays); pending overlays are created chrome-first with `openWindowInfo` and adopted, with a 5 s fallback to the stock window; `browser-window-command.ts` moves onto an actor kind in the same phase; the GUI-01 live row runs in this phase
+**Success Criteria** (what must be TRUE):
+
+  1. Clicking a `target=_blank` link, or a page calling `window.open`, opens a new web tab next to the opener, and closing that tab reselects the opener
+  2. The opened tab has a working `window.opener`, so a sign-in popup flow completes and returns to the opener
+  3. A `window.open` with popup features still opens a popup window, and the IDE's open-browser-window command still opens the stock browser window (GUI-01)
+
+**Plans**: TBD
+
+### Phase 37: Permission Prompts and Dialogs
+
+**Goal**: A page that asks for a permission, a password save or a dialog gets Firefox's prompt in place, and the IDE stays usable
+**Depends on**: Phase 36 (Allow on a blocked popup opens through the new-window path)
+**Requirements**: PROMPT-01, PROMPT-02, PROMPT-03, PROMPT-07, PROMPT-09
+**Research**: yes — `popup-notifications.inc.xhtml`, the WebRTC device picker and password-save templates; the dialog and permission probes run first (research probes 1 and 2)
+**Needs Chris**: only if probe 1 shows the stock dialog blocks the IDE and a tab-scoped relay is not feasible, because PROMPT-03 as written rules that dialog out
+**Notes**: doorhangers use the stock `PopupNotifications` on a native panel anchored to a rect Theia reports, never an `allow` kind a frame could call (research D2); research D5 assumed the stock window-modal dialog, which PROMPT-03 accepts only if it leaves the IDE usable; BiDi cannot see XUL panels, so checks assert page-side outcomes and use KWin screenshots
+**Success Criteria** (what must be TRUE):
+
+  1. A page asking for the camera, microphone, location or notifications shows a permission prompt anchored in the chrome bar; the answer is remembered per site and shows in the Phase 31 site panel; a request from a background tab waits until that tab is shown
+  2. While a page uses the camera, microphone or screen, a sharing indicator shows
+  3. alert, confirm, prompt, leave-page and HTTP-auth dialogs appear and can be answered while the rest of the IDE stays usable, and a page that repeats them can be stopped
+  4. After a login, the user is offered to save or update the password
+  5. Per-tab notification bars appear for a blocked popup, a hung script and a protocol handler, and their actions work (Allow on a blocked popup opens it as a web tab)
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 38: WebExtensions
+
+**Goal**: Installed Firefox extensions work in web tabs as they do in Firefox, driven from toolbar buttons and a puzzle menu in the chrome bar
+**Depends on**: Phase 37, and Phase 28's signed-off route (not planned without it)
+**Requirements**: EXT-05, EXT-06, EXT-07, EXT-08, EXT-09, EXT-10
+**Research**: yes — planned from the Phase 28 spike record
+**Notes**: if the signed-off route needs the GUI-05 bridge, the scope consequence recorded at sign-off governs this phase; EXT-09 adds addons.mozilla.org hosts to `powerbrowser/endpoint-allowlist.json`, and `allowlist-doc-consistency` then needs each allow-dispositioned Mozilla host named in this file and REQUIREMENTS.md in the same change; extension icon, name and badge are read chrome-side
+**Success Criteria** (what must be TRUE):
+
+  1. An installed extension's `tabs.query`, tab events and active tab report the web tabs as they would in Firefox
+  2. Extension buttons show in the chrome bar and in a puzzle menu with icon, badge, Pin to Toolbar, Manage and Remove; clicking a button opens its popup or runs its action on the active web tab
+  3. Extension content scripts, page actions and context-menu entries work in web tabs
+  4. Installing an extension from addons.mozilla.org shows the stock install prompt, and the extension then works
+  5. An ad blocker, a password manager and a dark-mode extension are each checked working live in web tabs
+
+**Plans**: TBD
+**UI hint**: yes
+
+## Progress
+
+**Execution Order:** 27 → 28 → 29 → 30 → 31 → 32 → 33 → 34 → 35 → 36 → 37 → 38 (strictly serial; Phase 26 is outside v1.5)
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 27. Groundwork, Navigation Buttons and Page-Focus Keys | 0/TBD | Not started | - |
+| 28. WebExtension Tab Route Spike | 0/TBD | Not started | - |
+| 29. Address Bar Search and Fixup | 0/TBD | Not started | - |
+| 30. Address-Bar Modes and Command Centre | 0/TBD | Not started | - |
+| 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
+| 32. Page Tools | 0/TBD | Not started | - |
+| 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
+| 34. Tab Strip | 0/TBD | Not started | - |
+| 35. Shell Furniture and Page Context Menu | 0/TBD | Not started | - |
+| 36. New-Window Links as Web Tabs | 0/TBD | Not started | - |
+| 37. Permission Prompts and Dialogs | 0/TBD | Not started | - |
+| 38. WebExtensions | 0/TBD | Not started | - |
+
 ## Hard constraints (every phase)
 
 - Never fork or patch Theia core — `@powerbrowser/*` extensions only; never modify Gecko outside the patch stack (hook-only patches)
+- Firefox internals only through `powerbrowser/shell/PowerBrowserAPI.sys.mjs`, every touchpoint catalogued in `powerbrowser/INTERNAL-APIS.md`; privileged pages open by enum, never by URL
 - One verification driver `scripts/verify-platform.sh` — new checks land as registry rows with `--self-test`, never sibling drivers
 - Single chrome-side SQLite writer; sessionstore stays restore authority; groups never sessionstore-coupled
 - No `[features]`/`[modes]` manifest flags — modes are data with shipped defaults

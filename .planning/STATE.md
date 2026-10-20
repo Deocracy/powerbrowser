@@ -2,11 +2,15 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
+current_phase: 27
+current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
 status: planning
-last_updated: "2026-10-20T20:04:06.936Z"
+stopped_at: v1.5 roadmap created (Phases 27–38)
+last_updated: "2026-10-20T20:59:51.000Z"
 last_activity: 2026-10-20
+state_head: 486271276f7fcc448263450adb3ef7dbd023b6de
 progress:
-  total_phases: 0
+  total_phases: 12
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,14 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** v1.5 Chrome Bar Firefox Parity — defining requirements
+**Current focus:** Phase 27 — Groundwork, Navigation Buttons and Page-Focus Keys (v1.5 Chrome Bar Firefox Parity, Phases 27–38)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 27 of Phases 27–38 (Groundwork, Navigation Buttons and Page-Focus Keys)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-10-20 — Milestone v1.5 started
+Status: Ready to plan
+Last activity: 2026-10-20 — v1.5 roadmap created (12 phases, 87/87 requirements mapped)
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -376,6 +382,7 @@ Recent decisions affecting current work:
 - MIG-04 is NOT complete: nothing has been built (objdir/ absent). 01-03 delivered its prerequisites only; plan 01-04 owns the build. Nine verify-platform.sh checks become runnable at that point.
 - Phase 1's two manual verifications (GUI-01 browser-window toggle, 5 steps; GUI-03 visible runtime restyle, 3 steps) are UNPERFORMED -- 01-07 ran autonomously with no human. Recorded as open WINDOWS.md ledger entries.
 - [v1.4] Waiting on Chris: NG-051 amend before the Phase 17 commit; NG-082 amend and the telemetry decision in Phase 19; schema v3/v4 ledger rows (Phase 20); Panorama decisions 1 and 2 before Phase 22; G-23, G-32, sketch 005 verdict and G-11 live confirmation (Phase 23); NG-084 text and the live UAT (Phase 24). Research at planning: Phases 19 and 22.
+- [v1.5] Waiting on Chris: the EXT-04 route sign-off (Phase 28, gates planning of Phase 38); the Browsing and Organising address-bar default modes, chosen from UI-spec mockups (Phase 30); PROMPT-03 only if the dialog probe shows the stock dialog blocks the IDE and a tab-scoped relay is not feasible (Phase 37). Research at planning: 30, 32 (probes), 34, 36, 37, 38; Phase 28 is a /gsd-spike. Phases run strictly in order: most edit PowerBrowserAPI.sys.mjs.
 - WINDOWS.md 18's named residual: no registered check drives a rejection out of either long-lived supervisor loop, so those two terminal handlers rest on the source-derived coverage rule rather than on a runtime red
 
 ### Roadmap Evolution
@@ -383,6 +390,7 @@ Recent decisions affecting current work:
 - Phase 14.1 inserted after Phase 14: In-Theia Web Tabs (GUI-02) — Chris reversed the 2026-08-30 deferral on 2026-09-06; + opens a web tab inside the shell (URGENT)
 - Phase 14.1.1 inserted after Phase 14.1: GUI Conformance Sweep — living GUI defect list, automated fix pass, then one-at-a-time confirmation with Chris (URGENT)
 - v1.4 roadmap created 2026-10-16: Phases 17–25, non-GUI (17–20) then GUI one step at a time (21–25); Phase 16 moved into the v1.3 record as retired (code removed in Phase 17, RM-01)
+- v1.5 roadmap created 2026-10-20: Phases 27–38 in the research's dependency order — groundwork with NAV/KEY (27), EXT-04 spike early (28), BAR (29), SMODE (30), SITE and menu (31), PAGE (32), BMK with MENU-03 and SMODE-07 (33), tab strip with BMK-07 (34), shell furniture (35), new-window links alone for GUI-01 risk (36), prompts (37), extensions (38). Phase 26 stays reserved for NG-089 and is not part of v1.5
 
 ## Deferred Items
 
@@ -461,12 +469,12 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-10-17T07:55:37.022Z
-Stopped at: Phase 23 complete, ready to verify Phase 22
+Stopped at: v1.5 roadmap created (Phases 27–38), awaiting Chris's approval
 Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Plan Phase 27 with /gsd-plan-phase 27 once Chris approves the v1.5 roadmap
 
 ## Quick Tasks Completed
 
