@@ -1,467 +1,583 @@
 # Pitfalls Research
 
-**Domain:** v1.4 Platform Updates and GUI Close-out: OpenCode removal, Firefox 153.1 → 153.5.0esr, Theia 1.74.1 → 1.76.0 with React 19 and Node 24, non-GUI gaps, GUI leftovers, live UAT, CI green
-**Researched:** 2026-10-16
-**Confidence:** HIGH for tree facts, tag and blob facts, and the hook/gate mechanics (each re-read or re-run in this session). MEDIUM for runtime behaviour at Theia 1.76 / React 19, because no sidecar has been started at 1.76 and no Gecko build exists at 153.5.
+**Domain:** Firefox-toolbar parity for a Theia-hosted chrome bar driving chrome-owned `<xul:browser>` overlay web tabs in a custom Gecko 153.5.0esr shell window (`powerbrowser.xhtml`, windowtype `powerbrowser:main`, not `browser.xhtml`)
+**Milestone:** v1.5 Chrome Bar Firefox Parity
+**Researched:** 2026-10-20
+**Confidence:** HIGH for pitfalls verified against the pinned `upstream/` source and this tree; MEDIUM where noted (behaviour that needs one live run to confirm); LOW items are labelled.
 
-Phase names below follow the build order in `.planning/research/ARCHITECTURE.md` ("Build Order for v1.4"): **17** OpenCode removal, **18** Firefox 153.5, **19** Node 24 then Theia 1.76 + React 19, **20** non-GUI gaps, **21** Panorama spec + `gui08` checks, **22** Phase 14 / 14.1.1 leftovers, **23** sketch 005 decision, **24** live UAT, **25** CI green. If the roadmap renumbers, map by name.
+Phase names used below are the seven v1.5 feature areas in `.planning/PROJECT.md`, plus one groundwork phase that the gap list's "Shared groundwork" section implies must come first:
 
-Evidence labels: **[verified]** re-checked in this session; **[tree]** read from a tracked file; **[inferred]** reasoned from tree facts, not run.
+- **P0 Groundwork**: wider state push, page-focus shortcut relay, web-tab action kinds, popover primitive, Places-write policy, openStockTab allow-list decision, shim policy
+- **P1 Address bar modes and search**
+- **P2 Navigation buttons and keys**
+- **P3 Site identity, permissions and app menu**
+- **P4 Page tools and bookmarks**
+- **P5 Extensions**
+- **P6 Page prompts**
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: The ESR tag you pin is not the commit the trial tested, and tags can move
+### Pitfall 1: Giving the shell window an `nsIBrowserDOMWindow` breaks GUI-01 and every Theia `window.open`
 
 **What goes wrong:**
-The 2026-10-15 trial reported "all 4 patches applied cleanly, `mach configure` passed" for 153.5. STACK.md records that the trial resolved `FIREFOX_153_5_0esr_RELEASE` to `f617beaded` (a later esr153 commit, version 153.6.0esr, 183 commits ahead), not to `223014c6b9`. Today both `FIREFOX_153_5_0esr_BUILD1` and `_RELEASE` resolve to `223014c6b9299ac9b035b4c50ea481e5c6de282c` [verified, `git ls-remote`]. The previous point release shows the tags do not always agree: `FIREFOX_153_4_0esr_BUILD1` = `f92008fc60`, while `_RELEASE` = `_BUILD3` = `508788b6f8` [verified]. A pin by tag name alone therefore admits two failure modes: (a) treating trial evidence as evidence for the pinned commit, and (b) a fresh CI clone getting a different commit from the local `upstream/` if a tag is re-pointed later.
+The plan for "target=_blank and window.open open a web tab" (gap list, Page prompts) puts an `nsIBrowserDOMWindow` on the shell window. GUI-01 depends on that object being absent. `powerbrowser.js` (the closing GUI-01 comment block) records the mechanism: with no `nsIBrowserDOMWindow`, `nsWindowWatcher` cannot divert the Theia frontend's `window.open(url, '_blank')` (`theia/extensions/tab-uris/src/browser/browser-window-command.ts`) into a tab, so the call falls through to `AppWindow::CreateNewContentWindow` and opens the stock window. Once a `browserDOMWindow` exists, every `window.open` from the shell's content goes to its `createContentWindow`/`openURI`. That includes the Theia frame's own calls: Open Browser Window, Theia's `WindowService.openNewWindow` for external links, and OAuth/login popups from Theia AI providers. The result is either a new overlay web tab or a cancelled open. Nothing falls through to the old default. CLAUDE.md hard rule 5 calls the reachable stock window "landed"; this change would remove it without any error.
 
 **Why it happens:**
-`scripts/fetch-upstream.sh:276-299` compares HEAD to the tag *inside the local clone*. A local `upstream/` cloned before a tag move keeps the old commit and still passes. CI's `verify.yml` clones fresh, so it gets the new target. The comment at `fetch-upstream.sh:276-282` also states that RELEASE and BUILD1 share a commit, which is false for 153.4.
+The object is per window, not per browser. The overlay pages and the Theia frame share one chrome window, so the shim cannot apply to one and not the other unless it inspects the opener.
 
 **How to avoid:**
-
-- Before the pin edit, run `git ls-remote --tags https://github.com/mozilla-firefox/firefox.git 'refs/tags/FIREFOX_153_5_0esr_*'`. Confirm BUILD1 and RELEASE are the same SHA, and record that SHA in the `docs/BUILD.md` rebase record next to the tag.
-- STACK.md recommends `_BUILD1`. The existing convention is `_RELEASE`. Either is the same commit today. Pick one, record the SHA, and do not cite the 10-15 trial as evidence for that commit. Re-run the replay and configure on `223014c6b9`.
-- Fix the comment at `fetch-upstream.sh:276-282` (the handoff already lists this). Keep the hash comparison, which is correct.
+- Build the shim to branch on the opener's top browsing context. If its `embedderElement` is `#powerbrowser-content` (the Theia frame), take the explicit stock-window path: call `PowerBrowserAPI.openBrowserWindow` or `openStockTab` directly. Do not return null from the shim, because a null return cancels the open.
+- Move `browser-window-command.ts` off `window.open` and onto an actor request in the same phase. That way GUI-01 no longer depends on the shim being absent.
+- Create an overlay opened by a page from the `nsIOpenWindowInfo` that Gecko hands to `createContentWindowInFrame`. tabbrowser passes `openWindowInfo` into the new browser. Without it, `window.opener` is null and opener-dependent flows (OAuth popups, payment popups) break.
+- Ownership changes direction here. Today Theia mints the `tabId` and chrome holds `owner: actorRef` (`webTabOpen`, `PowerBrowserAPI.sys.mjs:3231`), and `webTabDropOwnedBy` cleans up on frontend reload. A page-opened tab is created chrome-first and has no owner actor. Define adoption explicitly: chrome mints the overlay, pushes `{kind:'adopt'}`, and the frontend claims it. Without that step the overlay leaks on reload, or it is drawn on top with no placeholder.
 
 **Warning signs:**
-`git -C upstream rev-parse HEAD` differs from the SHA in the rebase record. `upstream/browser/config/version_display.txt` reads anything other than `153.5.0esr`. CI and local disagree on an upstream-reading row (`about-dialog-suppression`, `shell-gbrowser-standin`, `installer-schema`).
+Open Browser Window from the palette opens a web tab, or does nothing. The GUI-01 live row goes red. OAuth popups get `window.opener === null`. Overlays survive a frontend reload.
 
-**Phase to address:** 18
+**Phase to address:** P6 (Page prompts). The GUI-01 regression row must be in P6's verification, not deferred.
 
 ---
 
-### Pitfall 2: "Full verify-platform green" after the ESR bump needs more than one build, and one row stays green on stale evidence
+### Pitfall 2: Every member added to the `gBrowser` stand-in changes the code path of every upstream module that feature-detects it
 
 **What goes wrong:**
-After the rebase, `upstream/` says 153.5 but three objdirs on disk are 153.1 [verified]: `objdir/` (BuildID 20260928142802), `objdir-release/` (BuildID 20260904213953, built in 08-05, mach wall 54:40), and `objdir-nplus1/`. Rows that derive the version from the tree go red correctly:
+The stand-in in `powerbrowser.js` has exactly `tabs`, `getTabForBrowser`, `getBrowserForTab` and `setIcon`, and `scripts/verify-shell-gbrowser-standin.mjs` pins it by set equality. Several v1.5 features need more members:
 
-- `verify-branding-identity-release` derives the expected `--version` from `upstream/browser/config/version_display.txt` (`scripts/verify-branding-identity.mjs:75-78, :267, :545-547`), so it fails against the 153.1 release objdir.
-- `installer-build-proof` reads `upstream/config/milestone.txt` (`scripts/verify-installer-build-proof.mjs:229`) against `objdir/`.
-- `smoke-firefox` carries a hard-coded `153.1.0esr` (`scripts/smoke-firefox.sh:41-42`, found by STACK.md). This is a hand-kept expectation and breaks verification rule 2.
+- The PopupNotifications constructor takes the tabbrowser and uses `selectedBrowser` (9 uses), `selectedTab` and `tabContainer` (`upstream/toolkit/modules/PopupNotifications.sys.mjs`; constructed in `upstream/browser/base/content/browser.js:483`).
+- Tab-modal prompts use `getTabDialogBox`.
+- Favicons need `setIcon` to receive a real tab.
 
-One row stays green when it should not: `mar-update-hop` (`verify-platform.sh` full set) re-verifies stored evidence under `.mozbuild/mar-hop/` (`hop.json`, `nplus1.mar`, logs). It does not tie that evidence to the current tag. A full green run after the bump would therefore certify a 153.1 → 153.1.x hop as if it were current.
+Upstream modules feature-detect these members. `PromptParent.sys.mjs:222` checks `win?.gBrowser?.getTabDialogBox`, then calls `getTabForBrowser`, compares `win.gBrowser.selectedBrowser`, and calls `setTabLabelForAuthPrompts` (lines 232-288). Adding `getTabDialogBox` to support print preview therefore also moves every page `alert()` from the current window-modal fallback onto a code path that calls members the stand-in lacks.
+
+`UPSTREAM_CALL_SITES` in the gate is a hand-kept list of three files (browser-custom-element, LinkHandlerParent, ContextMenuParent). There are 58 upstream files under `browser/actors`, `browser/modules` and the extension parents that touch `gBrowser`, including PromptParent, WebRTCParent, FormValidationParent, RefreshBlockerParent and AboutTabCrashedParent. The gate stays green while a member addition changes their behaviour. That violates verification rule 2 (derive, do not hand-keep).
+
+The extreme version of this mistake is setting `windowtype="navigator:browser"` on the shell so that WebExtensions or PopupNotifications "just work". The extension window tracker accepts only that windowtype (`toolkit/components/extensions/parent/ext-tabs-base.js:1739-1742`). `openStockTab` (`PowerBrowserAPI.sys.mjs:1108`) and `startTabStoreTriggers` enumerate `navigator:browser` windows and would call `addWebTab`/`tabContainer` on the stand-in. SessionStore, BrowserWindowTracker and CustomizableUI would all attach to a window that has no tabbrowser.
 
 **Why it happens:**
-"Full build" is read as one `./mach build`. The registry's full set reads the dev objdir, the release objdir, and stored MAR evidence. These are three different artefacts with three different ages.
+Upstream is written against one tabbrowser. Duck typing makes each stand-in member a switch for code you did not read.
 
 **How to avoid:**
-
-- Budget two tier-3 builds for phase 18: dev (about 47-54 min) and release (about 55 min). `objdir-nplus1` and the MAR hop belong to release work (backlog 999.2). Record `mar-update-hop` as "evidence predates 153.5" in the phase verification. Do not report it as a 153.5 proof.
-- Change `smoke-firefox.sh:41-42` to derive the version from `version_display.txt`, the same way `verify-branding-identity.mjs` does, in the same commit as the pin move.
-- Run `scripts/verify-platform.sh` (full), not `--gate`. WINDOWS #10 is fixed, so the release-variant exclusions no longer apply.
+- Before adding a stand-in member, grep `upstream/` for every reader of that member on a `gBrowser`/`tabbrowser` receiver and record the branch each one takes, in the plan.
+- Make `UPSTREAM_CALL_SITES` derived: every upstream file reachable from an overlay's actors that reads a `gBrowser` member. Keep `--self-test` planting a new caller.
+- Never change the shell's windowtype. Treat that as an anti-pattern in ARCHITECTURE.md.
+- Prefer intercepting before the upstream consumer, using an own actor, the `disablecontextmenu` attribute, or a pref, over making the stand-in more complete.
 
 **Warning signs:**
-A full run where `verify-branding-identity-release` passes while `objdir-release/dist/bin/application.ini` still reads `Version=153.1.0`. A phase summary that says "full verify green" with only one build in its log.
+New `TypeError ... gBrowser.X is not a function` lines in the launch log (24-GAPS item 2 already shows `LinkHandlerParent.sys.mjs:106,160` "tab is null" and `TranslationsParent.sys.mjs:1574` "tabBrowser is null"). Prompts change modality after an unrelated feature lands.
 
-**Phase to address:** 18
+**Phase to address:** P0 (shim policy and the derived call-site list), enforced again in P3, P4 and P6.
 
 ---
 
-### Pitfall 3: "Refreshing" the patch stack by hand for the new tag
+### Pitfall 3: Upstream fails silently when the shell lacks a browser.xhtml global, so "it already works" is untested
 
 **What goes wrong:**
-The 4 patches touch 5 files: `browser/moz.build`, `browser/moz.configure`, `browser/installer/windows/nsis/{defines.nsi.in,installer.nsi}` and `toolkit/mozapps/update/updater/moz.build`. All 5 have the same blob SHA at 153.1 (`468445e58d`) and 153.5 (`223014c6b9`). For example, `browser/moz.build` is `5a03cfc6d3` in both, which is the `index 5a03cfc6d3..` line of `patches/020-powerbrowser-shell.patch` [verified, GitHub contents API]. The patches therefore need **no change**. The trap is "tidying" them for 153.5 by editing hunk headers, the `index` lines, or comment text inside a hunk. Per CLAUDE.md, a hand-edited hunk whose blob hashes no longer match turns `git apply --3way` into a silent no-op (`scripts/apply-patches.sh:6-10`).
+Each Firefox feature fails differently in this window, and several fail with no message:
+
+- **Permission requests** (camera, mic, geolocation, notifications) are cancelled. `PermissionUI.sys.mjs:534` and `:617`: `if (!chromeWin.PopupNotifications) { this.cancel(); return; }`. The page sees a denial with no prompt and no log line.
+- **alert/confirm/prompt/HTTP auth**: with no `gBrowser.getTabDialogBox`, `PromptParent.sys.mjs:296-307` opens a separate **window-modal** OS dialog (`Services.ww.openWindow(... "centerscreen,chrome,modal,titlebar")`). That dialog blocks the whole shell, including the IDE, rather than one tab.
+- **Page context menu**: `ContextMenuParent.sys.mjs:39-41` looks for `win.nsContextMenu`. If it is missing, it takes `docShell.chromeEventHandler` of a top-level chrome window, which is null, and throws on every right-click in an overlay.
+- **Favicons**: `LinkHandlerParent.sys.mjs:177,263` resolves a tab and calls `gBrowser.setIcon`. The stand-in returns no tab and `setIcon` is a no-op, so icons are dropped (plus the 24-GAPS FaviconLoader `NS_ERROR_NOT_AVAILABLE`).
+- **Clipboard paste popup** (`navigator.clipboard.readText` from a page) creates `#clipboardReadPasteMenuPopup` on demand (`toolkit/modules/ClipboardContextMenu.sys.mjs:173-180`), so it may work. It is unverified.
+- **Print** depends on `PrintUtils`, a window-scoped script with `getTabDialogBox` (`toolkit/components/printing/content/printUtils.js:128-137`), which the shell does not load.
 
 **Why it happens:**
-A version bump invites cosmetic edits. Patch files look like text, and nothing in the commit gate re-applies them. `apply-patches-self-test` and `about-dialog-suppression` are full-set rows, re-tiered out of `--quick` because they need `upstream/` (`verify-platform.sh:4636-4660`).
+Upstream writes "no chrome UI here" as a quiet fallback, because the same actors serve windows (Thunderbird, sidebars) that do not want prompts.
 
 **How to avoid:**
-
-- Replay with `scripts/rebase-upstream.sh --tag <tag>` exactly as-is. It composes `fetch-upstream.sh`, `apply-patches.sh` (D-75 non-vacuity assertion), `check-patch-surface.sh`, and the residual-brand scan with `--extra-root upstream`.
-- If any patch ever needs a change, edit the patched tree under `upstream/` and regenerate the patch from it. Never edit a `.patch` file in an editor. `docs/BUILD.md` has no regeneration command today, only CLAUDE.md's rule. Add one to the rebase section if a regeneration ever happens.
-- Run `bash scripts/apply-patches.sh --self-test` and `--only about-dialog-suppression` after the replay.
-- `deferred-items.md` (phase 01, row 11 a-ii) says "re-derive the self-test fixture at the first ESR bump". This is that bump. `browser/base/content/aboutDialog.xhtml` is unchanged (`3ffd464b96` at both tags) [verified], so the authored fixture is still accurate. Record that check as done rather than leaving the item open.
+- Begin each prompt or furniture item with a recorded live probe of today's behaviour. The gap list already says "live check first" for dialogs. Record it in the phase RESEARCH so the fix targets the real behaviour.
+- Assert on the positive outcome (the prompt is pushed to Theia, a decision arrives, the page's promise resolves). Never assert that an error line is absent, per CLAUDE.md verification rule 1: these fallbacks emit nothing.
 
 **Warning signs:**
-`git diff patches/` is non-empty in the ESR commit. The classifier in `fetch-upstream.sh` reports "pristine" after `apply-patches.sh` ran. `git -C upstream diff --stat` lists a path the patches do not name.
+A permission feature "works" in a test only because the test site handles denial gracefully. alert() freezes the IDE.
 
-**Phase to address:** 18
+**Phase to address:** P6 for prompts, context menu and permissions. P4 for favicons and print.
 
 ---
 
-### Pitfall 4: React 18 left in place builds green, and nothing gates a duplicate React
+### Pitfall 4: Reserved keys fire no matter which frame has focus, so the shortcut relay overrides Theia and Monaco
 
 **What goes wrong:**
-`@theia/core@1.76.0` declares `react`, `react-dom`, `@types/react` and `@types/react-dom` as `^19.0.0` **peer** dependencies [verified, `npm view`]. Yarn classic only warns on an unmet peer. With `theia/applications/browser/package.json:95-96` left at `react`/`react-dom` `18.3.1` and `theia/package.json` devDependencies left at `@types/react 18.3.31` / `@types/react-dom 18.3.7`, `yarn install` and `yarn build` both succeed. Theia's 1.76 code then runs on React 18 at runtime. Its lib is compiled with the automatic JSX runtime through `@theia/core/shared/react/jsx-runtime` (CHANGELOG 1.75.0, #17932). The failure shows up in widgets, not in the build. A second failure mode is the 18 types at the root combined with a nested 19 copy: TypeScript then sees two `@types/react`, or the typecheck passes against 18 types while 19 runs.
+The existing pattern, `<key reserved="true">` in `powerbrowser.js` (Ctrl+L at the `focusAddressKey` block), is handled in the parent before **any** content process sees the key. That includes the Theia frame, which is also a remote content browser. `GlobalKeyListener::IsReservedKey` (`upstream/dom/events/GlobalKeyListener.cpp:463-500`) has no notion of "only when the page is focused". The current Ctrl+L already shadows Monaco's `expandLineSelection`, which is bound to CtrlCmd+L (`@theia/monaco-editor-core/esm/vs/editor/contrib/lineSelection/browser/lineSelection.js:18`).
+
+Generalising the relay to the gap list's keys with `reserved="true"` breaks these Theia and Monaco bindings in Coding:
+
+| Key | Theia / Monaco owner | Firefox meaning |
+|---|---|---|
+| F5 | debug start/continue (`debug-frontend-application-contribution.js:677,712`) | reload |
+| F6 | debug pause (`:717`) | focus address/page |
+| F9 | toggle breakpoint (`:722`) | reader view |
+| F11 | step into (`:702`) | fullscreen |
+| Ctrl+K and `ctrlcmd+k …` chords | terminal clear (`terminal-frontend-contribution.js:806`), editor chords | search |
+| Ctrl+D | add selection to next match (`multicursor.js:586`) | bookmark |
+| Ctrl+F | editor/terminal/notebook find | find in page |
+| Ctrl+P | quick open (`file-search`) | print |
+| Ctrl+Tab | Theia editor switcher (`common-frontend-contribution.js:796`) | next tab |
+| Ctrl+J | toggle panel (`:822`) | downloads |
+
+Theia avoids Ctrl+W/T/N in browser builds for this reason: it binds Alt+W to close (`common-frontend-contribution.js:808`).
+
+A second problem applies even with correct key routing. Theia's when-clauses are evaluated against Theia's last focused widget. GUI-DEFECTS item 21 established that an overlay never takes DOM focus inside the Theia document. A relayed Ctrl+K with the page focused can therefore evaluate `terminalFocus` as true from before the click, and clear the terminal.
 
 **Why it happens:**
-The Theia re-pin runbook (`docs/BUILD.md:211-253`) moves only `@theia/*` pins. `verify-upstream-pins.mjs` steps 6-7 check only `@theia/*` entries and stanzas. No row asserts how many copies of `react`, `react-dom`, `@types/react` or `inversify` are installed. Today there is exactly one copy of each (react 18.3.1, inversify 6.2.2) [verified]. That is luck, not a gate.
+The one existing example (Ctrl+L) used `reserved` because nothing in Theia conflicted with focusing the address, and that example gets copied.
 
 **How to avoid:**
-
-- Move all four React packages in the same commit as the Theia pins, to the set STACK.md names (react/react-dom 19.2.8, @types/react 19.2.18, @types/react-dom 19.2.7: what Theia v1.76.0's own lockfile resolves).
-- Add a `resolutions` entry for each of the four, so a transitive range cannot introduce a second copy.
-- Add one `--quick` row, derived not hand-kept: walk `theia/node_modules` for every `react`, `react-dom`, `@types/react`, `@types/react-dom` and `inversify` `package.json`, then require exactly one copy each, with the React version matching `@theia/core`'s peer range. Give it a `--self-test` that plants a nested second copy. Append the row to `verify-platform.sh`; do not create a sibling driver.
-- Extensions already import only `@theia/core/shared/react` and `@theia/core/shared/inversify` (all 4 React files and every DI import) [verified]. Keep it that way. A bare `from 'react'` in an extension resolves past core and can create a second instance.
+- Use **non-reserved** chrome `<key>` elements for most relayed shortcuts. A non-reserved key goes to the focused remote browser first. If content does not consume it, a reply event returns to chrome (`IsHandledInRemoteProcess`, `GlobalKeyListener.cpp:465-468`). When the Theia frame is focused, Theia's own keybinding service wins and calls `preventDefault`, so chrome never fires. When the page is focused, the page gets first refusal, as in Firefox.
+- In the chrome handler, check which browser was the target (`Services.focus.focusedElement`/the event's original target). Relay only when it is an overlay. Do nothing for the Theia frame.
+- Reserve only the keys Firefox itself makes unblockable by pages (Ctrl+T, Ctrl+W, Ctrl+N, Ctrl+Q, Ctrl+Tab, Ctrl+Shift+T and similar). For each one, record the Theia binding it overrides when Theia is focused and the decision taken.
+- Have chrome push page focus and blur as a Theia context key (for example `pbWebPageFocus`) and write every relayed binding's when-clause against it. Do not reuse `editorFocus` or `terminalFocus`.
+- Derive one shortcut table and check at `--quick` time, as set equality, that the chrome keyset and the Theia keybinding registrations agree.
 
 **Warning signs:**
-`yarn install` prints `has unmet peer dependency "react@^19.0.0"` or `incorrect peer dependency`. The browser console shows "Invalid hook call" or "A React Element from an older version of React was rendered". A widget renders an empty node while every gate is green.
+F5 reloads a web tab while debugging. Ctrl+L stops selecting lines in the editor (already true). Ctrl+K in Browsing clears a terminal you cannot see.
 
-**Phase to address:** 19 (step b, the Theia + React commit)
+**Phase to address:** P0 (relay design and the reserved/non-reserved decision per key), then P2 (the keys themselves). Ctrl+K belongs to P1, after search fallback.
 
 ---
 
-### Pitfall 5: Changing Node, React and Theia in one step makes every failure ambiguous
+### Pitfall 5: Security indicators computed in Theia from strings show wrong state
 
 **What goes wrong:**
-The trial moved Theia and React together and never started the sidecar. If Node 24, React 19 and Theia 1.76 land as one change, a blank widget, a native-module load error or a DI resolution failure cannot be attributed to any one of them.
+Several separate faults, each of which shows a wrong security state:
+
+1. The current lock comes from the **typed text**: `chrome-bar-widget.tsx:650`, `const secure = this.inputValue.trim().startsWith('https://')`. Typing `https://anything` shows a lock before any navigation.
+2. A move to `currentURI` is still wrong. A certificate-error page sits on an `https://` URL. Mixed-content pages, broken TLS and `about:blank` with an inherited principal all have URLs that disagree with their security state.
+3. The overlay progress listener registers only `NOTIFY_LOCATION | NOTIFY_STATE_NETWORK` (`PowerBrowserAPI.sys.mjs:3343`), so `onSecurityChange` and `onContentBlockingEvent` never arrive. Adding them creates an ordering problem: the location push lands before the security push. A push that carries the new URL with the old page's state shows the previous site's lock on the next site.
+4. "Not Secure" for `http://localhost`/`127.0.0.1` dev URLs: Firefox treats loopback as potentially trustworthy. A URL-derived label is wrong one way or the other. For the Theia frame itself (`http://127.0.0.1:<port>`), any indicator is a bug.
+5. IDN: decoding punycode in Theia for display, or showing raw Unicode, bypasses `network.IDN_show_punycode` and the IDN blocklist, which allows homograph spoofing.
+6. Page-requested fullscreen (P4 "DOMFullscreen relay, overlay covers the window") without Firefox's fullscreen warning lets a page draw a fake chrome bar and address over the whole window. Pointer lock has the same problem.
+7. Relayed alert/auth dialogs styled as product UI with no origin line let a page show text that looks like a PowerBrowser message.
 
 **Why it happens:**
-The three changes look coupled. They are coupled only one way. `@theia/core@1.74.1` peers accept `react ^18.3.1 || ^19.0.0` [verified], so React 19 can be proven at 1.74.1. Theia ≥ 1.75 requires React 19. The published 1.76 packages declare no `engines`, so Node 24 is a choice (it supersedes D-16), not a requirement of the package metadata.
+Theia sees URLs. The state lives in `browser.browsingContext.secureBrowserUI`, which exists for any top-level canonical browsing context (`upstream/docshell/base/CanonicalBrowsingContext.cpp:272-280`), so it is available but has to be pushed.
 
 **How to avoid:**
-Use three commits, each followed by `--quick` and a live sidecar start:
-
-1. Node 24 at Theia 1.74.1 and React 18. Edit only `flake.nix:20`. Keep the `yarn.override` and rewrite the D-16 comment. Rebuild `drivelist`. Run `smoke-theia.sh`.
-2. React 19 at Theia 1.74.1. Pins and resolutions only.
-3. Theia 1.76.0. Pins and lockfile, delete D-22 rebind 2, set the `workbench.startupEditor` default.
-ARCHITECTURE.md proposes splitting 1 from 2+3. Splitting 2 from 3 costs one more install and isolates the React 19 runtime question from the 1.76 API question. This matches the "one fix at a time, confirmed" rule.
+- Compute `securityState` chrome-side from `secureBrowserUI.state` in the same push as `url`, and reset it on every non-same-document location change before the new state arrives.
+- Push `displayHost`/`displaySpec` from `nsIIDNService` and never derive them in Theia.
+- Never show an identity indicator for non-web widgets (editor tabs use `NavigatableWidget.getUri`, GUI-DEFECTS item 22) or for the Theia frame.
+- Ship the fullscreen warning in the same plan as page fullscreen. Every relayed prompt shows the requesting origin from the chrome-side principal.
+- Write a check that the identity UI never reads `inputValue`.
 
 **Warning signs:**
-A plan task that edits `flake.nix`, `theia/package.json` resolutions and React pins in one commit. A verification line that says "builds" with no live start.
+The lock appears while typing. The lock stays during a cross-site navigation. A cert-error page shows a lock.
 
-**Phase to address:** 19
+**Phase to address:** P3 for items 1-5 and 7. P4 for item 6. Both pushes come from the P0 state-push widening.
 
 ---
 
-### Pitfall 6: A green typecheck and build at 1.76 hide first-boot and runtime regressions
+### Pitfall 6: The Theia credential cookie is a port-less 127.0.0.1 cookie, and v1.5 adds three ways to delete or expose it
 
 **What goes wrong:**
-Several 1.76 changes compile cleanly and change what the user sees:
+`setSessionCookie` (`PowerBrowserAPI.sys.mjs:528-560`) stores the token-gate cookie for host `127.0.0.1`: HttpOnly, SameSite=Lax, not Secure. Cookies are not scoped by port. v1.5 interacts with it in three ways:
 
-- **`@theia/getting-started` comes back.** `@theia/ai-ide@1.76.0` lists `@theia/getting-started: 1.76.0` as a dependency [verified], and that package declares `theiaExtensions` [verified]. Theia collects extensions transitively, so Theia's own Welcome page opens on start. That undoes D-24/D-33, recorded at `theia/extensions/branding/src/browser/powerbrowser-welcome-contribution.ts:28-33` and `powerbrowser-welcome-widget.tsx:11`. STACK.md has the fix: `workbench.startupEditor: "none"` as a default preference.
-- **Telemetry schema collision.** `@theia/plugin-ext` now pulls in `@theia/telemetry`, which also registers `telemetry.telemetryLevel` (STACK.md). The Settings text may become Theia's, not the PowerBrowser copy in `theia/extensions/telemetry/src/browser/telemetry-preferences.ts`.
-- **`view:` targets fail only when used.** `theia/extensions/tab-uris/src/browser/view-factory-table.ts` is a hand-kept table of Theia widget factory ids, each cited to a 1.74.1 source line. Its drift check in `tab-uri-registry.ts:59-72` runs lazily, on first use of the `index` getter. It reports by `console.error`, not at startup. A renamed id at 1.76 surfaces only when someone opens a `view:` URI. (The ai-configuration id is unchanged at 1.76 [verified], but about 25 rows were not checked.)
-- **Render errors no longer throw.** Under React 19, an uncaught render error goes to `window.reportError`, and the widget root goes blank. Telemetry capture listens on the window `error` event, so it should still see it (STACK.md). That is UNVERIFIED.
+- **Clear cookies and site data** on a `localhost:4000`/`127.0.0.1:3000` dev tab (`webTabClearSiteData` over SiteDataManager), **Clear recent history** with cookies (Sanitizer), or sanitize-on-shutdown deletes the cookie for the whole host. The Theia backend then returns 403 on the next request or WebSocket reconnect, and the IDE disconnects.
+- The localhost/host:port fixup the gap list calls a current bug makes `127.0.0.1:<other port>` web tabs routine. Every such top-level navigation sends the Theia credential to whatever local server listens there (SameSite=Lax permits top-level GET). A compromised dev server then holds a credential for a backend that runs terminals.
+- Permission grants, zoom memory and ETP exceptions keyed by origin collect one entry per launch for the Theia frame, because its port is ephemeral (the same reason `localStorage` resets each launch, GUI-DEFECTS "Corrections").
 
 **Why it happens:**
-The static gates compare strings in the tree. They cannot see DI wiring, transitive extension composition, or DOM geometry. That is the 2026-09-06 lesson in memory (`live-gui-debug-loop`): a phase verified 10/10 while the chrome bar rendered at 37% width. First-boot behaviour (`initializeLayout`, `startupEditor`) also runs only when no persisted layout exists. A live check on a reused `THEIA_CONFIG_DIR` (`~/.config/powerbrowser`) skips it entirely.
+The cookie decision (D-99) was made when nothing could load a second loopback page or clear site data.
 
 **How to avoid:**
-
-- Run the live check twice: with a fresh empty `THEIA_CONFIG_DIR`, and with a carried-over 1.74 config dir (to check that layout, modes and named setups survive the `unload` → `pagehide` change).
-- On the fresh run, assert: one PowerBrowser welcome tab, no Theia Welcome, no AI Configuration tab, no AI-first perspective.
-- Open at least one `view:` URI and read the console for `[@powerbrowser/tab-uris] view-factory-table.ts names`. Then plant one bogus row in a scratch copy to prove the message fires (see Pitfall 8). Better: re-derive the table's ids from `theia/node_modules/@theia/*/lib` at check time instead of re-citing line numbers by hand.
-- Drive the sidecar standalone on `:4000` with `POWERBROWSER_TOKEN_DISABLE=1` and `gsd-browser` (memory `live-gui-debug-loop`). Measure rectangles; do not trust screenshots alone.
+- Exempt the token cookie by name from every clear-data and sanitize kind (chrome-side filter, with a check that plants a clear and requires the cookie to survive). Or re-mint it on 403.
+- Decide in P1 whether overlay loads to loopback strip the token cookie, for example through a request observer or a separate cookie scope. Record the decision in the threat model.
+- The permission and site-settings shim applies only to overlays and never records grants for the Theia frame's origin.
 
 **Warning signs:**
-Two welcome tabs on a fresh profile. A Help menu "Open Walkthrough" item. `Property with id 'telemetry.telemetryLevel' already exists` in the console. A `view:` link that opens nothing.
+The IDE disconnects after "Clear cookies" on any localhost tab. `permissions.sqlite` grows by one 127.0.0.1 origin per launch.
 
-**Phase to address:** 19 (live sidecar check), re-checked in 24 (UAT)
+**Phase to address:** P1 (fixup and exposure decision), P3 (clear site data), P4 (clear history).
 
 ---
 
-### Pitfall 7: OpenCode removal that is green in CI and red locally (or the reverse)
+### Pitfall 7: Each new privileged action kind is callable from anything in the Theia origin, including extensions and AI tools
 
 **What goes wrong:**
-ARCHITECTURE.md lists the four atomic removal sets. The local-versus-CI traps inside them:
+The sender wall (`groupSenderIsTheia`, `PowerBrowserAPI.sys.mjs:310-341`) proves that a message came from the shell's Theia frame on the live port. It cannot tell the chrome bar apart from other code in that frame. v1.5 adds kinds that are more powerful than anything currently on the channel:
 
-- `git rm -r theia/extensions/backend-opencode` leaves the ignored `lib/` and `tsconfig.tsbuildinfo` on disk, plus the workspace symlink `theia/node_modules/@powerbrowser/backend-opencode -> ../../extensions/backend-opencode` [verified]. `theia-build-order` (`scripts/verify-theia-build-order.mjs:261-264`) compares the `build:extensions` chain with `readdirSync`. It goes red locally and stays green in CI's fresh clone.
-- A stale `generated/ai-backend.json` makes `generate-check` red on every checkout that ever generated it, including `~/gsd-workspaces/pba/Power-Browser`. The writer never removes extra files.
-- Removing a workspace member changes yarn's top-level patterns. Until `yarn install` runs, `yarn check --integrity` reports `Top level patterns don't match`: the symptom `deferred-items.md` (14.1.1) logged for weeks. If `yarn.lock` is not re-committed, CI's `--frozen-lockfile` install (`.github/workflows/verify.yml:83`) fails, because `@agentclientprotocol/sdk@1.4.0` leaves the lock.
-- `scripts/verify-backend-env-readers.mjs:96-105` holds a hand-kept `EXPECTED_ENV_TOUCHERS` entry for `opencode-bridge-env.ts`. It must be deleted in the same commit.
+- `webTabSetPermission` (grant camera to a site)
+- `webTabClearSiteData`, Sanitizer
+- Places writes (delete history, bookmarks)
+- `readClipboardText`
+- an `openStockTab` allow-list widened to `about:preferences`, `about:logins`, `about:addons` and `view-source:`
+
+If those actions are also registered as Theia commands, a VS Code extension can run them through `vscode.commands.executeCommand`, and so can the stock Theia AI framework through its command-invoking tools (RM-02 keeps it stock). Example: an extension grants a site camera access with no prompt.
+
+`openStockTab` reaches `openBrowserWindow`, whose window-argument path loads with a **system** triggering principal (`PowerBrowserAPI.sys.mjs` comment above `openStockTab`, citing `browser.js:1304-1310`). Widening its wall with a pattern, rather than a fixed set of literals, is an escalation.
 
 **Why it happens:**
-CI always starts from a fresh clone (no ignored files, no `generated/`, no `.yarn-integrity`). Developer checkouts carry months of ignored state.
+"theia-only, S" items get wired as commands by default, because that is how the palette and keybindings reach them.
 
 **How to avoid:**
-`git rm -r`, then `rm -rf theia/extensions/backend-opencode`, then `yarn install --ignore-scripts` inside `nix develop .#theia` (not frozen; the lock moves on purpose), then `rm generated/ai-backend.json`, then `node scripts/generate.mjs --check` (expect 53 files). Commit `yarn.lock`. Re-run with `--frozen-lockfile` to prove CI's step passes. Do not run `yarn install` while another session serves a sidecar from `theia/**/lib` (14.1.1 deferred item 1).
+- Privileged kinds are invoked only from widget event handlers. Register no command id, or register one that only opens the UI and never performs the change.
+- Validate every argument chrome-side. Permission changes require a principal the chrome side derives from the live overlay, never a URL string sent by the frontend.
+- The `openStockTab` allow-list is a frozen set of exact literals, and `view-source:` admits only an http(s) inner URL. Add a `--self-test` that plants `about:config`, `chrome:` and `file:`.
+- Extend the `gui02-web-tab-bridge` gate's derived kind list to every new kind.
 
 **Warning signs:**
-`theia-build-order` names `"backend-opencode"` as present but not in the chain. `generate-check` reports an extra file. `yarn check --integrity` fails with `Top level patterns don't match`.
+A palette entry such as "Grant permission…" or "Clear history". A command id for a Places write.
 
-**Phase to address:** 17
+**Phase to address:** P0 (rule written once), checked in P3, P4 and P1 (clipboard).
 
 ---
 
-### Pitfall 8: Absence assertions that go vacuously green after the change
+### Pitfall 8: Overlays have no z-order. Anything drawn over the page either hides the page or is drawn underneath it
 
 **What goes wrong:**
-CLAUDE.md verification rule 1 says: never assert on the absence of a log line unless the code under test is proven to emit it. v1.4 creates several new chances to break that rule:
+Overlays are chrome-level `<xul:browser>` elements at `zIndex: 1` above the Theia frame (`webTabOpen`). The only mechanism is to hide every page while any element matching `BLOCKING_LAYER_SELECTOR` is visible (`web-tab.ts:99`: the dropdown, quick-input, dialogOverlay, `.lm-Menu`, drag image). v1.5 adds many layers that must look anchored over the page:
 
-- `ng051-backend-off` asserts the backend never spawns `opencode` and that `GET /mcp` is 404 (`scripts/verify-ng-051-backend-off.mjs:1-8`). Once the adapter is deleted, both are true by construction. Keeping the row "because it still passes" keeps a check that cannot go red. Delete the row with the adapter (the registry set in ARCHITECTURE.md).
-- The `view-factory-table` drift message (Pitfall 6) is emitted lazily. A live check that greps for its absence without first touching `index` proves nothing.
-- Theia's DOM can drift. `verify-platform.sh:3440-3447` waits for `#theia-app-shell .lm-MenuBar` and `#theia-statusBar`, "verified against the pinned Theia v1.74.1 DOM". Those presence waits fail loudly, which is correct. Any check written as "no element matches X" goes green if Theia renames X. The chrome-bar and modes stylesheets carry 12 selectors on Theia internals (`chrome-bar.css`: 9, `modes.css`: 3) [verified]. When Theia renames one, the rule stops applying and nothing errors.
-- New Theia log text at 1.76 (for example the `telemetry.telemetryLevel already exists` warning, or the removed `Child node ... does not belong to this tree` line) must not be asserted absent without a positive control that makes Theia emit it in the same run.
+- site-identity and permission panels, the app menu, the bookmark-edit popover, the downloads panel, the history menu
+- doorhangers
+- the find bar
+- hover cards and tooltips
+- Theia notification toasts
 
-**Why it happens:**
-An absence check is green by default. Upstream renames turn a live check into a decorative one, and a deletion makes it vacuous.
+Each of these needs a decision:
+
+- If the layer is **not** in the list (Theia `.theia-hover` tooltips, notification toasts), it is painted **under** the live page and is invisible wherever it overlaps the page rect.
+- If it **is** in the list, the page goes blank while it is open. A permission doorhanger then hides the page that is asking. Hover tooltips blank the page on every mouse-over.
+- Focus stays in a hidden overlay. A key relay that opens a Theia menu while the page has focus leaves the arrow keys going to the invisible page, because only `webTabFocusAddress` moves focus back to the frame (`PowerBrowserAPI.sys.mjs:3557`).
+- The alternative, XUL `<panel>`s in `powerbrowser.xhtml`, does draw above overlays because panels are native popups. It has two costs. It authors browser chrome markup, which collides with hard rule 5's "no custom browser chrome is authored" and needs a ruling. And BiDi cannot see it (see Pitfall 15).
 
 **How to avoid:**
-Every absence assertion added or kept in phases 19-24 gets a same-run positive control: plant the condition in a scratch copy and require the message, then require its absence on the real tree. This is the `--self-test` convention the registry already uses (for example `verify-shell-error-copy.mjs` and `verify-web-tab-live.mjs`'s `BROKEN_INSTRUMENT_MARKER` scorer). After the Theia move, re-verify `verify-platform.sh:3440` and every Theia selector in the two CSS files against the 1.76 DOM once, by measuring in `gsd-browser`.
+- Record the layer policy once in P0, with one rule per layer class:
+  - (a) Layers anchored in the chrome bar are laid out so they never intersect the page rect, or they hide it.
+  - (b) Layers that belong to the page (find bar, notification bars) shrink the placeholder rect through `webTabGeometry` instead of covering it.
+  - (c) Transient tooltips never extend over the page rect.
+  - (d) A doorhanger is a page-rect-shrinking bar or a panel placed outside the page rect, so the page stays visible.
+- Any chrome-initiated opener of a Theia popup first moves focus to the Theia frame, then restores focus to the page on close.
+- Add each new popup class to a derived check of the selector list against the popover primitive's class names, so one cannot be added without the other.
 
 **Warning signs:**
-A check that passed identically before and after its subject was deleted. A CSS rule in `chrome-bar.css` whose selector matches zero elements in the live DOM.
+The page flickers while the mouse moves over the toolbar. A panel's lower half is missing. The keyboard stops working after Escape.
 
-**Phase to address:** 17 (ng051), 19 (selectors, table, logs), 21 and 24 (GUI checks)
+**Phase to address:** P0 (popover primitive and layer policy), then every UI phase.
 
 ---
 
-### Pitfall 9: The commit gate and the Stop hook are red for a known GUI reason through the whole non-GUI half
+### Pitfall 9: The Theia command-centre mode in the address bar becomes a second input that hides the page and sends code to the search engine
 
 **What goes wrong:**
-The ledger `check_cmd` is `scripts/verify-platform.sh --quick` [verified]. `.claude/hooks/ledger-stop-gate.py` runs it on every Stop (`check-ledger.py --complete --run-check`), and `--quick` is red on the four `gui08` rows until phase 21 (CI run 36495714210, 2026-09-28: `verify-gui08-canvas-geometry` and `verify-gui08-panorama-copy` plus their self-tests) [verified]. Each session's Stop is therefore blocked once (`block_once`) through phases 17-20. Three wrong responses follow from that:
-
-- Fixing the `gui08` checks early. Chris decided the Panorama spec stays in the GUI half (handoff decision 1).
-- Loosening a check to get green.
-- Learning to ignore the red, so a new red in phase 17 or 19 goes unnoticed.
-
-Other hook traps:
-
-- SessionStart on `resume`/`compact` runs the check with a 120 s timeout (`ledger-session-check.py:186-200`). That exceeds the VSCode extension's 60 s spawn timeout, which is why the 2026-10-15 session could not be resumed. A session holding a 50-minute Gecko build cannot be resumed either.
-- The PreToolUse ledger hook blocks any Bash command where a path-like token resolves into `ledger/` and a shell operator (`|`, `;`, `&&`, `>`) appears. This blocked three read-only `jq`/`grep` pipes in this research session. A tree-wide `sed -i`/`grep -l | xargs` sweep for "opencode" reaches `ledger/REQUIREMENTS.json` and `ledger/history/log.jsonl` and is blocked. Done-row NG-051 and the AI-01..05 rewrite need Chris (`APPROVE`/`DROP` lines, `scripts/ledger-amend.py`). The agent cannot record them.
-- `scripts/size-gate.py` rejects a `*-plan.md` with more than 20 items, 20 cited ledger IDs, or 500 lines. The OpenCode removal (about 4.2k deleted lines, more than 25 file-level edits) will hit it if planned as one plan.
-
-**Why it happens:**
-The gate is a single pass/fail over the whole registry. A known red removes its signal for everything else.
+- Reusing Theia's quick-input widget for the "Theia command centre" mode (files, `>` commands, `@` symbols) opens `.quick-input-widget`. That is in the blocking selector, so in Browsing the page blanks while you type, and quick-input is centred at the top rather than under the pill.
+- Switching between the pill's `<input>` and quick-input's input loses typed text, caret position and IME composition state, and moves focus.
+- If engine suggestions (P1) are fed from the same input regardless of mode, workspace file paths, symbol names and command text go to a third-party suggestion endpoint as the user types.
+- With command-centre as the Coding default, typing a URL after Ctrl+L in Coding runs a file search.
 
 **How to avoid:**
-
-- Use the subtraction rule already ratified in `docs/non-gui/decisions.md` (R33): the gate passes when `--quick` failures, minus `docs/non-gui/quick-baseline.txt`, are empty. Refresh the baseline after phase 17 (it still lists `ai-opencode-tracer`) and after phase 19. Do not wait for phase 20. A stale baseline either hides a new red or reports a removed row as missing.
-- Decide whether `ledger-session-check.py` should stop running the check on `resume` (handoff "optional fix"). It is a hook change, so it needs Chris's decision.
-- Ask Chris for the NG-051 drop **before** the phase 17 commit. ARCHITECTURE.md notes that the phase gate goes red otherwise.
-- Split the OpenCode plan by removal set (manifest, workspace, registry) so that each plan stays under the size gate. The sets still land in one commit if the plans share a wave.
-- Run Bash reads of `ledger/` as single commands with no operators, or use `python3 scripts/ledger-report.py`.
+- Drive Theia's `QuickAccessRegistry` providers into the pill's own dropdown instead of opening the widget, after confirming those providers are reachable without patching Theia core (`diff-theia-core.sh`).
+- Engine suggestions and inline autofill run only in web and search modes. Make that a hard rule with a check that command-centre mode never calls the suggestion kind.
+- Define the auto-switch rules: a scheme, a dotted host or `localhost:` input leaves command-centre mode. Make the active mode visible in the pill.
 
 **Warning signs:**
-"completion gate fails" in a Stop where the only failures are `gui08-*`. A plan rejected by `size-gate`. `LEDGER FROZEN` on a command that also edits non-ledger files.
+Network traffic to the suggestion host while typing in Coding. The page goes blank in Browsing when the dropdown opens.
 
-**Phase to address:** 17 (baseline refresh, NG-051 approval, plan split), 19 (baseline refresh), 21 (gate green)
+**Phase to address:** P1.
 
 ---
 
-### Pitfall 10: The residual-brand scan misses new files and goes red on deleted citations
+### Pitfall 10: Search changes the endpoint, privacy and rebrand contracts as well as the UI
 
 **What goes wrong:**
-
-- The scan builds its file set from `git ls-files` (`scripts/scan-brand-residue.mjs:329`). An unstaged new file is invisible to it. v1.4 adds new files: the React single-copy check, any new `verify-*.mjs`, and new `docs/BUILD.md` sections. A green scan before `git add` proves nothing about them.
-- The frozen `-PLAN.md` row in `inventory/brand-tokens.json` counts **49** occurrences across 10 files, including `scripts/verify-platform.sh`, `powerbrowser/INTERNAL-APIS.md` and `token-gate/src/node/parent-watchdog-backend-contribution.ts` [verified]. Removing registry blocks or comments that cite a plan file, or adding new citations, moves the observed count and turns `scan-brand-residue` red. This happened during phase 16: 36 expected, 37 then 39 observed.
-- `inventory/brand-tokens.json` is the only file that may name the originating product. Writing that name in a new doc or check fails the scan.
-
-**Why it happens:**
-The scan reconciles exact counts so that it can go red. Every deletion-heavy commit, which describes phase 17, interacts with it.
+- `scripts/verify-endpoints.sh` fails on **any** observed host that is absent from `powerbrowser/endpoint-allowlist.json` (its `$comment`, D-85). Engine suggestion hosts and engine-icon fetches are not listed, so the first live search run turns the endpoint gate red, or the allowlist gets widened by accident.
+- `browser.region.network.url` is `""` in the allowlist, so the region is not geolocated. The engine set comes from Remote Settings search-config v2, selected by locale, region and `distroID` (`SearchEngineSelector.sys.mjs:190-224`). The defaults can be Mozilla's partner-coded engines (derivatives ship distribution-specific codes, for example Linux Mint's `client=firefox-b-lm`). A rebranded build that sends Mozilla's codes is a contract question, not a technical one.
+- Hard-coding an engine name or URL in Theia code (placeholder text "Search with X", a fallback URL) is a second rebrand file and violates the core value. `configuration.toml` already plans `[urls] default search`.
+- Search fallback sends single-word input to the engine. Intranet hosts (`buildbox`, `nas`) leak, and `localhost` does too when the fixup misses it.
+- `Services.search` may never have initialised in a session that opened no stock window. Call `await Services.search.init()` inside the API, and never read engines synchronously.
+- Hand-written user-facing strings: the chrome bar already hard-codes "PowerBrowser" in copy (`chrome-bar-widget.tsx:610,616`; also `mode-service.ts`, `web-tab.ts`, `save-page-copy-command.ts`), even though `applicationName` exists in the generated app `package.json`. Each new v1.5 message that repeats the literal adds another place a downstream rebrand must edit. The residue scan does not catch it, because it scans originating-product tokens, not this product's name.
 
 **How to avoid:**
-Stage first, then run `node scripts/scan-brand-residue.mjs`. If the `-PLAN.md` count moves, bump the row's `expected_count` and add one "COUNT MOVED a -> b" reason line in the same commit (precedent 12-02; the row's own reason text shows the format). Do not exclude the files instead.
+- Default engine and engine set come from `configuration.toml` through the generated `policies.json` `SearchEngines` policy (ESR honours Add/Default/Remove; `Policies.sys.mjs:3074`). This is the same mechanism EXT-03 uses.
+- Suggestions are off until a decision is recorded. When they are turned on, each engine's suggestion host is an allowlist row with a reason.
+- Read the product name from `FrontendApplicationConfigProvider.get().applicationName` in new copy. Decide whether to fix the existing literals or record them as accepted debt.
+- Before searching single words, apply the same rule Firefox uses (`browser.fixup.dns_first_for_single_words` / "did you mean to go to").
 
 **Warning signs:**
-The scan is green on a tree whose `git status` shows `??` entries under `scripts/` or `docs/`. A red on the `-PLAN.md` row in a commit that only deleted code.
+`verify-endpoints` red after the first live search. A downstream fixture build shows "PowerBrowser" in the search placeholder.
 
-**Phase to address:** 17, and every phase that adds a file
+**Phase to address:** P1. The configuration.toml key and generator target belong in P1's first plan.
+
+---
+
+### Pitfall 11: Places writes and "clear history" miss the stores this project added
+
+**What goes wrong:**
+Firefox's Sanitizer and `PlacesUtils.history.remove` know about Places, cookies and cache. They do not know about this project's own stores, all of which hold URLs, titles or page images:
+
+- `tabs.sqlite` closed rows (7-day retention, `TAB_STORE_CLOSED_RETENTION_MS`) and Panorama thumbnails (`TAB_STORE_THUMBNAIL_MAX_CHARS`)
+- `saved-pages/`
+- `powerbrowser-web-tab-history.json` (back/forward lists)
+- `powerbrowser-shell-state.json` (the Theia layout, including web tab URLs)
+- the backend reader's results
+
+"Clear recent history" that removes Places rows while those stores keep the URLs and screenshots is a privacy defect that looks finished.
+
+Other ways the Places work goes wrong:
+
+- **Raw SQL writes.** The precedent is raw read-only SQL over `promiseDBConnection` (`INTERNAL-APIS.md:36`). A write through raw SQL skips Places triggers, frecency recalculation and `moz_origins` (which autofill depends on) and can corrupt them.
+- **Reading `places.sqlite` from the Theia backend for speed.** It hits the same exclusive-lock `SQLITE_BUSY` that GUI-DEFECTS item 18 hit on `tabs.sqlite`.
+- **A star that only reads at navigation time.** It goes stale when the bookmark is changed in the stock window or the Library. It needs a Places observer push.
+- **Shift+Del applied to rows that come from bookmarks or open tabs.** It deletes the wrong thing. Firefox removes only rows sourced from history.
+
+**How to avoid:**
+- One chrome-side `clearHistory` kind fans out to Places, then the `tabs.sqlite` closed rows and thumbnails, `saved-pages`, the web-tab history file, and the URL entries in shell state. Add a check that plants a URL in each store and requires all of them to be gone.
+- Places writes go only through `PlacesUtils.bookmarks`/`PlacesUtils.history`. Write this in the re-ruled `INTERNAL-APIS.md:36` row.
+- Carry `source` on every suggestion row, and accept Shift+Del only on `history`.
+
+**Warning signs:**
+A Panorama card still shows a thumbnail of a site after Clear History. Autofill suggests a deleted origin.
+
+**Phase to address:** P0 (Places-write policy row), P4 (star, clear history), P1 (Shift+Del, input-history ranking).
+
+---
+
+### Pitfall 12: WebExtensions cannot see overlay tabs, so extensions act on the wrong page
+
+**What goes wrong:**
+The extension framework's window tracker admits only `windowtype="navigator:browser"` (`ext-tabs-base.js:1739-1742`). Overlay web tabs are therefore not tabs to any extension. The consequences:
+
+- `tabs.query({active:true, currentWindow:true})` from a toolbar button resolves to the active tab of the most recent **stock** window, or to nothing. A password manager, "send page", or translate extension pressed while the user looks at an overlay acts on a different page. That is a data-exposure bug, not a missing feature.
+- Content scripts still inject into overlays (injection works per document), but `sender.tab` is undefined. Extensions that route by tab (most password managers, per-site blockers) drop those messages.
+- `webRequest` sees overlay requests with `tabId: -1`, which breaks per-tab blocker state.
+- `browserAction`/`action` popups are `<browser>` elements inside CustomizableUI panels. With no CustomizableUI area, there is no popup host.
+- The add-ons endpoints are `deny` in the allowlist (`services.addons.mozilla.org`, every `extensions.getAddons.*` pref is `""`), so "find more add-ons" links fail the endpoint gate.
+
+The gap list tags this XL with a possible patch, and PROJECT.md lists WebExtensions as an open product decision.
+
+**How to avoid:**
+- Run a feasibility spike before roadmap commitment. Today's evidence leans one way: the honest MVP renders action buttons in Theia (icon, title, badge read chrome-side) that open the extension's UI in the stock window against a tab the user chose. The alternative is a patch that registers overlays with `tabTracker`.
+- Until that lands, an extension button pressed while an overlay is active must refuse with plain-language copy. It must never act on the stock window's tab without saying so.
+
+**Warning signs:**
+An extension's popup shows a URL that is not the visible page.
+
+**Phase to address:** P5. Flag it as needing `/gsd-spike` or deeper research before planning.
+
+---
+
+### Pitfall 13: A clipboard suggestion reads the clipboard with no user gesture
+
+**What goes wrong:**
+`readClipboardText` runs chrome-side, so it bypasses the page clipboard permission entirely. If the pill reads the clipboard on every focus to offer a "paste URL" row, then:
+
+- secrets copied from the password manager or a terminal are read on each focus;
+- any log line or push that carries the text exposes them;
+- if search suggestions are on, the text goes to the engine.
+
+On Wayland, a read while the window is not focused returns stale or empty data, which looks like a flaky bug.
+
+**How to avoid:**
+- Read only on explicit Paste & Go, or for the suggestion row only when the clipboard holds a single valid http(s) URL. Return only the parsed URL, never raw text, and never log it.
+- Off by default, behind a recorded privacy decision (the gap list already says "needs a privacy decision").
+
+**Phase to address:** P1.
+
+---
+
+### Pitfall 14: ESR fragility moves from patches into shims, and the line-keyed catalogue becomes the merge-conflict point
+
+**What goes wrong:**
+- Each shim mirrors an upstream internal contract: the PopupNotifications constructor arguments, PromptParent's duck typing, `win.nsContextMenu.contentData`, LinkHandlerParent's `setIcon` signature, the `nsIBrowserDOMWindow` methods, `PrintUtils`. None of these is a patch, so `apply-patches.sh --self-test` and `check-patch-surface.sh` never see them change across an ESR bump. They fail at runtime in the quiet ways described in Pitfall 3.
+- `INTERNAL-APIS.md` rows are keyed by `file:line`. v1.5 adds dozens of touchpoints to a 4,088-line `PowerBrowserAPI.sys.mjs`. Two concurrent plans editing that file shift each other's line numbers, and the catalogue gate goes red after every merge. The project memory notes that other sessions commit to `main`.
+- The guard catalogues `gBrowser` occurrences. New shim globals defined in `powerbrowser.js` (`window.PopupNotifications`, `window.nsContextMenu`, `window.browserDOMWindow`) are not in `FORBIDDEN_PATTERNS`. They would turn `powerbrowser.js` into a second boundary without the check noticing, which is exactly what hard rule 2 forbids.
+- Splitting the growing API into `PowerBrowserSearch.sys.mjs` and similar files is also a second boundary file.
+- Any real patch (extensions, PiP) edited by hand degrades into a silent no-op (CLAUDE.md "Patches are regenerated").
+
+**How to avoid:**
+- Add each shim global to `FORBIDDEN_PATTERNS` with a definition-line exemption, as was done for `gBrowser`.
+- Give each shim contract a derived `--quick` check over `upstream/`, in the way `verify-shell-gbrowser-standin.mjs` does, so an ESR bump that renames a member goes red by name.
+- Run `verify-ng-040-internals-catalogue-lines.mjs --fix` after every merge into the boundary file, and serialise plans that touch it within a wave.
+- Any new patch gets its own number (`050-…`) per concern and is regenerated from a patched tree.
+
+**Phase to address:** P0 (guard patterns and the catalogue workflow), P5 (any patch).
+
+---
+
+### Pitfall 15: Static gates and the standalone loop cannot see v1.5 behaviour
+
+**What goes wrong:**
+Almost every v1.5 feature crosses the bridge and is decided by DOM geometry, focus or chrome-side UI. None of these can observe that:
+
+- The `--quick` gates read text.
+- The standalone sidecar loop (`POWERBROWSER_TOKEN_DISABLE=1` on :4000) has no chrome actor and no overlays, so no push ever arrives.
+- BiDi's context tree contains only content browsers. Chrome-context Marionette is platform-blocked (`powerbrowser.js` deck-state comment, WINDOWS #7). XUL panels, doorhangers, the findbar and autocomplete popups are invisible to the harness.
+- Headless runs cannot show the GTK print dialog or a real permission decision.
+- An edit to `powerbrowser/shell/*.js` does not run unless the startup cache is purged. The F9 live test was invalidated that way.
+- Scripted headless passes are evidence, never UAT. Only Chris records a sheet result (PROJECT.md decision).
+
+**How to avoid:**
+- Prefer designs whose result is observable in the Theia frame (doorhanger content pushed and rendered by Theia over a shrunk page rect) over chrome XUL panels. That choice decides whether the feature can be verified at all.
+- Every live check launches with `-purgecaches` (`MOZ_PURGE_CACHES=1`, remove `startupCache`) and records that it did.
+- Assert positive outcomes through the page: the page's `Notification.permission` result, its `confirm()` return value, `document.fullscreenElement`. Do not assert that a log line is absent.
+- For print, use the `print.always_print_silent` + `print_to_filename` PDF path.
+- Visual geometry uses the KWin + spectacle screenshot procedure.
+- Give each new check a `--self-test` that plants a fault.
+
+**Phase to address:** Every phase. P0 should add the shared live harness pieces: page-focus probe, push recorder, purgecaches launcher.
 
 ---
 
 ## Moderate Pitfalls
 
-### Pitfall 11: The chrome JS startup cache makes chrome-side GUI fixes look broken
-
-**What goes wrong:**
-Edits to `powerbrowser/shell/*.js` take effect in the tree immediately, through the objdir symlinks. Gecko's startup cache keeps running the old compiled script with no error. This invalidated the F9 live test (memory `chrome-js-startup-cache`). The phase 21 and 22 worklists (group channel, Panorama close/undo, per-card close) and the phase 24 UAT all exercise chrome-side code. `-purgecaches` has zero occurrences in `scripts/` or `docs/` (`.planning/codebase/CONCERNS.md`); it lives only in CLAUDE-adjacent memory.
-
-**How to avoid:**
-After any chrome-JS edit: `rm -rf objdir/tmp/profile-default/startupCache` and `MOZ_PURGE_CACHES=1 ./objdir/dist/bin/powerbrowser -purgecaches`. Add these two lines to the tier-1 section of `docs/BUILD.md` (`:470`) in phase 20, so that UAT testers find them. Never record "the fix did not work" from a run that did not purge. The full rebuild in phase 18 changes the build ID, so the first launch after it is safe. Later edits are not.
-
-Also on the Gecko side: after phase 18 the dev objdir is 153.5 while `objdir-release` stays 153.1 until it is rebuilt. Launching the older binary on a profile the newer one touched triggers Firefox's downgrade protection, and the window waits on a dialog. Rebuild the release objdir in the same phase, or use a throwaway profile for any 153.1 launch.
-
-**Phase to address:** 18 (downgrade), 20 (doc line), 21, 22, 24 (purge discipline)
-
----
-
-### Pitfall 12: The Theia re-pin runbook's "token gate intact" step does not exercise the gate
-
-**What goes wrong:**
-`docs/BUILD.md:249-256` (UPD-04 step 6) proves the gate with `tsc -b theia/extensions/token-gate` plus the telemetry suite. That shows the code compiles. It does not show the gate rejects anything. The gate depends on Theia's backend lifecycle order: `configure()` runs before `start()` binds the socket (`token-gate-backend-contribution.ts:52-59, :76-87`). Theia 1.75/1.76 changed connection-token re-issue (#17762) and many backend classes.
-
-**How to avoid:**
-Run the live rows `--only side02-token-negative` and `--only side02-token-positive` (`verify-platform.sh:4723-4724`) and `--only side04-token-not-in-environment` at 1.76. Re-record the UPD-04 proof in `docs/BUILD.md:268-286` with those results, not with the compile alone.
-
-**Phase to address:** 19
-
----
-
-### Pitfall 13: Node 24's native rebuild in a sandbox or offline shell
-
-**What goes wrong:**
-Every native module is N-API (`drivelist` 12.0.2 builds from source with `NAPI_VERSION`; `better-sqlite3` 13.0.3 ships `prebuilds/linux-x64.node`; node-pty, @parcel/watcher and msgpackr-extract ship prebuilds) [verified]. The ABI therefore does not change, and an old `drivelist.node` still loads on 24 (STACK.md). The real risks are environmental:
-
-- `node-gyp rebuild` downloads headers for the exact running Node version into `~/.cache/node-gyp/24.19.0` unless it is given `--nodedir`. A sandboxed or offline session fails there, while CI (with network) passes.
-- The `flake.nix` shellHook prepends `${nodejs}/lib/node_modules/npm/bin/node-gyp-bin`. If that path ever moves, the prepend is a silent no-op and `node-gyp` resolves to whatever else is on `PATH`.
-- CLAUDE.md hard rule 4 still applies: `pkgs.mkShell` adds an rpath to the space-separated `NIX_LDFLAGS`, so a checkout path containing a space breaks every link. `NIX_NO_SELF_RPATH = "1"` (`flake.nix:27`) keeps the checkout path out of `drivelist.node`. Keep both when editing the shell.
-- Until the flake flips, scripts run outside the dev shell use host Node v24.19.0 [verified], while the sidecar runs on Node 22. A plain-node check that passes on the host does not prove the sidecar's runtime.
-
-**How to avoid:**
-Inside `nix develop .#theia`, run `(cd theia/node_modules/drivelist && node-gyp rebuild --nodedir="$(dirname "$(dirname "$(command -v node)")")")`, then `node -e "require('./theia/node_modules/drivelist')"`, then `bash scripts/smoke-theia.sh`. Edit only `flake.nix:20`. Never run `nix flake update` (it would move inkscape off 1.4.4 and break `generated-byte-identity`, and move rustc off 1.97.1).
-
-**Phase to address:** 19 (step a)
-
----
-
-### Pitfall 14: `rebase-upstream.yml` has never run, and it runs without Nix
-
-**What goes wrong:**
-`gh run list --workflow rebase-upstream.yml` returns no runs [verified]. Its steps run `node scripts/generate.mjs` directly on the runner, with no `nix develop` and therefore no inkscape. `verify.yml`'s own header records that a job without inkscape "failed at the 16-pixel icon". Dispatching it for 153.5 is likely to fail at the generate step, before any replay [inferred]. Separately, its `default:` tag is a literal mirror of the pin that `verify-upstream-pins.mjs` step 2 checks. Forgetting to move it turns `verify-upstream-pins` red.
-
-**How to avoid:**
-Do the 153.5 rebase locally through `scripts/rebase-upstream.sh`, which is the proven path (08-05 drill against 153.2). In the same commit, move the workflow default to the pinned tag. Either wrap the workflow's generate steps in `nix develop .#theia` (the same fix `verify.yml` received) or record that the workflow is unexercised. Do not cite it as a CI rebase proof.
-
-**Phase to address:** 18 (default and record), 25 (if CI green is meant to include it)
-
----
-
-### Pitfall 15: "generate-check fails locally" may be stale, or caused by the host inkscape
-
-**What goes wrong:**
-The handoff lists "find out why `generate-check` fails locally (inkscape)". In this session, `node scripts/generate.mjs --check` from the host shell printed `--check PASS -- all 54 generated file(s) match` with host `/run/current-system/sw/bin/inkscape` 1.4.4 [verified]. The likely mechanism of the earlier failure: outside the dev shell, the generator uses whatever inkscape the NixOS system profile provides. A system update that moves inkscape off 1.4.4 makes the local run fail byte identity while CI, which pins inkscape through the flake, passes. A sandboxed inkscape that cannot write its config dir is a second candidate [inferred].
-
-**How to avoid:**
-Reproduce the failure before fixing anything. Run generator checks inside `nix develop .#theia`, which pins inkscape 1.4.4 (`flake.nix:33-41`). If the root cause is the host profile, the fix is documentation plus running the check in the shell. Do not edit the PNGs and do not relax the byte comparison.
-
-**Phase to address:** 20
-
----
-
-### Pitfall 16: Clean-checkout and `yarn install` runs while another session serves the sidecar
-
-**What goes wrong:**
-G-14.1.1-9 (clean-checkout `yarn build:extensions`) was deferred three times because `rm -rf theia/extensions/*/lib` would delete the `lib` trees a concurrent session's running sidecar is served from (14.1.1 `deferred-items.md`). Phases 17 and 19 both need `yarn install`, which has the same effect. `theia build` also rewrites `lib/backend` under a running backend and kills it. The symptom is the shell chrome disappearing (memory `live-gui-debug-loop`), which is easy to misread as a CSS defect.
-
-**How to avoid:**
-Before any install or clean build, check `git status --porcelain` for foreign entries, check for a running `theia start`, and check `.worktree-lock` (`worktree-session-guard.py`, 2 h stale window). Commit with explicit paths only (memory `concurrent-sessions-on-main`). Run G-14.1.1-9 in phase 20 only after phase 19's final install, from a quiet tree, or in a separate clone (`scripts/fresh-clone-verify.py`).
-
-**Phase to address:** 17, 19, 20
-
----
+- **Zoom breaks overlay geometry.** `webTabGeometry` maps the placeholder rect by identity because "both frames share one window (one devicePixelRatio, no zoom UI)" (`PowerBrowserAPI.sys.mjs` comment above `webTabGeometry`). A zoom key that lands on the Theia frame (Theia binds `ctrlcmd+=/-/0` only in Electron, `electron-menu-contribution.js:305,317`) misplaces every overlay. Site-specific zoom memory is `browser-fullZoom.js` (14 `gBrowser` uses) and does not run here. Whether `browser.fullZoom` survives a cross-process navigation (`maychangeremoteness`) is unverified (LOW); check it live. **Prevention:** zoom only overlays; scale rects if the frame zoom is ever not 1. **Phase:** P4.
+- **Print targets the wrong browser.** Ctrl+P in Theia is quick-open. Print must take the overlay's `browsingContext` and the system-dialog path, not `PrintUtils` tab-modal preview (`printUtils.js:128-137` needs `getTabDialogBox`). **Phase:** P4.
+- **Audio from hidden tabs.** `docShellIsActive=false` throttles rendering and timers but does not mute media. A hidden overlay can play audio with no indicator. Ship the audible push and mute with or before anything that hides more tabs. **Phase:** P4.
+- **Camera or mic granted without an indicator.** Permission prompts that grant WebRTC must ship with the sharing indicator (webrtcUI uses `gBrowser`, `WebRTCParent.sys.mjs:153`). **Phase:** P6, same plan as permission prompts.
+- **Prompts from background tabs.** A hidden overlay (another mode, or not the active tab) that requests a permission or calls `alert()` must queue against that tab and show when it becomes visible, naming the tab. It must not interrupt the IDE. **Phase:** P6.
+- **The Theia frame's own beforeunload.** Theia sets `beforeunload` for unsaved editors. A prompt relay that renders into the Theia frame cannot serve a prompt from that same frame while it unloads. Apply the relay to overlays only, and leave the Theia frame on the stock window-modal fallback. **Phase:** P6.
+- **Prompt spam.** The current fallback is app-modal (Pitfall 3). Any relay needs Firefox's "stop this site prompting" control, or a page loop locks the shell. **Phase:** P6.
+- **Downloads with no UI.** Check what an overlay download does today before building the panel (gap list). If it saves silently to `~/Downloads`, that is a drive-by-download exposure to fix first. **Phase:** P4.
+- **Context-menu actions run with the wrong principal.** "Open link in new tab" from the forwarded menu must load with the page's principal and referrer, through the http(s) wall. Never use a null or system principal. Set `disablecontextmenu` on the Theia frame so the forward never fires for Theia. **Phase:** P6.
+- **Lost hidden-tab state.** Hiding uses `visibility`, never `display:none` or removal, because removal destroys the frameloader and its history (`webTabGeometry` comment). Find bars, notification bars and "unload tab" must keep that invariant, or unload must be explicit. **Phase:** P4.
+- **Find-bar layout.** The find bar has to shrink the page rect (gap list), so it must be in Theia's flow layout above the placeholder. Positioned over the placeholder, it is painted under the page. **Phase:** P4.
+- **Wrong focus after a Stop/Reload swap.** Swapping the reload button for Stop on the pushed `loading` flag re-renders the button. Keyboard focus on it is lost on every load. Keep one element and change its icon and label. **Phase:** P2.
 
 ## Minor Pitfalls
 
-### Pitfall 17: Comments and prose that name the old versions
-
-`scripts/lib/firefox-bidi.mjs:5,11`, `scripts/smoke-theia.sh:57`, `scripts/verify-platform.sh:3000, :3440`, `scripts/verify-branding-identity.mjs:31`, `theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts:142`, `tab-uris/src/browser/view-open-handler.ts:90`, `telemetry/src/browser/telemetry-preferences.ts:3`, `README.md:87`, and the D-16 comment at `flake.nix:14-19`. Only `smoke-firefox.sh:41-42` is functional. The rest are text, but a comment that says "verified against 1.74.1" after a move to 1.76 is a false claim. Update the ones whose claim was re-verified, and mark the others "as of 1.74.1".
-
-### Pitfall 18: Fixture manifests still pin 1.74.1 and a future ESR tag
-
-The tier-3 fixtures under `.planning/milestones/v1.1-phases/09-extensions-crash-pipeline/fixtures/*/configuration.toml` carry `theia_release = "1.74.1"` and `firefox_esr_tag = "FIREFOX_154_0esr_RELEASE"`, and `scripts/verify-downstream-fixture.mjs:585` builds a scratch manifest with `1.74.1`. `verify-upstream-pins.mjs` excludes `.planning/` as history, so nothing goes red. They are historical record; leave them. If a per-fixture tier-3 build (BLD-02) is re-run at 1.76, its manifest pin is not what gets installed. The workspace `package.json` decides.
-
-### Pitfall 19: User-facing copy reaching the screen unreviewed
-
-The redesigned Panorama's "Expand"/"Done" copy is unreviewed (handoff, Q1 in `docs/non-gui/questions-wave-e.md`). At 1.76, Theia's own strings (Getting Started, telemetry setting description) can reach the screen through new transitive extensions. The UI-SPEC rule (no internal identifier in user-facing text, product named "PowerBrowser", a next step that exists on screen) applies to every string the user sees, including upstream strings this tree chooses to expose.
-
----
+- **Pushes not coalesced.** The progress listener pushes on every state change. Adding security, zoom, favicon and audible fields multiplies the traffic. Coalesce per tab per frame chrome-side, as the frontend already does for geometry (`web-tab.ts` rAF dedupe).
+- **IME.** Enter during composition commits half-typed CJK text (gap list item). Guard on `isComposing` in the pill and in quick-access mode switching.
+- **Internal names in copy.** New error strings must follow the 01-UI-SPEC rule: no pref keys, kind names or raw exceptions; they name the product and offer a next step. `shell-error-copy-no-internals` checks by pattern, so new chrome-bar copy has to be inside its derived surface.
+- **Staging for the brand scan.** `scan-brand-residue.mjs` iterates `git ls-files`. New files must be staged before a green scan counts (CLAUDE.md trap).
+- **Tooltip shortcut text.** Shortcut text built from `KeybindingRegistry` will show Theia's binding (for example Alt+W) where the relay handles the Firefox key. Build the text from the same derived shortcut table.
 
 ## Technical Debt Patterns
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Keep `ng051-backend-off` "because it still passes" after deleting the adapter | No registry edit | A check that cannot go red; violates verification rule 1 | Never. Delete it with the adapter |
-| Rename D-22 rebind 2 to `AIConfigurationViewContribution` instead of deleting it | Looks like a port | Overrides nothing (no `initializeLayout` at 1.76 [verified in tarball]), so it is dead code that implies a guarantee | Never |
-| Leave `smoke-firefox.sh:41-42` as a literal and edit it to `153.5.0esr` | One-line edit | Red again at every ESR bump; hand-kept expectation | Never. Derive it from `version_display.txt` |
-| Re-cite `view-factory-table.ts` line numbers by hand at 1.76 | Matches the existing style | Drifts at every Theia bump; the drift check is lazy and console-only | Acceptable for this milestone if one live `view:` open plus a planted-row control is recorded; otherwise derive the ids from `node_modules` |
-| Accept the duplicate `telemetry.telemetryLevel` registration warning | No code change | Settings text depends on module load order | Acceptable only if the live check records which schema won and the text is acceptable; otherwise consume Theia's schema |
-| Pin the tag by name only, no SHA recorded | Matches the existing convention | Local and CI can diverge silently if a tag moves (Pitfall 1) | Never for an adoption. Record the SHA |
-| Report `mar-update-hop` green after the ESR move | Full run reads green | Certifies a 153.1 hop as current | Only with a written note that the evidence predates 153.5 |
+|---|---|---|---|
+| Add a member to the `gBrowser` stand-in to quiet one upstream consumer | One feature works | Unread upstream branches change behaviour (Pitfall 2) | Only with the per-member reader audit in the plan and the derived call-site list |
+| `reserved="true"` for every relayed key | Works from page focus at once | Breaks Theia/Monaco bindings in Coding (Pitfall 4) | Only for Firefox's unblockable set, each with a recorded override decision |
+| Security state from the URL string in Theia | No new push field | A wrong lock is a security defect (Pitfall 5) | Never |
+| Register privileged actions as Theia commands | Palette and keybindings for free | Extensions and AI tools can grant permissions or wipe data (Pitfall 7) | Never for state-changing kinds; only for "open this panel" |
+| Hard-code an engine or product name in copy | Fast copy | A second rebrand file (core value) | Never for new copy; existing literals need a recorded decision |
+| Add every popup to `BLOCKING_LAYER_SELECTOR` | No z-order work | Page blanks constantly and the asking page is hidden | Only for full-screen menus and the dragging layer |
+| A chrome-side XUL panel for doorhangers | Draws over the page with no layout work | Authors chrome (rule 5 ruling needed), invisible to BiDi | Only with a recorded rule-5 ruling and a screenshot-based check |
+| Raw SQL writes to Places | One statement | Skips triggers, frecency and `moz_origins` | Never |
 
 ## Integration Gotchas
 
 | Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| mozilla-firefox/firefox tags | Assuming `_RELEASE` == `_BUILD1` | Check `git ls-remote` for both; 153.4 differed [verified] |
-| Yarn classic peers | Treating an install without errors as compatible | `unmet peer dependency` is a warning; gate React copies explicitly (Pitfall 4) |
-| Yarn workspaces | Removing a member without `yarn install` | `.yarn-integrity` keeps the old top-level patterns; CI `--frozen-lockfile` fails on an uncommitted lock |
-| Theia extension collection | Assuming only declared `dependencies` compose | Theia collects `theiaExtensions` transitively; `@theia/getting-started` arrives through `@theia/ai-ide@1.76.0` [verified] |
-| Theia `isBound ? rebind : bind` idiom (`powerbrowser-frontend-module.ts:24-44`) | Expecting a missing base binding to fail | The `else bind` branch silently binds an orphan if upstream moved the service; compile catches a removed class, not a moved binding |
-| node-gyp under Nix | Relying on header download | `--nodedir` from the shell's Node; no network needed |
-| GitHub Actions `rebase-upstream.yml` | Treating it as a working CI rebase | Never run; no Nix, so no inkscape (Pitfall 14) |
+|---|---|---|
+| PermissionUI / PopupNotifications | Assume prompts work because no error is logged | They are cancelled silently (`PermissionUI.sys.mjs:534,617`); build the shim, assert the page's result |
+| PromptParent | Add `getTabDialogBox` to the stand-in for print | It flips all page prompts onto a path needing `selectedBrowser`/`getTabForBrowser` (`PromptParent.sys.mjs:222-288`) |
+| ContextMenuParent | Forward right-clicks after letting the stock actor run | It throws without `win.nsContextMenu` (`ContextMenuParent.sys.mjs:39-41`); intercept first, `disablecontextmenu` on the Theia frame |
+| nsIBrowserDOMWindow | Install it for window.open-to-tab | Branch on the opener, and move GUI-01 off `window.open` (Pitfall 1) |
+| WebExtensions | Set windowtype `navigator:browser` | Never; spike a Theia-rendered action surface (Pitfall 12) |
+| Services.search | Read engines synchronously; hard-code the default | `await init()`; defaults from configuration.toml via `policies.json` `SearchEngines` |
+| SiteDataManager / Sanitizer | Clear "127.0.0.1" like any site | Exempt the token cookie (Pitfall 6) |
+| Places | Theia backend reads `places.sqlite` directly | Chrome-side kinds only; exclusive locking gives `SQLITE_BUSY` (GUI-DEFECTS 18 precedent) |
+| Theia QuickAccess | Open quick-input as the command-centre mode | Drive providers into the pill dropdown; quick-input blanks the page (Pitfall 9) |
+| endpoint-allowlist | Add suggestion hosts as an afterthought when the gate goes red | Row per host with reason, decided before enabling |
 
 ## Performance Traps
 
 | Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Two upstream moves before one verify | A red full run needs bisection across two trees | One upstream per phase (ARCHITECTURE.md Pattern 2) | Any time; each Gecko build is 47-54 min |
-| One tier-3 build budgeted for "full verify" | Release-variant rows red at the end of the phase | Budget dev plus release builds in phase 18 (Pitfall 2) | Phase 18 |
-| `--quick` inside session hooks | Resume fails under VSCode's 60 s spawn limit (hook timeout 120 s) | Decide the `resume` hook change; keep `--quick` hermetic and fast | Every resume after an edit |
-| `--extra-root upstream/` scan in the rebase | About 55 s over about 460k files (01-15 and 08-05 measurements) | Expected; not a defect | Each rebase |
-| sccache across a large `moz.configure` change | Cold cache after the version bump | Expected first-build cost (D-71) | Phase 18 first build |
+|---|---|---|---|
+| Uncoalesced state pushes with the widened field set | Pill and strip lag during heavy pages, actor message backlog | Coalesce per tab per frame chrome-side; send only changed fields | Pages with many redirects or `pushState` loops |
+| Suggestion query per keystroke to engine plus Places | Dropdown flicker, request storms | Keep the 150 ms debounce, invalidate in-flight queries on commit (GUI-DEFECTS item 20 pattern) | Fast typists, slow engine endpoints |
+| Body MutationObserver re-publishing every web tab for each new popover class | CPU while hovering toolbars | Keep the rAF dedupe; avoid class churn on hover elements | Many open web tabs with frequent tooltips |
+| Places observer pushes for bookmark star on every Places notification | Push flood during bookmark import or sync | Filter to the active tab's URL chrome-side | Bulk bookmark operations |
+| Find "highlight all" result push per keystroke | Jank on long pages | Debounce find queries; push the final count only | Very large documents |
 
 ## Security Mistakes
 
 | Mistake | Risk | Prevention |
-|---------|------|------------|
-| Proving the token gate by compile only (Pitfall 12) | A 1.76 lifecycle change opens the backend unauthenticated | Live `side02-token-negative`/`-positive` rows at 1.76 |
-| Script-enabled `yarn install` to "fix" a native module | Runs unaudited postinstalls (puppeteer downloads Chromium); `@theia/ffmpeg/build` leftovers fail `diff-theia-core.sh` (STACK.md) | `--ignore-scripts` plus the one explicit `drivelist` rebuild (`docs/BUILD.md:59-98`) |
-| New transitive extensions adding egress | Getting Started links (theia-ide.org), new AI provider defaults (1.76 adds model discovery) | Re-run `ng069-sidecar-egress` and `theia-endpoints` at 1.76; any new host goes through the endpoint allowlist, never silently |
-| Removing the Theia AI framework along with OpenCode | Changes D-22, the `view:ai-configuration` row and tab-uris hooks without a decision | Separate question for Chris (ARCHITECTURE.md Anti-Pattern 3) |
-| Editing under `theia/node_modules/@theia` to silence a 1.76 break | Hard rule 1 violation; `diff-theia-core.sh` red | DI rebind or default preference in `@powerbrowser/*` |
+|---|---|---|
+| Lock or "Not Secure" from URL text | Users trust phishing or cert-error pages | Chrome-side `secureBrowserUI.state`, reset on location change |
+| Page fullscreen without the warning | Full-window UI spoofing | Ship the warning with the relay |
+| Relayed prompts without origin | Page text passes for product messages | Origin line from the chrome-side principal on every prompt |
+| Privileged kinds as Theia commands | Extensions or AI grant permissions or wipe data | Event-handler-only invocation, chrome-side validation |
+| `openStockTab` wall widened by pattern | System-principal loads of arbitrary `about:`/`chrome:` | Frozen literal set plus a planted-fault self-test |
+| Token cookie sent to other loopback ports | Local dev server gets a backend credential | Decision in P1; strip or scope |
+| Clipboard read on focus | Secret exposure | Explicit gesture or URL-only, never logged |
+| Extension acts on stock tab while overlay is visible | Data sent from the wrong page | Refuse with copy until overlays are real tabs to extensions |
 
 ## UX Pitfalls
 
 | Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Theia Welcome opens alongside the PowerBrowser welcome at 1.76 | Two welcome tabs, links to theia-ide.org | `workbench.startupEditor: "none"` default; check on a fresh profile |
-| Telemetry setting description becomes Theia's text | Settings copy no longer matches the PowerBrowser contract | Record which schema wins at the live check |
-| Testing first-boot only on a reused config dir | Regressions ship that only new users see | Fresh `THEIA_CONFIG_DIR` run in phases 19 and 24 |
-| Chrome-side fix "not working" in UAT | A real fix is reported failed | Purge the startup cache before every chrome-side UAT step |
+|---|---|---|
+| Page blanks whenever any popover opens | Cannot read the page while answering a question about it | Layer policy in P0; shrink rect for page-owned bars |
+| Shortcut does different things by invisible focus state | F5 reloads while debugging, Ctrl+K clears terminal | Page-focus context key; non-reserved keys |
+| Command-centre default in Coding swallows URLs | Typed URL becomes a file search | Auto-switch on URL-shaped input, visible mode chip |
+| alert() freezes the whole IDE | Lost work, force-quit | Tab-scoped relay with the stop-prompting control |
+| Permission requests silently denied | Sites "broken" with no explanation | Doorhanger shim, and until then a visible per-tab "blocked" indicator |
+| Focus stuck in a hidden page | Keyboard dead after a menu | Move focus to the frame before opening, restore after |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **ESR pin moved:** `configuration.toml:114`, `generated/upstream-pins.env` regenerated, `rebase-upstream.yml` default, `smoke-firefox.sh` derived, `fetch-upstream.sh` comment, and SHA recorded in `docs/BUILD.md`. Verify with `node scripts/verify-upstream-pins.mjs` and `git -C upstream rev-parse HEAD`.
-- [ ] **Full verify at 153.5:** both `objdir/` and `objdir-release/` read `Version=153.5.0` in `dist/bin/application.ini`. `mar-update-hop` is labelled as pre-153.5 evidence.
-- [ ] **Patches untouched:** `git diff --stat patches/` is empty; `apply-patches.sh --self-test` and `about-dialog-suppression` pass after the replay.
-- [ ] **React 19:** exactly one installed copy each of react, react-dom, @types/react, @types/react-dom and inversify; no `unmet peer` lines in the install log.
-- [ ] **Theia 1.76 live:** fresh-profile run shows one PowerBrowser welcome, no Theia Welcome, no AI Configuration tab; a `view:` URI opens; the factory-table console line is absent and was shown to fire when planted.
-- [ ] **Token gate at 1.76:** `side02-token-negative` and `side02-token-positive` run live, not just compiled.
-- [ ] **OpenCode gone locally:** no `theia/extensions/backend-opencode/` directory, no `node_modules/@powerbrowser/backend-opencode` symlink, no `generated/ai-backend.json`; `generate-check` reports 53 files; `yarn install --frozen-lockfile` passes on the committed lock.
-- [ ] **Brand scan:** run after `git add`; the `-PLAN.md` row count is reconciled in the same commit.
-- [ ] **Baseline:** `docs/non-gui/quick-baseline.txt` matches the actual `--quick` reds after phases 17 and 19.
-- [ ] **Chrome-side GUI fixes:** each live result names a `-purgecaches` launch.
-- [ ] **CI:** the latest `Verify static layers` run on `main` is green, read with `gh run list` (not inferred from local `--quick`).
+- [ ] **Search fallback:** verify single-word intranet host behaviour, `localhost:4000`, `127.0.0.1:3000` and IPv6 `[::1]:8080` all navigate, and the engine comes from configuration.toml.
+- [ ] **Security lock:** verify on a cert-error page, a mixed-content page, mid-navigation cross-site, and while typing.
+- [ ] **Shortcuts:** verify each key with the page focused, with Monaco focused, with the terminal focused, and in each mode. F5 still debugs in Coding.
+- [ ] **Clear history:** verify `tabs.sqlite` closed rows, thumbnails, `saved-pages`, the web-tab history file and the shell state are cleared, and Theia stays connected.
+- [ ] **Clear site data on localhost:** verify the IDE does not disconnect.
+- [ ] **window.open to tab:** verify Open Browser Window still opens the stock window (GUI-01) and an OAuth popup keeps `window.opener`.
+- [ ] **Permissions:** verify a background tab's request waits, and a camera grant shows a sharing indicator.
+- [ ] **Bookmark star:** verify it updates when the bookmark is removed from the stock window's Library.
+- [ ] **Extensions:** verify an action pressed with an overlay active never acts on a stock-window tab.
+- [ ] **Every chrome-side change:** verify the live run used `-purgecaches`.
+- [ ] **New copy:** verify a downstream fixture build shows the downstream name, not "PowerBrowser".
 
 ## Recovery Strategies
 
 | Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| Wrong ESR commit pinned (1) | MEDIUM | Move the pin, `rebase-upstream.sh --tag <right tag>`, rebuild both objdirs (about 2 h) |
-| Hand-edited patch (3) | LOW | `git checkout -- patches/`, `rebase-upstream.sh` again; if a change is needed, edit `upstream/` and regenerate |
-| React mismatch or duplicate (4) | LOW | Move the four pins, add resolutions, `yarn install --ignore-scripts`, rebuild, re-run the live check |
-| Bundled Node/React/Theia change (5) | MEDIUM | Revert to the last green commit and re-apply as three commits |
-| Theia Welcome or telemetry text regression (6) | LOW | Default preference or a guarded rebind in `@powerbrowser/branding`; never a core edit |
-| Local-only reds after OpenCode removal (7) | LOW | `rm -rf` the leftover directory and symlink, delete `generated/ai-backend.json`, `yarn install` |
-| Vacuous absence check shipped (8) | LOW | Add a planted-fault self-test row; the next run tells whether the check was ever real |
-| Brand-scan count drift (10) | LOW | Bump `expected_count` with a COUNT MOVED reason line in the same commit |
-| Stale chrome JS in a UAT result (11) | LOW | Purge the cache, re-run the step, and correct the UAT record |
-| Concurrent session's sidecar killed by an install (16) | LOW | Restart that sidecar; next time coordinate through `git status` and `.worktree-lock` first |
+|---|---|---|
+| GUI-01 broken by the browserDOMWindow shim | MEDIUM | Revert the shim; move `browser-window-command.ts` onto an actor kind; re-land with opener branching |
+| Stand-in member changed an upstream path | LOW-MEDIUM | Remove the member; intercept upstream consumer instead; add the consumer to the derived call-site list |
+| Reserved key broke a Theia binding | LOW | Switch to non-reserved key with target check; add a row to the shortcut table |
+| Token cookie cleared in the field | LOW | Re-mint on 403 through TheiaService; add the exemption |
+| Catalogue line drift after merge | LOW | `verify-ng-040-internals-catalogue-lines.mjs --fix`, re-run `--catalogue` |
+| Extensions built on a fake tabbrowser | HIGH | Remove; fall back to the stock-window route; spike the patch path properly |
+| Stale live test (cache not purged) | LOW | Re-run with purge; discard the earlier verdict in the phase log |
 
 ## Pitfall-to-Phase Mapping
 
 | Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| 1 Tag and commit identity | 18 | `git ls-remote` record plus `git -C upstream rev-parse HEAD` equal to the recorded SHA |
-| 2 Multi-build full verify, stale MAR evidence | 18 | Both `application.ini` files at 153.5; full `verify-platform.sh` log; MAR note in the verification |
-| 3 Patch hand-edits | 18 | Empty `git diff patches/`; `apply-patches.sh --self-test` |
-| 4 React mismatch or duplicates | 19 | New single-copy `--quick` row and its self-test |
-| 5 One-step multi-upgrade | 19 | Three commits, each with a `--quick` log and a live start |
-| 6 First-boot and runtime regressions | 19, 24 | Fresh-profile live check record; UAT sheet lines |
-| 7 Local versus CI removal leftovers | 17 | `theia-build-order`, `generate-check`, frozen-lockfile install all green locally |
-| 8 Vacuous absence assertions | 17, 19, 21, 24 | Each absence check has a planted control row |
-| 9 Red gate and hooks | 17, 19, 21 | Baseline refreshed; NG-051 approved by Chris; plans under the size gate |
-| 10 Brand scan | 17 and every phase | Scan run after `git add`; row counts reconciled |
-| 11 Startup cache and profile downgrade | 18, 20, 21-24 | `docs/BUILD.md` tier-1 line; UAT entries name the purge |
-| 12 Token gate proof | 19 | Live `side02-*` rows in the UPD-04 record |
-| 13 Node 24 native rebuild | 19 | `drivelist` rebuild with `--nodedir`; `smoke-theia.sh` on 24 |
-| 14 Rebase workflow | 18, 25 | Workflow default equals the pin; workflow either wrapped in Nix or recorded as unexercised |
-| 15 generate-check locally | 20 | Reproduced failure or a recorded "no longer reproduces" with the inkscape path |
-| 16 Concurrent sessions | 17, 19, 20 | Quiet-tree evidence in the plan summary |
+|---|---|---|
+| 1 browserDOMWindow vs GUI-01 | P6 | GUI-01 live row green after the shim; opener test page |
+| 2 gBrowser stand-in growth | P0 (policy, derived call sites), P3/P4/P6 | `shell-gbrowser-standin` with derived sites and new planted caller |
+| 3 Silent upstream fallbacks | P4, P6 | Recorded live probe before each plan; positive page-side assertions |
+| 4 Reserved keys and when-clauses | P0, P2 (P1 for Ctrl+K) | Derived shortcut-table set equality; live matrix of focus states |
+| 5 Security indicators | P3 (P4 for fullscreen) | Check that identity UI never reads `inputValue`; cert-error and mixed-content live pages |
+| 6 Token cookie on 127.0.0.1 | P1, P3, P4 | Planted clear keeps the cookie; IDE survives Clear site data |
+| 7 Privileged kinds callable by extensions/AI | P0, P3, P4, P1 | No command ids for state-changing kinds; openStockTab self-test |
+| 8 Overlay z-order and focus | P0, every UI phase | Selector vs popover-class derived check; focus probe after menu open |
+| 9 Command-centre mode | P1 | No suggestion call in command-centre mode; page visible while dropdown open |
+| 10 Search contracts | P1 | `verify-endpoints` green with explicit rows; fixture build engine and name |
+| 11 Places and clear history coverage | P0, P1, P4 | Plant-and-clear across every store |
+| 12 WebExtensions | P5 (spike first) | Spike verdict recorded before planning |
+| 13 Clipboard privacy | P1 | No clipboard read without gesture; no raw text in pushes or logs |
+| 14 ESR fragility and catalogue | P0, P5 | New shim globals in `FORBIDDEN_PATTERNS`; derived shim-contract checks |
+| 15 Verification blind spots | All, harness in P0 | Purgecaches recorded; positive assertions; self-tests |
 
 ## Sources
 
-- In-tree, read 2026-10-16 (HIGH): `CLAUDE.md`; `.planning/PROJECT.md`; `.planning/HANDOFF-plan-reorg.md`; `flake.nix`; `configuration.toml:113-127`; `theia/package.json`; `theia/applications/browser/package.json`; `theia/extensions/*` (branding, tab-uris, token-gate, chrome-bar, modes); `scripts/fetch-upstream.sh`, `rebase-upstream.sh`, `apply-patches.sh`, `check-patch-surface.sh`, `diff-theia-core.sh`, `verify-upstream-pins.mjs`, `verify-branding-identity.mjs`, `verify-installer-build-proof.mjs`, `verify-mar-update-hop.mjs`, `verify-theia-build-order.mjs`, `verify-ng-051-backend-off.mjs`, `verify-platform.sh`, `size-gate.py`, `check-ledger.py`; `.claude/settings.json` and `.claude/hooks/*.py`; `.github/workflows/verify.yml`, `rebase-upstream.yml`; `docs/BUILD.md` (Theia half, UPD-04 record, rebase procedure, toolchain baseline); `docs/non-gui/decisions.md` R33; `inventory/brand-tokens.json`; `.planning/codebase/CONCERNS.md`.
-- Past evidence (HIGH): `.planning/milestones/v1.0-phases/01-*/deferred-items.md` rows 4, 9-11; `.planning/milestones/v1.3-phases/14.1.1-gui-conformance-sweep/deferred-items.md`; `.planning/milestones/v1.3-phases/16-ai-backend-adapter-opencode/deferred-items.md`; 08-05 UPD-03 live drill and 09-04 UPD-04 proof records in `docs/BUILD.md`.
-- Live checks in this session (HIGH): `git ls-remote` of FIREFOX_153 ESR tags; GitHub contents API blob SHAs for the 5 patched files plus `aboutDialog.xhtml` and `milestone.txt` at 153.1 and 153.5; `npm view` of `@theia/core@1.74.1/1.76.0` peers, `@theia/ai-ide@1.76.0` deps, `@theia/getting-started@1.76.0` `theiaExtensions`; `npm pack @theia/ai-ide@1.76.0` (no `initializeLayout`, `AIConfigurationViewContribution`); Theia `CHANGELOG.md` 1.75.0/1.76.0 breaking changes; `gh run view 36495714210 --log-failed`; `gh run list --workflow rebase-upstream.yml` (empty); `node scripts/generate.mjs --check` (PASS, 54 files); installed copy counts of react/inversify in `theia/node_modules`.
-- Memory (MEDIUM, project-recorded experience): `chrome-js-startup-cache`, `live-gui-debug-loop`, `concurrent-sessions-on-main`, `one-fix-at-a-time-confirmed`.
-- Sibling v1.4 research (cross-referenced, not re-derived): `.planning/research/STACK.md`, `.planning/research/ARCHITECTURE.md`, `.planning/research/FEATURES.md`.
+Tree (HIGH):
+- [/home/chris/coding/Power-Browser/powerbrowser/shell/powerbrowser.js](powerbrowser/shell/powerbrowser.js): gBrowser stand-in, reserved Ctrl+L, GUI-01 comment
+- [/home/chris/coding/Power-Browser/powerbrowser/shell/powerbrowser.xhtml](powerbrowser/shell/powerbrowser.xhtml): CSP `default-src chrome:`
+- [/home/chris/coding/Power-Browser/powerbrowser/shell/PowerBrowserAPI.sys.mjs](powerbrowser/shell/PowerBrowserAPI.sys.mjs): sender wall 244-341, `setSessionCookie` 528-560, `openStockTab` ~1108, `webTabOpen`/`webTabPush`/`webTabGeometry`/`webTabFocusAddress` 3231-3575
+- [/home/chris/coding/Power-Browser/powerbrowser/INTERNAL-APIS.md](powerbrowser/INTERNAL-APIS.md): line-keyed rows, Places-read row 36
+- [/home/chris/coding/Power-Browser/powerbrowser/endpoint-allowlist.json](powerbrowser/endpoint-allowlist.json): host and pref dispositions
+- [/home/chris/coding/Power-Browser/theia/extensions/tab-uris/src/browser/web-tab.ts](theia/extensions/tab-uris/src/browser/web-tab.ts): `BLOCKING_LAYER_SELECTOR` line 99
+- [/home/chris/coding/Power-Browser/theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx](theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx): lock from `inputValue` line 650, literal copy 610/616
+- [/home/chris/coding/Power-Browser/scripts/verify-shell-gbrowser-standin.mjs](scripts/verify-shell-gbrowser-standin.mjs): hand-kept `UPSTREAM_CALL_SITES`
+- [/home/chris/coding/Power-Browser/.planning/GUI-DEFECTS.md](.planning/GUI-DEFECTS.md): items 17-25, item 10 breakdown
+- [/home/chris/coding/Power-Browser/.planning/milestones/v1.4-phases/24-live-uat-pass/24-GAPS.md](.planning/milestones/v1.4-phases/24-live-uat-pass/24-GAPS.md): item 2 launch-log errors, item 10 ignored `moveTo`
+- [/home/chris/coding/Power-Browser/.planning/research/chrome-bar-firefox-gap.md](.planning/research/chrome-bar-firefox-gap.md)
+- Project memory notes on the chrome JS startup cache, the live GUI debug loop, concurrent sessions on main, and KWin screenshots (outside the workspace, under /home/chris/.claude/projects/-home-chris-coding-Power-Browser/memory/)
+
+Pinned upstream (HIGH, read from `upstream/` at FIREFOX_153_5_0esr_BUILD1):
+- `browser/modules/PermissionUI.sys.mjs:465-540,617`; `browser/actors/PromptParent.sys.mjs:200-307`; `browser/actors/ContextMenuParent.sys.mjs:28-46,160-218`; `browser/actors/LinkHandlerParent.sys.mjs:96-263`; `browser/actors/WebRTCParent.sys.mjs:153,1367`
+- `toolkit/modules/PopupNotifications.sys.mjs` (tabbrowser members); `browser/base/content/browser.js:483`
+- `dom/events/GlobalKeyListener.cpp:360-500` (reserved keys, reply events, editable exemption)
+- `docshell/base/CanonicalBrowsingContext.cpp:272-280` (secureBrowserUI on any top BC)
+- `toolkit/components/extensions/parent/ext-tabs-base.js:1729-1742`
+- `toolkit/components/printing/content/printUtils.js:18,128-137`; `toolkit/modules/ClipboardContextMenu.sys.mjs:173-180`
+- `toolkit/components/search/SearchEngineSelector.sys.mjs:190-224`; `browser/components/enterprisepolicies/Policies.sys.mjs:3074`
+- Theia 1.76 / Monaco keybindings under `theia/node_modules/@theia/*/lib` (debug, terminal, core, monaco-editor-core lineSelection/multicursor)
+
+Web (MEDIUM/LOW):
+- [Linux Mint Firefox branding test case](https://community.linuxmint.com/iso/testcase/43): distribution-specific search partner code (`client=firefox-b-lm`)
 
 ---
-*Pitfalls research for: PowerBrowser v1.4 Platform Updates and GUI Close-out*
-*Researched: 2026-10-16*
+*Pitfalls research for: v1.5 Chrome Bar Firefox Parity*
+*Researched: 2026-10-20*

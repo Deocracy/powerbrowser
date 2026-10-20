@@ -1,404 +1,424 @@
-# Feature Research — v1.4 Platform Updates and GUI Close-out
+# Feature Research
 
-**Domain:** close-out of a rebrandable Gecko + Theia browser platform (no new product features)
-**Researched:** 2026-10-16, against `main` at `e9e29c1` (4 commits ahead of `origin/main` at `5bba4e3`)
-**Confidence:** HIGH for tree state (every "current state" below was re-read or re-run this session); MEDIUM for two classifications that depend on Chris (G-32, sketch 005)
+**Domain:** Firefox-toolbar parity for a Theia-hosted browser chrome bar (PowerBrowser v1.5)
+**Researched:** 2026-10-20
+**Confidence:** HIGH for Firefox and Theia behaviour (read from the pinned `upstream/` at `FIREFOX_153_5_0esr_BUILD1` and from the installed `@theia/*` 1.76.0 `lib/`); MEDIUM for VS Code command-centre behaviour (release notes only); MEDIUM for complexity estimates (taken from the 2026-10-20 gap list, which did not re-check its own line numbers).
 
-## How to read this
+Scope: only the features that are new in v1.5. The "Already have" list in `.planning/research/chrome-bar-firefox-gap.md` is the baseline and is not repeated here. Out of scope (Chris, 2026-10-20): private browsing, containers, Sync, sketch 005 items 1-2, the 24-GAPS defects, data-driven custom modes.
 
-"Feature" here means a v1.4 work item. For each one this file gives: where it is defined
-(file:line), what the tree shows today (verified this session, not copied from the handoff),
-and one acceptance statement a person or a check can observe. Line numbers are as of
-`e9e29c1`.
+Complexity uses the gap list's S/M/L/XL. Mapping to the template: S = LOW, M = MEDIUM, L and XL = HIGH.
 
-Evidence runs taken this session:
+---
 
-- `scripts/verify-platform.sh --quick` → **114 PASS, 4 FAIL**. The four failures are
-  `gui08-canvas-geometry`, `gui08-canvas-geometry-self-test`, `gui08-panorama-copy`,
-  `gui08-panorama-copy-self-test`. No other row is red.
-- `node scripts/verify-gui08-canvas-geometry.mjs` → 3 failures: `dataset.tray` anchor gone,
-  160px card gone, 160x90 thumbnail gone.
-- `node scripts/verify-gui08-panorama-copy.mjs` → unreviewed copy "Expand", "Done"; contract copy
-  gone: "Ungrouped", "No ungrouped tabs — drag a tab here to ungroup it."
-- `node scripts/generate.mjs --check` → PASS in the host shell **and** inside
-  `nix develop .#theia` (inkscape 1.4.4 in both, Node v22.23.2 in the dev shell).
-- `gh run list --workflow verify.yml --branch main` → latest run 36495714210 on `5bba4e3`
-  failed on exactly the four gui08 rows.
-- `scripts/ledger-report.py` → 85 rows: done 53, deferred-approved 10, dropped 22.
+## Proposed requirement categories
 
-## Gap-ID register
+| Prefix | Category | Gap-list area |
+|--------|----------|---------------|
+| `SMODE-` | Address-bar modes dropdown (engines, Bookmarks, Tabs, History, Actions, Command centre) | new (Chris, 2026-10-20) |
+| `BAR-` | Address-bar input and search (fallback, fixup, switch-to-tab, suggestions, autofill, one-offs, paste & go) | Address bar input |
+| `NAV-` | Navigation buttons (Stop, hard reload, history menu, Home) | Navigation buttons |
+| `KEY-` | Keyboard shortcuts that work with the page focused | Keyboard shortcuts |
+| `SITE-` | Site identity, security state, permissions panel, clear site data, tracking shield | Site identity |
+| `MENU-` | App (hamburger) menu and the stock-page entries it opens | App menu and windows |
+| `PAGE-` | Page tools: find, zoom, print, favicons, mute, downloads, fullscreen | Page tools |
+| `BMK-` | Bookmarks and history: star, editor, reopen closed tab, toolbar, clear history | Bookmarks and history |
+| `EXT-` | WebExtension toolbar buttons and the extensions (puzzle) menu | App menu row "WebExtension toolbar buttons" |
+| `PROMPT-` | Page prompts: permission requests, alert/confirm/auth, context menu, window.open as tab, autofill | Page prompts and shell furniture |
 
-### G-14.1.1-9 (G-9) — clean-checkout Theia build
+`MODE-` is already used by v1.4 (PowerBrowser modes, MODE-01..04), so the dropdown takes `SMODE-` to avoid a collision. `EXT-01..03` exist from v1/v1.1 (extension declaration); new EXT rows must continue the numbering at `EXT-04`.
 
-- **Defined:** `.planning/milestones/v1.3-phases/14.1.1-gui-conformance-sweep/14.1.1-UAT.md:651-665`
-  (truth: "`yarn build` in theia/ succeeds from a clean checkout"); carry-forward at
-  `.../14.1.1-gui-conformance-sweep/deferred-items.md:44-64`.
-- **Current state:** `status: fixed` (Phase 20 plan 20-05). The order fix landed:
-  `theia/package.json:69` builds `token-gate` before `tab-uris`, and the `theia-build-order` and
-  `theia-build-order-self-test` quick rows PASS. The chain has 7 entries and ends in
-  `extensions/chrome-bar build` (OpenCode and its `backend-opencode` entry were removed in
-  Phase 17), with 5 derived edges. The gap's suggested proof (`rm -rf theia/extensions/*/lib &&
-  yarn build:extensions`) is vacuous: under `composite`, `tsc -b` reads `tsconfig.tsbuildinfo`,
-  which sits outside `lib/`, and reports "up to date" over an empty `lib/`. The proof is the
-  full-tier `theia-fresh-clone-build` row, which runs CI's install-and-build step in a fresh
-  clone of HEAD, with `theia-fresh-clone-build-self-test` showing it red on three planted faults.
-- **Acceptance:** On a fresh `git clone` (or after deleting every `theia/extensions/*/lib`),
-  `nix develop .#theia -c bash -c 'cd theia && yarn install --frozen-lockfile && yarn build'`
-  exits 0, and the UAT entry flips to `fixed`, citing that run.
-- **Class:** Table stakes.
+The shared groundwork in the gap list (wider state push, shortcut relay, web-tab action kinds, popover primitive, Places-write policy, search area, shell-window shims, openStockTab allow-list) should not get its own REQ-IDs. Each piece lands inside the first requirement that needs it, and the requirement's check covers it.
 
-### G-14.1.1-10 (G-10) — group-channel static check
+---
 
-- **Defined:** `14.1.1-UAT.md:666-680` (truth: "A --quick row goes red when any of the five
-  group-channel preconditions regresses"); the five faults are described in
-  `.planning/GUI-DEFECTS.md:59-92`.
-- **Current state:** `status: open`. All five preconditions are in the code:
-  `GROUP_ACTOR_CHILD_MODULE = "resource://powerbrowser/GroupActorChild.sys.mjs"`
-  (`powerbrowser/shell/PowerBrowserAPI.sys.mjs:255`), `wantUntrusted: true` (`:2196`),
-  `document.dispatchEvent(... bubbles: true)`
-  (`theia/extensions/modes/src/browser/group-actor-client.ts:90-91`), and the reply detail built
-  by the content window's own `JSON.parse(JSON.stringify(...))` through `win.wrappedJSObject`
-  (`powerbrowser/shell/GroupActorChild.sys.mjs`; there is no `cloneInto`).
-  `scripts/verify-platform.sh` has **no** row for them (grep for group-channel, wantUntrusted
-  and GroupActorChild returns nothing). Only live checks touch the channel:
-  `verify-ng-038-actor-sender-wall.mjs` and `verify-web-tab-live.mjs`. The file that held this gap,
-  `group-actor-client.ts`, is now committed and clean.
-- **Acceptance:** `scripts/verify-platform.sh --only group-channel` passes on the tree, and its
-  `--self-test` plants each of the five faults (chrome:// child path, `wantUntrusted` false,
-  `window` dispatch, `bubbles:false`, uncloned reply). Each plant goes red and names its fault.
-  Clean control is green. The expected values are derived from the source, not hand-kept
-  (CLAUDE.md, Verification rule 2).
-- **Closed (Phase 20, plan 20-03):** the `group-channel` and `group-channel-self-test` rows
-  now cover all five, plus event-name agreement and `window` response listeners.
-- **Class:** Table stakes.
+## The address-bar modes dropdown (SMODE) — exact specification
 
-### G-14.1.1-11 (G-11) — Variant B strip relocation, ratification
+### How Firefox does it (pinned source)
 
-- **Defined:** `14.1.1-UAT.md:681-694` (truth: "The tab strip's per-mode behaviour matches one
-  ratified reading"); `.planning/GUI-DEFECTS.md:22` (item 2, OPEN).
-- **Current state:** **The code is built. The records are behind it.** Commit `539ba36`
-  ("feat(gui07): the tab strip relocates per mode", 2026-09-08) is an ancestor of HEAD.
-  `theia/extensions/chrome-bar/src/browser/tab-strip-widget.tsx` is a second view over the dock,
-  shown in Browsing; the dock's own bar is shown in Coding. `14-UI-SPEC.md:22-33` was amended
-  2026-09-08 to "Verdict GREEN → Variant B", and
-  `13-chrome-bar-strip-relocation-spike/13-SPIKE-STRIP-RELOCATION.md:16` reads
-  `Verdict: GREEN`. These records are still stale:
-  - the UAT entry is still `open`
-  - GUI-DEFECTS item 2 is still OPEN
-  - the GUI-07 box is unchecked (`.planning/REQUIREMENTS.md`, GUI-07)
-  - the header of `theia/extensions/modes/src/browser/mode-descriptors.ts:12-17` still says
-    "13-01 verdict RED: the tab strip stays top in every mode"
-  - `14-UAT.md` test 3 is still "Tab strip stays top in every mode" (`skipped`)
-- **Acceptance:** Chris switches Browsing → Coding → Browsing in the built app. In Browsing the
-  tabs sit above the URL row. In Coding they sit in the editor area's tab bar. No tab is lost or
-  duplicated across the switches. Then G-11 reads `fixed` (ratified Variant B), GUI-DEFECTS item 2
-  is closed, GUI-07 is checked, the `mode-descriptors.ts` comment matches the code, and `14-UAT.md`
-  test 3 is restated as relocation.
-- **Class:** Table stakes. This is a records-and-confirmation step, not build work.
+Firefox 153 ships the "unified search button" on by default: `browser.urlbar.scotchBonnet.enableOverride` is `true` (`upstream/browser/app/profile/firefox.js:451`, `upstream/browser/components/urlbar/UrlbarPrefs.sys.mjs:446`). The implementation is `upstream/browser/components/urlbar/content/SearchModeSwitcher.mjs`.
 
-### G-14.1.1-23 (G-23) — 60-character name cap at the input
+**Markup** (`upstream/browser/components/urlbar/content/UrlbarInput.mjs:124-151`): a `moz-button.searchmode-switcher` sits at the far left of the pill, before the site-info slot. It contains an icon, a dropmarker, a `.searchmode-switcher-title` label, and a `.searchmode-switcher-close` (x) button. The popup is a `panel-list` with a heading, an installed-engines group, a separator, the local modes, a footer separator, and a settings item.
 
-- **Defined:** `14.1.1-UAT.md:803-816` (truth: "Setup and mode names are capped at 60 characters
-  at the input, before commit"; contract `14-UI-SPEC.md:316` "one name field (cap 60
-  characters)").
-- **Current state:** `status: open`, and the code is unchanged.
-  `mode-service.ts:447` and `setups-service.ts:579` call `quickInput.input({ prompt, placeHolder })`
-  without `validateInput`, then `answer.trim().slice(0, 60)`. A 61+ character name is accepted
-  silently and saved truncated. Both files are now committed and clean, so the hold is gone.
-  **Spec ambiguity to resolve first:** `14-UI-SPEC.md:360` reads "pasted overflow is cut at the
-  cap before commit", which the current slice satisfies literally. The gap's reading, "refuse at
-  the input", is the stricter one.
-- **Acceptance:** In Save as Mode and Save Setup, typing or pasting a 61st character shows an
-  inline validation message in the quick input, and Enter does not commit until the name is 60
-  characters or fewer. A 60-character name saves unchanged. A static check (or an extension of
-  `verify-gui09-setups-copy.mjs`) asserts that both inputs pass `validateInput` against
-  `MODE_NAME_MAX` / `SETUP_NAME_MAX`. If Chris instead ratifies the `:360` reading, the entry
-  closes as `fixed (spec-ratified)` with no code change.
-- **Class:** Table stakes (Low complexity).
+**Popup contents, top to bottom** (`SearchModeSwitcher.mjs` `#buildSearchModeList`, `#populateEngines`):
 
-### G-14.1.1-32 (G-32) — side panels slide on mode switch
+1. Heading "This time search with:" (`urlbar-searchmode-popup-one-off-header`, `upstream/browser/locales/en-US/browser/browser.ftl:898`). The wording says the choice is for one search, because `scotchBonnet.persistSearchMode` defaults to `false` (`UrlbarPrefs.sys.mjs:450`).
+2. One row per visible engine (`SearchService.getVisibleEngines()`, minus `hideOneOffButton`). Each row has the engine icon, the engine name, and the first letter as its access key. A "new" badge appears on unused app-provided engines.
+3. Separator.
+4. Local modes from `UrlbarUtils.LOCAL_SEARCH_MODES` (`upstream/browser/components/urlbar/UrlbarUtils.sys.mjs:291-326`), in this order:
+   - Bookmarks — restrict `*`, access key B
+   - Tabs — restrict `%`, access key T
+   - History — restrict `^`, access key H
+   - Actions — restrict `>`, access key A
+   The labels come from `browser.ftl:877-884`.
+5. Up to 3 "Add “{engine}”" rows for OpenSearch engines that the current page advertises (`MAX_OPENSEARCH_ENGINES = 3`).
+6. "Search Settings" (access key S), which opens `about:preferences#search`.
 
-- **Defined:** `14.1.1-UAT.md:930-941` (truth: "Side panels slide on a mode switch within 200 ms,
-  instantly under reduced motion"; `fixable: needs-chris`); contract `14-UI-SPEC.md:198-200`,
-  `:265`, `:367`.
-- **Current state:** `status: open`. No slide is authored. Every `transition` in
-  `theia/extensions/modes/src/browser/modes.css` is on custom rows, buttons or Panorama cards
-  (`:53, :107, :152, :848`). None targets a side-panel container, and no other extension CSS
-  does either. The panels use the stock instant collapse.
-- **Acceptance:** One of two outcomes, chosen by Chris.
-  - (a) Switching Coding ↔ Browsing animates the left, right and bottom panel widths over 200 ms
-    or less. With `prefers-reduced-motion: reduce` the switch is instant. Measured live, the panel
-    width is intermediate at about 100 ms and final by 200 ms.
-  - (b) Chris accepts the stock collapse. `14-UI-SPEC.md` Motion and the `:367` state row are
-    amended to "instant", and G-32 closes as `fixed (spec-amended)`.
-- **Class:** Table stakes as a **decision**. The animation itself (option a) is optional.
+**Selecting a row:**
+- Engine row, normal click: enters that engine's search mode and keeps the typed text (`#remoteSearch`).
+- Engine row with Shift, or a middle/Ctrl click: opens the results page immediately, in the current tab or a new one (`#whereToOpenSerp`). Shift never opens a window.
+- Local row: runs `input.search(restrict + " " + text)`, which enters that mode (`#localSearch`).
+- Typed text is carried over only when the pill is not showing the page's own URL (`#getSearchString` checks `pageproxystate != "valid"`).
 
-### W1 — the active group filters the tab strip (handoff: "strip filtered by active group")
+**What the pill shows** (`updateSearchIcon`):
+- Outside a search mode, the button shows the default engine's icon and has no label. Its tooltip is "{engine}, pick a search engine" (`urlbar-searchmode-button3`). The globe icon replaces it when keyword search is disabled.
+- Inside a search mode, the button shows the mode's icon, its label in `.searchmode-switcher-title`, and the x button.
+- The placeholder changes with the mode (`browser.ftl:540-594`):
+  - default: "Search with { $name } or enter address", or "Search or enter address" when no engine is known
+  - general-purpose engine mode: "Search the Web"
+  - site engine, bookmarks, history, tabs and actions modes: "Enter search terms", with aria-labels "Search bookmarks", "Search history" and so on
 
-- **Defined:** `.planning/milestones/v1.3-phases/15-panorama-organising/15-PANORAMA-WORKLIST.md:32-42`;
-  open decision 2 at `:133-135`.
-- **Current state:** Not built. `tab-strip-widget.tsx:297-299` `mainTabs()` filters only the
-  home pane and stacked tabs. Nothing in `chrome-bar/src` reads a group. `GroupModel` holds
-  `activeGroupId` (`group-model.ts:117, 250`), but there is no shared frontend membership reader.
-- **Acceptance:** With groups A (2 tabs) and B (1 tab) and A active, the Browsing strip shows
-  exactly A's 2 tabs. Activating B in Organising and returning to Browsing shows exactly B's tab.
-  No tab is closed. Coding follows decision 2.
-- **Class:** Table stakes. It is the core purpose of Panorama (worklist `:34`).
-- **Hidden prerequisite, W2 (not in the handoff list):** a tab made with "+" must land in the
-  active group (worklist `:44-51`). This is **not built**: the only `setTabGroup` caller is
-  `group-model.ts:643` (Organising drop paths), and no create path assigns a group. Without W2,
-  W1 makes every new "+" tab vanish from the strip it was opened from. W2 must ship with W1.
+**Keyboard:**
+- Typed token plus a space enters a mode, and the token is removed from the text. `^` is History, `*` is Bookmarks, `%` is Tabs, `?` is the default engine, and `>` is Actions (Actions only with scotchBonnet). Sources: `UrlbarShared.mjs:46-72` (`RESTRICT_TOKENS`, `SEARCH_MODE_RESTRICT`), `UrlbarProviderHeuristicFallback.sys.mjs:235-270`, and `UrlbarInput.mjs:2341-2356` (`onFirstResult`, entry `"typed"`). A token without a space after it stays plain text. `+` (tags), `#` (titles) and `$` (URLs) narrow the results but do not enter a mode.
+- `@` lists the engines that have aliases, and `@alias ` enters that engine's mode (`UrlbarProviderTokenAliasEngines.sys.mjs:63`).
+- Alt+Up or Alt+Down opens the popup and focuses the button (`handleKeyDown`, `#handleAltUpDown`).
+- Accel+Up or Accel+Down cycles through the engines and then the local modes without opening the popup, and re-runs the query (`#handleAccelUpDown`).
+- Down on the focused button opens the popup. Tab past the last result moves focus to the button, and Shift+Tab past the first result does the same (`UrlbarController.sys.mjs:437-460`).
+- Backspace with the caret at position 0 and no selection leaves the mode and re-queries (`UrlbarController.sys.mjs:560-570`).
+- Escape first closes the results list. A second Escape reverts the pill, and `handleRevert` sets `searchMode = null` (`UrlbarController.sys.mjs:358-376`, `UrlbarInput.mjs:1420-1423`).
+- Ctrl+K enters default-engine search mode (`key_search`, `searchModeShortcut`, `UrlbarInput.mjs:2868-2882`). Ctrl+J (Linux) or Ctrl+E (other platforms) is the alternate key (`key_search2`, `browser-sets.inc.xhtml:165-172`, `browserSets.ftl:50-55`).
+- Search mode is stored per tab (`#getSearchModesObject(browser)`).
+- The quick actions behind Actions are `upstream/browser/components/urlbar/QuickActionsLoaderDefault.sys.mjs:80-335`: addons, bookmarks, clear history, downloads, extensions, help, inspect, color picker, library, logins, mute, print, private, refresh, restart, save PDF, screenshot, settings, themes, translate, update, view source and labs.
 
-### W4 — Undo Close Group, replacing the confirm dialog
+### How Theia 1.76 and VS Code do the command centre
 
-- **Defined:** `15-PANORAMA-WORKLIST.md:59-67`.
-- **Current state:** Not built. `organising-widget.ts:378-406` still opens a `ConfirmDialog`
-  with "…You can't undo this." `group-model.ts:676-702` commits `closeGroup` immediately. The copy
-  contract still requires the destructive confirmation (`15-UI-SPEC.md:142, :219`), and
-  `gui08-close-exactness` plus `gui08-panorama-copy` pin it.
-- **Acceptance:** Closing a group hides it and its tabs at once, with no dialog, and shows an
-  Undo affordance. Undo within about 15 s restores the group, its bounds and its tabs. Doing
-  nothing removes them for good after the timeout, and a relaunch inside the window does not
-  resurrect a committed close. The 15-UI-SPEC copy and the two checks are updated in the same
-  change.
-- **Class:** Table stakes (Medium: touches the chrome-side writer `closeGroupRows` and two gates).
+Theia 1.76 has no title-bar command-centre widget. A search for `commandCenter` across `@theia/core` and `@theia/monaco` finds nothing. What Theia has is the quick-access registry behind the stock quick input. Its prefixes, read from the installed `lib/`:
 
-### W5 — per-card close button
+| Prefix | Provider | Stock key (browser target) | Source |
+|--------|----------|----------------------------|--------|
+| `''` (none) | Go to file | Ctrl+P | `@theia/file-search/lib/browser/quick-file-open.js:55,136`, `quick-file-open-contribution.js:46` |
+| `>` | Commands | F1, Ctrl+Shift+P | `@theia/core/lib/browser/quick-input/quick-command-service.js:50`, `quick-command-frontend-contribution.js:64-68` |
+| `@` | Go to symbol in the active editor | — | `@theia/monaco/lib/browser/monaco-gotosymbol-quick-access.js:49` |
+| `:` | Go to line | — | `@theia/monaco/lib/browser/monaco-gotoline-quick-access.js:45` |
+| `#` | Go to symbol in workspace | Ctrl+O (Ctrl+T in Electron) | `@theia/monaco/lib/browser/workspace-symbol-command.js:38,60` |
+| `?` | Help: lists every provider | — | `@theia/core/lib/browser/quick-input/quick-help-service.js:26,47-69` |
+| `edt ` | Open editors | — | `@theia/editor/lib/browser/quick-editor-service.js:32` |
+| `term ` | Terminals | — | `@theia/terminal/lib/browser/terminal-quick-open-service.js:29` |
+| `task ` | Tasks | — | `@theia/task/lib/browser/quick-open-task.js:60` |
+| `debug ` | Launch configurations | — | `@theia/debug/lib/browser/debug-prefix-configuration.js:43` |
+| `view ` | Open view | — | `@theia/core/lib/browser/quick-input/quick-view-service.js:32` |
 
-- **Defined:** `15-PANORAMA-WORKLIST.md:69-71`.
-- **Current state:** Not built. The card (`organising-widget.ts:900-935`) has a title, an
-  address line, dblclick/Enter to dive and arrow-key focus. It has no close control. Only the
-  group box has one (`:806-815`).
-- **Acceptance:** Every card shows a labelled close control (visible on hover and focus, with
-  `aria-label`). Activating it closes that one tab: the card disappears, the tab leaves the strip,
-  and no other tab or group changes.
-- **Class:** Table stakes (Low).
+The file provider's placeholder is computed at runtime: "Search files by name (append : to go to line or @ to go to symbol)" (`quick-file-open.js:136`).
 
-### W6 — type-anywhere search on the canvas
+VS Code's command centre was introduced in 1.69 (setting `window.commandCenter`). It replaces the title-bar text. Clicking it opens Quick Open, which shows recent files and a search box with no prefix. Go Back and Go Forward sit on its left, and a separate control lists the quick-access options. It launches the quick input; it is not an inline input. (MEDIUM: VS Code 1.69 release notes.)
 
-- **Defined:** `15-PANORAMA-WORKLIST.md:73-76`.
-- **Current state:** Not built. The only widget-level key handler is Escape
-  (`organising-widget.ts:183-188`). Scope records disagree: `15-UI-SPEC.md:20-22` says search
-  "ship[s] only if cheap, else explicitly deferred", and `.planning/PROJECT.md:271` lists
-  "Piles + type-anywhere search" under **v1.5+ candidates**. The handoff (`:68`) puts it in v1.4.
-- **Acceptance:** In Organising, typing any printable key opens a search box. Matching cards are
-  outlined and the rest dim. Enter dives into the top match. Escape clears the search and
-  restores every card.
-- **Class:** Optional. Defer unless Chris confirms the handoff over PROJECT.md:271.
+**The integration finding that shapes the design.** `QuickAccessRegistry` (`@theia/core/lib/browser/quick-input/quick-access.d.ts`) exposes `getQuickAccessProviders()` and `getQuickAccessProvider(prefix)`. Each descriptor's `getInstance().getPicks(filter, token)` returns plain `QuickPicks`: items with label, description, detail and `execute()`, plus separators. The chrome bar can therefore render Theia's files, commands, `#`, `?`, `edt `, `term `, `task `, `debug ` and `view ` results in its own dropdown with no core patch.
 
-### W11 — group cycling and the unclosable last group
+The exceptions are `@` and `:`. They are registered as monaco-native providers, so `MonacoQuickAccessRegistry.getQuickAccessProvider` returns no Theia descriptor for them (`@theia/monaco/lib/browser/monaco-quick-access-registry.js`, the `theiaDescriptor` filter). They also preview inside the editor as the selection moves. For those two prefixes the pill hands off to the stock widget with `quickInputService.open(text)`. That widget is already in the page-overlay occlusion list (`.quick-input-widget` in `BLOCKING_LAYER_SELECTOR`, `theia/extensions/tab-uris/src/browser/web-tab.ts:99`).
 
-- **Defined:** `15-PANORAMA-WORKLIST.md:112-115`.
-- **Current state:** Not built. `panorama-commands.ts` registers five commands and no
-  keybindings. The extension has no `KeybindingContribution` for groups. The group close button
-  renders unconditionally (`organising-widget.ts:806`).
-- **Acceptance:** Ctrl+\` activates the next group and Ctrl+Shift+\` the previous one, and the
-  Browsing strip follows (needs W1). With exactly one group, its close control is absent from
-  both canvas and tree.
-- **Class:** Optional. The last-group half is cheap, and it becomes table stakes if W1 ships with
-  "every tab is in a group" (decision 1).
+### PowerBrowser specification (recommended)
 
-### NG-074 — CI verify passes on main
+**SMODE-01 Dropdown entries**, top to bottom:
 
-- **Defined:** `ledger/REQUIREMENTS.json:955-966` (spec_ref `docs/non-gui/GAPS.md:101`, test_ref
-  `scripts/verify-ng-074-ci-main.mjs::ng074-ci-green-on-main`); unblock options in
-  `docs/non-gui/questions-wave-e.md:15-39` (Q1, OPEN).
-- **Current state:** `deferred-approved`, owner chris, phase 15. The last run, 36495714210 on
-  `5bba4e3`, failed on exactly the four gui08 rows. The local quick tier agrees: 114/4. `main` is
-  4 commits ahead of `origin/main`, so a push is needed before any run can see a fix.
-- **Acceptance:** `node scripts/verify-ng-074-ci-main.mjs` exits 0. That means a `verify.yml`
-  run on the commit `main` points at completed with conclusion `success`, and the ledger row
-  moves to `done` with that run ID as evidence.
-- **Class:** Table stakes. It is the milestone's exit gate.
+1. Heading "This time search with:" (Firefox wording, because the pick does not persist; see SMODE-04)
+2. **Command centre**, access key C. It sits in its own group at the top because it is the Coding default.
+3. Separator
+4. One row per visible engine: icon, name, first-letter access key. Data comes from the `listSearchEngines` kind (BAR- groundwork).
+5. Separator
+6. Bookmarks (B), Tabs (T), History (H), Actions (A), in Firefox's order and with Firefox's labels
+7. Separator
+8. "Search Settings" (S). It opens PowerBrowser's engine picker (BAR-), or `about:preferences#search` through `openStockTab` once the allow-list decision is made.
 
-### NG-084 — live UAT pass (v1.2 sheets + 13, 14, 14.1, 15)
+"Add “{engine}”" OpenSearch rows are deferred (see Future Consideration).
 
-- **Defined:** `ledger/REQUIREMENTS.json:1085-1096` (text: "The five v1.2 human UAT sheets are
-  signed"; spec_ref `GAPS.md:114`). v1.4 widens it to phases 13, 14, 14.1 and 15 plus the React 19
-  runtime check (`.planning/PROJECT.md:171-172`).
-- **Current state:** `deferred-approved`, owner chris, phase 15. Pending results counted this
-  session:
+The Command centre row has no sub-rows. Its sub-modes are reached by prefix. Typing `?` in Command centre lists them through Theia's help provider, so the list comes from the registry and is never hand-kept.
 
-  | --- | --- |
-  |-------|-------|
-  | `v1.2-phases/10-sign-off-closeout/10-UAT.md` | 5 pending |
-  | `13-UAT.md` | 11 pass, 2 skipped, 1 pending |
-  | `14-UAT.md` | 5 issue, 3 pending, 1 skipped, 1 superseded |
-  | `14.1-UAT.md` | 10 `[pending]` |
-  | `14.1.1-UAT.md` | 35 issue, 13 pending |
-  | Phase 15 | **no UAT sheet exists** |
+**SMODE-02 Default mode for each PowerBrowser mode:**
 
-- **Acceptance:** Every listed sheet has no `pending` result. Phase 15 has a UAT sheet and it
-  is run. The ledger text is amended to the widened scope (Chris approves) and moves to `done`.
-  One UAT line records the sidecar running on React 19 with no React error in the frontend
-  console.
-- **Class:** Table stakes.
+| PowerBrowser mode | Default | Rationale |
+|-------------------|---------|-----------|
+| Coding | Command centre (files) | Chris, 2026-10-20 |
+| Browsing | Address (Firefox's state outside any search mode: URL or default-engine search) | Firefox parity |
+| Organising | Tabs | **Recommendation, needs Chris's decision.** Panorama is about finding and arranging tabs; the alternative is Address. |
+| Custom modes | Address | Data-driven custom modes are out of scope, and `chrome-bar-widget.tsx` keys modes on hard-coded ids |
 
-### NG-051 — `backend = "off"` starts no opencode
+**SMODE-03 How the mode shows in the pill.** The mode button is the leftmost element of `.pb-chrome-bar-pill`, before the lock. Codicons are used, never Firefox's `chrome://` icons, because the Theia frame cannot load them across the scheme wall.
 
-- **Defined:** `ledger/REQUIREMENTS.json:656-667` (spec_ref `GAPS.md:75`, test_ref
-  `scripts/verify-ng-051-backend-off.mjs::ng051-backend-off`); amend flagged at
-  `.planning/HANDOFF-plan-reorg.md:55-56`.
-- **Current state:** `done`. The row lives in the full tier (`verify-platform.sh:4710`), and the
-  quick-tier `ai-opencode-held` row PASSES. OpenCode is still in the tree:
-  - `theia/extensions/backend-opencode/`
-  - `configuration.toml:116-127` (`[ai] backend = "off"`)
-  - `scripts/verify-opencode-{bridge,presets,tracer}.mjs` and `verify-ng-051-backend-off.mjs`
-  - 17 opencode lines in `verify-platform.sh`, including `:2612-2640` and `:4581-4597`
-  - the `backend-opencode` entry in `theia/package.json:69`
-  - Phase 16 at `.planning/ROADMAP.md:262`
+- **Address mode:** the default engine's favicon, or a search codicon when none is known. No label. Tooltip "{engine}, pick a search engine". Placeholder "Search with {engine} or enter address". The existing placeholder "Search or enter address" is the fallback.
+- **Any other mode:** icon plus a label chip, for example "Command centre", "Bookmarks" or the engine name.
+- **x button:** shown only when the active mode differs from the PowerBrowser mode's default, because x means "back to default". In Coding the "Command centre" chip is always visible, so the pill is not mistaken for an address box, and it has no x.
+- **Placeholders by mode:**
+  - Command centre: the active provider's own `placeholder`, read from the registry descriptor rather than copied
+  - engine mode: "Search the Web" for general engines, otherwise "Enter search terms"
+  - local modes: "Enter search terms", with aria-labels "Search bookmarks", "Search tabs", "Search history" and "Search actions"
 
-  Removing OpenCode deletes NG-051's test_ref, so the row cannot stay `done` with a dangling
-  reference.
-- **Acceptance:** After removal, the tree has no opencode identifier in source, scripts,
-  registry or roadmap (a grep check derived from the tree, with `ledger/` and `history/` excluded).
-  `ledger-report.py` shows NG-051 amended (dropped or superseded "adapter removed") through
-  `scripts/ledger-amend.py`, carrying Chris's approval quote. The quick tier is green, with
-  `ai-opencode-held` removed rather than left asserting an absent adapter.
-- **Class:** Table stakes. It is owner-gated: only Chris can approve the ledger amend.
+**SMODE-04 Lifetime.** A mode picked from the dropdown, by token or by Accel+Up/Down lasts until any of these happens:
+- Enter commits
+- Escape reverts
+- the active tab changes
+- the PowerBrowser mode changes
 
-### NG-082 — Theia re-pin (ledger text says 1.75.0)
+The pill then returns to the PowerBrowser mode's default. This matches Firefox's `persistSearchMode = false`. Firefox keeps the mode per tab; resetting on tab switch is simpler and loses little.
 
-- **Defined:** `ledger/REQUIREMENTS.json:1059-1070` ("Theia is re-pinned to 1.75.0 (UPD-02,
-  UPD-04)"; spec_ref `GAPS.md:112`), deferred to 999.2. The handoff replaces the target with
-  1.76.0 (`HANDOFF-plan-reorg.md:59-60`).
-- **Current state:** `configuration.toml:115` has `theia_release = "1.74.1"`. Every
-  `@theia/core` pin reads `1.74.1`.
-  `theia/applications/browser/package.json:95-96` has `react`/`react-dom` `18.3.1`. `flake.nix:20`
-  has `nodejs = pkgs.nodejs_22`. The handoff reports a trial build on 1.76.0 that needs two fixes
-  (delete the AI-layout override in branding; React 19). That trial is not in the tree.
-- **Acceptance:** `theia_release = "1.76.0"`, and `node scripts/generate.mjs` propagates it. Every
-  `@theia/*` pin and lockfile tarball agrees (the theia-pin rows green). React and react-dom are
-  on 19.x. `nix develop .#theia -c node --version` prints v24.x. `scripts/diff-theia-core.sh`
-  passes. The sidecar starts and the shell renders with no frontend error. NG-082 is amended to
-  the 1.76.0 target and moved out of 999.2 (Chris approves), then marked `done`.
-- **Class:** Table stakes. It is owner-gated for the ledger amend.
+**SMODE-05 Keyboard.** Firefox's keys, unchanged:
+- Alt+Up/Down opens the dropdown
+- Accel+Up/Down cycles modes
+- Down on the button opens it
+- Tab past the last result focuses the button
+- Backspace at position 0 returns to the default mode
+- Escape closes, then reverts
 
-## Other v1.4 items (no gap ID)
+Ctrl+Up/Down must stop propagation so Theia does not see it. Access keys apply while the dropdown is open.
 
-| Item | Defined | Current state (verified) | Acceptance | Class |
-| --- | --- | --- | --- | --- |
-| Firefox 153.5.0esr | `PROJECT.md:162`; `HANDOFF:37-38, 57-58` | `configuration.toml:114` `FIREFOX_153_1_0esr_RELEASE`; `upstream/` HEAD describes `FIREFOX_153_1_0esr_BUILD1`; no full build on 153.5 | Pin moved, `fetch-upstream.sh` places `upstream/` at the tag's commit, `git -C upstream diff` empty, all 4 patches apply, `./mach build` exits 0, full `verify-platform.sh` green | Table stakes |
-| Fix the tag comment | `HANDOFF:58` | `fetch-upstream.sh:276-282` comment is generic, not wrong. **A real defect sits in the block this edit touches:** `configuration.toml:104` reads "…ESR tag this# project builds against" (lost newline) | Comment reads as two lines; tag comment states RELEASE vs BUILD1 policy | Optional, rides with the FF pin |
-| Pin convention, RELEASE vs BUILD1 | `HANDOFF:37` says "`BUILD1`" | Tree pins the `_RELEASE` tag; `fetch-upstream.sh:277-282` says both tags point at one commit | One convention named in the requirement; the stack research must confirm 153.5's tag exists | Table stakes (decide in requirement text) |
-| `quick-baseline.txt` refresh | `PROJECT.md:166`; `docs/non-gui/decisions.md:39-45` (R33) | Lists 9 labels from `7b7a1f7`. 5 of them now PASS: `ai-opencode-tracer`, `gui07-strip-spike-verdict`, `gui08-persistence-roundtrip`(+self-test), `internals-catalogue`. Only the 4 gui08 rows are red today. Consumers are the wave plans only | File equals the set of currently red quick rows. Once the gui08 rows are green that set is empty, so delete the file with its R33 references | Table stakes (Low) |
-| `generate-check` fails locally (inkscape) | `HANDOFF:63`, the only source | **Not reproduced:** `generate.mjs --check` PASSES in the host shell and in `nix develop .#theia`, inkscape 1.4.4 in both. Likely cause (LOW confidence): the earlier session ran it under the Claude Code sandbox | Record the two passing runs and close as not-reproducible; reopen only with a failing log | Table stakes to close, Low |
-| Schema v3/v4 ledger rows | `PROJECT.md:165`; `HANDOFF:62` | Head is v6 (`PowerBrowserAPI.sys.mjs:50`). v3 = loose-tab `x`/`y` (`:81-84`), v4 = within-group `ord` (`:86-89`). NG-015 and NG-019 cover migration and docs *through* v3/v4, and NG-002 covers persistence across navigation. No row states the v3/v4 behaviour itself | Two ledger rows added via `ledger-amend.py` (Chris approves): "a loose tab keeps its canvas position across restart" and "card order within a group persists across restart". Each has a test_ref to a passing check | Table stakes (Low) |
-| Panorama redesign in 15-UI-SPEC + two gui08 checks | `questions-wave-e.md:15-39` (Q1); `HANDOFF:43-46, 67-69` | Spec still prescribes 160px cards, 160x90 thumbs, 144px Ungrouped tray (`15-UI-SPEC.md:90-95, :212-213, :281-285`). Code has 220px cards, 124px thumb (`modes.css:442, 460`), loose cards on canvas (`organising-widget.ts:71-79`), Expand/Done. Dead tray CSS remains at `modes.css:536-608`, with `ungrouped` naming in `group-model.ts:115, 246-350` | 15-UI-SPEC describes the shipped geometry and copy ("Expand"/"Done" reviewed). Both checks derive from the new contract and pass, self-tests included. Quick tier is 0 FAIL. Stale tray comments and dead CSS are removed | Table stakes. **Unblocks NG-074** |
-| 14-VERIFICATION | `PROJECT.md:170` | `14-modes-windows-setups/` has no VERIFICATION file (13, 14.1, 14.1.1, 16 do; 15 has none either) | `14-VERIFICATION.md` exists with every Phase 14 must-have scored against the tree, and G-11/G-23/G-32 outcomes cited | Table stakes |
-| Sketch 005 decision | `PROJECT.md:173`; `HANDOFF:74` | `.planning/sketches/005-vscode-layout/index.html` is untracked and absent from `MANIFEST.md`. It proposes 4 Coding-only changes: one title row, centred address box, right cluster, horizontal activity icons. 4 more items are marked already-true | `MANIFEST.md` has row 005 with a recorded verdict (adopt → a named later phase, or reject), and the sketch is committed | Decision: table stakes; building it: optional (not v1.4) |
-| OpenCode removal | `PROJECT.md:160-161` | See NG-051 above | See NG-051 | Table stakes |
+**SMODE-06 Prefix table.** The prefix meaning depends on the mode, because Firefox and Theia both claim `>`, `@`, `#` and `?`.
+
+| Typed at start | In Command centre | In Address, engine, Bookmarks, Tabs, History or Actions |
+|----------------|-------------------|---------------------------------------------------------|
+| (no prefix) | Files (Theia `''`) | Address or search heuristic (BAR-) |
+| `>` | All Theia commands. The `>` stays in the text, as in VS Code. | `> ` enters **Actions**, which is the Theia command list filtered to the "Browser" category. The token is consumed. |
+| `@` | Symbols in the active editor, handed to the stock quick input | Engine alias list; `@alias ` enters that engine |
+| `:` | Go to line, handed to the stock quick input | Plain text |
+| `#` | Workspace symbols | Firefox title restrict (narrows results, no chip) |
+| `?` | Theia help (lists the prefixes) | `? ` enters default-engine search mode |
+| `edt `, `term `, `task `, `debug `, `view ` | The Theia provider | Plain text. These are ordinary search words ("view source", "task manager"), so they must not trigger outside Command centre. |
+| `% `, `* `, `^ ` | Switch to Tabs, Bookmarks or History. Theia does not use these characters. | Same |
+
+Two rules follow from the table:
+- Firefox tokens are consumed into the chip; Theia prefixes stay in the text. Each rule matches the convention of the product it comes from.
+- Actions and Theia commands are one registry. Every browser action PowerBrowser adds (print, downloads, clear history, settings and so on) is registered as a Theia command in a "Browser" category. That gives it a palette entry, a keybinding slot and an Actions row from one registration.
+
+**SMODE-07 URL entry inside Command centre:**
+- **Ctrl+L, Alt+D and F6 always focus the pill in Address mode**, with the current URL selected, even in Coding. They are the explicit "type an address" keys, and Ctrl+L already exists (`powerbrowser/shell/powerbrowser.js` reserved key, `chrome-bar-keybindings.ts:24`).
+- When the text has no Theia prefix and is unambiguously a URL, the first row is a heuristic "Go to {url}" row, selected by default, so Enter visits. Unambiguous means a scheme, `localhost[:port]`, `host:port`, an IP address, a leading `www.`, or a trailing `/`.
+- **A bare dotted name is not treated as a URL in Command centre.** `README.md`, `main.py`, `package.json` and `index.ts` are file names, and `.md` and `.py` are real TLDs. For these, file results come first and a "Go to {text}" row comes after them.
+- The last row is always "Search {engine} for “{text}”", a one-off that falls back to search.
+- Enter with no rows visits the text if it looks like any URL; otherwise it searches.
+
+**SMODE-08 Result surface.** Every mode, Command centre included, renders in the existing `.pb-chrome-bar-dropdown` portal (`chrome-bar-widget.tsx:578-603`). Command-centre rows show the `QuickPickItem` label, description, detail and keybinding, and keep the provider's separators ("recently used", "other commands"). Enter or a click calls `execute()`.
+
+The existing 8-row cap (`CHROME_SUGGESTION_LIMIT`, `chrome-bar-suggestion-service.ts`) must become per-mode. Command centre needs a scrolling list, as the stock quick input has.
+
+The stock keys stay bound to the stock widget in v1.5: Ctrl+P, F1, Ctrl+Shift+P and Ctrl+O. Routing them into the pill is deferred.
+
+**Complexity:** M for the dropdown and modes. M for the Command centre bridge (registry `getPicks`, `@`/`:` handoff, heuristic row). S for the prefix table, once both exist.
+
+---
 
 ## Feature Landscape
 
-### Table Stakes (must be in v1.4)
+### Table Stakes (Users Expect These)
 
-| Feature | Why Expected | Complexity | Notes |
-| --- | --- | --- | --- |
-| OpenCode removal + NG-051 amend | Retired 2026-09-28. Its 17 registry lines and its extension are dead weight in every gate run | MEDIUM | Owner-gated amend. Changes the `build:extensions` chain (G-9) and `theia-build-order` |
-| Firefox 153.5 + full build | Platform currency, ESR security line | HIGH (≈50 min build) | Trial applied all 4 patches cleanly |
-| Theia 1.76.0 + React 19 + Node 24 + NG-082 amend | Platform currency; 1.75.0 target is stale | MEDIUM | Branding AI-layout override must go; easier after OpenCode removal |
-| G-9 clean-checkout build | Stranger-clone promise (Core Value) | LOW | Tree is now quiet; just run it |
-| G-10 group-channel check | Five independent silent-failure modes (GUI-DEFECTS:61-64) | MEDIUM | Static, derive-and-compare, five plants |
-| Schema v3/v4 rows, baseline refresh, generate-check close | Record truth | LOW | generate-check already passes |
-| Panorama spec + gui08 checks | Only red quick rows; blocks NG-074 | MEDIUM | Q1 option (c) |
-| W1 + W2 strip filter by active group | The purpose of Panorama | MEDIUM | Needs decisions 1 and 2 |
-| W4 undo close, W5 card close | Basic tab hygiene on the canvas | MEDIUM / LOW | W4 rewrites a copy contract |
-| G-11 ratify, G-23 cap, G-32 decision, 14-VERIFICATION | Close Phase 14 honestly | LOW | G-11 code exists; G-23 may close by spec |
-| NG-084 live UAT | 70+ pending/issue results across six sheets | HIGH (human time) | Phase 15 needs a sheet first |
-| Sketch 005 decision | Untracked artefact | LOW | Decision only |
-| NG-074 CI green | Exit gate | LOW once gui08 is fixed | Needs a push of `main` |
+A Firefox or Chrome user notices these in the first hour. "Deps" names the existing code each one builds on.
 
-### Differentiators (optional in v1.4)
+| REQ | Feature | Firefox behaviour (pinned source) | Complexity | Deps on existing pieces |
+|-----|---------|-----------------------------------|------------|------------------------|
+| BAR | Search fallback for non-URL text | Heuristic engine result (`UrlbarProviderHeuristicFallback.sys.mjs`); placeholder names the engine (`urlbar-placeholder-with-name`, `browser.ftl:594`) | S | New `searchSubmission` kind over `Services.search` in `PowerBrowserAPI.sys.mjs` and a row in `INTERNAL-APIS.md`. Re-rules 13-UI-SPEC "no new addressability scheme" (already lifted in PROJECT.md). |
+| BAR | localhost, `host:port` and IP fixup (a current bug) | URIFixup | S | `typedAddressTargetOf` in `chrome-bar-widget.tsx`, or a `fixupUri` kind |
+| BAR | Real Switch to Tab (it currently navigates the current tab and duplicates) | Switch-to-tab rows (`UrlbarProviderOpenTabs.sys.mjs`) | S | `activateWidget` on the existing web-tab widget; suggestion rows from `chrome-bar-places-suggestions.ts` |
+| BAR | Engine search suggestions | `UrlbarProviderSearchSuggestions.sys.mjs` (on by default in Firefox) | M | Search area in PowerBrowserAPI. Sending keystrokes to an engine needs a privacy-default decision. |
+| BAR | Inline autofill of origins | `UrlbarProviderAutofill.sys.mjs` | M | `autofill` kind (moz_origins) plus `setSelectionRange` |
+| BAR | Default engine picker | `about:preferences#search` | M | `listSearchEngines` and `setDefaultSearchEngine`; feeds SMODE-01 |
+| BAR | Alt+Enter, Ctrl+click and middle-click open in a new tab | `whereToOpenLink` | S | `WebTabOpenHandler.openUrl` `where` |
+| BAR | Shift+Del removes a history row | `UrlbarController.sys.mjs:571-580` (`#dismissSelectedResult`) | S | First Places write; re-rules `INTERNAL-APIS.md:36` |
+| BAR | Select all on first click; IME composition guard | `UrlbarInput.mjs:5976-6005` (composition) | S | Pill `onFocus`/`onCompositionStart` |
+| BAR | Pill context menu with Paste & Go | — | M | MenuPath pattern in `layout-controls-widget.tsx:81-130`; `readClipboardText` kind |
+| BAR | Row favicons and type icons | — | S | Favicon field (PAGE- groundwork) |
+| NAV | Stop; Reload becomes Stop while loading; Esc stops | `toolbar-button-stop` (`browserContext.ftl:76`); `key_stop` Esc (`browser-sets.inc.xhtml`) | S | Existing `browser.stop()`; loading flag already pushed |
+| NAV | Hard reload: Shift+click, Ctrl+Shift+R, Ctrl+F5 | `key_reload_skip_cache`, `key_reload_skip_cache2` | S | `bypassCache` on `webTabReload` |
+| NAV | Back/Forward history menu (right-click or long-press) | session history menu | M | `webTabHistory` and `webTabGotoIndex` kinds over `sessionHistory`; `.lm-Menu` |
+| NAV | Home button and Alt+Home | `navbar-home` (`browser.ftl:1289`), `goHome` Alt+Home | S | Theia preference plus `webTabNavigate` |
+| NAV | Shortcut text in button tooltips | "Go back one page ({ $shortcut })" (`browserContext.ftl:15-18`) | S | `KeybindingRegistry` |
+| KEY | Ctrl+T, Ctrl+W, Ctrl+R/F5, Alt+Left/Right, Alt+D, F6, Alt+1-9, Ctrl+Tab and Ctrl+PageUp/PageDown, all working with the page focused | `browser-sets.inc.xhtml` (`key_newNavigatorTab`, `key_close` reserved, `key_reload`, `goBackKb`, `focusURLBar2`, `key_selectTab1..`) | S each, M for the relay | Generalise the reserved-key block in `powerbrowser/shell/powerbrowser.js` (Ctrl+L at about :320-330) into one `{kind:'shortcut', id}` push; Theia keybindings need when-clauses |
+| SITE | Real security state; "Not Secure" on http | `urlbar-trust-icon-notsecure-label = Not Secure` (`browser.ftl:1532`); `browser-siteIdentity.js` | M | `securityState` in `webTabPush` (`PowerBrowserAPI.sys.mjs` about :3385) and `WebTabState` (`web-tab.ts` about :150). Replaces the `startsWith('https://')` test at `chrome-bar-widget.tsx:648`, which is misleading today. |
+| SITE | Site information panel: connection, permissions, clear cookies and site data | `identity-site-information`, `identity-connection-secure`/`not-secure`, `identity-clear-site-data`, `identity-permissions-*` (`browser.ftl:422-479`) | L | Popover primitive; `webTabSiteInfo`, `webTabSetPermission`, `webTabClearSiteData` kinds |
+| MENU | Hamburger menu in every mode | Order from `appmenu-viewcache.inc.xhtml`: New Tab, New Window · Bookmarks, History, Downloads, Passwords, Extensions and Themes · Print, Save Page As, Find in Page, Zoom (− % +), Full Screen · Settings, More Tools, Help · Quit (`appmenu.ftl:22-77`) | S for the button, M for its contents | MenuPath/ContextMenuRenderer pattern; `openStockTab` allow-list (`PowerBrowserAPI.sys.mjs` about :1108) for `about:preferences`, `about:logins`, `about:addons`. Drop New Private Window, Tab groups, AI window, Report Broken Site and the account rows. |
+| PAGE | Find in page: Ctrl+F, F3, highlight all, match case, whole words, match count | `findbar.ftl`: "Find in page", "Highlight All", "Match Case", "Match Diacritics", "Whole Words", "{ $current } of { $total } matches", "Phrase not found", wrap messages | L | `webTabFind`/`webTabFindClose` over `browser.finder` plus a result push. The bar must shrink the page rect, not hide the page. |
+| PAGE | Zoom: Ctrl+plus/minus/0 and a % chip in the pill | `browser-fullZoom.js` (`browser/components/tabbrowser/content/`); `appmenuitem-zoom-*` | M | `webTabZoom` and a zoom field in the push |
+| PAGE | Print (Ctrl+P on a web tab) | `navbar-print` "Print this page… ({ $shortcut })" | M | `webTabPrint`. **Ctrl+P is Theia's Go to File**, so it must be scoped to web-tab focus. |
+| PAGE | Favicons on tab, strip and pill | — | M | Favicon field in the push (shared groundwork) |
+| PAGE | Audio indicator and mute (Ctrl+M) | `key_toggleMute` (control+M) | M | `DOMAudioPlayback` listener plus `webTabMute` |
+| PAGE | Downloads button and panel | `browser/components/downloads/content/downloads.js` | L | First a live check of what an overlay download does today; then a `Downloads.getList` push |
+| PAGE | Window fullscreen (F11) and page (video) fullscreen | `key_fullScreen`; DOMFullscreen | M / L | **F11 is Theia debug Step Into** (`@theia/debug/.../debug-frontend-application-contribution.js:702`), so it needs scoping |
+| BMK | Bookmark star, Ctrl+D, edit-bookmark popover | `urlbar-star-add-bookmark` "Bookmark this page ({ $shortcut })", `urlbar-star-edit-bookmark` (`browser.ftl:177-184`); `browser-places.js` | M + M | `addBookmark`/`removeBookmark` Places writes; popover primitive |
+| BMK | Reopen closed tab (Ctrl+Shift+T) | `key_undoCloseTab` | M | Closed rows in `tabs.sqlite` plus `shellArmWebTabHistory` |
+| BMK | Clear recent history (Ctrl+Shift+Del) | `key_sanitize` | M | Sanitizer kind that also clears `tabs.sqlite` closed rows |
+| BMK | Bookmarks toolbar (Ctrl+Shift+B) | `viewBookmarksToolbarKb` | L | `listBookmarkFolder('toolbar')` plus a Places observer push |
+| PROMPT | Permission requests: camera, mic, location, notifications | `browser/modules/PermissionUI.sys.mjs`. **Today it cancels silently** because the shell window has no `PopupNotifications` (`PermissionUI.sys.mjs:533-537`). | XL | PopupNotifications-compatible shim on the shell window, a doorhanger push and a `doorhangerAction` kind |
+| PROMPT | alert, confirm, prompt, beforeunload, HTTP auth | `browser/actors/PromptParent.sys.mjs`. With no `gBrowser.getTabDialogBox` it falls back to a **window-modal** prompt (`PromptParent.sys.mjs:222, 294-298`). | L | Live check of the current behaviour first; then relay to Theia dialogs |
+| PROMPT | Page right-click context menu | `browser/actors/ContextMenuParent.sys.mjs`, `browser/base/content/nsContextMenu.sys.mjs` | L | Forward the actor message to a Theia `.lm-Menu` |
+| PROMPT | `target=_blank` and `window.open` open a web tab | `nsIBrowserDOMWindow` (`browser/modules/BrowserDOMWindow.sys.mjs`) | L | Must branch on the opener. GUI-01 (`browser-window-command.ts`) depends on the shell window having **no** `nsIBrowserDOMWindow` (CLAUDE.md rule 5). |
+| PROMPT | Password and form autofill popup | `toolkit/components/passwordmgr/LoginManagerParent.sys.mjs`; PopupAutoComplete | M (popup) + L (save doorhanger) | `autocompletepopup` attribute and the element in `powerbrowser.xhtml`; the save prompt goes through the PROMPT shim |
+| EXT | Extensions (puzzle) menu: list, open popup, Manage | `unifiedExtensions.ftl`: "Extensions", "Manage extensions", "Pin to Toolbar", "Manage Extension", "Remove Extension" | XL | See the Anti-Features and Pitfalls note: `ext-browserAction.js` is tied to CustomizableUI and to `navigator:browser` windows |
 
-| Feature | Value Proposition | Complexity | Notes |
-| --- | --- | --- | --- |
-| W6 type-anywhere search | Fast group navigation | MEDIUM | PROJECT.md:271 already places it in v1.5+ |
-| W11 group cycling keys | Keyboard parity with Firefox Panorama | LOW | Last-group half is cheap |
-| G-32 option (a) authored slide | Matches the motion contract | LOW–MEDIUM | Only if Chris rejects the stock collapse |
-| Sketch 005 implementation | VS Code-familiar Coding shell | HIGH | A milestone of its own |
+### Differentiators (Competitive Advantage)
 
-### Anti-Features (do not do in v1.4)
+These set PowerBrowser apart from Firefox and from VS Code, and they follow from the Core Value ("reshape its GUI through Theia extensions").
+
+| REQ | Feature | Value Proposition | Complexity | Notes |
+|-----|---------|-------------------|------------|-------|
+| SMODE | One pill for both browser search modes and the Theia command centre | No other browser or IDE combines the address bar and the command centre in one input. Coding gets VS Code's Ctrl+P surface where the address bar is. | M | Built on the public `QuickAccessRegistry`, so any Theia extension's provider appears in the pill automatically |
+| SMODE | Default mode set by the PowerBrowser mode | The pill does what the current mode is for: files in Coding, addresses in Browsing, tabs in Organising | S | Keyed on the three shipped mode ids; custom modes use Address |
+| SMODE | Actions = Theia commands in a "Browser" category | One registration gives a palette entry, a keybinding and an Actions row. Downstreams add browser actions by contributing commands, with no fork. | S | Firefox's quick-action list (`QuickActionsLoaderDefault.sys.mjs`) is the checklist of which commands to register |
+| SMODE | Command-centre rows that survive a URL-shaped query | Typing `localhost:4000` while coding visits the dev server; typing `README.md` opens the file | S | The SMODE-07 rule |
+| BAR | One-off engine buttons and search-mode chip | Firefox parity that Chrome lacks | M | The dropdown engine rows are the one-off surface; separate one-off buttons under the results are optional |
+| BAR | Restrict tokens `^ * % ? #` in every mode | Power-user parity with Firefox | S | `restrict` field on `searchPlaces`; SMODE-06 |
+| NAV | Middle-click Back/Reload duplicates the tab | Firefox parity | M | `webTabDuplicate` |
+| PAGE | Reader view (F9) | Firefox parity | M | `isArticle` in the push; `about:reader` chrome-side |
+| MENU | Help submenu with `configuration.toml` help URLs | Rebrand-driven, so it supports Core Value | M | Generator surface |
+
+### Anti-Features (Commonly Requested, Often Problematic)
 
 | Feature | Why Requested | Why Problematic | Alternative |
-| --- | --- | --- | --- |
-| Named exclusion for the gui08 rows (Q1 b) | Fast CI green | Leaves the spec and code disagreeing permanently | Q1 (c): re-pin to the committed design |
-| Marking G-11 fixed without Chris looking | The code exists | The UAT protocol bars executors from closing `decision` gaps | One live confirmation inside the NG-084 pass |
-| W1 without W2 | W1 is listed and W2 is not | New "+" tabs vanish from the filtered strip | Ship W1 and W2 together |
-| DSH work | Handoff step 11 | Separate project (PROJECT.md:189-190) | Out of scope |
-| Release / MSIX / DMG (NG-075..081) | Adjacent to platform updates | Need hosts and accounts | Backlog 999.2 |
+|---------|---------------|-----------------|-------------|
+| Rebuild Firefox's full `UrlbarProvidersManager` stack in Theia | "Exact parity" | More than 40 providers (`browser/components/urlbar/UrlbarProvider*.sys.mjs`), many of them Mozilla services (Merino, Suggest, AI chat) | `Services.search` plus Places kinds, and spike one headless `urlbarQuery` kind only if parity gaps remain |
+| Render Theia's stock quick-input widget inside the pill by moving DOM nodes | "Reuse what exists" | Breaks on every Theia re-pin, and fights monaco's focus handling | `QuickAccessRegistry.getPicks` into our own dropdown; stock widget only for `@` and `:` |
+| Rebind Ctrl+P, F1 and Ctrl+Shift+P globally to the pill in v1.5 | "Command centre is the Coding default" | Loses monaco's `@`/`:` live preview and changes muscle memory for every Theia user | Keep the stock keys; the pill is an extra entry point. Revisit after live use. |
+| Bind Firefox keys globally (Ctrl+P print, F5 reload, F11 fullscreen, Ctrl+K search, Ctrl+T) | Firefox muscle memory | Clashes with Theia: Ctrl+P Go to File, F5 debug start, F11 debug Step Into, `ctrlcmd+k` chord prefix, `ctrlcmd+t` workspace symbol in Electron, `alt+w` close | When-clauses scoped to web-tab focus or Browsing; the page-focus relay fires only when the page owns focus |
+| Treat dotted names as URLs in Command centre | Consistent with Browsing | `README.md` and `main.py` would navigate to Moldova and Paraguay domains | SMODE-07 unambiguous-URL rule |
+| Persist the picked search mode across submits | "Sticky engine" | Firefox chose not to (`persistSearchMode = false`), and it hides the default from the user | Reset after commit (SMODE-04); the default engine picker covers "always use X" |
+| CustomizableUI: drag toolbar items | Firefox has it | It customises `browser.xhtml` chrome, which PowerBrowser does not author (gap list, Not applicable) | A Theia layout preference later (gap list: L) |
+| Re-implement WebExtension `browserAction` inside Theia from scratch | "Extensions must work in web tabs" | `ext-browserAction.js` calls `CustomizableUI.createWidget` (:195), `gUnifiedExtensions` and `ViewPopup`. `windowTracker` and `tabTracker` only see `windowtype="navigator:browser"` (`toolkit/components/extensions/parent/ext-tabs-base.js:1739-1742`), and the shell is `powerbrowser:main` (`powerbrowser/shell/powerbrowser.xhtml:21`). Web tabs inside Theia are not tabs to the WebExtension API at all. | Spike before writing EXT requirements (see Gaps). The fallback is a puzzle menu that lists extensions and opens their options and popups, with per-tab actions working only in the stock window. |
+| Mozilla account, Sync, Firefox Suggest, Report Broken Site, AI chat rows, private window | Present in Firefox's app menu and pill | Mozilla services or out of scope (PROJECT.md) | Omit from the menu and dropdown |
+| Clipboard URL suggestion row | Firefox has `UrlbarProviderClipboard` | Reads the clipboard on focus, which is a privacy decision | Paste & Go in the pill context menu (explicit user action) |
+| `about:` pages as web tabs | One click to Settings | Deliberate scheme wall | `openStockTab` allow-list decision, made once |
 
 ## Feature Dependencies
 
 ```
-OpenCode removal ──changes──> build:extensions chain ──> G-9 clean build, theia-build-order rows
-OpenCode removal ──eases────> Theia 1.76.0 (AI-layout override gone with it)
-NG-051 amend ──required by──> OpenCode removal (test_ref deleted)
-Firefox 153.5 ──independent of──> Theia 1.76.0 (separate dev shells)
-Theia 1.76.0 + React 19 ──required by──> NG-084 React 19 runtime line
-Panorama spec + gui08 checks ──required by──> NG-074 CI green
-Decision 1 (tray) + Decision 2 (strip scope) ──required by──> W1
-W2 (new tab → active group) ──required by──> W1 (else new tabs disappear)
-W1 ──required by──> W11 cycling being observable in the strip
-W4 ──rewrites──> 15-UI-SPEC copy + gui08-panorama-copy + gui08-close-exactness (do after the spec re-pin)
-G-11 / G-23 / G-32 outcomes ──required by──> 14-VERIFICATION
-All GUI fixes ──required by──> NG-084 (UAT last, so it tests the final tree)
-NG-084 + quick tier green + push ──required by──> NG-074
+Search area in PowerBrowserAPI (Services.search kinds)
+    ├──required by──> BAR search fallback ──> BAR suggestions, one-offs, placeholder engine name
+    └──required by──> SMODE engine rows ──> SMODE-01 dropdown
+
+SMODE-01 dropdown (popover primitive)
+    ├──requires──> popover/menu primitive (.pb-chrome-bar-dropdown portal + MenuPath)
+    ├──requires──> BAR listSearchEngines
+    └──hosts──> SMODE Command centre (QuickAccessRegistry.getPicks)
+
+SMODE Actions mode
+    └──requires──> browser actions registered as Theia commands ("Browser" category)
+                       └──each requires──> its own NAV/PAGE/BMK/MENU feature
+
+KEY page-focus shortcut relay (generalised reserved-key table, powerbrowser.js)
+    └──required by──> every KEY row, Ctrl+D, Ctrl+Shift+T, Ctrl+F/F3, zoom keys, print, F11, Ctrl+M
+
+Wider webTabPush (securityState, zoom, favicon, audible, displaySpec, crashed)
+    └──required by──> SITE lock/Not Secure, PAGE zoom chip, favicons, mute, BAR row favicons
+
+Web-tab action kinds (handleGroupMutation + verify-web-tab-bridge.mjs)
+    └──required by──> NAV stop/hard reload/history menu, PAGE find/zoom/print/mute
+
+Places-write policy (re-rule INTERNAL-APIS.md:36)
+    └──required by──> BMK star/editor/toolbar/clear history, BAR Shift+Del
+
+openStockTab allow-list decision
+    └──required by──> MENU Settings/Passwords/Add-ons, SMODE "Search Settings", EXT "Manage extensions"
+
+Shell-window shims (PopupNotifications, nsIBrowserDOMWindow, prompt relay, context-menu forwarding)
+    └──required by──> all PROMPT rows, password save doorhanger
+
+PROMPT window.open-as-tab ──conflicts──> GUI-01 stock-window escape hatch (unless keyed by opener)
+PAGE Print on Ctrl+P ──conflicts──> Theia Go to File on Ctrl+P (scope by focus)
+PAGE F11 fullscreen ──conflicts──> Theia debug Step Into on F11 (scope by focus)
+SMODE '>' Actions ──overlaps──> Theia '>' commands (resolved: one registry, category filter)
 ```
 
 ### Dependency Notes
 
-- **Panorama spec first among GUI steps:** it is the only red gate, and W4 edits the same copy
-  contract. Re-pinning after W4 would mean re-pinning twice.
-- **UAT after every GUI fix:** NG-084 run earlier would test a tree that W1, W2, W4, W5 and G-23
-  then change.
-- **Four items need Chris, not an executor:** NG-051 amend, NG-082 amend, the new v3/v4 rows,
-  NG-084 sign-off. G-32 and sketch 005 are decisions. Put them where a session can stop for him.
+- **SMODE requires the popover primitive and the engine list.** The dropdown is the first popover and should establish the primitive. The app menu, site panel and bookmark editor reuse it.
+- **Actions mode requires the features it lists.** Each Firefox quick action becomes available only once its command exists. Ship Actions with whatever commands exist; each later phase adds rows.
+- **The shortcut relay must come before any KEY, BMK or PAGE keyboard row.** Without it a focused page swallows every key except the reserved Ctrl+L.
+- **window.open-as-tab conflicts with GUI-01.** A shell-window `nsIBrowserDOMWindow` would also catch the Theia frontend's own `window.open(url, '_blank')`, which is how the stock browser window opens today. The implementation must hand Theia-frame openers back to the stock-window path, and GUI-01's check must stay green.
 
-## MVP Definition (v1.4 exit)
+## MVP Definition
 
-- [ ] OpenCode gone, NG-051 amended
-- [ ] Firefox 153.5 with a full build and full `verify-platform.sh` green
-- [ ] Theia 1.76.0 / React 19 / Node 24, NG-082 amended, sidecar checked live
-- [ ] G-9 run, G-10 row added, v3/v4 rows, baseline refreshed, generate-check closed
-- [ ] 15-UI-SPEC re-pinned, gui08 rows green
-- [ ] W1+W2, W4, W5
-- [ ] G-11, G-23, G-32 resolved; 14-VERIFICATION written
-- [ ] NG-084 UAT pass; sketch 005 verdict recorded
-- [ ] NG-074 green on pushed `main`
+### Launch With (v1.5)
 
-**Defer:** W6 (PROJECT.md:271 already says v1.5+), W11 cycling keys, sketch 005 build,
-remaining worklist W12 polish.
+Ordered so groundwork lands with its first consumer:
+
+- [ ] BAR search fallback + localhost/host:port fixup + real Switch to Tab. The bar is labelled as a search box but cannot search, and it cannot open dev URLs.
+- [ ] SMODE-01..08: dropdown, per-mode defaults, chip, prefix table, Command centre via `QuickAccessRegistry`. This is Chris's headline feature, and it builds the popover primitive.
+- [ ] KEY relay + Ctrl+T/W/R, Alt+Left/Right, Alt+D, F6, Alt+1-9 (scoped when-clauses)
+- [ ] NAV Stop, hard reload, history menu, Home
+- [ ] SITE real security state + "Not Secure"; site information panel with permissions and clear site data
+- [ ] MENU hamburger in every mode, with Settings, Passwords and Add-ons through the allow-list decision
+- [ ] PAGE find, zoom, print, favicons, mute, fullscreen; downloads after its live check
+- [ ] BMK star + Ctrl+D + editor, reopen closed tab, clear history, bookmarks toolbar
+- [ ] PROMPT permission requests, alert/confirm/auth relay, page context menu, window.open as web tab, form/password autofill
+- [ ] EXT puzzle menu, scoped by the spike result
+
+### Add After Validation (v1.x)
+
+- [ ] Route Ctrl+P, F1 and Ctrl+Shift+P into the pill's Command centre. Trigger: Chris uses the pill and prefers it.
+- [ ] Per-site zoom memory. Trigger: zoom chip in use.
+- [ ] Inline autofill and input-history ranking. Trigger: BAR basics stable.
+- [ ] OpenSearch "Add {engine}" rows (SearchModeSwitcher `MAX_OPENSEARCH_ENGINES`). Trigger: engine picker exists.
+- [ ] Tab strip parity (context menu, reorder, middle-click close). This was not in Chris's four areas; confirm.
+
+### Future Consideration (v2+)
+
+- [ ] Full WebExtension tab identity for in-Theia web tabs. Likely a patch-stack change in `browser/components/extensions`.
+- [ ] Certificate viewer, protections panel, HTTPS-Only toggle, Picture-in-Picture, translations, screenshots.
+- [ ] Toolbar item order and visibility preference (CustomizableUI substitute).
 
 ## Feature Prioritization Matrix
 
 | Feature | User Value | Implementation Cost | Priority |
-| --- | --- | --- | --- |
-| Panorama spec + gui08 checks | HIGH (unblocks CI) | MEDIUM | P1 |
-| OpenCode removal | MEDIUM | MEDIUM | P1 |
-| Firefox 153.5 | HIGH | HIGH | P1 |
-| Theia 1.76.0 / React 19 / Node 24 | HIGH | MEDIUM | P1 |
-| W1 + W2 | HIGH | MEDIUM | P1 |
-| G-10 group-channel row | MEDIUM | MEDIUM | P1 |
-| NG-084 UAT | HIGH | HIGH (human) | P1 |
-| NG-074 CI | HIGH | LOW | P1 |
-| W4 undo close | MEDIUM | MEDIUM | P2 |
-| W5 card close | MEDIUM | LOW | P2 |
-| G-9, G-11, G-23, 14-VERIFICATION, v3/v4 rows, baseline, generate-check | LOW–MEDIUM | LOW | P2 |
-| G-32 decision, sketch 005 decision | LOW | LOW | P2 |
-| W6, W11, G-32 slide | LOW–MEDIUM | LOW–MEDIUM | P3 |
+|---------|------------|---------------------|----------|
+| BAR search fallback + fixup + switch-to-tab | HIGH | LOW | P1 |
+| SMODE dropdown + Command centre | HIGH | MEDIUM | P1 |
+| KEY relay + core shortcuts | HIGH | LOW-MEDIUM | P1 |
+| NAV stop / hard reload | HIGH | LOW | P1 |
+| SITE security state + Not Secure | HIGH | MEDIUM | P1 |
+| MENU hamburger | HIGH | LOW | P1 |
+| PAGE find in page | HIGH | HIGH | P1 |
+| PAGE zoom, print, favicons, mute | HIGH | MEDIUM | P1 |
+| PROMPT permissions + dialogs | HIGH | HIGH | P1 (sites break without them) |
+| PROMPT window.open as tab | HIGH | HIGH | P1 |
+| BMK star, reopen closed tab, clear history | HIGH | MEDIUM | P1 |
+| PROMPT context menu, autofill | MEDIUM | HIGH | P2 |
+| SITE site info / permissions panel | MEDIUM | HIGH | P2 |
+| BAR suggestions, autofill, one-offs, Paste & Go | MEDIUM | MEDIUM | P2 |
+| BMK bookmarks toolbar | MEDIUM | HIGH | P2 |
+| PAGE downloads panel | MEDIUM | HIGH | P2 |
+| NAV history menu, Home | MEDIUM | LOW-MEDIUM | P2 |
+| EXT puzzle menu | MEDIUM | HIGH (XL, unknown) | P2 after spike |
+| PAGE reader view, devtools | LOW | MEDIUM | P3 |
 
-## Sources (all in-tree, read 2026-10-16)
+## Competitor Feature Analysis
 
-- `.planning/PROJECT.md:156-174, 264-272`; `.planning/HANDOFF-plan-reorg.md:30-82`
-- `.planning/milestones/v1.3-phases/14.1.1-gui-conformance-sweep/14.1.1-UAT.md:651-694, 803-816, 930-941`; `deferred-items.md:44-64, 131-148`
-- `.planning/milestones/v1.3-phases/14-modes-windows-setups/14-UI-SPEC.md:22-33, 198-200, 265, 316, 360, 367`
-- `.planning/milestones/v1.3-phases/15-panorama-organising/15-PANORAMA-WORKLIST.md:32-140`; `15-UI-SPEC.md:14-22, 90-95, 142, 212-219, 281-285`
-- `.planning/GUI-DEFECTS.md:22, 59-92`; `docs/non-gui/questions-wave-e.md:15-39`; `docs/non-gui/decisions.md:39-45, 84`
-- `ledger/REQUIREMENTS.json:656-667, 955-966, 1059-1070, 1085-1096` (read-only); `scripts/ledger-report.py`
-- Code: `theia/extensions/modes/src/browser/{mode-service.ts,setups-service.ts,organising-widget.ts,group-model.ts,panorama-commands.ts,mode-descriptors.ts,modes.css}`, `theia/extensions/chrome-bar/src/browser/tab-strip-widget.tsx`, `powerbrowser/shell/PowerBrowserAPI.sys.mjs`, `configuration.toml`, `flake.nix`, `theia/package.json`, `scripts/verify-platform.sh`
-- Runs: `verify-platform.sh --quick`, the two gui08 scripts, `generate.mjs --check` (host and `.#theia`), `gh run list/view` for verify.yml
+| Feature | Firefox 153 | VS Code / Theia | PowerBrowser approach |
+|---------|-------------|-----------------|-----------------------|
+| Mode picker in the input | Unified search button: engines, Bookmarks, Tabs, History, Actions, Search Settings | Command centre launches Quick Open; `?` lists providers | One dropdown with Firefox's rows plus a Command centre row |
+| Default | Address + default engine | Files (no prefix) | Set by PowerBrowser mode: Coding = Command centre, Browsing = Address, Organising = Tabs (proposed) |
+| Prefixes | `^ * % ? >` + space enter modes; `@alias`; `+ # $` restrict | `> @ : # ?` and word prefixes stay in the text | Table SMODE-06: Theia meanings in Command centre, Firefox meanings elsewhere, `% * ^` everywhere |
+| Actions | Fixed quick-action list | Commands registry | Actions = Theia commands in the "Browser" category |
+| Mode display | Icon; label + x in search mode; per-mode placeholder | Prefix visible in text; provider placeholder | Icon + chip; x only when not at the PowerBrowser-mode default; placeholder from the provider descriptor |
+| Mode lifetime | Per tab, cleared after submit | Until the widget closes | Cleared on commit, revert, tab switch or mode switch |
+
+## Sources
+
+Pinned upstream (HIGH, primary source):
+- `upstream/browser/components/urlbar/content/SearchModeSwitcher.mjs` (whole file)
+- `upstream/browser/components/urlbar/content/UrlbarInput.mjs:124-151, 1420-1423, 2341-2356, 2725-2760, 2868-2882, 5976-6005`
+- `upstream/browser/components/urlbar/UrlbarController.sys.mjs:313-580`
+- `upstream/browser/components/urlbar/UrlbarUtils.sys.mjs:291-326`
+- `upstream/browser/components/urlbar/content/UrlbarShared.mjs:46-72`
+- `upstream/browser/components/urlbar/UrlbarProviderHeuristicFallback.sys.mjs:128-145, 235-270`
+- `upstream/browser/components/urlbar/UrlbarProviderTokenAliasEngines.sys.mjs:63`
+- `upstream/browser/components/urlbar/QuickActionsLoaderDefault.sys.mjs:80-335`
+- `upstream/browser/components/urlbar/UrlbarPrefs.sys.mjs:442-450`; `upstream/browser/app/profile/firefox.js:451`
+- `upstream/browser/locales/en-US/browser/browser.ftl:137-140, 177-184, 399-408, 422-479, 538-594, 860-920, 1277-1296, 1532`
+- `upstream/browser/locales/en-US/browser/appmenu.ftl`, `browserContext.ftl`, `browserSets.ftl`, `unifiedExtensions.ftl`
+- `upstream/toolkit/locales/en-US/toolkit/main-window/findbar.ftl`
+- `upstream/browser/base/content/appmenu-viewcache.inc.xhtml` (menu order), `browser-sets.inc.xhtml` (keys)
+- `upstream/browser/modules/PermissionUI.sys.mjs:533-537`; `upstream/browser/actors/PromptParent.sys.mjs:215-298`
+- `upstream/browser/components/extensions/parent/ext-browserAction.js:9-40, 195`; `upstream/toolkit/components/extensions/parent/ext-tabs-base.js:1739-1742`
+- `upstream/browser/modules/BrowserDOMWindow.sys.mjs`, `browser/actors/ContextMenuParent.sys.mjs`, `browser/base/content/browser-places.js`, `browser/base/content/browser-siteIdentity.js`, `browser/components/tabbrowser/content/browser-fullZoom.js`, `browser/components/downloads/content/downloads.js`, `toolkit/components/passwordmgr/LoginManagerParent.sys.mjs`
+
+Installed Theia 1.76.0 (HIGH, primary source): `theia/node_modules/@theia/core/lib/browser/quick-input/{quick-access.d.ts, quick-command-service.js, quick-command-frontend-contribution.js, quick-help-service.js, quick-view-service.js}`, `@theia/file-search/lib/browser/{quick-file-open.js, quick-file-open-contribution.js}`, `@theia/monaco/lib/browser/{monaco-quick-access-registry.js, monaco-gotosymbol-quick-access.js, monaco-gotoline-quick-access.js, workspace-symbol-command.js}`, `@theia/editor/lib/browser/quick-editor-service.js`, `@theia/terminal/lib/browser/terminal-quick-open-service.js`, `@theia/task/lib/browser/quick-open-task.js`, `@theia/debug/lib/browser/{debug-prefix-configuration.js, debug-frontend-application-contribution.js}`, `@theia/core/lib/browser/common-frontend-contribution.js`.
+
+This tree: `.planning/research/chrome-bar-firefox-gap.md`; `theia/extensions/chrome-bar/src/browser/{chrome-bar-widget.tsx, chrome-bar-suggestion-service.ts, chrome-bar-keybindings.ts, layout-controls-widget.tsx}`; `theia/extensions/tab-uris/src/browser/web-tab.ts:99`; `powerbrowser/shell/powerbrowser.js` (reserved keys); `powerbrowser/shell/powerbrowser.xhtml:21`.
+
+Web (MEDIUM): [VS Code 1.69 release notes, Command Center](https://code.visualstudio.com/updates/v1_69); [VS Code user interface docs](https://code.visualstudio.com/docs/getstarted/userinterface) (Ctrl+P, Ctrl+Shift+P, Ctrl+Shift+O, Ctrl+G).
+
+## Gaps
+
+- **EXT feasibility.** WebExtension `tabs` and `browserAction` cannot see in-Theia web tabs (`ext-tabs-base.js:1742` versus `powerbrowser.xhtml:21`). A spike must decide between a puzzle menu over the stock window only, a tab adapter, and a patch, before EXT requirements are written. Content scripts probably still inject into overlay pages; this was not verified.
+- **Organising default.** Tabs (recommended) or Address: Chris decides.
+- **Coding pill with a web tab active.** Option one keeps the Command centre default (Chris's rule as stated). Option two switches to Address whenever the active widget is a web tab. This spec assumes option one, plus Ctrl+L/Alt+D/F6 and the heuristic row.
+- **Current prompt behaviour is unverified live.** The source says alert() falls back to a window-modal dialog and permission requests are cancelled. Check both live before sizing PROMPT.
+- **Tab strip rows** in the gap list are outside Chris's four named areas. Confirm whether they are in v1.5.
+- **Search suggestions privacy default.** Firefox enables them. PowerBrowser's telemetry defaults to off, which suggests suggestions should default to off. This is a product decision.
 
 ---
-*Feature research for: v1.4 Platform Updates and GUI Close-out*
-*Researched: 2026-10-16*
+*Feature research for: Firefox-toolbar parity in a Theia-hosted browser chrome bar*
+*Researched: 2026-10-20*
