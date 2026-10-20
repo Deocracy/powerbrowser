@@ -1,21 +1,21 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 27
 current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
 status: executing
-stopped_at: Completed 27-01-PLAN.md
-last_updated: "2026-10-20T22:48:10.050Z"
+stopped_at: Completed 27-02-PLAN.md
+last_updated: "2026-10-20T23:27:15.308Z"
 last_activity: 2026-10-20
-last_activity_desc: 27-01 complete (Esc stops a loading page; Reload/Stop one element)
-state_head: 505bd3dba5988efb70ea71d56a468c8d658ea75c
+last_activity_desc: 27-02 complete (history, selection, coalesced state, hard reload, background open on the web-tab channel)
+state_head: 154cadf79686136b0b033ee1b8254a783c1235ba
 progress:
   total_phases: 12
   completed_phases: 0
   total_plans: 8
-  completed_plans: 1
-  percent: 13
+  completed_plans: 2
+  percent: 25
 ---
 
 # Project State
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 27 (Groundwork, Navigation Buttons and Page-Focus Keys) — EXECUTING
-Plan: 2 of 8
-Status: Executing (27-01 complete)
-Last activity: 2026-10-20 — 27-01 complete: Esc stops a loading page; Reload/Stop single element; nav-keys-live registered
+Plan: 3 of 8
+Status: Executing (27-02 complete)
+Last activity: 2026-10-20 — 27-02 complete: webTabHistory/GotoIndex/Activated, coalesced state push, bypass-cache reload, openInBackground, bridge parity rules
 
-Progress: [█░░░░░░░░░] 13%
+Progress: [██░░░░░░░░] 25%
 
 ## Performance Metrics
 
@@ -148,6 +148,7 @@ Progress: [█░░░░░░░░░] 13%
 | Phase 17 P03 | 6min | 2 tasks | 8 files |
 | Phase 17 P04 | 20min | 2 tasks | 5 files |
 | Phase 27 P01 | 13min | 3 tasks | 11 files |
+| Phase 27 P02 | 37min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -372,6 +373,9 @@ Recent decisions affecting current work:
 - [Phase 27]: Phase 27 live keys are synthesised at the parent through nsITextInputProcessor in a chrome-scope evaluate (A3/A4 held)
 - [Phase 27]: Page-scoped key rows are created disabled and enabled only while chrome's active element is an overlay; the blur-deferred focus tracker holds (A1)
 - [Phase 27]: New web-tab kinds route from receiveMessage to the end-of-file handleWebTabAction; powerbrowser.js reaches the boundary through the second frozen export PowerBrowserWebTabs
+- [Phase 27]: A7 held: shell-window requestAnimationFrame flushes coalesced state pushes headless; no setTimeout fallback
+- [Phase 27]: history()/gotoIndex() fold only unknown-tab into lost view, so a refusal or timeout never blanks a live page
+- [Phase 27]: hard-reload-channel runs first in verify-nav-keys-live; pre-existing reload-on-shared-process GUI-02 defect deferred
 
 ### Pending Todos
 
@@ -473,8 +477,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-20T22:48:10.024Z
-Stopped at: Completed 27-01-PLAN.md
+Last session: 2026-10-20T23:27:15.275Z
+Stopped at: Completed 27-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
