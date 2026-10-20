@@ -25,6 +25,16 @@ requirements NAV-01..06, KEY-01..05).
 - Stock Firefox toolkit popups in powerbrowser.xhtml are shell furniture (rule 5
   clarified); not needed in this phase.
 
+### Decided after research (autonomous, recommended, 2026-10-20)
+- F6 / Shift+F6 use Firefox's `requestReplyFromRemoteContent()` pattern with a
+  `defaultPreventedByContent` test (27-RESEARCH.md Open Question 1). If the live
+  probe disproves that attribute, F6 falls back to a reserved row that is enabled
+  only while an overlay has focus; with the Theia frame focused the row is
+  disabled, so F6 keeps Theia's meaning there and the 2026-10-20 key ruling holds.
+- Ctrl+L moves from always-reserved to the page-focus-scoped mechanism (Open
+  Question 2); this supersedes 14.1-UI-SPEC A13's "guaranteed exit" wording.
+- Remaining Open Questions 3-6 take the research recommendation.
+
 ### Claude's Discretion
 All other implementation choices are at Claude's discretion — discuss phase was
 skipped per user setting. Use the ROADMAP phase goal, success criteria,
