@@ -1,6 +1,6 @@
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { ApplicationShell, BaseWidget, Message, OpenHandler, OpenerOptions, Widget, WidgetManager } from '@theia/core/lib/browser';
-import { Emitter, Event as TheiaEvent } from '@theia/core/lib/common';
+import { Disposable, Emitter, Event as TheiaEvent } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
 // Resolved through src/, not './': the build is `tsc -b` alone, which emits
 // no CSS into lib/, so a lib-relative specifier would name a file that is
@@ -155,7 +155,11 @@ export interface WebTabState {
     canGoForward: boolean;
 }
 
-/** The eight kinds `handleGroupMutation` serves for web tabs; one stable set for the bridge gate. */
+/**
+ * The web-tab kinds chrome serves: eight in `handleGroupMutation`, and
+ * `webTabStop` in `handleWebTabAction` (Phase 27's end-of-file section). One
+ * stable set for the bridge gate.
+ */
 export type WebTabMessage =
     | { kind: 'webTabOpen'; tabId: string; url: string; key: string }
     | { kind: 'webTabGeometry'; tabId: string; x: number; y: number; w: number; h: number; visible: boolean }
@@ -164,7 +168,8 @@ export type WebTabMessage =
     | { kind: 'webTabForward'; tabId: string }
     | { kind: 'webTabReload'; tabId: string }
     | { kind: 'webTabClose'; tabId: string }
-    | { kind: 'webTabFocus'; tabId: string };
+    | { kind: 'webTabFocus'; tabId: string }
+    | { kind: 'webTabStop'; tabId: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -206,6 +211,7 @@ export class WebTabChannel {
     private seq = 0;
     private readonly widgets = new Map<string, WebTabWidget>();
     private readonly focusAddressEmitter = new Emitter<void>();
+    private readonly pushHandlers = new Map<string, Set<(detail: Record<string, unknown>) => void>>();
 
     /** Fired when chrome's reserved accel+L asks the frontend to focus the address pill. */
     readonly onDidRequestFocusAddress: TheiaEvent<void> = this.focusAddressEmitter.event;
@@ -213,6 +219,39 @@ export class WebTabChannel {
     @postConstruct()
     protected init(): void {
         window.addEventListener(WEB_TAB_STATE_EVENT, this.onState);
+        this.onPush('focusAddress', () => this.focusAddressEmitter.fire());
+        this.onPush('state', detail => {
+            if (typeof detail.tabId !== 'string') {
+                return;
+            }
+            const widget = this.widgets.get(detail.tabId);
+            if (!widget) {
+                return;
+            }
+            widget.applyState({
+                url: typeof detail.url === 'string' ? detail.url : widget.url,
+                title: typeof detail.title === 'string' ? detail.title : '',
+                loading: detail.loading === true,
+                canGoBack: detail.canGoBack === true,
+                canGoForward: detail.canGoForward === true,
+            });
+        });
+    }
+
+    /**
+     * Subscribes to one push kind on the one chrome push event. Later phases
+     * add kinds by subscribing here, never by editing the router.
+     */
+    onPush(kind: string, handler: (detail: Record<string, unknown>) => void): Disposable {
+        const handlers = this.pushHandlers.get(kind) ?? new Set();
+        handlers.add(handler);
+        this.pushHandlers.set(kind, handlers);
+        return Disposable.create(() => handlers.delete(handler));
+    }
+
+    /** The registered widget for a chrome-pushed tab id, if this frontend still has it. */
+    widgetOf(tabId: string): WebTabWidget | undefined {
+        return this.widgets.get(tabId);
     }
 
     register(tabId: string, widget: WebTabWidget): void {
@@ -267,32 +306,16 @@ export class WebTabChannel {
     }
 
     private readonly onState = (event: Event): void => {
-        try {
-            const detail = (event as CustomEvent).detail as
-                { kind?: unknown; tabId?: unknown; url?: unknown; title?: unknown; loading?: unknown; canGoBack?: unknown; canGoForward?: unknown } | undefined;
-            if (!detail || typeof detail !== 'object') {
-                return;
+        const detail = (event as CustomEvent).detail as Record<string, unknown> | undefined;
+        if (!detail || typeof detail !== 'object' || typeof detail.kind !== 'string') {
+            return;
+        }
+        for (const handler of this.pushHandlers.get(detail.kind) ?? []) {
+            try {
+                handler(detail);
+            } catch (error) {
+                console.error('[@powerbrowser/tab-uris] push handler failed:', detail.kind, error);
             }
-            if (detail.kind === 'focusAddress') {
-                this.focusAddressEmitter.fire();
-                return;
-            }
-            if (detail.kind !== 'state' || typeof detail.tabId !== 'string') {
-                return;
-            }
-            const widget = this.widgets.get(detail.tabId);
-            if (!widget) {
-                return;
-            }
-            widget.applyState({
-                url: typeof detail.url === 'string' ? detail.url : widget.url,
-                title: typeof detail.title === 'string' ? detail.title : '',
-                loading: detail.loading === true,
-                canGoBack: detail.canGoBack === true,
-                canGoForward: detail.canGoForward === true,
-            });
-        } catch (error) {
-            console.error('[@powerbrowser/tab-uris] web-tab state dispatch failed:', error);
         }
     };
 }
@@ -591,6 +614,11 @@ export class WebTabWidget extends BaseWidget {
 
     focusPage(): void {
         this.channel.send({ kind: 'webTabFocus', tabId: this.tabId });
+    }
+
+    /** NAV-01: stops the page's load; the next state push turns Stop back into Reload. */
+    stop(): void {
+        this.channel.send({ kind: 'webTabStop', tabId: this.tabId });
     }
 
     applyState(state: WebTabState): void {

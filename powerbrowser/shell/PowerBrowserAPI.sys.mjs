@@ -3677,6 +3677,7 @@ export class PowerBrowserGroupParent extends GroupActorBase {
       return PowerBrowserAPI.handleShellMessage(message.data, this);
     }
     if (isStoreRequestKind(message.data?.kind)) { return handleStoreRequest(message.data, this); }
+    if (WEB_TAB_ACTION_KINDS.has(message.data?.kind)) { return handleWebTabAction(message.data, this); }
     return PowerBrowserAPI.handleGroupMutation(message.data, this);
   }
 
@@ -4086,3 +4087,106 @@ function isMintedSavedPageDir(candidate, root) {
   }
   return /^[0-9a-z]+-[0-9a-z]+$/.test(PathUtils.filename(normalized));
 }
+
+// ---------------------------------------------------------------------------
+// Phase 27: the web-tab action section.
+//
+// New web-tab kinds the frontend sends (webTabStop first; later v1.5 phases
+// add more) and the pushes chrome sends back for keys pressed inside a page
+// (shortcut, pageFocus). The actor parent's receiveMessage routes a kind in
+// WEB_TAB_ACTION_KINDS here with one line, the way the store request channel
+// above is routed; handleGroupMutation is not touched.
+//
+// This section sits at the end of the file on purpose: nothing above the
+// last catalogued internals line moves when it grows, so the line references
+// in INTERNAL-APIS.md stay valid. powerbrowser.js reaches it through the
+// second frozen export below: the boundary is one file, not one object.
+// ---------------------------------------------------------------------------
+
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop"]);
+
+async function handleWebTabAction(data, actorRef) {
+  if (!groupSenderIsTheia(actorRef)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: rejecting non-Theia-origin sender" };
+  }
+  const kind = data?.kind;
+  switch (kind) {
+    case "webTabStop": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      entry.browser.stop();
+      return { ok: true, kind, where: "done" };
+    }
+    default:
+      return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
+  }
+}
+
+// One push name, many kinds; the frontend's WebTabChannel.onPush routes them.
+// The log line names the kind and the error only, never a URL or a title.
+function sendWebTabPush(theiaBrowser, payload) {
+  try {
+    theiaBrowser.browsingContext.currentWindowGlobal
+      .getActor(GROUP_ACTOR_NAME)
+      .sendAsyncMessage("PowerBrowserWebTabState", payload);
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[web-tab] ${payload.kind} push failed: ${err && err.message ? err.message : err}`);
+  }
+}
+
+// The frontend tab id of an overlay <browser>, or null for anything else
+// (the Theia frame, a chrome button, nothing).
+function tabIdOfBrowser(element) {
+  if (!element) {
+    return null;
+  }
+  for (const [tabId, entry] of webTabs) {
+    if (entry.browser === element) {
+      return tabId;
+    }
+  }
+  return null;
+}
+
+// Last pageFocus tab id pushed per Theia frame, so a focus/blur pair that
+// lands on the same answer sends one push, not two.
+const lastPageFocusByFrame = new WeakMap();
+
+export const PowerBrowserWebTabs = Object.freeze({
+  tabIdOfBrowser,
+
+  /** Tells the Theia frame which page has focus (`tabId`) or that none has (`null`). */
+  pushPageFocus(theiaBrowser, tabId) {
+    if (lastPageFocusByFrame.has(theiaBrowser) && lastPageFocusByFrame.get(theiaBrowser) === tabId) {
+      return;
+    }
+    lastPageFocusByFrame.set(theiaBrowser, tabId);
+    sendWebTabPush(theiaBrowser, { kind: "pageFocus", tabId });
+  },
+
+  /**
+   * A page-scoped key fired: relays its row id with the tab whose page had
+   * focus. The target is derived from `overlay` (chrome's active element),
+   * never from Theia's current widget. Rows whose action lands in Theia UI
+   * focus the Theia frame first (the webTabFocusAddress precedent).
+   */
+  relayShortcut(theiaBrowser, overlay, id, landsInTheia) {
+    if (typeof id !== "string" || !/^[A-Za-z0-9]{1,32}$/.test(id)) {
+      return "refused-id";
+    }
+    const tabId = tabIdOfBrowser(overlay);
+    if (tabId === null) {
+      return "no-page";
+    }
+    if (landsInTheia) {
+      theiaBrowser.focus();
+    }
+    sendWebTabPush(theiaBrowser, { kind: "shortcut", id, tabId });
+    return "relayed";
+  },
+});

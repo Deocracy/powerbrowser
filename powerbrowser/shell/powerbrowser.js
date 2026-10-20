@@ -19,7 +19,7 @@ document.addEventListener(
   () => {
     dump("POWERBROWSER_SHELL_READY chrome://powerbrowser/content/powerbrowser.xhtml\n");
 
-    const { PowerBrowserAPI } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
+    const { PowerBrowserAPI, PowerBrowserWebTabs } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
 
     const browserElement = document.getElementById("powerbrowser-content");
     const loadingElement = document.getElementById("powerbrowser-loading");
@@ -330,6 +330,55 @@ document.addEventListener(
       PowerBrowserAPI.webTabFocusAddress(browserElement);
     });
     diagnosticsKeyset.appendChild(focusAddressKey);
+
+    // Phase 27: page-scoped browser keys. The 2026-10-20 ruling: a Firefox key
+    // that clashes with a Theia key takes the browser meaning only while a web
+    // page has focus. Every row is created disabled and the focus tracker below
+    // enables the rows only while chrome's active element is an overlay
+    // <browser>; GlobalKeyListener reads `disabled` live on every key event
+    // (KeyEventHandler.cpp:187-190), so with the Theia frame focused every key
+    // goes to Theia untouched (KEY-04). Each row mirrors one row of PAGE_SHORTCUTS
+    // in theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts, which
+    // owns the action; `firefox` names the upstream browser-sets.inc.xhtml key
+    // the row mirrors.
+    const PAGE_KEYS = [
+      { id: "stop", keycode: "VK_ESCAPE", modifiers: "", reserved: false, landsInTheia: false, firefox: "key_stop" },
+    ];
+    const pageKeyElements = PAGE_KEYS.map(row => {
+      const key = document.createXULElement("key");
+      key.setAttribute("id", `powerbrowser-page-key-${row.id}`);
+      if (row.key) {
+        key.setAttribute("key", row.key);
+      } else {
+        key.setAttribute("keycode", row.keycode);
+      }
+      if (row.modifiers) {
+        key.setAttribute("modifiers", row.modifiers);
+      }
+      if (row.reserved) {
+        key.setAttribute("reserved", "true");
+      }
+      key.setAttribute("disabled", "true");
+      key.addEventListener("command", () => {
+        PowerBrowserWebTabs.relayShortcut(browserElement, document.activeElement, row.id, row.landsInTheia);
+      });
+      diagnosticsKeyset.appendChild(key);
+      return key;
+    });
+    const syncPageFocus = () => {
+      const tabId = PowerBrowserWebTabs.tabIdOfBrowser(document.activeElement);
+      for (const key of pageKeyElements) {
+        if (tabId === null) {
+          key.setAttribute("disabled", "true");
+        } else {
+          key.removeAttribute("disabled");
+        }
+      }
+      PowerBrowserWebTabs.pushPageFocus(browserElement, tabId);
+    };
+    document.addEventListener("focus", syncPageFocus, true);
+    // Deferred one microtask so it reads the element focus moved TO.
+    document.addEventListener("blur", () => Promise.resolve().then(syncPageFocus), true);
     document.documentElement.appendChild(diagnosticsKeyset);
 
     // Custom title bar. The root's `customtitlebar` attribute

@@ -23,6 +23,7 @@ import { CHROME_SUGGESTION_PATH, ChromeBarSuggestionService, ChromeBarTabSuggest
 import { ChromeBarPlacesSuggestions } from './chrome-bar-places-suggestions';
 import { ChromeBarCommandContribution } from './chrome-bar-commands';
 import { ChromeBarKeybindingContribution } from './chrome-bar-keybindings';
+import { ChromeBarShortcutRelay } from './chrome-bar-shortcuts';
 import { ChromeBarContribution, ChromeBarWidget } from './chrome-bar-widget';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
@@ -77,4 +78,8 @@ export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     bind(LayoutControlsWidget).toSelf().inSingletonScope();
     bind(ChromeBarContribution).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(ChromeBarContribution);
+    // Phase 27: the page-focus key relay (chrome-bar-shortcuts.ts). Static
+    // like every bind above (D-50): its onStart subscribes to chrome's pushes.
+    bind(ChromeBarShortcutRelay).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(ChromeBarShortcutRelay);
 });
