@@ -15,7 +15,8 @@ import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import pDebounce from 'p-debounce';
 import type { TabQueryRow } from '@powerbrowser/tab-uris/lib/node/tab-query-service';
-import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
 import {
     CHROME_BAR_BACK_COMMAND_ID,
@@ -44,6 +45,15 @@ import '../../src/browser/chrome-bar.css';
 
 /** NAV-03: the session-history menu's path. The menu is built per request from the history reply, never registered. */
 const HISTORY_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-history'];
+
+/** NAV-03: Firefox's click-hold delay before Back/Forward open the history menu. */
+const HISTORY_HOLD_MS = 500;
+
+/** NAV-01 (27-UI-SPEC, Pitfall P7): Reload ignores clicks for 650 ms after it turns back from Stop. */
+const RELOAD_GUARD_MS = 650;
+
+type NavGesture = 'back' | 'forward' | 'reload';
+type ButtonEvent = React.MouseEvent<HTMLButtonElement>;
 
 /**
  * Maps raw typed text onto the contracted search-or-address routing.
@@ -144,6 +154,20 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(ContextMenuRenderer)
     protected readonly menus: ContextMenuRenderer;
 
+    /** NAV-06: middle-click and Ctrl+click open a background tab; a dropped link a foreground one. */
+    @inject(WebTabOpenHandler)
+    protected readonly webTabOpener: WebTabOpenHandler;
+
+    /** PAN-03: a tab the bar opens joins the active group, as New Tab's does. */
+    @inject(GroupModel)
+    protected readonly groups: GroupModel;
+
+    protected holdTimer: number | undefined;
+    /** Set when a hold opened the history menu, so the release's click does not navigate. */
+    protected suppressNavClick = false;
+    /** performance.now() before which a Reload click is ignored (the post-Stop guard). */
+    protected reloadGuardUntil = 0;
+
     /** The active web tab's state-push subscription; replaced on every current-widget change. */
     protected stateSubscription: Disposable | undefined;
 
@@ -192,16 +216,113 @@ export class ChromeBarWidget extends ReactWidget {
         this.title.closable = false;
     }
 
-    /** NAV-01: Stop while the active web tab loads, otherwise the Reload command. */
-    protected onReloadClick = async (): Promise<void> => {
+    /**
+     * NAV-01/NAV-02: Stop while the active web tab loads; otherwise Reload,
+     * ignored inside the post-Stop guard, Shift for a hard reload, Ctrl for a
+     * duplicate in a background tab.
+     */
+    protected onReloadClick = async (e: ButtonEvent): Promise<void> => {
         const tab = currentWebTab();
         if (tab?.loading) {
             tab.stop();
             this.update();
             return;
         }
+        if (performance.now() < this.reloadGuardUntil) {
+            return;
+        }
+        if (e.ctrlKey || e.metaKey) {
+            await this.openInNewTab('reload');
+            return;
+        }
+        if (e.shiftKey && tab) {
+            await tab.reload(true);
+            this.update();
+            return;
+        }
         await this.runCommand(CHROME_BAR_RELOAD_COMMAND_ID)();
     };
+
+    /** Back/Forward click: one step, a background tab with Ctrl, nothing for the release after a hold. */
+    protected onNavClick = (which: 'back' | 'forward') => async (e: ButtonEvent): Promise<void> => {
+        if (this.suppressNavClick) {
+            this.suppressNavClick = false;
+            return;
+        }
+        if (e.ctrlKey || e.metaKey) {
+            await this.openInNewTab(which);
+            return;
+        }
+        await this.runCommand(which === 'back' ? CHROME_BAR_BACK_COMMAND_ID : CHROME_BAR_FORWARD_COMMAND_ID)();
+    };
+
+    /** NAV-06: middle-click; nothing on the Stop state. */
+    protected onNavAuxClick = (which: NavGesture) => (e: ButtonEvent): void => {
+        if (e.button !== 1 || (which === 'reload' && currentWebTab()?.loading)) {
+            return;
+        }
+        e.preventDefault();
+        this.openInNewTab(which);
+    };
+
+    /** NAV-03: a 500 ms primary-button hold on Back or Forward opens the history menu. */
+    protected onNavPointerDown = (e: React.PointerEvent<HTMLButtonElement>): void => {
+        if (e.button !== 0) {
+            return;
+        }
+        const button = e.currentTarget;
+        this.suppressNavClick = false;
+        this.clearHold();
+        this.holdTimer = window.setTimeout(() => {
+            this.holdTimer = undefined;
+            this.suppressNavClick = true;
+            this.openHistoryMenu(button);
+        }, HISTORY_HOLD_MS);
+    };
+
+    protected clearHold = (): void => {
+        if (this.holdTimer !== undefined) {
+            window.clearTimeout(this.holdTimer);
+            this.holdTimer = undefined;
+        }
+    };
+
+    /**
+     * NAV-06 (Open Question 6: a URL-only duplicate): Back/Forward open the
+     * adjacent history entry, Reload the current page, in a new background tab
+     * after the current one, which stays selected and focused.
+     */
+    protected async openInNewTab(which: NavGesture): Promise<void> {
+        const tab = currentWebTab();
+        if (!tab) {
+            return;
+        }
+        let url: string | undefined = tab.url;
+        if (which !== 'reload') {
+            const reply = await tab.history().catch(() => undefined);
+            const target = (reply?.index ?? -2) + (which === 'back' ? -1 : 1);
+            url = reply?.ok ? reply.entries?.find(entry => entry.index === target)?.url : undefined;
+        }
+        if (!url || !/^https?:\/\//i.test(url)) {
+            return;
+        }
+        let widget: WebTabWidget;
+        try {
+            widget = await this.webTabOpener.openInBackground(url, tab);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening a background tab failed:', error instanceof Error ? error.name : typeof error);
+            return;
+        }
+        await this.joinActiveGroup(widget);
+    }
+
+    protected async joinActiveGroup(widget: Widget): Promise<void> {
+        try {
+            await this.groups.joinActiveGroup(widget);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] joining the active group failed:', error instanceof Error ? error.name : typeof error);
+        }
+    }
 
     /**
      * NAV-03: the active tab's session history as a stock `.lm-Menu` at the
@@ -263,7 +384,7 @@ export class ChromeBarWidget extends ReactWidget {
     }
 
     /** Right-click, the context-menu key and Shift+F10 all arrive as `contextmenu`. */
-    protected onHistoryContextMenu = (e: React.MouseEvent<HTMLButtonElement>): void => {
+    protected onHistoryContextMenu = (e: ButtonEvent): void => {
         e.preventDefault();
         this.openHistoryMenu(e.currentTarget);
     };
@@ -538,7 +659,12 @@ export class ChromeBarWidget extends ReactWidget {
         this.stateSubscription?.dispose();
         this.stateSubscription = undefined;
         if (widget instanceof WebTabWidget) {
-            this.stateSubscription = widget.onDidChangeState(() => {
+            let wasLoading = widget.loading;
+            this.stateSubscription = widget.onDidChangeState(state => {
+                if (wasLoading && !state.loading) {
+                    this.reloadGuardUntil = performance.now() + RELOAD_GUARD_MS;
+                }
+                wasLoading = state.loading;
                 this.syncAddressFromWidget(widget);
                 this.update();
             });
@@ -740,8 +866,13 @@ export class ChromeBarWidget extends ReactWidget {
                 title='Back'
                 aria-label='Back'
                 disabled={!canNavigate || !tab?.canGoBack}
-                onClick={this.runCommand(CHROME_BAR_BACK_COMMAND_ID)}
+                onClick={this.onNavClick('back')}
+                onAuxClick={this.onNavAuxClick('back')}
                 onContextMenu={this.onHistoryContextMenu}
+                onPointerDown={this.onNavPointerDown}
+                onPointerUp={this.clearHold}
+                onPointerLeave={this.clearHold}
+                onPointerCancel={this.clearHold}
             >
                 <span className='codicon codicon-chevron-left' />
             </button>
@@ -750,8 +881,13 @@ export class ChromeBarWidget extends ReactWidget {
                 title='Forward'
                 aria-label='Forward'
                 disabled={!canNavigate || !tab?.canGoForward}
-                onClick={this.runCommand(CHROME_BAR_FORWARD_COMMAND_ID)}
+                onClick={this.onNavClick('forward')}
+                onAuxClick={this.onNavAuxClick('forward')}
                 onContextMenu={this.onHistoryContextMenu}
+                onPointerDown={this.onNavPointerDown}
+                onPointerUp={this.clearHold}
+                onPointerLeave={this.clearHold}
+                onPointerCancel={this.clearHold}
             >
                 <span className='codicon codicon-chevron-right' />
             </button>
@@ -763,6 +899,7 @@ export class ChromeBarWidget extends ReactWidget {
                 aria-label={stopping ? 'Stop' : 'Reload'}
                 disabled={!stopping && (!canNavigate || !tab?.canReload)}
                 onClick={this.onReloadClick}
+                onAuxClick={this.onNavAuxClick('reload')}
             >
                 <span className={stopping ? 'codicon codicon-close' : 'codicon codicon-refresh'} />
             </button>

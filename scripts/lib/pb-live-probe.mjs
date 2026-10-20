@@ -174,10 +174,12 @@ export async function pressKey(app, { key, code, keyCode, modifiers = [] }) {
 const BIDI_KEYS = { Escape: '', Shift: '', Control: '', Alt: '', Meta: '', F5: '', F6: '' };
 
 /**
- * Serves `pages` (`{ '/a': { title, body, slow } }`) on 127.0.0.1. A `slow` page
- * sends its headers and the head of its body, then holds the response open
- * until `close()`, so the tab stays loading. Every GET is recorded in
- * `requests` as `{ path, cacheControl, pragma }`.
+ * Serves `pages` (`{ '/a': { title, body, slow, delayMs } }`) on 127.0.0.1. A
+ * `slow` page sends its headers and the head of its body, then holds the
+ * response open until `close()`, so the tab stays loading; a `delayMs` page
+ * finishes that many milliseconds after its head, so its loading and loaded
+ * pushes land in separate frames. Every GET is recorded in `requests` as
+ * `{ path, cacheControl, pragma, at }` (`at` is Date.now()).
  */
 export async function serveNavPages(pages) {
     const requests = [];
@@ -185,7 +187,7 @@ export async function serveNavPages(pages) {
     const server = createServer((request, response) => {
         const path = new URL(request.url, 'http://127.0.0.1').pathname;
         if (request.method === 'GET') {
-            requests.push({ path, cacheControl: request.headers['cache-control'] ?? null, pragma: request.headers.pragma ?? null });
+            requests.push({ path, cacheControl: request.headers['cache-control'] ?? null, pragma: request.headers.pragma ?? null, at: Date.now() });
         }
         const page = pages[path];
         if (!page) {
@@ -195,10 +197,13 @@ export async function serveNavPages(pages) {
         }
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         const head = `<!doctype html><html><head><title>${page.title}</title></head><body>${page.body ?? ''}`;
-        if (page.slow) {
+        if (page.slow || page.delayMs) {
             response.write(head);
             held.add(response);
             response.on('close', () => held.delete(response));
+            if (page.delayMs) {
+                setTimeout(() => response.end('</body></html>'), page.delayMs);
+            }
             return;
         }
         response.end(`${head}</body></html>`);

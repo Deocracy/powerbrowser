@@ -33,6 +33,15 @@
  *                    served titles newest first with /h3 checked, the overlay
  *                    hidden; choosing /h1 in the menu's own DOM lands there,
  *                    closes the menu, shows the overlay and focuses it.
+ *   long-press       A 600 ms primary press on Back opens the menu; the release
+ *                    does not navigate; Escape closes it and focuses Back.
+ *   history-error    With the tab's history read stubbed to fail, the menu holds
+ *                    one disabled item naming the configured application name.
+ *   hard-reload-click  Shift+click on Reload sends no-cache; a plain click does not.
+ *   stop-guard       A Reload click on the first loaded push is ignored; one
+ *                    700 ms later reloads (exactly one extra GET, the late one).
+ *   middle-click     Middle-click on Back opens /h1, Ctrl+click on Reload /h2,
+ *                    each in a new tab after the current one, which stays current.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -57,6 +66,7 @@ import {
     pressKey,
     pushes,
     serveNavPages,
+    WEB_TAB_STATE_EVENT,
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
@@ -81,6 +91,9 @@ const PAGES = {
     '/cache': { title: 'Cache', body: '<p>cache</p>' },
     '/bg-a': { title: 'Background A', body: '<p>a</p>' },
     '/bg': { title: 'Background', body: '<p>bg</p>' },
+    '/hard-click': { title: 'Hard Click', body: '<p>hard</p>' },
+    // Finishes 400 ms after its head, so the loading and loaded pushes are separate frames.
+    '/guard': { title: 'Guard', body: '<p>guard</p>', delayMs: 400 },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
@@ -517,13 +530,204 @@ async function historyMenu({ app, pages, fail }) {
     }
 }
 
-// hard-reload-channel runs first, on the session's first web tab: a reload of a
+const appNameExpr = `(() => {
+    const key = Object.getOwnPropertySymbols(window).find(k => k.description === 'FrontendApplicationConfigProvider');
+    return String((key && window[key] && window[key].applicationName) || '').trim();
+})()`;
+
+const clickOn = (app, label, init = {}) => app.evaluate(`(() => {
+    const b = ${navButtonExpr(label)};
+    if (!b) return false;
+    b.dispatchEvent(new MouseEvent(${JSON.stringify(init.type ?? 'click')}, { bubbles: true, cancelable: true, ...${JSON.stringify(init)} }));
+    return true;
+})()`);
+
+const escapeMenu = app => app.evaluate(`(() => {
+    const m = ${VISIBLE_MENUS}[0];
+    if (!m) return false;
+    m.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape', code: 'Escape', keyCode: 27 }));
+    return true;
+})()`);
+
+async function longPress({ app, pages, fail }) {
+    const setup = await threeStepTab(app, pages, ['/h1', '/h2']);
+    if (setup.error) {
+        return fail(setup.error);
+    }
+    const { tabId } = setup;
+    const mark = (await pushes(app)).length;
+    const pressed = await app.evaluate(`(() => {
+        const b = ${navButtonExpr('Back')};
+        document.activeElement?.blur?.();
+        if (!b || document.activeElement === b) return false;
+        b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, buttons: 1, isPrimary: true, pointerType: 'mouse' }));
+        return true;
+    })()`);
+    if (pressed !== true) {
+        return fail(`${BROKEN} the press on Back could not be driven from an unfocused Back`);
+    }
+    await sleep(600);
+    const menus = await readMenus(app);
+    if (menus.length !== 1 || menus[0].length !== 2) {
+        return fail(`a 600 ms press on Back must open one history menu with the two entries; saw ${JSON.stringify(menus)}`);
+    }
+    // A real release ends in a click on the button; it must not go back.
+    await app.evaluate(`(() => {
+        const b = ${navButtonExpr('Back')};
+        b.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, button: 0, isPrimary: true, pointerType: 'mouse' }));
+        b.click();
+        return true;
+    })()`);
+    if (await escapeMenu(app) !== true) {
+        return fail('the history menu closed on the release, before Escape could close it');
+    }
+    const left = await settle(() => readMenus(app), m => m.length === 0);
+    if (left.length) {
+        return fail(`Escape did not close the history menu: ${JSON.stringify(left)}`);
+    }
+    const focused = await settle(() => app.evaluate(`document.activeElement === ${navButtonExpr('Back')}`), v => v === true);
+    if (focused !== true) {
+        return fail('after Escape focus must return to the Back button that opened the menu');
+    }
+    await sleep(1000);
+    const moved = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && !String(p.url).endsWith('/h2'));
+    if (moved.length) {
+        return fail(`the release after the hold, or Escape, navigated the tab to ${JSON.stringify(moved[0].url)}`);
+    }
+}
+
+async function historyError({ app, pages, fail }) {
+    const setup = await threeStepTab(app, pages, ['/h1', '/h2']);
+    if (setup.error) {
+        return fail(setup.error);
+    }
+    const tab = `get('ApplicationShell').mainPanel.currentTitle?.owner`;
+    const stubbed = await probe(app, `const w = ${tab}; if (!w || w.tabId !== ${JSON.stringify(setup.tabId)}) return false; w.history = async () => ({ ok: false, reason: 'timeout' }); return true;`);
+    if (stubbed !== true) {
+        return fail(`${BROKEN} the current tab's history read could not be stubbed`);
+    }
+    try {
+        await contextMenuOn(app, 'Back');
+        const menus = await settle(() => readMenus(app), m => m.length === 1);
+        const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+        const item = menus?.[0]?.[0];
+        if (!menus || menus.length !== 1 || menus[0].length !== 1 || !item.disabled
+            || !item.label.startsWith(subject) || !item.label.includes("couldn't read this tab's history")) {
+            return fail(`a failed history read must open one menu holding one disabled item that starts with ${JSON.stringify(subject)}; saw ${JSON.stringify(menus)}`);
+        }
+        if (/timeout/i.test(item.label)) {
+            return fail(`the error item carries the raw failure reason: ${JSON.stringify(item.label)}`);
+        }
+    } finally {
+        await escapeMenu(app);
+        await probe(app, `const w = ${tab}; if (w && Object.prototype.hasOwnProperty.call(w, 'history')) delete w.history; return true;`);
+    }
+}
+
+async function hardReloadClick({ app, pages, fail }) {
+    const tabId = await openWebTab(app, pages.url('/hard-click'));
+    if (await waitForPush(app, loadedAt(tabId, '/hard-click')) < 0) {
+        return fail('no loaded state push arrived for /hard-click');
+    }
+    await sleep(800); // clear of the post-Stop guard
+    let mark = pages.requests.length;
+    const pushMark = (await pushes(app)).length;
+    if (await clickOn(app, 'Reload', { shiftKey: true }) !== true) {
+        return fail(`${BROKEN} the Reload button is missing`);
+    }
+    const hardGet = await nextGet(pages, '/hard-click', mark);
+    if (!hardGet || !noCache(hardGet)) {
+        return fail(`Shift+click on Reload must send a GET carrying no-cache; got ${JSON.stringify(hardGet)}`);
+    }
+    if (await waitForPush(app, loadedAt(tabId, '/hard-click'), { from: pushMark }) < 0) {
+        return fail('the Shift+click reload never settled');
+    }
+    await sleep(800);
+    mark = pages.requests.length;
+    await clickOn(app, 'Reload');
+    const plainGet = await nextGet(pages, '/hard-click', mark);
+    if (!plainGet || noCache(plainGet)) {
+        return fail(`a plain click on Reload must send a GET without no-cache; got ${JSON.stringify(plainGet)}`);
+    }
+}
+
+async function stopGuard({ app, pages, fail }) {
+    const armed = await app.evaluate(`(() => {
+        window.__pbGuard = { armed: true, early: 0, late: 0 };
+        const reload = () => ${navButtonExpr('Reload')};
+        window.addEventListener(${JSON.stringify(WEB_TAB_STATE_EVENT)}, event => {
+            const d = event.detail;
+            if (!window.__pbGuard.armed || !d || d.kind !== 'state' || d.loading || !String(d.url).endsWith('/guard')) return;
+            window.__pbGuard.armed = false;
+            window.__pbGuard.early = Date.now();
+            reload()?.click();
+            setTimeout(() => { window.__pbGuard.late = Date.now(); reload()?.click(); }, 700);
+        });
+        return true;
+    })()`);
+    if (armed !== true) {
+        return fail(`${BROKEN} the in-page click listener could not be installed`);
+    }
+    const mark = pages.requests.length;
+    await openWebTab(app, pages.url('/guard'));
+    let guard;
+    try {
+        await pollFor(async () => (guard = JSON.parse(await app.evaluate('JSON.stringify(window.__pbGuard)'))).late > 0, 15000, 'both Reload clicks');
+    } catch {
+        return fail(`the listener never saw a loaded push for /guard, or never made the late click: ${JSON.stringify(guard)}`);
+    }
+    await sleep(1500);
+    const gets = pages.requests.slice(mark).filter(r => r.path === '/guard');
+    const extra = gets.slice(1);
+    if (gets.length < 1) {
+        return fail(`${BROKEN} the page server saw no GET of /guard`);
+    }
+    if (extra.length !== 1 || extra[0].at < guard.late) {
+        return fail(`a click on Reload within 650 ms after loading ended must be ignored and one 700 ms later must reload: expected exactly one extra GET at or after the late click, saw ${extra.length} (${JSON.stringify(extra.map(r => r.at - guard.early))} ms after the early click)`);
+    }
+}
+
+async function middleClick({ app, pages, fail }) {
+    const setup = await threeStepTab(app, pages, ['/h1', '/h2']);
+    if (setup.error) {
+        return fail(setup.error);
+    }
+    const { tabId } = setup;
+    const around = () => probe(app, `
+        const panel = get('ApplicationShell').mainPanel;
+        const cur = panel.currentTitle;
+        const titles = panel.findTabBar(cur)?.titles ?? [];
+        const next = titles[titles.indexOf(cur) + 1];
+        return { current: cur?.owner?.tabId ?? null, next: next?.owner?.tabId ?? null };`);
+    for (const [label, init, path] of [['Back', { type: 'auxclick', button: 1 }, '/h1'], ['Reload', { ctrlKey: true }, '/h2']]) {
+        const before = await around();
+        const mark = (await pushes(app)).length;
+        await sleep(800); // clear of the post-Stop guard for the Reload half
+        if (await clickOn(app, label, init) !== true) {
+            return fail(`${BROKEN} the ${label} button is missing`);
+        }
+        const after = await settle(around, v => v && v.next && v.next !== before.next);
+        if (!after?.next || after.next === before.next) {
+            return fail(`${JSON.stringify(init)} on ${label} added no tab directly after the current one (${JSON.stringify(after)})`);
+        }
+        if (after.current !== tabId) {
+            return fail(`${JSON.stringify(init)} on ${label} changed the current tab to ${JSON.stringify(after.current)}`);
+        }
+        if (await waitForPush(app, loadedAt(after.next, path), { from: mark }) < 0) {
+            return fail(`the tab opened by ${JSON.stringify(init)} on ${label} never loaded ${path}`);
+        }
+    }
+}
+
+// The reload scenarios run first, on the session's first web tabs: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
 // about:blank, a GUI-02 defect independent of the flag under test
 // (27-02-SUMMARY, deferred-items.md). Run later, it would score that defect.
 const SCENARIOS = {
     'hard-reload-channel': hardReloadChannel,
+    'hard-reload-click': hardReloadClick,
+    'stop-guard': stopGuard,
     'esc-stop': escStop,
     'theia-keeps-esc': theiaKeepsEsc,
     'stop-button': stopButton,
@@ -531,6 +735,9 @@ const SCENARIOS = {
     activation,
     'background-open': backgroundOpen,
     history: historyMenu,
+    'long-press': longPress,
+    'history-error': historyError,
+    'middle-click': middleClick,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
@@ -592,7 +799,9 @@ function selectedScenarios(args) {
     if (!names.length || unknown.length) {
         throw new Error(`unknown or empty --scenario list (${unknown.join(', ') || 'none given'}); known: ${Object.keys(SCENARIOS).join(', ')}`);
     }
-    return names;
+    // Registry order, whatever order was asked for: it is load-bearing (the
+    // reload scenarios first, theia-keeps-esc after its control).
+    return Object.keys(SCENARIOS).filter(n => names.includes(n));
 }
 
 const PLANTS = [
