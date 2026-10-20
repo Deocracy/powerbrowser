@@ -45,6 +45,31 @@ const BWC = 'theia/extensions/tab-uris/src/browser/browser-window-command.ts';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const MODULE = 'theia/extensions/tab-uris/src/browser/tab-uris-frontend-module.ts';
 const CHROME_BAR_DIR = 'theia/extensions/chrome-bar/src/browser';
+const TAB_URIS_DIR = 'theia/extensions/tab-uris/src/browser';
+
+/**
+ * Phase 27 privileged-kind rule (powerbrowser/INTERNAL-APIS.md): every
+ * `case "webTab…"` arm chrome serves, in either handler, has exactly one class.
+ * Compared as set equality against the derived arms, so an unclassified arm
+ * and a stale entry each go red by name. `privileged` (state outside a tab's
+ * own navigation, lifecycle or selection) exists and is empty: Phase 27 adds
+ * no such kind, and the first one must be a deliberate edit here.
+ */
+const KIND_CLASS_NAMES = ['tab-navigation', 'tab-lifecycle', 'selection', 'privileged'];
+const KIND_CLASSES = new Map([
+    ['webTabNavigate', 'tab-navigation'],
+    ['webTabBack', 'tab-navigation'],
+    ['webTabForward', 'tab-navigation'],
+    ['webTabReload', 'tab-navigation'],
+    ['webTabStop', 'tab-navigation'],
+    ['webTabHistory', 'tab-navigation'],
+    ['webTabGotoIndex', 'tab-navigation'],
+    ['webTabOpen', 'tab-lifecycle'],
+    ['webTabClose', 'tab-lifecycle'],
+    ['webTabFocus', 'tab-lifecycle'],
+    ['webTabGeometry', 'tab-lifecycle'],
+    ['webTabActivated', 'selection'],
+]);
 
 /** Stock `HttpOpenHandler`'s priority; the web-tab handler must exceed it. */
 const STOCK_HTTP_HANDLER_PRIORITY = 500;
@@ -76,9 +101,9 @@ function diff(actual, expected) {
     };
 }
 
-/** The body of a top-level `function name(…) { … }`, up to its column-0 `}`. */
+/** The body of a top-level `[async] function name(…) { … }`, up to its column-0 `}`. */
 function functionBody(text, name) {
-    const start = text.search(new RegExp(`^function ${name}\\(`, 'm'));
+    const start = text.search(new RegExp(`^(?:async )?function ${name}\\(`, 'm'));
     if (start === -1) {
         return '';
     }
@@ -295,17 +320,91 @@ function checkBridge(raw) {
         }
     }
 
+    // 9. PUSH KINDS: what chrome pushes on the one state event vs what the
+    // frontend subscribes through WebTabChannel.onPush, both directions.
+    const pushedKinds = [
+        ...derive(src[API], /sendWebTabPush\(\s*[\w$.]+\s*,\s*\{\s*kind:\s*"([A-Za-z]+)"/g),
+        ...derive(src[API], /sendAsyncMessage\(\s*"PowerBrowserWebTabState"\s*,\s*\{\s*kind:\s*"([A-Za-z]+)"/g),
+    ];
+    const frontendFiles = Object.keys(src).filter(file => file.startsWith(`${CHROME_BAR_DIR}/`) || file.startsWith(`${TAB_URIS_DIR}/`));
+    const frontendText = frontendFiles.map(file => src[file]).join('\n');
+    const constants = new Map(derive(frontendText, /export const ([A-Za-z_$][\w$]*\s*=\s*'[A-Za-z]+')/g)
+        .map(pair => /^(\S+)\s*=\s*'([A-Za-z]+)'$/.exec(pair)).map(m => [m[1], m[2]]));
+    const subscribedKinds = derive(frontendText, /onPush\(\s*'([A-Za-z]+)'/g);
+    // `\s*,` after the identifier: the method's own declaration (`onPush(kind: string`) is not a call.
+    for (const ident of derive(frontendText, /onPush\(\s*([A-Za-z_$][\w$]*)\s*,/g)) {
+        if (constants.has(ident)) {
+            subscribedKinds.push(constants.get(ident));
+        } else {
+            failures.push(`push-kinds: onPush(${ident}, …) names an identifier with no export const ${ident} = '<kind>' in the tab-uris or chrome-bar sources, so its kind cannot be derived`);
+        }
+    }
+    if (pushedKinds.length === 0) {
+        failures.push(`push-kinds: ${API}: derived ZERO pushed kinds -- the parse found nothing, so this comparison proves nothing (broken instrument, never a clean pass)`);
+    }
+    if (subscribedKinds.length === 0) {
+        failures.push('push-kinds: derived ZERO onPush subscriptions in the tab-uris and chrome-bar sources -- the parse found nothing, so this comparison proves nothing (broken instrument, never a clean pass)');
+    }
+    if (pushedKinds.length && subscribedKinds.length) {
+        const { surplus, missing } = diff(pushedKinds, subscribedKinds);
+        if (surplus.length) {
+            failures.push(`push-kinds: chrome pushes kinds no frontend source subscribes to: ${surplus.join(', ')}`);
+        }
+        if (missing.length) {
+            failures.push(`push-kinds: the frontend subscribes to kinds chrome never pushes: ${missing.join(', ')}`);
+        }
+    }
+
+    // 10. ACTION ROUTING: the WEB_TAB_ACTION_KINDS Set literal is exactly the
+    // case arms of handleWebTabAction (a kind in one and not the other is
+    // either unroutable or routed to "unknown kind").
+    const setLiteral = /const WEB_TAB_ACTION_KINDS = new Set\(\[([^\]]*)\]\)/.exec(src[API]);
+    const routed = setLiteral ? derive(setLiteral[1], /"([A-Za-z]+)"/g) : [];
+    const actionArms = derive(functionBody(src[API], 'handleWebTabAction'), /case "([A-Za-z]+)"/g);
+    if (routed.length === 0 || actionArms.length === 0) {
+        failures.push(`action-routing: ${API}: derived ZERO WEB_TAB_ACTION_KINDS members (${routed.length}) or handleWebTabAction arms (${actionArms.length}) -- the parse found nothing, so this comparison proves nothing (broken instrument, never a clean pass)`);
+    } else {
+        const { surplus, missing } = diff(routed, actionArms);
+        if (surplus.length) {
+            failures.push(`action-routing: WEB_TAB_ACTION_KINDS routes kinds handleWebTabAction has no case arm for: ${surplus.join(', ')}`);
+        }
+        if (missing.length) {
+            failures.push(`action-routing: handleWebTabAction has case arms WEB_TAB_ACTION_KINDS does not route: ${missing.join(', ')}`);
+        }
+    }
+
+    // 11. CLASSIFICATION (privileged-kind rule): every webTab arm in either
+    // handler has one class, and the privileged class is empty.
+    if (apiKinds.length) {
+        const { surplus, missing } = diff(apiKinds, [...KIND_CLASSES.keys()]);
+        if (surplus.length) {
+            failures.push(`classification: webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): ${surplus.join(', ')}`);
+        }
+        if (missing.length) {
+            failures.push(`classification: KIND_CLASSES entries with no case arm left (stale): ${missing.join(', ')}`);
+        }
+    }
+    for (const [kind, kindClass] of KIND_CLASSES) {
+        if (!KIND_CLASS_NAMES.includes(kindClass)) {
+            failures.push(`classification: ${kind} has the unknown class '${kindClass}'`);
+        } else if (kindClass === 'privileged') {
+            failures.push(`classification: ${kind} is privileged -- Phase 27's rule admits no privileged webTab kind without a deliberate change to this gate and INTERNAL-APIS.md`);
+        }
+    }
+
     return failures;
 }
 
 function readSources() {
-    const files = [API, CHILD, CLIENT, BWC, WEB_TAB, MODULE];
-    for (const name of readdirSync(join(REPO_ROOT, CHROME_BAR_DIR))) {
-        if (/\.tsx?$/.test(name)) {
-            files.push(`${CHROME_BAR_DIR}/${name}`);
+    const files = new Set([API, CHILD, CLIENT, BWC, WEB_TAB, MODULE]);
+    for (const dir of [CHROME_BAR_DIR, TAB_URIS_DIR]) {
+        for (const name of readdirSync(join(REPO_ROOT, dir))) {
+            if (/\.tsx?$/.test(name)) {
+                files.add(`${dir}/${name}`);
+            }
         }
     }
-    return Object.fromEntries(files.map(file => [file, readFileSync(join(REPO_ROOT, file), 'utf8')]));
+    return Object.fromEntries([...files].map(file => [file, readFileSync(join(REPO_ROOT, file), 'utf8')]));
 }
 
 /** Replace inside one region of a source only, leaving the rest byte-identical. */
@@ -384,6 +483,29 @@ function selfTest() {
             sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace(' || reply.where === REFUSED_SCHEME_OUTCOME', '') },
             expect: 'does not fold it',
         },
+        {
+            name: 'planted chrome-only push kind',
+            sources: { ...clean, [API]: clean[API] + '\nsendWebTabPush(theiaBrowser, { kind: "plantedPush" });\n' },
+            expect: 'chrome pushes kinds no frontend source subscribes to: plantedPush',
+        },
+        {
+            name: 'planted frontend-only subscription',
+            sources: { ...clean, [WIDGET]: clean[WIDGET] + "\nthis.channel.onPush('plantedSub', () => undefined);\n" },
+            expect: 'the frontend subscribes to kinds chrome never pushes: plantedSub',
+        },
+        {
+            name: 'planted webTabStop dropped from WEB_TAB_ACTION_KINDS',
+            sources: { ...clean, [API]: clean[API].replace(/(const WEB_TAB_ACTION_KINDS = new Set\(\[)"webTabStop",\s*/, '$1') },
+            expect: 'handleWebTabAction has case arms WEB_TAB_ACTION_KINDS does not route: webTabStop',
+        },
+        {
+            name: 'planted extra arm in handleWebTabAction',
+            sources: {
+                ...clean,
+                [API]: replaceWithin(clean[API], 'async function handleWebTabAction(', '\n}', 'switch (kind) {', 'switch (kind) {\n    case "webTabPlantedArm": { break; }'),
+            },
+            expect: 'webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): webTabPlantedArm',
+        },
     ];
 
     let failed = 0;
@@ -413,7 +535,7 @@ function selfTest() {
 function main() {
     if (process.argv.includes('--help')) {
         console.log('usage: verify-web-tab-bridge.mjs [--self-test]\n' +
-            'Derives the web-tab bridge contract (kinds, event names, open-handler priority, overlay attributes, origin wall, no stock-window escape, actor-child purity) from the tree and compares it.');
+            'Derives the web-tab bridge contract (kinds, event names, open-handler priority, overlay attributes, origin wall, no stock-window escape, actor-child purity, push-kind parity, action routing, kind classification) from the tree and compares it.');
         return 0;
     }
     if (process.argv.includes('--self-test')) {
@@ -429,7 +551,8 @@ function main() {
     const kinds = derive(stripComments(sources[API]), /case "(webTab[A-Za-z]+)"/g);
     console.log(
         `verify-web-tab-bridge: PASS -- ${kinds.length} webTab kinds, the request/response/state event names, ` +
-        'the open-handler priority, the overlay attribute order, the embedder-is-primary wall and the no-stock-window rule ' +
+        'the open-handler priority, the overlay attribute order, the embedder-is-primary wall, the no-stock-window rule, ' +
+        'push-kind parity, action routing and kind classification ' +
         `agree across ${Object.keys(sources).length} sources`
     );
     return 0;

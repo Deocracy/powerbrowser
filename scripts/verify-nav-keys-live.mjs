@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Phase 27 (NAV-01, KEY-04): the live check for the navigation buttons and
+ * Phase 27 (NAV-01..03, NAV-06, KEY-04): the live check for the navigation buttons and
  * the page-focus keys, driven in the built shell over WebDriver BiDi.
  *
  * One session runs the selected scenarios in order and prints one line per
@@ -25,6 +25,10 @@
  *   activation       Activating tab A, then B, makes chrome's activeTabIdOf
  *                    report each; Settings current makes it null; a third
  *                    tab's coalesced load push still drives the pill.
+ *   hard-reload-channel  reload(true)'s GET carries no-cache; a plain reload's
+ *                    GET does not (both observed by the page server).
+ *   background-open  openInBackground(url, A) puts the new tab directly after A,
+ *                    A stays current, and the new tab loads /bg.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -70,6 +74,9 @@ const PAGES = {
     '/act-a': { title: 'Activation A', body: '<p>a</p>' },
     '/act-b': { title: 'Activation B', body: '<p>b</p>' },
     '/act-c': { title: 'Activation C', body: '<p>c</p>' },
+    '/cache': { title: 'Cache', body: '<p>cache</p>' },
+    '/bg-a': { title: 'Background A', body: '<p>a</p>' },
+    '/bg': { title: 'Background', body: '<p>bg</p>' },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
@@ -315,12 +322,90 @@ async function activation({ app, pages, fail }) {
     }
 }
 
+// The first GET of `path` recorded at index >= `from` by the page server, or null on timeout.
+async function nextGet(pages, path, from) {
+    try {
+        return await pollFor(async () => pages.requests.slice(from).find(r => r.path === path) ?? null, 10000, `a GET of ${path}`);
+    } catch {
+        return null;
+    }
+}
+
+const noCache = r => /no-cache/i.test(`${r.cacheControl ?? ''} ${r.pragma ?? ''}`);
+
+async function hardReloadChannel({ app, pages, fail }) {
+    const tabId = await openWebTab(app, pages.url('/cache'));
+    if (await waitForPush(app, loadedAt(tabId, '/cache')) < 0) {
+        return fail('no loaded state push arrived for /cache');
+    }
+    let mark = pages.requests.length;
+    const pushMark = (await pushes(app)).length;
+    const hard = await widgetCall(app, tabId, 'reload', true);
+    const hardGet = await nextGet(pages, '/cache', mark);
+    if (!hardGet) {
+        return fail(`reload(true) reached no GET of /cache (reply ${JSON.stringify(hard)}; GETs since: ${JSON.stringify(pages.requests.slice(mark).map(r => r.path))})`);
+    }
+    if (!noCache(hardGet)) {
+        return fail(`the bypass-cache reload's GET carried no no-cache: ${JSON.stringify(hardGet)}`);
+    }
+    if (await waitForPush(app, loadedAt(tabId, '/cache'), { from: pushMark }) < 0) {
+        return fail('the bypass-cache reload never settled');
+    }
+    mark = pages.requests.length;
+    const plain = await widgetCall(app, tabId, 'reload');
+    const plainGet = await nextGet(pages, '/cache', mark);
+    if (!plainGet) {
+        return fail(`a plain reload reached no GET of /cache (reply ${JSON.stringify(plain)})`);
+    }
+    if (noCache(plainGet)) {
+        return fail(`a plain reload's GET carried no-cache, so the flag is not what made the difference: ${JSON.stringify(plainGet)}`);
+    }
+}
+
+async function backgroundOpen({ app, pages, fail }) {
+    const a = await openWebTab(app, pages.url('/bg-a'));
+    if (await waitForPush(app, loadedAt(a, '/bg-a')) < 0) {
+        return fail('no loaded state push arrived for tab A');
+    }
+    const result = await probe(app, `
+        const channel = get('WebTabChannel');
+        const shell = get('ApplicationShell');
+        const ref = channel.widgetOf(${JSON.stringify(a)});
+        const opened = await get('WebTabOpenHandler').openInBackground(${JSON.stringify(pages.url('/bg'))}, ref);
+        await sleep(300);
+        const titles = shell.mainPanel.findTabBar(ref.title)?.titles ?? [];
+        return {
+            tabId: opened.tabId,
+            after: titles.indexOf(opened.title) === titles.indexOf(ref.title) + 1 && titles.indexOf(ref.title) >= 0,
+            current: shell.mainPanel.currentTitle === ref.title,
+        };`);
+    if (!result || typeof result.tabId !== 'string') {
+        return fail(`${BROKEN} openInBackground returned no tab: ${JSON.stringify(result)}`);
+    }
+    if (!result.after) {
+        return fail('the background tab is not directly after tab A in its tab bar');
+    }
+    if (!result.current) {
+        return fail('opening in the background changed the current tab');
+    }
+    if (await waitForPush(app, loadedAt(result.tabId, '/bg')) < 0) {
+        return fail('no state push for the background tab ended /bg');
+    }
+}
+
+// hard-reload-channel runs first, on the session's first web tab: a reload of a
+// tab that shares a content process with an earlier same-site tab (Firefox's
+// webIsolated process count is 4) is switched to remoteType "web" at
+// about:blank, a GUI-02 defect independent of the flag under test
+// (27-02-SUMMARY, deferred-items.md). Run later, it would score that defect.
 const SCENARIOS = {
+    'hard-reload-channel': hardReloadChannel,
     'esc-stop': escStop,
     'theia-keeps-esc': theiaKeepsEsc,
     'stop-button': stopButton,
     'history-channel': historyChannel,
     activation,
+    'background-open': backgroundOpen,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */

@@ -2501,7 +2501,7 @@ export const PowerBrowserAPI = Object.freeze({
           if (!webTabIdIsValid(data.tabId)) {
             return { ok: false, reason: "validation", message: "handleGroupMutation: refusing malformed tabId" };
           }
-          return { ok: true, kind, where: PowerBrowserAPI.webTabReload(data.tabId) };
+          return { ok: true, kind, where: PowerBrowserAPI.webTabReload(data.tabId, data.bypassCache === true) };
         }
         case "webTabFocus": {
           if (!webTabIdIsValid(data.tabId)) {
@@ -3528,12 +3528,17 @@ export const PowerBrowserAPI = Object.freeze({
     return "done";
   },
 
-  webTabReload(tabId) {
+  webTabReload(tabId, bypassCache = false) {
     const entry = webTabs.get(tabId);
     if (!entry) {
       return "unknown-tab";
     }
-    entry.browser.reload();
+    if (bypassCache) {
+      // NAV-02: Firefox's own hard reload flags (browser-commands.js kSkipCacheFlags).
+      entry.browser.reloadWithFlags(Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY | Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE);
+    } else {
+      entry.browser.reload();
+    }
     return "done";
   },
 

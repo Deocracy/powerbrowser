@@ -175,7 +175,7 @@ export type WebTabMessage =
     | { kind: 'webTabNavigate'; tabId: string; url: string }
     | { kind: 'webTabBack'; tabId: string }
     | { kind: 'webTabForward'; tabId: string }
-    | { kind: 'webTabReload'; tabId: string }
+    | { kind: 'webTabReload'; tabId: string; bypassCache?: boolean }
     | { kind: 'webTabClose'; tabId: string }
     | { kind: 'webTabFocus'; tabId: string }
     | { kind: 'webTabStop'; tabId: string }
@@ -595,13 +595,14 @@ export class WebTabWidget extends BaseWidget {
      * Reload; on a lost view this re-issues the open for the current URL
      * instead (the contracted "Choose Reload to try again" affordance), and
      * republishes geometry from scratch so the re-created overlay gets a
-     * rect the dedupe would otherwise have skipped.
+     * rect the dedupe would otherwise have skipped. `bypassCache` (NAV-02) is
+     * Firefox's hard reload; the lost-view reopen ignores it.
      */
-    async reload(): Promise<WebTabReply> {
+    async reload(bypassCache = false): Promise<WebTabReply> {
         if (this.lostView) {
             return this.reopen();
         }
-        const reply = this.settle(await this.channel.request({ kind: 'webTabReload', tabId: this.tabId }));
+        const reply = this.settle(await this.channel.request({ kind: 'webTabReload', tabId: this.tabId, ...(bypassCache ? { bypassCache: true } : {}) }));
         // "One Reload, not two" (G-14.1.1-4). The overlay was dropped between
         // the last geometry publish and this click, so `publish()`'s reply
         // handler had nothing to observe; `settle()` has only just marked the
@@ -774,12 +775,26 @@ export class WebTabOpenHandler implements OpenHandler {
     }
 
     async openUrl(url: string, rowKey?: string): Promise<WebTabWidget> {
-        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}) };
-        const widget = await this.widgetManager.getOrCreateWidget<WebTabWidget>(WEB_TAB_FACTORY_ID, options);
+        const widget = await this.createWidget(url, rowKey);
         if (!widget.isAttached) {
             this.shell.addWidget(widget, { area: 'main' });
         }
         await this.shell.activateWidget(widget.id);
         return widget;
+    }
+
+    /** NAV-06: a new web tab directly after `ref`; the current tab stays current. */
+    async openInBackground(url: string, ref: Widget): Promise<WebTabWidget> {
+        if (!/^https?:\/\//i.test(url)) {
+            throw new Error('@powerbrowser/tab-uris: openInBackground takes an http(s) URL only');
+        }
+        const widget = await this.createWidget(url);
+        this.shell.addWidget(widget, { area: 'main', ref, mode: 'tab-after' });
+        return widget;
+    }
+
+    protected createWidget(url: string, rowKey?: string): Promise<WebTabWidget> {
+        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}) };
+        return this.widgetManager.getOrCreateWidget<WebTabWidget>(WEB_TAB_FACTORY_ID, options);
     }
 }
