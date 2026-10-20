@@ -19,6 +19,9 @@
  *                    glyph); clicking it stops the load and the same node turns
  *                    back into Reload (refresh glyph). With the empty page
  *                    current, Reload is disabled.
+ *   history-channel  After /h1 -> /h2 -> /h3, history() replies the three
+ *                    entries with index 2; gotoIndex(0) lands on /h1;
+ *                    gotoIndex(99) is refused and moves nothing.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -57,9 +60,17 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const PAGES = {
     '/slow-esc': { title: 'Slow Esc', body: '<p>still loading</p>', slow: true },
     '/slow-button': { title: 'Slow Button', body: '<p>still loading</p>', slow: true },
+    '/h1': { title: 'History One', body: '<p>one</p>' },
+    '/h2': { title: 'History Two', body: '<p>two</p>' },
+    '/h3': { title: 'History Three', body: '<p>three</p>' },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
+const loadedAt = (tabId, path) => p => isState(tabId, false)(p) && String(p.url).endsWith(path);
+
+/** Calls `method(...args)` on the registered widget of `tabId` in the Theia frame; returns its reply. */
+const widgetCall = (app, tabId, method, ...args) =>
+    probe(app, `return await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).${method}(${args.map(a => JSON.stringify(a)).join(', ')});`);
 
 async function escStop({ app, pages, plant, fail, note }) {
     const tabId = await openWebTab(app, pages.url('/slow-esc'));
@@ -209,10 +220,50 @@ async function stopButton({ app, pages, plant, fail, note }) {
     }
 }
 
+async function historyChannel({ app, pages, fail }) {
+    const tabId = await openWebTab(app, pages.url('/h1'));
+    if (await waitForPush(app, loadedAt(tabId, '/h1')) < 0) {
+        return fail('no loaded state push for /h1 arrived');
+    }
+    for (const path of ['/h2', '/h3']) {
+        const mark = (await pushes(app)).length;
+        await widgetCall(app, tabId, 'navigate', pages.url(path));
+        if (await waitForPush(app, loadedAt(tabId, path), { from: mark }) < 0) {
+            return fail(`navigating to ${path} produced no loaded state push`);
+        }
+    }
+    const history = await widgetCall(app, tabId, 'history');
+    const entries = Array.isArray(history?.entries) ? history.entries : [];
+    const want = [['/h1', 'History One'], ['/h2', 'History Two'], ['/h3', 'History Three']];
+    const matches = entries.length === 3 && want.every(([path, title], i) =>
+        entries[i].index === i && String(entries[i].url).endsWith(path) && entries[i].title === title);
+    if (history?.where !== 'done' || history.index !== 2 || !matches) {
+        return fail(`history() must reply where "done", index 2 and the three served entries in order; got ${JSON.stringify(history)}`);
+    }
+    let mark = (await pushes(app)).length;
+    const jump = await widgetCall(app, tabId, 'gotoIndex', 0);
+    if (jump?.ok !== true || await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && String(p.url).endsWith('/h1'), { from: mark }) < 0) {
+        return fail(`gotoIndex(0) produced no state push for /h1 (reply ${JSON.stringify(jump)})`);
+    }
+    // The gotoIndex(0) push above is the positive control for the absence below.
+    await sleep(500);
+    mark = (await pushes(app)).length;
+    const refused = await widgetCall(app, tabId, 'gotoIndex', 99);
+    if (refused?.ok !== false || refused.reason !== 'validation') {
+        return fail(`gotoIndex(99) must be refused with reason "validation"; got ${JSON.stringify(refused)}`);
+    }
+    await sleep(1500);
+    const moved = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && !String(p.url).endsWith('/h1'));
+    if (moved.length) {
+        return fail(`gotoIndex(99) was refused but the tab navigated anyway: ${JSON.stringify(moved[0].url)}`);
+    }
+}
+
 const SCENARIOS = {
     'esc-stop': escStop,
     'theia-keeps-esc': theiaKeepsEsc,
     'stop-button': stopButton,
+    'history-channel': historyChannel,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */

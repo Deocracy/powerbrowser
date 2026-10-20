@@ -156,9 +156,9 @@ export interface WebTabState {
 }
 
 /**
- * The web-tab kinds chrome serves: eight in `handleGroupMutation`, and
- * `webTabStop` in `handleWebTabAction` (Phase 27's end-of-file section). One
- * stable set for the bridge gate.
+ * The web-tab kinds chrome serves: eight in `handleGroupMutation`, and the
+ * Phase 27 kinds in `handleWebTabAction` (the boundary file's end-of-file
+ * section). One stable set for the bridge gate.
  */
 export type WebTabMessage =
     | { kind: 'webTabOpen'; tabId: string; url: string; key: string }
@@ -169,7 +169,9 @@ export type WebTabMessage =
     | { kind: 'webTabReload'; tabId: string }
     | { kind: 'webTabClose'; tabId: string }
     | { kind: 'webTabFocus'; tabId: string }
-    | { kind: 'webTabStop'; tabId: string };
+    | { kind: 'webTabStop'; tabId: string }
+    | { kind: 'webTabHistory'; tabId: string }
+    | { kind: 'webTabGotoIndex'; tabId: string; index: number };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -186,12 +188,23 @@ export type TabRowMessage = { kind: 'closeTab'; uri: string } | { kind: 'touchTa
 
 export type ShellMessage = WebTabMessage | WindowMessage | TabRowMessage;
 
+/** NAV-03: one session-history entry, as chrome's `webTabHistory` reply carries it. */
+export interface WebTabHistoryEntry {
+    index: number;
+    title: string;
+    url: string;
+}
+
 export interface WebTabReply {
     ok: boolean;
     where?: string;
     reason?: string;
     message?: string;
     width?: number;
+    /** `webTabHistory`: the current entry's index (-1 when the history is empty). */
+    index?: number;
+    /** `webTabHistory`: at most 15 entries around the current one, ascending. */
+    entries?: WebTabHistoryEntry[];
 }
 
 /**
@@ -558,6 +571,16 @@ export class WebTabWidget extends BaseWidget {
         return this.settle(await this.channel.request({ kind: 'webTabForward', tabId: this.tabId }));
     }
 
+    /** NAV-03: the tab's windowed session history (reply `index` and `entries`). */
+    async history(): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabHistory', tabId: this.tabId }));
+    }
+
+    /** NAV-03: moves the tab to session-history entry `index`; chrome refuses an out-of-range one. */
+    async gotoIndex(index: number): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabGotoIndex', tabId: this.tabId, index }));
+    }
+
     /**
      * Reload; on a lost view this re-issues the open for the current URL
      * instead (the contracted "Choose Reload to try again" affordance), and
@@ -590,7 +613,8 @@ export class WebTabWidget extends BaseWidget {
         // One reading of "chrome no longer renders this tab" (G-14.1.1-48):
         // every site that folds an open-or-navigate reply -- onAfterAttach,
         // this reopen, and settle() -- reaches lost-view state through
-        // `lostReply()`. publish()'s narrower unknown-tab-only arm is the one
+        // `lostReply()`. publish()'s narrower unknown-tab-only arm (and
+        // settleUnknownTab(), its twin for the history kinds) is the one
         // deliberate exception, for the reason its own doc comment gives: a
         // slow frame's timeout reply must not blank a live page. The `lost-reply`
         // assertions in scripts/verify-web-tab-bridge.mjs guard both halves
@@ -599,10 +623,22 @@ export class WebTabWidget extends BaseWidget {
         // identifier/boolean, and each exported outcome constant must appear
         // inside lostReply(). Not covered: a reading spelled as an `if` guard
         // around a bare boolean is invisible to the call-site pattern, and
-        // publish()'s documented arm is the only instance of that shape here.
+        // publish() and settleUnknownTab() are the only instances of that shape here.
         this.setLostView(WebTabWidget.lostReply(reply));
         this.lastSent = '';
         this.publish();
+        return reply;
+    }
+
+    /**
+     * The history read and jump fold only unknown-tab, like publish(): their
+     * validation refusal (an out-of-range index) and a timeout are answers
+     * about the request, not evidence that the page is gone.
+     */
+    protected settleUnknownTab(reply: WebTabReply): WebTabReply {
+        if (reply.where === UNKNOWN_TAB_OUTCOME) {
+            this.setLostView(true);
+        }
         return reply;
     }
 

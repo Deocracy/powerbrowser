@@ -4103,7 +4103,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex"]);
 
 async function handleWebTabAction(data, actorRef) {
   if (!groupSenderIsTheia(actorRef)) {
@@ -4120,6 +4120,53 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: true, kind, where: "unknown-tab" };
       }
       entry.browser.stop();
+      return { ok: true, kind, where: "done" };
+    }
+    // NAV-03: the tab's session history in Firefox's FillHistoryMenu window
+    // (browser.js: at most 15 entries around the current one). The reply is
+    // this request's own actor response, primitives only; nothing is logged.
+    // browsingContext.sessionHistory, never browser.sessionHistory: that
+    // getter throws for a remote browser (RemoteWebNavigation).
+    case "webTabHistory": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      const sh = entry.browser.browsingContext?.sessionHistory;
+      if (!sh || sh.count === 0) {
+        return { ok: true, kind, where: "empty", index: -1, entries: [] };
+      }
+      const max = 15;
+      const half = Math.floor(max / 2);
+      const index = sh.index;
+      let start = Math.max(index - half, 0);
+      const end = Math.min(start === 0 ? max : index + half + 1, sh.count);
+      if (end === sh.count) {
+        start = Math.max(sh.count - max, 0);
+      }
+      const entries = [];
+      for (let i = start; i < end; i++) {
+        const e = sh.getEntryAtIndex(i);
+        entries.push({ index: i, title: String(e.title || ""), url: String(e.URI?.spec || "") });
+      }
+      return { ok: true, kind, where: "done", index, entries };
+    }
+    case "webTabGotoIndex": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      const sh = entry.browser.browsingContext?.sessionHistory;
+      if (!Number.isInteger(data.index) || !sh || data.index < 0 || data.index >= sh.count) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an out-of-range history index" };
+      }
+      entry.browser.gotoIndex(data.index);
       return { ok: true, kind, where: "done" };
     }
     default:
