@@ -55,7 +55,7 @@ returning null.
 
 ### Navigation buttons (NAV)
 
-- [ ] **NAV-01**: User sees Reload turn into Stop while a page loads, and can stop it with the button or Esc
+- [x] **NAV-01**: User sees Reload turn into Stop while a page loads, and can stop it with the button or Esc
 - [ ] **NAV-02**: User can bypass the cache with Shift+click Reload, Ctrl+Shift+R or Ctrl+F5
 - [ ] **NAV-03**: User can right-click or long-press Back/Forward for a session-history menu and jump to any entry
 - [ ] **NAV-04**: User can show a Home button and go home with it or Alt+Home; the home page is a setting
@@ -67,7 +67,7 @@ returning null.
 - [ ] **KEY-01**: User can press Ctrl+T, Ctrl+W, Ctrl+R/F5, Alt+Left and Alt+Right while focus is inside a web page and get the Firefox action
 - [ ] **KEY-02**: User can move focus between pill and page with Alt+D, Ctrl+L and F6/Shift+F6 from inside a page
 - [ ] **KEY-03**: User can switch tabs with Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp/PageDown and Alt+1..9 from inside a page
-- [ ] **KEY-04**: User keeps Theia's meaning of clashing keys (F5, F6, F11, Ctrl+P, Ctrl+K and others) in editors, terminals and other non-web tabs
+- [x] **KEY-04**: User keeps Theia's meaning of clashing keys (F5, F6, F11, Ctrl+P, Ctrl+K and others) in editors, terminals and other non-web tabs
 - [ ] **KEY-05**: User can use mouse buttons 4 and 5 for Back and Forward over a web page
 
 ### Site identity and security (SITE)
@@ -217,7 +217,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | BAR-12 | Phase 29 | Pending |
 | BAR-13 | Phase 29 | Pending |
 | BAR-14 | Phase 29 | Pending |
-| NAV-01 | Phase 27 | Pending |
+| NAV-01 | Phase 27 | Complete |
 | NAV-02 | Phase 27 | Pending |
 | NAV-03 | Phase 27 | Pending |
 | NAV-04 | Phase 27 | Pending |
@@ -226,7 +226,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | KEY-01 | Phase 27 | Pending |
 | KEY-02 | Phase 27 | Pending |
 | KEY-03 | Phase 27 | Pending |
-| KEY-04 | Phase 27 | Pending |
+| KEY-04 | Phase 27 | Complete |
 | KEY-05 | Phase 27 | Pending |
 | SITE-01 | Phase 31 | Pending |
 | SITE-02 | Phase 31 | Pending |
@@ -285,6 +285,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | PROMPT-09 | Phase 37 | Pending |
 
 **Coverage:**
+
 - v1.5 requirements: 87 total
 - Mapped to phases: 87 (Phases 27–38)
 - Unmapped: 0 ✓

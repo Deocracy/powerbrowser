@@ -149,31 +149,39 @@ forces a decision). Coverage: 87/87 v1.5 requirements, each in exactly one phase
   4. With focus inside a web page, Ctrl+T, Ctrl+W, Ctrl+R, F5, Alt+Left, Alt+Right, Alt+D, Ctrl+L, F6, Shift+F6, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp, Ctrl+PageDown, Alt+1..9 and mouse buttons 4 and 5 do what they do in Firefox
   5. In an editor, a terminal or any other non-web tab, F5, F6, F11, Ctrl+P, Ctrl+K and the other clashing keys keep Theia's meaning
 
-**Plans**: 8 plans (strictly sequential waves 1-8: no worktrees, and every plan's `--quick` reads the whole tree)
+**Plans**: 1/8 plans executed (strictly sequential waves 1-8: no worktrees, and every plan's `--quick` reads the whole tree)
 
 Plans:
 **Wave 1**
-- [ ] 27-01-PLAN.md — Tracer: Esc in a loading page stops it end to end (page-scoped key row, shortcut push, onPush router, relay, webTabStop); the single Reload/Stop element; live-probe harness and nav-keys-live rows
+
+- [x] 27-01-PLAN.md — Tracer: Esc in a loading page stops it end to end (page-scoped key row, shortcut push, onPush router, relay, webTabStop); the single Reload/Stop element; live-probe harness and nav-keys-live rows
 
 **Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 27-02-PLAN.md — Groundwork: webTabHistory, webTabGotoIndex, webTabActivated, coalesced state push, bypass-cache reload, openInBackground; append-only and privileged-kind rules; push-kind parity in the bridge gate
 
 **Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 27-03-PLAN.md — Policies: gBrowser stand-in call sites derived from upstream with reasoned absences; shell shim globals in FORBIDDEN_PATTERNS
 
 **Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 27-04-PLAN.md — Buttons: Back/Forward history menu, press-and-hold, 650 ms guard, Shift+click hard reload, middle-click and Ctrl+click background tab, link drop on New Tab
 
 **Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 27-05-PLAN.md — Home button and its two settings, empty and failure cases
 
 **Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 27-06-PLAN.md — Page keys: the full shortcut table both sides (Ctrl+T/W/R, F5, hard reload, Alt+arrows, Alt+Home, Alt+D, Ctrl+L, tab switching) and verify-shortcut-relay.mjs
 
 **Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 27-07-PLAN.md — F6/Shift+F6 both ways, mouse buttons 4/5, Esc in the pill, Theia keeps its keys; old focus-address path removed
 
 **Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 27-08-PLAN.md — Tooltips with shortcuts from the table via HoverService, never over the page
 
 **UI hint**: yes
@@ -373,7 +381,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 27. Groundwork, Navigation Buttons and Page-Focus Keys | 0/TBD | Not started | - |
+| 27. Groundwork, Navigation Buttons and Page-Focus Keys | 1/8 | In Progress|  |
 | 28. WebExtension Tab Route Spike | 0/TBD | Not started | - |
 | 29. Address Bar Search and Fixup | 0/TBD | Not started | - |
 | 30. Address-Bar Modes and Command Centre | 0/TBD | Not started | - |

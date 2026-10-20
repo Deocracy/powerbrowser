@@ -1,21 +1,21 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 27
 current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
 status: executing
-stopped_at: Phase 27 UI-SPEC approved
-last_updated: "2026-10-20T22:32:16.095Z"
+stopped_at: Completed 27-01-PLAN.md
+last_updated: "2026-10-20T22:48:10.050Z"
 last_activity: 2026-10-20
-last_activity_desc: v1.5 roadmap created (12 phases, 87/87 requirements mapped)
-state_head: f4a86f518ff6ea189be7e4146644a971b41960e3
+last_activity_desc: 27-01 complete (Esc stops a loading page; Reload/Stop one element)
+state_head: 505bd3dba5988efb70ea71d56a468c8d658ea75c
 progress:
   total_phases: 12
   completed_phases: 0
   total_plans: 8
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 13
 ---
 
 # Project State
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 ## Current Position
 
-Phase: 27 (Groundwork, Navigation Buttons and Page-Focus Keys) — READY TO EXECUTE
-Plan: —
-Status: Ready to execute
-Last activity: 2026-10-20 — v1.5 roadmap created (12 phases, 87/87 requirements mapped)
+Phase: 27 (Groundwork, Navigation Buttons and Page-Focus Keys) — EXECUTING
+Plan: 2 of 8
+Status: Executing (27-01 complete)
+Last activity: 2026-10-20 — 27-01 complete: Esc stops a loading page; Reload/Stop single element; nav-keys-live registered
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 13%
 
 ## Performance Metrics
 
@@ -147,6 +147,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 17 P02 | 2min | 2 tasks | 12 files |
 | Phase 17 P03 | 6min | 2 tasks | 8 files |
 | Phase 17 P04 | 20min | 2 tasks | 5 files |
+| Phase 27 P01 | 13min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -368,6 +369,9 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-02: Sets R and M landed as one removal commit 02fffb6 (deleted scripts imported emitAiBackend); phase-gate locked-check-missing for the 051 file is the expected red until plan 04 re-lock
 - [Phase 17]: 17-03: STACK.md keeps its opencode.json line because the file is Chris's CLI config and still exists
 - [Phase 17]: The R33 baseline shrinks from 9 rows to 4: five rows now pass and are gated green from here on
+- [Phase 27]: Phase 27 live keys are synthesised at the parent through nsITextInputProcessor in a chrome-scope evaluate (A3/A4 held)
+- [Phase 27]: Page-scoped key rows are created disabled and enabled only while chrome's active element is an overlay; the blur-deferred focus tracker holds (A1)
+- [Phase 27]: New web-tab kinds route from receiveMessage to the end-of-file handleWebTabAction; powerbrowser.js reaches the boundary through the second frozen export PowerBrowserWebTabs
 
 ### Pending Todos
 
@@ -469,9 +473,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-20T21:17:59.150Z
-Stopped at: Phase 27 UI-SPEC approved
-Resume file: .planning/phases/27-groundwork-navigation-buttons-and-page-focus-keys/27-UI-SPEC.md
+Last session: 2026-10-20T22:48:10.024Z
+Stopped at: Completed 27-01-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 
