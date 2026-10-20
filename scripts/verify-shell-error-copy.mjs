@@ -547,6 +547,7 @@ const EXPECTED_WIDGET_COPY = new Set([
   "Back",
   "Forward",
   "Reload",
+  "Stop",
   "Search or enter address",
   "New Tab",
   "Suggestions",
@@ -592,6 +593,14 @@ function deriveWidgetCopy(widgetSrc) {
   const attrRe = /(?:title|aria-label|placeholder)=\{?((?:"(?:[^"\\\n]|\\.)*")|(?:'(?:[^'\\\n]|\\.)*')|(?:`(?:[^`\\]|\\.)*`))\}?/g;
   for (const m of widgetSrc.matchAll(attrRe)) {
     out.add(m[1].slice(1, -1));
+  }
+  // A braced expression (a ternary such as Reload/Stop) contributes every
+  // quoted literal inside its braces, so no branch of it hides copy from the pin.
+  const literalRe = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g;
+  for (const m of widgetSrc.matchAll(/(?:title|aria-label|placeholder)=\{([^{}]*)\}/g)) {
+    for (const lit of m[1].matchAll(literalRe)) {
+      out.add(lit[0].slice(1, -1));
+    }
   }
   for (const m of widgetSrc.matchAll(/[^=]>([^<>{}\n]+?)</g)) {
     const text = m[1].trim();
@@ -723,6 +732,17 @@ const MODES_COPY_FAULTS = [
       ),
     }),
     expect: "Custom mode bliss",
+  },
+  {
+    name: "braced ternary label drifted inside the braces",
+    apply: (sources) => ({
+      ...sources,
+      [MODES_WIDGET_REL]: sources[MODES_WIDGET_REL].replace(
+        "aria-label={stopping ? 'Stop' : 'Reload'}",
+        "aria-label={stopping ? 'Halt loading' : 'Reload'}"
+      ),
+    }),
+    expect: "Halt loading",
   },
 ];
 

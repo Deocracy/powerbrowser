@@ -15,6 +15,10 @@
  *   theia-keeps-esc  With the Theia frame focused the stop row is disabled and
  *                    Esc produces no shortcut push. Scored only after esc-stop
  *                    passed in the same session (its positive control).
+ *   stop-button      While a page loads the bar shows ONE Stop button (close
+ *                    glyph); clicking it stops the load and the same node turns
+ *                    back into Reload (refresh glyph). With the empty page
+ *                    current, Reload is disabled.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -35,6 +39,9 @@ import {
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
+import { pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
+
+const NEW_TAB_COMMAND_ID = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_NEW_TAB_COMMAND_ID');
 
 const NAME = 'verify-nav-keys-live';
 const BROKEN = 'broken instrument:';
@@ -43,6 +50,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 const PAGES = {
     '/slow-esc': { title: 'Slow Esc', body: '<p>still loading</p>', slow: true },
+    '/slow-button': { title: 'Slow Button', body: '<p>still loading</p>', slow: true },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
@@ -98,9 +106,90 @@ async function theiaKeepsEsc({ app, fail, results }) {
     }
 }
 
+// The bar's Stop-or-Reload buttons, read in the Theia frame.
+const NAV_BUTTONS = `[...document.querySelectorAll('.pb-chrome-bar button')].filter(b => ['Stop', 'Reload'].includes(b.getAttribute('aria-label')))`;
+const readNavButton = app => app.evaluate(`JSON.stringify((() => {
+    const found = ${NAV_BUTTONS};
+    return found.map(b => ({
+        label: b.getAttribute('aria-label'),
+        close: !!b.querySelector('.codicon-close'),
+        refresh: !!b.querySelector('.codicon-refresh'),
+        disabled: b.disabled,
+        marked: b.__pbStopMark === true,
+    }));
+})())`).then(JSON.parse);
+
+async function stopButton({ app, pages, plant, fail, note }) {
+    const tabId = await openWebTab(app, pages.url('/slow-button'));
+    if (await waitForPush(app, isState(tabId, true)) < 0) {
+        return fail('no state push with loading: true arrived for the slow page, so there was no load to stop');
+    }
+    if (plant === 'second-stop-element') {
+        const planted = await app.evaluate(`(() => {
+            const bar = document.querySelector('.pb-chrome-bar');
+            if (!bar) return false;
+            const extra = document.createElement('button');
+            extra.className = 'pb-chrome-bar-button';
+            extra.setAttribute('aria-label', 'Stop');
+            bar.appendChild(extra);
+            return true;
+        })()`);
+        if (planted === true) {
+            note('PLANT second-stop-element applied');
+        }
+    }
+    let seen = [];
+    try {
+        await pollFor(async () => {
+            seen = await readNavButton(app);
+            return seen.some(b => b.label === 'Stop');
+        }, 5000, 'the bar to show Stop');
+    } catch {
+        // judged below on what was last seen
+    }
+    if (seen.length !== 1 || seen[0].label !== 'Stop' || !seen[0].close) {
+        return fail(`while loading the bar must show exactly one Stop-or-Reload button, labelled Stop with the close glyph; saw ${JSON.stringify(seen)}`);
+    }
+    const mark = (await pushes(app)).length;
+    await app.evaluate(`(() => { const b = ${NAV_BUTTONS}[0]; b.__pbStopMark = true; b.click(); return true; })()`);
+    if (await waitForPush(app, isState(tabId, false), { from: mark }) < 0) {
+        return fail('clicking Stop produced no state push with loading: false for the tab (the load was not stopped)');
+    }
+    try {
+        await pollFor(async () => {
+            seen = await readNavButton(app);
+            return seen.length === 1 && seen[0].label === 'Reload';
+        }, 5000, 'the bar to show Reload');
+    } catch {
+        // judged below
+    }
+    if (seen.length !== 1 || seen[0].label !== 'Reload' || !seen[0].refresh) {
+        return fail(`after the stop the bar must show exactly one button, labelled Reload with the refresh glyph; saw ${JSON.stringify(seen)}`);
+    }
+    if (!seen[0].marked) {
+        return fail('the Reload button after the stop is a different node from the Stop button that was clicked (it was re-mounted, so keyboard focus on it would be lost)');
+    }
+    const opened = await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(NEW_TAB_COMMAND_ID)}); return true;`);
+    if (opened !== true) {
+        return fail(`${BROKEN} the New Tab command did not run: ${JSON.stringify(opened)}`);
+    }
+    try {
+        await pollFor(async () => {
+            seen = await readNavButton(app);
+            return seen.length === 1 && seen[0].label === 'Reload' && seen[0].disabled;
+        }, 5000, 'Reload to be disabled on the empty page');
+    } catch {
+        // judged below
+    }
+    if (seen.length !== 1 || seen[0].label !== 'Reload' || !seen[0].disabled) {
+        return fail(`with the empty page current the single Reload button must be disabled; saw ${JSON.stringify(seen)}`);
+    }
+}
+
 const SCENARIOS = {
     'esc-stop': escStop,
     'theia-keeps-esc': theiaKeepsEsc,
+    'stop-button': stopButton,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */

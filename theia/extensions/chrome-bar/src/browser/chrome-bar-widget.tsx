@@ -183,6 +183,17 @@ export class ChromeBarWidget extends ReactWidget {
         this.title.closable = false;
     }
 
+    /** NAV-01: Stop while the active web tab loads, otherwise the Reload command. */
+    protected onReloadClick = async (): Promise<void> => {
+        const tab = currentWebTab();
+        if (tab?.loading) {
+            tab.stop();
+            this.update();
+            return;
+        }
+        await this.runCommand(CHROME_BAR_RELOAD_COMMAND_ID)();
+    };
+
     protected runCommand = (id: string) => async (): Promise<void> => {
         try {
             await this.commands.executeCommand(id);
@@ -647,6 +658,7 @@ export class ChromeBarWidget extends ReactWidget {
         // their contracted tooltips retained and the layout never shifts.
         const canNavigate = chromeBarHasNavigableTab();
         const tab = currentWebTab();
+        const stopping = !!tab?.loading;
         const secure = this.inputValue.trim().startsWith('https://');
         return <div className='pb-chrome-bar'>
             <button
@@ -667,14 +679,16 @@ export class ChromeBarWidget extends ReactWidget {
             >
                 <span className='codicon codicon-chevron-right' />
             </button>
+            {/* NAV-01: ONE element is Reload or Stop by the pushed loading flag, so
+                keyboard focus on it survives every load (no remount, no key change). */}
             <button
                 className='pb-chrome-bar-button'
-                title='Reload'
-                aria-label='Reload'
-                disabled={!canNavigate || !tab?.canReload}
-                onClick={this.runCommand(CHROME_BAR_RELOAD_COMMAND_ID)}
+                title={stopping ? 'Stop' : 'Reload'}
+                aria-label={stopping ? 'Stop' : 'Reload'}
+                disabled={!stopping && (!canNavigate || !tab?.canReload)}
+                onClick={this.onReloadClick}
             >
-                <span className='codicon codicon-refresh' />
+                <span className={stopping ? 'codicon codicon-close' : 'codicon codicon-refresh'} />
             </button>
             <div className='pb-chrome-bar-pill' ref={el => { this.pillRef = el; }}>
                 {secure && <span className='codicon codicon-lock pb-chrome-bar-lock' aria-hidden='true' />}
