@@ -61,10 +61,15 @@ document.addEventListener(
     // that same shape -- also the seed of the chrome-owned tab model the
     // post-4.0 bridge needs.
     //
-    // 14.1.1-04 (G-14.1.1-19): the three members beside `tabs` are the exact
-    // set upstream CALLS on a gBrowser receiver at the pinned tag
-    // (LinkHandlerParent.sys.mjs and browser-custom-element.mjs; ContextMenuParent
-    // calls none today and is scanned so a rebase that adds one is caught).
+    // 14.1.1-04 (G-14.1.1-19), widened in 27-03: the three members beside
+    // `tabs` are the members upstream CALLS on a gBrowser receiver at the
+    // pinned tag that this stand-in implements. The required set is derived
+    // from browser-custom-element.mjs plus every *Parent.sys.mjs under
+    // upstream/browser/actors and upstream/toolkit/actors. Five more members
+    // upstream calls (getNotificationBox, getTabDialogBox, refreshBlocked,
+    // removeTab, setTabLabelForAuthPrompts) are deliberately absent, each
+    // with its reason in the gate's DELIBERATELY_ABSENT; refreshBlocked is a
+    // known gap (it throws only with accessibility.blockautorefresh on).
     // Those call sites optional-chain the RECEIVER, not the member, so a
     // non-nullish stand-in missing the member threw once per overlay creation
     // and buried the next real chrome-side error in the same log.
