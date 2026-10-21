@@ -2204,9 +2204,12 @@ export const PowerBrowserAPI = Object.freeze({
    * NG-038: records the sidecar's live port for the sender wall. Called by
    * TheiaService._swap before the Theia frame is navigated, and only there. A
    * non-positive or non-integer port clears it, which refuses every sender.
+   * A valid port also installs the token-cookie strip (BAR-02), right after
+   * the cookie is minted, so it covers every load in the process.
    */
   setGroupSenderPort(port) {
     groupSenderPort = Number.isInteger(port) && port > 0 ? port : null;
+    if (groupSenderPort !== null) installTokenCookieStrip();
   },
 
   /**
@@ -4381,3 +4384,71 @@ async function resolveTypedAddress(text, engineName) {
   }
   return { kind: "visit", url: String(upgradeSchemeless(info, uri).spec) };
 }
+
+// The token-cookie strip (BAR-02; REQUIREMENTS technical ruling 2026-10-20).
+// The Theia token cookie is host-only on 127.0.0.1 and cookies are not
+// port-scoped, so a server on any other loopback port (a dev server typed into
+// the bar, opened in an overlay, the stock browser window or a worker) would
+// receive it. Gecko adds cookies to the request before http-on-modify-request
+// fires (nsHttpChannel.cpp), so this observer removes the token from the
+// Cookie header there; the cookie itself stays in the store. The token is
+// kept only on the sidecar's own port, and there only for the Theia frame,
+// chrome or a Theia-origin worker. Nothing here logs a cookie value.
+//
+// scripts/verify-token-cookie-strip.mjs pins this name to the token gate's
+// POWERBROWSER_TOKEN_COOKIE_NAME.
+const TOKEN_COOKIE_NAME = "POWERBROWSER_TOKEN";
+const TOKEN_STRIP_TOPIC = "http-on-modify-request";
+
+// Fail closed: with no recorded sidecar port nothing keeps the token.
+function tokenCookieAllowed(channel) {
+  if (groupSenderPort === null || channel.URI.port !== groupSenderPort) {
+    return false;
+  }
+  const info = channel.loadInfo;
+  const bc = info.targetBrowsingContext ?? info.browsingContext;
+  if (bc) {
+    // An overlay (or a frame inside one) loses it, even on the sidecar port.
+    return tabIdOfBrowser(bc.top.embedderElement) === null;
+  }
+  const principal = info.triggeringPrincipal;
+  return !!principal && (principal.isSystemPrincipal || principal.hostPort === `127.0.0.1:${groupSenderPort}`);
+}
+
+const tokenCookieStrip = {
+  observe(subject) {
+    let channel;
+    try {
+      channel = subject.QueryInterface(Ci.nsIHttpChannel);
+    } catch {
+      return;
+    }
+    if (channel.URI.host !== "127.0.0.1" || tokenCookieAllowed(channel)) {
+      return;
+    }
+    let header;
+    try {
+      header = channel.getRequestHeader("Cookie");
+    } catch {
+      return;
+    }
+    const entries = header.split(";");
+    const kept = entries.filter(entry => !entry.trim().startsWith(`${TOKEN_COOKIE_NAME}=`));
+    if (kept.length !== entries.length) {
+      channel.setRequestHeader("Cookie", kept.map(entry => entry.trim()).join("; "), false);
+    }
+  },
+};
+
+let tokenCookieStripInstalled = false;
+function installTokenCookieStrip() {
+  if (tokenCookieStripInstalled) {
+    return;
+  }
+  Services.obs.addObserver(tokenCookieStrip, TOKEN_STRIP_TOPIC);
+  tokenCookieStripInstalled = true;
+}
+
+// For the live check's self-test only: it removes the observer through this
+// to prove the check can go red. No product code calls removeObserver.
+export const PowerBrowserTokenCookie = Object.freeze({ observer: tokenCookieStrip, topic: TOKEN_STRIP_TOPIC });

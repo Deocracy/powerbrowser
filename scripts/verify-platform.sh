@@ -3779,6 +3779,15 @@ run_own_checks() {
     "gui02-web-tab-bridge|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs"
     "gui02-web-tab-bridge-self-test|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs --self-test"
 
+    # NEW (Phase 29, BAR-02; REQUIREMENTS technical ruling 2026-10-20): the
+    # Theia token cookie never reaches a server on another loopback port. Pins
+    # the strip's cookie name to the token gate's, its topic to
+    # http-on-modify-request, its install site to setGroupSenderPort and its
+    # port comparison. Honestly --quick: text reads only. The live proof is
+    # address-bar-live's token-cookie scenario.
+    "token-cookie-strip|node $REPO_ROOT/scripts/verify-token-cookie-strip.mjs"
+    "token-cookie-strip-self-test|node $REPO_ROOT/scripts/verify-token-cookie-strip.mjs --self-test"
+
     # NEW (Phase 20, PLAT-02, G-14.1.1-10): the PowerBrowserGroup channel's
     # static contract. The five 15-01 faults that kept the channel dead for a
     # phase -- no wantUntrusted on the child events entry, a chrome:// child

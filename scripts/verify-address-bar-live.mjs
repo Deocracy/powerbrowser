@@ -11,6 +11,16 @@
  * served page's request log is the independent observer of every search.
  *
  * Scenarios:
+ *   token-cookie  BAR-02's technical ruling: no load to a loopback port other
+ *               than the sidecar's carries the Theia token cookie. With a probe
+ *               cookie (pbprobe=1) added for 127.0.0.1 as the positive control,
+ *               four loads to the served port must each carry pbprobe and no
+ *               POWERBROWSER_TOKEN: a GUI-01 stock browser window (opened
+ *               first, so when this is the session's first scenario no web
+ *               tab has existed yet), an overlay page, its <img> subresource
+ *               and a dedicated worker it starts. The cookie store still holds
+ *               the token, and the Theia frame's credentialed health fetch
+ *               passes the token gate while an uncredentialed one is refused.
  *   search      Typing "hello world" in the pill and pressing Enter (at the
  *               parent) loads the default engine's results page: the served
  *               engine records one GET on its search path whose q parameter
@@ -53,9 +63,24 @@ const NAME = 'verify-address-bar-live';
 const ENTER = { key: 'Enter', code: 'Enter', keyCode: 13 };
 const ENGINE_ONE = 'Probe Engine One';
 
+const TOKEN_COOKIE = 'POWERBROWSER_TOKEN';
+const PROBE_COOKIE = 'pbprobe=1';
+const API_URL = 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs';
+
+// The overlay page starts a dedicated worker from a Blob; the page builds the
+// worker's absolute URL, since a blob worker has no base path of its own.
+const COOKIE_PAGE_BODY = `<img src="/pixel"><script>
+    const src = 'fetch(' + JSON.stringify(location.origin + '/cookie-worker') + ', { credentials: "include" });';
+    new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+</script>`;
+
 const PAGES = {
     '/start': { title: 'Address Start', body: '<p>start</p>' },
     '/one/search': { title: 'Probe One Results', body: '<p>results</p>' },
+    '/cookie-stock': { title: 'Cookie Stock', body: '<p>stock</p>' },
+    '/cookie-page': { title: 'Cookie Page', body: COOKIE_PAGE_BODY },
+    '/pixel': { title: 'Pixel', body: '' },
+    '/cookie-worker': { title: 'Cookie Worker', body: '' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -183,6 +208,97 @@ async function search(ctx) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// The four loads to the served (non-sidecar) loopback port, in report order.
+const COOKIE_LOADS = [
+    ['stock-window', '/cookie-stock'],
+    ['overlay', '/cookie-page'],
+    ['subresource', '/pixel'],
+    ['worker', '/cookie-worker'],
+];
+
+/** Chrome scope: true when the cookie store holds `name` for 127.0.0.1. */
+const storeHolds = (app, name) => inChrome(app,
+    `return Services.cookies.getCookiesFromHost('127.0.0.1', {}).some(c => c.name === ${JSON.stringify(name)});`);
+
+/** The Theia frame's health fetch status with `credentials`, or -1 on a network error. */
+const healthStatus = (app, credentials) => app.evaluate(
+    `fetch(location.origin + '/powerbrowser/health', { credentials: ${JSON.stringify(credentials)} }).then(r => r.status, () => -1)`);
+
+async function tokenCookie(ctx) {
+    const { app, pages, plant, fail, note, passNote, results } = ctx;
+    const firstScenario = results.length === 0 && !ctx.shared.tabId
+        && await inChrome(app, `return ![...document.querySelectorAll('browser')].some(b => W.tabIdOfBrowser(b) !== null);`) === true;
+    const added = await inChrome(app, `try {
+        const v = Services.cookies.add('127.0.0.1', '/', 'pbprobe', '1', false, false, true, Date.now() + 86400000, {},
+            Ci.nsICookie.SAMESITE_LAX, Ci.nsICookie.SCHEME_HTTP, false);
+        return !v || v.result === Ci.nsICookieValidation.eOK;
+    } catch (e) { return String(e); }`);
+    if (added !== true) {
+        return fail(`${BROKEN} the probe cookie could not be added for 127.0.0.1 (${String(added)})`);
+    }
+    if (plant === 'token-strip-off') {
+        const removed = await inChrome(app, `const T = ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserTokenCookie;
+            Services.obs.removeObserver(T.observer, T.topic); return true;`);
+        if (removed === true) {
+            note('PLANT token-strip-off applied');
+        }
+    }
+    const mark = pages.requests.length;
+    // (a) The GUI-01 stock window, before this scenario opens any web tab.
+    const opened = await app.evaluate(`(() => {
+        try { window.__pbCookieWindow = window.open(${JSON.stringify(pages.url('/cookie-stock'))}, '_blank'); return !!window.__pbCookieWindow; }
+        catch (e) { return String(e); }
+    })()`);
+    try {
+        if (opened !== true) {
+            return fail(`${BROKEN} window.open from the Theia frame returned no window (${String(opened)})`);
+        }
+        await nextGet(pages, '/cookie-stock', mark);
+    } finally {
+        await app.evaluate(`(() => { try { window.__pbCookieWindow && window.__pbCookieWindow.close(); } catch (e) {} return true; })()`);
+    }
+    // (b) The overlay page and its subresource; (c) the worker it starts.
+    const tabId = await openWebTab(app, pages.url('/cookie-page'));
+    if (await waitForPush(app, loadedAt(tabId, '/cookie-page')) < 0) {
+        fail(`${BROKEN} no loaded state push arrived for /cookie-page`);
+    }
+    await nextGet(pages, '/pixel', mark);
+    await nextGet(pages, '/cookie-worker', mark, () => true, 10000);
+    const seen = pages.requests.slice(mark);
+    const carried = [];
+    for (const [label, path] of COOKIE_LOADS) {
+        const request = seen.find(r => r.path === path);
+        if (!request) {
+            fail(`${BROKEN} no GET on ${path} (${label}) reached the served port${label === 'worker' ? ' within 10 s: the worker never ran' : ''}`);
+            continue;
+        }
+        const cookies = String(request.cookie ?? '').split(';').map(c => c.trim());
+        if (!cookies.includes(PROBE_COOKIE)) {
+            fail(`${BROKEN} the ${label} request (${path}) did not carry ${PROBE_COOKIE}, so the request log cannot see its cookies`);
+        }
+        if (cookies.some(c => c.startsWith(`${TOKEN_COOKIE}=`))) {
+            carried.push(label);
+        }
+    }
+    if (carried.length) {
+        fail(`carried ${TOKEN_COOKIE}: ${carried.join(', ')}`);
+    }
+    if (await storeHolds(app, TOKEN_COOKIE) !== true) {
+        fail(`the cookie store no longer holds ${TOKEN_COOKIE} for 127.0.0.1 (the strip must edit headers, never the store)`);
+    }
+    const withToken = await healthStatus(app, 'include');
+    if (withToken !== 200) {
+        fail(`the Theia frame's credentialed fetch of its own health route returned ${withToken}, not 200 (the strip took the token from the Theia frame)`);
+    }
+    const without = await healthStatus(app, 'omit');
+    if (without === 200) {
+        fail(`${BROKEN} the uncredentialed health fetch also returned 200, so the token gate is off and the credentialed fetch proves nothing`);
+    }
+    if (firstScenario) {
+        passNote('stock window before any web tab');
+    }
+}
+
 /** True when `name`'s positive control passed earlier in this session. */
 const controlPassed = (results, name) => {
     const control = results.find(r => r.name === CONTROL_OF[name]);
@@ -255,6 +371,7 @@ async function noEngine(ctx) {
 }
 
 const SCENARIOS = {
+    'token-cookie': tokenCookie,
     search,
     refused,
     'no-engine': noEngine,
@@ -272,11 +389,12 @@ async function runSession(names, plant = '') {
             const results = [];
             const shared = {};
             for (const name of names) {
-                const result = { name, failures: [], notes: [], notScored: false };
+                const result = { name, failures: [], notes: [], notScored: false, passNotes: [] };
                 const ctx = {
                     app, pages, plant, results, shared,
                     fail: reason => { result.failures.push(reason); },
                     note: text => { result.notes.push(text); },
+                    passNote: text => { result.passNotes.push(text); },
                 };
                 try {
                     if (await SCENARIOS[name](ctx) === 'not-scored') {
@@ -308,7 +426,7 @@ function report(results) {
                 console.error(`${r.name}: FAIL -- ${f}`);
             }
         } else {
-            console.log(`${r.name}: PASS`);
+            console.log(`${r.name}: PASS${r.passNotes.length ? ` (${r.passNotes.join('; ')})` : ''}`);
         }
     }
     return failed ? 1 : 0;
@@ -330,6 +448,7 @@ function selectedScenarios(args) {
 
 const PLANTS = [
     { plant: 'resolve-bypassed', target: 'search', run: ['search'], expect: 'no GET on /one/search' },
+    { plant: 'token-strip-off', target: 'token-cookie', run: ['token-cookie'], expect: `carried ${TOKEN_COOKIE}: stock-window, overlay, subresource, worker` },
 ];
 
 async function selfTest() {
