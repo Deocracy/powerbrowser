@@ -38,8 +38,10 @@
  *   history-error    With the tab's history read stubbed to fail, the menu holds
  *                    one disabled item naming the configured application name.
  *   hard-reload-click  Shift+click on Reload sends no-cache; a plain click does not.
- *   stop-guard       A Reload click on the first loaded push is ignored; one
- *                    700 ms later reloads (exactly one extra GET, the late one).
+ *   stop-guard       A Reload click as soon as the bar renders Reload after the
+ *                    loaded push (required to have hit, inside the guard) is
+ *                    ignored; one 700 ms later reloads (exactly one extra GET,
+ *                    the late one).
  *   middle-click     Middle-click on Back opens /h1, Ctrl+click on Reload /h2,
  *                    each in a new tab after the current one, which stays current.
  *   drop             A text/uri-list http link dragged onto New Tab shows the ring
@@ -761,17 +763,42 @@ async function hardReloadClick({ app, pages, fail }) {
     }
 }
 
-async function stopGuard({ app, pages, fail }) {
+async function stopGuard({ app, pages, plant, fail, note }) {
+    if (plant === 'guard-disabled') {
+        // The fault: the post-Stop guard never holds (reloadGuardUntil zeroed before the early click).
+        if (await probe(app, `window.__pbGuardBar = get('ChromeBarWidget'); return typeof window.__pbGuardBar.reloadGuardUntil === 'number';`) === true) {
+            note('PLANT guard-disabled applied');
+        }
+    }
+    // The early click waits (in frames) for the bar to render Reload, which it
+    // does only after the loaded push, and records that it hit; a click that
+    // found no Reload button would otherwise be a silent no-op and the check
+    // would pass with no guard at all.
     const armed = await app.evaluate(`(() => {
-        window.__pbGuard = { armed: true, early: 0, late: 0 };
+        window.__pbGuard = { armed: true, pushedAt: 0, early: 0, earlyHit: false, earlyAfterMs: -1, late: 0, lateHit: false };
         const reload = () => ${navButtonExpr('Reload')};
         window.addEventListener(${JSON.stringify(WEB_TAB_STATE_EVENT)}, event => {
             const d = event.detail;
-            if (!window.__pbGuard.armed || !d || d.kind !== 'state' || d.loading || !String(d.url).endsWith('/guard')) return;
-            window.__pbGuard.armed = false;
-            window.__pbGuard.early = Date.now();
-            reload()?.click();
-            setTimeout(() => { window.__pbGuard.late = Date.now(); reload()?.click(); }, 700);
+            const g = window.__pbGuard;
+            if (!g.armed || !d || d.kind !== 'state' || d.loading || !String(d.url).endsWith('/guard')) return;
+            g.armed = false;
+            g.pushedAt = performance.now();
+            const tryEarly = () => {
+                const b = reload();
+                if (b) {
+                    if (window.__pbGuardBar) window.__pbGuardBar.reloadGuardUntil = 0;
+                    g.earlyAfterMs = performance.now() - g.pushedAt;
+                    g.early = Date.now();
+                    g.earlyHit = true;
+                    b.click();
+                    setTimeout(() => { g.late = Date.now(); const l = reload(); g.lateHit = !!l; l?.click(); }, 700);
+                } else if (performance.now() - g.pushedAt < 200) {
+                    requestAnimationFrame(tryEarly);
+                } else {
+                    g.late = -1;
+                }
+            };
+            tryEarly();
         });
         return true;
     })()`);
@@ -782,10 +809,20 @@ async function stopGuard({ app, pages, fail }) {
     await openWebTab(app, pages.url('/guard'));
     let guard;
     try {
-        await pollFor(async () => (guard = JSON.parse(await app.evaluate('JSON.stringify(window.__pbGuard)'))).late > 0, 15000, 'both Reload clicks');
+        await pollFor(async () => (guard = JSON.parse(await app.evaluate('JSON.stringify(window.__pbGuard)'))).late !== 0, 15000, 'both Reload clicks');
     } catch {
         return fail(`the listener never saw a loaded push for /guard, or never made the late click: ${JSON.stringify(guard)}`);
     }
+    if (!guard.earlyHit) {
+        return fail(`${BROKEN} the bar showed no Reload button within 200 ms of the loaded push, so the early click hit nothing: ${JSON.stringify(guard)}`);
+    }
+    if (guard.earlyAfterMs >= 600) {
+        return fail(`${BROKEN} the early click landed ${Math.round(guard.earlyAfterMs)} ms after the loaded push, not inside the 650 ms guard`);
+    }
+    if (!guard.lateHit) {
+        return fail(`${BROKEN} the late click found no Reload button: ${JSON.stringify(guard)}`);
+    }
+    note(`early click ${Math.round(guard.earlyAfterMs)} ms after the loaded push`);
     await sleep(1500);
     const gets = pages.requests.slice(mark).filter(r => r.path === '/guard');
     const extra = gets.slice(1);
@@ -1981,6 +2018,7 @@ const PLANTS = [
     { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
     { plant: 'tab-order-reversed', target: 'tab-keys', run: ['tab-keys'], expect: 'expected T2' },
     { plant: 'hover-elsewhere', target: 'mouse-buttons', run: ['mouse-buttons'], expect: '/m1' },
+    { plant: 'guard-disabled', target: 'stop-guard', run: ['stop-guard'], expect: 'must be ignored' },
     { plant: 'close-fallback-removed', target: 'close-split', run: ['close-split'], expect: "the other pane's tab current" },
     { plant: 'pill-scope-removed', target: 'focus-keys-debug', run: ['focus-keys-debug'], expect: "the debugger's F6 took it" },
     { plant: 'hover-below', target: 'tooltips-all', run: ['tooltips-all'], expect: 'intersects' },
