@@ -18,7 +18,6 @@ import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import pDebounce from 'p-debounce';
-import type { TabQueryRow } from '@powerbrowser/tab-uris/lib/node/tab-query-service';
 import { EMPTY_PAGE_URL, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
@@ -34,7 +33,9 @@ import {
     focusAddressPill,
     setCurrentWebTab,
 } from './chrome-bar-commands';
-import { CHROME_SUGGESTION_LIMIT, ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
+import { ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
+import type { SourcedRow } from './chrome-bar-places-suggestions';
+import { PLACE_ROW_LIMIT, Row, composeRows, iconFor, nextHighlight } from './address-bar-rows';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE,
@@ -67,6 +68,12 @@ const RELOAD_GUARD_MS = 650;
 type NavGesture = 'back' | 'forward' | 'reload';
 type ButtonEvent = React.MouseEvent<HTMLButtonElement>;
 type ButtonDragEvent = React.DragEvent<HTMLButtonElement>;
+
+/** BAR-11: the heuristic row's key; the one row present for every non-empty text. */
+const HEURISTIC_KEY = 'heuristic';
+
+/** BAR-11: the dropdown's tallest size (29-UI-SPEC Spacing Scale); a short window caps it at its bottom less 8px. */
+const DROPDOWN_MAX_HEIGHT = 432;
 
 /** NAV-06: drag types that are links, as distinct from plain text. */
 const LINK_DRAG_TYPES = ['text/uri-list', 'text/x-moz-url'];
@@ -221,9 +228,20 @@ export class ChromeBarWidget extends ReactWidget {
 
     protected inputValue = '';
     protected committedAddress = '';
-    protected rows: TabQueryRow[] = [];
+    /** BAR-11: the rows on screen, composed by address-bar-rows from the parts below. */
+    protected rows: Row[] = [];
     protected dropdownOpen = false;
-    protected highlightIndex = -1;
+    /** BAR-11: the highlighted row, tracked by key so rows arriving late never move it. */
+    protected highlightKey: string | undefined = undefined;
+    /** BAR-11: the first row for the typed text; null until chrome's resolve arrives. */
+    protected heuristic: Row | null = null;
+    /** BAR-11: chrome found no engine for the typed words; the heuristic row is the no-search row. */
+    protected heuristicNoEngine = false;
+    /** BAR-11: open-tab, bookmark and history rows for the typed text. */
+    protected placeRows: Row[] = [];
+    /** BAR-11: cached favicons by page url, from chrome's Places cache only. */
+    protected icons: Record<string, string> = {};
+    /** The heuristic row could not be computed: the first row is the suggestions-failure row. */
     protected providerFailed = false;
     protected commitFailed = false;
     /** Phase 29 (BAR-01): chrome found no engine for typed words; Enter retries, typing or closing clears it. */
@@ -583,7 +601,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.querySeq += 1;
         this.dropdownArmed = false;
         this.dropdownOpen = false;
-        this.highlightIndex = -1;
+        this.highlightKey = undefined;
         this.homeFailed = false;
         this.noSearch = false;
     }
@@ -599,38 +617,129 @@ export class ChromeBarWidget extends ReactWidget {
             return;
         }
         const seq = ++this.querySeq;
+        // Each reply re-checks both guards on arrival (29-RESEARCH Pitfall 9).
+        const current = (): boolean => this.dropdownArmed && this.querySeq === seq;
         // Row-level shimmer only past the contracted delay: local matches
         // paint synchronously with no spinner; the shimmer row appears only
-        // when the provider is still outstanding after 150ms.
+        // when a request is still outstanding after 150ms.
         const timer = setTimeout(() => {
-            if (this.querySeq === seq) {
+            if (current()) {
                 this.shimmer = true;
                 this.dropdownOpen = true;
                 this.update();
             }
         }, 150);
-        try {
-            const rows = await this.suggestions.searchByPrefix(prefix, CHROME_SUGGESTION_LIMIT);
-            if (this.querySeq !== seq) {
-                return;
+        const heuristic = this.store.resolveTypedAddress(prefix, this.engineNameForRequest()).then(
+            resolved => {
+                if (current()) {
+                    this.setHeuristic(prefix, resolved);
+                }
+            },
+            () => {
+                if (current()) {
+                    this.setHeuristic(prefix, undefined);
+                }
             }
-            this.rows = rows.slice(0, CHROME_SUGGESTION_LIMIT);
-            this.providerFailed = false;
-        } catch {
-            if (this.querySeq !== seq) {
-                return;
+        );
+        const places = this.suggestions.searchByPrefix(prefix, PLACE_ROW_LIMIT).then(
+            rows => {
+                if (current()) {
+                    this.placeRows = this.placeRowsOf(rows as SourcedRow[]);
+                    this.showComposedRows(seq);
+                }
+            },
+            () => {
+                // Places and open tabs are an addition: their failure is silent, as in Firefox.
+                if (current()) {
+                    this.placeRows = [];
+                    this.showComposedRows(seq);
+                }
             }
-            this.rows = [];
-            this.providerFailed = true;
-        } finally {
-            clearTimeout(timer);
-            if (this.querySeq === seq) {
-                this.shimmer = false;
-                this.dropdownOpen = true;
-                this.highlightIndex = -1;
-                this.update();
-            }
+        );
+        await Promise.all([heuristic, places]);
+        clearTimeout(timer);
+        if (current()) {
+            this.shimmer = false;
+            this.update();
         }
+    }
+
+    /** BAR-11: the heuristic row from chrome's resolve of the typed text; undefined when the resolve failed. */
+    protected setHeuristic(text: string, resolved: ResolvedAddress | undefined): void {
+        this.providerFailed = !resolved;
+        this.heuristicNoEngine = resolved?.kind === 'no-engine';
+        const row: Row = { key: HEURISTIC_KEY, source: 'heuristic', title: text, caption: CHROME_BAR_COPY.visit, url: '' };
+        if (resolved?.kind === 'search' && resolved.url) {
+            const engine = resolved.engineName ?? '';
+            row.caption = CHROME_BAR_COPY.searchWith(engine);
+            row.url = resolved.url;
+            row.engineName = engine;
+            row.icon = this.engineList?.engines.find(e => e.name === engine)?.icon ?? null;
+        } else if (resolved?.kind === 'visit' && resolved.url) {
+            row.title = resolved.url;
+            row.url = resolved.url;
+        }
+        this.heuristic = row;
+        this.showComposedRows(this.querySeq);
+    }
+
+    /**
+     * BAR-11: sourced service rows as dropdown rows. An open-tab row is kept
+     * only while a web tab in the shell shows that address (a closed tab's
+     * store row is dropped); a row with no title shows its address.
+     */
+    protected placeRowsOf(rows: SourcedRow[]): Row[] {
+        const open = new Set(this.shell.getWidgets('main')
+            .filter((w): w is WebTabWidget => w instanceof WebTabWidget && w.hasPage)
+            .map(w => w.url));
+        return rows
+            .filter(row => row.source !== 'tab' || open.has(row.url))
+            .map(row => ({ key: `${row.source}:${row.url}`, source: row.source, title: row.title || row.url, caption: row.url, url: row.url }));
+    }
+
+    /** BAR-11: the one composition path, through address-bar-rows; cached icons ride along. */
+    protected composeVisibleRows(): Row[] {
+        const withIcon = (row: Row): Row => row.engineName ? row : { ...row, icon: this.icons[row.url] ?? null };
+        return composeRows(this.heuristic && withIcon(this.heuristic), [], this.placeRows.map(withIcon));
+    }
+
+    /** Rebuilds the rows, keeps the highlighted row by key (else the heuristic row), then asks for missing favicons. */
+    protected showComposedRows(seq: number): void {
+        this.rows = this.composeVisibleRows();
+        if (!this.rows.some(row => row.key === this.highlightKey)) {
+            this.highlightKey = HEURISTIC_KEY;
+        }
+        this.dropdownOpen = true;
+        this.update();
+        void this.requestIcons(seq);
+    }
+
+    /** BAR-11: favicons for the rows' addresses from chrome's Places cache, under the same guards as the query. */
+    protected async requestIcons(seq: number): Promise<void> {
+        const urls = this.rows
+            .filter(row => row.url && !row.engineName && this.icons[row.url] === undefined)
+            .map(row => row.url);
+        if (!urls.length) {
+            return;
+        }
+        let icons: Record<string, string>;
+        try {
+            icons = await this.store.placesFavicons(urls);
+        } catch {
+            return;
+        }
+        if (!this.dropdownArmed || this.querySeq !== seq) {
+            return;
+        }
+        const found = Object.keys(icons).filter(url => typeof icons[url] === 'string');
+        if (!found.length) {
+            return;
+        }
+        for (const url of found) {
+            this.icons[url] = icons[url];
+        }
+        this.rows = this.composeVisibleRows();
+        this.update();
     }
 
     protected onInputChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
@@ -638,6 +747,19 @@ export class ChromeBarWidget extends ReactWidget {
         this.commitFailed = false;
         this.noSearch = false;
         this.homeFailed = false;
+        // New text: the old rows describe other text, and the highlight returns to the heuristic row.
+        this.heuristic = null;
+        this.heuristicNoEngine = false;
+        this.providerFailed = false;
+        this.placeRows = [];
+        this.rows = [];
+        this.highlightKey = undefined;
+        if (!this.inputValue.trim()) {
+            // Empty text opens no dropdown.
+            this.closeDropdown();
+            this.update();
+            return;
+        }
         this.dropdownArmed = true;
         this.update();
         void this.debouncedQuery(this.inputValue);
@@ -720,7 +842,7 @@ export class ChromeBarWidget extends ReactWidget {
             this.commitFailed = false;
             this.homeFailed = true;
             this.dropdownOpen = true;
-            this.highlightIndex = -1;
+            this.highlightKey = undefined;
             this.update();
             focusAddressPill();
             return 'failed';
@@ -742,7 +864,7 @@ export class ChromeBarWidget extends ReactWidget {
     protected showCommitFailure(): void {
         this.commitFailed = true;
         this.dropdownOpen = true;
-        this.highlightIndex = -1;
+        this.highlightKey = undefined;
         this.update();
     }
 
@@ -750,7 +872,7 @@ export class ChromeBarWidget extends ReactWidget {
     protected showNoSearch(): void {
         this.noSearch = true;
         this.dropdownOpen = true;
-        this.highlightIndex = -1;
+        this.highlightKey = undefined;
         this.update();
     }
 
@@ -759,7 +881,7 @@ export class ChromeBarWidget extends ReactWidget {
      * uri key: the key is a store identity (kept as the React list key
      * below), not an address any opener could route.
      */
-    protected commitRow = async (row: TabQueryRow): Promise<void> => {
+    protected commitRow = async (row: Row): Promise<void> => {
         const url = row.url;
         this.committedAddress = url;
         this.inputValue = url;
@@ -826,9 +948,7 @@ export class ChromeBarWidget extends ReactWidget {
             if (!this.dropdownOpen || this.rows.length === 0) {
                 return;
             }
-            const step = e.key === 'ArrowDown' ? 1 : -1;
-            const next = this.highlightIndex + step;
-            this.highlightIndex = (next + this.rows.length) % this.rows.length;
+            this.highlightKey = nextHighlight(this.rows.map(row => row.key), this.highlightKey, e.key === 'ArrowDown' ? 1 : -1);
             this.update();
         } else if (e.key === 'Enter') {
             e.preventDefault();
@@ -843,8 +963,10 @@ export class ChromeBarWidget extends ReactWidget {
                 void this.commitText(this.inputValue);
                 return;
             }
-            const highlighted = this.highlightIndex >= 0 ? this.rows[this.highlightIndex] : undefined;
-            if (highlighted) {
+            // The heuristic row (and Enter before any row arrived) commits the typed text through a
+            // fresh resolve, never the cached heuristic; any other row commits its own address.
+            const highlighted = this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
+            if (highlighted && highlighted.source !== 'heuristic') {
                 void this.commitRow(highlighted);
             } else {
                 void this.commitText(this.inputValue);
@@ -1069,14 +1191,17 @@ export class ChromeBarWidget extends ReactWidget {
         // positions against the viewport. Geometry re-derives on every
         // render (each keystroke re-renders) plus on window resize.
         const pill = this.pillRef?.getBoundingClientRect();
+        const top = pill ? Math.round(pill.bottom + 4) : 0;
         const style: React.CSSProperties | undefined = pill ? {
             position: 'fixed',
-            top: Math.round(pill.bottom + 4),
+            top,
             left: Math.round(pill.left),
             width: Math.round(pill.width),
+            // A short window caps the panel at its bottom less 8px; the panel scrolls inside.
+            maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)),
         } : undefined;
         return createPortal(
-            <div className='pb-chrome-bar-dropdown' role='listbox' aria-label='Suggestions' style={style}>
+            <div className='pb-chrome-bar-dropdown' role='listbox' id='pb-chrome-bar-dropdown' aria-label='Suggestions' style={style}>
                 {body}
             </div>,
             document.body
@@ -1099,44 +1224,67 @@ export class ChromeBarWidget extends ReactWidget {
         }
         if (this.noSearch) {
             return <>
-                <div className='pb-chrome-bar-row'>{CHROME_BAR_COPY.noSearch(appSubject())}</div>
-                <div className='pb-chrome-bar-dropdown-footer'>Enter opens the address · Esc closes suggestions</div>
+                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.noSearch(appSubject())}</div>
+                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
             </>;
         }
         if (this.commitFailed) {
             return <>
-                <div className='pb-chrome-bar-row'>PowerBrowser couldn&apos;t open that address. Press Enter to try again.</div>
-                <div className='pb-chrome-bar-dropdown-footer'>Enter opens the address · Esc closes suggestions</div>
+                <div className='pb-chrome-bar-row is-message'>PowerBrowser couldn&apos;t open that address. Press Enter to try again.</div>
+                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
             </>;
         }
         return <>
-            {this.providerFailed ? (
-                <div className='pb-chrome-bar-row'>PowerBrowser couldn&apos;t load suggestions. Press Enter to visit what you typed.</div>
-            ) : this.rows.length === 0 && !this.shimmer ? (
-                <div className='pb-chrome-bar-row'>
-                    <div className='pb-chrome-bar-row-title'>No suggestions</div>
-                    <div className='pb-chrome-bar-row-caption'>No matches for what you typed — press Enter to visit it as an address.</div>
-                </div>
-            ) : (
-                this.rows.map((row, index) => (
-                    <div
-                        key={row.uri}
-                        role='option'
-                        aria-selected={index === this.highlightIndex}
-                        className={'pb-chrome-bar-row' + (index === this.highlightIndex ? ' is-highlighted' : '')}
-                        onMouseDown={e => {
-                            e.preventDefault();
-                            void this.commitRow(row);
-                        }}
-                    >
-                        <div className='pb-chrome-bar-row-title' title={row.title}>{row.title}</div>
-                        <div className='pb-chrome-bar-row-caption' title={row.url}>{row.url}</div>
-                    </div>
-                ))
-            )}
+            {this.rows.map((row, index) => this.renderRow(row, index))}
             {this.shimmer && <div className='pb-chrome-bar-row is-shimmer' aria-hidden='true' />}
-            <div className='pb-chrome-bar-dropdown-footer'>Enter opens the address · Esc closes suggestions</div>
+            <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
         </>;
+    }
+
+    /** The DOM id of a row, for the input's aria-activedescendant. */
+    protected rowId(index: number): string {
+        return `pb-chrome-bar-row-${index}`;
+    }
+
+    /**
+     * BAR-11: one single-line row -- a 16px leading icon (a cached favicon or
+     * engine icon as a data:image/ URI, else a codicon), the title, the
+     * caption, then the muted type marker. Titles and captions render as React
+     * text nodes only (T-29-18). The heuristic row commits the typed text;
+     * every other row commits its own address.
+     */
+    protected renderRow(row: Row, index: number): React.ReactNode {
+        const highlighted = row.key === this.highlightKey;
+        const message = row.source === 'heuristic' && (this.providerFailed || this.heuristicNoEngine);
+        const icon = iconFor(row);
+        return <div
+            key={row.key}
+            id={this.rowId(index)}
+            role='option'
+            aria-selected={highlighted}
+            className={'pb-chrome-bar-row' + (highlighted ? ' is-highlighted' : '') + (message ? ' is-message' : '')}
+            onMouseDown={e => {
+                e.preventDefault();
+                if (row.source === 'heuristic') {
+                    void this.commitText(this.inputValue);
+                } else {
+                    void this.commitRow(row);
+                }
+            }}
+        >
+            {this.providerFailed && row.source === 'heuristic' ? (
+                <div className='pb-chrome-bar-row-title'>PowerBrowser couldn&apos;t load suggestions. Press Enter to visit what you typed.</div>
+            ) : message ? (
+                <div className='pb-chrome-bar-row-title'>{CHROME_BAR_COPY.noSearch(appSubject())}</div>
+            ) : <>
+                {'image' in icon.leading
+                    ? <img className='pb-chrome-bar-row-icon' src={icon.leading.image} alt='' />
+                    : <span className={`pb-chrome-bar-row-icon codicon ${icon.leading.codicon}`} aria-hidden='true' />}
+                <div className='pb-chrome-bar-row-title' title={row.title}>{row.title}</div>
+                <div className='pb-chrome-bar-row-caption' title={row.caption}>{row.caption}</div>
+                {icon.trailing && <span className={`pb-chrome-bar-row-type codicon ${icon.trailing}`} aria-hidden='true' />}
+            </>}
+        </div>;
     }
 
     protected render(): React.ReactNode {
@@ -1149,6 +1297,7 @@ export class ChromeBarWidget extends ReactWidget {
         const secure = this.inputValue.trim().startsWith('https://');
         const engine = this.effectiveEngine();
         const addressLabel = engine ? CHROME_BAR_COPY.searchPlaceholder(engine) : CHROME_BAR_COPY.searchOrEnterAddress;
+        const activeIndex = this.dropdownOpen ? this.rows.findIndex(row => row.key === this.highlightKey) : -1;
         return <div className='pb-chrome-bar'>
             <button
                 className='pb-chrome-bar-button'
@@ -1212,6 +1361,11 @@ export class ChromeBarWidget extends ReactWidget {
                     className={CHROME_BAR_INPUT_CLASS}
                     placeholder={addressLabel}
                     aria-label={addressLabel}
+                    role='combobox'
+                    aria-expanded={this.dropdownOpen}
+                    aria-controls='pb-chrome-bar-dropdown'
+                    aria-autocomplete='both'
+                    aria-activedescendant={activeIndex >= 0 ? this.rowId(activeIndex) : undefined}
                     spellCheck={false}
                     value={this.inputValue}
                     onChange={this.onInputChange}

@@ -174,6 +174,11 @@ export class ChromeStoreClient {
         return { engines: reply['engines'] as SearchEngineInfo[], defaultName: String(reply['defaultName'] ?? '') };
     }
 
+    /** Phase 29 (BAR-11): cached favicons for up to 10 page urls, keyed by url; each a data:image/ URI. A url without one is absent. */
+    placesFavicons(urls: string[]): Promise<Record<string, string>> {
+        return this.field<Record<string, string>>({ kind: 'placesFavicons', urls }, 'icons');
+    }
+
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
     queryTabsWithPlaces(query: TabPlacesQuery = {}): Promise<TabPlacesRow[]> {
         return this.field<TabPlacesRow[]>({ kind: 'queryTabsWithPlaces', ...query }, 'rows');

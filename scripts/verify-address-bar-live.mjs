@@ -52,6 +52,17 @@
  *               searches /two/search; a name outside the set ("No Such Engine")
  *               is ignored: the placeholder names One and Enter searches
  *               /one/search. The setting is reset to "" afterwards.
+ *   rows        BAR-11: with a history visit (and a cached data: favicon), a
+ *               bookmark and an open web tab seeded chrome-side, typing "Row"
+ *               shows the heuristic row first and highlighted ("Search with
+ *               Probe Engine One"), then the history, bookmark and open-tab
+ *               rows once each with their type markers; the history row's icon
+ *               is a data:image/ <img> and no <img> in the dropdown has any
+ *               other src; at most 10 rows, each 32px tall, under a max-height
+ *               of at most 432px; the input is a combobox naming the dropdown.
+ *               ArrowDown moves aria-activedescendant to the second row, a
+ *               reply arriving after that does not move it, and clearing the
+ *               text closes the dropdown.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -100,6 +111,9 @@ const PAGES = {
     '/cookie-page': { title: 'Cookie Page', body: COOKIE_PAGE_BODY },
     '/pixel': { title: 'Pixel', body: '' },
     '/cookie-worker': { title: 'Cookie Worker', body: '' },
+    '/r-hist': { title: 'Row History Page', body: '<p>history</p>' },
+    '/r-book': { title: 'Row Bookmark Page', body: '<p>bookmark</p>' },
+    '/r-tab': { title: 'Row Tab Page', body: '<p>tab</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -506,6 +520,158 @@ async function defaultEngine(ctx) {
     }
 }
 
+// A 1x1 PNG, stored as the history row's cached favicon.
+const PNG_DATA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const ARROW_DOWN = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 };
+const HEURISTIC_CAPTION = `Search with ${ENGINE_ONE}`;
+// The seeded rows: path, the caption suffix that names the row, and its type marker.
+const SEEDED_ROWS = [
+    ['/r-hist', 'codicon-history'],
+    ['/r-book', 'codicon-star-full'],
+    ['/r-tab', 'codicon-browser'],
+];
+
+/** Seeds Places chrome-side: visits to r-hist and r-tab, a bookmark on r-book and a favicon for r-hist. */
+const seedRowPlaces = (app, pages) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const hist = ${JSON.stringify(pages.url('/r-hist'))};
+        await PlacesUtils.history.insert({ url: hist, title: 'Row History Page', visits: [{ date: new Date() }] });
+        await PlacesUtils.history.insert({ url: ${JSON.stringify(pages.url('/r-tab'))}, title: 'Row Tab Page', visits: [{ date: new Date() }] });
+        await PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid, url: ${JSON.stringify(pages.url('/r-book'))}, title: 'Row Bookmark Page' });
+        await PlacesUtils.favicons.setFaviconForPage(Services.io.newURI(hist), Services.io.newURI(hist + '/favicon.png'), Services.io.newURI(${JSON.stringify(PNG_DATA)}));
+        const icon = await PlacesUtils.favicons.getFaviconForPage(Services.io.newURI(hist), 16);
+        return icon && icon.dataURI && icon.dataURI.spec.startsWith('data:image/') ? 'ok' : 'no favicon stored';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/** The dropdown as the user sees it: one record per row, the <img> sources, the panel cap and the combobox attributes. */
+const readRows = app => app.evaluate(`JSON.stringify((() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    const dd = document.querySelector('.pb-chrome-bar-dropdown');
+    const attrs = input ? { role: input.getAttribute('role'), expanded: input.getAttribute('aria-expanded'),
+        controls: input.getAttribute('aria-controls'), autocomplete: input.getAttribute('aria-autocomplete'),
+        active: input.getAttribute('aria-activedescendant') } : null;
+    if (!dd) return { open: false, attrs, rows: [], imgs: [] };
+    const rows = [...dd.querySelectorAll('.pb-chrome-bar-row:not(.is-shimmer)')].map(r => {
+        const type = r.querySelector('.pb-chrome-bar-row-type');
+        const img = r.querySelector('img.pb-chrome-bar-row-icon');
+        return {
+            id: r.id,
+            selected: r.getAttribute('aria-selected') === 'true',
+            title: (r.querySelector('.pb-chrome-bar-row-title') || {}).textContent || '',
+            caption: (r.querySelector('.pb-chrome-bar-row-caption') || {}).textContent || '',
+            type: type ? [...type.classList].find(c => c.startsWith('codicon-') && c !== 'codicon') || null : null,
+            img: img ? img.getAttribute('src') : null,
+            height: r.getBoundingClientRect().height,
+        };
+    });
+    return { open: true, id: dd.id, attrs, rows, imgs: [...dd.querySelectorAll('img')].map(i => i.getAttribute('src')),
+        maxHeight: getComputedStyle(dd).maxHeight };
+})())`).then(JSON.parse);
+
+const rowFor = (view, pages, path) => view.rows.filter(r => r.caption === pages.url(path));
+
+async function rows(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const seeded = await seedRowPlaces(app, pages);
+    if (seeded !== 'ok') {
+        return fail(`${BROKEN} Places could not be seeded (${String(seeded)})`);
+    }
+    const tabId = await openWebTab(app, pages.url('/r-tab'));
+    if (await waitForPush(app, loadedAt(tabId, '/r-tab')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for /r-tab`);
+    }
+    if (plant === 'dedupe-off') {
+        const planted = await probe(app, `const w = get('ChromeBarWidget');
+            w.composeVisibleRows = function () {
+                const places = this.placeRows;
+                return (this.heuristic ? [this.heuristic] : []).concat(places, places.length ? [{ ...places[0], key: places[0].key + '#copy' }] : []);
+            };
+            return true;`);
+        if (planted === true) {
+            note('PLANT dedupe-off applied');
+        }
+    }
+    const ready = v => v.open && v.rows[0]?.caption === HEURISTIC_CAPTION
+        && SEEDED_ROWS.every(([path, type]) => rowFor(v, pages, path).some(r => r.type === type))
+        && rowFor(v, pages, '/r-hist').some(r => r.img);
+    let view;
+    // The open tab reaches the tab store a moment after its load; retype until every seeded row shows.
+    const end = Date.now() + 20000;
+    do {
+        // Clearing first: React ignores an input event that leaves the value unchanged.
+        await typeInPill(app, '');
+        await typeInPill(app, 'Row');
+        view = await settle(() => readRows(app), ready, 4000);
+    } while (!ready(view) && Date.now() < end);
+    const first = view.rows[0];
+    if (!first || first.caption !== HEURISTIC_CAPTION || !first.selected || view.attrs?.active !== first.id) {
+        fail(`the first row must be the heuristic row, highlighted, captioned ${JSON.stringify(HEURISTIC_CAPTION)}; saw ${JSON.stringify(view)}`);
+    }
+    const captions = view.rows.slice(1).map(r => r.caption);
+    const repeated = captions.filter((c, i) => captions.indexOf(c) !== i);
+    if (repeated.length) {
+        fail(`two rows for one url: ${JSON.stringify([...new Set(repeated)])}`);
+    }
+    for (const [path, type] of SEEDED_ROWS) {
+        const found = rowFor(view, pages, path);
+        if (found.length !== 1 || found[0].type !== type) {
+            fail(`the ${path} row must appear once with the ${type} marker; saw ${JSON.stringify(found)}`);
+        }
+    }
+    const hist = rowFor(view, pages, '/r-hist')[0];
+    if (!hist || !String(hist.img).startsWith('data:image/')) {
+        fail(`${BROKEN} the /r-hist row's leading slot is not a data:image/ <img> (the positive control for the icon check); saw ${JSON.stringify(hist)}`);
+    }
+    const foreign = view.imgs.filter(src => !String(src).startsWith('data:image/'));
+    if (foreign.length) {
+        fail(`an <img> in the dropdown has a src that is not data:image/: ${JSON.stringify(foreign)}`);
+    }
+    if (view.rows.length > 10) {
+        fail(`the dropdown shows ${view.rows.length} rows; at most 10`);
+    }
+    const tall = view.rows.filter(r => Math.round(r.height) !== 32);
+    if (tall.length) {
+        fail(`every row must be 32px tall; saw ${JSON.stringify(tall.map(r => [r.caption || r.title, r.height]))}`);
+    }
+    if (!(parseFloat(view.maxHeight) <= 432)) {
+        fail(`the dropdown's max-height must be at most 432px; saw ${JSON.stringify(view.maxHeight)}`);
+    }
+    const a = view.attrs ?? {};
+    if (a.role !== 'combobox' || a.expanded !== 'true' || a.controls !== view.id || view.id !== 'pb-chrome-bar-dropdown' || a.autocomplete !== 'both') {
+        fail(`the pill must be a combobox (aria-expanded, aria-controls naming the dropdown, aria-autocomplete both); saw ${JSON.stringify({ attrs: a, id: view.id })}`);
+    }
+    await pressKey(app, ARROW_DOWN);
+    const moved = await settle(() => readRows(app), v => v.rows[1]?.selected && v.attrs?.active === v.rows[1].id);
+    const second = moved.rows[1];
+    if (!second || !second.selected || moved.attrs?.active !== second.id) {
+        fail(`ArrowDown must move aria-activedescendant to the second row; saw ${JSON.stringify(moved.attrs)} over ${JSON.stringify(moved.rows.map(r => r.id))}`);
+    } else {
+        // A reply that arrives after the move: the same query again, with chrome's resolve held back.
+        const late = await probe(app, `const c = get('ChromeStoreClient');
+            const original = Object.getPrototypeOf(c).resolveTypedAddress.bind(c);
+            c.resolveTypedAddress = (...a) => sleep(800).then(() => original(...a));
+            try { await get('ChromeBarWidget').runQuery('Row'); } finally { delete c.resolveTypedAddress; }
+            return true;`);
+        if (late !== true) {
+            fail(`${BROKEN} the late reply could not be driven (${JSON.stringify(late)})`);
+        }
+        const after = await readRows(app);
+        const now = after.rows.find(r => r.selected);
+        if (!now || now.caption !== second.caption || now.title !== second.title || after.attrs?.active !== now.id) {
+            fail(`a reply arriving after ArrowDown moved the highlight from ${JSON.stringify(second.title)} to ${JSON.stringify(now ?? null)}`);
+        }
+    }
+    await typeInPill(app, '');
+    const cleared = await settle(() => readRows(app), v => !v.open);
+    if (cleared.open) {
+        fail(`clearing the text must close the dropdown; ${cleared.rows.length} row(s) still showing`);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -513,6 +679,7 @@ const SCENARIOS = {
     'no-engine': noEngine,
     'dev-addresses': devAddresses,
     'default-engine': defaultEngine,
+    rows,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -588,6 +755,7 @@ const PLANTS = [
     { plant: 'resolve-bypassed', target: 'search', run: ['search'], expect: 'no GET on /one/search' },
     { plant: 'engine-name-dropped', target: 'default-engine', run: ['default-engine'], expect: 'no GET on /two/search' },
     { plant: 'token-strip-off', target: 'token-cookie', run: ['token-cookie'], expect: `carried ${TOKEN_COOKIE}: stock-window, overlay, subresource, worker` },
+    { plant: 'dedupe-off', target: 'rows', run: ['rows'], expect: 'two rows for one url' },
 ];
 
 async function selfTest() {

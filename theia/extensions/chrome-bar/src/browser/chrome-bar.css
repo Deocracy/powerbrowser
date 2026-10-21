@@ -169,20 +169,22 @@
     border: 1px solid var(--color-border, #3f3e4a);
     border-radius: 4px;
     box-shadow: 0 10px 15px rgba(0, 0, 0, 0.5);
-    /* Eight 32px rows plus vertical padding plus the footer hint. */
-    max-height: 304px;
+    /* 29-UI-SPEC: ten 32px rows, the padding, the one-off strip and the
+       footer. The widget narrows this to the viewport bottom less 8px. */
+    max-height: 432px;
     overflow-y: auto;
     z-index: 100;
     box-sizing: border-box;
 }
 
+/* BAR-11: single-line 32px rows -- icon, title, caption, type marker. */
 .pb-chrome-bar-row {
-    min-height: 32px;
+    height: 32px;
     padding: 0 12px;
     display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 4px;
+    align-items: center;
+    gap: 8px;
+    box-sizing: border-box;
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.15s ease;
@@ -197,7 +199,38 @@
     background: rgba(0, 166, 245, 0.18);
 }
 
+/* A message row (a failure or no-search sentence) wraps instead of truncating. */
+.pb-chrome-bar-row.is-message {
+    height: auto;
+    min-height: 32px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.pb-chrome-bar-row.is-message .pb-chrome-bar-row-title {
+    white-space: normal;
+}
+
+.pb-chrome-bar-row-icon,
+.pb-chrome-bar-row-type {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+}
+
+.pb-chrome-bar-row-icon {
+    color: var(--color-text-muted, #9a99a8);
+}
+
+.pb-chrome-bar-row-type {
+    color: var(--color-text-muted, #9a99a8);
+}
+
+/* The title keeps at least 40% of the row; the caption truncates first. */
 .pb-chrome-bar-row-title {
+    flex: 1 1 auto;
+    min-width: 40%;
     font-size: 14px;
     line-height: 1.5;
     color: var(--color-text, #fbfbfe);
@@ -211,6 +244,9 @@
        variable would trip this sheet's own no-literal-typeface gate (the
        variable name itself contains the banned substring), so captions
        inherit the surrounding theme type like every other bar text. */
+    /* Shrinks a thousand times faster than the title, so it truncates first. */
+    flex: 0 1000 auto;
+    min-width: 0;
     font-size: 12px;
     line-height: 1.5;
     color: var(--color-text-muted, #9a99a8);

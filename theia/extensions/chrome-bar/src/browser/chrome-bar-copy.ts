@@ -19,6 +19,9 @@ export const CHROME_BAR_COPY = Object.freeze({
     searchPlaceholder: (engine: string) => `Search with ${engine} or enter address`,
     defaultSearchEngineDescription: 'The search engine the address bar uses when what you type is not an address.',
     noSearch: (subject: string) => `${subject} can't search right now. Type a full address, such as https://example.com, and press Enter.`,
+    visit: 'Visit',
+    searchWith: (engine: string) => `Search with ${engine}`,
+    dropdownFooter: 'Enter opens · Alt+Enter opens in a new tab · Esc closes suggestions',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

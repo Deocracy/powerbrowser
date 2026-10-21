@@ -555,9 +555,6 @@ const EXPECTED_WIDGET_COPY = new Set([
   "Suggestions",
   "Mode",
   "Chrome Bar",
-  "No suggestions",
-  "No matches for what you typed — press Enter to visit it as an address.",
-  "Enter opens the address · Esc closes suggestions",
   "PowerBrowser couldn&apos;t load suggestions. Press Enter to visit what you typed.",
   "PowerBrowser couldn&apos;t open that address. Press Enter to try again.",
 ]);
@@ -579,6 +576,9 @@ const EXPECTED_NAV_COPY = new Set([
   "Search or enter address",
   "Search with ${name} or enter address",
   "The search engine the address bar uses when what you type is not an address.",
+  "Visit",
+  "Search with ${name}",
+  "Enter opens · Alt+Enter opens in a new tab · Esc closes suggestions",
 ]);
 
 /**

@@ -3705,6 +3705,7 @@ const STORE_REQUEST_KINDS = new Set([
   "savePageCopy",
   "resolveTypedAddress",
   "listSearchEngines",
+  "placesFavicons",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -3787,6 +3788,9 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "listSearchEngines": {
         return { ok: true, kind, ...(await listSearchEngines()) };
+      }
+      case "placesFavicons": {
+        return { ok: true, kind, icons: await placesFavicons(data.urls) };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -4402,6 +4406,32 @@ async function listSearchEngines() {
   }
   const def = await barEngine("");
   return { engines, defaultName: def ? String(def.name) : "" };
+}
+
+// Row favicons for the address bar (BAR-11). Only the Places favicon cache is
+// read, and an icon crosses into the Theia frame only as a bounded
+// data:image/ string, so showing an icon never fetches anything. A url with no
+// cached icon is left out; the row shows its codicon.
+async function placesFavicons(urls) {
+  if (!Array.isArray(urls)) {
+    throw new Error("placesFavicons: refusing a malformed url list");
+  }
+  const icons = {};
+  for (const url of urls.slice(0, 10)) {
+    if (typeof url !== "string" || url.length > 8192 || !/^https?:\/\//.test(url)) {
+      continue;
+    }
+    try {
+      const icon = await lazy.PlacesUtils.favicons.getFaviconForPage(Services.io.newURI(url), 16);
+      const data = icon?.dataURI?.spec;
+      if (typeof data === "string" && data.startsWith("data:image/") && data.length <= 65536) {
+        icons[url] = data;
+      }
+    } catch {
+      // No icon for this page: the row shows its codicon.
+    }
+  }
+  return icons;
 }
 
 // The token-cookie strip (BAR-02; REQUIREMENTS technical ruling 2026-10-20).
