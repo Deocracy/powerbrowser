@@ -3756,6 +3756,13 @@ run_own_checks() {
     "gui06-chrome-bar-suggestions|node $REPO_ROOT/scripts/verify-chrome-bar-suggestions.mjs"
     "gui06-chrome-bar-suggestions-self-test|node $REPO_ROOT/scripts/verify-chrome-bar-suggestions.mjs --self-test"
 
+    # NEW (29-05, BAR-11): the address bar's rows module (composition, the
+    # key-tracked highlight, icon choice) imported straight from its .ts
+    # source under Node type stripping. Honestly --quick: one source read and
+    # a mkdtemp copy per plant; no build, no browser, no display, no network.
+    "address-bar-rows|node $REPO_ROOT/scripts/verify-address-bar-rows.mjs"
+    "address-bar-rows-self-test|node $REPO_ROOT/scripts/verify-address-bar-rows.mjs --self-test"
+
     # NEW (13-05): GUI-06's bar-placement gate. Derives the contribution area
     # from the widget's addWidget call and the ratified order from the
     # UI-SPEC order line at check time and compares both; honestly --quick
