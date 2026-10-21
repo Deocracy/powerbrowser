@@ -71,6 +71,34 @@ const KIND_CLASSES = new Map([
     ['webTabActivated', 'selection'],
 ]);
 
+/**
+ * Rule 12 (Phase 29): every store kind chrome serves (STORE_REQUEST_KINDS,
+ * routed to handleStoreRequest) has exactly one class, compared as set
+ * equality so an unclassified kind and a stale entry each go red by name.
+ * `network` = sends user input off the machine; `privileged` = Places writes
+ * or clipboard reads. Neither may enter TAB_STORE_RELAY_KINDS (the backend
+ * relay), and a privileged kind runs only from chrome-bar-widget.tsx through
+ * its same-named ChromeStoreClient method, never from a command or a key row.
+ * savePageCopy runs from a command, so it is store-write, not privileged.
+ * Both classes are empty today: the first entry of each is a deliberate edit
+ * here and in powerbrowser/INTERNAL-APIS.md.
+ */
+const STORE_KIND_CLASS_NAMES = ['read', 'store-write', 'network', 'privileged'];
+const STORE_KIND_CLASSES = new Map([
+    ['readHistoryEntry', 'read'],
+    ['readBookmarkByUrl', 'read'],
+    ['listBookmarkFolder', 'read'],
+    ['projectSessionStoreTabs', 'read'],
+    ['queryTabsWithPlaces', 'read'],
+    ['searchPlaces', 'read'],
+    ['resolveTypedAddress', 'read'],
+    ['setSetting', 'store-write'],
+    ['savePageCopy', 'store-write'],
+]);
+const STORE_PROTOCOL = `${TAB_URIS_DIR}/tab-store-access-protocol.ts`;
+const STORE_CLIENT = `${TAB_URIS_DIR}/chrome-store-client.ts`;
+const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/chrome-bar-widget.tsx`;
+
 /** Stock `HttpOpenHandler`'s priority; the web-tab handler must exceed it. */
 const STOCK_HTTP_HANDLER_PRIORITY = 500;
 
@@ -145,7 +173,7 @@ function classMethodBodies(text) {
 /**
  * @returns {string[]} failure messages -- empty means the bridge contract holds.
  */
-function checkBridge(raw) {
+function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
     const failures = [];
     const src = Object.fromEntries(Object.entries(raw).map(([file, text]) => [file, stripComments(text)]));
 
@@ -392,6 +420,76 @@ function checkBridge(raw) {
         }
     }
 
+    failures.push(...checkStoreKinds(src, storeClasses));
+    return failures;
+}
+
+/** Rule 12 over comment-stripped sources `src`: store-kind routing, classification and the network/privileged fences. */
+function checkStoreKinds(src, storeClasses) {
+    const failures = [];
+    const setLiteral = /const STORE_REQUEST_KINDS = new Set\(\[([^\]]*)\]\)/.exec(src[API]);
+    const members = setLiteral ? derive(setLiteral[1], /"([A-Za-z]+)"/g) : [];
+    const arms = derive(functionBody(src[API], 'handleStoreRequest'), /case "([A-Za-z]+)"/g);
+    if (members.length === 0 || arms.length === 0) {
+        failures.push(`store-kinds: ${API}: derived ZERO STORE_REQUEST_KINDS members (${members.length}) or handleStoreRequest arms (${arms.length}) -- the parse found nothing, so this comparison proves nothing (broken instrument, never a clean pass)`);
+        return failures;
+    }
+    const routing = diff(members, arms);
+    if (routing.surplus.length) {
+        failures.push(`store-kinds: STORE_REQUEST_KINDS routes kinds handleStoreRequest has no case arm for: ${routing.surplus.join(', ')}`);
+    }
+    if (routing.missing.length) {
+        failures.push(`store-kinds: handleStoreRequest has case arms STORE_REQUEST_KINDS does not route: ${routing.missing.join(', ')}`);
+    }
+    const classed = diff(members, [...storeClasses.keys()]);
+    if (classed.surplus.length) {
+        failures.push(`store-kinds: store kinds with no STORE_KIND_CLASSES entry (classify each under the privileged-kind rule): ${classed.surplus.join(', ')}`);
+    }
+    if (classed.missing.length) {
+        failures.push(`store-kinds: STORE_KIND_CLASSES entries with no store kind left (stale): ${classed.missing.join(', ')}`);
+    }
+    for (const [kind, kindClass] of storeClasses) {
+        if (!STORE_KIND_CLASS_NAMES.includes(kindClass)) {
+            failures.push(`store-kinds: ${kind} has the unknown class '${kindClass}'`);
+        }
+    }
+
+    const protocol = src[STORE_PROTOCOL] ?? '';
+    const writeFields = /TAB_STORE_WRITE_FIELDS[^=]*=\s*\{([\s\S]*?)\n\};/.exec(protocol);
+    const writeOps = writeFields ? derive(writeFields[1], /^\s*([A-Za-z]+):/gm) : [];
+    const relayLiteral = /TAB_STORE_RELAY_KINDS[^=]*=\s*\[([\s\S]*?)\];/.exec(protocol);
+    if (!relayLiteral || writeOps.length === 0) {
+        failures.push(`store-kinds: ${STORE_PROTOCOL}: TAB_STORE_RELAY_KINDS (${relayLiteral ? 'found' : 'missing'}) or TAB_STORE_WRITE_FIELDS keys (${writeOps.length}) did not derive (broken instrument, never a clean pass)`);
+    } else {
+        const relayed = new Set(derive(relayLiteral[1], /'([A-Za-z]+)'/g));
+        if (relayLiteral[1].includes('...TAB_STORE_WRITE_OPS')) {
+            writeOps.forEach(op => relayed.add(op));
+        }
+        for (const [kind, kindClass] of storeClasses) {
+            if ((kindClass === 'network' || kindClass === 'privileged') && relayed.has(kind)) {
+                failures.push(`store-kinds: the ${kindClass} kind ${kind} is relayed from the backend (TAB_STORE_RELAY_KINDS)`);
+            }
+        }
+    }
+
+    const callers = new Set([STORE_CLIENT, CHROME_BAR_WIDGET]);
+    for (const [kind, kindClass] of storeClasses) {
+        if (kindClass !== 'privileged') {
+            continue;
+        }
+        if (!new RegExp(`^\\s+(?:async\\s+)?${kind}\\(`, 'm').test(src[STORE_CLIENT] ?? '')) {
+            failures.push(`store-kinds: the privileged kind ${kind} has no same-named ChromeStoreClient method ${kind}( in ${STORE_CLIENT}`);
+        }
+        const named = new RegExp(`\\b${kind}\\b`);
+        for (const [file, text] of Object.entries(src)) {
+            if (!callers.has(file) && text.includes(`.${kind}(`)) {
+                failures.push(`store-kinds: the privileged kind ${kind} is called outside chrome-bar-widget.tsx, in ${file}`);
+            }
+            if ((text.includes('registerCommand(') || text.includes('registerKeybinding(')) && named.test(text)) {
+                failures.push(`store-kinds: the privileged kind ${kind} is named by a command or keybinding file, ${file}`);
+            }
+        }
+    }
     return failures;
 }
 
@@ -429,7 +527,50 @@ function selfTest() {
     }
 
     const WIDGET = `${CHROME_BAR_DIR}/chrome-bar-widget.tsx`;
+    const COMMANDS = `${CHROME_BAR_DIR}/chrome-bar-commands.ts`;
+    const KEYBINDINGS = `${CHROME_BAR_DIR}/chrome-bar-keybindings.ts`;
+    // Rule 12 plants: a planted store kind is a Set member plus a case arm, so routing stays in parity.
+    const withStoreKind = kind => replaceWithin(
+        clean[API].replace('const STORE_REQUEST_KINDS = new Set([', `const STORE_REQUEST_KINDS = new Set([\n  "${kind}",`),
+        'async function handleStoreRequest(', '\n}', 'case "resolveTypedAddress": {', `case "${kind}": { break; }\n      case "resolveTypedAddress": {`);
+    const relaying = kind => clean[STORE_PROTOCOL].replace("    'queryTabsWithPlaces',\n", `    'queryTabsWithPlaces',\n    '${kind}',\n`);
+    const classedAs = (kind, kindClass) => new Map([...STORE_KIND_CLASSES, [kind, kindClass]]);
     const cases = [
+        {
+            name: 'planted unclassified store kind',
+            sources: { ...clean, [API]: withStoreKind('plantedKind') },
+            expect: 'store kinds with no STORE_KIND_CLASSES entry (classify each under the privileged-kind rule): plantedKind',
+        },
+        {
+            name: 'planted stale store-kind class entry',
+            sources: clean,
+            storeClasses: classedAs('plantedStale', 'read'),
+            expect: 'STORE_KIND_CLASSES entries with no store kind left (stale): plantedStale',
+        },
+        {
+            name: 'planted privileged kind in the backend relay',
+            sources: { ...clean, [API]: withStoreKind('plantedPrivileged'), [STORE_PROTOCOL]: relaying('plantedPrivileged') },
+            storeClasses: classedAs('plantedPrivileged', 'privileged'),
+            expect: 'the privileged kind plantedPrivileged is relayed from the backend',
+        },
+        {
+            name: 'planted privileged kind called from chrome-bar-commands.ts',
+            sources: { ...clean, [API]: withStoreKind('plantedPrivileged'), [COMMANDS]: clean[COMMANDS] + '\nvoid this.store.plantedPrivileged();\n' },
+            storeClasses: classedAs('plantedPrivileged', 'privileged'),
+            expect: `the privileged kind plantedPrivileged is called outside chrome-bar-widget.tsx, in ${COMMANDS}`,
+        },
+        {
+            name: 'planted privileged kind named in chrome-bar-keybindings.ts',
+            sources: { ...clean, [API]: withStoreKind('plantedPrivileged'), [KEYBINDINGS]: clean[KEYBINDINGS] + "\nconst plantedRow = 'plantedPrivileged';\n" },
+            storeClasses: classedAs('plantedPrivileged', 'privileged'),
+            expect: `the privileged kind plantedPrivileged is named by a command or keybinding file, ${KEYBINDINGS}`,
+        },
+        {
+            name: 'planted network kind in the backend relay',
+            sources: { ...clean, [API]: withStoreKind('plantedNetwork'), [STORE_PROTOCOL]: relaying('plantedNetwork') },
+            storeClasses: classedAs('plantedNetwork', 'network'),
+            expect: 'the network kind plantedNetwork is relayed from the backend',
+        },
         {
             name: 'planted chrome-only kind',
             sources: { ...clean, [API]: clean[API] + '\ncase "webTabPlanted": {}\n' },
@@ -511,12 +652,12 @@ function selfTest() {
     let failed = 0;
     for (const testCase of cases) {
         const mutated = Object.keys(clean).some(file => testCase.sources[file] !== clean[file]);
-        if (!mutated) {
+        if (!mutated && !testCase.storeClasses) {
             console.error(`verify-web-tab-bridge --self-test: FAIL -- '${testCase.name}' did not modify any source; the anchor it edits has drifted`);
             failed++;
             continue;
         }
-        const failures = checkBridge(testCase.sources);
+        const failures = checkBridge(testCase.sources, testCase.storeClasses);
         if (!failures.some(f => f.includes(testCase.expect))) {
             console.error(`verify-web-tab-bridge --self-test: FAIL -- '${testCase.name}' did not go red naming '${testCase.expect}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
             failed++;
@@ -535,7 +676,7 @@ function selfTest() {
 function main() {
     if (process.argv.includes('--help')) {
         console.log('usage: verify-web-tab-bridge.mjs [--self-test]\n' +
-            'Derives the web-tab bridge contract (kinds, event names, open-handler priority, overlay attributes, origin wall, no stock-window escape, actor-child purity, push-kind parity, action routing, kind classification) from the tree and compares it.');
+            'Derives the web-tab bridge contract (kinds, event names, open-handler priority, overlay attributes, origin wall, no stock-window escape, actor-child purity, push-kind parity, action routing, kind classification, store-kind classification) from the tree and compares it.');
         return 0;
     }
     if (process.argv.includes('--self-test')) {
@@ -552,7 +693,7 @@ function main() {
     console.log(
         `verify-web-tab-bridge: PASS -- ${kinds.length} webTab kinds, the request/response/state event names, ` +
         'the open-handler priority, the overlay attribute order, the embedder-is-primary wall, the no-stock-window rule, ' +
-        'push-kind parity, action routing and kind classification ' +
+        'push-kind parity, action routing, kind classification and store-kind classification ' +
         `agree across ${Object.keys(sources).length} sources`
     );
     return 0;

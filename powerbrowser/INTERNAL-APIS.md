@@ -29,12 +29,20 @@ end of the Touchpoints table. New boundary code goes in an end-of-file section o
 `scripts/verify-ng-040-internals-catalogue-lines.mjs --fix` runs after every edit
 of the boundary file, and it never writes a row.
 
-**Privileged-kind rule (Phase 27):** a `webTab*` kind that changes state outside
-a tab's own navigation, lifecycle or selection (permissions, site data, Places
-writes, clipboard, stock pages) runs only from a widget event handler and never
-gets a command id or a key-relay row. Every `case "webTab…"` arm is classified in
-`scripts/verify-web-tab-bridge.mjs`, so an unclassified kind fails there. Phase 27
-adds no privileged kind.
+**Privileged-kind rule (Phase 27; store kinds, Phase 29):** a `webTab*` kind that
+changes state outside a tab's own navigation, lifecycle or selection (permissions,
+site data, Places writes, clipboard, stock pages) runs only from a widget event
+handler and never gets a command id or a key-relay row. Every `case "webTab…"` arm
+is classified in `scripts/verify-web-tab-bridge.mjs`, so an unclassified kind fails
+there. Phase 27 adds no privileged kind. The same holds for store kinds
+(`STORE_REQUEST_KINDS`, served by `handleStoreRequest`): a store kind that writes
+Places or reads the clipboard is classed privileged, runs only from a
+`chrome-bar-widget.tsx` event handler through its same-named `ChromeStoreClient`
+method, never gets a command id or a key row, and never enters
+`TAB_STORE_RELAY_KINDS`; a store kind that sends user input off the machine is
+classed network and never enters the relay either. Every store kind is classified
+in `scripts/verify-web-tab-bridge.mjs` rule 12. Phase 29 adds the first privileged
+store kinds (29-09).
 
 ## Touchpoints
 
