@@ -4804,6 +4804,10 @@ run_own_checks() {
       "ng069-sidecar-egress|node $REPO_ROOT/scripts/verify-ng-069-sidecar-egress.mjs"
       "ng071-tarball-extensions-build|node $REPO_ROOT/scripts/verify-ng-071-tarball-extensions.mjs"
       "ng072-policies-packaged-webextension|node $REPO_ROOT/scripts/verify-ng-072-policies-webextension.mjs"
+      # Phase 29 (BAR-04): the packaged bar offers exactly the configuration.toml
+      # engines, the first as default. Needs a fresh package (package-linux.sh);
+      # red on a stale one by design, like ng072.
+      "search-engines-packaged|node $REPO_ROOT/scripts/verify-search-engines-packaged.mjs"
       "ng073-declared-extension-loads|node $REPO_ROOT/scripts/verify-ng-073-declared-extension-loads.mjs"
       "ng074-ci-green-on-main|node $REPO_ROOT/scripts/verify-ng-074-ci-main.mjs"
       # NG-089 (Phase 24, UAT-01): no pending result on the listed sheets; full only, red until Chris runs them.

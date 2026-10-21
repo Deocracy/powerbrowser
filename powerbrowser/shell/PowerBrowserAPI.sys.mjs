@@ -4320,8 +4320,9 @@ async function barEngines() {
   if (!configuredEnginesActive()) {
     return visible;
   }
-  const builtIn = new Set((await searchLazy.SearchService.getAppProvidedEngines()).map(e => e.id));
-  return visible.filter(e => !builtIn.has(e.id));
+  // Not getAppProvidedEngines(): it prepends appDefaultEngine, which under a
+  // policy Default is the configured engine itself (measured in 29-04).
+  return visible.filter(e => !String(e.loadPath).startsWith("[app]"));
 }
 
 // A named engine is the bar engine with exactly that name or null: a name
