@@ -3707,6 +3707,7 @@ const STORE_REQUEST_KINDS = new Set([
   "listSearchEngines",
   "placesFavicons",
   "searchSuggestions",
+  "autofillOrigin",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -3795,6 +3796,9 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "searchSuggestions": {
         return { ok: true, kind, rows: await searchSuggestions(actorRef, data.text, data.engineName ?? "") };
+      }
+      case "autofillOrigin": {
+        return { ok: true, kind, completion: await autofillOrigin(data.text) };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -4476,6 +4480,35 @@ async function searchSuggestions(actorRef, text, engineName) {
     .map(entry => entry?.value)
     .filter(value => typeof value === "string" && value && value.length <= 512)
     .slice(0, 4);
+}
+
+// Inline autofill of a typed origin (BAR-07): the best-matching visited
+// http(s) origin from moz_origins, through the same read-only Places
+// connection searchPlaces reads (bound parameters, SELECT only; nothing here
+// writes Places). Text shaped like more than a host prefix is refused before
+// the query. The reply is strings; typed text is never logged.
+async function autofillOrigin(text) {
+  const typed = typeof text === "string" ? text.toLowerCase() : "";
+  if (!typed || typed.length > 253 || /[\s/:?#]/.test(typed)) {
+    return null;
+  }
+  const pattern = `${typed.replace(/[\\%_]/g, c => "\\" + c)}%`;
+  const places = await lazy.PlacesUtils.promiseDBConnection();
+  const rows = await places.executeCached(
+    `SELECT prefix, host FROM moz_origins
+      WHERE (host LIKE :hostPattern ESCAPE '\\' OR host LIKE :wwwPattern ESCAPE '\\')
+        AND prefix IN ('http://', 'https://') AND frecency > 0
+      ORDER BY frecency DESC LIMIT 1`,
+    // Sqlite.sys.mjs refuses a LIKE not followed by a binding (a parameter named
+    // like trips it too), so both patterns are bound, under other names.
+    { hostPattern: pattern, wwwPattern: `www.${pattern}` }
+  );
+  if (!rows.length) {
+    return null;
+  }
+  const host = String(rows[0].getResultByName("host"));
+  const shown = host.startsWith("www.") && !typed.startsWith("www.") ? host.slice(4) : host;
+  return { text: `${shown}/`, url: `${String(rows[0].getResultByName("prefix"))}${host}/` };
 }
 
 // The token-cookie strip (BAR-02; REQUIREMENTS technical ruling 2026-10-20).

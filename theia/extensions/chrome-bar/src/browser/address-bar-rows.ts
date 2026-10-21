@@ -95,3 +95,16 @@ export function iconFor(row: Row): { leading: RowIcon; trailing: string | null }
     const searching = row.source === 'heuristic' && !!row.engineName;
     return { leading: { codicon: searching ? 'codicon-search' : 'codicon-globe' }, trailing };
 }
+
+/**
+ * Inline autofill (BAR-07): the pill's value and the selected completed part
+ * when `completion` extends `typed` (compared case-insensitively), else null.
+ * The typed characters keep the case they were typed in.
+ */
+export function autofillSplice(typed: string, completion: string): { value: string; start: number; end: number } | null {
+    if (!typed || completion.length <= typed.length || !completion.toLowerCase().startsWith(typed.toLowerCase())) {
+        return null;
+    }
+    const value = typed + completion.slice(typed.length);
+    return { value, start: typed.length, end: value.length };
+}

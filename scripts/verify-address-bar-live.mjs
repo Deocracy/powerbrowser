@@ -107,6 +107,17 @@
  *               current, the dropdown closes and the pill shows /nt-fg's address;
  *               a Ctrl+mousedown on /nt-fg's own open-tab row opens a second tab
  *               on /nt-fg instead of switching.
+ *   autofill    BAR-07: with a visit to localhost:<port>/af seeded chrome-side
+ *               and its moz_origins frecency forced and then read back above 0
+ *               on the read-only Places connection (else a broken instrument),
+ *               and a tab on /af current, typing "loc" key by key at the parent
+ *               completes the pill to "localhost:<port>/" with the completed
+ *               part selected and the heuristic row a "Visit" of
+ *               http://localhost:<port>/; Tab collapses the selection with
+ *               focus and the dropdown kept; Enter loads / in that tab (a GET
+ *               and a push). Typing "loc" again then Backspace leaves "loc"
+ *               with no completion; typing "a" completes again; "loc" set by a
+ *               paste-shaped input event is not completed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -172,6 +183,8 @@ const PAGES = {
     '/nt-fg': { title: 'Target Foreground', body: '<p>foreground</p>' },
     '/nt-bg': { title: 'Target Background', body: '<p>background</p>' },
     '/nt-mid': { title: 'Middle Page', body: '<p>middle</p>' },
+    '/': { title: 'Served Root', body: '<p>root</p>' },
+    '/af': { title: 'Autofill Page', body: '<p>autofill</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -1229,6 +1242,152 @@ async function newTabTargets(ctx) {
     }
 }
 
+/** The pill's value, selection and focus. */
+const readSel = app => app.evaluate(`JSON.stringify((() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    return input ? { value: input.value, start: input.selectionStart, end: input.selectionEnd, focused: document.activeElement === input } : null;
+})())`).then(JSON.parse);
+
+/** Focuses the pill, selects its text, then types `text` one key at a time at the parent (trusted insertText). */
+async function typeKeys(app, text, { selectAll = true } = {}) {
+    if (await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} the Theia frame could not be made chrome's active element`);
+    }
+    const ready = await app.evaluate(`(() => {
+        const input = document.querySelector('.pb-chrome-bar-input');
+        if (!input) return false;
+        input.focus();
+        if (${selectAll}) input.select();
+        return document.activeElement === input;
+    })()`);
+    if (ready !== true) {
+        throw new Error(`${BROKEN} the pill could not be focused for typing`);
+    }
+    for (const ch of text) {
+        const upper = ch.toUpperCase();
+        await pressKey(app, { key: ch, code: `Key${upper}`, keyCode: upper.charCodeAt(0) });
+    }
+}
+
+const TAB_KEY = { key: 'Tab', code: 'Tab', keyCode: 9 };
+const BACKSPACE = { key: 'Backspace', code: 'Backspace', keyCode: 8 };
+
+/** Chrome scope: seeds a visit to `url` and waits until its origin's frecency is above 0 on the read-only connection. */
+const seedOrigin = (app, url, host) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        await PlacesUtils.history.insert({ url: ${JSON.stringify(url)}, title: 'Autofill Page', visits: [{ date: new Date() }] });
+        // A new origin row arrives with recalc_frecency = 1; the recalculator fills its frecency in on a deferred task.
+        await Cc['@mozilla.org/places/frecency-recalculator;1'].getService(Ci.nsIObserver).wrappedJSObject.recalculateAnyOutdatedFrecencies();
+        const db = await PlacesUtils.promiseDBConnection();
+        for (let i = 0; i < 50; i++) {
+            const rows = await db.execute("SELECT frecency FROM moz_origins WHERE prefix = 'http://' AND host = :host", { host: ${JSON.stringify(host)} });
+            if (rows.length && rows[0].getResultByName('frecency') > 0) return 'ok';
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        return 'never';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+async function autofill(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const port = new URL(pages.origin).port;
+    const host = `localhost:${port}`;
+    const origin = `http://${host}/`;
+    const completed = `${host}/`;
+    const seeded = await seedOrigin(app, localUrl(pages, '/af'), host);
+    if (seeded !== 'ok') {
+        return fail(`${BROKEN} the seeded origin never reached frecency > 0 on the read-only Places connection (${String(seeded)})`);
+    }
+    // A tab on the same site, so Enter navigates it without a process switch (Phase 27's reload defect).
+    const tabId = await openWebTab(app, localUrl(pages, '/af'));
+    if (await waitForPush(app, loadedAt(tabId, '/af')) < 0 || await makeCurrent(app, tabId) !== true) {
+        return fail(`${BROKEN} no current web tab on localhost /af`);
+    }
+    const completes = (typedLength, v) => v && v.value === completed && v.start === typedLength && v.end === completed.length;
+
+    await typeKeys(app, 'loc');
+    const filled = await settle(() => readSel(app), v => completes(3, v));
+    if (!completes(3, filled)) {
+        const reply = await probe(app, `return await get('ChromeStoreClient').autofillOrigin('loc');`);
+        return fail(`typing "loc" must complete the pill to ${JSON.stringify(completed)} with characters 3..${completed.length} selected; saw ${JSON.stringify(filled)}; chrome's autofillOrigin('loc') replies ${JSON.stringify(reply)}`);
+    }
+    const view = await settle(() => readRows(app), v => v.rows[0]?.title === origin);
+    if (view.rows[0]?.title !== origin || view.rows[0]?.caption !== 'Visit') {
+        fail(`the heuristic row must be a "Visit" of ${origin}; saw ${JSON.stringify(view.rows[0])}`);
+    }
+    await pressKey(app, TAB_KEY);
+    const tabbed = await settle(() => readSel(app), v => v && v.start === v.end);
+    const open = (await readRows(app)).open;
+    if (!tabbed || tabbed.value !== completed || tabbed.start !== completed.length || tabbed.end !== completed.length || !tabbed.focused || !open) {
+        fail(`Tab must accept the completion: the selection collapsed at the end, focus in the pill and the dropdown open; saw ${JSON.stringify({ ...tabbed, open })}`);
+    }
+    const mark = (await pushes(app)).length;
+    const getMark = pages.requests.length;
+    await pressKey(app, ENTER);
+    const got = await nextGet(pages, '/', getMark);
+    if (!got) {
+        fail(`Enter on the completion sent no GET on / of the served origin; pill ${JSON.stringify(await readSel(app))}`);
+    }
+    if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && p.url === origin, { from: mark, timeoutMs: got ? 15000 : 1000 }) < 0) {
+        fail(`no state push for the tab carried ${origin} after Enter`);
+    }
+
+    await typeKeys(app, 'loc');
+    const again = await settle(() => readSel(app), v => completes(3, v));
+    if (!completes(3, again)) {
+        return fail(`typing "loc" a second time did not complete (the positive control for Backspace); saw ${JSON.stringify(again)}`);
+    }
+    await pressKey(app, BACKSPACE);
+    const removed = await settle(() => readSel(app), v => v && v.value === 'loc');
+    // Past the debounced re-query the Backspace started: it must not complete again.
+    await sleep(1200);
+    const later = await readSel(app);
+    if (removed?.value !== 'loc' || later?.value !== 'loc' || later.start !== 3 || later.end !== 3) {
+        fail(`Backspace must remove the completion and leave "loc" with no selection; saw ${JSON.stringify(removed)}, then ${JSON.stringify(later)}`);
+    }
+    await typeKeys(app, 'a', { selectAll: false });
+    const back = await settle(() => readSel(app), v => completes(4, v));
+    if (!completes(4, back)) {
+        fail(`typing "a" after Backspace must complete again; saw ${JSON.stringify(back)}`);
+    }
+
+    if (plant === 'autofill-on-paste') {
+        const planted = await probe(app, `const w = get('ChromeBarWidget');
+            w.autofillEligible = function (e) { const i = e.target; return !this.autofillSuppressed && i.selectionStart === i.value.length && !/\\s/.test(i.value); };
+            return true;`);
+        if (planted === true) {
+            note('PLANT autofill-on-paste applied');
+        }
+    }
+    const pasted = await app.evaluate(`(() => {
+        const input = document.querySelector('.pb-chrome-bar-input');
+        if (!input) return false;
+        input.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'loc');
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: 'loc' }));
+        return true;
+    })()`);
+    if (pasted !== true) {
+        return fail(`${BROKEN} the paste-shaped input event could not be dispatched`);
+    }
+    // The query the paste started has answered once the heuristic row describes "loc".
+    const answered = await settle(() => readRows(app), v => v.rows[0]?.title === 'loc', 8000);
+    if (answered.rows[0]?.title !== 'loc') {
+        const seen = await readSel(app);
+        return fail(seen?.value === 'loc'
+            ? `${BROKEN} the query for the pasted "loc" never answered; rows ${JSON.stringify(answered.rows)}`
+            : `autofilled a paste: the pill reads ${JSON.stringify(seen)}`);
+    }
+    await sleep(1000);
+    const after = await readSel(app);
+    if (after?.value !== 'loc') {
+        fail(`autofilled a paste: the pill reads ${JSON.stringify(after)}`);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -1242,6 +1401,7 @@ const SCENARIOS = {
     'one-off': oneOff,
     'switch-to-tab': switchToTab,
     'new-tab-targets': newTabTargets,
+    autofill,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -1321,6 +1481,7 @@ const PLANTS = [
     { plant: 'setting-ignored', target: 'suggestions', run: ['suggestions'], expect: 'suggest request while the setting was off' },
     { plant: 'oneoff-default', target: 'one-off', run: ['one-off'], expect: 'no GET on /two/search' },
     { plant: 'tab-row-navigates', target: 'switch-to-tab', run: ['switch-to-tab'], expect: 'loading: true' },
+    { plant: 'autofill-on-paste', target: 'autofill', run: ['autofill'], expect: 'autofilled a paste' },
 ];
 
 async function selfTest() {

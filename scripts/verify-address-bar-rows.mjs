@@ -10,9 +10,10 @@
  * `verify-address-bar-rows: FAIL -- <case>: <got>` line per red case. A module
  * missing any of its exports is a broken instrument, never a pass.
  *
- * --self-test: the clean module must be green; then four copies of it in a
+ * --self-test: the clean module must be green; then five copies of it in a
  * mkdtemp directory, each with one planted fault (ROW_LIMIT 11, the tab-wins
- * rule inverted, the highlight wrap removed, safeIcon accepting http), must
+ * rule inverted, the highlight wrap removed, safeIcon accepting http,
+ * autofillSplice comparing case-sensitively), must
  * each go red naming the case that catches it. A plant whose text did not
  * change the module fails as "plant did not apply".
  *
@@ -32,7 +33,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-address-bar-rows';
 const MODULE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar-rows.ts';
-const EXPORTS = ['composeRows', 'nextHighlight', 'iconFor', 'safeIcon', 'ENGINE_ROW_LIMIT', 'PLACE_ROW_LIMIT', 'ROW_LIMIT'];
+const EXPORTS = ['composeRows', 'nextHighlight', 'iconFor', 'safeIcon', 'autofillSplice', 'ENGINE_ROW_LIMIT', 'PLACE_ROW_LIMIT', 'ROW_LIMIT'];
 
 const row = (source, url, extra = {}) => ({ key: `${source}:${url}`, source, title: url, caption: '', url, ...extra });
 const keysOf = rows => rows.map(r => r.key);
@@ -131,6 +132,18 @@ function cases(m) {
             ];
             return same(got, [png, null, null, null, null, null, null]) ? null : got;
         }],
+        ['autofillSplice completes a typed prefix and selects the completed part', () => {
+            const got = m.autofillSplice('loc', 'localhost:8080/');
+            return same(got, { value: 'localhost:8080/', start: 3, end: 15 }) ? null : { got };
+        }],
+        ['autofillSplice matches case-insensitively and keeps the typed case', () => {
+            const got = m.autofillSplice('LoC', 'localhost/');
+            return same(got, { value: 'LoCalhost/', start: 3, end: 10 }) ? null : { got };
+        }],
+        ['autofillSplice returns null for no match, an equal length and empty text', () => {
+            const got = [m.autofillSplice('git', 'example.org/'), m.autofillSplice('a.org/', 'a.org/'), m.autofillSplice('', 'a.org/')];
+            return same(got, [null, null, null]) ? null : got;
+        }],
     ];
 }
 
@@ -198,6 +211,12 @@ const PLANTS = [
         from: "src.startsWith('data:image/')",
         to: "(src.startsWith('data:image/') || src.startsWith('http'))",
         expect: 'safeIcon keeps',
+    },
+    {
+        name: 'autofillSplice case-sensitive',
+        from: '!completion.toLowerCase().startsWith(typed.toLowerCase())',
+        to: '!completion.startsWith(typed)',
+        expect: 'autofillSplice matches case-insensitively',
     },
 ];
 

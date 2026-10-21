@@ -35,7 +35,7 @@ import {
 } from './chrome-bar-commands';
 import { ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
 import type { SourcedRow } from './chrome-bar-places-suggestions';
-import { PLACE_ROW_LIMIT, Row, composeRows, iconFor, nextHighlight, safeIcon } from './address-bar-rows';
+import { PLACE_ROW_LIMIT, Row, autofillSplice, composeRows, iconFor, nextHighlight, safeIcon } from './address-bar-rows';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
@@ -245,6 +245,12 @@ export class ChromeBarWidget extends ReactWidget {
     protected engineRows: Row[] = [];
     /** BAR-03: an IME composition is open in the pill; nothing typed during one is sent to an engine. */
     protected composing = false;
+    /** BAR-07: the pill's autofilled value and the origin it opens; cleared by any input, a commit or a close. */
+    protected autofill: { value: string; url: string } | undefined;
+    /** BAR-07: Backspace or Delete removed a completion; nothing autofills until the next inserting keystroke. */
+    protected autofillSuppressed = false;
+    /** BAR-07: the last input event may autofill; read by the debounced query it schedules. */
+    protected autofillWanted = false;
     /** BAR-11: open-tab, bookmark and history rows for the typed text. */
     protected placeRows: Row[] = [];
     /** BAR-11: cached favicons by page url, from chrome's Places cache only. */
@@ -613,6 +619,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.homeFailed = false;
         this.noSearch = false;
         this.engineRows = [];
+        this.autofill = undefined;
     }
 
     protected async runQuery(prefix: string): Promise<void> {
@@ -651,6 +658,9 @@ export class ChromeBarWidget extends ReactWidget {
                 }
             }
         );
+        if (this.autofillWanted) {
+            void this.requestAutofill(prefix, current);
+        }
         const places = this.suggestions.searchByPrefix(prefix, PLACE_ROW_LIMIT).then(
             rows => {
                 if (current()) {
@@ -672,6 +682,61 @@ export class ChromeBarWidget extends ReactWidget {
             this.shimmer = false;
             this.update();
         }
+    }
+
+    /**
+     * BAR-07: completes the typed text inline to chrome's best visited origin,
+     * under the query's guards and only while the pill still holds `prefix`.
+     * The completed part is selected at once, so the next keystroke replaces
+     * it; the heuristic row becomes a visit of the origin.
+     */
+    protected async requestAutofill(prefix: string, current: () => boolean): Promise<void> {
+        let completion: { text: string; url: string } | null;
+        try {
+            completion = await this.store.autofillOrigin(prefix);
+        } catch {
+            return;
+        }
+        if (!completion || !current() || this.autofillSuppressed || this.inputValue !== prefix
+            || typeof completion.url !== 'string' || !/^https?:\/\//i.test(completion.url)) {
+            return;
+        }
+        const input = this.pillRef?.querySelector('input');
+        const splice = typeof completion.text === 'string' ? autofillSplice(prefix, completion.text) : null;
+        if (!splice || !input || input.value !== prefix) {
+            return;
+        }
+        this.inputValue = splice.value;
+        this.autofill = { value: splice.value, url: completion.url };
+        // Set on the element now, not after the render: a keystroke landing in between would append to the completion.
+        input.value = splice.value;
+        input.setSelectionRange(splice.start, splice.end);
+        this.heuristic = this.autofillRow(completion.url);
+        this.showComposedRows(this.querySeq);
+    }
+
+    /** BAR-07: the heuristic row for an autofilled origin. */
+    protected autofillRow(url: string): Row {
+        return { key: HEURISTIC_KEY, source: 'heuristic', title: url, caption: CHROME_BAR_COPY.visit, url };
+    }
+
+    /**
+     * BAR-07: only typed characters autofill: an insertText input with the
+     * caret at the end, no space, no composition and no suppression. A paste
+     * never does. An instance-replaceable method, so a live plant can widen it.
+     */
+    protected autofillEligible(e: React.ChangeEvent<HTMLInputElement>): boolean {
+        const native = e.nativeEvent as InputEvent;
+        const input = e.target;
+        return native.inputType === 'insertText' && native.isComposing !== true && !this.autofillSuppressed
+            && input.selectionStart === input.value.length && input.selectionEnd === input.value.length
+            && !/\s/.test(input.value);
+    }
+
+    /** BAR-07: the autofilled completion is still selected in `input`. */
+    protected autofillSelected(input: HTMLInputElement): boolean {
+        return !!this.autofill && input.value === this.autofill.value
+            && input.selectionStart !== null && input.selectionStart < input.value.length && input.selectionEnd === input.value.length;
     }
 
     /** BAR-03: the User-scope Search Suggestions setting; on unless the user turned it off. */
@@ -718,7 +783,8 @@ export class ChromeBarWidget extends ReactWidget {
             row.title = resolved.url;
             row.url = resolved.url;
         }
-        this.heuristic = row;
+        // BAR-07: an autofilled origin keeps the heuristic row on that origin.
+        this.heuristic = this.autofill && this.inputValue === this.autofill.value ? this.autofillRow(this.autofill.url) : row;
         this.showComposedRows(this.querySeq);
     }
 
@@ -783,6 +849,11 @@ export class ChromeBarWidget extends ReactWidget {
 
     protected onInputChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
         this.inputValue = e.target.value;
+        this.autofill = undefined;
+        if ((e.nativeEvent as InputEvent).inputType === 'insertText') {
+            this.autofillSuppressed = false;
+        }
+        this.autofillWanted = this.autofillEligible(e);
         this.commitFailed = false;
         this.noSearch = false;
         this.homeFailed = false;
@@ -1030,9 +1101,16 @@ export class ChromeBarWidget extends ReactWidget {
     /** Choosing a row by plain click or Enter: the heuristic commits the typed text, an open tab switches, the rest commit their address. */
     protected chooseRow(row: Row): Promise<void> {
         if (row.source === 'heuristic') {
-            return this.commitText(this.inputValue);
+            return this.commitTyped();
         }
         return row.source === 'tab' ? this.switchToTab(row) : this.commitRow(row);
+    }
+
+    /** BAR-07: an autofilled value opens the completed origin; any other text commits as typed. */
+    protected commitTyped(): Promise<void> {
+        return this.autofill && this.inputValue === this.autofill.value
+            ? this.commitRow(this.autofillRow(this.autofill.url))
+            : this.commitText(this.inputValue);
     }
 
     /**
@@ -1120,7 +1198,15 @@ export class ChromeBarWidget extends ReactWidget {
                 return;
             }
             const highlighted = this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
-            void (highlighted ? this.chooseRow(highlighted) : this.commitText(this.inputValue));
+            void (highlighted ? this.chooseRow(highlighted) : this.commitTyped());
+        } else if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && this.autofillSelected(e.currentTarget)) {
+            // BAR-07: Tab accepts the completion; focus and the dropdown stay. Without one, Tab moves focus as usual.
+            e.preventDefault();
+            const end = e.currentTarget.value.length;
+            e.currentTarget.setSelectionRange(end, end);
+        } else if ((e.key === 'Backspace' || e.key === 'Delete') && this.autofillSelected(e.currentTarget)) {
+            // BAR-07: the default action removes the selected completion; the re-query must not complete it again.
+            this.autofillSuppressed = true;
         } else if (e.key === 'Escape') {
             // Staged dismissal: close the dropdown, then restore the committed
             // address, then (NAV-01) stop a loading page.

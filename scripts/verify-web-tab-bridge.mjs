@@ -95,6 +95,7 @@ const STORE_KIND_CLASSES = new Map([
     ['resolveTypedAddress', 'read'],
     ['listSearchEngines', 'read'],
     ['placesFavicons', 'read'],
+    ['autofillOrigin', 'read'],
     ['searchSuggestions', 'network'],
     ['setSetting', 'store-write'],
     ['savePageCopy', 'store-write'],
