@@ -1,20 +1,20 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Completed 29-05-PLAN.md
-last_updated: "2026-10-21T22:28:51.181Z"
+stopped_at: Completed 29-06-PLAN.md
+last_updated: "2026-10-21T22:51:39.485Z"
 last_activity: 2026-10-21
-last_activity_desc: 29-05 complete (Firefox-shaped result rows with type markers and Places favicons, rows module under a Node test, configured-name brand ban; BAR-14 complete; BAR-11 rows half, 29-10 owns the rest)
-state_head: f65a1494be87c81092280c1b6ca3298393f0dab8
+last_activity_desc: 29-06 complete (engine suggestions while typing behind browser.searchSuggestions and chrome's address fence; the one-off engine strip by mouse and keyboard; BAR-03 and BAR-05 complete)
+state_head: 92c4edcc7e69e0959794d2a220afd9bd9c560fda
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 13
+  completed_plans: 14
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 29 (Address Bar Search and Fixup) — EXECUTING
-Plan: 6 of 10
+Plan: 7 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — 29-05 complete (Firefox-shaped result rows with type markers and Places favicons, rows module under a Node test, configured-name brand ban; BAR-14 complete; BAR-11 rows half, 29-10 owns the rest)
+Last activity: 2026-10-21 — 29-06 complete (engine suggestions while typing behind browser.searchSuggestions and chrome's address fence; the one-off engine strip by mouse and keyboard; BAR-03 and BAR-05 complete)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -161,6 +161,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P03 | 11m | 2 tasks | 8 files |
 | Phase 29 P04 | 16m | 2 tasks | 12 files |
 | Phase 29 P05 | 22m | 3 tasks | 13 files |
+| Phase 29 P06 | 35m | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -405,6 +406,9 @@ Recent decisions affecting current work:
 - [Phase 29]: Typing new text resets rows and highlight; a same-text reply keeps the highlighted row by key (29-05)
 - [Phase 29]: Failure and no-search sentences are is-message rows that wrap instead of truncating on one 32px line (29-05)
 - [Phase 29]: A place row with the heuristic row's url is dropped, including an open-tab row for a typed address; 29-07 switch-to-tab must revisit (29-05)
+- [Phase 29]: 29-06: searchSuggestions is a network store kind; chrome re-resolves the text and fetches only for kind search, so the frame gate is a second fence
+- [Phase 29]: 29-06: one-off live check derives its buttons from chrome's engine list (harness profile lists Gecko's app engines too)
+- [Phase 29]: 29-06: highlight keys are row keys then oneoff:<name>; a late reply keeps a one-off highlight
 
 ### Pending Todos
 
@@ -507,8 +511,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T22:28:51.121Z
-Stopped at: Completed 29-05-PLAN.md
+Last session: 2026-10-21T22:51:39.377Z
+Stopped at: Completed 29-06-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
