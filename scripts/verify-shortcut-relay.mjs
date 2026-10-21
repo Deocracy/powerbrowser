@@ -27,7 +27,10 @@
  * never reserved and names no Firefox key, and the reply listener reads its
  * rows from PAGE_KEYS through the `via` field; (9) every `relayShortcut(`
  * call in powerbrowser.js passes `row.id` or string literals only, and each
- * literal is a table id with a relay action (the AppCommand listener's ids).
+ * literal is a table id with a relay action (the AppCommand listener's ids);
+ * (10) every BUTTON_SHORTCUTS entry names only PAGE_SHORTCUTS rows, its
+ * `aria` equals formatAria over those rows, and its tooltip (formatTooltip of
+ * the first row) is at most 26 characters (NAV-05).
  *
  * Honestly --quick: reads text sources only. No build, no browser, no
  * display, no network.
@@ -115,6 +118,25 @@ export function formatMacLabel(row) {
 }
 
 /** Removes // and block comments outside string literals. */
+const ARIA_KEYS = { VK_LEFT: 'ArrowLeft', VK_RIGHT: 'ArrowRight', VK_HOME: 'Home', VK_ESCAPE: 'Escape' };
+
+/** `aria-keyshortcuts` for one row: Control, Alt, Shift joined by "+", then the key; null for an unknown keycode. */
+function formatAriaRow(row) {
+    const fn = /^VK_(F\d{1,2})$/.exec(row.keycode ?? '');
+    const key = row.key ?? ARIA_KEYS[row.keycode] ?? (fn ? fn[1] : null);
+    if (key === null) {
+        return null;
+    }
+    const m = mods(row);
+    return [...(m.has('accel') || m.has('control') ? ['Control'] : []), ...(m.has('alt') ? ['Alt'] : []), ...(m.has('shift') ? ['Shift'] : []), key].join('+');
+}
+
+/** `aria-keyshortcuts` for a button's rows, joined by a space; null when any row cannot be formatted. */
+export function formatAria(rows) {
+    const parts = rows.map(formatAriaRow);
+    return parts.includes(null) ? null : parts.join(' ');
+}
+
 /** NAV-05 tooltip text: the verb, a space and the first row's label in parentheses. */
 export function formatTooltip(verb, row, mac = false) {
     const label = mac ? formatMacLabel(row) : formatLabel(row);
@@ -514,7 +536,37 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
             }
         }
     }
-    return { failures, counts: { literalIds, rows: chrome.length, actions: actionIds.length, upstream: upstream.size, reserved: chrome.filter(r => r.reserved === true).length, reply: replyRows.length } };
+    // (10) nav-button shortcuts name table rows, and their aria and tooltip derive from them.
+    const buttons = buttonEntriesOf(frontendSrc);
+    if (buttons === null || !buttons.length) {
+        failures.push(`${FRONTEND_REL}: broken instrument -- derived ZERO BUTTON_SHORTCUTS entries`);
+    }
+    for (const entry of buttons ?? []) {
+        if (entry.unreadable) {
+            failures.push(`${FRONTEND_REL}: a BUTTON_SHORTCUTS entry this gate cannot read: ${entry.unreadable.slice(0, 60)}`);
+            continue;
+        }
+        const rows = entry.rows.map(id => frontendById.get(id));
+        entry.rows.forEach((id, i) => {
+            if (!rows[i]) {
+                failures.push(`${entry.button}: names row ${id}, which is not a PAGE_SHORTCUTS row (the tooltip would show a key the relay does not bind)`);
+            }
+        });
+        if (!entry.rows.length || rows.includes(undefined)) {
+            continue;
+        }
+        const aria = formatAria(rows);
+        if (aria === null || entry.aria !== aria) {
+            failures.push(`${entry.button}: aria ${JSON.stringify(entry.aria)} is not the formatter's ${JSON.stringify(aria)}`);
+        }
+        for (const mac of [false, true]) {
+            const tip = formatTooltip(entry.verb, rows[0], mac);
+            if (tip === null || tip.length > 26) {
+                failures.push(`${entry.button}: tooltip ${JSON.stringify(tip)} is longer than 26 characters or cannot be formatted`);
+            }
+        }
+    }
+    return { failures, counts: { buttons: buttons?.length ?? 0, literalIds, rows: chrome.length, actions: actionIds.length, upstream: upstream.size, reserved: chrome.filter(r => r.reserved === true).length, reply: replyRows.length } };
 }
 
 function readSources() {
@@ -529,7 +581,7 @@ function main() {
         }
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved; ${counts.literalIds} literal relayed ids are table ids`);
+    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved; ${counts.literalIds} literal relayed ids are table ids; ${counts.buttons} nav buttons name table rows with derived aria and tooltips of at most 26 characters`);
     return 0;
 }
 
@@ -554,6 +606,8 @@ const PLANTS = [
     { name: 'firefox id with other modifiers', rel: CHROME_REL, from: 'firefox: "key_reload_skip_cache" }', to: 'firefox: "key_reload" }', expect: "hardReload: key or modifiers differ from Firefox's key_reload" },
     { name: 'reply row marked reserved', rel: CHROME_REL, from: '{ id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false', to: '{ id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: true', expect: 'focusAddressF6: a replyListener row must be reserved: false' },
     { name: 'AppCommand id not in the table', rel: CHROME_REL, from: '"Back" ? "back" : "forward"', to: '"Back" ? "back" : "goForward"', expect: 'goForward: relayed by a relayShortcut(' },
+    { name: 'button aria drift', rel: FRONTEND_REL, from: "aria: 'Alt+ArrowLeft'", to: "aria: 'Alt+Left'", expect: 'back: aria "Alt+Left"' },
+    { name: 'button naming a missing row', rel: FRONTEND_REL, from: "rows: ['home']", to: "rows: ['goHome']", expect: 'home: names row goHome' },
     { name: 'creation loop without the disabled write', rel: CHROME_REL, from: '      key.setAttribute("disabled", "true");\n', to: '', expect: 'does not set disabled="true" unconditionally' },
 ];
 

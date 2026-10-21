@@ -523,6 +523,7 @@ const MODES_SERVICE_REL = "theia/extensions/modes/src/browser/mode-service.ts";
 const MODES_COMMANDS_REL = "theia/extensions/modes/src/browser/modes-commands.ts";
 const MODES_WIDGET_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx";
 const NAV_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts";
+const SHORTCUT_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts";
 
 /**
  * The declared modes copy contract, with ${...} interpolations normalized
@@ -575,6 +576,20 @@ const EXPECTED_NAV_COPY = new Set([
   "Show the Home button next to Reload.",
   "${name} can't open your home page. Press Enter to change it in Settings.",
   "The page the Home button and Alt+Home open, such as https://example.com. Leave it empty to open an empty page.",
+]);
+
+/**
+ * NAV-05 tooltip parts (chrome-bar-shortcuts.ts): the `label` of every
+ * PAGE_SHORTCUTS row and the `verb` of every BUTTON_SHORTCUTS entry. Hand-kept
+ * like EXPECTED_NAV_COPY: editing it is how a deliberate copy change is made.
+ */
+const EXPECTED_SHORTCUT_COPY = new Set([
+  "Esc", "Ctrl+T", "Ctrl+W", "Ctrl+R", "F5", "Ctrl+Shift+R", "Ctrl+F5",
+  "Alt+Left Arrow", "Alt+Right Arrow", "Alt+Home", "Alt+D", "Ctrl+L",
+  "Ctrl+Tab", "Ctrl+Shift+Tab", "Ctrl+Page Down", "Ctrl+Page Up",
+  "Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+6", "Alt+7", "Alt+8", "Alt+9",
+  "F6", "Shift+F6",
+  "Back", "Forward", "Reload", "Stop", "Home", "New Tab",
 ]);
 
 /** The brand literal the configured-name ruling bans from chrome-bar copy. */
@@ -674,6 +689,49 @@ function leakFailures(surface, value) {
   return out;
 }
 
+/** `label` literals of PAGE_SHORTCUTS and `verb` literals of BUTTON_SHORTCUTS; null when either table is gone. */
+function deriveShortcutCopyRaw(src) {
+  const code = stripComments(src);
+  const tables = [
+    [/PAGE_SHORTCUTS\b[^=]*=\s*\[([\s\S]*?)\n\];/, /\blabel:\s*'((?:[^'\\\n]|\\.)*)'/g],
+    [/BUTTON_SHORTCUTS\b[^=]*=\s*Object\.freeze\(\{([\s\S]*?)\n\}\);/, /\bverb:\s*'((?:[^'\\\n]|\\.)*)'/g],
+  ];
+  const out = [];
+  for (const [table, field] of tables) {
+    const body = table.exec(code)?.[1];
+    if (!body) {
+      return null;
+    }
+    out.push(...[...body.matchAll(field)].map((m) => m[1]));
+  }
+  return out;
+}
+
+/** @returns {string[]} failure messages for the chrome-bar-shortcuts.ts surface. */
+function checkShortcutCopy(src) {
+  const raw = deriveShortcutCopyRaw(src);
+  if (!raw || raw.length === 0) {
+    return [`shortcut copy: derived ZERO strings from PAGE_SHORTCUTS and BUTTON_SHORTCUTS in ${SHORTCUT_COPY_REL} -- a table is gone or empty, so this comparison proves nothing`];
+  }
+  const out = [];
+  const derived = new Set(raw);
+  for (const value of derived) {
+    if (!EXPECTED_SHORTCUT_COPY.has(value)) {
+      out.push(`shortcut copy: string NOT in EXPECTED_SHORTCUT_COPY (unreviewed tooltip copy): ${JSON.stringify(value)}`);
+    }
+    if (value.includes(NAV_BRAND_LITERAL)) {
+      out.push(`shortcut copy ${JSON.stringify(value)} spells the product name as a literal -- chrome-bar copy names the configured application name, interpolated`);
+    }
+    out.push(...leakFailures("shortcut copy", value));
+  }
+  for (const value of EXPECTED_SHORTCUT_COPY) {
+    if (!derived.has(value)) {
+      out.push(`shortcut copy: EXPECTED_SHORTCUT_COPY string is GONE (drifted or reworded tooltip copy): ${JSON.stringify(value)}`);
+    }
+  }
+  return out;
+}
+
 /** @returns {string[]} failure messages for the chrome-bar-copy.ts surface. */
 function checkNavCopy(src) {
   const raw = deriveNavCopyRaw(src);
@@ -703,7 +761,7 @@ function checkNavCopy(src) {
 
 function readModesSources() {
   const out = {};
-  for (const rel of [MODES_SERVICE_REL, MODES_COMMANDS_REL, MODES_WIDGET_REL, NAV_COPY_REL]) {
+  for (const rel of [MODES_SERVICE_REL, MODES_COMMANDS_REL, MODES_WIDGET_REL, NAV_COPY_REL, SHORTCUT_COPY_REL]) {
     try {
       out[rel] = readFileSync(join(REPO_ROOT, rel), "utf8");
     } catch {
@@ -736,6 +794,7 @@ function checkModesCopy(sources) {
     copyFailures.push(...leakFailures("modes copy", value));
   }
   copyFailures.push(...checkNavCopy(sources[NAV_COPY_REL] ?? ""));
+  copyFailures.push(...checkShortcutCopy(sources[SHORTCUT_COPY_REL] ?? ""));
   const widget = deriveWidgetCopy(sources[MODES_WIDGET_REL] ?? "");
   if (widget.size === 0) {
     copyFailures.push("widget copy: derived ZERO user-facing strings from the chrome-bar widget -- the enumeration matches nothing, so this comparison proves nothing");
@@ -836,6 +895,14 @@ const MODES_COPY_FAULTS = [
       [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("move one page at a time.", "go back."),
     }),
     expect: "Use Back and Forward to go back.",
+  },
+  {
+    name: "shortcut label drifted",
+    apply: (sources) => ({
+      ...sources,
+      [SHORTCUT_COPY_REL]: sources[SHORTCUT_COPY_REL].replace("label: 'Alt+Home'", "label: 'Alt+Hom'"),
+    }),
+    expect: "Alt+Hom",
   },
 ];
 

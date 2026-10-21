@@ -100,6 +100,13 @@
  *                    HoverService tooltip whose text is the table's Back row
  *                    through the gate's formatter, one line, its bottom edge at
  *                    or above the button's top and clear of the page rect.
+ *   tooltips-all     In Coding, Browsing and Organising with Home on and a web
+ *                    tab current: Back and Forward (both disabled on the fresh
+ *                    tab), Reload, Home, New Tab, and Stop while a slow page
+ *                    loads, each show their table text the same way. Where the
+ *                    bar has no room above it (Organising: the bar is at the
+ *                    window's top edge) the tooltip may sit below the button,
+ *                    still clear of the page rect.
  *   page-focus-reload  The page-focus context key is true with a page focused;
  *                    after a frontend reload it is false, turns true when a
  *                    page of the new frontend takes focus and false again with
@@ -179,6 +186,12 @@ const PAGES = {
     '/pf1': { title: 'Focus Before Reload', body: '<p>pf1</p>' },
     '/pf2': { title: 'Focus After Reload', body: '<p>pf2</p>' },
     '/tip': { title: 'Tooltip', body: '<p>tip</p>' },
+    '/tip-coding': { title: 'Tooltip Coding', body: '<p>coding</p>' },
+    '/tip-browsing': { title: 'Tooltip Browsing', body: '<p>browsing</p>' },
+    '/tip-organising': { title: 'Tooltip Organising', body: '<p>organising</p>' },
+    '/slow-tip-coding': { title: 'Slow Tip Coding', body: '<p>still loading</p>', slow: true },
+    '/slow-tip-browsing': { title: 'Slow Tip Browsing', body: '<p>still loading</p>', slow: true },
+    '/slow-tip-organising': { title: 'Slow Tip Organising', body: '<p>still loading</p>', slow: true },
     '/f6p': { title: 'Focus Kept', body: '<p>f6p</p><script>addEventListener("keydown", e => { if (e.key === "F6") e.preventDefault(); }, true);</script>' },
 };
 
@@ -1637,8 +1650,14 @@ async function checkTooltip(app, fail, { button, label, tabId, where }) {
     if (page && !(hover.bottom <= page.top || hover.top >= page.bottom || hover.right <= page.left || hover.left >= page.right)) {
         return fail(`${where}: ${button}'s tooltip box intersects the page rect: tooltip ${JSON.stringify(hover)}, page ${JSON.stringify(page)}`);
     }
-    if (hover.bottom > seen.button.top) {
+    // Organising puts the bar at the window's top edge, so HoverService flips the
+    // hover below it, onto the toolbar row between the bar and the page.
+    const roomAbove = seen.button.top >= hover.bottom - hover.top + 5;
+    if (roomAbove && hover.bottom > seen.button.top) {
         return fail(`${where}: ${button}'s tooltip bottom ${hover.bottom} is below the button's top ${seen.button.top} (it is not above the bar)`);
+    }
+    if (!roomAbove && hover.top < seen.button.bottom) {
+        return fail(`${where}: with no room above the bar, ${button}'s tooltip top ${hover.top} must be below the button's bottom ${seen.button.bottom}`);
     }
     return seen;
 }
@@ -1656,6 +1675,91 @@ async function tooltips({ app, pages, fail }) {
     const seen = await checkTooltip(app, fail, { button: 'back', tabId, where: 'Coding' });
     if (seen && !seen.page) {
         return fail(`${BROKEN} the web tab's placeholder is not visible, so the page-rect check proved nothing`);
+    }
+}
+
+const makeCurrent = (app, tabId) => probe(app, `const shell = get('ApplicationShell');
+    const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+    await shell.activateWidget(w.id);
+    return await until(() => shell.mainPanel.currentTitle?.owner === w && w.isVisible, 5000);`);
+
+async function tooltipsAll({ app, pages, plant, fail, note }) {
+    if (await setPref(app, 'browser.showHomeButton', true) !== true) {
+        return fail(`${BROKEN} browser.showHomeButton could not be set to true`);
+    }
+    try {
+        await tooltipModes({ app, pages, plant, fail, note });
+    } finally {
+        // Later scenarios expect Coding: Organising opens a web tab behind its own widget.
+        await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'coding'); return true;`);
+    }
+}
+
+async function tooltipModes({ app, pages, plant, fail, note }) {
+    if (plant === 'hover-below') {
+        const planted = await probe(app, `const hover = get('HoverService');
+            const original = hover.requestHover.bind(hover);
+            hover.requestHover = request => original({ ...request, position: 'bottom' });
+            return true;`);
+        if (planted === true) {
+            note('PLANT hover-below applied');
+        }
+    }
+    const disabledShown = new Set();
+    modes: for (const mode of ['coding', 'browsing', 'organising']) {
+        const reached = await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, ${JSON.stringify(mode)});
+            return await until(() => document.body.getAttribute('data-pb-mode') === ${JSON.stringify(mode)}, 10000);`);
+        if (reached !== true) {
+            return fail(`${BROKEN} mode ${mode} could not be reached`);
+        }
+        // Earlier tabs closed first: a fifth same-site tab sharing a content process
+        // can blank (deferred-items.md), which would enable Back on a fresh tab.
+        if (await probe(app, `for (const w of webTabs()) { w.close(); } return await until(() => webTabs().length === 0, 10000);`) !== true) {
+            return fail(`${BROKEN} ${mode}: the earlier web tabs could not be closed`);
+        }
+        const tabId = await openWebTab(app, pages.url(`/tip-${mode}`));
+        if (await waitForPush(app, loadedAt(tabId, `/tip-${mode}`)) < 0) {
+            return fail(`${mode}: no loaded state push arrived for /tip-${mode}`);
+        }
+        // Organising opens a web tab behind its own widget; make it current there too.
+        if (await makeCurrent(app, tabId) !== true) {
+            return fail(`${BROKEN} ${mode}: the web tab could not be made current`);
+        }
+        let pageSeen = false;
+        const states = [];
+        for (const [button, label, disabled] of [['back', 'Back', true], ['forward', 'Forward', true], ['reload', 'Reload', false], ['home', 'Home', false], ['newTab', 'New Tab', false]]) {
+            const seen = await checkTooltip(app, fail, { button, label, tabId, where: mode });
+            if (!seen) {
+                continue modes;
+            }
+            if (disabled && seen.disabled === true) {
+                disabledShown.add(button);
+            }
+            states.push(`${label} ${seen.disabled ? 'disabled' : 'enabled'}`);
+            pageSeen ||= !!seen.page;
+        }
+        const slowId = await openWebTab(app, pages.url(`/slow-tip-${mode}`));
+        if (await waitForPush(app, isState(slowId, true)) < 0) {
+            return fail(`${mode}: no state push with loading: true arrived for the slow page`);
+        }
+        if (await makeCurrent(app, slowId) !== true) {
+            return fail(`${BROKEN} ${mode}: the slow web tab could not be made current`);
+        }
+        if (await settle(() => app.evaluate(`!!${navButtonExpr('Stop')}`), v => v === true) !== true) {
+            return fail(`${BROKEN} ${mode}: the bar never showed Stop for the loading page`);
+        }
+        const stop = await checkTooltip(app, fail, { button: 'stop', label: 'Stop', tabId: slowId, where: mode });
+        await widgetCall(app, slowId, 'stop');
+        if (!stop) {
+            continue;
+        }
+        note(`${mode}: tooltips clear of the page rect (${pageSeen || stop.page ? 'visible' : 'not visible'}); ${states.join(', ')}`);
+    }
+    // Disabled keeps its tooltip: Back and Forward are disabled on a fresh tab, at least in Coding and Browsing.
+    for (const button of ['back', 'forward']) {
+        if (!disabledShown.has(button)) {
+            fail(`${BROKEN} ${button} was never hovered while disabled, so disabled-keeps-tooltip went unchecked`);
+        }
     }
 }
 
@@ -1687,6 +1791,7 @@ const SCENARIOS = {
     'pill-esc': pillEsc,
     'theia-keeps-keys': theiaKeepsKeys,
     tooltips,
+    'tooltips-all': tooltipsAll,
     'page-focus-reload': pageFocusReload,
 };
 
@@ -1763,6 +1868,7 @@ const PLANTS = [
     { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
     { plant: 'tab-order-reversed', target: 'tab-keys', run: ['tab-keys'], expect: 'expected T2' },
     { plant: 'hover-elsewhere', target: 'mouse-buttons', run: ['mouse-buttons'], expect: '/m1' },
+    { plant: 'hover-below', target: 'tooltips-all', run: ['tooltips-all'], expect: 'intersects' },
 ];
 
 async function selfTest() {

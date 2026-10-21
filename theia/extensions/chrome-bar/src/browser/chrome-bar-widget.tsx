@@ -1062,8 +1062,9 @@ export class ChromeBarWidget extends ReactWidget {
             </button>
             <button
                 className='pb-chrome-bar-button'
-                title='Forward'
                 aria-label='Forward'
+                aria-keyshortcuts={BUTTON_SHORTCUTS.forward.aria}
+                onPointerEnter={this.onNavHover('forward')}
                 disabled={!canNavigate || !tab?.canGoForward}
                 onClick={this.onNavClick('forward')}
                 onAuxClick={this.onNavAuxClick('forward')}
@@ -1079,8 +1080,9 @@ export class ChromeBarWidget extends ReactWidget {
                 keyboard focus on it survives every load (no remount, no key change). */}
             <button
                 className='pb-chrome-bar-button'
-                title={stopping ? 'Stop' : 'Reload'}
                 aria-label={stopping ? 'Stop' : 'Reload'}
+                aria-keyshortcuts={BUTTON_SHORTCUTS[stopping ? 'stop' : 'reload'].aria}
+                onPointerEnter={this.onNavHover(stopping ? 'stop' : 'reload')}
                 disabled={!stopping && (!canNavigate || !tab?.canReload)}
                 onClick={this.onReloadClick}
                 onAuxClick={this.onNavAuxClick('reload')}
@@ -1090,8 +1092,9 @@ export class ChromeBarWidget extends ReactWidget {
             {this.preferences.get(SHOW_HOME_BUTTON_PREFERENCE, false) && (
                 <button
                     className='pb-chrome-bar-button'
-                    title='Home'
                     aria-label='Home'
+                    aria-keyshortcuts={BUTTON_SHORTCUTS.home.aria}
+                    onPointerEnter={this.onNavHover('home')}
                     onClick={() => this.goHome(currentWebTab())}
                 >
                     <span className='codicon codicon-home' />
@@ -1113,8 +1116,9 @@ export class ChromeBarWidget extends ReactWidget {
             {this.renderDropdown()}
             <button
                 className='pb-chrome-bar-button'
-                title='New Tab'
                 aria-label='New Tab'
+                aria-keyshortcuts={BUTTON_SHORTCUTS.newTab.aria}
+                onPointerEnter={this.onNavHover('newTab')}
                 onClick={this.runCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)}
                 onDragEnter={this.onNewTabDragOver}
                 onDragOver={this.onNewTabDragOver}
