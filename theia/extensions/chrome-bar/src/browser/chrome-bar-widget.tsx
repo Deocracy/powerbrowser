@@ -970,6 +970,63 @@ export class ChromeBarWidget extends ReactWidget {
         widget.focusPage();
     }
 
+    /**
+     * BAR-08: the address a row opens in a new tab. Tab, bookmark and history
+     * rows carry theirs; the typed text (no row, or the heuristic row) and an
+     * engine row's text go through chrome's resolve wall, and only a visit or
+     * search reply gives an address. The text is read before the first await.
+     */
+    protected async urlForRow(row: Row | undefined): Promise<string | undefined> {
+        if (row && row.source !== 'heuristic' && row.source !== 'search') {
+            return row.url;
+        }
+        const text = (row?.source === 'search' ? row.title : this.inputValue).trim();
+        if (!text) {
+            return undefined;
+        }
+        try {
+            const resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());
+            return (resolved.kind === 'visit' || resolved.kind === 'search') && resolved.url ? resolved.url : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * BAR-08: opens a row (undefined: the typed text) in a new web tab
+     * directly after the current one, joined to the active group. Foreground
+     * (Alt+Enter) activates it with focus in its page; background (Ctrl+click,
+     * middle-click) leaves the current tab selected. Either way the dropdown
+     * closes and the pill reverts to the committed address. An open-tab row
+     * opens its address again rather than switching. With no current widget
+     * to open after, the tab is appended (and so selected).
+     */
+    protected async openRowInNewTab(row: Row | undefined, foreground: boolean): Promise<void> {
+        const url = await this.urlForRow(row);
+        if (!url || !/^https?:\/\//i.test(url)) {
+            this.showCommitFailure();
+            return;
+        }
+        const ref = currentWebTab() ?? this.shell.currentWidget;
+        this.inputValue = this.committedAddress;
+        this.commitFailed = false;
+        this.closeDropdown();
+        this.update();
+        let widget: WebTabWidget;
+        try {
+            widget = ref ? await this.webTabOpener.openInBackground(url, ref) : await this.webTabOpener.openUrl(url);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening a row in a new tab failed:', error instanceof Error ? error.name : typeof error);
+            this.showCommitFailure();
+            return;
+        }
+        await this.joinActiveGroup(widget);
+        if (foreground) {
+            await this.shell.activateWidget(widget.id);
+            widget.focusPage();
+        }
+    }
+
     /** Choosing a row by plain click or Enter: the heuristic commits the typed text, an open tab switches, the rest commit their address. */
     protected chooseRow(row: Row): Promise<void> {
         if (row.source === 'heuristic') {
@@ -1039,6 +1096,16 @@ export class ChromeBarWidget extends ReactWidget {
                 void this.openHomeSettings();
                 return;
             }
+            if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                // BAR-08: Alt+Enter opens the highlighted row (by default the typed text) in a new foreground tab.
+                if (this.dropdownOpen && this.highlightKey?.startsWith(ONE_OFF_KEY)) {
+                    void this.runOneOff(this.highlightKey.slice(ONE_OFF_KEY.length), 'foreground');
+                    return;
+                }
+                const row = this.dropdownOpen ? this.rows.find(r => r.key === this.highlightKey) : undefined;
+                void this.openRowInNewTab(row, true);
+                return;
+            }
             if (this.commitFailed || this.noSearch) {
                 // Retry affordance: Enter re-commits the typed text.
                 this.commitFailed = false;
@@ -1087,9 +1154,10 @@ export class ChromeBarWidget extends ReactWidget {
      * BAR-05: searches the typed text with `name` this time only. The engine
      * name rides this one request; Gecko's default and the setting are never
      * written. 'current' searches in the current tab; 'background' opens a new
-     * background tab, the current tab stays selected and the pill reverts.
+     * background tab, the current tab stays selected and the pill reverts;
+     * 'foreground' (Alt+Enter) opens the new tab and selects it.
      */
-    protected async runOneOff(name: string, target: 'current' | 'background'): Promise<void> {
+    protected async runOneOff(name: string, target: 'current' | 'background' | 'foreground'): Promise<void> {
         const text = this.inputValue.trim();
         if (!text) {
             return;
@@ -1113,8 +1181,8 @@ export class ChromeBarWidget extends ReactWidget {
             this.showNoSearch();
             return;
         }
-        // With no tab to open after, a background one-off searches in place.
-        const ref = target === 'background' ? currentWebTab() ?? this.shell.currentWidget : undefined;
+        // With no tab to open after, a new-tab one-off searches in place.
+        const ref = target !== 'current' ? currentWebTab() ?? this.shell.currentWidget : undefined;
         if (!ref) {
             try {
                 await this.openCommittedUrl(resolved.url);
@@ -1131,6 +1199,11 @@ export class ChromeBarWidget extends ReactWidget {
             return;
         }
         await this.joinActiveGroup(widget);
+        if (target === 'foreground') {
+            // BAR-08: Alt+Enter on a highlighted one-off.
+            await this.shell.activateWidget(widget.id);
+            widget.focusPage();
+        }
     }
 
     /** BAR-05: the one-off strip above the footer; absent for empty text or a single engine. */
@@ -1456,8 +1529,13 @@ export class ChromeBarWidget extends ReactWidget {
             aria-selected={highlighted}
             className={'pb-chrome-bar-row' + (highlighted ? ' is-highlighted' : '') + (message ? ' is-message' : '')}
             onMouseDown={e => {
+                // preventDefault keeps focus in the pill and stops a middle-button autoscroll.
                 e.preventDefault();
-                void this.chooseRow(row);
+                if (e.button === 1 || (e.button === 0 && (e.ctrlKey || e.metaKey))) {
+                    void this.openRowInNewTab(row, false);
+                } else {
+                    void this.chooseRow(row);
+                }
             }}
         >
             {this.providerFailed && row.source === 'heuristic' ? (

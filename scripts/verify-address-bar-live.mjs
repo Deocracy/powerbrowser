@@ -97,6 +97,16 @@
  *               chrome's focus in A's overlay and the pill showing A's address,
  *               with no state push with loading: true for A or B and no new GET
  *               on /sw-a.
+ *   new-tab-targets  BAR-08: from the session tab, Alt+Enter (at the parent)
+ *               on "localhost:<port>/nt-fg" opens a new tab on /nt-fg directly
+ *               after it, current, joined to the active group (the join call is
+ *               recorded), with chrome's focus in its overlay. With /nt-fg
+ *               current, a Ctrl+mousedown on the heuristic row for /nt-bg, and a
+ *               middle-button mousedown on a seeded /nt-mid history row, each
+ *               open a new tab directly after it, joined, while /nt-fg stays
+ *               current, the dropdown closes and the pill shows /nt-fg's address;
+ *               a Ctrl+mousedown on /nt-fg's own open-tab row opens a second tab
+ *               on /nt-fg instead of switching.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -159,6 +169,9 @@ const PAGES = {
     '/r-tab': { title: 'Row Tab Page', body: '<p>tab</p>' },
     '/sw-a': { title: 'Switch Alpha', body: '<p>alpha</p>' },
     '/sw-b': { title: 'Switch Beta', body: '<p>beta</p>' },
+    '/nt-fg': { title: 'Target Foreground', body: '<p>foreground</p>' },
+    '/nt-bg': { title: 'Target Background', body: '<p>background</p>' },
+    '/nt-mid': { title: 'Middle Page', body: '<p>middle</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -1066,6 +1079,156 @@ async function switchToTab(ctx) {
     }
 }
 
+/** The index of web tab `tabId` in its main-area tab bar, or -1. */
+const tabIndex = (app, tabId) => probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+    const bar = w && get('ApplicationShell').getTabBarFor(w);
+    return bar ? bar.titles.indexOf(w.title) : -1;`);
+
+/** Records, page-realm, the tab id of every widget the active group is asked to take (the join call itself). */
+const recordJoins = app => probe(app, `const g = get('GroupModel');
+    window.__pbJoined = [];
+    if (!g.__pbJoinSpy) {
+        const original = Object.getPrototypeOf(g).joinActiveGroup;
+        g.joinActiveGroup = function (widget) { window.__pbJoined.push(widget.tabId ?? widget.id); return original.call(this, widget); };
+        g.__pbJoinSpy = true;
+    }
+    return true;`);
+const joined = app => app.evaluate('JSON.stringify(window.__pbJoined || [])').then(JSON.parse);
+
+const ALT_ENTER = { ...ENTER, modifiers: ['alt'] };
+
+async function newTabTargets(ctx) {
+    const { app, pages, fail } = ctx;
+    const startId = await sessionTab(ctx);
+    if (await recordJoins(app) !== true) {
+        return fail(`${BROKEN} the active-group join could not be recorded`);
+    }
+    const port = new URL(pages.origin).port;
+    const known = new Set([startId]);
+    /** The id of the first tab not seen before whose state push ends `path`, at or after push `from`; null on timeout. */
+    const newTabOn = async (path, from) => {
+        const at = await waitForPush(app, p => p && p.kind === 'state' && !known.has(p.tabId) && pathOf(p.url) === path, { from });
+        if (at < 0) {
+            return null;
+        }
+        const id = (await pushes(app))[at].tabId;
+        known.add(id);
+        return id;
+    };
+    /** Shared checks for a new tab `id` on `path` opened after `refId`. */
+    const placed = async (how, id, path, refId, foreground) => {
+        const want = await tabIndex(app, refId) + 1;
+        const at = await tabIndex(app, id);
+        if (at !== want) {
+            fail(`${how}: the new ${path} tab must sit directly after the current one (index ${want}); it is at ${at}`);
+        }
+        if (!(await joined(app)).includes(id)) {
+            fail(`${how}: the new ${path} tab was not joined to the active group (joins recorded: ${JSON.stringify(await joined(app))})`);
+        }
+        const currentWant = foreground ? id : refId;
+        // A background tab must not take over: give a late activation time to land.
+        const current = foreground ? await settle(() => mainTabId(app), v => v === id) : (await sleep(1000), await mainTabId(app));
+        if (current !== currentWant) {
+            fail(`${how}: the current tab must be ${foreground ? 'the new' : 'the previous'} one (${currentWant}); it is ${JSON.stringify(current)}`);
+        }
+    };
+
+    // Alt+Enter on typed text: a new foreground tab.
+    let mark = (await pushes(app)).length;
+    await typeInPill(app, `localhost:${port}/nt-fg`);
+    await pressKey(app, ALT_ENTER);
+    const fgId = await newTabOn('/nt-fg', mark);
+    if (!fgId) {
+        return fail(`Alt+Enter on "localhost:${port}/nt-fg" opened no new tab on /nt-fg; pill ${JSON.stringify(await readPill(app))}`);
+    }
+    await placed('Alt+Enter', fgId, '/nt-fg', startId, true);
+    const focused = await settle(() => chromeActiveTabId(app), id => id === fgId);
+    if (focused !== fgId) {
+        fail(`Alt+Enter: chrome's active element must be the new tab's overlay; it is ${JSON.stringify(focused)}`);
+    }
+    if (await makeCurrent(app, fgId) !== true) {
+        return fail(`${BROKEN} the /nt-fg tab could not be made current`);
+    }
+    const committed = localUrl(pages, '/nt-fg');
+    /** After a background gesture: no dropdown, and the pill back on the current tab's address. */
+    const reverted = async how => {
+        const view = await settle(() => readRows(app), v => !v.open);
+        if (view.open) {
+            fail(`${how}: the dropdown must close; ${view.rows.length} row(s) still showing`);
+        }
+        const pill = await settle(() => readPill(app), v => v.value === committed);
+        if (pill.value !== committed) {
+            fail(`${how}: the pill must revert to the committed address ${JSON.stringify(committed)}; it shows ${JSON.stringify(pill.value)}`);
+        }
+    };
+
+    // Ctrl+click on the heuristic row: a new background tab.
+    await typeInPill(app, `localhost:${port}/nt-bg`);
+    const typed = await settle(() => readRows(app), v => v.open && v.rows.length > 0);
+    if (!typed.rows[0]) {
+        return fail(`${BROKEN} typing "localhost:${port}/nt-bg" showed no heuristic row`);
+    }
+    mark = (await pushes(app)).length;
+    await rowMouseDown(app, typed.rows[0].id, { ctrlKey: true });
+    const bgId = await newTabOn('/nt-bg', mark);
+    if (!bgId) {
+        fail('Ctrl+click on the heuristic row opened no new tab on /nt-bg');
+    } else {
+        await placed('Ctrl+click', bgId, '/nt-bg', fgId, false);
+        await reverted('Ctrl+click');
+    }
+
+    // Middle-click on a history row: a new background tab.
+    const urlMid = localUrl(pages, '/nt-mid');
+    const seeded = await inChrome(app, `return (async () => {
+        try {
+            const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+            await PlacesUtils.history.insert({ url: ${JSON.stringify(urlMid)}, title: 'Middle Page', visits: [{ date: new Date() }] });
+            return 'ok';
+        } catch (e) {
+            return 'error: ' + e;
+        }
+    })();`);
+    if (seeded !== 'ok') {
+        return fail(`${BROKEN} the /nt-mid history visit could not be seeded (${String(seeded)})`);
+    }
+    const isMid = r => r.caption === urlMid && r.type === 'codicon-history';
+    const midView = await typeUntilRow(app, 'Middle Page', isMid);
+    const midRow = midView.rows.find(isMid);
+    if (!midRow) {
+        return fail(`typing "Middle Page" must show the /nt-mid history row; saw ${JSON.stringify(midView.rows)}`);
+    }
+    mark = (await pushes(app)).length;
+    await rowMouseDown(app, midRow.id, { button: 1, buttons: 4 });
+    const midId = await newTabOn('/nt-mid', mark);
+    if (!midId) {
+        fail('a middle-click on the history row opened no new tab on /nt-mid');
+    } else {
+        await placed('middle-click', midId, '/nt-mid', fgId, false);
+        await reverted('middle-click');
+    }
+
+    // Ctrl+click on an open-tab row opens its address again rather than switching.
+    const isOpenTab = r => r.caption === committed && r.type === 'codicon-browser';
+    const tabView = await typeUntilRow(app, 'Target Foreground', isOpenTab);
+    const tabRow = tabView.rows.find(isOpenTab);
+    if (!tabRow) {
+        return fail(`typing "Target Foreground" must show the /nt-fg open-tab row; saw ${JSON.stringify(tabView.rows)}`);
+    }
+    mark = (await pushes(app)).length;
+    await rowMouseDown(app, tabRow.id, { ctrlKey: true });
+    const dupId = await newTabOn('/nt-fg', mark);
+    if (!dupId) {
+        fail('Ctrl+click on the open-tab row opened no new tab on /nt-fg (it must open the address again, not switch)');
+    } else {
+        await placed('Ctrl+click on an open-tab row', dupId, '/nt-fg', fgId, false);
+        const copies = await probe(app, `return webTabs().filter(w => w.url === ${JSON.stringify(committed)}).length;`);
+        if (copies !== 2) {
+            fail(`Ctrl+click on the open-tab row must leave two tabs on /nt-fg; there are ${JSON.stringify(copies)}`);
+        }
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -1078,6 +1241,7 @@ const SCENARIOS = {
     suggestions,
     'one-off': oneOff,
     'switch-to-tab': switchToTab,
+    'new-tab-targets': newTabTargets,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */

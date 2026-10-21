@@ -606,7 +606,7 @@ function selfTest() {
     const activationCases = [
         {
             name: 'planted row-key-fed commit',
-            mutate: src => src.replace('void this.commitRow(row);', 'void this.commitRow(row.uri);'),
+            mutate: src => src.replace(": this.commitRow(row);", ": this.commitRow(row.uri);"),
             expect: 'row.uri',
         },
         {
