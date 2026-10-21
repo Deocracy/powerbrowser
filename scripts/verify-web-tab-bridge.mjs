@@ -80,8 +80,9 @@ const KIND_CLASSES = new Map([
  * relay), and a privileged kind runs only from chrome-bar-widget.tsx through
  * its same-named ChromeStoreClient method, never from a command or a key row.
  * savePageCopy runs from a command, so it is store-write, not privileged.
- * Both classes are empty today: the first entry of each is a deliberate edit
- * here and in powerbrowser/INTERNAL-APIS.md.
+ * searchSuggestions (29-06) is the first network kind; privileged is still
+ * empty. The first entry of each is a deliberate edit here and in
+ * powerbrowser/INTERNAL-APIS.md.
  */
 const STORE_KIND_CLASS_NAMES = ['read', 'store-write', 'network', 'privileged'];
 const STORE_KIND_CLASSES = new Map([
@@ -94,6 +95,7 @@ const STORE_KIND_CLASSES = new Map([
     ['resolveTypedAddress', 'read'],
     ['listSearchEngines', 'read'],
     ['placesFavicons', 'read'],
+    ['searchSuggestions', 'network'],
     ['setSetting', 'store-write'],
     ['savePageCopy', 'store-write'],
 ]);

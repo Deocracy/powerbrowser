@@ -14,6 +14,7 @@ import { CHROME_BAR_COPY } from './chrome-bar-copy';
 export const SHOW_HOME_BUTTON_PREFERENCE = 'browser.showHomeButton';
 export const HOME_PAGE_PREFERENCE = 'browser.homePage';
 export const DEFAULT_SEARCH_ENGINE_PREFERENCE = 'browser.defaultSearchEngine';
+export const SEARCH_SUGGESTIONS_PREFERENCE = 'browser.searchSuggestions';
 
 /**
  * Phase 29 (BAR-04): "" means the default configuration.toml supplies. The
@@ -46,6 +47,13 @@ export const ChromeBarPreferenceSchema: PreferenceSchema = {
             description: CHROME_BAR_COPY.homePageDescription,
         },
         [DEFAULT_SEARCH_ENGINE_PREFERENCE]: DEFAULT_SEARCH_ENGINE_PROPERTY,
+        // Phase 29 (BAR-03): on by default, as in Firefox; User scope only.
+        [SEARCH_SUGGESTIONS_PREFERENCE]: {
+            type: 'boolean',
+            default: true,
+            scope: PreferenceScope.User,
+            description: CHROME_BAR_COPY.searchSuggestionsDescription,
+        },
     },
 };
 

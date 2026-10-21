@@ -221,7 +221,8 @@ const BIDI_KEYS = { Escape: '', Shift: '', Control: '', Alt: '', Met
  * response open until `close()`, so the tab stays loading; a `delayMs` page
  * finishes that many milliseconds after its head, so its loading and loaded
  * pushes land in separate frames. A `json: params => value` page answers
- * `application/x-suggestions+json` with `value(searchParams)`. Every GET is
+ * `application/x-suggestions+json` with `value(searchParams)`, or a 500 when
+ * that value is undefined (an engine whose suggest endpoint fails). Every GET is
  * recorded in `requests` as `{ path, search, cookie, cacheControl, pragma, at }`
  * (`search` is the query string, `cookie` the Cookie header or null, `at` is
  * Date.now()).
@@ -249,8 +250,14 @@ export async function serveNavPages(pages) {
             return;
         }
         if (page.json) {
+            const value = page.json(parsed.searchParams);
+            if (value === undefined) {
+                response.writeHead(500, { 'content-type': 'text/plain' });
+                response.end('failed');
+                return;
+            }
             response.writeHead(200, { 'content-type': 'application/x-suggestions+json' });
-            response.end(JSON.stringify(page.json(parsed.searchParams)));
+            response.end(JSON.stringify(value));
             return;
         }
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });

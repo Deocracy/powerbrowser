@@ -38,7 +38,8 @@ import type { SourcedRow } from './chrome-bar-places-suggestions';
 import { PLACE_ROW_LIMIT, Row, composeRows, iconFor, nextHighlight } from './address-bar-rows';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
 import {
-    DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE,
+    DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
+    SHOW_HOME_BUTTON_PREFERENCE,
 } from './chrome-bar-preferences';
 import { ADDRESS_FOCUSED_CONTEXT_KEY } from './chrome-bar-keybindings';
 // A cycle (chrome-bar-shortcuts imports this widget); safe because the frontend
@@ -237,6 +238,10 @@ export class ChromeBarWidget extends ReactWidget {
     protected heuristic: Row | null = null;
     /** BAR-11: chrome found no engine for the typed words; the heuristic row is the no-search row. */
     protected heuristicNoEngine = false;
+    /** BAR-03: the engine's suggestions for search-shaped text; empty for an address, a failure or the setting off. */
+    protected engineRows: Row[] = [];
+    /** BAR-03: an IME composition is open in the pill; nothing typed during one is sent to an engine. */
+    protected composing = false;
     /** BAR-11: open-tab, bookmark and history rows for the typed text. */
     protected placeRows: Row[] = [];
     /** BAR-11: cached favicons by page url, from chrome's Places cache only. */
@@ -604,6 +609,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.highlightKey = undefined;
         this.homeFailed = false;
         this.noSearch = false;
+        this.engineRows = [];
     }
 
     protected async runQuery(prefix: string): Promise<void> {
@@ -633,6 +639,7 @@ export class ChromeBarWidget extends ReactWidget {
             resolved => {
                 if (current()) {
                     this.setHeuristic(prefix, resolved);
+                    return this.fetchEngineRows(prefix, resolved, current);
                 }
             },
             () => {
@@ -662,6 +669,35 @@ export class ChromeBarWidget extends ReactWidget {
             this.shimmer = false;
             this.update();
         }
+    }
+
+    /** BAR-03: the User-scope Search Suggestions setting; on unless the user turned it off. */
+    protected suggestionsOn(): boolean {
+        return this.userPreference(SEARCH_SUGGESTIONS_PREFERENCE, true) === true;
+    }
+
+    /**
+     * BAR-03: the engine's suggestions, only when chrome resolved the text as
+     * a search, the setting is on and no composition is open; chrome
+     * re-resolves and refuses an address itself. A failure is silent.
+     */
+    protected async fetchEngineRows(prefix: string, resolved: ResolvedAddress, current: () => boolean): Promise<void> {
+        if (resolved.kind !== 'search' || !this.suggestionsOn() || this.composing) {
+            return;
+        }
+        let values: string[];
+        try {
+            values = await this.store.searchSuggestions(prefix, this.engineNameForRequest());
+        } catch {
+            return;
+        }
+        if (!current() || !Array.isArray(values)) {
+            return;
+        }
+        const caption = CHROME_BAR_COPY.searchWith(resolved.engineName ?? '');
+        this.engineRows = Array.from(new Set(values.filter(value => typeof value === 'string' && value)))
+            .map((value): Row => ({ key: 'search:' + value, source: 'search', title: value, caption, url: '' }));
+        this.showComposedRows(this.querySeq);
     }
 
     /** BAR-11: the heuristic row from chrome's resolve of the typed text; undefined when the resolve failed. */
@@ -700,7 +736,7 @@ export class ChromeBarWidget extends ReactWidget {
     /** BAR-11: the one composition path, through address-bar-rows; cached icons ride along. */
     protected composeVisibleRows(): Row[] {
         const withIcon = (row: Row): Row => row.engineName ? row : { ...row, icon: this.icons[row.url] ?? null };
-        return composeRows(this.heuristic && withIcon(this.heuristic), [], this.placeRows.map(withIcon));
+        return composeRows(this.heuristic && withIcon(this.heuristic), this.engineRows, this.placeRows.map(withIcon));
     }
 
     /** Rebuilds the rows, keeps the highlighted row by key (else the heuristic row), then asks for missing favicons. */
@@ -752,8 +788,15 @@ export class ChromeBarWidget extends ReactWidget {
         this.heuristicNoEngine = false;
         this.providerFailed = false;
         this.placeRows = [];
+        this.engineRows = [];
         this.rows = [];
         this.highlightKey = undefined;
+        // BAR-03: text typed while an IME composition is open is never queried (29-10 queries at composition end).
+        this.composing = (e.nativeEvent as InputEvent).isComposing === true;
+        if (this.composing) {
+            this.update();
+            return;
+        }
         if (!this.inputValue.trim()) {
             // Empty text opens no dropdown.
             this.closeDropdown();
@@ -882,6 +925,10 @@ export class ChromeBarWidget extends ReactWidget {
      * below), not an address any opener could route.
      */
     protected commitRow = async (row: Row): Promise<void> => {
+        if (row.source === 'search') {
+            // An engine suggestion commits its text through the same resolve path as typed text.
+            return this.commitText(row.title);
+        }
         const url = row.url;
         this.committedAddress = url;
         this.inputValue = url;

@@ -3706,6 +3706,7 @@ const STORE_REQUEST_KINDS = new Set([
   "resolveTypedAddress",
   "listSearchEngines",
   "placesFavicons",
+  "searchSuggestions",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -3791,6 +3792,9 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "placesFavicons": {
         return { ok: true, kind, icons: await placesFavicons(data.urls) };
+      }
+      case "searchSuggestions": {
+        return { ok: true, kind, rows: await searchSuggestions(actorRef, data.text, data.engineName ?? "") };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -4303,6 +4307,7 @@ export const PowerBrowserWebTabs = Object.freeze({
 const searchLazy = {};
 ChromeUtils.defineESModuleGetters(searchLazy, {
   SearchService: "moz-src:///toolkit/components/search/SearchService.sys.mjs",
+  SearchSuggestionController: "moz-src:///toolkit/components/search/SearchSuggestionController.sys.mjs",
 });
 
 // True when configuration.toml supplied engines (policy SearchEngines.Add).
@@ -4432,6 +4437,45 @@ async function placesFavicons(urls) {
     }
   }
   return icons;
+}
+
+// One suggestion controller per Theia frame: its next fetch stops the one in
+// flight, so a newer keystroke supersedes the older request.
+const suggestControllers = new WeakMap();
+
+// Engine suggestions for typed text (BAR-03). Chrome re-resolves the text and
+// fetches only for a search, so URL-shaped text never reaches an engine,
+// whatever the frame asked. The controller sends the request anonymously
+// (LOAD_ANONYMOUS, no persistent cache). A failure is silent, as in Firefox:
+// the reply is []. Typed text is never logged.
+async function searchSuggestions(actorRef, text, engineName) {
+  if (typeof text !== "string" || !text.trim() || text.length > 2048 || typeof engineName !== "string" || engineName.length > 256) {
+    throw new Error("searchSuggestions: refusing empty or oversized text or a malformed engine name");
+  }
+  const resolved = await resolveTypedAddress(text, engineName);
+  if (resolved.kind !== "search") {
+    return [];
+  }
+  const engine = await barEngine(engineName);
+  if (!engine) {
+    return [];
+  }
+  const frame = actorRef.browsingContext.top.embedderElement;
+  let controller = suggestControllers.get(frame);
+  if (!controller) {
+    controller = new searchLazy.SearchSuggestionController();
+    suggestControllers.set(frame, controller);
+  }
+  let result;
+  try {
+    result = await controller.fetch({ searchString: text.trim(), inPrivateBrowsing: false, engine, maxLocalResults: 0, maxRemoteResults: 4 });
+  } catch {
+    return [];
+  }
+  return (result?.remote ?? [])
+    .map(entry => entry?.value)
+    .filter(value => typeof value === "string" && value && value.length <= 512)
+    .slice(0, 4);
 }
 
 // The token-cookie strip (BAR-02; REQUIREMENTS technical ruling 2026-10-20).

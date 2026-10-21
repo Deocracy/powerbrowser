@@ -68,6 +68,16 @@
  *               with the configured application name ("The browser" when
  *               empty) and says it couldn't load suggestions; with the stub
  *               restored, Enter on that row searches /one/search for "Row".
+ *   suggestions BAR-03: positive control first -- typing "hel" sends a GET on
+ *               /one/suggest with q "hel" and shows "hel alpha" and "hel beta"
+ *               below the heuristic row, captioned "Search with Probe Engine
+ *               One". Then 127.0.0.1:<port>/x and localhost:4000 send no
+ *               suggest GET, and chrome's fence answers the page realm's
+ *               searchSuggestions('localhost:4000') with [] and no GET. A
+ *               failing endpoint ("fail", a 500) leaves only the heuristic row
+ *               with no error row. With browser.searchSuggestions off, "world"
+ *               sends no suggest GET and still shows the heuristic row. Enter on
+ *               "hel alpha" searches /one/search for "hel alpha".
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -107,7 +117,15 @@ const COOKIE_PAGE_BODY = `<img src="/pixel"><script>
     new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
 </script>`;
 
+/** An engine suggest endpoint: two completions of q, or a 500 (undefined) for q "fail". */
+const suggestPage = { json: params => {
+    const q = params.get('q') ?? '';
+    return q === 'fail' ? undefined : [q, [`${q} alpha`, `${q} beta`]];
+} };
+
 const PAGES = {
+    '/one/suggest': suggestPage,
+    '/two/suggest': suggestPage,
     '/start': { title: 'Address Start', body: '<p>start</p>' },
     '/one/search': { title: 'Probe One Results', body: '<p>results</p>' },
     '/two/search': { title: 'Probe Two Results', body: '<p>results</p>' },
@@ -708,6 +726,85 @@ async function failureRows(ctx) {
     }
 }
 
+const SUGGEST_PREF = 'browser.searchSuggestions';
+
+/** The /one/suggest GETs at index >= `from`. */
+const suggestGets = (pages, from) => pages.requests.slice(from).filter(r => r.path === '/one/suggest');
+
+/** The rows below the heuristic row that are engine suggestions (captioned like a heuristic search). */
+const engineRowsOf = view => view.rows.slice(1).filter(r => r.caption === HEURISTIC_CAPTION);
+
+async function suggestions(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    await sessionTab(ctx);
+    if (plant === 'setting-ignored') {
+        if (await probe(app, `get('ChromeBarWidget').suggestionsOn = () => true; return true;`) === true) {
+            note('PLANT setting-ignored applied');
+        }
+    }
+    // Positive control: the request log sees this engine's suggest GETs in this session.
+    let mark = pages.requests.length;
+    await typeInPill(app, 'hel');
+    const shows = v => v.rows[0]?.title === 'hel' && v.rows[1]?.title === 'hel alpha' && v.rows[2]?.title === 'hel beta';
+    const view = await settle(() => readRows(app), shows, 8000);
+    const asked = await nextGet(pages, '/one/suggest', mark, r => queryOf(r) === 'hel', 5000);
+    if (!asked || !shows(view) || view.rows[0].caption !== HEURISTIC_CAPTION || engineRowsOf(view).length !== 2) {
+        return fail(`typing "hel" must send a GET on /one/suggest with q "hel" (${asked ? 'sent' : 'none'}) and show "hel alpha" and "hel beta" below the heuristic row, captioned ${JSON.stringify(HEURISTIC_CAPTION)}; saw ${JSON.stringify(view.rows)}`);
+    }
+    mark = pages.requests.length;
+    for (const text of [`${new URL(pages.origin).host}/x`, 'localhost:4000']) {
+        await typeInPill(app, text);
+        await sleep(1650);
+    }
+    const fenced = await probe(app, `return await get('ChromeStoreClient').searchSuggestions('localhost:4000');`);
+    await sleep(500);
+    if (!Array.isArray(fenced) || fenced.length) {
+        fail(`chrome must answer searchSuggestions('localhost:4000') with []; got ${JSON.stringify(fenced)}`);
+    }
+    if (suggestGets(pages, mark).length) {
+        fail(`address-shaped text reached the engine: ${JSON.stringify(suggestGets(pages, mark).map(r => r.search))}`);
+    }
+    mark = pages.requests.length;
+    await typeInPill(app, 'fail');
+    const failedGet = await nextGet(pages, '/one/suggest', mark, r => queryOf(r) === 'fail', 5000);
+    await sleep(800);
+    const failed = await readRows(app);
+    if (!failedGet) {
+        fail(`${BROKEN} typing "fail" sent no GET on /one/suggest, so the failure path was never exercised`);
+    } else if (failed.rows[0]?.title !== 'fail' || engineRowsOf(failed).length || failed.rows.some(r => r.title.includes("couldn't"))) {
+        fail(`a failing suggest endpoint must leave the heuristic row with no engine rows and no error row; saw ${JSON.stringify(failed.rows)}`);
+    }
+    try {
+        if (await setPref(app, SUGGEST_PREF, false) !== true) {
+            return fail(`${BROKEN} the ${SUGGEST_PREF} setting could not be turned off`);
+        }
+        mark = pages.requests.length;
+        await typeInPill(app, 'world');
+        const off = await settle(() => readRows(app), v => v.rows[0]?.title === 'world');
+        await sleep(1500);
+        if (suggestGets(pages, mark).length) {
+            fail(`suggest request while the setting was off: ${JSON.stringify(suggestGets(pages, mark).map(r => r.search))}`);
+        }
+        if (off.rows[0]?.title !== 'world' || off.rows[0].caption !== HEURISTIC_CAPTION) {
+            fail(`with the setting off the heuristic row must still show for "world"; saw ${JSON.stringify(off.rows)}`);
+        }
+    } finally {
+        await setPref(app, SUGGEST_PREF, true);
+    }
+    await typeInPill(app, 'hel');
+    await settle(() => readRows(app), shows, 8000);
+    await pressKey(app, ARROW_DOWN);
+    const moved = await settle(() => readRows(app), v => v.rows[1]?.selected);
+    if (moved.rows[1]?.title !== 'hel alpha' || !moved.rows[1].selected) {
+        return fail(`ArrowDown must highlight "hel alpha"; saw ${JSON.stringify(moved.rows)}`);
+    }
+    const getMark = pages.requests.length;
+    await pressKey(app, ENTER);
+    if (!await nextGet(pages, '/one/search', getMark, r => queryOf(r) === 'hel alpha')) {
+        fail(`Enter on "hel alpha" must search it: no GET on /one/search with q "hel alpha"; pill ${JSON.stringify(await readPill(app))}`);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -717,6 +814,7 @@ const SCENARIOS = {
     'default-engine': defaultEngine,
     rows,
     'failure-rows': failureRows,
+    suggestions,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -793,6 +891,7 @@ const PLANTS = [
     { plant: 'engine-name-dropped', target: 'default-engine', run: ['default-engine'], expect: 'no GET on /two/search' },
     { plant: 'token-strip-off', target: 'token-cookie', run: ['token-cookie'], expect: `carried ${TOKEN_COOKIE}: stock-window, overlay, subresource, worker` },
     { plant: 'dedupe-off', target: 'rows', run: ['rows'], expect: 'two rows for one url' },
+    { plant: 'setting-ignored', target: 'suggestions', run: ['suggestions'], expect: 'suggest request while the setting was off' },
 ];
 
 async function selfTest() {

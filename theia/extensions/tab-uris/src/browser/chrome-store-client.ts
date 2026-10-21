@@ -179,6 +179,11 @@ export class ChromeStoreClient {
         return this.field<Record<string, string>>({ kind: 'placesFavicons', urls }, 'icons');
     }
 
+    /** Phase 29 (BAR-03): up to 4 engine suggestions for typed text; [] when chrome resolves it as an address or the engine fails. */
+    searchSuggestions(text: string, engineName = ''): Promise<string[]> {
+        return this.field<string[]>({ kind: 'searchSuggestions', text, engineName }, 'rows');
+    }
+
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
     queryTabsWithPlaces(query: TabPlacesQuery = {}): Promise<TabPlacesRow[]> {
         return this.field<TabPlacesRow[]>({ kind: 'queryTabsWithPlaces', ...query }, 'rows');
