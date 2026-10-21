@@ -89,6 +89,14 @@
  *               a new background tab while the session tab stays current. With
  *               every engine but Probe Engine One hidden chrome-side, no strip
  *               shows.
+ *   switch-to-tab  BAR-06: with web tabs on localhost /sw-a ("Switch Alpha",
+ *               its loaded push the positive control) and /sw-b, and B current,
+ *               typing "Switch Alpha" shows A's open-tab row with the
+ *               codicon-browser marker and "Switch to Tab"; a click on it, and
+ *               then ArrowDown to it and Enter, each make A the current tab with
+ *               chrome's focus in A's overlay and the pill showing A's address,
+ *               with no state push with loading: true for A or B and no new GET
+ *               on /sw-a.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -96,6 +104,7 @@
 import {
     appNameExpr,
     BROKEN,
+    chromeActiveTabId,
     focusTheiaFrame,
     inChrome,
     loadedAt,
@@ -148,6 +157,8 @@ const PAGES = {
     '/r-hist': { title: 'Row History Page', body: '<p>history</p>' },
     '/r-book': { title: 'Row Bookmark Page', body: '<p>bookmark</p>' },
     '/r-tab': { title: 'Row Tab Page', body: '<p>tab</p>' },
+    '/sw-a': { title: 'Switch Alpha', body: '<p>alpha</p>' },
+    '/sw-b': { title: 'Switch Beta', body: '<p>beta</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -598,6 +609,7 @@ const readRows = app => app.evaluate(`JSON.stringify((() => {
             title: (r.querySelector('.pb-chrome-bar-row-title') || {}).textContent || '',
             caption: (r.querySelector('.pb-chrome-bar-row-caption') || {}).textContent || '',
             type: type ? [...type.classList].find(c => c.startsWith('codicon-') && c !== 'codicon') || null : null,
+            switchText: (r.querySelector('.pb-chrome-bar-row-switch') || {}).textContent || '',
             img: img ? img.getAttribute('src') : null,
             height: r.getBoundingClientRect().height,
         };
@@ -951,6 +963,109 @@ async function oneOff(ctx) {
     }
 }
 
+/**
+ * The served origin under the name localhost: a second site, so this plan's
+ * tabs stay clear of the four-tab budget on 127.0.0.1 (Phase 27's deferred
+ * same-process reload defect).
+ */
+const localUrl = (pages, path) => pages.url(path).replace('//127.0.0.1:', '//localhost:');
+
+/** Dispatches a mousedown on the dropdown row `id` (React listens at its root); primary button unless `init` says otherwise. */
+const rowMouseDown = (app, id, init = {}) => app.evaluate(`(() => {
+    const r = document.getElementById(${JSON.stringify(id)});
+    if (!r) return false;
+    r.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, ...${JSON.stringify(init)} }));
+    return true;
+})()`);
+
+/** The tab id of the main area's current tab, or null. */
+const mainTabId = app => probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null;`);
+
+/** Clears and retypes `text` until a row matching `pred` shows (the tab store catches up a moment after a load). */
+async function typeUntilRow(app, text, pred, timeoutMs = 20000) {
+    let view;
+    const end = Date.now() + timeoutMs;
+    do {
+        await typeInPill(app, '');
+        await typeInPill(app, text);
+        view = await settle(() => readRows(app), v => v.rows.some(pred), 4000);
+    } while (!view.rows.some(pred) && Date.now() < end);
+    return view;
+}
+
+async function switchToTab(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const urlA = localUrl(pages, '/sw-a');
+    const tabA = await openWebTab(app, urlA);
+    // The positive control for the no-load check below: the recorder sees A's loads.
+    if (await waitForPush(app, loadedAt(tabA, '/sw-a')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for /sw-a`);
+    }
+    const tabB = await openWebTab(app, localUrl(pages, '/sw-b'));
+    if (await waitForPush(app, loadedAt(tabB, '/sw-b')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for /sw-b`);
+    }
+    if (plant === 'tab-row-navigates') {
+        const planted = await probe(app, `const w = get('ChromeBarWidget');
+            w.switchToTab = function (row) { return this.commitRow(row); };
+            return true;`);
+        if (planted === true) {
+            note('PLANT tab-row-navigates applied');
+        }
+    }
+    const isTabRow = r => r.caption === urlA && r.type === 'codicon-browser';
+    for (const how of ['click', 'Enter']) {
+        if (await makeCurrent(app, tabB) !== true) {
+            return fail(`${BROKEN} the /sw-b tab could not be made current`);
+        }
+        const view = await typeUntilRow(app, 'Switch Alpha', isTabRow);
+        const row = view.rows.find(isTabRow);
+        if (!row || row.switchText !== 'Switch to Tab') {
+            return fail(`${how}: typing "Switch Alpha" must show the /sw-a open-tab row with the codicon-browser marker and "Switch to Tab"; saw ${JSON.stringify(view.rows)}`);
+        }
+        if (how === 'Enter') {
+            let on = false;
+            for (let i = 0; i < 12 && !on; i++) {
+                await pressKey(app, ARROW_DOWN);
+                on = !!(await readRows(app)).rows.find(isTabRow)?.selected;
+            }
+            if (!on) {
+                return fail('ArrowDown never highlighted the /sw-a open-tab row');
+            }
+        }
+        const mark = (await pushes(app)).length;
+        const getMark = pages.requests.length;
+        if (how === 'click') {
+            await rowMouseDown(app, row.id);
+        } else {
+            await pressKey(app, ENTER);
+        }
+        const current = await settle(() => mainTabId(app), id => id === tabA);
+        if (current !== tabA) {
+            fail(`${how}: choosing the open-tab row must make /sw-a's tab current; the current tab is ${JSON.stringify(current)} (A ${tabA}, B ${tabB})`);
+        }
+        const focused = await settle(() => chromeActiveTabId(app), id => id === tabA);
+        if (focused !== tabA) {
+            fail(`${how}: chrome's active element must be /sw-a's overlay after the switch; it is ${JSON.stringify(focused)}`);
+        }
+        const pill = await settle(() => readPill(app), v => v.value === urlA);
+        if (pill.value !== urlA) {
+            fail(`${how}: the pill must show /sw-a's address after the switch; it shows ${JSON.stringify(pill.value)}`);
+        }
+        // Long enough for a load the choice started to push its start.
+        await sleep(1500);
+        const loads = (await pushes(app)).slice(mark)
+            .filter(p => p && p.kind === 'state' && p.loading === true && (p.tabId === tabA || p.tabId === tabB));
+        if (loads.length) {
+            fail(`${how}: a state push with loading: true arrived after choosing the open-tab row (switching must not load): ${JSON.stringify(loads.map(p => [p.tabId === tabA ? 'A' : 'B', pathOf(p.url)]))}`);
+        }
+        const gets = pages.requests.slice(getMark).filter(r => r.path === '/sw-a');
+        if (gets.length) {
+            fail(`${how}: choosing the open-tab row sent ${gets.length} new GET(s) on /sw-a`);
+        }
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -962,6 +1077,7 @@ const SCENARIOS = {
     'failure-rows': failureRows,
     suggestions,
     'one-off': oneOff,
+    'switch-to-tab': switchToTab,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -1040,6 +1156,7 @@ const PLANTS = [
     { plant: 'dedupe-off', target: 'rows', run: ['rows'], expect: 'two rows for one url' },
     { plant: 'setting-ignored', target: 'suggestions', run: ['suggestions'], expect: 'suggest request while the setting was off' },
     { plant: 'oneoff-default', target: 'one-off', run: ['one-off'], expect: 'no GET on /two/search' },
+    { plant: 'tab-row-navigates', target: 'switch-to-tab', run: ['switch-to-tab'], expect: 'loading: true' },
 ];
 
 async function selfTest() {

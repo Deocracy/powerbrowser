@@ -255,6 +255,15 @@
     white-space: nowrap;
 }
 
+.pb-chrome-bar-row-switch {
+    /* BAR-06: the open-tab row's trailing caption -- caption role, muted ink, never accent. */
+    flex: none;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted, #9a99a8);
+    white-space: nowrap;
+}
+
 .pb-chrome-bar-row.is-shimmer {
     background: var(--color-surface-raised, #35343f);
     animation: pb-chrome-bar-shimmer 0.9s ease-in-out infinite alternate;

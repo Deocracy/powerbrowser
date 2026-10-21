@@ -945,6 +945,39 @@ export class ChromeBarWidget extends ReactWidget {
         }
     };
 
+    /** BAR-06: the live web tab showing an open-tab row's address (the match placeRowsOf keeps tab rows by). */
+    protected liveTabFor(row: Row): WebTabWidget | undefined {
+        return this.shell.getWidgets('main')
+            .find((w): w is WebTabWidget => w instanceof WebTabWidget && w.hasPage && w.url === row.url);
+    }
+
+    /**
+     * BAR-06: shows the tab an open-tab row names, as a tab-strip click does.
+     * Nothing navigates, so the page keeps its state; the pill re-syncs from
+     * the activation. A tab closed since the query commits the row's address.
+     * A prototype method, so a live plant can replace it per instance.
+     */
+    protected async switchToTab(row: Row): Promise<void> {
+        const widget = this.liveTabFor(row);
+        if (!widget) {
+            return this.commitRow(row);
+        }
+        // Drops the typed text so the activation's sync is not held off as an edit in progress.
+        this.inputValue = this.committedAddress;
+        this.closeDropdown();
+        this.update();
+        await this.shell.activateWidget(widget.id);
+        widget.focusPage();
+    }
+
+    /** Choosing a row by plain click or Enter: the heuristic commits the typed text, an open tab switches, the rest commit their address. */
+    protected chooseRow(row: Row): Promise<void> {
+        if (row.source === 'heuristic') {
+            return this.commitText(this.inputValue);
+        }
+        return row.source === 'tab' ? this.switchToTab(row) : this.commitRow(row);
+    }
+
     /**
      * Commits typed text: typed text resolves chrome-side; search URLs are
      * minted only by chrome's resolveTypedAddress. A visit or search reply
@@ -1020,11 +1053,7 @@ export class ChromeBarWidget extends ReactWidget {
                 return;
             }
             const highlighted = this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
-            if (highlighted && highlighted.source !== 'heuristic') {
-                void this.commitRow(highlighted);
-            } else {
-                void this.commitText(this.inputValue);
-            }
+            void (highlighted ? this.chooseRow(highlighted) : this.commitText(this.inputValue));
         } else if (e.key === 'Escape') {
             // Staged dismissal: close the dropdown, then restore the committed
             // address, then (NAV-01) stop a loading page.
@@ -1413,8 +1442,8 @@ export class ChromeBarWidget extends ReactWidget {
      * BAR-11: one single-line row -- a 16px leading icon (a cached favicon or
      * engine icon as a data:image/ URI, else a codicon), the title, the
      * caption, then the muted type marker. Titles and captions render as React
-     * text nodes only (T-29-18). The heuristic row commits the typed text;
-     * every other row commits its own address.
+     * text nodes only (T-29-18). An open-tab row ends with the Switch to Tab
+     * caption (BAR-06); choosing a row goes through chooseRow.
      */
     protected renderRow(row: Row, index: number): React.ReactNode {
         const highlighted = row.key === this.highlightKey;
@@ -1428,11 +1457,7 @@ export class ChromeBarWidget extends ReactWidget {
             className={'pb-chrome-bar-row' + (highlighted ? ' is-highlighted' : '') + (message ? ' is-message' : '')}
             onMouseDown={e => {
                 e.preventDefault();
-                if (row.source === 'heuristic') {
-                    void this.commitText(this.inputValue);
-                } else {
-                    void this.commitRow(row);
-                }
+                void this.chooseRow(row);
             }}
         >
             {this.providerFailed && row.source === 'heuristic' ? (
@@ -1446,6 +1471,7 @@ export class ChromeBarWidget extends ReactWidget {
                 <div className='pb-chrome-bar-row-title' title={row.title}>{row.title}</div>
                 <div className='pb-chrome-bar-row-caption' title={row.caption}>{row.caption}</div>
                 {icon.trailing && <span className={`pb-chrome-bar-row-type codicon ${icon.trailing}`} aria-hidden='true' />}
+                {row.source === 'tab' && <span className='pb-chrome-bar-row-switch'>{CHROME_BAR_COPY.switchToTab}</span>}
             </>}
         </div>;
     }
