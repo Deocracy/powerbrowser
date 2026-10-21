@@ -64,7 +64,8 @@ export async function installPushRecorder(app) {
 
 /**
  * Records, in chrome, every firing of a page-key <key> row's command (the row
- * id, in order). A row that leaks under Theia focus fires its command even
+ * id, in order), and every F6/Shift+F6 keydown chrome prevents (as
+ * focusAddressF6/focusAddressShiftF6, the reply listener's rows). A row that leaks under Theia focus fires its command even
  * though relayShortcut then refuses to push, so this, not the push, is what an
  * absence check under Theia focus must read.
  */
@@ -74,6 +75,19 @@ export async function installFireRecorder(app) {
         if (!window.__pbFired) {
             window.__pbFired = [];
             for (const k of rows) k.addEventListener('command', () => window.__pbFired.push(k.id.slice('powerbrowser-page-key-'.length)));
+            // F6/Shift+F6 have no <key> row: record chrome taking an F6 instead.
+            // Bubble phase, after the reply listener. Chrome's preventDefault clears
+            // isReplyEventFromRemoteContent (StopCrossProcessForwarding), and an
+            // untouched reply arrives already prevented by content's ESM, so "chrome
+            // prevented it" reads: prevented, not by a page script, and neither a
+            // live reply nor waiting for one.
+            window.addEventListener('keydown', e => {
+                if (e.isTrusted && e.keyCode === KeyEvent.DOM_VK_F6 && !e.ctrlKey && !e.altKey && !e.metaKey
+                    && e.defaultPrevented && !e.defaultPreventedByContent
+                    && !e.isReplyEventFromRemoteContent && !e.isWaitingReplyFromRemoteContent) {
+                    window.__pbFired.push(e.shiftKey ? 'focusAddressShiftF6' : 'focusAddressF6');
+                }
+            });
         }
         return rows.length;
     })()`);

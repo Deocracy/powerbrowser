@@ -103,7 +103,9 @@
  *   theia-keeps-keys In an untitled editor F5, F6, F11, Ctrl+P, Ctrl+K,
  *                    Ctrl+Tab, Alt+Left, Ctrl+R and Ctrl+L, and in a terminal
  *                    Ctrl+R and Ctrl+W, all reach the Theia frame with no
- *                    page-key row firing its chrome command; Ctrl+L in the editor leaves the pill
+ *                    page-key row firing its chrome command (for F6, no reply
+ *                    the reply listener acts on; focus-keys is its positive
+ *                    control); Ctrl+L in the editor leaves the pill
  *                    unfocused, while Ctrl+L outside an editor and a terminal
  *                    focuses it. Scored only after page-keys passed.
  *   tooltips         Coding, a web tab current: hovering Back shows one
@@ -1467,9 +1469,15 @@ async function focusKeys({ app, pages, fail, note }) {
     }
     for (const [name, spec, id] of [['F6', KEY.f6, 'focusAddressF6'], ['Shift+F6', KEY.shiftF6, 'focusAddressShiftF6']]) {
         const mark = (await pushes(app)).length;
+        const fireMark = (await firedRows(app)).length;
         await keyInPage(app, tabId, spec);
         if (await waitForPush(app, p => p && p.kind === 'shortcut' && p.id === id && p.tabId === tabId, { from: mark, timeoutMs: 5000 }) < 0) {
             return fail(`${name} in a focused page produced no ${id} shortcut push (the reply listener did not relay it)`);
+        }
+        // Positive control for theia-keeps-keys' F6 firing check: the recorder sees this reply.
+        const fired = (await firedRows(app)).slice(fireMark);
+        if (!fired.includes(id)) {
+            return fail(`${BROKEN} the fire recorder did not see ${name}'s reply from a focused page; recorded ${JSON.stringify(fired)}`);
         }
         const pill = await settle(() => readPill(app), v => v.focused && v.selected);
         const onFrame = await settle(() => chromeOnTheiaFrame(app), v => v === true);
@@ -1684,6 +1692,23 @@ async function theiaKeepsKeys({ app, plant, fail, note, results }) {
     const leak = plant === 'rows-enabled-in-editor';
     if (leak) {
         note('PLANT rows-enabled-in-editor applied');
+    }
+    if (plant === 'reply-listener-ungated') {
+        // The F6 reply listener with its tabIdOfBrowser gate dropped (relayShortcut,
+        // which would refuse 'no-page', left out): it asks for and acts on the
+        // Theia frame's reply. PowerBrowserWebTabs is frozen, so it is added beside the real one.
+        await app.evaluateIn(app.chrome, `(() => {
+            window.addEventListener('keydown', e => {
+                if (!e.isTrusted || e.keyCode !== KeyEvent.DOM_VK_F6 || e.ctrlKey || e.altKey || e.metaKey) return;
+                if (!e.isReplyEventFromRemoteContent) {
+                    if (!e.isWaitingReplyFromRemoteContent) e.requestReplyFromRemoteContent();
+                    return;
+                }
+                if (!e.defaultPreventedByContent) e.preventDefault();
+            }, true);
+            return true;
+        })()`);
+        note('PLANT reply-listener-ungated applied');
     }
     for (const [name, spec] of editorKeys) {
         const { recorded, fired } = await keyInTheia(app, spec, focusEditor, leak);
@@ -2038,6 +2063,7 @@ const PLANTS = [
     { plant: 'second-stop-element', target: 'stop-button', run: ['stop-button'], expect: 'exactly one' },
     { plant: 'row-enabled-under-theia', target: 'theia-keeps-esc', run: ['esc-stop', 'theia-keeps-esc'], expect: 'fired its chrome command while the Theia frame had focus' },
     { plant: 'rows-enabled-in-editor', target: 'theia-keeps-keys', run: ['page-keys', 'theia-keeps-keys'], expect: 'no page-key row firing its chrome command' },
+    { plant: 'reply-listener-ungated', target: 'theia-keeps-keys', run: ['page-keys', 'theia-keeps-keys'], expect: 'fired ["focusAddressF6"]' },
     { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
     { plant: 'tab-order-reversed', target: 'tab-keys', run: ['tab-keys'], expect: 'expected T2' },
     { plant: 'hover-elsewhere', target: 'mouse-buttons', run: ['mouse-buttons'], expect: '/m1' },
