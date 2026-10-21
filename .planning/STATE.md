@@ -1,20 +1,20 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Phase 28 complete, ready to verify Phase 27
-last_updated: "2026-10-21T20:57:25.186Z"
+stopped_at: Completed 29-01-PLAN.md
+last_updated: "2026-10-21T21:23:43.800Z"
 last_activity: 2026-10-21
-last_activity_desc: Phase 28 complete, transitioned to Phase 27
-state_head: 88ad96cc3fe032cd6d56d5eecf2d114f28b58cc0
+last_activity_desc: 29-01 complete (resolveTypedAddress tracer, BAR-01)
+state_head: 8a903cbed5360608bd5eac9de6a3dbbf0cb57e52
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 8
+  completed_plans: 9
   percent: 8
 ---
 
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 27 — Groundwork, Navigation Buttons and Page-Focus Keys (v1.5 Chrome Bar Firefox Parity, Phases 27–38)
+**Current focus:** Phase 29 — Address Bar Search and Fixup
 
 ## Current Position
 
-Phase: 29 (Address Bar Search and Fixup) — READY TO EXECUTE
-Plan: 8
+Phase: 29 (Address Bar Search and Fixup) — EXECUTING
+Plan: 2 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — Phase 28 complete, transitioned to Phase 27
+Last activity: 2026-10-21 — 29-01 complete (resolveTypedAddress tracer, BAR-01)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -156,6 +156,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 27 P06 | 45min | 2 tasks | 7 files |
 | Phase 27 P07 | 50 min | 3 tasks | 9 files |
 | Phase 27 P08 | 45 min | 2 tasks | 6 files |
+| Phase 29 P01 | 24m | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -392,6 +393,7 @@ Recent decisions affecting current work:
 - [Phase 27]: 27-07: pushPageFocus dedupes on (frontend WindowGlobal, tab id), so a reloaded frontend never inherits its predecessor's answer
 - [Phase 27]: 27-08: nav-button tooltips request HoverService from onPointerEnter, because React drops onMouseEnter on disabled buttons
 - [Phase 27]: 27-08: in Organising the bar is at the window's top edge, so the tooltip flips below it onto the toolbar row, clear of the page; tooltips-all requires 'above' only where there is room
+- [Phase 29]: 29-01: upgradeSchemeless detects loopback by regex, not a "localhost" literal, so the gui08 dropped-localhost plant still discriminates
 
 ### Pending Todos
 
@@ -494,8 +496,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T05:22:54.773Z
-Stopped at: Phase 28 complete, ready to verify Phase 27
+Last session: 2026-10-21T21:23:43.750Z
+Stopped at: Completed 29-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
