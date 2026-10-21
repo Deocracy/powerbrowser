@@ -483,6 +483,7 @@ function isUnset(value) {
 const VARIANT_PREFIX = 'variants[].';
 const EXTENSIONS_PREFIX = 'extensions[].';
 const WEBEXTENSIONS_PREFIX = 'webextensions[].';
+const SEARCH_ENGINES_PREFIX = 'search_engines[].';
 
 /** The four `source` values EXT-01 through EXT-02 implement. Anything else is a typo. */
 const EXTENSION_SOURCES = Object.freeze(['openvsx', 'url', 'npm', 'local-path']);
@@ -922,6 +923,92 @@ function validateWebExtensionElements(doc) {
     return failures;
 }
 /**
+ * Per-entry rules for [[search_engines]] (BAR-04). Cloned from
+ * validateWebExtensionElements and for the same reason: every failure names
+ * the ENTRY (its name, or its ordinal where the name itself is what is
+ * missing), so a manifest with five engines fails on the one that is wrong.
+ *
+ * SHAPES ARE DERIVED, NOT RESTATED. name, url and suggest_url are tested
+ * against their own schema `regex`, read out of SCHEMA_KEYS; the url
+ * pattern is what refuses a non-https template and one without
+ * {searchTerms}. The generic regex loop skips `search_engines[].*` paths
+ * so one value yields one failure.
+ *
+ * DUPLICATE NAMES ARE COMPARED CASE-INSENSITIVELY. The policy engine keys
+ * an engine by its name and Gecko drops a second engine of the same name
+ * without a word (SearchService #addEngineToStore, "duplicate-title"), so
+ * two entries differing only in case would ship one engine. A collision
+ * with a name Firefox itself ships is scripts/verify-search-engines.mjs's
+ * check: it needs upstream/, which generate does not.
+ */
+function validateSearchEngineElements(doc) {
+    const failures = [];
+    const engines = readPath(doc, 'search_engines');
+    if (!Array.isArray(engines)) return failures;
+
+    const labelOf = (entry, index) => (isTable(entry) && typeof entry.name === 'string' && entry.name.trim() !== ''
+        ? `the [[search_engines]] entry named ${JSON.stringify(entry.name)}`
+        : `the ${ordinal(index + 1)} [[search_engines]] entry (no name stated)`);
+
+    const seen = new Map();
+    for (const entry of engines) {
+        if (isTable(entry) && typeof entry.name === 'string' && entry.name.trim() !== '') {
+            const key = entry.name.toLowerCase();
+            seen.set(key, [...(seen.get(key) ?? []), entry.name]);
+        }
+    }
+    for (const names of seen.values()) {
+        if (names.length > 1) {
+            failures.push(
+                `two or more [[search_engines]] entries use the name ${names.map(n => JSON.stringify(n)).join(' and ')}, and the browser keeps only `
+                + `one engine per name (capital letters do not count as a difference). Give each entry its own name in ${MANIFEST_NAME}, then run: ${RERUN}`,
+            );
+        }
+    }
+
+    for (const [index, entry] of engines.entries()) {
+        if (!isTable(entry)) {
+            failures.push(
+                `the ${ordinal(index + 1)} [[search_engines]] entry is not a section of settings. `
+                + `Open ${MANIFEST_NAME}, write it as a [[search_engines]] section with name and url, then run: ${RERUN}`,
+            );
+            continue;
+        }
+        const label = labelOf(entry, index);
+
+        for (const [path, spec] of Object.entries(SCHEMA_KEYS)) {
+            if (!path.startsWith(SEARCH_ENGINES_PREFIX) || !spec.required) continue;
+            const key = path.slice(SEARCH_ENGINES_PREFIX.length);
+            if (entry[key] !== undefined) continue;
+            failures.push(
+                `${label}: ${key} ${UNSET_MARK} Open ${MANIFEST_NAME}, find that [[search_engines]] entry, and give `
+                + `${key} a value. Then run: ${RERUN}`,
+            );
+        }
+
+        for (const key of ['name', 'url', 'suggest_url']) {
+            const value = entry[key];
+            if (value === undefined) continue;
+            const spec = SCHEMA_KEYS[`${SEARCH_ENGINES_PREFIX}${key}`];
+            if (typeof value !== 'string') {
+                failures.push(
+                    `${label}: ${key} is ${JSON.stringify(value)}, but this setting has to be text written inside double `
+                    + `quotes. Open ${MANIFEST_NAME}, quote the value, then run: ${RERUN}`,
+                );
+                continue;
+            }
+            if (spec.regex && !new RegExp(spec.regex).test(value)) {
+                failures.push(
+                    `${label}: ${key} is ${JSON.stringify(value)}, which is not allowed here. Write it as ${spec.regex_help}. `
+                    + `Allowed form: ${spec.regex} . A valid value looks like ${JSON.stringify(spec.regex_example)}. `
+                    + `Correct it in ${MANIFEST_NAME}, then run: ${RERUN}`,
+                );
+            }
+        }
+    }
+    return failures;
+}
+/**
  * The `[telemetry]` level enum and the endpoint rule (04-03, TEL-01/TEL-02).
  *
  * WHY A DEDICATED FUNCTION (same reason as validateExtensionElements).
@@ -1003,16 +1090,18 @@ function validate(doc, leaves) {    const failures = [];
     failures.push(...validateVariantIds(doc));
     failures.push(...validateExtensionElements(doc));
     failures.push(...validateWebExtensionElements(doc));
+    failures.push(...validateSearchEngineElements(doc));
     failures.push(...validateTelemetry(doc));
     failures.push(...validateTheia(doc));
 
     for (const { path, value } of leaves) {
-        // EXT-01 (04-02) and EXT-03. extensions[] and webextensions[]
-        // leaves are validated by validateExtensionElements and
-        // validateWebExtensionElements above, which name the ENTRY id -- the
-        // generic shape below can only name the dotted path, so letting both
-        // run would report one value twice.
-        if (path.startsWith(EXTENSIONS_PREFIX) || path.startsWith(WEBEXTENSIONS_PREFIX)) continue;
+        // EXT-01 (04-02), EXT-03 and BAR-04. extensions[], webextensions[]
+        // and search_engines[] leaves are validated by their element
+        // validators above, which name the ENTRY -- the generic shape below
+        // can only name the dotted path, so letting both run would report
+        // one value twice.
+        if (path.startsWith(EXTENSIONS_PREFIX) || path.startsWith(WEBEXTENSIONS_PREFIX)
+            || path.startsWith(SEARCH_ENGINES_PREFIX)) continue;
         // An explicitly emptied array (extensions = []) carries no spec by
         // construction -- rejectUnknown vetted it above, and there is no
         // value to check a pattern against. Without this guard the spec
@@ -2003,6 +2092,66 @@ export function emitWebExtensionSettings(config, variant) {
     // whole map to keep the one-entry-per-block shape the fragment readers
     // expect.)
     if (lines.length > 1) lines[lines.length - 1] = lines[lines.length - 1].replace(/,$/, '');
+    lines.push('}');
+    return lines.join('\n') + '\n';
+}
+/**
+ * The configured search engines (BAR-04): the distribution policies.json's
+ * `SearchEngines` key, `{Add: [{Name, URLTemplate, SuggestURLTemplate}],
+ * Default: <first name>}`, one Add entry per [[search_engines]]
+ * declaration in manifest order. The first entry is the default engine.
+ *
+ * FRAGMENT, NOT THE WHOLE POLICY FILE. Same split as
+ * emitWebExtensionSettings: the tracked policies.json carries sibling keys
+ * the manifest does not own, so the copy-over sets ONLY the SearchEngines
+ * key from this fragment and leaves every sibling byte-identical. No
+ * tracked comparand row -- the byte-identity gate skips rows without one,
+ * --check still covers the row through the frozen table, and the tracked
+ * side is pinned by scripts/verify-search-engines.mjs (key equality
+ * against this emission, shipped-name collision, template shape).
+ *
+ * WHY NO GENERATED_BANNER. Same reason as the fragments before it: strict
+ * JSON carries no comment, and a `_comment` key would pollute the key a
+ * reader copies from.
+ *
+ * WHAT IS DELIBERATELY NOT EMITTED. No IconURL (an https icon is a network
+ * fetch at engine install), no Method or PostData (GET only), no Remove
+ * (the policy applies it only after a stock window restores, so it cannot
+ * be relied on to hide Firefox's engines -- the bar's own filter does that).
+ *
+ * An absent [[search_engines]] table emits the empty object: no
+ * SearchEngines policy, and the bar keeps Firefox's own engines. A
+ * downstream replaces the list by restating it (D-07 array-replace).
+ *
+ * Runs AFTER validate(), so every entry carries a name and an https url
+ * holding {searchTerms}. Every emitted value passes the sink guard on the
+ * way out -- the key lands in a JSON document the policy engine reads.
+ *
+ * Joined with a literal newline, never the platform line-ending constant.
+ */
+export function emitSearchEngines(config, variant) {
+    void variant;
+    const engines = config.search_engines ?? [];
+    if (engines.length === 0) return '{}\n';
+    const lines = ['{', '  "Add": ['];
+    for (const entry of engines) {
+        const name = assertEmittable(`${SEARCH_ENGINES_PREFIX}name`, entry?.name);
+        const url = assertEmittable(`${SEARCH_ENGINES_PREFIX}url`, entry?.url);
+        lines.push('    {');
+        lines.push(`      "Name": ${JSON.stringify(name)},`);
+        if (isUnset(entry.suggest_url)) {
+            lines.push(`      "URLTemplate": ${JSON.stringify(url)}`);
+        } else {
+            const suggest = assertEmittable(`${SEARCH_ENGINES_PREFIX}suggest_url`, entry.suggest_url);
+            lines.push(`      "URLTemplate": ${JSON.stringify(url)},`);
+            lines.push(`      "SuggestURLTemplate": ${JSON.stringify(suggest)}`);
+        }
+        lines.push('    },');
+    }
+    // A trailing comma after the last entry is not valid strict JSON.
+    lines[lines.length - 1] = lines[lines.length - 1].replace(/,$/, '');
+    lines.push('  ],');
+    lines.push(`  "Default": ${JSON.stringify(engines[0].name)}`);
     lines.push('}');
     return lines.join('\n') + '\n';
 }
@@ -3483,6 +3632,19 @@ export const TARGETS = Object.freeze([
         generated: 'webextensions-settings.json',
         variant: 'dev',
         emit: emitWebExtensionSettings,
+    }),
+    // NEW (BAR-04): the configured search engines. No tracked comparand --
+    // same split as the webextensions row: the copy-over sets ONLY the
+    // SearchEngines key of powerbrowser/distribution/policies.json from
+    // this fragment, the byte-identity gate skips rows without a tracked
+    // path, and --check still covers the row through the frozen table. The
+    // tracked side is pinned by scripts/verify-search-engines.mjs (key
+    // equality against this emission, shipped-name collision, template
+    // shape), never the manifest.
+    Object.freeze({
+        generated: 'search-engines.json',
+        variant: 'dev',
+        emit: emitSearchEngines,
     }),
     // NEW (04-03): TEL-01/TEL-02's telemetry fragment. No tracked
     // comparand -- the tracked theia/applications/browser/package.json is

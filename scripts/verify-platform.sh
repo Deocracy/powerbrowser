@@ -4578,6 +4578,29 @@ run_own_checks() {
     "webextensions|node $REPO_ROOT/scripts/verify-webextensions.mjs"
     "webextensions-self-test|node $REPO_ROOT/scripts/verify-webextensions.mjs --self-test"
 
+    # NEW (29-03): BAR-04's configured-search-engine rows -- the manifest's
+    # [[search_engines]] table reaches the policy engine as the tracked
+    # SearchEngines key.
+    #
+    # search-engines derives the expected key from the manifest through
+    # generate.mjs's own emitSearchEngines and requires the generated
+    # fragment and the tracked key to equal it in both directions (a
+    # tracked engine outliving its manifest entry goes red naming the
+    # engine), refuses a configured name equal to one Firefox ships (Gecko
+    # drops a duplicate name without a word; read from the pinned
+    # upstream's search-config-v2.json, SKIP when upstream/ is absent), and
+    # requires every template to be https and to hold {searchTerms}.
+    #
+    # search-engines-self-test proves the unmutated control and a synthetic
+    # fixture green first, then requires red naming the defect for a stale
+    # tracked engine, a shipped-name collision, a url without {searchTerms}
+    # and an extra policy key -- all fixtures synthetic Acme data in mkdtemp.
+    #
+    # Both are honestly --quick: text off disk only. No build, no browser,
+    # no display, no network.
+    "search-engines|node $REPO_ROOT/scripts/verify-search-engines.mjs"
+    "search-engines-self-test|node $REPO_ROOT/scripts/verify-search-engines.mjs --self-test"
+
     # NEW (12-03): SQL-05's store gates, static halves. Honestly --quick: the
     # second-writer scan reads tracked source only (git ls-files, never the
     # upstream clone), and the soak default entry runs the static fixture

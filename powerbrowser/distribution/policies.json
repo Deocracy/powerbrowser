@@ -3,6 +3,21 @@
     "AppUpdateURL": "https://updates.powerbrowser.org/update.xml",
     "DisableTelemetry": true,
     "DisableFirefoxStudies": true,
-    "ExtensionSettings": {}
+    "ExtensionSettings": {},
+    "SearchEngines": {
+      "Add": [
+        {
+          "Name": "DuckDuckGo Lite",
+          "URLTemplate": "https://lite.duckduckgo.com/lite/?q={searchTerms}",
+          "SuggestURLTemplate": "https://ac.duckduckgo.com/ac/?q={searchTerms}&type=list"
+        },
+        {
+          "Name": "Wikipedia",
+          "URLTemplate": "https://en.wikipedia.org/wiki/Special:Search?search={searchTerms}",
+          "SuggestURLTemplate": "https://en.wikipedia.org/w/api.php?action=opensearch&search={searchTerms}"
+        }
+      ],
+      "Default": "DuckDuckGo Lite"
+    }
   }
 }

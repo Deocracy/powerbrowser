@@ -259,6 +259,27 @@
       "regex": "^(https://|file:///)[^\\s\\x00-\\x1f\\x7f]+$",
       "regex_help": "a download address starting with https:// or file:/// and containing no spaces or control characters",
       "regex_example": "https://example.org/acme-tool-1.2.3.xpi"
+    },
+    "search_engines[].name": {
+      "type": "string",
+      "required": true,
+      "regex": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+      "regex_help": "the engine's name as the address bar shows it: not empty, and no control characters",
+      "regex_example": "Acme Search"
+    },
+    "search_engines[].url": {
+      "type": "string",
+      "required": true,
+      "regex": "^https://[^\\s\\x00-\\x1f\\x7f]*\\{searchTerms\\}[^\\s\\x00-\\x1f\\x7f]*$",
+      "regex_help": "an https address containing {searchTerms} and no spaces or control characters",
+      "regex_example": "https://search.example.org/?q={searchTerms}"
+    },
+    "search_engines[].suggest_url": {
+      "type": "string",
+      "required": false,
+      "regex": "^https://[^\\s\\x00-\\x1f\\x7f]*\\{searchTerms\\}[^\\s\\x00-\\x1f\\x7f]*$",
+      "regex_help": "an https address containing {searchTerms} and no spaces or control characters",
+      "regex_example": "https://search.example.org/suggest?q={searchTerms}"
     }
   }
 }

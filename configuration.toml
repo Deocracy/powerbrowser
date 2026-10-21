@@ -101,6 +101,27 @@ level = "off"
 # them. This project declares none, so the block stays absent. A downstream
 # drops an inherited entry by restating the list without it.
 
+# Address-bar search engines (BAR-04). Each [[search_engines]] entry reaches
+# the policy engine through powerbrowser/distribution/policies.json's
+# SearchEngines key; the FIRST entry is the default engine. url and
+# suggest_url are https templates that hold {searchTerms} where the typed
+# text goes, and carry no partner or tracking parameter. A name must not
+# equal a name Firefox ships ("DuckDuckGo", "Wikipedia (en)", ...): Gecko
+# drops a duplicate name without a word, so verify-search-engines refuses
+# one. Every url and suggest_url host needs a row in
+# powerbrowser/endpoint-allowlist.json. A downstream replaces the list by
+# restating it (arrays replace, never merge); with no table at all the bar
+# keeps Firefox's own engines.
+[[search_engines]]
+name = "DuckDuckGo Lite"
+url = "https://lite.duckduckgo.com/lite/?q={searchTerms}"
+suggest_url = "https://ac.duckduckgo.com/ac/?q={searchTerms}&type=list"
+
+[[search_engines]]
+name = "Wikipedia"
+url = "https://en.wikipedia.org/wiki/Special:Search?search={searchTerms}"
+suggest_url = "https://en.wikipedia.org/w/api.php?action=opensearch&search={searchTerms}"
+
 # Upstream pins (UPD-01, UPD-02). firefox_esr_tag is the one ESR tag this
 # project builds against: scripts/fetch-upstream.sh clones it,
 # scripts/rebase-upstream.sh moves to it, and the rebase workflow mirrors
