@@ -12,9 +12,10 @@
  * Scenarios:
  *   esc-stop         Esc with a loading page focused stops it: a shortcut push
  *                    for the stop row, then a state push with loading false.
- *   theia-keeps-esc  With the Theia frame focused the stop row is disabled and
- *                    Esc produces no shortcut push. Scored only after esc-stop
- *                    passed in the same session (its positive control).
+ *   theia-keeps-esc  With the Theia frame focused Esc fires no page-key row's
+ *                    chrome command and the stop row is disabled. Scored only
+ *                    after esc-stop (which also proves the fire recorder sees
+ *                    the stop row fire) passed in the same session.
  *   stop-button      While a page loads the bar shows ONE Stop button (close
  *                    glyph); clicking it stops the load and the same node turns
  *                    back into Reload (refresh glyph). With the empty page
@@ -98,11 +99,11 @@
  *                    element, Back changes nothing within 1500 ms.
  *   pill-esc         A slow page loading, the pill focused with no dropdown
  *                    and no edit: Escape stops the load (a loading: false push)
- *                    with no shortcut push.
+ *                    with no page-key row firing its chrome command.
  *   theia-keeps-keys In an untitled editor F5, F6, F11, Ctrl+P, Ctrl+K,
  *                    Ctrl+Tab, Alt+Left, Ctrl+R and Ctrl+L, and in a terminal
  *                    Ctrl+R and Ctrl+W, all reach the Theia frame with no
- *                    shortcut push; Ctrl+L in the editor leaves the pill
+ *                    page-key row firing its chrome command; Ctrl+L in the editor leaves the pill
  *                    unfocused, while Ctrl+L outside an editor and a terminal
  *                    focuses it. Scored only after page-keys passed.
  *   tooltips         Coding, a web tab current: hovering Back shows one
@@ -135,6 +136,7 @@
 
 import {
     chromeActiveTabId,
+    firedRows,
     focusOverlay,
     focusTheiaFrame,
     inChrome,
@@ -235,11 +237,16 @@ async function escStop({ app, pages, plant, fail, note }) {
         }
     }
     const mark = (await pushes(app)).length;
+    const fireMark = (await firedRows(app)).length;
     await pressKey(app, ESCAPE);
     note(`keys: ${keyRoute.last}`);
     const shortcut = await waitForPush(app, p => p && p.kind === 'shortcut' && p.id === 'stop' && p.tabId === tabId, { from: mark });
     if (shortcut < 0) {
         return fail('Esc with the page focused produced no shortcut push for the stop row');
+    }
+    // The positive control for theia-keeps-esc's firing absence: the recorder sees this row fire.
+    if (!(await firedRows(app)).slice(fireMark).includes('stop')) {
+        return fail(`${BROKEN} the stop row's command fired (a shortcut push arrived) but the fire recorder saw no firing`);
     }
     if (await waitForPush(app, isState(tabId, false), { from: shortcut + 1 }) < 0) {
         return fail('after the shortcut push no state push with loading: false arrived for the tab (the load was not stopped)');
@@ -265,19 +272,21 @@ async function theiaKeepsEsc({ app, plant, fail, note, results }) {
             note('PLANT row-enabled-under-theia applied');
         }
     }
+    // Pressed before the attribute read, so a row left enabled is caught by
+    // what it does (its chrome command fires) and not only by the attribute.
+    const fireMark = (await firedRows(app)).length;
+    await pressKey(app, ESCAPE);
+    await sleep(1500);
+    const fired = (await firedRows(app)).slice(fireMark);
+    if (fired.length) {
+        return fail(`a page-key row fired its chrome command while the Theia frame had focus: ${JSON.stringify(fired)}`);
+    }
     const disabled = await pageKeyDisabled(app, 'stop');
     if (disabled === null) {
         return fail(`${BROKEN} the stop row element is missing from the shell document`);
     }
     if (disabled !== true) {
         return fail('the stop row carried no disabled attribute while the Theia frame had focus');
-    }
-    const mark = (await pushes(app)).length;
-    await pressKey(app, ESCAPE);
-    await sleep(1500);
-    const late = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'shortcut');
-    if (late.length) {
-        return fail(`a shortcut push arrived while the Theia frame had focus: ${JSON.stringify(late[0])}`);
     }
 }
 
@@ -1609,30 +1618,39 @@ async function pillEsc({ app, pages, fail }) {
         return fail(`${BROKEN} the pill must be focused with no dropdown before Escape; saw ${JSON.stringify(pill)}`);
     }
     const mark = (await pushes(app)).length;
+    const fireMark = (await firedRows(app)).length;
     await pressKey(app, ESCAPE);
     if (await waitForPush(app, isState(tabId, false), { from: mark, timeoutMs: 5000 }) < 0) {
         return fail('Escape in the pill with nothing to close or restore did not stop the loading page (no loading: false push)');
     }
-    const relayed = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'shortcut');
-    if (relayed.length) {
-        return fail(`Escape in the pill must stop the load from the pill, not the chrome row; shortcut pushes ${JSON.stringify(relayed)}`);
+    const fired = (await firedRows(app)).slice(fireMark);
+    if (fired.length) {
+        return fail(`Escape in the pill must stop the load from the pill, not the chrome row; page-key rows fired ${JSON.stringify(fired)}`);
     }
 }
 
-/** Presses `spec` with `focus()` re-established first; returns { recorded, pushed } for that press. */
-async function keyInTheia(app, spec, focus) {
+/**
+ * Presses `spec` with `focus()` re-established first; returns { recorded, fired }
+ * for that press: whether the Theia frame saw the keydown, and which page-key
+ * rows fired their chrome command. With `leak` (the rows-enabled-under-theia
+ * plant) every row's disabled attribute is removed just before the press.
+ */
+async function keyInTheia(app, spec, focus, leak = false) {
     await focus();
-    const mark = (await pushes(app)).length;
+    if (leak) {
+        await app.evaluateIn(app.chrome, `(() => { for (const k of document.querySelectorAll('key[id^="powerbrowser-page-key-"]')) k.removeAttribute('disabled'); return true; })()`);
+    }
+    const fireMark = (await firedRows(app)).length;
     const keyMark = await app.evaluate('window.__pbKeys.length');
     await pressKey(app, spec);
     await sleep(250);
     const keys = JSON.parse(await app.evaluate(`JSON.stringify(window.__pbKeys.slice(${keyMark}))`));
     const recorded = keys.some(k => k.code === spec.code && k.ctrl === (spec.modifiers ?? []).includes('accel') && k.alt === (spec.modifiers ?? []).includes('alt'));
-    const pushed = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'shortcut');
-    return { recorded, pushed };
+    const fired = (await firedRows(app)).slice(fireMark);
+    return { recorded, fired };
 }
 
-async function theiaKeepsKeys({ app, fail, results }) {
+async function theiaKeepsKeys({ app, plant, fail, note, results }) {
     const control = results.find(r => r.name === 'page-keys');
     if (!control || control.failures.length) {
         return 'not-scored';
@@ -1663,10 +1681,14 @@ async function theiaKeepsKeys({ app, fail, results }) {
     };
     const editorKeys = [['F5', KEY.f5], ['F6', KEY.f6], ['F11', KEY.f11], ['Ctrl+P', KEY.ctrlP], ['Ctrl+K', KEY.ctrlK],
         ['Ctrl+Tab', KEY.ctrlTab], ['Alt+Left', KEY.altLeft], ['Ctrl+R', KEY.ctrlR], ['Ctrl+L', KEY.ctrlL]];
+    const leak = plant === 'rows-enabled-in-editor';
+    if (leak) {
+        note('PLANT rows-enabled-in-editor applied');
+    }
     for (const [name, spec] of editorKeys) {
-        const { recorded, pushed } = await keyInTheia(app, spec, focusEditor);
-        if (!recorded || pushed.length) {
-            return fail(`${name} in an editor must reach the Theia frame with no shortcut push; recorded ${recorded}, pushes ${JSON.stringify(pushed)}`);
+        const { recorded, fired } = await keyInTheia(app, spec, focusEditor, leak);
+        if (!recorded || fired.length) {
+            return fail(`${name} in an editor must reach the Theia frame with no page-key row firing its chrome command; recorded ${recorded}, fired ${JSON.stringify(fired)}`);
         }
         if (name === 'Ctrl+L' && (await readPill(app)).focused) {
             return fail('Ctrl+L in an editor focused the pill');
@@ -1689,9 +1711,9 @@ async function theiaKeepsKeys({ app, fail, results }) {
         }
     };
     for (const [name, spec] of [['Ctrl+R', KEY.ctrlR], ['Ctrl+W', KEY.ctrlW]]) {
-        const { recorded, pushed } = await keyInTheia(app, spec, focusTerminal);
-        if (!recorded || pushed.length) {
-            return fail(`${name} in a terminal must reach the Theia frame with no shortcut push; recorded ${recorded}, pushes ${JSON.stringify(pushed)}`);
+        const { recorded, fired } = await keyInTheia(app, spec, focusTerminal);
+        if (!recorded || fired.length) {
+            return fail(`${name} in a terminal must reach the Theia frame with no page-key row firing its chrome command; recorded ${recorded}, fired ${JSON.stringify(fired)}`);
         }
     }
     await probe(app, `const t = get('ApplicationShell').currentWidget; if (t && /terminal/i.test(t.id)) { t.dispose(); } return true;`);
@@ -2014,7 +2036,8 @@ function selectedScenarios(args) {
 
 const PLANTS = [
     { plant: 'second-stop-element', target: 'stop-button', run: ['stop-button'], expect: 'exactly one' },
-    { plant: 'row-enabled-under-theia', target: 'theia-keeps-esc', run: ['esc-stop', 'theia-keeps-esc'], expect: 'while the Theia frame had focus' },
+    { plant: 'row-enabled-under-theia', target: 'theia-keeps-esc', run: ['esc-stop', 'theia-keeps-esc'], expect: 'fired its chrome command while the Theia frame had focus' },
+    { plant: 'rows-enabled-in-editor', target: 'theia-keeps-keys', run: ['page-keys', 'theia-keeps-keys'], expect: 'no page-key row firing its chrome command' },
     { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
     { plant: 'tab-order-reversed', target: 'tab-keys', run: ['tab-keys'], expect: 'expected T2' },
     { plant: 'hover-elsewhere', target: 'mouse-buttons', run: ['mouse-buttons'], expect: '/m1' },

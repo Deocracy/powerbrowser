@@ -39,6 +39,7 @@ export async function withProbeShell(fn) {
     try {
         return await withShell(profile, async app => {
             await installPushRecorder(app);
+            await installFireRecorder(app);
             return fn(app);
         });
     } finally {
@@ -59,6 +60,31 @@ export async function installPushRecorder(app) {
     if (ok !== true) {
         throw new Error('the push recorder could not be installed in the Theia frame');
     }
+}
+
+/**
+ * Records, in chrome, every firing of a page-key <key> row's command (the row
+ * id, in order). A row that leaks under Theia focus fires its command even
+ * though relayShortcut then refuses to push, so this, not the push, is what an
+ * absence check under Theia focus must read.
+ */
+export async function installFireRecorder(app) {
+    const rows = await app.evaluateIn(app.chrome, `(() => {
+        const rows = [...document.querySelectorAll('key[id^="powerbrowser-page-key-"]')];
+        if (!window.__pbFired) {
+            window.__pbFired = [];
+            for (const k of rows) k.addEventListener('command', () => window.__pbFired.push(k.id.slice('powerbrowser-page-key-'.length)));
+        }
+        return rows.length;
+    })()`);
+    if (!(rows > 0)) {
+        throw new Error('the page-key fire recorder found no powerbrowser-page-key-* rows in the shell document');
+    }
+}
+
+/** Every page-key row firing recorded so far, in order. */
+export async function firedRows(app) {
+    return JSON.parse(await app.evaluateIn(app.chrome, 'JSON.stringify(window.__pbFired || [])'));
 }
 
 /** Every push recorded so far, in order. */
