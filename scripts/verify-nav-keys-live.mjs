@@ -83,6 +83,10 @@
  *   focus-keys-prevented  A page that preventDefault()s F6 keeps it: chrome's
  *                    focus stays on its overlay and no shortcut push arrives
  *                    within 1500 ms. Scored only after focus-keys passed.
+ *   focus-keys-debug With a stand-in running debug session (inDebugMode set,
+ *                    the session state Running, so @theia/debug's F6 Pause
+ *                    binding is live), F6 in the pill still puts chrome's
+ *                    focus back on the page's overlay.
  *   mouse-buttons    Tab at /m2 with /m1 behind it: a mouseover on its overlay,
  *                    then an AppCommand Back on the shell window, lands on /m1;
  *                    Forward lands on /m2; after a mouseover on the Theia frame
@@ -1393,6 +1397,52 @@ async function focusKeysPrevented({ app, pages, fail, results }) {
     }
 }
 
+/**
+ * WR-02: during a running debug session @theia/debug binds F6 to Pause
+ * (`inDebugMode`, enabled while the session state is Running) in Theia's
+ * capture-phase dispatch, ahead of the pill's own keydown handler. The
+ * pill-scoped passthrough binding must still let F6 in the pill reach the
+ * page. The session is stood in for: inDebugMode set and the manager's state
+ * read as Running (Pause then runs against no thread, a no-op).
+ */
+async function focusKeysDebug({ app, pages, plant, fail, note }) {
+    const tabId = await openWebTab(app, pages.url('/f6'));
+    if (await waitForPush(app, loadedAt(tabId, '/f6')) < 0) {
+        return fail('no loaded state push arrived for /f6');
+    }
+    const mark = (await pushes(app)).length;
+    await keyInPage(app, tabId, KEY.f6);
+    if (await waitForPush(app, p => p && p.kind === 'shortcut' && p.id === 'focusAddressF6' && p.tabId === tabId, { from: mark, timeoutMs: 5000 }) < 0) {
+        return fail(`${BROKEN} F6 in the page did not reach the pill, so there was no pill to press F6 in`);
+    }
+    if (!(await settle(() => readPill(app), v => v.focused)).focused) {
+        return fail(`${BROKEN} the pill did not take focus after F6 in the page`);
+    }
+    const debugOn = await probe(app, `const keys = get('ContextKeyService');
+        keys.setContext('inDebugMode', true);
+        Object.defineProperty(get('DebugSessionManager'), 'state', { get: () => 2, configurable: true });
+        return keys.match('inDebugMode') && get('CommandRegistry').isEnabled('workbench.action.debug.pause');`);
+    try {
+        if (debugOn !== true) {
+            return fail(`${BROKEN} the stand-in debug session did not make the debugger's Pause command live (got ${JSON.stringify(debugOn)})`);
+        }
+        if (plant === 'pill-scope-removed') {
+            const removed = await probe(app, `const w = get('ChromeBarWidget'); if (!w.addressScope) return false; w.addressScope.dispose(); w.addressScope = undefined; return true;`);
+            if (removed === true) {
+                note('PLANT pill-scope-removed applied');
+            }
+        }
+        await pressKey(app, KEY.f6);
+        const back = await settle(() => chromeActiveTabId(app), v => v === tabId);
+        if (back !== tabId) {
+            return fail(`F6 in the pill during a debug session must put chrome's focus back on the page's overlay (the debugger's F6 took it); chrome's active overlay is ${JSON.stringify(back)}`);
+        }
+    } finally {
+        await probe(app, `get('ContextKeyService').setContext('inDebugMode', false); delete get('DebugSessionManager').state; return true;`);
+    }
+    note(`keys: ${keyRoute.last}`);
+}
+
 /** Dispatches a mouseover on `target` ('overlay' of `tabId`, or 'frame'), then an AppCommand `command` on the shell window. */
 const appCommand = (app, tabId, target, command) => inChrome(app, `
     const el = ${JSON.stringify(target)} === 'frame' ? document.getElementById('powerbrowser-content') : overlayOf(${JSON.stringify(tabId)});
@@ -1787,6 +1837,7 @@ const SCENARIOS = {
     'tab-keys': tabKeys,
     'focus-keys': focusKeys,
     'focus-keys-prevented': focusKeysPrevented,
+    'focus-keys-debug': focusKeysDebug,
     'mouse-buttons': mouseButtons,
     'pill-esc': pillEsc,
     'theia-keeps-keys': theiaKeepsKeys,
@@ -1868,6 +1919,7 @@ const PLANTS = [
     { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
     { plant: 'tab-order-reversed', target: 'tab-keys', run: ['tab-keys'], expect: 'expected T2' },
     { plant: 'hover-elsewhere', target: 'mouse-buttons', run: ['mouse-buttons'], expect: '/m1' },
+    { plant: 'pill-scope-removed', target: 'focus-keys-debug', run: ['focus-keys-debug'], expect: "the debugger's F6 took it" },
     { plant: 'hover-below', target: 'tooltips-all', run: ['tooltips-all'], expect: 'intersects' },
 ];
 

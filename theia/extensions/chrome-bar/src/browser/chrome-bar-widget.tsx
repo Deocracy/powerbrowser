@@ -16,6 +16,7 @@ import URI from '@theia/core/lib/common/uri';
 import { PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
+import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import pDebounce from 'p-debounce';
 import type { TabQueryRow } from '@powerbrowser/tab-uris/lib/node/tab-query-service';
 import { EMPTY_PAGE_URL, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -35,6 +36,7 @@ import {
 import { CHROME_SUGGESTION_LIMIT, ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
+import { ADDRESS_FOCUSED_CONTEXT_KEY } from './chrome-bar-keybindings';
 // A cycle (chrome-bar-shortcuts imports this widget); safe because the frontend
 // module loads chrome-bar-shortcuts first and these are read only at render time.
 import { BUTTON_SHORTCUTS, NavButton, tooltipFor } from './chrome-bar-shortcuts';
@@ -203,6 +205,9 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(HoverService)
     protected readonly hover: HoverService;
 
+    @inject(ContextKeyService)
+    protected readonly contextKeys: ContextKeyService;
+
     protected holdTimer: number | undefined;
     /** Set when a hold opened the history menu, so the release's click does not navigate. */
     protected suppressNavClick = false;
@@ -230,6 +235,19 @@ export class ChromeBarWidget extends ReactWidget {
     /** True from a keystroke until the dropdown is closed on user intent; a debounced query fires only while armed. */
     protected dropdownArmed = false;
     protected pillRef: HTMLDivElement | null = null;
+    /** The pill input's element-local context key; see ADDRESS_FOCUSED_CONTEXT_KEY. */
+    protected addressScope: Disposable | undefined;
+
+    /** Stable, so React calls it only on mount and unmount, not on every render. */
+    protected inputRef = (el: HTMLInputElement | null): void => {
+        this.addressScope?.dispose();
+        this.addressScope = undefined;
+        if (el) {
+            const scope = this.contextKeys.createScoped(el);
+            scope.createKey(ADDRESS_FOCUSED_CONTEXT_KEY, true);
+            this.addressScope = scope;
+        }
+    };
 
     /**
      * Re-derives the portalled dropdown geometry after a window resize
@@ -1123,6 +1141,7 @@ export class ChromeBarWidget extends ReactWidget {
                     spellCheck={false}
                     value={this.inputValue}
                     onChange={this.onInputChange}
+                    ref={this.inputRef}
                     onKeyDown={this.onInputKeyDown}
                     onBlur={this.onInputBlur}
                 />
