@@ -4197,8 +4197,10 @@ function tabIdOfBrowser(element) {
   return null;
 }
 
-// Last pageFocus tab id pushed per Theia frame, so a focus/blur pair that
-// lands on the same answer sends one push, not two.
+// Last pageFocus tab id pushed per Theia frame, with the frontend
+// WindowGlobal it went to, so a focus/blur pair that lands on the same answer
+// sends one push, not two, and a reloaded frontend never inherits the answer
+// its predecessor was sent.
 const lastPageFocusByFrame = new WeakMap();
 
 // The selected web tab per Theia frame <browser>, from webTabActivated.
@@ -4239,10 +4241,12 @@ export const PowerBrowserWebTabs = Object.freeze({
 
   /** Tells the Theia frame which page has focus (`tabId`) or that none has (`null`). */
   pushPageFocus(theiaBrowser, tabId) {
-    if (lastPageFocusByFrame.has(theiaBrowser) && lastPageFocusByFrame.get(theiaBrowser) === tabId) {
+    const windowGlobal = theiaBrowser.browsingContext?.currentWindowGlobal ?? null;
+    const last = lastPageFocusByFrame.get(theiaBrowser);
+    if (last && last.windowGlobal === windowGlobal && last.tabId === tabId) {
       return;
     }
-    lastPageFocusByFrame.set(theiaBrowser, tabId);
+    lastPageFocusByFrame.set(theiaBrowser, { windowGlobal, tabId });
     sendWebTabPush(theiaBrowser, { kind: "pageFocus", tabId });
   },
 

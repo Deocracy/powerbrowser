@@ -96,6 +96,10 @@
  *                    shortcut push; Ctrl+L in the editor leaves the pill
  *                    unfocused, while Ctrl+L outside an editor and a terminal
  *                    focuses it. Scored only after page-keys passed.
+ *   page-focus-reload  The page-focus context key is true with a page focused;
+ *                    after a frontend reload it is false, turns true when a
+ *                    page of the new frontend takes focus and false again with
+ *                    the Theia frame focused. Runs last: the reload drops every tab.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -114,6 +118,7 @@ import {
     focusOverlay,
     focusTheiaFrame,
     inChrome,
+    installPushRecorder,
     keyRoute,
     openWebTab,
     pageKeyDisabled,
@@ -166,6 +171,8 @@ const PAGES = {
     '/m1': { title: 'Mouse One', body: '<p>m1</p>' },
     '/m2': { title: 'Mouse Two', body: '<p>m2</p>' },
     '/slow-pill': { title: 'Slow Pill', body: '<p>still loading</p>', slow: true },
+    '/pf1': { title: 'Focus Before Reload', body: '<p>pf1</p>' },
+    '/pf2': { title: 'Focus After Reload', body: '<p>pf2</p>' },
     '/f6p': { title: 'Focus Kept', body: '<p>f6p</p><script>addEventListener("keydown", e => { if (e.key === "F6") e.preventDefault(); }, true);</script>' },
 };
 
@@ -1535,6 +1542,40 @@ async function theiaKeepsKeys({ app, fail, results }) {
     }
 }
 
+const PAGE_FOCUS_KEY = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts', 'PAGE_FOCUS_CONTEXT_KEY');
+const pageFocusKey = app => probe(app, `return get('ContextKeyService').match(${JSON.stringify(PAGE_FOCUS_KEY)});`);
+
+async function pageFocusReload({ app, pages, fail }) {
+    const a = await openWebTab(app, pages.url('/pf1'));
+    if (await waitForPush(app, loadedAt(a, '/pf1')) < 0) {
+        return fail('no loaded state push arrived for /pf1');
+    }
+    if (await focusOverlay(app, a) !== true || await settle(() => pageFocusKey(app), v => v === true) !== true) {
+        return fail(`${BROKEN} the page-focus key never turned true with a page focused before the reload`);
+    }
+    await app.evaluate('(() => { setTimeout(() => location.reload(), 50); return true; })()');
+    await sleep(2000);
+    await pollFor(() => probe(app, `return get('FrontendApplicationStateService').state === 'ready';`).then(v => v === true, () => false), 90000, 'the reloaded frontend');
+    await installPushRecorder(app);
+    if (await pageFocusKey(app) !== false) {
+        return fail('the reloaded frontend started with the page-focus key true');
+    }
+    const b = await openWebTab(app, pages.url('/pf2'));
+    if (await waitForPush(app, loadedAt(b, '/pf2')) < 0) {
+        return fail('no loaded state push arrived for /pf2 after the reload');
+    }
+    if (await focusOverlay(app, b) !== true) {
+        return fail(`${BROKEN} the new frontend's page could not be focused`);
+    }
+    if (await settle(() => pageFocusKey(app), v => v === true) !== true) {
+        return fail('after a frontend reload, focusing a page left the page-focus key false');
+    }
+    await focusTheiaFrame(app);
+    if (await settle(() => pageFocusKey(app), v => v === false) !== false) {
+        return fail('after a frontend reload, focusing the Theia frame left the page-focus key true');
+    }
+}
+
 // The reload scenarios run first, on the session's first web tabs: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
@@ -1567,6 +1608,7 @@ const SCENARIOS = {
     'mouse-buttons': mouseButtons,
     'pill-esc': pillEsc,
     'theia-keeps-keys': theiaKeepsKeys,
+    'page-focus-reload': pageFocusReload,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
