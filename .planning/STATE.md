@@ -1,20 +1,20 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Completed 29-07-PLAN.md
-last_updated: "2026-10-21T23:11:26.485Z"
+stopped_at: Completed 29-08-PLAN.md
+last_updated: "2026-10-21T23:53:54.368Z"
 last_activity: 2026-10-21
-last_activity_desc: 29-07 complete (an open-tab row switches to that tab without a load; Alt+Enter to a foreground tab, Ctrl+click and middle-click to a background tab; BAR-06 and BAR-08 complete)
-state_head: 0582cede81d4d1ac3f98622f9f5a559d03e5e0e5
+last_activity_desc: 29-08 complete (inline origin autofill from moz_origins with Enter/Tab accept; Ctrl+Enter completes a bare name to www.name.com; a link or text dropped on the pill loads or searches; BAR-07 and BAR-13 complete)
+state_head: 9fff14d51fe96a14e595b8b2754bc674a110b8c8
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 15
+  completed_plans: 16
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 29 (Address Bar Search and Fixup) — EXECUTING
-Plan: 8 of 10
+Plan: 9 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — 29-07 complete (an open-tab row switches to that tab without a load; Alt+Enter to a foreground tab, Ctrl+click and middle-click to a background tab; BAR-06 and BAR-08 complete)
+Last activity: 2026-10-21 — 29-08 complete (inline origin autofill from moz_origins with Enter/Tab accept; Ctrl+Enter completes a bare name to www.name.com; a link or text dropped on the pill loads or searches; BAR-07 and BAR-13 complete)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -163,6 +163,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P05 | 22m | 3 tasks | 13 files |
 | Phase 29 P06 | 35m | 2 tasks | 11 files |
 | Phase 29 P07 | 40m | 2 tasks | 6 files |
+| Phase 29 P08 | 42m | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -413,6 +414,10 @@ Recent decisions affecting current work:
 - [Phase 29]: Alt+Enter on a highlighted one-off opens that engine's search in a new foreground tab (runOneOff 'foreground')
 - [Phase 29]: openRowInNewTab with no current widget appends the tab (selected); a non-http(s) row address shows the commit-failure row
 - [Phase 29]: Alt+Enter reaches the pill without a Theia passthrough binding (verified live)
+- [Phase 29]: 29-08: autofillOrigin binds both LIKE patterns (:hostPattern, :wwwPattern); Sqlite.sys.mjs refuses a LIKE on a literal and a parameter named like
+- [Phase 29]: 29-08: the autofill completion is written to the input and selected synchronously, not after a rAF, so no keystroke lands between value and selection
+- [Phase 29]: 29-08: a dropped payload over 2048 characters shows the commit-failure row rather than being truncated
+- [Phase 29]: 29-08: New Tab and the pill share one dragover/dragleave handler (onDropTargetDragOver/Leave)
 
 ### Pending Todos
 
@@ -515,8 +520,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T23:11:26.431Z
-Stopped at: Completed 29-07-PLAN.md
+Last session: 2026-10-21T23:53:41.365Z
+Stopped at: Completed 29-08-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

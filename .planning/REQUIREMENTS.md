@@ -44,13 +44,13 @@ returning null.
 - [x] **BAR-04**: User can pick the default search engine from engines whose initial set comes from `configuration.toml`
 - [x] **BAR-05**: User can run a one-off search with another engine from the result list
 - [x] **BAR-06**: User choosing an open-tab suggestion switches to that tab instead of loading it again
-- [ ] **BAR-07**: User sees the bar complete a typed origin inline (autofill) and can accept it with Enter or Tab
+- [x] **BAR-07**: User sees the bar complete a typed origin inline (autofill) and can accept it with Enter or Tab
 - [x] **BAR-08**: User can open the typed address in a new tab with Alt+Enter, Ctrl+click or middle-click on a result
 - [ ] **BAR-09**: User can remove a history suggestion with Shift+Del
 - [ ] **BAR-10**: User can right-click the pill for Cut, Copy, Paste and Paste & Go
 - [ ] **BAR-11**: User sees result rows with favicons and type icons, the first click selects the whole address, and IME composition never commits early
 - [ ] **BAR-12**: User sees the text they typed but did not submit kept per tab when switching tabs
-- [ ] **BAR-13**: User can complete `name` to `www.name.com` with Ctrl+Enter, and drop a link or text onto the bar to load or search it
+- [x] **BAR-13**: User can complete `name` to `www.name.com` with Ctrl+Enter, and drop a link or text onto the bar to load or search it
 - [x] **BAR-14**: User sees every chrome-bar message name the configured application name, never a hard-coded brand
 
 ### Navigation buttons (NAV)
@@ -209,13 +209,13 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | BAR-04 | Phase 29 | Complete |
 | BAR-05 | Phase 29 | Complete |
 | BAR-06 | Phase 29 | Complete |
-| BAR-07 | Phase 29 | Pending |
+| BAR-07 | Phase 29 | Complete |
 | BAR-08 | Phase 29 | Complete |
 | BAR-09 | Phase 29 | Pending |
 | BAR-10 | Phase 29 | Pending |
 | BAR-11 | Phase 29 | Pending |
 | BAR-12 | Phase 29 | Pending |
-| BAR-13 | Phase 29 | Pending |
+| BAR-13 | Phase 29 | Complete |
 | BAR-14 | Phase 29 | Complete |
 | NAV-01 | Phase 27 | Complete |
 | NAV-02 | Phase 27 | Complete |
