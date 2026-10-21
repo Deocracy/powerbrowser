@@ -432,6 +432,8 @@ async function loadShippedSources(supervisorPath, shellPath, tag, overrides = {}
   };
   sandbox.crypto = globalThis.crypto;
   sandbox.console = console;
+  // The bootstrap's window-level key and AppCommand listeners; inert here, like the elements' own.
+  sandbox.addEventListener = () => {};
 
   createContext(sandbox);
   sandbox.window = sandbox;
