@@ -13,7 +13,7 @@ import {
 } from '@theia/core/lib/browser';
 import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
-import { PreferenceService } from '@theia/core/lib/common/preferences';
+import { PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import pDebounce from 'p-debounce';
@@ -621,8 +621,16 @@ export class ChromeBarWidget extends ReactWidget {
      * pill, as New Tab does; a rejected or unacknowledged value shows the
      * Home-failure row.
      */
+    /**
+     * The Home settings are read from user settings only: a workspace's own
+     * settings file must not be able to point Home at a page of its choosing.
+     */
+    protected userPreference<T extends string | boolean>(name: string, fallback: T): T {
+        return this.preferences.inspectInScope<T>(name, PreferenceScope.User) ?? fallback;
+    }
+
     async goHome(tab: WebTabWidget | undefined): Promise<'opened' | 'empty' | 'failed'> {
-        const page = String(this.preferences.get(HOME_PAGE_PREFERENCE, '') ?? '').trim();
+        const page = String(this.userPreference(HOME_PAGE_PREFERENCE, '')).trim();
         if (!page) {
             if (tab) {
                 await tab.navigate(EMPTY_PAGE_URL);
@@ -1089,7 +1097,7 @@ export class ChromeBarWidget extends ReactWidget {
             >
                 <span className={stopping ? 'codicon codicon-close' : 'codicon codicon-refresh'} />
             </button>
-            {this.preferences.get(SHOW_HOME_BUTTON_PREFERENCE, false) && (
+            {this.userPreference(SHOW_HOME_BUTTON_PREFERENCE, false) && (
                 <button
                     className='pb-chrome-bar-button'
                     aria-label='Home'

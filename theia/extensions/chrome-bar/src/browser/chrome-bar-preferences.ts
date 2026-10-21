@@ -8,7 +8,7 @@
 // registers a `browser.` key, so there is no other registration to win over.
 
 import { interfaces } from '@theia/core/shared/inversify';
-import { PreferenceContribution, PreferenceSchema } from '@theia/core/lib/common/preferences';
+import { PreferenceContribution, PreferenceSchema, PreferenceScope } from '@theia/core/lib/common/preferences';
 import { CHROME_BAR_COPY } from './chrome-bar-copy';
 
 export const SHOW_HOME_BUTTON_PREFERENCE = 'browser.showHomeButton';
@@ -19,11 +19,14 @@ export const ChromeBarPreferenceSchema: PreferenceSchema = {
         [SHOW_HOME_BUTTON_PREFERENCE]: {
             type: 'boolean',
             default: false,
+            // User scope only: a workspace settings file cannot change Home.
+            scope: PreferenceScope.User,
             description: CHROME_BAR_COPY.showHomeButtonDescription,
         },
         [HOME_PAGE_PREFERENCE]: {
             type: 'string',
             default: '',
+            scope: PreferenceScope.User,
             description: CHROME_BAR_COPY.homePageDescription,
         },
     },
