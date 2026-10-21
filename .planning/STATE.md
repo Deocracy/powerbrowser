@@ -1,20 +1,20 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Completed 29-03-PLAN.md
-last_updated: "2026-10-21T21:47:44.099Z"
+stopped_at: Completed 29-04-PLAN.md
+last_updated: "2026-10-21T22:05:02.141Z"
 last_activity: 2026-10-21
-last_activity_desc: 29-03 complete (configured search engines: [[search_engines]] -> SearchEngines policy, engine hosts allowlisted; BAR-04/BAR-03 partial)
-state_head: 1e3d09defb9c6c7eebe09f7ebf57243d4fc8a8bf
+last_activity_desc: "29-04 complete (Default Search Engine setting from chrome engine list, engine-naming placeholder, packaged engine-set check; BAR-04 complete)"
+state_head: e32eacbc1a82cadc6d7c6ec4720e84b673c12e7c
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 11
+  completed_plans: 12
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 29 (Address Bar Search and Fixup) — EXECUTING
-Plan: 4 of 10
+Plan: 5 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — 29-03 complete (configured search engines: [[search_engines]] -> SearchEngines policy, engine hosts allowlisted; BAR-04/BAR-03 partial)
+Last activity: 2026-10-21 — 29-04 complete (Default Search Engine setting from chrome engine list, engine-naming placeholder, packaged engine-set check; BAR-04 complete)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -159,6 +159,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P01 | 24m | 2 tasks | 11 files |
 | Phase 29 P02 | 9m | 3 tasks | 6 files |
 | Phase 29 P03 | 11m | 2 tasks | 8 files |
+| Phase 29 P04 | 16m | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -398,6 +399,8 @@ Recent decisions affecting current work:
 - [Phase 29]: 29-01: upgradeSchemeless detects loopback by regex, not a "localhost" literal, so the gui08 dropped-localhost plant still discriminates
 - [Phase 29]: 29-02: token-cookie strip installed by setGroupSenderPort (not webTabOpen), keyed by sidecar port first and fail-closed
 - [Phase 29]: 29-03: shipped search engines are DuckDuckGo Lite (default) and Wikipedia; [urls] search stays in the schema, superseded by [[search_engines]]
+- [Phase 29]: 29-04: no default-engine write kind; browser.defaultSearchEngine (User scope) rides each resolveTypedAddress as engineName, chrome accepts only a bar-set name
+- [Phase 29]: 29-04: barEngines hides Firefox engines by loadPath [app]; getAppProvidedEngines prepends the policy default engine
 
 ### Pending Todos
 
@@ -500,8 +503,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T21:47:43.970Z
-Stopped at: Completed 29-03-PLAN.md
+Last session: 2026-10-21T22:05:02.087Z
+Stopped at: Completed 29-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
