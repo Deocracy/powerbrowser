@@ -3733,6 +3733,17 @@ run_own_checks() {
     "gui06-chrome-bar-commands|node $REPO_ROOT/scripts/verify-chrome-bar-commands.mjs"
     "gui06-chrome-bar-commands-self-test|node $REPO_ROOT/scripts/verify-chrome-bar-commands.mjs --self-test"
 
+    # NEW (27-06): KEY-01/KEY-03's page-key table gate. Derives the chrome
+    # rows (PAGE_KEYS in powerbrowser.js), the frontend rows and relay
+    # action ids (chrome-bar-shortcuts.ts) and Firefox's own Linux key rows
+    # (browser-sets.inc.xhtml + browserSets.ftl), then requires one id set,
+    # matching keys and modifiers, formatter-derived labels, reservations
+    # that are Firefox's own or reasoned exceptions, no F11/Ctrl+P/Ctrl+K
+    # row, and every row created disabled. Honestly --quick: text reads only.
+    # The self-test plants ten faults in memory and requires each to go red.
+    "shortcut-relay|node $REPO_ROOT/scripts/verify-shortcut-relay.mjs"
+    "shortcut-relay-self-test|node $REPO_ROOT/scripts/verify-shortcut-relay.mjs --self-test"
+
     # NEW (13-02): GUI-06's suggestion-search gate. Static half derives the
     # search statement from the query-service source and compares
     # projection/escape/order/limit as set equality; live half runs the

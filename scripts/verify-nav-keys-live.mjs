@@ -1382,6 +1382,7 @@ const PLANTS = [
     { plant: 'second-stop-element', target: 'stop-button', run: ['stop-button'], expect: 'exactly one' },
     { plant: 'row-enabled-under-theia', target: 'theia-keeps-esc', run: ['esc-stop', 'theia-keeps-esc'], expect: 'while the Theia frame had focus' },
     { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
+    { plant: 'tab-order-reversed', target: 'tab-keys', run: ['tab-keys'], expect: 'expected T2' },
 ];
 
 async function selfTest() {
