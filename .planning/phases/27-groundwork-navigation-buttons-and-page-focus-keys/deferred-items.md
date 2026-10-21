@@ -22,3 +22,15 @@
   remoteness change on reload.
 - **What 27-02 did:** `hard-reload-channel` runs first in `verify-nav-keys-live.mjs`, on the
   session's first tab, so it scores only the bypass-cache flag. The defect is not fixed.
+
+## history-channel title race in the live self-test (found in 27-05)
+
+- **Seen:** `node scripts/verify-nav-keys-live.mjs --self-test`, clean control, 1 of 2 runs.
+  `history()` replied index 2 and the three entries, but entry 0's title was its URL
+  (`http://127.0.0.1:…/h1`) instead of "History One". The full run just before and the
+  re-run both passed.
+- **Likely cause:** the scenario navigates to /h2 on /h1's loaded push, before the title of
+  the /h1 session-history entry is recorded. A timing defect in the check, not in a path
+  27-05 changed (27-05 touched no history or navigation code).
+- **Where to look:** `historyChannel` in `scripts/verify-nav-keys-live.mjs`: wait for a state
+  push carrying the served title before each navigation.

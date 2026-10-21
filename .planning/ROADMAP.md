@@ -149,7 +149,7 @@ forces a decision). Coverage: 87/87 v1.5 requirements, each in exactly one phase
   4. With focus inside a web page, Ctrl+T, Ctrl+W, Ctrl+R, F5, Alt+Left, Alt+Right, Alt+D, Ctrl+L, F6, Shift+F6, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp, Ctrl+PageDown, Alt+1..9 and mouse buttons 4 and 5 do what they do in Firefox
   5. In an editor, a terminal or any other non-web tab, F5, F6, F11, Ctrl+P, Ctrl+K and the other clashing keys keep Theia's meaning
 
-**Plans**: 4/8 plans executed (strictly sequential waves 1-8: no worktrees, and every plan's `--quick` reads the whole tree)
+**Plans**: 5/8 plans executed (strictly sequential waves 1-8: no worktrees, and every plan's `--quick` reads the whole tree)
 
 Plans:
 **Wave 1**
@@ -170,7 +170,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 27-05-PLAN.md — Home button and its two settings, empty and failure cases
+- [x] 27-05-PLAN.md — Home button and its two settings, empty and failure cases
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -381,7 +381,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 27. Groundwork, Navigation Buttons and Page-Focus Keys | 4/8 | In Progress|  |
+| 27. Groundwork, Navigation Buttons and Page-Focus Keys | 5/8 | In Progress|  |
 | 28. WebExtension Tab Route Spike | 0/TBD | Not started | - |
 | 29. Address Bar Search and Fixup | 0/TBD | Not started | - |
 | 30. Address-Bar Modes and Command Centre | 0/TBD | Not started | - |
