@@ -43,9 +43,9 @@ returning null.
 - [x] **BAR-03**: User sees search suggestions from the engine as they type (on by default, with a setting to turn them off)
 - [x] **BAR-04**: User can pick the default search engine from engines whose initial set comes from `configuration.toml`
 - [x] **BAR-05**: User can run a one-off search with another engine from the result list
-- [ ] **BAR-06**: User choosing an open-tab suggestion switches to that tab instead of loading it again
+- [x] **BAR-06**: User choosing an open-tab suggestion switches to that tab instead of loading it again
 - [ ] **BAR-07**: User sees the bar complete a typed origin inline (autofill) and can accept it with Enter or Tab
-- [ ] **BAR-08**: User can open the typed address in a new tab with Alt+Enter, Ctrl+click or middle-click on a result
+- [x] **BAR-08**: User can open the typed address in a new tab with Alt+Enter, Ctrl+click or middle-click on a result
 - [ ] **BAR-09**: User can remove a history suggestion with Shift+Del
 - [ ] **BAR-10**: User can right-click the pill for Cut, Copy, Paste and Paste & Go
 - [ ] **BAR-11**: User sees result rows with favicons and type icons, the first click selects the whole address, and IME composition never commits early
@@ -208,9 +208,9 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | BAR-03 | Phase 29 | Complete |
 | BAR-04 | Phase 29 | Complete |
 | BAR-05 | Phase 29 | Complete |
-| BAR-06 | Phase 29 | Pending |
+| BAR-06 | Phase 29 | Complete |
 | BAR-07 | Phase 29 | Pending |
-| BAR-08 | Phase 29 | Pending |
+| BAR-08 | Phase 29 | Complete |
 | BAR-09 | Phase 29 | Pending |
 | BAR-10 | Phase 29 | Pending |
 | BAR-11 | Phase 29 | Pending |

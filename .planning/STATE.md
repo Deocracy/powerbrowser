@@ -1,20 +1,20 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Completed 29-06-PLAN.md
-last_updated: "2026-10-21T22:51:39.485Z"
+stopped_at: Completed 29-07-PLAN.md
+last_updated: "2026-10-21T23:11:26.485Z"
 last_activity: 2026-10-21
-last_activity_desc: 29-06 complete (engine suggestions while typing behind browser.searchSuggestions and chrome's address fence; the one-off engine strip by mouse and keyboard; BAR-03 and BAR-05 complete)
-state_head: 92c4edcc7e69e0959794d2a220afd9bd9c560fda
+last_activity_desc: 29-07 complete (an open-tab row switches to that tab without a load; Alt+Enter to a foreground tab, Ctrl+click and middle-click to a background tab; BAR-06 and BAR-08 complete)
+state_head: 0582cede81d4d1ac3f98622f9f5a559d03e5e0e5
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 14
+  completed_plans: 15
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 29 (Address Bar Search and Fixup) — EXECUTING
-Plan: 7 of 10
+Plan: 8 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — 29-06 complete (engine suggestions while typing behind browser.searchSuggestions and chrome's address fence; the one-off engine strip by mouse and keyboard; BAR-03 and BAR-05 complete)
+Last activity: 2026-10-21 — 29-07 complete (an open-tab row switches to that tab without a load; Alt+Enter to a foreground tab, Ctrl+click and middle-click to a background tab; BAR-06 and BAR-08 complete)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -162,6 +162,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P04 | 16m | 2 tasks | 12 files |
 | Phase 29 P05 | 22m | 3 tasks | 13 files |
 | Phase 29 P06 | 35m | 2 tasks | 11 files |
+| Phase 29 P07 | 40m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -409,6 +410,9 @@ Recent decisions affecting current work:
 - [Phase 29]: 29-06: searchSuggestions is a network store kind; chrome re-resolves the text and fetches only for kind search, so the frame gate is a second fence
 - [Phase 29]: 29-06: one-off live check derives its buttons from chrome's engine list (harness profile lists Gecko's app engines too)
 - [Phase 29]: 29-06: highlight keys are row keys then oneoff:<name>; a late reply keeps a one-off highlight
+- [Phase 29]: Alt+Enter on a highlighted one-off opens that engine's search in a new foreground tab (runOneOff 'foreground')
+- [Phase 29]: openRowInNewTab with no current widget appends the tab (selected); a non-http(s) row address shows the commit-failure row
+- [Phase 29]: Alt+Enter reaches the pill without a Theia passthrough binding (verified live)
 
 ### Pending Todos
 
@@ -511,8 +515,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T22:51:39.377Z
-Stopped at: Completed 29-06-PLAN.md
+Last session: 2026-10-21T23:11:26.431Z
+Stopped at: Completed 29-07-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
