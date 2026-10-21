@@ -63,6 +63,11 @@
  *               ArrowDown moves aria-activedescendant to the second row, a
  *               reply arriving after that does not move it, and clearing the
  *               text closes the dropdown.
+ *   failure-rows  BAR-14: with the client's resolveTypedAddress stubbed to
+ *               reject, typing "Row" shows a first row, highlighted, that starts
+ *               with the configured application name ("The browser" when
+ *               empty) and says it couldn't load suggestions; with the stub
+ *               restored, Enter on that row searches /one/search for "Row".
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -672,6 +677,37 @@ async function rows(ctx) {
     }
 }
 
+async function failureRows(ctx) {
+    const { app, pages, fail } = ctx;
+    await sessionTab(ctx);
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    const stubbed = await probe(app, `get('ChromeStoreClient').resolveTypedAddress = async () => { throw new Error('stubbed rejection'); }; return true;`);
+    if (stubbed !== true) {
+        return fail(`${BROKEN} the client's resolveTypedAddress could not be stubbed to reject`);
+    }
+    let restored = false;
+    try {
+        await typeInPill(app, 'Row');
+        const failed = v => (v.rows[0]?.title ?? '').includes("couldn't load suggestions");
+        const view = await settle(() => readRows(app), failed);
+        const first = view.rows[0];
+        if (!first || !failed(view) || !first.title.startsWith(subject) || !first.selected) {
+            fail(`a rejected resolve must make the first row, highlighted, start with ${JSON.stringify(subject)} and say it couldn't load suggestions; saw ${JSON.stringify(view.rows)}`);
+        }
+        await stubResolve(app, null);
+        restored = true;
+        const getMark = pages.requests.length;
+        await pressKey(app, ENTER);
+        if (!await nextGet(pages, '/one/search', getMark, r => queryOf(r) === 'Row')) {
+            fail(`Enter on the suggestions-failure row must still search: no GET on /one/search with q "Row"; pill ${JSON.stringify(await readPill(app))}`);
+        }
+    } finally {
+        if (!restored) {
+            await stubResolve(app, null);
+        }
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -680,6 +716,7 @@ const SCENARIOS = {
     'dev-addresses': devAddresses,
     'default-engine': defaultEngine,
     rows,
+    'failure-rows': failureRows,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */

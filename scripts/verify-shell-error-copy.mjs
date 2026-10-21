@@ -78,11 +78,12 @@
 // into a temporary copy and requires each to go red naming the drift; a check
 // that can only go green is not a check.
 
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { resolveConfig } from "./generate.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const REPO_ROOT = join(dirname(SELF), "..");
@@ -555,8 +556,6 @@ const EXPECTED_WIDGET_COPY = new Set([
   "Suggestions",
   "Mode",
   "Chrome Bar",
-  "PowerBrowser couldn&apos;t load suggestions. Press Enter to visit what you typed.",
-  "PowerBrowser couldn&apos;t open that address. Press Enter to try again.",
 ]);
 
 /**
@@ -579,6 +578,8 @@ const EXPECTED_NAV_COPY = new Set([
   "Visit",
   "Search with ${name}",
   "Enter opens · Alt+Enter opens in a new tab · Esc closes suggestions",
+  "${name} couldn't open that address. Press Enter to try again.",
+  "${name} couldn't load suggestions. Press Enter to go to what you typed.",
 ]);
 
 /**
@@ -595,8 +596,69 @@ const EXPECTED_SHORTCUT_COPY = new Set([
   "Back", "Forward", "Reload", "Stop", "Home", "New Tab",
 ]);
 
-/** The brand literal the configured-name ruling bans from chrome-bar copy. */
-const NAV_BRAND_LITERAL = "PowerBrowser";
+/**
+ * The brand the configured-name ruling bans from chrome-bar copy (BAR-14):
+ * configuration.toml's identity.display_name, derived at check time, so a
+ * rebrand bans its own name. Empty when the manifest does not resolve; the
+ * brand check then fails as a broken instrument.
+ */
+function deriveBrand() {
+  try {
+    return String(resolveConfig().config?.identity?.display_name ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+const NAV_BRAND_LITERAL = deriveBrand();
+
+/** Every chrome-bar source the brand ban covers. */
+const CHROME_BAR_SRC_DIR = "theia/extensions/chrome-bar/src";
+
+function chromeBarSourceRels(dir = CHROME_BAR_SRC_DIR) {
+  const out = [];
+  for (const entry of readdirSync(join(REPO_ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      out.push(...chromeBarSourceRels(rel));
+    } else if (/\.(ts|tsx|css)$/.test(entry.name)) {
+      out.push(rel);
+    }
+  }
+  return out;
+}
+
+/** Comments blanked with their line breaks kept, so a hit reports its real line. */
+function blankComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ""))
+    .replace(/(^|\s)\/\/.*$/gm, "$1");
+}
+
+/**
+ * BAR-14: no chrome-bar source names the configured application as a literal
+ * (comments excepted); a message that names the product reads appSubject().
+ */
+function checkChromeBarBrand(sources) {
+  if (!NAV_BRAND_LITERAL) {
+    return ["brand: configuration.toml identity.display_name did not resolve to a name -- the brand ban has nothing to ban (broken instrument)"];
+  }
+  const rels = Object.keys(sources).filter((rel) => rel.startsWith(`${CHROME_BAR_SRC_DIR}/`));
+  if (rels.length === 0) {
+    return [`brand: derived ZERO chrome-bar sources under ${CHROME_BAR_SRC_DIR} -- the ban covers nothing (broken instrument)`];
+  }
+  const out = [];
+  for (const rel of rels) {
+    blankComments(sources[rel]).split("\n").forEach((line, i) => {
+      if (line.includes(NAV_BRAND_LITERAL)) {
+        out.push(
+          `brand: ${rel}:${i + 1} spells the configured application name ${JSON.stringify(NAV_BRAND_LITERAL)} as a literal -- ` +
+            `chrome-bar copy names the configured application name through appSubject()`
+        );
+      }
+    });
+  }
+  return out;
+}
 
 function normalizeInterp(value) {
   return value.replace(/\$\{[^}]+\}/g, "${name}");
@@ -764,7 +826,7 @@ function checkNavCopy(src) {
 
 function readModesSources() {
   const out = {};
-  for (const rel of [MODES_SERVICE_REL, MODES_COMMANDS_REL, MODES_WIDGET_REL, NAV_COPY_REL, SHORTCUT_COPY_REL]) {
+  for (const rel of [MODES_SERVICE_REL, MODES_COMMANDS_REL, MODES_WIDGET_REL, NAV_COPY_REL, SHORTCUT_COPY_REL, ...chromeBarSourceRels()]) {
     try {
       out[rel] = readFileSync(join(REPO_ROOT, rel), "utf8");
     } catch {
@@ -797,6 +859,7 @@ function checkModesCopy(sources) {
     copyFailures.push(...leakFailures("modes copy", value));
   }
   copyFailures.push(...checkNavCopy(sources[NAV_COPY_REL] ?? ""));
+  copyFailures.push(...checkChromeBarBrand(sources));
   copyFailures.push(...checkShortcutCopy(sources[SHORTCUT_COPY_REL] ?? ""));
   const widget = deriveWidgetCopy(sources[MODES_WIDGET_REL] ?? "");
   if (widget.size === 0) {
@@ -879,9 +942,28 @@ const MODES_COPY_FAULTS = [
     name: "chrome-bar copy spells the product name as a literal",
     apply: (sources) => ({
       ...sources,
-      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("noAppName: 'The browser'", "noAppName: 'PowerBrowser'"),
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("noAppName: 'The browser'", `noAppName: '${NAV_BRAND_LITERAL}'`),
     }),
     expect: "spells the product name as a literal",
+  },
+  {
+    name: "the configured name in a JSX text node of the widget",
+    apply: (sources) => ({
+      ...sources,
+      [MODES_WIDGET_REL]: sources[MODES_WIDGET_REL].replace(
+        "<div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>",
+        `<div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter} ${NAV_BRAND_LITERAL} help</div>`
+      ),
+    }),
+    expect: `brand: ${MODES_WIDGET_REL}:`,
+  },
+  {
+    name: "the configured name inside a string in chrome-bar-copy.ts",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("untitledPage: 'Untitled page'", `untitledPage: 'Untitled ${NAV_BRAND_LITERAL} page'`),
+    }),
+    expect: `brand: ${NAV_COPY_REL}:`,
   },
   {
     name: "chrome-bar copy interpolates a member expression",

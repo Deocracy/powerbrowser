@@ -1230,7 +1230,7 @@ export class ChromeBarWidget extends ReactWidget {
         }
         if (this.commitFailed) {
             return <>
-                <div className='pb-chrome-bar-row is-message'>PowerBrowser couldn&apos;t open that address. Press Enter to try again.</div>
+                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.commitFailed(appSubject())}</div>
                 <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
             </>;
         }
@@ -1273,7 +1273,7 @@ export class ChromeBarWidget extends ReactWidget {
             }}
         >
             {this.providerFailed && row.source === 'heuristic' ? (
-                <div className='pb-chrome-bar-row-title'>PowerBrowser couldn&apos;t load suggestions. Press Enter to visit what you typed.</div>
+                <div className='pb-chrome-bar-row-title'>{CHROME_BAR_COPY.suggestionsFailed(appSubject())}</div>
             ) : message ? (
                 <div className='pb-chrome-bar-row-title'>{CHROME_BAR_COPY.noSearch(appSubject())}</div>
             ) : <>
