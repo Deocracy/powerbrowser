@@ -126,7 +126,7 @@ returning null.
 
 ### WebExtensions (EXT, continuing from EXT-03)
 
-- [ ] **EXT-04**: A spike records how web tabs become tabs that WebExtensions can see (patch, bridge or chrome-side tab model), with Chris's sign-off before EXT-05..10 are planned
+- [x] **EXT-04**: A spike records how web tabs become tabs that WebExtensions can see (patch, bridge or chrome-side tab model), with Chris's sign-off before EXT-05..10 are planned
 - [ ] **EXT-05**: An installed Firefox extension sees web tabs in its tabs API (query, events, active tab) as it would in Firefox
 - [ ] **EXT-06**: User sees extension toolbar buttons and an extensions (puzzle) menu with icon, badge, Pin to Toolbar, Manage and Remove
 - [ ] **EXT-07**: User clicking an extension button opens its popup or runs its action against the active web tab
@@ -267,8 +267,8 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | TAB-07 | Phase 34 | Pending |
 | TAB-08 | Phase 34 | Pending |
 | TAB-09 | Phase 34 | Pending |
-| EXT-04 | Phase 28 | Pending |
-| EXT-05 | Phase 38 | Pending |
+| EXT-04 | Phase 28 | Complete |
+| EXT-05 | Phase 31.1 | Pending |
 | EXT-06 | Phase 38 | Pending |
 | EXT-07 | Phase 38 | Pending |
 | EXT-08 | Phase 38 | Pending |

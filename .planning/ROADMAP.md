@@ -121,7 +121,7 @@ UI spec before planning: Phase 30 (`/gsd-ui-phase 30` with mockups). Waiting on 
 forces a decision). Coverage: 87/87 v1.5 requirements, each in exactly one phase.
 
 - [ ] **Phase 27: Groundwork, Navigation Buttons and Page-Focus Keys** - Stop, hard reload, history menus and Home; Firefox keys from inside a page; the shared push, action kinds and live-probe harness
-- [ ] **Phase 28: WebExtension Tab Route Spike** - How web tabs become tabs WebExtensions can see, recorded and signed off by Chris before Phase 38 is planned
+- [x] **Phase 28: WebExtension Tab Route Spike** - How web tabs become tabs WebExtensions can see, recorded and signed off by Chris before Phase 38 is planned
 - [ ] **Phase 29: Address Bar Search and Fixup** - Search fallback, localhost and host:port, suggestions, engines, switch-to-tab, autofill, pill editing, configured app name in copy
 - [ ] **Phase 30: Address-Bar Modes and Command Centre** - Modes dropdown, mode chip and tokens; Theia's command centre in the pill as the Coding default
 - [ ] **Phase 31: Site Identity, Permissions and App Menu** - Real lock and "Not Secure", site panel with permissions and clear site data, tracking shield, hamburger menu, Quit
@@ -255,13 +255,34 @@ Plans:
 **Plans**: TBD
 **UI hint**: yes
 
+### Phase 31.1: Extension Tab Host (INSERTED)
+
+**Goal**: Installed Firefox extensions see PowerBrowser's web tabs as real tabs (query, events, active tab, tab ids on content scripts, webRequest and webNavigation), built on the route Chris signed off in Phase 28, so Phases 32-38 are built against it
+**Depends on**: Phase 31 (inserted 2026-10-21 by the Phase 28 sign-off; decimal because the deploy workstream holds 40-58)
+**Requirements**: EXT-05
+**Decision record**: `.planning/phases/28-webextension-tab-route-spike/28-SPIKE-DECISION.md`; spikes `.planning/spikes/002a-ext-route-patch` (patch 050 draft) and `002c-ext-route-chrome-tab-model` (tab model)
+**Scope**: patch `050-extension-tab-host.patch` regenerated from a patched tree (never text-edited), including the adversarial-check guards (`ext-pageAction.js` null `selectedTab`, TabOpen null guard); the tab host behind PowerBrowserAPI (one tab element per overlay, TabOpen/TabSelect/TabClose/TabAttrModified, tabs-progress fan-out, `gBrowserInit`, `selectedTab`/`selectedBrowser`, `getTabForBrowser` landing together with `gBrowserInit`); CHROME_TOOLBAR window-type fix; derived gates (browserWindows consumers as set equality, Theia frame never in the tracker, http(s)-only navigation guard against moz-extension://); `verify-shell-gbrowser-standin.mjs` rewritten for the new member set (closes T-27-11 todo); D-74 amended for this one logic patch
+**Rulings**: while the IDE has focus the last web tab stays active for extensions (Chris, 2026-10-21); the getTabForBrowser-null ruling is reversed
+**Success Criteria** (what must be TRUE):
+
+  1. In a rebuilt binary with patch 050 applied, an installed extension's `tabs.query`, `tabs.onCreated/onActivated/onUpdated/onRemoved` and `windows.*` report the open web tabs with real ids, and the Theia frame never appears
+  2. Content scripts in web pages get `sender.tab`; webRequest and webNavigation carry the real tab id; `tabs.executeScript`/`sendMessage` by id reach the right page
+  3. An extension with a `page_action` `show_matches` starts and restarts cleanly with zero web tabs open, with the IDE focused, and when the first web tab opens (the adversarial-check cases)
+  4. A toolbar action run while a web page is on screen acts on that page, not on the stock window's tab, and the stock window (GUI-01) still works
+  5. `scripts/verify-platform.sh --quick` passes with the new derived gates and their self-tests, and `apply-patches.sh --self-test` plus `check-patch-surface.sh` pass with 050 in the stack
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 31.1 to break down)
+
 ### Phase 32: Page Tools
 
 **Goal**: The tools Firefox offers around a web page (find, zoom, print, save, edit, audio, downloads, source, reader view, crash recovery) work on web tabs
 **Depends on**: Phase 31 (the app menu and `openStockPage`)
 **Requirements**: PAGE-01, PAGE-02, PAGE-03, PAGE-04, PAGE-05, PAGE-06, PAGE-08, PAGE-09, PAGE-10, PAGE-11
 **Research**: partly — the downloads, print and edit-command probes run first (research probes 4, 6 and 9); if page-started downloads save silently today, that is fixed before anything else in the phase
-**Notes**: browser-element methods only (`finder`, `fullZoom`, `mute`, `stop`, `reloadWithFlags`, `gotoIndex`); never load `browser-fullZoom.js`, `printUtils.js` or another `browser.xhtml` script; favicons come from Places and `getTabForBrowser` keeps returning null (technical ruling 2026-10-20) unless the Phase 28 route changes it; PAGE-07 is in Phase 35 with the fullscreen furniture
+**Notes**: browser-element methods only (`finder`, `fullZoom`, `mute`, `stop`, `reloadWithFlags`, `gotoIndex`); never load `browser-fullZoom.js`, `printUtils.js` or another `browser.xhtml` script; favicons come via LinkHandlerParent → the Phase 31.1 tab host plus Places (the getTabForBrowser-null ruling was reversed by the Phase 28 sign-off, 2026-10-21); mute, soundPlaying and zoom become tab-host members; PAGE-07 is in Phase 35 with the fullscreen furniture
 **Success Criteria** (what must be TRUE):
 
   1. Ctrl+F and F3 open a find bar that shrinks the page instead of covering it, with highlight all, match case, whole words and a match count; Ctrl+plus, Ctrl+minus and Ctrl+0 zoom the page, and a chip in the pill shows the level and resets it
@@ -361,7 +382,7 @@ Plans:
 
 **Goal**: Installed Firefox extensions work in web tabs as they do in Firefox, driven from toolbar buttons and a puzzle menu in the chrome bar
 **Depends on**: Phase 37, and Phase 28's signed-off route (not planned without it)
-**Requirements**: EXT-05, EXT-06, EXT-07, EXT-08, EXT-09, EXT-10
+**Requirements**: EXT-06, EXT-07, EXT-08, EXT-09, EXT-10
 **Research**: yes — planned from the Phase 28 spike record
 **Notes**: if the signed-off route needs the GUI-05 bridge, the scope consequence recorded at sign-off governs this phase; EXT-09 adds addons.mozilla.org hosts to `powerbrowser/endpoint-allowlist.json`, and `allowlist-doc-consistency` then needs each allow-dispositioned Mozilla host named in this file and REQUIREMENTS.md in the same change; extension icon, name and badge are read chrome-side
 **Success Criteria** (what must be TRUE):

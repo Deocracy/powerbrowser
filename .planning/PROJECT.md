@@ -91,6 +91,8 @@ platform. If a rebrand ever requires editing a second file, that is a bug.
 | v1.5 is the chrome bar only: Firefox parity, including extensions and page prompts | Chris, 2026-10-20, from the 9-agent gap list | — Pending — v1.5 |
 | Address bar gets a modes dropdown; the Theia command centre is one mode and the Coding default | Chris, 2026-10-20 | — Pending — v1.5 |
 | Lift "no new addressability scheme" for search, and allow chrome-bar Places writes | Needed for search fallback, bookmarks and history removal (Chris, 2026-10-20) | — Pending — v1.5 |
+| Extensions see web tabs via patch 050 (tracker gate) + a chrome-side tab host, new Phase 31.1; no GUI-05; amends D-74 (one logic patch) and reverses the getTabForBrowser-null / no-synthesised-tab rule | Chris, 2026-10-21, from Phase 28 spikes 001/002a-c | — Pending — v1.5 |
+| While the IDE has focus, the last web tab stays the extensions' active tab | Chris, 2026-10-21 (safe until null-tab guards are proven) | — Pending — v1.5 |
 | Scripted headless passes count as evidence, never as UAT results | Only Chris records a sheet result; each scripted defect re-checked by a second agent | ✓ Good — 11 defects found that static gates missed |
 | v1.4 closed as override with UAT-01 deferred (NG-089 → phase 26) | Chris: "I want to do the GUI checks when everthing is done on my own time" | ⚠️ Revisit — audit `gaps_found`; MODE-01 live half failed (A18) |
 

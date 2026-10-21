@@ -1,6 +1,6 @@
 # Phase 28 — WebExtension Tab Route: spike record and decision (EXT-04)
 
-**Status:** awaiting Chris's sign-off (success criterion 3)
+**Status:** signed off by Chris, 2026-10-21
 **Spikes:** .planning/spikes/001-ext-visibility-today (VALIDATED), 002a-ext-route-patch (PARTIAL), 002b-ext-route-gui04-bridge (INVALIDATED), 002c-ext-route-chrome-tab-model (PARTIAL)
 **Run:** 2026-10-21, autonomous; throwaway code only, no product file changed.
 
@@ -202,6 +202,9 @@ Route (b), the GUI-04 bridge with hidden twin tabs, was disproved by the spike a
 
 ## Sign-off
 
-- Route chosen: _pending_
-- Sub-rulings: _pending_
-- Recorded by / date: _pending_
+- **Route chosen (Chris, 2026-10-21):** option 1 — patch-stack tracker gate (patch 050, grown by the ext-pageAction.js and TabOpen null guards from the adversarial check) plus a product tab host behind PowerBrowserAPI, built in a new Phase 31.1 "Extension Tab Host" before Phase 32. No GUI-05. EXT-05..10 stay in v1.5.
+- **Sub-ruling 1 (Chris):** while the IDE (editor/terminal) has focus, the last web tab stays the active tab for extensions (not "no active tab").
+- **Sub-rulings 2-3 (recommended defaults, taken with the route):** extensions may not navigate an overlay to moz-extension:// pages (the http(s) rule holds); the Theia frame never enters the tracker, enforced by a derived gate.
+- **Policy changes this carries:** D-74 amended — the patch stack may hold this one logic patch; the 2026-10-20 ruling "getTabForBrowser keeps returning null" and the "never synthesise a tab" rule (powerbrowser.js:80-82) are reversed for the tab host.
+- **Scope consequence:** no GUI-05; one new phase (31.1); Phases 32, 34-38 adjust per the list above.
+- Recorded by: Claude (autonomous run), 2026-10-21.
