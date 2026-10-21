@@ -79,3 +79,26 @@
 - In one `--scenario page-keys,page-prevented` run, `page-keys` failed with "after Alt+Home focus
   must stay in the page; chrome's active overlay is undefined". `undefined` means the chrome-scope
   evaluate returned no value. It did not recur in four later runs.
+
+## From 27-08
+
+### The shared-process blank defect also hits activation, not only reload (seen in 27-08)
+
+- **Found during:** 27-08 Task 2, `tooltips-all`. In Organising, the fifth 127.0.0.1 tab of the
+  scenario showed Back enabled on a tab that had just loaded. Its history read
+  `[/tip-organising, about:blank]` at index 1, so the page was replaced by `about:blank` after it
+  loaded, between the loaded push and `shell.activateWidget` making it current. Nothing reloaded it.
+- **What 27-08 did:** `tooltips-all` closes every web tab before each mode, so no tab shares a
+  content process with an earlier one. The defect is not fixed. It is the same entry as the 27-02
+  one above, with a second trigger (activation of a tab opened behind the Organising widget).
+
+### UI-SPEC rule (c) assumes a row above the bar in Organising (seen in 27-08)
+
+- 27-UI-SPEC "Tooltips (NAV-05)" says the hover sits over "the toolbar in Organising" above the bar.
+  Measured live: in Organising the chrome bar is at the window's top edge (0-40 px), and the toolbar
+  row is below it (40-73 px), then the page (from 73 px). `HoverService` flips the `top` request to
+  `bottom`, and the tooltip lands on the toolbar row (45-69 px), clear of the page.
+- Rule (c) (never over the page) holds. "Above the bar" does not hold in Organising, and there is
+  no room for it to hold. `tooltips-all` requires "above" only where the bar has room above it.
+  If Organising's layout changes so the toolbar row goes, a below-bar hover would cover the page and
+  `tooltips-all` would go red ("intersects").

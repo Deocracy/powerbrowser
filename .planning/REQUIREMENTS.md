@@ -59,7 +59,7 @@ returning null.
 - [x] **NAV-02**: User can bypass the cache with Shift+click Reload, Ctrl+Shift+R or Ctrl+F5
 - [x] **NAV-03**: User can right-click or long-press Back/Forward for a session-history menu and jump to any entry
 - [x] **NAV-04**: User can show a Home button and go home with it or Alt+Home; the home page is a setting
-- [ ] **NAV-05**: User sees each button's keyboard shortcut in its tooltip
+- [x] **NAV-05**: User sees each button's keyboard shortcut in its tooltip
 - [x] **NAV-06**: User can middle-click Back, Forward or Reload to open the result in a new tab, and drop a link on New Tab to open it
 
 ### Keyboard shortcuts with the page focused (KEY)
@@ -221,7 +221,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | NAV-02 | Phase 27 | Complete |
 | NAV-03 | Phase 27 | Complete |
 | NAV-04 | Phase 27 | Complete |
-| NAV-05 | Phase 27 | Pending |
+| NAV-05 | Phase 27 | Complete |
 | NAV-06 | Phase 27 | Complete |
 | KEY-01 | Phase 27 | Complete |
 | KEY-02 | Phase 27 | Complete |

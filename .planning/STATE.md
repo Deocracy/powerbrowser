@@ -4,18 +4,18 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 27
 current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
-status: executing
-stopped_at: Completed 27-07-PLAN.md
-last_updated: "2026-10-21T04:52:04.550Z"
+status: ready_for_verification
+stopped_at: Completed 27-08-PLAN.md
+last_updated: "2026-10-21T05:22:54.810Z"
 last_activity: 2026-10-21
-last_activity_desc: 27-07 complete (F6/Shift+F6 reply path, mouse 4/5 AppCommand, Esc in the pill stops a load, theia-keeps-keys live, focus-address path removed)
-state_head: 57fd34d526f1a6c02c847c9adb81d8749e594e0e
+last_activity_desc: 27-08 complete (nav-button tooltips name their shortcut from the table via HoverService; gate rule 10, shortcut copy surface, tooltips-all live)
+state_head: cefb157c40be7e4c9858c6891fc342999dd77a16
 progress:
   total_phases: 12
   completed_phases: 0
   total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -31,10 +31,10 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 Phase: 27 (Groundwork, Navigation Buttons and Page-Focus Keys) — EXECUTING
 Plan: 8 of 8
-Status: Executing (27-07 complete)
-Last activity: 2026-10-21 — 27-07 complete: F6 and Shift+F6 move between page and pill on the reply path (A2 held), mouse buttons 4/5 act on the hovered page, Esc in the pill stops a load, the Theia frame keeps every clashing key (live), and the old focus-address path is removed
+Status: Ready for verification (27-08 complete, all 8 plans done)
+Last activity: 2026-10-21 — 27-08 complete: every nav button's tooltip names its shortcut from the one table through HoverService (above the bar in Coding and Browsing, on the toolbar row below it in Organising, never over the page), with aria-keyshortcuts, gate rule (10), the shortcut copy surface and the tooltips-all live scenario
 
-Progress: [█████████░] 88%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -154,6 +154,7 @@ Progress: [█████████░] 88%
 | Phase 27 P05 | 15min | 2 tasks | 6 files |
 | Phase 27 P06 | 45min | 2 tasks | 7 files |
 | Phase 27 P07 | 50 min | 3 tasks | 9 files |
+| Phase 27 P08 | 45 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -388,6 +389,8 @@ Recent decisions affecting current work:
 - [Phase 27]: 27-06: 14.1-UI-SPEC A13 superseded -- Ctrl+L is the page-scoped reply-path row focusAddressL; guaranteed exits from a page are the reserved rows (Ctrl+T, Ctrl+W, Ctrl+Tab family), as in Firefox
 - [Phase 27]: 27-07: A2 held -- defaultPreventedByContent discriminates, so F6/Shift+F6 stay on the reply path; the reserved-row fallback was not taken
 - [Phase 27]: 27-07: pushPageFocus dedupes on (frontend WindowGlobal, tab id), so a reloaded frontend never inherits its predecessor's answer
+- [Phase 27]: 27-08: nav-button tooltips request HoverService from onPointerEnter, because React drops onMouseEnter on disabled buttons
+- [Phase 27]: 27-08: in Organising the bar is at the window's top edge, so the tooltip flips below it onto the toolbar row, clear of the page; tooltips-all requires 'above' only where there is room
 
 ### Pending Todos
 
@@ -489,8 +492,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T04:52:04.474Z
-Stopped at: Completed 27-07-PLAN.md
+Last session: 2026-10-21T05:22:54.773Z
+Stopped at: Completed 27-08-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
