@@ -7,6 +7,7 @@ import { MimeData } from '@theia/core/shared/@lumino/coreutils';
 import { Message } from '@theia/core/shared/@lumino/messaging';
 import { DockPanel, TabBar } from '@theia/core/shared/@lumino/widgets';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
+import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
 
 /** Marks a home-pane tab that the strip lists, so the pane's own bar does not. */
 const STRIP_ONLY_CLASS = 'pb-strip-only';
@@ -550,9 +551,31 @@ export class TabStripWidget extends ReactWidget {
         });
     }
 
+    /** The tabs the strip shows, in order, given the current widget. */
+    protected stripTabs(current: Widget | undefined): Widget[] {
+        return this.mainTabs().filter(widget => this.groups.showsInStrip(widget, current));
+    }
+
+    /**
+     * KEY-03: the order the tab-switching keys walk, which is the order the
+     * user sees: the strip in Browsing when it lists `anchor`, otherwise the
+     * main-area tab bar holding `anchor`.
+     */
+    switchOrder(anchor: Widget): Widget[] {
+        if (document.body.getAttribute(MODE_ATTRIBUTE) === 'browsing') {
+            const tabs = this.stripTabs(this.shell.mainPanel.currentTitle?.owner);
+            if (tabs.includes(anchor)) {
+                return tabs;
+            }
+        }
+        const bar = this.shell.mainPanel.findTabBar(anchor.title);
+        return (bar ? bar.titles.map(title => title.owner) : [])
+            .filter(widget => !TabStripWidget.MODE_SURFACES.includes(widget.id));
+    }
+
     protected render(): React.ReactNode {
         const current = this.shell.mainPanel.currentTitle?.owner;
-        const tabs = this.mainTabs().filter(widget => this.groups.showsInStrip(widget, current));
+        const tabs = this.stripTabs(current);
         const stack = this.stackWidgets();
         // The home bar shows only stacked tabs; the rest are the strip's.
         // Said on the title, which the bar renders as a class on its tab.

@@ -318,23 +318,9 @@ document.addEventListener(
     });
     diagnosticsKeyset.appendChild(diagnosticsKey);
 
-    // GUI-02 (14.1-01): the one key guaranteed to LEAVE a web page. A page
-    // rendered in a web-tab overlay owns the focused docshell, so Theia never
-    // sees Ctrl+L / Cmd+L while the page has focus (14.1-UI-SPEC A13,
-    // 14.1-RESEARCH Pitfall 8). A reserved key is handled in chrome before any
-    // content docshell -- including a focused overlay -- sees it, which is the
-    // only mechanism that can hand focus back to the Theia frame from there.
-    // The API method refocuses the frame and asks the frontend, over the
-    // state-push channel, to focus the address pill.
-    const focusAddressKey = document.createXULElement("key");
-    focusAddressKey.setAttribute("id", "powerbrowser-focus-address-key");
-    focusAddressKey.setAttribute("modifiers", "accel");
-    focusAddressKey.setAttribute("key", "L");
-    focusAddressKey.setAttribute("reserved", "true");
-    focusAddressKey.addEventListener("command", () => {
-      PowerBrowserAPI.webTabFocusAddress(browserElement);
-    });
-    diagnosticsKeyset.appendChild(focusAddressKey);
+    // Ctrl+L is no longer reserved here: it is the page-scoped `focusAddressL`
+    // row below, under the 2026-10-20 ruling (this supersedes 14.1-UI-SPEC A13).
+    // The guaranteed exits from a page are now the reserved rows, as in Firefox.
 
     // Phase 27: page-scoped browser keys. The 2026-10-20 ruling: a Firefox key
     // that clashes with a Theia key takes the browser meaning only while a web
@@ -348,6 +334,31 @@ document.addEventListener(
     // the row mirrors.
     const PAGE_KEYS = [
       { id: "stop", keycode: "VK_ESCAPE", modifiers: "", reserved: false, landsInTheia: false, firefox: "key_stop" },
+      { id: "newTab", key: "T", modifiers: "accel", reserved: true, landsInTheia: true, firefox: "key_newNavigatorTab" },
+      { id: "closeTab", key: "W", modifiers: "accel", reserved: true, landsInTheia: true, firefox: "key_close" },
+      { id: "reload", key: "R", modifiers: "accel", reserved: false, landsInTheia: false, firefox: "key_reload" },
+      { id: "reloadF5", keycode: "VK_F5", modifiers: "", reserved: false, landsInTheia: false, firefox: "key_reload2" },
+      { id: "hardReload", key: "R", modifiers: "accel,shift", reserved: false, landsInTheia: false, firefox: "key_reload_skip_cache" },
+      { id: "hardReloadF5", keycode: "VK_F5", modifiers: "accel", reserved: false, landsInTheia: false, firefox: "key_reload_skip_cache2" },
+      { id: "back", keycode: "VK_LEFT", modifiers: "alt", reserved: false, landsInTheia: false, firefox: "goBackKb" },
+      { id: "forward", keycode: "VK_RIGHT", modifiers: "alt", reserved: false, landsInTheia: false, firefox: "goForwardKb" },
+      { id: "home", keycode: "VK_HOME", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "goHome" },
+      { id: "focusAddress", key: "D", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "focusURLBar2" },
+      { id: "focusAddressL", key: "L", modifiers: "accel", reserved: false, landsInTheia: true, firefox: "focusURLBar" },
+      // No upstream <key>: tabbox.js handles these four in keydown.
+      { id: "nextTab", keycode: "VK_TAB", modifiers: "accel", reserved: true, landsInTheia: true },
+      { id: "prevTab", keycode: "VK_TAB", modifiers: "accel,shift", reserved: true, landsInTheia: true },
+      { id: "nextTabPage", keycode: "VK_PAGE_DOWN", modifiers: "accel", reserved: true, landsInTheia: true },
+      { id: "prevTabPage", keycode: "VK_PAGE_UP", modifiers: "accel", reserved: true, landsInTheia: true },
+      { id: "selectTab1", key: "1", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab1" },
+      { id: "selectTab2", key: "2", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab2" },
+      { id: "selectTab3", key: "3", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab3" },
+      { id: "selectTab4", key: "4", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab4" },
+      { id: "selectTab5", key: "5", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab5" },
+      { id: "selectTab6", key: "6", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab6" },
+      { id: "selectTab7", key: "7", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab7" },
+      { id: "selectTab8", key: "8", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab8" },
+      { id: "selectLastTab", key: "9", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectLastTab" },
     ];
     const pageKeyElements = PAGE_KEYS.map(row => {
       const key = document.createXULElement("key");

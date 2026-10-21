@@ -13,9 +13,13 @@
  */
 
 import { inject, injectable } from '@theia/core/shared/inversify';
-import { ApplicationShell, FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { ApplicationShell, FrontendApplicationContribution, Widget } from '@theia/core/lib/browser';
+import { CommandRegistry } from '@theia/core/lib/common/command';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { CHROME_BAR_NEW_TAB_COMMAND_ID, focusAddressPill } from './chrome-bar-commands';
+import { ChromeBarWidget } from './chrome-bar-widget';
+import { TabStripWidget } from './tab-strip-widget';
 
 export interface PageShortcut {
     /** The row id chrome pushes; `[A-Za-z0-9]{1,32}`. */
@@ -30,6 +34,30 @@ export interface PageShortcut {
 
 export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'stop', keycode: 'VK_ESCAPE', modifiers: '', label: 'Esc', macLabel: '⎋' },
+    { id: 'newTab', key: 'T', modifiers: 'accel', label: 'Ctrl+T', macLabel: '⌘T' },
+    { id: 'closeTab', key: 'W', modifiers: 'accel', label: 'Ctrl+W', macLabel: '⌘W' },
+    { id: 'reload', key: 'R', modifiers: 'accel', label: 'Ctrl+R', macLabel: '⌘R' },
+    { id: 'reloadF5', keycode: 'VK_F5', modifiers: '', label: 'F5', macLabel: 'F5' },
+    { id: 'hardReload', key: 'R', modifiers: 'accel,shift', label: 'Ctrl+Shift+R', macLabel: '⇧⌘R' },
+    { id: 'hardReloadF5', keycode: 'VK_F5', modifiers: 'accel', label: 'Ctrl+F5', macLabel: '⌘F5' },
+    { id: 'back', keycode: 'VK_LEFT', modifiers: 'alt', label: 'Alt+Left Arrow', macLabel: '⌥←' },
+    { id: 'forward', keycode: 'VK_RIGHT', modifiers: 'alt', label: 'Alt+Right Arrow', macLabel: '⌥→' },
+    { id: 'home', keycode: 'VK_HOME', modifiers: 'alt', label: 'Alt+Home', macLabel: '⌥↖' },
+    { id: 'focusAddress', key: 'D', modifiers: 'alt', label: 'Alt+D', macLabel: '⌥D' },
+    { id: 'focusAddressL', key: 'L', modifiers: 'accel', label: 'Ctrl+L', macLabel: '⌘L' },
+    { id: 'nextTab', keycode: 'VK_TAB', modifiers: 'accel', label: 'Ctrl+Tab', macLabel: '⌘⇥' },
+    { id: 'prevTab', keycode: 'VK_TAB', modifiers: 'accel,shift', label: 'Ctrl+Shift+Tab', macLabel: '⇧⌘⇥' },
+    { id: 'nextTabPage', keycode: 'VK_PAGE_DOWN', modifiers: 'accel', label: 'Ctrl+Page Down', macLabel: '⌘⇟' },
+    { id: 'prevTabPage', keycode: 'VK_PAGE_UP', modifiers: 'accel', label: 'Ctrl+Page Up', macLabel: '⌘⇞' },
+    { id: 'selectTab1', key: '1', modifiers: 'alt', label: 'Alt+1', macLabel: '⌥1' },
+    { id: 'selectTab2', key: '2', modifiers: 'alt', label: 'Alt+2', macLabel: '⌥2' },
+    { id: 'selectTab3', key: '3', modifiers: 'alt', label: 'Alt+3', macLabel: '⌥3' },
+    { id: 'selectTab4', key: '4', modifiers: 'alt', label: 'Alt+4', macLabel: '⌥4' },
+    { id: 'selectTab5', key: '5', modifiers: 'alt', label: 'Alt+5', macLabel: '⌥5' },
+    { id: 'selectTab6', key: '6', modifiers: 'alt', label: 'Alt+6', macLabel: '⌥6' },
+    { id: 'selectTab7', key: '7', modifiers: 'alt', label: 'Alt+7', macLabel: '⌥7' },
+    { id: 'selectTab8', key: '8', modifiers: 'alt', label: 'Alt+8', macLabel: '⌥8' },
+    { id: 'selectLastTab', key: '9', modifiers: 'alt', label: 'Alt+9', macLabel: '⌥9' },
 ];
 
 /** True while a web page (an overlay) has keyboard focus. */
@@ -47,12 +75,75 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
     @inject(ContextKeyService)
     protected readonly contextKeys: ContextKeyService;
 
+    @inject(CommandRegistry)
+    protected readonly commands: CommandRegistry;
+
+    @inject(ChromeBarWidget)
+    protected readonly bar: ChromeBarWidget;
+
+    @inject(TabStripWidget)
+    protected readonly strip: TabStripWidget;
+
     protected pageFocused: ContextKey<boolean> | undefined;
 
-    /** Row id -> action on the tab whose page had focus when the key fired. */
+    /**
+     * Row id -> action on the tab whose page had focus when the key fired.
+     * Only that tab's own navigation, New Tab, closing it, switching tabs and
+     * focusing the pill: no palette command and no privileged kind (T-27-19).
+     */
     protected readonly actions = new Map<string, (tab: WebTabWidget) => unknown>([
         ['stop', tab => tab.loading && tab.stop()],
+        ['newTab', () => this.commands.executeCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)],
+        ['closeTab', tab => this.closeTab(tab)],
+        ['reload', tab => tab.reload()],
+        ['reloadF5', tab => tab.reload()],
+        ['hardReload', tab => tab.reload(true)],
+        ['hardReloadF5', tab => tab.reload(true)],
+        ['back', tab => tab.canGoBack && tab.back()],
+        ['forward', tab => tab.canGoForward && tab.forward()],
+        ['home', async tab => (await this.bar.goHome(tab)) === 'opened' && tab.focusPage()],
+        ['focusAddress', () => focusAddressPill()],
+        ['focusAddressL', () => focusAddressPill()],
+        ['nextTab', tab => this.step(tab, 1)],
+        ['nextTabPage', tab => this.step(tab, 1)],
+        ['prevTab', tab => this.step(tab, -1)],
+        ['prevTabPage', tab => this.step(tab, -1)],
+        ...[1, 2, 3, 4, 5, 6, 7, 8].map((n): [string, (tab: WebTabWidget) => unknown] =>
+            [`selectTab${n}`, tab => this.switchTo(this.strip.switchOrder(tab)[n - 1], tab)]),
+        ['selectLastTab', tab => {
+            const order = this.strip.switchOrder(tab);
+            return this.switchTo(order[order.length - 1], tab);
+        }],
     ]);
+
+    /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */
+    protected async closeTab(tab: WebTabWidget): Promise<void> {
+        await this.shell.closeWidget(tab.id);
+        const next = this.shell.mainPanel.currentTitle?.owner;
+        if (next) {
+            // Activated first, as a switch does: focusing the page alone lost focus to Theia's own activation.
+            await this.switchTo(next, tab);
+        }
+    }
+
+    /** Next (+1) or previous (-1) in the visible order, wrapping at both ends. */
+    protected step(tab: WebTabWidget, delta: number): Promise<void> {
+        const order = this.strip.switchOrder(tab);
+        const at = order.indexOf(tab);
+        return this.switchTo(at < 0 ? undefined : order[(at + delta + order.length) % order.length], tab);
+    }
+
+    /** Activates `target` and focuses its page; with no target (Alt+5 of three) focus goes back to `from`'s page. */
+    protected async switchTo(target: Widget | undefined, from: WebTabWidget): Promise<void> {
+        if (!target) {
+            from.focusPage();
+            return;
+        }
+        await this.shell.activateWidget(target.id);
+        if (target instanceof WebTabWidget) {
+            target.focusPage();
+        }
+    }
 
     onStart(): void {
         this.pageFocused = this.contextKeys.createKey<boolean>(PAGE_FOCUS_CONTEXT_KEY, false);
@@ -78,10 +169,12 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
             if (!action || !tab) {
                 return;
             }
-            try {
-                action(tab);
-            } catch (error) {
+            const failed = (error: unknown) =>
                 console.error('[@powerbrowser/chrome-bar] shortcut failed:', id, error instanceof Error ? error.name : typeof error);
+            try {
+                Promise.resolve(action(tab)).catch(failed);
+            } catch (error) {
+                failed(error);
             }
         });
     }

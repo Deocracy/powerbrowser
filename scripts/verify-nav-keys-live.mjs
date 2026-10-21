@@ -58,6 +58,24 @@
  *                    focused; Enter opens Settings searching browser.homePage; a
  *                    second failure and Escape leave no row.
  *   home-no-tab      Settings current: Home opens /home in a new current web tab.
+ *   page-keys        With a page focused (served from localhost, a separate
+ *                    site, so its reloads avoid the shared-process defect in
+ *                    deferred-items.md): Ctrl+R and F5 add one GET without
+ *                    no-cache, Ctrl+Shift+R and Ctrl+F5 one with it; Alt+Left
+ *                    and Alt+Right go back and forward; Alt+Home loads
+ *                    browser.homePage with focus left in the page; Alt+D and
+ *                    Ctrl+L focus the pill with its text selected; Ctrl+T opens
+ *                    a current empty tab with the pill focused; Ctrl+W in a
+ *                    second tab closes it and lands focus in the first tab's page.
+ *   page-prevented   A page that preventDefault()s every keydown keeps F5 and
+ *                    Alt+Left (no GET, no navigation) while Ctrl+T and Ctrl+W
+ *                    still act. Scored only after page-keys passed in the same
+ *                    session (its positive control for F5 and Alt+Left).
+ *   tab-keys         Browsing, three tabs: Ctrl+Tab, Ctrl+Shift+Tab,
+ *                    Ctrl+PageDown/Up step with wrap in strip order, Alt+1 and
+ *                    Alt+9 pick the first and last, Alt+5 changes nothing, and
+ *                    focus lands in each target's page; in Coding Ctrl+Tab
+ *                    follows the tab bar holding the current tab.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -89,6 +107,7 @@ import {
 import { pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 
 const NEW_TAB_COMMAND_ID = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_NEW_TAB_COMMAND_ID');
+const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
 
 const NAME = 'verify-nav-keys-live';
 const BROKEN = 'broken instrument:';
@@ -114,6 +133,15 @@ const PAGES = {
     '/drop-text': { title: 'Dropped Text', body: '<p>dropped text</p>' },
     '/home-start': { title: 'Home Start', body: '<p>start</p>' },
     '/home': { title: 'Home Page', body: '<p>home</p>' },
+    '/k1': { title: 'Keys One', body: '<p>k1</p>' },
+    '/k2': { title: 'Keys Two', body: '<p>k2</p>' },
+    '/kb': { title: 'Keys B', body: '<p>kb</p>' },
+    '/kp0': { title: 'Keys Plain', body: '<p>kp0</p>' },
+    // Consumes every key it sees; the reserved rows must act anyway.
+    '/kp': { title: 'Keys Prevented', body: '<p>kp</p><script>addEventListener("keydown", e => e.preventDefault(), true);</script>' },
+    '/t1': { title: 'Tab One', body: '<p>t1</p>' },
+    '/t2': { title: 'Tab Two', body: '<p>t2</p>' },
+    '/t3': { title: 'Tab Three', body: '<p>t3</p>' },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
@@ -988,6 +1016,272 @@ async function homeNoTab({ app, pages, fail }) {
     }
 }
 
+// Keys as the parent sees them (pb-live-probe's pressKey).
+const KEY = {
+    ctrlR: { key: 'r', code: 'KeyR', keyCode: 82, modifiers: ['accel'] },
+    f5: { key: 'F5', code: 'F5', keyCode: 116 },
+    ctrlShiftR: { key: 'R', code: 'KeyR', keyCode: 82, modifiers: ['accel', 'shift'] },
+    ctrlF5: { key: 'F5', code: 'F5', keyCode: 116, modifiers: ['accel'] },
+    altLeft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, modifiers: ['alt'] },
+    altRight: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39, modifiers: ['alt'] },
+    altHome: { key: 'Home', code: 'Home', keyCode: 36, modifiers: ['alt'] },
+    altD: { key: 'd', code: 'KeyD', keyCode: 68, modifiers: ['alt'] },
+    ctrlL: { key: 'l', code: 'KeyL', keyCode: 76, modifiers: ['accel'] },
+    ctrlT: { key: 't', code: 'KeyT', keyCode: 84, modifiers: ['accel'] },
+    ctrlW: { key: 'w', code: 'KeyW', keyCode: 87, modifiers: ['accel'] },
+    ctrlTab: { key: 'Tab', code: 'Tab', keyCode: 9, modifiers: ['accel'] },
+    ctrlShiftTab: { key: 'Tab', code: 'Tab', keyCode: 9, modifiers: ['accel', 'shift'] },
+    ctrlPageDown: { key: 'PageDown', code: 'PageDown', keyCode: 34, modifiers: ['accel'] },
+    ctrlPageUp: { key: 'PageUp', code: 'PageUp', keyCode: 33, modifiers: ['accel'] },
+    alt: n => ({ key: String(n), code: `Digit${n}`, keyCode: 48 + n, modifiers: ['alt'] }),
+};
+
+/** A served URL on localhost: another site than 127.0.0.1, so these tabs get their own content processes. */
+const otherSite = (pages, path) => pages.url(path).replace('//127.0.0.1:', '//localhost:');
+
+/** Focuses `tabId`'s page and presses `spec` there; throws a broken-instrument error when the page cannot be focused. */
+async function keyInPage(app, tabId, spec) {
+    if (await focusOverlay(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused`);
+    }
+    await pressKey(app, spec);
+}
+
+/** The current main-area widget's tab id, URL and the web-tab count. */
+const currentTab = app => probe(app, `const owner = get('ApplicationShell').mainPanel.currentTitle?.owner;
+    return { tabId: owner?.tabId ?? null, url: owner?.url ?? null, count: webTabs().length };`);
+
+/** A web tab on `paths` in turn (interacted with before each navigation, so Back counts the entries). */
+async function tabThrough(app, urls) {
+    const tabId = await openWebTab(app, urls[0]);
+    if (await waitForPush(app, p => isState(tabId, false)(p) && p.url === urls[0]) < 0) {
+        return { error: `no loaded state push for ${urls[0]} arrived` };
+    }
+    for (const url of urls.slice(1)) {
+        await interactWith(app, tabId);
+        const mark = (await pushes(app)).length;
+        await widgetCall(app, tabId, 'navigate', url);
+        if (await waitForPush(app, p => isState(tabId, false)(p) && p.url === url, { from: mark }) < 0) {
+            return { error: `navigating to ${url} produced no loaded state push` };
+        }
+    }
+    return { tabId };
+}
+
+async function pageKeys({ app, pages, fail, note }) {
+    const k2 = otherSite(pages, '/k2');
+    const setup = await tabThrough(app, [otherSite(pages, '/k1'), k2]);
+    if (setup.error) {
+        return fail(setup.error);
+    }
+    const a = setup.tabId;
+    if (await focusOverlay(app, a) !== true || await pageKeyDisabled(app, 'reload') !== false) {
+        return fail(`${BROKEN} the reload row is missing or stayed disabled with the page focused`);
+    }
+    for (const [name, spec, hard] of [['Ctrl+R', KEY.ctrlR, false], ['F5', KEY.f5, false], ['Ctrl+Shift+R', KEY.ctrlShiftR, true], ['Ctrl+F5', KEY.ctrlF5, true]]) {
+        const mark = pages.requests.length;
+        const pushMark = (await pushes(app)).length;
+        await keyInPage(app, a, spec);
+        const got = await nextGet(pages, '/k2', mark);
+        if (!got) {
+            return fail(`${name} with the page focused reached no GET of /k2`);
+        }
+        if (noCache(got) !== hard) {
+            return fail(`${name}'s GET ${hard ? 'carried no' : 'carried'} no-cache: ${JSON.stringify(got)}`);
+        }
+        if (await waitForPush(app, p => isState(a, false)(p) && p.url === k2, { from: pushMark }) < 0) {
+            return fail(`the reload from ${name} never settled`);
+        }
+        await sleep(300);
+        const gets = pages.requests.slice(mark).filter(r => r.path === '/k2').length;
+        if (gets !== 1) {
+            return fail(`${name} must add exactly one GET of /k2; it added ${gets}`);
+        }
+    }
+    note(`keys: ${keyRoute.last}`);
+    for (const [name, spec, path] of [['Alt+Left', KEY.altLeft, '/k1'], ['Alt+Right', KEY.altRight, '/k2']]) {
+        const mark = (await pushes(app)).length;
+        await keyInPage(app, a, spec);
+        if (await waitForPush(app, p => isState(a, false)(p) && String(p.url).endsWith(path), { from: mark }) < 0) {
+            return fail(`${name} with the page focused produced no push ending ${path}`);
+        }
+        await sleep(300);
+    }
+    if (await setPref(app, 'browser.homePage', otherSite(pages, '/home')) !== true) {
+        return fail(`${BROKEN} browser.homePage could not be set`);
+    }
+    let mark = (await pushes(app)).length;
+    await keyInPage(app, a, KEY.altHome);
+    if (await waitForPush(app, p => isState(a, false)(p) && String(p.url).endsWith('/home'), { from: mark }) < 0) {
+        return fail('Alt+Home with the page focused produced no push ending /home');
+    }
+    const active = await settle(() => chromeActiveTabId(app), v => v === a);
+    if (active !== a) {
+        return fail(`after Alt+Home focus must stay in the page; chrome's active overlay is ${JSON.stringify(active)}`);
+    }
+    for (const [name, spec] of [['Alt+D', KEY.altD], ['Ctrl+L', KEY.ctrlL]]) {
+        await keyInPage(app, a, spec);
+        const pill = await settle(() => readPill(app), v => v.focused && v.selected);
+        if (!pill.focused || !pill.selected) {
+            return fail(`${name} with the page focused must focus the pill with its whole text selected; saw ${JSON.stringify(pill)}`);
+        }
+    }
+    const before = await currentTab(app);
+    await keyInPage(app, a, KEY.ctrlT);
+    const opened = await settle(() => currentTab(app), v => v.tabId && v.tabId !== a && v.count === before.count + 1);
+    if (!opened.tabId || opened.tabId === a || opened.count !== before.count + 1 || opened.url !== 'about:blank') {
+        return fail(`Ctrl+T with the page focused must open one current tab on the empty page; before ${JSON.stringify(before)}, after ${JSON.stringify(opened)}`);
+    }
+    const pill = await settle(() => readPill(app), v => v.focused);
+    if (!pill.focused) {
+        return fail(`after Ctrl+T the pill input must have focus; saw ${JSON.stringify(pill)}`);
+    }
+    // Close the empty tab and open B from A, so A is the tab Theia returns to.
+    await widgetCall(app, opened.tabId, 'close');
+    await focusOverlay(app, a);
+    const b = await openWebTab(app, otherSite(pages, '/kb'));
+    if (await waitForPush(app, p => isState(b, false)(p) && String(p.url).endsWith('/kb')) < 0) {
+        return fail('no loaded state push arrived for tab B');
+    }
+    await keyInPage(app, b, KEY.ctrlW);
+    const after = await settle(() => currentTab(app), v => v.tabId === a);
+    const gone = await probe(app, `return !get('WebTabChannel').widgetOf(${JSON.stringify(b)});`);
+    if (gone !== true || after.tabId !== a) {
+        return fail(`Ctrl+W in tab B's page must close B and make A current; B gone ${gone}, current ${JSON.stringify(after)}`);
+    }
+    const landed = await settle(() => chromeActiveTabId(app), v => v === a);
+    if (landed !== a) {
+        return fail(`after Ctrl+W focus must land in A's page; chrome's active overlay is ${JSON.stringify(landed)}`);
+    }
+}
+
+async function pagePrevented({ app, pages, fail, results }) {
+    const control = results.find(r => r.name === 'page-keys');
+    if (!control || control.failures.length) {
+        return 'not-scored';
+    }
+    const kp = otherSite(pages, '/kp');
+    const setup = await tabThrough(app, [otherSite(pages, '/kp0'), kp]);
+    if (setup.error) {
+        return fail(setup.error);
+    }
+    const p = setup.tabId;
+    const back = await settle(() => probe(app, `return get('WebTabChannel').widgetOf(${JSON.stringify(p)}).canGoBack;`), v => v === true);
+    if (back !== true) {
+        return fail(`${BROKEN} the preventing page has no history to go back to, so Alt+Left would mean nothing`);
+    }
+    let mark = pages.requests.length;
+    await keyInPage(app, p, KEY.f5);
+    await sleep(1500);
+    const gets = pages.requests.slice(mark).filter(r => r.path === '/kp');
+    if (gets.length) {
+        return fail(`a page that consumed F5 was reloaded anyway (${gets.length} GET of /kp)`);
+    }
+    const pushMark = (await pushes(app)).length;
+    await keyInPage(app, p, KEY.altLeft);
+    await sleep(1500);
+    const moved = (await pushes(app)).slice(pushMark).filter(x => x && x.kind === 'state' && x.tabId === p && x.url !== kp);
+    if (moved.length) {
+        return fail(`a page that consumed Alt+Left went back anyway, to ${JSON.stringify(moved[0].url)}`);
+    }
+    const before = await currentTab(app);
+    await keyInPage(app, p, KEY.ctrlT);
+    const opened = await settle(() => currentTab(app), v => v.count === before.count + 1 && v.tabId !== p);
+    if (opened.count !== before.count + 1) {
+        return fail(`Ctrl+T from a page that consumes every key must still open a tab; before ${JSON.stringify(before)}, after ${JSON.stringify(opened)}`);
+    }
+    await keyInPage(app, p, KEY.ctrlW);
+    const gone = await settle(() => probe(app, `return !get('WebTabChannel').widgetOf(${JSON.stringify(p)});`), v => v === true);
+    if (gone !== true) {
+        return fail('Ctrl+W from a page that consumes every key must still close it');
+    }
+}
+
+async function tabKeys({ app, pages, plant, fail, note }) {
+    const browsing = await probe(app, `
+        for (const w of [...get('ApplicationShell').mainPanel.widgets()]) {
+            if (w.id !== 'powerbrowser.modes.organising') { w.close(); }
+        }
+        await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'browsing');
+        return await until(() => document.body.getAttribute('data-pb-mode') === 'browsing' && webTabs().length === 0, 10000);`);
+    if (browsing !== true) {
+        return fail(`${BROKEN} Browsing with no tabs could not be reached`);
+    }
+    const ids = [];
+    for (const path of ['/t1', '/t2', '/t3']) {
+        const id = await openWebTab(app, pages.url(path));
+        if (await waitForPush(app, loadedAt(id, path)) < 0) {
+            return fail(`no loaded state push arrived for ${path}`);
+        }
+        ids.push(id);
+    }
+    const name = id => (ids.indexOf(id) >= 0 ? `T${ids.indexOf(id) + 1}` : JSON.stringify(id));
+    if (plant === 'tab-order-reversed') {
+        const planted = await probe(app, `const strip = get('TabStripWidget');
+            const original = strip.switchOrder.bind(strip);
+            strip.switchOrder = anchor => original(anchor).slice().reverse();
+            return true;`);
+        if (planted === true) {
+            note('PLANT tab-order-reversed applied');
+        }
+    }
+    const strip = await probe(app, `const strip = get('TabStripWidget');
+        return strip.switchOrder(get('WebTabChannel').widgetOf(${JSON.stringify(ids[0])})).map(w => w.tabId ?? w.id);`);
+    if (!Array.isArray(strip) || strip.length !== 3) {
+        return fail(`${BROKEN} the strip must list exactly the three tabs; it lists ${JSON.stringify(strip)}`);
+    }
+    // Only the current tab's overlay is shown, and a hidden one cannot take focus.
+    const activate = id => probe(app, `await get('ApplicationShell').activateWidget(get('WebTabChannel').widgetOf(${JSON.stringify(id)}).id); return true;`);
+    await activate(ids[0]);
+    if (await settle(() => focusOverlay(app, ids[0]), v => v === true) !== true) {
+        return fail(`${BROKEN} T1's page could not be focused`);
+    }
+    const steps = [
+        ['Ctrl+Tab', KEY.ctrlTab, 1], ['Ctrl+Tab', KEY.ctrlTab, 2], ['Ctrl+Tab', KEY.ctrlTab, 0],
+        ['Ctrl+Shift+Tab', KEY.ctrlShiftTab, 2], ['Ctrl+PageDown', KEY.ctrlPageDown, 0], ['Ctrl+PageUp', KEY.ctrlPageUp, 2],
+        ['Alt+1', KEY.alt(1), 0], ['Alt+9', KEY.alt(9), 2],
+    ];
+    let from = ids[0];
+    for (const [key, spec, want] of steps) {
+        await keyInPage(app, from, spec);
+        const target = ids[want];
+        const current = await settle(() => currentTab(app), v => v.tabId === target);
+        const active = await settle(() => chromeActiveTabId(app), v => v === target);
+        if (current.tabId !== target || active !== target) {
+            return fail(`${key} from ${name(from)}: expected ${name(target)}, got current ${name(current.tabId)} with focus in ${name(active)}`);
+        }
+        from = target;
+    }
+    // Alt+9 just moved to T3 (the control for this absence).
+    await keyInPage(app, from, KEY.alt(5));
+    await sleep(1000);
+    const still = await currentTab(app);
+    if (still.tabId !== from || await chromeActiveTabId(app) !== from) {
+        return fail(`Alt+5 with three tabs must change nothing; current is ${name(still.tabId)}`);
+    }
+    const coding = await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'coding');
+        return await until(() => document.body.getAttribute('data-pb-mode') === 'coding', 10000);`);
+    if (coding !== true) {
+        return fail(`${BROKEN} Coding could not be activated`);
+    }
+    const bar = await probe(app, `const shell = get('ApplicationShell');
+        const t1 = get('WebTabChannel').widgetOf(${JSON.stringify(ids[0])});
+        return (shell.mainPanel.findTabBar(t1.title)?.titles ?? []).map(t => t.owner.tabId ?? t.owner.id);`);
+    const at = Array.isArray(bar) ? bar.indexOf(ids[0]) : -1;
+    if (at < 0 || bar.length < 2) {
+        return fail(`${BROKEN} T1's tab bar in Coding lists ${JSON.stringify(bar)}`);
+    }
+    const want = bar[(at + 1) % bar.length];
+    await activate(ids[0]);
+    await settle(() => focusOverlay(app, ids[0]), v => v === true);
+    await keyInPage(app, ids[0], KEY.ctrlTab);
+    const current = await settle(() => currentTab(app), v => v.tabId === want);
+    if (current.tabId !== want) {
+        return fail(`Ctrl+Tab from T1 in Coding: expected ${name(want)} (T1's tab bar order), got ${name(current.tabId)}`);
+    }
+    await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'browsing'); return true;`);
+}
+
 // The reload scenarios run first, on the session's first web tabs: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
@@ -1012,7 +1306,13 @@ const SCENARIOS = {
     'home-empty': homeEmpty,
     'home-failure': homeFailure,
     'home-no-tab': homeNoTab,
+    'page-keys': pageKeys,
+    'page-prevented': pagePrevented,
+    'tab-keys': tabKeys,
 };
+
+/** The scenario each not-scored-capable scenario takes as its positive control. */
+const CONTROL_OF = { 'theia-keeps-esc': 'esc-stop', 'page-prevented': 'page-keys' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -1050,7 +1350,7 @@ function report(results) {
             console.log(`  ${r.name}: ${n}`);
         }
         if (r.notScored) {
-            console.log(`${r.name}: NOT SCORED -- its positive control (esc-stop) did not pass in this session`);
+            console.log(`${r.name}: NOT SCORED -- its positive control (${CONTROL_OF[r.name]}) did not pass in this session`);
         } else if (r.failures.length) {
             failed++;
             for (const f of r.failures) {

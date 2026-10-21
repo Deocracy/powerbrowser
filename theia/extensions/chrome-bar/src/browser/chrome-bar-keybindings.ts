@@ -22,6 +22,8 @@ export class ChromeBarKeybindingContribution implements KeybindingContribution {
         keybindings.registerKeybinding({
             command: CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,
             keybinding: 'ctrlcmd+l',
+            // KEY-04: Monaco and the terminal keep Ctrl+L now that chrome no longer reserves it.
+            when: '!editorFocus && !terminalFocus',
         });
     }
 }
