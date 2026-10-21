@@ -42,6 +42,10 @@
  *                    700 ms later reloads (exactly one extra GET, the late one).
  *   middle-click     Middle-click on Back opens /h1, Ctrl+click on Reload /h2,
  *                    each in a new tab after the current one, which stays current.
+ *   drop             A text/uri-list http link dragged onto New Tab shows the ring
+ *                    and copy cursor and opens a focused current tab; a
+ *                    javascript: link gets no ring and opens nothing; plain-text
+ *                    http opens with no ring during the drag.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -94,6 +98,8 @@ const PAGES = {
     '/hard-click': { title: 'Hard Click', body: '<p>hard</p>' },
     // Finishes 400 ms after its head, so the loading and loaded pushes are separate frames.
     '/guard': { title: 'Guard', body: '<p>guard</p>', delayMs: 400 },
+    '/drop': { title: 'Dropped', body: '<p>dropped</p>' },
+    '/drop-text': { title: 'Dropped Text', body: '<p>dropped text</p>' },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
@@ -719,6 +725,72 @@ async function middleClick({ app, pages, fail }) {
     }
 }
 
+/**
+ * Drags `{ type: value }` over New Tab and drops it, in the Theia frame.
+ * Returns what the drag looked like: dragover default-prevented, its
+ * dropEffect, the ring during the drag and after the drop.
+ */
+const dragOntoNewTab = (app, data) => app.evaluate(`JSON.stringify((() => {
+    const b = ${navButtonExpr('New Tab')};
+    if (!b) return null;
+    const dt = new DataTransfer();
+    for (const [type, value] of Object.entries(${JSON.stringify(data)})) dt.setData(type, value);
+    const fire = type => { const e = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }); b.dispatchEvent(e); return e; };
+    fire('dragenter');
+    const over = fire('dragover');
+    const seen = { prevented: over.defaultPrevented, dropEffect: dt.dropEffect, ring: b.classList.contains('is-drop-target') };
+    fire('drop');
+    seen.ringAfter = b.classList.contains('is-drop-target');
+    return seen;
+})())`).then(JSON.parse);
+
+const currentAndCount = app => probe(app, `const shell = get('ApplicationShell');
+    return { current: shell.mainPanel.currentTitle?.owner?.tabId ?? null, count: webTabs().length };`);
+
+async function dropOnNewTab({ app, pages, fail }) {
+    for (const [data, path, ring] of [
+        [{ 'text/uri-list': `# a comment\n${pages.url('/drop')}` }, '/drop', true],
+        [{ 'text/plain': `  ${pages.url('/drop-text')}  ` }, '/drop-text', false],
+    ]) {
+        const before = await currentAndCount(app);
+        const mark = (await pushes(app)).length;
+        const drag = await dragOntoNewTab(app, data);
+        if (!drag) {
+            return fail(`${BROKEN} the New Tab button is missing`);
+        }
+        if (!drag.prevented || drag.dropEffect !== 'copy' || drag.ring !== ring) {
+            return fail(`dragging ${JSON.stringify(Object.keys(data))} over New Tab must be accepted with the copy cursor and ${ring ? 'the' : 'no'} ring; saw ${JSON.stringify(drag)}`);
+        }
+        if (drag.ringAfter) {
+            return fail('the drop-target ring is still on New Tab after the drop');
+        }
+        const after = await settle(() => currentAndCount(app), v => v && v.current && v.current !== before.current);
+        if (!after?.current || after.current === before.current || after.count !== before.count + 1) {
+            return fail(`dropping ${path} on New Tab must open one new current web tab; before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`);
+        }
+        if (await waitForPush(app, loadedAt(after.current, path), { from: mark }) < 0) {
+            return fail(`the tab opened by the drop never loaded ${path}`);
+        }
+        const focused = await settle(() => chromeActiveTabId(app), v => v === after.current);
+        if (focused !== after.current) {
+            return fail(`after the drop focus must be in the new page; chrome's active overlay is ${JSON.stringify(focused)}`);
+        }
+        if (path === '/drop') {
+            // The positive control above opened a tab; a javascript: link must open none.
+            const refused = await dragOntoNewTab(app, { 'text/uri-list': 'javascript:alert(1)' });
+            // Theia's document listener default-prevents every dragover, so the refusal is the dropEffect.
+            if (refused.ring || refused.dropEffect !== 'none') {
+                return fail(`a javascript: link over New Tab must be refused with no ring; saw ${JSON.stringify(refused)}`);
+            }
+            await sleep(1500);
+            const still = await currentAndCount(app);
+            if (still.count !== after.count || still.current !== after.current) {
+                return fail(`dropping a javascript: link on New Tab opened a tab: ${JSON.stringify(still)}`);
+            }
+        }
+    }
+}
+
 // The reload scenarios run first, on the session's first web tabs: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
@@ -738,6 +810,7 @@ const SCENARIOS = {
     'long-press': longPress,
     'history-error': historyError,
     'middle-click': middleClick,
+    drop: dropOnNewTab,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */

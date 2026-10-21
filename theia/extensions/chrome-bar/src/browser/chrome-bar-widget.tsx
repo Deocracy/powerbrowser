@@ -54,6 +54,32 @@ const RELOAD_GUARD_MS = 650;
 
 type NavGesture = 'back' | 'forward' | 'reload';
 type ButtonEvent = React.MouseEvent<HTMLButtonElement>;
+type ButtonDragEvent = React.DragEvent<HTMLButtonElement>;
+
+/** NAV-06: drag types that are links, as distinct from plain text. */
+const LINK_DRAG_TYPES = ['text/uri-list', 'text/x-moz-url'];
+
+/** The dropped http(s) URL: first non-comment uri-list line, else x-moz-url's first line, else plain text. */
+function droppedUrlOf(data: DataTransfer): string | undefined {
+    const uriList = data.getData('text/uri-list').split(/\r?\n/).find(line => line.trim() && !line.startsWith('#'));
+    const value = (uriList || data.getData('text/x-moz-url').split(/\r?\n/)[0] || data.getData('text/plain')).trim();
+    return /^https?:\/\//i.test(value) ? value : undefined;
+}
+
+/**
+ * How New Tab treats a drag while it is over the button. A real drag hides
+ * its data until drop (Pitfall P10), so a link type alone shows the ring;
+ * link data that is readable and not http(s) is refused now. Plain text
+ * cannot be told apart from a URL until drop, so it gets no ring.
+ */
+function dropKindOf(data: DataTransfer): 'link' | 'text' | 'none' {
+    const types = Array.from(data.types);
+    if (LINK_DRAG_TYPES.some(type => types.includes(type))) {
+        const readable = LINK_DRAG_TYPES.some(type => data.getData(type));
+        return !readable || droppedUrlOf(data) ? 'link' : 'none';
+    }
+    return types.includes('text/plain') ? 'text' : 'none';
+}
 
 /**
  * Maps raw typed text onto the contracted search-or-address routing.
@@ -315,6 +341,44 @@ export class ChromeBarWidget extends ReactWidget {
         }
         await this.joinActiveGroup(widget);
     }
+
+    /** NAV-06: dragenter/dragover on New Tab; anything but a link or text is refused (no preventDefault). */
+    protected onNewTabDragOver = (e: ButtonDragEvent): void => {
+        const kind = dropKindOf(e.dataTransfer);
+        e.currentTarget.classList.toggle('is-drop-target', kind === 'link');
+        if (kind === 'none') {
+            e.dataTransfer.dropEffect = 'none';
+            return;
+        }
+        e.preventDefault();
+        // Theia's document-level listener sets dropEffect 'none' on every drag
+        // (frontend-application.js, file drops); stopping here keeps the copy.
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+    };
+
+    protected onNewTabDragLeave = (e: ButtonDragEvent): void => {
+        e.currentTarget.classList.remove('is-drop-target');
+    };
+
+    /** NAV-06: an http(s) link dropped on New Tab opens in a new foreground tab with focus in the page. */
+    protected onNewTabDrop = async (e: ButtonDragEvent): Promise<void> => {
+        e.currentTarget.classList.remove('is-drop-target');
+        e.preventDefault();
+        const url = droppedUrlOf(e.dataTransfer);
+        if (!url) {
+            return;
+        }
+        let widget: WebTabWidget;
+        try {
+            widget = await this.webTabOpener.openUrl(url);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening a dropped link failed:', error instanceof Error ? error.name : typeof error);
+            return;
+        }
+        await this.joinActiveGroup(widget);
+        widget.focusPage();
+    };
 
     protected async joinActiveGroup(widget: Widget): Promise<void> {
         try {
@@ -922,6 +986,10 @@ export class ChromeBarWidget extends ReactWidget {
                 title='New Tab'
                 aria-label='New Tab'
                 onClick={this.runCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)}
+                onDragEnter={this.onNewTabDragOver}
+                onDragOver={this.onNewTabDragOver}
+                onDragLeave={this.onNewTabDragLeave}
+                onDrop={this.onNewTabDrop}
             >
                 <span className='codicon codicon-plus' />
             </button>

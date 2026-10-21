@@ -482,6 +482,12 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
     box-shadow: inset 0 0 0 2px var(--color-primary, #00a6f5);
 }
 
+/* NAV-06 (accent item 6): New Tab while a droppable link is over it, the same
+   drop-here ring as the strip, unlayered for the same reason. */
+.pb-chrome-bar-button.is-drop-target {
+    box-shadow: inset 0 0 0 2px var(--color-primary, #00a6f5);
+}
+
 /* A home-pane tab the strip lists is not listed again in the pane's own
    bar. Browsing only: Coding shows the real bars, all tabs. */
 body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {

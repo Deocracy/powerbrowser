@@ -260,6 +260,9 @@ wording, kept for parity, and the accessible name plus `aria-keyshortcuts` carri
   item 6) and the copy cursor. Dropping opens the link in a new **foreground** web tab, joined to
   the active group, with focus in the page. Anything else gets `dropEffect: 'none'` and no ring.
   Dropped plain text that is not a URL is searched in Phase 29, not here.
+  Plain text cannot be classified while it is dragged (the drag data store is protected until drop),
+  so a plain-text-only drag gets the copy cursor without the ring and opens at drop only when it is
+  an http(s) URL (CONTEXT: Open Question 3 takes the research recommendation).
 
 ### Keys while a web page has focus (KEY-01..05)
 
