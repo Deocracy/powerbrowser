@@ -265,6 +265,46 @@
     to { opacity: 1; }
 }
 
+/* BAR-05: the one-off engine strip above the footer; buttons wrap when narrow. */
+.pb-chrome-bar-oneoffs {
+    border-top: 1px solid var(--color-border, #3f3e4a);
+    padding-top: 8px;
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.pb-chrome-bar-oneoffs-label {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted, #9a99a8);
+    margin-right: 4px;
+}
+
+.pb-chrome-bar-oneoff {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.pb-chrome-bar-oneoff:hover {
+    background: var(--color-surface-raised, #35343f);
+}
+
+/* Accent use 3 of 3, shared with the highlighted row: the keyboard-highlighted one-off. */
+.pb-chrome-bar-oneoff.is-highlighted {
+    background: rgba(0, 166, 245, 0.18);
+}
+
 .pb-chrome-bar-dropdown-footer {
     margin-top: 8px;
     font-size: 12px;

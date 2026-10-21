@@ -24,6 +24,7 @@ export const CHROME_BAR_COPY = Object.freeze({
     dropdownFooter: 'Enter opens · Alt+Enter opens in a new tab · Esc closes suggestions',
     commitFailed: (subject: string) => `${subject} couldn't open that address. Press Enter to try again.`,
     suggestionsFailed: (subject: string) => `${subject} couldn't load suggestions. Press Enter to go to what you typed.`,
+    oneOffLabel: 'This time, search with:',
     searchSuggestionsDescription: 'Show suggestions from your search engine while you type in the address bar. What you type is sent to the search engine.',
 });
 

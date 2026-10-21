@@ -78,6 +78,17 @@
  *               with no error row. With browser.searchSuggestions off, "world"
  *               sends no suggest GET and still shows the heuristic row. Enter on
  *               "hel alpha" searches /one/search for "hel alpha".
+ *   one-off     BAR-05: typing "hello" shows the strip "This time, search
+ *               with:" with one button per engine chrome lists except Probe
+ *               Engine One (the one in use), in chrome's order, among them
+ *               "Search with Probe Engine Two"; hovering that one shows one HoverService tooltip reading
+ *               "Probe Engine Two"; clicking it searches /two/search in the
+ *               current tab, and Gecko's default is still Probe Engine One and
+ *               the setting still ""; ArrowDown onto the button and Enter
+ *               searches /two/search again; a middle-click opens /two/search in
+ *               a new background tab while the session tab stays current. With
+ *               every engine but Probe Engine One hidden chrome-side, no strip
+ *               shows.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -634,7 +645,8 @@ async function rows(ctx) {
     if (!first || first.caption !== HEURISTIC_CAPTION || !first.selected || view.attrs?.active !== first.id) {
         fail(`the first row must be the heuristic row, highlighted, captioned ${JSON.stringify(HEURISTIC_CAPTION)}; saw ${JSON.stringify(view)}`);
     }
-    const captions = view.rows.slice(1).map(r => r.caption);
+    // Engine suggestions (BAR-03) share the heuristic caption; the dedupe is over the url-captioned rows.
+    const captions = view.rows.slice(1).map(r => r.caption).filter(c => c !== HEURISTIC_CAPTION);
     const repeated = captions.filter((c, i) => captions.indexOf(c) !== i);
     if (repeated.length) {
         fail(`two rows for one url: ${JSON.stringify([...new Set(repeated)])}`);
@@ -805,6 +817,140 @@ async function suggestions(ctx) {
     }
 }
 
+const ONE_OFF_LABEL = 'This time, search with:';
+const SEARCH_SERVICE = `ChromeUtils.importESModule('moz-src:///toolkit/components/search/SearchService.sys.mjs').SearchService`;
+
+/** The open dropdown's one-off strip (its label and buttons), or null when there is none. */
+const readOneOffs = app => app.evaluate(`JSON.stringify((() => {
+    const strip = document.querySelector('.pb-chrome-bar-dropdown .pb-chrome-bar-oneoffs');
+    if (!strip) return null;
+    const label = strip.querySelector('.pb-chrome-bar-oneoffs-label');
+    return { label: label ? label.textContent : null, buttons: [...strip.querySelectorAll('button.pb-chrome-bar-oneoff')]
+        .map(b => ({ aria: b.getAttribute('aria-label'), highlighted: b.classList.contains('is-highlighted') })) };
+})())`).then(JSON.parse);
+
+const TWO_BUTTON = `[...document.querySelectorAll('.pb-chrome-bar-dropdown .pb-chrome-bar-oneoff')].find(b => b.getAttribute('aria-label') === ${JSON.stringify(`Search with ${ENGINE_TWO}`)})`;
+
+/** Dispatches a mouse event `type` on Probe Engine Two's one-off button (React listens at its root). */
+const fireOneOff = (app, type, init = {}) => app.evaluate(`(() => {
+    const b = ${TWO_BUTTON};
+    if (!b) return false;
+    b.dispatchEvent(new MouseEvent(${JSON.stringify(type)}, { bubbles: true, cancelable: true, ...${JSON.stringify(init)} }));
+    return true;
+})()`);
+
+/** Types "hello" afresh (clearing first: React ignores an unchanged value) and waits for a strip with a button. */
+async function typeForOneOffs(app) {
+    await typeInPill(app, '');
+    await typeInPill(app, 'hello');
+    return settle(() => readOneOffs(app), v => !!v && v.buttons.length > 0, 8000);
+}
+
+/** Chrome-side: sets `hidden` on each named engine, then has the widget re-read the engines. */
+async function setEnginesHidden(app, names, hidden) {
+    const done = await inChrome(app, `return (async () => {
+        const S = ${SEARCH_SERVICE};
+        for (const name of ${JSON.stringify(names)}) S.getEngineByName(name).hidden = ${hidden};
+        return true;
+    })();`);
+    return done === true && await probe(app, `await get('ChromeBarWidget').refreshEngines(); return true;`) === true;
+}
+
+async function oneOff(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    if (plant === 'oneoff-default') {
+        const planted = await probe(app, `const w = get('ChromeBarWidget');
+            const original = Object.getPrototypeOf(w).runOneOff;
+            w.runOneOff = function (name, target) { return original.call(this, '', target); };
+            return true;`);
+        if (planted === true) {
+            note('PLANT oneoff-default applied');
+        }
+    }
+    // Derived from chrome's list, compared in order: every engine but the one in use.
+    const listed = await probe(app, `return (await get('ChromeStoreClient').listSearchEngines()).engines.map(e => e.name);`);
+    if (!Array.isArray(listed) || !listed.includes(ENGINE_ONE) || !listed.includes(ENGINE_TWO)) {
+        return fail(`${BROKEN} chrome's engine list lacks the probe engines: ${JSON.stringify(listed)}`);
+    }
+    const want = listed.filter(name => name !== ENGINE_ONE).map(name => `Search with ${name}`);
+    const strip = await typeForOneOffs(app);
+    if (!strip || strip.label !== ONE_OFF_LABEL || JSON.stringify(strip.buttons.map(b => b.aria)) !== JSON.stringify(want)) {
+        return fail(`typing "hello" must show the strip ${JSON.stringify(ONE_OFF_LABEL)} with the buttons ${JSON.stringify(want)}; saw ${JSON.stringify(strip)}`);
+    }
+    const twoAt = want.indexOf(`Search with ${ENGINE_TWO}`);
+    const tip = await probe(app, `const b = ${TWO_BUTTON};
+        get('HoverService').cancelHover();
+        b.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+        const shown = () => [...document.querySelectorAll('.theia-hover')].filter(h => h.matches(':popover-open') && !h.style.visibility);
+        if (!(await until(() => shown().length > 0, 5000))) return { shown: 0 };
+        const seen = { shown: shown().length, text: shown()[0].textContent, ours: shown()[0].classList.contains('pb-chrome-bar-hover') };
+        get('HoverService').cancelHover();
+        return seen;`);
+    if (tip?.shown !== 1 || tip.text !== ENGINE_TWO || !tip.ours) {
+        fail(`hovering the one-off must show one pb-chrome-bar-hover tooltip reading ${JSON.stringify(ENGINE_TWO)}; saw ${JSON.stringify(tip)}`);
+    }
+    let mark = pages.requests.length;
+    let pushMark = (await pushes(app)).length;
+    await fireOneOff(app, 'click');
+    const clicked = await nextGet(pages, '/two/search', mark, r => queryOf(r) === 'hello');
+    if (!clicked) {
+        fail(`no GET on /two/search with q "hello" after clicking the one-off; requests since the mark: ${JSON.stringify(pages.requests.slice(mark).map(r => r.path + r.search))}`);
+    } else if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && pathOf(p.url) === '/two/search', { from: pushMark }) < 0) {
+        fail('clicking the one-off did not search in the current tab (no state push for it on /two/search)');
+    }
+    const def = await inChrome(app, `return (async () => { const S = ${SEARCH_SERVICE}; return (await S.getDefault()).name; })();`);
+    const pref = await probe(app, `return get('PreferenceService').get(${JSON.stringify(ENGINE_PREF)});`);
+    if (def !== ENGINE_ONE || pref !== '') {
+        fail(`a one-off must change neither Gecko's default nor the setting; default ${JSON.stringify(def)}, ${ENGINE_PREF} ${JSON.stringify(pref)}`);
+    }
+    if (!await typeForOneOffs(app)) {
+        return fail('typing "hello" again showed no one-off strip');
+    }
+    let highlighted = false;
+    for (let i = 0; i < 12 + want.length && !highlighted; i++) {
+        await pressKey(app, ARROW_DOWN);
+        highlighted = !!(await readOneOffs(app))?.buttons[twoAt]?.highlighted;
+    }
+    if (!highlighted) {
+        return fail(`ArrowDown past the last row never highlighted the ${ENGINE_TWO} one-off`);
+    }
+    mark = pages.requests.length;
+    await pressKey(app, ENTER);
+    if (!await nextGet(pages, '/two/search', mark, r => queryOf(r) === 'hello')) {
+        fail('no GET on /two/search with q "hello" after Enter on the highlighted one-off');
+    }
+    if (!await typeForOneOffs(app)) {
+        return fail('typing "hello" a third time showed no one-off strip');
+    }
+    pushMark = (await pushes(app)).length;
+    await fireOneOff(app, 'auxclick', { button: 1 });
+    const bg = await waitForPush(app, p => p && p.kind === 'state' && p.tabId !== tabId && pathOf(p.url) === '/two/search', { from: pushMark });
+    if (bg < 0) {
+        fail('a middle-click on the one-off opened no new tab on /two/search');
+    }
+    const stayed = await probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner === get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});`);
+    if (stayed !== true) {
+        fail('a middle-click on the one-off changed the current tab (it must open in the background)');
+    }
+    const others = listed.filter(name => name !== ENGINE_ONE);
+    try {
+        if (!await setEnginesHidden(app, others, true)) {
+            return fail(`${BROKEN} the engines other than ${ENGINE_ONE} could not be hidden chrome-side`);
+        }
+        await typeInPill(app, '');
+        await typeInPill(app, 'hello');
+        const one = await settle(() => readRows(app), v => v.rows[0]?.title === 'hello');
+        if (!one.open || one.rows[0]?.title !== 'hello') {
+            fail(`${BROKEN} with one engine the dropdown did not open for "hello"; saw ${JSON.stringify(one)}`);
+        } else if (await readOneOffs(app)) {
+            fail('with one engine the one-off strip must be hidden');
+        }
+    } finally {
+        await setEnginesHidden(app, others, false);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -815,6 +961,7 @@ const SCENARIOS = {
     rows,
     'failure-rows': failureRows,
     suggestions,
+    'one-off': oneOff,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -892,6 +1039,7 @@ const PLANTS = [
     { plant: 'token-strip-off', target: 'token-cookie', run: ['token-cookie'], expect: `carried ${TOKEN_COOKIE}: stock-window, overlay, subresource, worker` },
     { plant: 'dedupe-off', target: 'rows', run: ['rows'], expect: 'two rows for one url' },
     { plant: 'setting-ignored', target: 'suggestions', run: ['suggestions'], expect: 'suggest request while the setting was off' },
+    { plant: 'oneoff-default', target: 'one-off', run: ['one-off'], expect: 'no GET on /two/search' },
 ];
 
 async function selfTest() {

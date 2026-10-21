@@ -35,7 +35,7 @@ import {
 } from './chrome-bar-commands';
 import { ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
 import type { SourcedRow } from './chrome-bar-places-suggestions';
-import { PLACE_ROW_LIMIT, Row, composeRows, iconFor, nextHighlight } from './address-bar-rows';
+import { PLACE_ROW_LIMIT, Row, composeRows, iconFor, nextHighlight, safeIcon } from './address-bar-rows';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
@@ -72,6 +72,9 @@ type ButtonDragEvent = React.DragEvent<HTMLButtonElement>;
 
 /** BAR-11: the heuristic row's key; the one row present for every non-empty text. */
 const HEURISTIC_KEY = 'heuristic';
+
+/** BAR-05: a one-off engine button's highlight key prefix, after the row keys. */
+const ONE_OFF_KEY = 'oneoff:';
 
 /** BAR-11: the dropdown's tallest size (29-UI-SPEC Spacing Scale); a short window caps it at its bottom less 8px. */
 const DROPDOWN_MAX_HEIGHT = 432;
@@ -742,7 +745,7 @@ export class ChromeBarWidget extends ReactWidget {
     /** Rebuilds the rows, keeps the highlighted row by key (else the heuristic row), then asks for missing favicons. */
     protected showComposedRows(seq: number): void {
         this.rows = this.composeVisibleRows();
-        if (!this.rows.some(row => row.key === this.highlightKey)) {
+        if (!this.highlightKeys().includes(this.highlightKey ?? '')) {
             this.highlightKey = HEURISTIC_KEY;
         }
         this.dropdownOpen = true;
@@ -995,7 +998,7 @@ export class ChromeBarWidget extends ReactWidget {
             if (!this.dropdownOpen || this.rows.length === 0) {
                 return;
             }
-            this.highlightKey = nextHighlight(this.rows.map(row => row.key), this.highlightKey, e.key === 'ArrowDown' ? 1 : -1);
+            this.highlightKey = nextHighlight(this.highlightKeys(), this.highlightKey, e.key === 'ArrowDown' ? 1 : -1);
             this.update();
         } else if (e.key === 'Enter') {
             e.preventDefault();
@@ -1012,6 +1015,10 @@ export class ChromeBarWidget extends ReactWidget {
             }
             // The heuristic row (and Enter before any row arrived) commits the typed text through a
             // fresh resolve, never the cached heuristic; any other row commits its own address.
+            if (this.dropdownOpen && this.highlightKey?.startsWith(ONE_OFF_KEY)) {
+                void this.runOneOff(this.highlightKey.slice(ONE_OFF_KEY.length), 'current');
+                return;
+            }
             const highlighted = this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
             if (highlighted && highlighted.source !== 'heuristic') {
                 void this.commitRow(highlighted);
@@ -1032,6 +1039,114 @@ export class ChromeBarWidget extends ReactWidget {
             }
         }
     };
+
+    /** BAR-05: the visible engines except the one in use, in chrome's order. */
+    protected oneOffEngines(): Array<{ name: string; icon: string | null }> {
+        if (!this.inputValue.trim()) {
+            return [];
+        }
+        const inUse = this.effectiveEngine();
+        return (this.engineList?.engines ?? []).filter(engine => engine.name !== inUse);
+    }
+
+    /** BAR-05: the row keys, then one key per one-off button: the arrow keys' one wrap-around list. */
+    protected highlightKeys(): string[] {
+        return this.rows.map(row => row.key).concat(this.oneOffEngines().map(engine => ONE_OFF_KEY + engine.name));
+    }
+
+    /**
+     * BAR-05: searches the typed text with `name` this time only. The engine
+     * name rides this one request; Gecko's default and the setting are never
+     * written. 'current' searches in the current tab; 'background' opens a new
+     * background tab, the current tab stays selected and the pill reverts.
+     */
+    protected async runOneOff(name: string, target: 'current' | 'background'): Promise<void> {
+        const text = this.inputValue.trim();
+        if (!text) {
+            return;
+        }
+        if (target === 'current') {
+            this.committedAddress = text;
+            this.inputValue = text;
+        } else {
+            this.inputValue = this.committedAddress;
+        }
+        this.commitFailed = false;
+        this.closeDropdown();
+        this.update();
+        let resolved: ResolvedAddress | undefined;
+        try {
+            resolved = await this.store.resolveTypedAddress(text, name);
+        } catch {
+            resolved = undefined;
+        }
+        if (resolved?.kind !== 'search' || !resolved.url) {
+            this.showNoSearch();
+            return;
+        }
+        // With no tab to open after, a background one-off searches in place.
+        const ref = target === 'background' ? currentWebTab() ?? this.shell.currentWidget : undefined;
+        if (!ref) {
+            try {
+                await this.openCommittedUrl(resolved.url);
+            } catch {
+                this.showCommitFailure();
+            }
+            return;
+        }
+        let widget: WebTabWidget;
+        try {
+            widget = await this.webTabOpener.openInBackground(resolved.url, ref);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening a background tab failed:', error instanceof Error ? error.name : typeof error);
+            return;
+        }
+        await this.joinActiveGroup(widget);
+    }
+
+    /** BAR-05: the one-off strip above the footer; absent for empty text or a single engine. */
+    protected renderOneOffs(): React.ReactNode {
+        const engines = this.oneOffEngines();
+        if (!engines.length) {
+            return undefined;
+        }
+        return <div className='pb-chrome-bar-oneoffs'>
+            <span className='pb-chrome-bar-oneoffs-label'>{CHROME_BAR_COPY.oneOffLabel}</span>
+            {engines.map((engine, index) => {
+                const icon = safeIcon(engine.icon);
+                const highlighted = this.highlightKey === ONE_OFF_KEY + engine.name;
+                return <button
+                    key={engine.name}
+                    id={this.oneOffId(index)}
+                    type='button'
+                    className={'pb-chrome-bar-oneoff' + (highlighted ? ' is-highlighted' : '')}
+                    aria-label={CHROME_BAR_COPY.searchWith(engine.name)}
+                    onPointerEnter={e => this.hover.requestHover({
+                        content: engine.name,
+                        target: e.currentTarget,
+                        position: 'top',
+                        cssClasses: ['pb-chrome-bar-hover'],
+                    })}
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={e => void this.runOneOff(engine.name, e.ctrlKey || e.metaKey ? 'background' : 'current')}
+                    onAuxClick={e => {
+                        if (e.button === 1) {
+                            void this.runOneOff(engine.name, 'background');
+                        }
+                    }}
+                >
+                    {icon
+                        ? <img className='pb-chrome-bar-row-icon' src={icon} alt='' />
+                        : <span className='pb-chrome-bar-row-icon codicon codicon-search' aria-hidden='true' />}
+                </button>;
+            })}
+        </div>;
+    }
+
+    /** The DOM id of a one-off button, for the input's aria-activedescendant. */
+    protected oneOffId(index: number): string {
+        return `pb-chrome-bar-oneoff-${index}`;
+    }
 
     protected onInputBlur = (): void => {
         this.closeDropdown();
@@ -1284,6 +1399,7 @@ export class ChromeBarWidget extends ReactWidget {
         return <>
             {this.rows.map((row, index) => this.renderRow(row, index))}
             {this.shimmer && <div className='pb-chrome-bar-row is-shimmer' aria-hidden='true' />}
+            {this.renderOneOffs()}
             <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
         </>;
     }
@@ -1345,6 +1461,8 @@ export class ChromeBarWidget extends ReactWidget {
         const engine = this.effectiveEngine();
         const addressLabel = engine ? CHROME_BAR_COPY.searchPlaceholder(engine) : CHROME_BAR_COPY.searchOrEnterAddress;
         const activeIndex = this.dropdownOpen ? this.rows.findIndex(row => row.key === this.highlightKey) : -1;
+        const oneOffIndex = this.dropdownOpen ? this.oneOffEngines().findIndex(engine => ONE_OFF_KEY + engine.name === this.highlightKey) : -1;
+        const activeId = activeIndex >= 0 ? this.rowId(activeIndex) : oneOffIndex >= 0 ? this.oneOffId(oneOffIndex) : undefined;
         return <div className='pb-chrome-bar'>
             <button
                 className='pb-chrome-bar-button'
@@ -1412,7 +1530,7 @@ export class ChromeBarWidget extends ReactWidget {
                     aria-expanded={this.dropdownOpen}
                     aria-controls='pb-chrome-bar-dropdown'
                     aria-autocomplete='both'
-                    aria-activedescendant={activeIndex >= 0 ? this.rowId(activeIndex) : undefined}
+                    aria-activedescendant={activeId}
                     spellCheck={false}
                     value={this.inputValue}
                     onChange={this.onInputChange}

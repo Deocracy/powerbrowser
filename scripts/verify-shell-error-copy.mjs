@@ -581,6 +581,7 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} couldn't open that address. Press Enter to try again.",
   "${name} couldn't load suggestions. Press Enter to go to what you typed.",
   "Show suggestions from your search engine while you type in the address bar. What you type is sent to the search engine.",
+  "This time, search with:",
 ]);
 
 /**
