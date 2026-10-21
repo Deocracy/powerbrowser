@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Completed 29-04-PLAN.md
-last_updated: "2026-10-21T22:05:02.141Z"
+stopped_at: Completed 29-05-PLAN.md
+last_updated: "2026-10-21T22:28:51.181Z"
 last_activity: 2026-10-21
-last_activity_desc: "29-04 complete (Default Search Engine setting from chrome engine list, engine-naming placeholder, packaged engine-set check; BAR-04 complete)"
-state_head: e32eacbc1a82cadc6d7c6ec4720e84b673c12e7c
+last_activity_desc: 29-05 complete (Firefox-shaped result rows with type markers and Places favicons, rows module under a Node test, configured-name brand ban; BAR-14 complete; BAR-11 rows half, 29-10 owns the rest)
+state_head: f65a1494be87c81092280c1b6ca3298393f0dab8
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 12
+  completed_plans: 13
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 29 (Address Bar Search and Fixup) — EXECUTING
-Plan: 5 of 10
+Plan: 6 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — 29-04 complete (Default Search Engine setting from chrome engine list, engine-naming placeholder, packaged engine-set check; BAR-04 complete)
+Last activity: 2026-10-21 — 29-05 complete (Firefox-shaped result rows with type markers and Places favicons, rows module under a Node test, configured-name brand ban; BAR-14 complete; BAR-11 rows half, 29-10 owns the rest)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -160,6 +160,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P02 | 9m | 3 tasks | 6 files |
 | Phase 29 P03 | 11m | 2 tasks | 8 files |
 | Phase 29 P04 | 16m | 2 tasks | 12 files |
+| Phase 29 P05 | 22m | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -401,6 +402,9 @@ Recent decisions affecting current work:
 - [Phase 29]: 29-03: shipped search engines are DuckDuckGo Lite (default) and Wikipedia; [urls] search stays in the schema, superseded by [[search_engines]]
 - [Phase 29]: 29-04: no default-engine write kind; browser.defaultSearchEngine (User scope) rides each resolveTypedAddress as engineName, chrome accepts only a bar-set name
 - [Phase 29]: 29-04: barEngines hides Firefox engines by loadPath [app]; getAppProvidedEngines prepends the policy default engine
+- [Phase 29]: Typing new text resets rows and highlight; a same-text reply keeps the highlighted row by key (29-05)
+- [Phase 29]: Failure and no-search sentences are is-message rows that wrap instead of truncating on one 32px line (29-05)
+- [Phase 29]: A place row with the heuristic row's url is dropped, including an open-tab row for a typed address; 29-07 switch-to-tab must revisit (29-05)
 
 ### Pending Todos
 
@@ -503,8 +507,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T22:05:02.087Z
-Stopped at: Completed 29-04-PLAN.md
+Last session: 2026-10-21T22:28:51.121Z
+Stopped at: Completed 29-05-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

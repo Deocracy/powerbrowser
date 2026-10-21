@@ -51,7 +51,7 @@ returning null.
 - [ ] **BAR-11**: User sees result rows with favicons and type icons, the first click selects the whole address, and IME composition never commits early
 - [ ] **BAR-12**: User sees the text they typed but did not submit kept per tab when switching tabs
 - [ ] **BAR-13**: User can complete `name` to `www.name.com` with Ctrl+Enter, and drop a link or text onto the bar to load or search it
-- [ ] **BAR-14**: User sees every chrome-bar message name the configured application name, never a hard-coded brand
+- [x] **BAR-14**: User sees every chrome-bar message name the configured application name, never a hard-coded brand
 
 ### Navigation buttons (NAV)
 
@@ -216,7 +216,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | BAR-11 | Phase 29 | Pending |
 | BAR-12 | Phase 29 | Pending |
 | BAR-13 | Phase 29 | Pending |
-| BAR-14 | Phase 29 | Pending |
+| BAR-14 | Phase 29 | Complete |
 | NAV-01 | Phase 27 | Complete |
 | NAV-02 | Phase 27 | Complete |
 | NAV-03 | Phase 27 | Complete |

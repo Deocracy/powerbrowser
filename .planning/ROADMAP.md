@@ -215,7 +215,7 @@ Plans:
   4. The first click selects the whole address, IME composition never commits early, and text typed but not submitted is still there after switching to another tab and back
   5. Every chrome-bar message names the configured application name: a sidecar run with a different configured name shows that name, and no chrome-bar source carries a brand literal
 
-**Plans**: 4/10 plans executed (strictly sequential waves 1-10: no worktrees, every plan's `--quick` reads the whole tree, most edit `chrome-bar-widget.tsx` or `PowerBrowserAPI.sys.mjs`)
+**Plans**: 5/10 plans executed (strictly sequential waves 1-10: no worktrees, every plan's `--quick` reads the whole tree, most edit `chrome-bar-widget.tsx` or `PowerBrowserAPI.sys.mjs`)
 
 Plans:
 **Wave 1**
@@ -236,7 +236,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 29-05-PLAN.md — Result rows: pure rows module with a Node test, heuristic first row, type markers and Places favicons, 32px rows; configured app name in all copy with a derived brand ban
+- [x] 29-05-PLAN.md — Result rows: pure rows module with a Node test, heuristic first row, type markers and Places favicons, 32px rows; configured app name in all copy with a derived brand ban
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -447,7 +447,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 27. Groundwork, Navigation Buttons and Page-Focus Keys | 8/8 | In Progress|  |
 | 28. WebExtension Tab Route Spike | 0/0 | Complete    | 2026-10-21 |
-| 29. Address Bar Search and Fixup | 4/10 | In Progress|  |
+| 29. Address Bar Search and Fixup | 5/10 | In Progress|  |
 | 30. Address-Bar Modes and Command Centre | 0/TBD | Not started | - |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
 | 32. Page Tools | 0/TBD | Not started | - |
