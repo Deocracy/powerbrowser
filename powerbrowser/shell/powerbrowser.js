@@ -433,6 +433,26 @@ document.addEventListener(
       true
     );
 
+    // Mouse buttons 4 and 5. GTK turns them into an AppCommand widget event
+    // (widget/gtk/nsWindow.cpp:3050-3063), never a mouse event, so no page
+    // sees them; browser-init.js:331 listens the same way. They act on the
+    // page under the pointer; only when no mouseover was ever seen do they
+    // fall back to the focused page.
+    let hovered;
+    document.addEventListener("mouseover", event => { hovered = event.target; }, true);
+    window.addEventListener("AppCommand", event => {
+      if (event.command !== "Back" && event.command !== "Forward") {
+        return;
+      }
+      const overlay = hovered === undefined ? document.activeElement : hovered;
+      if (PowerBrowserWebTabs.tabIdOfBrowser(overlay) === null) {
+        return;
+      }
+      PowerBrowserWebTabs.relayShortcut(browserElement, overlay, event.command === "Back" ? "back" : "forward", false);
+      event.stopPropagation();
+      event.preventDefault();
+    }, true);
+
     // Custom title bar. The root's `customtitlebar` attribute
     // (powerbrowser.xhtml) has the widget draw no OS title bar -- what
     // browser.xhtml does when tabs live in the title bar -- so that row is

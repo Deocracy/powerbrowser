@@ -25,7 +25,9 @@
  * loop skips `via: "replyListener"` rows and writes disabled="true"
  * unconditionally on every row it creates; (8) a `via: "replyListener"` row is
  * never reserved and names no Firefox key, and the reply listener reads its
- * rows from PAGE_KEYS through the `via` field.
+ * rows from PAGE_KEYS through the `via` field; (9) every `relayShortcut(`
+ * call in powerbrowser.js passes `row.id` or string literals only, and each
+ * literal is a table id with a relay action (the AppCommand listener's ids).
  *
  * Honestly --quick: reads text sources only. No build, no browser, no
  * display, no network.
@@ -452,7 +454,34 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
             failures.push(`${CHROME_REL}: the PAGE_KEYS row-creation loop does not set disabled="true" unconditionally, so a row could act while the Theia frame has focus`);
         }
     }
-    return { failures, counts: { rows: chrome.length, actions: actionIds.length, upstream: upstream.size, reserved: chrome.filter(r => r.reserved === true).length, reply: replyRows.length } };
+    // (9) ids relayed outside the table loops are still table ids with an action.
+    const tableIds = new Set(chrome.map(r => r.id));
+    const actionSet = new Set(actionIds);
+    let literalIds = 0;
+    for (const m of chromeSrc.matchAll(/\brelayShortcut\(/g)) {
+        const args = balanced(chromeSrc, m.index + m[0].length - 1);
+        const third = args === null ? undefined : elements(args)[2];
+        if (third === undefined) {
+            failures.push(`${CHROME_REL}: broken instrument -- a relayShortcut( call whose id argument cannot be read`);
+            continue;
+        }
+        if (third === 'row.id') {
+            continue;
+        }
+        const literals = [...third.matchAll(/"([^"]*)"|'([^']*)'/g)].map(x => x[1] ?? x[2]);
+        if (!literals.length || third.replace(/"[^"]*"|'[^']*'/g, '').match(/[^\s?:=!<>&|()\w.]/)) {
+            failures.push(`${CHROME_REL}: a relayShortcut( id this gate cannot check: ${third.slice(0, 60)}`);
+        }
+        // Capitalised literals are the AppCommand names compared against; table ids start lower-case.
+        const ids = literals.filter(x => !/^[A-Z]/.test(x));
+        for (const id of ids) {
+            literalIds++;
+            if (!tableIds.has(id) || !actionSet.has(id)) {
+                failures.push(`${id}: relayed by a relayShortcut( call in ${CHROME_REL} but not a table id with a relay action`);
+            }
+        }
+    }
+    return { failures, counts: { literalIds, rows: chrome.length, actions: actionIds.length, upstream: upstream.size, reserved: chrome.filter(r => r.reserved === true).length, reply: replyRows.length } };
 }
 
 function readSources() {
@@ -467,7 +496,7 @@ function main() {
         }
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved`);
+    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved; ${counts.literalIds} literal relayed ids are table ids`);
     return 0;
 }
 
@@ -491,6 +520,7 @@ const PLANTS = [
     },
     { name: 'firefox id with other modifiers', rel: CHROME_REL, from: 'firefox: "key_reload_skip_cache" }', to: 'firefox: "key_reload" }', expect: "hardReload: key or modifiers differ from Firefox's key_reload" },
     { name: 'reply row marked reserved', rel: CHROME_REL, from: '{ id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false', to: '{ id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: true', expect: 'focusAddressF6: a replyListener row must be reserved: false' },
+    { name: 'AppCommand id not in the table', rel: CHROME_REL, from: '"Back" ? "back" : "forward"', to: '"Back" ? "back" : "goForward"', expect: 'goForward: relayed by a relayShortcut(' },
     { name: 'creation loop without the disabled write', rel: CHROME_REL, from: '      key.setAttribute("disabled", "true");\n', to: '', expect: 'does not set disabled="true" unconditionally' },
 ];
 

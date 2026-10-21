@@ -83,6 +83,19 @@
  *   focus-keys-prevented  A page that preventDefault()s F6 keeps it: chrome's
  *                    focus stays on its overlay and no shortcut push arrives
  *                    within 1500 ms. Scored only after focus-keys passed.
+ *   mouse-buttons    Tab at /m2 with /m1 behind it: a mouseover on its overlay,
+ *                    then an AppCommand Back on the shell window, lands on /m1;
+ *                    Forward lands on /m2; after a mouseover on the Theia frame
+ *                    element, Back changes nothing within 1500 ms.
+ *   pill-esc         A slow page loading, the pill focused with no dropdown
+ *                    and no edit: Escape stops the load (a loading: false push)
+ *                    with no shortcut push.
+ *   theia-keeps-keys In an untitled editor F5, F6, F11, Ctrl+P, Ctrl+K,
+ *                    Ctrl+Tab, Alt+Left, Ctrl+R and Ctrl+L, and in a terminal
+ *                    Ctrl+R and Ctrl+W, all reach the Theia frame with no
+ *                    shortcut push; Ctrl+L in the editor leaves the pill
+ *                    unfocused, while Ctrl+L outside an editor and a terminal
+ *                    focuses it. Scored only after page-keys passed.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -150,6 +163,9 @@ const PAGES = {
     '/t2': { title: 'Tab Two', body: '<p>t2</p>' },
     '/t3': { title: 'Tab Three', body: '<p>t3</p>' },
     '/f6': { title: 'Focus Keys', body: '<p>f6</p>' },
+    '/m1': { title: 'Mouse One', body: '<p>m1</p>' },
+    '/m2': { title: 'Mouse Two', body: '<p>m2</p>' },
+    '/slow-pill': { title: 'Slow Pill', body: '<p>still loading</p>', slow: true },
     '/f6p': { title: 'Focus Kept', body: '<p>f6p</p><script>addEventListener("keydown", e => { if (e.key === "F6") e.preventDefault(); }, true);</script>' },
 };
 
@@ -1045,6 +1061,9 @@ const KEY = {
     alt: n => ({ key: String(n), code: `Digit${n}`, keyCode: 48 + n, modifiers: ['alt'] }),
     f6: { key: 'F6', code: 'F6', keyCode: 117 },
     shiftF6: { key: 'F6', code: 'F6', keyCode: 117, modifiers: ['shift'] },
+    f11: { key: 'F11', code: 'F11', keyCode: 122 },
+    ctrlP: { key: 'p', code: 'KeyP', keyCode: 80, modifiers: ['accel'] },
+    ctrlK: { key: 'k', code: 'KeyK', keyCode: 75, modifiers: ['accel'] },
 };
 
 /** True when chrome's active element is the Theia frame's <browser>. */
@@ -1340,6 +1359,169 @@ async function focusKeysPrevented({ app, pages, fail, results }) {
     }
 }
 
+/** Dispatches a mouseover on `target` ('overlay' of `tabId`, or 'frame'), then an AppCommand `command` on the shell window. */
+const appCommand = (app, tabId, target, command) => inChrome(app, `
+    const el = ${JSON.stringify(target)} === 'frame' ? document.getElementById('powerbrowser-content') : overlayOf(${JSON.stringify(tabId)});
+    if (!el) return false;
+    el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    window.dispatchEvent(new CommandEvent('AppCommand', { command: ${JSON.stringify(command)}, bubbles: true, cancelable: true }));
+    return true;`);
+
+async function mouseButtons({ app, pages, fail, note }) {
+    const setup = await tabThrough(app, [pages.url('/m1'), pages.url('/m2')]);
+    if (setup.error) {
+        return fail(setup.error);
+    }
+    const tabId = setup.tabId;
+    if (await settle(() => probe(app, `return get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).canGoBack;`), v => v === true) !== true) {
+        return fail(`${BROKEN} the tab has no history to go back to`);
+    }
+    // A5 evidence only: does chrome see a trusted mouseover with the overlay as target?
+    const a5Started = await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return 'no overlay';
+        try {
+            window.__pbA5 = null;
+            window.__pbA5Rec = e => { if (e.isTrusted && W.tabIdOfBrowser(e.target) !== null) window.__pbA5 = true; };
+            document.addEventListener('mouseover', window.__pbA5Rec, true);
+            const r = o.getBoundingClientRect();
+            window.synthesizeMouseEvent('mousemove', r.left + r.width / 2, r.top + r.height / 2);
+            return true;
+        } catch (e) { return 'threw ' + e; }`);
+    await sleep(500);
+    const a5 = await inChrome(app, `document.removeEventListener('mouseover', window.__pbA5Rec, true); return window.__pbA5;`);
+    note(`A5 trusted mouseover on an overlay: ${a5Started === true ? JSON.stringify(a5) : a5Started}`);
+    for (const [command, path, target] of [['Back', '/m1', 'overlay'], ['Forward', '/m2', 'overlay']]) {
+        const mark = (await pushes(app)).length;
+        if (await appCommand(app, tabId, target, command) !== true) {
+            return fail(`${BROKEN} the overlay of ${tabId} is missing`);
+        }
+        if (await waitForPush(app, p => isState(tabId, false)(p) && String(p.url).endsWith(path), { from: mark, timeoutMs: 5000 }) < 0) {
+            return fail(`AppCommand ${command} over the page produced no push ending ${path}`);
+        }
+        await sleep(300);
+    }
+    const mark = (await pushes(app)).length;
+    await appCommand(app, tabId, 'frame', 'Back');
+    await sleep(1500);
+    const moved = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && !String(p.url).endsWith('/m2'));
+    if (moved.length) {
+        return fail(`AppCommand Back with the pointer over the Theia frame navigated the page, to ${JSON.stringify(moved[0].url)}`);
+    }
+}
+
+async function pillEsc({ app, pages, fail }) {
+    const tabId = await openWebTab(app, pages.url('/slow-pill'));
+    if (await waitForPush(app, isState(tabId, true)) < 0) {
+        return fail('no state push with loading: true arrived for the slow page');
+    }
+    if (await focusTheiaFrame(app) !== true) {
+        return fail(`${BROKEN} the Theia frame could not be made chrome's active element`);
+    }
+    await app.evaluate(`(() => { const i = document.querySelector('.pb-chrome-bar-input'); i.focus(); return true; })()`);
+    const pill = await settle(() => readPill(app), v => v.focused);
+    if (!pill.focused || pill.rows.length) {
+        return fail(`${BROKEN} the pill must be focused with no dropdown before Escape; saw ${JSON.stringify(pill)}`);
+    }
+    const mark = (await pushes(app)).length;
+    await pressKey(app, ESCAPE);
+    if (await waitForPush(app, isState(tabId, false), { from: mark, timeoutMs: 5000 }) < 0) {
+        return fail('Escape in the pill with nothing to close or restore did not stop the loading page (no loading: false push)');
+    }
+    const relayed = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'shortcut');
+    if (relayed.length) {
+        return fail(`Escape in the pill must stop the load from the pill, not the chrome row; shortcut pushes ${JSON.stringify(relayed)}`);
+    }
+}
+
+/** Presses `spec` with `focus()` re-established first; returns { recorded, pushed } for that press. */
+async function keyInTheia(app, spec, focus) {
+    await focus();
+    const mark = (await pushes(app)).length;
+    const keyMark = await app.evaluate('window.__pbKeys.length');
+    await pressKey(app, spec);
+    await sleep(250);
+    const keys = JSON.parse(await app.evaluate(`JSON.stringify(window.__pbKeys.slice(${keyMark}))`));
+    const recorded = keys.some(k => k.code === spec.code && k.ctrl === (spec.modifiers ?? []).includes('accel') && k.alt === (spec.modifiers ?? []).includes('alt'));
+    const pushed = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'shortcut');
+    return { recorded, pushed };
+}
+
+async function theiaKeepsKeys({ app, fail, results }) {
+    const control = results.find(r => r.name === 'page-keys');
+    if (!control || control.failures.length) {
+        return 'not-scored';
+    }
+    if (await focusTheiaFrame(app) !== true) {
+        return fail(`${BROKEN} the Theia frame could not be made chrome's active element`);
+    }
+    await app.evaluate(`(() => {
+        if (!window.__pbKeys) {
+            window.__pbKeys = [];
+            document.addEventListener('keydown', e => window.__pbKeys.push({ code: e.code, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey }), true);
+        }
+        return true;
+    })()`);
+    const opened = await probe(app, `await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile');
+        return await until(() => !!get('EditorManager').currentEditor, 10000);`);
+    if (opened !== true) {
+        return fail(`${BROKEN} no untitled editor opened`);
+    }
+    const focusEditor = async () => {
+        await focusTheiaFrame(app);
+        await probe(app, `const ed = get('EditorManager').currentEditor; await get('ApplicationShell').activateWidget(ed.id); ed.editor.focus(); return true;`);
+        const focused = await settle(() => probe(app, `return get('ContextKeyService').match('editorFocus');`), v => v === true);
+        if (focused !== true) {
+            const seen = await probe(app, `const ed = get('EditorManager').currentEditor; return { active: document.activeElement?.className ?? null, visible: ed?.isVisible ?? null, editor: ed?.id ?? null, hasFocus: document.hasFocus() };`);
+            throw new Error(`${BROKEN} the untitled editor could not be focused (editorFocus false; ${JSON.stringify(seen)})`);
+        }
+    };
+    const editorKeys = [['F5', KEY.f5], ['F6', KEY.f6], ['F11', KEY.f11], ['Ctrl+P', KEY.ctrlP], ['Ctrl+K', KEY.ctrlK],
+        ['Ctrl+Tab', KEY.ctrlTab], ['Alt+Left', KEY.altLeft], ['Ctrl+R', KEY.ctrlR], ['Ctrl+L', KEY.ctrlL]];
+    for (const [name, spec] of editorKeys) {
+        const { recorded, pushed } = await keyInTheia(app, spec, focusEditor);
+        if (!recorded || pushed.length) {
+            return fail(`${name} in an editor must reach the Theia frame with no shortcut push; recorded ${recorded}, pushes ${JSON.stringify(pushed)}`);
+        }
+        if (name === 'Ctrl+L' && (await readPill(app)).focused) {
+            return fail('Ctrl+L in an editor focused the pill');
+        }
+        await pressKey(app, ESCAPE);
+        await sleep(200);
+    }
+    await probe(app, `get('EditorManager').currentEditor?.close(); return true;`);
+    const term = await probe(app, `await get('CommandRegistry').executeCommand('terminal:new');
+        return await until(() => get('ContextKeyService').match('terminalFocus'), 15000);`);
+    if (term !== true) {
+        return fail(`${BROKEN} the new terminal never took focus (terminalFocus false)`);
+    }
+    const focusTerminal = async () => {
+        await focusTheiaFrame(app);
+        await probe(app, `const t = get('ApplicationShell').currentWidget; t?.activate?.(); return true;`);
+        const focused = await settle(() => probe(app, `return get('ContextKeyService').match('terminalFocus');`), v => v === true);
+        if (focused !== true) {
+            throw new Error(`${BROKEN} the terminal could not be focused (terminalFocus false)`);
+        }
+    };
+    for (const [name, spec] of [['Ctrl+R', KEY.ctrlR], ['Ctrl+W', KEY.ctrlW]]) {
+        const { recorded, pushed } = await keyInTheia(app, spec, focusTerminal);
+        if (!recorded || pushed.length) {
+            return fail(`${name} in a terminal must reach the Theia frame with no shortcut push; recorded ${recorded}, pushes ${JSON.stringify(pushed)}`);
+        }
+    }
+    await probe(app, `const t = get('ApplicationShell').currentWidget; if (t && /terminal/i.test(t.id)) { t.dispose(); } return true;`);
+    // Positive control for the Ctrl+L absence: outside an editor and a terminal it focuses the pill.
+    await focusTheiaFrame(app);
+    await app.evaluate(`(() => { document.activeElement?.blur?.(); return true; })()`);
+    const plain = await settle(() => probe(app, `const c = get('ContextKeyService'); return !c.match('editorFocus') && !c.match('terminalFocus');`), v => v === true);
+    if (plain !== true) {
+        return fail(`${BROKEN} focus could not be moved outside an editor and a terminal`);
+    }
+    await pressKey(app, KEY.ctrlL);
+    const pill = await settle(() => readPill(app), v => v.focused);
+    if (!pill.focused) {
+        return fail(`${BROKEN} the positive control failed: Ctrl+L outside an editor and a terminal did not focus the pill`);
+    }
+}
+
 // The reload scenarios run first, on the session's first web tabs: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
@@ -1369,10 +1551,13 @@ const SCENARIOS = {
     'tab-keys': tabKeys,
     'focus-keys': focusKeys,
     'focus-keys-prevented': focusKeysPrevented,
+    'mouse-buttons': mouseButtons,
+    'pill-esc': pillEsc,
+    'theia-keeps-keys': theiaKeepsKeys,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
-const CONTROL_OF = { 'theia-keeps-esc': 'esc-stop', 'page-prevented': 'page-keys', 'focus-keys-prevented': 'focus-keys' };
+const CONTROL_OF = { 'theia-keeps-esc': 'esc-stop', 'page-prevented': 'page-keys', 'focus-keys-prevented': 'focus-keys', 'theia-keeps-keys': 'page-keys' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {

@@ -735,14 +735,16 @@ export class ChromeBarWidget extends ReactWidget {
                 void this.commitText(this.inputValue);
             }
         } else if (e.key === 'Escape') {
-            // Two-stage dismissal: first press closes the dropdown, second
-            // restores the committed address.
+            // Staged dismissal: close the dropdown, then restore the committed
+            // address, then (NAV-01) stop a loading page.
             if (this.dropdownOpen) {
                 this.closeDropdown();
                 this.update();
-            } else {
+            } else if (this.inputValue !== this.committedAddress) {
                 this.inputValue = this.committedAddress;
                 this.update();
+            } else if (currentWebTab()?.loading) {
+                currentWebTab()?.stop();
             }
         }
     };
