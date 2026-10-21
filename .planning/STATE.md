@@ -1,20 +1,20 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Completed 29-01-PLAN.md
-last_updated: "2026-10-21T21:23:43.800Z"
+stopped_at: Completed 29-02-PLAN.md
+last_updated: "2026-10-21T21:35:55.693Z"
 last_activity: 2026-10-21
-last_activity_desc: 29-01 complete (resolveTypedAddress tracer, BAR-01)
-state_head: 8a903cbed5360608bd5eac9de6a3dbbf0cb57e52
+last_activity_desc: 29-02 complete (token-cookie strip, dev addresses, rule 12; BAR-02)
+state_head: 84199c2332fed5142f3a13120e71473d29240db6
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 9
+  completed_plans: 10
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 29 (Address Bar Search and Fixup) — EXECUTING
-Plan: 2 of 10
+Plan: 3 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — 29-01 complete (resolveTypedAddress tracer, BAR-01)
+Last activity: 2026-10-21 — 29-02 complete (token-cookie strip, dev addresses, rule 12; BAR-02)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -157,6 +157,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 27 P07 | 50 min | 3 tasks | 9 files |
 | Phase 27 P08 | 45 min | 2 tasks | 6 files |
 | Phase 29 P01 | 24m | 2 tasks | 11 files |
+| Phase 29 P02 | 9m | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -394,6 +395,7 @@ Recent decisions affecting current work:
 - [Phase 27]: 27-08: nav-button tooltips request HoverService from onPointerEnter, because React drops onMouseEnter on disabled buttons
 - [Phase 27]: 27-08: in Organising the bar is at the window's top edge, so the tooltip flips below it onto the toolbar row, clear of the page; tooltips-all requires 'above' only where there is room
 - [Phase 29]: 29-01: upgradeSchemeless detects loopback by regex, not a "localhost" literal, so the gui08 dropped-localhost plant still discriminates
+- [Phase 29]: 29-02: token-cookie strip installed by setGroupSenderPort (not webTabOpen), keyed by sidecar port first and fail-closed
 
 ### Pending Todos
 
@@ -496,8 +498,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T21:23:43.750Z
-Stopped at: Completed 29-01-PLAN.md
+Last session: 2026-10-21T21:35:55.591Z
+Stopped at: Completed 29-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

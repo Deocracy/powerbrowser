@@ -39,7 +39,7 @@ returning null.
 ### Address bar input and search (BAR)
 
 - [x] **BAR-01**: User can type non-URL text and press Enter to search with the default engine
-- [ ] **BAR-02**: User can open `localhost`, `localhost:4000`, `host:port` and IP addresses by typing them
+- [x] **BAR-02**: User can open `localhost`, `localhost:4000`, `host:port` and IP addresses by typing them
 - [ ] **BAR-03**: User sees search suggestions from the engine as they type (on by default, with a setting to turn them off)
 - [ ] **BAR-04**: User can pick the default search engine from engines whose initial set comes from `configuration.toml`
 - [ ] **BAR-05**: User can run a one-off search with another engine from the result list
@@ -204,7 +204,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | SMODE-06 | Phase 30 | Pending |
 | SMODE-07 | Phase 33 | Pending |
 | BAR-01 | Phase 29 | Complete |
-| BAR-02 | Phase 29 | Pending |
+| BAR-02 | Phase 29 | Complete |
 | BAR-03 | Phase 29 | Pending |
 | BAR-04 | Phase 29 | Pending |
 | BAR-05 | Phase 29 | Pending |
