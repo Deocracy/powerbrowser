@@ -137,18 +137,25 @@
  */
 
 import {
+    BROKEN,
     chromeActiveTabId,
     firedRows,
     focusOverlay,
     focusTheiaFrame,
     inChrome,
     installPushRecorder,
+    isState,
     keyRoute,
+    loadedAt,
+    makeCurrent,
     openWebTab,
     pageKeyDisabled,
+    pillKey,
     pressKey,
     pushes,
+    readPill,
     serveNavPages,
+    setPref,
     WEB_TAB_STATE_EVENT,
     waitForPush,
     withProbeShell,
@@ -160,7 +167,6 @@ const NEW_TAB_COMMAND_ID = sourceConst('theia/extensions/chrome-bar/src/browser/
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
 
 const NAME = 'verify-nav-keys-live';
-const BROKEN = 'broken instrument:';
 const ESCAPE = { key: 'Escape', code: 'Escape', keyCode: 27 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -209,9 +215,6 @@ const PAGES = {
     '/slow-tip-organising': { title: 'Slow Tip Organising', body: '<p>still loading</p>', slow: true },
     '/f6p': { title: 'Focus Kept', body: '<p>f6p</p><script>addEventListener("keydown", e => { if (e.key === "F6") e.preventDefault(); }, true);</script>' },
 };
-
-const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
-const loadedAt = (tabId, path) => p => isState(tabId, false)(p) && String(p.url).endsWith(path);
 
 /** Calls `method(...args)` on the registered widget of `tabId` in the Theia frame; returns its reply. */
 const widgetCall = (app, tabId, method, ...args) =>
@@ -943,12 +946,6 @@ async function dropOnNewTab({ app, pages, fail }) {
     }
 }
 
-/** Sets a Home setting in the user scope (the profile's own config dir) and waits until it reads back. */
-const setPref = (app, key, value) => probe(app, `const prefs = get('PreferenceService');
-    await prefs.ready;
-    await prefs.set(${JSON.stringify(key)}, ${JSON.stringify(value)}, 1);
-    return await until(() => prefs.get(${JSON.stringify(key)}) === ${JSON.stringify(value)}, 10000);`);
-
 /** The bar's button labels in order, each button's top, the toggle's top and bottom, the pill's min-width. */
 const readBar = app => app.evaluate(`JSON.stringify((() => {
     const bar = document.querySelector('.pb-chrome-bar');
@@ -1009,27 +1006,6 @@ async function home({ app, pages, fail }) {
         return fail('clicking Home produced no state push for the current tab ending /home');
     }
 }
-
-/** The pill input's focus and selection, and the dropdown's rows and footers, in the Theia frame. */
-const readPill = app => app.evaluate(`JSON.stringify((() => {
-    const input = document.querySelector('.pb-chrome-bar-input');
-    const dropdown = document.querySelector('.pb-chrome-bar-dropdown');
-    return {
-        focused: !!input && document.activeElement === input,
-        value: input ? input.value : null,
-        selected: !!input && input.selectionStart === 0 && input.selectionEnd === input.value.length,
-        rows: dropdown ? [...dropdown.querySelectorAll('.pb-chrome-bar-row')].map(r => r.textContent) : [],
-        footers: dropdown ? dropdown.querySelectorAll('.pb-chrome-bar-dropdown-footer').length : 0,
-    };
-})())`).then(JSON.parse);
-
-/** Dispatches a keydown on the pill input (React's root listener sees it bubble). */
-const pillKey = (app, key) => app.evaluate(`(() => {
-    const input = document.querySelector('.pb-chrome-bar-input');
-    if (!input) return false;
-    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: ${JSON.stringify(key)} }));
-    return true;
-})()`);
 
 const currentWidget = app => probe(app, `const owner = get('ApplicationShell').mainPanel.currentTitle?.owner;
     return { id: owner?.id ?? null, tabId: owner?.tabId ?? null, count: webTabs().length };`);
@@ -1872,11 +1848,6 @@ async function tooltips({ app, pages, fail }) {
         return fail(`${BROKEN} the web tab's placeholder is not visible, so the page-rect check proved nothing`);
     }
 }
-
-const makeCurrent = (app, tabId) => probe(app, `const shell = get('ApplicationShell');
-    const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
-    await shell.activateWidget(w.id);
-    return await until(() => shell.mainPanel.currentTitle?.owner === w && w.isVisible, 5000);`);
 
 async function tooltipsAll({ app, pages, plant, fail, note }) {
     if (await setPref(app, 'browser.showHomeButton', true) !== true) {

@@ -15,7 +15,9 @@
 //     content process and never reach a chrome <key> (27-RESEARCH Pitfall P11);
 //     BiDi input on the chrome context is the fallback if TIP is refused;
 //   - served pages that may hang mid-body (`slow: true`) and a record of every
-//     GET's cache headers.
+//     GET's cache headers, query string and Cookie header;
+//   - (Phase 29) the pill and preference helpers the nav-keys and address-bar
+//     live checks share.
 //
 // Node built-ins plus ./pb-relaunch.mjs only.
 
@@ -211,28 +213,44 @@ export async function pressKey(app, { key, code, keyCode, modifiers = [] }) {
 }
 
 // WebDriver's normalised key code points for the non-printable keys used here.
-const BIDI_KEYS = { Escape: '', Shift: '', Control: '', Alt: '', Meta: '', F5: '', F6: '' };
+const BIDI_KEYS = { Escape: '', Shift: '', Control: '', Alt: '', Meta: '', F5: '', F6: '', Enter: '\uE007' };
 
 /**
  * Serves `pages` (`{ '/a': { title, body, slow, delayMs } }`) on 127.0.0.1. A
  * `slow` page sends its headers and the head of its body, then holds the
  * response open until `close()`, so the tab stays loading; a `delayMs` page
  * finishes that many milliseconds after its head, so its loading and loaded
- * pushes land in separate frames. Every GET is recorded in `requests` as
- * `{ path, cacheControl, pragma, at }` (`at` is Date.now()).
+ * pushes land in separate frames. A `json: params => value` page answers
+ * `application/x-suggestions+json` with `value(searchParams)`. Every GET is
+ * recorded in `requests` as `{ path, search, cookie, cacheControl, pragma, at }`
+ * (`search` is the query string, `cookie` the Cookie header or null, `at` is
+ * Date.now()).
  */
 export async function serveNavPages(pages) {
     const requests = [];
     const held = new Set();
     const server = createServer((request, response) => {
-        const path = new URL(request.url, 'http://127.0.0.1').pathname;
+        const parsed = new URL(request.url, 'http://127.0.0.1');
+        const path = parsed.pathname;
         if (request.method === 'GET') {
-            requests.push({ path, cacheControl: request.headers['cache-control'] ?? null, pragma: request.headers.pragma ?? null, at: Date.now() });
+            requests.push({
+                path,
+                search: parsed.search,
+                cookie: request.headers.cookie ?? null,
+                cacheControl: request.headers['cache-control'] ?? null,
+                pragma: request.headers.pragma ?? null,
+                at: Date.now(),
+            });
         }
         const page = pages[path];
         if (!page) {
             response.writeHead(404, { 'content-type': 'text/plain' });
             response.end('not found');
+            return;
+        }
+        if (page.json) {
+            response.writeHead(200, { 'content-type': 'application/x-suggestions+json' });
+            response.end(JSON.stringify(page.json(parsed.searchParams)));
             return;
         }
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -263,5 +281,47 @@ export async function serveNavPages(pages) {
         }),
     };
 }
+
+/** Prefix of a failure that means the check's own instrument broke, not the product. */
+export const BROKEN = 'broken instrument:';
+
+/** A state push for `tabId` with `loading` as given. */
+export const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
+
+/** A loaded state push for `tabId` whose URL ends with `path`. */
+export const loadedAt = (tabId, path) => p => isState(tabId, false)(p) && String(p.url).endsWith(path);
+
+/** Sets a Home setting in the user scope (the profile's own config dir) and waits until it reads back. */
+export const setPref = (app, key, value) => probe(app, `const prefs = get('PreferenceService');
+    await prefs.ready;
+    await prefs.set(${JSON.stringify(key)}, ${JSON.stringify(value)}, 1);
+    return await until(() => prefs.get(${JSON.stringify(key)}) === ${JSON.stringify(value)}, 10000);`);
+
+/** The pill input's focus and selection, and the dropdown's rows and footers, in the Theia frame. */
+export const readPill = app => app.evaluate(`JSON.stringify((() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    const dropdown = document.querySelector('.pb-chrome-bar-dropdown');
+    return {
+        focused: !!input && document.activeElement === input,
+        value: input ? input.value : null,
+        selected: !!input && input.selectionStart === 0 && input.selectionEnd === input.value.length,
+        rows: dropdown ? [...dropdown.querySelectorAll('.pb-chrome-bar-row')].map(r => r.textContent) : [],
+        footers: dropdown ? dropdown.querySelectorAll('.pb-chrome-bar-dropdown-footer').length : 0,
+    };
+})())`).then(JSON.parse);
+
+/** Dispatches a keydown on the pill input (React's root listener sees it bubble). */
+export const pillKey = (app, key) => app.evaluate(`(() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    if (!input) return false;
+    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: ${JSON.stringify(key)} }));
+    return true;
+})()`);
+
+/** Makes the web tab `tabId` the shell's current, visible widget. */
+export const makeCurrent = (app, tabId) => probe(app, `const shell = get('ApplicationShell');
+    const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+    await shell.activateWidget(w.id);
+    return await until(() => shell.mainPanel.currentTitle?.owner === w && w.isVisible, 5000);`);
 
 export { GET_BY_NAME, probe, pollFor };

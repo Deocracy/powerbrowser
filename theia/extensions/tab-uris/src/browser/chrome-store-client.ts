@@ -76,6 +76,13 @@ export interface TabPlacesResult {
     truncated: boolean;
 }
 
+/** Phase 29 (BAR-01): chrome's resolution of typed pill text. Only chrome mints a search URL. */
+export interface ResolvedAddress {
+    kind: 'visit' | 'search' | 'refused' | 'no-engine';
+    url?: string;
+    engineName?: string;
+}
+
 export interface TabPlacesQuery {
     bookmarked?: boolean;
     open?: boolean;
@@ -139,6 +146,11 @@ export class ChromeStoreClient {
     /** NG-023: http(s) history and bookmark matches for typed text, bookmarks first. */
     searchPlaces(text: string, limit: number): Promise<PlaceMatch[]> {
         return this.field<PlaceMatch[]>({ kind: 'searchPlaces', text, limit }, 'rows');
+    }
+
+    /** Phase 29 (BAR-01): URI fixup, then the bar engine's submission, then the http(s) wall, all chrome-side. */
+    resolveTypedAddress(text: string, engineName = ''): Promise<ResolvedAddress> {
+        return this.field<ResolvedAddress>({ kind: 'resolveTypedAddress', text, engineName }, 'resolved');
     }
 
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */

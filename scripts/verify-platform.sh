@@ -4978,6 +4978,16 @@ run_own_checks() {
       "nav-keys-live|node $REPO_ROOT/scripts/verify-nav-keys-live.mjs"
       "nav-keys-live-self-test|node $REPO_ROOT/scripts/verify-nav-keys-live.mjs --self-test"
 
+      # NEW (Phase 29): the address bar's search and URI fixup, driven in the
+      # built shell against a hermetic engine chrome adds per session (its
+      # search path is a page the check serves), with the startup cache purged
+      # (MOZ_PURGE_CACHES=1). Needs the built binary and the last Theia app
+      # build, so never --quick. Its scenario list grows through Phase 29. The
+      # self-test runs a clean control session, then one session per planted
+      # fault, each scored on the scenario it targets.
+      "address-bar-live|node $REPO_ROOT/scripts/verify-address-bar-live.mjs"
+      "address-bar-live-self-test|node $REPO_ROOT/scripts/verify-address-bar-live.mjs --self-test"
+
       # NG-029..NG-038 (non-GUI wave C): the built shell driven through the
       # command registry, the actor channel, the core window's close button in
       # the chrome document and real quit-and-relaunch cycles on one kept

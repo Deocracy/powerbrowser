@@ -3700,6 +3700,7 @@ const STORE_REQUEST_KINDS = new Set([
   "searchPlaces",
   "setSetting",
   "savePageCopy",
+  "resolveTypedAddress",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -3776,6 +3777,9 @@ async function handleStoreRequest(data, actorRef) {
       case "savePageCopy": {
         const saved = await savePageCopy(data.uri);
         return { ok: true, kind, dir: saved.dir, bytes: saved.bytes };
+      }
+      case "resolveTypedAddress": {
+        return { ok: true, kind, resolved: await resolveTypedAddress(data.text, data.engineName ?? "") };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -4271,3 +4275,109 @@ export const PowerBrowserWebTabs = Object.freeze({
     return "relayed";
   },
 });
+
+// ---------------------------------------------------------------------------
+// Phase 29: the search area.
+//
+// Search, URI fixup and (in later plans) suggestions, autofill, favicons,
+// clipboard and the token-cookie strip. The store request channel above
+// routes each of its kinds here with one case arm.
+//
+// This section sits at the end of the file on purpose: nothing above the
+// last catalogued internals line moves when it grows, so the line references
+// in INTERNAL-APIS.md stay valid. It has its own lazy-getter block, so the
+// top block (and every line under it) does not move either.
+// ---------------------------------------------------------------------------
+
+const searchLazy = {};
+ChromeUtils.defineESModuleGetters(searchLazy, {
+  SearchService: "moz-src:///toolkit/components/search/SearchService.sys.mjs",
+});
+
+// True when configuration.toml supplied engines (policy SearchEngines.Add).
+// The policy's Remove runs only after a stock window restores, so the bar
+// hides Firefox's own engines itself rather than relying on it.
+function configuredEnginesActive() {
+  if (Services.policies?.status !== Ci.nsIEnterprisePolicies.ACTIVE) {
+    return false;
+  }
+  const add = Services.policies.getActivePolicies()?.SearchEngines?.Add;
+  return Array.isArray(add) && add.length > 0;
+}
+
+// The engines the bar offers: Gecko's visible engines, minus the
+// app-provided ones when configuration.toml supplied its own.
+async function barEngines() {
+  await searchLazy.SearchService.init();
+  const visible = await searchLazy.SearchService.getVisibleEngines();
+  if (!configuredEnginesActive()) {
+    return visible;
+  }
+  const builtIn = new Set((await searchLazy.SearchService.getAppProvidedEngines()).map(e => e.id));
+  return visible.filter(e => !builtIn.has(e.id));
+}
+
+// A named engine is the bar engine with exactly that name or null: a name
+// outside the set is refused, never substituted. No name means the default.
+async function barEngine(name) {
+  const engines = await barEngines();
+  if (name) {
+    return engines.find(e => e.name === name) ?? null;
+  }
+  const def = await searchLazy.SearchService.getDefault();
+  return engines.find(e => e.id === def?.id) ?? engines[0] ?? null;
+}
+
+// Fixup adds http:// to a schemeless host; the pill has always minted
+// https:// for a bare dotted host, so that case is upgraded. Loopback, IP
+// literals and an explicit port keep fixup's http://.
+function upgradeSchemeless(info, uri) {
+  if (!info.fixupChangedProtocol) {
+    return uri;
+  }
+  const host = uri.host;
+  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":") || host.startsWith("[");
+  const isLoopback = /^(.+\.)?localhost$/.test(host);
+  if (!host.includes(".") || uri.port !== -1 || isIp || isLoopback) {
+    return uri;
+  }
+  return uri.mutate().setScheme("https").finalize();
+}
+
+// The one resolve path for typed text: URI fixup, then the bar engine's
+// submission for keyword text, then the http(s) wall on the RESULT (never
+// only on the input). Typed text is never logged.
+async function resolveTypedAddress(text, engineName) {
+  if (typeof text !== "string" || !text.trim() || text.length > 2048) {
+    throw new Error("resolveTypedAddress: refusing empty or oversized text");
+  }
+  if (typeof engineName !== "string" || engineName.length > 256) {
+    throw new Error("resolveTypedAddress: refusing a malformed engine name");
+  }
+  const typed = text.trim();
+  // Keyword lookup returns an empty info before init.
+  await searchLazy.SearchService.init();
+  let info;
+  try {
+    info = Services.uriFixup.getFixupURIInfo(typed, Ci.nsIURIFixup.FIXUP_FLAG_FIX_SCHEME_TYPOS | Ci.nsIURIFixup.FIXUP_FLAG_ALLOW_KEYWORD_LOOKUP);
+  } catch {
+    return { kind: "refused" };
+  }
+  if (info.keywordProviderId) {
+    // Keyword searches go through the bar's engine, never fixup's own default URL.
+    const engine = await barEngine(engineName);
+    if (!engine) {
+      return { kind: "no-engine" };
+    }
+    const sub = engine.getSubmission(info.keywordAsSent);
+    if (!sub || sub.postData || !/^https?$/.test(sub.uri.scheme)) {
+      return { kind: "refused" };
+    }
+    return { kind: "search", url: String(sub.uri.spec), engineName: String(engine.name) };
+  }
+  const uri = info.preferredURI;
+  if (!uri || !/^https?$/.test(uri.scheme)) {
+    return { kind: "refused" };
+  }
+  return { kind: "visit", url: String(upgradeSchemeless(info, uri).spec) };
+}

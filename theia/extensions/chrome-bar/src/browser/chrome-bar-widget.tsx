@@ -22,6 +22,7 @@ import type { TabQueryRow } from '@powerbrowser/tab-uris/lib/node/tab-query-serv
 import { EMPTY_PAGE_URL, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
+import { ChromeStoreClient, ResolvedAddress } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import {
     CHROME_BAR_BACK_COMMAND_ID,
     CHROME_BAR_FORWARD_COMMAND_ID,
@@ -91,22 +92,6 @@ function dropKindOf(data: DataTransfer): 'link' | 'text' | 'none' {
 }
 
 /**
- * Maps raw typed text onto the contracted search-or-address routing.
- * Returns the URL to open, or undefined when the text is not an address
- * this tree can visit (the caller surfaces the contracted in-bar failure
- * row). No search-engine host is minted here by design.
- */
-function typedAddressTargetOf(text: string): string | undefined {
-    if (/^https?:\/\//i.test(text)) {
-        return text;
-    }
-    if (!/\s/.test(text) && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(text) && text.includes('.')) {
-        return `https://${text}`;
-    }
-    return undefined;
-}
-
-/**
  * GUI-06 (13-03): the chrome bar widget -- nav buttons, address pill with
  * suggestions, new-tab, and the mode toggle.
  *
@@ -125,8 +110,9 @@ function typedAddressTargetOf(text: string): string | undefined {
  *
  * Threat notes (13-03 threat model): suggestion titles and captions render
  * as React text nodes only, never markup (T-13-03-01); address commits
- * route through the existing opener with empty as a no-op and no
- * evaluation surface (T-13-03-03); the toggle is selection state only and
+ * resolve chrome-side through the resolveTypedAddress store kind (URI
+ * fixup, the bar engine's submission, the http(s) wall on the result), with
+ * empty as a no-op and no evaluation surface (T-13-03-03, Phase 29); the toggle is selection state only and
  * never touches a tab, with the before/after countTabs comparison in
  * selectMode asserting the invariant on every
  * switch (T-13-03-04); a refused or unacknowledged web-tab navigation takes
@@ -207,6 +193,10 @@ export class ChromeBarWidget extends ReactWidget {
 
     @inject(ContextKeyService)
     protected readonly contextKeys: ContextKeyService;
+
+    /** Phase 29 (BAR-01): typed text and the home page resolve chrome-side. */
+    @inject(ChromeStoreClient)
+    protected readonly store: ChromeStoreClient;
 
     protected holdTimer: number | undefined;
     /** Set when a hold opened the history menu, so the release's click does not navigate. */
@@ -645,8 +635,8 @@ export class ChromeBarWidget extends ReactWidget {
     /**
      * NAV-04: opens the home page in `tab` (the active web tab for a click,
      * the pushed tab for 27-06's Alt+Home), or in a new web tab without one.
-     * A non-empty value takes the pill's address routing, so only http(s) and
-     * bare dotted hosts open. Empty opens the empty page and focuses the
+     * A non-empty value resolves through chrome's resolveTypedAddress kind and
+     * opens only as a visit: a search result is never a home page. Empty opens the empty page and focuses the
      * pill, as New Tab does; a rejected or unacknowledged value shows the
      * Home-failure row.
      */
@@ -669,12 +659,12 @@ export class ChromeBarWidget extends ReactWidget {
             focusAddressPill();
             return 'empty';
         }
-        const target = typedAddressTargetOf(page);
         try {
-            if (!target) {
+            const resolved = await this.store.resolveTypedAddress(page);
+            if (resolved.kind !== 'visit' || !resolved.url) {
                 throw new Error('the home page is not an address');
             }
-            await this.navigateWebTab(target, tab);
+            await this.navigateWebTab(resolved.url, tab);
             return 'opened';
         } catch {
             this.commitFailed = false;
@@ -726,14 +716,11 @@ export class ChromeBarWidget extends ReactWidget {
     };
 
     /**
-     * Commits typed text by scheme, inventing no search addressability:
-     * text already carrying http or https goes to the web-tab route as-is;
-     * host-like text (no spaces, no scheme, containing a dot) is normalized
-     * with an https prefix onto the same route; anything else is not an
-     * address this tree can visit, so it surfaces the contracted in-bar
-     * failure row instead of a file-scheme editor open, and no search-engine
-     * host is minted anywhere (non-address text stays local). Empty commits
-     * are no-ops.
+     * Commits typed text: typed text resolves chrome-side; search URLs are
+     * minted only by chrome's resolveTypedAddress. A visit or search reply
+     * opens on the web-tab route; anything else (refused, no reply) surfaces
+     * the contracted in-bar failure row. This widget keeps no address rule
+     * of its own. Empty commits are no-ops.
      */
     protected commitText = async (raw: string): Promise<void> => {
         const text = raw.trim();
@@ -745,13 +732,18 @@ export class ChromeBarWidget extends ReactWidget {
         this.commitFailed = false;
         this.closeDropdown();
         this.update();
-        const target = typedAddressTargetOf(text);
-        if (!target) {
+        let resolved: ResolvedAddress | undefined;
+        try {
+            resolved = await this.store.resolveTypedAddress(text);
+        } catch {
+            resolved = undefined;
+        }
+        if (!resolved || (resolved.kind !== 'visit' && resolved.kind !== 'search') || !resolved.url) {
             this.showCommitFailure();
             return;
         }
         try {
-            await this.openCommittedUrl(target);
+            await this.openCommittedUrl(resolved.url);
         } catch {
             this.showCommitFailure();
         }

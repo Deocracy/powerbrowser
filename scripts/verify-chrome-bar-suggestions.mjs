@@ -620,8 +620,8 @@ function selfTest() {
         {
             name: 'planted engine-host literal',
             mutate: src => src.replace(
-                'return `https://${text}`;',
-                'return `https://duckduckgo.com/html/?q=${text}`;'
+                'resolved = await this.store.resolveTypedAddress(text);',
+                'resolved = { kind: \'search\', url: `https://duckduckgo.com/html/?q=${text}` };'
             ),
             expect: 'duckduckgo.com',
         },
