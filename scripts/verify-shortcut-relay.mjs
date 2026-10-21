@@ -452,6 +452,10 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
             } else if (!sameKey(row, fx) || !sameMods(row, fx)) {
                 failures.push(`${row.id}: key or modifiers differ from Firefox's ${row.firefox}: row ${describe(row)}, Firefox ${describe(fx)}`);
             }
+            // (4, the other direction) Firefox's unblockable keys stay unblockable.
+            if (fx && fx.reserved && row.reserved !== true) {
+                failures.push(`${row.id}: Firefox's ${row.firefox} is reserved="true" but the row is not reserved (a page could swallow it)`);
+            }
         }
     }
     for (const id of exceptions.keys()) {
@@ -593,6 +597,7 @@ const PLANTS = [
     { name: 'modifier drift between the sides', rel: FRONTEND_REL, from: "{ id: 'hardReload', key: 'R', modifiers: 'accel,shift'", to: "{ id: 'hardReload', key: 'R', modifiers: 'accel'", expect: 'hardReload: key or modifiers drift between the sides' },
     { name: 'label drift', rel: FRONTEND_REL, from: "label: 'Alt+Left Arrow'", to: "label: 'Alt+Left'", expect: 'back: label' },
     { name: 'reload made reserved', rel: CHROME_REL, from: '{ id: "reload", key: "R", modifiers: "accel", reserved: false', to: '{ id: "reload", key: "R", modifiers: "accel", reserved: true', expect: 'reload: reserved' },
+    { name: 'newTab unreserved', rel: CHROME_REL, from: '{ id: "newTab", key: "T", modifiers: "accel", reserved: true', to: '{ id: "newTab", key: "T", modifiers: "accel", reserved: false', expect: "newTab: Firefox's key_newNavigatorTab is reserved=\"true\" but the row is not reserved" },
     { name: 'stale exception', exceptions: new Map([...RESERVED_EXCEPTIONS, ['reload', 'planted']]), expect: 'reload: stale RESERVED_EXCEPTIONS' },
     {
         name: 'accel+P row on both sides',
