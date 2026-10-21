@@ -35,7 +35,7 @@ import {
 } from './chrome-bar-commands';
 import { ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
 import type { SourcedRow } from './chrome-bar-places-suggestions';
-import { PLACE_ROW_LIMIT, Row, autofillSplice, composeRows, iconFor, nextHighlight, safeIcon } from './address-bar-rows';
+import { PLACE_ROW_LIMIT, Row, autofillSplice, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
@@ -1120,7 +1120,7 @@ export class ChromeBarWidget extends ReactWidget {
      * else (refused, no reply) surfaces the contracted in-bar failure row. This widget keeps no address rule
      * of its own. Empty commits are no-ops.
      */
-    protected commitText = async (raw: string): Promise<void> => {
+    protected commitText = async (raw: string, { canonize = false }: { canonize?: boolean } = {}): Promise<void> => {
         const text = raw.trim();
         if (!text) {
             return;
@@ -1132,7 +1132,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
         let resolved: ResolvedAddress | undefined;
         try {
-            resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());
+            resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest(), canonize);
         } catch {
             resolved = undefined;
         }
@@ -1182,6 +1182,11 @@ export class ChromeBarWidget extends ReactWidget {
                 }
                 const row = this.dropdownOpen ? this.rows.find(r => r.key === this.highlightKey) : undefined;
                 void this.openRowInNewTab(row, true);
+                return;
+            }
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && isCanonizable(this.inputValue.trim())) {
+                // BAR-13: Ctrl+Enter completes a bare name to www.name.com in the current tab; other text is plain Enter.
+                void this.commitText(this.inputValue, { canonize: true });
                 return;
             }
             if (this.commitFailed || this.noSearch) {

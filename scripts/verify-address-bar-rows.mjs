@@ -33,7 +33,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-address-bar-rows';
 const MODULE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar-rows.ts';
-const EXPORTS = ['composeRows', 'nextHighlight', 'iconFor', 'safeIcon', 'autofillSplice', 'ENGINE_ROW_LIMIT', 'PLACE_ROW_LIMIT', 'ROW_LIMIT'];
+const EXPORTS = ['composeRows', 'nextHighlight', 'iconFor', 'safeIcon', 'autofillSplice', 'isCanonizable', 'ENGINE_ROW_LIMIT', 'PLACE_ROW_LIMIT', 'ROW_LIMIT'];
 
 const row = (source, url, extra = {}) => ({ key: `${source}:${url}`, source, title: url, caption: '', url, ...extra });
 const keysOf = rows => rows.map(r => r.key);
@@ -140,6 +140,8 @@ function cases(m) {
             const got = m.autofillSplice('LoC', 'localhost/');
             return same(got, { value: 'LoCalhost/', start: 3, end: 10 }) ? null : { got };
         }],
+        ...[['example', true], ['example/path', true], ['example.org', false], ['localhost:3000', false], ['two words', false], ['https://x', false]]
+            .map(([text, want]) => [`isCanonizable(${JSON.stringify(text)}) is ${want}`, () => (m.isCanonizable(text) === want ? null : { got: m.isCanonizable(text) })]),
         ['autofillSplice returns null for no match, an equal length and empty text', () => {
             const got = [m.autofillSplice('git', 'example.org/'), m.autofillSplice('a.org/', 'a.org/'), m.autofillSplice('', 'a.org/')];
             return same(got, [null, null, null]) ? null : got;

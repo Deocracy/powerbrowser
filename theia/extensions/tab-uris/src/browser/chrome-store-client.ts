@@ -160,9 +160,9 @@ export class ChromeStoreClient {
         return this.field<PlaceMatch[]>({ kind: 'searchPlaces', text, limit }, 'rows');
     }
 
-    /** Phase 29 (BAR-01): URI fixup, then the bar engine's submission, then the http(s) wall, all chrome-side. */
-    resolveTypedAddress(text: string, engineName = ''): Promise<ResolvedAddress> {
-        return this.field<ResolvedAddress>({ kind: 'resolveTypedAddress', text, engineName }, 'resolved');
+    /** Phase 29 (BAR-01): URI fixup, then the bar engine's submission, then the http(s) wall, all chrome-side. `canonize` (BAR-13) completes a bare name to www.name.com first. */
+    resolveTypedAddress(text: string, engineName = '', canonize = false): Promise<ResolvedAddress> {
+        return this.field<ResolvedAddress>({ kind: 'resolveTypedAddress', text, engineName, canonize }, 'resolved');
     }
 
     /** Phase 29 (BAR-04): the bar's engines, for the Default Search Engine setting and the placeholder. */

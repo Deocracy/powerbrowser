@@ -3786,7 +3786,7 @@ async function handleStoreRequest(data, actorRef) {
         return { ok: true, kind, dir: saved.dir, bytes: saved.bytes };
       }
       case "resolveTypedAddress": {
-        return { ok: true, kind, resolved: await resolveTypedAddress(data.text, data.engineName ?? "") };
+        return { ok: true, kind, resolved: await resolveTypedAddress(data.text, data.engineName ?? "", data.canonize === true) };
       }
       case "listSearchEngines": {
         return { ok: true, kind, ...(await listSearchEngines()) };
@@ -4367,15 +4367,30 @@ function upgradeSchemeless(info, uri) {
 
 // The one resolve path for typed text: URI fixup, then the bar engine's
 // submission for keyword text, then the http(s) wall on the RESULT (never
-// only on the input). Typed text is never logged.
-async function resolveTypedAddress(text, engineName) {
+// only on the input). Typed text is never logged. `canonize` (Ctrl+Enter,
+// BAR-13) first completes a bare name to www.<name><locale suffix>, as
+// UrlbarInput._maybeCanonizeURL does.
+async function resolveTypedAddress(text, engineName, canonize = false) {
   if (typeof text !== "string" || !text.trim() || text.length > 2048) {
     throw new Error("resolveTypedAddress: refusing empty or oversized text");
   }
   if (typeof engineName !== "string" || engineName.length > 256) {
     throw new Error("resolveTypedAddress: refusing a malformed engine name");
   }
-  const typed = text.trim();
+  let typed = text.trim();
+  if (canonize === true && /^\s*[^.:\/\s]+(?:\/.*|\s*)$/i.test(typed)) {
+    let suffix = Services.locale.urlFixupSuffix;
+    if (!suffix.endsWith("/")) {
+      suffix += "/";
+    }
+    const slash = typed.indexOf("/");
+    const suffixed = slash >= 0 ? typed.slice(0, slash) + suffix + typed.slice(slash + 1) : typed + suffix;
+    try {
+      typed = Services.uriFixup.getFixupURIInfo(suffixed, Ci.nsIURIFixup.FIXUP_FLAGS_MAKE_ALTERNATE_URI).fixedURI.spec;
+    } catch {
+      // As in Firefox, a fixup throw leaves the text as typed.
+    }
+  }
   // Keyword lookup returns an empty info before init.
   await searchLazy.SearchService.init();
   let info;

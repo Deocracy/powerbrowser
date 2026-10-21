@@ -108,3 +108,12 @@ export function autofillSplice(typed: string, completion: string): { value: stri
     const value = typed + completion.slice(typed.length);
     return { value, start: typed.length, end: value.length };
 }
+
+/**
+ * Ctrl+Enter (BAR-13): true for a bare name Firefox completes to
+ * www.<name>.com -- no dot, colon or space before an optional path. The same
+ * test as UrlbarInput._maybeCanonizeURL; chrome applies it again.
+ */
+export function isCanonizable(text: string): boolean {
+    return /^\s*[^.:\/\s]+(?:\/.*|\s*)$/i.test(text);
+}

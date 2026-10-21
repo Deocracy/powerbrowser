@@ -118,6 +118,14 @@
  *               and a push). Typing "loc" again then Backspace leaves "loc"
  *               with no completion; typing "a" completes again; "loc" set by a
  *               paste-shaped input event is not completed.
+ *   canonize-drop  Ctrl+Enter and drops on the pill (BAR-13). Canonize half:
+ *               the page realm's resolveTypedAddress('example', '', true)
+ *               replies a visit of https://www.example.com/ and with canonize
+ *               false a search. With the widget's openCommittedUrl wrapped to
+ *               record its argument and load nothing (no public host is ever
+ *               loaded), Ctrl+Enter (at the parent) on "example" commits
+ *               https://www.example.com/ and on "example.org" (not a bare
+ *               name, so plain Enter) https://example.org/.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -1388,6 +1396,48 @@ async function autofill(ctx) {
     }
 }
 
+const CTRL_ENTER = { ...ENTER, modifiers: ['control'] };
+
+/** The URLs the wrapped openCommittedUrl recorded. */
+const committedUrls = app => app.evaluate('JSON.stringify(window.__pbCommitted || [])').then(JSON.parse);
+
+async function canonizeDrop(ctx) {
+    const { app, fail } = ctx;
+    await sessionTab(ctx);
+    const canon = await probe(app, `return await get('ChromeStoreClient').resolveTypedAddress('example', '', true);`);
+    if (canon?.kind !== 'visit' || canon.url !== 'https://www.example.com/') {
+        fail(`resolveTypedAddress('example', '', true) must reply a visit of https://www.example.com/; got ${JSON.stringify(canon)}`);
+    }
+    const plain = await probe(app, `return await get('ChromeStoreClient').resolveTypedAddress('example', '', false);`);
+    if (plain?.kind !== 'search') {
+        fail(`resolveTypedAddress('example', '', false) must reply kind search; got ${JSON.stringify(plain)}`);
+    }
+    // The UI half records the commit instead of loading it: www.example.com is a public host.
+    const wrapped = await probe(app, `const w = get('ChromeBarWidget');
+        window.__pbCommitted = [];
+        w.__pbOpenCommitted = w.openCommittedUrl;
+        w.openCommittedUrl = async url => { window.__pbCommitted.push(url); };
+        return true;`);
+    if (wrapped !== true) {
+        return fail(`${BROKEN} the widget's openCommittedUrl could not be wrapped`);
+    }
+    try {
+        for (const [text, want] of [['example', 'https://www.example.com/'], ['example.org', 'https://example.org/']]) {
+            await app.evaluate('window.__pbCommitted = []; true');
+            await typeInPill(app, text);
+            await pressKey(app, CTRL_ENTER);
+            const got = await settle(() => committedUrls(app), v => v.length > 0, 8000);
+            if (got.length !== 1 || got[0] !== want) {
+                fail(`Ctrl+Enter on "${text}" must commit ${want}; the commit recorded ${JSON.stringify(got)}`);
+            }
+        }
+    } finally {
+        await probe(app, `const w = get('ChromeBarWidget');
+            if (w.__pbOpenCommitted) { w.openCommittedUrl = w.__pbOpenCommitted; delete w.__pbOpenCommitted; }
+            return true;`);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -1402,6 +1452,7 @@ const SCENARIOS = {
     'switch-to-tab': switchToTab,
     'new-tab-targets': newTabTargets,
     autofill,
+    'canonize-drop': canonizeDrop,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
