@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "PB spike 002c chrome tab model probe",
+  "version": "1.0",
+  "browser_specific_settings": { "gecko": { "id": "spike002c-tab-model@powerbrowser.test" } },
+  "permissions": ["tabs", "webNavigation", "webRequest", "<all_urls>"],
+  "background": { "scripts": ["config.js", "background.js"], "persistent": true },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["config.js", "content.js"], "run_at": "document_idle", "all_frames": false }
+  ],
+  "browser_action": { "default_title": "spike002c", "default_area": "navbar" },
+  "page_action": { "default_title": "spike002c page", "show_matches": ["<all_urls>"] },
+  "sidebar_action": { "default_panel": "popup.html", "default_title": "spike002c sidebar", "open_at_install": false },
+  "commands": { "spike-cmd": { "suggested_key": { "default": "Alt+Shift+9" }, "description": "spike" } }
+}

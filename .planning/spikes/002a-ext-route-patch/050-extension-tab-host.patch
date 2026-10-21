@@ -1,0 +1,267 @@
+diff --git a/browser/components/extensions/parent/ext-browser.js b/browser/components/extensions/parent/ext-browser.js
+index 91adc6b..a02f0ee 100644
+--- a/browser/components/extensions/parent/ext-browser.js
++++ b/browser/components/extensions/parent/ext-browser.js
+@@ -319,6 +319,12 @@ class WindowTracker extends WindowTrackerBase {
+     // bug 1983854 - should this only look for windows on the current
+     // workspace?
+     options.allowFromInactiveWorkspace = true;
++    // BrowserWindowTracker only tracks tabbrowser windows; a focused tab host
++    // window is the top normal window when it is the top browser window.
++    let top = this.getTopWindow(context);
++    if (top && this.isTabHostWindow(top)) {
++      return top;
++    }
+     return BrowserWindowTracker.getTopWindow(options);
+   }
+ }
+@@ -643,9 +649,12 @@ class TabTracker extends TabTrackerBase {
+       }
+ 
+       // emitActivated to trigger tab.onActivated/tab.onHighlighted for a newly opened window.
+-      this.emitActivated(window.gBrowser.tabs[0]);
+-      if (this.has("tabs-highlighted")) {
+-        this.emitHighlighted(window);
++      // A tab host window can open with no tab; a tabbrowser window cannot.
++      if (window.gBrowser.tabs.length) {
++        this.emitActivated(window.gBrowser.tabs[0]);
++        if (this.has("tabs-highlighted")) {
++          this.emitHighlighted(window);
++        }
+       }
+     }
+   }
+@@ -1193,7 +1202,9 @@ class Window extends WindowBase {
+       return null;
+     }
+ 
+-    return tabManager.getWrapper(this.window.gBrowser.selectedTab);
++    // A tab host window with no tab has no selected tab.
++    let { selectedTab } = this.window.gBrowser;
++    return selectedTab ? tabManager.getWrapper(selectedTab) : null;
+   }
+ 
+   getTabAtIndex(index) {
+diff --git a/browser/components/extensions/parent/ext-browserAction.js b/browser/components/extensions/parent/ext-browserAction.js
+index 45ce82b..a64819c 100644
+--- a/browser/components/extensions/parent/ext-browserAction.js
++++ b/browser/components/extensions/parent/ext-browserAction.js
+@@ -979,6 +979,10 @@ this.browserAction = class extends ExtensionAPIPersistent {
+    *        Browser chrome window.
+    */
+   updateWindow(window) {
++    // A tab host window has no CustomizableUI toolbar; its button is the embedder's.
++    if (windowTracker.isTabHostWindow(window)) {
++      return;
++    }
+     let node = this.widget.forWindow(window).node;
+     if (node) {
+       let tab = window.gBrowser.selectedTab;
+diff --git a/browser/components/extensions/parent/ext-menus.js b/browser/components/extensions/parent/ext-menus.js
+index fbce863..f7a06fc 100644
+--- a/browser/components/extensions/parent/ext-menus.js
++++ b/browser/components/extensions/parent/ext-menus.js
+@@ -1050,6 +1050,9 @@ const menuTracker = {
+   },
+ 
+   async onWindowOpen(window) {
++    if (windowTracker.isTabHostWindow(window)) {
++      return;
++    }
+     for (const id of menuTracker.menuIds) {
+       const menu = window.document.getElementById(id);
+       menu.addEventListener("popupshowing", menuTracker);
+@@ -1071,6 +1074,9 @@ const menuTracker = {
+   },
+ 
+   cleanupWindow(window) {
++    if (windowTracker.isTabHostWindow(window)) {
++      return;
++    }
+     for (const id of this.menuIds) {
+       const menu = window.document.getElementById(id);
+       menu.removeEventListener("popupshowing", this);
+diff --git a/browser/components/extensions/parent/ext-sessions.js b/browser/components/extensions/parent/ext-sessions.js
+index 5a1431f..72529d6 100644
+--- a/browser/components/extensions/parent/ext-sessions.js
++++ b/browser/components/extensions/parent/ext-sessions.js
+@@ -30,6 +30,9 @@ const getRecentlyClosed = (maxResults, extension) => {
+   // Get closed tabs
+   // Private closed tabs are in sessionstore if the owning window is still open .
+   for (let window of windowTracker.browserWindows()) {
++    if (windowTracker.isTabHostWindow(window)) {
++      continue;
++    }
+     if (!extension.canAccessWindow(window)) {
+       continue;
+     }
+@@ -207,6 +210,9 @@ this.sessions = class extends ExtensionAPIPersistent {
+             // so we must find the tab in which case we can just use its closedId.
+             let recentlyClosedTabs = [];
+             for (let window of windowTracker.browserWindows()) {
++    if (windowTracker.isTabHostWindow(window)) {
++      continue;
++    }
+               let closedTabData =
+                 SessionStore.getClosedTabDataForWindow(window);
+               for (let tab of closedTabData) {
+diff --git a/browser/components/extensions/parent/ext-sidebarAction.js b/browser/components/extensions/parent/ext-sidebarAction.js
+index ec06766..ed2be4a 100644
+--- a/browser/components/extensions/parent/ext-sidebarAction.js
++++ b/browser/components/extensions/parent/ext-sidebarAction.js
+@@ -93,6 +93,9 @@ this.sidebarAction = class extends ExtensionAPI {
+     }
+ 
+     for (let window of windowTracker.browserWindows()) {
++      if (windowTracker.isTabHostWindow(window)) {
++        continue;
++      }
+       let { SidebarController } = window;
+       // Note: sidebar preferences such as sidebar.installed.extensions are kept to remember users preferences
+       // and should be remembered between browser/extension restarts, when the extension is disabled and re-enabled,
+@@ -114,6 +117,9 @@ this.sidebarAction = class extends ExtensionAPI {
+     }
+ 
+     for (let window of windowTracker.browserWindows()) {
++      if (windowTracker.isTabHostWindow(window)) {
++        continue;
++      }
+       let { SidebarController } = window;
+       if (SidebarController.lastOpenedId === sidebarId) {
+         SidebarController.lastOpenedId = null;
+@@ -129,6 +135,9 @@ this.sidebarAction = class extends ExtensionAPI {
+ 
+     let install = this.extension.startupReason === "ADDON_INSTALL";
+     for (let window of windowTracker.browserWindows()) {
++      if (windowTracker.isTabHostWindow(window)) {
++        continue;
++      }
+       this.updateWindow(window);
+       let { SidebarController } = window;
+       if (
+@@ -141,7 +150,7 @@ this.sidebarAction = class extends ExtensionAPI {
+   }
+ 
+   createMenuItem(window, details) {
+-    if (!this.extension.canAccessWindow(window)) {
++    if (windowTracker.isTabHostWindow(window) || !this.extension.canAccessWindow(window)) {
+       return;
+     }
+     this.panel = details.panel;
+@@ -214,6 +223,9 @@ this.sidebarAction = class extends ExtensionAPI {
+    *        Browser chrome window.
+    */
+   updateWindow(window) {
++    if (windowTracker.isTabHostWindow(window)) {
++      return;
++    }
+     if (!this.extension.canAccessWindow(window)) {
+       return;
+     }
+@@ -401,6 +413,9 @@ this.sidebarAction = class extends ExtensionAPI {
+    */
+   isOpen(window) {
+     let { SidebarController } = window;
++    if (!SidebarController) {
++      return false;
++    }
+     return SidebarController.isOpen && this.id == SidebarController.currentID;
+   }
+ 
+diff --git a/remote/shared/TabManager.sys.mjs b/remote/shared/TabManager.sys.mjs
+index b3b7693..3e8d301 100644
+--- a/remote/shared/TabManager.sys.mjs
++++ b/remote/shared/TabManager.sys.mjs
+@@ -191,6 +191,11 @@ class TabManagerClass {
+ 
+     // For web-platform reftests a faked tabbrowser is used,
+     // which does not actually have tabs.
++    // A tab host window can expose top-level browsers that are not tabs to
++    // anything else (an embedder's own UI frame); WebDriver still sees them.
++    if (tabBrowser && tabBrowser.webDriverTabs) {
++      return tabBrowser.webDriverTabs;
++    }
+     if (tabBrowser && tabBrowser.tabs) {
+       return tabBrowser.tabs;
+     }
+diff --git a/toolkit/components/extensions/parent/ext-tabs-base.js b/toolkit/components/extensions/parent/ext-tabs-base.js
+index dbe17d4..253ddfc 100644
+--- a/toolkit/components/extensions/parent/ext-tabs-base.js
++++ b/toolkit/components/extensions/parent/ext-tabs-base.js
+@@ -1739,7 +1739,57 @@ class WindowTrackerBase extends EventEmitter {
+   isBrowserWindow(window) {
+     let { documentElement } = window.document;
+ 
+-    return documentElement.getAttribute("windowtype") === "navigator:browser";
++    return (
++      documentElement.getAttribute("windowtype") === "navigator:browser" ||
++      this.isTabHostWindow(window)
++    );
++  }
++
++  // A window that is not a tabbrowser window but hosts its own tabs opts in
++  // with this attribute on its document element. It must then provide the
++  // gBrowser and gBrowserInit members ext-browser.js reads.
++  isTabHostWindow(window) {
++    return window.document.documentElement.hasAttribute("extensiontabhost");
++  }
++
++  // The most recently active window of any type when that window is a
++  // browser window; otherwise the most recent tabbrowser window; otherwise a
++  // tab host window. With no browser window at all it keeps the old result
++  // (null, or the NS_ERROR_FAILURE getMostRecentNonPBWindow throws).
++  _mostRecentBrowserWindow(nonPB) {
++    let recent = type =>
++      nonPB
++        ? Services.wm.getMostRecentNonPBWindow(type)
++        : Services.wm.getMostRecentWindow(type);
++    let win = null;
++    try {
++      win = recent(null);
++    } catch (e) {}
++    if (
++      win &&
++      !win.closed &&
++      this.isBrowserWindowInitialized(win) &&
++      this.isBrowserWindow(win)
++    ) {
++      return win;
++    }
++    try {
++      win = recent("navigator:browser");
++    } catch (e) {
++      win = null;
++    }
++    if (win) {
++      return win;
++    }
++    for (let host of this.browserWindows()) {
++      if (
++        this.isTabHostWindow(host) &&
++        !(nonPB && PrivateBrowsingUtils.isWindowPrivate(host))
++      ) {
++        return host;
++      }
++    }
++    return recent("navigator:browser");
+   }
+ 
+   /**
+@@ -1780,7 +1830,7 @@ class WindowTrackerBase extends EventEmitter {
+    *        @readonly
+    */
+   get topWindow() {
+-    return Services.wm.getMostRecentWindow("navigator:browser");
++    return this._mostRecentBrowserWindow(false);
+   }
+ 
+   /**
+@@ -1790,7 +1840,7 @@ class WindowTrackerBase extends EventEmitter {
+    *        @readonly
+    */
+   get topNonPBWindow() {
+-    return Services.wm.getMostRecentNonPBWindow("navigator:browser");
++    return this._mostRecentBrowserWindow(true);
+   }
+ 
+   /**

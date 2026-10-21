@@ -1,0 +1,4941 @@
+{
+  "origin": "http://127.0.0.1:39907",
+  "extId": "spike001-tab-visibility@powerbrowser.test",
+  "startedAt": "2026-10-21T07:03:28.879Z",
+  "install": {
+    "route": "AddonManager.installTemporaryAddon",
+    "id": "spike001-tab-visibility@powerbrowser.test",
+    "isActive": true,
+    "temporarilyInstalled": true,
+    "signaturesRequiredPref": false,
+    "requireSigningBuild": false
+  },
+  "steps": [
+    {
+      "name": "baseline: shell only, no overlay, no stock window",
+      "index": 1,
+      "action": null,
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": []
+      },
+      "snapshot": {
+        "ok": {
+          "label": "baseline: shell only, no overlay, no stock window",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "open overlay A on /a",
+      "index": 2,
+      "action": "wt-nesv55-1",
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-1",
+            "url": "http://127.0.0.1:39907/a",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 11,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "open overlay A on /a",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "open overlay B on /b",
+      "index": 3,
+      "action": "wt-nesv55-2",
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-1",
+            "url": "http://127.0.0.1:39907/a",
+            "visible": "hidden",
+            "mmGroup": "browsers",
+            "bcId": 11,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          },
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/b",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 12,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "open overlay B on /b",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "activate overlay A",
+      "index": 4,
+      "action": true,
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-1",
+            "url": "http://127.0.0.1:39907/a",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 11,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          },
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/b",
+            "visible": "hidden",
+            "mmGroup": "browsers",
+            "bcId": 12,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "activate overlay A",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "activate overlay B",
+      "index": 5,
+      "action": true,
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-1",
+            "url": "http://127.0.0.1:39907/a",
+            "visible": "hidden",
+            "mmGroup": "browsers",
+            "bcId": 11,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          },
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/b",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 12,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "activate overlay B",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "navigate overlay B to /c",
+      "index": 6,
+      "action": {
+        "ok": true,
+        "kind": "webTabNavigate",
+        "where": "loading"
+      },
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-1",
+            "url": "http://127.0.0.1:39907/a",
+            "visible": "hidden",
+            "mmGroup": "browsers",
+            "bcId": 11,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          },
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "navigate overlay B to /c",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "bg: tabs.executeScript on the active tab (no stock window)",
+      "index": 7,
+      "action": {
+        "err": "Error: An unexpected error occurred"
+      },
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-1",
+            "url": "http://127.0.0.1:39907/a",
+            "visible": "hidden",
+            "mmGroup": "browsers",
+            "bcId": 11,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          },
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "bg: tabs.executeScript on the active tab (no stock window)",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "bg: ping every content-script port",
+      "index": 8,
+      "action": {
+        "ok": [
+          "http://127.0.0.1:39907/a",
+          "http://127.0.0.1:39907/b",
+          "http://127.0.0.1:39907/c"
+        ]
+      },
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-1",
+            "url": "http://127.0.0.1:39907/a",
+            "visible": "hidden",
+            "mmGroup": "browsers",
+            "bcId": 11,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          },
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "bg: ping every content-script port",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "browserAction triggerAction(shell window)",
+      "index": 9,
+      "action": "threw: TypeError: can't access property \"documentGlobal\", nativeTab is null",
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-1",
+            "url": "http://127.0.0.1:39907/a",
+            "visible": "hidden",
+            "mmGroup": "browsers",
+            "bcId": 11,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          },
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "browserAction triggerAction(shell window)",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "close overlay A",
+      "index": 10,
+      "action": true,
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": null,
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": null,
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "close overlay A",
+          "queryAll": {
+            "ok": []
+          },
+          "queryActiveCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "queryActiveLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetAll": {
+            "ok": []
+          },
+          "windowsGetCurrent": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "windowsGetLastFocused": {
+            "err": "Error: An unexpected error occurred"
+          }
+        }
+      }
+    },
+    {
+      "name": "open stock window (GUI-01) on /s",
+      "index": 11,
+      "action": {
+        "context": "ff4b166a-8780-4b0a-b825-ac04da0ac7c4",
+        "url": "http://127.0.0.1:39907/s"
+      },
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "navigator:browser",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "open stock window (GUI-01) on /s",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "browserAction: widget node presence per window",
+      "index": 12,
+      "action": {
+        "shell": false,
+        "stock": [
+          [
+            "id",
+            {
+              "type": "string",
+              "value": "spike001-tab-visibility_powerbrowser_test-browser-action"
+            }
+          ],
+          [
+            "area",
+            {
+              "type": "string",
+              "value": "nav-bar"
+            }
+          ]
+        ]
+      },
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "navigator:browser",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "browserAction: widget node presence per window",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "browserAction triggerAction(stock window)",
+      "index": 13,
+      "action": "returned",
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "navigator:browser",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "browserAction triggerAction(stock window)",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "browserAction triggerAction(shell window) with a stock window open",
+      "index": 14,
+      "action": "threw: TypeError: can't access property \"documentGlobal\", nativeTab is undefined",
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "navigator:browser",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "browserAction triggerAction(shell window) with a stock window open",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "focus shell window, activate overlay B (user is looking at an overlay)",
+      "index": 15,
+      "action": true,
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "focus shell window, activate overlay B (user is looking at an overlay)",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": false,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "browserAction triggerAction(stock window) while overlay B is what the user sees",
+      "index": 16,
+      "action": "returned",
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "browserAction triggerAction(stock window) while overlay B is what the user sees",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": false,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bg: tabs.executeScript on the active tab (stock window open)",
+      "index": 17,
+      "action": {
+        "ok": [
+          "http://127.0.0.1:39907/s"
+        ]
+      },
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "bg: tabs.executeScript on the active tab (stock window open)",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": false,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bg: tabs.sendMessage to stock tab id",
+      "index": 18,
+      "action": {
+        "ok": {
+          "fromContent": "http://127.0.0.1:39907/s",
+          "m": {
+            "hi": 1
+          }
+        }
+      },
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "bg: tabs.sendMessage to stock tab id",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": false,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bg: tabs.sendMessage to -1 (overlay id)",
+      "index": 19,
+      "action": {
+        "err": "Error: Type error for parameter tabId (Integer -1 is too small (must be at least 0)) for tabs.sendMessage."
+      },
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": [
+          {
+            "pbTabId": "wt-nesv55-2",
+            "url": "http://127.0.0.1:39907/c",
+            "visible": "visible",
+            "mmGroup": "browsers",
+            "bcId": 13,
+            "getTabForBrowser": null,
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "bg: tabs.sendMessage to -1 (overlay id)",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": false,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "close overlay B",
+      "index": 20,
+      "action": true,
+      "ground": {
+        "shellIsBrowserWindow": false,
+        "shellWindowTrackerId": 1,
+        "topWindow": "navigator:browser",
+        "mostRecentAnyWindowtype": "powerbrowser:main",
+        "activeTabUrl": "http://127.0.0.1:39907/s",
+        "theiaFrame": {
+          "mmGroup": null,
+          "getBrowserData": {
+            "tabId": -1,
+            "windowId": -1
+          },
+          "url": "http://127.0.0.1:36931/"
+        },
+        "overlays": []
+      },
+      "snapshot": {
+        "ok": {
+          "label": "close overlay B",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 31,
+                "index": 0,
+                "active": true,
+                "url": "http://127.0.0.1:39907/s",
+                "title": "page /s",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 31,
+                "type": "normal",
+                "focused": false,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 31,
+                    "index": 0,
+                    "active": true,
+                    "url": "http://127.0.0.1:39907/s",
+                    "title": "page /s",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 31,
+              "type": "normal",
+              "focused": false
+            }
+          }
+        }
+      }
+    }
+  ],
+  "log": [
+    {
+      "step": 0,
+      "src": "bg",
+      "kind": "started",
+      "t": 1792566215167,
+      "data": {
+        "manifest": 3,
+        "id": "spike001-tab-visibility@powerbrowser.test"
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566216973,
+      "data": {
+        "label": "baseline: shell only, no overlay, no stock window",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566216973,
+      "data": {
+        "id": 1,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "baseline: shell only, no overlay, no stock window",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 2,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792566217179,
+      "data": {
+        "tabId": -1,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:39907/a"
+      }
+    },
+    {
+      "step": 2,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792566217213,
+      "data": {
+        "href": "http://127.0.0.1:39907/a",
+        "top": true
+      }
+    },
+    {
+      "step": 2,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792566217220,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:39907/a"
+        },
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:39907/a",
+          "origin": "http://127.0.0.1:39907",
+          "envType": "content_child",
+          "documentId": "6ac03034-53aa-427f-590c-6e13ba51f28f"
+        }
+      }
+    },
+    {
+      "step": 2,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792566217220,
+      "data": {
+        "href": "http://127.0.0.1:39907/a",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 2,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792566217221,
+      "data": {
+        "name": "http://127.0.0.1:39907/a",
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:39907/a",
+          "origin": "http://127.0.0.1:39907",
+          "envType": "content_child",
+          "documentId": "6ac03034-53aa-427f-590c-6e13ba51f28f"
+        }
+      }
+    },
+    {
+      "step": 2,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566222079,
+      "data": {
+        "label": "open overlay A on /a",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 2,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566222079,
+      "data": {
+        "id": 2,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "open overlay A on /a",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792566222209,
+      "data": {
+        "tabId": -1,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:39907/b"
+      }
+    },
+    {
+      "step": 3,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792566222241,
+      "data": {
+        "href": "http://127.0.0.1:39907/b",
+        "top": true
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792566222248,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:39907/b"
+        },
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:39907/b",
+          "origin": "http://127.0.0.1:39907",
+          "envType": "content_child",
+          "documentId": "b57931cf-accb-c622-460f-a63a436f8aae"
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792566222248,
+      "data": {
+        "href": "http://127.0.0.1:39907/b",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792566222248,
+      "data": {
+        "name": "http://127.0.0.1:39907/b",
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:39907/b",
+          "origin": "http://127.0.0.1:39907",
+          "envType": "content_child",
+          "documentId": "b57931cf-accb-c622-460f-a63a436f8aae"
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566227038,
+      "data": {
+        "label": "open overlay B on /b",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566227038,
+      "data": {
+        "id": 3,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "open overlay B on /b",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 4,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566231092,
+      "data": {
+        "label": "activate overlay A",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 4,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566231092,
+      "data": {
+        "id": 4,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "activate overlay A",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 5,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566235145,
+      "data": {
+        "label": "activate overlay B",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 5,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566235145,
+      "data": {
+        "id": 5,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "activate overlay B",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792566235292,
+      "data": {
+        "tabId": -1,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:39907/c"
+      }
+    },
+    {
+      "step": 6,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792566235299,
+      "data": {
+        "href": "http://127.0.0.1:39907/c",
+        "top": true
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792566235300,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:39907/c"
+        },
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:39907/c",
+          "origin": "http://127.0.0.1:39907",
+          "envType": "content_child",
+          "documentId": "1b41dbb9-6a0c-0899-81ba-398889734ce8"
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792566235301,
+      "data": {
+        "name": "http://127.0.0.1:39907/c",
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:39907/c",
+          "origin": "http://127.0.0.1:39907",
+          "envType": "content_child",
+          "documentId": "1b41dbb9-6a0c-0899-81ba-398889734ce8"
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792566235300,
+      "data": {
+        "href": "http://127.0.0.1:39907/c",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566237850,
+      "data": {
+        "label": "navigate overlay B to /c",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566237850,
+      "data": {
+        "id": 6,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "navigate overlay B to /c",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566238149,
+      "data": {
+        "id": 7,
+        "op": "executeScriptActive",
+        "r": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566239953,
+      "data": {
+        "label": "bg: tabs.executeScript on the active tab (no stock window)",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566239953,
+      "data": {
+        "id": 8,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "bg: tabs.executeScript on the active tab (no stock window)",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 8,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566240099,
+      "data": {
+        "id": 9,
+        "op": "pingPorts",
+        "r": {
+          "ok": [
+            "http://127.0.0.1:39907/a",
+            "http://127.0.0.1:39907/b",
+            "http://127.0.0.1:39907/c"
+          ]
+        }
+      }
+    },
+    {
+      "step": 8,
+      "src": "bg",
+      "kind": "port.message",
+      "t": 1792566240100,
+      "data": {
+        "name": "http://127.0.0.1:39907/a",
+        "m": {
+          "pong": 1792566240099,
+          "href": "http://127.0.0.1:39907/a"
+        }
+      }
+    },
+    {
+      "step": 8,
+      "src": "bg",
+      "kind": "port.message",
+      "t": 1792566240100,
+      "data": {
+        "name": "http://127.0.0.1:39907/c",
+        "m": {
+          "pong": 1792566240099,
+          "href": "http://127.0.0.1:39907/c"
+        }
+      }
+    },
+    {
+      "step": 8,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566241902,
+      "data": {
+        "label": "bg: ping every content-script port",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 8,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566241902,
+      "data": {
+        "id": 10,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "bg: ping every content-script port",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566244455,
+      "data": {
+        "label": "browserAction triggerAction(shell window)",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566244455,
+      "data": {
+        "id": 11,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "browserAction triggerAction(shell window)",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 10,
+      "src": "bg",
+      "kind": "port.disconnect",
+      "t": 1792566244612,
+      "data": {
+        "name": "http://127.0.0.1:39907/a"
+      }
+    },
+    {
+      "step": 10,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566247158,
+      "data": {
+        "label": "close overlay A",
+        "queryAll": {
+          "ok": []
+        },
+        "queryActiveCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "queryActiveLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetAll": {
+          "ok": []
+        },
+        "windowsGetCurrent": {
+          "err": "Error: An unexpected error occurred"
+        },
+        "windowsGetLastFocused": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 10,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566247158,
+      "data": {
+        "id": 12,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "close overlay A",
+            "queryAll": {
+              "ok": []
+            },
+            "queryActiveCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "queryActiveLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetAll": {
+              "ok": []
+            },
+            "windowsGetCurrent": {
+              "err": "Error: An unexpected error occurred"
+            },
+            "windowsGetLastFocused": {
+              "err": "Error: An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "tabs.onCreated",
+      "t": 1792566248336,
+      "data": {
+        "id": 1,
+        "windowId": 31,
+        "index": 0,
+        "active": true,
+        "url": "about:blank",
+        "title": "New Tab",
+        "status": "complete"
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "tabs.onActivated",
+      "t": 1792566248336,
+      "data": {
+        "tabId": 1,
+        "windowId": 31
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "windows.onCreated",
+      "t": 1792566248336,
+      "data": {
+        "id": 31,
+        "type": "normal",
+        "focused": false
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "windows.onFocusChanged",
+      "t": 1792566248353,
+      "data": {
+        "id": 31
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792566248422,
+      "data": {
+        "tabId": 1,
+        "changeInfo": {
+          "title": "127.0.0.1:39907/s"
+        },
+        "tab": {
+          "id": 1,
+          "windowId": 31,
+          "index": 0,
+          "active": true,
+          "url": "about:blank",
+          "title": "127.0.0.1:39907/s",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792566248427,
+      "data": {
+        "tabId": 1,
+        "changeInfo": {
+          "status": "loading"
+        },
+        "tab": {
+          "id": 1,
+          "windowId": 31,
+          "index": 0,
+          "active": true,
+          "url": "about:blank",
+          "title": "127.0.0.1:39907/s",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "webNavigation.onCommitted",
+      "t": 1792566248440,
+      "data": {
+        "tabId": 1,
+        "frameId": 0,
+        "url": "http://127.0.0.1:39907/s"
+      }
+    },
+    {
+      "step": 11,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792566248449,
+      "data": {
+        "href": "http://127.0.0.1:39907/s",
+        "top": true
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792566248469,
+      "data": {
+        "tabId": 1,
+        "changeInfo": {
+          "status": "loading",
+          "url": "http://127.0.0.1:39907/s"
+        },
+        "tab": {
+          "id": 1,
+          "windowId": 31,
+          "index": 0,
+          "active": true,
+          "url": "http://127.0.0.1:39907/s",
+          "title": "127.0.0.1:39907/s",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792566248473,
+      "data": {
+        "tabId": 1,
+        "changeInfo": {
+          "title": "page /s"
+        },
+        "tab": {
+          "id": 1,
+          "windowId": 31,
+          "index": 0,
+          "active": true,
+          "url": "http://127.0.0.1:39907/s",
+          "title": "page /s",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792566248482,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:39907/s"
+        },
+        "sender": {
+          "tab": {
+            "id": 1,
+            "windowId": 31,
+            "index": 0,
+            "active": true,
+            "url": "http://127.0.0.1:39907/s",
+            "title": "page /s",
+            "status": "loading"
+          },
+          "frameId": 0,
+          "url": "http://127.0.0.1:39907/s",
+          "origin": "http://127.0.0.1:39907",
+          "envType": "content_child",
+          "documentId": "22c4ced6-4453-dae9-f244-38e2e8ad1664"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792566248483,
+      "data": {
+        "name": "http://127.0.0.1:39907/s",
+        "sender": {
+          "tab": {
+            "id": 1,
+            "windowId": 31,
+            "index": 0,
+            "active": true,
+            "url": "http://127.0.0.1:39907/s",
+            "title": "page /s",
+            "status": "loading"
+          },
+          "frameId": 0,
+          "url": "http://127.0.0.1:39907/s",
+          "origin": "http://127.0.0.1:39907",
+          "envType": "content_child",
+          "documentId": "22c4ced6-4453-dae9-f244-38e2e8ad1664"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792566248484,
+      "data": {
+        "tabId": 1,
+        "changeInfo": {
+          "status": "complete"
+        },
+        "tab": {
+          "id": 1,
+          "windowId": 31,
+          "index": 0,
+          "active": true,
+          "url": "http://127.0.0.1:39907/s",
+          "title": "page /s",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792566248501,
+      "data": {
+        "href": "http://127.0.0.1:39907/s",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792566248630,
+      "data": {
+        "tabId": 1,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:39907/s"
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566251814,
+      "data": {
+        "label": "open stock window (GUI-01) on /s",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566251814,
+      "data": {
+        "id": 13,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "open stock window (GUI-01) on /s",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 12,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566253466,
+      "data": {
+        "label": "browserAction: widget node presence per window",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 12,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566253466,
+      "data": {
+        "id": 14,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "browserAction: widget node presence per window",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 13,
+      "src": "bg",
+      "kind": "browserAction.onClicked",
+      "t": 1792566253692,
+      "data": {
+        "tab": {
+          "id": 1,
+          "windowId": 31,
+          "index": 0,
+          "active": true,
+          "url": "http://127.0.0.1:39907/s",
+          "title": "page /s",
+          "status": "complete"
+        },
+        "info": {
+          "button": 0,
+          "modifiers": []
+        }
+      }
+    },
+    {
+      "step": 13,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566253695,
+      "data": {
+        "label": "inside browserAction.onClicked",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 13,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566256019,
+      "data": {
+        "label": "browserAction triggerAction(stock window)",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 13,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566256019,
+      "data": {
+        "id": 15,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "browserAction triggerAction(stock window)",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 14,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566258572,
+      "data": {
+        "label": "browserAction triggerAction(shell window) with a stock window open",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 14,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566258572,
+      "data": {
+        "id": 16,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "browserAction triggerAction(shell window) with a stock window open",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 15,
+      "src": "bg",
+      "kind": "windows.onFocusChanged",
+      "t": 1792566258807,
+      "data": {
+        "id": -1
+      }
+    },
+    {
+      "step": 15,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566262627,
+      "data": {
+        "label": "focus shell window, activate overlay B (user is looking at an overlay)",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": false,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        }
+      }
+    },
+    {
+      "step": 15,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566262627,
+      "data": {
+        "id": 17,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "focus shell window, activate overlay B (user is looking at an overlay)",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": false,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 16,
+      "src": "bg",
+      "kind": "browserAction.onClicked",
+      "t": 1792566262835,
+      "data": {
+        "tab": {
+          "id": 1,
+          "windowId": 31,
+          "index": 0,
+          "active": true,
+          "url": "http://127.0.0.1:39907/s",
+          "title": "page /s",
+          "status": "complete"
+        },
+        "info": {
+          "button": 0,
+          "modifiers": []
+        }
+      }
+    },
+    {
+      "step": 16,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566262839,
+      "data": {
+        "label": "inside browserAction.onClicked",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": false,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        }
+      }
+    },
+    {
+      "step": 16,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566265179,
+      "data": {
+        "label": "browserAction triggerAction(stock window) while overlay B is what the user sees",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": false,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        }
+      }
+    },
+    {
+      "step": 16,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566265179,
+      "data": {
+        "id": 18,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "browserAction triggerAction(stock window) while overlay B is what the user sees",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": false,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 17,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566265479,
+      "data": {
+        "id": 19,
+        "op": "executeScriptActive",
+        "r": {
+          "ok": [
+            "http://127.0.0.1:39907/s"
+          ]
+        }
+      }
+    },
+    {
+      "step": 17,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566267281,
+      "data": {
+        "label": "bg: tabs.executeScript on the active tab (stock window open)",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": false,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        }
+      }
+    },
+    {
+      "step": 17,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566267281,
+      "data": {
+        "id": 20,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "bg: tabs.executeScript on the active tab (stock window open)",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": false,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 18,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566267430,
+      "data": {
+        "id": 21,
+        "op": "sendMessageTab",
+        "r": {
+          "ok": {
+            "fromContent": "http://127.0.0.1:39907/s",
+            "m": {
+              "hi": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 18,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566269232,
+      "data": {
+        "label": "bg: tabs.sendMessage to stock tab id",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": false,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        }
+      }
+    },
+    {
+      "step": 18,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566269232,
+      "data": {
+        "id": 22,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "bg: tabs.sendMessage to stock tab id",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": false,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 19,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566269531,
+      "data": {
+        "id": 23,
+        "op": "sendMessageTab",
+        "r": {
+          "err": "Error: Type error for parameter tabId (Integer -1 is too small (must be at least 0)) for tabs.sendMessage."
+        }
+      }
+    },
+    {
+      "step": 19,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566271184,
+      "data": {
+        "label": "bg: tabs.sendMessage to -1 (overlay id)",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": false,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        }
+      }
+    },
+    {
+      "step": 19,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566271185,
+      "data": {
+        "id": 24,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "bg: tabs.sendMessage to -1 (overlay id)",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": false,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 20,
+      "src": "bg",
+      "kind": "port.disconnect",
+      "t": 1792566271404,
+      "data": {
+        "name": "http://127.0.0.1:39907/b"
+      }
+    },
+    {
+      "step": 20,
+      "src": "bg",
+      "kind": "port.disconnect",
+      "t": 1792566271405,
+      "data": {
+        "name": "http://127.0.0.1:39907/c"
+      }
+    },
+    {
+      "step": 20,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792566274037,
+      "data": {
+        "label": "close overlay B",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 31,
+              "index": 0,
+              "active": true,
+              "url": "http://127.0.0.1:39907/s",
+              "title": "page /s",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 31,
+              "type": "normal",
+              "focused": false,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 31,
+            "type": "normal",
+            "focused": false
+          }
+        }
+      }
+    },
+    {
+      "step": 20,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792566274038,
+      "data": {
+        "id": 25,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "close overlay B",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 31,
+                  "index": 0,
+                  "active": true,
+                  "url": "http://127.0.0.1:39907/s",
+                  "title": "page /s",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 31,
+                  "type": "normal",
+                  "focused": false,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 31,
+                      "index": 0,
+                      "active": true,
+                      "url": "http://127.0.0.1:39907/s",
+                      "title": "page /s",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 31,
+                "type": "normal",
+                "focused": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "noBrowserWindowStacks": {
+    "haveBackgroundContext": true,
+    "tabsQueryActiveCurrent": {
+      "err": "ExtensionError: Invalid url pattern: undefined",
+      "stack": "ExtensionError@resource://gre/modules/ExtensionUtils.sys.mjs:46:5\nparseMatchPatterns@resource://gre/modules/ExtensionUtils.sys.mjs:291:15\nquery@chrome://extensions/content/parent/ext-tabs-base.js:2325:25\n.tabsQueryActiveCurrent<@chrome://powerbrowser/content/powerbrowser.xhtml:9:60\nrun@chrome://powerbrowser/content/powerbrowser.xhtml:6:59\n@chrome://powerbrowser/content/powerbrowser.xhtml:9:31\n@chrome://powerbrowser/content/powerbrowser.xhtml:13:5\nexecuteInRealm@chrome://remote/content/shared/Realm.sys.mjs:302:40\nevaluateExpression@chrome://remote/content/webdriver-bidi/modules/windowglobal/script.sys.mjs:373:22\nhandleCommand@chrome://remote/content/shared/messagehandler/MessageHandler.sys.mjs:288:33\nreceiveMessage@chrome://remote/content/shared/messagehandler/transports/js-window-actors/MessageHandlerFrameChild.sys.mjs:78:37\n"
+    },
+    "tabsQueryActiveLastFocused": {
+      "err": "ExtensionError: Invalid url pattern: undefined",
+      "stack": "ExtensionError@resource://gre/modules/ExtensionUtils.sys.mjs:46:5\nparseMatchPatterns@resource://gre/modules/ExtensionUtils.sys.mjs:291:15\nquery@chrome://extensions/content/parent/ext-tabs-base.js:2325:25\n.tabsQueryActiveLastFocused<@chrome://powerbrowser/content/powerbrowser.xhtml:10:64\nrun@chrome://powerbrowser/content/powerbrowser.xhtml:6:59\n@chrome://powerbrowser/content/powerbrowser.xhtml:10:35\n@chrome://powerbrowser/content/powerbrowser.xhtml:13:5\nexecuteInRealm@chrome://remote/content/shared/Realm.sys.mjs:302:40\nevaluateExpression@chrome://remote/content/webdriver-bidi/modules/windowglobal/script.sys.mjs:373:22\nhandleCommand@chrome://remote/content/shared/messagehandler/MessageHandler.sys.mjs:288:33\nreceiveMessage@chrome://remote/content/shared/messagehandler/transports/js-window-actors/MessageHandlerFrameChild.sys.mjs:78:37\n"
+    },
+    "canAccessWindowTop": {
+      "err": "TypeError: WebExtensionPolicy.canAccessWindow: Argument 1 does not implement interface WindowProxy.",
+      "stack": "canAccessWindow@resource://gre/modules/Extension.sys.mjs:3791:24\ncanAccessWindow@resource://gre/modules/ExtensionCommon.sys.mjs:550:27\n.canAccessWindowTop<@chrome://powerbrowser/content/powerbrowser.xhtml:11:41\nrun@chrome://powerbrowser/content/powerbrowser.xhtml:6:59\n@chrome://powerbrowser/content/powerbrowser.xhtml:11:27\n@chrome://powerbrowser/content/powerbrowser.xhtml:13:5\nexecuteInRealm@chrome://remote/content/shared/Realm.sys.mjs:302:40\nevaluateExpression@chrome://remote/content/webdriver-bidi/modules/windowglobal/script.sys.mjs:373:22\nhandleCommand@chrome://remote/content/shared/messagehandler/MessageHandler.sys.mjs:288:33\nreceiveMessage@chrome://remote/content/shared/messagehandler/transports/js-window-actors/MessageHandlerFrameChild.sys.mjs:78:37\n"
+    }
+  },
+  "stockChromeContext": {
+    "context": "a36a7737-8f49-4360-8efb-c96216a252eb",
+    "url": "chrome://browser/content/browser.xhtml"
+  },
+  "finishedAt": "2026-10-21T07:04:34.191Z"
+}

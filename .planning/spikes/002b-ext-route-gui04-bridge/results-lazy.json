@@ -1,0 +1,6446 @@
+{
+  "mode": "lazy",
+  "origin": "http://127.0.0.1:44571",
+  "extId": "spike002b-bridge@powerbrowser.test",
+  "startedAt": "2026-10-21T16:46:49.034Z",
+  "steps": [
+    {
+      "name": "open hidden stock window (the bridge host)",
+      "index": 1,
+      "action": {
+        "windowtype": "navigator:browser",
+        "chromeUrl": "chrome://browser/content/browser.xhtml",
+        "visibilityAfterHide": true,
+        "hideErr": null,
+        "headless": true
+      },
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "about:blank",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 1,
+        "mirrorErrors": [],
+        "overlays": []
+      },
+      "snapshot": {
+        "ok": {
+          "label": "open hidden stock window (the bridge host)",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": true,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {}
+    },
+    {
+      "name": "open overlay A",
+      "index": 2,
+      "action": null,
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "about:blank",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 1,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            },
+            "twin": null
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "open overlay A",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": true,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 1
+      }
+    },
+    {
+      "name": "mirror: add twin for A",
+      "index": 3,
+      "action": [
+        [
+          "lazyBrowserReplaced",
+          {
+            "type": "boolean",
+            "value": false
+          }
+        ]
+      ],
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "about:blank",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 2,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": null,
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "http://127.0.0.1:44571/r?a",
+              "label": "127.0.0.1:44571/r?a",
+              "lazy": true
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "mirror: add twin for A",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": false,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "http://127.0.0.1:44571/r?a",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": true,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": false,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "http://127.0.0.1:44571/r?a",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 1
+      }
+    },
+    {
+      "name": "open overlay B",
+      "index": 4,
+      "action": null,
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "about:blank",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 2,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": null,
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "http://127.0.0.1:44571/r?a",
+              "label": "127.0.0.1:44571/r?a",
+              "lazy": true
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b",
+            "nonce": "nonce-2",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            },
+            "twin": null
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "open overlay B",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": false,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "http://127.0.0.1:44571/r?a",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": true,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": false,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "http://127.0.0.1:44571/r?a",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 1,
+        "?b": 1
+      }
+    },
+    {
+      "name": "mirror: add twin for B",
+      "index": 5,
+      "action": [
+        [
+          "lazyBrowserReplaced",
+          {
+            "type": "boolean",
+            "value": false
+          }
+        ]
+      ],
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "about:blank",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": null,
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "http://127.0.0.1:44571/r?a",
+              "label": "127.0.0.1:44571/r?a",
+              "lazy": true
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b",
+            "nonce": "nonce-2",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": false,
+              "linkedPanel": null,
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "http://127.0.0.1:44571/r?b",
+              "label": "127.0.0.1:44571/r?b",
+              "lazy": true
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "mirror: add twin for B",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": false,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "http://127.0.0.1:44571/r?a",
+                "status": "complete"
+              },
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": false,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "http://127.0.0.1:44571/r?b",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": true,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": true,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": false,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "http://127.0.0.1:44571/r?a",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 3,
+                    "windowId": 21,
+                    "index": 2,
+                    "active": false,
+                    "url": "http://127.0.0.1:44571/r?b",
+                    "title": "http://127.0.0.1:44571/r?b",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 1,
+        "?b": 1
+      }
+    },
+    {
+      "name": "ext reaches each twin by id (no selection involved)",
+      "index": 6,
+      "action": {
+        "1": {
+          "executeScript": {
+            "err": "Error: Missing host permission for the tab"
+          },
+          "sendMessage": {
+            "err": "Error: Could not establish connection. Receiving end does not exist."
+          }
+        },
+        "2": {
+          "executeScript": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "sendMessage": {
+            "err": "Error: Could not establish connection. Receiving end does not exist."
+          }
+        },
+        "3": {
+          "executeScript": {
+            "err": "Error: An unexpected error occurred"
+          },
+          "sendMessage": {
+            "err": "Error: Could not establish connection. Receiving end does not exist."
+          }
+        }
+      },
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "about:blank",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": null,
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "http://127.0.0.1:44571/r?a",
+              "label": "127.0.0.1:44571/r?a",
+              "lazy": true
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b",
+            "nonce": "nonce-2",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": false,
+              "linkedPanel": null,
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "http://127.0.0.1:44571/r?b",
+              "label": "127.0.0.1:44571/r?b",
+              "lazy": true
+            }
+          }
+        ]
+      },
+      "hits": {
+        "?a": 1,
+        "?b": 1
+      }
+    },
+    {
+      "name": "activate overlay A + mirror select twin A",
+      "index": 7,
+      "action": {
+        "theia": true,
+        "mirror": [
+          [
+            "selected",
+            {
+              "type": "boolean",
+              "value": true
+            }
+          ]
+        ]
+      },
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?a",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": true,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b",
+            "nonce": "nonce-2",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": false,
+              "linkedPanel": null,
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "http://127.0.0.1:44571/r?b",
+              "label": "127.0.0.1:44571/r?b",
+              "lazy": true
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "activate overlay A + mirror select twin A",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": false,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              },
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": false,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "http://127.0.0.1:44571/r?b",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": false,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": true,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "nonce-3",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 3,
+                    "windowId": 21,
+                    "index": 2,
+                    "active": false,
+                    "url": "http://127.0.0.1:44571/r?b",
+                    "title": "http://127.0.0.1:44571/r?b",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 1
+      }
+    },
+    {
+      "name": "ext reaches active tab: A active",
+      "index": 8,
+      "action": {
+        "active": {
+          "ok": [
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "executeScript": {
+          "ok": [
+            [
+              "http://127.0.0.1:44571/r?a",
+              "nonce-3"
+            ]
+          ]
+        },
+        "sendMessage": {
+          "ok": {
+            "fromContent": "http://127.0.0.1:44571/r?a",
+            "title": "nonce-3",
+            "m": {
+              "hi": 1
+            }
+          }
+        }
+      },
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?a",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": true,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b",
+            "nonce": "nonce-2",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": false,
+              "linkedPanel": null,
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "http://127.0.0.1:44571/r?b",
+              "label": "127.0.0.1:44571/r?b",
+              "lazy": true
+            }
+          }
+        ]
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 1
+      }
+    },
+    {
+      "name": "activate overlay B + mirror select twin B",
+      "index": 9,
+      "action": {
+        "theia": true,
+        "mirror": [
+          [
+            "selected",
+            {
+              "type": "boolean",
+              "value": true
+            }
+          ]
+        ]
+      },
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?b",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b",
+            "nonce": "nonce-2",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": true,
+              "linkedPanel": "panel-21-3",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "nonce-4",
+              "label": "nonce-4",
+              "lazy": false
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "activate overlay B + mirror select twin B",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": false,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": false,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              },
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": false,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": false,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "nonce-3",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 3,
+                    "windowId": 21,
+                    "index": 2,
+                    "active": true,
+                    "url": "http://127.0.0.1:44571/r?b",
+                    "title": "nonce-4",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 2
+      }
+    },
+    {
+      "name": "ext reaches active tab: B active",
+      "index": 10,
+      "action": {
+        "active": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "executeScript": {
+          "ok": [
+            [
+              "http://127.0.0.1:44571/r?b",
+              "nonce-4"
+            ]
+          ]
+        },
+        "sendMessage": {
+          "ok": {
+            "fromContent": "http://127.0.0.1:44571/r?b",
+            "title": "nonce-4",
+            "m": {
+              "hi": 1
+            }
+          }
+        }
+      },
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?b",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b",
+            "nonce": "nonce-2",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": true,
+              "linkedPanel": "panel-21-3",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "nonce-4",
+              "label": "nonce-4",
+              "lazy": false
+            }
+          }
+        ]
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 2
+      }
+    },
+    {
+      "name": "navigate overlay B to ?b2 (no mirror propagation)",
+      "index": 11,
+      "action": {
+        "ok": true,
+        "kind": "webTabNavigate",
+        "where": "loading"
+      },
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?b",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b2",
+            "nonce": "nonce-5",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": true,
+              "linkedPanel": "panel-21-3",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "nonce-4",
+              "label": "nonce-4",
+              "lazy": false
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "navigate overlay B to ?b2 (no mirror propagation)",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": false,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": false,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              },
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": false,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": false,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "nonce-3",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 3,
+                    "windowId": 21,
+                    "index": 2,
+                    "active": true,
+                    "url": "http://127.0.0.1:44571/r?b",
+                    "title": "nonce-4",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 2,
+        "?b2": 1
+      }
+    },
+    {
+      "name": "ext reaches active tab: B active after navigation",
+      "index": 12,
+      "action": {
+        "active": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "executeScript": {
+          "ok": [
+            [
+              "http://127.0.0.1:44571/r?b",
+              "nonce-4"
+            ]
+          ]
+        },
+        "sendMessage": {
+          "ok": {
+            "fromContent": "http://127.0.0.1:44571/r?b",
+            "title": "nonce-4",
+            "m": {
+              "hi": 1
+            }
+          }
+        }
+      },
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?b",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b2",
+            "nonce": "nonce-5",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": true,
+              "linkedPanel": "panel-21-3",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "nonce-4",
+              "label": "nonce-4",
+              "lazy": false
+            }
+          }
+        ]
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 2,
+        "?b2": 1
+      }
+    },
+    {
+      "name": "browserAction triggerAction(hidden window)",
+      "index": 13,
+      "action": [
+        [
+          "returned",
+          {
+            "type": "boolean",
+            "value": true
+          }
+        ],
+        [
+          "buttonInHiddenWindow",
+          {
+            "type": "boolean",
+            "value": true
+          }
+        ],
+        [
+          "buttonInShell",
+          {
+            "type": "boolean",
+            "value": false
+          }
+        ]
+      ],
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?b",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b2",
+            "nonce": "nonce-5",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": true,
+              "linkedPanel": "panel-21-3",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "nonce-4",
+              "label": "nonce-4",
+              "lazy": false
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "browserAction triggerAction(hidden window)",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": false,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": false,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              },
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 3,
+                "windowId": 21,
+                "index": 2,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?b",
+                "title": "nonce-4",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": false,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": false,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "nonce-3",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 3,
+                    "windowId": 21,
+                    "index": 2,
+                    "active": true,
+                    "url": "http://127.0.0.1:44571/r?b",
+                    "title": "nonce-4",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 2,
+        "?b2": 1
+      }
+    },
+    {
+      "name": "side effects: session store, external-link target",
+      "index": 14,
+      "action": [
+        [
+          "sessionStore",
+          {
+            "type": "object",
+            "value": [
+              [
+                "windows",
+                {
+                  "type": "number",
+                  "value": 1
+                }
+              ],
+              [
+                "tabsPerWindow",
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "number",
+                      "value": 3
+                    }
+                  ]
+                }
+              ],
+              [
+                "urls",
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "string",
+                      "value": "about:blank"
+                    },
+                    {
+                      "type": "string",
+                      "value": "http://127.0.0.1:44571/r?a"
+                    },
+                    {
+                      "type": "string",
+                      "value": "http://127.0.0.1:44571/r?b"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          "externalLinkTargetIsHidden",
+          {
+            "type": "boolean",
+            "value": true
+          }
+        ],
+        [
+          "mostRecentNavigatorBrowserIsHidden",
+          {
+            "type": "boolean",
+            "value": true
+          }
+        ]
+      ],
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?b",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 3,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": false,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b2",
+            "nonce": "nonce-5",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 3,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 3,
+              "selected": true,
+              "linkedPanel": "panel-21-3",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "nonce": "nonce-4",
+              "label": "nonce-4",
+              "lazy": false
+            }
+          }
+        ]
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 2,
+        "?b2": 1
+      }
+    },
+    {
+      "name": "mirror: remove twin B (before closing overlay B)",
+      "index": 15,
+      "action": [
+        [
+          "overlayStillConnected",
+          {
+            "type": "boolean",
+            "value": true
+          }
+        ],
+        [
+          "overlayInShell",
+          {
+            "type": "boolean",
+            "value": true
+          }
+        ],
+        [
+          "overlayUrl",
+          {
+            "type": "string",
+            "value": "http://127.0.0.1:44571/r?b2"
+          }
+        ],
+        [
+          "overlayHasFrameLoader",
+          {
+            "type": "boolean",
+            "value": true
+          }
+        ]
+      ],
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?a",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 2,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "hidden",
+            "docShellIsActive": false,
+            "renderLayers": false,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": true,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          },
+          {
+            "pbTabId": "wt-xbckvt-2",
+            "url": "http://127.0.0.1:44571/r?b2",
+            "nonce": "nonce-5",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": -1,
+              "windowId": -1
+            },
+            "twin": null
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "mirror: remove twin B (before closing overlay B)",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": false,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": false,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": true,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "nonce-3",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 2,
+        "?b2": 1
+      }
+    },
+    {
+      "name": "close overlay B",
+      "index": 16,
+      "action": true,
+      "ground": {
+        "topWindowIsHidden": true,
+        "browserWindowTrackerTopIsHidden": true,
+        "hiddenSelected": {
+          "url": "http://127.0.0.1:44571/r?a",
+          "isOverlay": false
+        },
+        "hiddenTabCount": 2,
+        "mirrorErrors": [],
+        "overlays": [
+          {
+            "pbTabId": "wt-xbckvt-1",
+            "url": "http://127.0.0.1:44571/r?a",
+            "nonce": "nonce-1",
+            "visible": "visible",
+            "docShellIsActive": true,
+            "renderLayers": true,
+            "inShell": true,
+            "parentIds": [
+              "",
+              ""
+            ],
+            "getBrowserData": {
+              "tabId": 2,
+              "windowId": 21
+            },
+            "twin": {
+              "extTabId": 2,
+              "selected": true,
+              "linkedPanel": "panel-21-2",
+              "linkedBrowserIsOverlay": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "nonce": "nonce-3",
+              "label": "nonce-3",
+              "lazy": false
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "ok": {
+          "label": "close overlay B",
+          "queryAll": {
+            "ok": [
+              {
+                "id": 1,
+                "windowId": 21,
+                "index": 0,
+                "active": false,
+                "url": "about:blank",
+                "title": "New Tab",
+                "status": "complete"
+              },
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveCurrent": {
+            "ok": [
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              }
+            ]
+          },
+          "queryActiveLastFocused": {
+            "ok": [
+              {
+                "id": 2,
+                "windowId": 21,
+                "index": 1,
+                "active": true,
+                "url": "http://127.0.0.1:44571/r?a",
+                "title": "nonce-3",
+                "status": "complete"
+              }
+            ]
+          },
+          "windowsGetAll": {
+            "ok": [
+              {
+                "id": 21,
+                "type": "normal",
+                "focused": true,
+                "tabs": [
+                  {
+                    "id": 1,
+                    "windowId": 21,
+                    "index": 0,
+                    "active": false,
+                    "url": "about:blank",
+                    "title": "New Tab",
+                    "status": "complete"
+                  },
+                  {
+                    "id": 2,
+                    "windowId": 21,
+                    "index": 1,
+                    "active": true,
+                    "url": "http://127.0.0.1:44571/r?a",
+                    "title": "nonce-3",
+                    "status": "complete"
+                  }
+                ]
+              }
+            ]
+          },
+          "windowsGetCurrent": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          },
+          "windowsGetLastFocused": {
+            "ok": {
+              "id": 21,
+              "type": "normal",
+              "focused": true
+            }
+          }
+        }
+      },
+      "hits": {
+        "?a": 2,
+        "?b": 2,
+        "?b2": 1
+      }
+    }
+  ],
+  "log": [
+    {
+      "step": 0,
+      "src": "bg",
+      "kind": "started",
+      "t": 1792601215619,
+      "data": {
+        "manifest": 2,
+        "id": "spike002b-bridge@powerbrowser.test"
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "tabs.onCreated",
+      "t": 1792601216120,
+      "data": {
+        "id": 1,
+        "windowId": 21,
+        "index": 0,
+        "active": true,
+        "url": "about:blank",
+        "title": "New Tab",
+        "status": "complete"
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "tabs.onActivated",
+      "t": 1792601216120,
+      "data": {
+        "tabId": 1,
+        "windowId": 21
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "windows.onCreated",
+      "t": 1792601216121,
+      "data": {
+        "id": 21,
+        "type": "normal",
+        "focused": false
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "windows.onFocusChanged",
+      "t": 1792601216140,
+      "data": {
+        "id": 21
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601216214,
+      "data": {
+        "tabId": 1,
+        "changeInfo": {
+          "status": "loading"
+        },
+        "tab": {
+          "id": 1,
+          "windowId": 21,
+          "index": 0,
+          "active": true,
+          "url": "about:blank",
+          "title": "New Tab",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "webNavigation.onCommitted",
+      "t": 1792601216214,
+      "data": {
+        "tabId": 1,
+        "frameId": 0,
+        "url": "about:blank"
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601216228,
+      "data": {
+        "tabId": 1,
+        "changeInfo": {
+          "status": "complete"
+        },
+        "tab": {
+          "id": 1,
+          "windowId": 21,
+          "index": 0,
+          "active": true,
+          "url": "about:blank",
+          "title": "New Tab",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601218328,
+      "data": {
+        "label": "open hidden stock window (the bridge host)",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601218328,
+      "data": {
+        "id": 1,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "open hidden stock window (the bridge host)",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": true,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792601218491,
+      "data": {
+        "tabId": -1,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:44571/r?a"
+      }
+    },
+    {
+      "step": 1,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792601218532,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?a",
+        "title": "nonce-1",
+        "top": true
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792601218541,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:44571/r?a"
+        },
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:44571/r?a",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "3cdaefb2-5968-86ec-ea84-a8fedb0bbd16"
+        }
+      }
+    },
+    {
+      "step": 1,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792601218541,
+      "data": {
+        "name": "http://127.0.0.1:44571/r?a",
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:44571/r?a",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "3cdaefb2-5968-86ec-ea84-a8fedb0bbd16"
+        }
+      }
+    },
+    {
+      "step": 1,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792601218542,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?a",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 2,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601223281,
+      "data": {
+        "label": "open overlay A",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 2,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601223281,
+      "data": {
+        "id": 2,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "open overlay A",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": true,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "tabs.onCreated",
+      "t": 1792601223528,
+      "data": {
+        "id": 2,
+        "windowId": 21,
+        "index": 1,
+        "active": false,
+        "url": "http://127.0.0.1:44571/r?a",
+        "title": "http://127.0.0.1:44571/r?a",
+        "status": "complete"
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601226145,
+      "data": {
+        "label": "mirror: add twin for A",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "http://127.0.0.1:44571/r?a",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "http://127.0.0.1:44571/r?a",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601226145,
+      "data": {
+        "id": 3,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "mirror: add twin for A",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "http://127.0.0.1:44571/r?a",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": true,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "http://127.0.0.1:44571/r?a",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792601226294,
+      "data": {
+        "tabId": -1,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:44571/r?b"
+      }
+    },
+    {
+      "step": 3,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792601226335,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?b",
+        "title": "nonce-2",
+        "top": true
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792601226341,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:44571/r?b"
+        },
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:44571/r?b",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "d5c499a7-2f87-342c-2139-49d7240dc77a"
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792601226342,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?b",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 3,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792601226342,
+      "data": {
+        "name": "http://127.0.0.1:44571/r?b",
+        "sender": {
+          "tab": null,
+          "url": "http://127.0.0.1:44571/r?b",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "d5c499a7-2f87-342c-2139-49d7240dc77a"
+        }
+      }
+    },
+    {
+      "step": 4,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601231098,
+      "data": {
+        "label": "open overlay B",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "http://127.0.0.1:44571/r?a",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "http://127.0.0.1:44571/r?a",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 4,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601231098,
+      "data": {
+        "id": 4,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "open overlay B",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "http://127.0.0.1:44571/r?a",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": true,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "http://127.0.0.1:44571/r?a",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 5,
+      "src": "bg",
+      "kind": "tabs.onCreated",
+      "t": 1792601231327,
+      "data": {
+        "id": 3,
+        "windowId": 21,
+        "index": 2,
+        "active": false,
+        "url": "http://127.0.0.1:44571/r?b",
+        "title": "http://127.0.0.1:44571/r?b",
+        "status": "complete"
+      }
+    },
+    {
+      "step": 5,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601233951,
+      "data": {
+        "label": "mirror: add twin for B",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "http://127.0.0.1:44571/r?a",
+              "status": "complete"
+            },
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "http://127.0.0.1:44571/r?b",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "http://127.0.0.1:44571/r?a",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "http://127.0.0.1:44571/r?b",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 5,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601233951,
+      "data": {
+        "id": 5,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "mirror: add twin for B",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "http://127.0.0.1:44571/r?a",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "http://127.0.0.1:44571/r?b",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": true,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "http://127.0.0.1:44571/r?a",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 3,
+                      "windowId": 21,
+                      "index": 2,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?b",
+                      "title": "http://127.0.0.1:44571/r?b",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601234101,
+      "data": {
+        "label": "ids",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "http://127.0.0.1:44571/r?a",
+              "status": "complete"
+            },
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "http://127.0.0.1:44571/r?b",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": true,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "http://127.0.0.1:44571/r?a",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "http://127.0.0.1:44571/r?b",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601234101,
+      "data": {
+        "id": 6,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "ids",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "http://127.0.0.1:44571/r?a",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "http://127.0.0.1:44571/r?b",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": true,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": true,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "http://127.0.0.1:44571/r?a",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 3,
+                      "windowId": 21,
+                      "index": 2,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?b",
+                      "title": "http://127.0.0.1:44571/r?b",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601234414,
+      "data": {
+        "id": 7,
+        "op": "executeScriptTab",
+        "r": {
+          "err": "Error: Missing host permission for the tab"
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601234700,
+      "data": {
+        "id": 8,
+        "op": "sendMessageTab",
+        "r": {
+          "err": "Error: Could not establish connection. Receiving end does not exist."
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601234851,
+      "data": {
+        "id": 9,
+        "op": "executeScriptTab",
+        "r": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601235152,
+      "data": {
+        "id": 10,
+        "op": "sendMessageTab",
+        "r": {
+          "err": "Error: Could not establish connection. Receiving end does not exist."
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601235452,
+      "data": {
+        "id": 11,
+        "op": "executeScriptTab",
+        "r": {
+          "err": "Error: An unexpected error occurred"
+        }
+      }
+    },
+    {
+      "step": 6,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601235601,
+      "data": {
+        "id": 12,
+        "op": "sendMessageTab",
+        "r": {
+          "err": "Error: Could not establish connection. Receiving end does not exist."
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601239634,
+      "data": {
+        "tabId": 2,
+        "changeInfo": {
+          "favIconUrl": ""
+        },
+        "tab": {
+          "id": 2,
+          "windowId": 21,
+          "index": 1,
+          "active": true,
+          "url": "about:blank",
+          "title": "127.0.0.1:44571/r?a",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601239635,
+      "data": {
+        "tabId": 2,
+        "changeInfo": {
+          "discarded": false
+        },
+        "tab": {
+          "id": 2,
+          "windowId": 21,
+          "index": 1,
+          "active": true,
+          "url": "about:blank",
+          "title": "127.0.0.1:44571/r?a",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "tabs.onActivated",
+      "t": 1792601239635,
+      "data": {
+        "tabId": 2,
+        "previousTabId": 1,
+        "windowId": 21
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601239639,
+      "data": {
+        "tabId": 2,
+        "changeInfo": {
+          "favIconUrl": ""
+        },
+        "tab": {
+          "id": 2,
+          "windowId": 21,
+          "index": 1,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?a",
+          "title": "127.0.0.1:44571/r?a",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "webNavigation.onCommitted",
+      "t": 1792601239637,
+      "data": {
+        "tabId": 2,
+        "frameId": 0,
+        "url": "http://127.0.0.1:44571/r?a"
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601239641,
+      "data": {
+        "tabId": 2,
+        "changeInfo": {
+          "status": "loading"
+        },
+        "tab": {
+          "id": 2,
+          "windowId": 21,
+          "index": 1,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?a",
+          "title": "127.0.0.1:44571/r?a",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "webNavigation.onCommitted",
+      "t": 1792601239661,
+      "data": {
+        "tabId": 2,
+        "frameId": 0,
+        "url": "http://127.0.0.1:44571/r?a"
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601239666,
+      "data": {
+        "tabId": 2,
+        "changeInfo": {
+          "status": "loading",
+          "url": "http://127.0.0.1:44571/r?a"
+        },
+        "tab": {
+          "id": 2,
+          "windowId": 21,
+          "index": 1,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?a",
+          "title": "127.0.0.1:44571/r?a",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601239678,
+      "data": {
+        "tabId": 2,
+        "changeInfo": {
+          "title": "nonce-3"
+        },
+        "tab": {
+          "id": 2,
+          "windowId": 21,
+          "index": 1,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?a",
+          "title": "nonce-3",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792601239683,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?a",
+        "title": "nonce-3",
+        "top": true
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601239685,
+      "data": {
+        "tabId": 2,
+        "changeInfo": {
+          "status": "complete"
+        },
+        "tab": {
+          "id": 2,
+          "windowId": 21,
+          "index": 1,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?a",
+          "title": "nonce-3",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792601239690,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:44571/r?a"
+        },
+        "sender": {
+          "tab": {
+            "id": 2,
+            "windowId": 21,
+            "index": 1,
+            "active": true,
+            "url": "http://127.0.0.1:44571/r?a",
+            "title": "nonce-3",
+            "status": "complete"
+          },
+          "frameId": 0,
+          "url": "http://127.0.0.1:44571/r?a",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "4ff86b0b-6e06-fed7-8ca7-a167622f48d2"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792601239690,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?a",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792601239691,
+      "data": {
+        "name": "http://127.0.0.1:44571/r?a",
+        "sender": {
+          "tab": {
+            "id": 2,
+            "windowId": 21,
+            "index": 1,
+            "active": true,
+            "url": "http://127.0.0.1:44571/r?a",
+            "title": "nonce-3",
+            "status": "complete"
+          },
+          "frameId": 0,
+          "url": "http://127.0.0.1:44571/r?a",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "4ff86b0b-6e06-fed7-8ca7-a167622f48d2"
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792601239827,
+      "data": {
+        "tabId": 2,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:44571/r?a"
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601242217,
+      "data": {
+        "label": "activate overlay A + mirror select twin A",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": false,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            },
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "http://127.0.0.1:44571/r?b",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "http://127.0.0.1:44571/r?b",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 7,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601242217,
+      "data": {
+        "id": 13,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "activate overlay A + mirror select twin A",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "http://127.0.0.1:44571/r?b",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": false,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": true,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "nonce-3",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 3,
+                      "windowId": 21,
+                      "index": 2,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?b",
+                      "title": "http://127.0.0.1:44571/r?b",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 8,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601242509,
+      "data": {
+        "id": 14,
+        "op": "activeTab",
+        "r": {
+          "ok": [
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": 8,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601242658,
+      "data": {
+        "id": 15,
+        "op": "executeScriptTab",
+        "r": {
+          "ok": [
+            [
+              "http://127.0.0.1:44571/r?a",
+              "nonce-3"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "step": 8,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601242958,
+      "data": {
+        "id": 16,
+        "op": "sendMessageTab",
+        "r": {
+          "ok": {
+            "fromContent": "http://127.0.0.1:44571/r?a",
+            "title": "nonce-3",
+            "m": {
+              "hi": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601246950,
+      "data": {
+        "tabId": 3,
+        "changeInfo": {
+          "favIconUrl": ""
+        },
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "about:blank",
+          "title": "127.0.0.1:44571/r?b",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601246951,
+      "data": {
+        "tabId": 3,
+        "changeInfo": {
+          "discarded": false
+        },
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "about:blank",
+          "title": "127.0.0.1:44571/r?b",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "webNavigation.onCommitted",
+      "t": 1792601246956,
+      "data": {
+        "tabId": 3,
+        "frameId": 0,
+        "url": "http://127.0.0.1:44571/r?b"
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "tabs.onActivated",
+      "t": 1792601246951,
+      "data": {
+        "tabId": 3,
+        "previousTabId": 2,
+        "windowId": 21
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601246958,
+      "data": {
+        "tabId": 3,
+        "changeInfo": {
+          "favIconUrl": ""
+        },
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?b",
+          "title": "127.0.0.1:44571/r?b",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601246961,
+      "data": {
+        "tabId": 3,
+        "changeInfo": {
+          "status": "loading"
+        },
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?b",
+          "title": "127.0.0.1:44571/r?b",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "webNavigation.onCommitted",
+      "t": 1792601246999,
+      "data": {
+        "tabId": 3,
+        "frameId": 0,
+        "url": "http://127.0.0.1:44571/r?b"
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601247008,
+      "data": {
+        "tabId": 3,
+        "changeInfo": {
+          "status": "loading",
+          "url": "http://127.0.0.1:44571/r?b"
+        },
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?b",
+          "title": "127.0.0.1:44571/r?b",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601247028,
+      "data": {
+        "tabId": 3,
+        "changeInfo": {
+          "title": "nonce-4"
+        },
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?b",
+          "title": "nonce-4",
+          "status": "loading"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792601247034,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?b",
+        "title": "nonce-4",
+        "top": true
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601247034,
+      "data": {
+        "tabId": 3,
+        "changeInfo": {
+          "status": "complete"
+        },
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?b",
+          "title": "nonce-4",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792601247043,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:44571/r?b"
+        },
+        "sender": {
+          "tab": {
+            "id": 3,
+            "windowId": 21,
+            "index": 2,
+            "active": true,
+            "url": "http://127.0.0.1:44571/r?b",
+            "title": "nonce-4",
+            "status": "complete"
+          },
+          "frameId": 0,
+          "url": "http://127.0.0.1:44571/r?b",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "3012a9cb-4bc2-1ec6-56ff-41263c7c9287"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792601247044,
+      "data": {
+        "name": "http://127.0.0.1:44571/r?b",
+        "sender": {
+          "tab": {
+            "id": 3,
+            "windowId": 21,
+            "index": 2,
+            "active": true,
+            "url": "http://127.0.0.1:44571/r?b",
+            "title": "nonce-4",
+            "status": "complete"
+          },
+          "frameId": 0,
+          "url": "http://127.0.0.1:44571/r?b",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "3012a9cb-4bc2-1ec6-56ff-41263c7c9287"
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792601247044,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?b",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792601247128,
+      "data": {
+        "tabId": 3,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:44571/r?b"
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601249565,
+      "data": {
+        "label": "activate overlay B + mirror select twin B",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": false,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            },
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 9,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601249565,
+      "data": {
+        "id": 17,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "activate overlay B + mirror select twin B",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": false,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "nonce-3",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 3,
+                      "windowId": 21,
+                      "index": 2,
+                      "active": true,
+                      "url": "http://127.0.0.1:44571/r?b",
+                      "title": "nonce-4",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 10,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601249713,
+      "data": {
+        "id": 18,
+        "op": "activeTab",
+        "r": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": 10,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601250014,
+      "data": {
+        "id": 19,
+        "op": "executeScriptTab",
+        "r": {
+          "ok": [
+            [
+              "http://127.0.0.1:44571/r?b",
+              "nonce-4"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "step": 10,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601250315,
+      "data": {
+        "id": 20,
+        "op": "sendMessageTab",
+        "r": {
+          "ok": {
+            "fromContent": "http://127.0.0.1:44571/r?b",
+            "title": "nonce-4",
+            "m": {
+              "hi": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "tabs.onUpdated",
+      "t": 1792601251968,
+      "data": {
+        "tabId": 3,
+        "changeInfo": {
+          "isArticle": false
+        },
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?b",
+          "title": "nonce-4",
+          "status": "complete"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "port.disconnect",
+      "t": 1792601251968,
+      "data": {
+        "name": "http://127.0.0.1:44571/r?b"
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "webNavigation.onCommitted",
+      "t": 1792601251969,
+      "data": {
+        "tabId": 3,
+        "frameId": 0,
+        "url": "http://127.0.0.1:44571/r?b2"
+      }
+    },
+    {
+      "step": 11,
+      "src": "cs",
+      "kind": "cs-injected",
+      "t": 1792601251971,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?b2",
+        "title": "nonce-5",
+        "top": true
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "runtime.onMessage",
+      "t": 1792601251973,
+      "data": {
+        "msg": {
+          "kind": "cs-hello",
+          "href": "http://127.0.0.1:44571/r?b2"
+        },
+        "sender": {
+          "tab": {
+            "id": 3,
+            "windowId": 21,
+            "index": 2,
+            "active": true,
+            "url": "http://127.0.0.1:44571/r?b",
+            "title": "nonce-4",
+            "status": "complete"
+          },
+          "frameId": 0,
+          "url": "http://127.0.0.1:44571/r?b2",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "a48ec9a9-de6a-3b54-fea1-567158d64123"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "runtime.onConnect",
+      "t": 1792601251974,
+      "data": {
+        "name": "http://127.0.0.1:44571/r?b2",
+        "sender": {
+          "tab": {
+            "id": 3,
+            "windowId": 21,
+            "index": 2,
+            "active": true,
+            "url": "http://127.0.0.1:44571/r?b",
+            "title": "nonce-4",
+            "status": "complete"
+          },
+          "frameId": 0,
+          "url": "http://127.0.0.1:44571/r?b2",
+          "origin": "http://127.0.0.1:44571",
+          "envType": "content_child",
+          "documentId": "a48ec9a9-de6a-3b54-fea1-567158d64123"
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "cs",
+      "kind": "cs-reply",
+      "t": 1792601251975,
+      "data": {
+        "href": "http://127.0.0.1:44571/r?b2",
+        "reply": {
+          "ack": true
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "webRequest.onBeforeRequest",
+      "t": 1792601252015,
+      "data": {
+        "tabId": 3,
+        "frameId": 0,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:44571/r?b2"
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601254520,
+      "data": {
+        "label": "navigate overlay B to ?b2 (no mirror propagation)",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": false,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            },
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 11,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601254520,
+      "data": {
+        "id": 21,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "navigate overlay B to ?b2 (no mirror propagation)",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": false,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "nonce-3",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 3,
+                      "windowId": 21,
+                      "index": 2,
+                      "active": true,
+                      "url": "http://127.0.0.1:44571/r?b",
+                      "title": "nonce-4",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 12,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601254817,
+      "data": {
+        "id": 22,
+        "op": "activeTab",
+        "r": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": 12,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601255119,
+      "data": {
+        "id": 23,
+        "op": "executeScriptTab",
+        "r": {
+          "ok": [
+            [
+              "http://127.0.0.1:44571/r?b",
+              "nonce-4"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "step": 12,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601255269,
+      "data": {
+        "id": 24,
+        "op": "sendMessageTab",
+        "r": {
+          "ok": {
+            "fromContent": "http://127.0.0.1:44571/r?b",
+            "title": "nonce-4",
+            "m": {
+              "hi": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 13,
+      "src": "bg",
+      "kind": "browserAction.onClicked",
+      "t": 1792601256977,
+      "data": {
+        "tab": {
+          "id": 3,
+          "windowId": 21,
+          "index": 2,
+          "active": true,
+          "url": "http://127.0.0.1:44571/r?b",
+          "title": "nonce-4",
+          "status": "complete"
+        },
+        "info": {
+          "button": 0,
+          "modifiers": []
+        }
+      }
+    },
+    {
+      "step": 13,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601256982,
+      "data": {
+        "label": "inside browserAction.onClicked",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": false,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            },
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 13,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601258573,
+      "data": {
+        "label": "browserAction triggerAction(hidden window)",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": false,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": false,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            },
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 3,
+              "windowId": 21,
+              "index": 2,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?b",
+              "title": "nonce-4",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 13,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601258573,
+      "data": {
+        "id": 25,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "browserAction triggerAction(hidden window)",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": false,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                },
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 3,
+                  "windowId": 21,
+                  "index": 2,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?b",
+                  "title": "nonce-4",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": false,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": false,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "nonce-3",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 3,
+                      "windowId": 21,
+                      "index": 2,
+                      "active": true,
+                      "url": "http://127.0.0.1:44571/r?b",
+                      "title": "nonce-4",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 15,
+      "src": "bg",
+      "kind": "tabs.onRemoved",
+      "t": 1792601260244,
+      "data": {
+        "tabId": 3,
+        "info": {
+          "windowId": 21,
+          "isWindowClosing": false
+        }
+      }
+    },
+    {
+      "step": 15,
+      "src": "bg",
+      "kind": "tabs.onActivated",
+      "t": 1792601260245,
+      "data": {
+        "tabId": 2,
+        "windowId": 21
+      }
+    },
+    {
+      "step": 15,
+      "src": "bg",
+      "kind": "port.disconnect",
+      "t": 1792601260249,
+      "data": {
+        "name": "http://127.0.0.1:44571/r?b"
+      }
+    },
+    {
+      "step": 15,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601262776,
+      "data": {
+        "label": "mirror: remove twin B (before closing overlay B)",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": false,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 15,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601262776,
+      "data": {
+        "id": 26,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "mirror: remove twin B (before closing overlay B)",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": false,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": true,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "nonce-3",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": 16,
+      "src": "bg",
+      "kind": "port.disconnect",
+      "t": 1792601263001,
+      "data": {
+        "name": "http://127.0.0.1:44571/r?b2"
+      }
+    },
+    {
+      "step": 16,
+      "src": "bg",
+      "kind": "snapshot",
+      "t": 1792601265629,
+      "data": {
+        "label": "close overlay B",
+        "queryAll": {
+          "ok": [
+            {
+              "id": 1,
+              "windowId": 21,
+              "index": 0,
+              "active": false,
+              "url": "about:blank",
+              "title": "New Tab",
+              "status": "complete"
+            },
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveCurrent": {
+          "ok": [
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "queryActiveLastFocused": {
+          "ok": [
+            {
+              "id": 2,
+              "windowId": 21,
+              "index": 1,
+              "active": true,
+              "url": "http://127.0.0.1:44571/r?a",
+              "title": "nonce-3",
+              "status": "complete"
+            }
+          ]
+        },
+        "windowsGetAll": {
+          "ok": [
+            {
+              "id": 21,
+              "type": "normal",
+              "focused": true,
+              "tabs": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            }
+          ]
+        },
+        "windowsGetCurrent": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        },
+        "windowsGetLastFocused": {
+          "ok": {
+            "id": 21,
+            "type": "normal",
+            "focused": true
+          }
+        }
+      }
+    },
+    {
+      "step": 16,
+      "src": "bg",
+      "kind": "cmd-result",
+      "t": 1792601265629,
+      "data": {
+        "id": 27,
+        "op": "snapshot",
+        "r": {
+          "ok": {
+            "label": "close overlay B",
+            "queryAll": {
+              "ok": [
+                {
+                  "id": 1,
+                  "windowId": 21,
+                  "index": 0,
+                  "active": false,
+                  "url": "about:blank",
+                  "title": "New Tab",
+                  "status": "complete"
+                },
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveCurrent": {
+              "ok": [
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            },
+            "queryActiveLastFocused": {
+              "ok": [
+                {
+                  "id": 2,
+                  "windowId": 21,
+                  "index": 1,
+                  "active": true,
+                  "url": "http://127.0.0.1:44571/r?a",
+                  "title": "nonce-3",
+                  "status": "complete"
+                }
+              ]
+            },
+            "windowsGetAll": {
+              "ok": [
+                {
+                  "id": 21,
+                  "type": "normal",
+                  "focused": true,
+                  "tabs": [
+                    {
+                      "id": 1,
+                      "windowId": 21,
+                      "index": 0,
+                      "active": false,
+                      "url": "about:blank",
+                      "title": "New Tab",
+                      "status": "complete"
+                    },
+                    {
+                      "id": 2,
+                      "windowId": 21,
+                      "index": 1,
+                      "active": true,
+                      "url": "http://127.0.0.1:44571/r?a",
+                      "title": "nonce-3",
+                      "status": "complete"
+                    }
+                  ]
+                }
+              ]
+            },
+            "windowsGetCurrent": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            },
+            "windowsGetLastFocused": {
+              "ok": {
+                "id": 21,
+                "type": "normal",
+                "focused": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "hits": {
+    "?a": 2,
+    "?b": 2,
+    "?b2": 1
+  },
+  "install": {
+    "id": "spike002b-bridge@powerbrowser.test",
+    "isActive": true
+  },
+  "finishedAt": "2026-10-21T16:47:45.817Z"
+}

@@ -1,0 +1,14 @@
+== apply --check of the spike patch per tag
+FIREFOX_115_0esr_RELEASE: FAILS -- 4 hunk file(s): browser/components/extensions/parent/ext-browser.js:319 browser/components/extensions/parent/ext-sidebarAction.js:93 remote/shared/TabManager.sys.mjs:191 toolkit/components/extensions/parent/ext-tabs-base.js:1739 
+FIREFOX_128_0esr_RELEASE: FAILS -- 4 hunk file(s): browser/components/extensions/parent/ext-browser.js:319 browser/components/extensions/parent/ext-sidebarAction.js:93 remote/shared/TabManager.sys.mjs:191 toolkit/components/extensions/parent/ext-tabs-base.js:1739 
+FIREFOX_140_0esr_RELEASE: FAILS -- 4 hunk file(s): browser/components/extensions/parent/ext-browser.js:319 browser/components/extensions/parent/ext-sidebarAction.js:93 remote/shared/TabManager.sys.mjs:191 toolkit/components/extensions/parent/ext-tabs-base.js:1739 
+FIREFOX_153_0esr_RELEASE: applies cleanly
+FIREFOX_153_5_0esr_BUILD1: applies cleanly
+== commits per file (default branch) 2025-06-17T12:14:00Z .. 2026-07-16T16:09:21Z, and on the pinned tag's history 2026-07-16T16:09:21Z .. 2026-10-06T17:03:54Z
+20 main-commits 140->153 | 0 commits on the 153 ESR line 153.0->153.5 | browser/components/extensions/parent/ext-browser.js
+30 main-commits 140->153 | 0 commits on the 153 ESR line 153.0->153.5 | browser/components/extensions/parent/ext-browserAction.js
+16 main-commits 140->153 | 0 commits on the 153 ESR line 153.0->153.5 | browser/components/extensions/parent/ext-menus.js
+13 main-commits 140->153 | 0 commits on the 153 ESR line 153.0->153.5 | browser/components/extensions/parent/ext-sessions.js
+17 main-commits 140->153 | 0 commits on the 153 ESR line 153.0->153.5 | browser/components/extensions/parent/ext-sidebarAction.js
+10 main-commits 140->153 | 0 commits on the 153 ESR line 153.0->153.5 | remote/shared/TabManager.sys.mjs
+21 main-commits 140->153 | 0 commits on the 153 ESR line 153.0->153.5 | toolkit/components/extensions/parent/ext-tabs-base.js

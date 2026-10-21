@@ -1,0 +1,94 @@
+{
+  "mode": "early",
+  "origin": "http://127.0.0.1:33783",
+  "extId": "spike002c-tab-model@powerbrowser.test",
+  "startedAt": "2026-10-21T16:48:19.470Z",
+  "steps": [],
+  "log": [],
+  "startupState": {
+    "windowTrackerLoaded": true,
+    "listenerTypes": [
+      "progress",
+      "TabClose",
+      "TabOpen",
+      "TabSelect",
+      "TabMultiSelect",
+      "TabAttrModified",
+      "TabPinned",
+      "TabUnpinned",
+      "TabBrowserInserted",
+      "TabBrowserDiscarded",
+      "TabGrouped",
+      "TabUngrouped",
+      "TabMove",
+      "TabShow",
+      "TabHide"
+    ],
+    "openListeners": 2,
+    "activePolicies": [
+      "default-theme@mozilla.org",
+      "pictureinpicture@mozilla.org",
+      "webcompat@mozilla.org",
+      "newtab@mozilla.org",
+      "addons-search-detection@mozilla.com",
+      "formautofill@mozilla.org",
+      "ipp-activator@mozilla.com"
+    ],
+    "shellHasGBrowserInit": "undefined"
+  },
+  "modelInstall": {
+    "installed": true,
+    "tabsAtInstall": 1
+  },
+  "registerReport": {
+    "node": null,
+    "init": null,
+    "register": {
+      "listenerTypesAtRegister": [
+        "progress",
+        "TabClose",
+        "TabOpen",
+        "TabSelect",
+        "TabMultiSelect",
+        "TabAttrModified",
+        "TabPinned",
+        "TabUnpinned",
+        "TabBrowserInserted",
+        "TabBrowserDiscarded",
+        "TabGrouped",
+        "TabUngrouped",
+        "TabMove",
+        "TabShow",
+        "TabHide"
+      ],
+      "openListenerCount": 2,
+      "openErrors": [
+        "Error: Cannot attach ID to a destroyed tab. @ setId@chrome://browser/content/parent/ext-browser.js:393:13"
+      ]
+    }
+  },
+  "install": {
+    "id": "spike002c-tab-model@powerbrowser.test",
+    "isActive": true
+  },
+  "backgroundStartFailure": {
+    "policyActive": false,
+    "views": null,
+    "backgroundState": null,
+    "errors": [
+      {
+        "stage": "pre-install",
+        "msg": "can't access property \"linkedBrowser\", tab is null",
+        "src": "resource://gre/modules/ExtensionActions.sys.mjs",
+        "line": 494
+      },
+      {
+        "stage": "pre-install",
+        "msg": "Browser load failed: NS_ERROR_NOT_AVAILABLE",
+        "src": "resource://gre/modules/ExtensionParent.sys.mjs",
+        "line": 2024
+      }
+    ]
+  },
+  "finishedAt": "2026-10-21T16:48:41.359Z"
+}
