@@ -4991,7 +4991,8 @@ run_own_checks() {
       # built shell against a hermetic engine chrome adds per session (its
       # search path is a page the check serves), with the startup cache purged
       # (MOZ_PURGE_CACHES=1). Needs the built binary and the last Theia app
-      # build, so never --quick. Its scenario list grows through Phase 29. The
+      # build, so never --quick. Its scenario list grows through Phase 29
+      # (token-cookie, search, refused, no-engine, dev-addresses so far). The
       # self-test runs a clean control session, then one session per planted
       # fault, each scored on the scenario it targets.
       "address-bar-live|node $REPO_ROOT/scripts/verify-address-bar-live.mjs"

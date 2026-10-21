@@ -38,6 +38,13 @@
  *               on typed words shows one row naming the configured
  *               application name and "can't search right now", and the served
  *               engine sees no GET. Scored only after search passed.
+ *   dev-addresses  BAR-02: chrome resolves localhost, localhost:4000,
+ *               devbox:3000, 192.168.1.10:8080 and [::1]:8080 to http visits
+ *               of exactly that host and port, example.com to
+ *               https://example.com/ and a single word to a search on the
+ *               served engine; then 127.0.0.1:<served port>/dev typed in the
+ *               pill and Enter loads /dev in the session's web tab (a GET and a
+ *               state push). Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -77,6 +84,7 @@ const COOKIE_PAGE_BODY = `<img src="/pixel"><script>
 const PAGES = {
     '/start': { title: 'Address Start', body: '<p>start</p>' },
     '/one/search': { title: 'Probe One Results', body: '<p>results</p>' },
+    '/dev': { title: 'Dev Page', body: '<p>dev</p>' },
     '/cookie-stock': { title: 'Cookie Stock', body: '<p>stock</p>' },
     '/cookie-page': { title: 'Cookie Page', body: COOKIE_PAGE_BODY },
     '/pixel': { title: 'Pixel', body: '' },
@@ -370,15 +378,55 @@ async function noEngine(ctx) {
     }
 }
 
+// Typed text and the visit URL Gecko's URI fixup must resolve it to.
+const DEV_VISITS = [
+    ['localhost', 'http://localhost/'],
+    ['localhost:4000', 'http://localhost:4000/'],
+    ['devbox:3000', 'http://devbox:3000/'],
+    ['192.168.1.10:8080', 'http://192.168.1.10:8080/'],
+    ['[::1]:8080', 'http://[::1]:8080/'],
+    ['example.com', 'https://example.com/'],
+];
+
+async function devAddresses(ctx) {
+    const { app, pages, fail, results } = ctx;
+    if (!controlPassed(results, 'dev-addresses')) {
+        return 'not-scored';
+    }
+    for (const [text, url] of DEV_VISITS) {
+        const reply = await resolveIn(app, text);
+        if (reply?.kind !== 'visit' || reply.url !== url) {
+            fail(`resolveTypedAddress(${JSON.stringify(text)}) must reply a visit of ${url}; got ${JSON.stringify(reply)}`);
+        }
+    }
+    const word = await resolveIn(app, 'hello');
+    if (word?.kind !== 'search' || word.engineName !== ENGINE_ONE || !String(word.url).startsWith(`${pages.origin}/one/search`)) {
+        fail(`resolveTypedAddress('hello') must reply kind search from ${JSON.stringify(ENGINE_ONE)} on the served origin; got ${JSON.stringify(word)}`);
+    }
+    const tabId = await sessionTab(ctx);
+    const mark = (await pushes(app)).length;
+    const getMark = pages.requests.length;
+    await typeInPill(app, `${new URL(pages.origin).host}/dev`);
+    await pressKey(app, ENTER);
+    const got = await nextGet(pages, '/dev', getMark);
+    if (!got) {
+        fail(`no GET on /dev after Enter on ${new URL(pages.origin).host}/dev; pill ${JSON.stringify(await readPill(app))}`);
+    }
+    if (await waitForPush(app, loadedAt(tabId, '/dev'), { from: mark, timeoutMs: got ? 15000 : 1000 }) < 0) {
+        fail('no loaded state push for the session tab ended /dev');
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
     refused,
     'no-engine': noEngine,
+    'dev-addresses': devAddresses,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
-const CONTROL_OF = { refused: 'search', 'no-engine': 'search' };
+const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
