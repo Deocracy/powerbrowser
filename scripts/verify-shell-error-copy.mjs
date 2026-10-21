@@ -549,6 +549,7 @@ const EXPECTED_WIDGET_COPY = new Set([
   "Forward",
   "Reload",
   "Stop",
+  "Home",
   "Search or enter address",
   "New Tab",
   "Suggestions",
@@ -571,6 +572,8 @@ const EXPECTED_NAV_COPY = new Set([
   "The browser",
   "Untitled page",
   "${name} couldn't read this tab's history. Use Back and Forward to move one page at a time.",
+  "Show the Home button next to Reload.",
+  "The page the Home button and Alt+Home open, such as https://example.com. Leave it empty to open an empty page.",
 ]);
 
 /** The brand literal the configured-name ruling bans from chrome-bar copy. */

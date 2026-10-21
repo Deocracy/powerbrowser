@@ -46,6 +46,11 @@
  *                    and copy cursor and opens a focused current tab; a
  *                    javascript: link gets no ring and opens nothing; plain-text
  *                    http opens with no ring during the drag.
+ *   home             With default settings the bar has no Home button; turning
+ *                    browser.showHomeButton on shows it right after Reload with
+ *                    no reload, on one row with every button, the pill keeping
+ *                    its 120px minimum; clicking it loads browser.homePage
+ *                    (/home) in the current web tab.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -100,6 +105,8 @@ const PAGES = {
     '/guard': { title: 'Guard', body: '<p>guard</p>', delayMs: 400 },
     '/drop': { title: 'Dropped', body: '<p>dropped</p>' },
     '/drop-text': { title: 'Dropped Text', body: '<p>dropped text</p>' },
+    '/home-start': { title: 'Home Start', body: '<p>start</p>' },
+    '/home': { title: 'Home Page', body: '<p>home</p>' },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
@@ -791,6 +798,73 @@ async function dropOnNewTab({ app, pages, fail }) {
     }
 }
 
+/** Sets a Home setting in the user scope (the profile's own config dir) and waits until it reads back. */
+const setPref = (app, key, value) => probe(app, `const prefs = get('PreferenceService');
+    await prefs.ready;
+    await prefs.set(${JSON.stringify(key)}, ${JSON.stringify(value)}, 1);
+    return await until(() => prefs.get(${JSON.stringify(key)}) === ${JSON.stringify(value)}, 10000);`);
+
+/** The bar's button labels in order, each button's top, the toggle's top and bottom, the pill's min-width. */
+const readBar = app => app.evaluate(`JSON.stringify((() => {
+    const bar = document.querySelector('.pb-chrome-bar');
+    if (!bar) return null;
+    const buttons = [...bar.querySelectorAll(':scope > button')];
+    const toggle = bar.querySelector('.pb-chrome-bar-toggle')?.getBoundingClientRect();
+    return {
+        labels: buttons.map(b => b.getAttribute('aria-label')),
+        tops: buttons.map(b => Math.round(b.getBoundingClientRect().top)),
+        bottoms: buttons.map(b => Math.round(b.getBoundingClientRect().bottom)),
+        toggle: toggle ? { top: Math.round(toggle.top), bottom: Math.round(toggle.bottom) } : null,
+        pillMin: getComputedStyle(bar.querySelector('.pb-chrome-bar-pill')).minWidth,
+        homeDisabled: ${navButtonExpr('Home')}?.disabled ?? null,
+    };
+})())`).then(JSON.parse);
+
+async function home({ app, pages, fail }) {
+    const before = await readBar(app);
+    if (!before) {
+        return fail(`${BROKEN} the chrome bar is missing`);
+    }
+    // Counts only because the same session then shows the button (positive control below).
+    if (before.labels.includes('Home')) {
+        return fail(`with default settings the bar must show no Home button; saw ${JSON.stringify(before.labels)}`);
+    }
+    if (await setPref(app, 'browser.showHomeButton', true) !== true) {
+        return fail(`${BROKEN} browser.showHomeButton could not be set to true`);
+    }
+    const bar = await settle(() => readBar(app), v => v && v.labels.includes('Home'));
+    if (!bar?.labels.includes('Home')) {
+        return fail(`turning browser.showHomeButton on must show the Home button without a reload; saw ${JSON.stringify(bar?.labels)}`);
+    }
+    const reload = bar.labels.findIndex(l => l === 'Reload' || l === 'Stop');
+    if (bar.labels[reload + 1] !== 'Home') {
+        return fail(`Home must sit directly after Reload; saw ${JSON.stringify(bar.labels)}`);
+    }
+    if (bar.homeDisabled !== false) {
+        return fail(`Home must never be disabled; disabled is ${JSON.stringify(bar.homeDisabled)}`);
+    }
+    if (new Set(bar.tops).size !== 1 || !bar.toggle || bar.toggle.top >= bar.bottoms[0] || bar.toggle.bottom <= bar.tops[0]) {
+        return fail(`every bar button and the mode toggle must share one row; tops ${JSON.stringify(bar.tops)}, toggle ${JSON.stringify(bar.toggle)}`);
+    }
+    if (bar.pillMin !== '120px') {
+        return fail(`the address pill's min-width must stay 120px with Home shown; it is ${JSON.stringify(bar.pillMin)}`);
+    }
+    if (await setPref(app, 'browser.homePage', pages.url('/home')) !== true) {
+        return fail(`${BROKEN} browser.homePage could not be set`);
+    }
+    const tabId = await openWebTab(app, pages.url('/home-start'));
+    if (await waitForPush(app, loadedAt(tabId, '/home-start')) < 0) {
+        return fail('no loaded state push arrived for /home-start');
+    }
+    const mark = (await pushes(app)).length;
+    if (await clickOn(app, 'Home') !== true) {
+        return fail(`${BROKEN} the Home button vanished before it could be clicked`);
+    }
+    if (await waitForPush(app, loadedAt(tabId, '/home'), { from: mark }) < 0) {
+        return fail('clicking Home produced no state push for the current tab ending /home');
+    }
+}
+
 // The reload scenarios run first, on the session's first web tabs: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
@@ -811,6 +885,7 @@ const SCENARIOS = {
     'history-error': historyError,
     'middle-click': middleClick,
     drop: dropOnNewTab,
+    home,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */

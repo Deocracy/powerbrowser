@@ -12,6 +12,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     noAppName: 'The browser',
     untitledPage: 'Untitled page',
     historyReadFailed: (subject: string) => `${subject} couldn't read this tab's history. Use Back and Forward to move one page at a time.`,
+    showHomeButtonDescription: 'Show the Home button next to Reload.',
+    homePageDescription: 'The page the Home button and Alt+Home open, such as https://example.com. Leave it empty to open an empty page.',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

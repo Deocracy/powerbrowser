@@ -24,6 +24,7 @@ import { ChromeBarPlacesSuggestions } from './chrome-bar-places-suggestions';
 import { ChromeBarCommandContribution } from './chrome-bar-commands';
 import { ChromeBarKeybindingContribution } from './chrome-bar-keybindings';
 import { ChromeBarShortcutRelay } from './chrome-bar-shortcuts';
+import { bindChromeBarPreferences } from './chrome-bar-preferences';
 import { ChromeBarContribution, ChromeBarWidget } from './chrome-bar-widget';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
@@ -82,4 +83,6 @@ export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     // like every bind above (D-50): its onStart subscribes to chrome's pushes.
     bind(ChromeBarShortcutRelay).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(ChromeBarShortcutRelay);
+    // NAV-04: the Home settings, static at module load (D-50).
+    bindChromeBarPreferences(bind);
 });

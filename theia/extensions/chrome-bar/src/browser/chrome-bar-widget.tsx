@@ -1,6 +1,6 @@
 import * as React from '@theia/core/shared/react';
 import { createPortal } from '@theia/core/shared/react-dom';
-import { injectable, inject } from '@theia/core/shared/inversify';
+import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import {
     ApplicationShell,
     ContextMenuRenderer,
@@ -11,6 +11,7 @@ import {
 } from '@theia/core/lib/browser';
 import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
+import { PreferenceService } from '@theia/core/lib/common/preferences';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import pDebounce from 'p-debounce';
@@ -31,6 +32,7 @@ import {
 } from './chrome-bar-commands';
 import { CHROME_SUGGESTION_LIMIT, ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
+import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 // The organising placeholder's own id, imported for the same const-discipline
@@ -188,6 +190,10 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(GroupModel)
     protected readonly groups: GroupModel;
 
+    /** NAV-04: the Home settings (chrome-bar-preferences.ts). */
+    @inject(PreferenceService)
+    protected readonly preferences: PreferenceService;
+
     protected holdTimer: number | undefined;
     /** Set when a hold opened the history menu, so the release's click does not navigate. */
     protected suppressNavClick = false;
@@ -226,6 +232,16 @@ export class ChromeBarWidget extends ReactWidget {
 
     /** Debounced pill queries over the RPC proxy (in-tree p-debounce pin, 150ms precedent). */
     protected readonly debouncedQuery = pDebounce((prefix: string) => this.runQuery(prefix), 150);
+
+    @postConstruct()
+    protected init(): void {
+        // NAV-04: toggling either Home setting updates the bar live, with no reload.
+        this.toDispose.push(this.preferences.onPreferenceChanged(change => {
+            if (change.preferenceName === SHOW_HOME_BUTTON_PREFERENCE || change.preferenceName === HOME_PAGE_PREFERENCE) {
+                this.update();
+            }
+        }));
+    }
 
     constructor() {
         super();
@@ -556,8 +572,7 @@ export class ChromeBarWidget extends ReactWidget {
      * without one, the two-step opener resolves to WebTabOpenHandler at
      * priority 1000 and opens a new web tab.
      */
-    protected async navigateWebTab(url: string): Promise<void> {
-        const tab = currentWebTab();
+    protected async navigateWebTab(url: string, tab = currentWebTab()): Promise<void> {
         if (tab) {
             const reply = await tab.navigate(url);
             if (!reply.ok) {
@@ -568,6 +583,21 @@ export class ChromeBarWidget extends ReactWidget {
         const uri = new URI(url);
         const handler = await this.openerService.getOpener(uri);
         await handler.open(uri);
+    }
+
+    /**
+     * NAV-04: opens the home page in `tab` (the active web tab for a click,
+     * the pushed tab for 27-06's Alt+Home), or in a new web tab without one.
+     * A non-empty value takes the pill's address routing, so only http(s) and
+     * bare dotted hosts open.
+     */
+    async goHome(tab: WebTabWidget | undefined): Promise<'opened' | 'empty' | 'failed'> {
+        const page = String(this.preferences.get(HOME_PAGE_PREFERENCE, '') ?? '').trim();
+        const target = typedAddressTargetOf(page);
+        if (target) {
+            await this.navigateWebTab(target, tab);
+        }
+        return 'opened';
     }
 
     /** Surfaces a commit failure in-bar per the copy contract: one failure row, Enter retries. */
@@ -967,6 +997,16 @@ export class ChromeBarWidget extends ReactWidget {
             >
                 <span className={stopping ? 'codicon codicon-close' : 'codicon codicon-refresh'} />
             </button>
+            {this.preferences.get(SHOW_HOME_BUTTON_PREFERENCE, false) && (
+                <button
+                    className='pb-chrome-bar-button'
+                    title='Home'
+                    aria-label='Home'
+                    onClick={() => this.goHome(currentWebTab())}
+                >
+                    <span className='codicon codicon-home' />
+                </button>
+            )}
             <div className='pb-chrome-bar-pill' ref={el => { this.pillRef = el; }}>
                 {secure && <span className='codicon codicon-lock pb-chrome-bar-lock' aria-hidden='true' />}
                 <input
