@@ -403,7 +403,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 27. Groundwork, Navigation Buttons and Page-Focus Keys | 8/8 | In Progress|  |
-| 28. WebExtension Tab Route Spike | 0/TBD | Not started | - |
+| 28. WebExtension Tab Route Spike | 0/0 | Complete    | 2026-10-21 |
 | 29. Address Bar Search and Fixup | 0/TBD | Not started | - |
 | 30. Address-Bar Modes and Command Centre | 0/TBD | Not started | - |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |

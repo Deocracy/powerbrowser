@@ -4,18 +4,18 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 27
 current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
-status: ready_for_verification
-stopped_at: Completed 27-08-PLAN.md
-last_updated: "2026-10-21T05:22:54.810Z"
+status: verifying
+stopped_at: Phase 28 complete, ready to verify Phase 27
+last_updated: "2026-10-21T19:33:50.339Z"
 last_activity: 2026-10-21
-last_activity_desc: 27-08 complete (nav-button tooltips name their shortcut from the table via HoverService; gate rule 10, shortcut copy surface, tooltips-all live)
-state_head: cefb157c40be7e4c9858c6891fc342999dd77a16
+last_activity_desc: Phase 28 complete, transitioned to Phase 27
+state_head: f14fda531955a983123e7e90c43111c87005234d
 progress:
-  total_phases: 12
-  completed_phases: 0
+  total_phases: 13
+  completed_phases: 1
   total_plans: 8
   completed_plans: 8
-  percent: 100
+  percent: 8
 ---
 
 # Project State
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 ## Current Position
 
-Phase: 27 (Groundwork, Navigation Buttons and Page-Focus Keys) — EXECUTING
-Plan: 8 of 8
-Status: Ready for verification (27-08 complete, all 8 plans done)
-Last activity: 2026-10-21 — 27-08 complete: every nav button's tooltip names its shortcut from the one table through HoverService (above the bar in Coding and Browsing, on the toolbar row below it in Organising, never over the page), with aria-keyshortcuts, gate rule (10), the shortcut copy surface and the tooltips-all live scenario
+Phase: 27 — Groundwork, Navigation Buttons and Page-Focus Keys
+Plan: 8
+Status: Phase complete — ready for verification
+Last activity: 2026-10-21 — Phase 28 complete, transitioned to Phase 27
 
-Progress: [██████████] 100%
+Progress: [█░░░░░░░░░] 8%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [██████████] 100%
 | 20 | 5 | - | - |
 | 21 | 5 | - | - |
 | 23 | 5 | - | - |
+| 28 | 0 | - | - |
 
 **Recent Trend:**
 
@@ -494,7 +495,7 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-10-21T05:22:54.773Z
-Stopped at: Completed 27-08-PLAN.md
+Stopped at: Phase 28 complete, ready to verify Phase 27
 Resume file: None
 
 ## Operator Next Steps
