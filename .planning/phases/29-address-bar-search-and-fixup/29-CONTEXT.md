@@ -28,7 +28,7 @@ Phase 29; requirements BAR-01..14).
 
 ### Claude's Discretion
 All other choices are at Claude's discretion (discuss skipped). Use the ROADMAP
-goal and notes, .planning/research/SUMMARY.md (Phase 2 section, D1-D8,
+goal and notes, .planning/research/SUMMARY.md (Phase 2 section, research disagreements 1 to 8,
 Pitfalls 6, 10, 11, 13, probes 11 and 13), STACK.md (SearchService via moz-src,
 await init(), URIFixup, SearchSuggestionController) and codebase conventions.
 

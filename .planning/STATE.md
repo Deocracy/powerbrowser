@@ -2,18 +2,18 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 27
-current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
-status: verifying
+current_phase: 29
+current_phase_name: Address Bar Search and Fixup
+status: executing
 stopped_at: Phase 28 complete, ready to verify Phase 27
-last_updated: "2026-10-21T19:33:50.339Z"
+last_updated: "2026-10-21T20:57:25.186Z"
 last_activity: 2026-10-21
 last_activity_desc: Phase 28 complete, transitioned to Phase 27
-state_head: f14fda531955a983123e7e90c43111c87005234d
+state_head: 88ad96cc3fe032cd6d56d5eecf2d114f28b58cc0
 progress:
   total_phases: 13
   completed_phases: 1
-  total_plans: 8
+  total_plans: 18
   completed_plans: 8
   percent: 8
 ---
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 ## Current Position
 
-Phase: 27 — Groundwork, Navigation Buttons and Page-Focus Keys
+Phase: 29 (Address Bar Search and Fixup) — READY TO EXECUTE
 Plan: 8
-Status: Phase complete — ready for verification
+Status: Ready to execute
 Last activity: 2026-10-21 — Phase 28 complete, transitioned to Phase 27
 
 Progress: [█░░░░░░░░░] 8%

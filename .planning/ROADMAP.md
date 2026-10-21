@@ -215,7 +215,49 @@ Plans:
   4. The first click selects the whole address, IME composition never commits early, and text typed but not submitted is still there after switching to another tab and back
   5. Every chrome-bar message names the configured application name: a sidecar run with a different configured name shows that name, and no chrome-bar source carries a brand literal
 
-**Plans**: TBD
+**Plans**: 10 plans (strictly sequential waves 1-10: no worktrees, every plan's `--quick` reads the whole tree, most edit `chrome-bar-widget.tsx` or `PowerBrowserAPI.sys.mjs`)
+
+Plans:
+**Wave 1**
+
+- [ ] 29-01-PLAN.md — Tracer: typed words and Enter search the default engine end to end (resolveTypedAddress store kind, pill commit path, served-engine live harness); refused schemes and no-engine rows
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 29-02-PLAN.md — Development addresses (localhost, host:port, IP) proven live; the token-cookie strip with its static gate and live proof; rule 12 store-kind classification
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 29-03-PLAN.md — [[search_engines]] in configuration.toml through emitSearchEngines into policies.json SearchEngines; engine hosts in the endpoint allowlist; verify-search-engines gate
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 29-04-PLAN.md — Default Search Engine setting filled from chrome, engine-naming placeholder; packaged check that the bar offers exactly the configured engines
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 29-05-PLAN.md — Result rows: pure rows module with a Node test, heuristic first row, type markers and Places favicons, 32px rows; configured app name in all copy with a derived brand ban
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 29-06-PLAN.md — Engine suggestions (on by default, setting to turn off, never for addresses); the one-off engine strip
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 29-07-PLAN.md — Switch to an open tab without reloading; Alt+Enter, Ctrl+click and middle-click new-tab targets
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 29-08-PLAN.md — Inline origin autofill; Ctrl+Enter to www.name.com; drop a link or text on the pill
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 29-09-PLAN.md — Shift+Del removes a history row; pill context menu with Cut, Copy, Paste, Paste & Go (first privileged store kinds)
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 29-10-PLAN.md — First click selects all, IME guard, typed text kept per tab; the whole phase's live checks green together
+
 **UI hint**: yes
 
 ### Phase 30: Address-Bar Modes and Command Centre
@@ -404,7 +446,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 27. Groundwork, Navigation Buttons and Page-Focus Keys | 8/8 | In Progress|  |
 | 28. WebExtension Tab Route Spike | 0/0 | Complete    | 2026-10-21 |
-| 29. Address Bar Search and Fixup | 0/TBD | Not started | - |
+| 29. Address Bar Search and Fixup | 0/10 | Planned | - |
 | 30. Address-Bar Modes and Command Centre | 0/TBD | Not started | - |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
 | 32. Page Tools | 0/TBD | Not started | - |
