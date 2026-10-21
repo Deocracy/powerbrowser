@@ -68,7 +68,7 @@ const RELOAD_GUARD_MS = 650;
 
 type NavGesture = 'back' | 'forward' | 'reload';
 type ButtonEvent = React.MouseEvent<HTMLButtonElement>;
-type ButtonDragEvent = React.DragEvent<HTMLButtonElement>;
+type DropTargetDragEvent = React.DragEvent<HTMLElement>;
 
 /** BAR-11: the heuristic row's key; the one row present for every non-empty text. */
 const HEURISTIC_KEY = 'heuristic';
@@ -82,10 +82,15 @@ const DROPDOWN_MAX_HEIGHT = 432;
 /** NAV-06: drag types that are links, as distinct from plain text. */
 const LINK_DRAG_TYPES = ['text/uri-list', 'text/x-moz-url'];
 
-/** The dropped http(s) URL: first non-comment uri-list line, else x-moz-url's first line, else plain text. */
-function droppedUrlOf(data: DataTransfer): string | undefined {
+/** The dropped payload: first non-comment uri-list line, else x-moz-url's first line, else plain text, trimmed. */
+function droppedTextOf(data: DataTransfer): string {
     const uriList = data.getData('text/uri-list').split(/\r?\n/).find(line => line.trim() && !line.startsWith('#'));
-    const value = (uriList || data.getData('text/x-moz-url').split(/\r?\n/)[0] || data.getData('text/plain')).trim();
+    return (uriList || data.getData('text/x-moz-url').split(/\r?\n/)[0] || data.getData('text/plain')).trim();
+}
+
+/** The dropped http(s) URL, else undefined. */
+function droppedUrlOf(data: DataTransfer): string | undefined {
+    const value = droppedTextOf(data);
     return /^https?:\/\//i.test(value) ? value : undefined;
 }
 
@@ -483,8 +488,8 @@ export class ChromeBarWidget extends ReactWidget {
         await this.joinActiveGroup(widget);
     }
 
-    /** NAV-06: dragenter/dragover on New Tab; anything but a link or text is refused (no preventDefault). */
-    protected onNewTabDragOver = (e: ButtonDragEvent): void => {
+    /** NAV-06, BAR-13: dragenter/dragover on New Tab and the pill; anything but a link or text is refused (no preventDefault). */
+    protected onDropTargetDragOver = (e: DropTargetDragEvent): void => {
         const kind = dropKindOf(e.dataTransfer);
         e.currentTarget.classList.toggle('is-drop-target', kind === 'link');
         if (kind === 'none') {
@@ -498,12 +503,12 @@ export class ChromeBarWidget extends ReactWidget {
         e.dataTransfer.dropEffect = 'copy';
     };
 
-    protected onNewTabDragLeave = (e: ButtonDragEvent): void => {
+    protected onDropTargetDragLeave = (e: DropTargetDragEvent): void => {
         e.currentTarget.classList.remove('is-drop-target');
     };
 
     /** NAV-06: an http(s) link dropped on New Tab opens in a new foreground tab with focus in the page. */
-    protected onNewTabDrop = async (e: ButtonDragEvent): Promise<void> => {
+    protected onNewTabDrop = async (e: DropTargetDragEvent): Promise<void> => {
         e.currentTarget.classList.remove('is-drop-target');
         e.preventDefault();
         const url = droppedUrlOf(e.dataTransfer);
@@ -519,6 +524,43 @@ export class ChromeBarWidget extends ReactWidget {
         }
         await this.joinActiveGroup(widget);
         widget.focusPage();
+    };
+
+    /**
+     * BAR-13: a link or text dropped on the pill loads in the current tab, as
+     * in Firefox: through chrome's resolve wall, so an address loads, other
+     * text searches the bar's engine and anything refused shows the
+     * commit-failure row. The payload is never put in the pill for editing.
+     */
+    protected onPillDrop = async (e: DropTargetDragEvent): Promise<void> => {
+        e.currentTarget.classList.remove('is-drop-target');
+        e.preventDefault();
+        e.stopPropagation();
+        const payload = droppedTextOf(e.dataTransfer);
+        if (!payload) {
+            return;
+        }
+        let resolved: ResolvedAddress | undefined;
+        try {
+            // Over 2048 characters chrome refuses it; it is never cut short into another address.
+            resolved = payload.length <= 2048 ? await this.store.resolveTypedAddress(payload, this.engineNameForRequest()) : undefined;
+        } catch {
+            resolved = undefined;
+        }
+        if (!resolved || (resolved.kind !== 'visit' && resolved.kind !== 'search') || !resolved.url) {
+            this.showCommitFailure();
+            return;
+        }
+        // Drops any typed text, so the load's state push can update the pill.
+        this.inputValue = this.committedAddress;
+        this.commitFailed = false;
+        this.closeDropdown();
+        this.update();
+        try {
+            await this.openCommittedUrl(resolved.url);
+        } catch {
+            this.showCommitFailure();
+        }
     };
 
     protected async joinActiveGroup(widget: Widget): Promise<void> {
@@ -1715,7 +1757,14 @@ export class ChromeBarWidget extends ReactWidget {
                     <span className='codicon codicon-home' />
                 </button>
             )}
-            <div className='pb-chrome-bar-pill' ref={el => { this.pillRef = el; }}>
+            <div
+                className='pb-chrome-bar-pill'
+                ref={el => { this.pillRef = el; }}
+                onDragEnter={this.onDropTargetDragOver}
+                onDragOver={this.onDropTargetDragOver}
+                onDragLeave={this.onDropTargetDragLeave}
+                onDrop={this.onPillDrop}
+            >
                 {secure && <span className='codicon codicon-lock pb-chrome-bar-lock' aria-hidden='true' />}
                 <input
                     className={CHROME_BAR_INPUT_CLASS}
@@ -1742,9 +1791,9 @@ export class ChromeBarWidget extends ReactWidget {
                 aria-keyshortcuts={BUTTON_SHORTCUTS.newTab.aria}
                 onPointerEnter={this.onNavHover('newTab')}
                 onClick={this.runCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)}
-                onDragEnter={this.onNewTabDragOver}
-                onDragOver={this.onNewTabDragOver}
-                onDragLeave={this.onNewTabDragLeave}
+                onDragEnter={this.onDropTargetDragOver}
+                onDragOver={this.onDropTargetDragOver}
+                onDragLeave={this.onDropTargetDragLeave}
                 onDrop={this.onNewTabDrop}
             >
                 <span className='codicon codicon-plus' />

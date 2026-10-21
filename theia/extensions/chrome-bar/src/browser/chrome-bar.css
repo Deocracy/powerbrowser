@@ -581,6 +581,12 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
     box-shadow: inset 0 0 0 2px var(--color-primary, #00a6f5);
 }
 
+/* BAR-13 (accent item 7): the pill while a droppable link is over it, the same
+   drop-here ring again, so all three read as one signal. */
+.pb-chrome-bar-pill.is-drop-target {
+    box-shadow: inset 0 0 0 2px var(--color-primary, #00a6f5);
+}
+
 /* A home-pane tab the strip lists is not listed again in the pane's own
    bar. Browsing only: Coding shows the real bars, all tabs. */
 body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {

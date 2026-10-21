@@ -125,7 +125,16 @@
  *               record its argument and load nothing (no public host is ever
  *               loaded), Ctrl+Enter (at the parent) on "example" commits
  *               https://www.example.com/ and on "example.org" (not a bare
- *               name, so plain Enter) https://example.org/.
+ *               name, so plain Enter) https://example.org/. Drop half, each
+ *               drag synthesised on the pill as nav-keys-live does on New
+ *               Tab: a text/uri-list drag of <served>/dropped shows the ring
+ *               with dropEffect copy, and dropping it loads /dropped in the
+ *               session tab (a GET and a push) while the pill, sampled every
+ *               frame until that push, never holds the payload; a plain-text
+ *               drag gets copy with no ring, and dropping "dropped words" GETs
+ *               /one/search with q "dropped words"; a javascript: uri-list
+ *               drag gets no ring and dropEffect none; dropped javascript:
+ *               text shows the commit-failure row and loads nothing.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -193,6 +202,7 @@ const PAGES = {
     '/nt-mid': { title: 'Middle Page', body: '<p>middle</p>' },
     '/': { title: 'Served Root', body: '<p>root</p>' },
     '/af': { title: 'Autofill Page', body: '<p>autofill</p>' },
+    '/dropped': { title: 'Dropped Page', body: '<p>dropped</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -964,7 +974,7 @@ async function oneOff(ctx) {
     mark = pages.requests.length;
     await pressKey(app, ENTER);
     if (!await nextGet(pages, '/two/search', mark, r => queryOf(r) === 'hello')) {
-        fail('no GET on /two/search with q "hello" after Enter on the highlighted one-off');
+        fail(`no GET on /two/search with q "hello" after Enter on the highlighted one-off; requests since the mark: ${JSON.stringify(pages.requests.slice(mark).map(r => r.path + r.search))}; pill ${JSON.stringify(await readPill(app))}; one-offs ${JSON.stringify(await readOneOffs(app))}`);
     }
     if (!await typeForOneOffs(app)) {
         return fail('typing "hello" a third time showed no one-off strip');
@@ -1435,6 +1445,99 @@ async function canonizeDrop(ctx) {
         await probe(app, `const w = get('ChromeBarWidget');
             if (w.__pbOpenCommitted) { w.openCommittedUrl = w.__pbOpenCommitted; delete w.__pbOpenCommitted; }
             return true;`);
+    }
+    await dropOnPill(ctx);
+}
+
+/**
+ * Synthesises dragenter, dragover and (unless `drop` is false) drop on the
+ * pill with `data`; returns the dragover's verdict. After a drop the pill's
+ * value is sampled every frame into window.__pbPillSeen until a recorded push
+ * at index >= `pushMark` ends `path` (or 15 s pass); a sample taken after that
+ * push could show the pushed address, so none is.
+ */
+const dragOntoPill = (app, data, { drop = true, path = '', pushMark = 0 } = {}) => app.evaluate(`JSON.stringify((() => {
+    const pill = document.querySelector('.pb-chrome-bar-pill');
+    const input = document.querySelector('.pb-chrome-bar-input');
+    if (!pill || !input) return null;
+    const dt = new DataTransfer();
+    for (const [type, value] of Object.entries(${JSON.stringify(data)})) dt.setData(type, value);
+    const fire = type => { const e = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }); input.dispatchEvent(e); return e; };
+    fire('dragenter');
+    const over = fire('dragover');
+    const seen = { prevented: over.defaultPrevented, dropEffect: dt.dropEffect, ring: pill.classList.contains('is-drop-target') };
+    if (${drop}) {
+        window.__pbPillSeen = [input.value];
+        const path = ${JSON.stringify(path)};
+        const end = performance.now() + 15000;
+        // A push carrying the path may set the pill itself, so sampling stops before reading past one.
+        const sample = () => {
+            const pushed = path && (window.__pbPushes || []).slice(${pushMark}).some(p => p && p.kind === 'state' && String(p.url).endsWith(path));
+            if (pushed || performance.now() >= end) return;
+            window.__pbPillSeen.push(input.value);
+            requestAnimationFrame(sample);
+        };
+        fire('drop');
+        seen.valueAfterDrop = input.value;
+        seen.ringAfter = pill.classList.contains('is-drop-target');
+        requestAnimationFrame(sample);
+    }
+    return seen;
+})())`).then(JSON.parse);
+
+async function dropOnPill(ctx) {
+    const { app, pages, fail } = ctx;
+    const tabId = await sessionTab(ctx);
+    const payload = pages.url('/dropped');
+
+    let mark = (await pushes(app)).length;
+    let getMark = pages.requests.length;
+    const link = await dragOntoPill(app, { 'text/uri-list': `# a comment\n${payload}` }, { path: '/dropped', pushMark: mark });
+    if (!link) {
+        return fail(`${BROKEN} the pill is missing`);
+    }
+    if (!link.prevented || link.dropEffect !== 'copy' || !link.ring || link.ringAfter) {
+        fail(`a link dragged over the pill must show the ring with dropEffect copy, and the ring must go at the drop; saw ${JSON.stringify(link)}`);
+    }
+    const linkGet = await nextGet(pages, '/dropped', getMark);
+    if (!linkGet) {
+        fail(`dropping a link on the pill sent no GET on /dropped; pill ${JSON.stringify(await readPill(app))}`);
+    }
+    if (await waitForPush(app, loadedAt(tabId, '/dropped'), { from: mark, timeoutMs: linkGet ? 15000 : 1000 }) < 0) {
+        fail('dropping a link on the pill did not load /dropped in the current tab (no loaded push for the session tab)');
+    }
+    const sampled = await app.evaluate('JSON.stringify(window.__pbPillSeen || [])').then(JSON.parse);
+    if (!sampled.length) {
+        fail(`${BROKEN} the pill was never sampled after the drop`);
+    } else if (sampled.includes(payload)) {
+        fail(`the dropped payload was put in the pill before the load's push (sampled ${JSON.stringify(sampled.slice(0, 8))})`);
+    }
+
+    mark = (await pushes(app)).length;
+    getMark = pages.requests.length;
+    const text = await dragOntoPill(app, { 'text/plain': 'dropped words' }, { path: '/one/search', pushMark: mark });
+    if (!text?.prevented || text.dropEffect !== 'copy' || text.ring) {
+        fail(`plain text dragged over the pill must get dropEffect copy and no ring; saw ${JSON.stringify(text)}`);
+    }
+    const searched = await nextGet(pages, '/one/search', getMark, r => queryOf(r) === 'dropped words');
+    if (!searched) {
+        fail(`dropping "dropped words" on the pill sent no GET on /one/search with q "dropped words"; requests ${JSON.stringify(pages.requests.slice(getMark).map(r => r.path + r.search))}`);
+    }
+
+    const refusedLink = await dragOntoPill(app, { 'text/uri-list': 'javascript:alert(1)' }, { drop: false });
+    if (refusedLink?.ring || refusedLink?.dropEffect !== 'none') {
+        fail(`a javascript: link over the pill must be refused with no ring and dropEffect none; saw ${JSON.stringify(refusedLink)}`);
+    }
+    mark = (await pushes(app)).length;
+    await dragOntoPill(app, { 'text/plain': 'javascript:alert(1)' }, { path: 'never', pushMark: mark });
+    const pill = await settle(() => readPill(app), v => v.rows.length === 1 && v.rows[0].includes("couldn't open that address"));
+    if (pill.rows.length !== 1 || !pill.rows[0].includes("couldn't open that address")) {
+        fail(`dropped javascript: text must show the one commit-failure row; saw ${JSON.stringify(pill)}`);
+    }
+    await sleep(1000);
+    const loads = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && String(p.url).startsWith('javascript:'));
+    if (loads.length) {
+        fail(`dropped javascript: text reached the tab: ${JSON.stringify(loads)}`);
     }
 }
 
