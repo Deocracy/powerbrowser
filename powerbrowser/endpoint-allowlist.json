@@ -27,6 +27,24 @@
       "reason": "08-04 (PKG-02, T-08-04a): the fork's own update-descriptor host. The only unattended callout the enabled updater may make: AppUpdateURL policy and the hash-pinned update.xml it serves, fetched over HTTPS from infrastructure this project controls. Deliberate waiver in the same category as the Safe Browsing entries -- a real capability (self-update), not an inherited default. Until the static file host exists the name does not resolve and checks fail closed; scripts/verify-mar-update-hop.mjs proves each hop with zero *.mozilla.org / *.mozilla.net resolutions."
     },
     {
+      "host": "lite.duckduckgo.com",
+      "disposition": "allow",
+      "reason": "29-03 (BAR-01/BAR-03): the search-results host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default.",
+      "manifest": "search_engines[0].url"
+    },
+    {
+      "host": "ac.duckduckgo.com",
+      "disposition": "allow",
+      "reason": "29-03 (BAR-01/BAR-03): the suggestions host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default.",
+      "manifest": "search_engines[0].suggest_url"
+    },
+    {
+      "host": "en.wikipedia.org",
+      "disposition": "allow",
+      "reason": "29-03 (BAR-01/BAR-03): the search-results and suggestions host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default.",
+      "manifest": "search_engines[1].url"
+    },
+    {
       "host": "normandy.cdn.mozilla.net",
       "disposition": "deny",
       "reason": "Normandy/Shield CDN (app.normandy.api_url, modules/libpref/init/all.js:2866). D-84: imply_option(\"MOZ_NORMANDY\", False) in the browser/moz.configure hunk compiles the entire subsystem, and every app.normandy.* pref that would name this host, out of the build -- code that is not compiled cannot be re-enabled at runtime."

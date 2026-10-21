@@ -2759,7 +2759,8 @@ export function mozillaEndpointPrefs(config) {
 /**
  * Every manifest URL that names a host this build may contact (04-04,
  * TEL-03): the [telemetry] endpoint when stated, each stated [urls] value,
- * and installer.support_url -- the in-app link target the welcome and
+ * each [[search_engines]] url and suggest_url (BAR-03), and
+ * installer.support_url -- the in-app link target the welcome and
  * about surfaces render (powerbrowserBranding.repoUrl), whose host
  * powerbrowser/endpoint-allowlist.json already tracks. product.homepage is
  * deliberately NOT here: it is product metadata, not a contacted surface.
@@ -2793,6 +2794,13 @@ export function manifestEndpointSources(config) {
     take('telemetry.endpoint', config.telemetry?.endpoint);
     for (const key of ['release_notes', 'update', 'crash_report', 'homepage', 'search']) {
         take(`urls.${key}`, config.urls?.[key]);
+    }
+    // BAR-01/BAR-03: each configured search engine's search and suggest
+    // hosts are deliberate egress. {searchTerms} parses inside new URL, so
+    // the host derives as for any other key.
+    for (const [i, entry] of (config.search_engines ?? []).entries()) {
+        take(`search_engines[${i}].url`, entry?.url);
+        take(`search_engines[${i}].suggest_url`, entry?.suggest_url);
     }
     take('installer.support_url', config.installer?.support_url);
     return sources;
@@ -5368,7 +5376,10 @@ function selfTest() {
     // update host is inherited from this project's own manifest (an
     // optional key, so the mask never strips it): the derivation is over
     // the MERGED config, so any default-layer contactable host reaches
-    // every fixture. Without this, a red result from the coverage gate
+    // every fixture -- which is why the second fixture also carries the
+    // inherited [[search_engines]] hosts, while the first restates its own
+    // engine list and so carries only its own (D-07 array-replace, BAR-03).
+    // Without this, a red result from the coverage gate
     // could be the derivation broken on a clean manifest rather than on
     // a drift. The expected hosts and prefs are literals: deriving them
     // through the derivation would make the control agree with it no
@@ -5409,14 +5420,14 @@ function selfTest() {
             };
             return [
                 ...checkOne(
-                    `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[telemetry]\nlevel = "all"\nendpoint = "https://collector.example.org/v1/events"\n[urls]\ncrash_report = "https://crash.example.org/report"\nupdate = "https://updates.example.org/update.xml"\n[installer]\nsupport_url = "https://example.org/support"\n`,
-                    ['collector.example.org', 'crash.example.org', 'example.org', 'updates.example.org'],
+                    `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[telemetry]\nlevel = "all"\nendpoint = "https://collector.example.org/v1/events"\n[urls]\ncrash_report = "https://crash.example.org/report"\nupdate = "https://updates.example.org/update.xml"\n[installer]\nsupport_url = "https://example.org/support"\n[[search_engines]]\nname = "Acme Search"\nurl = "https://search.example.org/?q={searchTerms}"\nsuggest_url = "https://suggest.example.org/?q={searchTerms}"\n`,
+                    ['collector.example.org', 'crash.example.org', 'example.org', 'search.example.org', 'suggest.example.org', 'updates.example.org'],
                     'https://collector.example.org/v1/events',
                     'https://crash.example.org/report',
                 ),
                 ...checkOne(
                     `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[urls]\nupdate = "https://updates.example.org/update.xml"\n`,
-                    ['powerbrowser.org', 'updates.example.org'],
+                    ['ac.duckduckgo.com', 'en.wikipedia.org', 'lite.duckduckgo.com', 'powerbrowser.org', 'updates.example.org'],
                     '',
                     '',
                 ),

@@ -350,6 +350,20 @@ it — arrays replace, never merge. No add-on binary is ever vendored into
 the tree: the mechanism (declaration plus policy) is platform work, the
 curated list stays downstream data.
 
+### `[[search_engines]]` — search engines (absent table means Firefox's own engines)
+
+| Setting | Required? | If omitted | Reaches |
+|---|---|---|---|
+| `search_engines[].name` | Required | Hard failure | `generated/search-engines.json` and the `SearchEngines` policy's `Add` entry `Name`; the first entry's name is the `Default`. A name equal to one Firefox ships (`DuckDuckGo`, `Wikipedia (en)`, ...) is rejected by `verify-search-engines`, because the browser drops a second engine of the same name without a word; two entries differing only in capital letters fail generate |
+| `search_engines[].url` | Required | Hard failure | The entry's `URLTemplate`: an `https://` address holding `{searchTerms}` where the typed text goes. Its host must be an allowlist row in `powerbrowser/endpoint-allowlist.json`, which `theia-endpoints` fails naming the host |
+| `search_engines[].suggest_url` | Optional | No suggestions from that engine | The entry's `SuggestURLTemplate`, same shape and the same allowlist rule as `url` |
+
+The first entry is the default engine, and the address bar lists only the
+configured engines while the policy is active. This project ships DuckDuckGo
+Lite (default) and Wikipedia; no template carries a partner or tracking
+parameter. Arrays replace, never merge: a downstream replaces the list by
+restating it.
+
 ## Downstream obligations
 
 - **Own unique identity.** State every required key for yourself. Required
