@@ -58,6 +58,8 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'selectTab7', key: '7', modifiers: 'alt', label: 'Alt+7', macLabel: '⌥7' },
     { id: 'selectTab8', key: '8', modifiers: 'alt', label: 'Alt+8', macLabel: '⌥8' },
     { id: 'selectLastTab', key: '9', modifiers: 'alt', label: 'Alt+9', macLabel: '⌥9' },
+    { id: 'focusAddressF6', keycode: 'VK_F6', modifiers: '', label: 'F6', macLabel: 'F6' },
+    { id: 'focusAddressShiftF6', keycode: 'VK_F6', modifiers: 'shift', label: 'Shift+F6', macLabel: '⇧F6' },
 ];
 
 /** True while a web page (an overlay) has keyboard focus. */
@@ -104,6 +106,8 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['home', async tab => (await this.bar.goHome(tab)) === 'opened' && tab.focusPage()],
         ['focusAddress', () => focusAddressPill()],
         ['focusAddressL', () => focusAddressPill()],
+        ['focusAddressF6', () => focusAddressPill()],
+        ['focusAddressShiftF6', () => focusAddressPill()],
         ['nextTab', tab => this.step(tab, 1)],
         ['nextTabPage', tab => this.step(tab, 1)],
         ['prevTab', tab => this.step(tab, -1)],

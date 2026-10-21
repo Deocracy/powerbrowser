@@ -359,8 +359,11 @@ document.addEventListener(
       { id: "selectTab7", key: "7", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab7" },
       { id: "selectTab8", key: "8", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab8" },
       { id: "selectLastTab", key: "9", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectLastTab" },
+      // No upstream <key>: content's document navigation consumes F6, so these ride the reply listener below.
+      { id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false, landsInTheia: true, via: "replyListener" },
+      { id: "focusAddressShiftF6", keycode: "VK_F6", modifiers: "shift", reserved: false, landsInTheia: true, via: "replyListener" },
     ];
-    const pageKeyElements = PAGE_KEYS.map(row => {
+    const pageKeyElements = PAGE_KEYS.filter(row => row.via !== "replyListener").map(row => {
       const key = document.createXULElement("key");
       key.setAttribute("id", `powerbrowser-page-key-${row.id}`);
       if (row.key) {
@@ -396,6 +399,39 @@ document.addEventListener(
     // Deferred one microtask so it reads the element focus moved TO.
     document.addEventListener("blur", () => Promise.resolve().then(syncPageFocus), true);
     document.documentElement.appendChild(diagnosticsKeyset);
+
+    // F6 and Shift+F6 from a page. A <key> cannot serve them: content's
+    // EventStateManager consumes F6 for document navigation
+    // (EventStateManager.cpp:4004-4040) and BrowserChild replies with it
+    // prevented (BrowserChild.cpp:2600-2608). So, as tabbrowser.js:8064-8083
+    // does, ask for the reply on the first pass and act on the reply only when
+    // the page itself did not call preventDefault().
+    const replyRows = PAGE_KEYS.filter(row => row.via === "replyListener");
+    window.addEventListener(
+      "keydown",
+      event => {
+        if (!event.isTrusted || event.keyCode !== KeyEvent.DOM_VK_F6 || event.ctrlKey || event.altKey || event.metaKey) {
+          return;
+        }
+        const row = replyRows.find(r => r.modifiers.includes("shift") === event.shiftKey);
+        // Only an overlay's F6; the Theia frame's F6 is never touched.
+        if (!row || PowerBrowserWebTabs.tabIdOfBrowser(event.target) === null) {
+          return;
+        }
+        if (!event.isReplyEventFromRemoteContent) {
+          if (!event.isWaitingReplyFromRemoteContent) {
+            event.requestReplyFromRemoteContent();
+          }
+          return;
+        }
+        if (event.defaultPreventedByContent) {
+          return;
+        }
+        PowerBrowserWebTabs.relayShortcut(browserElement, event.target, row.id, row.landsInTheia);
+        event.preventDefault();
+      },
+      true
+    );
 
     // Custom title bar. The root's `customtitlebar` attribute
     // (powerbrowser.xhtml) has the widget draw no OS title bar -- what

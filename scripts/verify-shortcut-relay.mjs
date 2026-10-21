@@ -22,7 +22,10 @@
  * exception that is not a reserved row is stale; (5) a row's `firefox` id
  * names an upstream key with the same key or keycode and modifiers; (6) no
  * row binds F11, Ctrl+P or Ctrl+K (KEY-04 names them); (7) the row-creation
- * loop writes disabled="true" unconditionally.
+ * loop skips `via: "replyListener"` rows and writes disabled="true"
+ * unconditionally on every row it creates; (8) a `via: "replyListener"` row is
+ * never reserved and names no Firefox key, and the reply listener reads its
+ * rows from PAGE_KEYS through the `via` field.
  *
  * Honestly --quick: reads text sources only. No build, no browser, no
  * display, no network.
@@ -416,12 +419,28 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
             }
         }
     }
-    // (7) every row is created disabled, outside any branch.
-    const loopAt = /PAGE_KEYS\.map\(\s*\(?\w+\)?\s*=>\s*(?=\{)/.exec(chromeSrc);
+    // (8) reply-listener rows: page-blockable by construction, so never reserved, and no <key> to mirror.
+    const replyRows = chrome.filter(r => r.via === 'replyListener');
+    for (const row of replyRows) {
+        if (row.reserved !== false) {
+            failures.push(`${row.id}: a replyListener row must be reserved: false (a page keeps a key it prevents)`);
+        }
+        if (row.firefox) {
+            failures.push(`${row.id}: a replyListener row names Firefox key ${row.firefox}; it has no <key> row to mirror`);
+        }
+    }
+    if (replyRows.length && !/PAGE_KEYS\.filter\(\s*(\w+)\s*=>\s*\1\.via\s*===\s*"replyListener"\s*\)/.test(chromeSrc)) {
+        failures.push(`${CHROME_REL}: the reply listener does not read its rows from PAGE_KEYS through the via field`);
+    }
+    // (7) every <key> row is created disabled, outside any branch, and reply rows get no <key>.
+    const loopAt = /PAGE_KEYS(\.filter\(\s*(\w+)\s*=>\s*\2\.via\s*!==\s*"replyListener"\s*\))?\.map\(\s*\(?\w+\)?\s*=>\s*(?=\{)/.exec(chromeSrc);
     const loop = loopAt ? balanced(chromeSrc, loopAt.index + loopAt[0].length) : null;
     if (loop === null) {
         failures.push(`${CHROME_REL}: broken instrument -- the PAGE_KEYS row-creation loop was not found`);
     } else {
+        if (replyRows.length && !loopAt[1]) {
+            failures.push(`${CHROME_REL}: the PAGE_KEYS row-creation loop does not skip replyListener rows (${replyRows.map(r => r.id).join(', ')} would get a <key>)`);
+        }
         let top = '';
         let depth = 0;
         // The loop body with every nested block collapsed to `{}`: what is left runs on every row.
@@ -433,7 +452,7 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
             failures.push(`${CHROME_REL}: the PAGE_KEYS row-creation loop does not set disabled="true" unconditionally, so a row could act while the Theia frame has focus`);
         }
     }
-    return { failures, counts: { rows: chrome.length, actions: actionIds.length, upstream: upstream.size, reserved: chrome.filter(r => r.reserved === true).length } };
+    return { failures, counts: { rows: chrome.length, actions: actionIds.length, upstream: upstream.size, reserved: chrome.filter(r => r.reserved === true).length, reply: replyRows.length } };
 }
 
 function readSources() {
@@ -448,7 +467,7 @@ function main() {
         }
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every row created disabled`);
+    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved`);
     return 0;
 }
 
@@ -471,6 +490,7 @@ const PLANTS = [
         expect: 'plantPrint: binds accel+P',
     },
     { name: 'firefox id with other modifiers', rel: CHROME_REL, from: 'firefox: "key_reload_skip_cache" }', to: 'firefox: "key_reload" }', expect: "hardReload: key or modifiers differ from Firefox's key_reload" },
+    { name: 'reply row marked reserved', rel: CHROME_REL, from: '{ id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false', to: '{ id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: true', expect: 'focusAddressF6: a replyListener row must be reserved: false' },
     { name: 'creation loop without the disabled write', rel: CHROME_REL, from: '      key.setAttribute("disabled", "true");\n', to: '', expect: 'does not set disabled="true" unconditionally' },
 ];
 

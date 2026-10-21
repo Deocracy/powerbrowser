@@ -698,7 +698,16 @@ export class ChromeBarWidget extends ReactWidget {
     };
 
     protected onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (e.key === 'F6' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            // The pill is chrome, not an editor: F6 and Shift+F6 go back to the page.
+            e.preventDefault();
+            this.closeDropdown();
+            this.update();
+            const tab = currentWebTab();
+            if (tab?.hasPage) {
+                tab.focusPage();
+            }
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault();
             if (!this.dropdownOpen || this.rows.length === 0) {
                 return;

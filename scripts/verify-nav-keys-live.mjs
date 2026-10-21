@@ -76,6 +76,13 @@
  *                    Alt+9 pick the first and last, Alt+5 changes nothing, and
  *                    focus lands in each target's page; in Coding Ctrl+Tab
  *                    follows the tab bar holding the current tab.
+ *   focus-keys       F6 in a focused page puts focus on the pill with its text
+ *                    selected (chrome's active element the Theia frame); F6 in
+ *                    the pill puts chrome's focus back on the page's overlay;
+ *                    Shift+F6 makes the same two moves.
+ *   focus-keys-prevented  A page that preventDefault()s F6 keeps it: chrome's
+ *                    focus stays on its overlay and no shortcut push arrives
+ *                    within 1500 ms. Scored only after focus-keys passed.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -142,6 +149,8 @@ const PAGES = {
     '/t1': { title: 'Tab One', body: '<p>t1</p>' },
     '/t2': { title: 'Tab Two', body: '<p>t2</p>' },
     '/t3': { title: 'Tab Three', body: '<p>t3</p>' },
+    '/f6': { title: 'Focus Keys', body: '<p>f6</p>' },
+    '/f6p': { title: 'Focus Kept', body: '<p>f6p</p><script>addEventListener("keydown", e => { if (e.key === "F6") e.preventDefault(); }, true);</script>' },
 };
 
 const isState = (tabId, loading) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === loading;
@@ -1034,7 +1043,12 @@ const KEY = {
     ctrlPageDown: { key: 'PageDown', code: 'PageDown', keyCode: 34, modifiers: ['accel'] },
     ctrlPageUp: { key: 'PageUp', code: 'PageUp', keyCode: 33, modifiers: ['accel'] },
     alt: n => ({ key: String(n), code: `Digit${n}`, keyCode: 48 + n, modifiers: ['alt'] }),
+    f6: { key: 'F6', code: 'F6', keyCode: 117 },
+    shiftF6: { key: 'F6', code: 'F6', keyCode: 117, modifiers: ['shift'] },
 };
+
+/** True when chrome's active element is the Theia frame's <browser>. */
+const chromeOnTheiaFrame = app => inChrome(app, `return document.activeElement === document.getElementById('powerbrowser-content');`);
 
 /** A served URL on localhost: another site than 127.0.0.1, so these tabs get their own content processes. */
 const otherSite = (pages, path) => pages.url(path).replace('//127.0.0.1:', '//localhost:');
@@ -1282,6 +1296,50 @@ async function tabKeys({ app, pages, plant, fail, note }) {
     await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'browsing'); return true;`);
 }
 
+async function focusKeys({ app, pages, fail, note }) {
+    const tabId = await openWebTab(app, pages.url('/f6'));
+    if (await waitForPush(app, loadedAt(tabId, '/f6')) < 0) {
+        return fail('no loaded state push arrived for /f6');
+    }
+    for (const [name, spec, id] of [['F6', KEY.f6, 'focusAddressF6'], ['Shift+F6', KEY.shiftF6, 'focusAddressShiftF6']]) {
+        const mark = (await pushes(app)).length;
+        await keyInPage(app, tabId, spec);
+        if (await waitForPush(app, p => p && p.kind === 'shortcut' && p.id === id && p.tabId === tabId, { from: mark, timeoutMs: 5000 }) < 0) {
+            return fail(`${name} in a focused page produced no ${id} shortcut push (the reply listener did not relay it)`);
+        }
+        const pill = await settle(() => readPill(app), v => v.focused && v.selected);
+        const onFrame = await settle(() => chromeOnTheiaFrame(app), v => v === true);
+        if (!pill.focused || !pill.selected || onFrame !== true) {
+            return fail(`${name} in a focused page must focus the pill with its whole text selected and chrome's focus on the Theia frame; pill ${JSON.stringify(pill)}, chrome on the Theia frame ${onFrame}`);
+        }
+        await pressKey(app, spec);
+        const back = await settle(() => chromeActiveTabId(app), v => v === tabId);
+        if (back !== tabId) {
+            return fail(`${name} in the pill must put chrome's focus back on the page's overlay; chrome's active overlay is ${JSON.stringify(back)}`);
+        }
+    }
+    note(`keys: ${keyRoute.last}`);
+}
+
+async function focusKeysPrevented({ app, pages, fail, results }) {
+    const control = results.find(r => r.name === 'focus-keys');
+    if (!control || control.failures.length) {
+        return 'not-scored';
+    }
+    const tabId = await openWebTab(app, pages.url('/f6p'));
+    if (await waitForPush(app, loadedAt(tabId, '/f6p')) < 0) {
+        return fail('no loaded state push arrived for /f6p');
+    }
+    const mark = (await pushes(app)).length;
+    await keyInPage(app, tabId, KEY.f6);
+    await sleep(1500);
+    const relayed = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'shortcut');
+    const active = await chromeActiveTabId(app);
+    if (relayed.length || active !== tabId) {
+        return fail(`a page that consumed F6 must keep it; shortcut pushes ${JSON.stringify(relayed)}, chrome's active overlay ${JSON.stringify(active)}`);
+    }
+}
+
 // The reload scenarios run first, on the session's first web tabs: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
@@ -1309,10 +1367,12 @@ const SCENARIOS = {
     'page-keys': pageKeys,
     'page-prevented': pagePrevented,
     'tab-keys': tabKeys,
+    'focus-keys': focusKeys,
+    'focus-keys-prevented': focusKeysPrevented,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
-const CONTROL_OF = { 'theia-keeps-esc': 'esc-stop', 'page-prevented': 'page-keys' };
+const CONTROL_OF = { 'theia-keeps-esc': 'esc-stop', 'page-prevented': 'page-keys', 'focus-keys-prevented': 'focus-keys' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
