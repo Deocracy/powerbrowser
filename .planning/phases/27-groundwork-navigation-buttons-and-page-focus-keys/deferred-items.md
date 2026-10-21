@@ -23,7 +23,11 @@
 - **What 27-02 did:** `hard-reload-channel` runs first in `verify-nav-keys-live.mjs`, on the
   session's first tab, so it scores only the bypass-cache flag. The defect is not fixed.
 
-## history-channel title race in the live self-test (found in 27-05)
+## history-channel title race in the live self-test (found in 27-05) -- RESOLVED in 27-07
+
+- **Resolved:** 27-07 (commit 4936517). It reproduced in 27-07's first self-test clean control.
+  `historyChannel` now waits for a state push that carries each page's served title before the next
+  navigation. Three solo runs and the next self-test clean control passed.
 
 - **Seen:** `node scripts/verify-nav-keys-live.mjs --self-test`, clean control, 1 of 2 runs.
   `history()` replied index 2 and the three entries, but entry 0's title was its URL
@@ -35,7 +39,12 @@
 - **Where to look:** `historyChannel` in `scripts/verify-nav-keys-live.mjs`: wait for a state
   push carrying the served title before each navigation.
 
-## Dead accel+L focus path after the A13 row was retired (found in 27-06)
+## Dead accel+L focus path after the A13 row was retired (found in 27-06) -- RESOLVED in 27-07
+
+- **Resolved:** 27-07 (commit 4936517) removed the method, the push kind, the channel emitter and
+  event, and the chrome-bar subscriber. It also rewrote the web-tab.ts placeholder comment and the
+  WebTabChannel inject comment. `verify-web-tab-bridge.mjs` (and `--self-test`),
+  `check-internals-boundary.sh --catalogue` and `verify-ng-040-internals-catalogue-lines.mjs` pass.
 
 - **Seen:** 27-06 deleted the always-reserved accel+L `<key>` in `powerbrowser.js`, its only
   caller. `PowerBrowserAPI.webTabFocusAddress` (PowerBrowserAPI.sys.mjs:3562), the
@@ -47,3 +56,26 @@
   with the dead path in place.
 - **Where to look:** remove the method, the push kind and the listener together, then re-run
   `verify-web-tab-bridge.mjs` and `check-internals-boundary.sh --catalogue`.
+
+## verify-ng-040 --fix swaps rows that share an internal name (found in 27-07)
+
+- **Seen:** 27-07 Task 3 deleted 18 lines above the saved-page section of `PowerBrowserAPI.sys.mjs`.
+  `node scripts/verify-ng-040-internals-catalogue-lines.mjs --fix` then re-pointed the two
+  `IOUtils.remove` rows of `savePageCopy`, but in table order rather than by shift. The
+  "persist fails" row (was 4072) got 4050 and the "replaced copy" row (was 4068) got 4054, which
+  swapped their descriptions. The check still passed afterwards, because it only checks that the
+  internal named on each row appears at that line.
+- **What 27-07 did:** corrected both rows by hand (4050 = replaced copy, 4054 = persist failure).
+- **Where to look:** `--fix` should apply each stale reference's own shift (or match by nearest
+  line), not reassign rows that share an internal in table order. The check cannot see this, so
+  after any `--fix`, read the diff of rows that name the same internal.
+
+## Intermittent live failures not reproduced (seen in 27-07)
+
+- In 27-07's first full live run, `hard-reload-click` failed once ("Shift+click on Reload must send a
+  GET carrying no-cache; got null"). It passed in two reruns and in the self-test clean control.
+  The shared-process blank-reload defect above is the likely cause (it was the 22nd-or-later tab of
+  the session).
+- In one `--scenario page-keys,page-prevented` run, `page-keys` failed with "after Alt+Home focus
+  must stay in the page; chrome's active overlay is undefined". `undefined` means the chrome-scope
+  evaluate returned no value. It did not recur in four later runs.
