@@ -3553,24 +3553,6 @@ export const PowerBrowserAPI = Object.freeze({
   },
 
   /**
-   * GUI-02 (14.1-01): the reserved accel+L path (UI-SPEC A13). A focused
-   * overlay page swallows every key Theia would otherwise bind, so leaving
-   * the page has to start in chrome: the shell's <key reserved="true"> calls
-   * this, which hands focus back to the Theia frame and asks the frontend,
-   * over the same push channel, to focus the address pill.
-   */
-  webTabFocusAddress(theiaBrowser) {
-    try {
-      theiaBrowser.focus();
-      theiaBrowser.browsingContext.currentWindowGlobal
-        .getActor(GROUP_ACTOR_NAME)
-        .sendAsyncMessage("PowerBrowserWebTabState", { kind: "focusAddress" });
-    } catch (err) {
-      PowerBrowserAPI.log("error", `[web-tab] focusAddress push failed: ${err && err.message ? err.message : err}`);
-    }
-  },
-
-  /**
    * GUI-02 (14.1-01, T-14.1-05): drops every overlay a frontend WindowGlobal
    * opened, called from the parent actor's didDestroy. A sidecar swap or a
    * frontend reload replaces the WindowGlobal and its actor; without this
@@ -4268,7 +4250,7 @@ export const PowerBrowserWebTabs = Object.freeze({
    * A page-scoped key fired: relays its row id with the tab whose page had
    * focus. The target is derived from `overlay` (chrome's active element),
    * never from Theia's current widget. Rows whose action lands in Theia UI
-   * focus the Theia frame first (the webTabFocusAddress precedent).
+   * focus the Theia frame first, so the pill or a new tab can take focus.
    */
   relayShortcut(theiaBrowser, overlay, id, landsInTheia) {
     if (typeof id !== "string" || !/^[A-Za-z0-9]{1,32}$/.test(id)) {

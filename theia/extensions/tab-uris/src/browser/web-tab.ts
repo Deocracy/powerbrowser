@@ -233,16 +233,11 @@ export class WebTabChannel {
 
     private seq = 0;
     private readonly widgets = new Map<string, WebTabWidget>();
-    private readonly focusAddressEmitter = new Emitter<void>();
     private readonly pushHandlers = new Map<string, Set<(detail: Record<string, unknown>) => void>>();
-
-    /** Fired when chrome's reserved accel+L asks the frontend to focus the address pill. */
-    readonly onDidRequestFocusAddress: TheiaEvent<void> = this.focusAddressEmitter.event;
 
     @postConstruct()
     protected init(): void {
         window.addEventListener(WEB_TAB_STATE_EVENT, this.onState);
-        this.onPush('focusAddress', () => this.focusAddressEmitter.fire());
         this.onPush('state', detail => {
             if (typeof detail.tabId !== 'string') {
                 return;
@@ -402,7 +397,7 @@ export class WebTabWidget extends BaseWidget {
         this.node.appendChild(this.stateNode);
         // Keyboard entry into the page (UI-SPEC A14): Enter or Space on the
         // focused placeholder hands focus to the overlay; leaving it again
-        // is chrome's reserved accel+L feeding onDidRequestFocusAddress.
+        // is a page-scoped focus row (Alt+D, Ctrl+L, F6, Shift+F6) through the shortcut relay.
         this.node.addEventListener('keydown', event => {
             if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();

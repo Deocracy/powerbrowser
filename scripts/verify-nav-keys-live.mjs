@@ -325,15 +325,17 @@ async function stopButton({ app, pages, plant, fail, note }) {
 }
 
 async function historyChannel({ app, pages, fail }) {
+    // Each wait includes the served title, so the session-history entry has its title before the next navigation.
+    const titled = (path, title) => p => loadedAt(tabId, path)(p) && p.title === title;
     const tabId = await openWebTab(app, pages.url('/h1'));
-    if (await waitForPush(app, loadedAt(tabId, '/h1')) < 0) {
-        return fail('no loaded state push for /h1 arrived');
+    if (await waitForPush(app, titled('/h1', 'History One')) < 0) {
+        return fail('no loaded state push for /h1 with its title arrived');
     }
-    for (const path of ['/h2', '/h3']) {
+    for (const [path, title] of [['/h2', 'History Two'], ['/h3', 'History Three']]) {
         const mark = (await pushes(app)).length;
         await widgetCall(app, tabId, 'navigate', pages.url(path));
-        if (await waitForPush(app, loadedAt(tabId, path), { from: mark }) < 0) {
-            return fail(`navigating to ${path} produced no loaded state push`);
+        if (await waitForPush(app, titled(path, title), { from: mark }) < 0) {
+            return fail(`navigating to ${path} produced no loaded state push with its title`);
         }
     }
     const history = await widgetCall(app, tabId, 'history');
@@ -1075,7 +1077,8 @@ const otherSite = (pages, path) => pages.url(path).replace('//127.0.0.1:', '//lo
 /** Focuses `tabId`'s page and presses `spec` there; throws a broken-instrument error when the page cannot be focused. */
 async function keyInPage(app, tabId, spec) {
     if (await focusOverlay(app, tabId) !== true) {
-        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused`);
+        const seen = await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return { exists: !!o, visibility: o?.style.visibility ?? null, active: W.tabIdOfBrowser(document.activeElement) ?? document.activeElement?.id ?? null };`);
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused (${JSON.stringify(seen)}, current ${JSON.stringify(await currentTab(app))})`);
     }
     await pressKey(app, spec);
 }
@@ -1223,6 +1226,11 @@ async function pagePrevented({ app, pages, fail, results }) {
     if (opened.count !== before.count + 1) {
         return fail(`Ctrl+T from a page that consumes every key must still open a tab; before ${JSON.stringify(before)}, after ${JSON.stringify(opened)}`);
     }
+    // Ctrl+T left the new tab current, and a hidden overlay cannot take focus.
+    await probe(app, `await get('ApplicationShell').activateWidget(get('WebTabChannel').widgetOf(${JSON.stringify(p)}).id); return true;`);
+    if (await settle(() => focusOverlay(app, p), v => v === true) !== true) {
+        return fail(`${BROKEN} the preventing page could not be made current and focused again`);
+    }
     await keyInPage(app, p, KEY.ctrlW);
     const gone = await settle(() => probe(app, `return !get('WebTabChannel').widgetOf(${JSON.stringify(p)});`), v => v === true);
     if (gone !== true) {
@@ -1367,7 +1375,7 @@ const appCommand = (app, tabId, target, command) => inChrome(app, `
     window.dispatchEvent(new CommandEvent('AppCommand', { command: ${JSON.stringify(command)}, bubbles: true, cancelable: true }));
     return true;`);
 
-async function mouseButtons({ app, pages, fail, note }) {
+async function mouseButtons({ app, pages, plant, fail, note }) {
     const setup = await tabThrough(app, [pages.url('/m1'), pages.url('/m2')]);
     if (setup.error) {
         return fail(setup.error);
@@ -1391,7 +1399,12 @@ async function mouseButtons({ app, pages, fail, note }) {
     note(`A5 trusted mouseover on an overlay: ${a5Started === true ? JSON.stringify(a5) : a5Started}`);
     for (const [command, path, target] of [['Back', '/m1', 'overlay'], ['Forward', '/m2', 'overlay']]) {
         const mark = (await pushes(app)).length;
-        if (await appCommand(app, tabId, target, command) !== true) {
+        // The plant: the pointer moves onto the Theia frame just before the first Back.
+        const over = plant === 'hover-elsewhere' && command === 'Back' ? 'frame' : target;
+        if (over !== target) {
+            note('PLANT hover-elsewhere applied');
+        }
+        if (await appCommand(app, tabId, over, command) !== true) {
             return fail(`${BROKEN} the overlay of ${tabId} is missing`);
         }
         if (await waitForPush(app, p => isState(tabId, false)(p) && String(p.url).endsWith(path), { from: mark, timeoutMs: 5000 }) < 0) {
@@ -1628,6 +1641,7 @@ const PLANTS = [
     { plant: 'row-enabled-under-theia', target: 'theia-keeps-esc', run: ['esc-stop', 'theia-keeps-esc'], expect: 'while the Theia frame had focus' },
     { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
     { plant: 'tab-order-reversed', target: 'tab-keys', run: ['tab-keys'], expect: 'expected T2' },
+    { plant: 'hover-elsewhere', target: 'mouse-buttons', run: ['mouse-buttons'], expect: '/m1' },
 ];
 
 async function selfTest() {

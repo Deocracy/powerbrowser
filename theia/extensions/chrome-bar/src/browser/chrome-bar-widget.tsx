@@ -1156,7 +1156,7 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
     @inject(PerspectiveService)
     protected readonly perspectives: PerspectiveService;
 
-    /** GUI-02: the frontend end of the web-tab bridge, for chrome's reserved accel+L. */
+    /** GUI-02: the frontend end of the web-tab bridge, for the window-chrome and drag-region messages. */
     @inject(WebTabChannel)
     protected readonly webTabs: WebTabChannel;
 
@@ -1547,11 +1547,6 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         // ordering hazard).
         this.shell.mainPanel.onDidChangeCurrent(title => this.syncCurrentWidget(title?.owner));
         this.syncCurrentWidget(this.shell.mainPanel.currentTitle?.owner);
-        // The landing half of chrome's reserved accel+L: from inside a page
-        // the shell key asks the frontend to focus the address, the channel
-        // re-emits it here, and the pill takes focus with its content
-        // selected -- the same result as the in-Theia keybinding.
-        this.webTabs.onDidRequestFocusAddress(() => focusAddressPill());
         // The portalled dropdown positions against the viewport, so a
         // window resize re-derives its geometry while open.
         window.addEventListener('resize', () => this.barWidget.repositionDropdown());
