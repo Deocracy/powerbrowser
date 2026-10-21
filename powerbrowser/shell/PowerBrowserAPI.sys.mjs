@@ -3704,6 +3704,7 @@ const STORE_REQUEST_KINDS = new Set([
   "setSetting",
   "savePageCopy",
   "resolveTypedAddress",
+  "listSearchEngines",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -3783,6 +3784,9 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "resolveTypedAddress": {
         return { ok: true, kind, resolved: await resolveTypedAddress(data.text, data.engineName ?? "") };
+      }
+      case "listSearchEngines": {
+        return { ok: true, kind, ...(await listSearchEngines()) };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -4383,6 +4387,20 @@ async function resolveTypedAddress(text, engineName) {
     return { kind: "refused" };
   }
   return { kind: "visit", url: String(upgradeSchemeless(info, uri).spec) };
+}
+
+// The bar's engines in order, for the Default Search Engine setting (BAR-04).
+// An icon crosses into the Theia frame only as a bounded data:image/ string,
+// so the frame never fetches an engine-supplied URL.
+async function listSearchEngines() {
+  const engines = [];
+  for (const engine of await barEngines()) {
+    const url = await engine.getIconURL(16);
+    const icon = typeof url === "string" && url.startsWith("data:image/") && url.length <= 65536 ? url : null;
+    engines.push({ name: String(engine.name), icon });
+  }
+  const def = await barEngine("");
+  return { engines, defaultName: def ? String(def.name) : "" };
 }
 
 // The token-cookie strip (BAR-02; REQUIREMENTS technical ruling 2026-10-20).

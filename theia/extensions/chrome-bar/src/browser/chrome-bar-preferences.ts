@@ -8,11 +8,27 @@
 // registers a `browser.` key, so there is no other registration to win over.
 
 import { interfaces } from '@theia/core/shared/inversify';
-import { PreferenceContribution, PreferenceSchema, PreferenceScope } from '@theia/core/lib/common/preferences';
+import { PreferenceContribution, PreferenceDataProperty, PreferenceSchema, PreferenceScope } from '@theia/core/lib/common/preferences';
 import { CHROME_BAR_COPY } from './chrome-bar-copy';
 
 export const SHOW_HOME_BUTTON_PREFERENCE = 'browser.showHomeButton';
 export const HOME_PAGE_PREFERENCE = 'browser.homePage';
+export const DEFAULT_SEARCH_ENGINE_PREFERENCE = 'browser.defaultSearchEngine';
+
+/**
+ * Phase 29 (BAR-04): "" means the default configuration.toml supplies. The
+ * widget fills enum and enumItemLabels from chrome's engine list at runtime;
+ * until then the only option is that default.
+ */
+export const DEFAULT_SEARCH_ENGINE_PROPERTY: PreferenceDataProperty = {
+    type: 'string',
+    default: '',
+    // User scope only: a workspace settings file cannot choose the engine.
+    scope: PreferenceScope.User,
+    description: CHROME_BAR_COPY.defaultSearchEngineDescription,
+    enum: [''],
+    enumItemLabels: [''],
+};
 
 export const ChromeBarPreferenceSchema: PreferenceSchema = {
     properties: {
@@ -29,6 +45,7 @@ export const ChromeBarPreferenceSchema: PreferenceSchema = {
             scope: PreferenceScope.User,
             description: CHROME_BAR_COPY.homePageDescription,
         },
+        [DEFAULT_SEARCH_ENGINE_PREFERENCE]: DEFAULT_SEARCH_ENGINE_PROPERTY,
     },
 };
 

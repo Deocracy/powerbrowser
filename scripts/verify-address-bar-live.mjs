@@ -45,6 +45,13 @@
  *               served engine; then 127.0.0.1:<served port>/dev typed in the
  *               pill and Enter loads /dev in the session's web tab (a GET and a
  *               state push). Scored only after search passed.
+ *   default-engine  BAR-04: the placeholder and aria-label name Gecko's
+ *               default (Probe Engine One); the Default Search Engine setting's
+ *               options hold "", One and Two; setting it to Probe Engine Two
+ *               renames the placeholder with no reload and Enter on hello
+ *               searches /two/search; a name outside the set ("No Such Engine")
+ *               is ignored: the placeholder names One and Enter searches
+ *               /one/search. The setting is reset to "" afterwards.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -61,6 +68,7 @@ import {
     pushes,
     readPill,
     serveNavPages,
+    setPref,
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
@@ -69,6 +77,8 @@ import { pollFor, probe } from './lib/pb-relaunch.mjs';
 const NAME = 'verify-address-bar-live';
 const ENTER = { key: 'Enter', code: 'Enter', keyCode: 13 };
 const ENGINE_ONE = 'Probe Engine One';
+const ENGINE_TWO = 'Probe Engine Two';
+const ENGINE_PREF = 'browser.defaultSearchEngine';
 
 const TOKEN_COOKIE = 'POWERBROWSER_TOKEN';
 const PROBE_COOKIE = 'pbprobe=1';
@@ -84,6 +94,7 @@ const COOKIE_PAGE_BODY = `<img src="/pixel"><script>
 const PAGES = {
     '/start': { title: 'Address Start', body: '<p>start</p>' },
     '/one/search': { title: 'Probe One Results', body: '<p>results</p>' },
+    '/two/search': { title: 'Probe Two Results', body: '<p>results</p>' },
     '/dev': { title: 'Dev Page', body: '<p>dev</p>' },
     '/cookie-stock': { title: 'Cookie Stock', body: '<p>stock</p>' },
     '/cookie-page': { title: 'Cookie Page', body: COOKIE_PAGE_BODY },
@@ -93,7 +104,7 @@ const PAGES = {
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
 
-/** Adds the served engine chrome-side and makes it the default; throws `harness:` on any failure. */
+/** Adds the two served engines chrome-side and makes One the default; throws `harness:` on any failure. */
 async function installEngine(app, pages) {
     const reply = await inChrome(app, `return (async () => {
         try {
@@ -104,6 +115,12 @@ async function installEngine(app, pages) {
                     name: ${JSON.stringify(ENGINE_ONE)},
                     url: ${JSON.stringify(`${pages.origin}/one/search?q={searchTerms}`)},
                     suggestUrl: ${JSON.stringify(`${pages.origin}/one/suggest?q={searchTerms}`)},
+                });
+            SearchService.getEngineByName(${JSON.stringify(ENGINE_TWO)})
+                ?? await SearchService.addUserEngine({
+                    name: ${JSON.stringify(ENGINE_TWO)},
+                    url: ${JSON.stringify(`${pages.origin}/two/search?q={searchTerms}`)},
+                    suggestUrl: ${JSON.stringify(`${pages.origin}/two/suggest?q={searchTerms}`)},
                 });
             await SearchService.setDefault(engine, SearchService.CHANGE_REASON.USER);
             return (await SearchService.getDefault()).name;
@@ -417,12 +434,85 @@ async function devAddresses(ctx) {
     }
 }
 
+/** The pill input's placeholder and aria-label. */
+const readAddressLabel = app => app.evaluate(`JSON.stringify((() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    return input ? { placeholder: input.placeholder, aria: input.getAttribute('aria-label') } : null;
+})())`).then(JSON.parse);
+
+const labelFor = engine => `Search with ${engine} or enter address`;
+const labelIs = text => v => !!v && v.placeholder === text && v.aria === text;
+
+/** Types `text`, presses Enter, and returns the first GET on `path` with q === text, or null. */
+async function searchVia(ctx, text, path) {
+    const getMark = ctx.pages.requests.length;
+    await typeInPill(ctx.app, text);
+    await pressKey(ctx.app, ENTER);
+    return nextGet(ctx.pages, path, getMark, r => queryOf(r) === text);
+}
+
+async function defaultEngine(ctx) {
+    const { app, plant, fail, note } = ctx;
+    await sessionTab(ctx);
+    // Focus re-reads chrome's engines: the harness added its engines after startup.
+    if (await focusTheiaFrame(app) !== true || await app.evaluate(`(() => { const i = document.querySelector('.pb-chrome-bar-input'); if (!i) return false; i.focus(); return true; })()`) !== true) {
+        throw new Error(`${BROKEN} the pill could not be focused`);
+    }
+    const first = await settle(() => readAddressLabel(app), labelIs(labelFor(ENGINE_ONE)));
+    if (!labelIs(labelFor(ENGINE_ONE))(first)) {
+        fail(`the placeholder and aria-label must read ${JSON.stringify(labelFor(ENGINE_ONE))}; got ${JSON.stringify(first)}`);
+    }
+    const options = await probe(app, `return get('PreferenceSchemaService').getSchemaProperty(${JSON.stringify(ENGINE_PREF)})?.enum ?? null;`);
+    for (const option of ['', ENGINE_ONE, ENGINE_TWO]) {
+        if (!Array.isArray(options) || !options.includes(option)) {
+            fail(`the ${ENGINE_PREF} setting's options must include ${JSON.stringify(option)}; got ${JSON.stringify(options)}`);
+        }
+    }
+    if (plant === 'engine-name-dropped') {
+        const wrapped = await probe(app, `const c = get('ChromeStoreClient');
+            const original = Object.getPrototypeOf(c).resolveTypedAddress.bind(c);
+            c.resolveTypedAddress = text => original(text, '');
+            return true;`);
+        if (wrapped === true) {
+            note('PLANT engine-name-dropped applied');
+        }
+    }
+    try {
+        if (await setPref(app, ENGINE_PREF, ENGINE_TWO) !== true) {
+            return fail(`${BROKEN} the ${ENGINE_PREF} setting could not be set`);
+        }
+        const two = await settle(() => readAddressLabel(app), labelIs(labelFor(ENGINE_TWO)));
+        if (!labelIs(labelFor(ENGINE_TWO))(two)) {
+            fail(`with the setting on ${ENGINE_TWO} the placeholder must read ${JSON.stringify(labelFor(ENGINE_TWO))} with no reload; got ${JSON.stringify(two)}`);
+        }
+        if (!await searchVia(ctx, 'hello', '/two/search')) {
+            fail(`no GET on /two/search with q "hello" after Enter with the setting on ${ENGINE_TWO}`);
+        }
+        if (await setPref(app, ENGINE_PREF, 'No Such Engine') !== true) {
+            return fail(`${BROKEN} the ${ENGINE_PREF} setting could not be set to an unknown name`);
+        }
+        const unknown = await settle(() => readAddressLabel(app), labelIs(labelFor(ENGINE_ONE)));
+        if (!labelIs(labelFor(ENGINE_ONE))(unknown)) {
+            fail(`an unknown engine name must leave the placeholder naming ${ENGINE_ONE}; got ${JSON.stringify(unknown)}`);
+        }
+        if (!await searchVia(ctx, 'hello', '/one/search')) {
+            fail('no GET on /one/search with q "hello" after Enter with an unknown engine name in the setting');
+        }
+    } finally {
+        await setPref(app, ENGINE_PREF, '');
+        if (plant === 'engine-name-dropped') {
+            await stubResolve(app, null);
+        }
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
     refused,
     'no-engine': noEngine,
     'dev-addresses': devAddresses,
+    'default-engine': defaultEngine,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -496,6 +586,7 @@ function selectedScenarios(args) {
 
 const PLANTS = [
     { plant: 'resolve-bypassed', target: 'search', run: ['search'], expect: 'no GET on /one/search' },
+    { plant: 'engine-name-dropped', target: 'default-engine', run: ['default-engine'], expect: 'no GET on /two/search' },
     { plant: 'token-strip-off', target: 'token-cookie', run: ['token-cookie'], expect: `carried ${TOKEN_COOKIE}: stock-window, overlay, subresource, worker` },
 ];
 

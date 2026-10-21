@@ -83,6 +83,18 @@ export interface ResolvedAddress {
     engineName?: string;
 }
 
+/** Phase 29 (BAR-04): one bar engine; the icon is a data:image/ URI or null. */
+export interface SearchEngineInfo {
+    name: string;
+    icon: string | null;
+}
+
+/** Phase 29 (BAR-04): the bar's engines in order and the configured default's name. */
+export interface SearchEngineList {
+    engines: SearchEngineInfo[];
+    defaultName: string;
+}
+
 export interface TabPlacesQuery {
     bookmarked?: boolean;
     open?: boolean;
@@ -151,6 +163,15 @@ export class ChromeStoreClient {
     /** Phase 29 (BAR-01): URI fixup, then the bar engine's submission, then the http(s) wall, all chrome-side. */
     resolveTypedAddress(text: string, engineName = ''): Promise<ResolvedAddress> {
         return this.field<ResolvedAddress>({ kind: 'resolveTypedAddress', text, engineName }, 'resolved');
+    }
+
+    /** Phase 29 (BAR-04): the bar's engines, for the Default Search Engine setting and the placeholder. */
+    async listSearchEngines(): Promise<SearchEngineList> {
+        const reply = await this.request({ kind: 'listSearchEngines' });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `listSearchEngines failed (${reply.reason ?? 'store'})`);
+        }
+        return { engines: reply['engines'] as SearchEngineInfo[], defaultName: String(reply['defaultName'] ?? '') };
     }
 
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */

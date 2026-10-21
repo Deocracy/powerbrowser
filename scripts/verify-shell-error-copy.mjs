@@ -551,7 +551,6 @@ const EXPECTED_WIDGET_COPY = new Set([
   "Reload",
   "Stop",
   "Home",
-  "Search or enter address",
   "New Tab",
   "Suggestions",
   "Mode",
@@ -577,6 +576,9 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} can't open your home page. Press Enter to change it in Settings.",
   "The page the Home button and Alt+Home open, such as https://example.com. Leave it empty to open an empty page.",
   "${name} can't search right now. Type a full address, such as https://example.com, and press Enter.",
+  "Search or enter address",
+  "Search with ${name} or enter address",
+  "The search engine the address bar uses when what you type is not an address.",
 ]);
 
 /**

@@ -92,6 +92,7 @@ const STORE_KIND_CLASSES = new Map([
     ['queryTabsWithPlaces', 'read'],
     ['searchPlaces', 'read'],
     ['resolveTypedAddress', 'read'],
+    ['listSearchEngines', 'read'],
     ['setSetting', 'store-write'],
     ['savePageCopy', 'store-write'],
 ]);

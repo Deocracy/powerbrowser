@@ -13,7 +13,7 @@ import {
 } from '@theia/core/lib/browser';
 import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
-import { PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
+import { PreferenceSchemaService, PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
@@ -22,7 +22,7 @@ import type { TabQueryRow } from '@powerbrowser/tab-uris/lib/node/tab-query-serv
 import { EMPTY_PAGE_URL, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
-import { ChromeStoreClient, ResolvedAddress } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
+import { ChromeStoreClient, ResolvedAddress, SearchEngineList } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import {
     CHROME_BAR_BACK_COMMAND_ID,
     CHROME_BAR_FORWARD_COMMAND_ID,
@@ -36,7 +36,9 @@ import {
 } from './chrome-bar-commands';
 import { CHROME_SUGGESTION_LIMIT, ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
-import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
+import {
+    DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE,
+} from './chrome-bar-preferences';
 import { ADDRESS_FOCUSED_CONTEXT_KEY } from './chrome-bar-keybindings';
 // A cycle (chrome-bar-shortcuts imports this widget); safe because the frontend
 // module loads chrome-bar-shortcuts first and these are read only at render time.
@@ -198,6 +200,13 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(ChromeStoreClient)
     protected readonly store: ChromeStoreClient;
 
+    /** Phase 29 (BAR-04): the Default Search Engine setting's options come from chrome's engine list. */
+    @inject(PreferenceSchemaService)
+    protected readonly preferenceSchema: PreferenceSchemaService;
+
+    /** Phase 29 (BAR-04): chrome's engine list; undefined until it arrives or when it failed. */
+    protected engineList: SearchEngineList | undefined;
+
     protected holdTimer: number | undefined;
     /** Set when a hold opened the history menu, so the release's click does not navigate. */
     protected suppressNavClick = false;
@@ -261,7 +270,44 @@ export class ChromeBarWidget extends ReactWidget {
             if (change.preferenceName === SHOW_HOME_BUTTON_PREFERENCE || change.preferenceName === HOME_PAGE_PREFERENCE) {
                 this.update();
             }
+            if (change.preferenceName === DEFAULT_SEARCH_ENGINE_PREFERENCE) {
+                void this.refreshEngines();
+            }
         }));
+        void this.refreshEngines();
+    }
+
+    /**
+     * BAR-04: re-reads chrome's engines and fills the setting's options; the
+     * empty option is labelled with the configured default's name.
+     */
+    protected async refreshEngines(): Promise<void> {
+        try {
+            this.engineList = await this.store.listSearchEngines();
+        } catch (error) {
+            this.engineList = undefined;
+            console.error('[@powerbrowser/chrome-bar] reading the search engines failed:', error instanceof Error ? error.name : typeof error);
+        }
+        if (this.engineList) {
+            const names = this.engineList.engines.map(engine => engine.name);
+            this.preferenceSchema.updateSchemaProperty(DEFAULT_SEARCH_ENGINE_PREFERENCE, {
+                ...DEFAULT_SEARCH_ENGINE_PROPERTY,
+                enum: ['', ...names],
+                enumItemLabels: [this.engineList.defaultName, ...names],
+            });
+        }
+        this.update();
+    }
+
+    /** BAR-04: the User-scope engine choice when chrome lists it, else '' (chrome's default). */
+    protected engineNameForRequest(): string {
+        const chosen = String(this.userPreference(DEFAULT_SEARCH_ENGINE_PREFERENCE, ''));
+        return chosen && this.engineList?.engines.some(engine => engine.name === chosen) ? chosen : '';
+    }
+
+    /** BAR-04: the engine searches actually go to, for the placeholder; undefined before the list arrives. */
+    protected effectiveEngine(): string | undefined {
+        return this.engineNameForRequest() || this.engineList?.defaultName || undefined;
     }
 
     constructor() {
@@ -664,7 +710,7 @@ export class ChromeBarWidget extends ReactWidget {
             return 'empty';
         }
         try {
-            const resolved = await this.store.resolveTypedAddress(page);
+            const resolved = await this.store.resolveTypedAddress(page, this.engineNameForRequest());
             if (resolved.kind !== 'visit' || !resolved.url) {
                 throw new Error('the home page is not an address');
             }
@@ -746,7 +792,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
         let resolved: ResolvedAddress | undefined;
         try {
-            resolved = await this.store.resolveTypedAddress(text);
+            resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());
         } catch {
             resolved = undefined;
         }
@@ -821,6 +867,11 @@ export class ChromeBarWidget extends ReactWidget {
     protected onInputBlur = (): void => {
         this.closeDropdown();
         this.update();
+    };
+
+    /** BAR-04: engines can change after startup (added in a stock window), so focus re-reads them. */
+    protected onInputFocus = (): void => {
+        void this.refreshEngines();
     };
 
     /**
@@ -1096,6 +1147,8 @@ export class ChromeBarWidget extends ReactWidget {
         const tab = currentWebTab();
         const stopping = !!tab?.loading;
         const secure = this.inputValue.trim().startsWith('https://');
+        const engine = this.effectiveEngine();
+        const addressLabel = engine ? CHROME_BAR_COPY.searchPlaceholder(engine) : CHROME_BAR_COPY.searchOrEnterAddress;
         return <div className='pb-chrome-bar'>
             <button
                 className='pb-chrome-bar-button'
@@ -1157,14 +1210,15 @@ export class ChromeBarWidget extends ReactWidget {
                 {secure && <span className='codicon codicon-lock pb-chrome-bar-lock' aria-hidden='true' />}
                 <input
                     className={CHROME_BAR_INPUT_CLASS}
-                    placeholder='Search or enter address'
-                    aria-label='Search or enter address'
+                    placeholder={addressLabel}
+                    aria-label={addressLabel}
                     spellCheck={false}
                     value={this.inputValue}
                     onChange={this.onInputChange}
                     ref={this.inputRef}
                     onKeyDown={this.onInputKeyDown}
                     onBlur={this.onInputBlur}
+                    onFocus={this.onInputFocus}
                 />
             </div>
             {this.renderDropdown()}
