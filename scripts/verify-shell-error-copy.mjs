@@ -576,6 +576,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Show the Home button next to Reload.",
   "${name} can't open your home page. Press Enter to change it in Settings.",
   "The page the Home button and Alt+Home open, such as https://example.com. Leave it empty to open an empty page.",
+  "${name} can't search right now. Type a full address, such as https://example.com, and press Enter.",
 ]);
 
 /**

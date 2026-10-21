@@ -137,6 +137,7 @@
  */
 
 import {
+    appNameExpr,
     BROKEN,
     chromeActiveTabId,
     firedRows,
@@ -655,11 +656,6 @@ async function historyMenu({ app, pages, fail }) {
         return fail(`choosing an entry must put focus in the page; chrome's active overlay is ${JSON.stringify(focused)}`);
     }
 }
-
-const appNameExpr = `(() => {
-    const key = Object.getOwnPropertySymbols(window).find(k => k.description === 'FrontendApplicationConfigProvider');
-    return String((key && window[key] && window[key].applicationName) || '').trim();
-})()`;
 
 const clickOn = (app, label, init = {}) => app.evaluate(`(() => {
     const b = ${navButtonExpr(label)};

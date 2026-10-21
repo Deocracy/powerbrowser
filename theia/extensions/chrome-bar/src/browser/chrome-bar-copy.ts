@@ -15,6 +15,7 @@ export const CHROME_BAR_COPY = Object.freeze({
     showHomeButtonDescription: 'Show the Home button next to Reload.',
     homeFailed: (subject: string) => `${subject} can't open your home page. Press Enter to change it in Settings.`,
     homePageDescription: 'The page the Home button and Alt+Home open, such as https://example.com. Leave it empty to open an empty page.',
+    noSearch: (subject: string) => `${subject} can't search right now. Type a full address, such as https://example.com, and press Enter.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

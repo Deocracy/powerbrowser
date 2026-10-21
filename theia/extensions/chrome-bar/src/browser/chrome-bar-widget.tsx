@@ -217,6 +217,8 @@ export class ChromeBarWidget extends ReactWidget {
     protected highlightIndex = -1;
     protected providerFailed = false;
     protected commitFailed = false;
+    /** Phase 29 (BAR-01): chrome found no engine for typed words; Enter retries, typing or closing clears it. */
+    protected noSearch = false;
     /** NAV-04: the Home-failure row is showing; Enter or a click opens Settings on the home-page setting. */
     protected homeFailed = false;
     protected shimmer = false;
@@ -537,6 +539,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.dropdownOpen = false;
         this.highlightIndex = -1;
         this.homeFailed = false;
+        this.noSearch = false;
     }
 
     protected async runQuery(prefix: string): Promise<void> {
@@ -587,6 +590,7 @@ export class ChromeBarWidget extends ReactWidget {
     protected onInputChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
         this.inputValue = e.target.value;
         this.commitFailed = false;
+        this.noSearch = false;
         this.homeFailed = false;
         this.dropdownArmed = true;
         this.update();
@@ -696,6 +700,14 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
     }
 
+    /** Phase 29 (BAR-01): chrome has no engine for typed words: one no-search row, Enter retries. */
+    protected showNoSearch(): void {
+        this.noSearch = true;
+        this.dropdownOpen = true;
+        this.highlightIndex = -1;
+        this.update();
+    }
+
     /**
      * Activates a suggestion row through its url field, never its opaque
      * uri key: the key is a store identity (kept as the React list key
@@ -718,8 +730,8 @@ export class ChromeBarWidget extends ReactWidget {
     /**
      * Commits typed text: typed text resolves chrome-side; search URLs are
      * minted only by chrome's resolveTypedAddress. A visit or search reply
-     * opens on the web-tab route; anything else (refused, no reply) surfaces
-     * the contracted in-bar failure row. This widget keeps no address rule
+     * opens on the web-tab route; no-engine shows the no-search row; anything
+     * else (refused, no reply) surfaces the contracted in-bar failure row. This widget keeps no address rule
      * of its own. Empty commits are no-ops.
      */
     protected commitText = async (raw: string): Promise<void> => {
@@ -737,6 +749,10 @@ export class ChromeBarWidget extends ReactWidget {
             resolved = await this.store.resolveTypedAddress(text);
         } catch {
             resolved = undefined;
+        }
+        if (resolved?.kind === 'no-engine') {
+            this.showNoSearch();
+            return;
         }
         if (!resolved || (resolved.kind !== 'visit' && resolved.kind !== 'search') || !resolved.url) {
             this.showCommitFailure();
@@ -774,9 +790,10 @@ export class ChromeBarWidget extends ReactWidget {
                 void this.openHomeSettings();
                 return;
             }
-            if (this.commitFailed) {
+            if (this.commitFailed || this.noSearch) {
                 // Retry affordance: Enter re-commits the typed text.
                 this.commitFailed = false;
+                this.noSearch = false;
                 void this.commitText(this.inputValue);
                 return;
             }
@@ -846,6 +863,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.inputValue = address;
         this.committedAddress = address;
         this.commitFailed = false;
+        this.noSearch = false;
         this.update();
     }
 
@@ -1027,6 +1045,12 @@ export class ChromeBarWidget extends ReactWidget {
             >
                 {CHROME_BAR_COPY.homeFailed(appSubject())}
             </div>;
+        }
+        if (this.noSearch) {
+            return <>
+                <div className='pb-chrome-bar-row'>{CHROME_BAR_COPY.noSearch(appSubject())}</div>
+                <div className='pb-chrome-bar-dropdown-footer'>Enter opens the address · Esc closes suggestions</div>
+            </>;
         }
         if (this.commitFailed) {
             return <>

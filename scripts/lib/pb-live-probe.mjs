@@ -318,6 +318,12 @@ export const pillKey = (app, key) => app.evaluate(`(() => {
     return true;
 })()`);
 
+/** Page-realm expression: the configured application name, trimmed ('' when none). */
+export const appNameExpr = `(() => {
+    const key = Object.getOwnPropertySymbols(window).find(k => k.description === 'FrontendApplicationConfigProvider');
+    return String((key && window[key] && window[key].applicationName) || '').trim();
+})()`;
+
 /** Makes the web tab `tabId` the shell's current, visible widget. */
 export const makeCurrent = (app, tabId) => probe(app, `const shell = get('ApplicationShell');
     const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});

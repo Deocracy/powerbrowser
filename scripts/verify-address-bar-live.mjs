@@ -18,11 +18,22 @@
  *               that path. Chrome's resolveTypedAddress replies kind search
  *               naming the engine, and resolves example.com to a visit of
  *               https://example.com/ (reply only, nothing loads).
+ *   refused     javascript:, file:, chrome: and about: text typed and
+ *               committed shows the commit-failure row, chrome replies kind
+ *               refused, and no state push for the tab carries that scheme.
+ *               Scored only after search passed in the same session (its
+ *               pushes prove the recorder sees this tab's navigations).
+ *   no-engine   Chrome refuses an engine name outside the bar's set (kind
+ *               no-engine); with the client stubbed to reply no-engine, Enter
+ *               on typed words shows one row naming the configured
+ *               application name and "can't search right now", and the served
+ *               engine sees no GET. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
 
 import {
+    appNameExpr,
     BROKEN,
     focusTheiaFrame,
     inChrome,
@@ -170,12 +181,87 @@ async function search(ctx) {
     }
 }
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/** True when `name`'s positive control passed earlier in this session. */
+const controlPassed = (results, name) => {
+    const control = results.find(r => r.name === CONTROL_OF[name]);
+    return !!control && !control.failures.length && !control.notScored;
+};
+
+const REFUSED_TEXTS = [
+    ['javascript:alert(1)', 'javascript:'],
+    ['file:///etc/hostname', 'file:'],
+    ['chrome://browser/content/browser.xhtml', 'chrome:'],
+    ['about:config', 'about:'],
+];
+
+async function refused(ctx) {
+    const { app, fail, results } = ctx;
+    if (!controlPassed(results, 'refused')) {
+        return 'not-scored';
+    }
+    const tabId = await sessionTab(ctx);
+    for (const [text, scheme] of REFUSED_TEXTS) {
+        const mark = (await pushes(app)).length;
+        await typeInPill(app, text);
+        await pressKey(app, ENTER);
+        const pill = await settle(() => readPill(app), v => v.rows.length === 1 && v.rows[0].includes("couldn't open that address"));
+        if (pill.rows.length !== 1 || !pill.rows[0].includes("couldn't open that address")) {
+            fail(`${text}: Enter must show the one commit-failure row; saw ${JSON.stringify(pill)}`);
+        }
+        await sleep(1500);
+        const loaded = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && String(p.url).toLowerCase().startsWith(scheme));
+        if (loaded.length) {
+            fail(`${text}: the tab navigated to ${JSON.stringify(loaded[0].url)}`);
+        }
+        const reply = await resolveIn(app, text);
+        if (reply?.kind !== 'refused') {
+            fail(`${text}: resolveTypedAddress must reply kind refused; got ${JSON.stringify(reply)}`);
+        }
+    }
+}
+
+async function noEngine(ctx) {
+    const { app, pages, fail, results } = ctx;
+    if (!controlPassed(results, 'no-engine')) {
+        return 'not-scored';
+    }
+    const named = await resolveIn(app, 'hello world', 'No Such Engine');
+    if (named?.kind !== 'no-engine') {
+        fail(`resolveTypedAddress('hello world', 'No Such Engine') must reply kind no-engine; got ${JSON.stringify(named)}`);
+    }
+    await sessionTab(ctx);
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    if (await stubResolve(app, { kind: 'no-engine' }) !== true) {
+        return fail(`${BROKEN} the client's resolveTypedAddress could not be stubbed`);
+    }
+    try {
+        const getMark = pages.requests.length;
+        await typeInPill(app, 'hello world');
+        await pressKey(app, ENTER);
+        const pill = await settle(() => readPill(app), v => v.rows.length === 1 && v.rows[0].includes("can't search right now"));
+        if (pill.rows.length !== 1 || !pill.rows[0].startsWith(subject) || !pill.rows[0].includes("can't search right now")) {
+            fail(`a no-engine reply must show one row starting with ${JSON.stringify(subject)} saying it can't search right now; saw ${JSON.stringify(pill)}`);
+        }
+        await sleep(1500);
+        const searched = pages.requests.slice(getMark).filter(r => r.path === '/one/search');
+        if (searched.length) {
+            fail(`a no-engine reply loaded the engine anyway: ${JSON.stringify(searched.map(r => r.path + r.search))}`);
+        }
+    } finally {
+        await stubResolve(app, null);
+    }
+}
+
 const SCENARIOS = {
     search,
+    refused,
+    'no-engine': noEngine,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
-const CONTROL_OF = {};
+const CONTROL_OF = { refused: 'search', 'no-engine': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
