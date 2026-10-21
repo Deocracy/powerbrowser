@@ -96,6 +96,10 @@
  *                    shortcut push; Ctrl+L in the editor leaves the pill
  *                    unfocused, while Ctrl+L outside an editor and a terminal
  *                    focuses it. Scored only after page-keys passed.
+ *   tooltips         Coding, a web tab current: hovering Back shows one
+ *                    HoverService tooltip whose text is the table's Back row
+ *                    through the gate's formatter, one line, its bottom edge at
+ *                    or above the button's top and clear of the page rect.
  *   page-focus-reload  The page-focus context key is true with a page focused;
  *                    after a frontend reload it is false, turns true when a
  *                    page of the new frontend takes focus and false again with
@@ -130,6 +134,7 @@ import {
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
 import { pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
+import { buttonShortcuts, formatTooltip } from './verify-shortcut-relay.mjs';
 
 const NEW_TAB_COMMAND_ID = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_NEW_TAB_COMMAND_ID');
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
@@ -173,6 +178,7 @@ const PAGES = {
     '/slow-pill': { title: 'Slow Pill', body: '<p>still loading</p>', slow: true },
     '/pf1': { title: 'Focus Before Reload', body: '<p>pf1</p>' },
     '/pf2': { title: 'Focus After Reload', body: '<p>pf2</p>' },
+    '/tip': { title: 'Tooltip', body: '<p>tip</p>' },
     '/f6p': { title: 'Focus Kept', body: '<p>f6p</p><script>addEventListener("keydown", e => { if (e.key === "F6") e.preventDefault(); }, true);</script>' },
 };
 
@@ -1581,6 +1587,78 @@ async function pageFocusReload({ app, pages, fail }) {
 // webIsolated process count is 4) is switched to remoteType "web" at
 // about:blank, a GUI-02 defect independent of the flag under test
 // (27-02-SUMMARY, deferred-items.md). Run later, it would score that defect.
+// NAV-05: the tooltip text each button must show, derived from BUTTON_SHORTCUTS and PAGE_SHORTCUTS with the gate's formatter.
+const TOOLTIPS = Object.fromEntries(buttonShortcuts().map(b => [b.button, { verb: b.verb, text: formatTooltip(b.verb, b.rows[0]) }]));
+
+/**
+ * Hovers the nav button labelled `label` (a pointerover: React builds
+ * onPointerEnter from it) and reads the tooltip once HoverService shows it,
+ * with the button's box and the web tab placeholder's box while it is visible.
+ */
+const readTooltip = (app, label, tabId) => probe(app, `
+    const button = ${navButtonExpr(label)};
+    if (!button) return { missing: true };
+    get('HoverService').cancelHover();
+    button.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    const shown = () => [...document.querySelectorAll('.theia-hover')].find(h => h.matches(':popover-open') && !h.style.visibility);
+    if (!(await until(() => !!shown(), 5000))) return { shown: false, disabled: button.disabled };
+    const box = el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
+    const hover = shown();
+    const cs = getComputedStyle(hover);
+    const widget = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+    return {
+        shown: true,
+        text: hover.textContent,
+        ours: hover.classList.contains('pb-chrome-bar-hover'),
+        lines: Math.round((hover.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) / parseFloat(cs.lineHeight)),
+        hover: box(hover),
+        button: box(button),
+        page: widget && widget.isVisible ? box(widget.node) : null,
+        disabled: button.disabled,
+    };`);
+
+/** Fails unless the `button` tooltip, hovered on `label`, reads the table text above the button and clear of the page. */
+async function checkTooltip(app, fail, { button, label, tabId, where }) {
+    const want = TOOLTIPS[button]?.text;
+    if (!want) {
+        return fail(`${BROKEN} no tooltip text derived for ${button} from BUTTON_SHORTCUTS`);
+    }
+    const seen = await readTooltip(app, label ?? TOOLTIPS[button].verb, tabId);
+    if (seen.missing) {
+        return fail(`${BROKEN} ${where}: no nav button labelled ${JSON.stringify(label ?? TOOLTIPS[button].verb)}`);
+    }
+    if (!seen.shown) {
+        return fail(`${where}: hovering ${button} (disabled ${seen.disabled}) showed no tooltip within 5 s`);
+    }
+    const { hover, page } = seen;
+    if (seen.text !== want || !seen.ours || seen.lines !== 1) {
+        return fail(`${where}: ${button}'s tooltip must read ${JSON.stringify(want)} on one line with the chrome-bar hover class; saw ${JSON.stringify({ text: seen.text, ours: seen.ours, lines: seen.lines })}`);
+    }
+    if (page && !(hover.bottom <= page.top || hover.top >= page.bottom || hover.right <= page.left || hover.left >= page.right)) {
+        return fail(`${where}: ${button}'s tooltip box intersects the page rect: tooltip ${JSON.stringify(hover)}, page ${JSON.stringify(page)}`);
+    }
+    if (hover.bottom > seen.button.top) {
+        return fail(`${where}: ${button}'s tooltip bottom ${hover.bottom} is below the button's top ${seen.button.top} (it is not above the bar)`);
+    }
+    return seen;
+}
+
+async function tooltips({ app, pages, fail }) {
+    const coding = await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'coding');
+        return await until(() => document.body.getAttribute('data-pb-mode') === 'coding', 10000);`);
+    if (coding !== true) {
+        return fail(`${BROKEN} Coding could not be reached`);
+    }
+    const tabId = await openWebTab(app, pages.url('/tip'));
+    if (await waitForPush(app, loadedAt(tabId, '/tip')) < 0) {
+        return fail('no loaded state push arrived for /tip');
+    }
+    const seen = await checkTooltip(app, fail, { button: 'back', tabId, where: 'Coding' });
+    if (seen && !seen.page) {
+        return fail(`${BROKEN} the web tab's placeholder is not visible, so the page-rect check proved nothing`);
+    }
+}
+
 const SCENARIOS = {
     'hard-reload-channel': hardReloadChannel,
     'hard-reload-click': hardReloadClick,
@@ -1608,6 +1686,7 @@ const SCENARIOS = {
     'mouse-buttons': mouseButtons,
     'pill-esc': pillEsc,
     'theia-keeps-keys': theiaKeepsKeys,
+    tooltips,
     'page-focus-reload': pageFocusReload,
 };
 

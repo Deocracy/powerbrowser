@@ -35,6 +35,14 @@
     font-size: 14px;
 }
 
+/* NAV-05 layer policy (c): a HoverService tooltip short enough to sit above
+   the bar. The custom property on the element itself beats the inherited
+   :root value whatever the layer, so this layered rule takes effect. */
+.pb-chrome-bar-hover {
+    --theia-ui-padding: 4px;
+    line-height: 1.4;
+}
+
 .pb-chrome-bar-button {
     flex: none;
     width: 32px;

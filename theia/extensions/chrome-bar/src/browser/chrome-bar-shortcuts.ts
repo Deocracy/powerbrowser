@@ -15,6 +15,7 @@
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { ApplicationShell, FrontendApplicationContribution, Widget } from '@theia/core/lib/browser';
 import { CommandRegistry } from '@theia/core/lib/common/command';
+import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { CHROME_BAR_NEW_TAB_COMMAND_ID, focusAddressPill } from './chrome-bar-commands';
@@ -61,6 +62,39 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'focusAddressF6', keycode: 'VK_F6', modifiers: '', label: 'F6', macLabel: 'F6' },
     { id: 'focusAddressShiftF6', keycode: 'VK_F6', modifiers: 'shift', label: 'Shift+F6', macLabel: '⇧F6' },
 ];
+
+export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
+
+export interface ButtonShortcut {
+    /** The verb-only accessible name, also the tooltip's first word(s). */
+    verb: string;
+    /** PAGE_SHORTCUTS ids this button's keys are; the first names the tooltip. */
+    rows: readonly string[];
+    /** The `aria-keyshortcuts` value for those rows. */
+    aria: string;
+}
+
+/**
+ * NAV-05: each nav button's shortcut, named by table row so the tooltip can
+ * only show a key the relay binds (never KeybindingRegistry, which would show
+ * Theia's binding where the relay handles the Firefox key).
+ * verify-shortcut-relay.mjs rule (10) holds rows and aria to the table.
+ */
+export const BUTTON_SHORTCUTS: Readonly<Record<NavButton, ButtonShortcut>> = Object.freeze({
+    back: { verb: 'Back', rows: ['back'], aria: 'Alt+ArrowLeft' },
+    forward: { verb: 'Forward', rows: ['forward'], aria: 'Alt+ArrowRight' },
+    reload: { verb: 'Reload', rows: ['reload', 'reloadF5'], aria: 'Control+R F5' },
+    stop: { verb: 'Stop', rows: ['stop'], aria: 'Escape' },
+    home: { verb: 'Home', rows: ['home'], aria: 'Alt+Home' },
+    newTab: { verb: 'New Tab', rows: ['newTab'], aria: 'Control+T' },
+});
+
+/** "Back (Alt+Left Arrow)": the verb and the first row's label (macOS: its macLabel). */
+export function tooltipFor(button: NavButton): string {
+    const { verb, rows } = BUTTON_SHORTCUTS[button];
+    const row = PAGE_SHORTCUTS.find(r => r.id === rows[0]);
+    return row ? `${verb} (${isOSX ? row.macLabel : row.label})` : verb;
+}
 
 /** True while a web page (an overlay) has keyboard focus. */
 export const PAGE_FOCUS_CONTEXT_KEY = 'powerbrowser.webPageFocused';

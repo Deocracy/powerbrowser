@@ -6,6 +6,7 @@ import {
     CommonCommands,
     ContextMenuRenderer,
     FrontendApplicationContribution,
+    HoverService,
     OpenerService,
     ReactWidget,
     Widget,
@@ -34,6 +35,9 @@ import {
 import { CHROME_SUGGESTION_LIMIT, ChromeBarSuggestionService } from './chrome-bar-suggestion-service';
 import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
+// A cycle (chrome-bar-shortcuts imports this widget); safe because the frontend
+// module loads chrome-bar-shortcuts first and these are read only at render time.
+import { BUTTON_SHORTCUTS, NavButton, tooltipFor } from './chrome-bar-shortcuts';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 // The organising placeholder's own id, imported for the same const-discipline
@@ -195,6 +199,10 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(PreferenceService)
     protected readonly preferences: PreferenceService;
 
+    /** NAV-05: nav-button tooltips (native title tooltips are dead in the shell until Phase 35). */
+    @inject(HoverService)
+    protected readonly hover: HoverService;
+
     protected holdTimer: number | undefined;
     /** Set when a hold opened the history menu, so the release's click does not navigate. */
     protected suppressNavClick = false;
@@ -323,6 +331,21 @@ export class ChromeBarWidget extends ReactWidget {
             this.suppressNavClick = true;
             this.openHistoryMenu(button);
         }, HISTORY_HOLD_MS);
+    };
+
+    /**
+     * NAV-05: the tooltip names the button's shortcut from the one table, at
+     * 'top' so it sits over the row above the bar and never over the page.
+     * Pointer, not mouse, enter: React drops onMouseEnter on a disabled button,
+     * and a disabled button keeps its tooltip.
+     */
+    protected onNavHover = (button: NavButton) => (e: React.PointerEvent<HTMLButtonElement>): void => {
+        this.hover.requestHover({
+            content: tooltipFor(button),
+            target: e.currentTarget,
+            position: 'top',
+            cssClasses: ['pb-chrome-bar-hover'],
+        });
     };
 
     protected clearHold = (): void => {
@@ -1023,8 +1046,9 @@ export class ChromeBarWidget extends ReactWidget {
         return <div className='pb-chrome-bar'>
             <button
                 className='pb-chrome-bar-button'
-                title='Back'
                 aria-label='Back'
+                aria-keyshortcuts={BUTTON_SHORTCUTS.back.aria}
+                onPointerEnter={this.onNavHover('back')}
                 disabled={!canNavigate || !tab?.canGoBack}
                 onClick={this.onNavClick('back')}
                 onAuxClick={this.onNavAuxClick('back')}

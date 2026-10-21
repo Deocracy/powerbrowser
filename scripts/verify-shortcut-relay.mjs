@@ -115,6 +115,39 @@ export function formatMacLabel(row) {
 }
 
 /** Removes // and block comments outside string literals. */
+/** NAV-05 tooltip text: the verb, a space and the first row's label in parentheses. */
+export function formatTooltip(verb, row, mac = false) {
+    const label = mac ? formatMacLabel(row) : formatLabel(row);
+    return label === null ? null : `${verb} (${label})`;
+}
+
+/** `name: { verb: '…', rows: ['…'], aria: '…' }` entries of BUTTON_SHORTCUTS; null when the object is gone. */
+function buttonEntriesOf(src) {
+    const at = /BUTTON_SHORTCUTS\b[^=]*=\s*Object\.freeze\(\s*(?=\{)/.exec(src);
+    const body = at ? balanced(src, at.index + at[0].length) : null;
+    if (body === null) {
+        return null;
+    }
+    return elements(body).map(text => {
+        const m = /^(\w+)\s*:\s*\{\s*verb\s*:\s*'([^']*)'\s*,\s*rows\s*:\s*\[([^\]]*)\]\s*,\s*aria\s*:\s*'([^']*)'\s*,?\s*\}$/.exec(text);
+        return m
+            ? { button: m[1], verb: m[2], rows: [...m[3].matchAll(/'([^']*)'/g)].map(x => x[1]), aria: m[4] }
+            : { unreadable: text };
+    });
+}
+
+/**
+ * The nav buttons as derived from the tree: `{ button, verb, rows, aria }`
+ * with `rows` the PAGE_SHORTCUTS row objects. A live check builds the
+ * tooltip it expects from these with formatTooltip.
+ */
+export function buttonShortcuts(src = readFileSync(join(REPO_ROOT, FRONTEND_REL), 'utf8')) {
+    const code = stripComments(src);
+    const table = new Map(rowsOf(code, /PAGE_SHORTCUTS\b[^=]*=\s*/, FRONTEND_REL, []).map(r => [r.id, r]));
+    return (buttonEntriesOf(code) ?? []).filter(e => !e.unreadable)
+        .map(e => ({ ...e, rows: e.rows.map(id => table.get(id)).filter(Boolean) }));
+}
+
 function stripComments(src) {
     let out = '';
     for (let i = 0; i < src.length; i++) {
