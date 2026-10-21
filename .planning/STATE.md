@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Completed 29-02-PLAN.md
-last_updated: "2026-10-21T21:35:55.693Z"
+stopped_at: Completed 29-03-PLAN.md
+last_updated: "2026-10-21T21:47:44.099Z"
 last_activity: 2026-10-21
-last_activity_desc: 29-02 complete (token-cookie strip, dev addresses, rule 12; BAR-02)
-state_head: 84199c2332fed5142f3a13120e71473d29240db6
+last_activity_desc: 29-03 complete (configured search engines: [[search_engines]] -> SearchEngines policy, engine hosts allowlisted; BAR-04/BAR-03 partial)
+state_head: 1e3d09defb9c6c7eebe09f7ebf57243d4fc8a8bf
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 10
+  completed_plans: 11
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 29 (Address Bar Search and Fixup) — EXECUTING
-Plan: 3 of 10
+Plan: 4 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — 29-02 complete (token-cookie strip, dev addresses, rule 12; BAR-02)
+Last activity: 2026-10-21 — 29-03 complete (configured search engines: [[search_engines]] -> SearchEngines policy, engine hosts allowlisted; BAR-04/BAR-03 partial)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -158,6 +158,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 27 P08 | 45 min | 2 tasks | 6 files |
 | Phase 29 P01 | 24m | 2 tasks | 11 files |
 | Phase 29 P02 | 9m | 3 tasks | 6 files |
+| Phase 29 P03 | 11m | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -396,6 +397,7 @@ Recent decisions affecting current work:
 - [Phase 27]: 27-08: in Organising the bar is at the window's top edge, so the tooltip flips below it onto the toolbar row, clear of the page; tooltips-all requires 'above' only where there is room
 - [Phase 29]: 29-01: upgradeSchemeless detects loopback by regex, not a "localhost" literal, so the gui08 dropped-localhost plant still discriminates
 - [Phase 29]: 29-02: token-cookie strip installed by setGroupSenderPort (not webTabOpen), keyed by sidecar port first and fail-closed
+- [Phase 29]: 29-03: shipped search engines are DuckDuckGo Lite (default) and Wikipedia; [urls] search stays in the schema, superseded by [[search_engines]]
 
 ### Pending Todos
 
@@ -498,8 +500,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T21:35:55.591Z
-Stopped at: Completed 29-02-PLAN.md
+Last session: 2026-10-21T21:47:43.970Z
+Stopped at: Completed 29-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
