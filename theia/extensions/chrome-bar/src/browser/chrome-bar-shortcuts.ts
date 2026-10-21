@@ -156,8 +156,15 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */
     protected async closeTab(tab: WebTabWidget): Promise<void> {
+        const order = this.strip.switchOrder(tab);
+        const at = order.indexOf(tab);
+        const fallback = order[at + 1] ?? order[at - 1];
         await this.shell.closeWidget(tab.id);
-        const next = this.shell.mainPanel.currentTitle?.owner;
+        // A tab made current only by markAsCurrent gets no activation fallback,
+        // and closing the last tab of a split pane leaves no current title.
+        const next = this.shell.mainPanel.currentTitle?.owner
+            ?? (fallback && !fallback.isDisposed ? fallback : undefined)
+            ?? this.shell.mainAreaTabBars.map(bar => bar.currentTitle?.owner).find(owner => owner !== undefined);
         if (next) {
             // Activated first, as a switch does: focusing the page alone lost focus to Theia's own activation.
             await this.switchTo(next, tab);

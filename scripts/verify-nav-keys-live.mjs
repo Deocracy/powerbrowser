@@ -76,6 +76,9 @@
  *                    Alt+9 pick the first and last, Alt+5 changes nothing, and
  *                    focus lands in each target's page; in Coding Ctrl+Tab
  *                    follows the tab bar holding the current tab.
+ *   close-split      Coding, B alone in a split pane and current only through
+ *                    its page focus, never activated: Ctrl+W in B's page closes it,
+ *                    makes A current and lands focus in A's page.
  *   focus-keys       F6 in a focused page puts focus on the pill with its text
  *                    selected (chrome's active element the Theia frame); F6 in
  *                    the pill puts chrome's focus back on the page's overlay;
@@ -184,6 +187,8 @@ const PAGES = {
     '/t2': { title: 'Tab Two', body: '<p>t2</p>' },
     '/t3': { title: 'Tab Three', body: '<p>t3</p>' },
     '/f6': { title: 'Focus Keys', body: '<p>f6</p>' },
+    '/s1': { title: 'Split One', body: '<p>s1</p>' },
+    '/s2': { title: 'Split Two', body: '<p>s2</p>' },
     '/m1': { title: 'Mouse One', body: '<p>m1</p>' },
     '/m2': { title: 'Mouse Two', body: '<p>m2</p>' },
     '/slow-pill': { title: 'Slow Pill', body: '<p>still loading</p>', slow: true },
@@ -1353,6 +1358,62 @@ async function tabKeys({ app, pages, plant, fail, note }) {
     await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'browsing'); return true;`);
 }
 
+/**
+ * WR-03: Coding, A in one pane and B alone in a split pane, B not Theia's
+ * active widget and current only through a click into its page (markAsCurrent).
+ * Ctrl+W in B's page must make A current and land focus in A's page.
+ */
+async function closeSplit({ app, pages, plant, fail, note }) {
+    const coding = await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'coding');
+        return await until(() => document.body.getAttribute('data-pb-mode') === 'coding', 10000);`);
+    if (coding !== true) {
+        return fail(`${BROKEN} Coding could not be activated`);
+    }
+    try {
+        const a = await openWebTab(app, pages.url('/s1'));
+        const b = await openWebTab(app, pages.url('/s2'));
+        if (await waitForPush(app, loadedAt(a, '/s1')) < 0 || await waitForPush(app, loadedAt(b, '/s2')) < 0) {
+            return fail('no loaded state push arrived for /s1 and /s2');
+        }
+        const split = await probe(app, `const shell = get('ApplicationShell');
+            const ch = get('WebTabChannel');
+            const wa = ch.widgetOf(${JSON.stringify(a)});
+            const wb = ch.widgetOf(${JSON.stringify(b)});
+            shell.mainPanel.addWidget(wb, { mode: 'split-right', ref: wa });
+            await shell.activateWidget(wa.id);
+            const bar = shell.mainPanel.findTabBar(wb.title);
+            // B must not be Theia's active widget: only the active one gets Theia's own close fallback.
+            return { alone: !!bar && bar.titles.length === 1 && bar !== shell.mainPanel.findTabBar(wa.title), bActive: shell.activeWidget === wb };`);
+        if (!split || split.alone !== true || split.bActive !== false) {
+            return fail(`${BROKEN} B could not be put alone in a split pane without being Theia's active widget: ${JSON.stringify(split)}`);
+        }
+        if (plant === 'close-fallback-removed') {
+            const replaced = await probe(app, `const relay = get('ChromeBarShortcutRelay');
+                relay.closeTab = async tab => {
+                    await relay.shell.closeWidget(tab.id);
+                    const next = relay.shell.mainPanel.currentTitle?.owner;
+                    if (next) await relay.switchTo(next, tab);
+                };
+                return true;`);
+            if (replaced === true) {
+                note('PLANT close-fallback-removed applied');
+            }
+        }
+        await keyInPage(app, b, KEY.ctrlW);
+        const after = await settle(() => currentTab(app), v => v.tabId === a);
+        const gone = await probe(app, `return !get('WebTabChannel').widgetOf(${JSON.stringify(b)});`);
+        if (gone !== true || after.tabId !== a) {
+            return fail(`Ctrl+W on the only tab of a split pane must close it and make the other pane's tab current; B gone ${gone}, current ${JSON.stringify(after)}`);
+        }
+        const landed = await settle(() => chromeActiveTabId(app), v => v === a);
+        if (landed !== a) {
+            return fail(`after Ctrl+W on a split pane's only tab focus must land in A's page; chrome's active overlay is ${JSON.stringify(landed)}`);
+        }
+    } finally {
+        await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, 'browsing'); return true;`);
+    }
+}
+
 async function focusKeys({ app, pages, fail, note }) {
     const tabId = await openWebTab(app, pages.url('/f6'));
     if (await waitForPush(app, loadedAt(tabId, '/f6')) < 0) {
@@ -1835,6 +1896,7 @@ const SCENARIOS = {
     'page-keys': pageKeys,
     'page-prevented': pagePrevented,
     'tab-keys': tabKeys,
+    'close-split': closeSplit,
     'focus-keys': focusKeys,
     'focus-keys-prevented': focusKeysPrevented,
     'focus-keys-debug': focusKeysDebug,
@@ -1919,6 +1981,7 @@ const PLANTS = [
     { plant: 'relay-row-removed', target: 'esc-stop', run: ['esc-stop'], expect: 'loading: false' },
     { plant: 'tab-order-reversed', target: 'tab-keys', run: ['tab-keys'], expect: 'expected T2' },
     { plant: 'hover-elsewhere', target: 'mouse-buttons', run: ['mouse-buttons'], expect: '/m1' },
+    { plant: 'close-fallback-removed', target: 'close-split', run: ['close-split'], expect: "the other pane's tab current" },
     { plant: 'pill-scope-removed', target: 'focus-keys-debug', run: ['focus-keys-debug'], expect: "the debugger's F6 took it" },
     { plant: 'hover-below', target: 'tooltips-all', run: ['tooltips-all'], expect: 'intersects' },
 ];
