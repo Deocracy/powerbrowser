@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Phase 27 (NAV-01..03, NAV-06, KEY-04): the live check for the navigation buttons and
+ * Phase 27 (NAV-01..04, NAV-06, KEY-04): the live check for the navigation buttons and
  * the page-focus keys, driven in the built shell over WebDriver BiDi.
  *
  * One session runs the selected scenarios in order and prints one line per
@@ -51,6 +51,13 @@
  *                    no reload, on one row with every button, the pill keeping
  *                    its 120px minimum; clicking it loads browser.homePage
  *                    (/home) in the current web tab.
+ *   home-empty       An empty home page: Home leaves the current tab on the empty
+ *                    page and focuses the pill input with its text selected.
+ *   home-failure     Home page "not an address": Home shows one dropdown row
+ *                    naming the configured application name, no footer, the pill
+ *                    focused; Enter opens Settings searching browser.homePage; a
+ *                    second failure and Escape leave no row.
+ *   home-no-tab      Settings current: Home opens /home in a new current web tab.
  *
  * Usage:
  *   node scripts/verify-nav-keys-live.mjs [--scenario a,b]
@@ -865,6 +872,122 @@ async function home({ app, pages, fail }) {
     }
 }
 
+/** The pill input's focus and selection, and the dropdown's rows and footers, in the Theia frame. */
+const readPill = app => app.evaluate(`JSON.stringify((() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    const dropdown = document.querySelector('.pb-chrome-bar-dropdown');
+    return {
+        focused: !!input && document.activeElement === input,
+        value: input ? input.value : null,
+        selected: !!input && input.selectionStart === 0 && input.selectionEnd === input.value.length,
+        rows: dropdown ? [...dropdown.querySelectorAll('.pb-chrome-bar-row')].map(r => r.textContent) : [],
+        footers: dropdown ? dropdown.querySelectorAll('.pb-chrome-bar-dropdown-footer').length : 0,
+    };
+})())`).then(JSON.parse);
+
+/** Dispatches a keydown on the pill input (React's root listener sees it bubble). */
+const pillKey = (app, key) => app.evaluate(`(() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    if (!input) return false;
+    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: ${JSON.stringify(key)} }));
+    return true;
+})()`);
+
+const currentWidget = app => probe(app, `const owner = get('ApplicationShell').mainPanel.currentTitle?.owner;
+    return { id: owner?.id ?? null, tabId: owner?.tabId ?? null, count: webTabs().length };`);
+
+async function homeEmpty({ app, pages, fail }) {
+    if (await setPref(app, 'browser.showHomeButton', true) !== true || await setPref(app, 'browser.homePage', '') !== true) {
+        return fail(`${BROKEN} the Home settings could not be set`);
+    }
+    const tabId = await openWebTab(app, pages.url('/home-start'));
+    if (await waitForPush(app, loadedAt(tabId, '/home-start')) < 0) {
+        return fail('no loaded state push arrived for /home-start');
+    }
+    if (await settle(() => app.evaluate(`!!${navButtonExpr('Home')}`), v => v === true) !== true || await clickOn(app, 'Home') !== true) {
+        return fail(`${BROKEN} the Home button is missing`);
+    }
+    const spec = await settle(() => inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o ? o.currentURI.spec : 'gone';`), v => v === 'about:blank');
+    if (spec !== 'about:blank') {
+        return fail(`with an empty home page Home must leave the current tab on the empty page; it is on ${JSON.stringify(spec)}`);
+    }
+    const pill = await settle(() => readPill(app), v => v.focused && v.selected);
+    if (!pill.focused || !pill.selected) {
+        return fail(`with an empty home page Home must focus the pill with its whole text selected; saw ${JSON.stringify(pill)}`);
+    }
+    const current = await currentWidget(app);
+    if (current.tabId !== tabId) {
+        return fail(`an empty home page with a web tab current must not open another tab; current is ${JSON.stringify(current)}`);
+    }
+}
+
+async function homeFailure({ app, pages, fail }) {
+    if (await setPref(app, 'browser.showHomeButton', true) !== true || await setPref(app, 'browser.homePage', 'not an address') !== true) {
+        return fail(`${BROKEN} the Home settings could not be set`);
+    }
+    const tabId = await openWebTab(app, pages.url('/home-start'));
+    if (await waitForPush(app, loadedAt(tabId, '/home-start')) < 0) {
+        return fail('no loaded state push arrived for /home-start');
+    }
+    if (await settle(() => app.evaluate(`!!${navButtonExpr('Home')}`), v => v === true) !== true || await clickOn(app, 'Home') !== true) {
+        return fail(`${BROKEN} the Home button is missing`);
+    }
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    const pill = await settle(() => readPill(app), v => v.rows.length > 0 && v.focused);
+    if (pill.rows.length !== 1 || !pill.rows[0].startsWith(subject) || !pill.rows[0].includes("can't open your home page") || pill.footers !== 0) {
+        return fail(`a rejected home page must show one row starting with ${JSON.stringify(subject)} and no footer; saw ${JSON.stringify(pill)}`);
+    }
+    if (/browser\.homePage|not an address/.test(pill.rows[0])) {
+        return fail(`the Home-failure row carries the setting key or its value: ${JSON.stringify(pill.rows[0])}`);
+    }
+    if (!pill.focused) {
+        return fail('the Home-failure row must move focus to the pill');
+    }
+    await pillKey(app, 'Enter');
+    const settings = await settle(() => probe(app, `const owner = get('ApplicationShell').mainPanel.currentTitle?.owner;
+        return { id: owner?.id ?? null, search: document.querySelector('#preference-searchbar')?.value ?? null };`),
+        v => v && v.id === 'settings_widget' && v.search === 'browser.homePage', 10000);
+    if (settings?.id !== 'settings_widget' || settings.search !== 'browser.homePage') {
+        return fail(`Enter on the Home-failure row must open Settings searching browser.homePage; saw ${JSON.stringify(settings)}`);
+    }
+    if ((await readPill(app)).rows.length) {
+        return fail('the Home-failure row stayed open after Enter opened Settings');
+    }
+    // Settings is current now (no web tab): a second failure, then Escape.
+    await clickOn(app, 'Home');
+    const again = await settle(() => readPill(app), v => v.rows.length === 1);
+    if (again.rows.length !== 1) {
+        return fail(`a second Home click must show the row again (the control for Escape); saw ${JSON.stringify(again)}`);
+    }
+    await pillKey(app, 'Escape');
+    const closed = await settle(() => readPill(app), v => v.rows.length === 0);
+    if (closed.rows.length) {
+        return fail(`Escape must close the Home-failure row; saw ${JSON.stringify(closed)}`);
+    }
+}
+
+async function homeNoTab({ app, pages, fail }) {
+    if (await setPref(app, 'browser.showHomeButton', true) !== true || await setPref(app, 'browser.homePage', pages.url('/home')) !== true) {
+        return fail(`${BROKEN} the Home settings could not be set`);
+    }
+    await probe(app, `await get('CommandRegistry').executeCommand('preferences:open'); return true;`);
+    const before = await settle(() => currentWidget(app), v => v.id === 'settings_widget');
+    if (before.id !== 'settings_widget') {
+        return fail(`${BROKEN} Settings could not be made current; current is ${JSON.stringify(before)}`);
+    }
+    const mark = (await pushes(app)).length;
+    if (await clickOn(app, 'Home') !== true) {
+        return fail(`${BROKEN} the Home button is missing`);
+    }
+    const after = await settle(() => currentWidget(app), v => v.tabId && v.count === before.count + 1);
+    if (!after.tabId || after.count !== before.count + 1) {
+        return fail(`Home with no web tab current must open one new current web tab; before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`);
+    }
+    if (await waitForPush(app, loadedAt(after.tabId, '/home'), { from: mark }) < 0) {
+        return fail('the tab Home opened never pushed /home');
+    }
+}
+
 // The reload scenarios run first, on the session's first web tabs: a reload of a
 // tab that shares a content process with an earlier same-site tab (Firefox's
 // webIsolated process count is 4) is switched to remoteType "web" at
@@ -886,6 +1009,9 @@ const SCENARIOS = {
     'middle-click': middleClick,
     drop: dropOnNewTab,
     home,
+    'home-empty': homeEmpty,
+    'home-failure': homeFailure,
+    'home-no-tab': homeNoTab,
 };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */

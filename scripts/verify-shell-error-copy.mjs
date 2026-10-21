@@ -573,6 +573,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Untitled page",
   "${name} couldn't read this tab's history. Use Back and Forward to move one page at a time.",
   "Show the Home button next to Reload.",
+  "${name} can't open your home page. Press Enter to change it in Settings.",
   "The page the Home button and Alt+Home open, such as https://example.com. Leave it empty to open an empty page.",
 ]);
 

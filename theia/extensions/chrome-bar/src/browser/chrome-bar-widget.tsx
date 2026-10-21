@@ -3,6 +3,7 @@ import { createPortal } from '@theia/core/shared/react-dom';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import {
     ApplicationShell,
+    CommonCommands,
     ContextMenuRenderer,
     FrontendApplicationContribution,
     OpenerService,
@@ -16,7 +17,7 @@ import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import pDebounce from 'p-debounce';
 import type { TabQueryRow } from '@powerbrowser/tab-uris/lib/node/tab-query-service';
-import { WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { EMPTY_PAGE_URL, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
 import {
@@ -213,6 +214,8 @@ export class ChromeBarWidget extends ReactWidget {
     protected highlightIndex = -1;
     protected providerFailed = false;
     protected commitFailed = false;
+    /** NAV-04: the Home-failure row is showing; Enter or a click opens Settings on the home-page setting. */
+    protected homeFailed = false;
     protected shimmer = false;
     protected mode = ChromeBarWidget.MODES[0];
     protected querySeq = 0;
@@ -491,6 +494,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.dropdownArmed = false;
         this.dropdownOpen = false;
         this.highlightIndex = -1;
+        this.homeFailed = false;
     }
 
     protected async runQuery(prefix: string): Promise<void> {
@@ -541,6 +545,7 @@ export class ChromeBarWidget extends ReactWidget {
     protected onInputChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
         this.inputValue = e.target.value;
         this.commitFailed = false;
+        this.homeFailed = false;
         this.dropdownArmed = true;
         this.update();
         void this.debouncedQuery(this.inputValue);
@@ -589,16 +594,49 @@ export class ChromeBarWidget extends ReactWidget {
      * NAV-04: opens the home page in `tab` (the active web tab for a click,
      * the pushed tab for 27-06's Alt+Home), or in a new web tab without one.
      * A non-empty value takes the pill's address routing, so only http(s) and
-     * bare dotted hosts open.
+     * bare dotted hosts open. Empty opens the empty page and focuses the
+     * pill, as New Tab does; a rejected or unacknowledged value shows the
+     * Home-failure row.
      */
     async goHome(tab: WebTabWidget | undefined): Promise<'opened' | 'empty' | 'failed'> {
         const page = String(this.preferences.get(HOME_PAGE_PREFERENCE, '') ?? '').trim();
-        const target = typedAddressTargetOf(page);
-        if (target) {
-            await this.navigateWebTab(target, tab);
+        if (!page) {
+            if (tab) {
+                await tab.navigate(EMPTY_PAGE_URL);
+            } else {
+                await this.commands.executeCommand(CHROME_BAR_NEW_TAB_COMMAND_ID);
+            }
+            focusAddressPill();
+            return 'empty';
         }
-        return 'opened';
+        const target = typedAddressTargetOf(page);
+        try {
+            if (!target) {
+                throw new Error('the home page is not an address');
+            }
+            await this.navigateWebTab(target, tab);
+            return 'opened';
+        } catch {
+            this.commitFailed = false;
+            this.homeFailed = true;
+            this.dropdownOpen = true;
+            this.highlightIndex = -1;
+            this.update();
+            focusAddressPill();
+            return 'failed';
+        }
     }
+
+    /** NAV-04: the Home-failure affordance -- Settings filtered to the home-page setting. */
+    protected openHomeSettings = async (): Promise<void> => {
+        this.closeDropdown();
+        this.update();
+        try {
+            await this.commands.executeCommand(CommonCommands.OPEN_PREFERENCES.id, HOME_PAGE_PREFERENCE);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening Settings failed:', error instanceof Error ? error.name : typeof error);
+        }
+    };
 
     /** Surfaces a commit failure in-bar per the copy contract: one failure row, Enter retries. */
     protected showCommitFailure(): void {
@@ -671,6 +709,10 @@ export class ChromeBarWidget extends ReactWidget {
             this.update();
         } else if (e.key === 'Enter') {
             e.preventDefault();
+            if (this.homeFailed) {
+                void this.openHomeSettings();
+                return;
+            }
             if (this.commitFailed) {
                 // Retry affordance: Enter re-commits the typed text.
                 this.commitFailed = false;
@@ -910,6 +952,19 @@ export class ChromeBarWidget extends ReactWidget {
     }
 
     protected dropdownBody(): React.ReactNode {
+        if (this.homeFailed) {
+            return <div
+                role='option'
+                aria-selected={true}
+                className='pb-chrome-bar-row is-highlighted'
+                onMouseDown={e => {
+                    e.preventDefault();
+                    void this.openHomeSettings();
+                }}
+            >
+                {CHROME_BAR_COPY.homeFailed(appSubject())}
+            </div>;
+        }
         if (this.commitFailed) {
             return <>
                 <div className='pb-chrome-bar-row'>PowerBrowser couldn&apos;t open that address. Press Enter to try again.</div>
