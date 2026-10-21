@@ -34,3 +34,16 @@
   27-05 changed (27-05 touched no history or navigation code).
 - **Where to look:** `historyChannel` in `scripts/verify-nav-keys-live.mjs`: wait for a state
   push carrying the served title before each navigation.
+
+## Dead accel+L focus path after the A13 row was retired (found in 27-06)
+
+- **Seen:** 27-06 deleted the always-reserved accel+L `<key>` in `powerbrowser.js`, its only
+  caller. `PowerBrowserAPI.webTabFocusAddress` (PowerBrowserAPI.sys.mjs:3562), the
+  `focusAddress` push kind, `WebTabChannel.onDidRequestFocusAddress` (web-tab.ts:240-245) and
+  its listener in chrome-bar-widget.tsx:1543 now have no sender. The comment at web-tab.ts:405
+  still says leaving a page is "chrome's reserved accel+L".
+- **Why not fixed here:** outside 27-06's files; removing a push kind touches
+  `verify-web-tab-bridge.mjs`'s push-kind parity and the boundary catalogue. All gates pass
+  with the dead path in place.
+- **Where to look:** remove the method, the push kind and the listener together, then re-run
+  `verify-web-tab-bridge.mjs` and `check-internals-boundary.sh --catalogue`.

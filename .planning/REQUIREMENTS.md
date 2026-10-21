@@ -58,15 +58,15 @@ returning null.
 - [x] **NAV-01**: User sees Reload turn into Stop while a page loads, and can stop it with the button or Esc
 - [x] **NAV-02**: User can bypass the cache with Shift+click Reload, Ctrl+Shift+R or Ctrl+F5
 - [x] **NAV-03**: User can right-click or long-press Back/Forward for a session-history menu and jump to any entry
-- [ ] **NAV-04**: User can show a Home button and go home with it or Alt+Home; the home page is a setting
+- [x] **NAV-04**: User can show a Home button and go home with it or Alt+Home; the home page is a setting
 - [ ] **NAV-05**: User sees each button's keyboard shortcut in its tooltip
 - [x] **NAV-06**: User can middle-click Back, Forward or Reload to open the result in a new tab, and drop a link on New Tab to open it
 
 ### Keyboard shortcuts with the page focused (KEY)
 
-- [ ] **KEY-01**: User can press Ctrl+T, Ctrl+W, Ctrl+R/F5, Alt+Left and Alt+Right while focus is inside a web page and get the Firefox action
+- [x] **KEY-01**: User can press Ctrl+T, Ctrl+W, Ctrl+R/F5, Alt+Left and Alt+Right while focus is inside a web page and get the Firefox action
 - [ ] **KEY-02**: User can move focus between pill and page with Alt+D, Ctrl+L and F6/Shift+F6 from inside a page
-- [ ] **KEY-03**: User can switch tabs with Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp/PageDown and Alt+1..9 from inside a page
+- [x] **KEY-03**: User can switch tabs with Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp/PageDown and Alt+1..9 from inside a page
 - [x] **KEY-04**: User keeps Theia's meaning of clashing keys (F5, F6, F11, Ctrl+P, Ctrl+K and others) in editors, terminals and other non-web tabs
 - [ ] **KEY-05**: User can use mouse buttons 4 and 5 for Back and Forward over a web page
 
@@ -220,12 +220,12 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | NAV-01 | Phase 27 | Complete |
 | NAV-02 | Phase 27 | Complete |
 | NAV-03 | Phase 27 | Complete |
-| NAV-04 | Phase 27 | Pending |
+| NAV-04 | Phase 27 | Complete |
 | NAV-05 | Phase 27 | Pending |
 | NAV-06 | Phase 27 | Complete |
-| KEY-01 | Phase 27 | Pending |
+| KEY-01 | Phase 27 | Complete |
 | KEY-02 | Phase 27 | Pending |
-| KEY-03 | Phase 27 | Pending |
+| KEY-03 | Phase 27 | Complete |
 | KEY-04 | Phase 27 | Complete |
 | KEY-05 | Phase 27 | Pending |
 | SITE-01 | Phase 31 | Pending |

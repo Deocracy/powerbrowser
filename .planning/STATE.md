@@ -1,21 +1,21 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 27
 current_phase_name: Groundwork, Navigation Buttons and Page-Focus Keys
 status: executing
-stopped_at: Completed 27-05-PLAN.md
-last_updated: "2026-10-21T00:20:40.210Z"
+stopped_at: Completed 27-06-PLAN.md
+last_updated: "2026-10-21T04:01:19.614Z"
 last_activity: 2026-10-21
-last_activity_desc: 27-04 complete (Back/Forward history menu, hold, 650 ms Reload guard, Shift+click hard reload, middle/Ctrl+click background tabs, link drop on New Tab)
-state_head: 5a2676321bbc8d97e25e6f0fbeb6fc6adca2d745
+last_activity_desc: 27-06 complete (25-row page-key table both sides, relay actions, switchOrder, Ctrl+L when-clause, verify-shortcut-relay gate)
+state_head: 603f9fa53305b71dc9235d9bfc5cb8e9892c7509
 progress:
   total_phases: 12
   completed_phases: 0
   total_plans: 8
-  completed_plans: 5
-  percent: 63
+  completed_plans: 6
+  percent: 75
 ---
 
 # Project State
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 27 (Groundwork, Navigation Buttons and Page-Focus Keys) — EXECUTING
-Plan: 6 of 8
-Status: Executing (27-05 complete)
-Last activity: 2026-10-21 — 27-05 complete: optional Home button behind browser.showHomeButton (off by default) opening browser.homePage (empty by default) through the pill's address routing; empty value opens the empty page and focuses the pill; Home-failure row opens Settings filtered to browser.homePage
+Plan: 7 of 8
+Status: Executing (27-06 complete)
+Last activity: 2026-10-21 — 27-06 complete: Firefox browser keys act while a web page has focus (Ctrl+T/W and the Ctrl+Tab family reserved, the rest reply-path); always-reserved Ctrl+L retired (A13 superseded); verify-shortcut-relay gate in --quick
 
-Progress: [██████░░░░] 63%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -152,6 +152,7 @@ Progress: [██████░░░░] 63%
 | Phase 27 P03 | 5min | 2 tasks | 3 files |
 | Phase 27 P04 | 21min | 3 tasks | 8 files |
 | Phase 27 P05 | 15min | 2 tasks | 6 files |
+| Phase 27 P06 | 45min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -383,6 +384,7 @@ Recent decisions affecting current work:
 - [Phase 27]: 27-04: New Tab drop handler stops propagation for accepted drags; Theia's document dragover listener forces dropEffect none
 - [Phase 27]: 27-04: live nav scenarios press a trusted key in each page before navigating (requireUserInteraction gates canGoBack, Firefox parity)
 - [Phase 27]: 27-05: Home settings use brand-neutral browser.showHomeButton (off) and browser.homePage (empty) with a static PreferenceContribution schema; goHome(tab) is public for 27-06's Alt+Home
+- [Phase 27]: 27-06: 14.1-UI-SPEC A13 superseded -- Ctrl+L is the page-scoped reply-path row focusAddressL; guaranteed exits from a page are the reserved rows (Ctrl+T, Ctrl+W, Ctrl+Tab family), as in Firefox
 
 ### Pending Todos
 
@@ -484,8 +486,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T00:20:36.721Z
-Stopped at: Completed 27-05-PLAN.md
+Last session: 2026-10-21T04:01:19.582Z
+Stopped at: Completed 27-06-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
