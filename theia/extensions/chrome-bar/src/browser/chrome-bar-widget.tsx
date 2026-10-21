@@ -329,6 +329,12 @@ export class ChromeBarWidget extends ReactWidget {
         this.holdTimer = window.setTimeout(() => {
             this.holdTimer = undefined;
             this.suppressNavClick = true;
+            // One-shot: only the release that ends this hold is swallowed. Cleared
+            // after that release's click, wherever it lands, so a later keyboard
+            // Enter/Space (a click with no pointerdown) is never eaten.
+            window.addEventListener('pointerup', () => setTimeout(() => {
+                this.suppressNavClick = false;
+            }), { capture: true, once: true });
             this.openHistoryMenu(button);
         }, HISTORY_HOLD_MS);
     };
