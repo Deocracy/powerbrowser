@@ -245,7 +245,10 @@
  *               Coding shows the Command centre chip with no x and the
  *               empty-prefix provider's placeholder, Browsing the Address form
  *               with no chip, Organising the Tabs chip, an empty pill and the
- *               Tabs placeholder (read from chrome-bar-copy.ts). In Coding a
+ *               Tabs placeholder (read from chrome-bar-copy.ts). In Browsing,
+ *               History picked with an empty pill opens its zero-query list
+ *               (the positive), and Backspace at the start returns to the
+ *               default with that list closed (WR-03). In Coding a
  *               localhost web tab made current keeps Command centre (D-16).
  *               Tabs picked from the menu, the text cleared, Backspace at the
  *               parent returns to Command centre; "ab" then Backspace leaves
@@ -3717,6 +3720,31 @@ async function modeDefaults(ctx) {
             }
         }
 
+        // D-14 (WR-03): in Browsing, Backspace at the start of an empty pill leaves History for the default and closes History's list.
+        const browsingDefault = MODE_TABLE.DEFAULT_MODE_BY_UI_MODE.browsing;
+        await switchUiMode(app, 'browsing');
+        if (plant === 'requery-repaints' && await probe(app, `get('AddressBar').requery = function () {
+            if (this.inputValue.trim() || this.localMode()) { this.textEdited(this.inputValue, false); } else { this.update(); }
+        }; return true;`) === true) {
+            note('PLANT requery-repaints applied');
+        }
+        await pickLocalMode(app, 'history');
+        await typeInPill(app, '');
+        if (!(await settle(() => readRows(app), v => v.open)).open) {
+            fail(`${BROKEN} History's zero-query list did not open in Browsing, so the Backspace step proves nothing`);
+        } else {
+            await pressKey(app, BACKSPACE);
+            const left = await settle(() => modeState(app), v => v?.mode === browsingDefault);
+            const after = await settle(() => readRows(app), v => !v.open, 2000);
+            if (left?.mode !== browsingDefault) {
+                fail(`Backspace at the start of an empty pill in History did not return Browsing to its default: the mode is ${JSON.stringify(left?.mode)}`);
+            } else if (after.open) {
+                fail(`Backspace at the start left History's list open in ${await modeLabelOf(app, browsingDefault)} mode (${after.rows.length} rows)`);
+            }
+        }
+        await probe(app, `delete get('AddressBar').requery; return true;`);
+        await pressKey(app, ESCAPE);
+
         // D-16: Coding keeps Command centre with a web tab active.
         await switchUiMode(app, 'coding');
         const webTab = await openLocalTab(app, pages, '/md-web');
@@ -4379,6 +4407,7 @@ const PLANTS = [
     { plant: 'help-row-executes', target: 'command-centre', run: ['search', 'command-centre'], expect: 'a help row opened the centred quick input' },
     { plant: 'cc-sends', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress from Command centre' },
     { plant: 'default-ignored', target: 'mode-defaults', run: ['search', 'mode-defaults'], expect: 'Coding did not start in Command centre' },
+    { plant: 'requery-repaints', target: 'mode-defaults', run: ['search', 'mode-defaults'], expect: "left History's list open" },
     { plant: 'token-kept', target: 'mode-tokens', run: ['search', 'mode-tokens'], expect: 'the * token did not enter Bookmarks' },
     { plant: 'cycle-off', target: 'mode-keys', run: ['search', 'mode-keys'], expect: 'Ctrl+Down did not move to the next mode' },
     { plant: 'visit-only-off', target: 'go-to', run: ['search', 'go-to'], expect: 'Command centre opened a search' },

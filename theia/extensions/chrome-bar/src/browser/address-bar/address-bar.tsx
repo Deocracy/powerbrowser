@@ -2508,13 +2508,13 @@ export class AddressBar {
         this.update();
     }
 
-    /** Re-runs the query for the pill's text in the active mode; empty text only repaints. */
+    /**
+     * Re-runs the query for the pill's text in the active mode. Empty text in a
+     * resolving mode closes the list (WR-03): textEdited drops the old mode's
+     * rows and bumps querySeq, so a late reply cannot land either.
+     */
     protected requery(): void {
-        if (this.inputValue.trim() || this.localMode()) {
-            this.textEdited(this.inputValue, false);
-        } else {
-            this.update();
-        }
+        this.textEdited(this.inputValue, false);
     }
 
     protected focusInputAtEnd(): void {
