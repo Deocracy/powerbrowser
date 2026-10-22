@@ -1,11 +1,12 @@
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
-import { ApplicationShell } from '@theia/core/lib/browser';
-import type { CancellationToken } from '@theia/core/lib/common';
+import { ApplicationShell, KeybindingRegistry } from '@theia/core/lib/browser';
+import { CancellationToken, CommandRegistry } from '@theia/core/lib/common';
 import { WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import type { Row } from './address-bar-rows';
 import { LOCAL_MODES, LocalModeId } from './address-bar-mode-table';
 import { CHROME_BAR_COPY } from '../chrome-bar-copy';
+import { CHROME_BAR_COMMAND_CATEGORY } from '../chrome-bar-commands';
 
 /**
  * Phase 30 (D-06): one address-bar mode, contributed through
@@ -137,4 +138,35 @@ export class BookmarksAddressBarMode extends PlacesAddressBarMode {
 export class HistoryAddressBarMode extends PlacesAddressBarMode {
     readonly id = 'history';
     readonly restrict = 'history';
+}
+
+/**
+ * SMODE-01, Actions (D-11): the visible, enabled commands in the Browser
+ * category, in registration order, as the stock palette lists them, filtered
+ * on the label, each with its keybindings. These are navigation and
+ * UI-opening commands; no store kind is reachable from a command (research
+ * D7), so a row runs its command id and nothing else.
+ */
+@injectable()
+export class ActionsAddressBarMode extends BuiltInAddressBarMode {
+    readonly id = 'actions';
+
+    @inject(CommandRegistry)
+    protected readonly commands: CommandRegistry;
+
+    @inject(KeybindingRegistry)
+    protected readonly keybindings: KeybindingRegistry;
+
+    async provide(text: string): Promise<Row[]> {
+        return this.commands.commands
+            .filter(command => command.category === CHROME_BAR_COMMAND_CATEGORY && !!command.label
+                && this.commands.isVisible(command.id) && this.commands.isEnabled(command.id) && matches(text, command.label))
+            .map((command): Row => ({
+                key: 'action:' + command.id, source: 'action', title: command.label ?? '', caption: '', url: '',
+                badges: this.keybindings.getKeybindingsForCommand(command.id).map(binding => this.keybindings.acceleratorFor(binding, '+').join(' ')),
+                run: async () => {
+                    await this.commands.executeCommand(command.id);
+                },
+            }));
+    }
 }

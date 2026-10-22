@@ -234,7 +234,10 @@
  *               and two visits seeded chrome-side (one visit to a page that
  *               is not bookmarked), each lists its own source newest first on
  *               focus, typing narrows it, and Shift+Delete removes the
- *               history-only row in History. Scored only after search passed.
+ *               history-only row in History. Actions: with a fresh tab
+ *               current, it lists exactly the visible, enabled commands of
+ *               the derived category (New Tab, not the disabled Back), and
+ *               Enter on "new" opens a new tab. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -313,6 +316,7 @@ const PAGES = {
     '/dr-b': { title: 'Draft Beta', body: '<p>beta</p>' },
     '/dr-c': { title: 'Draft Gamma', body: '<p>gamma</p>' },
     '/lt-b': { title: 'Lifetime Beta', body: '<p>beta</p>' },
+    '/lm-act': { title: 'Local Actions', body: '<p>actions</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -2889,6 +2893,63 @@ async function bookmarksAndHistory(ctx) {
     }
 }
 
+/** The Actions mode's category, derived from the command declarations. */
+const COMMAND_CATEGORY = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_COMMAND_CATEGORY');
+
+/** Derived now from the page realm's CommandRegistry: the labels of the visible, enabled commands in the category, and of every command in it. */
+const categoryLabels = app => probe(app, `const registry = get('CommandRegistry');
+    const inCategory = registry.commands.filter(c => c.category === ${JSON.stringify(COMMAND_CATEGORY)} && c.label);
+    return {
+        listed: inCategory.filter(c => registry.isVisible(c.id) && registry.isEnabled(c.id)).map(c => c.label),
+        all: inCategory.map(c => c.label),
+    };`);
+
+/**
+ * SMODE-01, Actions (D-11). With a fresh web tab current (no back history),
+ * the Actions list on focus equals, as a set, the labels of the visible and
+ * enabled commands in the derived category, with New Tab among them and Back
+ * absent (the disabled control), and nothing from outside the category.
+ * Typing "new" and Enter opens a new tab, which becomes current.
+ */
+async function actionsMode(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await openLocalTab(app, pages, '/lm-act');
+    await showTab(app, tabId, '/lm-act');
+    if (plant === 'actions-unfiltered') {
+        if (await probe(app, `const m = get('ActionsAddressBarMode');
+            m.provide = async () => m.commands.commands.filter(c => c.label)
+                .map(c => ({ key: 'action:' + c.id, source: 'action', title: c.label, caption: '', url: '', run: () => m.commands.executeCommand(c.id) }));
+            return true;`) === true) {
+            note('PLANT actions-unfiltered applied');
+        }
+    }
+    const want = await settle(() => categoryLabels(app), v => !!v && !v.listed.includes('Back'));
+    if (!want?.listed.includes('New Tab') || want.listed.includes('Back') || !want.all.includes('Back')) {
+        return fail(`${BROKEN} with a fresh tab current the ${COMMAND_CATEGORY} commands must include an enabled New Tab and a disabled Back; derived ${JSON.stringify(want)}`);
+    }
+    await restoreDefaultMode(app);
+    await pickLocalMode(app, 'actions');
+    const view = await settle(() => readRows(app), v => v.rows.filter(r => r.title).length >= want.listed.length);
+    const titles = view.rows.map(r => r.title).filter(Boolean);
+    const outside = titles.filter(t => !want.all.includes(t));
+    if (outside.length) {
+        fail(`Actions listed a command outside the ${COMMAND_CATEGORY} category: ${JSON.stringify(outside.slice(0, 5))}${outside.length > 5 ? ` and ${outside.length - 5} more` : ''}`);
+    }
+    if (JSON.stringify([...titles].sort()) !== JSON.stringify([...want.listed].sort())) {
+        fail(`Actions must list exactly the visible, enabled ${COMMAND_CATEGORY} commands ${JSON.stringify(want.listed)}; saw ${JSON.stringify(titles.slice(0, 10))}`);
+    }
+    await typeInPill(app, 'new');
+    const typed = await settle(() => readRows(app), v => v.rows.some(r => r.title === 'New Tab' && r.selected));
+    if (!typed.rows.some(r => r.title === 'New Tab' && r.selected)) {
+        return fail(`typing "new" in Actions must highlight New Tab; saw ${JSON.stringify(typed.rows)}`);
+    }
+    await pressKey(app, ENTER);
+    const opened = await settle(() => mainTabId(app), id => !!id && id !== tabId, 10000);
+    if (!opened || opened === tabId) {
+        fail(`Enter on the New Tab action must open a new tab and make it current; the current tab is ${JSON.stringify(opened)}`);
+    }
+}
+
 /** The open-tab rows in the dropdown, in order. */
 const tabRowsOf = view => view.rows.filter(r => r.type === 'codicon-browser');
 
@@ -3030,7 +3091,9 @@ async function localModes(ctx) {
         }
 
         await bookmarksAndHistory(ctx);
+        await actionsMode(ctx);
     } finally {
+        await probe(app, `delete get('ActionsAddressBarMode').provide; return true;`);
         await probe(app, `delete get('TabsAddressBarMode').provide; return true;`);
         await probe(app, `delete get('ChromeStoreClient').searchPlaces; return true;`);
         await restoreDefaultMode(app);
@@ -3151,6 +3214,7 @@ const PLANTS = [
     { plant: 'mode-sticks', target: 'mode-lifetime', run: ['mode-lifetime'], expect: 'mode did not return to the default after Enter' },
     { plant: 'tabs-lists-active', target: 'local-modes', run: ['search', 'local-modes'], expect: 'the active tab is listed' },
     { plant: 'restrict-dropped', target: 'local-modes', run: ['search', 'local-modes'], expect: 'expected the seeded bookmarks newest first' },
+    { plant: 'actions-unfiltered', target: 'local-modes', run: ['search', 'local-modes'], expect: 'listed a command outside the Browser category' },
 ];
 
 async function selfTest() {

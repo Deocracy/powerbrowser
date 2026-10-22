@@ -409,6 +409,23 @@
     background: rgba(0, 166, 245, 0.18);
 }
 
+/* SMODE-01: an Actions row's trailing keybinding badges (30-UI-SPEC caption role, 1px border, 4px apart). */
+.pb-chrome-bar-row-badges {
+    flex: none;
+    display: flex;
+    gap: 4px;
+}
+
+.pb-chrome-bar-row-badge {
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 0 4px;
+    border: 1px solid var(--color-border, #3f3e4a);
+    border-radius: 4px;
+    color: var(--color-text-muted, #9a99a8);
+    white-space: nowrap;
+}
+
 /* SMODE-01: the modes menu, a .pb-chrome-bar-dropdown anchored at the pill's left edge. */
 .pb-chrome-bar-dropdown.pb-address-modes {
     right: auto;

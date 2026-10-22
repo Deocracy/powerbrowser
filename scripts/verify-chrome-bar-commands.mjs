@@ -11,7 +11,9 @@
  * derivation (no const found) fails as a broken instrument, never passes
  * as clean. The four visible labels are asserted verbatim plus the
  * labelless focus-only command (keybinding-reachable without invented
- * copy), and a duplicated id string fails naming the duplicate. Call
+ * copy), and a duplicated id string fails naming the duplicate. Every
+ * labelled Command block carries `category: CHROME_BAR_COMMAND_CATEGORY`
+ * (D-11, 30-03) and the focus-only one carries no category. Call
  * sites (the widget, the keybindings) must import the exported id consts
  * rather than retype the strings -- a re-spelled literal fails naming the
  * file, per the browser-window-command precedent.
@@ -132,6 +134,27 @@ function checkCommands(sources) {
         failures.push(`${COMMANDS_REL}: the focus-only command carries a label -- it must stay labelless (keybinding-reachable, never the palette)`);
     }
 
+    // D-11 (30-03): every labelled command carries the Browser category
+    // const, so the palette and the address bar's Actions mode list it; the
+    // focus-only command carries neither label nor category. Derived from
+    // every exported Command block, so an added command is held to it too.
+    if (!/export const CHROME_BAR_COMMAND_CATEGORY\s*=\s*'Browser';/.test(commandsSrc)) {
+        failures.push(`${COMMANDS_REL}: CHROME_BAR_COMMAND_CATEGORY = 'Browser' is gone -- the palette category and the Actions mode have no shared const`);
+    }
+    const blocks = [...commandsSrc.matchAll(/export const (CHROME_BAR_\w+):\s*Command\s*=\s*\{([^}]*)\}/g)];
+    if (blocks.length === 0) {
+        failures.push(`${COMMANDS_REL}: derived ZERO Command blocks, so the category assertion proves nothing`);
+    }
+    for (const [, name, body] of blocks) {
+        const categorised = /category:\s*CHROME_BAR_COMMAND_CATEGORY\b/.test(body);
+        if (/label:/.test(body) && !categorised) {
+            failures.push(`${COMMANDS_REL}: ${name} has a label but no category: CHROME_BAR_COMMAND_CATEGORY -- it would be missing from the Browser category and the Actions mode`);
+        }
+        if (!/label:/.test(body) && /category:/.test(body)) {
+            failures.push(`${COMMANDS_REL}: ${name} is labelless but carries a category -- the focus-only command must carry neither`);
+        }
+    }
+
     // Call-site discipline: import the exported consts, never re-spell the
     // id strings (a copy drifts silently from the registration). The
     // assertion names each declared id literally: neighbouring identifiers
@@ -203,6 +226,16 @@ function selfTest() {
             name: 'planted label drift',
             mutate: src => src.replace("label: 'Back'", "label: 'Go Back'"),
             expect: 'Back',
+        },
+        {
+            name: 'planted category dropped',
+            mutate: src => src.replace(/(id: CHROME_BAR_RELOAD_COMMAND_ID,\n)\s*category: CHROME_BAR_COMMAND_CATEGORY,\n/, '$1'),
+            expect: 'CHROME_BAR_RELOAD has a label but no category',
+        },
+        {
+            name: 'planted category on the focus command',
+            mutate: src => src.replace('    id: CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,\n', '    id: CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,\n    category: CHROME_BAR_COMMAND_CATEGORY,\n'),
+            expect: 'CHROME_BAR_FOCUS_ADDRESS is labelless but carries a category',
         },
         {
             name: 'planted duplicate id',

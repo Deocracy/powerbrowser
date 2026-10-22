@@ -22,23 +22,34 @@ export const CHROME_BAR_RELOAD_COMMAND_ID = 'powerbrowser.chrome-bar.reload';
 export const CHROME_BAR_NEW_TAB_COMMAND_ID = 'powerbrowser.chrome-bar.new-tab';
 export const CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID = 'powerbrowser.chrome-bar.focus-address';
 
+/**
+ * D-11 (30-03): the palette category of the four visible commands ("Browser:
+ * Back" and so on), and what the address bar's Actions mode lists. The
+ * focus-only command has none: it stays labelless and out of the palette.
+ */
+export const CHROME_BAR_COMMAND_CATEGORY = 'Browser';
+
 export const CHROME_BAR_BACK: Command = {
     id: CHROME_BAR_BACK_COMMAND_ID,
+    category: CHROME_BAR_COMMAND_CATEGORY,
     label: 'Back',
 };
 
 export const CHROME_BAR_FORWARD: Command = {
     id: CHROME_BAR_FORWARD_COMMAND_ID,
+    category: CHROME_BAR_COMMAND_CATEGORY,
     label: 'Forward',
 };
 
 export const CHROME_BAR_RELOAD: Command = {
     id: CHROME_BAR_RELOAD_COMMAND_ID,
+    category: CHROME_BAR_COMMAND_CATEGORY,
     label: 'Reload',
 };
 
 export const CHROME_BAR_NEW_TAB: Command = {
     id: CHROME_BAR_NEW_TAB_COMMAND_ID,
+    category: CHROME_BAR_COMMAND_CATEGORY,
     label: 'New Tab',
 };
 

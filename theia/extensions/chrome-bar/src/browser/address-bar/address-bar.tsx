@@ -70,6 +70,11 @@ const LOCAL_MODE_COPY: { [mode: string]: LocalModeCopy } = {
         label: CHROME_BAR_COPY.searchHistory, empty: CHROME_BAR_COPY.noHistory, noMatch: CHROME_BAR_COPY.noMatchingHistory,
         failed: CHROME_BAR_COPY.historyFailed, footer: CHROME_BAR_COPY.dropdownFooter,
     },
+    actions: {
+        // Never empty in this phase (D-11): the Browser commands always include New Tab.
+        label: CHROME_BAR_COPY.searchActions, empty: () => CHROME_BAR_COPY.noMatchingActions,
+        noMatch: CHROME_BAR_COPY.noMatchingActions, footer: CHROME_BAR_COPY.actionsFooter,
+    },
     tabs: {
         label: CHROME_BAR_COPY.searchTabs, empty: CHROME_BAR_COPY.noOtherTabs,
         noMatch: CHROME_BAR_COPY.noMatchingTabs, footer: CHROME_BAR_COPY.tabsFooter,
@@ -1827,6 +1832,9 @@ export class AddressBar {
                 <div className='pb-chrome-bar-row-title' title={row.title}>{row.title}</div>
                 <div className='pb-chrome-bar-row-caption' title={row.caption}>{row.caption}</div>
                 {icon.trailing && <span className={`pb-chrome-bar-row-type codicon ${icon.trailing}`} aria-hidden='true' />}
+                {!!row.badges?.length && <span className='pb-chrome-bar-row-badges'>
+                    {row.badges.map(badge => <span key={badge} className='pb-chrome-bar-row-badge'>{badge}</span>)}
+                </span>}
                 {row.source === 'tab' && <span className='pb-chrome-bar-row-switch'>{CHROME_BAR_COPY.switchToTab}</span>}
             </>}
         </div>;
