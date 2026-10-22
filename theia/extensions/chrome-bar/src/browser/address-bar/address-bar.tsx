@@ -1029,6 +1029,7 @@ export class AddressBar {
         this.inputValue = url;
         this.commitFailed = false;
         this.closeDropdown();
+        this.resetMode();
         this.update();
         try {
             await this.openCommittedUrl(url);
@@ -1057,6 +1058,7 @@ export class AddressBar {
         // Drops the typed text so the activation's sync is not held off as an edit in progress.
         this.inputValue = this.committedAddress;
         this.closeDropdown();
+        this.resetMode();
         this.update();
         await this.shell.activateWidget(widget.id);
         widget.focusPage();
@@ -1109,6 +1111,7 @@ export class AddressBar {
         this.inputValue = this.committedAddress;
         this.commitFailed = false;
         this.closeDropdown();
+        this.resetMode();
         this.update();
         let widget: WebTabWidget;
         try {
@@ -1159,6 +1162,7 @@ export class AddressBar {
         this.inputValue = text;
         this.commitFailed = false;
         this.closeDropdown();
+        this.resetMode();
         this.update();
         let resolved: ResolvedAddress | undefined;
         try {
@@ -1184,6 +1188,11 @@ export class AddressBar {
     protected onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
         if (this.composing(e)) {
             // BAR-11: the IME owns every key while a composition is open; nothing commits or moves early.
+            return;
+        }
+        if (this.modesOpen) {
+            // SMODE-01: a menu the input opened is driven from the input.
+            this.onModesKeyDown(e);
             return;
         }
         if (e.key === 'F6' && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -1265,8 +1274,10 @@ export class AddressBar {
             if (this.dropdownOpen) {
                 this.closeDropdown();
                 this.update();
-            } else if (this.inputValue !== this.committedAddress) {
+            } else if (this.inputValue !== this.committedAddress || this.mode !== this.defaultMode()) {
+                // D-15: the restore step also returns a picked mode to the default.
                 this.inputValue = this.committedAddress;
+                this.resetMode();
                 this.update();
             } else if (currentWebTab()?.loading) {
                 currentWebTab()?.stop();
@@ -1358,6 +1369,7 @@ export class AddressBar {
         }
         this.commitFailed = false;
         this.closeDropdown();
+        this.resetMode();
         this.update();
         let resolved: ResolvedAddress | undefined;
         try {
@@ -1512,6 +1524,9 @@ export class AddressBar {
     onCurrentWidgetChanged(widget: Widget | undefined): void {
         this.saveDraft();
         this.closeDropdown();
+        // D-15: a tab change ends a picked mode.
+        this.closeModesMenu();
+        this.resetMode();
         this.draftOwner = widget;
         const draft = widget && this.drafts.get(widget);
         if (widget && draft !== undefined) {
@@ -1608,7 +1623,7 @@ export class AddressBar {
             </React.Fragment>)}
             {this.shimmer && <div className='pb-chrome-bar-row is-shimmer' aria-hidden='true' />}
             {this.renderOneOffs()}
-            <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
+            <div className='pb-chrome-bar-dropdown-footer'>{this.modeEngine() !== undefined ? CHROME_BAR_COPY.engineFooter : CHROME_BAR_COPY.dropdownFooter}</div>
         </>;
     }
 
@@ -1766,7 +1781,63 @@ export class AddressBar {
             {this.mode !== 'address' && <span className='pb-address-mode-label'>{label}</span>}
             <span className='pb-address-mode-chevron codicon codicon-chevron-down' aria-hidden='true' />
         </button>;
-        return this.mode === 'address' ? button : <span className='pb-address-mode-chip'>{button}</span>;
+        if (this.mode === 'address') {
+            return button;
+        }
+        const resetLabel = CHROME_BAR_COPY.returnTo(this.modeLabel(this.defaultMode()));
+        return <span className='pb-address-mode-chip'>
+            {button}
+            {this.mode !== this.defaultMode() && <button
+                type='button'
+                className='pb-address-mode-reset'
+                aria-label={resetLabel}
+                onPointerEnter={e => this.hover.requestHover({
+                    content: resetLabel,
+                    target: e.currentTarget,
+                    position: 'bottom',
+                    cssClasses: ['pb-chrome-bar-hover'],
+                })}
+                // Focus stays in the pill: the x never takes it, so the dropdown it re-opens is not closed by a blur.
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => this.onModeReset()}
+            >
+                <span className='codicon codicon-close' aria-hidden='true' />
+            </button>}
+        </span>;
+    }
+
+    /**
+     * SMODE-03 (D-14): the x returns to the default mode, keeps the text and
+     * re-runs the query. A prototype method, so a live plant can replace it.
+     */
+    protected onModeReset(): void {
+        this.resetMode({ requery: true });
+        this.focusInputAtEnd();
+        this.update();
+    }
+
+    /**
+     * D-15: returns the pill to the PowerBrowser mode's default; `requery`
+     * re-runs the query for the kept text. Every commit path, Esc's restore,
+     * a tab change and a PowerBrowser-mode change call it. A prototype
+     * method, so a live plant can make a picked mode stick.
+     */
+    protected resetMode({ requery = false }: { requery?: boolean } = {}): void {
+        this.mode = this.defaultMode();
+        if (requery) {
+            this.requery();
+        }
+    }
+
+    /** D-15: the bar reports every PowerBrowser-mode change; a change returns the pill to that mode's default. */
+    uiModeChanged(id: string): void {
+        if (id === this.uiMode) {
+            return;
+        }
+        this.uiMode = id;
+        this.closeModesMenu();
+        this.resetMode();
+        this.update();
     }
 
     protected onModeButtonClick = (): void => {
@@ -1791,14 +1862,59 @@ export class AddressBar {
         this.closeModesMenu();
     };
 
-    /** SMODE-01: the open menu's keys, from whichever element opened it. */
+    /**
+     * SMODE-01: the open menu's keys, from whichever element opened it.
+     * ArrowUp/Down move and wrap, Home/End jump; an access letter picks the
+     * one item it starts, or cycles the highlight through several; Enter (or
+     * Space on the button) picks, Shift+Enter searches with an engine item
+     * now; Esc closes the menu with the mode kept and focus in the input.
+     */
     protected onModesKeyDown(e: React.KeyboardEvent<HTMLElement>): void {
-        if (e.key === 'Escape') {
+        const items = this.modeMenuItems();
+        const keys = items.map(item => item.key);
+        const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            const down = e.key === 'ArrowDown';
+            this.modesHighlight = this.modesHighlight === undefined
+                ? keys[down ? 0 : keys.length - 1]
+                : nextHighlight(keys, this.modesHighlight, down ? 1 : -1);
+        } else if (e.key === 'Home' || e.key === 'End') {
+            this.modesHighlight = keys[e.key === 'Home' ? 0 : keys.length - 1];
+        } else if (e.key === 'Enter' || (e.key === ' ' && e.currentTarget.tagName === 'BUTTON')) {
+            e.preventDefault();
+            const item = items.find(entry => entry.key === this.modesHighlight);
+            if (item) {
+                this.chooseModeItem(item, e.shiftKey && e.key === 'Enter' ? 'current' : 'pick');
+            } else {
+                this.closeModesMenu();
+            }
+            return;
+        } else if (e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
             this.closeModesMenu();
             this.focusInputAtEnd();
+            return;
+        } else if (e.key === 'Tab') {
+            this.closeModesMenu();
+            return;
+        } else if (plain && e.key.length === 1 && e.key.trim()) {
+            const letter = e.key.toLocaleLowerCase();
+            const matches = items.filter(item => item.label.slice(0, 1).toLocaleLowerCase() === letter);
+            if (matches.length === 1) {
+                e.preventDefault();
+                this.chooseModeItem(matches[0], 'pick');
+                return;
+            }
+            if (matches.length > 1) {
+                const from = matches.findIndex(item => item.key === this.modesHighlight);
+                this.modesHighlight = matches[(from + 1) % matches.length].key;
+            }
+        } else {
+            return;
         }
+        e.preventDefault();
+        this.update();
     }
 
     /** SMODE-01: opens the modes menu with the active mode's item highlighted (none in Address); the result dropdown closes. */

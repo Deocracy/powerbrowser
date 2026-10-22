@@ -602,6 +602,8 @@ const EXPECTED_NAV_COPY = new Set([
   "Search Settings",
   "${name}, choose a mode",
   "Modes",
+  "Return to ${name}",
+  "Enter searches · Alt+Enter searches in a new tab · Esc closes suggestions",
 ]);
 
 /**

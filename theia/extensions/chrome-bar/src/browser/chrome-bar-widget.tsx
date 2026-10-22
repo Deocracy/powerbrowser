@@ -534,6 +534,8 @@ export class ChromeBarWidget extends ReactWidget {
         } else {
             this.activeCustomId = undefined;
         }
+        // D-15: every PowerBrowser-mode change, startup included, returns the pill to that mode's default.
+        this.addressBar.uiModeChanged(id);
         this.update();
     }
 

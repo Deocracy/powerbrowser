@@ -208,6 +208,22 @@
  *               GETs /two/search with q "hello" and nothing on /one/search.
  *               Scored only after search passed (its GET proves the log sees
  *               /one/search).
+ *   mode-chip   SMODE-03: in Browsing the Address form has no chip, label or
+ *               x; Probe Engine Two's mode shows a chip with its label and an
+ *               x; a trusted click on the x with "hello" typed returns to the
+ *               Address form with "hello" kept, and the re-run query shows the
+ *               heuristic row "Search with Probe Engine One". In the menu, the
+ *               probe engines' shared first letter, pressed once per item that
+ *               starts with it up to Probe Engine Two (at least twice), then
+ *               Enter, picks Probe Engine Two. Search Settings makes Settings current,
+ *               searching the preference DEFAULT_SEARCH_ENGINE_PREFERENCE
+ *               names (read from chrome-bar-preferences.ts), and closes the
+ *               menu.
+ *   mode-lifetime  D-15: with Probe Engine Two's mode picked each time, the
+ *               mode equals the instance's defaultMode() after Enter commits
+ *               "hello" (a GET on /two/search), after the second Esc (the
+ *               address restored), after activating a second web tab, after
+ *               the Organising toggle segment, and after Browsing again.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -230,7 +246,7 @@ import {
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
-import { pollFor, probe } from './lib/pb-relaunch.mjs';
+import { pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-address-bar-live';
 const ENTER = { key: 'Enter', code: 'Enter', keyCode: 13 };
@@ -285,6 +301,7 @@ const PAGES = {
     '/dr-a2': { title: 'Draft Alpha Two', body: '<p>alpha two</p>' },
     '/dr-b': { title: 'Draft Beta', body: '<p>beta</p>' },
     '/dr-c': { title: 'Draft Gamma', body: '<p>gamma</p>' },
+    '/lt-b': { title: 'Lifetime Beta', body: '<p>beta</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -2575,6 +2592,185 @@ async function modesDropdown(ctx) {
     }
 }
 
+/** The Search Settings item's preference, derived from the setting's own declaration. */
+const SEARCH_SETTINGS_PREF = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-preferences.ts', 'DEFAULT_SEARCH_ENGINE_PREFERENCE');
+
+/** The main area's current widget id and the Settings search filter. */
+const settingsView = app => probe(app, `const owner = get('ApplicationShell').mainPanel.currentTitle?.owner;
+    return { id: owner?.id ?? null, search: document.querySelector('#preference-searchbar')?.value ?? null };`);
+
+/** A key record for a letter, as pressKey takes it. */
+const letterKey = letter => ({ key: letter.toLowerCase(), code: `Key${letter.toUpperCase()}`, keyCode: letter.toUpperCase().charCodeAt(0) });
+
+async function modeChip(ctx) {
+    const { app, plant, fail, note } = ctx;
+    await sessionTab(ctx);
+    try {
+        const plain = await readMode(app);
+        if (!plain || plain.chip || plain.label !== null || plain.reset) {
+            fail(`in Browsing the Address form must show no chip, no label and no x; saw ${JSON.stringify(plain)}`);
+        }
+        await pickEngineMode(app, ENGINE_TWO);
+        const chip = await readMode(app);
+        if (!chip?.chip || chip.label !== ENGINE_TWO || !chip.reset) {
+            fail(`${ENGINE_TWO}'s mode must show a chip labelled ${JSON.stringify(ENGINE_TWO)} with an x; saw ${JSON.stringify(chip)}`);
+        }
+        if (plant === 'reset-ignored') {
+            if (await probe(app, `get('AddressBar').onModeReset = function () {}; return true;`) === true) {
+                note('PLANT reset-ignored applied');
+            }
+        }
+        await typeInPill(app, 'hello');
+        await clickOn(app, '.pb-address-mode-reset');
+        const back = await settle(() => readMode(app), v => v && !v.chip && v.value === 'hello');
+        if (!back || back.chip || back.value !== 'hello') {
+            fail(`the x did not return to the default mode with the text kept; saw ${JSON.stringify(back)}`);
+        } else {
+            const rows = await settle(() => readRows(app), v => v.rows[0]?.caption === HEURISTIC_CAPTION);
+            if (rows.rows[0]?.caption !== HEURISTIC_CAPTION) {
+                fail(`after the x the query must re-run in the default mode, its heuristic row reading ${JSON.stringify(HEURISTIC_CAPTION)}; saw ${JSON.stringify(rows.rows)}`);
+            }
+        }
+        if (plant === 'reset-ignored') {
+            await restoreDefaultMode(app);
+        }
+
+        // Access letters: the probe engines share their first letter (with any built-in engine that starts with it),
+        // so pressing it once per item up to Probe Engine Two, then Enter, picks it by cycling.
+        const menu = await openModesMenu(app);
+        if (!menu) {
+            return fail(`${BROKEN} the modes menu did not open for the access-letter step`);
+        }
+        const letter = ENGINE_TWO.slice(0, 1);
+        const shared = menu.items.filter(i => i.label.slice(0, 1).toLowerCase() === letter.toLowerCase()).map(i => i.label);
+        const presses = shared.indexOf(ENGINE_TWO) + 1;
+        if (presses < 2) {
+            return fail(`${BROKEN} the menu's items starting with ${letter} are ${JSON.stringify(shared)}, so no press sequence cycles to ${ENGINE_TWO}`);
+        }
+        for (let i = 0; i < presses; i++) {
+            await pressKey(app, letterKey(letter));
+        }
+        await pressKey(app, ENTER);
+        const lettered = await settle(() => readMode(app), v => v?.label === ENGINE_TWO);
+        if (lettered?.label !== ENGINE_TWO) {
+            fail(`pressing ${letter} ${presses} times (items ${JSON.stringify(shared)}) then Enter in the modes menu must pick ${ENGINE_TWO}; the chip reads ${JSON.stringify(lettered?.label)}`);
+        }
+
+        // Search Settings opens the default-engine setting and closes the menu.
+        if (!await openModesMenu(app)) {
+            return fail(`${BROKEN} the modes menu did not open for the Search Settings step`);
+        }
+        const chose = await app.evaluate(`(() => {
+            const item = [...document.querySelectorAll('.pb-address-modes [role=menuitem]')].find(i => i.querySelector('.codicon-settings-gear'));
+            if (!item) return false;
+            item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+            return true;
+        })()`);
+        if (chose !== true) {
+            return fail('the modes menu has no Search Settings item (codicon-settings-gear)');
+        }
+        const settings = await settle(() => settingsView(app), v => v?.id === 'settings_widget' && v.search === SEARCH_SETTINGS_PREF, 10000);
+        if (settings?.id !== 'settings_widget' || settings.search !== SEARCH_SETTINGS_PREF) {
+            fail(`Search Settings must make Settings current, searching ${SEARCH_SETTINGS_PREF}; saw ${JSON.stringify(settings)}`);
+        }
+        if (await readModesMenu(app)) {
+            fail('the modes menu stayed open after Search Settings');
+        }
+    } finally {
+        await restoreDefaultMode(app);
+    }
+}
+
+/** The AddressBar's active mode and its default for the current PowerBrowser mode, read now. */
+const modeState = app => probe(app, `const bar = get('AddressBar'); return { mode: bar.mode, default: bar.defaultMode() };`);
+
+/** A trusted click on the mode-toggle segment named `name`. */
+async function clickSegment(app, name) {
+    const at = await app.evaluate(`JSON.stringify((() => {
+        const seg = [...document.querySelectorAll('.pb-chrome-bar-toggle .pb-chrome-bar-segment')].find(b => b.textContent === ${JSON.stringify(name)});
+        if (!seg) return null;
+        const r = seg.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })())`).then(JSON.parse);
+    if (!at) {
+        throw new Error(`${BROKEN} no mode-toggle segment named ${name}`);
+    }
+    await theiaPointer(app, click(at.x, at.y));
+}
+
+const bodyMode = app => app.evaluate(`document.body.dataset.pbMode ?? null`);
+
+async function modeLifetime(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const backToDefault = async label => {
+        const state = await settle(() => modeState(app), v => v && v.mode === v.default);
+        if (!state || state.mode !== state.default) {
+            fail(`mode did not return to the default after ${label}: it is ${JSON.stringify(state?.mode)}, the default ${JSON.stringify(state?.default)}`);
+        }
+        return state;
+    };
+    const otherTab = await openLocalTab(app, pages, '/lt-b');
+    await showTab(app, tabId, '/start');
+    if (plant === 'mode-sticks') {
+        if (await probe(app, `get('AddressBar').resetMode = function () {}; return true;`) === true) {
+            note('PLANT mode-sticks applied');
+        }
+    }
+    try {
+        // Enter commits.
+        await pickEngineMode(app, ENGINE_TWO);
+        await typeInPill(app, 'hello');
+        const getMark = pages.requests.length;
+        await pressKey(app, ENTER);
+        if (!await nextGet(pages, '/two/search', getMark, r => queryOf(r) === 'hello')) {
+            return fail(`${BROKEN} Enter in ${ENGINE_TWO}'s mode loaded no /two/search, so nothing was committed`);
+        }
+        await backToDefault('Enter');
+
+        // The second Esc restores the address.
+        await pickEngineMode(app, ENGINE_TWO);
+        await typeInPill(app, 'hello again');
+        if (!(await settle(() => readDraftView(app), v => v?.expanded))?.expanded) {
+            return fail(`${BROKEN} typing in ${ENGINE_TWO}'s mode opened no dropdown, so the first Esc would not be the close step`);
+        }
+        await pressKey(app, ESCAPE);
+        await settle(() => readDraftView(app), v => v && !v.expanded);
+        await pressKey(app, ESCAPE);
+        const address = await currentTabUrl(app);
+        const restored = await settle(() => readDraftView(app), v => v?.value === address);
+        if (restored?.value !== address) {
+            fail(`${BROKEN} two Esc presses did not restore the address ${JSON.stringify(address)} (${JSON.stringify(restored)})`);
+        }
+        await backToDefault('the second Esc');
+
+        // A tab change.
+        await pickEngineMode(app, ENGINE_TWO);
+        await showTab(app, otherTab, '/lt-b');
+        await backToDefault('a tab change');
+        await showTab(app, tabId, '/start');
+
+        // A PowerBrowser-mode change, there and back.
+        await pickEngineMode(app, ENGINE_TWO);
+        await clickSegment(app, 'Organising');
+        if (await settle(() => bodyMode(app), v => v === 'organising') !== 'organising') {
+            return fail(`${BROKEN} the Organising segment did not switch the PowerBrowser mode`);
+        }
+        await backToDefault('switching to Organising');
+        await pickEngineMode(app, ENGINE_TWO);
+        await clickSegment(app, 'Browsing');
+        if (await settle(() => bodyMode(app), v => v === 'browsing') !== 'browsing') {
+            return fail(`${BROKEN} the Browsing segment did not switch the PowerBrowser mode back`);
+        }
+        await backToDefault('switching back to Browsing');
+    } finally {
+        await restoreDefaultMode(app);
+        if (await bodyMode(app) !== 'browsing') {
+            await clickSegment(app, 'Browsing').catch(() => undefined);
+        }
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -2595,6 +2791,8 @@ const SCENARIOS = {
     'select-ime': selectIme,
     drafts,
     'modes-dropdown': modesDropdown,
+    'mode-chip': modeChip,
+    'mode-lifetime': modeLifetime,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -2682,6 +2880,8 @@ const PLANTS = [
     { plant: 'draft-lost', target: 'drafts', run: ['drafts'], expect: 'expected the draft text' },
     { plant: 'pill-drag-navigates', target: 'canonize-drop', run: ['canonize-drop'], expect: "must be left to the field" },
     { plant: 'engine-mode-ignored', target: 'modes-dropdown', run: ['search', 'modes-dropdown'], expect: 'no GET on /two/search' },
+    { plant: 'reset-ignored', target: 'mode-chip', run: ['mode-chip'], expect: 'the x did not return to the default mode' },
+    { plant: 'mode-sticks', target: 'mode-lifetime', run: ['mode-lifetime'], expect: 'mode did not return to the default after Enter' },
 ];
 
 async function selfTest() {

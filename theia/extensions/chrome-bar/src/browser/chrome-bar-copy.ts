@@ -46,6 +46,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     searchSettings: 'Search Settings',
     chooseMode: (label: string) => `${label}, choose a mode`,
     modesMenuLabel: 'Modes',
+    returnTo: (label: string) => `Return to ${label}`,
+    engineFooter: 'Enter searches · Alt+Enter searches in a new tab · Esc closes suggestions',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */
