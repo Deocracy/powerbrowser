@@ -31,6 +31,8 @@ export interface Row {
     detail?: string;
     /** Phase 30 (SMODE-05): a pick's own icon classes, applied as given (file-icon theme, codicons). */
     iconClasses?: string[];
+    /** Phase 30 (SMODE-05): choosing the row keeps the dropdown and the mode (a help row puts its prefix in the pill). */
+    stays?: boolean;
 }
 
 export const ENGINE_ROW_LIMIT = 4;

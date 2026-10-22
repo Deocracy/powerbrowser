@@ -1,12 +1,17 @@
 import { injectable, inject } from '@theia/core/shared/inversify';
-import { QuickAccessProviderDescriptor, QuickAccessRegistry } from '@theia/core/lib/browser';
+import { KeybindingRegistry, QuickAccessProviderDescriptor, QuickAccessRegistry, QuickHelpService } from '@theia/core/lib/browser';
 import { CancellationToken } from '@theia/core/lib/common';
 import { isOSX } from '@theia/core/lib/common/os';
-import { QuickInputService, QuickPicks } from '@theia/core/lib/common/quick-pick-service';
+import { QuickInputService, QuickPickItem, QuickPicks } from '@theia/core/lib/common/quick-pick-service';
 import type { Row } from './address-bar-rows';
 import { BuiltInAddressBarMode } from './address-bar-modes';
 import { CHROME_BAR_COPY } from '../chrome-bar-copy';
 import { PAGE_SHORTCUTS } from '../chrome-bar-shortcuts';
+
+/** What a help row needs from the pill: put this text in it and list that provider's picks. */
+export interface CommandCentrePill {
+    acceptText(text: string): void;
+}
 
 /**
  * SMODE-05 (D-21..D-27): Command centre, the pill's own rendering of Theia's
@@ -30,6 +35,34 @@ export class CommandCentreAddressBarMode extends BuiltInAddressBarMode {
 
     @inject(QuickInputService)
     protected readonly quickInput: QuickInputService;
+
+    @inject(KeybindingRegistry)
+    protected readonly keybindings: KeybindingRegistry;
+
+    /** The pill that renders this mode; set by the address bar when it dispatches here. */
+    protected pill: CommandCentrePill | undefined;
+
+    attach(pill: CommandCentrePill): void {
+        this.pill = pill;
+    }
+
+    /** D-25: the input's placeholder, the selected provider's own (else the default provider's), read now. */
+    placeholder(text: string): string | undefined {
+        return (this.descriptorFor(text) ?? this.descriptorFor(''))?.placeholder;
+    }
+
+    /**
+     * Pitfall 1: a ? help row puts its provider's prefix in the pill (empty for
+     * the default provider's row) and lists that provider's picks. The pick's
+     * own execute() is never called: it opens the centred quick input. The
+     * prefixes are the registry's help entries, so nothing is hand-kept. An
+     * instance method, so a live plant can call execute() instead.
+     */
+    acceptHelp(pick: QuickPickItem): void {
+        const prefixes = ([] as string[]).concat(...this.registry.getQuickAccessProviders()
+            .map(descriptor => descriptor.helpEntries.map(entry => entry.prefix || descriptor.prefix)));
+        this.pill?.acceptText(prefixes.includes(pick.label) ? pick.label : '');
+    }
 
     /** The provider the registry selects for `text`; undefined when it has none (D-22). */
     descriptorFor(text: string): QuickAccessProviderDescriptor | undefined {
@@ -65,6 +98,7 @@ export class CommandCentreAddressBarMode extends BuiltInAddressBarMode {
             return [];
         }
         const filter = text.substring(descriptor.prefix.length).trim();
+        const help = descriptor.prefix === QuickHelpService.PREFIX;
         const picks: QuickPicks = await descriptor.getInstance().getPicks(filter, token);
         if (token.isCancellationRequested) {
             return [];
@@ -77,7 +111,9 @@ export class CommandCentreAddressBarMode extends BuiltInAddressBarMode {
             return {
                 key: `pick:${index}`, source: 'pick', title: pick.label, caption: pick.description ?? '', url: '',
                 detail: pick.detail, iconClasses: pick.iconClasses,
-                run: execute ? () => execute() : undefined,
+                badges: pick.keySequence ? [this.keybindings.acceleratorForSequence(pick.keySequence, '+').join(' ')] : undefined,
+                run: help ? () => this.acceptHelp(pick) : execute ? () => execute() : undefined,
+                stays: help || undefined,
             };
         });
     }

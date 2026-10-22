@@ -15,6 +15,7 @@ import URI from '@theia/core/lib/common/uri';
 import { PreferenceSchemaService, PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
+import { LabelParser } from '@theia/core/lib/browser/label-parser';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import pDebounce from 'p-debounce';
 import { MessageLoop } from '@theia/core/shared/@lumino/messaging';
@@ -199,6 +200,10 @@ export class AddressBar {
     @inject(ClipboardService)
     protected readonly clipboard: ClipboardService;
 
+    /** Phase 30 (SMODE-05): a pick's label renders its $(icon) parts as codicons, its text as text nodes (T-30-03). */
+    @inject(LabelParser)
+    protected readonly labelParser: LabelParser;
+
     /** Phase 29 (BAR-04): chrome's engine list; undefined until it arrives or when it failed. */
     protected engineList: SearchEngineList | undefined;
 
@@ -379,7 +384,18 @@ export class AddressBar {
     /** Phase 30 (SMODE-05): the Command centre contribution while it is the active mode, else undefined. */
     protected commandCentre(): CommandCentreAddressBarMode | undefined {
         const local = this.localMode();
-        return local && local.id === 'command-centre' ? local as CommandCentreAddressBarMode : undefined;
+        if (!local || local.id !== 'command-centre') {
+            return undefined;
+        }
+        const centre = local as CommandCentreAddressBarMode;
+        centre.attach(this);
+        return centre;
+    }
+
+    /** SMODE-05: a help row's prefix becomes the pill's text, and that provider's picks are listed; focus stays. */
+    acceptText(text: string): void {
+        this.textEdited(text, false);
+        this.focusInputAtEnd();
     }
 
     /** Firefox's search string: empty while the pill still shows the committed address, else the trimmed text. */
@@ -1313,18 +1329,46 @@ export class AddressBar {
             // SMODE-05: a group header or a message pick (no execute) chooses nothing.
             return;
         }
+        if (row.run && row.stays) {
+            // SMODE-05: a help row keeps the dropdown and the mode; it changes the pill's text.
+            return row.run();
+        }
         if (row.run) {
-            // Phase 30: an action or the trailing search row; the choice ends the picked mode (D-15).
+            // Phase 30: an action, the trailing search row or a pick; the choice ends the picked mode (D-15).
             this.inputValue = this.committedAddress;
             this.closeDropdown();
             this.resetMode();
             this.update();
-            return row.run();
+            await row.run();
+            if (row.source === 'pick') {
+                this.returnFocusAfterPick();
+            }
+            return;
         }
         if (row.source === 'heuristic') {
             return this.commitTyped();
         }
         return row.source === 'tab' ? this.switchToTab(row) : this.commitRow(row);
+    }
+
+    /**
+     * 30-RESEARCH A5: a pick that left focus in the pill (a > command refocuses
+     * the element active when its picks were read) gives it back, on the next
+     * task, to the shell's current widget. Top-panel widgets are not tracked,
+     * so that is the editor or tab the user was in.
+     */
+    protected returnFocusAfterPick(): void {
+        setTimeout(() => {
+            const input = this.pillRef?.querySelector('input');
+            if (!input || document.activeElement !== input) {
+                return;
+            }
+            input.blur();
+            const widget = this.shell.currentWidget ?? this.shell.mainPanel.currentTitle?.owner;
+            if (widget) {
+                void this.shell.activateWidget(widget.id);
+            }
+        });
     }
 
     /** BAR-07: an autofilled value opens the completed origin; any other text commits as typed. */
@@ -1876,8 +1920,11 @@ export class AddressBar {
         const highlighted = row.key === this.highlightKey;
         const message = (row.source === 'heuristic' && (this.providerFailed || this.heuristicNoEngine)) || (row.source === 'pick' && !row.run);
         const icon = iconFor(row);
+        const pick = row.source === 'pick';
         const titleLine = <>
-            <div className='pb-chrome-bar-row-title' title={row.title}>{row.title}</div>
+            <div className='pb-chrome-bar-row-title' title={pick ? this.labelParser.stripIcons(row.title) : row.title}>
+                {pick ? this.pickLabel(row.title) : row.title}
+            </div>
             <div className='pb-chrome-bar-row-caption' title={row.caption}>{row.caption}</div>
         </>;
         return <div
@@ -1923,6 +1970,13 @@ export class AddressBar {
         </div>;
     }
 
+    /** SMODE-05 (T-30-03): a pick's label as $(name) codicon spans and React text nodes; never markup. */
+    protected pickLabel(label: string): React.ReactNode {
+        return this.labelParser.parse(label).map((part, index) => <React.Fragment key={index}>
+            {typeof part === 'string' ? part : <span className={`codicon codicon-${part.name}`} aria-hidden='true' />}
+        </React.Fragment>);
+    }
+
     /** The pill and its portalled dropdown, rendered by the bar widget between Home and New Tab. */
     render(): React.ReactNode {
         const secure = this.inputValue.trim().startsWith('https://');
@@ -1932,6 +1986,9 @@ export class AddressBar {
         const addressLabel = local ? LOCAL_MODE_COPY[local.id].label
             : modeEngine ? CHROME_BAR_COPY.searchWith(modeEngine)
                 : engine ? CHROME_BAR_COPY.searchPlaceholder(engine) : CHROME_BAR_COPY.searchOrEnterAddress;
+        // D-25: Command centre's placeholder is the selected provider's own, read now; its aria-label stays the mode label.
+        const centre = this.commandCentre();
+        const placeholder = (centre && centre.placeholder(this.rawQueryText())) || addressLabel;
         const activeIndex = this.dropdownOpen ? this.rows.findIndex(row => row.key === this.highlightKey) : -1;
         const oneOffIndex = this.dropdownOpen ? this.oneOffEngines().findIndex(engine => ONE_OFF_KEY + engine.name === this.highlightKey) : -1;
         const activeId = activeIndex >= 0 ? this.rowId(activeIndex) : oneOffIndex >= 0 ? this.oneOffId(oneOffIndex) : undefined;
@@ -1948,7 +2005,7 @@ export class AddressBar {
                 {secure && <span className='codicon codicon-lock pb-chrome-bar-lock' aria-hidden='true' />}
                 <input
                     className={CHROME_BAR_INPUT_CLASS}
-                    placeholder={addressLabel}
+                    placeholder={placeholder}
                     aria-label={addressLabel}
                     role='combobox'
                     aria-expanded={this.dropdownOpen}

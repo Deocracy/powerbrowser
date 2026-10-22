@@ -247,7 +247,22 @@
  *               "READ" shows a group header and a README.md row (the
  *               positive control that file search reaches the workspace), and
  *               Enter on it makes an editor on README.md the shell's current
- *               widget. Scored only after search passed.
+ *               widget. For every prefix the page realm's registry lists
+ *               (derived now), the prefix typed with a sample filter (READ for
+ *               the default provider, toggle after >) renders the provider's
+ *               own getPicks rows and group headers in order, labels compared
+ *               after LabelParser; debug lists the fixture's launch
+ *               configuration. Choosing the > help row after ? puts > in the
+ *               pill and lists commands with no centred quick input; the #
+ *               pick without execute is a message row ArrowDown skips; the
+ *               zero-query list equals the empty-text picks and the
+ *               placeholder equals the default provider's, read now; Enter on
+ *               the bottom-panel toggle command toggles it and leaves focus
+ *               off the pill. Scored only after search passed.
+ *   command-centre-handoff  D-22, D-23: in Command centre, @ and then :12
+ *               (no Theia descriptor) each open the centred quick input
+ *               holding that text while the pill keeps it, and Esc closes it.
+ *               Scored only after command-centre passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -379,7 +394,7 @@ const stubResolve = (app, reply) => probe(app, reply === null
  * setter, then an input event). React restores the controlled value until the
  * widget re-renders, so the typed value is read back by polling.
  */
-async function typeInPill(app, text) {
+async function typeInPill(app, text, { focused = true } = {}) {
     if (await focusTheiaFrame(app) !== true) {
         throw new Error(`${BROKEN} the Theia frame could not be made chrome's active element`);
     }
@@ -391,8 +406,9 @@ async function typeInPill(app, text) {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         return true;
     })()`);
-    const pill = typed === true ? await settle(() => readPill(app), v => v.focused && v.value === text) : null;
-    if (!pill || !pill.focused || pill.value !== text) {
+    // `focused: false`: the text may hand focus elsewhere (Command centre's hand-off to Theia's quick input).
+    const pill = typed === true ? await settle(() => readPill(app), v => (!focused || v.focused) && v.value === text) : null;
+    if (!pill || (focused && !pill.focused) || pill.value !== text) {
         throw new Error(`${BROKEN} the pill could not be focused and typed into (${JSON.stringify(pill)})`);
     }
 }
@@ -3215,9 +3231,37 @@ async function highlightPick(app, text) {
 
 /** Enters Command centre from the default mode through the menu, with the text cleared. */
 async function enterCommandCentre(app) {
+    await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
     await restoreDefaultMode(app);
     return pickLocalMode(app, 'command-centre');
 }
+
+/**
+ * The provider the registry selects for `prefix + filter` (which must be the
+ * one registered at `prefix`), its own getPicks(filter) as group/pick texts
+ * with labels through LabelParser, and the rows the pill renders, read in the
+ * same probe.
+ */
+const picksAndRows = (app, prefix, filter) => probe(app, `const reg = get('QuickAccessRegistry');
+    const parser = get('LabelParser');
+    const d = reg.getQuickAccessProvider(${JSON.stringify(prefix + filter)});
+    if (!d || d.prefix !== ${JSON.stringify(prefix)}) return { error: 'the registry selected ' + (d ? JSON.stringify(d.prefix) : 'no provider') };
+    const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
+    const picks = await d.getInstance().getPicks(${JSON.stringify(filter.trim())}, token);
+    const want = picks.map(p => p.type === 'separator' ? 'group:' + (p.label ?? '') : 'pick:' + parser.parse(p.label).filter(x => typeof x === 'string').join(''));
+    const dd = document.querySelector('.pb-chrome-bar-dropdown:not(.pb-address-modes)');
+    const got = dd ? [...dd.querySelectorAll('.pb-chrome-bar-row:not(.is-shimmer)')]
+        .filter(r => r.classList.contains('is-group') || r.querySelector('.pb-chrome-bar-row-title'))
+        .map(r => r.classList.contains('is-group') ? 'group:' + r.textContent : 'pick:' + r.querySelector('.pb-chrome-bar-row-title').textContent) : [];
+    return { want, got, placeholder: d.placeholder ?? null };`);
+
+const sameList = v => !!v && !v.error && JSON.stringify(v.want) === JSON.stringify(v.got);
+
+/** The prefixes the page realm's registry lists, derived now. */
+const registryPrefixes = app => probe(app, `return get('QuickAccessRegistry').getQuickAccessProviders().map(d => d.prefix);`);
+
+/** Hides Theia's quick input if it shows (after a plant opened it). */
+const hideQuickInput = app => probe(app, `const q = get('QuickInputService'); if (q.hide) q.hide(); return true;`);
 
 /**
  * SMODE-05: Theia's picks under the pill, run on Enter. In the fixture
@@ -3233,6 +3277,9 @@ async function commandCentre(ctx) {
     await openWorkspace(ctx);
     if (plant === 'picks-dropped' && await probe(app, `get('CommandCentreAddressBarMode').provide = async () => []; return true;`) === true) {
         note('PLANT picks-dropped applied');
+    }
+    if (plant === 'help-row-executes' && await probe(app, `get('CommandCentreAddressBarMode').acceptHelp = pick => pick.execute(); return true;`) === true) {
+        note('PLANT help-row-executes applied');
     }
     try {
         await enterCommandCentre(app);
@@ -3272,8 +3319,130 @@ async function commandCentre(ctx) {
         if (editor.current !== 'README.md') {
             fail(`Enter on the README.md pick must make an editor on README.md the shell's current widget; shell ${JSON.stringify(editor)}`);
         }
+
+        // Every prefix the registry lists renders that provider's own picks, in order (D-21, D-24).
+        const prefixes = await registryPrefixes(app);
+        if (!Array.isArray(prefixes) || !prefixes.includes('') || !prefixes.includes('>')) {
+            return fail(`${BROKEN} the registry's prefixes could not be derived (${JSON.stringify(prefixes)})`);
+        }
+        await enterCommandCentre(app);
+        for (const prefix of prefixes) {
+            const filter = prefix === '' ? 'READ' : prefix === '>' ? 'toggle' : '';
+            await typeInPill(app, prefix + filter);
+            const seen = await settle(() => picksAndRows(app, prefix, filter), sameList, 15000);
+            if (!sameList(seen)) {
+                fail(`for ${JSON.stringify(prefix + filter)} the rows under the pill must equal the provider's own picks in order; ${JSON.stringify(seen).slice(0, 600)}`);
+            } else if (!seen.want.length) {
+                fail(`${BROKEN} the provider for ${JSON.stringify(prefix + filter)} returned no pick, so the comparison proves nothing`);
+            }
+            if (prefix === 'debug ' && !seen?.got?.includes(`pick:${LAUNCH_NAME}`)) {
+                fail(`"debug " must list the fixture's launch configuration ${JSON.stringify(LAUNCH_NAME)}; saw ${JSON.stringify(seen?.got)}`);
+            }
+        }
+
+        // A ? help row puts its prefix in the pill and lists that provider's picks; it never opens the centred quick input.
+        await typeInPill(app, '?');
+        await settle(() => readCcRows(app), v => v.rows.some(r => r.text === '>'));
+        if (!(await highlightPick(app, '>')).rows.some(r => r.selected && r.text === '>')) {
+            return fail(`${BROKEN} the > help row could not be highlighted after typing ?`);
+        }
+        await pressKey(app, ENTER);
+        const helped = await settle(async () => ({ pill: await readPill(app), rows: await readCcRows(app), quick: await readQuickInput(app) }),
+            v => !!v.quick || (v.pill.value === '>' && v.rows.rows.filter(r => !r.group).length > 10), 10000);
+        if (helped.quick) {
+            fail(`a help row opened the centred quick input (${JSON.stringify(helped.quick)}); it must put its prefix in the pill`);
+            await hideQuickInput(app);
+            await enterCommandCentre(app);
+        } else if (helped.pill.value !== '>' || helped.rows.rows.filter(r => !r.group).length <= 10) {
+            fail(`choosing the > help row must put > in the pill and list commands; pill ${JSON.stringify(helped.pill.value)}, ${helped.rows.rows.length} rows`);
+        }
+
+        // The # pick without execute is a message row the highlight skips.
+        await typeInPill(app, '#');
+        const symbols = await settle(() => readCcRows(app), v => v.rows.some(r => r.message));
+        await pressKey(app, ARROW_DOWN);
+        const skipped = await readCcRows(app);
+        if (!symbols.rows.some(r => r.message) || skipped.rows.some(r => r.selected)) {
+            fail(`the # pick without execute must render as a message row that ArrowDown skips; before ${JSON.stringify(symbols.rows)}, after ${JSON.stringify(skipped.rows)}`);
+        }
+
+        // The zero-query list is the default provider's picks for empty text, and the placeholder is its own (D-25).
+        await enterCommandCentre(app);
+        const zero = await settle(() => picksAndRows(app, '', ''), v => sameList(v) && (v.want.length > 0 || !!v.got), 10000);
+        if (!sameList(zero)) {
+            fail(`the zero-query list must equal the default provider's picks for empty text; ${JSON.stringify(zero).slice(0, 400)}`);
+        }
+        const label = await localModeLabel(app, 'command-centre');
+        const shown = await readMode(app);
+        if (!zero?.placeholder || shown?.placeholder !== zero.placeholder || shown?.aria !== label) {
+            fail(`Command centre's placeholder must be the default provider's own ${JSON.stringify(zero?.placeholder)} and its aria-label ${JSON.stringify(label)}; saw ${JSON.stringify(shown)}`);
+        }
+
+        // A > command runs from the pill, and focus does not stay in the pill afterwards (30-RESEARCH A5).
+        const bottomBefore = (await shellState(app)).bottom;
+        await typeInPill(app, '>toggle');
+        const toggles = await settle(() => readCcRows(app), v => v.rows.some(r => /Toggle Bottom Panel$/.test(r.text)));
+        const toggle = toggles.rows.find(r => /Toggle Bottom Panel$/.test(r.text));
+        if (!toggle || !(await highlightPick(app, toggle.text)).rows.some(r => r.selected && r.text === toggle.text)) {
+            return fail(`${BROKEN} no bottom-panel toggle row could be highlighted for ">toggle"; saw ${JSON.stringify(toggles.rows.map(r => r.text))}`);
+        }
+        await pressKey(app, ENTER);
+        const toggled = await settle(() => shellState(app), v => v.bottom !== bottomBefore && !v.pillActive);
+        if (toggled.bottom === bottomBefore) {
+            fail(`Enter on ${JSON.stringify(toggle.text)} must toggle the bottom panel (was ${bottomBefore}); shell ${JSON.stringify(toggled)}`);
+        }
+        if (toggled.pillActive) {
+            fail(`after ${JSON.stringify(toggle.text)} focus stayed in the pill; it must return to the shell's current widget`);
+        }
+        if (await readQuickInput(app)) {
+            fail('the centred quick input showed after a > command run from the pill');
+        }
     } finally {
-        await probe(app, `delete get('CommandCentreAddressBarMode').provide; return true;`);
+        await probe(app, `const m = get('CommandCentreAddressBarMode'); delete m.provide; delete m.acceptHelp; return true;`);
+        await hideQuickInput(app);
+        await restoreDefaultMode(app);
+    }
+}
+
+/**
+ * D-22, D-23: text with no Theia descriptor (@, :12) opens Theia's centred
+ * quick input holding it, the pill keeps the text, and Esc closes it.
+ */
+async function commandCentreHandoff(ctx) {
+    const { app, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'command-centre-handoff')) {
+        return 'not-scored';
+    }
+    await openWorkspace(ctx);
+    if (plant === 'handoff-off' && await probe(app, `get('CommandCentreAddressBarMode').handsOff = () => false; return true;`) === true) {
+        note('PLANT handoff-off applied');
+    }
+    try {
+        for (const text of ['@', ':12']) {
+            await enterCommandCentre(app);
+            await typeInPill(app, text, { focused: false });
+            const quick = await settle(() => readQuickInput(app), v => !!v && v.value === text);
+            if (!quick) {
+                fail(`${text} did not open Theia's picker: no centred quick input showed for ${JSON.stringify(text)}`);
+                continue;
+            }
+            if (quick.value !== text) {
+                fail(`Theia's picker opened on ${JSON.stringify(quick.value)}, not the pill's ${JSON.stringify(text)}`);
+            }
+            const pill = await readPill(app);
+            if (pill.value !== text) {
+                fail(`the pill must keep ${JSON.stringify(text)} while Theia's picker shows; it holds ${JSON.stringify(pill.value)}`);
+            }
+            await pressKey(app, ESCAPE);
+            if (await settle(() => readQuickInput(app), v => !v)) {
+                fail(`Esc did not close Theia's picker opened for ${JSON.stringify(text)}`);
+                await hideQuickInput(app);
+            }
+        }
+    } finally {
+        await probe(app, `delete get('CommandCentreAddressBarMode').handsOff; return true;`);
+        await hideQuickInput(app);
+        await enterCommandCentre(app).catch(() => null);
         await restoreDefaultMode(app);
     }
 }
@@ -3303,11 +3472,12 @@ const SCENARIOS = {
     'local-modes': localModes,
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
+    'command-centre-handoff': commandCentreHandoff,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
-    'command-centre': 'search' };
+    'command-centre': 'search', 'command-centre-handoff': 'command-centre' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -3400,6 +3570,8 @@ const PLANTS = [
     { plant: 'restrict-dropped', target: 'local-modes', run: ['search', 'local-modes'], expect: 'expected the seeded bookmarks newest first' },
     { plant: 'actions-unfiltered', target: 'local-modes', run: ['search', 'local-modes'], expect: 'listed a command outside the Browser category' },
     { plant: 'picks-dropped', target: 'command-centre', run: ['search', 'command-centre'], expect: 'no Explorer row' },
+    { plant: 'help-row-executes', target: 'command-centre', run: ['search', 'command-centre'], expect: 'a help row opened the centred quick input' },
+    { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 
 async function selfTest() {
