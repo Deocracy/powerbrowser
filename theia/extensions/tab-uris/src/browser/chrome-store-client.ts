@@ -189,6 +189,11 @@ export class ChromeStoreClient {
         return this.field<{ text: string; url: string } | null>({ kind: 'autofillOrigin', text }, 'completion');
     }
 
+    /** Phase 29 (BAR-09): removes a page from history; true when Places held it. Privileged: only the widget's Shift+Delete handler calls it. */
+    removeHistoryEntry(url: string): Promise<boolean> {
+        return this.field<boolean>({ kind: 'removeHistoryEntry', url }, 'removed');
+    }
+
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
     queryTabsWithPlaces(query: TabPlacesQuery = {}): Promise<TabPlacesRow[]> {
         return this.field<TabPlacesRow[]>({ kind: 'queryTabsWithPlaces', ...query }, 'rows');

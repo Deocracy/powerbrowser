@@ -583,6 +583,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Show suggestions from your search engine while you type in the address bar. What you type is sent to the search engine.",
   "This time, search with:",
   "Switch to Tab",
+  "${name} couldn't remove that page from your history. Press Shift+Delete to try again.",
 ]);
 
 /**

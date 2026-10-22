@@ -3708,6 +3708,7 @@ const STORE_REQUEST_KINDS = new Set([
   "placesFavicons",
   "searchSuggestions",
   "autofillOrigin",
+  "removeHistoryEntry",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -3799,6 +3800,9 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "autofillOrigin": {
         return { ok: true, kind, completion: await autofillOrigin(data.text) };
+      }
+      case "removeHistoryEntry": {
+        return { ok: true, kind, removed: await removeHistoryEntry(data.url) };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -4593,3 +4597,17 @@ function installTokenCookieStrip() {
 // For the live check's self-test only: it removes the observer through this
 // to prove the check can go red. No product code calls removeObserver.
 export const PowerBrowserTokenCookie = Object.freeze({ observer: tokenCookieStrip, topic: TOKEN_STRIP_TOPIC });
+
+// Shift+Delete on a history row (BAR-09; REQUIREMENTS ruling 2026-10-20): the
+// chrome bar's first Places write. A privileged store kind (rule 12): only the
+// widget's Shift+Delete handler sends it, and only for a row whose source is
+// history, so a bookmark row never reaches here (29-RESEARCH Pitfall 10).
+// history.remove also clears the page's visits, frecency and moz_origins row.
+// The url is never logged; a Places error is withheld by handleStoreRequest.
+async function removeHistoryEntry(url) {
+  const target = storeUrlArg(url);
+  if (!/^https?:\/\//i.test(target)) {
+    throw new Error("removeHistoryEntry: refusing a non-http(s) url");
+  }
+  return Boolean(await lazy.PlacesUtils.history.remove(target));
+}

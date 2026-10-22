@@ -135,6 +135,18 @@
  *               /one/search with q "dropped words"; a javascript: uri-list
  *               drag gets no ring and dropEffect none; dropped javascript:
  *               text shows the commit-failure row and loads nothing.
+ *   shift-del   BAR-09: with visits to <served>/del-me, /keep-me (also
+ *               bookmarked) and /del-fail seeded chrome-side and read back
+ *               (the positive control), typing "Me Page" shows the /del-me
+ *               history row and the /keep-me bookmark row; ArrowDown to the
+ *               history row and Shift+Delete (at the parent) removes the row,
+ *               moves the highlight to the row that followed it (else the one
+ *               before), and history.fetch for /del-me is null; re-typing shows
+ *               no row for it. Shift+Delete on the bookmark row keeps the row and
+ *               the page's visits. With the client's removeHistoryEntry stubbed
+ *               to reject, Shift+Delete on the /del-fail row keeps it and shows
+ *               a notice directly under it starting with the configured
+ *               application name.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -203,6 +215,9 @@ const PAGES = {
     '/': { title: 'Served Root', body: '<p>root</p>' },
     '/af': { title: 'Autofill Page', body: '<p>autofill</p>' },
     '/dropped': { title: 'Dropped Page', body: '<p>dropped</p>' },
+    '/del-me': { title: 'Delete Me Page', body: '<p>delete</p>' },
+    '/keep-me': { title: 'Keep Me Page', body: '<p>keep</p>' },
+    '/del-fail': { title: 'Fail Me Page', body: '<p>fail</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -1541,6 +1556,150 @@ async function dropOnPill(ctx) {
     }
 }
 
+const SHIFT_DELETE = { key: 'Delete', code: 'Delete', keyCode: 46, modifiers: ['shift'] };
+
+/** Chrome scope: PlacesUtils.history.fetch for `url` as `{ found, visits }`, or `{ error }`. */
+const placesEntry = (app, url) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const info = await PlacesUtils.history.fetch(${JSON.stringify(url)}, { includeVisits: true });
+        return JSON.stringify({ found: !!info, visits: info && info.visits ? info.visits.length : 0 });
+    } catch (e) {
+        return JSON.stringify({ error: String(e) });
+    }
+})();`).then(JSON.parse);
+
+/** Chrome scope: a visit to each `[url, title]` in `visits`, and a bookmark on each in `bookmarks`. */
+const seedPlaces = (app, visits, bookmarks = []) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        for (const [url, title] of ${JSON.stringify(visits)}) {
+            await PlacesUtils.history.insert({ url, title, visits: [{ date: new Date() }] });
+        }
+        for (const [url, title] of ${JSON.stringify(bookmarks)}) {
+            await PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid, url, title });
+        }
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/** Presses ArrowDown until the highlighted row is the one captioned `url`; returns the dropdown then. */
+async function highlightRow(app, url) {
+    let view = await readRows(app);
+    for (let i = 0; i < 14 && !view.rows.find(r => r.selected && r.caption === url); i++) {
+        await pressKey(app, ARROW_DOWN);
+        view = await settle(() => readRows(app), v => v.rows.some(r => r.selected));
+    }
+    return view;
+}
+
+/** The failure notices in the dropdown, each with the caption of the row directly above it. */
+const readNotices = app => app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-chrome-bar-dropdown .pb-chrome-bar-row.is-message')]
+    .filter(n => !n.querySelector('.pb-chrome-bar-row-title'))
+    .map(n => ({ text: n.textContent || '', above: ((n.previousElementSibling && n.previousElementSibling.querySelector('.pb-chrome-bar-row-caption')) || {}).textContent || '' })))`).then(JSON.parse);
+
+/**
+ * BAR-09: Shift+Delete removes a history row's page from Places and nothing
+ * else. The seeded entries are read back first (the positive control); the
+ * bookmark half proves a bookmarked page keeps its visits.
+ */
+async function shiftDel(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    await sessionTab(ctx);
+    const delMe = pages.url('/del-me');
+    const keepMe = pages.url('/keep-me');
+    const delFail = pages.url('/del-fail');
+    const seeded = await seedPlaces(app, [[delMe, 'Delete Me Page'], [keepMe, 'Keep Me Page'], [delFail, 'Fail Me Page']], [[keepMe, 'Keep Me Page']]);
+    const before = [await placesEntry(app, delMe), await placesEntry(app, keepMe), await placesEntry(app, delFail)];
+    if (seeded !== 'ok' || !before.every(e => e.found && e.visits > 0)) {
+        return fail(`${BROKEN} Places could not be seeded with visited /del-me, /keep-me and /del-fail (${String(seeded)}; ${JSON.stringify(before)})`);
+    }
+    if (plant === 'shift-del-bookmark') {
+        const planted = await probe(app, `const w = get('ChromeBarWidget');
+            w.removableRow = row => row.source === 'history' || row.source === 'bookmark';
+            return true;`);
+        if (planted === true) {
+            note('PLANT shift-del-bookmark applied');
+        }
+    }
+    const shows = (v, url, type) => v.rows.some(r => r.caption === url && r.type === type);
+    const typeMePage = async () => {
+        await typeInPill(app, '');
+        await typeInPill(app, 'Me Page');
+        return settle(() => readRows(app), v => shows(v, delMe, 'codicon-history') && shows(v, keepMe, 'codicon-star-full'), 8000);
+    };
+
+    let view = await typeMePage();
+    if (!shows(view, delMe, 'codicon-history') || !shows(view, keepMe, 'codicon-star-full')) {
+        return fail(`${BROKEN} typing "Me Page" did not show the /del-me history row and the /keep-me bookmark row; saw ${JSON.stringify(view.rows)}`);
+    }
+    view = await highlightRow(app, delMe);
+    const at = view.rows.findIndex(r => r.caption === delMe);
+    if (!view.rows[at]?.selected) {
+        return fail(`${BROKEN} ArrowDown never highlighted the /del-me history row; saw ${JSON.stringify(view.rows)}`);
+    }
+    const expected = view.rows[at + 1] ?? view.rows[at - 1];
+    await pressKey(app, SHIFT_DELETE);
+    const after = await settle(() => readRows(app), v => !v.rows.some(r => r.caption === delMe), 5000);
+    if (after.rows.some(r => r.caption === delMe)) {
+        fail(`Shift+Delete on the highlighted history row left it in the dropdown; saw ${JSON.stringify(after.rows)}`);
+    } else {
+        const now = after.rows.find(r => r.selected);
+        if (!now || now.caption !== expected?.caption || now.title !== expected?.title) {
+            fail(`after the removal the highlight must move to ${JSON.stringify(expected && [expected.title, expected.caption])}; it is on ${JSON.stringify(now ?? null)}`);
+        }
+    }
+    const gone = await settle(() => placesEntry(app, delMe), e => !e.found, 5000);
+    if (gone.found) {
+        fail(`Shift+Delete on the history row did not remove /del-me from Places: history.fetch still finds it (${JSON.stringify(gone)})`);
+    }
+    view = await typeMePage();
+    if (view.rows.some(r => r.caption === delMe)) {
+        fail(`re-typing "Me Page" still shows a row for the removed /del-me; saw ${JSON.stringify(view.rows)}`);
+    }
+
+    view = await highlightRow(app, keepMe);
+    if (!view.rows.find(r => r.caption === keepMe)?.selected) {
+        return fail(`${BROKEN} ArrowDown never highlighted the /keep-me bookmark row; saw ${JSON.stringify(view.rows)}`);
+    }
+    await pressKey(app, SHIFT_DELETE);
+    await sleep(1000);
+    const kept = await placesEntry(app, keepMe);
+    if (!kept.found || kept.visits < 1) {
+        fail(`Shift+Delete on a bookmark row removed the visits of a bookmarked page (/keep-me: ${JSON.stringify(kept)})`);
+    }
+    if (!(await readRows(app)).rows.some(r => r.caption === keepMe)) {
+        fail('Shift+Delete on a bookmark row removed the row');
+    }
+
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    if (await probe(app, `get('ChromeStoreClient').removeHistoryEntry = async () => { throw new Error('stubbed rejection'); }; return true;`) !== true) {
+        return fail(`${BROKEN} the client's removeHistoryEntry could not be stubbed to reject`);
+    }
+    try {
+        await typeInPill(app, '');
+        await typeInPill(app, 'Fail Me Page');
+        await settle(() => readRows(app), v => shows(v, delFail, 'codicon-history'), 8000);
+        view = await highlightRow(app, delFail);
+        if (!view.rows.find(r => r.caption === delFail)?.selected) {
+            return fail(`${BROKEN} ArrowDown never highlighted the /del-fail history row; saw ${JSON.stringify(view.rows)}`);
+        }
+        await pressKey(app, SHIFT_DELETE);
+        const notices = await settle(() => readNotices(app), v => v.length > 0, 5000);
+        const notice = notices.find(n => n.above === delFail);
+        if (!notice || !notice.text.startsWith(subject) || !notice.text.includes("couldn't remove that page from your history")) {
+            fail(`a failed removal must show, directly under the row, a notice starting with ${JSON.stringify(subject)} that says it couldn't remove the page; saw ${JSON.stringify(notices)}`);
+        }
+        if (!(await readRows(app)).rows.some(r => r.caption === delFail)) {
+            fail('a failed removal must keep the row');
+        }
+    } finally {
+        await probe(app, `delete get('ChromeStoreClient').removeHistoryEntry; return true;`);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -1556,6 +1715,7 @@ const SCENARIOS = {
     'new-tab-targets': newTabTargets,
     autofill,
     'canonize-drop': canonizeDrop,
+    'shift-del': shiftDel,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -1636,6 +1796,7 @@ const PLANTS = [
     { plant: 'oneoff-default', target: 'one-off', run: ['one-off'], expect: 'no GET on /two/search' },
     { plant: 'tab-row-navigates', target: 'switch-to-tab', run: ['switch-to-tab'], expect: 'loading: true' },
     { plant: 'autofill-on-paste', target: 'autofill', run: ['autofill'], expect: 'autofilled a paste' },
+    { plant: 'shift-del-bookmark', target: 'shift-del', run: ['shift-del'], expect: 'removed the visits of a bookmarked page' },
 ];
 
 async function selfTest() {

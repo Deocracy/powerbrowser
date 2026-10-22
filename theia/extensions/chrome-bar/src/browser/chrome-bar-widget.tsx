@@ -258,6 +258,8 @@ export class ChromeBarWidget extends ReactWidget {
     protected autofillWanted = false;
     /** BAR-11: open-tab, bookmark and history rows for the typed text. */
     protected placeRows: Row[] = [];
+    /** BAR-09: the row whose Shift+Delete removal failed; its failure notice shows under it until the next query. */
+    protected removeFailedKey: string | undefined;
     /** BAR-11: cached favicons by page url, from chrome's Places cache only. */
     protected icons: Record<string, string> = {};
     /** The heuristic row could not be computed: the first row is the suggestions-failure row. */
@@ -662,6 +664,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.noSearch = false;
         this.engineRows = [];
         this.autofill = undefined;
+        this.removeFailedKey = undefined;
     }
 
     protected async runQuery(prefix: string): Promise<void> {
@@ -907,6 +910,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.engineRows = [];
         this.rows = [];
         this.highlightKey = undefined;
+        this.removeFailedKey = undefined;
         // BAR-03: text typed while an IME composition is open is never queried (29-10 queries at composition end).
         this.composing = (e.nativeEvent as InputEvent).isComposing === true;
         if (this.composing) {
@@ -1251,6 +1255,10 @@ export class ChromeBarWidget extends ReactWidget {
             e.preventDefault();
             const end = e.currentTarget.value.length;
             e.currentTarget.setSelectionRange(end, end);
+        } else if (e.key === 'Delete' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && this.removableHighlighted()) {
+            // BAR-09: Shift+Delete removes a highlighted history row; on any other row, or none, it keeps its default.
+            e.preventDefault();
+            void this.removeHighlightedRow();
         } else if ((e.key === 'Backspace' || e.key === 'Delete') && this.autofillSelected(e.currentTarget)) {
             // BAR-07: the default action removes the selected completion; the re-query must not complete it again.
             this.autofillSuppressed = true;
@@ -1268,6 +1276,53 @@ export class ChromeBarWidget extends ReactWidget {
             }
         }
     };
+
+    /** BAR-09: the highlighted row when Shift+Delete may remove it, else undefined. */
+    protected removableHighlighted(): Row | undefined {
+        const row = this.dropdownOpen ? this.rows.find(r => r.key === this.highlightKey) : undefined;
+        return row && this.removableRow(row) ? row : undefined;
+    }
+
+    /**
+     * BAR-09: only a history row is removable. A bookmark row's page keeps its
+     * visits, and open-tab, engine and heuristic rows are not history entries.
+     * An instance-replaceable method, so a live plant can widen it.
+     */
+    protected removableRow(row: Row): boolean {
+        return row.source === 'history';
+    }
+
+    /**
+     * BAR-09: removes a history row's page from Places through chrome (the
+     * only caller of the privileged kind). On success the row goes and the
+     * highlight moves to the row that followed it, else the one before; on
+     * failure the row stays with the failure notice under it.
+     */
+    protected async removeHighlightedRow(): Promise<void> {
+        const row = this.removableHighlighted();
+        if (!row) {
+            return;
+        }
+        this.removeFailedKey = undefined;
+        try {
+            await this.store.removeHistoryEntry(row.url);
+        } catch {
+            if (this.rows.some(r => r.key === row.key)) {
+                this.removeFailedKey = row.key;
+                this.update();
+            }
+            return;
+        }
+        const keys = this.rows.map(r => r.key);
+        const at = keys.indexOf(row.key);
+        if (at < 0) {
+            return;
+        }
+        this.placeRows = this.placeRows.filter(r => r.key !== row.key);
+        this.rows = this.composeVisibleRows();
+        this.highlightKey = keys[at + 1] ?? keys[at - 1];
+        this.showComposedRows(this.querySeq);
+    }
 
     /** BAR-05: the visible engines except the one in use, in chrome's order. */
     protected oneOffEngines(): Array<{ name: string; icon: string | null }> {
@@ -1632,7 +1687,10 @@ export class ChromeBarWidget extends ReactWidget {
             </>;
         }
         return <>
-            {this.rows.map((row, index) => this.renderRow(row, index))}
+            {this.rows.map((row, index) => <React.Fragment key={row.key}>
+                {this.renderRow(row, index)}
+                {row.key === this.removeFailedKey && <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.removeFailed(appSubject())}</div>}
+            </React.Fragment>)}
             {this.shimmer && <div className='pb-chrome-bar-row is-shimmer' aria-hidden='true' />}
             {this.renderOneOffs()}
             <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
