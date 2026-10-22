@@ -19,6 +19,7 @@ import { PerspectiveService } from '@theia/core/lib/browser/perspective-service'
 import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import pDebounce from 'p-debounce';
+import { MessageLoop } from '@theia/core/shared/@lumino/messaging';
 import { EMPTY_PAGE_URL, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
@@ -256,7 +257,9 @@ export class ChromeBarWidget extends ReactWidget {
     /** BAR-03: the engine's suggestions for search-shaped text; empty for an address, a failure or the setting off. */
     protected engineRows: Row[] = [];
     /** BAR-03: an IME composition is open in the pill; nothing typed during one is sent to an engine. */
-    protected composing = false;
+    protected compositionOpen = false;
+    /** BAR-11: the pill already had focus when the current press began; only a focusing press selects all. */
+    protected focusedAtPress = false;
     /** BAR-07: the pill's autofilled value and the origin it opens; cleared by any input, a commit or a close. */
     protected autofill: { value: string; url: string } | undefined;
     /** BAR-07: Backspace or Delete removed a completion; nothing autofills until the next inserting keystroke. */
@@ -951,7 +954,7 @@ export class ChromeBarWidget extends ReactWidget {
      * re-resolves and refuses an address itself. A failure is silent.
      */
     protected async fetchEngineRows(prefix: string, resolved: ResolvedAddress, current: () => boolean): Promise<void> {
-        if (resolved.kind !== 'search' || !this.suggestionsOn() || this.composing) {
+        if (resolved.kind !== 'search' || !this.suggestionsOn() || this.compositionOpen) {
             return;
         }
         let values: string[];
@@ -1052,7 +1055,34 @@ export class ChromeBarWidget extends ReactWidget {
         if ((e.nativeEvent as InputEvent).inputType === 'insertText') {
             this.autofillSuppressed = false;
         }
-        this.textEdited(e.target.value, this.autofillEligible(e), (e.nativeEvent as InputEvent).isComposing === true);
+        this.textEdited(e.target.value, this.autofillEligible(e), this.composing(e));
+    };
+
+    /**
+     * BAR-11: an IME composition is open for this event. An instance-replaceable
+     * method, so a live plant can turn the guard off.
+     */
+    protected composing(e: { nativeEvent: Event; keyCode?: number }): boolean {
+        return (e.nativeEvent as KeyboardEvent).isComposing === true || e.keyCode === 229;
+    }
+
+    /** BAR-11: the composed text is queried once, now (never autofilled: it is not an insertText input). */
+    protected onCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>): void => {
+        this.textEdited(e.currentTarget.value, false);
+    };
+
+    /** BAR-11: records whether this press found the pill focused (in a focused document). */
+    protected onInputMouseDown = (e: React.MouseEvent<HTMLInputElement>): void => {
+        this.focusedAtPress = document.hasFocus() && document.activeElement === e.currentTarget;
+    };
+
+    /** BAR-11: a primary click that gave the pill focus selects it all; a drag's range and later clicks stay stock. */
+    protected onInputMouseUp = (e: React.MouseEvent<HTMLInputElement>): void => {
+        const input = e.currentTarget;
+        if (e.button === 0 && !this.focusedAtPress && input.selectionStart === input.selectionEnd) {
+            input.select();
+        }
+        this.focusedAtPress = true;
     };
 
     /** New pill text, from a keystroke or from the pill menu's Cut and Paste (which never autofill). */
@@ -1073,21 +1103,32 @@ export class ChromeBarWidget extends ReactWidget {
         this.rows = [];
         this.highlightKey = undefined;
         this.removeFailedKey = undefined;
-        // BAR-03: text typed while an IME composition is open is never queried (29-10 queries at composition end).
-        this.composing = composing;
-        if (this.composing) {
-            this.update();
+        // BAR-03: text typed while an IME composition is open is never queried (onCompositionEnd queries it).
+        this.compositionOpen = composing;
+        if (this.compositionOpen) {
+            this.renderNow();
             return;
         }
         if (!this.inputValue.trim()) {
             // Empty text opens no dropdown.
             this.closeDropdown();
-            this.update();
+            this.renderNow();
             return;
         }
         this.dropdownArmed = true;
-        this.update();
+        this.renderNow();
         void this.debouncedQuery(this.inputValue);
+    }
+
+    /**
+     * Renders inside the current handler. React puts a controlled input's old
+     * value back after onChange unless it re-rendered in the handler, and
+     * Theia's update() renders a frame later; during an IME composition that
+     * write ends the composition (measured live: compositionend straight
+     * after the first input event, the pill back on the old address).
+     */
+    protected renderNow(): void {
+        MessageLoop.sendMessage(this, Widget.Msg.UpdateRequest);
     }
 
     /**
@@ -1360,6 +1401,10 @@ export class ChromeBarWidget extends ReactWidget {
     };
 
     protected onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+        if (this.composing(e)) {
+            // BAR-11: the IME owns every key while a composition is open; nothing commits or moves early.
+            return;
+        }
         if (e.key === 'F6' && !e.ctrlKey && !e.altKey && !e.metaKey) {
             // The pill is chrome, not an editor: F6 and Shift+F6 go back to the page.
             e.preventDefault();
@@ -2006,6 +2051,9 @@ export class ChromeBarWidget extends ReactWidget {
                     onChange={this.onInputChange}
                     ref={this.inputRef}
                     onKeyDown={this.onInputKeyDown}
+                    onCompositionEnd={this.onCompositionEnd}
+                    onMouseDown={this.onInputMouseDown}
+                    onMouseUp={this.onInputMouseUp}
                     onContextMenu={this.onPillContextMenu}
                     onBlur={this.onInputBlur}
                     onFocus={this.onInputFocus}

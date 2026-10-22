@@ -164,6 +164,19 @@
  *               the read stubbed to reject it shows a row starting with the
  *               configured application name. The user's clipboard text is put
  *               back afterwards.
+ *   select-ime  BAR-11: with the session tab's page focused, a trusted click
+ *               (BiDi pointer input on the Theia frame) on the pill focuses it
+ *               and selects the whole address; a second click leaves a
+ *               collapsed caret; from the page again, a press at the input's
+ *               start dragged to the middle selects 0 to the middle. Then, with
+ *               the pill cleared, a composition of "かな" begun and flushed
+ *               through nsITextInputProcessor at the parent: Enter while it is
+ *               open gives no loading push, no GET on /one/search and none on
+ *               /one/suggest in 1500 ms; committing it runs exactly one suggest
+ *               query for "かな" (the positive control that the log sees
+ *               queries); Enter then GETs /one/search with q "かな" and the tab
+ *               pushes it (the control for the push check). Scored only after
+ *               suggestions passed in the same session.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -172,6 +185,7 @@ import {
     appNameExpr,
     BROKEN,
     chromeActiveTabId,
+    focusOverlay,
     focusTheiaFrame,
     inChrome,
     loadedAt,
@@ -1957,6 +1971,167 @@ async function contextMenu(ctx) {
     }
 }
 
+/** The Theia frame's BiDi browsing context id. */
+async function theiaContext(app) {
+    const href = await app.evaluate('location.href');
+    const found = (await app.contexts()).find(c => c.url === href);
+    if (!found) {
+        throw new Error(`${BROKEN} no BiDi context for the Theia frame at ${href}`);
+    }
+    return found.context;
+}
+
+/** The pill input's viewport box and the x of its text's left edge plus `chars` characters of its value. */
+const pillGeometry = (app, chars = 0) => app.evaluate(`JSON.stringify((() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    if (!input) return null;
+    const r = input.getBoundingClientRect();
+    const style = getComputedStyle(input);
+    const ctx2d = document.createElement('canvas').getContext('2d');
+    ctx2d.font = style.font;
+    const textX = r.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+    return { left: r.left, y: r.top + r.height / 2, textX, x: textX + ctx2d.measureText(input.value.slice(0, ${chars})).width };
+})())`).then(JSON.parse);
+
+/** Trusted pointer input on the Theia frame (BiDi), released afterwards. */
+async function theiaPointer(app, actions) {
+    const context = await theiaContext(app);
+    await app.send('input.performActions', { context, actions: [{ type: 'pointer', id: 'pb-pill-mouse', parameters: { pointerType: 'mouse' }, actions }] });
+    await app.send('input.releaseActions', { context });
+}
+
+const click = (x, y) => [
+    { type: 'pointerMove', x: Math.round(x), y: Math.round(y) },
+    { type: 'pointerDown', button: 0 },
+    { type: 'pointerUp', button: 0 },
+];
+
+/**
+ * Chrome scope: runs `body` with `tip`, one nsITextInputProcessor kept on the
+ * shell window across calls, so a composition begun in one call is still the
+ * same transaction's in the next. Returns 'ok' or the error text.
+ */
+const imeStep = (app, body) => app.evaluateIn(app.chrome, `(() => {
+    try {
+        const C = typeof Cc !== 'undefined' ? Cc : Components.classes;
+        const I = typeof Ci !== 'undefined' ? Ci : Components.interfaces;
+        if (!window.__pbImeTip) window.__pbImeTip = C['@mozilla.org/text-input-processor;1'].createInstance(I.nsITextInputProcessor);
+        const tip = window.__pbImeTip;
+        if (!tip.beginInputTransactionForTests(window)) return 'no input transaction';
+        ${body}
+        return 'ok';
+    } catch (e) {
+        return String(e);
+    }
+})()`);
+
+const COMPOSED = 'かな';
+
+async function selectIme(ctx) {
+    const { app, pages, plant, fail, note, results } = ctx;
+    if (!controlPassed(results, 'select-ime')) {
+        return 'not-scored';
+    }
+    const tabId = await sessionTab(ctx);
+    // Select-all: a press that gives the pill focus selects all its text (an earlier scenario may leave it empty).
+    await typeInPill(app, 'select all of this');
+    if (await focusOverlay(app, tabId) !== true) {
+        return fail(`${BROKEN} the session tab's page could not be focused`);
+    }
+    const before = await pillGeometry(app, 4);
+    if (!before) {
+        return fail(`${BROKEN} no pill input to click`);
+    }
+    await theiaPointer(app, click(before.x, before.y));
+    const first = await settle(() => readSel(app), v => v && v.focused && v.value && v.start === 0 && v.end === v.value.length);
+    if (!first || !first.focused || !first.value || first.start !== 0 || first.end !== first.value.length) {
+        return fail(`the first click on the pill must focus it and select its whole address; saw ${JSON.stringify(first)}`);
+    }
+    await theiaPointer(app, click(before.x, before.y));
+    const second = await settle(() => readSel(app), v => v && v.start === v.end);
+    if (!second || !second.focused || second.start !== second.end) {
+        fail(`a second click inside the text must leave a collapsed caret; saw ${JSON.stringify(second)}`);
+    }
+    // A drag that starts on the focusing press keeps its own range.
+    if (await focusOverlay(app, tabId) !== true) {
+        return fail(`${BROKEN} the session tab's page could not be focused again`);
+    }
+    const value = (await readSel(app))?.value ?? '';
+    const mid = await pillGeometry(app, Math.floor(value.length / 2));
+    await theiaPointer(app, [
+        { type: 'pointerMove', x: Math.round(mid.left + 1), y: Math.round(mid.y) },
+        { type: 'pointerDown', button: 0 },
+        { type: 'pointerMove', x: Math.round(mid.x), y: Math.round(mid.y), duration: 100 },
+        { type: 'pointerUp', button: 0 },
+    ]);
+    const dragged = await settle(() => readSel(app), v => v && v.end > 0);
+    if (!dragged || !dragged.focused || dragged.start !== 0 || !(dragged.end > 0 && dragged.end < dragged.value.length)) {
+        fail(`a drag from the start to the middle on the focusing press must select 0 to the middle, not the whole value; saw ${JSON.stringify(dragged)}`);
+    }
+
+    // IME: nothing commits or queries while a composition is open.
+    if (plant === 'ime-guard-off') {
+        if (await probe(app, `get('ChromeBarWidget').composing = () => false; return true;`) === true) {
+            note('PLANT ime-guard-off applied');
+        }
+    }
+    try {
+        await typeInPill(app, '');
+        const begun = await imeStep(app, `tip.setPendingCompositionString(${JSON.stringify(COMPOSED)});
+            tip.appendClauseToPendingComposition(${COMPOSED.length}, tip.ATTR_RAW_CLAUSE);
+            tip.flushPendingComposition();`);
+        if (begun !== 'ok') {
+            return fail(`${BROKEN} the composition could not be begun through nsITextInputProcessor: ${begun}`);
+        }
+        const shown = await settle(() => readSel(app), v => v && v.value === COMPOSED);
+        if (shown?.value !== COMPOSED) {
+            return fail(`${BROKEN} the open composition never reached the pill (${JSON.stringify(shown)})`);
+        }
+        const mark = (await pushes(app)).length;
+        const getMark = pages.requests.length;
+        const entered = await imeStep(app, `const ev = new KeyboardEvent('', { key: 'Enter', code: 'Enter', keyCode: 13 });
+            tip.keydown(ev);
+            tip.keyup(ev);`);
+        if (entered !== 'ok') {
+            return fail(`${BROKEN} Enter could not be pressed during the composition: ${entered}`);
+        }
+        await sleep(1500);
+        const loads = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && p.loading === true);
+        const searched = pages.requests.slice(getMark).filter(r => r.path === '/one/search');
+        const asked = suggestGets(pages, getMark);
+        if (loads.length || searched.length) {
+            fail(`committed during composition: Enter while composing gave ${loads.length} loading push(es) and ${searched.length} GET(s) on /one/search (${JSON.stringify(searched.map(r => r.search))})`);
+        }
+        if (asked.length) {
+            fail(`queried during composition: ${JSON.stringify(asked.map(r => r.search))}`);
+        }
+        const commitMark = pages.requests.length;
+        const committed = await imeStep(app, 'tip.commitComposition();');
+        if (committed !== 'ok') {
+            return fail(`${BROKEN} the composition could not be committed: ${committed}`);
+        }
+        // Positive control: the observer sees the one query that composition end runs.
+        const query = await nextGet(pages, '/one/suggest', commitMark, r => queryOf(r) === COMPOSED, 5000);
+        await sleep(800);
+        const queries = suggestGets(pages, commitMark);
+        if (!query || queries.length !== 1) {
+            return fail(`composition end must run exactly one query for ${JSON.stringify(COMPOSED)}; saw ${queries.length} GET(s) on /one/suggest: ${JSON.stringify(queries.map(r => r.search))}`);
+        }
+        const pushMark = (await pushes(app)).length;
+        const enterMark = pages.requests.length;
+        await pressKey(app, ENTER);
+        if (!await nextGet(pages, '/one/search', enterMark, r => queryOf(r) === COMPOSED)) {
+            return fail(`Enter after the composition ended must search ${JSON.stringify(COMPOSED)}: no GET on /one/search with that q; pill ${JSON.stringify(await readPill(app))}`);
+        }
+        if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && pathOf(p.url) === '/one/search', { from: pushMark }) < 0) {
+            fail(`${BROKEN} no state push for the tab followed the post-composition search, so the no-push check above saw nothing`);
+        }
+    } finally {
+        await probe(app, `delete get('ChromeBarWidget').composing; return true;`);
+        await inChrome(app, 'delete window.__pbImeTip; return true;');
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -1974,10 +2149,11 @@ const SCENARIOS = {
     'canonize-drop': canonizeDrop,
     'shift-del': shiftDel,
     'context-menu': contextMenu,
+    'select-ime': selectIme,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
-const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search' };
+const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -2056,6 +2232,7 @@ const PLANTS = [
     { plant: 'autofill-on-paste', target: 'autofill', run: ['autofill'], expect: 'autofilled a paste' },
     { plant: 'shift-del-bookmark', target: 'shift-del', run: ['shift-del'], expect: 'removed the visits of a bookmarked page' },
     { plant: 'paste-reads-on-open', target: 'context-menu', run: ['context-menu'], expect: 'clipboard read before a click' },
+    { plant: 'ime-guard-off', target: 'select-ime', run: ['suggestions', 'select-ime'], expect: 'committed during composition' },
 ];
 
 async function selfTest() {
