@@ -1521,10 +1521,13 @@ export class ChromeBarWidget extends ReactWidget {
             return;
         }
         this.removeFailedKey = undefined;
+        // A close, commit or keystroke during the Places write leaves the dropdown closed or replaced.
+        const seq = this.querySeq;
+        const current = (): boolean => this.dropdownArmed && this.querySeq === seq;
         try {
             await this.store.removeHistoryEntry(row.url);
         } catch {
-            if (this.rows.some(r => r.key === row.key)) {
+            if (current() && this.rows.some(r => r.key === row.key)) {
                 this.removeFailedKey = row.key;
                 this.update();
             }
@@ -1532,13 +1535,13 @@ export class ChromeBarWidget extends ReactWidget {
         }
         const keys = this.rows.map(r => r.key);
         const at = keys.indexOf(row.key);
-        if (at < 0) {
+        if (at < 0 || !current()) {
             return;
         }
         this.placeRows = this.placeRows.filter(r => r.key !== row.key);
         this.rows = this.composeVisibleRows();
         this.highlightKey = keys[at + 1] ?? keys[at - 1];
-        this.showComposedRows(this.querySeq);
+        this.showComposedRows(seq);
     }
 
     /** BAR-05: the visible engines except the one in use, in chrome's order. */
