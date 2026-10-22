@@ -4,17 +4,17 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
-status: executing
-stopped_at: Completed 29-09-PLAN.md
-last_updated: "2026-10-22T01:25:21.976Z"
+status: verifying
+stopped_at: Completed 29-10-PLAN.md
+last_updated: "2026-10-22T02:18:25.637Z"
 last_activity: 2026-10-21
-last_activity_desc: 29-09 complete (Shift+Delete removes a history row through the first privileged store kind; pill context menu with Cut, Copy, Paste, Paste & Go and Select All, clipboard read chrome-side only on Paste; BAR-09 and BAR-10 complete)
-state_head: e34934a8f1b0b93b12c275fcf9bd829bd97da7bf
+last_activity_desc: 29-10 complete (first click selects the pill, IME composition never commits early, typed text kept per tab in memory; all 18 address-bar live scenarios, the 12-plant self-test, nav-keys-live and web-tab-live green; BAR-11 and BAR-12 complete; phase 29 ready for verification)
+state_head: d9677fa47bd311ac51ed7a6237f3fc7ef57a7811
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 17
+  completed_plans: 18
   percent: 8
 ---
 
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 ## Current Position
 
-Phase: 29 (Address Bar Search and Fixup) — EXECUTING
+Phase: 29 (Address Bar Search and Fixup) — VERIFYING
 Plan: 10 of 10
-Status: Ready to execute
-Last activity: 2026-10-21 — 29-09 complete (Shift+Delete removes a history row through the first privileged store kind; pill context menu with Cut, Copy, Paste, Paste & Go and Select All, clipboard read chrome-side only on Paste; BAR-09 and BAR-10 complete)
+Status: Phase complete — ready for verification
+Last activity: 2026-10-21 — 29-10 complete (first click selects the pill, IME composition never commits early, typed text kept per tab in memory; all 18 address-bar live scenarios, the 12-plant self-test, nav-keys-live and web-tab-live green; BAR-11 and BAR-12 complete; phase 29 ready for verification)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -165,6 +165,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P07 | 40m | 2 tasks | 6 files |
 | Phase 29 P08 | 42m | 3 tasks | 9 files |
 | Phase 29 P09 | 85m | 2 tasks | 8 files |
+| Phase 29 P10 | 3h05m | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -422,6 +423,9 @@ Recent decisions affecting current work:
 - [Phase 29]: 29-09: Shift+Delete removes only history rows; chrome does not re-check bookmarks (frontend gate plus live check, Pitfall 10)
 - [Phase 29]: 29-09: Paste & Go focuses the page once its load finishes; focus sent at the navigation ack was lost to the hidden overlay or a process switch
 - [Phase 29]: 29-09: Cut removes the selection only after ClipboardService reports the write
+- [Phase 29]: 29-10: every pill edit renders synchronously (MessageLoop.sendMessage UpdateRequest) so React's controlled-value restore cannot end an IME composition
+- [Phase 29]: 29-10: drafts hold only off-screen tabs; saveDraft is the single writer and keeps nothing when the value equals the committed address, so commits and Esc restore clear drafts
+- [Phase 29]: 29-10: syncAddressFromWidget keeps any uncommitted edit regardless of focus and only updates the committed address
 
 ### Pending Todos
 
@@ -524,8 +528,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-22T01:25:21.923Z
-Stopped at: Completed 29-09-PLAN.md
+Last session: 2026-10-22T02:18:25.572Z
+Stopped at: Completed 29-10-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
