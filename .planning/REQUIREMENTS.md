@@ -33,7 +33,7 @@ returning null.
 - [x] **SMODE-03**: User can see which mode is active from an icon and label chip in the pill, and return to the mode's default with one click or Backspace at the start
 - [x] **SMODE-04**: User can enter a mode by typing its token and a space (`*` bookmarks, `%` tabs, `^` history, `>` actions, `@alias` engine), and cycle modes with Accel+Up/Down or open the dropdown with Alt+Up/Down
 - [x] **SMODE-05**: User in Command centre mode can search files, run `>` commands, and use `#`, `?`, `edt`, `term`, `task`, `debug` and `view` prefixes, with results shown under the pill; `@` and `:` open Theia's symbol and go-to-line pickers
-- [ ] **SMODE-06**: User can still go to an address from Command centre: Ctrl+L, Alt+D and F6 switch the pill to address mode, and unambiguous URLs (scheme, localhost, host:port, IP) get a "Go to" first row
+- [x] **SMODE-06**: User can still go to an address from Command centre: Ctrl+L, Alt+D and F6 switch the pill to address mode, and unambiguous URLs (scheme, localhost, host:port, IP) get a "Go to" first row
 - [ ] **SMODE-07**: User can run browser actions (print, downloads, clear history, settings and the like) from Actions mode; Command centre mode never sends typed text to a search engine
 
 ### Address bar input and search (BAR)
@@ -201,7 +201,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | SMODE-03 | Phase 30 | Complete |
 | SMODE-04 | Phase 30 | Complete |
 | SMODE-05 | Phase 30 | Complete |
-| SMODE-06 | Phase 30 | Pending |
+| SMODE-06 | Phase 30 | Complete |
 | SMODE-07 | Phase 33 | Pending |
 | BAR-01 | Phase 29 | Complete |
 | BAR-02 | Phase 29 | Complete |

@@ -4,17 +4,17 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 30
 current_phase_name: Address-Bar Modes and Command Centre
-status: executing
-stopped_at: Completed 30-05-PLAN.md
-last_updated: "2026-10-22T21:05:26.450Z"
+status: verifying
+stopped_at: Completed 30-06-PLAN.md
+last_updated: "2026-10-22T22:38:59.102Z"
 last_activity: 2026-10-22
-last_activity_desc: 30-03 complete (Tabs, Bookmarks, History and Actions modes; searchPlacesRestricted behind the searchPlaces restrict field; Browser command category; live local-modes and the 20-plant self-test green)
-state_head: 8ee4f674f728ee51a1867411ef7c3cde7d1d0caa
+last_activity_desc: 30-06 complete (Go-to row from the local classifier with visit-only commits; Ctrl+L, Alt+D and F6 to Address mode; all 30 address-bar live scenarios, the 29-plant self-test, nav-keys-live and web-tab-live green); Phase 30 ready for verification
+state_head: fdec14b5af9d7da6c2ef2886cc0e2b74be24ba75
 progress:
   total_phases: 13
   completed_phases: 1
-  total_plans: 24
-  completed_plans: 23
+  total_plans: 59
+  completed_plans: 24
   percent: 8
 ---
 
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 Phase: 30 (Address-Bar Modes and Command Centre) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
-Last activity: 2026-10-22 — 30-03 complete (Tabs, Bookmarks, History and Actions modes; searchPlacesRestricted behind the searchPlaces restrict field; Browser command category; live local-modes and the 20-plant self-test green)
+Status: Phase complete — ready for verification
+Last activity: 2026-10-22 — 30-06 complete (Go-to row from the local classifier with visit-only commits; Ctrl+L, Alt+D and F6 to Address mode; all 30 address-bar live scenarios, the 29-plant self-test, nav-keys-live and web-tab-live green); Phase 30 ready for verification
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -171,6 +171,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 30 P03 | ~1h20m | 3 tasks | 17 files |
 | Phase 30 P04 | 38m | 3 tasks | 11 files |
 | Phase 30 P05 | 56m | 3 tasks | 8 files |
+| Phase 30 P06 | 70m | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -443,6 +444,8 @@ Recent decisions affecting current work:
 - [Phase 30]: 30-05: Command centre keeps a token exactly when the registry's descriptor for it has that prefix; every @ token stays text there
 - [Phase 30]: 30-05: Accel+Up/Down re-runs the query only when the result list is open
 - [Phase 30]: 30-05: @alias needs the leading @ and matches case-insensitively; aliases come only from Gecko engine.aliases
+- [Phase 30]: SMODE-06: a dotted host with a port is ambiguous (A3); every Go-to commit is visit-only (A4); New Tab ends in Address mode (A2)
+- [Phase 30]: SMODE-06: focusAddressPill reaches AddressBar.focusAddress through setAddressFocus; Alt+D shares Ctrl+L's editor/terminal scope
 
 ### Pending Todos
 
@@ -546,8 +549,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-22T21:05:25.878Z
-Stopped at: Completed 30-05-PLAN.md
+Last session: 2026-10-22T22:38:58.836Z
+Stopped at: Completed 30-06-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
