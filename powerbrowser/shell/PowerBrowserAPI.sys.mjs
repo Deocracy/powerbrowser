@@ -4530,7 +4530,9 @@ async function autofillOrigin(text) {
     return null;
   }
   const host = String(rows[0].getResultByName("host"));
-  const shown = host.startsWith("www.") && !typed.startsWith("www.") ? host.slice(4) : host;
+  // A host that itself starts with the typed text ("ww" -> www.example.com)
+  // keeps its www.; only a wwwPattern match drops it.
+  const shown = host.startsWith(typed) ? host : host.slice(4);
   return { text: `${shown}/`, url: `${String(rows[0].getResultByName("prefix"))}${host}/` };
 }
 
