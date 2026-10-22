@@ -263,6 +263,17 @@
  *               (no Theia descriptor) each open the centred quick input
  *               holding that text while the pill keeps it, and Esc closes it.
  *               Scored only after command-centre passed.
+ *   command-centre-privacy  D-26: with the page realm's
+ *               ChromeStoreClient.request wrapped to record each request's
+ *               kind, typing "hello" in Address mode records a
+ *               resolveTypedAddress and the served engine sees a suggest GET
+ *               (the positive controls). Then in every contributed mode whose
+ *               modeSends() row is all false (derived from the instance:
+ *               Command centre, Tabs and Actions today), "hello", "README" and
+ *               "localhost:4000", each waited past the debounce, record no
+ *               resolveTypedAddress, searchSuggestions, autofillOrigin or
+ *               searchPlaces request and no GET on either served engine's
+ *               search or suggest path. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -3231,9 +3242,7 @@ async function highlightPick(app, text) {
 
 /** Enters Command centre from the default mode through the menu, with the text cleared. */
 async function enterCommandCentre(app) {
-    await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
-    await restoreDefaultMode(app);
-    return pickLocalMode(app, 'command-centre');
+    return enterMode(app, 'command-centre');
 }
 
 /**
@@ -3447,6 +3456,95 @@ async function commandCentreHandoff(ctx) {
     }
 }
 
+/** D-26: the store kinds that carry typed text to chrome, and the served engines' paths. */
+const TYPED_TEXT_KINDS = ['resolveTypedAddress', 'searchSuggestions', 'autofillOrigin', 'searchPlaces'];
+const ENGINE_PATHS = ['/one/search', '/one/suggest', '/two/search', '/two/suggest'];
+const PRIVACY_TEXTS = ['hello', 'README', 'localhost:4000'];
+
+/** Wraps the page realm's ChromeStoreClient.request, the one method every store kind goes through, to record each kind. */
+const recordStoreKinds = app => probe(app, `const client = get('ChromeStoreClient');
+    const request = Object.getPrototypeOf(client).request;
+    window.__pbStoreKinds = [];
+    client.request = function (msg, ...rest) { window.__pbStoreKinds.push(msg && msg.kind); return request.call(this, msg, ...rest); };
+    return true;`);
+const storeKinds = app => app.evaluate('JSON.stringify(window.__pbStoreKinds || [])').then(JSON.parse);
+
+/** Derived now from the AddressBar instance: the contributed modes whose modeSends() row is all false. */
+const silentModes = app => probe(app, `const bar = get('AddressBar');
+    const saved = bar.mode;
+    const out = [];
+    try {
+        for (const mode of bar.modeProvider.getContributions()) {
+            bar.mode = mode.id;
+            const sends = bar.modeSends();
+            if (Object.keys(sends).length && Object.values(sends).every(flag => flag === false)) {
+                out.push({ id: mode.id, label: mode.label });
+            }
+        }
+    } finally {
+        bar.mode = saved;
+    }
+    return out;`);
+
+/**
+ * D-26: typing in a mode that sends nothing reaches neither chrome nor an
+ * engine. Address mode's "hello" is the positive control for both observers.
+ */
+async function commandCentrePrivacy(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'command-centre-privacy')) {
+        return 'not-scored';
+    }
+    const silent = await silentModes(app);
+    if (!Array.isArray(silent) || !silent.some(mode => mode.id === 'command-centre')) {
+        return fail(`${BROKEN} no contributed mode with an all-false modeSends() row includes Command centre (${JSON.stringify(silent)})`);
+    }
+    await recordStoreKinds(app);
+    try {
+        await restoreDefaultMode(app);
+        const controlMark = pages.requests.length;
+        await typeInPill(app, 'hello');
+        const control = await settle(() => storeKinds(app), kinds => kinds.includes('resolveTypedAddress'));
+        const suggestSeen = await nextGet(pages, '/one/suggest', controlMark, () => true, 10000);
+        if (!control.includes('resolveTypedAddress') || !suggestSeen) {
+            return fail(`${BROKEN} typing "hello" in Address mode must record a resolveTypedAddress and a GET on /one/suggest (kinds ${JSON.stringify(control)}, suggest GET ${!!suggestSeen}), else the recorders prove nothing`);
+        }
+        await restoreDefaultMode(app);
+        if (plant === 'cc-sends' && await probe(app, `const bar = get('AddressBar');
+            bar.modeSends = () => (${JSON.stringify({ resolve: true, suggestions: true, autofill: true, places: true })});
+            return true;`) === true) {
+            note('PLANT cc-sends applied');
+        }
+        for (const mode of silent) {
+            await enterMode(app, mode.id);
+            const kindMark = (await storeKinds(app)).length;
+            const getMark = pages.requests.length;
+            for (const text of PRIVACY_TEXTS) {
+                await typeInPill(app, text);
+                await sleep(600);
+            }
+            const sent = (await storeKinds(app)).slice(kindMark).filter(kind => TYPED_TEXT_KINDS.includes(kind));
+            for (const kind of [...new Set(sent)]) {
+                fail(`sent ${kind} from ${mode.label} while typing ${JSON.stringify(PRIVACY_TEXTS)}`);
+            }
+            const gets = pages.requests.slice(getMark).filter(r => ENGINE_PATHS.includes(r.path));
+            if (gets.length) {
+                fail(`typing in ${mode.label} reached a served engine: ${JSON.stringify(gets.map(r => r.path + r.search))}`);
+            }
+        }
+    } finally {
+        await probe(app, `delete get('ChromeStoreClient').request; delete get('AddressBar').modeSends; return true;`);
+        await restoreDefaultMode(app);
+    }
+}
+
+/** Enters the contributed mode `id` from the default mode through the menu, with the text cleared. */
+async function enterMode(app, id) {
+    await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
+    await restoreDefaultMode(app);
+    return pickLocalMode(app, id);
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -3473,11 +3571,13 @@ const SCENARIOS = {
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
+    'command-centre-privacy': commandCentrePrivacy,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
-    'command-centre': 'search', 'command-centre-handoff': 'command-centre' };
+    'command-centre': 'search', 'command-centre-handoff': 'command-centre',
+    'command-centre-privacy': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -3571,6 +3671,7 @@ const PLANTS = [
     { plant: 'actions-unfiltered', target: 'local-modes', run: ['search', 'local-modes'], expect: 'listed a command outside the Browser category' },
     { plant: 'picks-dropped', target: 'command-centre', run: ['search', 'command-centre'], expect: 'no Explorer row' },
     { plant: 'help-row-executes', target: 'command-centre', run: ['search', 'command-centre'], expect: 'a help row opened the centred quick input' },
+    { plant: 'cc-sends', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress from Command centre' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 

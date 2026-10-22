@@ -24,22 +24,36 @@
  *      chrome-bar-copy.ts; LOCAL_MODES is in D-08 order (command-centre,
  *      bookmarks, tabs, history, actions); restrict tokens are unique single
  *      characters; the trailing search row is on bookmarks, tabs and history
- *      and the cap is 10 on bookmarks and history (30-UI-SPEC, pinned).
+ *      and the cap is 10 on bookmarks and history (30-UI-SPEC, pinned);
+ *   7. D-26: the body of AddressBar.runQuery (address-bar/address-bar.tsx,
+ *      comments stripped) begins with a return guarded by the active mode's
+ *      resolve flag (this.modeSends().resolve), so no path reaches its
+ *      chrome requests in a mode that may not resolve;
+ *   8. D-26: address-bar/command-centre.ts references no chrome store
+ *      client, none of the four typed-text kinds (resolveTypedAddress,
+ *      searchSuggestions, autofillOrigin, searchPlaces) and not the
+ *      suggestion service; the positive control is that the same scan finds
+ *      every one of those names in address-bar.tsx and address-bar-modes.ts,
+ *      so a scan that matches nothing is a broken instrument, never a pass;
+ *   9. D-26: the Command centre contribution's id, derived from
+ *      command-centre.ts, is the MODE_SENDS key whose row is all false.
  *
  * Each case prints `ok <case>`; the run ends `verify-address-bar-modes: PASS`
  * or one `verify-address-bar-modes: FAIL -- <case>: <got>` line per red case.
  * A derivation that finds nothing (no MODES literal, no modeLabels) or a table
  * missing an export is a FAIL, never a pass.
  *
- * --self-test: the clean tree must be green; then eight planted copies in a
+ * --self-test: the clean tree must be green; then eleven planted copies in a
  * mkdtemp directory (the organising row removed, browsing set to history,
  * command-centre's suggestions flag set true, the fallback removed from
  * defaultModeFor, tabs and bookmarks swapped in LOCAL_MODES, one modeLabels
- * key removed, a duplicated token, the history cap dropped) must each go red naming the case that
+ * key removed, a duplicated token, the history cap dropped, the runQuery
+ * guard removed, a resolve call added to command-centre.ts, the contribution
+ * id changed to address) must each go red naming the case that
  * catches it. A plant whose text did not change its source fails as "plant did
  * not apply".
  *
- * Honestly --quick: reads three source files, writes only under mkdtemp, no
+ * Honestly --quick: reads six source files, writes only under mkdtemp, no
  * build, no browser, no display, no network.
  *
  * Usage:
@@ -57,6 +71,11 @@ const NAME = 'verify-address-bar-modes';
 const TABLE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-bar-mode-table.ts';
 const WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
 const COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
+const ADDRESS_BAR_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-bar.tsx';
+const MODES_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-bar-modes.ts';
+const CENTRE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/command-centre.ts';
+/** D-26: the names a mode reaches chrome or an engine through while typing. */
+const TYPED_TEXT_SENDERS = ['ChromeStoreClient', 'resolveTypedAddress', 'searchSuggestions', 'autofillOrigin', 'searchPlaces', 'ChromeBarSuggestionService'];
 const EXPORTS = ['LOCAL_MODES', 'DEFAULT_MODE_BY_UI_MODE', 'defaultModeFor', 'MODE_SENDS', 'engineModeId', 'engineNameOf'];
 
 /** The decided defaults (contract pins). */
@@ -90,8 +109,43 @@ function deriveLabelKeys(copySrc) {
     return keys.length ? keys : null;
 }
 
+/** Source text without its block and line comments (a URL's // inside a string is not in these files' code). */
+const stripComments = src => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+/** The body of the method declared by `head` (its first brace to the matching one); null when the method is gone. */
+function methodBody(src, head) {
+    const at = src.indexOf(head);
+    if (at < 0) {
+        return null;
+    }
+    const open = src.indexOf('{', at + head.length);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+        depth += src[i] === '{' ? 1 : src[i] === '}' ? -1 : 0;
+        if (depth === 0) {
+            return src.slice(open + 1, i);
+        }
+    }
+    return null;
+}
+
+/** Case 7's reading: the first statement of runQuery is `if (<cond>) { return; }`; returns the condition, else null. */
+function runQueryGuard(addressBarSrc) {
+    const body = methodBody(stripComments(addressBarSrc), 'protected async runQuery(');
+    return body === null ? null : /^\s*if\s*\(([^{};]*)\)\s*\{\s*return;\s*\}/.exec(body)?.[1] ?? '';
+}
+
+/** The TYPED_TEXT_SENDERS names `src` references outside comments. */
+const sendersIn = src => TYPED_TEXT_SENDERS.filter(name => new RegExp(`\\b${name}\\b`).test(stripComments(src)));
+
+/** The id the Command centre class declares; null when the class or its id is gone. */
+function centreId(centreSrc) {
+    const body = methodBody(centreSrc, 'export class CommandCentreAddressBarMode');
+    return body === null ? null : /readonly id = '([^']+)'/.exec(body)?.[1] ?? null;
+}
+
 /** The cases: each returns null when it holds, else what it got. */
-function cases(m, uiModes, labelKeys) {
+function cases(m, uiModes, labelKeys, srcs) {
     const localIds = m.LOCAL_MODES.map(entry => entry.id);
     return [
         ['default table keys equal the widget\'s MODES ids', () =>
@@ -139,6 +193,24 @@ function cases(m, uiModes, labelKeys) {
             const tokens = m.LOCAL_MODES.map(entry => entry.restrictToken).filter(token => token !== undefined);
             return tokens.every(token => typeof token === 'string' && token.length === 1) && new Set(tokens).size === tokens.length ? null : tokens;
         }],
+        ['runQuery begins with a return guarded by this.modeSends().resolve (D-26)', () => {
+            const guard = runQueryGuard(srcs[ADDRESS_BAR_REL]);
+            return guard !== null && /!this\.modeSends\(\)\.resolve\b/.test(guard)
+                ? null : { guard: guard ?? `no runQuery in ${ADDRESS_BAR_REL}` };
+        }],
+        ['command-centre.ts sends nothing typed to chrome (no store client, typed-text kind or suggestion service)', () => {
+            const control = sendersIn(srcs[ADDRESS_BAR_REL] + '\n' + srcs[MODES_REL]);
+            if (control.length !== TYPED_TEXT_SENDERS.length) {
+                return { brokenInstrument: `the scan found only ${JSON.stringify(control)} of ${JSON.stringify(TYPED_TEXT_SENDERS)} in ${ADDRESS_BAR_REL} and ${MODES_REL}` };
+            }
+            const found = sendersIn(srcs[CENTRE_REL]);
+            return found.length ? { commandCentreReferences: found } : null;
+        }],
+        ['the Command centre contribution id is the MODE_SENDS key whose row is all false', () => {
+            const id = centreId(srcs[CENTRE_REL]);
+            const row = id !== null ? m.MODE_SENDS[id] : undefined;
+            return row && FLAGS.every(f => row[f] === false) ? null : { id: id ?? `no CommandCentreAddressBarMode id in ${CENTRE_REL}`, row: row ?? null };
+        }],
         ['engineModeId and engineNameOf round-trip; a local id has no engine', () => {
             const got = [m.engineNameOf(m.engineModeId('Some Engine')), m.engineNameOf('tabs'), m.engineNameOf('address')];
             return JSON.stringify(got) === JSON.stringify(['Some Engine', null, null]) ? null : got;
@@ -146,8 +218,8 @@ function cases(m, uiModes, labelKeys) {
     ];
 }
 
-/** Runs every case against the table at `tablePath` and the two sources' text; returns `{ oks, failures }`. */
-async function runAt(tablePath, widgetSrc, copySrc) {
+/** Runs every case against the table at `tablePath` and the sources' text (by rel path); returns `{ oks, failures }`. */
+async function runAt(tablePath, srcs) {
     let m;
     try {
         m = await import(pathToFileURL(tablePath).href);
@@ -160,7 +232,7 @@ async function runAt(tablePath, widgetSrc, copySrc) {
     }
     const oks = [];
     const failures = [];
-    for (const [name, run] of cases(m, deriveUiModes(widgetSrc), deriveLabelKeys(copySrc))) {
+    for (const [name, run] of cases(m, deriveUiModes(srcs[WIDGET_REL]), deriveLabelKeys(srcs[COPY_REL]), srcs)) {
         let got;
         try {
             got = run();
@@ -177,9 +249,11 @@ async function runAt(tablePath, widgetSrc, copySrc) {
 }
 
 const read = rel => readFileSync(join(REPO_ROOT, rel), 'utf8');
+const SOURCES = [TABLE_REL, WIDGET_REL, COPY_REL, ADDRESS_BAR_REL, MODES_REL, CENTRE_REL];
+const readSources = () => Object.fromEntries(SOURCES.map(rel => [rel, read(rel)]));
 
 async function main() {
-    const { oks, failures } = await runAt(join(REPO_ROOT, TABLE_REL), read(WIDGET_REL), read(COPY_REL));
+    const { oks, failures } = await runAt(join(REPO_ROOT, TABLE_REL), readSources());
     for (const name of oks) {
         console.log(`  ok  ${name}`);
     }
@@ -189,7 +263,7 @@ async function main() {
         }
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${oks.length} cases over ${TABLE_REL}, derived against ${WIDGET_REL} and ${COPY_REL}`);
+    console.log(`${NAME}: PASS -- ${oks.length} cases over ${TABLE_REL}, derived against ${SOURCES.slice(1).join(', ')}`);
     return 0;
 }
 
@@ -226,12 +300,27 @@ const PLANTS = [
     { name: 'one modeLabels key removed', rel: COPY_REL, from: "        history: 'History',\n", to: '', expect: 'LOCAL_MODES ids equal the modeLabels keys' },
     { name: 'a duplicated token', rel: TABLE_REL, from: "restrictToken: '^'", to: "restrictToken: '%'", expect: 'restrict tokens are unique' },
     { name: 'the history cap dropped', rel: TABLE_REL, from: "restrictToken: '^', group: 'local', searchRow: true, cap: 10", to: "restrictToken: '^', group: 'local', searchRow: true", expect: 'LOCAL_MODES search rows and caps' },
+    {
+        name: 'the runQuery guard removed',
+        rel: ADDRESS_BAR_REL,
+        from: 'if (!this.dropdownArmed || !this.modeSends().resolve) {',
+        to: 'if (!this.dropdownArmed) {',
+        expect: 'runQuery begins with a return guarded',
+    },
+    {
+        name: 'a resolve call added to command-centre.ts',
+        rel: CENTRE_REL,
+        from: '    descriptorFor(text: string)',
+        to: '    planted(store: { resolveTypedAddress(text: string): unknown }): unknown {\n        return store.resolveTypedAddress(\'typed\');\n    }\n\n    descriptorFor(text: string)',
+        expect: 'command-centre.ts sends nothing typed',
+    },
+    { name: 'the contribution id changed to address', rel: CENTRE_REL, from: "readonly id = 'command-centre';", to: "readonly id = 'address';", expect: 'the Command centre contribution id' },
 ];
 
 async function selfTest() {
     let failed = 0;
-    const sources = { [TABLE_REL]: read(TABLE_REL), [WIDGET_REL]: read(WIDGET_REL), [COPY_REL]: read(COPY_REL) };
-    const clean = await runAt(join(REPO_ROOT, TABLE_REL), sources[WIDGET_REL], sources[COPY_REL]);
+    const sources = readSources();
+    const clean = await runAt(join(REPO_ROOT, TABLE_REL), sources);
     if (clean.failures.length) {
         console.error(`${NAME} --self-test: FAIL -- the clean tree is not green: ${clean.failures.join(' | ')}`);
         return 1;
@@ -249,7 +338,7 @@ async function selfTest() {
             const planted = { ...sources, [plant.rel]: mutated };
             const tablePath = join(dir, `mode-table-${i}.ts`);
             writeFileSync(tablePath, planted[TABLE_REL]);
-            const { failures } = await runAt(tablePath, planted[WIDGET_REL], planted[COPY_REL]);
+            const { failures } = await runAt(tablePath, planted);
             const named = failures.find(f => f.startsWith(plant.expect));
             if (named) {
                 console.log(`  ok  ${plant.name} -> red: ${named}`);
