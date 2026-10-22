@@ -277,7 +277,32 @@ Plans:
   4. In Command centre, file search, `>` commands and the `#`, `?`, `edt`, `term`, `task`, `debug` and `view` prefixes show Theia's results under the pill while the page stays visible, with no engine suggestion row; `@` and `:` open Theia's symbol and go-to-line pickers
   5. From Command centre, Ctrl+L, Alt+D and F6 switch the pill to address mode, and an unambiguous URL (scheme, localhost, host:port, IP) gets a "Go to" first row
 
-**Plans**: TBD
+**Plans**: 6 plans (strictly sequential waves 1-6: no worktrees, every plan edits `address-bar/address-bar.tsx` and `--quick` reads the whole tree)
+
+Plans:
+**Wave 1**
+
+- [ ] 30-01-PLAN.md — D-04 move: the pill into `address-bar/` as the injectable `AddressBar`, rows module moved, gate scans recursive with nested plants, live plants re-pointed; no behaviour change
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 30-02-PLAN.md — Tracer: modes dropdown, mode button and chip, engine modes, x reset, mode lifetime, Search Settings; the D-03 default table and the `verify-address-bar-modes` gate
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 30-03-PLAN.md — Tabs, Bookmarks, History and Actions contributions; zero-query lists; `searchPlaces` restrict field chrome-side; the Browser command category
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 30-04-PLAN.md — Command centre on `QuickAccessRegistry`: picks under the pill, help rows, `@`/`:` hand-off, runtime placeholder; D-26 send guard with static gate and live recorder
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 30-05-PLAN.md — Defaults per PowerBrowser mode proven live, Backspace reset, mode tokens with chrome-side engine aliases, Ctrl/Alt+Up/Down pill-scoped keys
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 30-06-PLAN.md — Go-to row from a local classifier with visit-only commits; Ctrl+L, Alt+D and F6 to Address mode; phase-close live run
 **UI hint**: yes
 
 ### Phase 31: Site Identity, Permissions and App Menu
