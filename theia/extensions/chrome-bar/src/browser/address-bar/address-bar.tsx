@@ -62,6 +62,14 @@ interface LocalModeCopy {
 
 /** SMODE-01: the strings of each local mode that lists its own rows (30-UI-SPEC "Strings"). */
 const LOCAL_MODE_COPY: { [mode: string]: LocalModeCopy } = {
+    bookmarks: {
+        label: CHROME_BAR_COPY.searchBookmarks, empty: CHROME_BAR_COPY.noBookmarks, noMatch: CHROME_BAR_COPY.noMatchingBookmarks,
+        failed: CHROME_BAR_COPY.bookmarksFailed, footer: CHROME_BAR_COPY.dropdownFooter,
+    },
+    history: {
+        label: CHROME_BAR_COPY.searchHistory, empty: CHROME_BAR_COPY.noHistory, noMatch: CHROME_BAR_COPY.noMatchingHistory,
+        failed: CHROME_BAR_COPY.historyFailed, footer: CHROME_BAR_COPY.dropdownFooter,
+    },
     tabs: {
         label: CHROME_BAR_COPY.searchTabs, empty: CHROME_BAR_COPY.noOtherTabs,
         noMatch: CHROME_BAR_COPY.noMatchingTabs, footer: CHROME_BAR_COPY.tabsFooter,

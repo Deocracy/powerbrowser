@@ -27,7 +27,7 @@ import { ChromeBarShortcutRelay } from './chrome-bar-shortcuts';
 import { bindChromeBarPreferences } from './chrome-bar-preferences';
 import { ChromeBarContribution, ChromeBarWidget } from './chrome-bar-widget';
 import { AddressBar } from './address-bar/address-bar';
-import { AddressBarModeContribution, TabsAddressBarMode } from './address-bar/address-bar-modes';
+import { AddressBarModeContribution, BookmarksAddressBarMode, HistoryAddressBarMode, TabsAddressBarMode } from './address-bar/address-bar-modes';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
 import { TopTabsSidePanelHandler } from './side-panel-top-tabs';
@@ -84,6 +84,10 @@ export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     // 30-03 (SMODE-01): the local modes, each a singleton bound to the contribution point at load (D-50).
     bind(TabsAddressBarMode).toSelf().inSingletonScope();
     bind(AddressBarModeContribution).toService(TabsAddressBarMode);
+    bind(BookmarksAddressBarMode).toSelf().inSingletonScope();
+    bind(AddressBarModeContribution).toService(BookmarksAddressBarMode);
+    bind(HistoryAddressBarMode).toSelf().inSingletonScope();
+    bind(AddressBarModeContribution).toService(HistoryAddressBarMode);
     bind(TabStripWidget).toSelf().inSingletonScope();
     bind(LayoutControlsWidget).toSelf().inSingletonScope();
     bind(ChromeBarContribution).toSelf().inSingletonScope();

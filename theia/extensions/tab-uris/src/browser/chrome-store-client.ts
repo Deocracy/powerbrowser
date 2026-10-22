@@ -155,9 +155,12 @@ export class ChromeStoreClient {
         return { dir: String(reply.dir), bytes: Number(reply.bytes) };
     }
 
-    /** NG-023: http(s) history and bookmark matches for typed text, bookmarks first. */
-    searchPlaces(text: string, limit: number): Promise<PlaceMatch[]> {
-        return this.field<PlaceMatch[]>({ kind: 'searchPlaces', text, limit }, 'rows');
+    /**
+     * NG-023: http(s) history and bookmark matches for typed text, bookmarks first.
+     * Phase 30 (SMODE-01): `restrict` lists one source alone, newest first, empty text included.
+     */
+    searchPlaces(text: string, limit: number, restrict?: 'bookmark' | 'history'): Promise<PlaceMatch[]> {
+        return this.field<PlaceMatch[]>(restrict === undefined ? { kind: 'searchPlaces', text, limit } : { kind: 'searchPlaces', text, limit, restrict }, 'rows');
     }
 
     /** Phase 29 (BAR-01): URI fixup, then the bar engine's submission, then the http(s) wall, all chrome-side. `canonize` (BAR-13) completes a bare name to www.name.com first; `forceSearch` (BAR-05 one-off) skips fixup and searches the text with the engine. */

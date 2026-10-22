@@ -3777,7 +3777,7 @@ async function handleStoreRequest(data, actorRef) {
         return { ok: true, kind, rows: joined.rows, truncated: joined.truncated };
       }
       case "searchPlaces": {
-        return { ok: true, kind, rows: await searchPlaces(data.text, data.limit) };
+        return { ok: true, kind, rows: data.restrict !== undefined ? await searchPlacesRestricted(data.text, data.limit, data.restrict) : await searchPlaces(data.text, data.limit) };
       }
       case "setSetting": {
         const saved = await setStoreSetting(data.key, data.value);
@@ -4646,4 +4646,60 @@ function readClipboardText() {
     return "";
   }
   return String(data.value?.QueryInterface(Ci.nsISupportsString).data ?? "").slice(0, 8192);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 30: restricted Places lists.
+//
+// The address bar's Bookmarks and History modes (SMODE-01) list their source
+// on focus and filter it as the user types. searchPlaces cannot serve that:
+// it has no restrict field and returns nothing for empty text. This reader
+// rides the same searchPlaces store kind behind its `restrict` field, so the
+// store walls (storeSenderInShellWindow, groupSenderIsTheia) run first and no
+// kind is added. `restrict` is one of two literals and anything else is
+// refused with fixed text that never echoes it. SELECT only, every value a
+// bound parameter, text cut to 256 characters, the cap clamped to 1..50 and
+// http(s) addresses only, as in searchPlaces. Empty text matches every row.
+// It sits at the end of the file so no catalogued line above moves.
+// ---------------------------------------------------------------------------
+
+const PLACES_RESTRICT_SQL = Object.freeze({
+  // The newest bookmarks first, one row per page.
+  bookmark: `SELECT h.url AS url, COALESCE(MAX(b.title), h.title, '') AS title, h.frecency AS frecency,
+                    MAX(b.guid) AS bookmark_guid
+               FROM moz_bookmarks b
+               JOIN moz_places h ON h.id = b.fk
+              WHERE (h.url LIKE :pattern ESCAPE '\\' OR h.title LIKE :pattern ESCAPE '\\' OR b.title LIKE :pattern ESCAPE '\\')
+                AND (substr(h.url, 1, 7) = 'http://' OR substr(h.url, 1, 8) = 'https://')
+              GROUP BY h.id
+              ORDER BY MAX(b.dateAdded) DESC
+              LIMIT :cap`,
+  // The most recent visits first; a bookmarked page keeps its bookmark flag.
+  history: `SELECT h.url AS url, COALESCE(MAX(b.title), h.title, '') AS title, h.frecency AS frecency,
+                   MAX(b.guid) AS bookmark_guid
+              FROM moz_places h
+              LEFT JOIN moz_bookmarks b ON b.fk = h.id
+             WHERE h.visit_count > 0
+               AND (h.url LIKE :pattern ESCAPE '\\' OR h.title LIKE :pattern ESCAPE '\\' OR b.title LIKE :pattern ESCAPE '\\')
+               AND (substr(h.url, 1, 7) = 'http://' OR substr(h.url, 1, 8) = 'https://')
+             GROUP BY h.id
+             ORDER BY h.last_visit_date DESC
+             LIMIT :cap`,
+});
+
+async function searchPlacesRestricted(text, limit, restrict) {
+  if (restrict !== "bookmark" && restrict !== "history") {
+    throw new Error("searchPlacesRestricted: refusing an unknown restrict value");
+  }
+  const needle = typeof text === "string" ? text.slice(0, 256) : "";
+  const cap = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 50) : 8;
+  const pattern = `%${needle.replace(/[\\%_]/g, c => "\\" + c)}%`;
+  const places = await lazy.PlacesUtils.promiseDBConnection();
+  const rows = await places.executeCached(PLACES_RESTRICT_SQL[restrict], { pattern, cap });
+  return rows.map(row => ({
+    url: row.getResultByName("url"),
+    title: row.getResultByName("title") ?? "",
+    frecency: row.getResultByName("frecency"),
+    bookmarked: row.getResultByName("bookmark_guid") !== null,
+  }));
 }

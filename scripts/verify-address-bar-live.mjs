@@ -230,7 +230,11 @@
  *               the trailing search row, highlighted, which searches
  *               /one/search only when chosen; "Alpha" filters to the
  *               scenario's /sw-a, and Enter switches to that very tab with no
- *               loading push. Scored only after search passed.
+ *               loading push. Bookmarks and History: with two bookmarks
+ *               and two visits seeded chrome-side (one visit to a page that
+ *               is not bookmarked), each lists its own source newest first on
+ *               focus, typing narrows it, and Shift+Delete removes the
+ *               history-only row in History. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -2783,6 +2787,108 @@ async function modeLifetime(ctx) {
     }
 }
 
+/** The places rows of the open dropdown whose caption is one of `urls`, in order. */
+const seededRowsOf = (view, urls) => view.rows.filter(r => urls.includes(r.caption));
+
+/** Chrome scope: bookmarks on `[url, title, dateAdded ms]` and visits `[url, title, date ms]`, as given. */
+const seedDatedPlaces = (app, bookmarks, visits) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        for (const [url, title, at] of ${JSON.stringify(bookmarks)}) {
+            await PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid, url, title, dateAdded: new Date(at) });
+        }
+        for (const [url, title, at] of ${JSON.stringify(visits)}) {
+            await PlacesUtils.history.insert({ url, title, visits: [{ date: new Date(at) }] });
+        }
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/**
+ * SMODE-01, Bookmarks and History, through the searchPlaces kind's restrict
+ * field. Two bookmarks (/lm-b1, then /lm-b2 newer) and two visits (/lm-b1,
+ * then the history-only /lm-h newer) are seeded chrome-side, newer than
+ * anything else in the session. Bookmarks on focus lists /lm-b2 then /lm-b1
+ * and never /lm-h; History lists /lm-h then /lm-b1 (the positive control that
+ * /lm-h is a real Places row) and never the unvisited /lm-b2; each list has
+ * at most 10 rows and no highlight. Typing narrows each within its source.
+ * Shift+Delete on the highlighted /lm-h row in History removes it from Places
+ * and from the next query.
+ */
+async function bookmarksAndHistory(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const [b1, b2, h] = ['/lm-b1', '/lm-b2', '/lm-h'].map(path => localUrl(pages, path));
+    const seeded = [b1, b2, h];
+    // Settle any visit the Tabs part's loads are still recording, so the seeded visits are the newest.
+    await sleep(1500);
+    const now = Date.now();
+    const seed = await seedDatedPlaces(app,
+        [[b1, 'Local Book One', now + 60000], [b2, 'Local Book Two', now + 120000]],
+        [[b1, 'Local Book One', now - 1000], [h, 'Local History Only', now - 500]]);
+    if (seed !== 'ok') {
+        return fail(`${BROKEN} the bookmarks and visits could not be seeded chrome-side (${seed})`);
+    }
+    if (!(await placesEntry(app, h)).found) {
+        return fail(`${BROKEN} the seeded /lm-h visit is not in Places`);
+    }
+    if (plant === 'restrict-dropped') {
+        if (await probe(app, `const store = get('ChromeStoreClient');
+            const searchPlaces = Object.getPrototypeOf(store).searchPlaces;
+            store.searchPlaces = function (text, limit) { return searchPlaces.call(this, text, limit); };
+            return true;`) === true) {
+            note('PLANT restrict-dropped applied');
+        }
+    }
+
+    await pickLocalMode(app, 'bookmarks');
+    const books = await settle(() => readRows(app), v => seededRowsOf(v, seeded).length >= 2);
+    const bookUrls = seededRowsOf(books, seeded).map(r => r.caption);
+    if (JSON.stringify(bookUrls) !== JSON.stringify([b2, b1])) {
+        fail(`Bookmarks on focus: expected the seeded bookmarks newest first (/lm-b2, /lm-b1) and not the history-only /lm-h; saw ${JSON.stringify(books.rows.map(r => r.caption))}`);
+    }
+    if (books.rows.length > 10 || books.rows.some(r => r.selected)) {
+        fail(`the Bookmarks zero-query list must hold at most 10 rows with none highlighted; saw ${JSON.stringify(books.rows)}`);
+    }
+    await typeInPill(app, 'Book Two');
+    const bookTwo = await settle(() => readRows(app), v => v.rows.some(r => r.title === 'Book Two'));
+    const narrowed = bookTwo.rows.filter(r => r.type === 'codicon-star-full').map(r => r.caption);
+    if (JSON.stringify(narrowed) !== JSON.stringify([b2])) {
+        fail(`typing "Book Two" in Bookmarks must leave only /lm-b2; saw ${JSON.stringify(bookTwo.rows)}`);
+    }
+
+    // Cleared first: a picked mode keeps typed text, and History's list on focus is the zero-query one.
+    await typeInPill(app, '');
+    await restoreDefaultMode(app);
+    await pickLocalMode(app, 'history');
+    const hist = await settle(() => readRows(app), v => seededRowsOf(v, seeded).length >= 2);
+    const histUrls = seededRowsOf(hist, seeded).map(r => r.caption);
+    if (JSON.stringify(histUrls) !== JSON.stringify([h, b1])) {
+        fail(`History on focus must list the seeded visits newest first (/lm-h, /lm-b1) and not the unvisited /lm-b2; saw ${JSON.stringify(hist.rows.map(r => r.caption))}`);
+    }
+    if (hist.rows.length > 10 || hist.rows.some(r => r.selected)) {
+        fail(`the History zero-query list must hold at most 10 rows with none highlighted; saw ${JSON.stringify(hist.rows)}`);
+    }
+    await typeInPill(app, 'History Only');
+    const only = await settle(() => readRows(app), v => v.rows[0]?.caption === h && v.rows[0].selected);
+    const placesOnly = only.rows.filter(r => r.type === 'codicon-history' || r.type === 'codicon-star-full').map(r => r.caption);
+    if (JSON.stringify(placesOnly) !== JSON.stringify([h]) || !only.rows[0]?.selected) {
+        return fail(`typing "History Only" in History must leave only /lm-h, highlighted; saw ${JSON.stringify(only.rows)}`);
+    }
+    await pressKey(app, SHIFT_DELETE);
+    const gone = await settle(() => readRows(app), v => !v.rows.some(r => r.caption === h));
+    if (gone.rows.some(r => r.caption === h) || (await placesEntry(app, h)).found) {
+        fail(`Shift+Delete on the /lm-h history row in History must remove it from the list and from Places; rows ${JSON.stringify(gone.rows)}`);
+    }
+    await typeInPill(app, '');
+    await typeInPill(app, 'History Only');
+    const again = await settle(() => readRows(app), v => v.rows.some(r => r.title === 'History Only'));
+    if (again.rows.some(r => r.caption === h)) {
+        fail(`the next History query still lists the removed /lm-h; saw ${JSON.stringify(again.rows)}`);
+    }
+}
+
 /** The open-tab rows in the dropdown, in order. */
 const tabRowsOf = view => view.rows.filter(r => r.type === 'codicon-browser');
 
@@ -2922,8 +3028,11 @@ async function localModes(ctx) {
         } else if (sentWhileTyping) {
             fail(`typing in Tabs sent ${sentWhileTyping} search(es) before the search row was chosen`);
         }
+
+        await bookmarksAndHistory(ctx);
     } finally {
         await probe(app, `delete get('TabsAddressBarMode').provide; return true;`);
+        await probe(app, `delete get('ChromeStoreClient').searchPlaces; return true;`);
         await restoreDefaultMode(app);
     }
 }
@@ -3041,6 +3150,7 @@ const PLANTS = [
     { plant: 'reset-ignored', target: 'mode-chip', run: ['mode-chip'], expect: 'the x did not return to the default mode' },
     { plant: 'mode-sticks', target: 'mode-lifetime', run: ['mode-lifetime'], expect: 'mode did not return to the default after Enter' },
     { plant: 'tabs-lists-active', target: 'local-modes', run: ['search', 'local-modes'], expect: 'the active tab is listed' },
+    { plant: 'restrict-dropped', target: 'local-modes', run: ['search', 'local-modes'], expect: 'expected the seeded bookmarks newest first' },
 ];
 
 async function selfTest() {

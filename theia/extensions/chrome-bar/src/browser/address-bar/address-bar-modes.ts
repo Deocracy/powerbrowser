@@ -2,6 +2,7 @@ import { injectable, inject, postConstruct } from '@theia/core/shared/inversify'
 import { ApplicationShell } from '@theia/core/lib/browser';
 import type { CancellationToken } from '@theia/core/lib/common';
 import { WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import type { Row } from './address-bar-rows';
 import { LOCAL_MODES, LocalModeId } from './address-bar-mode-table';
 import { CHROME_BAR_COPY } from '../chrome-bar-copy';
@@ -100,4 +101,40 @@ export class TabsAddressBarMode extends BuiltInAddressBarMode {
             .sort((a, b) => rank(a) - rank(b))
             .map((w): Row => ({ key: 'tab:' + w.id, source: 'tab', title: w.title.label || w.url, caption: w.url, url: w.url, widgetId: w.id }));
     }
+}
+
+/**
+ * SMODE-01, Bookmarks and History: one Places source each, read chrome-side
+ * through the searchPlaces kind's restrict field (searchPlacesRestricted):
+ * newest first, empty text included, at most the mode's LOCAL_MODES cap. A
+ * rejected read rejects, so the address bar shows the mode's failure row. A
+ * bookmarked visit is a bookmark row, so Shift+Delete keeps its Phase 29 rule.
+ */
+@injectable()
+abstract class PlacesAddressBarMode extends BuiltInAddressBarMode {
+    abstract readonly restrict: 'bookmark' | 'history';
+
+    @inject(ChromeStoreClient)
+    protected readonly store: ChromeStoreClient;
+
+    async provide(text: string): Promise<Row[]> {
+        const cap = LOCAL_MODES.find(entry => entry.id === this.id)?.cap ?? 10;
+        const places = await this.store.searchPlaces(text, cap, this.restrict);
+        return places.map((place): Row => {
+            const source = this.restrict === 'bookmark' || place.bookmarked ? 'bookmark' : 'history';
+            return { key: `${source}:${place.url}`, source, title: place.title || place.url, caption: place.url, url: place.url };
+        });
+    }
+}
+
+@injectable()
+export class BookmarksAddressBarMode extends PlacesAddressBarMode {
+    readonly id = 'bookmarks';
+    readonly restrict = 'bookmark';
+}
+
+@injectable()
+export class HistoryAddressBarMode extends PlacesAddressBarMode {
+    readonly id = 'history';
+    readonly restrict = 'history';
 }
