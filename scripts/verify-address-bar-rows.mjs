@@ -10,11 +10,12 @@
  * `verify-address-bar-rows: FAIL -- <case>: <got>` line per red case. A module
  * missing any of its exports is a broken instrument, never a pass.
  *
- * --self-test: the clean module must be green; then eight copies of it in a
+ * --self-test: the clean module must be green; then nine copies of it in a
  * mkdtemp directory, each with one planted fault (ROW_LIMIT 11, the tab-wins
  * rule inverted, the highlight wrap removed, safeIcon accepting http, a
  * pick's icon classes dropped, autofillSplice comparing case-sensitively, a
- * dotted host:port classed as a url, the IPv6 address rule removed), must
+ * dotted host:port classed as a url, the file-search reading ignored so
+ * Makefile:12 is a url in Command centre, the IPv6 address rule removed), must
  * each go red naming the case that catches it. A plant whose text did not
  * change the module fails as "plant did not apply".
  *
@@ -169,6 +170,13 @@ function cases(m) {
             ['[::1]:8080', 'url'], ['www.x.com', 'url'], ['x/', 'url'], ['README.md', 'ambiguous'], ['main.py', 'ambiguous'],
             ['main.py:12', 'ambiguous'], ['example.com:8080', 'ambiguous'], ['hello', 'text'], ['hello world', 'text'], ['  ', 'text']]
             .map(([text, want]) => [`classifyAddress(${JSON.stringify(text)}) is ${want}`, () => (m.classifyAddress(text) === want ? null : { got: m.classifyAddress(text) })]),
+        // WR-01: in a file search (Command centre) a file and line or a folder is not an address; the strong forms still are.
+        ...[['Makefile:12', 'ambiguous'], ['src/', 'ambiguous'], ['theia/extensions/', 'ambiguous'], ['devbox:3000', 'ambiguous'],
+            ['localhost:4000/', 'url'], ['https://x/', 'url'], ['www.x.com/', 'url'], ['127.0.0.1/', 'url'], ['README.md', 'ambiguous'], ['hello', 'text']]
+            .map(([text, want]) => [`classifyAddress(${JSON.stringify(text)}, file search) is ${want}`, () => {
+                const got = m.classifyAddress(text, { fileSearch: true });
+                return got === want ? null : { got };
+            }]),
         ['a Go-to row: the globe and no type marker', () => {
             const got = m.iconFor(row('goto', 'localhost:4000/'));
             return same(got, { leading: { codicon: 'codicon-globe' }, trailing: null }) ? null : got;
@@ -262,6 +270,12 @@ const PLANTS = [
         from: '/^[^./:]+:\\d{1,5}(\\/.*)?$/',
         to: '/^[^/:]+:\\d{1,5}(\\/.*)?$/',
         expect: 'classifyAddress("main.py:12")',
+    },
+    {
+        name: 'file search ignored',
+        from: "return fileSearch ? 'ambiguous' : 'url';",
+        to: "return 'url';",
+        expect: 'classifyAddress("Makefile:12", file search)',
     },
     {
         name: 'IPv6 rule removed',
