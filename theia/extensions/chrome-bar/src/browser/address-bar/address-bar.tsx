@@ -24,7 +24,7 @@ import { EMPTY_PAGE_URL, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/t
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
 import { ChromeStoreClient, ResolvedAddress, SearchEngineList } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
-import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, currentWebTab, focusAddressPill } from '../chrome-bar-commands';
+import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, currentWebTab, focusAddressPill, setAddressFocus } from '../chrome-bar-commands';
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
 import { PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
@@ -232,6 +232,24 @@ export class AddressBar {
     /** Called once by the host widget at construction. */
     attach(host: ReactWidget): void {
         this.host = host;
+        setAddressFocus(() => this.focusAddress());
+    }
+
+    /**
+     * D-28 (SMODE-06): every address key and New Tab -- the pill in Address
+     * mode, focused, its whole text selected (the current address unless text
+     * was typed). An instance method, so a live plant can keep the mode.
+     */
+    focusAddress(): void {
+        this.closeModesMenu();
+        this.closeDropdown();
+        this.mode = 'address';
+        this.renderNow();
+        const input = this.pillRef?.querySelector('input');
+        if (input) {
+            input.focus();
+            input.select();
+        }
     }
 
     /** The moved code's repaint: the host widget's update(). */
@@ -469,14 +487,16 @@ export class AddressBar {
     /**
      * SMODE-06 (D-29..D-31): the Go-to row for the typed text, and whether it
      * leads the list (an unambiguous address) or follows the mode's rows (a
-     * dotted name that may be a file); undefined for plain text or a Theia
-     * prefix. Classified locally, so nothing is sent to decide it. Choosing it
+     * dotted name that may be a file), in Command centre with no Theia prefix
+     * and in Tabs, Bookmarks and History; undefined otherwise and for plain
+     * text. Classified locally, so nothing is sent to decide it. Choosing it
      * commits visit-only through chrome's resolve.
      */
     protected gotoRowFor(mode: AddressBarMode, typed: string): { row: Row; first: boolean } | undefined {
         const text = typed.trim();
         const kind = classifyAddress(text);
-        const offers = mode.id === 'command-centre' ? this.commandCentre()?.descriptorFor(typed)?.prefix === '' : false;
+        const offers = mode.id === 'command-centre' ? this.commandCentre()?.descriptorFor(typed)?.prefix === ''
+            : LOCAL_MODES.some(entry => entry.id === mode.id && entry.searchRow);
         if (!offers || kind === 'text') {
             return undefined;
         }
@@ -1261,7 +1281,10 @@ export class AddressBar {
             this.dropdownOpen = true;
             this.highlightKey = undefined;
             this.update();
-            focusAddressPill();
+            // Focus only: the address keys' path would close the Home-failure row just shown.
+            const input = this.pillRef?.querySelector('input');
+            input?.focus();
+            input?.select();
             return 'failed';
         }
     }
@@ -1546,8 +1569,13 @@ export class AddressBar {
                 this.cycleMode(e.key === 'ArrowDown' ? 1 : -1);
             }
         } else if (e.key === 'F6' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-            // The pill is chrome, not an editor: F6 and Shift+F6 go back to the page.
             e.preventDefault();
+            if (this.mode !== 'address') {
+                // D-28: in a non-Address mode F6 switches to Address and keeps focus, the text selected.
+                this.focusAddress();
+                return;
+            }
+            // The pill is chrome, not an editor: in Address mode F6 and Shift+F6 go back to the page.
             this.closeDropdown();
             this.update();
             const tab = currentWebTab();

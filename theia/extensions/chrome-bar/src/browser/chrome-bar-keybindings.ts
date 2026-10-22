@@ -32,6 +32,12 @@ export class ChromeBarKeybindingContribution implements KeybindingContribution {
             // KEY-04: Monaco and the terminal keep Ctrl+L now that chrome no longer reserves it.
             when: '!editorFocus && !terminalFocus',
         });
+        // SMODE-06 (D-28): Alt+D is the other address key, with Ctrl+L's scope; Theia binds no alt+d outside editors.
+        keybindings.registerKeybinding({
+            command: CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,
+            keybinding: 'alt+d',
+            when: '!editorFocus && !terminalFocus',
+        });
         // WR-02: F6/Shift+F6 in the pill go to the page (the pill's own keydown
         // handler). Theia's capture-phase dispatch would otherwise run
         // @theia/debug's F6 (Pause, `inDebugMode`) first and stop the event.

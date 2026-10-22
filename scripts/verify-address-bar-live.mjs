@@ -321,6 +321,17 @@
  *               Go-to row for localhost:<port>/x shows the commit-failure row
  *               and the served engine sees no GET on /one/search (visit-only,
  *               30-RESEARCH A4). Scored only after search passed.
+ *   address-keys  SMODE-06 (D-28, KEY-04): in Coding with the pill in Command
+ *               centre and a localhost tab current, Ctrl+L, Alt+D and F6
+ *               pressed in the page each focus the pill in Address mode with
+ *               the tab's address selected (Esc twice returns to Command
+ *               centre). In the pill, F6 in Command centre switches to Address
+ *               and keeps focus, and F6 again focuses the page; Ctrl+L in the
+ *               pill enters Address. New Tab makes a new tab current with the
+ *               pill focused in Address. In Tabs mode localhost:<port>/sw-a
+ *               gets a first, highlighted Go-to row. In the README.md editor
+ *               Ctrl+L and Alt+D leave the pill unfocused and its mode
+ *               unchanged. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -4096,6 +4107,137 @@ async function goTo(ctx) {
     }
 }
 
+const NEW_TAB_COMMAND = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_NEW_TAB_COMMAND_ID');
+const CTRL_L = { key: 'l', code: 'KeyL', keyCode: 76, modifiers: ['accel'] };
+const ALT_D = { key: 'd', code: 'KeyD', keyCode: 68, modifiers: ['alt'] };
+const F6 = { key: 'F6', code: 'F6', keyCode: 117 };
+
+/** The pill and the address bar's mode, read together. */
+const pillAndMode = async app => ({ pill: await readPill(app), mode: (await modeState(app))?.mode });
+
+/** Fails unless the pill has focus in Address mode with all of `value` selected; `label` names the key that got it there. */
+async function expectAddressFocus(app, fail, label, value) {
+    const v = await settle(() => pillAndMode(app), x => x.mode === 'address' && x.pill.focused && x.pill.selected && (value === undefined || x.pill.value === value));
+    if (v.mode !== 'address') {
+        fail(`${label} left the pill in ${v.mode === 'command-centre' ? 'Command centre' : JSON.stringify(v.mode)}`);
+    } else if (!v.pill.focused || !v.pill.selected || (value !== undefined && v.pill.value !== value)) {
+        fail(`${label} must focus the pill with ${value === undefined ? 'its text' : JSON.stringify(value)} selected; pill ${JSON.stringify(v.pill)}`);
+    }
+}
+
+/** Esc twice in the pill returns it to Command centre; throws a broken instrument when it does not. */
+async function backToCentre(app) {
+    await focusPill(app);
+    await pressKey(app, ESCAPE);
+    await pressKey(app, ESCAPE);
+    const state = await settle(() => modeState(app), v => v?.mode === 'command-centre');
+    if (state?.mode !== 'command-centre') {
+        throw new Error(`${BROKEN} Esc twice did not return the pill to Command centre (${JSON.stringify(state)})`);
+    }
+}
+
+/**
+ * SMODE-06 (D-28, KEY-04): in Coding, from Command centre, Ctrl+L, Alt+D and
+ * F6 pressed in a web page each focus the pill in Address mode with the tab's
+ * address selected. In the pill, F6 in Command centre switches to Address and
+ * keeps focus, and F6 in Address gives the page focus (Phase 27); Ctrl+L in
+ * the pill enters Address. New Tab ends with the pill focused in Address.
+ * Tabs mode gives an address a first Go-to row. In the README.md editor
+ * Ctrl+L and Alt+D leave the pill unfocused and its mode unchanged.
+ */
+async function addressKeys(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'address-keys')) {
+        return 'not-scored';
+    }
+    const dir = await openWorkspace(ctx);
+    const uiMode = await bodyMode(app);
+    if (uiMode !== 'coding') {
+        await switchUiMode(app, 'coding');
+    }
+    const tabId = await openLocalTab(app, pages, '/start');
+    await showTab(app, tabId, 'address-keys');
+    const address = localUrl(pages, '/start');
+    if (plant === 'focus-keeps-mode' && await probe(app, `get('AddressBar').focusAddress = function () {
+        const input = document.querySelector('.pb-chrome-bar-input'); input.focus(); input.select(); }; return true;`) === true) {
+        note('PLANT focus-keeps-mode applied');
+    }
+    try {
+        await restoreDefaultMode(app);
+        await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; bar.update(); return true;`);
+        if ((await modeState(app))?.mode !== 'command-centre') {
+            return fail(`${BROKEN} Coding did not start the pill in Command centre (${JSON.stringify(await modeState(app))})`);
+        }
+        // From the page: each address key reaches the pill in Address mode.
+        for (const [key, label] of [[CTRL_L, 'Ctrl+L'], [ALT_D, 'Alt+D'], [F6, 'F6']]) {
+            if (await focusOverlay(app, tabId) !== true) {
+                return fail(`${BROKEN} the page could not be focused before ${label}`);
+            }
+            await pressKey(app, key);
+            await expectAddressFocus(app, fail, label, address);
+            await backToCentre(app);
+        }
+
+        // In the pill: F6 in Command centre switches to Address and keeps focus; F6 in Address goes to the page.
+        await focusPill(app);
+        await pressKey(app, F6);
+        await expectAddressFocus(app, fail, 'F6 in the pill');
+        if (await chromeActiveTabId(app) === tabId) {
+            fail('F6 in the pill in Command centre moved focus to the page instead of keeping it in the pill');
+        }
+        await pressKey(app, F6);
+        if (await settle(() => chromeActiveTabId(app), v => v === tabId) !== tabId) {
+            fail('F6 in the pill in Address mode must give the page focus (Phase 27)');
+        }
+        await backToCentre(app);
+        await focusPill(app);
+        await pressKey(app, CTRL_L);
+        await expectAddressFocus(app, fail, 'Ctrl+L in the pill');
+        await backToCentre(app);
+
+        // New Tab: a new tab is current and the pill has focus in Address mode.
+        await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(NEW_TAB_COMMAND)}); return true;`);
+        const fresh = await settle(() => mainTabId(app), v => !!v && v !== tabId);
+        if (!fresh || fresh === tabId) {
+            fail(`New Tab did not make a new tab current (${JSON.stringify(fresh)})`);
+        }
+        await expectAddressFocus(app, fail, 'New Tab');
+        await showTab(app, tabId, 'address-keys');
+
+        // Tabs mode: an address gets a first, highlighted Go-to row.
+        await enterMode(app, 'tabs');
+        const tabsText = `${new URL(address).host}/sw-a`;
+        const tabs = await ccRowsFor(app, tabsText, v => v.rows[0]?.text === GO_TO(tabsText));
+        if (tabs.rows[0]?.text !== GO_TO(tabsText) || !tabs.rows[0].selected) {
+            fail(`in Tabs mode ${tabsText} must get a first, highlighted "${GO_TO(tabsText)}" row; rows ${JSON.stringify(tabs.rows.map(r => [r.text, r.selected]))}`);
+        }
+        await restoreDefaultMode(app);
+
+        // KEY-04: in an editor Ctrl+L and Alt+D keep their Theia meaning.
+        if (await focusTheiaFrame(app) !== true || await focusReadmeEditor(app, dir) !== true) {
+            return fail(`${BROKEN} the README.md editor could not be opened and focused`);
+        }
+        for (const [key, label] of [[CTRL_L, 'Ctrl+L'], [ALT_D, 'Alt+D']]) {
+            const before = await pillAndMode(app);
+            await pressKey(app, key);
+            await sleep(500);
+            const after = await pillAndMode(app);
+            if (after.pill.focused || after.mode !== before.mode) {
+                fail(`${label} in the editor took the pill (focused ${after.pill.focused}, mode ${JSON.stringify(before.mode)} -> ${JSON.stringify(after.mode)})`);
+            }
+        }
+    } finally {
+        await probe(app, `const bar = get('AddressBar'); delete bar.focusAddress;
+            const ed = get('EditorManager').currentEditor;
+            if (ed && ed.editor.document && ed.editor.document.revert) { await ed.editor.document.revert(); }
+            return true;`);
+        await restoreDefaultMode(app);
+        if (uiMode && uiMode !== 'coding') {
+            await switchUiMode(app, uiMode).catch(() => undefined);
+        }
+    }
+}
+
 /** Enters the contributed mode `id` from the default mode through the menu, with the text cleared. */
 async function enterMode(app, id) {
     await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
@@ -4134,13 +4276,14 @@ const SCENARIOS = {
     'command-centre-privacy': commandCentrePrivacy,
     'mode-keys': modeKeys,
     'go-to': goTo,
+    'address-keys': addressKeys,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
     'command-centre': 'search', 'command-centre-handoff': 'command-centre',
     'command-centre-privacy': 'search', 'mode-defaults': 'search', 'mode-tokens': 'search', 'mode-keys': 'search',
-    'go-to': 'search' };
+    'go-to': 'search', 'address-keys': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -4239,6 +4382,7 @@ const PLANTS = [
     { plant: 'token-kept', target: 'mode-tokens', run: ['search', 'mode-tokens'], expect: 'the * token did not enter Bookmarks' },
     { plant: 'cycle-off', target: 'mode-keys', run: ['search', 'mode-keys'], expect: 'Ctrl+Down did not move to the next mode' },
     { plant: 'visit-only-off', target: 'go-to', run: ['search', 'go-to'], expect: 'Command centre opened a search' },
+    { plant: 'focus-keeps-mode', target: 'address-keys', run: ['search', 'address-keys'], expect: 'Ctrl+L left the pill in Command centre' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 

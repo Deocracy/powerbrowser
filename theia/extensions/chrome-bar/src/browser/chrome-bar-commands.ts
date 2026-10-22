@@ -96,11 +96,27 @@ export function chromeBarHasNavigableTab(): boolean {
 }
 
 /**
- * Focuses the address pill and selects its content. A DOM lookup, not a
- * widget reference: the command side must not import the widget (the
- * widget imports these ids -- the dependency runs one way only).
+ * D-28 (SMODE-06): the address bar's own focus path, which also puts the pill
+ * in Address mode. Registered by the address bar, in the same one-way pattern
+ * as the current web tab above: the command side never imports the widget.
+ */
+let addressFocus: (() => void) | undefined;
+
+export function setAddressFocus(focus: (() => void) | undefined): void {
+    addressFocus = focus;
+}
+
+/**
+ * Focuses the address pill in Address mode and selects its content: the
+ * focus command (Ctrl/Cmd+L, Alt+D), New Tab and the page relay's address
+ * keys all come here. Before the address bar registers its focus path, a DOM
+ * lookup focuses and selects only.
  */
 export function focusAddressPill(): void {
+    if (addressFocus) {
+        addressFocus();
+        return;
+    }
     const input = document.querySelector<HTMLInputElement>(`.${CHROME_BAR_INPUT_CLASS}`);
     if (input) {
         input.focus();
