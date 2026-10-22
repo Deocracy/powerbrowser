@@ -1547,6 +1547,27 @@ export class AddressBar {
         return visitOnly && resolved.kind === 'search';
     }
 
+    /**
+     * D-26 (CR-01): Enter (Alt+Enter: in a new tab) in a local mode with typed
+     * text chooses the highlighted row, never the text itself. Pressed inside
+     * the debounce, the list settles first, so its default row (the first
+     * actionable one, 30-UI-SPEC) wins; with no row, Enter does nothing.
+     */
+    protected async enterLocalRow(mode: AddressBarMode, newTab: boolean): Promise<void> {
+        const value = this.inputValue;
+        if (!this.highlightedRow() && this.dropdownArmed) {
+            await this.runLocalQuery(mode);
+        }
+        const row = this.highlightedRow();
+        if (row && this.inputValue === value) {
+            await (newTab ? this.openRowInNewTab(row, true) : this.chooseRow(row));
+        }
+    }
+
+    protected highlightedRow(): Row | undefined {
+        return this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
+    }
+
     protected onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
         if (this.composing(e)) {
             // BAR-11: the IME owns every key while a composition is open; nothing commits or moves early.
@@ -1596,6 +1617,12 @@ export class AddressBar {
                 void this.openHomeSettings();
                 return;
             }
+            const local = this.commandCentre();
+            if (local && this.queryText()) {
+                // D-26 (CR-01): Enter, Alt+Enter and Ctrl+Enter act on a row; typed text never reaches chrome's resolve.
+                void this.enterLocalRow(local, e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey);
+                return;
+            }
             if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
                 // BAR-08: Alt+Enter opens the highlighted row (by default the typed text) in a new foreground tab.
                 if (this.dropdownOpen && this.highlightKey?.startsWith(ONE_OFF_KEY)) {
@@ -1608,7 +1635,7 @@ export class AddressBar {
             }
             // BAR-13: with a completion still selected, Ctrl+Enter acts on the typed part, not the autofilled origin.
             const typed = this.autofillSelected(e.currentTarget) ? this.inputValue.slice(0, e.currentTarget.selectionStart ?? undefined) : this.inputValue;
-            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && isCanonizable(typed.trim())) {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !local && isCanonizable(typed.trim())) {
                 // BAR-13: Ctrl+Enter completes a bare name to www.name.com in the current tab; other text is plain Enter.
                 void this.commitText(typed, { canonize: true });
                 return;
@@ -2468,8 +2495,10 @@ export class AddressBar {
     protected cycleMode(step: 1 | -1): void {
         const engines = this.engineList ? this.engineList.engines.map(engine => engine.name) : [];
         const contributed = this.modeProvider.getContributions();
-        const open = this.dropdownOpen;
-        this.mode = nextMode(cycleOrder(engines, id => contributed.some(mode => mode.id === id)), this.mode, step);
+        const next = nextMode(cycleOrder(engines, id => contributed.some(mode => mode.id === id)), this.mode, step);
+        // D-26 (IN-03): leaving Command centre for a mode that resolves keeps the text but sends none of it.
+        const open = this.dropdownOpen && !(this.commandCentre() && (MODE_SENDS[modeKindOf(next)] ?? MODE_SENDS['address']).resolve);
+        this.mode = next;
         this.closeDropdown();
         if (open) {
             this.requery();
