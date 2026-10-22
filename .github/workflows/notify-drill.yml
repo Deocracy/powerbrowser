@@ -1,0 +1,25 @@
+# GH-18 notification drill (Phase 41). The second owner account dispatches
+# this workflow from main; its one job waits on the release environment's
+# required reviewer, so the pending-deployment approval has to reach the
+# owner's phone. The owner rejects it from the phone, so it never deploys
+# anything. Kept as a re-runnable drill rather than deleted after the first
+# run (41-RESEARCH Open Question 4).
+#
+# It runs only from main: the release environment's branch policy admits
+# only main. It uses no secret, no action and no self-hosted runner, and the
+# token carries no permission at all.
+
+name: Notification drill
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  pending-deployment:
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 5
+    steps:
+      - run: echo "Deployment approval reached the reviewer."
