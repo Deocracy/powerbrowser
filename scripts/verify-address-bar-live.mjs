@@ -89,7 +89,10 @@
  *               current tab, and Gecko's default is still Probe Engine One and
  *               the setting still ""; ArrowDown onto the button and Enter
  *               searches /two/search again; a middle-click opens /two/search in
- *               a new background tab while the session tab stays current. With
+ *               a new background tab while the session tab stays current. When
+ *               that middle-click's resolve replies no-engine once, the
+ *               no-search row shows and Enter opens /two/search in a new tab
+ *               (the retry repeats the one-off). With
  *               every engine but Probe Engine One hidden chrome-side, no strip
  *               shows.
  *   switch-to-tab  BAR-06: with web tabs on localhost /sw-a ("Switch Alpha",
@@ -1103,6 +1106,41 @@ async function oneOff(ctx) {
     const stayed = await probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner === get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});`);
     if (stayed !== true) {
         fail('a middle-click on the one-off changed the current tab (it must open in the background)');
+    }
+    // A failed background one-off: Enter repeats it in a new tab rather than re-committing the pill's page address.
+    if (plant === 'oneoff-retry-recommits') {
+        const planted = await probe(app, `const w = get('ChromeBarWidget');
+            const original = Object.getPrototypeOf(w).showNoSearch;
+            w.showNoSearch = function () { return original.call(this); };
+            return true;`);
+        if (planted === true) {
+            note('PLANT oneoff-retry-recommits applied');
+        }
+    }
+    if (!await typeForOneOffs(app)) {
+        return fail('typing "hello" a fourth time showed no one-off strip');
+    }
+    const failOnce = await probe(app, `const c = get('ChromeStoreClient');
+        c.resolveTypedAddress = async () => { delete c.resolveTypedAddress; return { kind: 'no-engine' }; };
+        return true;`);
+    if (failOnce !== true) {
+        return fail(`${BROKEN} the client's resolveTypedAddress could not be stubbed`);
+    }
+    try {
+        await fireOneOff(app, 'auxclick', { button: 1 });
+        const row = await settle(() => readPill(app), v => v.rows.length === 1 && v.rows[0].includes("can't search right now"));
+        if (row.rows.length !== 1 || !row.rows[0].includes("can't search right now")) {
+            fail(`a failed background one-off must show the no-search row; saw ${JSON.stringify(row)}`);
+        } else {
+            const seen = new Set((await pushes(app)).map(p => p?.tabId));
+            pushMark = (await pushes(app)).length;
+            await pressKey(app, ENTER);
+            if (await waitForPush(app, p => p && p.kind === 'state' && !seen.has(p.tabId) && pathOf(p.url) === '/two/search', { from: pushMark }) < 0) {
+                fail(`Enter after a failed background one-off opened no new tab on /two/search; pill ${JSON.stringify(await readPill(app))}`);
+            }
+        }
+    } finally {
+        await stubResolve(app, null);
     }
     const others = listed.filter(name => name !== ENGINE_ONE);
     try {
@@ -2465,6 +2503,7 @@ const PLANTS = [
     { plant: 'dedupe-off', target: 'rows', run: ['rows'], expect: 'two rows for one url' },
     { plant: 'setting-ignored', target: 'suggestions', run: ['suggestions'], expect: 'suggest request while the setting was off' },
     { plant: 'oneoff-default', target: 'one-off', run: ['one-off'], expect: 'no GET on /two/search' },
+    { plant: 'oneoff-retry-recommits', target: 'one-off', run: ['one-off'], expect: 'Enter after a failed background one-off opened no new tab' },
     { plant: 'tab-row-navigates', target: 'switch-to-tab', run: ['switch-to-tab'], expect: 'loading: true' },
     { plant: 'autofill-on-paste', target: 'autofill', run: ['autofill'], expect: 'autofilled a paste' },
     { plant: 'shift-del-bookmark', target: 'shift-del', run: ['shift-del'], expect: 'removed the visits of a bookmarked page' },

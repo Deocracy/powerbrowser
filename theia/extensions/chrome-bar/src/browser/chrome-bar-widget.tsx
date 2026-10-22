@@ -1269,8 +1269,9 @@ export class ChromeBarWidget extends ReactWidget {
     }
 
     /** Phase 29 (BAR-01): chrome has no engine for typed words: one no-search row, Enter retries. */
-    protected showNoSearch(): void {
+    protected showNoSearch(retry?: () => Promise<void>): void {
         this.noSearch = true;
+        this.retry = retry;
         this.dropdownOpen = true;
         this.highlightKey = undefined;
         this.update();
@@ -1485,7 +1486,7 @@ export class ChromeBarWidget extends ReactWidget {
             }
             if (this.commitFailed || this.noSearch) {
                 // Retry affordance: Enter repeats the failed drop, new-tab open or search, else re-commits the typed text.
-                const retry = this.commitFailed ? this.retry : undefined;
+                const retry = this.retry;
                 this.commitFailed = false;
                 this.noSearch = false;
                 if (retry) {
@@ -1601,10 +1602,10 @@ export class ChromeBarWidget extends ReactWidget {
      * name rides this one request; Gecko's default and the setting are never
      * written. 'current' searches in the current tab; 'background' opens a new
      * background tab, the current tab stays selected and the pill reverts;
-     * 'foreground' (Alt+Enter) opens the new tab and selects it.
+     * 'foreground' (Alt+Enter) opens the new tab and selects it. `text` is
+     * passed by a retry: a new-tab one-off has already put the page address back in the pill.
      */
-    protected async runOneOff(name: string, target: 'current' | 'background' | 'foreground'): Promise<void> {
-        const text = this.inputValue.trim();
+    protected async runOneOff(name: string, target: 'current' | 'background' | 'foreground', text = this.inputValue.trim()): Promise<void> {
         if (!text) {
             return;
         }
@@ -1625,7 +1626,8 @@ export class ChromeBarWidget extends ReactWidget {
             resolved = undefined;
         }
         if (resolved?.kind !== 'search' || !resolved.url) {
-            this.showNoSearch();
+            // Enter repeats this one-off; re-committing the pill would reload the page (WR-05) or use the default engine.
+            this.showNoSearch(() => this.runOneOff(name, target, text));
             return;
         }
         // With no tab to open after, a new-tab one-off searches in place.
