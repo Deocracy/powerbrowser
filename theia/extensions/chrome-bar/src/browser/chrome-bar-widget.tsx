@@ -1476,9 +1476,11 @@ export class ChromeBarWidget extends ReactWidget {
                 void this.openRowInNewTab(row, true);
                 return;
             }
-            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && isCanonizable(this.inputValue.trim())) {
+            // BAR-13: with a completion still selected, Ctrl+Enter acts on the typed part, not the autofilled origin.
+            const typed = this.autofillSelected(e.currentTarget) ? this.inputValue.slice(0, e.currentTarget.selectionStart ?? undefined) : this.inputValue;
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && isCanonizable(typed.trim())) {
                 // BAR-13: Ctrl+Enter completes a bare name to www.name.com in the current tab; other text is plain Enter.
-                void this.commitText(this.inputValue, { canonize: true });
+                void this.commitText(typed, { canonize: true });
                 return;
             }
             if (this.commitFailed || this.noSearch) {
