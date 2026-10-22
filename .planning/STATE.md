@@ -1,20 +1,20 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 29
-current_phase_name: Address Bar Search and Fixup
-status: verifying
-stopped_at: Completed 29-10-PLAN.md
-last_updated: "2026-10-22T02:18:25.637Z"
-last_activity: 2026-10-21
-last_activity_desc: 29-10 complete (first click selects the pill, IME composition never commits early, typed text kept per tab in memory; all 18 address-bar live scenarios, the 12-plant self-test, nav-keys-live and web-tab-live green; BAR-11 and BAR-12 complete; phase 29 ready for verification)
-state_head: d9677fa47bd311ac51ed7a6237f3fc7ef57a7811
+current_phase: 30
+current_phase_name: Address-Bar Modes and Command Centre
+status: executing
+stopped_at: Completed 30-02-PLAN.md
+last_updated: "2026-10-22T17:50:54.681Z"
+last_activity: 2026-10-22
+last_activity_desc: 30-02 complete (modes dropdown, engine modes, chip and x, mode lifetime, Search Settings; verify-address-bar-modes gate; 17-plant live self-test green)
+state_head: 4e35f27c17d9744d4f4fb5defbabb8b5d8b9656b
 progress:
   total_phases: 13
   completed_phases: 1
-  total_plans: 18
-  completed_plans: 18
+  total_plans: 24
+  completed_plans: 20
   percent: 8
 ---
 
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 29 — Address Bar Search and Fixup
+**Current focus:** Phase 30
 
 ## Current Position
 
-Phase: 29 (Address Bar Search and Fixup) — VERIFYING
-Plan: 10 of 10
-Status: Phase complete — ready for verification
-Last activity: 2026-10-21 — 29-10 complete (first click selects the pill, IME composition never commits early, typed text kept per tab in memory; all 18 address-bar live scenarios, the 12-plant self-test, nav-keys-live and web-tab-live green; BAR-11 and BAR-12 complete; phase 29 ready for verification)
+Phase: 30 (Address-Bar Modes and Command Centre) — EXECUTING
+Plan: 3 of 6
+Status: Ready to execute
+Last activity: 2026-10-22 — 30-02 complete (modes dropdown, engine modes, chip and x, mode lifetime, Search Settings; verify-address-bar-modes gate; live modes-dropdown, mode-chip, mode-lifetime and the 17-plant self-test green)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -166,6 +166,8 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P08 | 42m | 3 tasks | 9 files |
 | Phase 29 P09 | 85m | 2 tasks | 8 files |
 | Phase 29 P10 | 3h05m | 2 tasks | 3 files |
+| Phase 30 P01 | ~2h | 3 tasks | 14 files |
+| Phase 30 P02 | ~1h30m | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -426,6 +428,10 @@ Recent decisions affecting current work:
 - [Phase 29]: 29-10: every pill edit renders synchronously (MessageLoop.sendMessage UpdateRequest) so React's controlled-value restore cannot end an IME composition
 - [Phase 29]: 29-10: drafts hold only off-screen tabs; saveDraft is the single writer and keeps nothing when the value equals the committed address, so commits and Esc restore clear drafts
 - [Phase 29]: 29-10: syncAddressFromWidget keeps any uncommitted edit regardless of focus and only updates the committed address
+- [Phase 30]: 30-02: an engine mode's commit captures its engine before resetMode, and its failure retry repeats that engine
+- [Phase 30]: 30-02: uiModeChanged resets the pill's mode only when the PowerBrowser mode id changes
+- [Phase 30]: 30-02: the modes menu re-reads chrome's engines each time it opens
+- [Phase 30]: 30-02: the nav-copy gate skips quoted property keys (modeLabels keys are mode ids, not copy)
 
 ### Pending Todos
 
@@ -529,8 +535,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-22T02:18:25.572Z
-Stopped at: Completed 29-10-PLAN.md
+Last session: 2026-10-22T17:50:54.495Z
+Stopped at: Completed 30-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

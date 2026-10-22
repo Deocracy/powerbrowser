@@ -277,16 +277,16 @@ Plans:
   4. In Command centre, file search, `>` commands and the `#`, `?`, `edt`, `term`, `task`, `debug` and `view` prefixes show Theia's results under the pill while the page stays visible, with no engine suggestion row; `@` and `:` open Theia's symbol and go-to-line pickers
   5. From Command centre, Ctrl+L, Alt+D and F6 switch the pill to address mode, and an unambiguous URL (scheme, localhost, host:port, IP) gets a "Go to" first row
 
-**Plans**: 6 plans (strictly sequential waves 1-6: no worktrees, every plan edits `address-bar/address-bar.tsx` and `--quick` reads the whole tree)
+**Plans**: 2/6 plans executed (strictly sequential waves 1-6: no worktrees, every plan edits `address-bar/address-bar.tsx` and `--quick` reads the whole tree)
 
 Plans:
 **Wave 1**
 
-- [ ] 30-01-PLAN.md — D-04 move: the pill into `address-bar/` as the injectable `AddressBar`, rows module moved, gate scans recursive with nested plants, live plants re-pointed; no behaviour change
+- [x] 30-01-PLAN.md — D-04 move: the pill into `address-bar/` as the injectable `AddressBar`, rows module moved, gate scans recursive with nested plants, live plants re-pointed; no behaviour change
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 30-02-PLAN.md — Tracer: modes dropdown, mode button and chip, engine modes, x reset, mode lifetime, Search Settings; the D-03 default table and the `verify-address-bar-modes` gate
+- [x] 30-02-PLAN.md — Tracer: modes dropdown, mode button and chip, engine modes, x reset, mode lifetime, Search Settings; the D-03 default table and the `verify-address-bar-modes` gate
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -303,6 +303,7 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [ ] 30-06-PLAN.md — Go-to row from a local classifier with visit-only commits; Ctrl+L, Alt+D and F6 to Address mode; phase-close live run
+
 **UI hint**: yes
 
 ### Phase 31: Site Identity, Permissions and App Menu
@@ -473,7 +474,7 @@ Plans:
 | 27. Groundwork, Navigation Buttons and Page-Focus Keys | 8/8 | In Progress|  |
 | 28. WebExtension Tab Route Spike | 0/0 | Complete    | 2026-10-21 |
 | 29. Address Bar Search and Fixup | 10/10 | In Progress|  |
-| 30. Address-Bar Modes and Command Centre | 0/TBD | Not started | - |
+| 30. Address-Bar Modes and Command Centre | 2/6 | In Progress | - |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
 | 32. Page Tools | 0/TBD | Not started | - |
 | 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
