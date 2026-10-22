@@ -177,6 +177,16 @@
  *               queries); Enter then GETs /one/search with q "かな" and the tab
  *               pushes it (the control for the push check). Scored only after
  *               suggestions passed in the same session.
+ *   drafts      BAR-12: with web tabs on localhost /dr-a (A) and /dr-b (B),
+ *               "draft text" typed in A without Enter: activating B shows B's
+ *               address; activating A shows the draft with the caret at its
+ *               end, no dropdown and the pill not focused. A's own script
+ *               navigating to /dr-a2 keeps the draft after A's loaded push.
+ *               Enter commits it as a search (openCommittedUrl wrapped to
+ *               record, nothing loads), and switching away and back shows
+ *               A's address. Text typed in B then Esc twice (close, restore)
+ *               leaves no draft. A tab C with "gone" typed is closed, and the
+ *               pill shows the next current tab's own address.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -250,6 +260,10 @@ const PAGES = {
     '/keep-me': { title: 'Keep Me Page', body: '<p>keep</p>' },
     '/del-fail': { title: 'Fail Me Page', body: '<p>fail</p>' },
     '/pasted': { title: 'Pasted Page', body: '<p>pasted</p>' },
+    '/dr-a': { title: 'Draft Alpha', body: '<p>alpha</p>' },
+    '/dr-a2': { title: 'Draft Alpha Two', body: '<p>alpha two</p>' },
+    '/dr-b': { title: 'Draft Beta', body: '<p>beta</p>' },
+    '/dr-c': { title: 'Draft Gamma', body: '<p>gamma</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -2132,6 +2146,162 @@ async function selectIme(ctx) {
     }
 }
 
+/**
+ * The pill's value, selection, whether it has focus in a focused document,
+ * whether its dropdown is open, and whether the Theia frame's active element
+ * is still the one markActive recorded.
+ */
+const readDraftView = app => app.evaluate(`JSON.stringify((() => {
+    const input = document.querySelector('.pb-chrome-bar-input');
+    return input ? {
+        value: input.value, start: input.selectionStart, end: input.selectionEnd,
+        focused: document.hasFocus() && document.activeElement === input,
+        expanded: input.getAttribute('aria-expanded') === 'true',
+        sameActive: document.activeElement === window.__pbActiveMark,
+    } : null;
+})())`).then(JSON.parse);
+
+/** Records the Theia frame's active element for readDraftView's sameActive. */
+const markActive = app => app.evaluate('window.__pbActiveMark = document.activeElement; true');
+
+/** The shell's current web tab's page url, or null. */
+const currentTabUrl = app => probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner?.url ?? null;`);
+
+const DRAFT = 'draft text';
+
+/** Opens `path` on localhost as a web tab and waits for its loaded push; returns its tab id. */
+async function openLocalTab(app, pages, path) {
+    const tabId = await openWebTab(app, localUrl(pages, path));
+    if (await waitForPush(app, loadedAt(tabId, path)) < 0) {
+        throw new Error(`${BROKEN} no loaded state push arrived for ${path}`);
+    }
+    return tabId;
+}
+
+/** Makes `tabId` current or throws a broken-instrument error naming `label`. */
+async function showTab(app, tabId, label) {
+    if (await makeCurrent(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the ${label} tab could not be made current`);
+    }
+}
+
+async function drafts(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const urlA = localUrl(pages, '/dr-a');
+    const urlA2 = localUrl(pages, '/dr-a2');
+    const urlB = localUrl(pages, '/dr-b');
+    const tabA = await openLocalTab(app, pages, '/dr-a');
+    const tabB = await openLocalTab(app, pages, '/dr-b');
+    if (plant === 'draft-lost') {
+        if (await probe(app, `get('ChromeBarWidget').saveDraft = function () {}; return true;`) === true) {
+            note('PLANT draft-lost applied');
+        }
+    }
+    try {
+        await showTab(app, tabA, '/dr-a');
+        await typeInPill(app, DRAFT);
+        await showTab(app, tabB, '/dr-b');
+        const onB = await settle(() => readDraftView(app), v => v?.value === urlB);
+        if (onB?.value !== urlB) {
+            return fail(`switching to B must show B's address ${urlB}; the pill shows ${JSON.stringify(onB?.value)}`);
+        }
+        // Focus in B's page and none in the pill, so a restore that focused the pill would show.
+        await app.evaluate(`(() => { const i = document.querySelector('.pb-chrome-bar-input'); if (i) i.blur(); return true; })()`);
+        if (await focusOverlay(app, tabB) !== true) {
+            return fail(`${BROKEN} B's page could not be focused`);
+        }
+        await markActive(app);
+        await showTab(app, tabA, '/dr-a');
+        const back = await settle(() => readDraftView(app), v => v?.value === DRAFT);
+        if (back?.value !== DRAFT) {
+            return fail(`expected the draft text ${JSON.stringify(DRAFT)} in A's pill after switching back; it shows ${JSON.stringify(back?.value)}`);
+        }
+        if (back.start !== DRAFT.length || back.end !== DRAFT.length || back.expanded || back.focused || !back.sameActive) {
+            fail(`the restored draft must have the caret at its end, no dropdown, and the switch must neither focus the pill nor move the Theia frame's active element; saw ${JSON.stringify(back)}`);
+        }
+
+        // A page-initiated navigation keeps the draft.
+        const overlay = await pollFor(async () => (await app.contexts()).find(c => c.url === urlA) ?? null, 10000, 'the /dr-a overlay context').catch(() => null);
+        if (!overlay) {
+            return fail(`${BROKEN} no BiDi context for A's page at ${urlA}`);
+        }
+        const mark = (await pushes(app)).length;
+        await app.evaluateIn(overlay.context, `location.href = '/dr-a2'; true`);
+        if (await waitForPush(app, loadedAt(tabA, '/dr-a2'), { from: mark }) < 0) {
+            return fail(`${BROKEN} A's own navigation to /dr-a2 pushed no loaded state, so the draft was never tested against a push`);
+        }
+        await sleep(300);
+        const kept = await readDraftView(app);
+        if (kept?.value !== DRAFT) {
+            fail(`expected the draft text ${JSON.stringify(DRAFT)} to survive A's own navigation to /dr-a2; the pill shows ${JSON.stringify(kept?.value)}`);
+        }
+
+        // Enter commits the draft as a search; the commit is recorded, nothing loads (it would change A's site).
+        const wrapped = await probe(app, `const w = get('ChromeBarWidget');
+            window.__pbCommitted = [];
+            w.__pbOpenCommitted = w.openCommittedUrl;
+            w.openCommittedUrl = async url => { window.__pbCommitted.push(url); };
+            return true;`);
+        if (wrapped !== true) {
+            return fail(`${BROKEN} the widget's openCommittedUrl could not be wrapped`);
+        }
+        try {
+            if (await focusTheiaFrame(app) !== true || await app.evaluate(`(() => { const i = document.querySelector('.pb-chrome-bar-input'); i.focus(); return document.activeElement === i && i.value === ${JSON.stringify(DRAFT)}; })()`) !== true) {
+                return fail(`${BROKEN} the pill could not be focused with the draft in it`);
+            }
+            await pressKey(app, ENTER);
+            const got = await settle(() => committedUrls(app), v => v.length > 0, 8000);
+            const q = got.length === 1 ? new URL(got[0]).searchParams.get('q') : null;
+            if (got.length !== 1 || !got[0].startsWith(`${pages.origin}/one/search`) || q !== DRAFT) {
+                fail(`Enter on the draft must commit it as a search on /one/search with q ${JSON.stringify(DRAFT)}; the commit recorded ${JSON.stringify(got)}`);
+            }
+        } finally {
+            await probe(app, `const w = get('ChromeBarWidget');
+                if (w.__pbOpenCommitted) { w.openCommittedUrl = w.__pbOpenCommitted; delete w.__pbOpenCommitted; }
+                return true;`);
+        }
+        await showTab(app, tabB, '/dr-b');
+        await showTab(app, tabA, '/dr-a');
+        const afterCommit = await settle(() => readDraftView(app), v => v?.value === urlA2);
+        if (afterCommit?.value !== urlA2) {
+            fail(`after the commit, switching away and back must show A's address ${urlA2}; the pill shows ${JSON.stringify(afterCommit?.value)}`);
+        }
+
+        // Esc's restore step drops the draft.
+        await showTab(app, tabB, '/dr-b');
+        await typeInPill(app, 'beta typed');
+        if (!(await settle(() => readDraftView(app), v => v?.expanded)).expanded) {
+            return fail(`${BROKEN} typing in B's pill opened no dropdown, so the first Esc would not be the close step`);
+        }
+        await pressKey(app, ESCAPE);
+        await settle(() => readDraftView(app), v => v && !v.expanded);
+        await pressKey(app, ESCAPE);
+        const restored = await settle(() => readDraftView(app), v => v?.value === urlB);
+        if (restored?.value !== urlB) {
+            return fail(`${BROKEN} two Esc presses did not restore B's address (${JSON.stringify(restored)})`);
+        }
+        await showTab(app, tabA, '/dr-a');
+        await showTab(app, tabB, '/dr-b');
+        const afterEsc = await settle(() => readDraftView(app), v => v?.value === urlB);
+        if (afterEsc?.value !== urlB) {
+            fail(`after Esc restored B's address, switching away and back must show ${urlB}; the pill shows ${JSON.stringify(afterEsc?.value)}`);
+        }
+
+        // Closing a tab with a draft: the next current tab shows its own address.
+        const tabC = await openLocalTab(app, pages, '/dr-c');
+        await showTab(app, tabC, '/dr-c');
+        await typeInPill(app, 'gone');
+        await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(tabC)}).close(); return true;`);
+        const next = await settle(async () => ({ url: await currentTabUrl(app), view: await readDraftView(app) }),
+            v => v.url && v.view?.value === v.url);
+        if (!next.url || next.view?.value !== next.url) {
+            fail(`after closing C with a draft, the pill must show the next current tab's address ${JSON.stringify(next.url)}; it shows ${JSON.stringify(next.view?.value)}`);
+        }
+    } finally {
+        await probe(app, `delete get('ChromeBarWidget').saveDraft; return true;`);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -2150,6 +2320,7 @@ const SCENARIOS = {
     'shift-del': shiftDel,
     'context-menu': contextMenu,
     'select-ime': selectIme,
+    drafts,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -2233,6 +2404,7 @@ const PLANTS = [
     { plant: 'shift-del-bookmark', target: 'shift-del', run: ['shift-del'], expect: 'removed the visits of a bookmarked page' },
     { plant: 'paste-reads-on-open', target: 'context-menu', run: ['context-menu'], expect: 'clipboard read before a click' },
     { plant: 'ime-guard-off', target: 'select-ime', run: ['suggestions', 'select-ime'], expect: 'committed during composition' },
+    { plant: 'draft-lost', target: 'drafts', run: ['drafts'], expect: 'expected the draft text' },
 ];
 
 async function selfTest() {

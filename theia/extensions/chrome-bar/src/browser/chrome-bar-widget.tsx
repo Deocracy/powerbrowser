@@ -260,6 +260,10 @@ export class ChromeBarWidget extends ReactWidget {
     protected compositionOpen = false;
     /** BAR-11: the pill already had focus when the current press began; only a focusing press selects all. */
     protected focusedAtPress = false;
+    /** BAR-12: typed, unsubmitted text of the tabs not on screen, in memory only; never stored, pushed or logged. */
+    protected readonly drafts = new WeakMap<Widget, string>();
+    /** BAR-12: the widget whose address the pill currently shows; its own text lives in inputValue, not in drafts. */
+    protected draftOwner: Widget | undefined;
     /** BAR-07: the pill's autofilled value and the origin it opens; cleared by any input, a commit or a close. */
     protected autofill: { value: string; url: string } | undefined;
     /** BAR-07: Backspace or Delete removed a completion; nothing autofills until the next inserting keystroke. */
@@ -1679,19 +1683,20 @@ export class ChromeBarWidget extends ReactWidget {
     }
 
     /**
-     * Re-derives the pill from a widget, unless the user is typing: while
-     * the input has focus AND carries an uncommitted edit, neither a tab
-     * change nor a state push overwrites it (the carried two-stage Esc
-     * restores the committed address). Focus alone is not the guard: after
-     * Enter the input keeps focus and the value equals the committed text,
-     * and that is exactly when chrome's canonical URL must replace it.
+     * Re-derives the pill from a widget. BAR-12: while the pill carries an
+     * uncommitted edit, focused or not, a state push only updates the
+     * committed address (so a page-initiated navigation keeps the typed text,
+     * and Esc's restore step shows the new address). The guard is the edit,
+     * not focus: after Enter the value equals the committed text, and that is
+     * exactly when chrome's canonical URL must replace it. `keepEdit` false
+     * (a tab switch) always syncs.
      */
-    protected syncAddressFromWidget(widget: Widget | undefined): void {
-        const input = this.pillRef?.querySelector('input');
-        if (input && document.activeElement === input && this.inputValue !== this.committedAddress) {
+    protected syncAddressFromWidget(widget: Widget | undefined, keepEdit = true): void {
+        const address = this.addressOf(widget);
+        if (keepEdit && this.inputValue !== this.committedAddress) {
+            this.committedAddress = address;
             return;
         }
-        const address = this.addressOf(widget);
         this.inputValue = address;
         this.committedAddress = address;
         this.commitFailed = false;
@@ -1705,6 +1710,9 @@ export class ChromeBarWidget extends ReactWidget {
      * subscription), then syncs the pill and re-renders nav enablement.
      */
     onCurrentWidgetChanged(widget: Widget | undefined): void {
+        this.saveDraft();
+        this.closeDropdown();
+        this.draftOwner = widget;
         this.stateSubscription?.dispose();
         this.stateSubscription = undefined;
         if (widget instanceof WebTabWidget) {
@@ -1718,8 +1726,30 @@ export class ChromeBarWidget extends ReactWidget {
                 this.update();
             });
         }
-        this.syncAddressFromWidget(widget);
+        const draft = widget && this.drafts.get(widget);
+        if (widget && draft !== undefined) {
+            // BAR-12: the tab's own typed text comes back; setting the value puts the caret at its end, focus stays put.
+            this.drafts.delete(widget);
+            this.committedAddress = this.addressOf(widget);
+            this.inputValue = draft;
+            this.commitFailed = false;
+        } else {
+            this.syncAddressFromWidget(widget, false);
+        }
         this.update();
+    }
+
+    /**
+     * BAR-12: keeps the outgoing widget's uncommitted text for its return.
+     * Every commit path and Esc's restore leave the value equal to the
+     * committed address, so nothing is kept for them. An instance-replaceable
+     * method, so a live plant can drop drafts.
+     */
+    protected saveDraft(): void {
+        const owner = this.draftOwner;
+        if (owner && !owner.isDisposed && this.inputValue !== this.committedAddress) {
+            this.drafts.set(owner, this.inputValue);
+        }
     }
 
     /**
