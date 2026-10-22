@@ -584,6 +584,12 @@ const EXPECTED_NAV_COPY = new Set([
   "This time, search with:",
   "Switch to Tab",
   "${name} couldn't remove that page from your history. Press Shift+Delete to try again.",
+  "Cut",
+  "Copy",
+  "Paste",
+  "Paste & Go",
+  "Select All",
+  "${name} couldn't read the clipboard. Press Ctrl+V to paste, then press Enter.",
 ]);
 
 /**

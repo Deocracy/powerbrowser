@@ -194,6 +194,11 @@ export class ChromeStoreClient {
         return this.field<boolean>({ kind: 'removeHistoryEntry', url }, 'removed');
     }
 
+    /** Phase 29 (BAR-10): the global clipboard's text, at most 8192 characters; "" when empty. Privileged: only the pill menu's Paste and Paste & Go call it. */
+    readClipboardText(): Promise<string> {
+        return this.field<string>({ kind: 'readClipboardText' }, 'text');
+    }
+
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
     queryTabsWithPlaces(query: TabPlacesQuery = {}): Promise<TabPlacesRow[]> {
         return this.field<TabPlacesRow[]>({ kind: 'queryTabsWithPlaces', ...query }, 'rows');

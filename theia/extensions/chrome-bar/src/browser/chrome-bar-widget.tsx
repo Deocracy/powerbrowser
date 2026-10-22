@@ -16,6 +16,7 @@ import URI from '@theia/core/lib/common/uri';
 import { PreferenceSchemaService, PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
+import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import pDebounce from 'p-debounce';
 import { EMPTY_PAGE_URL, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -59,6 +60,8 @@ import '../../src/browser/chrome-bar.css';
 
 /** NAV-03: the session-history menu's path. The menu is built per request from the history reply, never registered. */
 const HISTORY_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-history'];
+/** BAR-10: the pill's Cut/Copy/Paste menu, built per request like the history menu, never registered. */
+const PILL_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-pill'];
 
 /** NAV-03: Firefox's click-hold delay before Back/Forward open the history menu. */
 const HISTORY_HOLD_MS = 500;
@@ -220,6 +223,10 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(PreferenceSchemaService)
     protected readonly preferenceSchema: PreferenceSchemaService;
 
+    /** Phase 29 (BAR-10): Cut and Copy write through it; nothing here reads it (Paste reads chrome-side). */
+    @inject(ClipboardService)
+    protected readonly clipboard: ClipboardService;
+
     /** Phase 29 (BAR-04): chrome's engine list; undefined until it arrives or when it failed. */
     protected engineList: SearchEngineList | undefined;
 
@@ -265,6 +272,8 @@ export class ChromeBarWidget extends ReactWidget {
     /** The heuristic row could not be computed: the first row is the suggestions-failure row. */
     protected providerFailed = false;
     protected commitFailed = false;
+    /** BAR-10: Paste or Paste & Go could not read the clipboard; one failure row shows until the next edit or close. */
+    protected pasteFailed = false;
     /** Phase 29 (BAR-01): chrome found no engine for typed words; Enter retries, typing or closing clears it. */
     protected noSearch = false;
     /** NAV-04: the Home-failure row is showing; Enter or a click opens Settings on the home-page setting. */
@@ -638,6 +647,152 @@ export class ChromeBarWidget extends ReactWidget {
         this.openHistoryMenu(e.currentTarget);
     };
 
+    /** BAR-10: right-click, the context-menu key and Shift+F10 on the pill open its menu instead of the native one. */
+    protected onPillContextMenu = (e: React.MouseEvent<HTMLInputElement>): void => {
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        const keyboard = e.button !== 2 || (e.clientX === 0 && e.clientY === 0);
+        void this.openPillMenu(keyboard ? { x: rect.left, y: rect.bottom } : { x: e.clientX, y: e.clientY });
+    };
+
+    /**
+     * BAR-10: Cut, Copy, Paste, Paste & Go, a separator, Select All, as a
+     * stock `.lm-Menu` built per request. Enablement reads only the input:
+     * Paste and Paste & Go are always enabled, so opening the menu never reads
+     * the clipboard; it is read only when one of them is chosen. Focus returns
+     * to the pill on close, except after Paste & Go, which moves it to the page.
+     * A prototype method, so a live plant can replace it per instance.
+     */
+    protected async openPillMenu(anchor: { x: number; y: number }): Promise<void> {
+        const input = this.pillRef?.querySelector('input');
+        if (!input) {
+            return;
+        }
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? start;
+        let went = false;
+        const item = (id: string, label: string, sortString: string, enabled: boolean, run: () => Promise<void>): CommandMenu => ({
+            id: `pill-${id}`, label, sortString, isVisible: () => true, isEnabled: () => enabled, isToggled: () => false, run,
+        });
+        const group = (id: string, sortString: string, children: CommandMenu[]): CompoundMenuNode => ({
+            id, sortString, children, isVisible: () => true, isEmpty: () => false,
+        });
+        const menu: CompoundMenuNode = {
+            id: 'pill', sortString: '0', isVisible: () => true, isEmpty: () => false, children: [
+                group('pill-edit', '0', [
+                    item('cut', CHROME_BAR_COPY.cut, '0', start !== end, () => this.cutSelection(input, start, end)),
+                    item('copy', CHROME_BAR_COPY.copy, '1', start !== end, async () => {
+                        await this.clipboard.writeText(input.value.slice(start, end));
+                    }),
+                    item('paste', CHROME_BAR_COPY.paste, '2', true, () => this.pasteClipboard(input, start, end)),
+                    item('paste-and-go', CHROME_BAR_COPY.pasteAndGo, '3', true, () => {
+                        went = true;
+                        return this.pasteAndGo();
+                    }),
+                ]),
+                group('pill-select', '1', [
+                    item('select-all', CHROME_BAR_COPY.selectAll, '0', input.value !== '', async () => input.select()),
+                ]),
+            ],
+        };
+        this.menus.render({
+            menuPath: PILL_MENU_PATH,
+            menu,
+            anchor,
+            context: input,
+            includeAnchorArg: false,
+            // Deferred past the stock focus restore, as the history menu does.
+            onHide: () => setTimeout(() => {
+                if (!went) {
+                    input.focus();
+                }
+            }),
+        });
+    }
+
+    /** BAR-10: Cut removes the selection only once the clipboard took it, so a failed write loses no text. */
+    protected async cutSelection(input: HTMLInputElement, start: number, end: number): Promise<void> {
+        let written = !this.clipboard.onDidWriteText;
+        const listener = this.clipboard.onDidWriteText?.(() => { written = true; });
+        try {
+            await this.clipboard.writeText(input.value.slice(start, end));
+        } finally {
+            listener?.dispose();
+        }
+        if (written) {
+            input.setRangeText('', start, end, 'end');
+            this.textEdited(input.value, false);
+        }
+    }
+
+    /** BAR-10: inserts the clipboard text at the selection as typing does (suggestions refresh, no autofill). */
+    protected async pasteClipboard(input: HTMLInputElement, start: number, end: number): Promise<void> {
+        let text: string;
+        try {
+            text = await this.store.readClipboardText();
+        } catch {
+            this.showPasteFailure();
+            return;
+        }
+        if (typeof text !== 'string' || !text) {
+            return;
+        }
+        input.setRangeText(text, start, end, 'end');
+        this.textEdited(input.value, false);
+    }
+
+    /** BAR-10: replaces the text with the clipboard text and commits it as Enter would, then focuses the page. */
+    protected async pasteAndGo(): Promise<void> {
+        let text: string;
+        try {
+            text = await this.store.readClipboardText();
+        } catch {
+            this.showPasteFailure();
+            return;
+        }
+        if (typeof text !== 'string' || !text.trim()) {
+            return;
+        }
+        await this.commitText(text);
+        const tab = currentWebTab();
+        if (tab && !this.commitFailed && !this.noSearch) {
+            this.focusPageWhenLoaded(tab);
+        }
+    }
+
+    /**
+     * BAR-10: moves focus to `tab`'s page once the load just started has
+     * finished, if the pill still has focus and no new edit. A focus given
+     * earlier is lost when the navigation commits into a new browsing context
+     * (measured live: the page took focus, then dropped it 32ms later).
+     */
+    protected focusPageWhenLoaded(tab: WebTabWidget): void {
+        let started = false;
+        const done = (): void => {
+            subscription.dispose();
+            clearTimeout(timer);
+        };
+        const subscription = tab.onDidChangeState(state => {
+            started = started || state.loading;
+            if (started && !state.loading) {
+                done();
+                if (document.activeElement === this.pillRef?.querySelector('input') && this.inputValue === this.committedAddress) {
+                    tab.focusPage();
+                }
+            }
+        });
+        // A load that never reports back does not hold a later load's focus hostage.
+        const timer = setTimeout(done, 30000);
+    }
+
+    /** BAR-10: the clipboard could not be read: one failure row under the pill. */
+    protected showPasteFailure(): void {
+        this.pasteFailed = true;
+        this.dropdownOpen = true;
+        this.highlightKey = undefined;
+        this.update();
+    }
+
     protected runCommand = (id: string) => async (): Promise<void> => {
         try {
             await this.commands.executeCommand(id);
@@ -665,6 +820,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.engineRows = [];
         this.autofill = undefined;
         this.removeFailedKey = undefined;
+        this.pasteFailed = false;
     }
 
     protected async runQuery(prefix: string): Promise<void> {
@@ -893,13 +1049,19 @@ export class ChromeBarWidget extends ReactWidget {
     }
 
     protected onInputChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
-        this.inputValue = e.target.value;
-        this.autofill = undefined;
         if ((e.nativeEvent as InputEvent).inputType === 'insertText') {
             this.autofillSuppressed = false;
         }
-        this.autofillWanted = this.autofillEligible(e);
+        this.textEdited(e.target.value, this.autofillEligible(e), (e.nativeEvent as InputEvent).isComposing === true);
+    };
+
+    /** New pill text, from a keystroke or from the pill menu's Cut and Paste (which never autofill). */
+    protected textEdited(value: string, autofillWanted: boolean, composing = false): void {
+        this.inputValue = value;
+        this.autofill = undefined;
+        this.autofillWanted = autofillWanted;
         this.commitFailed = false;
+        this.pasteFailed = false;
         this.noSearch = false;
         this.homeFailed = false;
         // New text: the old rows describe other text, and the highlight returns to the heuristic row.
@@ -912,7 +1074,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.highlightKey = undefined;
         this.removeFailedKey = undefined;
         // BAR-03: text typed while an IME composition is open is never queried (29-10 queries at composition end).
-        this.composing = (e.nativeEvent as InputEvent).isComposing === true;
+        this.composing = composing;
         if (this.composing) {
             this.update();
             return;
@@ -926,7 +1088,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.dropdownArmed = true;
         this.update();
         void this.debouncedQuery(this.inputValue);
-    };
+    }
 
     /**
      * Opens a committed URL on the GUI-02 routing: http and https navigate
@@ -1680,6 +1842,12 @@ export class ChromeBarWidget extends ReactWidget {
                 <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
             </>;
         }
+        if (this.pasteFailed) {
+            return <>
+                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.pasteFailed(appSubject())}</div>
+                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
+            </>;
+        }
         if (this.commitFailed) {
             return <>
                 <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.commitFailed(appSubject())}</div>
@@ -1838,6 +2006,7 @@ export class ChromeBarWidget extends ReactWidget {
                     onChange={this.onInputChange}
                     ref={this.inputRef}
                     onKeyDown={this.onInputKeyDown}
+                    onContextMenu={this.onPillContextMenu}
                     onBlur={this.onInputBlur}
                     onFocus={this.onInputFocus}
                 />

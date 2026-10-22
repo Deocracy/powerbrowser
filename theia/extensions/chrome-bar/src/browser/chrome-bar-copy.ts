@@ -27,6 +27,12 @@ export const CHROME_BAR_COPY = Object.freeze({
     oneOffLabel: 'This time, search with:',
     switchToTab: 'Switch to Tab',
     removeFailed: (subject: string) => `${subject} couldn't remove that page from your history. Press Shift+Delete to try again.`,
+    cut: 'Cut',
+    copy: 'Copy',
+    paste: 'Paste',
+    pasteAndGo: 'Paste & Go',
+    selectAll: 'Select All',
+    pasteFailed: (subject: string) => `${subject} couldn't read the clipboard. Press Ctrl+V to paste, then press Enter.`,
     searchSuggestionsDescription: 'Show suggestions from your search engine while you type in the address bar. What you type is sent to the search engine.',
 });
 

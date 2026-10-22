@@ -3709,6 +3709,7 @@ const STORE_REQUEST_KINDS = new Set([
   "searchSuggestions",
   "autofillOrigin",
   "removeHistoryEntry",
+  "readClipboardText",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -3803,6 +3804,9 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "removeHistoryEntry": {
         return { ok: true, kind, removed: await removeHistoryEntry(data.url) };
+      }
+      case "readClipboardText": {
+        return { ok: true, kind, text: readClipboardText() };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -4610,4 +4614,26 @@ async function removeHistoryEntry(url) {
     throw new Error("removeHistoryEntry: refusing a non-http(s) url");
   }
   return Boolean(await lazy.PlacesUtils.history.remove(target));
+}
+
+// Paste and Paste & Go on the address pill (BAR-10): the global clipboard's
+// text, read chrome-side, because a content clipboard read opens Firefox's
+// native paste confirmation popup over the bar (29-RESEARCH Pitfall 4). A
+// privileged store kind (rule 12): only the widget's Paste and Paste & Go
+// handlers send it, after the user chose one. The global clipboard only, never
+// the selection clipboard; at most 8192 characters. No log line, ever,
+// carries the text.
+function readClipboardText() {
+  const trans = Cc["@mozilla.org/widget/transferable;1"].createInstance(Ci.nsITransferable);
+  trans.init(null);
+  trans.addDataFlavor("text/plain");
+  Services.clipboard.getData(trans, Services.clipboard.kGlobalClipboard);
+  const data = {};
+  try {
+    trans.getTransferData("text/plain", data);
+  } catch {
+    // No text/plain on the clipboard: an empty clipboard, not an error.
+    return "";
+  }
+  return String(data.value?.QueryInterface(Ci.nsISupportsString).data ?? "").slice(0, 8192);
 }

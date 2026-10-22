@@ -147,6 +147,23 @@
  *               to reject, Shift+Delete on the /del-fail row keeps it and shows
  *               a notice directly under it starting with the configured
  *               application name.
+ *   context-menu  BAR-10: with the client's readClipboardText wrapped to count
+ *               calls, a contextmenu on the empty pill opens one .lm-Menu reading
+ *               Cut, Copy, Paste, Paste & Go, a separator, Select All, with Cut,
+ *               Copy and Select All disabled, Paste and Paste & Go enabled and
+ *               no clipboard read; Esc closes it with focus in the pill. With
+ *               "cd" selected in "abcdef" every item is enabled. Items are
+ *               chosen with trusted keys at the parent (ArrowDown, Enter). With
+ *               127.0.0.1:<port>/pasted on the global clipboard (written
+ *               chrome-side), Paste & Go reads it once (the positive control),
+ *               loads /pasted in the session tab (a GET and a loaded push) and
+ *               puts chrome's focus in the page. Paste of "xyz" after "ab" leaves
+ *               "abxyz" with the caret at the end and focus in the pill; Copy
+ *               and Cut of "cd" put "cd" on the clipboard (Cut leaves "abef").
+ *               Paste & Go on an empty clipboard reads it and loads nothing; with
+ *               the read stubbed to reject it shows a row starting with the
+ *               configured application name. The user's clipboard text is put
+ *               back afterwards.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -218,6 +235,7 @@ const PAGES = {
     '/del-me': { title: 'Delete Me Page', body: '<p>delete</p>' },
     '/keep-me': { title: 'Keep Me Page', body: '<p>keep</p>' },
     '/del-fail': { title: 'Fail Me Page', body: '<p>fail</p>' },
+    '/pasted': { title: 'Pasted Page', body: '<p>pasted</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -679,6 +697,9 @@ const readRows = app => app.evaluate(`JSON.stringify((() => {
 
 const rowFor = (view, pages, path) => view.rows.filter(r => r.caption === pages.url(path));
 
+/** Which row is highlighted, as the user sees it: changes with every move of the highlight. */
+const highlightOf = v => `${v.attrs?.active ?? ''}|${v.rows.map(r => r.selected ? r.caption : '').join(',')}`;
+
 async function rows(ctx) {
     const { app, pages, plant, fail, note } = ctx;
     const seeded = await seedRowPlaces(app, pages);
@@ -979,8 +1000,13 @@ async function oneOff(ctx) {
         return fail('typing "hello" again showed no one-off strip');
     }
     let highlighted = false;
+    // Each press waits for the highlight to move: a read taken before the re-render
+    // would count one press late, and Enter would then land on the button past it.
+    const sig = async () => `${highlightOf(await readRows(app))}|${JSON.stringify((await readOneOffs(app))?.buttons.map(b => b.highlighted))}`;
+    let was = await sig();
     for (let i = 0; i < 12 + want.length && !highlighted; i++) {
         await pressKey(app, ARROW_DOWN);
+        was = await settle(sig, v => v !== was);
         highlighted = !!(await readOneOffs(app))?.buttons[twoAt]?.highlighted;
     }
     if (!highlighted) {
@@ -1585,12 +1611,17 @@ const seedPlaces = (app, visits, bookmarks = []) => inChrome(app, `return (async
     }
 })();`);
 
-/** Presses ArrowDown until the highlighted row is the one captioned `url`; returns the dropdown then. */
+/**
+ * Presses ArrowDown until the highlighted row is the one captioned `url`;
+ * returns the dropdown then. Each press waits for the highlight to move, so a
+ * read taken before the re-render cannot cause a second press.
+ */
 async function highlightRow(app, url) {
     let view = await readRows(app);
     for (let i = 0; i < 14 && !view.rows.find(r => r.selected && r.caption === url); i++) {
+        const was = highlightOf(view);
         await pressKey(app, ARROW_DOWN);
-        view = await settle(() => readRows(app), v => v.rows.some(r => r.selected));
+        view = await settle(() => readRows(app), v => highlightOf(v) !== was);
     }
     return view;
 }
@@ -1700,6 +1731,232 @@ async function shiftDel(ctx) {
     }
 }
 
+const ESCAPE = { key: 'Escape', code: 'Escape', keyCode: 27 };
+const PILL_MENU_LABELS = ['Cut', 'Copy', 'Paste', 'Paste & Go', 'Select All'];
+
+/** Chrome scope: the global clipboard's text ("" when it holds none), or `error: ...`. */
+const clipboardText = app => inChrome(app, `try {
+    const trans = Cc['@mozilla.org/widget/transferable;1'].createInstance(Ci.nsITransferable);
+    trans.init(null);
+    trans.addDataFlavor('text/plain');
+    Services.clipboard.getData(trans, Services.clipboard.kGlobalClipboard);
+    const data = {};
+    try { trans.getTransferData('text/plain', data); } catch { return ''; }
+    return String(data.value.QueryInterface(Ci.nsISupportsString).data);
+} catch (e) {
+    return 'error: ' + e;
+}`);
+
+/** Chrome scope: puts `text` on the global clipboard; null empties it. */
+const setClipboard = (app, text) => inChrome(app, `try {
+    ${text === null
+        ? 'Services.clipboard.emptyClipboard(Services.clipboard.kGlobalClipboard);'
+        : `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString(${JSON.stringify(text)});`}
+    return 'ok';
+} catch (e) {
+    return 'error: ' + e;
+}`);
+
+/** The visible .lm-Menu count, and the last one's items (collapsed separators dropped). */
+const readPillMenu = app => app.evaluate(`JSON.stringify((() => {
+    const menus = [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0);
+    const m = menus[menus.length - 1];
+    const items = m ? [...m.querySelectorAll('.lm-Menu-item')].filter(i => !i.classList.contains('lm-mod-collapsed')).map(i => ({
+        separator: i.getAttribute('data-type') === 'separator',
+        label: (i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '',
+        disabled: i.classList.contains('lm-mod-disabled'),
+        active: i.classList.contains('lm-mod-active'),
+    })) : [];
+    return { count: menus.length, items };
+})())`).then(JSON.parse);
+
+/** Sets the pill to `value` with `start..end` selected, then dispatches a right-click contextmenu on it. */
+async function openPillMenuWith(app, value, start = value.length, end = start) {
+    await typeInPill(app, value);
+    const opened = await app.evaluate(`(() => {
+        const input = document.querySelector('.pb-chrome-bar-input');
+        if (!input) return false;
+        input.focus();
+        input.setSelectionRange(${start}, ${end});
+        const r = input.getBoundingClientRect();
+        input.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: r.left + 20, clientY: r.top + r.height / 2 }));
+        return true;
+    })()`);
+    if (opened !== true) {
+        throw new Error(`${BROKEN} the contextmenu could not be dispatched on the pill`);
+    }
+    return settle(() => readPillMenu(app), v => v.count === 1 && v.items.length > 0);
+}
+
+/** Moves the open menu's highlight to `label` with ArrowDown at the parent, then presses Enter there (trusted keys). */
+async function chooseMenuItem(app, label) {
+    let active = (await readPillMenu(app)).items.find(it => it.active)?.label ?? '';
+    for (let i = 0; i < 8; i++) {
+        const was = active;
+        await pressKey(app, ARROW_DOWN);
+        // Wait for the move, so a read taken before the re-render cannot cause a second press.
+        const menu = await settle(() => readPillMenu(app), v => (v.items.find(it => it.active)?.label ?? '') !== was);
+        active = menu.items.find(it => it.active)?.label ?? '';
+        if (active === label) {
+            await pressKey(app, ENTER);
+            return true;
+        }
+    }
+    return false;
+}
+
+const readCount = app => app.evaluate('window.__pbClipboardReads || 0');
+
+/**
+ * BAR-10: the pill's context menu. The clipboard is read only when Paste or
+ * Paste & Go is chosen; a counter on the client's readClipboardText is the
+ * observer, and Paste & Go's read is its positive control. The user's
+ * clipboard text is saved first and put back afterwards.
+ */
+async function contextMenu(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const saved = await clipboardText(app);
+    if (String(saved).startsWith('error: ')) {
+        return fail(`${BROKEN} the global clipboard could not be read chrome-side (${saved})`);
+    }
+    const counted = await probe(app, `const c = get('ChromeStoreClient');
+        window.__pbClipboardReads = 0;
+        const original = Object.getPrototypeOf(c).readClipboardText.bind(c);
+        c.readClipboardText = (...a) => { window.__pbClipboardReads += 1; return original(...a); };
+        return true;`);
+    if (counted !== true) {
+        return fail(`${BROKEN} the client's readClipboardText could not be wrapped`);
+    }
+    try {
+        if (plant === 'paste-reads-on-open') {
+            const planted = await probe(app, `const w = get('ChromeBarWidget');
+                w.openPillMenu = async function (anchor) { await this.store.readClipboardText(); return Object.getPrototypeOf(this).openPillMenu.call(this, anchor); };
+                return true;`);
+            if (planted === true) {
+                note('PLANT paste-reads-on-open applied');
+            }
+        }
+        let menu = await openPillMenuWith(app, '');
+        const labels = menu.items.filter(i => !i.separator).map(i => i.label);
+        const separators = menu.items.map((i, n) => i.separator ? n : -1).filter(n => n >= 0);
+        if (menu.count !== 1 || JSON.stringify(labels) !== JSON.stringify(PILL_MENU_LABELS)
+            || separators.length !== 1 || menu.items[separators[0] + 1]?.label !== 'Select All') {
+            return fail(`a contextmenu on the pill must open one .lm-Menu reading ${PILL_MENU_LABELS.join(', ')} with one separator before Select All; saw ${JSON.stringify(menu)}`);
+        }
+        const state = Object.fromEntries(menu.items.filter(i => !i.separator).map(i => [i.label, !i.disabled]));
+        if (state.Cut || state.Copy || state['Select All'] || !state.Paste || !state['Paste & Go']) {
+            fail(`with an empty pill, Cut, Copy and Select All must be disabled and Paste and Paste & Go enabled; saw ${JSON.stringify(state)}`);
+        }
+        if (await readCount(app) !== 0) {
+            fail(`clipboard read before a click: opening the menu called readClipboardText ${await readCount(app)} time(s)`);
+        }
+        await pressKey(app, ESCAPE);
+        const closed = await settle(() => readSel(app), v => v && v.focused);
+        if ((await readPillMenu(app)).count !== 0 || !closed?.focused) {
+            fail(`Esc must close the menu and leave focus in the pill; saw ${JSON.stringify({ menu: await readPillMenu(app), pill: closed })}`);
+        }
+
+        menu = await openPillMenuWith(app, 'abcdef', 2, 4);
+        const selectedState = Object.fromEntries(menu.items.filter(i => !i.separator).map(i => [i.label, !i.disabled]));
+        if (!PILL_MENU_LABELS.every(l => selectedState[l])) {
+            fail(`with "cd" selected in "abcdef", every item must be enabled; saw ${JSON.stringify(selectedState)}`);
+        }
+        await pressKey(app, ESCAPE);
+        await settle(() => readPillMenu(app), v => v.count === 0);
+
+        // Paste & Go: the positive control for the read counter.
+        const pasted = pages.url('/pasted');
+        await setClipboard(app, pasted.replace(/^http:\/\//, ''));
+        const mark = (await pushes(app)).length;
+        let getMark = pages.requests.length;
+        await openPillMenuWith(app, '');
+        if (!await chooseMenuItem(app, 'Paste & Go')) {
+            return fail(`${BROKEN} Paste & Go could not be reached with ArrowDown in the pill menu`);
+        }
+        const got = await nextGet(pages, '/pasted', getMark);
+        if (await readCount(app) !== 1) {
+            fail(`Paste & Go must read the clipboard exactly once; readClipboardText ran ${await readCount(app)} time(s)`);
+        }
+        if (!got) {
+            fail(`Paste & Go with ${JSON.stringify(pasted)} on the clipboard sent no GET on /pasted; pill ${JSON.stringify(await readPill(app))}`);
+        } else if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && pathOf(p.url) === '/pasted' && !p.loading, { from: mark }) < 0) {
+            fail('no loaded state push for the tab carried /pasted after Paste & Go');
+        } else if (await settle(() => chromeActiveTabId(app), id => id === tabId) !== tabId) {
+            fail(`after Paste & Go chrome's focus must be in the tab's page; it is on ${JSON.stringify(await chromeActiveTabId(app))}`);
+        }
+
+        // Paste inserts at the caret, as typing does, with no autofill.
+        await setClipboard(app, 'xyz');
+        await openPillMenuWith(app, 'ab');
+        if (!await chooseMenuItem(app, 'Paste')) {
+            return fail(`${BROKEN} Paste could not be reached with ArrowDown in the pill menu`);
+        }
+        const afterPaste = await settle(() => readSel(app), v => v && v.value === 'abxyz' && v.focused);
+        if (afterPaste?.value !== 'abxyz' || !afterPaste.focused || afterPaste.start !== 5 || afterPaste.end !== 5) {
+            fail(`Paste with "xyz" after "ab" must leave "abxyz", the caret at the end and focus in the pill; saw ${JSON.stringify(afterPaste)}`);
+        }
+
+        // Copy and Cut write the selection; the clipboard is set to something else first.
+        await setClipboard(app, 'before copy');
+        await openPillMenuWith(app, 'abcdef', 2, 4);
+        if (!await chooseMenuItem(app, 'Copy')) {
+            return fail(`${BROKEN} Copy could not be reached with ArrowDown in the pill menu`);
+        }
+        const copied = await settle(() => clipboardText(app), v => v === 'cd');
+        const afterCopy = await settle(() => readSel(app), v => v && v.focused);
+        if (copied !== 'cd' || afterCopy?.value !== 'abcdef' || !afterCopy.focused) {
+            fail(`Copy of "cd" must put "cd" on the clipboard and leave "abcdef" with focus in the pill; clipboard ${JSON.stringify(copied)}, pill ${JSON.stringify(afterCopy)}`);
+        }
+        await setClipboard(app, 'before cut');
+        await openPillMenuWith(app, 'abcdef', 2, 4);
+        if (!await chooseMenuItem(app, 'Cut')) {
+            return fail(`${BROKEN} Cut could not be reached with ArrowDown in the pill menu`);
+        }
+        const afterCut = await settle(() => readSel(app), v => v && v.value === 'abef' && v.focused);
+        const cut = await clipboardText(app);
+        if (afterCut?.value !== 'abef' || !afterCut.focused || cut !== 'cd') {
+            fail(`Cut of "cd" must leave "abef" with focus in the pill and "cd" on the clipboard; pill ${JSON.stringify(afterCut)}, clipboard ${JSON.stringify(cut)}`);
+        }
+
+        // An empty clipboard: Paste & Go reads it and loads nothing.
+        await setClipboard(app, null);
+        const readsBefore = await readCount(app);
+        getMark = pages.requests.length;
+        const pushMark = (await pushes(app)).length;
+        await openPillMenuWith(app, '');
+        if (!await chooseMenuItem(app, 'Paste & Go')) {
+            return fail(`${BROKEN} Paste & Go could not be reached with ArrowDown in the pill menu`);
+        }
+        await settle(() => readCount(app), n => n > readsBefore);
+        await sleep(1500);
+        const loads = pages.requests.slice(getMark).filter(r => !r.path.endsWith('/suggest'));
+        const navigated = (await pushes(app)).slice(pushMark).filter(p => p && p.kind === 'state' && p.tabId === tabId && p.loading === true);
+        if (await readCount(app) <= readsBefore) {
+            fail(`${BROKEN} Paste & Go on an empty clipboard never read it, so its no-load result proves nothing`);
+        } else if (loads.length || navigated.length) {
+            fail(`Paste & Go with an empty clipboard loaded something: ${JSON.stringify({ loads: loads.map(r => r.path), navigated: navigated.length })}`);
+        }
+
+        // A read error shows the failure row.
+        const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+        await probe(app, `get('ChromeStoreClient').readClipboardText = async () => { throw new Error('stubbed rejection'); }; return true;`);
+        await openPillMenuWith(app, '');
+        if (!await chooseMenuItem(app, 'Paste & Go')) {
+            return fail(`${BROKEN} Paste & Go could not be reached with ArrowDown in the pill menu`);
+        }
+        const failed = await settle(() => readNotices(app), v => v.length > 0, 5000);
+        if (!failed[0] || !failed[0].text.startsWith(subject) || !failed[0].text.includes("couldn't read the clipboard")) {
+            fail(`a failed clipboard read must show one row starting with ${JSON.stringify(subject)} that says it couldn't read the clipboard; saw ${JSON.stringify(failed)}`);
+        }
+    } finally {
+        await probe(app, `const c = get('ChromeStoreClient'); delete c.readClipboardText;
+            const w = get('ChromeBarWidget'); delete w.openPillMenu; return true;`);
+        await setClipboard(app, saved ? saved : null);
+        await app.evaluate(`(() => { const i = document.querySelector('.pb-chrome-bar-input'); if (i) i.blur(); return true; })()`);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -1716,6 +1973,7 @@ const SCENARIOS = {
     autofill,
     'canonize-drop': canonizeDrop,
     'shift-del': shiftDel,
+    'context-menu': contextMenu,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
@@ -1797,6 +2055,7 @@ const PLANTS = [
     { plant: 'tab-row-navigates', target: 'switch-to-tab', run: ['switch-to-tab'], expect: 'loading: true' },
     { plant: 'autofill-on-paste', target: 'autofill', run: ['autofill'], expect: 'autofilled a paste' },
     { plant: 'shift-del-bookmark', target: 'shift-del', run: ['shift-del'], expect: 'removed the visits of a bookmarked page' },
+    { plant: 'paste-reads-on-open', target: 'context-menu', run: ['context-menu'], expect: 'clipboard read before a click' },
 ];
 
 async function selfTest() {

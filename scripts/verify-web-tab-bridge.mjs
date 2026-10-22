@@ -100,6 +100,7 @@ const STORE_KIND_CLASSES = new Map([
     ['setSetting', 'store-write'],
     ['savePageCopy', 'store-write'],
     ['removeHistoryEntry', 'privileged'],
+    ['readClipboardText', 'privileged'],
 ]);
 const STORE_PROTOCOL = `${TAB_URIS_DIR}/tab-store-access-protocol.ts`;
 const STORE_CLIENT = `${TAB_URIS_DIR}/chrome-store-client.ts`;
