@@ -623,6 +623,7 @@ const EXPECTED_NAV_COPY = new Set([
   "No matching results. Type ? to see what you can search.",
   "${name} couldn't load these results. Keep typing to try again.",
   "Enter opens · Type ? for more · ${name} enters an address · Esc closes",
+  "Go to ${name}",
 ]);
 
 /**

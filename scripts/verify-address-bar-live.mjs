@@ -312,6 +312,15 @@
  *               Alt+Up swaps the lines (Monaco received the key), Alt+Down
  *               swaps them back, and Ctrl+Down leaves the pill's mode
  *               unchanged. Scored only after search passed.
+ *   go-to       SMODE-06 (D-29..D-31): on its own localhost tab in the
+ *               fixture workspace, Command centre gives localhost:<port>/dev a
+ *               first, highlighted "Go to" row and Enter loads /dev (a GET and
+ *               a state push); README.md lists the file first, highlighted,
+ *               then an unhighlighted Go-to row; "hello" gets no Go-to row.
+ *               With chrome's resolve stubbed to reply a search, Enter on the
+ *               Go-to row for localhost:<port>/x shows the commit-failure row
+ *               and the served engine sees no GET on /one/search (visit-only,
+ *               30-RESEARCH A4). Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -3996,6 +4005,97 @@ async function modeKeys(ctx) {
     }
 }
 
+const GO_TO = text => `Go to ${text}`;
+const COMMIT_FAILED = "couldn't open that address";
+
+/** Types `text` in the pill and waits past the debounce for Command centre's rows to settle; returns the view. */
+async function ccRowsFor(app, text, ok = v => v.open && v.rows.length > 0) {
+    await typeInPill(app, text);
+    await sleep(600);
+    return settle(() => readCcRows(app), ok, 10000);
+}
+
+/**
+ * SMODE-06 (D-29..D-31): an unambiguous address typed in Command centre gets
+ * a first, highlighted "Go to" row and Enter loads it; README.md lists the
+ * file first and then an unhighlighted Go-to row; "hello" gets none. With
+ * chrome's resolve stubbed to reply a search, Enter on a Go-to row shows the
+ * commit-failure row and the served engine sees no GET (the search control
+ * proves the log sees that path). Runs in the fixture workspace on its own
+ * localhost tab.
+ */
+async function goTo(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'go-to')) {
+        return 'not-scored';
+    }
+    await openWorkspace(ctx);
+    const tabId = await openLocalTab(app, pages, '/start');
+    await showTab(app, tabId, 'go-to');
+    if (plant === 'visit-only-off' && await probe(app, `get('AddressBar').refusesSearch = () => false; return true;`) === true) {
+        note('PLANT visit-only-off applied');
+    }
+    const host = new URL(localUrl(pages, '/')).host;
+    try {
+        // An unambiguous address: Go-to first and highlighted; Enter loads it.
+        await enterMode(app, 'command-centre');
+        const devText = `${host}/dev`;
+        const dev = await ccRowsFor(app, devText, v => v.rows[0]?.text === GO_TO(devText));
+        if (dev.rows[0]?.text !== GO_TO(devText) || !dev.rows[0].selected) {
+            fail(`${devText}: the first row must be "${GO_TO(devText)}", highlighted; rows ${JSON.stringify(dev.rows.map(r => [r.text, r.selected]))}`);
+        }
+        const mark = (await pushes(app)).length;
+        const getMark = pages.requests.length;
+        await pressKey(app, ENTER);
+        const got = await nextGet(pages, '/dev', getMark);
+        if (!got) {
+            fail(`no GET on /dev after Enter on the Go-to row; pill ${JSON.stringify(await readPill(app))}`);
+        }
+        if (await waitForPush(app, loadedAt(tabId, '/dev'), { from: mark, timeoutMs: got ? 15000 : 1000 }) < 0) {
+            fail('no loaded state push for the tab ended /dev after the Go-to commit');
+        }
+
+        // A dotted name that may be a file: the file first, then an unhighlighted Go-to row.
+        await enterMode(app, 'command-centre');
+        const readme = await ccRowsFor(app, 'README.md', v => v.rows.some(r => r.text === GO_TO('README.md')) && v.rows.some(r => r.text === 'README.md'));
+        const fileAt = readme.rows.findIndex(r => r.text === 'README.md');
+        const gotoAt = readme.rows.findIndex(r => r.text === GO_TO('README.md'));
+        if (fileAt < 0 || gotoAt < fileAt || readme.rows[gotoAt]?.selected || readme.rows.find(r => r.selected)?.text !== 'README.md') {
+            fail(`README.md must list the file first, highlighted, then an unhighlighted "${GO_TO('README.md')}"; rows ${JSON.stringify(readme.rows.map(r => [r.text, r.selected]))}`);
+        }
+
+        // Plain words: no Go-to row.
+        await enterMode(app, 'command-centre');
+        const words = await ccRowsFor(app, 'hello', v => v.open);
+        if (words.rows.some(r => r.text.startsWith(GO_TO('')))) {
+            fail(`"hello" must get no Go-to row; rows ${JSON.stringify(words.rows.map(r => r.text))}`);
+        }
+
+        // Visit-only (A4): a Go-to that chrome resolves to a search loads nothing.
+        await enterMode(app, 'command-centre');
+        await stubResolve(app, { kind: 'search', url: pages.url('/one/search?q=probe'), engineName: ENGINE_ONE });
+        const xText = `${host}/x`;
+        const x = await ccRowsFor(app, xText, v => v.rows[0]?.text === GO_TO(xText));
+        if (x.rows[0]?.text !== GO_TO(xText) || !x.rows[0].selected) {
+            return fail(`${BROKEN} ${xText} showed no highlighted Go-to row to commit (${JSON.stringify(x.rows.map(r => r.text))})`);
+        }
+        const searchMark = pages.requests.length;
+        await pressKey(app, ENTER);
+        const pill = await settle(() => readPill(app), v => v.rows.some(r => r.includes(COMMIT_FAILED)), 5000);
+        const opened = await nextGet(pages, '/one/search', searchMark, () => true, 3000);
+        if (opened) {
+            fail(`Command centre opened a search: a Go-to commit that chrome resolved to a search loaded ${opened.path}${opened.search}`);
+        }
+        if (!pill.rows.some(r => r.includes(COMMIT_FAILED))) {
+            fail(`a Go-to commit resolved to a search must show the commit-failure row; pill ${JSON.stringify(pill)}`);
+        }
+    } finally {
+        await stubResolve(app, null);
+        await probe(app, `const bar = get('AddressBar'); delete bar.refusesSearch; bar.commitFailed = false; bar.closeDropdown(); bar.inputValue = bar.committedAddress; return true;`);
+        await restoreDefaultMode(app);
+    }
+}
+
 /** Enters the contributed mode `id` from the default mode through the menu, with the text cleared. */
 async function enterMode(app, id) {
     await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
@@ -4033,12 +4133,14 @@ const SCENARIOS = {
     'command-centre-handoff': commandCentreHandoff,
     'command-centre-privacy': commandCentrePrivacy,
     'mode-keys': modeKeys,
+    'go-to': goTo,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
     'command-centre': 'search', 'command-centre-handoff': 'command-centre',
-    'command-centre-privacy': 'search', 'mode-defaults': 'search', 'mode-tokens': 'search', 'mode-keys': 'search' };
+    'command-centre-privacy': 'search', 'mode-defaults': 'search', 'mode-tokens': 'search', 'mode-keys': 'search',
+    'go-to': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -4136,6 +4238,7 @@ const PLANTS = [
     { plant: 'default-ignored', target: 'mode-defaults', run: ['search', 'mode-defaults'], expect: 'Coding did not start in Command centre' },
     { plant: 'token-kept', target: 'mode-tokens', run: ['search', 'mode-tokens'], expect: 'the * token did not enter Bookmarks' },
     { plant: 'cycle-off', target: 'mode-keys', run: ['search', 'mode-keys'], expect: 'Ctrl+Down did not move to the next mode' },
+    { plant: 'visit-only-off', target: 'go-to', run: ['search', 'go-to'], expect: 'Command centre opened a search' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 

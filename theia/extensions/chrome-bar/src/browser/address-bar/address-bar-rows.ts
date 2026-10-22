@@ -10,7 +10,7 @@
  * must stay dependency-free.
  */
 
-export type RowSource = 'heuristic' | 'search' | 'history' | 'bookmark' | 'tab' | 'action' | 'pick' | 'group';
+export type RowSource = 'heuristic' | 'search' | 'history' | 'bookmark' | 'tab' | 'action' | 'pick' | 'group' | 'goto';
 
 /** One dropdown row. `key` is stable across arrivals; an engine row's url is empty until resolved. */
 export interface Row {
@@ -135,4 +135,33 @@ export function autofillSplice(typed: string, completion: string): { value: stri
  */
 export function isCanonizable(text: string): boolean {
     return /^\s*[^.:\/\s]+(?:\/.*|\s*)$/i.test(text);
+}
+
+export type AddressClass = 'url' | 'ambiguous' | 'text';
+
+/**
+ * SMODE-06 (D-29, D-30): whether typed text is an unambiguous address, a bare
+ * dotted name that may be a file (README.md, main.py:12) or plain text.
+ * Local and pure, so classifying sends nothing to chrome. A dotted host with a
+ * port is ambiguous, because the file provider reads main.py:12 as file plus
+ * line (30-RESEARCH A3).
+ */
+export function classifyAddress(raw: string): AddressClass {
+    const t = raw.trim();
+    if (!t || /\s/.test(t)) {
+        return 'text';
+    }
+    const url = [
+        /^[a-z][a-z0-9+.-]*:\/\//i,                    // a scheme
+        /^localhost(:\d{1,5})?(\/.*)?$/i,               // localhost[:port]
+        /^\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?(\/.*)?$/,     // IPv4[:port]
+        /^\[[0-9a-f:.]+\](:\d{1,5})?(\/.*)?$/i,          // [IPv6][:port]
+        /^www\.[^/]+\.[^/]+/i,                          // a leading www.
+        /^[^./:]+:\d{1,5}(\/.*)?$/,                      // an undotted host:port (devbox:3000)
+        /\/$/,                                          // a trailing /
+    ];
+    if (url.some(re => re.test(t))) {
+        return 'url';
+    }
+    return /^[^/:]+\.[^/:]+(:\d+)?$/.test(t) ? 'ambiguous' : 'text';
 }

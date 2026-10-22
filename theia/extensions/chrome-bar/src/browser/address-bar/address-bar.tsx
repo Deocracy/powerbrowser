@@ -27,7 +27,7 @@ import { ChromeStoreClient, ResolvedAddress, SearchEngineList } from '@powerbrow
 import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, currentWebTab, focusAddressPill } from '../chrome-bar-commands';
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
-import { PLACE_ROW_LIMIT, Row, autofillSplice, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
+import { PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
 import { LOCAL_MODES, MODE_SENDS, ModeId, cycleOrder, defaultModeFor, engineModeId, engineNameOf, modeKindOf, nextMode, tokenise } from './address-bar-mode-table';
 import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes';
 // Type only: command-centre.ts imports the shortcut table, which imports this file.
@@ -54,6 +54,7 @@ const DROPDOWN_MAX_HEIGHT = 432;
 
 /** SMODE-01: the trailing "Search with {engine}" row's key in Bookmarks, Tabs and History. */
 const SEARCH_ROW_KEY = 'search-row';
+const GOTO_ROW_KEY = 'goto-row';
 
 /** SMODE-01: a local mode's strings: placeholder and aria-label, the empty and no-match rows, a failed read, the footer. */
 interface LocalModeCopy {
@@ -450,17 +451,42 @@ export class AddressBar {
         const listed = (rows ?? []).slice(0, entry?.cap ?? Infinity)
             .map(row => row.url && row.icon === undefined ? { ...row, icon: this.icons[row.url] ?? null } : row);
         const search = entry?.searchRow && text ? [this.searchRowFor(text)] : [];
-        this.rows = listed.concat(search);
+        // SMODE-06 (D-29, D-30): an address leads the list; a dotted name that may be a file follows the mode's rows.
+        const goto = this.gotoRowFor(mode, typed);
+        this.rows = goto?.first ? [goto.row, ...listed, ...search] : [...listed, ...(goto ? [goto.row] : []), ...search];
         this.providerFailed = false;
         this.heuristicNoEngine = false;
         this.localMessage = rows === undefined && copy.failed ? copy.failed(appSubject())
-            : listed.length ? undefined
+            : listed.length || goto ? undefined
                 : text ? copy.noMatch : copy.empty(this.effectiveEngine() ?? '');
-        // The first row that can act; a group header or a message pick never takes the highlight.
-        this.highlightKey = text ? this.highlightKeys()[0] : undefined;
+        // The first row that can act; a group header or a message pick never takes the highlight, nor a trailing Go-to row.
+        this.highlightKey = text ? this.highlightKeys().find(key => key !== GOTO_ROW_KEY || goto?.first) : undefined;
         this.dropdownOpen = true;
         this.update();
         void this.requestIcons(seq);
+    }
+
+    /**
+     * SMODE-06 (D-29..D-31): the Go-to row for the typed text, and whether it
+     * leads the list (an unambiguous address) or follows the mode's rows (a
+     * dotted name that may be a file); undefined for plain text or a Theia
+     * prefix. Classified locally, so nothing is sent to decide it. Choosing it
+     * commits visit-only through chrome's resolve.
+     */
+    protected gotoRowFor(mode: AddressBarMode, typed: string): { row: Row; first: boolean } | undefined {
+        const text = typed.trim();
+        const kind = classifyAddress(text);
+        const offers = mode.id === 'command-centre' ? this.commandCentre()?.descriptorFor(typed)?.prefix === '' : false;
+        if (!offers || kind === 'text') {
+            return undefined;
+        }
+        return {
+            first: kind === 'url',
+            row: {
+                key: GOTO_ROW_KEY, source: 'goto', title: CHROME_BAR_COPY.goTo(text), caption: '', url: '',
+                run: () => this.commitText(text, { visitOnly: true }),
+            },
+        };
     }
 
     /** SMODE-01: the trailing row that searches `text` with the default engine, only when chosen. */
@@ -1458,14 +1484,14 @@ export class AddressBar {
      * else (refused, no reply) surfaces the contracted in-bar failure row. This widget keeps no address rule
      * of its own. Empty commits are no-ops.
      */
-    protected commitText = async (raw: string, { canonize = false, engine = this.modeEngine() }: { canonize?: boolean; engine?: string } = {}): Promise<void> => {
+    protected commitText = async (raw: string, { canonize = false, engine = this.modeEngine(), visitOnly = false }: { canonize?: boolean; engine?: string; visitOnly?: boolean } = {}): Promise<void> => {
         const text = raw.trim();
         if (!text) {
             return;
         }
         // Phase 30: an engine mode's commit always searches with that engine (forceSearch), and its retry does too.
         const engineName = engine ?? this.engineNameForRequest();
-        const retry = (): Promise<void> => this.commitText(text, { canonize, engine });
+        const retry = (): Promise<void> => this.commitText(text, { canonize, engine, visitOnly });
         this.committedAddress = text;
         this.inputValue = text;
         this.commitFailed = false;
@@ -1482,7 +1508,7 @@ export class AddressBar {
             this.showNoSearch(retry);
             return;
         }
-        if (!resolved || (resolved.kind !== 'visit' && resolved.kind !== 'search') || !resolved.url) {
+        if (!resolved || (resolved.kind !== 'visit' && resolved.kind !== 'search') || !resolved.url || this.refusesSearch(resolved, visitOnly)) {
             this.showCommitFailure(retry);
             return;
         }
@@ -1492,6 +1518,11 @@ export class AddressBar {
             this.showCommitFailure(retry);
         }
     };
+
+    /** D-31 (30-RESEARCH A4): a Go-to commit that chrome resolves to a search loads nothing. An instance method, so a live plant can turn it off. */
+    protected refusesSearch(resolved: ResolvedAddress, visitOnly: boolean): boolean {
+        return visitOnly && resolved.kind === 'search';
+    }
 
     protected onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
         if (this.composing(e)) {
@@ -1575,8 +1606,14 @@ export class AddressBar {
                 return;
             }
             const highlighted = this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
-            if (!highlighted && this.commandCentre()) {
-                // D-26: Command centre never sends its text to chrome's resolve; with no row chosen, Enter does nothing.
+            const centre = this.commandCentre();
+            if (!highlighted && centre) {
+                // D-26: Command centre never sends its text to chrome's resolve; with no row chosen, Enter does nothing,
+                // unless the text is an unambiguous address, which goes through the Go-to row's visit-only commit (D-29).
+                const goto = this.gotoRowFor(centre, this.rawQueryText());
+                if (goto?.first) {
+                    void this.chooseRow(goto.row);
+                }
                 return;
             }
             void (highlighted ? this.chooseRow(highlighted) : this.commitTyped());

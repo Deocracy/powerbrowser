@@ -69,6 +69,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     noMatchingResults: 'No matching results. Type ? to see what you can search.',
     commandCentreFailed: (subject: string) => `${subject} couldn't load these results. Keep typing to try again.`,
     commandCentreFooter: (addressKey: string) => `Enter opens · Type ? for more · ${addressKey} enters an address · Esc closes`,
+    // Phase 30 (SMODE-06): the Go-to row; {address} is the text as typed.
+    goTo: (address: string) => `Go to ${address}`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

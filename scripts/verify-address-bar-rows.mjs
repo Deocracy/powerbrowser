@@ -10,10 +10,11 @@
  * `verify-address-bar-rows: FAIL -- <case>: <got>` line per red case. A module
  * missing any of its exports is a broken instrument, never a pass.
  *
- * --self-test: the clean module must be green; then six copies of it in a
+ * --self-test: the clean module must be green; then eight copies of it in a
  * mkdtemp directory, each with one planted fault (ROW_LIMIT 11, the tab-wins
  * rule inverted, the highlight wrap removed, safeIcon accepting http, a
- * pick's icon classes dropped, autofillSplice comparing case-sensitively), must
+ * pick's icon classes dropped, autofillSplice comparing case-sensitively, a
+ * dotted host:port classed as a url, the IPv6 address rule removed), must
  * each go red naming the case that catches it. A plant whose text did not
  * change the module fails as "plant did not apply".
  *
@@ -33,7 +34,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-address-bar-rows';
 const MODULE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-bar-rows.ts';
-const EXPORTS = ['composeRows', 'nextHighlight', 'iconFor', 'safeIcon', 'autofillSplice', 'isCanonizable', 'ENGINE_ROW_LIMIT', 'PLACE_ROW_LIMIT', 'ROW_LIMIT'];
+const EXPORTS = ['composeRows', 'nextHighlight', 'iconFor', 'safeIcon', 'autofillSplice', 'isCanonizable', 'classifyAddress', 'ENGINE_ROW_LIMIT', 'PLACE_ROW_LIMIT', 'ROW_LIMIT'];
 
 const row = (source, url, extra = {}) => ({ key: `${source}:${url}`, source, title: url, caption: '', url, ...extra });
 const keysOf = rows => rows.map(r => r.key);
@@ -164,6 +165,14 @@ function cases(m) {
         }],
         ...[['example', true], ['example/path', true], ['example.org', false], ['localhost:3000', false], ['two words', false], ['https://x', false]]
             .map(([text, want]) => [`isCanonizable(${JSON.stringify(text)}) is ${want}`, () => (m.isCanonizable(text) === want ? null : { got: m.isCanonizable(text) })]),
+        ...[['https://x', 'url'], ['localhost', 'url'], ['localhost:4000', 'url'], ['devbox:3000', 'url'], ['127.0.0.1', 'url'],
+            ['[::1]:8080', 'url'], ['www.x.com', 'url'], ['x/', 'url'], ['README.md', 'ambiguous'], ['main.py', 'ambiguous'],
+            ['main.py:12', 'ambiguous'], ['example.com:8080', 'ambiguous'], ['hello', 'text'], ['hello world', 'text'], ['  ', 'text']]
+            .map(([text, want]) => [`classifyAddress(${JSON.stringify(text)}) is ${want}`, () => (m.classifyAddress(text) === want ? null : { got: m.classifyAddress(text) })]),
+        ['a Go-to row: the globe and no type marker', () => {
+            const got = m.iconFor(row('goto', 'localhost:4000/'));
+            return same(got, { leading: { codicon: 'codicon-globe' }, trailing: null }) ? null : got;
+        }],
         ['autofillSplice returns null for no match, an equal length and empty text', () => {
             const got = [m.autofillSplice('git', 'example.org/'), m.autofillSplice('a.org/', 'a.org/'), m.autofillSplice('', 'a.org/')];
             return same(got, [null, null, null]) ? null : got;
@@ -247,6 +256,18 @@ const PLANTS = [
         from: '!completion.toLowerCase().startsWith(typed.toLowerCase())',
         to: '!completion.startsWith(typed)',
         expect: 'autofillSplice matches case-insensitively',
+    },
+    {
+        name: 'dotted host:port classed as url',
+        from: '/^[^./:]+:\\d{1,5}(\\/.*)?$/',
+        to: '/^[^/:]+:\\d{1,5}(\\/.*)?$/',
+        expect: 'classifyAddress("main.py:12")',
+    },
+    {
+        name: 'IPv6 rule removed',
+        from: '/^\\[[0-9a-f:.]+\\](:\\d{1,5})?(\\/.*)?$/i,',
+        to: '',
+        expect: 'classifyAddress("[::1]:8080")',
     },
 ];
 
