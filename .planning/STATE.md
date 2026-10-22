@@ -1,20 +1,20 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 30
 current_phase_name: Address-Bar Modes and Command Centre
 status: executing
-stopped_at: Completed 30-02-PLAN.md
-last_updated: "2026-10-22T17:50:54.681Z"
+stopped_at: Completed 30-03-PLAN.md
+last_updated: "2026-10-22T19:15:41.011Z"
 last_activity: 2026-10-22
-last_activity_desc: 30-02 complete (modes dropdown, engine modes, chip and x, mode lifetime, Search Settings; verify-address-bar-modes gate; 17-plant live self-test green)
-state_head: 4e35f27c17d9744d4f4fb5defbabb8b5d8b9656b
+last_activity_desc: 30-03 complete (Tabs, Bookmarks, History and Actions modes; searchPlacesRestricted behind the searchPlaces restrict field; Browser command category; live local-modes and the 20-plant self-test green)
+state_head: 2f6fdfbfcda6824170076e7b6a3b06e6a6c9d25c
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 24
-  completed_plans: 20
+  completed_plans: 21
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 30 (Address-Bar Modes and Command Centre) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
-Last activity: 2026-10-22 — 30-02 complete (modes dropdown, engine modes, chip and x, mode lifetime, Search Settings; verify-address-bar-modes gate; live modes-dropdown, mode-chip, mode-lifetime and the 17-plant self-test green)
+Last activity: 2026-10-22 — 30-03 complete (Tabs, Bookmarks, History and Actions modes; searchPlacesRestricted behind the searchPlaces restrict field; Browser command category; live local-modes and the 20-plant self-test green)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -168,6 +168,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P10 | 3h05m | 2 tasks | 3 files |
 | Phase 30 P01 | ~2h | 3 tasks | 14 files |
 | Phase 30 P02 | ~1h30m | 3 tasks | 12 files |
+| Phase 30 P03 | ~1h20m | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -432,6 +433,9 @@ Recent decisions affecting current work:
 - [Phase 30]: 30-02: uiModeChanged resets the pill's mode only when the PowerBrowser mode id changes
 - [Phase 30]: 30-02: the modes menu re-reads chrome's engines each time it opens
 - [Phase 30]: 30-02: the nav-copy gate skips quoted property keys (modeLabels keys are mode ids, not copy)
+- [Phase 30]: 30-03: Tabs records its MRU order from shell.mainPanel.onDidChangeCurrent (a web tab never takes DOM focus), not onDidChangeCurrentWidget
+- [Phase 30]: 30-03: local modes hide the one-off strip; their trailing search row is the way to the default engine
+- [Phase 30]: 30-03: a History row for a bookmarked page is a bookmark row, so Shift+Delete keeps the Phase 29 unbookmarked-only rule
 
 ### Pending Todos
 
@@ -535,8 +539,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-22T17:50:54.495Z
-Stopped at: Completed 30-02-PLAN.md
+Last session: 2026-10-22T19:15:40.931Z
+Stopped at: Completed 30-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
