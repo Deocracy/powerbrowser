@@ -46,9 +46,12 @@
  * string (only the GUI-01 palette command keeps that path); the commit path
  * references the row url field and never feeds the opaque row key into a
  * commit or open call (the React list key is the one sanctioned row.uri
- * use); no bare window.open literal and no search-engine host literal (a
- * small frozen list plus a query-param search pattern) may appear in any
- * chrome-bar browser source. An empty derivation -- zero browser sources,
+ * use); no bare window.open literal and no search-engine host literal may
+ * appear in any chrome-bar browser source. The banned hosts are derived at
+ * check time from configuration.toml's [[search_engines]] url and
+ * suggest_url and, when upstream/ is fetched, Firefox's own
+ * search-config-v2.json, over a small floor of public hosts; a
+ * case-insensitive query-param search pattern backs them. An empty derivation -- zero browser sources,
  * no widget source, or a missing routing anchor -- fails as a broken
  * instrument, never passes as clean. Zero routed call sites is a loud
  * failure: call sites exist, so there is no held-out STAGED pass.
@@ -66,6 +69,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { resolveConfig } from './generate.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-chrome-bar-suggestions';
@@ -387,11 +391,11 @@ const CHROME_BAR_WIDGET_FILE = 'chrome-bar-widget.tsx';
 const WINDOW_COMMAND_ID = 'powerbrowser.open-browser-window';
 
 /**
- * The negated search-addressability list (T-13-04-03): obvious public
- * engine hosts plus a query-param search pattern. A frozen hand-kept list
- * -- adding a host is a deliberate contract change visible in the diff.
+ * The negated search-addressability floor (T-13-04-03): public engine hosts
+ * banned even in a tree with no upstream/ checkout. The engines the product
+ * actually ships are derived by engineHosts() below, never listed here.
  */
-const ENGINE_HOSTS = Object.freeze([
+const ENGINE_HOSTS_FLOOR = Object.freeze([
     'google.com',
     'bing.com',
     'duckduckgo.com',
@@ -403,7 +407,66 @@ const ENGINE_HOSTS = Object.freeze([
     'search.brave.com',
     'mojeek.com',
 ]);
-const SEARCH_QUERY_PATTERN = /[?&](q|query)=|search\?/;
+const SEARCH_QUERY_PATTERN = /[?&](q|query|search)=|search\?/i;
+const UPSTREAM_SEARCH_CONFIG_REL = 'upstream/services/settings/dumps/main/search-config-v2.json';
+
+/** The template's host, or null; `{searchTerms}` is not valid URL text, so it is filled first. */
+function templateHost(template) {
+    try {
+        return new URL(String(template).replace(/\{searchTerms\}/g, 'x')).host || null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The banned engine hosts, derived from the tree: every configured engine's
+ * url and suggest_url host, every search base host in upstream's shipped
+ * engine config when upstream/ is present, and the floor. A configured
+ * template with no host is a broken instrument, never a smaller ban.
+ */
+function engineHosts(root = REPO_ROOT) {
+    const hosts = new Set(ENGINE_HOSTS_FLOOR);
+    const failures = [];
+    const configured = [];
+    const { failures: resolveFailures, config } = resolveConfig(join(root, 'configuration.toml'), undefined);
+    for (const f of resolveFailures) {
+        failures.push(`configuration.toml did not resolve, so the configured engine hosts cannot be derived: ${f}`);
+    }
+    for (const engine of config?.search_engines ?? []) {
+        for (const template of [engine?.url, engine?.suggest_url].filter(t => t !== undefined)) {
+            const host = templateHost(template);
+            if (host) {
+                configured.push({ host, template: String(template) });
+                hosts.add(host);
+            } else {
+                failures.push(`configuration.toml: the [[search_engines]] template ${JSON.stringify(template)} has no host, so its engine cannot be banned (broken instrument)`);
+            }
+        }
+    }
+    let upstream = null;
+    try {
+        upstream = JSON.parse(readFileSync(join(root, UPSTREAM_SEARCH_CONFIG_REL), 'utf8'));
+    } catch {
+        // No upstream/ checkout: the configured hosts and the floor still hold.
+    }
+    const walk = node => {
+        if (node && typeof node === 'object') {
+            for (const [key, value] of Object.entries(node)) {
+                const host = key === 'base' && typeof value === 'string' ? templateHost(value) : null;
+                if (host) {
+                    hosts.add(host);
+                } else {
+                    walk(value);
+                }
+            }
+        }
+    };
+    walk(upstream?.data);
+    return { hosts: [...hosts], configured, failures };
+}
+
+const ENGINE_HOSTS = engineHosts();
 
 function checkActivationSources(entries) {
     const failures = [];
@@ -444,13 +507,13 @@ function checkActivationSources(entries) {
         if (/window\.open\s*\(/.test(src)) {
             failures.push(`${rel}: bare window.open bypasses the stock-window command -- suggestion activation must navigate through the imported command const`);
         }
-        for (const host of ENGINE_HOSTS) {
+        for (const host of ENGINE_HOSTS.hosts) {
             if (src.includes(host)) {
-                failures.push(`${rel}: invents search addressability with the engine host literal '${host}' -- search dispatch stays deferred to GUI-02 scope (T-13-04-03)`);
+                failures.push(`${rel}: invents search addressability with the engine host literal '${host}' -- a search URL is minted only by chrome's resolveTypedAddress (T-13-04-03)`);
             }
         }
         if (SEARCH_QUERY_PATTERN.test(src)) {
-            failures.push(`${rel}: invents search addressability with a query-param search pattern -- search dispatch stays deferred to GUI-02 scope (T-13-04-03)`);
+            failures.push(`${rel}: invents search addressability with a query-param search pattern -- a search URL is minted only by chrome's resolveTypedAddress (T-13-04-03)`);
         }
     }
     // No STAGED branch: call sites exist, so zero routed call sites is a
@@ -486,7 +549,7 @@ function main() {
     if (process.argv.includes('--self-test')) {
         return selfTest();
     }
-    const failures = [...checkStatic(readSources()), ...checkLive()];
+    const failures = [...checkStatic(readSources()), ...checkLive(), ...ENGINE_HOSTS.failures];
     const activation = checkActivation();
     failures.push(...activation.failures);
     if (failures.length) {
@@ -624,6 +687,23 @@ function selfTest() {
                 'resolved = { kind: \'search\', url: `https://duckduckgo.com/html/?q=${text}` };'
             ),
             expect: 'duckduckgo.com',
+        },
+        // Each configured template hardcoded in the widget: its derived host, not the floor, must name it.
+        ...ENGINE_HOSTS.configured.map(({ host, template }) => ({
+            name: `planted configured template ${template}`,
+            mutate: src => src.replace(
+                'resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());',
+                `resolved = { kind: 'search', url: \`${template.replace(/\{searchTerms\}/g, '${text}')}\` };`
+            ),
+            expect: `'${host}'`,
+        })),
+        {
+            name: 'planted Special:Search template on an unlisted host',
+            mutate: src => src.replace(
+                'resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());',
+                'resolved = { kind: \'search\', url: `https://wiki.example.net/wiki/Special:Search?search=${text}` };'
+            ),
+            expect: 'query-param search pattern',
         },
         {
             name: 'planted bare window.open',
