@@ -604,6 +604,21 @@ const EXPECTED_NAV_COPY = new Set([
   "Modes",
   "Return to ${name}",
   "Enter searches · Alt+Enter searches in a new tab · Esc closes suggestions",
+  "Search tabs",
+  "Search bookmarks",
+  "Search history",
+  "Search actions",
+  "No other open tabs. Type an address, or words to search with ${name}.",
+  "No bookmarks yet. Type an address, or words to search with ${name}.",
+  "No history yet. Type an address, or words to search with ${name}.",
+  "No matching tabs.",
+  "No matching bookmarks.",
+  "No matching history.",
+  "No matching actions. Press Esc to go back.",
+  "${name} couldn't load your bookmarks. Keep typing to try again.",
+  "${name} couldn't load your history. Keep typing to try again.",
+  "Enter switches to the tab · Esc closes suggestions",
+  "Enter runs the action · Esc closes suggestions",
 ]);
 
 /**

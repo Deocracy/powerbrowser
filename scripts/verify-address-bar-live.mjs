@@ -224,6 +224,13 @@
  *               "hello" (a GET on /two/search), after the second Esc (the
  *               address restored), after activating a second web tab, after
  *               the Organising toggle segment, and after Browsing again.
+ *   local-modes  SMODE-01: Tabs lists every other open web tab on focus,
+ *               most recently used first, never the current one, with no
+ *               row highlighted; no-match text shows "No matching tabs." and
+ *               the trailing search row, highlighted, which searches
+ *               /one/search only when chosen; "Alpha" filters to the
+ *               scenario's /sw-a, and Enter switches to that very tab with no
+ *               loading push. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -1250,11 +1257,8 @@ async function switchToTab(ctx) {
             return fail(`${how}: typing "Switch Alpha" must show the /sw-a open-tab row with the codicon-browser marker and "Switch to Tab"; saw ${JSON.stringify(view.rows)}`);
         }
         if (how === 'Enter') {
-            let on = false;
-            for (let i = 0; i < 12 && !on; i++) {
-                await pressKey(app, ARROW_DOWN);
-                on = !!(await readRows(app)).rows.find(isTabRow)?.selected;
-            }
+            // Each press waits for the highlight to move (highlightRow): a read taken before the re-render overshot onto a one-off.
+            const on = !!(await highlightRow(app, urlA)).rows.find(isTabRow)?.selected;
             if (!on) {
                 return fail('ArrowDown never highlighted the /sw-a open-tab row');
             }
@@ -2779,6 +2783,151 @@ async function modeLifetime(ctx) {
     }
 }
 
+/** The open-tab rows in the dropdown, in order. */
+const tabRowsOf = view => view.rows.filter(r => r.type === 'codicon-browser');
+
+/** The label of the contributed local mode `id`, read from the AddressBar's own contributions; null when not contributed. */
+const localModeLabel = (app, id) => probe(app, `return get('AddressBar').contributedIn('local').find(m => m.id === ${JSON.stringify(id)})?.label ?? null;`);
+
+/** Picks the contributed local mode `id` from the menu (opened here); throws a broken instrument when it cannot. */
+async function pickLocalMode(app, id) {
+    const label = await localModeLabel(app, id);
+    if (!label) {
+        throw new Error(`${BROKEN} no ${id} mode is contributed, so it cannot be picked`);
+    }
+    if (!await openModesMenu(app) || await modeItemMouseDown(app, label) !== true) {
+        throw new Error(`${BROKEN} the modes menu has no item named ${label}`);
+    }
+    const view = await settle(() => readMode(app), v => v?.label === label);
+    if (view?.label !== label) {
+        throw new Error(`${BROKEN} picking ${label} from the menu did not show its chip (${JSON.stringify(view)})`);
+    }
+    return label;
+}
+
+/** Derived now from the shell: the urls of the open web tabs with a page other than the current one, and the current one's. */
+const otherTabs = app => probe(app, `const shell = get('ApplicationShell');
+    const current = shell.mainPanel.currentTitle?.owner;
+    const tabs = shell.getWidgets('main').filter(w => typeof w.tabId === 'string' && w.hasPage);
+    return { current: current?.url ?? null, others: tabs.filter(w => w !== current).map(w => ({ url: w.url, title: w.title.label })) };`);
+
+const NO_TAB_TEXT = 'zz no such tab';
+
+/**
+ * SMODE-01, local modes. Tabs: with web tabs on localhost /sw-a, /sw-b and
+ * /dr-c activated in that order, the Tabs mode lists on focus every other
+ * open web tab (derived from the shell), with /sw-b then /sw-a first and no
+ * row highlighted, and never the current tab. Text no tab matches shows "No
+ * matching tabs." and the trailing search row, highlighted, and sends no
+ * search until it is chosen; "Alpha" leaves only rows matching it, the
+ * scenario's /sw-a first and highlighted, and Enter makes that very tab
+ * current (by its widget, so a second /sw-a tab from switch-to-tab is not
+ * taken) with no loading push. Enter on the search row then GETs /one/search.
+ */
+async function localModes(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'local-modes')) {
+        return 'not-scored';
+    }
+    const urlA = localUrl(pages, '/sw-a');
+    const urlB = localUrl(pages, '/sw-b');
+    const tabA = await openLocalTab(app, pages, '/sw-a');
+    const tabB = await openLocalTab(app, pages, '/sw-b');
+    const tabC = await openLocalTab(app, pages, '/dr-c');
+    await showTab(app, tabA, '/sw-a');
+    await showTab(app, tabB, '/sw-b');
+    await showTab(app, tabC, '/dr-c');
+    if (plant === 'tabs-lists-active') {
+        const planted = await probe(app, `const m = get('TabsAddressBarMode');
+            const shell = get('ApplicationShell');
+            const provide = Object.getPrototypeOf(m).provide;
+            m.provide = async function (text, token) {
+                const cur = shell.mainPanel.currentTitle?.owner;
+                const rows = await provide.call(this, text, token);
+                return cur && cur.hasPage ? [{ key: 'tab:' + cur.id, source: 'tab', title: cur.title.label, caption: cur.url, url: cur.url, widgetId: cur.id }, ...rows] : rows;
+            };
+            return true;`);
+        if (planted === true) {
+            note('PLANT tabs-lists-active applied');
+        }
+    }
+    try {
+        // Focus: the zero-query list.
+        await pickLocalMode(app, 'tabs');
+        const want = await otherTabs(app);
+        const zero = await settle(() => readRows(app), v => tabRowsOf(v).length >= want.others.length);
+        const listed = tabRowsOf(zero).map(r => r.caption);
+        const count = (list, url) => list.filter(u => u === url).length;
+        if (count(listed, want.current) > count(want.others.map(t => t.url), want.current)) {
+            fail(`the active tab is listed: Tabs on focus showed the current tab ${JSON.stringify(want.current)}; rows ${JSON.stringify(listed)}`);
+        }
+        if (JSON.stringify(listed.slice(0, 2)) !== JSON.stringify([urlB, urlA])) {
+            fail(`Tabs on focus must list the tabs most recently used first, /sw-b then /sw-a (activated /sw-a, /sw-b, /dr-c); saw ${JSON.stringify(listed)}`);
+        }
+        if (JSON.stringify([...listed].sort()) !== JSON.stringify(want.others.map(t => t.url).sort())) {
+            fail(`Tabs on focus must list every other open web tab ${JSON.stringify(want.others.map(t => t.url))}; saw ${JSON.stringify(listed)}`);
+        }
+        if (zero.rows.some(r => r.selected)) {
+            fail(`the zero-query list must have no row highlighted; saw ${JSON.stringify(zero.rows)}`);
+        }
+
+        // No match: the message and the highlighted search row; nothing is searched until it is chosen.
+        const typedMark = pages.requests.length;
+        await typeInPill(app, NO_TAB_TEXT);
+        const none = await settle(() => readRows(app), v => v.rows.some(r => r.selected && r.title === NO_TAB_TEXT));
+        const notices = await readNotices(app);
+        const searchRow = none.rows.find(r => r.title === NO_TAB_TEXT);
+        if (tabRowsOf(none).length || !notices.some(n => n.text === 'No matching tabs.')) {
+            fail(`typing ${JSON.stringify(NO_TAB_TEXT)} in Tabs must show "No matching tabs." and no tab row; saw ${JSON.stringify(none.rows)}, notices ${JSON.stringify(notices)}`);
+        }
+        if (!searchRow?.selected || searchRow.caption !== HEURISTIC_CAPTION) {
+            fail(`with no matching tab the trailing search row (${JSON.stringify(NO_TAB_TEXT)}, ${JSON.stringify(HEURISTIC_CAPTION)}) must show, highlighted; saw ${JSON.stringify(none.rows)}`);
+        }
+        const typedGets = () => pages.requests.slice(typedMark).filter(r => r.path === '/one/search' && queryOf(r) === NO_TAB_TEXT).length;
+        const sentWhileTyping = typedGets();
+
+        // Filter: only matching rows, the scenario's /sw-a first and highlighted.
+        await typeInPill(app, 'Alpha');
+        const alpha = await settle(() => readRows(app), v => tabRowsOf(v)[0]?.caption === urlA && v.rows.some(r => r.title === 'Alpha'));
+        const alphaRows = tabRowsOf(alpha);
+        const wantAlpha = want.others.filter(t => `${t.title} ${t.url}`.toLowerCase().includes('alpha')).length;
+        if (alphaRows[0]?.caption !== urlA || !alphaRows[0]?.selected || alphaRows.length !== wantAlpha
+            || alphaRows.some(r => !`${r.title} ${r.caption}`.toLowerCase().includes('alpha'))) {
+            fail(`typing "Alpha" in Tabs must leave the ${wantAlpha} matching tab row(s), /sw-a first and highlighted; saw ${JSON.stringify(alpha.rows)}`);
+        }
+        const last = alpha.rows[alpha.rows.length - 1];
+        if (last?.title !== 'Alpha' || last.caption !== HEURISTIC_CAPTION || last.selected) {
+            fail(`the Tabs list must end with the search row for "Alpha" (${JSON.stringify(HEURISTIC_CAPTION)}), not highlighted while a tab matches; saw ${JSON.stringify(last)}`);
+        }
+        const mark = (await pushes(app)).length;
+        await pressKey(app, ENTER);
+        const current = await settle(() => mainTabId(app), id => id === tabA);
+        if (current !== tabA) {
+            fail(`Enter on the /sw-a row must make the scenario's own /sw-a tab current; the current tab is ${JSON.stringify(current)} (A ${tabA})`);
+        }
+        await sleep(1500);
+        const loads = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.loading === true && p.tabId === tabA);
+        if (loads.length) {
+            fail(`switching from a Tabs row loaded the tab: ${loads.length} loading push(es) for /sw-a`);
+        }
+
+        // The search row, chosen, searches with the default engine (the positive control for "nothing while typing").
+        await pickLocalMode(app, 'tabs');
+        await typeInPill(app, NO_TAB_TEXT);
+        await settle(() => readRows(app), v => v.rows.some(r => r.selected && r.title === NO_TAB_TEXT));
+        const enterMark = pages.requests.length;
+        await pressKey(app, ENTER);
+        if (!await nextGet(pages, '/one/search', enterMark, r => queryOf(r) === NO_TAB_TEXT)) {
+            fail(`Enter on the trailing search row must GET /one/search with q ${JSON.stringify(NO_TAB_TEXT)}`);
+        } else if (sentWhileTyping) {
+            fail(`typing in Tabs sent ${sentWhileTyping} search(es) before the search row was chosen`);
+        }
+    } finally {
+        await probe(app, `delete get('TabsAddressBarMode').provide; return true;`);
+        await restoreDefaultMode(app);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -2801,10 +2950,11 @@ const SCENARIOS = {
     'modes-dropdown': modesDropdown,
     'mode-chip': modeChip,
     'mode-lifetime': modeLifetime,
+    'local-modes': localModes,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
-const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search' };
+const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -2890,6 +3040,7 @@ const PLANTS = [
     { plant: 'engine-mode-ignored', target: 'modes-dropdown', run: ['search', 'modes-dropdown'], expect: 'no GET on /two/search' },
     { plant: 'reset-ignored', target: 'mode-chip', run: ['mode-chip'], expect: 'the x did not return to the default mode' },
     { plant: 'mode-sticks', target: 'mode-lifetime', run: ['mode-lifetime'], expect: 'mode did not return to the default after Enter' },
+    { plant: 'tabs-lists-active', target: 'local-modes', run: ['search', 'local-modes'], expect: 'the active tab is listed' },
 ];
 
 async function selfTest() {

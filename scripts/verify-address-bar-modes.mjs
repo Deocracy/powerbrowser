@@ -23,18 +23,19 @@
  *   6. the LOCAL_MODES ids equal the keys of CHROME_BAR_COPY.modeLabels in
  *      chrome-bar-copy.ts; LOCAL_MODES is in D-08 order (command-centre,
  *      bookmarks, tabs, history, actions); restrict tokens are unique single
- *      characters.
+ *      characters; the trailing search row is on bookmarks, tabs and history
+ *      and the cap is 10 on bookmarks and history (30-UI-SPEC, pinned).
  *
  * Each case prints `ok <case>`; the run ends `verify-address-bar-modes: PASS`
  * or one `verify-address-bar-modes: FAIL -- <case>: <got>` line per red case.
  * A derivation that finds nothing (no MODES literal, no modeLabels) or a table
  * missing an export is a FAIL, never a pass.
  *
- * --self-test: the clean tree must be green; then seven planted copies in a
+ * --self-test: the clean tree must be green; then eight planted copies in a
  * mkdtemp directory (the organising row removed, browsing set to history,
  * command-centre's suggestions flag set true, the fallback removed from
  * defaultModeFor, tabs and bookmarks swapped in LOCAL_MODES, one modeLabels
- * key removed, a duplicated token) must each go red naming the case that
+ * key removed, a duplicated token, the history cap dropped) must each go red naming the case that
  * catches it. A plant whose text did not change its source fails as "plant did
  * not apply".
  *
@@ -63,6 +64,14 @@ const DECIDED = { coding: 'command-centre', browsing: 'address', organising: 'ta
 /** D-08's menu order of the local modes. */
 const MENU_ORDER = ['command-centre', 'bookmarks', 'tabs', 'history', 'actions'];
 const FLAGS = ['resolve', 'suggestions', 'autofill', 'places'];
+/** 30-UI-SPEC "Result lists by mode": which local modes add the trailing search row, and their caps (contract pins). */
+const SEARCH_ROWS_AND_CAPS = {
+    'command-centre': { searchRow: false, cap: null },
+    bookmarks: { searchRow: true, cap: 10 },
+    tabs: { searchRow: true, cap: null },
+    history: { searchRow: true, cap: 10 },
+    actions: { searchRow: false, cap: null },
+};
 
 const sameSet = (a, b) => a.length === b.length && new Set(a).size === a.length && a.every(x => b.includes(x));
 const sorted = a => [...a].sort();
@@ -120,6 +129,10 @@ function cases(m, uiModes, labelKeys) {
         ['LOCAL_MODES ids equal the modeLabels keys', () =>
             labelKeys && sameSet(localIds, labelKeys)
                 ? null : { localModes: sorted(localIds), modeLabels: labelKeys ? sorted(labelKeys) : `no modeLabels in ${COPY_REL}` }],
+        ['LOCAL_MODES search rows and caps are the UI-SPEC\'s (search row on bookmarks, tabs, history; cap 10 on bookmarks and history)', () => {
+            const got = Object.fromEntries(m.LOCAL_MODES.map(entry => [entry.id, { searchRow: entry.searchRow === true, cap: entry.cap ?? null }]));
+            return JSON.stringify(got) === JSON.stringify(SEARCH_ROWS_AND_CAPS) ? null : got;
+        }],
         ['LOCAL_MODES order is D-08\'s', () =>
             JSON.stringify(localIds) === JSON.stringify(MENU_ORDER) ? null : localIds],
         ['restrict tokens are unique single characters', () => {
@@ -206,12 +219,13 @@ const PLANTS = [
     {
         name: 'tabs and bookmarks swapped in LOCAL_MODES',
         rel: TABLE_REL,
-        from: "    { id: 'bookmarks', iconClass: 'codicon-star-full', restrictToken: '*', group: 'local' },\n    { id: 'tabs', iconClass: 'codicon-browser', restrictToken: '%', group: 'local' },",
-        to: "    { id: 'tabs', iconClass: 'codicon-browser', restrictToken: '%', group: 'local' },\n    { id: 'bookmarks', iconClass: 'codicon-star-full', restrictToken: '*', group: 'local' },",
+        from: "    { id: 'bookmarks', iconClass: 'codicon-star-full', restrictToken: '*', group: 'local', searchRow: true, cap: 10 },\n    { id: 'tabs', iconClass: 'codicon-browser', restrictToken: '%', group: 'local', searchRow: true },",
+        to: "    { id: 'tabs', iconClass: 'codicon-browser', restrictToken: '%', group: 'local', searchRow: true },\n    { id: 'bookmarks', iconClass: 'codicon-star-full', restrictToken: '*', group: 'local', searchRow: true, cap: 10 },",
         expect: 'LOCAL_MODES order',
     },
     { name: 'one modeLabels key removed', rel: COPY_REL, from: "        history: 'History',\n", to: '', expect: 'LOCAL_MODES ids equal the modeLabels keys' },
     { name: 'a duplicated token', rel: TABLE_REL, from: "restrictToken: '^'", to: "restrictToken: '%'", expect: 'restrict tokens are unique' },
+    { name: 'the history cap dropped', rel: TABLE_REL, from: "restrictToken: '^', group: 'local', searchRow: true, cap: 10", to: "restrictToken: '^', group: 'local', searchRow: true", expect: 'LOCAL_MODES search rows and caps' },
 ];
 
 async function selfTest() {

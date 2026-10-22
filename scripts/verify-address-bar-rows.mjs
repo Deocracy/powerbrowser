@@ -119,6 +119,11 @@ function cases(m) {
             ];
             return same(got, want) ? null : got;
         }],
+        ['an action row: the zap glyph whatever icon it carries, and no type marker', () => {
+            const got = [m.iconFor(row('action', '')), m.iconFor(row('action', '', { icon: 'data:image/png;base64,AA' }))];
+            const want = { leading: { codicon: 'codicon-zap' }, trailing: null };
+            return same(got, [want, want]) ? null : got;
+        }],
         ['safeIcon keeps a bounded data:image/ URI and nothing else', () => {
             const png = 'data:image/png;base64,AA';
             const got = [

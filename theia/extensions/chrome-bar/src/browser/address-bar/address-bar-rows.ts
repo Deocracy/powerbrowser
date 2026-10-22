@@ -10,7 +10,7 @@
  * must stay dependency-free.
  */
 
-export type RowSource = 'heuristic' | 'search' | 'history' | 'bookmark' | 'tab';
+export type RowSource = 'heuristic' | 'search' | 'history' | 'bookmark' | 'tab' | 'action';
 
 /** One dropdown row. `key` is stable across arrivals; an engine row's url is empty until resolved. */
 export interface Row {
@@ -21,6 +21,12 @@ export interface Row {
     url: string;
     engineName?: string;
     icon?: string | null;
+    /** Phase 30: the web tab a Tabs-mode row switches to; preferred over the url, so two tabs on one url stay two rows. */
+    widgetId?: string;
+    /** Phase 30: an Actions row's keybinding labels, shown trailing. */
+    badges?: string[];
+    /** Phase 30: what choosing the row does, when it is not an address (an action, the trailing search row). */
+    run?: () => void | Promise<void>;
 }
 
 export const ENGINE_ROW_LIMIT = 4;
@@ -85,6 +91,9 @@ const TYPE_MARKERS: { [source: string]: string } = {
  */
 export function iconFor(row: Row): { leading: RowIcon; trailing: string | null } {
     const trailing = TYPE_MARKERS[row.source] ?? null;
+    if (row.source === 'action') {
+        return { leading: { codicon: 'codicon-zap' }, trailing: null };
+    }
     if (row.source === 'search') {
         return { leading: { codicon: 'codicon-search' }, trailing };
     }

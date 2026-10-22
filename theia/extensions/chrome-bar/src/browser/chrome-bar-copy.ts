@@ -48,6 +48,22 @@ export const CHROME_BAR_COPY = Object.freeze({
     modesMenuLabel: 'Modes',
     returnTo: (label: string) => `Return to ${label}`,
     engineFooter: 'Enter searches · Alt+Enter searches in a new tab · Esc closes suggestions',
+    // Phase 30 (SMODE-01): the local modes' lists (30-UI-SPEC "Strings").
+    searchTabs: 'Search tabs',
+    searchBookmarks: 'Search bookmarks',
+    searchHistory: 'Search history',
+    searchActions: 'Search actions',
+    noOtherTabs: (engine: string) => `No other open tabs. Type an address, or words to search with ${engine}.`,
+    noBookmarks: (engine: string) => `No bookmarks yet. Type an address, or words to search with ${engine}.`,
+    noHistory: (engine: string) => `No history yet. Type an address, or words to search with ${engine}.`,
+    noMatchingTabs: 'No matching tabs.',
+    noMatchingBookmarks: 'No matching bookmarks.',
+    noMatchingHistory: 'No matching history.',
+    noMatchingActions: 'No matching actions. Press Esc to go back.',
+    bookmarksFailed: (subject: string) => `${subject} couldn't load your bookmarks. Keep typing to try again.`,
+    historyFailed: (subject: string) => `${subject} couldn't load your history. Keep typing to try again.`,
+    tabsFooter: 'Enter switches to the tab · Esc closes suggestions',
+    actionsFooter: 'Enter runs the action · Esc closes suggestions',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

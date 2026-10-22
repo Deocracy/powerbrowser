@@ -22,14 +22,18 @@ export interface LocalModeEntry {
     restrictToken?: string;
     /** The modes menu group (D-08): top sits above the engines, local below them. */
     group: 'top' | 'local';
+    /** Typed text adds a trailing "Search with {engine}" row (30-UI-SPEC "Result lists by mode"). */
+    searchRow?: boolean;
+    /** The most rows the mode lists; absent: no cap, the list scrolls. */
+    cap?: number;
 }
 
 /** The local modes in D-08 menu order. Address is not a menu row: it is the mode button's own form. */
 export const LOCAL_MODES: readonly LocalModeEntry[] = Object.freeze([
     { id: 'command-centre', iconClass: 'codicon-compass', group: 'top' },
-    { id: 'bookmarks', iconClass: 'codicon-star-full', restrictToken: '*', group: 'local' },
-    { id: 'tabs', iconClass: 'codicon-browser', restrictToken: '%', group: 'local' },
-    { id: 'history', iconClass: 'codicon-history', restrictToken: '^', group: 'local' },
+    { id: 'bookmarks', iconClass: 'codicon-star-full', restrictToken: '*', group: 'local', searchRow: true, cap: 10 },
+    { id: 'tabs', iconClass: 'codicon-browser', restrictToken: '%', group: 'local', searchRow: true },
+    { id: 'history', iconClass: 'codicon-history', restrictToken: '^', group: 'local', searchRow: true, cap: 10 },
     { id: 'actions', iconClass: 'codicon-zap', restrictToken: '>', group: 'local' },
 ]);
 

@@ -10,7 +10,7 @@ import {
     ReactWidget,
     Widget,
 } from '@theia/core/lib/browser';
-import { CommandMenu, CommandRegistry, CompoundMenuNode, ContributionProvider, Disposable, MenuPath } from '@theia/core/lib/common';
+import { CancellationTokenSource, CommandMenu, CommandRegistry, CompoundMenuNode, ContributionProvider, Disposable, MenuPath } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
 import { PreferenceSchemaService, PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
@@ -47,6 +47,26 @@ const ONE_OFF_KEY = 'oneoff:';
 
 /** BAR-11: the dropdown's tallest size (29-UI-SPEC Spacing Scale); a short window caps it at its bottom less 8px. */
 const DROPDOWN_MAX_HEIGHT = 432;
+
+/** SMODE-01: the trailing "Search with {engine}" row's key in Bookmarks, Tabs and History. */
+const SEARCH_ROW_KEY = 'search-row';
+
+/** SMODE-01: a local mode's strings: placeholder and aria-label, the empty and no-match rows, a failed read, the footer. */
+interface LocalModeCopy {
+    label: string;
+    empty: (engine: string) => string;
+    noMatch: string;
+    failed?: (subject: string) => string;
+    footer: string;
+}
+
+/** SMODE-01: the strings of each local mode that lists its own rows (30-UI-SPEC "Strings"). */
+const LOCAL_MODE_COPY: { [mode: string]: LocalModeCopy } = {
+    tabs: {
+        label: CHROME_BAR_COPY.searchTabs, empty: CHROME_BAR_COPY.noOtherTabs,
+        noMatch: CHROME_BAR_COPY.noMatchingTabs, footer: CHROME_BAR_COPY.tabsFooter,
+    },
+};
 
 /** SMODE-01: the Search Settings item's key in the modes menu; every other item's key is its mode id. */
 const SEARCH_SETTINGS_KEY = 'search-settings';
@@ -169,6 +189,10 @@ export class AddressBar {
     protected mode: ModeId = 'address';
     /** The PowerBrowser mode id the bar last reported; the default mode is that mode's row in the D-03 table. */
     protected uiMode = '';
+    /** Phase 30 (SMODE-01): a local mode's list request, cancelled by the next keystroke or a close. */
+    protected localQuery: CancellationTokenSource | undefined;
+    /** Phase 30 (SMODE-01): the local list's empty, no-match or failure row, above any rows. */
+    protected localMessage: string | undefined;
     /** Phase 30 (SMODE-01): the modes menu is open; the element that opened it keeps focus and drives it. */
     protected modesOpen = false;
     /** The highlighted modes-menu item, by key. */
@@ -317,6 +341,69 @@ export class AddressBar {
     /** Phase 30 (D-26): what the active mode may send to chrome while typing. */
     protected modeSends(): { resolve: boolean; suggestions: boolean; autofill: boolean; places: boolean } {
         return MODE_SENDS[modeKindOf(this.mode)] ?? MODE_SENDS['address'];
+    }
+
+    /** Phase 30 (SMODE-01): the active mode's contribution when it lists its own rows, else undefined. */
+    protected localMode(): AddressBarMode | undefined {
+        const mode = this.modeProvider.getContributions().find(entry => entry.id === this.mode);
+        return mode && mode.provide && LOCAL_MODE_COPY[mode.id] ? mode : undefined;
+    }
+
+    /** Firefox's search string: empty while the pill still shows the committed address, else the trimmed text. */
+    protected queryText(): string {
+        return this.inputValue === this.committedAddress ? '' : this.inputValue.trim();
+    }
+
+    /**
+     * SMODE-01: a local mode's list for the query text, in place of runQuery
+     * (nothing else is sent while typing). Rows past the mode's cap are
+     * dropped; Bookmarks, Tabs and History end with the search row. With text
+     * the first row is highlighted (the search row only when nothing else
+     * matched); the zero-query list has no highlight, so Enter on an unedited
+     * address still reloads it. A rejected read shows the mode's failure row.
+     */
+    protected async runLocalQuery(mode: AddressBarMode): Promise<void> {
+        if (!this.dropdownArmed || !mode.provide) {
+            return;
+        }
+        this.localQuery?.cancel();
+        const source = this.localQuery = new CancellationTokenSource();
+        const seq = ++this.querySeq;
+        const text = this.queryText();
+        const entry = LOCAL_MODES.find(candidate => candidate.id === mode.id);
+        const copy = LOCAL_MODE_COPY[mode.id];
+        let rows: Row[] | undefined;
+        try {
+            rows = await mode.provide(text, source.token);
+        } catch {
+            rows = undefined;
+        }
+        if (!this.dropdownArmed || this.querySeq !== seq || source.token.isCancellationRequested) {
+            return;
+        }
+        const listed = (rows ?? []).slice(0, entry?.cap ?? Infinity)
+            .map(row => row.url && row.icon === undefined ? { ...row, icon: this.icons[row.url] ?? null } : row);
+        const search = entry?.searchRow && text ? [this.searchRowFor(text)] : [];
+        this.rows = listed.concat(search);
+        this.providerFailed = false;
+        this.heuristicNoEngine = false;
+        this.localMessage = rows === undefined && copy.failed ? copy.failed(appSubject())
+            : listed.length ? undefined
+                : text ? copy.noMatch : copy.empty(this.effectiveEngine() ?? '');
+        this.highlightKey = text ? this.rows[0]?.key : undefined;
+        this.dropdownOpen = true;
+        this.update();
+        void this.requestIcons(seq);
+    }
+
+    /** SMODE-01: the trailing row that searches `text` with the default engine, only when chosen. */
+    protected searchRowFor(text: string): Row {
+        const engine = this.effectiveEngine() ?? '';
+        return {
+            key: SEARCH_ROW_KEY, source: 'heuristic', title: text, caption: CHROME_BAR_COPY.searchWith(engine), url: '',
+            engineName: engine, icon: this.engineList?.engines.find(e => e.name === engine)?.icon ?? null,
+            run: () => this.runOneOff(this.engineNameForRequest(), 'current', text),
+        };
     }
 
     /** BAR-04: the User-scope engine choice when chrome lists it, else '' (chrome's default); an engine mode's engine first. */
@@ -591,6 +678,8 @@ export class AddressBar {
         this.removeFailedKey = undefined;
         this.pasteFailed = false;
         this.retry = undefined;
+        this.localQuery?.cancel();
+        this.localMessage = undefined;
     }
 
     protected async runQuery(prefix: string): Promise<void> {
@@ -600,7 +689,8 @@ export class AddressBar {
         // sequence bump in closeDropdown cannot see it because the sequence
         // is taken below. Without this guard that late query re-opened the
         // dropdown over the committed page.
-        if (!this.dropdownArmed) {
+        // SMODE-01: a query debounced before a switch to a local mode must not replace that mode's list.
+        if (!this.dropdownArmed || this.localMode()) {
             return;
         }
         const seq = ++this.querySeq;
@@ -812,7 +902,9 @@ export class AddressBar {
         for (const url of found) {
             this.icons[url] = icons[url];
         }
-        this.rows = this.composeVisibleRows();
+        this.rows = this.localMode()
+            ? this.rows.map(row => row.url && !row.engineName ? { ...row, icon: this.icons[row.url] ?? null } : row)
+            : this.composeVisibleRows();
         this.update();
     }
 
@@ -871,10 +963,19 @@ export class AddressBar {
         this.rows = [];
         this.highlightKey = undefined;
         this.removeFailedKey = undefined;
+        this.localMessage = undefined;
         // BAR-03: text typed while an IME composition is open is never queried (onCompositionEnd queries it).
         this.compositionOpen = composing;
         if (this.compositionOpen) {
             this.renderNow();
+            return;
+        }
+        const local = this.localMode();
+        if (local) {
+            // SMODE-01: a local mode lists its own rows, empty text included (the zero-query list).
+            this.dropdownArmed = true;
+            this.renderNow();
+            void this.runLocalQuery(local);
             return;
         }
         if (!this.inputValue.trim()) {
@@ -1040,8 +1141,9 @@ export class AddressBar {
 
     /** BAR-06: the live web tab showing an open-tab row's address (the match the places service keeps tab rows by). */
     protected liveTabFor(row: Row): WebTabWidget | undefined {
-        return this.shell.getWidgets('main')
-            .find((w): w is WebTabWidget => w instanceof WebTabWidget && w.hasPage && w.url === row.url);
+        const tabs = this.shell.getWidgets('main').filter((w): w is WebTabWidget => w instanceof WebTabWidget && w.hasPage);
+        // Phase 30: a Tabs-mode row names its own tab, so two tabs on one url each switch to their own.
+        return tabs.find(w => row.widgetId !== undefined && w.id === row.widgetId) ?? tabs.find(w => w.url === row.url);
     }
 
     /**
@@ -1097,6 +1199,14 @@ export class AddressBar {
      * to open after, the tab is appended (and so selected).
      */
     protected async openRowInNewTab(row: Row | undefined, foreground: boolean): Promise<void> {
+        if (row?.key === SEARCH_ROW_KEY) {
+            // SMODE-01: the trailing search row searches its text with the default engine in the new tab.
+            return this.runOneOff(this.engineNameForRequest(), foreground ? 'foreground' : 'background', row.title);
+        }
+        if (row?.run) {
+            // An action has no address to open elsewhere: it runs.
+            return this.chooseRow(row);
+        }
         const url = await this.urlForRow(row);
         if (!url || !/^https?:\/\//i.test(url)) {
             this.showCommitFailure(() => this.openRowInNewTab(row, foreground));
@@ -1129,7 +1239,15 @@ export class AddressBar {
     }
 
     /** Choosing a row by plain click or Enter: the heuristic commits the typed text, an open tab switches, the rest commit their address. */
-    protected chooseRow(row: Row): Promise<void> {
+    protected async chooseRow(row: Row): Promise<void> {
+        if (row.run) {
+            // Phase 30: an action or the trailing search row; the choice ends the picked mode (D-15).
+            this.inputValue = this.committedAddress;
+            this.closeDropdown();
+            this.resetMode();
+            this.update();
+            return row.run();
+        }
         if (row.source === 'heuristic') {
             return this.commitTyped();
         }
@@ -1211,6 +1329,7 @@ export class AddressBar {
             }
             this.highlightKey = nextHighlight(this.highlightKeys(), this.highlightKey, e.key === 'ArrowDown' ? 1 : -1);
             this.update();
+            this.scrollHighlightIntoView();
         } else if (e.key === 'Enter') {
             e.preventDefault();
             if (this.homeFailed) {
@@ -1329,15 +1448,30 @@ export class AddressBar {
         if (at < 0 || !current()) {
             return;
         }
+        this.highlightKey = keys[at + 1] ?? keys[at - 1];
+        if (this.localMode()) {
+            // History mode: the list is the mode's own, not the composed Address rows.
+            this.rows = this.rows.filter(r => r.key !== row.key);
+            this.update();
+            return;
+        }
         this.placeRows = this.placeRows.filter(r => r.key !== row.key);
         this.rows = this.composeVisibleRows();
-        this.highlightKey = keys[at + 1] ?? keys[at - 1];
         this.showComposedRows(seq);
+    }
+
+    /** Keeps the highlighted row visible in a list that scrolls, after the render that moves the highlight. */
+    protected scrollHighlightIntoView(): void {
+        const index = this.rows.findIndex(row => row.key === this.highlightKey);
+        if (index >= 0) {
+            requestAnimationFrame(() => document.getElementById(this.rowId(index))?.scrollIntoView({ block: 'nearest' }));
+        }
     }
 
     /** BAR-05: the visible engines except the one in use, in chrome's order. */
     protected oneOffEngines(): Array<{ name: string; icon: string | null }> {
-        if (!this.inputValue.trim()) {
+        // A local mode offers the default engine through its own search row instead.
+        if (!this.inputValue.trim() || this.localMode()) {
             return [];
         }
         const inUse = this.effectiveEngine();
@@ -1466,6 +1600,12 @@ export class AddressBar {
     /** BAR-04: engines can change after startup (added in a stock window), so focus re-reads them. */
     protected onInputFocus = (): void => {
         void this.refreshEngines();
+        // SMODE-01: focus in a local mode opens its zero-query list (or the list for the kept text).
+        const local = this.localMode();
+        if (local && !this.dropdownOpen) {
+            this.dropdownArmed = true;
+            void this.runLocalQuery(local);
+        }
     };
 
     /**
@@ -1617,14 +1757,22 @@ export class AddressBar {
             </>;
         }
         return <>
+            {this.localMessage !== undefined && <div className='pb-chrome-bar-row is-message'>{this.localMessage}</div>}
             {this.rows.map((row, index) => <React.Fragment key={row.key}>
                 {this.renderRow(row, index)}
                 {row.key === this.removeFailedKey && <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.removeFailed(appSubject())}</div>}
             </React.Fragment>)}
             {this.shimmer && <div className='pb-chrome-bar-row is-shimmer' aria-hidden='true' />}
             {this.renderOneOffs()}
-            <div className='pb-chrome-bar-dropdown-footer'>{this.modeEngine() !== undefined ? CHROME_BAR_COPY.engineFooter : CHROME_BAR_COPY.dropdownFooter}</div>
+            <div className='pb-chrome-bar-dropdown-footer'>{this.footerText()}</div>
         </>;
+    }
+
+    /** The footer hint for the active mode. */
+    protected footerText(): string {
+        const local = this.localMode();
+        return local ? LOCAL_MODE_COPY[local.id].footer
+            : this.modeEngine() !== undefined ? CHROME_BAR_COPY.engineFooter : CHROME_BAR_COPY.dropdownFooter;
     }
 
     /** The DOM id of a row, for the input's aria-activedescendant. */
@@ -1681,8 +1829,10 @@ export class AddressBar {
         const secure = this.inputValue.trim().startsWith('https://');
         const engine = this.effectiveEngine();
         const modeEngine = this.modeEngine();
-        const addressLabel = modeEngine ? CHROME_BAR_COPY.searchWith(modeEngine)
-            : engine ? CHROME_BAR_COPY.searchPlaceholder(engine) : CHROME_BAR_COPY.searchOrEnterAddress;
+        const local = this.localMode();
+        const addressLabel = local ? LOCAL_MODE_COPY[local.id].label
+            : modeEngine ? CHROME_BAR_COPY.searchWith(modeEngine)
+                : engine ? CHROME_BAR_COPY.searchPlaceholder(engine) : CHROME_BAR_COPY.searchOrEnterAddress;
         const activeIndex = this.dropdownOpen ? this.rows.findIndex(row => row.key === this.highlightKey) : -1;
         const oneOffIndex = this.dropdownOpen ? this.oneOffEngines().findIndex(engine => ONE_OFF_KEY + engine.name === this.highlightKey) : -1;
         const activeId = activeIndex >= 0 ? this.rowId(activeIndex) : oneOffIndex >= 0 ? this.oneOffId(oneOffIndex) : undefined;
@@ -1999,7 +2149,7 @@ export class AddressBar {
 
     /** Re-runs the query for the pill's text in the active mode; empty text only repaints. */
     protected requery(): void {
-        if (this.inputValue.trim()) {
+        if (this.inputValue.trim() || this.localMode()) {
             this.textEdited(this.inputValue, false);
         } else {
             this.update();
