@@ -632,18 +632,23 @@ D-04 is a move/refactor, so this section applies to that plan.
 | A6 | Engine aliases come only from Gecko (`engine.aliases`); no `configuration.toml` alias key this phase | Pattern 4 | `@alias` inert in the shipped tree until a downstream configures one |
 | A7 | Tabs MRU is an in-memory list fed by `onCurrentWidgetChanged`; tabs never activated this session sort after the rest in tab order | Pattern 6 | Order differs from the store's `last_active` after a restart |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All three are resolved in 30-04-PLAN.md `<objective>` ("Decided (autonomous, recommended; recorded)").
 
 1. **UI-SPEC line 190 quotes the file placeholder without the toggle suffix.**
    - What we know: the runtime placeholder ends "(Press Ctrl+P to show/hide excluded files)". D-25 requires the descriptor's own text.
    - What's unclear: whether Chris wants the suffix shown in the pill, where Ctrl+P opens the stock widget.
    - Recommendation: follow D-25 verbatim (show the descriptor's text). The verifier reads the runtime value. Flag at verify-work; stripping the suffix would be a hand-kept edit that D-25 forbids.
+   - RESOLVED (30-04): the placeholder is shown verbatim, suffix included, per D-25; flagged for Chris at verify-work.
 2. **`debug ` with no launch configuration returns 0 picks.**
    - What we know: the provider works; the probe profile had no configuration.
    - Recommendation: the live scenario asserts a descriptor exists for `debug ` and that the no-match copy shows. A positive pick needs a `.theia/launch.json` in the temp workspace; add one.
+   - RESOLVED (30-04): the live workspace fixture carries `.theia/launch.json`, so `debug ` has a pick.
 3. **"Recently opened" zero-query list depends on navigation history.**
    - What we know: after one file open with no cursor move, `''` returned 0 picks.
    - Recommendation: the scenario opens a file, moves the cursor (or opens two files), then asserts a "recently opened" separator. Otherwise it asserts the zero-query empty copy.
+   - RESOLVED (30-04): the zero-query list is compared with the provider's own picks for empty text; no "recently opened" header is asserted.
 
 ## Environment Availability
 
