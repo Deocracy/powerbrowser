@@ -825,6 +825,10 @@ export class ChromeBarWidget extends ReactWidget {
         this.homeFailed = false;
         this.noSearch = false;
         this.engineRows = [];
+        // Rows kept here would come back under a later failure or paste row, or be chosen unseen.
+        this.rows = [];
+        this.heuristic = null;
+        this.placeRows = [];
         this.autofill = undefined;
         this.removeFailedKey = undefined;
         this.pasteFailed = false;
@@ -1701,8 +1705,11 @@ export class ChromeBarWidget extends ReactWidget {
         }
         this.inputValue = address;
         this.committedAddress = address;
+        if (this.commitFailed || this.noSearch) {
+            // The failure row described the old text; it closes with it.
+            this.closeDropdown();
+        }
         this.commitFailed = false;
-        this.noSearch = false;
         this.update();
     }
 
