@@ -490,6 +490,7 @@ with "autonomous interactive".
 | 14 | verification_deferred (3/3 plans executed, code review 13/13 fixed, UI review 15/24 with 3 priority fixed, security SECURED; verifier not run per nonstop rule) | /gsd-verify-work 14 |
 | 15 | verification_deferred (3/3 plans executed, code review 19/19 dispositioned incl. CR-01 origin fix, UI review 20/24 with 3 priority fixed, security SECURED 14/14; verifier not run per nonstop rule) | /gsd-verify-work 15 |
 | 27 | verification_deferred_human (70/71 verified; real-input key/mouse checks, hold cleanup, visuals, judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 27 |
+| 29 | verification_deferred_human (74/81 verified; review clean after 2 fix iterations, security SECURED 40/40; rebrand run, real IME, pill keyboard/mouse, visuals, OS drag, packaged engine list, 7 review fixes untested live, judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 29 |
 
 ## Deferred Items
 
