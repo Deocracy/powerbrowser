@@ -1,10 +1,10 @@
 ---
 phase: 29-address-bar-search-and-fixup
-fixed_at: 2026-10-22T02:54:15Z
+fixed_at: 2026-10-22T03:30:56Z
 review_path: .planning/phases/29-address-bar-search-and-fixup/29-REVIEW.md
-iteration: 1
-findings_in_scope: 12
-fixed: 12
+iteration: 2
+findings_in_scope: 1
+fixed: 1
 skipped: 0
 status: all_fixed
 ---
@@ -138,8 +138,47 @@ created), so every result below can be reproduced from this tree.
 **Commits:** 101b203, 9e79e15, 63e8eda
 **Applied fix:** The static check adds two pins. `overlay:` requires `if (bc) { return tabIdOfBrowser(bc.top.embedderElement) === null; }` in `tokenCookieAllowed`. `filter:` requires the `${TOKEN_COOKIE_NAME}=` filter in `tokenCookieStrip`. Each has a plant (`return true`; a filter on another name), and the self-test has 6 of 6 red. In the live check, token-cookie gains a fifth load: a web tab on `<sidecar origin>/powerbrowser/health?pb-overlay`, observed chrome-side at `http-on-examine-response`. It must carry no `POWERBROWSER_TOKEN` and must not get 200. The Theia frame's credentialed 200 is the control. The tab is closed afterwards (9e79e15), and sidecar-overlay is reported after the four served-port labels (63e8eda).
 
+## Iteration 2
+
+**Fixed at:** 2026-10-22T03:30:56Z
+**Findings in scope:** 1 (NEW-01, the re-review's one warning). Fixed: 1. Skipped: 0. The
+frontmatter counts are for this iteration; iteration 1's counts (12 of 12) are above.
+
+### Verification
+
+All gates ran in the **main checkout** (`workflow.use_worktrees` is `false`), so every result can
+be reproduced from this tree. `PowerBrowserAPI.sys.mjs` was not edited, so the catalogue and
+boundary steps were not needed.
+
+- `node --check scripts/verify-address-bar-live.mjs`: PASS.
+- Theia rebuilt (chrome-bar, tab-uris, browser app in development mode): 0 errors.
+- `node scripts/verify-address-bar-live.mjs --scenario one-off`: PASS.
+- The one-off scenario run with the new plant `oneoff-retry-recommits` (showNoSearch drops the
+  retry, which restores the defect): red, naming "Enter after a failed background one-off opened
+  no new tab on /two/search". The pill held the page URL `/two/search?q=hello`, which is the
+  re-commit WR-05 removed.
+- `scripts/verify-platform.sh --quick`: PASS.
+- The full `verify-address-bar-live.mjs --self-test` was not run. Only the new plant was driven.
+
+### Fixed Issues
+
+#### NEW-01: After a failed one-off search in a new tab, Enter still reloads the current page
+
+**Files modified:** `theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx`, `scripts/verify-address-bar-live.mjs`
+**Commit:** 8587866
+**Status:** fixed: requires human verification (the live check covers the background target; the
+foreground and current targets use the same retry, but no scenario drives them)
+**Applied fix:** `showNoSearch(retry?)` records its retry the same way `showCommitFailure` does.
+`runOneOff` takes an optional `text` (default `inputValue.trim()`), and its failure branch calls
+`showNoSearch(() => this.runOneOff(name, target, text))`, so the retry uses the text captured
+before a new-tab target resets the pill. The Enter branch uses `const retry = this.retry;` for
+both failure rows. With no retry, as for a no-engine reply on typed text, Enter still re-commits
+the typed text. The one-off live scenario adds a check: one resolve stubbed to reply no-engine, a
+middle-click on the Probe Engine Two one-off, then the no-search row, then Enter, which must open
+/two/search in a tab not seen before. The self-test gets the plant `oneoff-retry-recommits`.
+
 ---
 
-_Fixed: 2026-10-22T02:54:15Z_
+_Fixed: 2026-10-22T03:30:56Z_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 1_
+_Iteration: 2_
