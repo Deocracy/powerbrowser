@@ -132,3 +132,20 @@ export function tokenise(text: string, mode: ModeId, context: TokenContext): { m
     }
     return null;
 }
+
+/**
+ * SMODE-04 (D-19): the Accel+Up/Down cycle -- Address, each engine's mode in
+ * chrome's order, the local-group LOCAL_MODES in table order, then Command
+ * centre; a local mode that is not contributed is left out.
+ */
+export function cycleOrder(engineNames: readonly string[], contributed: (id: LocalModeId) => boolean): ModeId[] {
+    const local = LOCAL_MODES.filter(entry => entry.group === 'local' && contributed(entry.id)).map(entry => entry.id);
+    const centre: ModeId[] = contributed('command-centre') ? ['command-centre'] : [];
+    return ([] as ModeId[]).concat(['address'], engineNames.map(engineModeId), local, centre);
+}
+
+/** The mode `step` places from `current` in `order`, wrapping both ways; a mode outside the order steps from Address. */
+export function nextMode(order: readonly ModeId[], current: ModeId, step: 1 | -1): ModeId {
+    const from = Math.max(order.indexOf(current), 0);
+    return order[(from + step + order.length) % order.length];
+}

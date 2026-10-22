@@ -38,7 +38,13 @@ export class ChromeBarKeybindingContribution implements KeybindingContribution {
         // A passthrough binding on an element-local key outranks that global
         // binding whatever the registration order, and lets the event reach the
         // pill; F6 everywhere else in Theia is untouched.
-        for (const keybinding of ['f6', 'shift+f6']) {
+        // SMODE-04 (D-19, D-20): Ctrl/Cmd+Up/Down cycle the pill's modes and
+        // Alt+Up/Down open its modes menu, in the same handler. The same
+        // passthrough outranks any global binding of these keys in the capture
+        // phase and lets them reach the pill; in an editor, or anywhere else
+        // the pill does not have focus, they keep their Monaco and Theia
+        // meaning (KEY-04).
+        for (const keybinding of ['f6', 'shift+f6', 'ctrlcmd+up', 'ctrlcmd+down', 'alt+up', 'alt+down']) {
             keybindings.registerKeybinding({
                 command: KeybindingRegistry.PASSTHROUGH_PSEUDO_COMMAND,
                 keybinding,

@@ -16,6 +16,7 @@ import { PreferenceSchemaService, PreferenceScope, PreferenceService } from '@th
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
 import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
 import { LabelParser } from '@theia/core/lib/browser/label-parser';
+import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import pDebounce from 'p-debounce';
 import { MessageLoop } from '@theia/core/shared/@lumino/messaging';
@@ -27,7 +28,7 @@ import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, currentWebTab, f
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
 import { PLACE_ROW_LIMIT, Row, autofillSplice, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
-import { LOCAL_MODES, MODE_SENDS, ModeId, defaultModeFor, engineModeId, engineNameOf, modeKindOf, tokenise } from './address-bar-mode-table';
+import { LOCAL_MODES, MODE_SENDS, ModeId, cycleOrder, defaultModeFor, engineModeId, engineNameOf, modeKindOf, nextMode, tokenise } from './address-bar-mode-table';
 import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes';
 // Type only: command-centre.ts imports the shortcut table, which imports this file.
 import type { CommandCentreAddressBarMode } from './command-centre';
@@ -1502,7 +1503,18 @@ export class AddressBar {
             this.onModesKeyDown(e);
             return;
         }
-        if (e.key === 'F6' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const accel = isOSX ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+        if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && ((accel && !e.altKey) || (e.altKey && !e.ctrlKey && !e.metaKey))) {
+            // SMODE-04 (D-19): Accel+Up/Down cycles the mode without opening the dropdown; Alt+Up/Down opens the
+            // modes menu. The pill-scoped passthrough let the key through; nothing past the pill sees it.
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.altKey) {
+                this.openModesMenu();
+            } else {
+                this.cycleMode(e.key === 'ArrowDown' ? 1 : -1);
+            }
+        } else if (e.key === 'F6' && !e.ctrlKey && !e.altKey && !e.metaKey) {
             // The pill is chrome, not an editor: F6 and Shift+F6 go back to the page.
             e.preventDefault();
             this.closeDropdown();
@@ -2379,6 +2391,25 @@ export class AddressBar {
         this.mode = mode;
         this.requery();
         this.focusInputAtEnd();
+    }
+
+    /**
+     * SMODE-04 (D-19): Accel+Up/Down steps through cycleOrder -- Address, the
+     * engines, the contributed local modes, Command centre. An open result
+     * list is re-run for the current text in the new mode; a closed one stays
+     * closed (Firefox re-queries only an open view). A prototype method, so a
+     * live plant can replace it.
+     */
+    protected cycleMode(step: 1 | -1): void {
+        const engines = this.engineList ? this.engineList.engines.map(engine => engine.name) : [];
+        const contributed = this.modeProvider.getContributions();
+        const open = this.dropdownOpen;
+        this.mode = nextMode(cycleOrder(engines, id => contributed.some(mode => mode.id === id)), this.mode, step);
+        this.closeDropdown();
+        if (open) {
+            this.requery();
+        }
+        this.update();
     }
 
     /** Re-runs the query for the pill's text in the active mode; empty text only repaints. */

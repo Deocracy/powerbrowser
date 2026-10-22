@@ -301,6 +301,17 @@
  *               resolveTypedAddress, searchSuggestions, autofillOrigin or
  *               searchPlaces request and no GET on either served engine's
  *               search or suggest path. Scored only after search passed.
+ *   mode-keys   SMODE-04, D-19, D-20, KEY-04: in Browsing with the pill
+ *               focused (the fixture workspace open), Ctrl+Down at the parent
+ *               steps through cycleOrder -- the table module imported, the
+ *               engines from listSearchEngines and the contributed ids from
+ *               the instance, all derived now -- once per entry, wrapping to
+ *               Address, and Ctrl+Up steps back. Alt+Down opens the modes
+ *               menu and Esc closes it with the mode unchanged. In the
+ *               README.md editor, with two lines and the cursor on line 2,
+ *               Alt+Up swaps the lines (Monaco received the key), Alt+Down
+ *               swaps them back, and Ctrl+Down leaves the pill's mode
+ *               unchanged. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -3862,6 +3873,129 @@ async function modeTokens(ctx) {
     }
 }
 
+const ACCEL_DOWN = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, modifiers: ['accel'] };
+const ACCEL_UP = { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, modifiers: ['accel'] };
+const ALT_DOWN = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, modifiers: ['alt'] };
+const ALT_UP = { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, modifiers: ['alt'] };
+const EDITOR_LINES = 'probe line one\nprobe line two';
+const EDITOR_SWAPPED = 'probe line two\nprobe line one';
+
+/** Focuses the pill input in the Theia frame without changing its text; throws a broken instrument when it cannot. */
+async function focusPill(app) {
+    if (await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} the Theia frame could not be made chrome's active element`);
+    }
+    const focused = await app.evaluate(`(() => {
+        const input = document.querySelector('.pb-chrome-bar-input');
+        if (!input) return false;
+        input.focus();
+        return document.activeElement === input;
+    })()`);
+    if (focused !== true) {
+        throw new Error(`${BROKEN} the pill could not be focused`);
+    }
+}
+
+/** The editor on the fixture's README.md, opened and made current, its text set to two lines with the cursor on line 2 and focus in it. */
+const focusReadmeEditor = (app, dir) => probe(app, `const root = get('WorkspaceService').tryGetRoots()[0];
+    const widget = await get('EditorManager').open(root.resource.resolve('README.md'));
+    await get('ApplicationShell').activateWidget(widget.id);
+    const control = widget.editor.getControl();
+    control.setValue(${JSON.stringify(EDITOR_LINES)});
+    control.setPosition({ lineNumber: 2, column: 1 });
+    widget.editor.focus();
+    return await until(() => get('ContextKeyService').match('editorFocus'), 5000);`);
+const readmeText = app => probe(app, `return get('EditorManager').currentEditor?.editor.getControl().getValue() ?? null;`);
+
+/**
+ * SMODE-04 (D-19, D-20, KEY-04): Ctrl+Up/Down cycles the pill's modes and
+ * Alt+Up/Down opens its modes menu, only while the pill has focus; in an
+ * editor Monaco keeps Alt+Up/Down (move line) and Ctrl+Down leaves the pill
+ * alone.
+ */
+async function modeKeys(ctx) {
+    const { app, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'mode-keys')) {
+        return 'not-scored';
+    }
+    const dir = await openWorkspace(ctx);
+    if (await bodyMode(app) !== 'browsing') {
+        await switchUiMode(app, 'browsing');
+    }
+    if (plant === 'cycle-off' && await probe(app, `get('AddressBar').cycleMode = function () {}; return true;`) === true) {
+        note('PLANT cycle-off applied');
+    }
+    try {
+        await probe(app, `const bar = get('AddressBar'); await bar.refreshEngines(); bar.inputValue = bar.committedAddress; return true;`);
+        await restoreDefaultMode(app);
+        const derived = await probe(app, `const list = await get('ChromeStoreClient').listSearchEngines();
+            return { engines: (list?.engines ?? []).map(e => e.name), contributed: get('AddressBar').modeProvider.getContributions().map(m => m.id) };`);
+        const order = MODE_TABLE.cycleOrder(derived.engines, id => derived.contributed.includes(id));
+        const start = await modeState(app);
+        if (start?.mode !== 'address' || order.length < 3) {
+            return fail(`${BROKEN} the cycle must start in Address over at least three modes (mode ${JSON.stringify(start?.mode)}, order ${JSON.stringify(order)})`);
+        }
+        await focusPill(app);
+        for (let i = 1; i <= order.length; i++) {
+            const want = order[i % order.length];
+            await pressKey(app, ACCEL_DOWN);
+            const state = await settle(() => modeState(app), v => v?.mode === want);
+            if (state?.mode !== want) {
+                fail(`Ctrl+Down did not move to the next mode: after ${JSON.stringify(order[i - 1])} it is ${JSON.stringify(state?.mode)}, expected ${JSON.stringify(want)} (order ${JSON.stringify(order)})`);
+                break;
+            }
+        }
+        await pressKey(app, ACCEL_UP);
+        const back = await settle(() => modeState(app), v => v?.mode === order[order.length - 1]);
+        if (back?.mode !== order[order.length - 1]) {
+            fail(`Ctrl+Up from Address must step back to ${JSON.stringify(order[order.length - 1])}; the mode is ${JSON.stringify(back?.mode)}`);
+        }
+        await restoreDefaultMode(app);
+
+        // Alt+Down opens the modes menu; Esc closes it with the mode kept.
+        await focusPill(app);
+        await pressKey(app, ALT_DOWN);
+        if (!await settle(() => readModesMenu(app), v => !!v)) {
+            fail('Alt+Down in the pill did not open the modes menu');
+        } else {
+            await pressKey(app, ESCAPE);
+            const closed = await settle(() => readModesMenu(app), v => v === null);
+            const kept = await modeState(app);
+            if (closed !== null || kept?.mode !== 'address') {
+                fail(`Esc must close the modes menu with the mode unchanged; the menu is ${closed ? 'open' : 'closed'}, the mode ${JSON.stringify(kept?.mode)}`);
+            }
+        }
+
+        // KEY-04: in an editor Monaco keeps Alt+Up/Down, and Ctrl+Down leaves the pill's mode alone.
+        if (await focusTheiaFrame(app) !== true || await focusReadmeEditor(app, dir) !== true) {
+            return fail(`${BROKEN} the README.md editor could not be opened and focused`);
+        }
+        await pressKey(app, ALT_UP);
+        const swapped = await settle(() => readmeText(app), v => v === EDITOR_SWAPPED);
+        if (swapped !== EDITOR_SWAPPED) {
+            fail(`Alt+Up in the editor must move line 2 up (Monaco received the key); the text is ${JSON.stringify(swapped)}`);
+        }
+        await pressKey(app, ALT_DOWN);
+        const restored = await settle(() => readmeText(app), v => v === EDITOR_LINES);
+        if (restored !== EDITOR_LINES) {
+            fail(`Alt+Down in the editor must move the line back down; the text is ${JSON.stringify(restored)}`);
+        }
+        const before = await modeState(app);
+        await pressKey(app, ACCEL_DOWN);
+        await sleep(500);
+        const after = await modeState(app);
+        if (after?.mode !== before?.mode) {
+            fail(`Ctrl+Down in the editor changed the pill's mode from ${JSON.stringify(before?.mode)} to ${JSON.stringify(after?.mode)}`);
+        }
+    } finally {
+        await probe(app, `const bar = get('AddressBar'); delete bar.cycleMode;
+            const ed = get('EditorManager').currentEditor;
+            if (ed && ed.editor.document && ed.editor.document.revert) { await ed.editor.document.revert(); }
+            return true;`);
+        await restoreDefaultMode(app);
+    }
+}
+
 /** Enters the contributed mode `id` from the default mode through the menu, with the text cleared. */
 async function enterMode(app, id) {
     await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
@@ -3898,12 +4032,13 @@ const SCENARIOS = {
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
     'command-centre-privacy': commandCentrePrivacy,
+    'mode-keys': modeKeys,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
     'command-centre': 'search', 'command-centre-handoff': 'command-centre',
-    'command-centre-privacy': 'search', 'mode-defaults': 'search', 'mode-tokens': 'search' };
+    'command-centre-privacy': 'search', 'mode-defaults': 'search', 'mode-tokens': 'search', 'mode-keys': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -4000,6 +4135,7 @@ const PLANTS = [
     { plant: 'cc-sends', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress from Command centre' },
     { plant: 'default-ignored', target: 'mode-defaults', run: ['search', 'mode-defaults'], expect: 'Coding did not start in Command centre' },
     { plant: 'token-kept', target: 'mode-tokens', run: ['search', 'mode-tokens'], expect: 'the * token did not enter Bookmarks' },
+    { plant: 'cycle-off', target: 'mode-keys', run: ['search', 'mode-keys'], expect: 'Ctrl+Down did not move to the next mode' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 

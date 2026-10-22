@@ -47,21 +47,27 @@
  *  12. derived: over every printable ASCII character c, the set whose "c x"
  *      switches mode outside Command centre equals the LOCAL_MODES restrict
  *      tokens plus `?`, and inside it (Command centre keeping > and ?, a stub
- *      for the registry) that set minus the kept tokens.
+ *      for the registry) that set minus the kept tokens;
+ *  13. D-19: cycleOrder for two engines with every mode contributed is the
+ *      UI-SPEC's cycle (Address, the engines, Bookmarks, Tabs, History,
+ *      Actions, Command centre; a contract pin), and without Actions the same
+ *      minus Actions;
+ *  14. nextMode wraps from Command centre to Address and back, and steps
+ *      once each way in the middle.
  *
  * Each case prints `ok <case>`; the run ends `verify-address-bar-modes: PASS`
  * or one `verify-address-bar-modes: FAIL -- <case>: <got>` line per red case.
  * A derivation that finds nothing (no MODES literal, no modeLabels) or a table
  * missing an export is a FAIL, never a pass.
  *
- * --self-test: the clean tree must be green; then twelve planted copies in a
+ * --self-test: the clean tree must be green; then thirteen planted copies in a
  * mkdtemp directory (the organising row removed, browsing set to history,
  * command-centre's suggestions flag set true, the fallback removed from
  * defaultModeFor, tabs and bookmarks swapped in LOCAL_MODES, one modeLabels
  * key removed, a duplicated token, the history cap dropped, the runQuery
  * guard removed, a resolve call added to command-centre.ts, the contribution
- * id changed to address, tokenise accepting a token without a space) must
- * each go red naming the case that
+ * id changed to address, tokenise accepting a token without a space,
+ * nextMode not wrapping) must each go red naming the case that
  * catches it. A plant whose text did not change its source fails as "plant did
  * not apply".
  *
@@ -88,7 +94,9 @@ const MODES_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-b
 const CENTRE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/command-centre.ts';
 /** D-26: the names a mode reaches chrome or an engine through while typing. */
 const TYPED_TEXT_SENDERS = ['ChromeStoreClient', 'resolveTypedAddress', 'searchSuggestions', 'autofillOrigin', 'searchPlaces', 'ChromeBarSuggestionService'];
-const EXPORTS = ['LOCAL_MODES', 'DEFAULT_MODE_BY_UI_MODE', 'defaultModeFor', 'MODE_SENDS', 'engineModeId', 'engineNameOf', 'tokenise'];
+const EXPORTS = ['LOCAL_MODES', 'DEFAULT_MODE_BY_UI_MODE', 'defaultModeFor', 'MODE_SENDS', 'engineModeId', 'engineNameOf', 'tokenise', 'cycleOrder', 'nextMode'];
+/** 30-UI-SPEC "Tokens and keys": the Accel+Up/Down cycle for two engines with every mode contributed (a contract pin). */
+const CYCLE_PIN = ['address', 'engine:A', 'engine:B', 'bookmarks', 'tabs', 'history', 'actions', 'command-centre'];
 /** SMODE-04: the token context of the planted cases -- one alias, a default engine, and Command centre keeping > and ? (a stub for the registry). */
 const TOKEN_CONTEXT = { aliases: [['@two', 'Engine Two']], defaultEngine: 'Engine One', keepInCommandCentre: token => token === '>' || token === '?' };
 
@@ -255,6 +263,21 @@ function cases(m, uiModes, labelKeys, srcs) {
             return restrict.length && sameSet(outside, wantOutside) && sameSet(inside, wantInside)
                 ? null : { outside: sorted(outside), wantOutside: sorted(wantOutside), inside: sorted(inside), wantInside: sorted(wantInside) };
         }],
+        ['cycleOrder: Address, the engines in order, the local modes, Command centre; an uncontributed mode left out (D-19)', () => {
+            const all = m.cycleOrder(['A', 'B'], () => true);
+            const noActions = m.cycleOrder(['A', 'B'], id => id !== 'actions');
+            const wantNoActions = CYCLE_PIN.filter(id => id !== 'actions');
+            return JSON.stringify(all) === JSON.stringify(CYCLE_PIN) && JSON.stringify(noActions) === JSON.stringify(wantNoActions)
+                ? null : { all, noActions };
+        }],
+        ['nextMode wraps both ways', () => {
+            const got = [
+                m.nextMode(CYCLE_PIN, 'command-centre', 1), m.nextMode(CYCLE_PIN, 'address', -1),
+                m.nextMode(CYCLE_PIN, 'address', 1), m.nextMode(CYCLE_PIN, 'tabs', -1),
+            ];
+            const want = ['address', 'command-centre', 'engine:A', 'bookmarks'];
+            return JSON.stringify(got) === JSON.stringify(want) ? null : got;
+        }],
         ['engineModeId and engineNameOf round-trip; a local id has no engine', () => {
             const got = [m.engineNameOf(m.engineModeId('Some Engine')), m.engineNameOf('tabs'), m.engineNameOf('address')];
             return JSON.stringify(got) === JSON.stringify(['Some Engine', null, null]) ? null : got;
@@ -365,6 +388,13 @@ const PLANTS = [
         from: "    const space = text.indexOf(' ');\n",
         to: "    const space = text.indexOf(' ') < 0 ? 1 : text.indexOf(' ');\n",
         expect: 'tokenise: a token without a following space stays text',
+    },
+    {
+        name: 'nextMode does not wrap',
+        rel: TABLE_REL,
+        from: 'return order[(from + step + order.length) % order.length];',
+        to: 'return order[Math.min(Math.max(from + step, 0), order.length - 1)];',
+        expect: 'nextMode wraps both ways',
     },
 ];
 
