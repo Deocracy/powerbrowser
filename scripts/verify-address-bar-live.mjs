@@ -132,7 +132,10 @@
  *               session tab (a GET and a push) while the pill, sampled every
  *               frame until that push, never holds the payload; a plain-text
  *               drag gets copy with no ring, and dropping "dropped words" GETs
- *               /one/search with q "dropped words"; a javascript: uri-list
+ *               /one/search with q "dropped words", while the same drag
+ *               started on the pill's own text (dragstart on the input) is
+ *               left to the field: neither its dragover nor its drop is
+ *               prevented and no GET follows; a javascript: uri-list
  *               drag gets no ring and dropEffect none; dropped javascript:
  *               text shows the commit-failure row and loads nothing.
  *   shift-del   BAR-09: with visits to <served>/del-me, /keep-me (also
@@ -1525,13 +1528,14 @@ async function canonizeDrop(ctx) {
  * at index >= `pushMark` ends `path` (or 15 s pass); a sample taken after that
  * push could show the pushed address, so none is.
  */
-const dragOntoPill = (app, data, { drop = true, path = '', pushMark = 0 } = {}) => app.evaluate(`JSON.stringify((() => {
+const dragOntoPill = (app, data, { drop = true, path = '', pushMark = 0, fromPill = false } = {}) => app.evaluate(`JSON.stringify((() => {
     const pill = document.querySelector('.pb-chrome-bar-pill');
     const input = document.querySelector('.pb-chrome-bar-input');
     if (!pill || !input) return null;
     const dt = new DataTransfer();
     for (const [type, value] of Object.entries(${JSON.stringify(data)})) dt.setData(type, value);
     const fire = type => { const e = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }); input.dispatchEvent(e); return e; };
+    if (${fromPill}) fire('dragstart');
     fire('dragenter');
     const over = fire('dragover');
     const seen = { prevented: over.defaultPrevented, dropEffect: dt.dropEffect, ring: pill.classList.contains('is-drop-target') };
@@ -1546,16 +1550,17 @@ const dragOntoPill = (app, data, { drop = true, path = '', pushMark = 0 } = {}) 
             window.__pbPillSeen.push(input.value);
             requestAnimationFrame(sample);
         };
-        fire('drop');
+        seen.dropPrevented = fire('drop').defaultPrevented;
         seen.valueAfterDrop = input.value;
         seen.ringAfter = pill.classList.contains('is-drop-target');
         requestAnimationFrame(sample);
     }
+    if (${fromPill}) fire('dragend');
     return seen;
 })())`).then(JSON.parse);
 
 async function dropOnPill(ctx) {
-    const { app, pages, fail } = ctx;
+    const { app, pages, plant, fail, note } = ctx;
     const tabId = await sessionTab(ctx);
     const payload = pages.url('/dropped');
 
@@ -1592,6 +1597,24 @@ async function dropOnPill(ctx) {
     if (!searched) {
         fail(`dropping "dropped words" on the pill sent no GET on /one/search with q "dropped words"; requests ${JSON.stringify(pages.requests.slice(getMark).map(r => r.path + r.search))}`);
     }
+
+    // WR-08: the same drop, started on the pill's own text, is the native
+    // in-field move. The plain-text drop above (a GET) is its positive control.
+    if (plant === 'pill-drag-navigates') {
+        const planted = await probe(app, `const w = get('ChromeBarWidget');
+            Object.defineProperty(w, 'pillDragActive', { get: () => false, set() {}, configurable: true });
+            return true;`);
+        if (planted === true) {
+            note('PLANT pill-drag-navigates applied');
+        }
+    }
+    getMark = pages.requests.length;
+    const own = await dragOntoPill(app, { 'text/plain': 'own words' }, { fromPill: true });
+    const ownGet = await nextGet(pages, '/one/search', getMark, r => queryOf(r) === 'own words', searched ? 3000 : 500);
+    if (own?.prevented || own?.dropPrevented || ownGet) {
+        fail(`a drag started on the pill's own text and dropped back on it must be left to the field; dragover prevented ${JSON.stringify(own?.prevented)}, drop prevented ${JSON.stringify(own?.dropPrevented)}, ${ownGet ? 'sent a GET on /one/search for "own words"' : 'no GET'}`);
+    }
+    await probe(app, `const w = get('ChromeBarWidget'); delete w.pillDragActive; w.pillDragActive = false; return true;`);
 
     const refusedLink = await dragOntoPill(app, { 'text/uri-list': 'javascript:alert(1)' }, { drop: false });
     if (refusedLink?.ring || refusedLink?.dropEffect !== 'none') {
@@ -2405,6 +2428,7 @@ const PLANTS = [
     { plant: 'paste-reads-on-open', target: 'context-menu', run: ['context-menu'], expect: 'clipboard read before a click' },
     { plant: 'ime-guard-off', target: 'select-ime', run: ['suggestions', 'select-ime'], expect: 'committed during composition' },
     { plant: 'draft-lost', target: 'drafts', run: ['drafts'], expect: 'expected the draft text' },
+    { plant: 'pill-drag-navigates', target: 'canonize-drop', run: ['canonize-drop'], expect: "must be left to the field" },
 ];
 
 async function selfTest() {

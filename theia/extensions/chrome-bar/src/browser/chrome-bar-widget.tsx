@@ -523,6 +523,21 @@ export class ChromeBarWidget extends ReactWidget {
         e.dataTransfer.dropEffect = 'copy';
     };
 
+    /**
+     * BAR-13: a drag that started on the pill's own text. Dropping it back on
+     * the pill is the native in-field move, never a load; the pill's handlers
+     * only stop Theia's document-level listener from cancelling that move.
+     */
+    protected pillDragActive = false;
+
+    protected onPillDragOver = (e: DropTargetDragEvent): void => {
+        if (this.pillDragActive) {
+            e.stopPropagation();
+            return;
+        }
+        this.onDropTargetDragOver(e);
+    };
+
     protected onDropTargetDragLeave = (e: DropTargetDragEvent): void => {
         e.currentTarget.classList.remove('is-drop-target');
     };
@@ -554,6 +569,10 @@ export class ChromeBarWidget extends ReactWidget {
      */
     protected onPillDrop = async (e: DropTargetDragEvent): Promise<void> => {
         e.currentTarget.classList.remove('is-drop-target');
+        if (this.pillDragActive) {
+            e.stopPropagation();
+            return;
+        }
         e.preventDefault();
         e.stopPropagation();
         const payload = droppedTextOf(e.dataTransfer);
@@ -2096,8 +2115,8 @@ export class ChromeBarWidget extends ReactWidget {
             <div
                 className='pb-chrome-bar-pill'
                 ref={el => { this.pillRef = el; }}
-                onDragEnter={this.onDropTargetDragOver}
-                onDragOver={this.onDropTargetDragOver}
+                onDragEnter={this.onPillDragOver}
+                onDragOver={this.onPillDragOver}
                 onDragLeave={this.onDropTargetDragLeave}
                 onDrop={this.onPillDrop}
             >
@@ -2120,6 +2139,8 @@ export class ChromeBarWidget extends ReactWidget {
                     onMouseDown={this.onInputMouseDown}
                     onMouseUp={this.onInputMouseUp}
                     onContextMenu={this.onPillContextMenu}
+                    onDragStart={() => { this.pillDragActive = true; }}
+                    onDragEnd={() => { this.pillDragActive = false; }}
                     onBlur={this.onInputBlur}
                     onFocus={this.onInputFocus}
                 />
