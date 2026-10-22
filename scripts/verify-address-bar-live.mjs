@@ -476,8 +476,9 @@ async function tokenCookie(ctx) {
     if (watching !== true) {
         fail(`${BROKEN} the sidecar-overlay response observer could not be added (${String(watching)})`);
     } else {
+        let sidecarTab = null;
         try {
-            await openWebTab(app, sidecarHealth);
+            sidecarTab = await openWebTab(app, sidecarHealth);
             const sidecarSeen = await settle(() => inChrome(app, 'return JSON.stringify(window.__pbSidecarSeen);').then(JSON.parse), v => v.length > 0, 10000);
             if (!sidecarSeen.length) {
                 fail(`${BROKEN} no response for the sidecar-overlay load of ${sidecarHealth} was observed within 10 s`);
@@ -488,6 +489,10 @@ async function tokenCookie(ctx) {
             }
         } finally {
             await inChrome(app, 'Services.obs.removeObserver(window.__pbSidecarObs, "http-on-examine-response"); return true;');
+            // Left open, its open-tab row would take a later scenario's place-row slot.
+            if (sidecarTab) {
+                await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(sidecarTab)}).close(); return true;`);
+            }
         }
     }
     const seen = pages.requests.slice(mark);
