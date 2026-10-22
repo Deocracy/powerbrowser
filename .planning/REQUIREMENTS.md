@@ -46,8 +46,8 @@ returning null.
 - [x] **BAR-06**: User choosing an open-tab suggestion switches to that tab instead of loading it again
 - [x] **BAR-07**: User sees the bar complete a typed origin inline (autofill) and can accept it with Enter or Tab
 - [x] **BAR-08**: User can open the typed address in a new tab with Alt+Enter, Ctrl+click or middle-click on a result
-- [ ] **BAR-09**: User can remove a history suggestion with Shift+Del
-- [ ] **BAR-10**: User can right-click the pill for Cut, Copy, Paste and Paste & Go
+- [x] **BAR-09**: User can remove a history suggestion with Shift+Del
+- [x] **BAR-10**: User can right-click the pill for Cut, Copy, Paste and Paste & Go
 - [ ] **BAR-11**: User sees result rows with favicons and type icons, the first click selects the whole address, and IME composition never commits early
 - [ ] **BAR-12**: User sees the text they typed but did not submit kept per tab when switching tabs
 - [x] **BAR-13**: User can complete `name` to `www.name.com` with Ctrl+Enter, and drop a link or text onto the bar to load or search it
@@ -211,8 +211,8 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | BAR-06 | Phase 29 | Complete |
 | BAR-07 | Phase 29 | Complete |
 | BAR-08 | Phase 29 | Complete |
-| BAR-09 | Phase 29 | Pending |
-| BAR-10 | Phase 29 | Pending |
+| BAR-09 | Phase 29 | Complete |
+| BAR-10 | Phase 29 | Complete |
 | BAR-11 | Phase 29 | Pending |
 | BAR-12 | Phase 29 | Pending |
 | BAR-13 | Phase 29 | Complete |

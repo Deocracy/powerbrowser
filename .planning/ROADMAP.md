@@ -215,7 +215,7 @@ Plans:
   4. The first click selects the whole address, IME composition never commits early, and text typed but not submitted is still there after switching to another tab and back
   5. Every chrome-bar message names the configured application name: a sidecar run with a different configured name shows that name, and no chrome-bar source carries a brand literal
 
-**Plans**: 8/10 plans executed (strictly sequential waves 1-10: no worktrees, every plan's `--quick` reads the whole tree, most edit `chrome-bar-widget.tsx` or `PowerBrowserAPI.sys.mjs`)
+**Plans**: 9/10 plans executed (strictly sequential waves 1-10: no worktrees, every plan's `--quick` reads the whole tree, most edit `chrome-bar-widget.tsx` or `PowerBrowserAPI.sys.mjs`)
 
 Plans:
 **Wave 1**
@@ -252,7 +252,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 29-09-PLAN.md — Shift+Del removes a history row; pill context menu with Cut, Copy, Paste, Paste & Go (first privileged store kinds)
+- [x] 29-09-PLAN.md — Shift+Del removes a history row; pill context menu with Cut, Copy, Paste, Paste & Go (first privileged store kinds)
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
@@ -447,7 +447,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 27. Groundwork, Navigation Buttons and Page-Focus Keys | 8/8 | In Progress|  |
 | 28. WebExtension Tab Route Spike | 0/0 | Complete    | 2026-10-21 |
-| 29. Address Bar Search and Fixup | 8/10 | In Progress|  |
+| 29. Address Bar Search and Fixup | 9/10 | In Progress|  |
 | 30. Address-Bar Modes and Command Centre | 0/TBD | Not started | - |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
 | 32. Page Tools | 0/TBD | Not started | - |

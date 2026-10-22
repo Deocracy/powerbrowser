@@ -1,20 +1,20 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 29
 current_phase_name: Address Bar Search and Fixup
 status: executing
-stopped_at: Completed 29-08-PLAN.md
-last_updated: "2026-10-21T23:53:54.368Z"
+stopped_at: Completed 29-09-PLAN.md
+last_updated: "2026-10-22T01:25:21.976Z"
 last_activity: 2026-10-21
-last_activity_desc: 29-08 complete (inline origin autofill from moz_origins with Enter/Tab accept; Ctrl+Enter completes a bare name to www.name.com; a link or text dropped on the pill loads or searches; BAR-07 and BAR-13 complete)
-state_head: 9fff14d51fe96a14e595b8b2754bc674a110b8c8
+last_activity_desc: 29-09 complete (Shift+Delete removes a history row through the first privileged store kind; pill context menu with Cut, Copy, Paste, Paste & Go and Select All, clipboard read chrome-side only on Paste; BAR-09 and BAR-10 complete)
+state_head: e34934a8f1b0b93b12c275fcf9bd829bd97da7bf
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
   percent: 8
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 29 (Address Bar Search and Fixup) — EXECUTING
-Plan: 9 of 10
+Plan: 10 of 10
 Status: Ready to execute
-Last activity: 2026-10-21 — 29-08 complete (inline origin autofill from moz_origins with Enter/Tab accept; Ctrl+Enter completes a bare name to www.name.com; a link or text dropped on the pill loads or searches; BAR-07 and BAR-13 complete)
+Last activity: 2026-10-21 — 29-09 complete (Shift+Delete removes a history row through the first privileged store kind; pill context menu with Cut, Copy, Paste, Paste & Go and Select All, clipboard read chrome-side only on Paste; BAR-09 and BAR-10 complete)
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -164,6 +164,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 29 P06 | 35m | 2 tasks | 11 files |
 | Phase 29 P07 | 40m | 2 tasks | 6 files |
 | Phase 29 P08 | 42m | 3 tasks | 9 files |
+| Phase 29 P09 | 85m | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -418,6 +419,9 @@ Recent decisions affecting current work:
 - [Phase 29]: 29-08: the autofill completion is written to the input and selected synchronously, not after a rAF, so no keystroke lands between value and selection
 - [Phase 29]: 29-08: a dropped payload over 2048 characters shows the commit-failure row rather than being truncated
 - [Phase 29]: 29-08: New Tab and the pill share one dragover/dragleave handler (onDropTargetDragOver/Leave)
+- [Phase 29]: 29-09: Shift+Delete removes only history rows; chrome does not re-check bookmarks (frontend gate plus live check, Pitfall 10)
+- [Phase 29]: 29-09: Paste & Go focuses the page once its load finishes; focus sent at the navigation ack was lost to the hidden overlay or a process switch
+- [Phase 29]: 29-09: Cut removes the selection only after ClipboardService reports the write
 
 ### Pending Todos
 
@@ -520,8 +524,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-21T23:53:41.365Z
-Stopped at: Completed 29-08-PLAN.md
+Last session: 2026-10-22T01:25:21.923Z
+Stopped at: Completed 29-09-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
