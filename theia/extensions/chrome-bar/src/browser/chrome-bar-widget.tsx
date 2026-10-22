@@ -279,6 +279,8 @@ export class ChromeBarWidget extends ReactWidget {
     /** The heuristic row could not be computed: the first row is the suggestions-failure row. */
     protected providerFailed = false;
     protected commitFailed = false;
+    /** What Enter on the commit-failure row repeats; undefined: commit the pill text again. */
+    protected retry: (() => Promise<void>) | undefined;
     /** BAR-10: Paste or Paste & Go could not read the clipboard; one failure row shows until the next edit or close. */
     protected pasteFailed = false;
     /** Phase 29 (BAR-01): chrome found no engine for typed words; Enter retries, typing or closing clears it. */
@@ -555,9 +557,13 @@ export class ChromeBarWidget extends ReactWidget {
         e.preventDefault();
         e.stopPropagation();
         const payload = droppedTextOf(e.dataTransfer);
-        if (!payload) {
-            return;
+        if (payload) {
+            await this.openDropped(payload);
         }
+    };
+
+    /** BAR-13: the dropped payload's load; a failure's retry drops the same payload again. */
+    protected async openDropped(payload: string): Promise<void> {
         let resolved: ResolvedAddress | undefined;
         try {
             // Over 2048 characters chrome refuses it; it is never cut short into another address.
@@ -566,7 +572,7 @@ export class ChromeBarWidget extends ReactWidget {
             resolved = undefined;
         }
         if (!resolved || (resolved.kind !== 'visit' && resolved.kind !== 'search') || !resolved.url) {
-            this.showCommitFailure();
+            this.showCommitFailure(() => this.openDropped(payload));
             return;
         }
         // Drops any typed text, so the load's state push can update the pill.
@@ -577,9 +583,9 @@ export class ChromeBarWidget extends ReactWidget {
         try {
             await this.openCommittedUrl(resolved.url);
         } catch {
-            this.showCommitFailure();
+            this.showCommitFailure(() => this.openDropped(payload));
         }
-    };
+    }
 
     protected async joinActiveGroup(widget: Widget): Promise<void> {
         try {
@@ -832,6 +838,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.autofill = undefined;
         this.removeFailedKey = undefined;
         this.pasteFailed = false;
+        this.retry = undefined;
     }
 
     protected async runQuery(prefix: string): Promise<void> {
@@ -1101,6 +1108,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.autofill = undefined;
         this.autofillWanted = autofillWanted;
         this.commitFailed = false;
+        this.retry = undefined;
         this.pasteFailed = false;
         this.noSearch = false;
         this.homeFailed = false;
@@ -1237,8 +1245,9 @@ export class ChromeBarWidget extends ReactWidget {
     };
 
     /** Surfaces a commit failure in-bar per the copy contract: one failure row, Enter retries. */
-    protected showCommitFailure(): void {
+    protected showCommitFailure(retry?: () => Promise<void>): void {
         this.commitFailed = true;
+        this.retry = retry;
         this.dropdownOpen = true;
         this.highlightKey = undefined;
         this.update();
@@ -1334,9 +1343,14 @@ export class ChromeBarWidget extends ReactWidget {
     protected async openRowInNewTab(row: Row | undefined, foreground: boolean): Promise<void> {
         const url = await this.urlForRow(row);
         if (!url || !/^https?:\/\//i.test(url)) {
-            this.showCommitFailure();
+            this.showCommitFailure(() => this.openRowInNewTab(row, foreground));
             return;
         }
+        await this.openUrlInNewTab(url, foreground);
+    }
+
+    /** BAR-08: opens `url` in a new tab after the current one; a failure's retry opens the same address again. */
+    protected async openUrlInNewTab(url: string, foreground: boolean): Promise<void> {
         const ref = currentWebTab() ?? this.shell.currentWidget;
         this.inputValue = this.committedAddress;
         this.commitFailed = false;
@@ -1347,7 +1361,7 @@ export class ChromeBarWidget extends ReactWidget {
             widget = ref ? await this.webTabOpener.openInBackground(url, ref) : await this.webTabOpener.openUrl(url);
         } catch (error) {
             console.error('[@powerbrowser/chrome-bar] opening a row in a new tab failed:', error instanceof Error ? error.name : typeof error);
-            this.showCommitFailure();
+            this.showCommitFailure(() => this.openUrlInNewTab(url, foreground));
             return;
         }
         await this.joinActiveGroup(widget);
@@ -1453,10 +1467,17 @@ export class ChromeBarWidget extends ReactWidget {
                 return;
             }
             if (this.commitFailed || this.noSearch) {
-                // Retry affordance: Enter re-commits the typed text.
+                // Retry affordance: Enter repeats the failed drop, new-tab open or search, else re-commits the typed text.
+                const retry = this.commitFailed ? this.retry : undefined;
                 this.commitFailed = false;
                 this.noSearch = false;
-                void this.commitText(this.inputValue);
+                if (retry) {
+                    this.closeDropdown();
+                    this.update();
+                    void retry();
+                } else {
+                    void this.commitText(this.inputValue);
+                }
                 return;
             }
             // The heuristic row (and Enter before any row arrived) commits the typed text through a
@@ -1592,11 +1613,7 @@ export class ChromeBarWidget extends ReactWidget {
         // With no tab to open after, a new-tab one-off searches in place.
         const ref = target !== 'current' ? currentWebTab() ?? this.shell.currentWidget : undefined;
         if (!ref) {
-            try {
-                await this.openCommittedUrl(resolved.url);
-            } catch {
-                this.showCommitFailure();
-            }
+            await this.openSearchUrl(resolved.url);
             return;
         }
         let widget: WebTabWidget;
@@ -1611,6 +1628,15 @@ export class ChromeBarWidget extends ReactWidget {
             // BAR-08: Alt+Enter on a highlighted one-off.
             await this.shell.activateWidget(widget.id);
             widget.focusPage();
+        }
+    }
+
+    /** BAR-05: a one-off's search in place; a failure's retry opens the same search again. */
+    protected async openSearchUrl(url: string): Promise<void> {
+        try {
+            await this.openCommittedUrl(url);
+        } catch {
+            this.showCommitFailure(() => this.openSearchUrl(url));
         }
     }
 
