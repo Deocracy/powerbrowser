@@ -2021,7 +2021,8 @@ export class ChromeBarWidget extends ReactWidget {
                 e.preventDefault();
                 if (e.button === 1 || (e.button === 0 && (e.ctrlKey || e.metaKey))) {
                     void this.openRowInNewTab(row, false);
-                } else {
+                } else if (e.button === 0) {
+                    // Right-click and the side buttons choose nothing, as in Firefox.
                     void this.chooseRow(row);
                 }
             }}
