@@ -117,6 +117,8 @@ const WEB_TAB_REL = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const MODULE_REL = 'theia/extensions/tab-uris/src/browser/tab-uris-frontend-module.ts';
 const CHROME_BAR_COMMANDS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
 const CHROME_BAR_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+/** The pill (30-01, D-04): closeDropdown, the debounce and the dropdown class live here. */
+const ADDRESS_BAR_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-bar.tsx';
 const DESCRIPTORS_REL = 'theia/extensions/modes/src/browser/mode-descriptors.ts';
 const MODES_COMMANDS_REL = 'theia/extensions/modes/src/browser/modes-commands.ts';
 const ORGANISING_REL = 'theia/extensions/modes/src/browser/organising-widget.ts';
@@ -228,17 +230,18 @@ function derive() {
     // suggestion debounce, which is the whole timing the guard exists for. The
     // interval is read off the source that sets it -- a hand-typed 150 here
     // would silently stop exercising the race the day the debounce changes.
-    const chromeBarWidgetClass = /export class (\w+)\s+extends ReactWidget/.exec(chromeBarWidget)?.[1];
-    if (!chromeBarWidgetClass) {
-        failures.push(`${CHROME_BAR_WIDGET_REL}: derived NO chrome-bar widget class -- the dropdown-rearms plant has no closeDropdown to disarm`);
+    const addressBar = read(ADDRESS_BAR_REL);
+    const addressBarClass = /protected closeDropdown\(/.test(addressBar) ? /export class (\w+)[^{]*\{/.exec(addressBar)?.[1] : undefined;
+    if (!addressBarClass) {
+        failures.push(`${ADDRESS_BAR_REL}: derived NO address-bar class owning closeDropdown -- the dropdown-rearms plant has no closeDropdown to disarm`);
     }
-    const debounceMs = Number(/pDebounce\([\s\S]*?,\s*(\d+)\s*\)/.exec(chromeBarWidget)?.[1]);
+    const debounceMs = Number(/pDebounce\([\s\S]*?,\s*(\d+)\s*\)/.exec(addressBar)?.[1]);
     if (!debounceMs) {
-        failures.push(`${CHROME_BAR_WIDGET_REL}: derived NO suggestion debounce interval -- the commit-inside-the-debounce phase would be timed by a guess, so a green there could not mean the late query was outrun`);
+        failures.push(`${ADDRESS_BAR_REL}: derived NO suggestion debounce interval -- the commit-inside-the-debounce phase would be timed by a guess, so a green there could not mean the late query was outrun`);
     }
-    const dropdownClass = /className='(pb-chrome-bar-dropdown)' role='listbox'/.exec(chromeBarWidget)?.[1];
+    const dropdownClass = /className='(pb-chrome-bar-dropdown)' role='listbox'/.exec(addressBar)?.[1];
     if (!dropdownClass) {
-        failures.push(`${CHROME_BAR_WIDGET_REL}: derived NO suggestion dropdown class -- a re-opened dropdown over the committed page would be unfindable, so its absence would assert nothing`);
+        failures.push(`${ADDRESS_BAR_REL}: derived NO suggestion dropdown class -- a re-opened dropdown over the committed page would be unfindable, so its absence would assert nothing`);
     }
 
     // G-14.1.1-6: the capture cap the stored snapshot must fit inside. Read
@@ -278,7 +281,7 @@ function derive() {
         failures, factoryId, emptyUrl, stateEvent, requestEvent, blockingSelector, lostViewCopy,
         handlerClass, widgetClass, channelClass, chromeBarContributionClass,
         newTabCommandId, inputClass, shipped, activateCommandId, organisingWidgetId, walk,
-        thumbnailMaxChars, thumbnailSettleMs, chromeBarWidgetClass, debounceMs, dropdownClass,
+        thumbnailMaxChars, thumbnailSettleMs, addressBarClass, debounceMs, dropdownClass,
     };
 }
 
@@ -608,17 +611,17 @@ function phaseExpression(cfg, phase, arg) {
             // The querySeq bump is deliberately LEFT IN PLACE -- it never
             // caught that query anyway (runQuery takes its sequence after the
             // guard), and removing it too would plant a second fault.
-            const bar = __getByName(container, cfg.chromeBarWidgetClass);
+            const bar = __getByName(container, cfg.addressBarClass);
             const barProto = Object.getPrototypeOf(bar);
             if (typeof barProto.closeDropdown !== 'function') {
-                fail('plant dropdown-rearms could not be applied: ' + cfg.chromeBarWidgetClass + '.prototype.closeDropdown is not a function');
+                fail('plant dropdown-rearms could not be applied: ' + cfg.addressBarClass + '.prototype.closeDropdown is not a function');
             } else {
                 const realClose = barProto.closeDropdown;
                 barProto.closeDropdown = function () {
                     realClose.call(this);
                     this.dropdownArmed = true;
                 };
-                report.notes.push('PLANT dropdown-rearms: ' + cfg.chromeBarWidgetClass + '.prototype.closeDropdown leaves the bar armed, so a query still in flight at Enter re-opens the dropdown over the committed page');
+                report.notes.push('PLANT dropdown-rearms: ' + cfg.addressBarClass + '.prototype.closeDropdown leaves the bar armed, so a query still in flight at Enter re-opens the dropdown over the committed page');
             }
         } else if (cfg.plant === 'hide-not-published') {
             // WHAT THE RED PROVES: that the stored snapshot exists only because
@@ -1073,7 +1076,7 @@ async function drive(derived, plant) {
         thumbnailSettleMs: derived.thumbnailSettleMs,
         debounceMs: derived.debounceMs,
         dropdownClass: derived.dropdownClass,
-        chromeBarWidgetClass: derived.chromeBarWidgetClass,
+        addressBarClass: derived.addressBarClass,
     };
     try {
         // Empty URL: the shell's own supervised frontend is the app under

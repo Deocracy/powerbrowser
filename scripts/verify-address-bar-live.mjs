@@ -788,7 +788,7 @@ async function rows(ctx) {
         return fail(`${BROKEN} no loaded state push arrived for /r-tab`);
     }
     if (plant === 'dedupe-off') {
-        const planted = await probe(app, `const w = get('ChromeBarWidget');
+        const planted = await probe(app, `const w = get('AddressBar');
             w.composeVisibleRows = function () {
                 const places = this.placeRows;
                 return (this.heuristic ? [this.heuristic] : []).concat(places, places.length ? [{ ...places[0], key: places[0].key + '#copy' }] : []);
@@ -858,7 +858,7 @@ async function rows(ctx) {
         const late = await probe(app, `const c = get('ChromeStoreClient');
             const original = Object.getPrototypeOf(c).resolveTypedAddress.bind(c);
             c.resolveTypedAddress = (...a) => sleep(800).then(() => original(...a));
-            try { await get('ChromeBarWidget').runQuery('Row'); } finally { delete c.resolveTypedAddress; }
+            try { await get('AddressBar').runQuery('Row'); } finally { delete c.resolveTypedAddress; }
             return true;`);
         if (late !== true) {
             fail(`${BROKEN} the late reply could not be driven (${JSON.stringify(late)})`);
@@ -919,7 +919,7 @@ async function suggestions(ctx) {
     const { app, pages, plant, fail, note } = ctx;
     await sessionTab(ctx);
     if (plant === 'setting-ignored') {
-        if (await probe(app, `get('ChromeBarWidget').suggestionsOn = () => true; return true;`) === true) {
+        if (await probe(app, `get('AddressBar').suggestionsOn = () => true; return true;`) === true) {
             note('PLANT setting-ignored applied');
         }
     }
@@ -1022,14 +1022,14 @@ async function setEnginesHidden(app, names, hidden) {
         for (const name of ${JSON.stringify(names)}) S.getEngineByName(name).hidden = ${hidden};
         return true;
     })();`);
-    return done === true && await probe(app, `await get('ChromeBarWidget').refreshEngines(); return true;`) === true;
+    return done === true && await probe(app, `await get('AddressBar').refreshEngines(); return true;`) === true;
 }
 
 async function oneOff(ctx) {
     const { app, pages, plant, fail, note } = ctx;
     const tabId = await sessionTab(ctx);
     if (plant === 'oneoff-default') {
-        const planted = await probe(app, `const w = get('ChromeBarWidget');
+        const planted = await probe(app, `const w = get('AddressBar');
             const original = Object.getPrototypeOf(w).runOneOff;
             w.runOneOff = function (name, target) { return original.call(this, '', target); };
             return true;`);
@@ -1109,7 +1109,7 @@ async function oneOff(ctx) {
     }
     // A failed background one-off: Enter repeats it in a new tab rather than re-committing the pill's page address.
     if (plant === 'oneoff-retry-recommits') {
-        const planted = await probe(app, `const w = get('ChromeBarWidget');
+        const planted = await probe(app, `const w = get('AddressBar');
             const original = Object.getPrototypeOf(w).showNoSearch;
             w.showNoSearch = function () { return original.call(this); };
             return true;`);
@@ -1203,7 +1203,7 @@ async function switchToTab(ctx) {
         return fail(`${BROKEN} no loaded state push arrived for /sw-b`);
     }
     if (plant === 'tab-row-navigates') {
-        const planted = await probe(app, `const w = get('ChromeBarWidget');
+        const planted = await probe(app, `const w = get('AddressBar');
             w.switchToTab = function (row) { return this.commitRow(row); };
             return true;`);
         if (planted === true) {
@@ -1526,7 +1526,7 @@ async function autofill(ctx) {
     }
 
     if (plant === 'autofill-on-paste') {
-        const planted = await probe(app, `const w = get('ChromeBarWidget');
+        const planted = await probe(app, `const w = get('AddressBar');
             w.autofillEligible = function (e) { const i = e.target; return !this.autofillSuppressed && i.selectionStart === i.value.length && !/\\s/.test(i.value); };
             return true;`);
         if (planted === true) {
@@ -1576,13 +1576,13 @@ async function canonizeDrop(ctx) {
         fail(`resolveTypedAddress('example', '', false) must reply kind search; got ${JSON.stringify(plain)}`);
     }
     // The UI half records the commit instead of loading it: www.example.com is a public host.
-    const wrapped = await probe(app, `const w = get('ChromeBarWidget');
+    const wrapped = await probe(app, `const w = get('AddressBar');
         window.__pbCommitted = [];
         w.__pbOpenCommitted = w.openCommittedUrl;
         w.openCommittedUrl = async url => { window.__pbCommitted.push(url); };
         return true;`);
     if (wrapped !== true) {
-        return fail(`${BROKEN} the widget's openCommittedUrl could not be wrapped`);
+        return fail(`${BROKEN} the address bar's openCommittedUrl could not be wrapped`);
     }
     try {
         for (const [text, want] of [['example', 'https://www.example.com/'], ['example.org', 'https://example.org/']]) {
@@ -1595,7 +1595,7 @@ async function canonizeDrop(ctx) {
             }
         }
     } finally {
-        await probe(app, `const w = get('ChromeBarWidget');
+        await probe(app, `const w = get('AddressBar');
             if (w.__pbOpenCommitted) { w.openCommittedUrl = w.__pbOpenCommitted; delete w.__pbOpenCommitted; }
             return true;`);
     }
@@ -1682,7 +1682,7 @@ async function dropOnPill(ctx) {
     // WR-08: the same drop, started on the pill's own text, is the native
     // in-field move. The plain-text drop above (a GET) is its positive control.
     if (plant === 'pill-drag-navigates') {
-        const planted = await probe(app, `const w = get('ChromeBarWidget');
+        const planted = await probe(app, `const w = get('AddressBar');
             Object.defineProperty(w, 'pillDragActive', { get: () => false, set() {}, configurable: true });
             return true;`);
         if (planted === true) {
@@ -1695,7 +1695,7 @@ async function dropOnPill(ctx) {
     if (own?.prevented || own?.dropPrevented || ownGet) {
         fail(`a drag started on the pill's own text and dropped back on it must be left to the field; dragover prevented ${JSON.stringify(own?.prevented)}, drop prevented ${JSON.stringify(own?.dropPrevented)}, ${ownGet ? 'sent a GET on /one/search for "own words"' : 'no GET'}`);
     }
-    await probe(app, `const w = get('ChromeBarWidget'); delete w.pillDragActive; w.pillDragActive = false; return true;`);
+    await probe(app, `const w = get('AddressBar'); delete w.pillDragActive; w.pillDragActive = false; return true;`);
 
     const refusedLink = await dragOntoPill(app, { 'text/uri-list': 'javascript:alert(1)' }, { drop: false });
     if (refusedLink?.ring || refusedLink?.dropEffect !== 'none') {
@@ -1780,7 +1780,7 @@ async function shiftDel(ctx) {
         return fail(`${BROKEN} Places could not be seeded with visited /del-me, /keep-me and /del-fail (${String(seeded)}; ${JSON.stringify(before)})`);
     }
     if (plant === 'shift-del-bookmark') {
-        const planted = await probe(app, `const w = get('ChromeBarWidget');
+        const planted = await probe(app, `const w = get('AddressBar');
             w.removableRow = row => row.source === 'history' || row.source === 'bookmark';
             return true;`);
         if (planted === true) {
@@ -1962,7 +1962,7 @@ async function contextMenu(ctx) {
     }
     try {
         if (plant === 'paste-reads-on-open') {
-            const planted = await probe(app, `const w = get('ChromeBarWidget');
+            const planted = await probe(app, `const w = get('AddressBar');
                 w.openPillMenu = async function (anchor) { await this.store.readClipboardText(); return Object.getPrototypeOf(this).openPillMenu.call(this, anchor); };
                 return true;`);
             if (planted === true) {
@@ -2083,7 +2083,7 @@ async function contextMenu(ctx) {
         }
     } finally {
         await probe(app, `const c = get('ChromeStoreClient'); delete c.readClipboardText;
-            const w = get('ChromeBarWidget'); delete w.openPillMenu; return true;`);
+            const w = get('AddressBar'); delete w.openPillMenu; return true;`);
         await setClipboard(app, saved ? saved : null);
         await app.evaluate(`(() => { const i = document.querySelector('.pb-chrome-bar-input'); if (i) i.blur(); return true; })()`);
     }
@@ -2189,7 +2189,7 @@ async function selectIme(ctx) {
 
     // IME: nothing commits or queries while a composition is open.
     if (plant === 'ime-guard-off') {
-        if (await probe(app, `get('ChromeBarWidget').composing = () => false; return true;`) === true) {
+        if (await probe(app, `get('AddressBar').composing = () => false; return true;`) === true) {
             note('PLANT ime-guard-off applied');
         }
     }
@@ -2245,7 +2245,7 @@ async function selectIme(ctx) {
             fail(`${BROKEN} no state push for the tab followed the post-composition search, so the no-push check above saw nothing`);
         }
     } finally {
-        await probe(app, `delete get('ChromeBarWidget').composing; return true;`);
+        await probe(app, `delete get('AddressBar').composing; return true;`);
         await inChrome(app, 'delete window.__pbImeTip; return true;');
     }
 }
@@ -2297,7 +2297,7 @@ async function drafts(ctx) {
     const tabA = await openLocalTab(app, pages, '/dr-a');
     const tabB = await openLocalTab(app, pages, '/dr-b');
     if (plant === 'draft-lost') {
-        if (await probe(app, `get('ChromeBarWidget').saveDraft = function () {}; return true;`) === true) {
+        if (await probe(app, `get('AddressBar').saveDraft = function () {}; return true;`) === true) {
             note('PLANT draft-lost applied');
         }
     }
@@ -2341,13 +2341,13 @@ async function drafts(ctx) {
         }
 
         // Enter commits the draft as a search; the commit is recorded, nothing loads (it would change A's site).
-        const wrapped = await probe(app, `const w = get('ChromeBarWidget');
+        const wrapped = await probe(app, `const w = get('AddressBar');
             window.__pbCommitted = [];
             w.__pbOpenCommitted = w.openCommittedUrl;
             w.openCommittedUrl = async url => { window.__pbCommitted.push(url); };
             return true;`);
         if (wrapped !== true) {
-            return fail(`${BROKEN} the widget's openCommittedUrl could not be wrapped`);
+            return fail(`${BROKEN} the address bar's openCommittedUrl could not be wrapped`);
         }
         try {
             if (await focusTheiaFrame(app) !== true || await app.evaluate(`(() => { const i = document.querySelector('.pb-chrome-bar-input'); i.focus(); return document.activeElement === i && i.value === ${JSON.stringify(DRAFT)}; })()`) !== true) {
@@ -2360,7 +2360,7 @@ async function drafts(ctx) {
                 fail(`Enter on the draft must commit it as a search on /one/search with q ${JSON.stringify(DRAFT)}; the commit recorded ${JSON.stringify(got)}`);
             }
         } finally {
-            await probe(app, `const w = get('ChromeBarWidget');
+            await probe(app, `const w = get('AddressBar');
                 if (w.__pbOpenCommitted) { w.openCommittedUrl = w.__pbOpenCommitted; delete w.__pbOpenCommitted; }
                 return true;`);
         }
@@ -2402,7 +2402,7 @@ async function drafts(ctx) {
             fail(`after closing C with a draft, the pill must show the next current tab's address ${JSON.stringify(next.url)}; it shows ${JSON.stringify(next.view?.value)}`);
         }
     } finally {
-        await probe(app, `delete get('ChromeBarWidget').saveDraft; return true;`);
+        await probe(app, `delete get('AddressBar').saveDraft; return true;`);
     }
 }
 

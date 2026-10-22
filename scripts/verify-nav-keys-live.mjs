@@ -1514,7 +1514,7 @@ async function focusKeysDebug({ app, pages, plant, fail, note }) {
             return fail(`${BROKEN} the stand-in debug session did not make the debugger's Pause command live (got ${JSON.stringify(debugOn)})`);
         }
         if (plant === 'pill-scope-removed') {
-            const removed = await probe(app, `const w = get('ChromeBarWidget'); if (!w.addressScope) return false; w.addressScope.dispose(); w.addressScope = undefined; return true;`);
+            const removed = await probe(app, `const w = get('AddressBar'); if (!w.addressScope) return false; w.addressScope.dispose(); w.addressScope = undefined; return true;`);
             if (removed === true) {
                 note('PLANT pill-scope-removed applied');
             }
