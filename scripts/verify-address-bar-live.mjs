@@ -459,7 +459,7 @@ async function tokenCookie(ctx) {
     }
     await nextGet(pages, '/pixel', mark);
     await nextGet(pages, '/cookie-worker', mark, () => true, 10000);
-    const carried = [];
+    let sidecarCarried = false;
     // (d) A web tab on the sidecar's own origin is an overlay, so it loses the
     // token even on that port; the Theia frame's credentialed 200 below is the control.
     const sidecarHealth = `${await app.evaluate('location.origin')}/powerbrowser/health?pb-overlay`;
@@ -483,7 +483,7 @@ async function tokenCookie(ctx) {
             if (!sidecarSeen.length) {
                 fail(`${BROKEN} no response for the sidecar-overlay load of ${sidecarHealth} was observed within 10 s`);
             } else if (sidecarSeen[0].token) {
-                carried.push('sidecar-overlay');
+                sidecarCarried = true;
             } else if (sidecarSeen[0].status === 200) {
                 fail(`the sidecar-overlay load carried no ${TOKEN_COOKIE} yet the token gate answered 200, so the gate let an overlay in without the token`);
             }
@@ -496,6 +496,7 @@ async function tokenCookie(ctx) {
         }
     }
     const seen = pages.requests.slice(mark);
+    const carried = [];
     for (const [label, path] of COOKIE_LOADS) {
         const request = seen.find(r => r.path === path);
         if (!request) {
@@ -509,6 +510,10 @@ async function tokenCookie(ctx) {
         if (cookies.some(c => c.startsWith(`${TOKEN_COOKIE}=`))) {
             carried.push(label);
         }
+    }
+    // Reported last, so the four served-port labels keep their order.
+    if (sidecarCarried) {
+        carried.push('sidecar-overlay');
     }
     if (carried.length) {
         fail(`carried ${TOKEN_COOKIE}: ${carried.join(', ')}`);
