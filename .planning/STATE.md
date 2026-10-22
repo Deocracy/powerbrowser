@@ -1,20 +1,20 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 30
 current_phase_name: Address-Bar Modes and Command Centre
 status: executing
-stopped_at: Completed 30-03-PLAN.md
-last_updated: "2026-10-22T19:15:41.011Z"
+stopped_at: Completed 30-04-PLAN.md
+last_updated: "2026-10-22T20:04:39.775Z"
 last_activity: 2026-10-22
 last_activity_desc: 30-03 complete (Tabs, Bookmarks, History and Actions modes; searchPlacesRestricted behind the searchPlaces restrict field; Browser command category; live local-modes and the 20-plant self-test green)
-state_head: 2f6fdfbfcda6824170076e7b6a3b06e6a6c9d25c
+state_head: b7fb5f460746cddedaf266e1b12e695942e86dc0
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 24
-  completed_plans: 21
+  completed_plans: 22
   percent: 8
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 30 (Address-Bar Modes and Command Centre) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Status: Ready to execute
 Last activity: 2026-10-22 — 30-03 complete (Tabs, Bookmarks, History and Actions modes; searchPlacesRestricted behind the searchPlaces restrict field; Browser command category; live local-modes and the 20-plant self-test green)
 
@@ -169,6 +169,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 30 P01 | ~2h | 3 tasks | 14 files |
 | Phase 30 P02 | ~1h30m | 3 tasks | 12 files |
 | Phase 30 P03 | ~1h20m | 3 tasks | 17 files |
+| Phase 30 P04 | 38m | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -436,6 +437,8 @@ Recent decisions affecting current work:
 - [Phase 30]: 30-03: Tabs records its MRU order from shell.mainPanel.onDidChangeCurrent (a web tab never takes DOM focus), not onDidChangeCurrentWidget
 - [Phase 30]: 30-03: local modes hide the one-off strip; their trailing search row is the way to the default engine
 - [Phase 30]: 30-03: a History row for a bookmarked page is a bookmark row, so Shift+Delete keeps the Phase 29 unbookmarked-only rule
+- [Phase 30]: 30-04: Command centre never sends its text to chrome's resolve; Enter or Alt+Enter with no chosen row does nothing (30-05's Go-to row adds the address commit)
+- [Phase 30]: 30-04: the D-25 placeholder is shown verbatim, runtime suffix included; flagged for Chris at verify-work
 
 ### Pending Todos
 
@@ -539,8 +542,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-22T19:15:40.931Z
-Stopped at: Completed 30-03-PLAN.md
+Last session: 2026-10-22T20:04:39.594Z
+Stopped at: Completed 30-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
