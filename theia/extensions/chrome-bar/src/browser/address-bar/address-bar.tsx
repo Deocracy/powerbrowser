@@ -1923,6 +1923,8 @@ export class AddressBar {
         this.modesOpen = true;
         this.modesHighlight = this.mode === 'address' ? undefined : this.mode;
         this.update();
+        // BAR-04: engines can change after startup, and the menu may open before the pill was ever focused.
+        void this.refreshEngines();
     }
 
     protected closeModesMenu(): void {

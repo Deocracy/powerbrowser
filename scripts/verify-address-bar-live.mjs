@@ -2509,6 +2509,8 @@ async function pickEngineMode(app, name) {
     if (!await openModesMenu(app)) {
         throw new Error(`${BROKEN} the modes menu did not open, so ${name}'s mode could not be picked`);
     }
+    // The menu re-reads chrome's engines as it opens; their items arrive with the reply.
+    await settle(() => readModesMenu(app), v => !!v && v.items.some(i => i.label === name));
     if (await modeItemMouseDown(app, name) !== true) {
         throw new Error(`${BROKEN} the modes menu has no item named ${name}`);
     }
@@ -2548,11 +2550,16 @@ async function modesDropdown(ctx) {
         if (!Array.isArray(want?.engines) || !want.engines.includes(ENGINE_TWO)) {
             return fail(`${BROKEN} chrome's engine list does not name ${ENGINE_TWO} (${JSON.stringify(want)})`);
         }
-        const menu = await openModesMenu(app);
-        if (!menu) {
+        const expected = [...want.top, ...want.engines, ...want.local];
+        const opened = await openModesMenu(app);
+        if (!opened) {
             return fail('a trusted click on the mode button opened no .pb-address-modes menu');
         }
-        const expected = [...want.top, ...want.engines, ...want.local];
+        // The menu re-reads chrome's engines as it opens; the items settle on that reply.
+        const menu = await settle(() => readModesMenu(app), v => !!v && JSON.stringify(v.items.slice(0, -1).map(i => i.label)) === JSON.stringify(expected));
+        if (!menu) {
+            return fail('the modes menu closed before its items settled');
+        }
         const labels = menu.items.map(i => i.label);
         const last = menu.items[menu.items.length - 1];
         if (!menu.headingFirst || menu.heading !== ONE_OFF_LABEL) {
@@ -2637,7 +2644,8 @@ async function modeChip(ctx) {
 
         // Access letters: the probe engines share their first letter (with any built-in engine that starts with it),
         // so pressing it once per item up to Probe Engine Two, then Enter, picks it by cycling.
-        const menu = await openModesMenu(app);
+        const menu = await openModesMenu(app)
+            && await settle(() => readModesMenu(app), v => !!v && v.items.some(i => i.label === ENGINE_TWO));
         if (!menu) {
             return fail(`${BROKEN} the modes menu did not open for the access-letter step`);
         }
