@@ -523,6 +523,8 @@ function check(targetPath) {
 const MODES_SERVICE_REL = "theia/extensions/modes/src/browser/mode-service.ts";
 const MODES_COMMANDS_REL = "theia/extensions/modes/src/browser/modes-commands.ts";
 const MODES_WIDGET_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx";
+/** The pill's sources (30-01 D-04 move); their copy is pinned with the widget's. */
+const ADDRESS_BAR_DIR_REL = "theia/extensions/chrome-bar/src/browser/address-bar/";
 const NAV_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts";
 const SHORTCUT_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts";
 
@@ -871,7 +873,8 @@ function checkModesCopy(sources) {
   copyFailures.push(...checkNavCopy(sources[NAV_COPY_REL] ?? ""));
   copyFailures.push(...checkChromeBarBrand(sources));
   copyFailures.push(...checkShortcutCopy(sources[SHORTCUT_COPY_REL] ?? ""));
-  const widget = deriveWidgetCopy(sources[MODES_WIDGET_REL] ?? "");
+  const widgetCopyRels = widgetCopySourceRels(sources);
+  const widget = deriveWidgetCopy(widgetCopyRels.map((rel) => sources[rel] ?? "").join("\n"));
   if (widget.size === 0) {
     copyFailures.push("widget copy: derived ZERO user-facing strings from the chrome-bar widget -- the enumeration matches nothing, so this comparison proves nothing");
     return copyFailures;
@@ -889,7 +892,23 @@ function checkModesCopy(sources) {
   return copyFailures;
 }
 
+/** The widget plus every .tsx under address-bar/, from the sources read (so an absent directory adds nothing). */
+function widgetCopySourceRels(sources) {
+  return [
+    MODES_WIDGET_REL,
+    ...Object.keys(sources).filter((rel) => rel.startsWith(ADDRESS_BAR_DIR_REL) && rel.endsWith(".tsx")).sort(),
+  ];
+}
+
 const MODES_COPY_FAULTS = [
+  {
+    name: "a literal aria string in a nested address-bar source bypasses the pinned copy",
+    apply: (sources) => ({
+      ...sources,
+      [`${ADDRESS_BAR_DIR_REL}planted.tsx`]: "export const planted = <div aria-label='Planted pill copy' />;\n",
+    }),
+    expect: "Planted pill copy",
+  },
   {
     name: "all-caps sentinel leaked into the fallback notice",
     apply: (sources) => ({
@@ -1273,9 +1292,11 @@ if (selfTest) {
 
 check(target);
 if (!argv.includes("--file")) {
-  for (const f of checkModesCopy(readModesSources())) {
+  const modesSources = readModesSources();
+  for (const f of checkModesCopy(modesSources)) {
     fail(f);
   }
+  console.log(`verify-shell-error-copy: widget copy derived from ${widgetCopySourceRels(modesSources).length} chrome-bar source(s)`);
 }
 if (failures.length === 0) {
   console.log(`verify-shell-error-copy: PASS -- no internal identifier can reach the error layer (${target})`);

@@ -490,7 +490,7 @@ function checkStoreKinds(src, storeClasses) {
         const named = new RegExp(`\\b${kind}\\b`);
         for (const [file, text] of Object.entries(src)) {
             if (!callers.has(file) && text.includes(`.${kind}(`)) {
-                failures.push(`store-kinds: the privileged kind ${kind} is called outside chrome-bar-widget.tsx, in ${file}`);
+                failures.push(`store-kinds: the privileged kind ${kind} is called outside ${CHROME_BAR_WIDGET}, in ${file}`);
             }
             if ((text.includes('registerCommand(') || text.includes('registerKeybinding(')) && named.test(text)) {
                 failures.push(`store-kinds: the privileged kind ${kind} is named by a command or keybinding file, ${file}`);
@@ -502,8 +502,9 @@ function checkStoreKinds(src, storeClasses) {
 
 function readSources() {
     const files = new Set([API, CHILD, CLIENT, BWC, WEB_TAB, MODULE]);
+    // Recursive (30-01): the pill lives under chrome-bar/src/browser/address-bar/.
     for (const dir of [CHROME_BAR_DIR, TAB_URIS_DIR]) {
-        for (const name of readdirSync(join(REPO_ROOT, dir))) {
+        for (const name of readdirSync(join(REPO_ROOT, dir), { recursive: true })) {
             if (/\.tsx?$/.test(name)) {
                 files.add(`${dir}/${name}`);
             }
@@ -564,7 +565,12 @@ function selfTest() {
             name: 'planted privileged kind called from chrome-bar-commands.ts',
             sources: { ...clean, [API]: withStoreKind('plantedPrivileged'), [COMMANDS]: clean[COMMANDS] + '\nvoid this.store.plantedPrivileged();\n' },
             storeClasses: classedAs('plantedPrivileged', 'privileged'),
-            expect: `the privileged kind plantedPrivileged is called outside chrome-bar-widget.tsx, in ${COMMANDS}`,
+            expect: `the privileged kind plantedPrivileged is called outside ${CHROME_BAR_WIDGET}, in ${COMMANDS}`,
+        },
+        {
+            name: 'planted privileged call in a nested chrome-bar file',
+            sources: { ...clean, [`${CHROME_BAR_DIR}/nested/planted.ts`]: 'void this.store.readClipboardText();\n' },
+            expect: `the privileged kind readClipboardText is called outside ${CHROME_BAR_WIDGET}, in ${CHROME_BAR_DIR}/nested/planted.ts`,
         },
         {
             name: 'planted privileged kind named in chrome-bar-keybindings.ts',
@@ -658,7 +664,7 @@ function selfTest() {
 
     let failed = 0;
     for (const testCase of cases) {
-        const mutated = Object.keys(clean).some(file => testCase.sources[file] !== clean[file]);
+        const mutated = Object.keys({ ...clean, ...testCase.sources }).some(file => testCase.sources[file] !== clean[file]);
         if (!mutated && !testCase.storeClasses) {
             console.error(`verify-web-tab-bridge --self-test: FAIL -- '${testCase.name}' did not modify any source; the anchor it edits has drifted`);
             failed++;

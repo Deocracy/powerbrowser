@@ -24,8 +24,8 @@
  *   node scripts/verify-chrome-bar-commands.mjs --self-test
  */
 
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,6 +34,20 @@ const NAME = 'verify-chrome-bar-commands';
 const COMMANDS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
 const WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
 const KEYBINDINGS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-keybindings.ts';
+/** The pill's sources (30-01 D-04 move): each is held to the no-re-spelled-id rule. */
+const ADDRESS_BAR_DIR_REL = 'theia/extensions/chrome-bar/src/browser/address-bar';
+
+/** Every .ts/.tsx under address-bar/, recursively; none when the directory is absent. */
+function addressBarSourceRels() {
+    try {
+        return readdirSync(join(REPO_ROOT, ADDRESS_BAR_DIR_REL), { recursive: true })
+            .filter(f => f.endsWith('.ts') || f.endsWith('.tsx'))
+            .map(f => `${ADDRESS_BAR_DIR_REL}/${f.split(sep).join('/')}`)
+            .sort();
+    } catch {
+        return [];
+    }
+}
 
 /**
  * The declared command contract. The ONE hand-kept list in this file:
@@ -123,9 +137,13 @@ function checkCommands(sources) {
     // assertion names each declared id literally: neighbouring identifiers
     // in the same dotted namespace (the status-bar element id, the widget
     // id) are different registrations and must not trip this check.
-    for (const rel of [WIDGET_REL, KEYBINDINGS_REL]) {
+    // The widget and keybindings always execute chrome-bar commands, so they
+    // must reference a const; an address-bar source need not (it may execute
+    // none), but none of them may re-spell an id.
+    const addressBarRels = Object.keys(sources).filter(rel => rel.startsWith(`${ADDRESS_BAR_DIR_REL}/`));
+    for (const rel of [WIDGET_REL, KEYBINDINGS_REL, ...addressBarRels]) {
         const src = sources[rel] ?? '';
-        if (!src.includes('CHROME_BAR_')) {
+        if ((rel === WIDGET_REL || rel === KEYBINDINGS_REL) && !src.includes('CHROME_BAR_')) {
             failures.push(`${rel}: does not reference any CHROME_BAR_* id const -- the call site forked off the shared command ids`);
         }
         for (const id of EXPECTED_IDS) {
@@ -140,7 +158,7 @@ function checkCommands(sources) {
 
 function readSources() {
     const out = {};
-    for (const rel of [COMMANDS_REL, WIDGET_REL, KEYBINDINGS_REL]) {
+    for (const rel of [COMMANDS_REL, WIDGET_REL, KEYBINDINGS_REL, ...addressBarSourceRels()]) {
         out[rel] = readFileSync(join(REPO_ROOT, rel), 'utf8');
     }
     return out;
@@ -150,14 +168,15 @@ function main() {
     if (process.argv.includes('--self-test')) {
         return selfTest();
     }
-    const failures = checkCommands(readSources());
+    const sources = readSources();
+    const failures = checkCommands(sources);
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the chrome-bar command registry drifted from the declared contract.`);
         console.error(`If the change is deliberate, edit EXPECTED_IDS/EXPECTED_LABELS in this script in the SAME commit so the contract change is visible in the diff.`);
         failures.forEach(f => console.error(`  - ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${EXPECTED_IDS.length} command ids and ${EXPECTED_LABELS.length} contracted labels match the declared contract, call sites import the consts`);
+    console.log(`${NAME}: PASS -- ${EXPECTED_IDS.length} command ids and ${EXPECTED_LABELS.length} contracted labels match the declared contract, call sites import the consts (${Object.keys(sources).length - 1} call-site source(s) read)`);
     return 0;
 }
 
@@ -214,10 +233,20 @@ function selfTest() {
         }
     }
 
+    // Nested-file plant (30-01): an address-bar source re-spelling an id goes red naming it.
+    const nestedRel = `${ADDRESS_BAR_DIR_REL}/nested/planted.tsx`;
+    const nestedFailures = checkCommands({ ...clean, [nestedRel]: "void this.commands.executeCommand('powerbrowser.chrome-bar.new-tab');\n" });
+    if (!nestedFailures.some(f => f.includes(nestedRel) && f.includes('powerbrowser.chrome-bar.new-tab'))) {
+        console.error(`${NAME} --self-test: FAIL -- 'planted re-spelled id in ${nestedRel}' did not go red naming the file; got: ${nestedFailures.join(' | ') || '(no failures at all)'}`);
+        failed++;
+    } else {
+        console.log(`  ok  planted re-spelled id in ${nestedRel} -> red, naming 'powerbrowser.chrome-bar.new-tab'`);
+    }
+
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- ${cases.length} planted faults all went red`);
+    console.log(`${NAME} --self-test: PASS -- ${cases.length + 1} planted faults all went red`);
     return 0;
 }
 

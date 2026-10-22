@@ -66,7 +66,7 @@
 
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { resolveConfig } from './generate.mjs';
@@ -497,13 +497,13 @@ function checkActivationSources(entries) {
         } else {
             routed.push(rel);
         }
+    }
+    for (const { file, src } of entries) {
+        const rel = `${CHROME_BAR_BROWSER_DIR}/${file}`;
         const dekeyed = src.split('key={row.uri}').join('');
         if (/row\.uri/.test(dekeyed)) {
             failures.push(`${rel}: feeds the opaque row key row.uri into a commit or open call -- the blank-panel mint recurrence (T-13-04-02); commit row.url instead`);
         }
-    }
-    for (const { file, src } of entries) {
-        const rel = `${CHROME_BAR_BROWSER_DIR}/${file}`;
         if (/window\.open\s*\(/.test(src)) {
             failures.push(`${rel}: bare window.open bypasses the stock-window command -- suggestion activation must navigate through the imported command const`);
         }
@@ -527,22 +527,29 @@ function checkActivationSources(entries) {
     return { failures, routed };
 }
 
-function checkActivation() {
+/** Every .ts/.tsx under the chrome-bar browser dir, recursively (30-01: the pill is under address-bar/), keyed relative to it. */
+function chromeBarSourceEntries() {
     let files;
     try {
-        files = readdirSync(join(REPO_ROOT, CHROME_BAR_BROWSER_DIR))
-            .filter(f => f.endsWith('.ts') || f.endsWith('.tsx'));
+        files = readdirSync(join(REPO_ROOT, CHROME_BAR_BROWSER_DIR), { recursive: true })
+            .filter(f => f.endsWith('.ts') || f.endsWith('.tsx'))
+            .map(f => f.split(sep).join('/'));
     } catch {
         files = [];
     }
-    if (files.length === 0) {
+    return files.map(file => ({ file, src: readFileSync(join(REPO_ROOT, CHROME_BAR_BROWSER_DIR, file), 'utf8') }));
+}
+
+function checkActivation() {
+    const entries = chromeBarSourceEntries();
+    if (entries.length === 0) {
         return {
             failures: [`${CHROME_BAR_BROWSER_DIR}: derived ZERO chrome-bar browser sources -- the activation routing cannot be derived, so this comparison proves nothing`],
             routed: [],
+            sources: 0,
         };
     }
-    const entries = files.map(file => ({ file, src: readFileSync(join(REPO_ROOT, CHROME_BAR_BROWSER_DIR, file), 'utf8') }));
-    return checkActivationSources(entries);
+    return { ...checkActivationSources(entries), sources: entries.length };
 }
 
 function main() {
@@ -557,7 +564,7 @@ function main() {
         failures.forEach(f => console.error(`  - ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- search shape matches the declared contract and fixture semantics hold (prefix, escape, cap ${EXPECTED.uiCap}, recency); activation routes row URLs through the in-shell web-tab path (${activation.routed.length} file(s))`);
+    console.log(`${NAME}: PASS -- search shape matches the declared contract and fixture semantics hold (prefix, escape, cap ${EXPECTED.uiCap}, recency); activation routes row URLs through the in-shell web-tab path (${activation.routed.length} file(s); ${activation.sources} chrome-bar source(s) read)`);
     return 0;
 }
 
@@ -663,9 +670,7 @@ function selfTest() {
 
     const widgetRel = `${CHROME_BAR_BROWSER_DIR}/${CHROME_BAR_WIDGET_FILE}`;
     const widgetSrc = readFileSync(join(REPO_ROOT, widgetRel), 'utf8');
-    const otherEntries = readdirSync(join(REPO_ROOT, CHROME_BAR_BROWSER_DIR))
-        .filter(f => (f.endsWith('.ts') || f.endsWith('.tsx')) && f !== CHROME_BAR_WIDGET_FILE)
-        .map(file => ({ file, src: readFileSync(join(REPO_ROOT, CHROME_BAR_BROWSER_DIR, file), 'utf8') }));
+    const otherEntries = chromeBarSourceEntries().filter(entry => entry.file !== CHROME_BAR_WIDGET_FILE);
     const activationCases = [
         {
             name: 'planted row-key-fed commit',
@@ -728,6 +733,21 @@ function selfTest() {
         } else {
             console.log(`  ok  ${testCase.name} -> red, naming '${testCase.expect}'`);
         }
+    }
+
+    // Nested-file plant (30-01, Pitfall 2): a key-fed commit in a file under a
+    // subdirectory must go red naming that file, so the recursive scan is proven.
+    const nestedFile = 'nested/planted.tsx';
+    const nestedFailures = checkActivationSources([
+        { file: CHROME_BAR_WIDGET_FILE, src: widgetSrc },
+        ...otherEntries,
+        { file: nestedFile, src: 'const planted = () => this.commitRow(row.uri);\n' },
+    ]).failures;
+    if (!nestedFailures.some(f => f.includes(`${CHROME_BAR_BROWSER_DIR}/${nestedFile}`) && f.includes('row.uri'))) {
+        console.error(`${NAME} --self-test: FAIL -- 'planted row-key-fed commit in ${nestedFile}' did not go red naming '${nestedFile}' and 'row.uri'; got: ${nestedFailures.join(' | ') || '(no failures at all)'}`);
+        failed++;
+    } else {
+        console.log(`  ok  planted row-key-fed commit in ${nestedFile} -> red, naming 'row.uri'`);
     }
 
     if (failed) {
