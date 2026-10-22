@@ -18,7 +18,10 @@
  *               POWERBROWSER_TOKEN: a GUI-01 stock browser window (opened
  *               first, so when this is the session's first scenario no web
  *               tab has existed yet), an overlay page, its <img> subresource
- *               and a dedicated worker it starts. The cookie store still holds
+ *               and a dedicated worker it starts. A web tab opened on the
+ *               sidecar's own /powerbrowser/health is an overlay, so its
+ *               request (seen chrome-side at http-on-examine-response) carries
+ *               no POWERBROWSER_TOKEN and the gate refuses it. The cookie store still holds
  *               the token, and the Theia frame's credentialed health fetch
  *               passes the token gate while an uncredentialed one is refused.
  *   search      Typing "hello world" in the pill and pressing Enter (at the
@@ -456,8 +459,38 @@ async function tokenCookie(ctx) {
     }
     await nextGet(pages, '/pixel', mark);
     await nextGet(pages, '/cookie-worker', mark, () => true, 10000);
-    const seen = pages.requests.slice(mark);
     const carried = [];
+    // (d) A web tab on the sidecar's own origin is an overlay, so it loses the
+    // token even on that port; the Theia frame's credentialed 200 below is the control.
+    const sidecarHealth = `${await app.evaluate('location.origin')}/powerbrowser/health?pb-overlay`;
+    const watching = await inChrome(app, `window.__pbSidecarSeen = [];
+        window.__pbSidecarObs = { observe(s) {
+            const c = s.QueryInterface(Ci.nsIHttpChannel);
+            if (c.URI.spec !== ${JSON.stringify(sidecarHealth)}) return;
+            let cookie = '';
+            try { cookie = c.getRequestHeader('Cookie'); } catch (e) {}
+            window.__pbSidecarSeen.push({ status: c.responseStatus, token: cookie.split(';').some(e => e.trim().startsWith(${JSON.stringify(`${TOKEN_COOKIE}=`)})) });
+        } };
+        Services.obs.addObserver(window.__pbSidecarObs, 'http-on-examine-response');
+        return true;`);
+    if (watching !== true) {
+        fail(`${BROKEN} the sidecar-overlay response observer could not be added (${String(watching)})`);
+    } else {
+        try {
+            await openWebTab(app, sidecarHealth);
+            const sidecarSeen = await settle(() => inChrome(app, 'return JSON.stringify(window.__pbSidecarSeen);').then(JSON.parse), v => v.length > 0, 10000);
+            if (!sidecarSeen.length) {
+                fail(`${BROKEN} no response for the sidecar-overlay load of ${sidecarHealth} was observed within 10 s`);
+            } else if (sidecarSeen[0].token) {
+                carried.push('sidecar-overlay');
+            } else if (sidecarSeen[0].status === 200) {
+                fail(`the sidecar-overlay load carried no ${TOKEN_COOKIE} yet the token gate answered 200, so the gate let an overlay in without the token`);
+            }
+        } finally {
+            await inChrome(app, 'Services.obs.removeObserver(window.__pbSidecarObs, "http-on-examine-response"); return true;');
+        }
+    }
+    const seen = pages.requests.slice(mark);
     for (const [label, path] of COOKIE_LOADS) {
         const request = seen.find(r => r.path === path);
         if (!request) {

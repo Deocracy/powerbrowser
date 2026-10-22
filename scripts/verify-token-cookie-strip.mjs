@@ -14,7 +14,12 @@
  *   3. setGroupSenderPort's body calls installTokenCookieStrip(), so the strip
  *      is live from the cookie mint on, before any web tab (a stock browser
  *      window can be opened first);
- *   4. tokenCookieAllowed compares the request port against groupSenderPort.
+ *   4. tokenCookieAllowed compares the request port against groupSenderPort;
+ *   5. its browsing-context branch keeps the token only when the load's top
+ *      embedder is not an overlay (tabIdOfBrowser(...) === null), so a web tab
+ *      on the sidecar's own port loses it;
+ *   6. tokenCookieStrip.observe filters the Cookie header on
+ *      `${TOKEN_COOKIE_NAME}=` (a filter on another name strips nothing).
  * A derivation that finds nothing is a broken instrument, never a pass.
  * Honestly --quick: text reads only. The live proof is
  * verify-address-bar-live.mjs --scenario token-cookie.
@@ -103,8 +108,21 @@ function check(sources) {
     const allowed = functionBody(boundary, 'tokenCookieAllowed');
     if (!allowed) {
         failures.push(`${BROKEN} ${BOUNDARY_REL}: the tokenCookieAllowed function body did not derive`);
-    } else if (!/channel\.URI\.port !== groupSenderPort/.test(stripLineComments(allowed))) {
-        failures.push('port: tokenCookieAllowed does not compare the request port against groupSenderPort, so another loopback port can keep the token');
+    } else {
+        const code = stripLineComments(allowed);
+        if (!/channel\.URI\.port !== groupSenderPort/.test(code)) {
+            failures.push('port: tokenCookieAllowed does not compare the request port against groupSenderPort, so another loopback port can keep the token');
+        }
+        if (!/\n {2}if \(bc\) \{\s*return tabIdOfBrowser\(bc\.top\.embedderElement\) === null;\s*\}/.test(code)) {
+            failures.push('overlay: tokenCookieAllowed\'s browsing-context branch does not return tabIdOfBrowser(bc.top.embedderElement) === null, so a web tab on the sidecar\'s own port can keep the token');
+        }
+    }
+
+    const strip = /\nconst tokenCookieStrip = \{\n[\s\S]*?\n\};/.exec(boundary)?.[0];
+    if (!strip) {
+        failures.push(`${BROKEN} ${BOUNDARY_REL}: the tokenCookieStrip object did not derive`);
+    } else if (!stripLineComments(strip).includes('.filter(entry => !entry.trim().startsWith(`${TOKEN_COOKIE_NAME}=`))')) {
+        failures.push('filter: tokenCookieStrip.observe does not drop the Cookie entries that start with `${TOKEN_COOKIE_NAME}=`, so the strip removes nothing');
     }
     return failures;
 }
@@ -147,6 +165,16 @@ function selfTest() {
             mutate: src => src.replace('groupSenderPort === null || channel.URI.port !== groupSenderPort', 'groupSenderPort === null'),
             expect: 'port:',
         },
+        {
+            name: 'overlay branch keeps the token',
+            mutate: src => src.replace('    return tabIdOfBrowser(bc.top.embedderElement) === null;', '    return true;'),
+            expect: 'overlay:',
+        },
+        {
+            name: 'filter on another cookie name',
+            mutate: src => src.replace('entry.trim().startsWith(`${TOKEN_COOKIE_NAME}=`)', 'entry.trim().startsWith(`${TOKEN_STRIP_TOPIC}=`)'),
+            expect: 'filter:',
+        },
     ];
     let failed = 0;
     for (const c of cases) {
@@ -182,7 +210,7 @@ function main() {
         failures.forEach(f => console.error(`  - ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- the strip removes the token gate's cookie name on ${STRIP_TOPIC}, is installed by setGroupSenderPort and keeps the token only on the sidecar's port`);
+    console.log(`${NAME}: PASS -- the strip removes the token gate's cookie name on ${STRIP_TOPIC}, is installed by setGroupSenderPort and keeps the token only on the sidecar's port, never for an overlay`);
     return 0;
 }
 
