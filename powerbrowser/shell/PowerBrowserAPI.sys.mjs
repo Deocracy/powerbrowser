@@ -3371,8 +3371,32 @@ export const PowerBrowserAPI = Object.freeze({
       });
       return "opened";
     }
-    const where = PowerBrowserAPI.webTabNavigate(tabId, spec);
-    return where === "loading" ? "opened" : where;
+    PowerBrowserAPI.firstWebTabLoad(tabId, entry, spec);
+    return "opened";
+  },
+
+  /**
+   * WR-05 (Phase 30 review): a fresh overlay commits its initial about:blank
+   * into session history a few ms after it is created. A first load that
+   * commits before it leaves that about:blank appended after the page, so a
+   * one-page tab reports canGoBack (seen live after a PowerBrowser-mode round
+   * trip). Waits for the commit, bounded as restoreWebTabHistory does, then
+   * loads replacing it. A navigation the frontend sends meanwhile, or a close,
+   * supersedes this load.
+   */
+  async firstWebTabLoad(tabId, entry, spec) {
+    entry.firstLoad = spec;
+    const committed = () => (entry.browser.browsingContext?.sessionHistory?.count ?? 0) > 0;
+    for (let waited = 0; !committed() && waited < 3000; waited += 25) {
+      await PowerBrowserAPI.sleep(25);
+    }
+    if (entry.firstLoad !== spec || webTabs.get(tabId) !== entry) {
+      return;
+    }
+    if (!committed()) {
+      PowerBrowserAPI.log("warn", "[web-tab] initial history entry not yet committed; loading anyway");
+    }
+    PowerBrowserAPI.webTabNavigate(tabId, spec, { replace: true });
   },
 
   /**
@@ -3409,7 +3433,7 @@ export const PowerBrowserAPI = Object.freeze({
    * hardening addWebTab applies (tabbrowser.js:3185-3198 throws on a system
    * principal), and never browser.src.
    */
-  webTabNavigate(tabId, url) {
+  webTabNavigate(tabId, url, { replace = false } = {}) {
     const spec = typeof url === "string" && url ? url : "about:blank";
     if (spec !== "about:blank" && !/^https?:\/\//i.test(spec)) {
       return "refused-scheme";
@@ -3418,8 +3442,11 @@ export const PowerBrowserAPI = Object.freeze({
     if (!entry) {
       return "unknown-tab";
     }
+    // WR-05: any navigation supersedes a first load still waiting in firstWebTabLoad.
+    entry.firstLoad = null;
     const triggeringPrincipal = Services.scriptSecurityManager.createNullPrincipal({});
-    entry.browser.fixupAndLoadURIString(spec, { triggeringPrincipal });
+    const loadFlags = replace ? Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY : Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
+    entry.browser.fixupAndLoadURIString(spec, { triggeringPrincipal, loadFlags });
     return "loading";
   },
 

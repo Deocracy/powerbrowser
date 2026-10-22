@@ -236,8 +236,10 @@
  *               focus, typing narrows it, and Shift+Delete removes the
  *               history-only row in History. Actions: with a fresh tab
  *               current, it lists exactly the visible, enabled commands of
- *               the derived category (New Tab, not the disabled Forward), and
- *               Enter on "new" opens a new tab. Scored only after search passed.
+ *               the derived category (New Tab, not the disabled Back and
+ *               Forward: the one-page tab reports canGoBack false, WR-05),
+ *               and Enter on "new" opens a new tab. Scored only after search
+ *               passed.
  *   mode-defaults  SMODE-02, D-14: the mode table is imported under Node's
  *               type stripping, so no default is typed here. For each row of
  *               DEFAULT_MODE_BY_UI_MODE, a trusted click on that PowerBrowser
@@ -3050,11 +3052,29 @@ async function actionsMode(ctx) {
             note('PLANT actions-unfiltered applied');
         }
     }
-    // Forward is the disabled control: a tab opened on one page has nothing ahead of it. (Back is not: after a
-    // PowerBrowser-mode round trip a fresh tab can report canGoBack, recorded in the phase's deferred items.)
-    const want = await settle(() => categoryLabels(app), v => !!v && !v.listed.includes('Forward'));
-    if (!want?.listed.includes('New Tab') || want.listed.includes('Forward') || !want.all.includes('Forward')) {
-        return fail(`${BROKEN} with a fresh tab current the ${COMMAND_CATEGORY} commands must include an enabled New Tab and a disabled Forward; derived ${JSON.stringify(want)}`);
+    if (plant === 'phantom-history' && await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return false;
+        // The WR-05 defect's state as seen live: the page entry marked interacted, an about:blank appended after it, then a state push.
+        const sh = o.browsingContext.sessionHistory;
+        const e = sh.createEntry();
+        e.URI = Services.io.newURI('about:blank');
+        e.triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
+        sh.getEntryAtIndex(0).hasUserInteraction = true;
+        sh.addEntry(e);
+        o.dispatchEvent(new Event('pagetitlechanged'));
+        return o.canGoBack;`) === true) {
+        note('PLANT phantom-history applied');
+    }
+    // Back and Forward are the disabled controls: a tab opened on one page has nothing behind or ahead of it.
+    // WR-05: after a PowerBrowser-mode round trip (mode-lifetime runs first) a fresh tab used to report canGoBack.
+    const want = await settle(() => categoryLabels(app), v => !!v && !v.listed.includes('Forward') && !v.listed.includes('Back'));
+    if (!want?.listed.includes('New Tab') || !want.all.includes('Forward') || !want.all.includes('Back')) {
+        return fail(`${BROKEN} the ${COMMAND_CATEGORY} commands must include an enabled New Tab, a Forward and a Back; derived ${JSON.stringify(want)}`);
+    }
+    if (want.listed.includes('Back') || want.current?.canGoBack !== false) {
+        return fail(`a tab opened on one page reports canGoBack (${JSON.stringify(want.current)}): Back is enabled with no page behind it`);
+    }
+    if (want.listed.includes('Forward')) {
+        return fail(`a tab opened on one page enables Forward; derived ${JSON.stringify(want)}`);
     }
     await restoreDefaultMode(app);
     await pickLocalMode(app, 'actions');
@@ -4540,6 +4560,7 @@ const PLANTS = [
     { plant: 'mode-sticks', target: 'mode-lifetime', run: ['mode-lifetime'], expect: 'mode did not return to the default after Enter' },
     { plant: 'tabs-lists-active', target: 'local-modes', run: ['search', 'local-modes'], expect: 'the active tab is listed' },
     { plant: 'restrict-dropped', target: 'local-modes', run: ['search', 'local-modes'], expect: 'expected the seeded bookmarks newest first' },
+    { plant: 'phantom-history', target: 'local-modes', run: ['search', 'mode-lifetime', 'local-modes'], expect: 'a tab opened on one page reports canGoBack' },
     { plant: 'actions-unfiltered', target: 'local-modes', run: ['search', 'local-modes'], expect: 'listed a command outside the Browser category' },
     { plant: 'picks-dropped', target: 'command-centre', run: ['search', 'command-centre'], expect: 'no Explorer row' },
     { plant: 'help-row-executes', target: 'command-centre', run: ['search', 'command-centre'], expect: 'a help row opened the centred quick input' },
