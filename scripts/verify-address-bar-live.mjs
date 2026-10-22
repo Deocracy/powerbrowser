@@ -238,6 +238,21 @@
  *               current, it lists exactly the visible, enabled commands of
  *               the derived category (New Tab, not the disabled Forward), and
  *               Enter on "new" opens a new tab. Scored only after search passed.
+ *   mode-defaults  SMODE-02, D-14: the mode table is imported under Node's
+ *               type stripping, so no default is typed here. For each row of
+ *               DEFAULT_MODE_BY_UI_MODE, a trusted click on that PowerBrowser
+ *               mode's toggle segment leaves the instance in that row's mode:
+ *               Coding shows the Command centre chip with no x and the
+ *               empty-prefix provider's placeholder, Browsing the Address form
+ *               with no chip, Organising the Tabs chip, an empty pill and the
+ *               Tabs placeholder (read from chrome-bar-copy.ts). In Coding a
+ *               localhost web tab made current keeps Command centre (D-16).
+ *               Tabs picked from the menu, the text cleared, Backspace at the
+ *               parent returns to Command centre; "ab" then Backspace leaves
+ *               "a" in Command centre. A custom mode saved through
+ *               ModeService.saveCurrentAsMode (its name prompt answered)
+ *               starts in defaultModeFor's fallback. Scored only after search
+ *               passed.
  *   command-centre  SMODE-05: with a temp workspace opened once per session
  *               (README.md, src/main.py, .theia/launch.json; the Theia frame
  *               reloaded on its location.hash, then ready and opened awaited)
@@ -301,7 +316,7 @@ import {
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
-import { GET_BY_NAME, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
+import { GET_BY_NAME, pollFor, probe, sourceConst, sourceMatch } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-address-bar-live';
 const ENTER = { key: 'Enter', code: 'Enter', keyCode: 13 };
@@ -358,6 +373,7 @@ const PAGES = {
     '/dr-c': { title: 'Draft Gamma', body: '<p>gamma</p>' },
     '/lt-b': { title: 'Lifetime Beta', body: '<p>beta</p>' },
     '/lm-act': { title: 'Local Actions', body: '<p>actions</p>' },
+    '/md-web': { title: 'Mode Defaults Web', body: '<p>web</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -2543,10 +2559,21 @@ async function clickOn(app, selector) {
     await theiaPointer(app, click(at.x, at.y));
 }
 
-/** Opens the modes menu with a trusted click on the mode button; returns the menu, or null when none opened. */
+/**
+ * Opens the modes menu with a trusted click on the mode button; returns the
+ * menu, or null when none opened. One more click when the first opened
+ * nothing: a page focus still landing from an earlier activation blurs the
+ * button, and the blur closes the menu it just opened.
+ */
 async function openModesMenu(app) {
-    await clickOn(app, '.pb-address-mode');
-    return settle(() => readModesMenu(app), v => !!v);
+    for (let attempt = 0; attempt < 2; attempt++) {
+        await clickOn(app, '.pb-address-mode');
+        const menu = await settle(() => readModesMenu(app), v => !!v);
+        if (menu) {
+            return menu;
+        }
+    }
+    return null;
 }
 
 /** Dispatches a primary mousedown (plus `init`) on the modes-menu item whose label is `label`; false when absent. */
@@ -3538,6 +3565,166 @@ async function commandCentrePrivacy(ctx) {
     }
 }
 
+/** The mode table itself, imported under Node's type stripping as the static gate does: every expected default is the tree's own value. */
+const MODE_TABLE = await import(new URL('../theia/extensions/chrome-bar/src/browser/address-bar/address-bar-mode-table.ts', import.meta.url).href);
+const TABS_PLACEHOLDER = sourceMatch('theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts', /\bsearchTabs: '([^']+)'/);
+const CUSTOM_MODE_NAME = 'Probe Custom Mode';
+
+/** The AddressBar's label for the mode `id` (Address, an engine's name or a contribution's label), read now. */
+const modeLabelOf = (app, id) => probe(app, `return get('AddressBar').modeLabel(${JSON.stringify(id)});`);
+
+/** The label of the mode-toggle segment for the PowerBrowser mode `id` (its text, lowercased, is the id the bar sends); null when absent. */
+const segmentLabel = (app, id) => app.evaluate(`(() => {
+    const seg = [...document.querySelectorAll('.pb-chrome-bar-toggle .pb-chrome-bar-segment')].find(b => (b.textContent || '').toLowerCase() === ${JSON.stringify(id)});
+    return seg ? seg.textContent : null;
+})()`);
+
+/** Switches to the PowerBrowser mode `id` with a trusted click on its segment and waits for the body to carry it. */
+async function switchUiMode(app, id) {
+    const label = await segmentLabel(app, id);
+    if (!label) {
+        throw new Error(`${BROKEN} no mode-toggle segment for the PowerBrowser mode ${id}`);
+    }
+    await clickSegment(app, label);
+    if (await settle(() => bodyMode(app), v => v === id, 10000) !== id) {
+        throw new Error(`${BROKEN} the ${label} segment did not switch the PowerBrowser mode`);
+    }
+    return label;
+}
+
+/** Saves the current layout as the custom mode `name` through ModeService.saveCurrentAsMode, answering its name prompt; returns its id. */
+const saveCustomMode = (app, name) => probe(app, `const modes = get('ModeService');
+    const field = () => [...document.querySelectorAll('.quick-input-widget .quick-input-box input')].find(e => e.offsetParent !== null) || null;
+    // The prompt hides on a focus loss, which a late pill blur can cause: start from a blurred pill, and retry a hidden prompt.
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    await sleep(500);
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const running = modes.saveCurrentAsMode();
+        if (!(await until(() => field() !== null, 10000))) return { error: 'no Save as Mode name field opened' };
+        const input = field();
+        input.focus();
+        input.value = ${JSON.stringify(name)};
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(500);
+        let impl = null;
+        try { impl = get('MonacoQuickInputImplementation'); } catch (e) { impl = null; }
+        if (impl && typeof impl.accept === 'function') {
+            await impl.accept();
+        } else {
+            const event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
+            Object.defineProperty(event, 'keyCode', { get: () => 13 });
+            input.dispatchEvent(event);
+        }
+        await running;
+        const row = modes.getCustomModes().find(r => r.name === ${JSON.stringify(name)});
+        if (row) return { id: row.id, attempts: attempt + 1 };
+    }
+    return { error: 'no custom mode named ' + ${JSON.stringify(name)} + ' after three saves; customs ' + JSON.stringify(modes.getCustomModes()) };`);
+
+/**
+ * SMODE-02 (D-01..D-03, D-13, D-16, D-17) and D-14's Backspace: each shipped
+ * PowerBrowser mode starts the pill in its DEFAULT_MODE_BY_UI_MODE row (the
+ * table imported, never typed here); Coding keeps Command centre with a web
+ * tab active; a saved custom mode starts in defaultModeFor's fallback; and
+ * Backspace at the start leaves a picked mode, while in the default mode it
+ * deletes as usual.
+ */
+async function modeDefaults(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'mode-defaults')) {
+        return 'not-scored';
+    }
+    const tabId = await sessionTab(ctx);
+    if (plant === 'default-ignored' && await probe(app, `get('AddressBar').defaultMode = () => 'address'; return true;`) === true) {
+        note('PLANT default-ignored applied');
+    }
+    const startsIn = async (id, want) => {
+        const label = await switchUiMode(app, id);
+        const wantLabel = await modeLabelOf(app, want);
+        const state = await settle(() => modeState(app), v => v?.mode === want, 10000);
+        if (state?.mode !== want) {
+            fail(`${label} did not start in ${wantLabel}: the mode is ${JSON.stringify(state?.mode)}`);
+            return null;
+        }
+        return { label, wantLabel, view: await readMode(app) };
+    };
+    try {
+        for (const [id, want] of Object.entries(MODE_TABLE.DEFAULT_MODE_BY_UI_MODE)) {
+            const seen = await startsIn(id, want);
+            if (!seen) {
+                continue;
+            }
+            const { label, wantLabel, view } = seen;
+            if (want === 'address') {
+                if (!view || view.chip || view.label !== null || view.reset) {
+                    fail(`${label} must show the Address form with no chip, label or x; saw ${JSON.stringify(view)}`);
+                }
+            } else if (!view?.chip || view.label !== wantLabel || view.reset) {
+                fail(`${label} must show the ${JSON.stringify(wantLabel)} chip with no x; saw ${JSON.stringify(view)}`);
+            }
+            if (want === 'command-centre') {
+                const placeholder = await probe(app, `return get('QuickAccessRegistry').getQuickAccessProvider('')?.placeholder ?? null;`);
+                if (!placeholder || view?.placeholder !== placeholder) {
+                    fail(`${label}'s placeholder must be the empty-prefix provider's own ${JSON.stringify(placeholder)}; saw ${JSON.stringify(view?.placeholder)}`);
+                }
+            }
+            if (want === 'tabs' && (view?.value !== '' || view.placeholder !== TABS_PLACEHOLDER)) {
+                fail(`${label} must show an empty pill with the placeholder ${JSON.stringify(TABS_PLACEHOLDER)}; saw ${JSON.stringify(view)}`);
+            }
+        }
+
+        // D-16: Coding keeps Command centre with a web tab active.
+        await switchUiMode(app, 'coding');
+        const webTab = await openLocalTab(app, pages, '/md-web');
+        await showTab(app, webTab, '/md-web');
+        const withWeb = await settle(() => modeState(app), v => v?.mode === 'command-centre');
+        if (withWeb?.mode !== 'command-centre') {
+            fail(`Coding with a web tab active left Command centre: the mode is ${JSON.stringify(withWeb?.mode)}`);
+        }
+
+        // D-14: Backspace at the start of an empty pill leaves Tabs for the default; in the default it deletes.
+        if (withWeb?.mode === 'command-centre') {
+            await pickLocalMode(app, 'tabs');
+            await typeInPill(app, '');
+            await pressKey(app, BACKSPACE);
+            const back = await settle(() => modeState(app), v => v?.mode === 'command-centre');
+            if (back?.mode !== 'command-centre') {
+                fail(`Backspace at the start of an empty pill in Tabs did not return to Command centre: the mode is ${JSON.stringify(back?.mode)}`);
+            }
+            await typeInPill(app, 'ab');
+            await pressKey(app, BACKSPACE);
+            const deleted = await settle(() => readMode(app), v => v?.value === 'a');
+            const kept = await modeState(app);
+            if (deleted?.value !== 'a' || kept?.mode !== 'command-centre') {
+                fail(`Backspace after "ab" in Command centre must leave "a" in the same mode; saw ${JSON.stringify(deleted?.value)} in ${JSON.stringify(kept?.mode)}`);
+            }
+            await pressKey(app, ESCAPE);
+            await pressKey(app, ESCAPE);
+        }
+
+        // D-17: a saved custom mode starts in defaultModeFor's fallback.
+        const custom = await saveCustomMode(app, CUSTOM_MODE_NAME);
+        if (!custom?.id) {
+            return fail(`${BROKEN} the custom mode could not be saved (${JSON.stringify(custom)})`);
+        }
+        if (custom.attempts > 1) {
+            note(`the Save as Mode prompt took ${custom.attempts} attempts (a hidden prompt was retried)`);
+        }
+        const wantCustom = MODE_TABLE.defaultModeFor(custom.id, () => true);
+        const customState = await settle(() => modeState(app), v => v?.mode === wantCustom, 10000);
+        if (customState?.mode !== wantCustom) {
+            fail(`the custom mode ${CUSTOM_MODE_NAME} did not start in ${await modeLabelOf(app, wantCustom)}: the mode is ${JSON.stringify(customState?.mode)}`);
+        }
+    } finally {
+        await probe(app, `delete get('AddressBar').defaultMode; return true;`);
+        if (await bodyMode(app) !== 'browsing') {
+            await switchUiMode(app, 'browsing').catch(() => undefined);
+        }
+        await restoreDefaultMode(app);
+        await showTab(app, tabId, '/start').catch(() => undefined);
+    }
+}
+
 /** Enters the contributed mode `id` from the default mode through the menu, with the text cleared. */
 async function enterMode(app, id) {
     await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
@@ -3568,6 +3755,7 @@ const SCENARIOS = {
     'mode-chip': modeChip,
     'mode-lifetime': modeLifetime,
     'local-modes': localModes,
+    'mode-defaults': modeDefaults,
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
@@ -3577,7 +3765,7 @@ const SCENARIOS = {
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
     'command-centre': 'search', 'command-centre-handoff': 'command-centre',
-    'command-centre-privacy': 'search' };
+    'command-centre-privacy': 'search', 'mode-defaults': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -3672,6 +3860,7 @@ const PLANTS = [
     { plant: 'picks-dropped', target: 'command-centre', run: ['search', 'command-centre'], expect: 'no Explorer row' },
     { plant: 'help-row-executes', target: 'command-centre', run: ['search', 'command-centre'], expect: 'a help row opened the centred quick input' },
     { plant: 'cc-sends', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress from Command centre' },
+    { plant: 'default-ignored', target: 'mode-defaults', run: ['search', 'mode-defaults'], expect: 'Coding did not start in Command centre' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 

@@ -1505,6 +1505,12 @@ export class AddressBar {
             // BAR-09: Shift+Delete removes a highlighted history row; on any other row, or none, it keeps its default.
             e.preventDefault();
             void this.removeHighlightedRow();
+        } else if (e.key === 'Backspace' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey
+            && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0 && this.mode !== this.defaultMode()) {
+            // SMODE-03 (D-14): Backspace at the start leaves a picked mode for the default and re-runs the query.
+            e.preventDefault();
+            this.resetMode({ requery: true });
+            this.update();
         } else if ((e.key === 'Backspace' || e.key === 'Delete') && this.autofillSelected(e.currentTarget)) {
             // BAR-07: the default action removes the selected completion; the re-query must not complete it again.
             this.autofillSuppressed = true;
