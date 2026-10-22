@@ -277,7 +277,7 @@ Plans:
   4. In Command centre, file search, `>` commands and the `#`, `?`, `edt`, `term`, `task`, `debug` and `view` prefixes show Theia's results under the pill while the page stays visible, with no engine suggestion row; `@` and `:` open Theia's symbol and go-to-line pickers
   5. From Command centre, Ctrl+L, Alt+D and F6 switch the pill to address mode, and an unambiguous URL (scheme, localhost, host:port, IP) gets a "Go to" first row
 
-**Plans**: 4/6 plans executed (strictly sequential waves 1-6: no worktrees, every plan edits `address-bar/address-bar.tsx` and `--quick` reads the whole tree)
+**Plans**: 5/6 plans executed (strictly sequential waves 1-6: no worktrees, every plan edits `address-bar/address-bar.tsx` and `--quick` reads the whole tree)
 
 Plans:
 **Wave 1**
@@ -298,7 +298,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 30-05-PLAN.md — Defaults per PowerBrowser mode proven live, Backspace reset, mode tokens with chrome-side engine aliases, Ctrl/Alt+Up/Down pill-scoped keys
+- [x] 30-05-PLAN.md — Defaults per PowerBrowser mode proven live, Backspace reset, mode tokens with chrome-side engine aliases, Ctrl/Alt+Up/Down pill-scoped keys
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -474,7 +474,7 @@ Plans:
 | 27. Groundwork, Navigation Buttons and Page-Focus Keys | 8/8 | In Progress|  |
 | 28. WebExtension Tab Route Spike | 0/0 | Complete    | 2026-10-21 |
 | 29. Address Bar Search and Fixup | 10/10 | In Progress|  |
-| 30. Address-Bar Modes and Command Centre | 4/6 | In Progress|  |
+| 30. Address-Bar Modes and Command Centre | 5/6 | In Progress|  |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
 | 32. Page Tools | 0/TBD | Not started | - |
 | 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
