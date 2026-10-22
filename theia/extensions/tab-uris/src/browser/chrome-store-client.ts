@@ -87,6 +87,8 @@ export interface ResolvedAddress {
 export interface SearchEngineInfo {
     name: string;
     icon: string | null;
+    /** Phase 30 (SMODE-04): Gecko's engine.aliases, at most 8 of at most 64 characters; empty when it has none. */
+    aliases: string[];
 }
 
 /** Phase 29 (BAR-04): the bar's engines in order and the configured default's name. */
@@ -174,7 +176,9 @@ export class ChromeStoreClient {
         if (!reply.ok) {
             throw new Error(reply.message ?? `listSearchEngines failed (${reply.reason ?? 'store'})`);
         }
-        return { engines: reply['engines'] as SearchEngineInfo[], defaultName: String(reply['defaultName'] ?? '') };
+        // An older chrome sends no aliases: an engine without them has none.
+        const engines = (reply['engines'] as SearchEngineInfo[]).map(engine => ({ ...engine, aliases: Array.isArray(engine.aliases) ? engine.aliases.map(String) : [] }));
+        return { engines, defaultName: String(reply['defaultName'] ?? '') };
     }
 
     /** Phase 29 (BAR-11): cached favicons for up to 10 page urls, keyed by url; each a data:image/ URI. A url without one is absent. */

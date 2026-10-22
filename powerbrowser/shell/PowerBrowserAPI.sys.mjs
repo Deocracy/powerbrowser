@@ -4435,14 +4435,16 @@ async function resolveTypedAddress(text, engineName, canonize = false, forceSear
 }
 
 // The bar's engines in order, for the Default Search Engine setting (BAR-04).
-// An icon crosses into the Theia frame only as a bounded data:image/ string,
-// so the frame never fetches an engine-supplied URL.
+// Each engine's aliases (Gecko's engine.aliases, SMODE-04) cross as at most 8
+// strings of at most 64 characters. An icon crosses into the Theia frame only
+// as a bounded data:image/ string, so the frame never fetches an
+// engine-supplied URL.
 async function listSearchEngines() {
   const engines = [];
   for (const engine of await barEngines()) {
     const url = await engine.getIconURL(16);
     const icon = typeof url === "string" && url.startsWith("data:image/") && url.length <= 65536 ? url : null;
-    engines.push({ name: String(engine.name), icon });
+    engines.push({ name: String(engine.name), icon, aliases: (Array.isArray(engine.aliases) ? engine.aliases : []).slice(0, 8).map(alias => String(alias).slice(0, 64)) });
   }
   const def = await barEngine("");
   return { engines, defaultName: def ? String(def.name) : "" };

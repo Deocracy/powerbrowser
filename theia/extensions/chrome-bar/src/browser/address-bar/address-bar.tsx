@@ -27,7 +27,7 @@ import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, currentWebTab, f
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
 import { PLACE_ROW_LIMIT, Row, autofillSplice, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
-import { LOCAL_MODES, MODE_SENDS, ModeId, defaultModeFor, engineModeId, engineNameOf, modeKindOf } from './address-bar-mode-table';
+import { LOCAL_MODES, MODE_SENDS, ModeId, defaultModeFor, engineModeId, engineNameOf, modeKindOf, tokenise } from './address-bar-mode-table';
 import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes';
 // Type only: command-centre.ts imports the shortcut table, which imports this file.
 import type { CommandCentreAddressBarMode } from './command-centre';
@@ -1037,6 +1037,25 @@ export class AddressBar {
             this.renderNow();
             return;
         }
+        if (this.applyToken()) {
+            // SMODE-04: the remaining text renders now, so the caret can be put at its end.
+            this.renderNow();
+            const input = this.pillRef?.querySelector('input');
+            if (input && document.activeElement === input) {
+                input.setSelectionRange(this.inputValue.length, this.inputValue.length);
+            }
+        }
+        const aliasRows = this.aliasRows();
+        if (aliasRows.length) {
+            // SMODE-04: "@" alone lists the engines that have an alias; nothing is sent while it does, and a
+            // query debounced before it is disarmed so it cannot replace the list.
+            this.localQuery?.cancel();
+            this.dropdownArmed = false;
+            this.rows = aliasRows;
+            this.dropdownOpen = true;
+            this.renderNow();
+            return;
+        }
         if (!this.modeSends().resolve) {
             // D-26: a mode that may not resolve typed text never reaches runQuery; a local mode lists its own
             // rows, empty text included (the zero-query list), on a fresh token per keystroke.
@@ -1068,6 +1087,59 @@ export class AddressBar {
         this.dropdownArmed = true;
         this.renderNow();
         void this.debouncedQuery(this.inputValue);
+    }
+
+    /**
+     * SMODE-04 (D-18): a leading mode token and its space enter that mode, the
+     * token consumed; true when one did. Command centre keeps a token that is
+     * exactly a Theia quick-access prefix, derived from the registry. An
+     * instance-replaceable method, so a live plant can ignore tokens.
+     */
+    protected applyToken(): boolean {
+        const next = tokenise(this.inputValue, this.mode, {
+            aliases: this.engineAliases(),
+            defaultEngine: this.effectiveEngine(),
+            keepInCommandCentre: token => {
+                const centre = this.commandCentre();
+                const descriptor = centre ? centre.descriptorFor(token) : undefined;
+                return !!descriptor && descriptor.prefix === token;
+            },
+        });
+        if (!next) {
+            return false;
+        }
+        this.mode = next.mode;
+        this.inputValue = next.text;
+        return true;
+    }
+
+    /** SMODE-04: each engine alias chrome lists, with its engine's name, in chrome's order. */
+    protected engineAliases(): Array<[string, string]> {
+        const engines = this.engineList ? this.engineList.engines : [];
+        return ([] as Array<[string, string]>).concat(...engines.map(engine => engine.aliases.map((alias): [string, string] => [alias, engine.name])));
+    }
+
+    /**
+     * SMODE-04: "@" alone outside Command centre lists the engines that have
+     * an alias -- the alias, the engine's name, its icon; choosing one enters
+     * its mode with empty text. Empty when no engine has an alias, so "@"
+     * stays plain text.
+     */
+    protected aliasRows(): Row[] {
+        if (this.inputValue !== '@' || this.mode === 'command-centre') {
+            return [];
+        }
+        const engines = this.engineList ? this.engineList.engines : [];
+        return this.engineAliases().map(([alias, name]): Row => ({
+            key: `alias:${alias}`, source: 'heuristic', title: alias, caption: name, url: '', engineName: name,
+            icon: engines.find(engine => engine.name === name)?.icon ?? null,
+            stays: true,
+            run: () => {
+                this.inputValue = '';
+                this.closeDropdown();
+                this.pickMode(engineModeId(name));
+            },
+        }));
     }
 
     /**

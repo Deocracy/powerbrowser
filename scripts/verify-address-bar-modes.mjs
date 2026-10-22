@@ -36,20 +36,32 @@
  *      every one of those names in address-bar.tsx and address-bar-modes.ts,
  *      so a scan that matches nothing is a broken instrument, never a pass;
  *   9. D-26: the Command centre contribution's id, derived from
- *      command-centre.ts, is the MODE_SENDS key whose row is all false.
+ *      command-centre.ts, is the MODE_SENDS key whose row is all false;
+ *  10. SMODE-04 (D-18): tokenise's planted cases -- `* foo` is Bookmarks and
+ *      "foo", `% ` Tabs and empty text, `^ x` History, `> x` Actions outside
+ *      Command centre and text inside it, `? x` the default engine's mode
+ *      outside and text inside, `@two x` (case-insensitive) the aliased
+ *      engine, `@nope x` text, `@two x` text in Command centre, `* x`
+ *      Bookmarks in Command centre too;
+ *  11. a token without a following space (`*foo`, `@two`, ...) stays text;
+ *  12. derived: over every printable ASCII character c, the set whose "c x"
+ *      switches mode outside Command centre equals the LOCAL_MODES restrict
+ *      tokens plus `?`, and inside it (Command centre keeping > and ?, a stub
+ *      for the registry) that set minus the kept tokens.
  *
  * Each case prints `ok <case>`; the run ends `verify-address-bar-modes: PASS`
  * or one `verify-address-bar-modes: FAIL -- <case>: <got>` line per red case.
  * A derivation that finds nothing (no MODES literal, no modeLabels) or a table
  * missing an export is a FAIL, never a pass.
  *
- * --self-test: the clean tree must be green; then eleven planted copies in a
+ * --self-test: the clean tree must be green; then twelve planted copies in a
  * mkdtemp directory (the organising row removed, browsing set to history,
  * command-centre's suggestions flag set true, the fallback removed from
  * defaultModeFor, tabs and bookmarks swapped in LOCAL_MODES, one modeLabels
  * key removed, a duplicated token, the history cap dropped, the runQuery
  * guard removed, a resolve call added to command-centre.ts, the contribution
- * id changed to address) must each go red naming the case that
+ * id changed to address, tokenise accepting a token without a space) must
+ * each go red naming the case that
  * catches it. A plant whose text did not change its source fails as "plant did
  * not apply".
  *
@@ -76,7 +88,9 @@ const MODES_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-b
 const CENTRE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/command-centre.ts';
 /** D-26: the names a mode reaches chrome or an engine through while typing. */
 const TYPED_TEXT_SENDERS = ['ChromeStoreClient', 'resolveTypedAddress', 'searchSuggestions', 'autofillOrigin', 'searchPlaces', 'ChromeBarSuggestionService'];
-const EXPORTS = ['LOCAL_MODES', 'DEFAULT_MODE_BY_UI_MODE', 'defaultModeFor', 'MODE_SENDS', 'engineModeId', 'engineNameOf'];
+const EXPORTS = ['LOCAL_MODES', 'DEFAULT_MODE_BY_UI_MODE', 'defaultModeFor', 'MODE_SENDS', 'engineModeId', 'engineNameOf', 'tokenise'];
+/** SMODE-04: the token context of the planted cases -- one alias, a default engine, and Command centre keeping > and ? (a stub for the registry). */
+const TOKEN_CONTEXT = { aliases: [['@two', 'Engine Two']], defaultEngine: 'Engine One', keepInCommandCentre: token => token === '>' || token === '?' };
 
 /** The decided defaults (contract pins). */
 const DECIDED = { coding: 'command-centre', browsing: 'address', organising: 'tabs' };
@@ -211,6 +225,36 @@ function cases(m, uiModes, labelKeys, srcs) {
             const row = id !== null ? m.MODE_SENDS[id] : undefined;
             return row && FLAGS.every(f => row[f] === false) ? null : { id: id ?? `no CommandCentreAddressBarMode id in ${CENTRE_REL}`, row: row ?? null };
         }],
+        ['tokenise: a token and a space enter its mode, consumed; Command centre keeps > and ? and @ (D-18)', () => {
+            const t = (text, mode = 'address') => m.tokenise(text, mode, TOKEN_CONTEXT);
+            const got = {
+                star: t('* foo'), percent: t('% '), caret: t('^ x'), actions: t('> x'), actionsInCentre: t('> x', 'command-centre'),
+                engine: t('? x'), engineInCentre: t('? x', 'command-centre'), alias: t('@two x'), aliasCased: t('@TWO x'),
+                unknownAlias: t('@nope x'), aliasInCentre: t('@two x', 'command-centre'), starInCentre: t('* x', 'command-centre'),
+            };
+            const want = {
+                star: { mode: 'bookmarks', text: 'foo' }, percent: { mode: 'tabs', text: '' }, caret: { mode: 'history', text: 'x' },
+                actions: { mode: 'actions', text: 'x' }, actionsInCentre: null, engine: { mode: m.engineModeId('Engine One'), text: 'x' },
+                engineInCentre: null, alias: { mode: m.engineModeId('Engine Two'), text: 'x' }, aliasCased: { mode: m.engineModeId('Engine Two'), text: 'x' },
+                unknownAlias: null, aliasInCentre: null, starInCentre: { mode: 'bookmarks', text: 'x' },
+            };
+            return JSON.stringify(got) === JSON.stringify(want) ? null : got;
+        }],
+        ['tokenise: a token without a following space stays text', () => {
+            const got = ['*foo', '%', '^x', '>x', '?x', '@two', '@twox', ' * x'].map(text => [text, m.tokenise(text, 'address', TOKEN_CONTEXT)]).filter(([, r]) => r !== null);
+            return got.length ? got : null;
+        }],
+        ['tokenise: the characters whose token switches are the restrict tokens and ?, minus those Command centre keeps (derived over printable ASCII)', () => {
+            const restrict = m.LOCAL_MODES.map(entry => entry.restrictToken).filter(token => token !== undefined);
+            const printable = Array.from({ length: 0x7f - 0x21 }, (_, i) => String.fromCharCode(0x21 + i));
+            const switching = mode => printable.filter(c => m.tokenise(`${c} x`, mode, TOKEN_CONTEXT) !== null);
+            const outside = switching('address');
+            const inside = switching('command-centre');
+            const wantOutside = [...restrict, '?'];
+            const wantInside = wantOutside.filter(c => !TOKEN_CONTEXT.keepInCommandCentre(c));
+            return restrict.length && sameSet(outside, wantOutside) && sameSet(inside, wantInside)
+                ? null : { outside: sorted(outside), wantOutside: sorted(wantOutside), inside: sorted(inside), wantInside: sorted(wantInside) };
+        }],
         ['engineModeId and engineNameOf round-trip; a local id has no engine', () => {
             const got = [m.engineNameOf(m.engineModeId('Some Engine')), m.engineNameOf('tabs'), m.engineNameOf('address')];
             return JSON.stringify(got) === JSON.stringify(['Some Engine', null, null]) ? null : got;
@@ -315,6 +359,13 @@ const PLANTS = [
         expect: 'command-centre.ts sends nothing typed',
     },
     { name: 'the contribution id changed to address', rel: CENTRE_REL, from: "readonly id = 'command-centre';", to: "readonly id = 'address';", expect: 'the Command centre contribution id' },
+    {
+        name: 'tokenise accepts a token without a space',
+        rel: TABLE_REL,
+        from: "    const space = text.indexOf(' ');\n",
+        to: "    const space = text.indexOf(' ') < 0 ? 1 : text.indexOf(' ');\n",
+        expect: 'tokenise: a token without a following space stays text',
+    },
 ];
 
 async function selfTest() {

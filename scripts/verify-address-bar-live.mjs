@@ -253,6 +253,18 @@
  *               ModeService.saveCurrentAsMode (its name prompt answered)
  *               starts in defaultModeFor's fallback. Scored only after search
  *               passed.
+ *   mode-tokens  SMODE-04: with the alias @two set chrome-side on Probe
+ *               Engine Two and read back through the pill's engine list,
+ *               each typed from Address mode with an empty pill: "* " enters
+ *               Bookmarks with empty text, "% al" Tabs with "al", "^ "
+ *               History, "> " Actions, "? x" the default engine's mode with
+ *               "x", and "*x" stays Address with "*x". "@two hello" shows the
+ *               Probe Engine Two chip with "hello", and Enter GETs /two/search
+ *               with q "hello". "@" alone lists a row "@two" captioned Probe
+ *               Engine Two; choosing it enters that mode with empty text. In
+ *               Command centre "> " stays as text and lists command rows, and
+ *               "% " enters Tabs. The alias is removed afterwards. Scored
+ *               only after search passed.
  *   command-centre  SMODE-05: with a temp workspace opened once per session
  *               (README.md, src/main.py, .theia/launch.json; the Theia frame
  *               reloaded on its location.hash, then ready and opened awaited)
@@ -421,7 +433,7 @@ const stubResolve = (app, reply) => probe(app, reply === null
  * setter, then an input event). React restores the controlled value until the
  * widget re-renders, so the typed value is read back by polling.
  */
-async function typeInPill(app, text, { focused = true } = {}) {
+async function typeInPill(app, text, { focused = true, value = text } = {}) {
     if (await focusTheiaFrame(app) !== true) {
         throw new Error(`${BROKEN} the Theia frame could not be made chrome's active element`);
     }
@@ -434,8 +446,9 @@ async function typeInPill(app, text, { focused = true } = {}) {
         return true;
     })()`);
     // `focused: false`: the text may hand focus elsewhere (Command centre's hand-off to Theia's quick input).
-    const pill = typed === true ? await settle(() => readPill(app), v => (!focused || v.focused) && v.value === text) : null;
-    if (!pill || (focused && !pill.focused) || pill.value !== text) {
+    // `value`: what the pill holds afterwards when that differs from the text (a mode token is consumed).
+    const pill = typed === true ? await settle(() => readPill(app), v => (!focused || v.focused) && v.value === value) : null;
+    if (!pill || (focused && !pill.focused) || pill.value !== value) {
         throw new Error(`${BROKEN} the pill could not be focused and typed into (${JSON.stringify(pill)})`);
     }
 }
@@ -3725,6 +3738,130 @@ async function modeDefaults(ctx) {
     }
 }
 
+/** Chrome scope: sets Probe Engine Two's user alias (an empty string removes it); returns the engine's aliases read back. */
+const setEngineTwoAlias = (app, alias) => inChrome(app, `return (async () => {
+    try {
+        const engine = ${SEARCH_SERVICE}.getEngineByName(${JSON.stringify(ENGINE_TWO)});
+        engine.alias = ${JSON.stringify(alias)};
+        return JSON.stringify(engine.aliases);
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/** Re-reads chrome's engines into the AddressBar and returns Probe Engine Two's aliases as the pill now holds them. */
+const pillAliases = app => probe(app, `const bar = get('AddressBar');
+    await bar.refreshEngines();
+    return (bar.engineList?.engines ?? []).find(e => e.name === ${JSON.stringify(ENGINE_TWO)})?.aliases ?? null;`);
+
+/** Every token typed from Address mode with an empty pill, the mode id it must enter (null: Address, the text kept) and the text left. */
+const ADDRESS_TOKENS = [
+    { text: '* ', mode: 'bookmarks', left: '' },
+    { text: '% al', mode: 'tabs', left: 'al' },
+    { text: '^ ', mode: 'history', left: '' },
+    { text: '> ', mode: 'actions', left: '' },
+    { text: '? x', mode: 'default-engine', left: 'x' },
+    { text: '*x', mode: null, left: '*x' },
+];
+
+/**
+ * SMODE-04 (D-18): mode tokens typed at the start with a space enter their
+ * mode, consumed into the chip; engine aliases come from chrome's
+ * listSearchEngines reply (Gecko engine.aliases), set here on the hermetic
+ * Probe Engine Two.
+ */
+async function modeTokens(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'mode-tokens')) {
+        return 'not-scored';
+    }
+    await sessionTab(ctx);
+    const read = await setEngineTwoAlias(app, '@two');
+    const held = await pillAliases(app);
+    if (!String(read).includes('@two') || !Array.isArray(held) || !held.includes('@two')) {
+        return fail(`${BROKEN} the alias @two did not reach the pill from chrome (chrome reads ${read}, the pill holds ${JSON.stringify(held)})`);
+    }
+    if (plant === 'token-kept' && await probe(app, `get('AddressBar').applyToken = () => false; return true;`) === true) {
+        note('PLANT token-kept applied');
+    }
+    const fromEmpty = async () => {
+        await probe(app, `const bar = get('AddressBar'); bar.inputValue = ''; return true;`);
+        await restoreDefaultMode(app);
+    };
+    try {
+        const defaultEngine = await probe(app, `return get('AddressBar').effectiveEngine() ?? null;`);
+        for (const step of ADDRESS_TOKENS) {
+            await fromEmpty();
+            const want = step.mode === 'default-engine' ? MODE_TABLE.engineModeId(defaultEngine) : step.mode ?? 'address';
+            const wantLabel = await modeLabelOf(app, want);
+            const token = step.text.split(' ')[0];
+            try {
+                await typeInPill(app, step.text, { value: step.left });
+            } catch {
+                // The text was kept as typed: the mode check below names the step.
+            }
+            const state = await settle(() => modeState(app), v => v?.mode === want);
+            const view = await readMode(app);
+            if (state?.mode !== want) {
+                fail(`the ${token} token did not enter ${wantLabel}: ${JSON.stringify(step.text)} left the mode ${JSON.stringify(state?.mode)} and the text ${JSON.stringify(view?.value)}`);
+            } else if (view?.value !== step.left || (want === 'address' ? view.chip : view.label !== wantLabel)) {
+                fail(`${JSON.stringify(step.text)} must show ${want === 'address' ? 'the Address form' : `the ${wantLabel} chip`} with the text ${JSON.stringify(step.left)}; saw ${JSON.stringify(view)}`);
+            }
+        }
+
+        // @alias enters its engine, and Enter searches it.
+        await fromEmpty();
+        await typeInPill(app, '@two hello', { value: 'hello' }).catch(() => undefined);
+        const aliased = await settle(() => readMode(app), v => v?.label === ENGINE_TWO && v.value === 'hello');
+        if (aliased?.label !== ENGINE_TWO || aliased.value !== 'hello') {
+            fail(`the @two alias did not enter ${ENGINE_TWO} with the text "hello"; saw ${JSON.stringify(aliased)}`);
+        } else {
+            const getMark = pages.requests.length;
+            await pressKey(app, ENTER);
+            if (!await nextGet(pages, '/two/search', getMark, r => queryOf(r) === 'hello')) {
+                fail(`Enter after @two hello loaded no /two/search with q "hello"`);
+            }
+        }
+
+        // @ alone lists the aliased engines; choosing one enters its mode with empty text.
+        await fromEmpty();
+        await typeInPill(app, '@');
+        const listed = await settle(() => readRows(app), v => v.rows.some(r => r.title === '@two'));
+        const row = listed.rows.find(r => r.title === '@two');
+        if (!row || row.caption !== ENGINE_TWO) {
+            fail(`"@" alone must list a row titled "@two" captioned ${JSON.stringify(ENGINE_TWO)}; saw ${JSON.stringify(listed.rows.map(r => [r.title, r.caption]))}`);
+        } else {
+            await rowMouseDown(app, row.id);
+            const chosen = await settle(() => readMode(app), v => v?.label === ENGINE_TWO && v.value === '');
+            if (chosen?.label !== ENGINE_TWO || chosen.value !== '') {
+                fail(`choosing the @two row must enter ${ENGINE_TWO} with empty text; saw ${JSON.stringify(chosen)}`);
+            }
+        }
+
+        // In Command centre > stays text for Theia's commands, and % still enters Tabs.
+        await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
+        await enterCommandCentre(app);
+        await typeInPill(app, '> ').catch(() => undefined);
+        const kept = await settle(() => readCcRows(app), v => v.rows.some(r => !r.group && !r.message));
+        const keptState = await modeState(app);
+        const keptView = await readMode(app);
+        if (keptState?.mode !== 'command-centre' || keptView?.value !== '> ' || !kept.rows.some(r => !r.group && !r.message)) {
+            fail(`in Command centre "> " must stay as text and list command rows; the mode is ${JSON.stringify(keptState?.mode)}, the text ${JSON.stringify(keptView?.value)}, ${kept.rows.length} rows`);
+        }
+        await typeInPill(app, '% ', { value: '' }).catch(() => undefined);
+        const tabs = await settle(() => modeState(app), v => v?.mode === 'tabs');
+        if (tabs?.mode !== 'tabs') {
+            fail(`in Command centre the % token did not enter Tabs: the mode is ${JSON.stringify(tabs?.mode)}`);
+        }
+    } finally {
+        await probe(app, `delete get('AddressBar').applyToken; return true;`);
+        await setEngineTwoAlias(app, '');
+        await pillAliases(app);
+        await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
+        await restoreDefaultMode(app);
+    }
+}
+
 /** Enters the contributed mode `id` from the default mode through the menu, with the text cleared. */
 async function enterMode(app, id) {
     await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; return true;`);
@@ -3756,6 +3893,7 @@ const SCENARIOS = {
     'mode-lifetime': modeLifetime,
     'local-modes': localModes,
     'mode-defaults': modeDefaults,
+    'mode-tokens': modeTokens,
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
@@ -3765,7 +3903,7 @@ const SCENARIOS = {
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
     'command-centre': 'search', 'command-centre-handoff': 'command-centre',
-    'command-centre-privacy': 'search', 'mode-defaults': 'search' };
+    'command-centre-privacy': 'search', 'mode-defaults': 'search', 'mode-tokens': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -3861,6 +3999,7 @@ const PLANTS = [
     { plant: 'help-row-executes', target: 'command-centre', run: ['search', 'command-centre'], expect: 'a help row opened the centred quick input' },
     { plant: 'cc-sends', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress from Command centre' },
     { plant: 'default-ignored', target: 'mode-defaults', run: ['search', 'mode-defaults'], expect: 'Coding did not start in Command centre' },
+    { plant: 'token-kept', target: 'mode-tokens', run: ['search', 'mode-tokens'], expect: 'the * token did not enter Bookmarks' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 

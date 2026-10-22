@@ -88,3 +88,47 @@ export function engineNameOf(mode: string): string | undefined {
 export function modeKindOf(mode: ModeId): string {
     return engineNameOf(mode) === undefined ? mode : 'engine';
 }
+
+/** SMODE-04: what tokenise reads beyond the text and the mode. */
+export interface TokenContext {
+    /** Each engine alias and its engine's name, from chrome's engine list (Gecko engine.aliases). */
+    aliases: ReadonlyArray<readonly [string, string]>;
+    /** The engine searches go to now; `?` enters its mode. */
+    defaultEngine: string | undefined;
+    /** True for a token Command centre keeps as text: one that is exactly a Theia quick-access prefix. */
+    keepInCommandCentre: (token: string) => boolean;
+}
+
+/**
+ * SMODE-04 (D-18): a mode token at the start of `text`, followed by a space,
+ * enters that mode and is consumed with its space; returns the new mode and
+ * the remaining text, else null. The single-character tokens are the
+ * LOCAL_MODES restrict tokens plus `?` (the default engine's mode); `@alias`
+ * enters that alias's engine (compared case-insensitively). In Command centre
+ * a token it keeps (a Theia prefix) stays text, and so does every `@` token
+ * (the symbol hand-off). A token without a following space stays text.
+ */
+export function tokenise(text: string, mode: ModeId, context: TokenContext): { mode: ModeId; text: string } | null {
+    const space = text.indexOf(' ');
+    if (space <= 0) {
+        return null;
+    }
+    const token = text.slice(0, space);
+    const rest = text.slice(space + 1);
+    if (mode === 'command-centre' && (token.startsWith('@') || context.keepInCommandCentre(token))) {
+        return null;
+    }
+    const local = LOCAL_MODES.find(entry => entry.restrictToken === token);
+    if (local) {
+        return { mode: local.id, text: rest };
+    }
+    if (token === '?') {
+        return context.defaultEngine ? { mode: engineModeId(context.defaultEngine), text: rest } : null;
+    }
+    if (token.length > 1 && token.startsWith('@')) {
+        const folded = token.toLowerCase();
+        const pair = context.aliases.find(([alias]) => alias.toLowerCase() === folded);
+        return pair ? { mode: engineModeId(pair[1]), text: rest } : null;
+    }
+    return null;
+}
