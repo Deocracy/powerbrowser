@@ -236,7 +236,7 @@
  *               focus, typing narrows it, and Shift+Delete removes the
  *               history-only row in History. Actions: with a fresh tab
  *               current, it lists exactly the visible, enabled commands of
- *               the derived category (New Tab, not the disabled Back), and
+ *               the derived category (New Tab, not the disabled Forward), and
  *               Enter on "new" opens a new tab. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
@@ -2899,16 +2899,18 @@ const COMMAND_CATEGORY = sourceConst('theia/extensions/chrome-bar/src/browser/ch
 /** Derived now from the page realm's CommandRegistry: the labels of the visible, enabled commands in the category, and of every command in it. */
 const categoryLabels = app => probe(app, `const registry = get('CommandRegistry');
     const inCategory = registry.commands.filter(c => c.category === ${JSON.stringify(COMMAND_CATEGORY)} && c.label);
+    const owner = get('ApplicationShell').mainPanel.currentTitle?.owner;
     return {
         listed: inCategory.filter(c => registry.isVisible(c.id) && registry.isEnabled(c.id)).map(c => c.label),
         all: inCategory.map(c => c.label),
+        current: owner ? { tabId: owner.tabId ?? null, url: owner.url ?? null, canGoBack: owner.canGoBack ?? null } : null,
     };`);
 
 /**
  * SMODE-01, Actions (D-11). With a fresh web tab current (no back history),
  * the Actions list on focus equals, as a set, the labels of the visible and
- * enabled commands in the derived category, with New Tab among them and Back
- * absent (the disabled control), and nothing from outside the category.
+ * enabled commands in the derived category, with New Tab among them and
+ * Forward absent (the disabled control), and nothing from outside the category.
  * Typing "new" and Enter opens a new tab, which becomes current.
  */
 async function actionsMode(ctx) {
@@ -2923,9 +2925,11 @@ async function actionsMode(ctx) {
             note('PLANT actions-unfiltered applied');
         }
     }
-    const want = await settle(() => categoryLabels(app), v => !!v && !v.listed.includes('Back'));
-    if (!want?.listed.includes('New Tab') || want.listed.includes('Back') || !want.all.includes('Back')) {
-        return fail(`${BROKEN} with a fresh tab current the ${COMMAND_CATEGORY} commands must include an enabled New Tab and a disabled Back; derived ${JSON.stringify(want)}`);
+    // Forward is the disabled control: a tab opened on one page has nothing ahead of it. (Back is not: after a
+    // PowerBrowser-mode round trip a fresh tab can report canGoBack, recorded in the phase's deferred items.)
+    const want = await settle(() => categoryLabels(app), v => !!v && !v.listed.includes('Forward'));
+    if (!want?.listed.includes('New Tab') || want.listed.includes('Forward') || !want.all.includes('Forward')) {
+        return fail(`${BROKEN} with a fresh tab current the ${COMMAND_CATEGORY} commands must include an enabled New Tab and a disabled Forward; derived ${JSON.stringify(want)}`);
     }
     await restoreDefaultMode(app);
     await pickLocalMode(app, 'actions');
