@@ -3763,6 +3763,16 @@ run_own_checks() {
     "address-bar-rows|node $REPO_ROOT/scripts/verify-address-bar-rows.mjs"
     "address-bar-rows-self-test|node $REPO_ROOT/scripts/verify-address-bar-rows.mjs --self-test"
 
+    # NEW (30-02, SMODE-01..03): the address bar's mode table imported straight
+    # from its .ts source under Node type stripping, and compared against what
+    # the tree derives: the default table's keys against the widget's MODES
+    # literal, the LOCAL_MODES ids against the copy's modeLabels keys, the
+    # decided defaults, the Address fallback, the D-26 MODE_SENDS row and the
+    # D-08 menu order. Honestly --quick: three source reads and a mkdtemp copy
+    # per plant; no build, no browser, no display, no network.
+    "address-bar-modes|node $REPO_ROOT/scripts/verify-address-bar-modes.mjs"
+    "address-bar-modes-self-test|node $REPO_ROOT/scripts/verify-address-bar-modes.mjs --self-test"
+
     # NEW (13-05): GUI-06's bar-placement gate. Derives the contribution area
     # from the widget's addWidget call and the ratified order from the
     # UI-SPEC order line at check time and compares both; honestly --quick
