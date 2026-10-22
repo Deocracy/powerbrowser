@@ -1,6 +1,6 @@
 import * as React from '@theia/core/shared/react';
 import { createPortal } from '@theia/core/shared/react-dom';
-import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
+import { injectable, inject, named, postConstruct } from '@theia/core/shared/inversify';
 import {
     ApplicationShell,
     CommonCommands,
@@ -10,7 +10,7 @@ import {
     ReactWidget,
     Widget,
 } from '@theia/core/lib/browser';
-import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
+import { CommandMenu, CommandRegistry, CompoundMenuNode, ContributionProvider, Disposable, MenuPath } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
 import { PreferenceSchemaService, PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { NavigatableWidget } from '@theia/core/lib/browser/navigatable-types';
@@ -26,6 +26,8 @@ import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, currentWebTab, f
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
 import { PLACE_ROW_LIMIT, Row, autofillSplice, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
+import { LOCAL_MODES, MODE_SENDS, ModeId, defaultModeFor, engineModeId, engineNameOf, modeKindOf } from './address-bar-mode-table';
+import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes';
 import { CHROME_BAR_COPY, appSubject } from '../chrome-bar-copy';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
@@ -45,6 +47,18 @@ const ONE_OFF_KEY = 'oneoff:';
 
 /** BAR-11: the dropdown's tallest size (29-UI-SPEC Spacing Scale); a short window caps it at its bottom less 8px. */
 const DROPDOWN_MAX_HEIGHT = 432;
+
+/** SMODE-01: the Search Settings item's key in the modes menu; every other item's key is its mode id. */
+const SEARCH_SETTINGS_KEY = 'search-settings';
+
+/** SMODE-01: one modes-menu item: a mode (an engine's carries its name), or Search Settings (no mode). */
+interface ModeMenuItem {
+    key: string;
+    label: string;
+    icon: React.ReactNode;
+    mode?: ModeId;
+    engine?: string;
+}
 
 /** NAV-06: drag types that are links, as distinct from plain text. */
 const LINK_DRAG_TYPES = ['text/uri-list', 'text/x-moz-url'];
@@ -146,6 +160,19 @@ export class AddressBar {
 
     /** Phase 29 (BAR-04): chrome's engine list; undefined until it arrives or when it failed. */
     protected engineList: SearchEngineList | undefined;
+
+    /** Phase 30 (D-06): the contributed modes, read lazily and never at construction (D-50). */
+    @inject(ContributionProvider) @named(AddressBarModeContribution)
+    protected readonly modeProvider: ContributionProvider<AddressBarMode>;
+
+    /** Phase 30 (SMODE-03): the active mode; a picked mode returns to the default after a commit, Esc, a tab change or a PowerBrowser-mode change (D-15). */
+    protected mode: ModeId = 'address';
+    /** The PowerBrowser mode id the bar last reported; the default mode is that mode's row in the D-03 table. */
+    protected uiMode = '';
+    /** Phase 30 (SMODE-01): the modes menu is open; the element that opened it keeps focus and drives it. */
+    protected modesOpen = false;
+    /** The highlighted modes-menu item, by key. */
+    protected modesHighlight: string | undefined;
 
     /** The bar widget this renders into; its update() repaints the pill. */
     protected host: ReactWidget | undefined;
@@ -269,8 +296,35 @@ export class AddressBar {
         this.update();
     }
 
-    /** BAR-04: the User-scope engine choice when chrome lists it, else '' (chrome's default). */
+    /** Phase 30: the contributed modes of a menu group, in LOCAL_MODES order; a contribution outside the table is ignored. */
+    contributedIn(group: 'top' | 'local'): AddressBarMode[] {
+        const contributed = this.modeProvider.getContributions();
+        return LOCAL_MODES.filter(entry => entry.group === group)
+            .map(entry => contributed.find(mode => mode.id === entry.id))
+            .filter((mode): mode is AddressBarMode => mode !== undefined);
+    }
+
+    /** Phase 30 (D-03, D-17): the PowerBrowser mode's default mode; Address when that mode is not contributed. */
+    defaultMode(): ModeId {
+        return defaultModeFor(this.uiMode, id => this.modeProvider.getContributions().some(mode => mode.id === id));
+    }
+
+    /** Phase 30: an engine mode's engine name, else undefined. An instance-replaceable method, so a live plant can ignore the mode. */
+    protected modeEngine(): string | undefined {
+        return engineNameOf(this.mode);
+    }
+
+    /** Phase 30 (D-26): what the active mode may send to chrome while typing. */
+    protected modeSends(): { resolve: boolean; suggestions: boolean; autofill: boolean; places: boolean } {
+        return MODE_SENDS[modeKindOf(this.mode)] ?? MODE_SENDS['address'];
+    }
+
+    /** BAR-04: the User-scope engine choice when chrome lists it, else '' (chrome's default); an engine mode's engine first. */
     protected engineNameForRequest(): string {
+        const modeEngine = this.modeEngine();
+        if (modeEngine) {
+            return modeEngine;
+        }
         const chosen = String(this.userPreference(DEFAULT_SEARCH_ENGINE_PREFERENCE, ''));
         return chosen && this.engineList?.engines.some(engine => engine.name === chosen) ? chosen : '';
     }
@@ -562,7 +616,9 @@ export class AddressBar {
                 this.update();
             }
         }, 150);
-        const heuristic = this.store.resolveTypedAddress(prefix, this.engineNameForRequest()).then(
+        // Phase 30 (D-26): each request is sent only when the mode's MODE_SENDS row allows it.
+        const sends = this.modeSends();
+        const heuristic = !sends.resolve ? Promise.resolve() : this.store.resolveTypedAddress(prefix, this.engineNameForRequest(), false, this.modeEngine() !== undefined).then(
             resolved => {
                 if (current()) {
                     this.setHeuristic(prefix, resolved);
@@ -575,10 +631,10 @@ export class AddressBar {
                 }
             }
         );
-        if (this.autofillWanted) {
+        if (sends.autofill && this.autofillWanted) {
             void this.requestAutofill(prefix, current);
         }
-        const places = this.suggestions.searchByPrefix(prefix, PLACE_ROW_LIMIT).then(
+        const places = !sends.places ? Promise.resolve() : this.suggestions.searchByPrefix(prefix, PLACE_ROW_LIMIT).then(
             rows => {
                 if (current()) {
                     this.placeRows = this.placeRowsOf(rows as SourcedRow[]);
@@ -667,7 +723,7 @@ export class AddressBar {
      * re-resolves and refuses an address itself. A failure is silent.
      */
     protected async fetchEngineRows(prefix: string, resolved: ResolvedAddress, current: () => boolean): Promise<void> {
-        if (resolved.kind !== 'search' || !this.suggestionsOn() || this.compositionOpen) {
+        if (resolved.kind !== 'search' || !this.modeSends().suggestions || !this.suggestionsOn() || this.compositionOpen) {
             return;
         }
         let values: string[];
@@ -1021,7 +1077,8 @@ export class AddressBar {
             return undefined;
         }
         try {
-            const resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());
+            // An engine mode searches address-shaped text too, as its Enter does.
+            const resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest(), false, this.modeEngine() !== undefined);
             return (resolved.kind === 'visit' || resolved.kind === 'search') && resolved.url ? resolved.url : undefined;
         } catch {
             return undefined;
@@ -1090,11 +1147,14 @@ export class AddressBar {
      * else (refused, no reply) surfaces the contracted in-bar failure row. This widget keeps no address rule
      * of its own. Empty commits are no-ops.
      */
-    protected commitText = async (raw: string, { canonize = false }: { canonize?: boolean } = {}): Promise<void> => {
+    protected commitText = async (raw: string, { canonize = false, engine = this.modeEngine() }: { canonize?: boolean; engine?: string } = {}): Promise<void> => {
         const text = raw.trim();
         if (!text) {
             return;
         }
+        // Phase 30: an engine mode's commit always searches with that engine (forceSearch), and its retry does too.
+        const engineName = engine ?? this.engineNameForRequest();
+        const retry = (): Promise<void> => this.commitText(text, { canonize, engine });
         this.committedAddress = text;
         this.inputValue = text;
         this.commitFailed = false;
@@ -1102,22 +1162,22 @@ export class AddressBar {
         this.update();
         let resolved: ResolvedAddress | undefined;
         try {
-            resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest(), canonize);
+            resolved = await this.store.resolveTypedAddress(text, engineName, canonize, engine !== undefined);
         } catch {
             resolved = undefined;
         }
         if (resolved?.kind === 'no-engine') {
-            this.showNoSearch();
+            this.showNoSearch(retry);
             return;
         }
         if (!resolved || (resolved.kind !== 'visit' && resolved.kind !== 'search') || !resolved.url) {
-            this.showCommitFailure();
+            this.showCommitFailure(retry);
             return;
         }
         try {
             await this.openCommittedUrl(resolved.url);
         } catch {
-            this.showCommitFailure();
+            this.showCommitFailure(retry);
         }
     };
 
@@ -1387,6 +1447,7 @@ export class AddressBar {
 
     protected onInputBlur = (): void => {
         this.closeDropdown();
+        this.closeModesMenu();
         this.update();
     };
 
@@ -1604,7 +1665,9 @@ export class AddressBar {
     render(): React.ReactNode {
         const secure = this.inputValue.trim().startsWith('https://');
         const engine = this.effectiveEngine();
-        const addressLabel = engine ? CHROME_BAR_COPY.searchPlaceholder(engine) : CHROME_BAR_COPY.searchOrEnterAddress;
+        const modeEngine = this.modeEngine();
+        const addressLabel = modeEngine ? CHROME_BAR_COPY.searchWith(modeEngine)
+            : engine ? CHROME_BAR_COPY.searchPlaceholder(engine) : CHROME_BAR_COPY.searchOrEnterAddress;
         const activeIndex = this.dropdownOpen ? this.rows.findIndex(row => row.key === this.highlightKey) : -1;
         const oneOffIndex = this.dropdownOpen ? this.oneOffEngines().findIndex(engine => ONE_OFF_KEY + engine.name === this.highlightKey) : -1;
         const activeId = activeIndex >= 0 ? this.rowId(activeIndex) : oneOffIndex >= 0 ? this.oneOffId(oneOffIndex) : undefined;
@@ -1617,6 +1680,7 @@ export class AddressBar {
                 onDragLeave={this.onDropTargetDragLeave}
                 onDrop={this.onPillDrop}
             >
+                {this.renderModeButton()}
                 {secure && <span className='codicon codicon-lock pb-chrome-bar-lock' aria-hidden='true' />}
                 <input
                     className={CHROME_BAR_INPUT_CLASS}
@@ -1643,6 +1707,259 @@ export class AddressBar {
                 />
             </div>
             {this.renderDropdown()}
+            {this.renderModesMenu()}
         </>;
+    }
+
+    /** SMODE-03: a mode's label -- Address, the engine's name, or the contribution's label. */
+    protected modeLabel(mode: ModeId): string {
+        const engine = engineNameOf(mode);
+        if (engine !== undefined) {
+            return engine;
+        }
+        const local = this.modeProvider.getContributions().find(entry => entry.id === mode);
+        return local ? local.label : CHROME_BAR_COPY.addressModeLabel;
+    }
+
+    /** SMODE-03: a mode's 16px icon -- a local mode's codicon, else the engine's icon (Address: the default engine's), else the search codicon. */
+    protected modeIcon(mode: ModeId): React.ReactNode {
+        const local = this.modeProvider.getContributions().find(entry => entry.id === mode);
+        if (local) {
+            return <span className={`pb-address-mode-icon codicon ${local.iconClass}`} aria-hidden='true' />;
+        }
+        const name = mode === 'address' ? this.effectiveEngine() : engineNameOf(mode);
+        const engine = this.engineList ? this.engineList.engines.find(entry => entry.name === name) : undefined;
+        const icon = safeIcon(engine ? engine.icon : null);
+        return icon
+            ? <img className='pb-address-mode-icon' src={icon} alt='' />
+            : <span className='pb-address-mode-icon codicon codicon-search' aria-hidden='true' />;
+    }
+
+    /**
+     * SMODE-03 (D-12, D-13): the pill's first child. Address is the icon form
+     * with no label; every other mode is the chip, icon plus label. A press,
+     * or Enter, Space or ArrowDown, opens the modes menu.
+     */
+    protected renderModeButton(): React.ReactNode {
+        const label = this.modeLabel(this.mode);
+        const items = this.modesOpen ? this.modeMenuItems() : [];
+        const active = items.findIndex(item => item.key === this.modesHighlight);
+        const button = <button
+            type='button'
+            className='pb-address-mode'
+            aria-haspopup='menu'
+            aria-expanded={this.modesOpen}
+            aria-controls={this.modesOpen ? 'pb-address-modes' : undefined}
+            aria-activedescendant={active >= 0 ? this.modeItemId(active) : undefined}
+            aria-label={CHROME_BAR_COPY.chooseMode(label)}
+            onPointerEnter={e => this.hover.requestHover({
+                content: CHROME_BAR_COPY.chooseMode(label),
+                target: e.currentTarget,
+                position: 'bottom',
+                cssClasses: ['pb-chrome-bar-hover'],
+            })}
+            onClick={this.onModeButtonClick}
+            onKeyDown={this.onModeButtonKeyDown}
+            onBlur={this.onModeButtonBlur}
+        >
+            {this.modeIcon(this.mode)}
+            {this.mode !== 'address' && <span className='pb-address-mode-label'>{label}</span>}
+            <span className='pb-address-mode-chevron codicon codicon-chevron-down' aria-hidden='true' />
+        </button>;
+        return this.mode === 'address' ? button : <span className='pb-address-mode-chip'>{button}</span>;
+    }
+
+    protected onModeButtonClick = (): void => {
+        if (this.modesOpen) {
+            this.closeModesMenu();
+        } else {
+            this.openModesMenu();
+        }
+    };
+
+    protected onModeButtonKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
+        if (this.modesOpen) {
+            this.onModesKeyDown(e);
+        } else if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
+            // preventDefault: the native click that Enter and Space make would close it again.
+            e.preventDefault();
+            this.openModesMenu();
+        }
+    };
+
+    protected onModeButtonBlur = (): void => {
+        this.closeModesMenu();
+    };
+
+    /** SMODE-01: the open menu's keys, from whichever element opened it. */
+    protected onModesKeyDown(e: React.KeyboardEvent<HTMLElement>): void {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            this.closeModesMenu();
+            this.focusInputAtEnd();
+        }
+    }
+
+    /** SMODE-01: opens the modes menu with the active mode's item highlighted (none in Address); the result dropdown closes. */
+    protected openModesMenu(): void {
+        this.closeDropdown();
+        this.modesOpen = true;
+        this.modesHighlight = this.mode === 'address' ? undefined : this.mode;
+        this.update();
+    }
+
+    protected closeModesMenu(): void {
+        if (this.modesOpen) {
+            this.modesOpen = false;
+            this.modesHighlight = undefined;
+            this.update();
+        }
+    }
+
+    /**
+     * SMODE-01 (D-07, D-08): the menu's groups in order -- the top modes, one
+     * item per engine in chrome's order, the local modes, Search Settings. A
+     * group with no item is left out, and with it its separator.
+     */
+    protected modeMenuGroups(): ModeMenuItem[][] {
+        const modes = (group: 'top' | 'local'): ModeMenuItem[] => this.contributedIn(group)
+            .map(mode => ({ key: mode.id, label: mode.label, icon: this.modeIcon(mode.id), mode: mode.id }));
+        const engines = (this.engineList ? this.engineList.engines : []).map((engine): ModeMenuItem => {
+            const mode = engineModeId(engine.name);
+            return { key: mode, label: engine.name, icon: this.modeIcon(mode), mode, engine: engine.name };
+        });
+        const settings: ModeMenuItem = {
+            key: SEARCH_SETTINGS_KEY,
+            label: CHROME_BAR_COPY.searchSettings,
+            icon: <span className='pb-address-mode-icon codicon codicon-settings-gear' aria-hidden='true' />,
+        };
+        return [modes('top'), engines, modes('local'), [settings]].filter(group => group.length > 0);
+    }
+
+    protected modeMenuItems(): ModeMenuItem[] {
+        return ([] as ModeMenuItem[]).concat(...this.modeMenuGroups());
+    }
+
+    /** The DOM id of a modes-menu item, for aria-activedescendant. */
+    protected modeItemId(index: number): string {
+        return `pb-address-modes-item-${index}`;
+    }
+
+    /**
+     * SMODE-01: a mode item enters its mode; with Shift an engine item
+     * searches the text in the current tab now, with Ctrl (or a middle
+     * press) in a new background tab, and the mode is not changed. Search
+     * Settings opens the setting.
+     */
+    protected chooseModeItem(item: ModeMenuItem, how: 'pick' | 'current' | 'background'): void {
+        if (!item.mode) {
+            void this.openSearchSettings();
+        } else if (item.engine !== undefined && how !== 'pick') {
+            this.closeModesMenu();
+            void this.runOneOff(item.engine, how);
+        } else {
+            this.pickMode(item.mode);
+        }
+    }
+
+    /**
+     * SMODE-01: enters `mode`. The text is kept when it differs from the
+     * committed address and cleared when it is the page's own address; focus
+     * returns to the input with the caret at the end, and remaining text is
+     * queried again in the new mode.
+     */
+    protected pickMode(mode: ModeId): void {
+        this.closeModesMenu();
+        if (this.inputValue === this.committedAddress) {
+            this.inputValue = '';
+        }
+        this.mode = mode;
+        this.requery();
+        this.focusInputAtEnd();
+    }
+
+    /** Re-runs the query for the pill's text in the active mode; empty text only repaints. */
+    protected requery(): void {
+        if (this.inputValue.trim()) {
+            this.textEdited(this.inputValue, false);
+        } else {
+            this.update();
+        }
+    }
+
+    protected focusInputAtEnd(): void {
+        const input = this.pillRef?.querySelector('input');
+        if (input) {
+            input.focus();
+            input.setSelectionRange(this.inputValue.length, this.inputValue.length);
+        }
+    }
+
+    /** SMODE-01 (D-09): Search Settings opens Theia's preferences editor on the default-engine setting; no URL crosses to chrome. */
+    protected openSearchSettings = async (): Promise<void> => {
+        this.closeModesMenu();
+        try {
+            await this.commands.executeCommand(CommonCommands.OPEN_PREFERENCES.id, DEFAULT_SEARCH_ENGINE_PREFERENCE);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening Search Settings failed:', error instanceof Error ? error.name : typeof error);
+        }
+    };
+
+    /**
+     * SMODE-01 (D-10): the modes menu, a `.pb-chrome-bar-dropdown` body portal
+     * like the result dropdown, so layer rule (a) covers it with no new
+     * selector. Anchored at the pill's left edge.
+     */
+    protected renderModesMenu(): React.ReactNode {
+        if (!this.modesOpen) {
+            return undefined;
+        }
+        const pill = this.pillRef?.getBoundingClientRect();
+        const top = pill ? Math.round(pill.bottom + 4) : 0;
+        const style: React.CSSProperties | undefined = pill ? {
+            position: 'fixed',
+            top,
+            left: Math.round(pill.left),
+            maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)),
+        } : undefined;
+        let index = 0;
+        return createPortal(
+            <div className='pb-chrome-bar-dropdown pb-address-modes' role='menu' id='pb-address-modes' aria-label={CHROME_BAR_COPY.modesMenuLabel} style={style}>
+                <div className='pb-address-modes-heading' role='presentation'>{CHROME_BAR_COPY.oneOffLabel}</div>
+                {this.modeMenuGroups().map((group, groupIndex) => <React.Fragment key={group[0].key}>
+                    {groupIndex !== 0 && <div className='pb-address-modes-separator' role='separator' />}
+                    {group.map(item => this.renderModeItem(item, index++))}
+                </React.Fragment>)}
+            </div>,
+            document.body
+        );
+    }
+
+    /** One 32px menu item: icon, then the label with its access letter underlined. Labels render as text nodes only. */
+    protected renderModeItem(item: ModeMenuItem, index: number): React.ReactNode {
+        const highlighted = item.key === this.modesHighlight;
+        return <div
+            key={item.key}
+            id={this.modeItemId(index)}
+            role='menuitem'
+            className={'pb-address-modes-item' + (highlighted ? ' is-highlighted' : '')}
+            onMouseDown={e => {
+                // preventDefault keeps focus where it is until the choice moves it.
+                e.preventDefault();
+                if (e.button === 1) {
+                    if (item.engine !== undefined) {
+                        this.chooseModeItem(item, 'background');
+                    }
+                } else if (e.button === 0) {
+                    this.chooseModeItem(item, e.shiftKey ? 'current' : e.ctrlKey || e.metaKey ? 'background' : 'pick');
+                }
+            }}
+        >
+            {item.icon}
+            <span className='pb-address-modes-label'>
+                <span className='pb-address-modes-access'>{item.label.slice(0, 1)}</span>{item.label.slice(1)}
+            </span>
+        </div>;
     }
 }

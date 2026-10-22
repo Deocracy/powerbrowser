@@ -688,7 +688,7 @@ function selfTest() {
         {
             name: 'planted engine-host literal',
             mutate: src => src.replace(
-                'resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());',
+                'resolved = await this.store.resolveTypedAddress(text, engineName, canonize, engine !== undefined);',
                 'resolved = { kind: \'search\', url: `https://duckduckgo.com/html/?q=${text}` };'
             ),
             expect: 'duckduckgo.com',
@@ -697,7 +697,7 @@ function selfTest() {
         ...ENGINE_HOSTS.configured.map(({ host, template }) => ({
             name: `planted configured template ${template}`,
             mutate: src => src.replace(
-                'resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());',
+                'resolved = await this.store.resolveTypedAddress(text, engineName, canonize, engine !== undefined);',
                 `resolved = { kind: 'search', url: \`${template.replace(/\{searchTerms\}/g, '${text}')}\` };`
             ),
             expect: `'${host}'`,
@@ -705,7 +705,7 @@ function selfTest() {
         {
             name: 'planted Special:Search template on an unlisted host',
             mutate: src => src.replace(
-                'resolved = await this.store.resolveTypedAddress(text, this.engineNameForRequest());',
+                'resolved = await this.store.resolveTypedAddress(text, engineName, canonize, engine !== undefined);',
                 'resolved = { kind: \'search\', url: `https://wiki.example.net/wiki/Special:Search?search=${text}` };'
             ),
             expect: 'query-param search pattern',

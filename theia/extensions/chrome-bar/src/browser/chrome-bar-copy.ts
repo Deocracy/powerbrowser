@@ -34,6 +34,18 @@ export const CHROME_BAR_COPY = Object.freeze({
     selectAll: 'Select All',
     pasteFailed: (subject: string) => `${subject} couldn't read the clipboard. Press Ctrl+V to paste, then press Enter.`,
     searchSuggestionsDescription: 'Show suggestions from your search engine while you type in the address bar. What you type is sent to the search engine.',
+    // Phase 30 (SMODE-01..03): the address bar's modes. modeLabels is keyed by the LOCAL_MODES ids.
+    modeLabels: Object.freeze({
+        'command-centre': 'Command centre',
+        bookmarks: 'Bookmarks',
+        tabs: 'Tabs',
+        history: 'History',
+        actions: 'Actions',
+    }),
+    addressModeLabel: 'Address',
+    searchSettings: 'Search Settings',
+    chooseMode: (label: string) => `${label}, choose a mode`,
+    modesMenuLabel: 'Modes',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

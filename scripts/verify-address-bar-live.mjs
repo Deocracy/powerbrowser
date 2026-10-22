@@ -197,6 +197,18 @@
  *               leaves no draft. A tab C with "gone" typed is closed, and the
  *               pill shows the next current tab's own address.
  *
+ *   modes-dropdown  SMODE-01: the mode button is the pill's first child; a
+ *               trusted click on it opens .pb-address-modes, whose heading is
+ *               "This time, search with:" and whose items read, in order, the
+ *               AddressBar's contributed top modes, chrome's engines from
+ *               listSearchEngines, its contributed local modes, then the
+ *               Search Settings item (codicon-settings-gear) -- derived at
+ *               check time. Picking Probe Engine Two shows its chip and the
+ *               placeholder "Search with Probe Engine Two"; Enter on "hello"
+ *               GETs /two/search with q "hello" and nothing on /one/search.
+ *               Scored only after search passed (its GET proves the log sees
+ *               /one/search).
+ *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
 
@@ -2406,6 +2418,163 @@ async function drafts(ctx) {
     }
 }
 
+// ---- Phase 30 (SMODE-01..03): the address bar's modes ----
+
+/** The pill's mode button or chip as the user sees it, with the input's placeholder, aria-label and value. */
+const readMode = app => app.evaluate(`JSON.stringify((() => {
+    const pill = document.querySelector('.pb-chrome-bar-pill');
+    const input = document.querySelector('.pb-chrome-bar-input');
+    if (!pill || !input) return null;
+    const first = pill.firstElementChild;
+    const button = pill.querySelector('.pb-address-mode');
+    return {
+        firstIsMode: !!first && (first.matches('.pb-address-mode') || first.matches('.pb-address-mode-chip')),
+        chip: !!pill.querySelector('.pb-address-mode-chip'),
+        label: pill.querySelector('.pb-address-mode-label')?.textContent ?? null,
+        reset: !!pill.querySelector('.pb-address-mode-reset'),
+        expanded: button?.getAttribute('aria-expanded') === 'true',
+        placeholder: input.placeholder,
+        aria: input.getAttribute('aria-label'),
+        value: input.value,
+    };
+})())`).then(JSON.parse);
+
+/** The open modes menu: whether the heading comes first, its text, and each item's label and settings gear; null when closed. */
+const readModesMenu = app => app.evaluate(`JSON.stringify((() => {
+    const menu = document.querySelector('.pb-chrome-bar-dropdown.pb-address-modes');
+    if (!menu) return null;
+    const heading = menu.firstElementChild;
+    return {
+        headingFirst: !!heading && heading.classList.contains('pb-address-modes-heading'),
+        heading: heading ? heading.textContent : null,
+        items: [...menu.querySelectorAll('[role=menuitem]')].map(item => ({
+            label: item.querySelector('.pb-address-modes-label')?.textContent ?? '',
+            gear: !!item.querySelector('.codicon-settings-gear'),
+            highlighted: item.classList.contains('is-highlighted'),
+        })),
+    };
+})())`).then(JSON.parse);
+
+/** The viewport centre of the first element matching `selector` in the Theia frame, or null. */
+const centreOf = (app, selector) => app.evaluate(`JSON.stringify((() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+})())`).then(JSON.parse);
+
+/** A trusted click (BiDi pointer input) on the first element matching `selector`; throws a broken instrument when it is absent. */
+async function clickOn(app, selector) {
+    const at = await centreOf(app, selector);
+    if (!at) {
+        throw new Error(`${BROKEN} nothing to click at ${selector}`);
+    }
+    await theiaPointer(app, click(at.x, at.y));
+}
+
+/** Opens the modes menu with a trusted click on the mode button; returns the menu, or null when none opened. */
+async function openModesMenu(app) {
+    await clickOn(app, '.pb-address-mode');
+    return settle(() => readModesMenu(app), v => !!v);
+}
+
+/** Dispatches a primary mousedown (plus `init`) on the modes-menu item whose label is `label`; false when absent. */
+const modeItemMouseDown = (app, label, init = {}) => app.evaluate(`(() => {
+    const item = [...document.querySelectorAll('.pb-address-modes [role=menuitem]')]
+        .find(i => i.querySelector('.pb-address-modes-label')?.textContent === ${JSON.stringify(label)});
+    if (!item) return false;
+    item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, ...${JSON.stringify(init)} }));
+    return true;
+})()`);
+
+/** Picks the engine mode named `name` from the menu (opened here); throws a broken instrument when it cannot. */
+async function pickEngineMode(app, name) {
+    if (!await openModesMenu(app)) {
+        throw new Error(`${BROKEN} the modes menu did not open, so ${name}'s mode could not be picked`);
+    }
+    if (await modeItemMouseDown(app, name) !== true) {
+        throw new Error(`${BROKEN} the modes menu has no item named ${name}`);
+    }
+    const view = await settle(() => readMode(app), v => v?.label === name);
+    if (view?.label !== name) {
+        throw new Error(`${BROKEN} picking ${name} from the menu did not show its chip (${JSON.stringify(view)})`);
+    }
+}
+
+/** What the menu must list, derived now: the contributed top modes, chrome's engines in reply order, the contributed local modes. */
+const expectedModeLabels = app => probe(app, `const bar = get('AddressBar');
+    const list = await get('ChromeStoreClient').listSearchEngines();
+    return {
+        top: bar.contributedIn('top').map(m => m.label),
+        engines: (list?.engines ?? []).map(e => e.name),
+        local: bar.contributedIn('local').map(m => m.label),
+    };`);
+
+/** Puts the address bar back in its default mode with the menu closed, after a scenario that may have left another. */
+const restoreDefaultMode = app => probe(app, `const bar = get('AddressBar');
+    delete bar.modeEngine; delete bar.onModeReset; delete bar.resetMode;
+    bar.modesOpen = false; bar.mode = bar.defaultMode(); bar.update();
+    return true;`);
+
+async function modesDropdown(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'modes-dropdown')) {
+        return 'not-scored';
+    }
+    await sessionTab(ctx);
+    try {
+        const view = await readMode(app);
+        if (!view?.firstIsMode) {
+            fail(`the mode button must be the pill's first child, before the lock; saw ${JSON.stringify(view)}`);
+        }
+        const want = await expectedModeLabels(app);
+        if (!Array.isArray(want?.engines) || !want.engines.includes(ENGINE_TWO)) {
+            return fail(`${BROKEN} chrome's engine list does not name ${ENGINE_TWO} (${JSON.stringify(want)})`);
+        }
+        const menu = await openModesMenu(app);
+        if (!menu) {
+            return fail('a trusted click on the mode button opened no .pb-address-modes menu');
+        }
+        const expected = [...want.top, ...want.engines, ...want.local];
+        const labels = menu.items.map(i => i.label);
+        const last = menu.items[menu.items.length - 1];
+        if (!menu.headingFirst || menu.heading !== ONE_OFF_LABEL) {
+            fail(`the modes menu must start with the heading ${JSON.stringify(ONE_OFF_LABEL)}; saw ${JSON.stringify(menu.heading)}`);
+        }
+        if (JSON.stringify(labels.slice(0, -1)) !== JSON.stringify(expected) || !last?.gear || menu.items.slice(0, -1).some(i => i.gear)) {
+            fail(`the modes menu must list ${JSON.stringify(expected)} then the Search Settings item (codicon-settings-gear); saw ${JSON.stringify(menu.items)}`);
+        }
+        if (plant === 'engine-mode-ignored') {
+            if (await probe(app, `get('AddressBar').modeEngine = () => undefined; return true;`) === true) {
+                note('PLANT engine-mode-ignored applied');
+            }
+        }
+        if (await modeItemMouseDown(app, ENGINE_TWO) !== true) {
+            return fail(`${BROKEN} the modes menu has no item named ${ENGINE_TWO}`);
+        }
+        const chip = await settle(() => readMode(app), v => v?.label === ENGINE_TWO && v.placeholder === `Search with ${ENGINE_TWO}`);
+        if (chip?.label !== ENGINE_TWO) {
+            fail(`picking ${ENGINE_TWO} must show its chip labelled ${JSON.stringify(ENGINE_TWO)}; saw ${JSON.stringify(chip)}`);
+        }
+        if (chip?.placeholder !== `Search with ${ENGINE_TWO}` || chip?.aria !== `Search with ${ENGINE_TWO}`) {
+            fail(`in ${ENGINE_TWO}'s mode the placeholder and aria-label must read ${JSON.stringify(`Search with ${ENGINE_TWO}`)}; saw ${JSON.stringify(chip)}`);
+        }
+        await typeInPill(app, 'hello');
+        const getMark = pages.requests.length;
+        await pressKey(app, ENTER);
+        const got = await nextGet(pages, '/two/search', getMark, r => queryOf(r) === 'hello');
+        if (!got) {
+            fail(`no GET on /two/search with q "hello" after Enter in ${ENGINE_TWO}'s mode; requests since the mark: ${JSON.stringify(pages.requests.slice(getMark).map(r => r.path + r.search))}`);
+        }
+        const one = pages.requests.slice(getMark).filter(r => r.path === '/one/search');
+        if (one.length) {
+            fail(`Enter in ${ENGINE_TWO}'s mode searched the default engine too: ${JSON.stringify(one.map(r => r.path + r.search))}`);
+        }
+    } finally {
+        await restoreDefaultMode(app);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -2425,10 +2594,11 @@ const SCENARIOS = {
     'context-menu': contextMenu,
     'select-ime': selectIme,
     drafts,
+    'modes-dropdown': modesDropdown,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
-const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions' };
+const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -2511,6 +2681,7 @@ const PLANTS = [
     { plant: 'ime-guard-off', target: 'select-ime', run: ['suggestions', 'select-ime'], expect: 'committed during composition' },
     { plant: 'draft-lost', target: 'drafts', run: ['drafts'], expect: 'expected the draft text' },
     { plant: 'pill-drag-navigates', target: 'canonize-drop', run: ['canonize-drop'], expect: "must be left to the field" },
+    { plant: 'engine-mode-ignored', target: 'modes-dropdown', run: ['search', 'modes-dropdown'], expect: 'no GET on /two/search' },
 ];
 
 async function selfTest() {

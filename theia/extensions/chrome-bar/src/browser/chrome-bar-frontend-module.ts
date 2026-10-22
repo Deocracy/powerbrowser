@@ -12,7 +12,7 @@
  */
 
 import { ContainerModule } from '@theia/core/shared/inversify';
-import { CommandContribution } from '@theia/core/lib/common';
+import { bindContributionProvider, CommandContribution } from '@theia/core/lib/common';
 import {
     ApplicationShellOptions,
     FrontendApplicationContribution,
@@ -27,6 +27,7 @@ import { ChromeBarShortcutRelay } from './chrome-bar-shortcuts';
 import { bindChromeBarPreferences } from './chrome-bar-preferences';
 import { ChromeBarContribution, ChromeBarWidget } from './chrome-bar-widget';
 import { AddressBar } from './address-bar/address-bar';
+import { AddressBarModeContribution } from './address-bar/address-bar-modes';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
 import { TopTabsSidePanelHandler } from './side-panel-top-tabs';
@@ -78,6 +79,8 @@ export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     bind(ChromeBarWidget).toSelf().inSingletonScope();
     // 30-01 (D-04): the address pill the widget renders, static like every bind here (D-50).
     bind(AddressBar).toSelf().inSingletonScope();
+    // 30-02 (D-06): the address-bar modes contribution point, bound at load (D-50); the built-in modes bind to it in 30-03 and 30-04.
+    bindContributionProvider(bind, AddressBarModeContribution);
     bind(TabStripWidget).toSelf().inSingletonScope();
     bind(LayoutControlsWidget).toSelf().inSingletonScope();
     bind(ChromeBarContribution).toSelf().inSingletonScope();

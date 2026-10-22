@@ -593,6 +593,15 @@ const EXPECTED_NAV_COPY = new Set([
   "Paste & Go",
   "Select All",
   "${name} couldn't read the clipboard. Press Ctrl+V to paste, then press Enter.",
+  "Command centre",
+  "Bookmarks",
+  "Tabs",
+  "History",
+  "Actions",
+  "Address",
+  "Search Settings",
+  "${name}, choose a mode",
+  "Modes",
 ]);
 
 /**
@@ -738,7 +747,10 @@ function deriveNavCopyRaw(src) {
     return null;
   }
   const body = braceBody(code, code.indexOf("{", at)) ?? "";
-  return [...body.matchAll(/`(?:[^`\\]|\\.)*`|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g)].map((m) => m[0].slice(1, -1));
+  // A quoted property key (30-02: the modeLabels keys are mode ids) is not copy; its value still is.
+  return [...body.matchAll(/`(?:[^`\\]|\\.)*`|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g)]
+    .filter((m) => !(/[{,]\s*$/.test(body.slice(0, m.index)) && /^\s*:/.test(body.slice(m.index + m[0].length))))
+    .map((m) => m[0].slice(1, -1));
 }
 
 /** The internal-identifier rules every copy surface shares. */
@@ -967,6 +979,14 @@ const MODES_COPY_FAULTS = [
       ),
     }),
     expect: "Halt loading",
+  },
+  {
+    name: "a mode label under a quoted key drifted from the pinned copy",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("'command-centre': 'Command centre'", "'command-centre': 'Command center'"),
+    }),
+    expect: "Command center",
   },
   {
     name: "chrome-bar copy spells the product name as a literal",
