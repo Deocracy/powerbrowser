@@ -1548,10 +1548,12 @@ export class AddressBar {
     }
 
     /**
-     * D-26 (CR-01): Enter (Alt+Enter: in a new tab) in a local mode with typed
-     * text chooses the highlighted row, never the text itself. Pressed inside
-     * the debounce, the list settles first, so its default row (the first
-     * actionable one, 30-UI-SPEC) wins; with no row, Enter does nothing.
+     * D-26 (CR-01, WR-02): Enter (Alt+Enter: in a new tab) in a local mode
+     * with typed text chooses the highlighted row, never the text itself (no
+     * web search from Tabs, Bookmarks, History or Actions). Pressed inside the
+     * debounce, the list settles first, so its default row (the first
+     * actionable one, 30-UI-SPEC) wins; with no row (Actions with no match),
+     * Enter does nothing.
      */
     protected async enterLocalRow(mode: AddressBarMode, newTab: boolean): Promise<void> {
         const value = this.inputValue;
@@ -1617,9 +1619,9 @@ export class AddressBar {
                 void this.openHomeSettings();
                 return;
             }
-            const local = this.commandCentre();
+            const local = this.localMode();
             if (local && this.queryText()) {
-                // D-26 (CR-01): Enter, Alt+Enter and Ctrl+Enter act on a row; typed text never reaches chrome's resolve.
+                // D-26 (CR-01, WR-02): in a local mode Enter, Alt+Enter and Ctrl+Enter act on a row; typed text never reaches chrome's resolve.
                 void this.enterLocalRow(local, e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey);
                 return;
             }
