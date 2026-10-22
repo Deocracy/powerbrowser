@@ -28,6 +28,8 @@ import type { SourcedRow } from '../chrome-bar-places-suggestions';
 import { PLACE_ROW_LIMIT, Row, autofillSplice, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
 import { LOCAL_MODES, MODE_SENDS, ModeId, defaultModeFor, engineModeId, engineNameOf, modeKindOf } from './address-bar-mode-table';
 import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes';
+// Type only: command-centre.ts imports the shortcut table, which imports this file.
+import type { CommandCentreAddressBarMode } from './command-centre';
 import { CHROME_BAR_COPY, appSubject } from '../chrome-bar-copy';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
@@ -57,7 +59,8 @@ interface LocalModeCopy {
     empty: (engine: string) => string;
     noMatch: string;
     failed?: (subject: string) => string;
-    footer: string;
+    /** Absent: the mode's contribution supplies its footer (Command centre derives its address key). */
+    footer?: string;
 }
 
 /** SMODE-01: the strings of each local mode that lists its own rows (30-UI-SPEC "Strings"). */
@@ -78,6 +81,11 @@ const LOCAL_MODE_COPY: { [mode: string]: LocalModeCopy } = {
     tabs: {
         label: CHROME_BAR_COPY.searchTabs, empty: CHROME_BAR_COPY.noOtherTabs,
         noMatch: CHROME_BAR_COPY.noMatchingTabs, footer: CHROME_BAR_COPY.tabsFooter,
+    },
+    // SMODE-05: the label is the input's aria-label; the placeholder is the provider's own (D-25).
+    'command-centre': {
+        label: CHROME_BAR_COPY.modeLabels['command-centre'], empty: () => CHROME_BAR_COPY.noRecentFiles,
+        noMatch: CHROME_BAR_COPY.noMatchingResults, failed: CHROME_BAR_COPY.commandCentreFailed,
     },
 };
 
@@ -300,6 +308,12 @@ export class AddressBar {
     /** Debounced pill queries over the RPC proxy (in-tree p-debounce pin, 150ms precedent). */
     protected readonly debouncedQuery = pDebounce((prefix: string) => this.runQuery(prefix), 150);
 
+    /** Phase 30 (D-26): a mode that sends nothing while typing lists its own rows on the same debounce. */
+    protected readonly debouncedLocalQuery = pDebounce(() => {
+        const local = this.localMode();
+        return local ? this.runLocalQuery(local) : Promise.resolve();
+    }, 150);
+
     @postConstruct()
     protected init(): void {
         // Lives as long as the app, as the singleton widget did.
@@ -362,9 +376,20 @@ export class AddressBar {
         return mode && mode.provide && LOCAL_MODE_COPY[mode.id] ? mode : undefined;
     }
 
+    /** Phase 30 (SMODE-05): the Command centre contribution while it is the active mode, else undefined. */
+    protected commandCentre(): CommandCentreAddressBarMode | undefined {
+        const local = this.localMode();
+        return local && local.id === 'command-centre' ? local as CommandCentreAddressBarMode : undefined;
+    }
+
     /** Firefox's search string: empty while the pill still shows the committed address, else the trimmed text. */
     protected queryText(): string {
         return this.inputValue === this.committedAddress ? '' : this.inputValue.trim();
+    }
+
+    /** SMODE-05: the text as typed, untrimmed: a provider prefix such as "debug " ends in its space. */
+    protected rawQueryText(): string {
+        return this.inputValue === this.committedAddress ? '' : this.inputValue;
     }
 
     /**
@@ -382,18 +407,29 @@ export class AddressBar {
         this.localQuery?.cancel();
         const source = this.localQuery = new CancellationTokenSource();
         const seq = ++this.querySeq;
-        const text = this.queryText();
+        const typed = mode.id === 'command-centre' ? this.rawQueryText() : this.queryText();
+        const text = typed.trim();
         const entry = LOCAL_MODES.find(candidate => candidate.id === mode.id);
         const copy = LOCAL_MODE_COPY[mode.id];
+        // The shimmer row only past the contracted delay, while the list is still outstanding.
+        const timer = setTimeout(() => {
+            if (this.dropdownArmed && this.querySeq === seq) {
+                this.shimmer = true;
+                this.dropdownOpen = true;
+                this.update();
+            }
+        }, 150);
         let rows: Row[] | undefined;
         try {
-            rows = await mode.provide(text, source.token);
+            rows = await mode.provide(typed, source.token);
         } catch {
             rows = undefined;
         }
+        clearTimeout(timer);
         if (!this.dropdownArmed || this.querySeq !== seq || source.token.isCancellationRequested) {
             return;
         }
+        this.shimmer = false;
         const listed = (rows ?? []).slice(0, entry?.cap ?? Infinity)
             .map(row => row.url && row.icon === undefined ? { ...row, icon: this.icons[row.url] ?? null } : row);
         const search = entry?.searchRow && text ? [this.searchRowFor(text)] : [];
@@ -403,7 +439,8 @@ export class AddressBar {
         this.localMessage = rows === undefined && copy.failed ? copy.failed(appSubject())
             : listed.length ? undefined
                 : text ? copy.noMatch : copy.empty(this.effectiveEngine() ?? '');
-        this.highlightKey = text ? this.rows[0]?.key : undefined;
+        // The first row that can act; a group header or a message pick never takes the highlight.
+        this.highlightKey = text ? this.highlightKeys()[0] : undefined;
         this.dropdownOpen = true;
         this.update();
         void this.requestIcons(seq);
@@ -702,8 +739,9 @@ export class AddressBar {
         // sequence bump in closeDropdown cannot see it because the sequence
         // is taken below. Without this guard that late query re-opened the
         // dropdown over the committed page.
-        // SMODE-01: a query debounced before a switch to a local mode must not replace that mode's list.
-        if (!this.dropdownArmed || this.localMode()) {
+        // Phase 30 (D-26): a mode whose MODE_SENDS row forbids the resolve sends nothing from here; that also
+        // keeps a query debounced before a switch to a local mode from replacing the mode's list.
+        if (!this.dropdownArmed || !this.modeSends().resolve) {
             return;
         }
         const seq = ++this.querySeq;
@@ -983,12 +1021,26 @@ export class AddressBar {
             this.renderNow();
             return;
         }
-        const local = this.localMode();
-        if (local) {
-            // SMODE-01: a local mode lists its own rows, empty text included (the zero-query list).
+        if (!this.modeSends().resolve) {
+            // D-26: a mode that may not resolve typed text never reaches runQuery; a local mode lists its own
+            // rows, empty text included (the zero-query list), on a fresh token per keystroke.
+            this.localQuery?.cancel();
+            const centre = this.commandCentre();
+            if (centre && centre.handsOff(this.rawQueryText())) {
+                // D-22, D-23: no Theia provider takes this text; Theia's own quick input does, and the pill keeps it.
+                this.closeDropdown();
+                this.renderNow();
+                centre.handOff(this.rawQueryText());
+                return;
+            }
+            if (!this.localMode()) {
+                this.closeDropdown();
+                this.renderNow();
+                return;
+            }
             this.dropdownArmed = true;
             this.renderNow();
-            void this.runLocalQuery(local);
+            void this.debouncedLocalQuery();
             return;
         }
         if (!this.inputValue.trim()) {
@@ -1220,6 +1272,10 @@ export class AddressBar {
             // An action has no address to open elsewhere: it runs.
             return this.chooseRow(row);
         }
+        if (this.commandCentre()) {
+            // D-26: nothing typed in Command centre is resolved; a row with no run has nothing to open.
+            return;
+        }
         const url = await this.urlForRow(row);
         if (!url || !/^https?:\/\//i.test(url)) {
             this.showCommitFailure(() => this.openRowInNewTab(row, foreground));
@@ -1253,6 +1309,10 @@ export class AddressBar {
 
     /** Choosing a row by plain click or Enter: the heuristic commits the typed text, an open tab switches, the rest commit their address. */
     protected async chooseRow(row: Row): Promise<void> {
+        if (!row.run && (row.source === 'group' || row.source === 'pick')) {
+            // SMODE-05: a group header or a message pick (no execute) chooses nothing.
+            return;
+        }
         if (row.run) {
             // Phase 30: an action or the trailing search row; the choice ends the picked mode (D-15).
             this.inputValue = this.committedAddress;
@@ -1387,6 +1447,10 @@ export class AddressBar {
                 return;
             }
             const highlighted = this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
+            if (!highlighted && this.commandCentre()) {
+                // D-26: Command centre never sends its text to chrome's resolve; with no row chosen, Enter does nothing.
+                return;
+            }
             void (highlighted ? this.chooseRow(highlighted) : this.commitTyped());
         } else if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && this.autofillSelected(e.currentTarget)) {
             // BAR-07: Tab accepts the completion; focus and the dropdown stay. Without one, Tab moves focus as usual.
@@ -1493,7 +1557,8 @@ export class AddressBar {
 
     /** BAR-05: the row keys, then one key per one-off button: the arrow keys' one wrap-around list. */
     protected highlightKeys(): string[] {
-        return this.rows.map(row => row.key).concat(this.oneOffEngines().map(engine => ONE_OFF_KEY + engine.name));
+        // SMODE-05: group headers and picks without an execute are never highlighted.
+        return this.rows.filter(row => row.source !== 'group' && !(row.source === 'pick' && !row.run)).map(row => row.key).concat(this.oneOffEngines().map(engine => ONE_OFF_KEY + engine.name));
     }
 
     /**
@@ -1784,7 +1849,9 @@ export class AddressBar {
     /** The footer hint for the active mode. */
     protected footerText(): string {
         const local = this.localMode();
-        return local ? LOCAL_MODE_COPY[local.id].footer
+        const centre = this.commandCentre();
+        return centre ? centre.footer()
+            : local ? LOCAL_MODE_COPY[local.id].footer ?? CHROME_BAR_COPY.dropdownFooter
             : this.modeEngine() !== undefined ? CHROME_BAR_COPY.engineFooter : CHROME_BAR_COPY.dropdownFooter;
     }
 
@@ -1801,15 +1868,25 @@ export class AddressBar {
      * caption (BAR-06); choosing a row goes through chooseRow.
      */
     protected renderRow(row: Row, index: number): React.ReactNode {
+        if (row.source === 'group') {
+            // SMODE-05: a provider separator, a 24px caption header; the rule above it marks every group but the first.
+            return <div key={row.key} id={this.rowId(index)} role='presentation'
+                className={'pb-chrome-bar-row is-group' + (index > 0 ? ' has-rule' : '')}>{row.title}</div>;
+        }
         const highlighted = row.key === this.highlightKey;
-        const message = row.source === 'heuristic' && (this.providerFailed || this.heuristicNoEngine);
+        const message = (row.source === 'heuristic' && (this.providerFailed || this.heuristicNoEngine)) || (row.source === 'pick' && !row.run);
         const icon = iconFor(row);
+        const titleLine = <>
+            <div className='pb-chrome-bar-row-title' title={row.title}>{row.title}</div>
+            <div className='pb-chrome-bar-row-caption' title={row.caption}>{row.caption}</div>
+        </>;
         return <div
             key={row.key}
             id={this.rowId(index)}
             role='option'
             aria-selected={highlighted}
-            className={'pb-chrome-bar-row' + (highlighted ? ' is-highlighted' : '') + (message ? ' is-message' : '')}
+            aria-disabled={row.source === 'pick' && !row.run ? true : undefined}
+            className={'pb-chrome-bar-row' + (highlighted ? ' is-highlighted' : '') + (message ? ' is-message' : '') + (row.detail ? ' has-detail' : '')}
             onMouseDown={e => {
                 // preventDefault keeps focus in the pill and stops a middle-button autoscroll.
                 e.preventDefault();
@@ -1823,14 +1900,20 @@ export class AddressBar {
         >
             {this.providerFailed && row.source === 'heuristic' ? (
                 <div className='pb-chrome-bar-row-title'>{CHROME_BAR_COPY.suggestionsFailed(appSubject())}</div>
-            ) : message ? (
+            ) : message && row.source === 'heuristic' ? (
                 <div className='pb-chrome-bar-row-title'>{CHROME_BAR_COPY.noSearch(appSubject())}</div>
             ) : <>
                 {'image' in icon.leading
                     ? <img className='pb-chrome-bar-row-icon' src={icon.leading.image} alt='' />
-                    : <span className={`pb-chrome-bar-row-icon codicon ${icon.leading.codicon}`} aria-hidden='true' />}
-                <div className='pb-chrome-bar-row-title' title={row.title}>{row.title}</div>
-                <div className='pb-chrome-bar-row-caption' title={row.caption}>{row.caption}</div>
+                    : 'classes' in icon.leading
+                        ? <span className={`pb-chrome-bar-row-icon ${icon.leading.classes}`} aria-hidden='true' />
+                        : <span className={`pb-chrome-bar-row-icon codicon ${icon.leading.codicon}`} aria-hidden='true' />}
+                {row.detail
+                    ? <div className='pb-chrome-bar-row-lines'>
+                        <div className='pb-chrome-bar-row-line'>{titleLine}</div>
+                        <div className='pb-chrome-bar-row-detail' title={row.detail}>{row.detail}</div>
+                    </div>
+                    : titleLine}
                 {icon.trailing && <span className={`pb-chrome-bar-row-type codicon ${icon.trailing}`} aria-hidden='true' />}
                 {!!row.badges?.length && <span className='pb-chrome-bar-row-badges'>
                     {row.badges.map(badge => <span key={badge} className='pb-chrome-bar-row-badge'>{badge}</span>)}

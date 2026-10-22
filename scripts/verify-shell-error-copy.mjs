@@ -619,6 +619,10 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} couldn't load your history. Keep typing to try again.",
   "Enter switches to the tab · Esc closes suggestions",
   "Enter runs the action · Esc closes suggestions",
+  "No recent files. Type a file name, or > to run a command.",
+  "No matching results. Type ? to see what you can search.",
+  "${name} couldn't load these results. Keep typing to try again.",
+  "Enter opens · Type ? for more · ${name} enters an address · Esc closes",
 ]);
 
 /**

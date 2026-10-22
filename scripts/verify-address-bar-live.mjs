@@ -238,10 +238,23 @@
  *               current, it lists exactly the visible, enabled commands of
  *               the derived category (New Tab, not the disabled Forward), and
  *               Enter on "new" opens a new tab. Scored only after search passed.
+ *   command-centre  SMODE-05: with a temp workspace opened once per session
+ *               (README.md, src/main.py, .theia/launch.json; the Theia frame
+ *               reloaded on its location.hash, then ready and opened awaited)
+ *               and Command centre picked from the menu, "view exp" shows an
+ *               Explorer row under the pill, and Enter on it opens the left
+ *               panel (collapsed first) with no centred quick input showing;
+ *               "READ" shows a group header and a README.md row (the
+ *               positive control that file search reaches the workspace), and
+ *               Enter on it makes an editor on README.md the shell's current
+ *               widget. Scored only after search passed.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
     appNameExpr,
     BROKEN,
@@ -249,6 +262,8 @@ import {
     focusOverlay,
     focusTheiaFrame,
     inChrome,
+    installFireRecorder,
+    installPushRecorder,
     loadedAt,
     makeCurrent,
     openWebTab,
@@ -260,7 +275,7 @@ import {
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
-import { pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
+import { GET_BY_NAME, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-address-bar-live';
 const ENTER = { key: 'Enter', code: 'Enter', keyCode: 13 };
@@ -2957,8 +2972,9 @@ async function actionsMode(ctx) {
 /** The open-tab rows in the dropdown, in order. */
 const tabRowsOf = view => view.rows.filter(r => r.type === 'codicon-browser');
 
-/** The label of the contributed local mode `id`, read from the AddressBar's own contributions; null when not contributed. */
-const localModeLabel = (app, id) => probe(app, `return get('AddressBar').contributedIn('local').find(m => m.id === ${JSON.stringify(id)})?.label ?? null;`);
+/** The label of the contributed mode `id` (top or local group), read from the AddressBar's own contributions; null when not contributed. */
+const localModeLabel = (app, id) => probe(app, `const bar = get('AddressBar');
+    return [...bar.contributedIn('top'), ...bar.contributedIn('local')].find(m => m.id === ${JSON.stringify(id)})?.label ?? null;`);
 
 /** Picks the contributed local mode `id` from the menu (opened here); throws a broken instrument when it cannot. */
 async function pickLocalMode(app, id) {
@@ -3104,6 +3120,164 @@ async function localModes(ctx) {
     }
 }
 
+/** The fixture's one launch configuration, so the debug provider has a pick (30-RESEARCH Open Question 2). */
+const LAUNCH_NAME = 'Probe Launch';
+
+/**
+ * Pitfall 7: a temp workspace opened once per session. The Theia frame is
+ * reloaded on its location.hash, so the page realm's recorders are installed
+ * again and the session's web tab is forgotten (later scenarios open their
+ * own). Plants must be applied after this returns: the reload starts a fresh
+ * container.
+ */
+async function openWorkspace(ctx) {
+    const { app, shared } = ctx;
+    if (shared.workspace) {
+        return shared.workspace;
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'pb-cc-ws-'));
+    shared.cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(join(dir, 'README.md'), '# Probe workspace\n');
+    mkdirSync(join(dir, 'src'));
+    writeFileSync(join(dir, 'src', 'main.py'), 'print("probe")\n');
+    mkdirSync(join(dir, '.theia'));
+    writeFileSync(join(dir, '.theia', 'launch.json'), JSON.stringify({
+        version: '0.2.0',
+        configurations: [{ type: 'node', request: 'launch', name: LAUNCH_NAME, program: '${workspaceFolder}/src/main.py' }],
+    }, null, 4));
+    await app.evaluate(`(() => { window.location.hash = ${JSON.stringify(dir)}; window.location.reload(); return true; })()`).catch(() => null);
+    await sleep(3000);
+    try {
+        await pollFor(() => app.evaluate(`(() => {
+            try {
+                ${GET_BY_NAME}
+                const c = window.theia.container;
+                return __getByName(c, 'FrontendApplicationStateService').state === 'ready' && __getByName(c, 'WorkspaceService').opened;
+            } catch (e) { return false; }
+        })()`), 120000, 'the fixture workspace');
+    } catch {
+        throw new Error(`${BROKEN} the fixture workspace ${dir} did not open after the reload`);
+    }
+    await installPushRecorder(app);
+    await installFireRecorder(app);
+    shared.tabId = undefined;
+    shared.workspace = dir;
+    return dir;
+}
+
+/** The result dropdown's Command-centre rows in order: group headers and pick rows (message picks included), the mode's own message rows apart. */
+const readCcRows = app => app.evaluate(`JSON.stringify((() => {
+    const dd = document.querySelector('.pb-chrome-bar-dropdown:not(.pb-address-modes)');
+    if (!dd) return { open: false, rows: [], messages: [], footer: null };
+    const rows = [...dd.querySelectorAll('.pb-chrome-bar-row:not(.is-shimmer)')]
+        .filter(r => r.classList.contains('is-group') || r.querySelector('.pb-chrome-bar-row-title'))
+        .map(r => r.classList.contains('is-group')
+            ? { group: true, text: r.textContent || '' }
+            : {
+                group: false,
+                text: r.querySelector('.pb-chrome-bar-row-title').textContent || '',
+                selected: r.getAttribute('aria-selected') === 'true',
+                message: r.classList.contains('is-message'),
+                badges: [...r.querySelectorAll('.pb-chrome-bar-row-badge')].map(b => b.textContent),
+                icons: [...r.querySelectorAll('.pb-chrome-bar-row-title .codicon')].map(i => i.className),
+                height: r.getBoundingClientRect().height,
+            });
+    const messages = [...dd.querySelectorAll('.pb-chrome-bar-row.is-message')].filter(r => !r.querySelector('.pb-chrome-bar-row-title')).map(r => r.textContent);
+    return { open: true, rows, messages, footer: (dd.querySelector('.pb-chrome-bar-dropdown-footer') || {}).textContent ?? null };
+})())`).then(JSON.parse);
+
+/** The centred stock quick input when it shows (a non-zero rect), with its input's value; null when hidden. */
+const readQuickInput = app => app.evaluate(`JSON.stringify((() => {
+    const w = [...document.querySelectorAll('.quick-input-widget')].find(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+    return w ? { value: (w.querySelector('input') || {}).value ?? null } : null;
+})())`).then(JSON.parse);
+
+/** The shell's panels, its current widget's editor file name, and whether the pill input has focus. */
+const shellState = app => probe(app, `const shell = get('ApplicationShell');
+    const w = shell.currentWidget;
+    return {
+        left: shell.isExpanded('left'),
+        bottom: shell.isExpanded('bottom'),
+        current: w && w.editor && w.editor.uri ? w.editor.uri.path.base : (w ? w.id : null),
+        pillActive: document.activeElement === document.querySelector('.pb-chrome-bar-input'),
+    };`);
+
+/** Presses ArrowDown until the selected Command-centre row's text is `text` (at most 40 presses); returns the last view. */
+async function highlightPick(app, text) {
+    let view = await readCcRows(app);
+    for (let i = 0; i < 40 && !view.rows.some(r => r.selected && r.text === text); i++) {
+        const was = view.rows.findIndex(r => r.selected);
+        await pressKey(app, ARROW_DOWN);
+        view = await settle(() => readCcRows(app), v => v.rows.findIndex(r => r.selected) !== was);
+    }
+    return view;
+}
+
+/** Enters Command centre from the default mode through the menu, with the text cleared. */
+async function enterCommandCentre(app) {
+    await restoreDefaultMode(app);
+    return pickLocalMode(app, 'command-centre');
+}
+
+/**
+ * SMODE-05: Theia's picks under the pill, run on Enter. In the fixture
+ * workspace, "view exp" lists Explorer and Enter opens the left panel with no
+ * centred quick input; "READ" lists a group header and README.md (file search
+ * reaches the workspace), and Enter opens it as the current editor.
+ */
+async function commandCentre(ctx) {
+    const { app, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'command-centre')) {
+        return 'not-scored';
+    }
+    await openWorkspace(ctx);
+    if (plant === 'picks-dropped' && await probe(app, `get('CommandCentreAddressBarMode').provide = async () => []; return true;`) === true) {
+        note('PLANT picks-dropped applied');
+    }
+    try {
+        await enterCommandCentre(app);
+        await probe(app, `await get('ApplicationShell').collapsePanel('left'); return true;`);
+        if ((await settle(() => shellState(app), v => !v.left)).left) {
+            return fail(`${BROKEN} the left panel could not be collapsed before the Explorer step`);
+        }
+        await typeInPill(app, 'view exp');
+        const views = await settle(() => readCcRows(app), v => v.rows.some(r => !r.group && r.text === 'Explorer'));
+        if (!views.rows.some(r => !r.group && r.text === 'Explorer')) {
+            return fail(`no Explorer row under the pill for "view exp" in Command centre; saw ${JSON.stringify(views)}`);
+        }
+        if (!(await highlightPick(app, 'Explorer')).rows.some(r => r.selected && r.text === 'Explorer')) {
+            return fail(`${BROKEN} the Explorer row could not be highlighted with ArrowDown`);
+        }
+        await pressKey(app, ENTER);
+        const opened = await settle(() => shellState(app), v => v.left);
+        if (!opened.left) {
+            fail(`Enter on the Explorer pick did not open the left panel; shell ${JSON.stringify(opened)}`);
+        }
+        const centred = await readQuickInput(app);
+        if (centred) {
+            fail(`the centred quick input showed after the Explorer pick (${JSON.stringify(centred)}); Command centre runs picks under the pill`);
+        }
+
+        await enterCommandCentre(app);
+        await typeInPill(app, 'READ');
+        const files = await settle(() => readCcRows(app), v => v.rows.some(r => r.group) && v.rows.some(r => !r.group && r.text === 'README.md'));
+        if (!files.rows.some(r => r.group) || !files.rows.some(r => !r.group && r.text === 'README.md')) {
+            return fail(`no group header and README.md row for "READ": file search did not reach the workspace; saw ${JSON.stringify(files)}`);
+        }
+        if (!(await highlightPick(app, 'README.md')).rows.some(r => r.selected && r.text === 'README.md')) {
+            return fail(`${BROKEN} the README.md row could not be highlighted with ArrowDown`);
+        }
+        await pressKey(app, ENTER);
+        const editor = await settle(() => shellState(app), v => v.current === 'README.md', 15000);
+        if (editor.current !== 'README.md') {
+            fail(`Enter on the README.md pick must make an editor on README.md the shell's current widget; shell ${JSON.stringify(editor)}`);
+        }
+    } finally {
+        await probe(app, `delete get('CommandCentreAddressBarMode').provide; return true;`);
+        await restoreDefaultMode(app);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -3127,19 +3301,22 @@ const SCENARIOS = {
     'mode-chip': modeChip,
     'mode-lifetime': modeLifetime,
     'local-modes': localModes,
+    // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
+    'command-centre': commandCentre,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
-const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search' };
+const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
+    'command-centre': 'search' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
     const pages = await serveNavPages(PAGES);
+    const shared = { cleanups: [] };
     try {
         return await withProbeShell(async app => {
             await installEngine(app, pages);
             const results = [];
-            const shared = {};
             for (const name of names) {
                 const result = { name, failures: [], notes: [], notScored: false, passNotes: [] };
                 const ctx = {
@@ -3161,6 +3338,9 @@ async function runSession(names, plant = '') {
         });
     } finally {
         await pages.close();
+        for (const cleanup of shared.cleanups) {
+            cleanup();
+        }
     }
 }
 
@@ -3219,6 +3399,7 @@ const PLANTS = [
     { plant: 'tabs-lists-active', target: 'local-modes', run: ['search', 'local-modes'], expect: 'the active tab is listed' },
     { plant: 'restrict-dropped', target: 'local-modes', run: ['search', 'local-modes'], expect: 'expected the seeded bookmarks newest first' },
     { plant: 'actions-unfiltered', target: 'local-modes', run: ['search', 'local-modes'], expect: 'listed a command outside the Browser category' },
+    { plant: 'picks-dropped', target: 'command-centre', run: ['search', 'command-centre'], expect: 'no Explorer row' },
 ];
 
 async function selfTest() {

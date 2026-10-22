@@ -10,10 +10,10 @@
  * `verify-address-bar-rows: FAIL -- <case>: <got>` line per red case. A module
  * missing any of its exports is a broken instrument, never a pass.
  *
- * --self-test: the clean module must be green; then five copies of it in a
+ * --self-test: the clean module must be green; then six copies of it in a
  * mkdtemp directory, each with one planted fault (ROW_LIMIT 11, the tab-wins
- * rule inverted, the highlight wrap removed, safeIcon accepting http,
- * autofillSplice comparing case-sensitively), must
+ * rule inverted, the highlight wrap removed, safeIcon accepting http, a
+ * pick's icon classes dropped, autofillSplice comparing case-sensitively), must
  * each go red naming the case that catches it. A plant whose text did not
  * change the module fails as "plant did not apply".
  *
@@ -124,6 +124,23 @@ function cases(m) {
             const want = { leading: { codicon: 'codicon-zap' }, trailing: null };
             return same(got, [want, want]) ? null : got;
         }],
+        ['a Command-centre pick: its icon classes as given, an empty slot without any, no type marker', () => {
+            const got = [
+                m.iconFor(row('pick', '', { iconClasses: ['book-icon', 'medium-blue', 'file-icon'] })),
+                m.iconFor(row('pick', '')),
+                m.iconFor(row('pick', '', { iconClasses: ['codicon', 'codicon-add'], icon: 'data:image/png;base64,AA' })),
+            ];
+            const want = [
+                { leading: { classes: 'book-icon medium-blue file-icon' }, trailing: null },
+                { leading: { classes: '' }, trailing: null },
+                { leading: { classes: 'codicon codicon-add' }, trailing: null },
+            ];
+            return same(got, want) ? null : got;
+        }],
+        ['a group header has no icon classes of its own: the globe, never a pick slot', () => {
+            const got = m.iconFor(row('group', ''));
+            return same(got, { leading: { codicon: 'codicon-globe' }, trailing: null }) ? null : got;
+        }],
         ['safeIcon keeps a bounded data:image/ URI and nothing else', () => {
             const png = 'data:image/png;base64,AA';
             const got = [
@@ -218,6 +235,12 @@ const PLANTS = [
         from: "src.startsWith('data:image/')",
         to: "(src.startsWith('data:image/') || src.startsWith('http'))",
         expect: 'safeIcon keeps',
+    },
+    {
+        name: 'pick icon classes dropped',
+        from: "return { leading: { classes: (row.iconClasses ?? []).join(' ') }, trailing };",
+        to: "return { leading: { codicon: 'codicon-globe' }, trailing };",
+        expect: 'a Command-centre pick',
     },
     {
         name: 'autofillSplice case-sensitive',

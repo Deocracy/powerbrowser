@@ -64,6 +64,11 @@ export const CHROME_BAR_COPY = Object.freeze({
     historyFailed: (subject: string) => `${subject} couldn't load your history. Keep typing to try again.`,
     tabsFooter: 'Enter switches to the tab · Esc closes suggestions',
     actionsFooter: 'Enter runs the action · Esc closes suggestions',
+    // Phase 30 (SMODE-05): Command centre's rows and footer; {addressKey} is the address key's shortcut label.
+    noRecentFiles: 'No recent files. Type a file name, or > to run a command.',
+    noMatchingResults: 'No matching results. Type ? to see what you can search.',
+    commandCentreFailed: (subject: string) => `${subject} couldn't load these results. Keep typing to try again.`,
+    commandCentreFooter: (addressKey: string) => `Enter opens · Type ? for more · ${addressKey} enters an address · Esc closes`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

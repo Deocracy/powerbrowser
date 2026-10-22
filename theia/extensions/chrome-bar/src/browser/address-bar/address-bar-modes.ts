@@ -35,7 +35,7 @@ type LabelledModeId = keyof typeof CHROME_BAR_COPY.modeLabels;
 
 /** A built-in mode's static fields, read from its LOCAL_MODES row and its modeLabels copy. */
 @injectable()
-abstract class BuiltInAddressBarMode implements AddressBarMode {
+export abstract class BuiltInAddressBarMode implements AddressBarMode {
     abstract readonly id: LabelledModeId;
 
     get label(): string {

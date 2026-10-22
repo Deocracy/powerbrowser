@@ -426,6 +426,54 @@
     white-space: nowrap;
 }
 
+/* SMODE-05: a provider separator as a 24px caption header; every group but the first carries a 1px rule. */
+.pb-chrome-bar-row.is-group {
+    height: 24px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted, #9a99a8);
+    cursor: default;
+    border-radius: 0;
+}
+
+.pb-chrome-bar-row.is-group:hover {
+    background: transparent;
+}
+
+.pb-chrome-bar-row.is-group.has-rule {
+    border-top: 1px solid var(--color-border, #3f3e4a);
+}
+
+/* SMODE-05: a pick with a detail is a 48px two-line row (title line 21px, detail line 18px). */
+.pb-chrome-bar-row.has-detail {
+    height: 48px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.pb-chrome-bar-row-lines {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.pb-chrome-bar-row-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.pb-chrome-bar-row-detail {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted, #9a99a8);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* SMODE-01: the modes menu, a .pb-chrome-bar-dropdown anchored at the pill's left edge. */
 .pb-chrome-bar-dropdown.pb-address-modes {
     right: auto;

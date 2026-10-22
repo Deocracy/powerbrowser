@@ -30,6 +30,7 @@ import { AddressBar } from './address-bar/address-bar';
 import {
     ActionsAddressBarMode, AddressBarModeContribution, BookmarksAddressBarMode, HistoryAddressBarMode, TabsAddressBarMode,
 } from './address-bar/address-bar-modes';
+import { CommandCentreAddressBarMode } from './address-bar/command-centre';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
 import { TopTabsSidePanelHandler } from './side-panel-top-tabs';
@@ -92,6 +93,9 @@ export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     bind(AddressBarModeContribution).toService(HistoryAddressBarMode);
     bind(ActionsAddressBarMode).toSelf().inSingletonScope();
     bind(AddressBarModeContribution).toService(ActionsAddressBarMode);
+    // 30-04 (SMODE-05): Command centre, bound at load like the rest (D-50), so Coding starts in it.
+    bind(CommandCentreAddressBarMode).toSelf().inSingletonScope();
+    bind(AddressBarModeContribution).toService(CommandCentreAddressBarMode);
     bind(TabStripWidget).toSelf().inSingletonScope();
     bind(LayoutControlsWidget).toSelf().inSingletonScope();
     bind(ChromeBarContribution).toSelf().inSingletonScope();

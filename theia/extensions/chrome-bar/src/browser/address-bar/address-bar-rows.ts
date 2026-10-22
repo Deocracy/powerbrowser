@@ -10,7 +10,7 @@
  * must stay dependency-free.
  */
 
-export type RowSource = 'heuristic' | 'search' | 'history' | 'bookmark' | 'tab' | 'action';
+export type RowSource = 'heuristic' | 'search' | 'history' | 'bookmark' | 'tab' | 'action' | 'pick' | 'group';
 
 /** One dropdown row. `key` is stable across arrivals; an engine row's url is empty until resolved. */
 export interface Row {
@@ -25,8 +25,12 @@ export interface Row {
     widgetId?: string;
     /** Phase 30: an Actions row's keybinding labels, shown trailing. */
     badges?: string[];
-    /** Phase 30: what choosing the row does, when it is not an address (an action, the trailing search row). */
+    /** Phase 30: what choosing the row does, when it is not an address (an action, the trailing search row, a pick). */
     run?: () => void | Promise<void>;
+    /** Phase 30 (SMODE-05): a Command-centre pick's second line. */
+    detail?: string;
+    /** Phase 30 (SMODE-05): a pick's own icon classes, applied as given (file-icon theme, codicons). */
+    iconClasses?: string[];
 }
 
 export const ENGINE_ROW_LIMIT = 4;
@@ -75,7 +79,7 @@ export function nextHighlight(keys: string[], current: string | undefined, step:
     return keys[(from + step + keys.length) % keys.length];
 }
 
-export type RowIcon = { image: string } | { codicon: string };
+export type RowIcon = { image: string } | { codicon: string } | { classes: string };
 
 const TYPE_MARKERS: { [source: string]: string } = {
     history: 'codicon-history',
@@ -91,6 +95,10 @@ const TYPE_MARKERS: { [source: string]: string } = {
  */
 export function iconFor(row: Row): { leading: RowIcon; trailing: string | null } {
     const trailing = TYPE_MARKERS[row.source] ?? null;
+    if (row.iconClasses || row.source === 'pick') {
+        // SMODE-05: a pick's icon classes as given; a pick without any (most commands) keeps an empty slot.
+        return { leading: { classes: (row.iconClasses ?? []).join(' ') }, trailing };
+    }
     if (row.source === 'action') {
         return { leading: { codicon: 'codicon-zap' }, trailing: null };
     }
