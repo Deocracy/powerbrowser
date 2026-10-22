@@ -6,6 +6,8 @@
  * and (Phase 29, BAR-11) each carries its source for the row's type marker.
  */
 import { inject, injectable } from '@theia/core/shared/inversify';
+import { ApplicationShell } from '@theia/core/lib/browser';
+import { WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import type { TabQueryRow } from '@powerbrowser/tab-uris/lib/node/tab-query-service';
 import { ChromeStoreClient, PlaceMatch } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import { CHROME_SUGGESTION_LIMIT, ChromeBarSuggestionService, ChromeBarTabSuggestions } from './chrome-bar-suggestion-service';
@@ -21,6 +23,9 @@ export class ChromeBarPlacesSuggestions implements ChromeBarSuggestionService {
     @inject(ChromeStoreClient)
     protected readonly store: ChromeStoreClient;
 
+    @inject(ApplicationShell)
+    protected readonly shell: ApplicationShell;
+
     async searchByPrefix(prefix: string, limit: number): Promise<SourcedRow[]> {
         const cap = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), CHROME_SUGGESTION_LIMIT) : CHROME_SUGGESTION_LIMIT;
         const [tabRows, places] = await Promise.all([
@@ -31,10 +36,16 @@ export class ChromeBarPlacesSuggestions implements ChromeBarSuggestionService {
                 return [];
             }),
         ]);
+        // An open-tab row is kept only while a web tab in the shell shows that
+        // address (a stock-window tab or a closed tab's store row is dropped),
+        // before it can take a place row's slot or hide its address.
+        const open = new Set(this.shell.getWidgets('main')
+            .filter((w): w is WebTabWidget => w instanceof WebTabWidget && w.hasPage)
+            .map(w => w.url));
         const seen = new Set<string>();
         const rows: SourcedRow[] = [];
         for (const row of tabRows) {
-            if (!seen.has(row.url)) {
+            if (open.has(row.url) && !seen.has(row.url)) {
                 seen.add(row.url);
                 rows.push({ ...row, source: 'tab' });
             }

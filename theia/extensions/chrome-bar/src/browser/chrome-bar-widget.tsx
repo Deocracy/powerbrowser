@@ -1008,16 +1008,12 @@ export class ChromeBarWidget extends ReactWidget {
     }
 
     /**
-     * BAR-11: sourced service rows as dropdown rows. An open-tab row is kept
-     * only while a web tab in the shell shows that address (a closed tab's
-     * store row is dropped); a row with no title shows its address.
+     * BAR-11: sourced service rows as dropdown rows (the service keeps an
+     * open-tab row only while a shell web tab shows it); a row with no title
+     * shows its address.
      */
     protected placeRowsOf(rows: SourcedRow[]): Row[] {
-        const open = new Set(this.shell.getWidgets('main')
-            .filter((w): w is WebTabWidget => w instanceof WebTabWidget && w.hasPage)
-            .map(w => w.url));
         return rows
-            .filter(row => row.source !== 'tab' || open.has(row.url))
             .map(row => ({ key: `${row.source}:${row.url}`, source: row.source, title: row.title || row.url, caption: row.url, url: row.url }));
     }
 
@@ -1284,7 +1280,7 @@ export class ChromeBarWidget extends ReactWidget {
         }
     };
 
-    /** BAR-06: the live web tab showing an open-tab row's address (the match placeRowsOf keeps tab rows by). */
+    /** BAR-06: the live web tab showing an open-tab row's address (the match the places service keeps tab rows by). */
     protected liveTabFor(row: Row): WebTabWidget | undefined {
         return this.shell.getWidgets('main')
             .find((w): w is WebTabWidget => w instanceof WebTabWidget && w.hasPage && w.url === row.url);
