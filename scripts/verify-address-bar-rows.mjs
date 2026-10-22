@@ -32,7 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-address-bar-rows';
-const MODULE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar-rows.ts';
+const MODULE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-bar-rows.ts';
 const EXPORTS = ['composeRows', 'nextHighlight', 'iconFor', 'safeIcon', 'autofillSplice', 'isCanonizable', 'ENGINE_ROW_LIMIT', 'PLACE_ROW_LIMIT', 'ROW_LIMIT'];
 
 const row = (source, url, extra = {}) => ({ key: `${source}:${url}`, source, title: url, caption: '', url, ...extra });

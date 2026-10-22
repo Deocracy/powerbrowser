@@ -26,6 +26,7 @@ import { ChromeBarKeybindingContribution } from './chrome-bar-keybindings';
 import { ChromeBarShortcutRelay } from './chrome-bar-shortcuts';
 import { bindChromeBarPreferences } from './chrome-bar-preferences';
 import { ChromeBarContribution, ChromeBarWidget } from './chrome-bar-widget';
+import { AddressBar } from './address-bar/address-bar';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
 import { TopTabsSidePanelHandler } from './side-panel-top-tabs';
@@ -75,6 +76,8 @@ export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     bind(ChromeBarKeybindingContribution).toSelf().inSingletonScope();
     bind(KeybindingContribution).toService(ChromeBarKeybindingContribution);
     bind(ChromeBarWidget).toSelf().inSingletonScope();
+    // 30-01 (D-04): the address pill the widget renders, static like every bind here (D-50).
+    bind(AddressBar).toSelf().inSingletonScope();
     bind(TabStripWidget).toSelf().inSingletonScope();
     bind(LayoutControlsWidget).toSelf().inSingletonScope();
     bind(ChromeBarContribution).toSelf().inSingletonScope();

@@ -19,7 +19,7 @@ import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { CHROME_BAR_NEW_TAB_COMMAND_ID, focusAddressPill } from './chrome-bar-commands';
-import { ChromeBarWidget } from './chrome-bar-widget';
+import { AddressBar } from './address-bar/address-bar';
 import { TabStripWidget } from './tab-strip-widget';
 
 export interface PageShortcut {
@@ -114,8 +114,8 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
     @inject(CommandRegistry)
     protected readonly commands: CommandRegistry;
 
-    @inject(ChromeBarWidget)
-    protected readonly bar: ChromeBarWidget;
+    @inject(AddressBar)
+    protected readonly addressBar: AddressBar;
 
     @inject(TabStripWidget)
     protected readonly strip: TabStripWidget;
@@ -137,7 +137,7 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['hardReloadF5', tab => tab.reload(true)],
         ['back', tab => tab.canGoBack && tab.back()],
         ['forward', tab => tab.canGoForward && tab.forward()],
-        ['home', async tab => (await this.bar.goHome(tab)) === 'opened' && tab.focusPage()],
+        ['home', async tab => (await this.addressBar.goHome(tab)) === 'opened' && tab.focusPage()],
         ['focusAddress', () => focusAddressPill()],
         ['focusAddressL', () => focusAddressPill()],
         ['focusAddressF6', () => focusAddressPill()],

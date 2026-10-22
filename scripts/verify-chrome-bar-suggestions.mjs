@@ -387,7 +387,7 @@ function checkLive() {
  * or open call fed the opaque key.
  */
 const CHROME_BAR_BROWSER_DIR = 'theia/extensions/chrome-bar/src/browser';
-const CHROME_BAR_WIDGET_FILE = 'chrome-bar-widget.tsx';
+const CHROME_BAR_WIDGET_FILE = 'address-bar/address-bar.tsx';
 const WINDOW_COMMAND_ID = 'powerbrowser.open-browser-window';
 
 /**

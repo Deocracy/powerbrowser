@@ -525,6 +525,7 @@ const MODES_COMMANDS_REL = "theia/extensions/modes/src/browser/modes-commands.ts
 const MODES_WIDGET_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx";
 /** The pill's sources (30-01 D-04 move); their copy is pinned with the widget's. */
 const ADDRESS_BAR_DIR_REL = "theia/extensions/chrome-bar/src/browser/address-bar/";
+const ADDRESS_BAR_REL = `${ADDRESS_BAR_DIR_REL}address-bar.tsx`;
 const NAV_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts";
 const SHORTCUT_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts";
 
@@ -976,15 +977,15 @@ const MODES_COPY_FAULTS = [
     expect: "spells the product name as a literal",
   },
   {
-    name: "the configured name in a JSX text node of the widget",
+    name: "the configured name in a JSX text node of the address bar",
     apply: (sources) => ({
       ...sources,
-      [MODES_WIDGET_REL]: sources[MODES_WIDGET_REL].replace(
+      [ADDRESS_BAR_REL]: sources[ADDRESS_BAR_REL].replace(
         "<div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>",
         `<div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter} ${NAV_BRAND_LITERAL} help</div>`
       ),
     }),
-    expect: `brand: ${MODES_WIDGET_REL}:`,
+    expect: `brand: ${ADDRESS_BAR_REL}:`,
   },
   {
     name: "the configured name inside a string in chrome-bar-copy.ts",

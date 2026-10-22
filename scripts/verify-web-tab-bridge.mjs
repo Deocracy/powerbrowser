@@ -77,7 +77,7 @@ const KIND_CLASSES = new Map([
  * equality so an unclassified kind and a stale entry each go red by name.
  * `network` = sends user input off the machine; `privileged` = Places writes
  * or clipboard reads. Neither may enter TAB_STORE_RELAY_KINDS (the backend
- * relay), and a privileged kind runs only from chrome-bar-widget.tsx through
+ * relay), and a privileged kind runs only from address-bar/address-bar.tsx through
  * its same-named ChromeStoreClient method, never from a command or a key row.
  * savePageCopy runs from a command, so it is store-write, not privileged.
  * searchSuggestions (29-06) is the first network kind and removeHistoryEntry
@@ -104,7 +104,7 @@ const STORE_KIND_CLASSES = new Map([
 ]);
 const STORE_PROTOCOL = `${TAB_URIS_DIR}/tab-store-access-protocol.ts`;
 const STORE_CLIENT = `${TAB_URIS_DIR}/chrome-store-client.ts`;
-const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/chrome-bar-widget.tsx`;
+const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/address-bar/address-bar.tsx`;
 
 /** Stock `HttpOpenHandler`'s priority; the web-tab handler must exceed it. */
 const STOCK_HTTP_HANDLER_PRIORITY = 500;
