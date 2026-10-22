@@ -29,6 +29,14 @@
  *      comments stripped) begins with a return guarded by the active mode's
  *      resolve flag (this.modeSends().resolve), so no path reaches its
  *      chrome requests in a mode that may not resolve;
+ *  7a. D-26 (CR-01, WR-04): in onInputKeyDown's Enter branch (Enter,
+ *      Alt+Enter and Ctrl+Enter), a guard on a variable assigned
+ *      this.localMode() and on this.queryText() returns through
+ *      enterLocalRow, and no typed-text commit (commitText, commitTyped,
+ *      urlForRow, resolveTypedAddress, runOneOff, openRowInNewTab) comes
+ *      before it or inside it; the positive control is that commits follow
+ *      it; the Ctrl+Enter canonize condition negates that variable; and
+ *      enterLocalRow calls no typed-text commit and opens only its row;
  *   8. D-26: address-bar/command-centre.ts references no chrome store
  *      client, none of the four typed-text kinds (resolveTypedAddress,
  *      searchSuggestions, autofillOrigin, searchPlaces) and not the
@@ -60,12 +68,15 @@
  * A derivation that finds nothing (no MODES literal, no modeLabels) or a table
  * missing an export is a FAIL, never a pass.
  *
- * --self-test: the clean tree must be green; then thirteen planted copies in a
+ * --self-test: the clean tree must be green; then seventeen planted copies in a
  * mkdtemp directory (the organising row removed, browsing set to history,
  * command-centre's suggestions flag set true, the fallback removed from
  * defaultModeFor, tabs and bookmarks swapped in LOCAL_MODES, one modeLabels
  * key removed, a duplicated token, the history cap dropped, the runQuery
- * guard removed, a resolve call added to command-centre.ts, the contribution
+ * guard removed, CR-01's canonize branch moved above the local-mode guard, the
+ * guard narrowed to Command centre, canonize without the local-mode test,
+ * enterLocalRow falling back to the typed text, a resolve call added to
+ * command-centre.ts, the contribution
  * id changed to address, tokenise accepting a token without a space,
  * nextMode not wrapping) must each go red naming the case that
  * catches it. A plant whose text did not change its source fails as "plant did
@@ -157,6 +168,41 @@ function runQueryGuard(addressBarSrc) {
     return body === null ? null : /^\s*if\s*\(([^{};]*)\)\s*\{\s*return;\s*\}/.exec(body)?.[1] ?? '';
 }
 
+/** D-26 (CR-01): the calls that can carry the pill's typed text to chrome's resolve or an engine. */
+const TEXT_COMMITS = /\b(commitText|commitTyped|urlForRow|resolveTypedAddress|runOneOff|openRowInNewTab)\s*\(/g;
+
+/**
+ * Case 8's reading of onInputKeyDown's Enter branch (Enter, Alt+Enter and
+ * Ctrl+Enter all live in it): the local-mode guard (a variable assigned
+ * this.localMode(), tested with this.queryText(), whose block returns), the
+ * typed-text commits before and after it, the canonize branch's condition and
+ * enterLocalRow's commits; null fields when a piece is gone.
+ */
+function enterBranch(addressBarSrc) {
+    const src = stripComments(addressBarSrc);
+    const keyDown = methodBody(src, 'protected onInputKeyDown = (');
+    const body = keyDown === null ? null : methodBody(keyDown, "else if (e.key === 'Enter')");
+    if (body === null) {
+        return null;
+    }
+    const guard = /const (\w+) = this\.localMode\(\);\s*if \(\1 && this\.queryText\(\)\) \{([^{}]*)\}/.exec(body);
+    const commits = [...body.matchAll(TEXT_COMMITS)].map(m => ({ name: m[1], at: m.index }));
+    const guardEnd = guard ? guard.index + guard[0].length : -1;
+    const canonize = /if \(([^{}]*)\) \{\s*void this\.commitText\(\w+, \{ canonize: true \}\);/.exec(body)?.[1] ?? null;
+    const local = methodBody(src, 'protected async enterLocalRow(');
+    return {
+        guard: guard ? { variable: guard[1], block: guard[2] } : null,
+        before: guard ? commits.filter(c => c.at < guard.index).map(c => c.name) : null,
+        inGuard: guard ? [...guard[2].matchAll(TEXT_COMMITS)].map(m => m[1]).filter(name => name !== 'openRowInNewTab') : null,
+        after: commits.filter(c => c.at > guardEnd).map(c => c.name),
+        canonize,
+        enterLocalRow: local === null ? null : {
+            commits: [...local.matchAll(TEXT_COMMITS)].map(m => m[1]).filter(name => name !== 'openRowInNewTab'),
+            rowlessOpens: [...local.matchAll(/\bopenRowInNewTab\(\s*(?!row\b)/g)].length,
+        },
+    };
+}
+
 /** The TYPED_TEXT_SENDERS names `src` references outside comments. */
 const sendersIn = src => TYPED_TEXT_SENDERS.filter(name => new RegExp(`\\b${name}\\b`).test(stripComments(src)));
 
@@ -219,6 +265,28 @@ function cases(m, uiModes, labelKeys, srcs) {
             const guard = runQueryGuard(srcs[ADDRESS_BAR_REL]);
             return guard !== null && /!this\.modeSends\(\)\.resolve\b/.test(guard)
                 ? null : { guard: guard ?? `no runQuery in ${ADDRESS_BAR_REL}` };
+        }],
+        ['Enter, Alt+Enter and Ctrl+Enter: a local mode with typed text returns through enterLocalRow before any typed-text commit (D-26, CR-01)', () => {
+            const enter = enterBranch(srcs[ADDRESS_BAR_REL]);
+            if (!enter) {
+                return { brokenInstrument: `no onInputKeyDown Enter branch in ${ADDRESS_BAR_REL}` };
+            }
+            if (!enter.after.length) {
+                return { brokenInstrument: 'the scan found no typed-text commit after the guard, so it matches nothing', enter };
+            }
+            const ok = enter.guard && /\breturn;/.test(enter.guard.block) && /this\.enterLocalRow\(/.test(enter.guard.block)
+                && !enter.before.length && !enter.inGuard.length;
+            return ok ? null : { guard: enter.guard ?? 'no `const x = this.localMode(); if (x && this.queryText())` guard', commitsBeforeGuard: enter.before, commitsInGuard: enter.inGuard };
+        }],
+        ['Ctrl+Enter canonizes only outside a local mode (D-26, CR-01)', () => {
+            const enter = enterBranch(srcs[ADDRESS_BAR_REL]);
+            const variable = enter?.guard?.variable;
+            return variable && enter.canonize && new RegExp(`!${variable}\\b`).test(enter.canonize)
+                ? null : { canonize: enter?.canonize ?? 'no canonize branch', localVariable: variable ?? null };
+        }],
+        ['enterLocalRow acts only on the highlighted row, never on the typed text (D-26, WR-02)', () => {
+            const local = enterBranch(srcs[ADDRESS_BAR_REL])?.enterLocalRow;
+            return local && !local.commits.length && !local.rowlessOpens ? null : local ?? { enterLocalRow: `no enterLocalRow in ${ADDRESS_BAR_REL}` };
         }],
         ['command-centre.ts sends nothing typed to chrome (no store client, typed-text kind or suggestion service)', () => {
             const control = sendersIn(srcs[ADDRESS_BAR_REL] + '\n' + srcs[MODES_REL]);
@@ -373,6 +441,28 @@ const PLANTS = [
         from: 'if (!this.dropdownArmed || !this.modeSends().resolve) {',
         to: 'if (!this.dropdownArmed) {',
         expect: 'runQuery begins with a return guarded',
+    },
+    {
+        name: 'CR-01: the canonize branch above the local-mode guard',
+        rel: ADDRESS_BAR_REL,
+        from: 'const local = this.localMode();\n            if (local && this.queryText()) {',
+        to: 'if ((e.ctrlKey || e.metaKey) && isCanonizable(this.inputValue.trim())) {\n                void this.commitText(this.inputValue, { canonize: true });\n                return;\n            }\n            const local = this.localMode();\n            if (local && this.queryText()) {',
+        expect: 'Enter, Alt+Enter and Ctrl+Enter: a local mode',
+    },
+    {
+        name: 'CR-01: the guard narrowed to Command centre',
+        rel: ADDRESS_BAR_REL,
+        from: 'const local = this.localMode();\n            if (local && this.queryText()) {',
+        to: 'const local = this.commandCentre();\n            if (local && this.queryText()) {',
+        expect: 'Enter, Alt+Enter and Ctrl+Enter: a local mode',
+    },
+    { name: 'CR-01: canonize without the local-mode test', rel: ADDRESS_BAR_REL, from: '&& !local && isCanonizable(', to: '&& isCanonizable(', expect: 'Ctrl+Enter canonizes only outside' },
+    {
+        name: 'WR-02: enterLocalRow falls back to the typed text',
+        rel: ADDRESS_BAR_REL,
+        from: '        const row = this.highlightedRow();\n',
+        to: '        const row = this.highlightedRow();\n        if (!row) {\n            return this.commitTyped();\n        }\n',
+        expect: 'enterLocalRow acts only',
     },
     {
         name: 'a resolve call added to command-centre.ts',

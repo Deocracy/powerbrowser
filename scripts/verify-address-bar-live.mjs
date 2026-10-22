@@ -303,7 +303,16 @@
  *               "localhost:4000", each waited past the debounce, record no
  *               resolveTypedAddress, searchSuggestions, autofillOrigin or
  *               searchPlaces request and no GET on either served engine's
- *               search or suggest path. Scored only after search passed.
+ *               search or suggest path. Then, with row choices and address
+ *               opens recorded instead of run (a rowless Alt+Enter still runs
+ *               the real path), "readme" typed in each of those modes and
+ *               Enter, Alt+Enter or Ctrl+Enter pressed inside the debounce
+ *               send none of those kinds, reach no engine and open no
+ *               address; in Command centre each key must choose the
+ *               highlighted README.md pick (the positive). Ctrl+Down out of
+ *               Command centre with its list open (the mode must change)
+ *               keeps "readme" and sends nothing (IN-03). Scored only after
+ *               search passed.
  *   mode-keys   SMODE-04, D-19, D-20, KEY-04: in Browsing with the pill
  *               focused (the fixture workspace open), Ctrl+Down at the parent
  *               steps through cycleOrder -- the table module imported, the
@@ -3543,6 +3552,42 @@ const recordStoreKinds = app => probe(app, `const client = get('ChromeStoreClien
     return true;`);
 const storeKinds = app => app.evaluate('JSON.stringify(window.__pbStoreKinds || [])').then(JSON.parse);
 
+/** D-26 (CR-01, WR-02, WR-04): the commit keys pressed on PRIVACY_KEY_TEXT in each silent mode, a bare word Ctrl+Enter could canonize. */
+const PRIVACY_KEY_TEXT = 'readme';
+const COMMIT_KEYS = [['Enter', ENTER], ['Alt+Enter', ALT_ENTER], ['Ctrl+Enter', CTRL_ENTER]];
+
+/**
+ * Replaces the AddressBar's row choice, new-tab open with a row, committed-url
+ * open and url-in-new-tab open with recorders, so a chosen row (a user
+ * decision) costs nothing and an open of an address is seen instead of loaded.
+ * openRowInNewTab with no row still runs the real method: that is the
+ * typed-text path under test. Every typed-text commit still reaches chrome's
+ * resolve through the recorded ChromeStoreClient.request.
+ */
+const recordChoices = app => probe(app, `const bar = get('AddressBar');
+    const proto = Object.getPrototypeOf(bar);
+    window.__pbChoices = [];
+    window.__pbSaved = { openCommittedUrl: bar.openCommittedUrl };
+    bar.chooseRow = async row => { window.__pbChoices.push({ how: 'choose', key: row ? row.key : null }); };
+    bar.openRowInNewTab = async (row, foreground) => {
+        if (!row) return proto.openRowInNewTab.call(bar, row, foreground);
+        window.__pbChoices.push({ how: 'new-tab', key: row.key });
+    };
+    bar.openCommittedUrl = async url => { window.__pbChoices.push({ how: 'open', url }); };
+    bar.openUrlInNewTab = async url => { window.__pbChoices.push({ how: 'open-new-tab', url }); };
+    return true;`);
+const choices = app => app.evaluate('JSON.stringify(window.__pbChoices || [])').then(JSON.parse);
+const restoreChoices = app => probe(app, `const bar = get('AddressBar');
+    delete bar.chooseRow;
+    delete bar.openRowInNewTab;
+    delete bar.openUrlInNewTab;
+    if (window.__pbSaved) bar.openCommittedUrl = window.__pbSaved.openCommittedUrl;
+    if (window.__pbSaved && window.__pbSaved.onInputKeyDown) { bar.onInputKeyDown = window.__pbSaved.onInputKeyDown; bar.update(); }
+    delete bar.cycleMode;
+    delete bar.enterLocalRow;
+    window.__pbSaved = undefined;
+    return true;`);
+
 /** Derived now from the AddressBar instance: the contributed modes whose modeSends() row is all false. */
 const silentModes = app => probe(app, `const bar = get('AddressBar');
     const saved = bar.mode;
@@ -3569,6 +3614,8 @@ async function commandCentrePrivacy(ctx) {
     if (!controlPassed(ctx.results, 'command-centre-privacy')) {
         return 'not-scored';
     }
+    // The fixture workspace gives Command centre a README.md pick, the row its commit keys must choose.
+    await openWorkspace(ctx);
     const silent = await silentModes(app);
     if (!Array.isArray(silent) || !silent.some(mode => mode.id === 'command-centre')) {
         return fail(`${BROKEN} no contributed mode with an all-false modeSends() row includes Command centre (${JSON.stringify(silent)})`);
@@ -3606,7 +3653,98 @@ async function commandCentrePrivacy(ctx) {
                 fail(`typing in ${mode.label} reached a served engine: ${JSON.stringify(gets.map(r => r.path + r.search))}`);
             }
         }
+
+        // CR-01, WR-02: Enter, Alt+Enter and Ctrl+Enter, each pressed inside the debounce, act on a row or do nothing.
+        await recordChoices(app);
+        if (plant === 'cc-canonize' && await probe(app, `const bar = get('AddressBar');
+            const original = bar.onInputKeyDown;
+            window.__pbSaved.onInputKeyDown = original;
+            bar.onInputKeyDown = e => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && /^\\s*[^.:\\/\\s]+(?:\\/.*|\\s*)$/.test(bar.inputValue)) {
+                    e.preventDefault();
+                    void bar.commitText(bar.inputValue, { canonize: true });
+                    return;
+                }
+                return original(e);
+            };
+            bar.update();
+            await sleep(300);
+            return true;`) === true) {
+            note('PLANT cc-canonize applied');
+        }
+        if (plant === 'local-enter-commits' && await probe(app, `const bar = get('AddressBar');
+            bar.enterLocalRow = async function () { return this.highlightedRow() ? this.chooseRow(this.highlightedRow()) : this.commitTyped(); };
+            return true;`) === true) {
+            note('PLANT local-enter-commits applied');
+        }
+        for (const mode of silent) {
+            for (const [keyName, key] of COMMIT_KEYS) {
+                await enterMode(app, mode.id);
+                const kindMark = (await storeKinds(app)).length;
+                const getMark = pages.requests.length;
+                const choiceMark = (await choices(app)).length;
+                await typeInPill(app, PRIVACY_KEY_TEXT);
+                await pressKey(app, key);
+                await sleep(800);
+                const sent = (await storeKinds(app)).slice(kindMark).filter(kind => TYPED_TEXT_KINDS.includes(kind));
+                for (const kind of [...new Set(sent)]) {
+                    fail(`sent ${kind} from ${mode.label} on ${keyName} with ${JSON.stringify(PRIVACY_KEY_TEXT)}`);
+                }
+                const gets = pages.requests.slice(getMark).filter(r => ENGINE_PATHS.includes(r.path));
+                if (gets.length) {
+                    fail(`${keyName} in ${mode.label} reached a served engine: ${JSON.stringify(gets.map(r => r.path + r.search))}`);
+                }
+                const made = (await choices(app)).slice(choiceMark);
+                const opened = made.filter(c => c.how === 'open' || c.how === 'open-new-tab');
+                if (opened.length) {
+                    fail(`${keyName} in ${mode.label} opened the typed text as an address: ${JSON.stringify(opened)}`);
+                }
+                // The positive: Command centre's README.md pick is highlighted, so each key must choose a row.
+                if (mode.id === 'command-centre' && !made.some(c => (c.how === 'choose' || c.how === 'new-tab') && c.key)) {
+                    fail(`${BROKEN} ${keyName} on ${JSON.stringify(PRIVACY_KEY_TEXT)} in ${mode.label} chose no row (choices ${JSON.stringify(made)}), so the key never reached the pill or no pick was highlighted`);
+                }
+            }
+        }
+
+        // IN-03: Ctrl+Down from Command centre with its list open keeps the text and sends none of it.
+        if (plant === 'cc-cycle-requery' && await probe(app, `const bar = get('AddressBar');
+            const proto = Object.getPrototypeOf(bar);
+            bar.cycleMode = function (step) {
+                const open = this.dropdownOpen;
+                proto.cycleMode.call(this, step);
+                if (open && !this.dropdownOpen) this.requery();
+            };
+            return true;`) === true) {
+            note('PLANT cc-cycle-requery applied');
+        }
+        await enterMode(app, 'command-centre');
+        await typeInPill(app, PRIVACY_KEY_TEXT);
+        if (!(await settle(() => readRows(app), v => v.open)).open) {
+            fail(`${BROKEN} Command centre's list did not open for ${JSON.stringify(PRIVACY_KEY_TEXT)}, so the Ctrl+Down step proves nothing`);
+        } else {
+            const kindMark = (await storeKinds(app)).length;
+            const getMark = pages.requests.length;
+            await pressKey(app, ACCEL_DOWN);
+            const moved = await settle(() => modeState(app), v => v?.mode !== 'command-centre');
+            await sleep(800);
+            if (moved?.mode === 'command-centre') {
+                fail(`${BROKEN} Ctrl+Down did not leave Command centre, so the step proves nothing`);
+            }
+            const sent = (await storeKinds(app)).slice(kindMark).filter(kind => TYPED_TEXT_KINDS.includes(kind));
+            for (const kind of [...new Set(sent)]) {
+                fail(`sent ${kind} after Ctrl+Down out of Command centre with ${JSON.stringify(PRIVACY_KEY_TEXT)}`);
+            }
+            const gets = pages.requests.slice(getMark).filter(r => ENGINE_PATHS.includes(r.path));
+            if (gets.length) {
+                fail(`Ctrl+Down out of Command centre reached a served engine: ${JSON.stringify(gets.map(r => r.path + r.search))}`);
+            }
+            const pill = await readPill(app);
+            if (pill.value !== PRIVACY_KEY_TEXT) {
+                fail(`Ctrl+Down out of Command centre must keep ${JSON.stringify(PRIVACY_KEY_TEXT)}; the pill holds ${JSON.stringify(pill.value)}`);
+            }
+        }
     } finally {
+        await restoreChoices(app).catch(() => null);
         await probe(app, `delete get('ChromeStoreClient').request; delete get('AddressBar').modeSends; return true;`);
         await restoreDefaultMode(app);
     }
@@ -4406,6 +4544,9 @@ const PLANTS = [
     { plant: 'picks-dropped', target: 'command-centre', run: ['search', 'command-centre'], expect: 'no Explorer row' },
     { plant: 'help-row-executes', target: 'command-centre', run: ['search', 'command-centre'], expect: 'a help row opened the centred quick input' },
     { plant: 'cc-sends', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress from Command centre' },
+    { plant: 'cc-canonize', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress from Command centre on Ctrl+Enter' },
+    { plant: 'local-enter-commits', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress from Actions on Enter' },
+    { plant: 'cc-cycle-requery', target: 'command-centre-privacy', run: ['search', 'command-centre-privacy'], expect: 'sent resolveTypedAddress after Ctrl+Down out of Command centre' },
     { plant: 'default-ignored', target: 'mode-defaults', run: ['search', 'mode-defaults'], expect: 'Coding did not start in Command centre' },
     { plant: 'requery-repaints', target: 'mode-defaults', run: ['search', 'mode-defaults'], expect: "left History's list open" },
     { plant: 'token-kept', target: 'mode-tokens', run: ['search', 'mode-tokens'], expect: 'the * token did not enter Bookmarks' },
