@@ -1598,7 +1598,8 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
         let resolved: ResolvedAddress | undefined;
         try {
-            resolved = await this.store.resolveTypedAddress(text, name);
+            // A one-off always searches: address-shaped text too (BAR-05).
+            resolved = await this.store.resolveTypedAddress(text, name, false, true);
         } catch {
             resolved = undefined;
         }

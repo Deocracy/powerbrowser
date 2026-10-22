@@ -3788,7 +3788,7 @@ async function handleStoreRequest(data, actorRef) {
         return { ok: true, kind, dir: saved.dir, bytes: saved.bytes };
       }
       case "resolveTypedAddress": {
-        return { ok: true, kind, resolved: await resolveTypedAddress(data.text, data.engineName ?? "", data.canonize === true) };
+        return { ok: true, kind, resolved: await resolveTypedAddress(data.text, data.engineName ?? "", data.canonize === true, data.forceSearch === true) };
       }
       case "listSearchEngines": {
         return { ok: true, kind, ...(await listSearchEngines()) };
@@ -4357,6 +4357,15 @@ async function barEngine(name) {
   return engines.find(e => e.id === def?.id) ?? engines[0] ?? null;
 }
 
+// The bar engine's submission for `terms`, with the http(s) wall on the result.
+function engineSearch(engine, terms) {
+  const sub = engine.getSubmission(terms);
+  if (!sub || sub.postData || !/^https?$/.test(sub.uri.scheme)) {
+    return { kind: "refused" };
+  }
+  return { kind: "search", url: String(sub.uri.spec), engineName: String(engine.name) };
+}
+
 // Fixup adds http:// to a schemeless host; the pill has always minted
 // https:// for a bare dotted host, so that case is upgraded. Loopback, IP
 // literals and an explicit port keep fixup's http://.
@@ -4377,8 +4386,10 @@ function upgradeSchemeless(info, uri) {
 // submission for keyword text, then the http(s) wall on the RESULT (never
 // only on the input). Typed text is never logged. `canonize` (Ctrl+Enter,
 // BAR-13) first completes a bare name to www.<name><locale suffix>, as
-// UrlbarInput._maybeCanonizeURL does.
-async function resolveTypedAddress(text, engineName, canonize = false) {
+// UrlbarInput._maybeCanonizeURL does. `forceSearch` (a one-off engine click,
+// BAR-05) skips fixup: the text is that engine's search even when it is
+// shaped like an address, as in Firefox.
+async function resolveTypedAddress(text, engineName, canonize = false, forceSearch = false) {
   if (typeof text !== "string" || !text.trim() || text.length > 2048) {
     throw new Error("resolveTypedAddress: refusing empty or oversized text");
   }
@@ -4386,6 +4397,10 @@ async function resolveTypedAddress(text, engineName, canonize = false) {
     throw new Error("resolveTypedAddress: refusing a malformed engine name");
   }
   let typed = text.trim();
+  if (forceSearch === true) {
+    const engine = await barEngine(engineName);
+    return engine ? engineSearch(engine, typed) : { kind: "no-engine" };
+  }
   if (canonize === true && /^\s*[^.:\/\s]+(?:\/.*|\s*)$/i.test(typed)) {
     let suffix = Services.locale.urlFixupSuffix;
     if (!suffix.endsWith("/")) {
@@ -4410,14 +4425,7 @@ async function resolveTypedAddress(text, engineName, canonize = false) {
   if (info.keywordProviderId) {
     // Keyword searches go through the bar's engine, never fixup's own default URL.
     const engine = await barEngine(engineName);
-    if (!engine) {
-      return { kind: "no-engine" };
-    }
-    const sub = engine.getSubmission(info.keywordAsSent);
-    if (!sub || sub.postData || !/^https?$/.test(sub.uri.scheme)) {
-      return { kind: "refused" };
-    }
-    return { kind: "search", url: String(sub.uri.spec), engineName: String(engine.name) };
+    return engine ? engineSearch(engine, info.keywordAsSent) : { kind: "no-engine" };
   }
   const uri = info.preferredURI;
   if (!uri || !/^https?$/.test(uri.scheme)) {
