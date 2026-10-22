@@ -1,7 +1,7 @@
 # Phase 30: Address-Bar Modes and Command Centre - Context
 
 **Gathered:** 2026-10-21
-**Status:** Ready for UI spec (`/gsd-ui-phase 30`); planning waits on the two PENDING-CHRIS defaults below
+**Status:** Ready for UI spec (`/gsd-ui-phase 30`); both defaults decided by Chris 2026-10-21 (D-01, D-02)
 **Mode:** `--auto` (Chris's standing autonomous rule: every gray area takes the recommended option, recorded with a one-line reason)
 
 <domain>
@@ -29,16 +29,16 @@ Data-driven custom modes are out of scope (FEATURES.md header).
 
 ### Recorded rulings that apply (REQUIREMENTS.md header, ROADMAP Phase 30, research picks)
 - Coding default = Command centre. Decided by Chris 2026-10-20; not re-opened here.
-- Browsing and Organising defaults are chosen by Chris from visual mockups in the UI spec (see PENDING-CHRIS below).
+- Browsing and Organising defaults are chosen by Chris from visual mockups in the UI spec (D-01, D-02 below).
 - Research D1: Command centre renders `QuickAccessRegistry` picks inline in the pill's dropdown and hands only `@` and `:` to Theia's stock quick input. Fallback if probe 7 fails: `QuickInputService.open`, accepting that the page hides.
 - Research D7: actions that open UI are commands; actions that change state run only from that UI's event handlers, never as command ids (Phase 27 privileged-kind rule).
 - Firefox keys that clash with Theia take the browser meaning only while a web page has focus (KEY ruling 2026-10-20); KEY-04 keeps Theia's Ctrl+K in non-web tabs.
 - Chrome-bar copy reads the configured application name, never a hard-coded brand (BAR-14 carries forward).
 - Hard rule 1: no Theia core patch; `@theia/*` consumed as dependencies only (`scripts/diff-theia-core.sh`).
 
-### PENDING-CHRIS (do not choose; the UI spec presents mockups, Chris picks)
-- **D-01: Browsing default mode — PENDING-CHRIS.** Candidates from research: Address (proposed in SUMMARY.md Q3 and FEATURES SMODE-02, Firefox parity) or another mode shown in the mockups. The UI spec must carry a mockup per candidate.
-- **D-02: Organising default mode — PENDING-CHRIS.** Candidates from research: Tabs (FEATURES recommendation, because Panorama is about finding and arranging tabs) or Address. The UI spec must carry a mockup per candidate.
+### Chris's decisions (2026-10-21, chosen from 30-MOCKUPS.html)
+- **D-01: Browsing default mode = Address and search (option A).** Chris, 2026-10-21, from the mockups.
+- **D-02: Organising default mode = Tabs (option A).** Chris, 2026-10-21, from the mockups.
 - **D-03:** The per-PowerBrowser-mode default lives in one table keyed by mode id, so Chris's answer is a one-row change and nothing is hard-coded before he answers. Reason: lets planning and the split proceed without guessing the two values.
 
 ### Pill split and contribution point

@@ -26,7 +26,7 @@ not re-specified unless they change. It adds, for SMODE-01..06:
 - Command centre: Theia's quick-access picks rendered under the pill; `@` and `:` handed to Theia
 - the "Go to {address}" row
 - mode tokens, Accel+Up/Down, Alt+Up/Down, Backspace-at-start, and the address keys from Command centre
-- the per-PowerBrowser-mode default table (D-03), with Browsing and Organising **PENDING-CHRIS**
+- the per-PowerBrowser-mode default table (D-03), with Browsing = Address and Organising = Tabs (Chris, 2026-10-21)
 
 Hard rules that bind every row below (inherited): no Theia core patch, no Firefox internal outside
 `PowerBrowserAPI.sys.mjs`, no custom browser chrome beyond the chrome bar, no internal identifier
@@ -219,8 +219,8 @@ answer and nothing hard-codes a value before it.
 | PowerBrowser mode | Default | Status |
 |-------------------|---------|--------|
 | Coding | Command centre | **Decided** (Chris, 2026-10-20) |
-| Browsing | — | **PENDING-CHRIS** (D-01) — candidates A–D below; recommendation **A Address** |
-| Organising | — | **PENDING-CHRIS** (D-02) — candidates A–D below; recommendation **A Tabs** |
+| Browsing | Address | **Decided** (Chris, 2026-10-21, from 30-MOCKUPS.html: option A) |
+| Organising | Tabs | **Decided** (Chris, 2026-10-21, from 30-MOCKUPS.html: option A) |
 | Custom modes | Address | Decided (D-17) |
 
 Facts every candidate shares, so the trade-offs compare like with like:
@@ -240,7 +240,7 @@ Facts every candidate shares, so the trade-offs compare like with like:
   stay visible. A default with a zero-query list therefore hides the page on every click into the
   pill.
 
-### Browsing (D-01, PENDING-CHRIS)
+### Browsing (D-01, decided: A Address)
 
 | Option | Empty pill shows | Placeholder | Typing does | Trade-offs |
 |--------|------------------|-------------|-------------|------------|
@@ -254,7 +254,7 @@ only candidate that keeps search, autofill and suggestions one keystroke away wh
 page visible on focus. The others replace a strong default with a list the user can already reach
 by token.
 
-### Organising (D-02, PENDING-CHRIS)
+### Organising (D-02, decided: A Tabs)
 
 | Option | Empty pill shows | Placeholder | Typing does | Trade-offs |
 |--------|------------------|-------------|-------------|------------|
@@ -560,5 +560,5 @@ gate is that no new packages are added.
 | Idle pill per mode (Organising empty) | `chrome-bar-widget.tsx` `addressOf()` (MODE_SURFACES return `''`) |
 | Top rows per mode in mockups | `chrome-bar.css` GUI-07 (Coding menubar, Browsing tab strip, Organising toolbar) |
 | Decided (autonomous, recommended) | Pill left padding 4px; 24px chip with 24px x; 280px modes menu; codicon per mode (`compass` for Command centre); chip weight 400; reuse of "This time, search with:"; "{label}, choose a mode" / "Return to {default}"; per-mode placeholders "Search with {engine}" and "Search tabs/…"; x-click reading of criterion 1; zero-query lists with no default highlight; per-mode caps; trailing search row in Bookmarks/Tabs/History; Go-to row in those modes; active tab excluded from Tabs; no Tab-to-button rule; per-mode footers and empty/failure copy |
-| PENDING-CHRIS | D-01 Browsing default, D-02 Organising default (recommendations A Address, A Tabs) |
+| Decided by Chris 2026-10-21 | D-01 Browsing default = Address (A), D-02 Organising default = Tabs (A) |
 | Deferred (named, not specified) | SMODE-07 browser actions (Phase 33); Ctrl+P / F1 / Ctrl+Shift+P / Ctrl+O into the pill; Ctrl+K engine mode; OpenSearch "Add engine" rows; per-tab mode memory; data-driven custom-mode defaults; top sites on focus; matched-text highlighting; group names on Tabs rows in Organising |
