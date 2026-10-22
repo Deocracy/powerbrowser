@@ -1091,6 +1091,8 @@ export class ChromeBarWidget extends ReactWidget {
 
     /** New pill text, from a keystroke or from the pill menu's Cut and Paste (which never autofill). */
     protected textEdited(value: string, autofillWanted: boolean, composing = false): void {
+        // Replies still in flight describe the old text; the debounced query takes a new sequence later.
+        this.querySeq += 1;
         this.inputValue = value;
         this.autofill = undefined;
         this.autofillWanted = autofillWanted;
