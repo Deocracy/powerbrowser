@@ -174,7 +174,7 @@ function cases(m) {
         ...[['Makefile:12', 'ambiguous'], ['src/', 'ambiguous'], ['theia/extensions/', 'ambiguous'], ['devbox:3000', 'ambiguous'],
             ['localhost:4000/', 'url'], ['https://x/', 'url'], ['www.x.com/', 'url'], ['127.0.0.1/', 'url'], ['README.md', 'ambiguous'], ['hello', 'text']]
             .map(([text, want]) => [`classifyAddress(${JSON.stringify(text)}, file search) is ${want}`, () => {
-                const got = m.classifyAddress(text, { fileSearch: true });
+                const got = m.classifyAddress(text, { files: true });
                 return got === want ? null : { got };
             }]),
         ['a Go-to row: the globe and no type marker', () => {
@@ -273,7 +273,7 @@ const PLANTS = [
     },
     {
         name: 'file search ignored',
-        from: "return fileSearch ? 'ambiguous' : 'url';",
+        from: "return files ? 'ambiguous' : 'url';",
         to: "return 'url';",
         expect: 'classifyAddress("Makefile:12", file search)',
     },

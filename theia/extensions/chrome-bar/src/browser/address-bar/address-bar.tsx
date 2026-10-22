@@ -494,7 +494,7 @@ export class AddressBar {
      */
     protected gotoRowFor(mode: AddressBarMode, typed: string): { row: Row; first: boolean } | undefined {
         const text = typed.trim();
-        const kind = classifyAddress(text, { fileSearch: mode.id === 'command-centre' });
+        const kind = classifyAddress(text, { files: mode.id === 'command-centre' });
         const offers = mode.id === 'command-centre' ? this.commandCentre()?.descriptorFor(typed)?.prefix === ''
             : LOCAL_MODES.some(entry => entry.id === mode.id && entry.searchRow);
         if (!offers || kind === 'text') {

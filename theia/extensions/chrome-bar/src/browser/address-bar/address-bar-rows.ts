@@ -144,11 +144,11 @@ export type AddressClass = 'url' | 'ambiguous' | 'text';
  * dotted name that may be a file (README.md, main.py:12) or plain text.
  * Local and pure, so classifying sends nothing to chrome. A dotted host with a
  * port is ambiguous, because the file provider reads main.py:12 as file plus
- * line (30-RESEARCH A3). In a file search (`fileSearch`, Command centre) an
+ * line (30-RESEARCH A3). In a file search (`files` set, Command centre) an
  * undotted host:port and a trailing / are ambiguous too: Makefile:12 is a
  * file plus line and src/ a folder (WR-01).
  */
-export function classifyAddress(raw: string, { fileSearch = false }: { fileSearch?: boolean } = {}): AddressClass {
+export function classifyAddress(raw: string, { files = false }: { files?: boolean } = {}): AddressClass {
     const t = raw.trim();
     if (!t || /\s/.test(t)) {
         return 'text';
@@ -168,7 +168,7 @@ export function classifyAddress(raw: string, { fileSearch = false }: { fileSearc
         /\/$/,                                          // a trailing /, or a folder (src/)
     ];
     if (fileShaped.some(re => re.test(t))) {
-        return fileSearch ? 'ambiguous' : 'url';
+        return files ? 'ambiguous' : 'url';
     }
     return /^[^/:]+\.[^/:]+(:\d+)?$/.test(t) ? 'ambiguous' : 'text';
 }
