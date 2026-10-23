@@ -93,6 +93,11 @@ platform. If a rebrand ever requires editing a second file, that is a bug.
 | Lift "no new addressability scheme" for search, and allow chrome-bar Places writes | Needed for search fallback, bookmarks and history removal (Chris, 2026-10-20) | — Pending — v1.5 |
 | Extensions see web tabs via patch 050 (tracker gate) + a chrome-side tab host, new Phase 31.1; no GUI-05; amends D-74 (one logic patch) and reverses the getTabForBrowser-null / no-synthesised-tab rule | Chris, 2026-10-21, from Phase 28 spikes 001/002a-c | — Pending — v1.5 |
 | While the IDE has focus, the last web tab stays the extensions' active tab | Chris, 2026-10-21 (safe until null-tab guards are proven) | — Pending — v1.5 |
+| Browsing default address-bar mode = Address and search; Organising default = Tabs (Coding = Command centre) | Chris, 2026-10-21, chosen from 30-MOCKUPS.html | — Built (Phase 30) — v1.5 |
+| Extension sidebars (sidebarAction) show as a Theia side-panel view | Chris, 2026-10-22 (patch 050 turns sidebarAction off for the shell window) | — Pending (Phase 38) — v1.5 |
+| Extension pages that open in a tab (options, welcome, dashboards) open in the stock window; web tabs never load moz-extension:// | Chris, 2026-10-22 (keeps the Phase 28 sub-ruling) | — Pending (Phase 38) — v1.5 |
+| Extension keyboard shortcuts (commands API) included; they fire while a web page has focus, Theia keeps its keys otherwise | Chris, 2026-10-22 (matches the 2026-10-20 page-focus key ruling) | — Pending (Phase 38) — v1.5 |
+| v1.5 phases 31–38 run as "DSH codes, Claude checks": DSH plans and writes code sandboxed; Claude runs builds, live checks, reviews and verification | Chris, 2026-10-22 (DSH via OmniRoute → opencode-go/muse-spark-1.3-contributor) | — In use — v1.5 |
 | Scripted headless passes count as evidence, never as UAT results | Only Chris records a sheet result; each scripted defect re-checked by a second agent | ✓ Good — 11 defects found that static gates missed |
 | v1.4 closed as override with UAT-01 deferred (NG-089 → phase 26) | Chris: "I want to do the GUI checks when everthing is done on my own time" | ⚠️ Revisit — audit `gaps_found`; MODE-01 live half failed (A18) |
 
