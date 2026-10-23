@@ -197,7 +197,7 @@
  *               leaves no draft. A tab C with "gone" typed is closed, and the
  *               pill shows the next current tab's own address.
  *
- *   modes-dropdown  SMODE-01: the mode button is the pill's first child; a
+ *   modes-dropdown  SMODE-01: the mode button is the pill's first child after the identity box; a
  *               trusted click on it opens .pb-address-modes, whose heading is
  *               "This time, search with:" and whose items read, in order, the
  *               AddressBar's contributed top modes, chrome's engines from
@@ -2667,7 +2667,8 @@ const readMode = app => app.evaluate(`JSON.stringify((() => {
     const pill = document.querySelector('.pb-chrome-bar-pill');
     const input = document.querySelector('.pb-chrome-bar-input');
     if (!pill || !input) return null;
-    const first = pill.firstElementChild;
+    // Phase 31 (31-UI-SPEC): the identity box sits at the pill's left end, before the mode button.
+    const first = [...pill.children].find(child => !child.matches('.pb-identity')) ?? null;
     const button = pill.querySelector('.pb-address-mode');
     return {
         firstIsMode: !!first && (first.matches('.pb-address-mode') || first.matches('.pb-address-mode-chip')),
@@ -2780,7 +2781,7 @@ async function modesDropdown(ctx) {
     try {
         const view = await readMode(app);
         if (!view?.firstIsMode) {
-            fail(`the mode button must be the pill's first child, before the lock; saw ${JSON.stringify(view)}`);
+            fail(`the mode button must be the pill's first child after the identity box; saw ${JSON.stringify(view)}`);
         }
         const want = await expectedModeLabels(app);
         if (!Array.isArray(want?.engines) || !want.engines.includes(ENGINE_TWO)) {

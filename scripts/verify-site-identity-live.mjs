@@ -89,7 +89,7 @@ async function identityLock(ctx) {
     if (!pushed) {
         return fail(`${BROKEN} no state push for the served-origin tab to compare the box against`);
     }
-    const host = (() => { try { return new URL(pushed.url).host; } catch { return ''; } })();
+    const host = (() => { try { return new URL(pushed.url).hostname; } catch { return ''; } })();
     if (box.host !== host) {
         return fail(`the identity box shows ${JSON.stringify(box.host)} but the tab's last push is for ${JSON.stringify(host)} (the box must follow the push, never typed text)`);
     }
