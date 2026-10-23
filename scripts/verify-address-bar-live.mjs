@@ -365,12 +365,14 @@ import {
     loadedAt,
     makeCurrent,
     openWebTab,
+    overlayVisibility,
     pressKey,
     pushes,
     readPill,
     serveNavPages,
     setPref,
     waitForPush,
+    WEB_TAB_STATE_EVENT,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
 import { GET_BY_NAME, pollFor, probe, sourceConst, sourceMatch } from './lib/pb-relaunch.mjs';
@@ -390,6 +392,13 @@ const API_URL = 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs';
 const COOKIE_PAGE_BODY = `<img src="/pixel"><script>
     const src = 'fetch(' + JSON.stringify(location.origin + '/cookie-worker') + ', { credentials: "include" });';
     new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+</script>`;
+
+// A page that is slow to leave (60 ms of work on pagehide, as a beacon would do) holds its
+// content process while the next page's browsing context is set up, which widens the moment
+// the overlay reports the switch's about:blank placeholder past a refresh tick.
+const SLOW_PAGEHIDE_BODY = `<p>focus</p><script>
+    addEventListener('pagehide', () => { const end = Date.now() + 60; while (Date.now() < end) { /* busy */ } });
 </script>`;
 
 /** An engine suggest endpoint: two completions of q, or a 500 (undefined) for q "fail". */
@@ -424,6 +433,10 @@ const PAGES = {
     '/keep-me': { title: 'Keep Me Page', body: '<p>keep</p>' },
     '/del-fail': { title: 'Fail Me Page', body: '<p>fail</p>' },
     '/pasted': { title: 'Pasted Page', body: '<p>pasted</p>' },
+    '/pf-1': { title: 'Focus One', body: SLOW_PAGEHIDE_BODY },
+    '/pf-2': { title: 'Focus Two', body: SLOW_PAGEHIDE_BODY },
+    '/pf-3': { title: 'Focus Three', body: SLOW_PAGEHIDE_BODY },
+    '/pf-4': { title: 'Focus Four', body: SLOW_PAGEHIDE_BODY },
     '/dr-a': { title: 'Draft Alpha', body: '<p>alpha</p>' },
     '/dr-a2': { title: 'Draft Alpha Two', body: '<p>alpha two</p>' },
     '/dr-b': { title: 'Draft Beta', body: '<p>beta</p>' },
@@ -2243,6 +2256,90 @@ async function contextMenu(ctx) {
             const w = get('AddressBar'); delete w.openPillMenu; return true;`);
         await setClipboard(app, saved ? saved : null);
         await app.evaluate(`(() => { const i = document.querySelector('.pb-chrome-bar-input'); if (i) i.blur(); return true; })()`);
+    }
+}
+
+/**
+ * The page takes the focus the product hands it, including straight after
+ * the overlay was hidden. Gecko cannot focus a hidden <browser>, and a
+ * focused one that is hidden loses focus at the next refresh tick, so:
+ *   - F6 in the pill with the suggestions dropdown open (the page hidden
+ *     behind it) must end with the page focused: the focus has to reach
+ *     chrome after the geometry that shows the page again;
+ *   - a focused page navigated by the frontend keeps chrome's focus through
+ *     each load, and no state push carries the about:blank placeholder that
+ *     a browsing-context switch leaves for a moment, which the widget reads
+ *     as "no page" and hides. (canGoBack is no signal here: it skips entries
+ *     without user interaction, and these loads have none.)
+ */
+async function pageFocus(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const tabExpr = `get('WebTabChannel').widgetOf(${JSON.stringify(tabId)})`;
+    if (plant === 'focus-before-show' && await probe(app, `${tabExpr}.focusPage = function () { this.channel.send({ kind: 'webTabFocus', tabId: this.tabId }); }; return true;`) === true) {
+        note('PLANT focus-before-show applied');
+    }
+    try {
+        if ((await modeState(app))?.mode !== 'address') {
+            return fail(`${BROKEN} the pill is not in Address mode (${JSON.stringify(await modeState(app))})`);
+        }
+        await typeInPill(app, 'hello');
+        const hidden = await settle(() => overlayVisibility(app, tabId), v => v === 'hidden');
+        if (hidden !== 'hidden') {
+            return fail(`${BROKEN} the open dropdown did not hide the page (its visibility is ${JSON.stringify(hidden)})`);
+        }
+        await pressKey(app, F6);
+        if (await settle(() => chromeActiveTabId(app), id => id === tabId) !== tabId) {
+            fail(`F6 in the pill with the dropdown open must give the page focus; chrome's focus is on ${JSON.stringify(await chromeActiveTabId(app) ?? null)}, the page is ${JSON.stringify(await overlayVisibility(app, tabId))}`);
+        }
+        await probe(app, `const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; bar.update(); return true;`);
+
+        const [first, ...hops] = ['/pf-1', '/pf-2', '/pf-3', '/pf-4'];
+        let from = (await pushes(app)).length;
+        await probe(app, `await ${tabExpr}.navigate(${JSON.stringify(pages.url(first))}); return true;`);
+        if (await waitForPush(app, loadedAt(tabId, first), { from }) < 0) {
+            return fail(`${BROKEN} no loaded state push arrived for ${first}`);
+        }
+        if (await focusOverlay(app, tabId) !== true) {
+            return fail(`${BROKEN} the page could not be focused before the navigations`);
+        }
+        // A push asked for inside each switch, as a page retitled mid-switch would ask for one:
+        // the overlay's own pagetitlechanged listener schedules it while the placeholder shows.
+        if (await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)});
+            window.__pbRetitleOnSwitch = e => { if (e.target === o) o.dispatchEvent(new Event('pagetitlechanged')); };
+            window.addEventListener('DidChangeBrowserRemoteness', window.__pbRetitleOnSwitch);
+            return !!o;`) !== true) {
+            return fail(`${BROKEN} the browsing-context switch listener could not be installed chrome-side`);
+        }
+        if (plant === 'placeholder-push') {
+            note('PLANT placeholder-push applied');
+        }
+        const mark = (await pushes(app)).length;
+        for (const path of hops) {
+            from = (await pushes(app)).length;
+            await probe(app, `await ${tabExpr}.navigate(${JSON.stringify(pages.url(path))}); return true;`);
+            if (plant === 'placeholder-push') {
+                await app.evaluate(`(() => { window.dispatchEvent(new CustomEvent(${JSON.stringify(WEB_TAB_STATE_EVENT)}, { detail: { kind: 'state', tabId: ${JSON.stringify(tabId)}, url: 'about:blank', title: '', loading: true, canGoBack: false, canGoForward: false } })); return true; })()`);
+            }
+            if (await waitForPush(app, loadedAt(tabId, path), { from }) < 0) {
+                return fail(`no loaded state push for the tab carried ${path}`);
+            }
+            if (await settle(() => chromeActiveTabId(app), id => id === tabId) !== tabId) {
+                fail(`the focused page lost chrome's focus while it loaded ${path}; it is on ${JSON.stringify(await chromeActiveTabId(app) ?? null)}`);
+                break;
+            }
+        }
+        const states = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId);
+        const placeholders = states.filter(p => p.url === 'about:blank');
+        if (!states.length) {
+            fail(`${BROKEN} no state push was recorded for the tab across ${hops.length} navigations`);
+        } else if (placeholders.length) {
+            fail(`a page-to-page navigation pushed the placeholder of a browsing-context switch: ${placeholders.length} of ${states.length} state pushes carried about:blank (loading ${placeholders.map(p => p.loading).join(', ')})`);
+        }
+    } finally {
+        await inChrome(app, `if (window.__pbRetitleOnSwitch) { window.removeEventListener('DidChangeBrowserRemoteness', window.__pbRetitleOnSwitch); delete window.__pbRetitleOnSwitch; } return true;`);
+        await probe(app, `const tab = ${tabExpr}; if (tab) { delete tab.focusPage; }
+            const bar = get('AddressBar'); bar.inputValue = bar.committedAddress; bar.update(); return true;`);
     }
 }
 
@@ -4448,6 +4545,7 @@ const SCENARIOS = {
     'canonize-drop': canonizeDrop,
     'shift-del': shiftDel,
     'context-menu': contextMenu,
+    'page-focus': pageFocus,
     'select-ime': selectIme,
     drafts,
     'modes-dropdown': modesDropdown,
@@ -4552,6 +4650,8 @@ const PLANTS = [
     { plant: 'autofill-on-paste', target: 'autofill', run: ['autofill'], expect: 'autofilled a paste' },
     { plant: 'shift-del-bookmark', target: 'shift-del', run: ['shift-del'], expect: 'removed the visits of a bookmarked page' },
     { plant: 'paste-reads-on-open', target: 'context-menu', run: ['context-menu'], expect: 'clipboard read before a click' },
+    { plant: 'focus-before-show', target: 'page-focus', run: ['page-focus'], expect: 'F6 in the pill with the dropdown open must give the page focus' },
+    { plant: 'placeholder-push', target: 'page-focus', run: ['page-focus'], expect: 'pushed the placeholder of a browsing-context switch' },
     { plant: 'ime-guard-off', target: 'select-ime', run: ['suggestions', 'select-ime'], expect: 'committed during composition' },
     { plant: 'draft-lost', target: 'drafts', run: ['drafts'], expect: 'expected the draft text' },
     { plant: 'pill-drag-navigates', target: 'canonize-drop', run: ['canonize-drop'], expect: "must be left to the field" },

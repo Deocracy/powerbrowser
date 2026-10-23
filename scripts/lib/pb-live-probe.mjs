@@ -143,8 +143,25 @@ export async function inChrome(app, body) {
     })()`);
 }
 
-/** Focuses the overlay of `tabId`; true when chrome's active element is then that overlay. */
+/** Chrome's `style.visibility` for the overlay of `tabId` ('visible' or 'hidden'), or null when it has none. */
+export async function overlayVisibility(app, tabId) {
+    return inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o ? o.style.visibility : null;`);
+}
+
+/**
+ * Focuses the overlay of `tabId` as a click into the page would; true when
+ * chrome's active element is then that overlay. It waits for chrome to show
+ * the overlay first: Gecko cannot focus a hidden element, and chrome shows it
+ * again only when the frontend's next geometry publish arrives, a frame or
+ * more after a menu or dropdown closes. A user cannot click a hidden page
+ * either, so this waits on the state the step needs rather than retrying.
+ */
 export async function focusOverlay(app, tabId) {
+    try {
+        await pollFor(async () => await overlayVisibility(app, tabId) === 'visible', 5000, 'the page to be shown');
+    } catch {
+        return false;
+    }
     return inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return false; o.focus(); return document.activeElement === o;`);
 }
 
