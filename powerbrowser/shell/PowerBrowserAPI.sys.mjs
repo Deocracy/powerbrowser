@@ -35,6 +35,13 @@ ChromeUtils.defineESModuleGetters(lazy, {
   // getFolderContents only -- never a raw places file open); the
   // sessionstore projection reuses the SessionStore line above.
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
+  // Phase 31 (SITE-02/03, D-31-03/D-31-06): the identity read-throughs.
+  // SiteDataManager backs the registrable-domain highlight and the site-data
+  // probe; SitePermissions backs the per-site reads (writes land in plan 02);
+  // ContentBlockingAllowList backs the per-site shield exception (plan 03).
+  SiteDataManager: "resource:///modules/SiteDataManager.sys.mjs",
+  SitePermissions: "resource:///modules/SitePermissions.sys.mjs",
+  ContentBlockingAllowList: "resource://gre/modules/ContentBlockingAllowList.sys.mjs",
 });
 
 // Strong references to in-flight one-shot timers created by sleep(). See the
@@ -3342,8 +3349,33 @@ export const PowerBrowserAPI = Object.freeze({
         }
         scheduleWebTabState(theiaBrowser, tabId, browser, starting, !starting);
       },
+      // Phase 31 (SITE-01, D-31-02): a connection change recomputes the
+      // pushed enum on the next animation frame, through the same push as
+      // url/title. Signature mirrors browser.js:2529
+      // (aWebProgress, aRequest, aState).
+      onSecurityChange(webProgress, _request, _state) {
+        if (!webProgress.isTopLevel) {
+          return;
+        }
+        scheduleWebTabState(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
+      },
+      // Phase 31 (D-31-02): a content-blocking event stashes the count and
+      // recomputes the push. Signature mirrors browser.js:2486
+      // (aWebProgress, aRequest, aEvent, aIsSimulated).
+      onContentBlockingEvent(webProgress) {
+        if (webProgress && !webProgress.isTopLevel) {
+          return;
+        }
+        try {
+          const log = browser.getContentBlockingLog();
+          entry.blockedTrackers = Array.isArray(log) ? log.length : 0;
+        } catch (err) {
+          entry.blockedTrackers = 0;
+        }
+        scheduleWebTabState(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
+      },
     };
-    browser.addProgressListener(entry.listener, Ci.nsIWebProgress.NOTIFY_LOCATION | Ci.nsIWebProgress.NOTIFY_STATE_NETWORK);
+    browser.addProgressListener(entry.listener, Ci.nsIWebProgress.NOTIFY_LOCATION | Ci.nsIWebProgress.NOTIFY_STATE_NETWORK | Ci.nsIWebProgress.NOTIFY_SECURITY | Ci.nsIWebProgress.NOTIFY_CONTENT_BLOCKING);
     // Title: dispatched on the embedder <browser> element itself
     // (WindowGlobalParent.cpp:563-566), the same event tabbrowser.js reads
     // for tab.label. Upserts the row (same key) and pushes.
@@ -3409,27 +3441,221 @@ export const PowerBrowserAPI = Object.freeze({
    * event, through the SAME actor pair the requests ride: the Theia frame's
    * WindowGlobal's parent actor sends to its child, which re-dispatches the
    * payload into the content window as a PowerBrowserWebTabState event.
-   * Primitives only -- URL, title, three booleans -- never the launch token,
-   * a pref, or an object. The frame can be mid-swap (no WindowGlobal, or one
-   * the actor's `matches` pin refuses), so a throw here is logged and
-   * dropped rather than allowed to unwind a progress notification.
+   * Primitives only -- URL, title, three booleans, the pushed identity enum
+   * (never the bitfield), display host, registrable domain and tracker
+   * count -- never the launch token, a pref, or an object. The frame can be
+   * mid-swap (no WindowGlobal, or one the actor's `matches` pin refuses), so
+   * a throw here is logged and dropped rather than allowed to unwind a
+   * progress notification.
+   *
+   * Phase 31 (SITE-01..03, D-31-01..04): `securityState` is computed here,
+   * in the same push as `url`, and reset on every location change by the
+   * caller below: what the pill renders is always this tab's last push.
    */
   webTabPush(theiaBrowser, tabId, browser, loading) {
     try {
+      const pageSpec = browser.currentURI ? browser.currentURI.spec : "";
+      const identity = PowerBrowserAPI.webTabIdentity(browser, pageSpec);
       theiaBrowser.browsingContext.currentWindowGlobal
         .getActor(GROUP_ACTOR_NAME)
         .sendAsyncMessage("PowerBrowserWebTabState", {
           kind: "state",
           tabId,
-          url: browser.currentURI.spec,
+          url: pageSpec,
           title: browser.contentTitle,
           loading: !!loading,
           canGoBack: browser.canGoBack,
           canGoForward: browser.canGoForward,
+          securityState: identity.securityState,
+          displaySpec: identity.displaySpec,
+          baseDomain: identity.baseDomain,
+          blockedTrackers: identity.blockedTrackers,
         });
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] state push for ${tabId} failed: ${err && err.message ? err.message : err}`);
     }
+  },
+
+  /**
+   * Phase 31 (SITE-01..03, D-31-01/D-31-03/D-31-04): this overlay's site
+   * identity, derived chrome-side. The decode recipe mirrors
+   * browser-siteIdentity.js:872-935: a secure transport (STATE_IS_SECURE
+   * and neither BROKEN nor INSECURE) is `secure`; a broken transport is
+   * `mixed-passive` when the break is loaded mixed display content alone,
+   * else `broken`; a non-secure transport is `local` for a potentially
+   * trustworthy origin (localhost/file, like `_isPotentiallyTrustworthy`)
+   * and `insecure` otherwise. About pages and the empty page carry `none`.
+   * The enum crosses the wire, never the bitfield. Display host comes from
+   * `nsIIDNService.convertToDisplayIDN` (getEffectiveHost, :746-759); the
+   * registrable domain from `SiteDataManager.getBaseDomainFromHost` (call
+   * site :473); both fall back without throwing. Primitives only.
+   */
+  webTabIdentity(browser, pageSpec) {
+    const spec = typeof pageSpec === "string" ? pageSpec : "";
+    let securityState = "none";
+    if (/^https?:\/\//i.test(spec)) {
+      let state = 0;
+      try {
+        state = browser.securityUI ? browser.securityUI.state : 0;
+      } catch (err) {
+        state = 0;
+      }
+      const wpl = Ci.nsIWebProgressListener;
+      const isSecure = !!(state & wpl.STATE_IS_SECURE);
+      const isBroken = !!(state & wpl.STATE_IS_BROKEN);
+      const isInsecure = !!(state & wpl.STATE_IS_INSECURE);
+      const mixedPassiveLoaded = !!(state & wpl.STATE_LOADED_MIXED_DISPLAY_CONTENT);
+      const mixedActiveLoaded = !!(state & wpl.STATE_LOADED_MIXED_ACTIVE_CONTENT);
+      const mixedDisplayBlocked = !!(state & wpl.STATE_BLOCKED_MIXED_DISPLAY_CONTENT);
+      const mixedActiveBlocked = !!(state & wpl.STATE_BLOCKED_MIXED_ACTIVE_CONTENT);
+      if (isSecure && !isBroken && !isInsecure) {
+        securityState = "secure";
+      } else if (isBroken || (isSecure && isInsecure)) {
+        securityState = (mixedPassiveLoaded && !mixedActiveLoaded && !mixedDisplayBlocked && !mixedActiveBlocked) ? "mixed-passive" : "broken";
+      } else if (PowerBrowserAPI.webTabIsLocalOrigin(browser)) {
+        securityState = "local";
+      } else {
+        securityState = "insecure";
+      }
+    }
+    let displaySpec = "";
+    let baseDomain = null;
+    try {
+      const uri = browser.currentURI;
+      if (uri && typeof uri.host === "string" && uri.host) {
+        try {
+          displaySpec = Cc["@mozilla.org/network/idn-service;1"].getService(Ci.nsIIDNService).convertToDisplayIDN(uri.host);
+        } catch (err) {
+          displaySpec = uri.host;
+        }
+        try {
+          baseDomain = lazy.SiteDataManager.getBaseDomainFromHost(uri.host);
+        } catch (err) {
+          baseDomain = null;
+        }
+      }
+    } catch (err) {
+      displaySpec = "";
+      baseDomain = null;
+    }
+    let blockedTrackers = 0;
+    try {
+      const entry = [...webTabs.values()].find(candidate => candidate.browser === browser);
+      if (entry && typeof entry.blockedTrackers === "number") {
+        blockedTrackers = entry.blockedTrackers;
+      } else {
+        const log = browser.getContentBlockingLog();
+        blockedTrackers = Array.isArray(log) ? log.length : 0;
+      }
+    } catch (err) {
+      blockedTrackers = 0;
+    }
+    return { securityState, displaySpec, baseDomain, blockedTrackers };
+  },
+
+  /**
+   * Phase 31 (D-31-01): the `_isPotentiallyTrustworthy` half of the decode
+   * (`_isSecureContext` on the page's own principal, browser-siteIdentity
+   * :44-46) without the broken-connection exclusion the caller already
+   * applies. True for localhost and file origins; false -- or a throw --
+   * resolves to `insecure` there.
+   */
+  webTabIsLocalOrigin(browser) {
+    try {
+      const principal = browser.contentPrincipal;
+      if (principal && typeof principal.isPotentiallyTrustworthy === "boolean") {
+        return principal.isPotentiallyTrustworthy;
+      }
+      const scheme = browser.currentURI ? browser.currentURI.scheme : "";
+      return scheme === "file";
+    } catch (err) {
+      return false;
+    }
+  },
+
+  /**
+   * Phase 31 (SITE-04..06, D-31-05/D-31-06): one overlay's site information.
+   * Everything derives from the overlay: the identity is recomputed (never
+   * trusted from a sender), the cert reads `secInfo.serverCert`
+   * (pageinfo/security.js:92-94 shape: organization/issuer/validity, null
+   * when there is none), the permissions read
+   * `SitePermissions.getAllForBrowser` (:237-264) filtered to the
+   * chrome-side ID array, the site-data probe reads
+   * `SiteDataManager.hasSiteData`, and the shield reads
+   * `ContentBlockingAllowList.includes` plus the stashed log length.
+   * Primitives only; every read is guarded, so a missing surface resolves
+   * to a null/false/empty rather than throwing the kind out.
+   */
+  async webTabSiteInfo(browser) {
+    const pageSpec = browser.currentURI ? browser.currentURI.spec : "";
+    const identity = PowerBrowserAPI.webTabIdentity(browser, pageSpec);
+    let issuer = null;
+    let subject = null;
+    let validFrom = null;
+    let validTo = null;
+    try {
+      const secInfo = browser.securityUI ? browser.securityUI.secInfo : null;
+      const cert = secInfo ? secInfo.serverCert : null;
+      if (cert) {
+        issuer = typeof cert.issuerOrganization === "string" && cert.issuerOrganization ? cert.issuerOrganization
+          : (typeof cert.issuerName === "string" ? cert.issuerName : null);
+        subject = typeof cert.organization === "string" && cert.organization ? cert.organization
+          : (typeof cert.commonName === "string" ? cert.commonName : null);
+        const validity = cert.validity;
+        if (validity) {
+          validFrom = typeof validity.notBefore === "string" ? validity.notBefore : null;
+          validTo = typeof validity.notAfter === "string" ? validity.notAfter : null;
+        }
+      }
+    } catch (err) {
+      issuer = null;
+      subject = null;
+      validFrom = null;
+      validTo = null;
+    }
+    let permissions = [];
+    try {
+      const all = lazy.SitePermissions.getAllForBrowser(browser);
+      if (Array.isArray(all)) {
+        permissions = all
+          .filter(row => row && SITE_INFO_PERMISSION_IDS.includes(row.id))
+          .map(row => ({ id: String(row.id), state: row.state, scope: row.scope ?? null }));
+      }
+    } catch (err) {
+      permissions = [];
+    }
+    let hasData = false;
+    try {
+      const host = browser.currentURI && typeof browser.currentURI.asciiHost === "string" ? browser.currentURI.asciiHost : "";
+      hasData = host ? await lazy.SiteDataManager.hasSiteData(host) : false;
+    } catch (err) {
+      hasData = false;
+    }
+    let shieldExcepted = false;
+    try {
+      shieldExcepted = !!lazy.ContentBlockingAllowList.includes(browser);
+    } catch (err) {
+      shieldExcepted = false;
+    }
+    let shieldCount = 0;
+    try {
+      const log = browser.getContentBlockingLog();
+      shieldCount = Array.isArray(log) ? log.length : 0;
+    } catch (err) {
+      shieldCount = 0;
+    }
+    return {
+      securityState: identity.securityState,
+      displaySpec: identity.displaySpec,
+      baseDomain: identity.baseDomain,
+      issuer,
+      subject,
+      validFrom,
+      validTo,
+      permissions,
+      hasData,
+      shield: { count: shieldCount, excepted: shieldExcepted },
+    };
   },
 
   /**
@@ -4153,7 +4379,13 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo"]);
+
+// Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
+// read path -- the six upstream Firefox IDs, the same set the Theia table
+// carries. Chrome never imports the Theia table; the static gate compares
+// the two by set equality.
+const SITE_INFO_PERMISSION_IDS = ["camera", "microphone", "geo", "desktop-notification", "autoplay-media", "popup"];
 
 async function handleWebTabAction(data, actorRef) {
   if (!groupSenderIsTheia(actorRef)) {
@@ -4228,6 +4460,23 @@ async function handleWebTabAction(data, actorRef) {
       }
       activeTabByFrame.set(actorRef.browsingContext.top.embedderElement, data.tabId);
       return { ok: true, kind, where: "applied" };
+    }
+    // Phase 31 (SITE-04..06, D-31-05/D-31-06): this tab's site information
+    // for the panel shell. tabId only: the principal, the cert, the
+    // permissions, the site-data probe and the shield state all derive from
+    // the overlay chrome already holds -- never from a sender field, so a
+    // frame can only read its own tab's site. Primitives only, like the
+    // history arm above. No setForPrincipal/removeFromPrincipal call here;
+    // the write arms arrive in plan 02.
+    case "webTabSiteInfo": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      return { ok: true, kind, where: "done", ...(await PowerBrowserAPI.webTabSiteInfo(entry.browser)) };
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };

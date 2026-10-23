@@ -162,6 +162,14 @@ export interface WebTabState {
     loading: boolean;
     canGoBack: boolean;
     canGoForward: boolean;
+    /** Phase 31 (D-31-01): chrome's connection decode, pushed with `url`; 'none' until the first location change. */
+    securityState?: string;
+    /** Phase 31 (D-31-03): the IDN-safe host chrome derived for display. */
+    displaySpec?: string;
+    /** Phase 31 (D-31-03): the registrable domain, or null when it cannot be derived. */
+    baseDomain?: string | null;
+    /** Phase 31 (D-31-02): the content-blocking log length chrome stashed. */
+    blockedTrackers?: number;
 }
 
 /**
@@ -181,7 +189,8 @@ export type WebTabMessage =
     | { kind: 'webTabStop'; tabId: string }
     | { kind: 'webTabHistory'; tabId: string }
     | { kind: 'webTabGotoIndex'; tabId: string; index: number }
-    | { kind: 'webTabActivated'; tabId: string | null };
+    | { kind: 'webTabActivated'; tabId: string | null }
+    | { kind: 'webTabSiteInfo'; tabId: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -252,6 +261,12 @@ export class WebTabChannel {
                 loading: detail.loading === true,
                 canGoBack: detail.canGoBack === true,
                 canGoForward: detail.canGoForward === true,
+                securityState: typeof detail.securityState === 'string' ? detail.securityState : widget.securityState,
+                displaySpec: typeof detail.displaySpec === 'string' ? detail.displaySpec : widget.displaySpec,
+                baseDomain: typeof detail.baseDomain === 'string' || detail.baseDomain === null
+                    ? detail.baseDomain as string | null
+                    : widget.baseDomain,
+                blockedTrackers: typeof detail.blockedTrackers === 'number' ? detail.blockedTrackers : widget.blockedTrackers,
             });
         });
     }
@@ -357,6 +372,14 @@ export class WebTabWidget extends BaseWidget {
     canGoBack = false;
     canGoForward = false;
     lostView = false;
+    /** Phase 31 (D-31-01): the last pushed connection state; undefined before the first push. */
+    securityState: string | undefined;
+    /** Phase 31 (D-31-03): the last pushed display host. */
+    displaySpec: string | undefined;
+    /** Phase 31 (D-31-03): the last pushed registrable domain. */
+    baseDomain: string | null | undefined;
+    /** Phase 31 (D-31-02): the last pushed blocked-tracker count. */
+    blockedTrackers = 0;
 
     protected readonly stateEmitter = new Emitter<WebTabState>();
     readonly onDidChangeState: TheiaEvent<WebTabState> = this.stateEmitter.event;
@@ -681,12 +704,29 @@ export class WebTabWidget extends BaseWidget {
         this.channel.send({ kind: 'webTabStop', tabId: this.tabId });
     }
 
+    /** Phase 31 (D-31-05): this tab's site information, keyed chrome-side by the overlay's own principal. */
+    siteInfo(): Promise<WebTabReply> {
+        return this.channel.request({ kind: 'webTabSiteInfo', tabId: this.tabId });
+    }
+
     applyState(state: WebTabState): void {
         this.url = state.url;
         this.pageTitle = state.title;
         this.loading = state.loading;
         this.canGoBack = state.canGoBack;
         this.canGoForward = state.canGoForward;
+        if (state.securityState !== undefined) {
+            this.securityState = state.securityState;
+        }
+        if (state.displaySpec !== undefined) {
+            this.displaySpec = state.displaySpec;
+        }
+        if (state.baseDomain !== undefined) {
+            this.baseDomain = state.baseDomain;
+        }
+        if (state.blockedTrackers !== undefined) {
+            this.blockedTrackers = state.blockedTrackers;
+        }
         if (this.loading) {
             const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
             this.title.iconClass = reduced ? 'codicon codicon-loading' : 'codicon codicon-loading codicon-modifier-spin';
