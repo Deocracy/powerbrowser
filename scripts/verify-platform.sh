@@ -3773,6 +3773,18 @@ run_own_checks() {
     "address-bar-modes|node $REPO_ROOT/scripts/verify-address-bar-modes.mjs"
     "address-bar-modes-self-test|node $REPO_ROOT/scripts/verify-address-bar-modes.mjs --self-test"
 
+    # NEW (31-01, SITE-01..03): the site-identity static gate. Imports the
+    # pure table under Node type stripping and compares it against what the
+    # tree derives: SECURITY_STATES against the boundary decode arms, the
+    # overlay mask flags, PERMISSION_IDS against upstream SitePermissions
+    # plus the chrome-side array, absence of openStockTab(about:…),
+    # data.origin and typed-text lock derivations, style-literal and codicon
+    # checks, and the catalogue rows. Honestly --quick: source reads plus
+    # two catalog subprocesses and a mkdtemp copy per plant; no build, no
+    # browser, no display, no network.
+    "site-identity|node $REPO_ROOT/scripts/verify-site-identity.mjs"
+    "site-identity-self-test|node $REPO_ROOT/scripts/verify-site-identity.mjs --self-test"
+
     # NEW (13-05): GUI-06's bar-placement gate. Derives the contribution area
     # from the widget's addWidget call and the ratified order from the
     # UI-SPEC order line at check time and compares both; honestly --quick
