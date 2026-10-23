@@ -122,12 +122,11 @@ async function identityTls(ctx) {
         const original = proto.renderIdentityBox;
         proto.renderIdentityBox = function () {
             const secure = this.inputValue.trim().startsWith('https://');
-            bar.inputValue = secure ? bar.inputValue : bar.inputValue;
-            bar.committedAddress = bar.inputValue;
-            return original.call(this);
+            if (!secure) return original.call(this);
+            // The pre-31 lock followed the typed text; shadow the pushed state with it.
+            this.identityState = () => ({ state: 'secure', displaySpec: '', baseDomain: null });
+            try { return original.call(this); } finally { delete this.identityState; }
         };
-        bar.inputValue = 'https://evil.example';
-        bar.update();
         return true;`) === true) {
         note('PLANT typed-lock applied');
     }
@@ -214,8 +213,8 @@ async function identityTls(ctx) {
     const mixedBox = await readIdentity(app);
     if (!mixedBox.present) {
         fail('no .pb-identity element with the mixed web tab current');
-    } else if (mixedBox.icon === null || !String(mixedBox.icon).includes('warning')) {
-        fail(`the mixed pill must render the warning icon; saw icon ${JSON.stringify(mixedBox.icon)}`);
+    } else if (mixedBox.icon === null || !String(mixedBox.icon).split(' ').includes('codicon-warning') || !String(mixedBox.icon).split(' ').includes('is-warning')) {
+        fail(`the mixed pill must render the warning icon in the warning colour (codicon-warning is-warning); saw icon ${JSON.stringify(mixedBox.icon)}`);
     }
     // --- spoof: typing https text on the plain tab moves neither icon nor text.
     if (await makeCurrent(app, plainId) !== true) {
@@ -253,6 +252,13 @@ async function identityTls(ctx) {
     }
     if (idnPush.displaySpec !== idnAscii) {
         fail(`the IDN tab pushed displaySpec ${JSON.stringify(idnPush.displaySpec)}, want the punycode ${JSON.stringify(idnAscii)}`);
+    }
+    if (await makeCurrent(app, idnId) !== true) {
+        return fail(`${BROKEN} the IDN web tab could not be made current`);
+    }
+    const idnBox = await readIdentity(app);
+    if (!idnBox.present || idnBox.host !== idnAscii) {
+        fail(`the IDN pill must render the punycode host ${JSON.stringify(idnAscii)}; saw ${JSON.stringify(idnBox)}`);
     }
 }
 
