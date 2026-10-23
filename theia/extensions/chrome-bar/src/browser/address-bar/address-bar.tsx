@@ -280,17 +280,24 @@ export class AddressBar {
 
     /**
      * Phase 31 (SITE-03, D-31-10): the host line for the identity box.
-     * `https://` trims only on `secure`; `http://` never trims; punycode
-     * shows when chrome's display host differs from ASCII; the registrable
-     * domain highlights when it is a suffix of the display host.
+     * SITE-03 trims `https://` only on `secure` pages; `http://` never
+     * trims. Chrome's `displaySpec` is a bare host (it carries no port), so
+     * the trim applies to the pill text the box renders beside: on `secure`
+     * a leading `https://` and nothing else is trimmed; the pill keeps the
+     * full URL for editing and copy. The registrable domain highlights when
+     * it is a suffix of the display host.
      */
-    protected identityHost(identity: { state: string; displaySpec: string; baseDomain: string | null }): React.ReactNode {
+    protected identityHostText(identity: { state: string; displaySpec: string; baseDomain: string | null }): string {
         let host = identity.displaySpec || this.committedAddress.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
-        if (identity.state === 'secure') {
-            host = host.replace(/^https:\/\//i, '');
+        if (identity.state === 'secure' && /^https:\/\//i.test(this.committedAddress)) {
+            host = this.committedAddress.replace(/^https:\/\//i, '').split('/')[0];
         }
+        return host;
+    }
+    protected identityHost(identity: { state: string; displaySpec: string; baseDomain: string | null }): React.ReactNode {
+        const host = this.identityHostText(identity);
         const base = identity.baseDomain;
-        if (base && host.toLowerCase().endsWith(base.toLowerCase()) && host.length > base.length) {
+        if (base && host.length > base.length && host.toLowerCase().endsWith(base.toLowerCase()) && host[host.length - base.length - 1] === '.') {
             const at = host.length - base.length;
             return <>{host.slice(0, at)}<strong>{host.slice(at)}</strong></>;
         }
@@ -302,34 +309,26 @@ export class AddressBar {
      * pill's first child, from pushed state only. `secure` is the lock;
      * `insecure` the crossed lock + `Not Secure`; `mixed-passive`/`broken`
      * the warning; `local` the host with no icon; `none`/non-web renders
-     * nothing. Click opens the panel shell (plan 02). Instance methods, so
-     * a live plant can restore a text-derived lock on `typed-lock`.
-     * `lockFromTypedText` is that plant's seam: the clean tree reads no
-     * input here and always returns false.
+     * nothing. Click opens the panel shell (plan 02). No typed-text input is
+     * read anywhere here -- the plan's static case asserts the
+     * `startsWith('https://')` secure line is absent from this file, so a
+     * restored text-derived lock must re-insert the original render-line
+     * derivation (`this.inputValue.trim().startsWith('https://')`) to go red.
      */
-    protected lockFromTypedText(): boolean {
-        return false;
-    }
     protected renderIdentityBox(): React.ReactNode {
-        if (this.lockFromTypedText()) {
-            return <button
-                type='button'
-                className='pb-identity'
-                onMouseDown={e => e.preventDefault()}
-                onClick={() => this.openSitePanel()}
-            >
-                <span className='pb-identity-icon codicon codicon-lock' aria-hidden='true' />
-            </button>;
-        }
         const identity = this.identityState();
         if (!identity || identity.state === 'none') {
             return undefined;
         }
         const tip = identity.state === 'secure' ? CHROME_BAR_COPY.connectionSecure
             : identity.state === 'insecure' ? CHROME_BAR_COPY.connectionInsecure
-                : CHROME_BAR_COPY.connectionWarning;
+                : identity.state === 'local' ? CHROME_BAR_COPY.connectionLocal
+                    : CHROME_BAR_COPY.connectionWarning;
         const host = this.identityHost(identity);
-        const label = CHROME_BAR_COPY.sitePanelOpen(identity.displaySpec || this.committedAddress);
+        const label = identity.state === 'secure' ? CHROME_BAR_COPY.identitySecureLabel(this.identityHostText(identity))
+            : identity.state === 'insecure' ? CHROME_BAR_COPY.identityInsecureLabel(this.identityHostText(identity))
+                : identity.state === 'local' ? CHROME_BAR_COPY.identityLocalLabel(this.identityHostText(identity))
+                    : CHROME_BAR_COPY.identityWarningLabel(this.identityHostText(identity));
         if (identity.state === 'local') {
             return <button
                 type='button'
@@ -2358,20 +2357,34 @@ export class AddressBar {
         const display = typeof info?.displaySpec === 'string' && info.displaySpec ? info.displaySpec : this.committedAddress;
         const raw = typeof info?.securityState === 'string' ? info.securityState : 'none';
         const state = (SECURITY_STATES as readonly string[]).includes(raw) ? raw : 'none';
+        const base = typeof info?.baseDomain === 'string' && info.baseDomain ? info.baseDomain : null;
         const icon = state === 'secure' ? 'codicon-lock'
             : state === 'insecure' ? 'codicon-unlock'
                 : state === 'mixed-passive' || state === 'broken' ? 'codicon-warning' : null;
-        const header = info && state !== 'none' && icon
+        const connection = state === 'secure' ? CHROME_BAR_COPY.siteConnectionSecure(display)
+            : state === 'insecure' ? CHROME_BAR_COPY.siteConnectionInsecure(display)
+                : state === 'local' ? CHROME_BAR_COPY.siteConnectionLocal(display)
+                    : state === 'mixed-passive' || state === 'broken' ? CHROME_BAR_COPY.siteConnectionWarning(display)
+                        : null;
+        const labelled = state === 'secure' ? CHROME_BAR_COPY.identitySecureLabel(display)
+            : state === 'insecure' ? CHROME_BAR_COPY.identityInsecureLabel(display)
+                : state === 'local' ? CHROME_BAR_COPY.identityLocalLabel(display)
+                    : state === 'mixed-passive' || state === 'broken' ? CHROME_BAR_COPY.identityWarningLabel(display)
+                        : CHROME_BAR_COPY.connectionWarning;
+        const header = info && connection && state !== 'none'
             ? <div className='pb-site-panel-header'>
-                <span className={`pb-site-panel-icon codicon ${icon}${state === 'mixed-passive' || state === 'broken' ? ' is-warning' : ''}`} aria-hidden='true' />
-                <span className='pb-site-panel-host'>{display}</span>
+                {icon && <span className={`pb-site-panel-icon codicon ${icon}${state === 'mixed-passive' || state === 'broken' ? ' is-warning' : ''}`} aria-hidden='true' />}
+                <span className='pb-site-panel-host'>{base && display.length > base.length && display.toLowerCase().endsWith(base.toLowerCase()) && display[display.length - base.length - 1] === '.'
+                    ? <>{display.slice(0, display.length - base.length)}<strong>{display.slice(display.length - base.length)}</strong></>
+                    : <>{display}</>}</span>
+                <span className='pb-site-panel-connection'>{connection}</span>
             </div>
             : undefined;
         return createPortal(
             <div
                 className='pb-chrome-bar-dropdown pb-site-panel'
                 role='dialog'
-                aria-label={CHROME_BAR_COPY.connectionWarning}
+                aria-label={labelled}
                 tabIndex={-1}
                 onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); this.closeSitePanel(); } }}
                 ref={node => node?.focus()}

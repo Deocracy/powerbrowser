@@ -76,7 +76,16 @@ export const CHROME_BAR_COPY = Object.freeze({
     connectionSecure: 'Connection secure',
     connectionInsecure: 'Not Secure',
     connectionWarning: 'This page has a security problem',
+    connectionLocal: 'This page is served from this device',
     sitePanelOpen: (host: string) => `Show site information for ${host}`,
+    identitySecureLabel: (host: string) => `Connection secure, show site information for ${host}`,
+    identityInsecureLabel: (host: string) => `Not Secure, show site information for ${host}`,
+    identityWarningLabel: (host: string) => `Security problem, show site information for ${host}`,
+    identityLocalLabel: (host: string) => `Local page, show site information for ${host}`,
+    siteConnectionSecure: (host: string) => `Secure connection to ${host}`,
+    siteConnectionInsecure: (host: string) => `Not a secure connection to ${host}`,
+    siteConnectionWarning: (host: string) => `There is a security problem with ${host}`,
+    siteConnectionLocal: (host: string) => `Local page on ${host}`,
     siteUnavailable: (subject: string) => `${subject} can't show site information for this page. Try reloading the page.`,
 });
 

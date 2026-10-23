@@ -3322,6 +3322,10 @@ export const PowerBrowserAPI = Object.freeze({
         if (!webProgress.isTopLevel) {
           return;
         }
+        // Phase 31 (D-31-01/D-31-02): a top-level location change resets
+        // the stashed shield count with the identity, so the next push --
+        // in the same frame as the new url -- never shows the old page's.
+        entry.blockedTrackers = 0;
         const locationSpec = location.spec;
         const sameDocument = !!(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT);
         if (!sameDocument && /^https?:\/\//i.test(locationSpec)) {
@@ -3367,8 +3371,7 @@ export const PowerBrowserAPI = Object.freeze({
           return;
         }
         try {
-          const log = browser.getContentBlockingLog();
-          entry.blockedTrackers = Array.isArray(log) ? log.length : 0;
+          entry.blockedTrackers = PowerBrowserAPI.webTabBlockedTrackerCount(browser);
         } catch (err) {
           entry.blockedTrackers = 0;
         }
@@ -3540,12 +3543,19 @@ export const PowerBrowserAPI = Object.freeze({
     }
     let blockedTrackers = 0;
     try {
+      // Phase 31 (D-31-02/SITE-08): `getContentBlockingLog()` returns a
+      // serialized JSON DOMString or null (browser-custom-element.mjs:1889,
+      // the `contentBlockingLog` DOMString at WindowGlobalActors.webidl:149),
+      // so it must be parsed before counting: `{ origin: [[state, blocked],
+      // ...] }` (browser-siteProtections.js:1026 `_processContentBlockingLog`).
+      // A count is derived only fresh -- the entry stash above, reset on
+      // every top-level location change, wins when present, so a stale or
+      // blockerless page can never repeat the old page's count.
       const entry = [...webTabs.values()].find(candidate => candidate.browser === browser);
       if (entry && typeof entry.blockedTrackers === "number") {
         blockedTrackers = entry.blockedTrackers;
       } else {
-        const log = browser.getContentBlockingLog();
-        blockedTrackers = Array.isArray(log) ? log.length : 0;
+        blockedTrackers = PowerBrowserAPI.webTabBlockedTrackerCount(browser);
       }
     } catch (err) {
       blockedTrackers = 0;
@@ -3554,17 +3564,52 @@ export const PowerBrowserAPI = Object.freeze({
   },
 
   /**
-   * Phase 31 (D-31-01): the `_isPotentiallyTrustworthy` half of the decode
-   * (`_isSecureContext` on the page's own principal, browser-siteIdentity
-   * :44-46) without the broken-connection exclusion the caller already
-   * applies. True for localhost and file origins; false -- or a throw --
-   * resolves to `insecure` there.
+   * Phase 31 (D-31-02/SITE-08): one overlay's blocked-tracker count -- the
+   * number of origins in its parsed content-blocking log. Guards every step:
+   * null, non-string, and unparseable logs read 0 rather than throwing the
+   * push out.
+   */
+  webTabBlockedTrackerCount(browser) {
+    try {
+      const raw = browser.getContentBlockingLog();
+      if (typeof raw !== "string" || !raw) {
+        return 0;
+      }
+      let parsed = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (err) {
+        return 0;
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return 0;
+      }
+      return Object.keys(parsed).length;
+    } catch (err) {
+      return 0;
+    }
+  },
+
+  /**
+   * Phase 31 (D-31-01): the trust half of the decode -- upstream's
+   * `_isPotentiallyTrustworthy` getter (browser-siteIdentity.js:192-198)
+   * without its broken-connection guard, which the caller already applies
+   * in this file. True for secure contexts (`securityUI.isSecureContext`,
+   * browser-siteIdentity.js:676-677 -- a loopback http page is a secure
+   * context) and for chrome-scheme documents; a missing or throwing surface
+   * resolves to false, which reads `insecure` there. The principal's
+   * `isOriginPotentiallyTrustworthy` (nsIPrincipal.idl:468) is the fallback
+   * for documents with no securityUI (e.g. about:blank).
    */
   webTabIsLocalOrigin(browser) {
     try {
+      const securityUI = browser.securityUI;
+      if (securityUI && typeof securityUI.isSecureContext === "boolean") {
+        return securityUI.isSecureContext;
+      }
       const principal = browser.contentPrincipal;
-      if (principal && typeof principal.isPotentiallyTrustworthy === "boolean") {
-        return principal.isPotentiallyTrustworthy;
+      if (principal && typeof principal.isOriginPotentiallyTrustworthy === "boolean") {
+        return principal.isOriginPotentiallyTrustworthy;
       }
       const scheme = browser.currentURI ? browser.currentURI.scheme : "";
       return scheme === "file";
@@ -3639,8 +3684,7 @@ export const PowerBrowserAPI = Object.freeze({
     }
     let shieldCount = 0;
     try {
-      const log = browser.getContentBlockingLog();
-      shieldCount = Array.isArray(log) ? log.length : 0;
+      shieldCount = PowerBrowserAPI.webTabBlockedTrackerCount(browser);
     } catch (err) {
       shieldCount = 0;
     }
