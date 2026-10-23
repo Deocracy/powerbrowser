@@ -624,6 +624,11 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} couldn't load these results. Keep typing to try again.",
   "Enter opens · Type ? for more · ${name} enters an address · Esc closes",
   "Go to ${name}",
+  "Connection secure",
+  "Not Secure",
+  "This page has a security problem",
+  "Show site information for ${name}",
+  "${name} can't show site information for this page. Try reloading the page.",
 ]);
 
 /**

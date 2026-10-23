@@ -33,6 +33,7 @@ import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes'
 // Type only: command-centre.ts imports the shortcut table, which imports this file.
 import type { CommandCentreAddressBarMode } from './command-centre';
 import { CHROME_BAR_COPY, appSubject } from '../chrome-bar-copy';
+import { SECURITY_STATES } from '../site-identity/site-identity-table';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
 } from '../chrome-bar-preferences';
@@ -256,6 +257,153 @@ export class AddressBar {
     protected update(): void {
         this.host?.update();
     }
+
+    /**
+     * Phase 31 (SITE-01, D-31-01/D-31-09): this pill's identity, from the
+     * current web tab's last pushed state only -- never from pill text, so
+     * typing cannot spoof it. A non-web widget (an editor) has no identity.
+     */
+    protected identityState(): { state: string; displaySpec: string; baseDomain: string | null } | undefined {
+        const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
+        if (!(tab instanceof WebTabWidget) || !tab.hasPage) {
+            return undefined;
+        }
+        // Read through the pushed-state fields; `in` keeps this compiling
+        // against the published tab-uris lib until the next Theia build.
+        const pushed = tab as WebTabWidget & { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown };
+        const raw = typeof pushed.securityState === 'string' ? pushed.securityState : 'none';
+        const state = (SECURITY_STATES as readonly string[]).includes(raw) ? raw : 'none';
+        const displaySpec = typeof pushed.displaySpec === 'string' ? pushed.displaySpec : '';
+        const baseDomain = typeof pushed.baseDomain === 'string' ? pushed.baseDomain : null;
+        return { state, displaySpec, baseDomain };
+    }
+
+    /**
+     * Phase 31 (SITE-03, D-31-10): the host line for the identity box.
+     * `https://` trims only on `secure`; `http://` never trims; punycode
+     * shows when chrome's display host differs from ASCII; the registrable
+     * domain highlights when it is a suffix of the display host.
+     */
+    protected identityHost(identity: { state: string; displaySpec: string; baseDomain: string | null }): React.ReactNode {
+        let host = identity.displaySpec || this.committedAddress.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
+        if (identity.state === 'secure') {
+            host = host.replace(/^https:\/\//i, '');
+        }
+        const base = identity.baseDomain;
+        if (base && host.toLowerCase().endsWith(base.toLowerCase()) && host.length > base.length) {
+            const at = host.length - base.length;
+            return <>{host.slice(0, at)}<strong>{host.slice(at)}</strong></>;
+        }
+        return <>{host}</>;
+    }
+
+    /**
+     * Phase 31 (SITE-01..03, D-31-09/D-31-10/D-31-14): the identity box, the
+     * pill's first child, from pushed state only. `secure` is the lock;
+     * `insecure` the crossed lock + `Not Secure`; `mixed-passive`/`broken`
+     * the warning; `local` the host with no icon; `none`/non-web renders
+     * nothing. Click opens the panel shell (plan 02). Instance methods, so
+     * a live plant can restore a text-derived lock on `typed-lock`.
+     * `lockFromTypedText` is that plant's seam: the clean tree reads no
+     * input here and always returns false.
+     */
+    protected lockFromTypedText(): boolean {
+        return false;
+    }
+    protected renderIdentityBox(): React.ReactNode {
+        if (this.lockFromTypedText()) {
+            return <button
+                type='button'
+                className='pb-identity'
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => this.openSitePanel()}
+            >
+                <span className='pb-identity-icon codicon codicon-lock' aria-hidden='true' />
+            </button>;
+        }
+        const identity = this.identityState();
+        if (!identity || identity.state === 'none') {
+            return undefined;
+        }
+        const tip = identity.state === 'secure' ? CHROME_BAR_COPY.connectionSecure
+            : identity.state === 'insecure' ? CHROME_BAR_COPY.connectionInsecure
+                : CHROME_BAR_COPY.connectionWarning;
+        const host = this.identityHost(identity);
+        const label = CHROME_BAR_COPY.sitePanelOpen(identity.displaySpec || this.committedAddress);
+        if (identity.state === 'local') {
+            return <button
+                type='button'
+                className='pb-identity'
+                aria-label={label}
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => this.openSitePanel()}
+            >
+                <span className='pb-identity-host'>{host}</span>
+            </button>;
+        }
+        const icon = identity.state === 'secure' ? 'codicon-lock'
+            : identity.state === 'insecure' ? 'codicon-unlock' : 'codicon-warning';
+        const warning = identity.state === 'mixed-passive' || identity.state === 'broken';
+        return <button
+            type='button'
+            className='pb-identity'
+            aria-label={label}
+            onPointerEnter={e => this.hover.requestHover({
+                content: tip,
+                target: e.currentTarget,
+                position: 'bottom',
+                cssClasses: ['pb-chrome-bar-hover'],
+            })}
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => this.openSitePanel()}
+        >
+            <span className={`pb-identity-icon codicon ${icon}${warning ? ' is-warning' : ''}`} aria-hidden='true' />
+            {identity.state === 'insecure' && <span className='pb-identity-insecure'>{CHROME_BAR_COPY.connectionInsecure}</span>}
+            <span className='pb-identity-host'>{host}</span>
+        </button>;
+    }
+
+    /**
+     * Phase 31 (SITE-01/02): the panel opener. Requests this tab's site
+     * information through the privileged kind from the click handler only;
+     * renders the panel shell (header or `not-available` fallback) in the
+     * same `.pb-chrome-bar-dropdown` portal family as every other pill
+     * dropdown. Full permission rows land in plan 02 task 1 -- this wires
+     * open/close/Esc/outside-click and the `webTabSiteInfo` request.
+     */
+    protected async openSitePanel(): Promise<void> {
+        const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
+        let info: { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown } | null = null;
+        // Read through the pushed-state request field; `in` keeps this
+        // compiling against the published tab-uris lib until the next Theia
+        // build (same seam as identityState's pushed fields above).
+        const requester = tab as WebTabWidget & { siteInfo?: unknown };
+        if (tab instanceof WebTabWidget && typeof requester.siteInfo === 'function') {
+            try {
+                info = await (requester.siteInfo as () => Promise<{ securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown }>)();
+            } catch {
+                info = null;
+            }
+        }
+        this.sitePanelInfo = info && typeof info === 'object' && (info as { ok?: unknown }).ok !== false ? info : null;
+        this.sitePanelOpen = true;
+        this.update();
+    }
+
+    /** Phase 31 (SITE-01/02): the panel shell's last `webTabSiteInfo` reply; null on `unknown-tab`/refused. */
+    protected sitePanelInfo: { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown } | null = null;
+
+    /** Phase 31 (SITE-01): whether the panel shell shows. */
+    protected sitePanelOpen = false;
+
+    /** Phase 31 (SITE-02): closes the panel shell. */
+    protected closeSitePanel = (): void => {
+        if (this.sitePanelOpen) {
+            this.sitePanelOpen = false;
+            this.sitePanelInfo = null;
+            this.update();
+        }
+    };
 
     protected inputValue = '';
     protected committedAddress = '';
@@ -1669,11 +1817,13 @@ export class AddressBar {
             // BAR-07: the default action removes the selected completion; the re-query must not complete it again.
             this.autofillSuppressed = true;
         } else if (e.key === 'Escape') {
-            // Staged dismissal: close the dropdown, then restore the committed
-            // address, then (NAV-01) stop a loading page.
+            // Staged dismissal: close the dropdown, then the site panel,
+            // then restore the committed address, then (NAV-01) stop a loading page.
             if (this.dropdownOpen) {
                 this.closeDropdown();
                 this.update();
+            } else if (this.sitePanelOpen) {
+                this.closeSitePanel();
             } else if (this.inputValue !== this.committedAddress || this.mode !== this.defaultMode()) {
                 // D-15: the restore step also returns a picked mode to the default.
                 this.inputValue = this.committedAddress;
@@ -1876,6 +2026,7 @@ export class AddressBar {
     protected onInputBlur = (): void => {
         this.closeDropdown();
         this.closeModesMenu();
+        this.closeSitePanel();
         this.update();
     };
 
@@ -2139,7 +2290,6 @@ export class AddressBar {
 
     /** The pill and its portalled dropdown, rendered by the bar widget between Home and New Tab. */
     render(): React.ReactNode {
-        const secure = this.inputValue.trim().startsWith('https://');
         const engine = this.effectiveEngine();
         const modeEngine = this.modeEngine();
         const local = this.localMode();
@@ -2161,8 +2311,8 @@ export class AddressBar {
                 onDragLeave={this.onDropTargetDragLeave}
                 onDrop={this.onPillDrop}
             >
+                {this.renderIdentityBox()}
                 {this.renderModeButton()}
-                {secure && <span className='codicon codicon-lock pb-chrome-bar-lock' aria-hidden='true' />}
                 <input
                     className={CHROME_BAR_INPUT_CLASS}
                     placeholder={placeholder}
@@ -2189,7 +2339,50 @@ export class AddressBar {
             </div>
             {this.renderDropdown()}
             {this.renderModesMenu()}
+            {this.renderSitePanelFallback()}
         </>;
+    }
+
+    /**
+     * Phase 31 (SITE-01/02): the panel shell -- identity click renders the
+     * `.pb-chrome-bar-dropdown.pb-site-panel` portal (D-31-14) with a header
+     * (state icon + displaySpec + baseDomain) from the `webTabSiteInfo`
+     * reply, else the `not-available` fallback copy on `unknown-tab` or a
+     * refused reply. Esc and outside-click (blur of the whole bar) close it.
+     */
+    protected renderSitePanelFallback(): React.ReactNode {
+        if (!this.sitePanelOpen) {
+            return undefined;
+        }
+        const info = this.sitePanelInfo;
+        const display = typeof info?.displaySpec === 'string' && info.displaySpec ? info.displaySpec : this.committedAddress;
+        const raw = typeof info?.securityState === 'string' ? info.securityState : 'none';
+        const state = (SECURITY_STATES as readonly string[]).includes(raw) ? raw : 'none';
+        const icon = state === 'secure' ? 'codicon-lock'
+            : state === 'insecure' ? 'codicon-unlock'
+                : state === 'mixed-passive' || state === 'broken' ? 'codicon-warning' : null;
+        const header = info && state !== 'none' && icon
+            ? <div className='pb-site-panel-header'>
+                <span className={`pb-site-panel-icon codicon ${icon}${state === 'mixed-passive' || state === 'broken' ? ' is-warning' : ''}`} aria-hidden='true' />
+                <span className='pb-site-panel-host'>{display}</span>
+            </div>
+            : undefined;
+        return createPortal(
+            <div
+                className='pb-chrome-bar-dropdown pb-site-panel'
+                role='dialog'
+                aria-label={CHROME_BAR_COPY.connectionWarning}
+                tabIndex={-1}
+                onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); this.closeSitePanel(); } }}
+                ref={node => node?.focus()}
+            >
+                {header ?? <div className='pb-site-panel-empty'>{CHROME_BAR_COPY.siteUnavailable(appSubject())}</div>}
+                <button type='button' className='pb-site-panel-close' onMouseDown={e => e.preventDefault()} onClick={this.closeSitePanel}>
+                    <span className='codicon codicon-close' aria-hidden='true' />
+                </button>
+            </div>,
+            document.body
+        );
     }
 
     /** SMODE-03: a mode's label -- Address, the engine's name, or the contribution's label. */

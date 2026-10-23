@@ -54,6 +54,9 @@ const TAB_URIS_DIR = 'theia/extensions/tab-uris/src/browser';
  * and a stale entry each go red by name. `privileged` (state outside a tab's
  * own navigation, lifecycle or selection) exists and is empty: Phase 27 adds
  * no such kind, and the first one must be a deliberate edit here.
+ * Phase 31 (SITE-04..06): `webTabSiteInfo` is tab-navigation -- the panel's
+ * read of this tab's own site, keyed chrome-side by the overlay's principal,
+ * never a sender field, so it reaches no other tab's state.
  */
 const KIND_CLASS_NAMES = ['tab-navigation', 'tab-lifecycle', 'selection', 'privileged'];
 const KIND_CLASSES = new Map([
@@ -69,6 +72,7 @@ const KIND_CLASSES = new Map([
     ['webTabFocus', 'tab-lifecycle'],
     ['webTabGeometry', 'tab-lifecycle'],
     ['webTabActivated', 'selection'],
+    ['webTabSiteInfo', 'tab-navigation'],
 ]);
 
 /**

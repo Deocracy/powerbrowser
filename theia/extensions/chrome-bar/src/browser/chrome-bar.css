@@ -239,6 +239,116 @@
     color: var(--color-success, #8ad38a);
 }
 
+/* SITE-01 (31-UI-SPEC geometry): the identity box, the pill's first child --
+   24px tall, transparent, icon + host. Warning ink only on broken/mixed. */
+.pb-identity {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 4px;
+    background: transparent;
+    border: none;
+    border-radius: 9999px;
+    color: inherit;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.pb-identity:focus-visible {
+    outline: 1px solid var(--color-text-muted, #9a99a8);
+    outline-offset: 1px;
+}
+
+.pb-identity-icon {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+}
+
+.pb-identity-icon.is-warning {
+    color: var(--theia-notificationsWarningIcon-foreground);
+}
+
+.pb-identity-insecure {
+    flex: none;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.pb-identity-host {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+/* SITE-01: the plan-01 panel fallback keeps the panel geometry. */
+.pb-chrome-bar-dropdown.pb-site-panel {
+    right: auto;
+    width: 320px;
+    padding: 4px;
+}
+
+.pb-site-panel-empty {
+    min-height: 32px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.pb-site-panel-header {
+    min-height: 32px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.pb-site-panel-icon {
+    font-size: 16px;
+    flex: none;
+}
+
+.pb-site-panel-icon.is-warning {
+    color: var(--theia-notificationsWarningIcon-foreground);
+}
+
+.pb-site-panel-host {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pb-site-panel-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    padding: 0 12px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: inherit;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+.pb-site-panel-close:hover {
+    background: var(--color-surface-raised, #35343f);
+}
+
 .pb-chrome-bar-input {
     flex: 1 1 auto;
     min-width: 0;

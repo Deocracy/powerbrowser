@@ -71,6 +71,13 @@ export const CHROME_BAR_COPY = Object.freeze({
     commandCentreFooter: (addressKey: string) => `Enter opens · Type ? for more · ${addressKey} enters an address · Esc closes`,
     // Phase 30 (SMODE-06): the Go-to row; {address} is the text as typed.
     goTo: (address: string) => `Go to ${address}`,
+    // Phase 31 (SITE-01..03): the identity box and the site panel shell.
+    // Every pill/panel string lives here; TSX carries no literal.
+    connectionSecure: 'Connection secure',
+    connectionInsecure: 'Not Secure',
+    connectionWarning: 'This page has a security problem',
+    sitePanelOpen: (host: string) => `Show site information for ${host}`,
+    siteUnavailable: (subject: string) => `${subject} can't show site information for this page. Try reloading the page.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */
