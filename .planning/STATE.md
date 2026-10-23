@@ -512,6 +512,7 @@ with "autonomous interactive".
 | 27 | verification_deferred_human (70/71 verified; real-input key/mouse checks, hold cleanup, visuals, judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 27 |
 | 29 | verification_deferred_human (74/81 verified; review clean after 2 fix iterations, security SECURED 40/40; rebrand run, real IME, pill keyboard/mouse, visuals, OS drag, packaged engine list, 7 review fixes untested live, judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 29 |
 | 30 | verification_deferred_human (52/55 verified, no gaps; review 1 critical + 6 warnings fixed, security SECURED 24/24; real typing/IME, visuals vs 30-MOCKUPS.html, placeholder suffix IN-05, confirm D-34, WR-02 in Bookmarks/History, @alias default, 3 judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 30 |
+| focus-fix | verification_deferred_human (overlay focus race fixed c423f1a, 15/15 loops; on a real keyboard: F6 from the pill with suggestions open then type, Paste & Go then Down scrolls, same-site link then Down scrolls — Chris at end of milestone; record .planning/debug/overlay-focus-intermittent.md) | /gsd-debug overlay-focus-intermittent |
 
 ## Deferred Items
 
