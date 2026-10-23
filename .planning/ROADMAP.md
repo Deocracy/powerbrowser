@@ -320,7 +320,14 @@ Plans:
   4. Clear cookies and site data removes the current site's data and the IDE stays signed in, including after clearing on a `localhost` tab; the tracking-protection shield shows what was blocked and turns protection off for the site
   5. The hamburger menu opens from the chrome bar in Coding, Browsing and Organising, in Firefox's order, and opens Settings, Passwords and Add-ons; Ctrl+Q and the menu's Quit item quit the application
 
-**Plans**: TBD
+**Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
+
+Plans:
+- [ ] 31-01-PLAN.md (wave 1) — Lead the phase with one end-to-end tracer: chrome computes the real connection state and the pill renders it.
+- [ ] 31-02-PLAN.md (wave 2) — Build the site information panel on the plan-01 read path: connection + certificate, tri-state permission rows keyed by the overlay's principal, and permission icons in the identit
+- [ ] 31-03-PLAN.md (wave 3) — Add site-data clearing with the token-cookie exemption and the tracking shield with per-site exception, both in the site panel.
+- [ ] 31-04-PLAN.md (wave 4) — Build the Firefox-ordered hamburger with stock-page entries and Quit, closing the phase.
+- [ ] 31-05-PLAN.md (wave 5) — Give the menu Quit row its route to chrome and reserve Ctrl+Q chrome-side, closing the phase.
 **UI hint**: yes
 
 ### Phase 31.1: Extension Tab Host (INSERTED)
@@ -329,7 +336,7 @@ Plans:
 **Depends on**: Phase 31 (inserted 2026-10-21 by the Phase 28 sign-off; decimal because the deploy workstream holds 40-58)
 **Requirements**: EXT-05
 **Decision record**: `.planning/phases/28-webextension-tab-route-spike/28-SPIKE-DECISION.md`; spikes `.planning/spikes/002a-ext-route-patch` (patch 050 draft) and `002c-ext-route-chrome-tab-model` (tab model)
-**Scope**: patch `050-extension-tab-host.patch` regenerated from a patched tree (never text-edited), including the adversarial-check guards (`ext-pageAction.js` null `selectedTab`, TabOpen null guard); the tab host behind PowerBrowserAPI (one tab element per overlay, TabOpen/TabSelect/TabClose/TabAttrModified, tabs-progress fan-out, `gBrowserInit`, `selectedTab`/`selectedBrowser`, `getTabForBrowser` landing together with `gBrowserInit`); CHROME_TOOLBAR window-type fix; derived gates (browserWindows consumers as set equality, Theia frame never in the tracker, http(s)-only navigation guard against moz-extension://); `verify-shell-gbrowser-standin.mjs` rewritten for the new member set (closes T-27-11 todo); D-74 amended for this one logic patch
+**Scope**: patch `050-extension-tab-host.patch` regenerated from a patched tree (never text-edited), including the adversarial-check guards (`ext-pageAction.js` null `selectedTab`, TabOpen null guard); the tab host behind PowerBrowserAPI (one tab element per overlay, TabOpen/TabSelect/TabClose/TabAttrModified, tabs-progress fan-out, `gBrowserInit`, `selectedTab`/`selectedBrowser`, `getTabForBrowser` landing together with `gBrowserInit`); CHROME_TOOLBAR window-type fix; derived gates (browserWindows consumers as set equality, Theia frame never in the tracker, http(s)-only navigation guard against moz-extension://); `verify-shell-gbrowser-standin.mjs` rewritten for the new member set (T-27-11 moved to Phase 35 plan 35-01); D-74 amended for this one logic patch
 **Rulings**: while the IDE has focus the last web tab stays active for extensions (Chris, 2026-10-21); the getTabForBrowser-null ruling is reversed
 **Success Criteria** (what must be TRUE):
 
@@ -339,11 +346,13 @@ Plans:
   4. A toolbar action run while a web page is on screen acts on that page, not on the stock window's tab, and the stock window (GUI-01) still works
   5. `scripts/verify-platform.sh --quick` passes with the new derived gates and their self-tests, and `apply-patches.sh --self-test` plus `check-patch-surface.sh` pass with 050 in the stack
 
-**Plans:** 0 plans
+**Plans**: 4 plans (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
-
-- [ ] TBD (run /gsd-plan-phase 31.1 to break down)
+- [ ] 31.1-01-PLAN.md (wave 1) — Regenerate patch 050 from the pinned upstream bytes, carrying every guard the verification found necessary.
+- [ ] 31.1-02-PLAN.md (wave 2) — Build the chrome-side tab host behind PowerBrowserAPI, together with the gate that asserts its member set, and prove each slice live on the binary 31.1-01 built.
+- [ ] 31.1-03-PLAN.md (wave 3) — Turn the phase's scope rulings into derived static gates, so an ESR rebase or a later edit cannot quietly undo them.
+- [ ] 31.1-04-PLAN.md (wave 4) — Finish EXT-05's live proof on the stamped binary: the adversarial starts, the toolbar target with GUI-01, the extension-path scheme wall and a whole-session Theia check.
 
 ### Phase 32: Page Tools
 
@@ -360,7 +369,18 @@ Plans:
   4. A downloads button and panel list each download, which the user can open, show in its folder, cancel or retry; no page-started download is saved without appearing there
   5. Reader view opens on article pages, Ctrl+U shows the page source, F12 opens the page's developer tools, and a crashed tab shows a reload button instead of a blank page
 
-**Plans**: TBD
+**Plans**: 9 plans (strictly sequential waves; DSH codes, Claude checks)
+
+Plans:
+- [ ] 32-01-PLAN.md (wave 1) — Lead the phase with the three research probes plus the chrome half of the element-method tracers: find (PAGE-01), zoom (PAGE-02), mute/audio (PAGE-05).
+- [ ] 32-04-PLAN.md (wave 2) — Ship the Downloads view-push panel (PAGE-06) on the 32-01 foundation.
+- [ ] 32-09-PLAN.md (wave 3) — Give the extension tab host the mute and zoom members Phase 31.1 left to this phase, so extensions see and drive the same mute and zoom state the chrome bar does (PAGE-05, PAGE-02)
+- [ ] 32-02-PLAN.md (wave 4) — Wire the 32-01 chrome kinds to the Theia UI: widget methods + push subscriptions (find/zoom/mute), the find bar, the zoom chip, audio marks, contracted copy, commands, keybindings,
+- [ ] 32-03-PLAN.md (wave 5) — Ship system-dialog print (PAGE-03) on the 32-01 foundation.
+- [ ] 32-05-PLAN.md (wave 6) — Ship picker-split save (PAGE-08) on the 32-01 foundation.
+- [ ] 32-06-PLAN.md (wave 7) — Ship probe-gated edit commands (PAGE-09) on the 32-01 foundation.
+- [ ] 32-07-PLAN.md (wave 8) — Ship the chrome half of the same-tab and stock-window page tools on the 32-01 foundation: reader / view source / devtools arms (PAGE-10), crash signal (PAGE-11), the shared-process
+- [ ] 32-08-PLAN.md (wave 9) — Ship the Theia half of the same-tab and stock-window page tools on the 32-07 chrome foundation: favicon rendering (PAGE-04), reader toggle / view source / devtools wiring (PAGE-10)
 **UI hint**: yes
 
 ### Phase 33: Bookmarks, History and the Full Menu
@@ -377,7 +397,14 @@ Plans:
   4. Ctrl+Shift+Del clears history over a chosen time range, also clears PowerBrowser's closed tabs, thumbnails, saved pages and web-tab history, and leaves the IDE signed in
   5. The app menu reaches New Tab, New Window, Bookmarks, History, Downloads, Print, Save Page As, Find in Page, Zoom, Full Screen, More Tools and Help; Actions mode runs print, downloads, clear history, settings and the other browser actions, and Command centre still never sends typed text to a search engine
 
-**Plans**: TBD
+**Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
+
+Plans:
+- [ ] 33-01-PLAN.md (wave 1) — Chrome-side foundation for every Phase 33 store surface: the bookmark write/remove/update kinds, the closed-tab read kind, the single clearHistory fan-out kind, the client methods,
+- [ ] 33-02-PLAN.md (wave 2) — Star button + editor popover (BMK-01, BMK-02): the in-pill star, its filled state, Ctrl+D on both focus paths, and the anchored editor portal with name/folder/Remove/Done.
+- [ ] 33-03-PLAN.md (wave 3) — Bookmarks toolbar + reopen closed tab + History submenu (BMK-03, BMK-04, BMK-06): the collapsible toolbar row with live observer refresh, Ctrl+Shift+T history-carrying reopen, and 
+- [ ] 33-04-PLAN.md (wave 4) — Clear Recent History picker (BMK-05): the five-range picker panel, its confirm-only clearHistory call, and Ctrl+Shift+Del on both focus paths.
+- [ ] 33-05-PLAN.md (wave 5) — Full hamburger menu + Actions coverage (MENU-03, SMODE-07): the Firefox-ordered MENU-03 entries with four submenus, the shared-id discipline with Actions rows, and the Command-cent
 **UI hint**: yes
 
 ### Phase 34: Tab Strip
@@ -393,7 +420,14 @@ Plans:
   3. An overflowing strip scrolls, and List All Tabs picks any tab; a pinned tab shrinks to its icon and is still pinned after a restart
   4. The user selects several tabs and closes, moves, mutes or bookmarks them together; hovering a tab shows a preview card; a background tab whose title changes shows an attention mark
 
-**Plans**: TBD
+**Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
+
+Plans:
+- [ ] 34-01-PLAN.md (wave 1) — Tab context menu (TAB-01) plus Bookmark Tab / Bookmark All Tabs (BMK-07) on the extended strip (D-01, D-02, D-03, D-04, D-13, D-15, D-16).
+- [ ] 34-02-PLAN.md (wave 2) — In-strip drag reorder (TAB-02), middle-click close plus double-click new plus drop-to-open (TAB-03, TAB-08), overflow scroll plus List All Tabs (TAB-04) — D-01, D-02, D-05, D-06, D
+- [ ] 34-03-PLAN.md (wave 3) — Pin with restart persistence (TAB-05) plus multiselect with bulk delegation (TAB-06) — D-01, D-02, D-08, D-09, D-13, D-14, D-15, D-16.
+- [ ] 34-04-PLAN.md (wave 4) — Hover preview card (TAB-07) plus background-title attention mark (TAB-09) — D-01, D-02, D-10, D-11, D-12, D-15, D-16.
+- [ ] 34-05-PLAN.md (wave 5) — Phase-close live run: full twelve-scenario suite (all TAB plus BMK-07 plus modes/D-02), registry order proof, VALIDATION green-marking — D-01..D-16 (all prior decisions proven toge
 **UI hint**: yes
 
 ### Phase 35: Shell Furniture and Page Context Menu
@@ -410,7 +444,16 @@ Plans:
   3. Hovering an element with a `title` shows its tooltip, and hovering a link shows the link status text
   4. F11 on a web page makes the window full screen, and a page video that enters fullscreen shows Firefox's fullscreen warning and leaves fullscreen on Esc
 
-**Plans**: TBD
+**Plans**: 7 plans (strictly sequential waves; DSH codes, Claude checks)
+
+Plans:
+- [ ] 35-01-PLAN.md (wave 1) — Close T-27-11 and give every Phase 35 shim global its derived coverage before any shim lands.
+- [ ] 35-02-PLAN.md (wave 2) — The tracer for the furniture installer, on PROMPT-08: page tooltips and the link-hover status
+- [ ] 35-03-PLAN.md (wave 3) — Build the page context menu engine (PROMPT-04) and every row that needs nothing from Phases
+- [ ] 35-04-PLAN.md (wave 4) — Finish PROMPT-04's rows that run on other phases' mechanisms: Inspect (D-13), the edit rows
+- [ ] 35-05-PLAN.md (wave 5) — Complete the page menu with the two pieces the 28 sign-off and the ROADMAP research line bind to
+- [ ] 35-06-PLAN.md (wave 6) — Host the stock form furniture (PROMPT-06): the `PopupAutoComplete` panel FormHistory and
+- [ ] 35-07-PLAN.md (wave 7) — Ship PAGE-07 with both halves and the stock warning (D-05, B5).
 **UI hint**: yes
 
 ### Phase 36: New-Window Links as Web Tabs
@@ -426,7 +469,12 @@ Plans:
   2. The opened tab has a working `window.opener`, so a sign-in popup flow completes and returns to the opener
   3. A `window.open` with popup features still opens a popup window, and the IDE's open-browser-window command still opens the stock browser window (GUI-01)
 
-**Plans**: TBD
+**Plans**: 3 plans (strictly sequential waves; DSH codes, Claude checks)
+
+Plans:
+- [ ] 36-01-PLAN.md (wave 1) — Build the chrome half of PROMPT-05: a minimal nsIBrowserDOMWindow shim behind the boundary, installed by one `installNewWindowReceivers(window)` call, that adopts overlay-opener ne
+- [ ] 36-02-PLAN.md (wave 2) — Build the frontend half of PROMPT-05 on top of plan 36-01: WebTabOpenHandler.adopt (mint + tab-after + background-aware activation + webTabAdopt ack + unknown-key self-sweep), the 
+- [ ] 36-03-PLAN.md (wave 3) — Prove PROMPT-05 live in the built shell: _blank clicks and page window.open become opener-adjacent web tabs with a working window.opener (postMessage round-trip), close reselects t
 
 ### Phase 37: Permission Prompts and Dialogs
 
@@ -462,7 +510,14 @@ Plans:
   4. Installing an extension from addons.mozilla.org shows the stock install prompt, and the extension then works
   5. An ad blocker, a password manager and a dark-mode extension are each checked working live in web tabs
 
-**Plans**: TBD
+**Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
+
+Plans:
+- [ ] 38-01-PLAN.md (wave 1) — Build the chrome-side extension bridge on the Phase 31.1 tab host: action-state
+- [ ] 38-02-PLAN.md (wave 2) — Render the EXT-06/07 surface on the 38-01 bridge: buttons row, puzzle menu,
+- [ ] 38-03-PLAN.md (wave 3) — Prove EXT-08 on the stack that already exists: content scripts + messaging on the
+- [ ] 38-04-PLAN.md (wave 4) — Implement Chris's B5 ruling (2026-10-22, verbatim in 38-CONTEXT.md): sidebar
+- [ ] 38-05-PLAN.md (wave 5) — Close the phase's AMO + fixtures surface: AMO install over the stock prompt path
 **UI hint**: yes
 
 ## Progress

@@ -322,7 +322,7 @@ Numbers are ROADMAP success-criteria references.
   `34-01-PLAN.md:89`, both pointing at 31.1's host). 38 assumes the
   `tabs.update({active})` → `selectedTab`-setter half of the 31.1 host bridge
   (31.1-02-PLAN.md:116: `selectedTab=` refused-traced setter; 38-01 serves
-  `tabsBridgeActivate` through the host's `tabHostSelectTab`, never by adding a
+  `tabsBridgeActivate` through the host's `tabHostSelectById` (31.1-02; corrected 2026-10-23), never by adding a
   setter — no fallback builds it here).
 - **Phase 35 (Furniture + Context Menu):** `installShellFurniture(window)` installer
   + derived `verify-shell-furniture.mjs`; `contentAreaContextMenu` relay stub that
