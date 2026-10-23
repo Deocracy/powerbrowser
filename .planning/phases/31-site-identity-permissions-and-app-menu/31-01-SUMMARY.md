@@ -118,7 +118,7 @@ coverage:
 - `tsc --noEmit` chrome-bar + tab-uris: green
 - `check-internals-boundary.sh` plain + `--catalogue`: PASS
 - `verify-ng-040-internals-catalogue-lines.mjs`: PASS
-- `node scripts/scan-brand-residue.mjs`: PASS (386–388 files; inventory
+- `node scripts/scan-brand-residue.mjs`: PASS (392 files; inventory
   `-PLAN.md` count reconciled 49 → 59 for the ten new catalogue rows)
 - `scripts/verify-platform.sh --only site-identity`: PASS
 - `scripts/verify-platform.sh --only site-identity-self-test`: PASS

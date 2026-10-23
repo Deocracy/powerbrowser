@@ -76,7 +76,7 @@ scripts/verify-platform.sh --only site-identity
 ```
 
 - PASS definition: `verify-site-identity: PASS -- 10 cases`; self-test
-  names all 7 planted faults; `--quick` green except the pre-existing
+  names all 10 planted faults; `--quick` green except the pre-existing
   environment rows listed in the summary (`verify-downstream-fixtures*`,
   `installer-build-proof-self-test`, `sql-store-soak*`, plus the
   pre-existing `gui07-strip-spike-verdict*` red also seen on the clean
