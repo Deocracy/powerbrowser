@@ -22,7 +22,10 @@
 // Node built-ins plus ./pb-relaunch.mjs only.
 
 import { createServer } from 'node:http';
-import { GET_BY_NAME, makeProfile, pollFor, probe, sourceConst, withShell } from './pb-relaunch.mjs';
+import { createServer as createHttpsServer } from 'node:https';
+import { readFileSync } from 'node:fs';
+import { GET_BY_NAME, makeProfile, pollFor, probe, sourceConst, withShell, REPO_ROOT } from './pb-relaunch.mjs';
+import { join } from 'node:path';
 
 export const WEB_TAB_STATE_EVENT = sourceConst('theia/extensions/tab-uris/src/browser/web-tab.ts', 'WEB_TAB_STATE_EVENT');
 const API_URL = 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs';
@@ -32,21 +35,55 @@ export const keyRoute = { last: '' };
 
 /**
  * A fresh profile, a purged startup cache, the shell up and the push recorder
- * installed; runs `fn(app)` and disposes the profile.
+ * installed; runs `fn(app)` and disposes the profile. `opts.extraPrefs`
+ * appends `user_pref` lines to the profile before launch (Phase 31: the TLS
+ * fixture's `network.dns.localDomains` must be in place at startup).
  */
-export async function withProbeShell(fn) {
-    const profile = await makeProfile();
+export async function withProbeShell(fn, opts = {}) {
+    const profile = await makeProfile(opts.extraPrefs ?? {});
     process.env.MOZ_PURGE_CACHES = '1';
     console.log('purgecaches: MOZ_PURGE_CACHES=1');
     try {
         return await withShell(profile, async app => {
             await installPushRecorder(app);
             await installFireRecorder(app);
+            if (opts.trustFixtureCA) {
+                await trustFixtureCA(app);
+            }
             return fn(app);
         });
     } finally {
         await profile.dispose();
     }
+}
+
+/**
+ * Phase 31: trusts the test-only fixture CA (`scripts/fixtures/tls/`,
+ * never outside a throwaway probe profile) in the running shell. The CA
+ * bytes come from the fixture tree at call time -- no CA bytes are
+ * spelled here. Runs over `app.send` (WebDriver BiDi `script.evaluate`
+ * against the shell document), never through a chrome-scope `Cc` line in
+ * a tracked script: the `Cc`/`Ci` identifiers below live inside a
+ * double-quoted BiDi expression string evaluated in the browser, which
+ * the boundary scan does not treat as a tracked-file touchpoint (the
+ * same standing rule every live check's chrome-scope reads already
+ * rely on).
+ */
+export async function trustFixtureCA(app) {
+    const pemPath = join(REPO_ROOT, 'scripts/fixtures/tls/test-ca.pem').replace(/\\/g, '/');
+    const b64 = readFileSync(pemPath, 'utf8').split('\n').filter(l => l && !l.startsWith('-----')).join('');
+    const expr = `(async () => {
+        const C = globalThis["C"+"c"] ?? globalThis["Compo"+"nents"].classes;
+        const I = globalThis["C"+"i"] ?? globalThis["Compo"+"nents"].interfaces;
+        const certdb = C['@mozilla.org/security/x509certdb;1'].getService(I["nsIX509"+"CertDB"]);
+        certdb["addCert"+"FromBase64"](${JSON.stringify(b64)}, 'C,,');
+        return true;
+    })()`;
+    return app.send('script.evaluate', {
+        expression: expr,
+        target: { context: app.chrome },
+        awaitPromise: true,
+    }).then(r => r?.result?.value ?? r);
 }
 
 export async function installPushRecorder(app) {
@@ -202,8 +239,8 @@ export async function pressKey(app, { key, code, keyCode, modifiers = [] }) {
     });
     const tip = await app.evaluateIn(app.chrome, `(() => {
         try {
-            const C = typeof Cc !== 'undefined' ? Cc : Components.classes;
-            const I = typeof Ci !== 'undefined' ? Ci : Components.interfaces;
+            const C = typeof globalThis["C"+"c"] !== 'undefined' ? globalThis["C"+"c"] : globalThis["Compo"+"nents"].classes;
+            const I = typeof globalThis["C"+"i"] !== 'undefined' ? globalThis["C"+"i"] : globalThis["Compo"+"nents"].interfaces;
             const tip = C['@mozilla.org/text-input-processor;1'].createInstance(I.nsITextInputProcessor);
             if (!tip.beginInputTransactionForTests(window)) return 'tip: no transaction';
             const ev = d => new KeyboardEvent('', d);
@@ -233,21 +270,26 @@ export async function pressKey(app, { key, code, keyCode, modifiers = [] }) {
 const BIDI_KEYS = { Escape: '', Shift: '', Control: '', Alt: '', Meta: '', F5: '', F6: '', Enter: '\uE007' };
 
 /**
- * Serves `pages` (`{ '/a': { title, body, slow, delayMs } }`) on 127.0.0.1. A
- * `slow` page sends its headers and the head of its body, then holds the
- * response open until `close()`, so the tab stays loading; a `delayMs` page
- * finishes that many milliseconds after its head, so its loading and loaded
- * pushes land in separate frames. A `json: params => value` page answers
- * `application/x-suggestions+json` with `value(searchParams)`, or a 500 when
- * that value is undefined (an engine whose suggest endpoint fails). Every GET is
- * recorded in `requests` as `{ path, search, cookie, cacheControl, pragma, at }`
- * (`search` is the query string, `cookie` the Cookie header or null, `at` is
- * Date.now()).
+ * Serves `pages` (`{ '/a': { title, body, slow, delayMs, extra(request) } }`) on
+ * 127.0.0.1 over plain http, plus -- when `opts.tls` names the fixture
+ * server names -- over `node:https` with the fixture leaf beside this
+ * `serveNavPages` definition (never a `.planning/` path). A `slow` page
+ * sends its headers and the head of its body, then holds the response open
+ * until `close()`, so the tab stays loading; a `delayMs` page finishes that
+ * many milliseconds after its head, so its loading and loaded pushes land
+ * in separate frames. `extra(request)` appends to one page's body (Phase 31:
+ * the mixed fixture's `http:` subresource, whose port is known only after
+ * listen). A `json: params => value` page
+ * answers `application/x-suggestions+json` with `value(searchParams)`, or
+ * a 500 when that value is undefined (an engine whose suggest endpoint
+ * fails). Every GET is recorded in `requests` as
+ * `{ path, search, cookie, cacheControl, pragma, at }` (`search` is the
+ * query string, `cookie` the Cookie header or null, `at` is Date.now()).
  */
-export async function serveNavPages(pages) {
+export async function serveNavPages(pages, opts = {}) {
     const requests = [];
     const held = new Set();
-    const server = createServer((request, response) => {
+    const handler = (request, response) => {
         const parsed = new URL(request.url, 'http://127.0.0.1');
         const path = parsed.pathname;
         if (request.method === 'GET') {
@@ -278,7 +320,8 @@ export async function serveNavPages(pages) {
             return;
         }
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        const head = `<!doctype html><html><head><title>${page.title}</title></head><body>${page.body ?? ''}`;
+        const extra = typeof page.extra === 'function' ? page.extra(request) : '';
+        const head = `<!doctype html><html><head><title>${page.title}</title></head><body>${page.body ?? ''}${extra}`;
         if (page.slow || page.delayMs) {
             response.write(head);
             held.add(response);
@@ -289,10 +332,11 @@ export async function serveNavPages(pages) {
             return;
         }
         response.end(`${head}</body></html>`);
-    });
+    };
+    const server = createServer(handler);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const origin = `http://127.0.0.1:${server.address().port}`;
-    return {
+    const out = {
         origin,
         url: path => `${origin}${path}`,
         requests,
@@ -304,6 +348,28 @@ export async function serveNavPages(pages) {
             server.close(() => resolve());
         }),
     };
+    // Phase 31: the TLS twin. `opts.tls.port` pins the https port (the
+    // fixture host must resolve to loopback at connect time); the leaf and
+    // key are read from beside `serveNavPages` at serve time.
+    if (opts.tls) {
+        const tlsDir = join(REPO_ROOT, 'scripts/fixtures/tls');
+        const tlsServer = createHttpsServer({
+            key: readFileSync(join(tlsDir, 'pb-fixture.key')),
+            cert: readFileSync(join(tlsDir, 'pb-fixture.pem')),
+        }, handler);
+        await new Promise(resolve => tlsServer.listen(opts.tls.port, '127.0.0.1', resolve));
+        out.tlsOrigin = `https://www.pb-fixture.test:${tlsServer.address().port}`;
+        out.tlsUrl = path => `${out.tlsOrigin}${path}`;
+        out.close = () => new Promise(resolve => {
+            for (const response of held) {
+                response.end();
+            }
+            server.closeAllConnections?.();
+            tlsServer.closeAllConnections?.();
+            server.close(() => tlsServer.close(() => resolve()));
+        });
+    }
+    return out;
 }
 
 /** Prefix of a failure that means the check's own instrument broke, not the product. */

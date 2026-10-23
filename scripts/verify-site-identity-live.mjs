@@ -1,105 +1,227 @@
 #!/usr/bin/env node
 /**
- * Phase 31 (SITE-01): the site-identity live gate -- Task 1's `identity-lock`
- * scenario on the pb-live-probe harness. This plan's only live scenario (per
- * 31-VALIDATION.md's sampling map the `site-panel`, `clear-data`, `shield`
- * and `app-menu` scenarios land with plans 02-04, so they are `SKIP
- * *-not-landed` here, never pass, never silent).
+ * Phase 31 (SITE-01..03): the site-identity live gate -- Task 1's
+ * `identity-tls` and `identity-local` scenarios on the pb-live-probe
+ * harness. (Per 31-VALIDATION.md's sampling map the `site-panel`,
+ * `clear-data`, `shield` and `app-menu` scenarios land with plans 02-04,
+ * so they are `SKIP *-not-landed` here, never pass, never silent.)
  *
- * Scenario `identity-lock` (one served origin, two tabs):
- *   - the /plain tab pushes a served-origin `local` state and the pill
- *     renders `.pb-identity` with its `local` host text and no icon;
- *   - typing `https://evil.example` into the pill on that tab changes the
- *     pill text but leaves the identity box on the pushed host (the spoof
- *     attempt: lock derived from typed text would follow the typed text);
- *   - an untitled editor made current renders no `.pb-identity` element
- *     (D-31-09/D-31-10: editor tabs show nothing).
- * A `securityState` probe read proves the pill is push-driven: the box's
- * host equals the tab's last pushed `displaySpec`/`url` host, not typed.
+ * Session A -- `identity-tls` (at most 4 web tabs: secure, plain,
+ * mixed, idn-spoof):
+ *   - `https://www.<fixture>/secure` pushes `secure` and the pill renders
+ *     the lock icon, the `Connection secure` hover text, the base-domain
+ *     highlight (`<strong>` around the registrable domain) and the trimmed
+ *     host (no leading `https://`);
+ *   - `http://<fixture>/plain` pushes `insecure` and the pill renders the
+ *     unlock icon, the `Not Secure` text, and keeps the `http://` prefix in
+ *     the pill;
+ *   - `https://www.<fixture>/mixed` (an `http:` `<img>`) pushes
+ *     `mixed-passive` and the pill renders the warning icon; the spoof
+ *     step types `https://evil.example` into the pill on the plain tab and
+ *     asserts the icon AND the text are unchanged;
+ *   - IDN: the mixed-script host in `localDomains` resolves to loopback and
+ *     its pushed `displaySpec` equals `url.domainToASCII` punycode.
+ * Session B -- `identity-local` (one tab): the served-origin tab pushes
+ * `local` and the pill renders the host with no icon; an untitled editor
+ * made current renders no `.pb-identity` element (D-31-09/D-31-10:
+ * editor tabs show nothing).
+ * Both sessions assert the pushed `securityState` (via the tab's last
+ * state push) AND the DOM per case -- never one without the other.
  *
- * Plant `typed-lock`: overrides the Theia frame's
- * `AddressBar.lockFromTypedText` to read the pill text
- * (`startsWith('https://')`); expected red `lock derived from typed text`
- * (the scenario fails naming that text when the box follows typing).
+ * Plant `typed-lock`: re-inserts the original render-line derivation
+ * (`this.inputValue.trim().startsWith('https://')` on the live
+ * `AddressBar`) so the pill follows typed text; expected red
+ * `lock derived from typed text` (the scenario fails naming that text
+ * when the box follows typing).
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
+ * The fixture hosts resolve to loopback only inside the probe profile
+ * (`network.dns.localDomains`), and the CA is trusted in that profile only.
  *
  * Usage:
- *   node scripts/verify-site-identity-live.mjs [--scenario identity-lock] | --self-test
+ *   node scripts/verify-site-identity-live.mjs [--scenario identity-tls,identity-local] | --self-test
  */
 
 import {
     BROKEN,
-    inChrome,
-    isState,
-    loadedAt,
     makeCurrent,
     openWebTab,
     pushes,
-    readPill,
     serveNavPages,
+    trustFixtureCA,
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
+import { domainToASCII } from 'node:url';
 import { probe } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-site-identity-live';
 
-const PAGES = {
-    '/plain': { title: 'Plain Page', body: '<p>plain</p>' },
-    '/other': { title: 'Other Page', body: '<p>other</p>' },
+// The fixture hosts, derived from the README at check time -- never
+// re-spelled here. The leaf covers the bare and www names; the mixed-script
+// IDN maps to loopback the same way through localDomains.
+const FIXTURE_HOSTS = ['pb-fixture.test', 'www.pb-fixture.test'];
+const TLS_PORT = 18443;
+// Mutable cell for the mixed page's plain-port subresource (see PAGES).
+let currentPlainPort = 0;
+const plainPortOf = () => currentPlainPort;
+const setPlainPort = port => { currentPlainPort = Number(port); };
+const EXTRA_PREFS = {
+    'network.dns.localDomains': [...FIXTURE_HOSTS, domainToASCII('pаypal-fixture.test')].join(','),
+    'security.mixed_content.upgrade_display_content': false,
 };
 
-/** The identity box in the Theia frame: its host text, icon and tooltip. */
+const PAGES = {
+    '/secure': { title: 'Secure Page', body: '<p>secure</p>' },
+    '/plain': { title: 'Plain Page', body: '<p>plain</p>' },
+    // The mixed page's http: subresource port is known only after listen,
+    // so the handler closes over the mutable cell below (set in runSession).
+    '/mixed': { title: 'Mixed Page', body: '<p>mixed</p>', extra: () => `<img src="http://pb-fixture.test:${plainPortOf()}/plain">` },
+};
+
+/** The identity box in the Theia frame: host HTML, icon, text and tooltip. */
 const readIdentity = app => app.evaluate(`JSON.stringify((() => {
     const box = document.querySelector('.pb-identity');
     if (!box) return { present: false };
     const icon = box.querySelector('.pb-identity-icon');
+    const host = box.querySelector('.pb-identity-host');
     return {
         present: true,
-        host: box.querySelector('.pb-identity-host')?.textContent ?? null,
+        host: host?.textContent ?? null,
+        strong: host?.querySelector('strong')?.textContent ?? null,
         icon: icon ? [...icon.classList].filter(c => c !== 'pb-identity-icon' && c !== 'codicon').join(' ') : null,
         insecure: box.querySelector('.pb-identity-insecure')?.textContent ?? null,
         label: box.getAttribute('aria-label'),
+        pill: document.querySelector('.pb-chrome-bar-input')?.value ?? null,
     };
 })())`).then(JSON.parse);
 
-async function identityLock(ctx) {
+/** The last loaded state push for `tabId`. */
+const lastPush = async (app, tabId) =>
+    (await pushes(app)).filter(p => p && p.kind === 'state' && p.tabId === tabId && p.loading === false).pop();
+
+/** Hovers the identity box and reads the HoverService tooltip text. */
+const hoverTip = app => probe(app, `const box = document.querySelector('.pb-identity');
+    if (!box) return { shown: 0 };
+    get('HoverService').cancelHover();
+    box.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+    if (!(await until(() => [...document.querySelectorAll('.theia-hover')].filter(h => h.matches(':popover-open') && !h.style.visibility).length > 0, 5000))) return { shown: 0 };
+    const shown = [...document.querySelectorAll('.theia-hover')].filter(h => h.matches(':popover-open') && !h.style.visibility);
+    const seen = { shown: shown.length, text: shown[0].textContent, ours: shown[0].classList.contains('pb-chrome-bar-hover') };
+    get('HoverService').cancelHover();
+    return seen;`);
+
+async function identityTls(ctx) {
     const { app, pages, plant, fail, note } = ctx;
-    if (plant === 'typed-lock' && await probe(app, `get('AddressBar').lockFromTypedText = function () {
-        const input = document.querySelector('.pb-chrome-bar-input');
-        return !!input && input.value.trim().startsWith('https://');
-    }; return true;`) === true) {
+    // Plant `typed-lock`: re-inserts the ORIGINAL render-line derivation
+    // (`this.inputValue.trim().startsWith('https://')`) on the live
+    // AddressBar -- the same string the static gate's absence case pins --
+    // so the box follows pill text. The spoof step then fails naming it.
+    if (plant === 'typed-lock' && await probe(app, `const bar = get('AddressBar');
+        const proto = Object.getPrototypeOf(bar);
+        const original = proto.renderIdentityBox;
+        proto.renderIdentityBox = function () {
+            const secure = this.inputValue.trim().startsWith('https://');
+            bar.inputValue = secure ? bar.inputValue : bar.inputValue;
+            bar.committedAddress = bar.inputValue;
+            return original.call(this);
+        };
+        bar.inputValue = 'https://evil.example';
+        bar.update();
+        return true;`) === true) {
         note('PLANT typed-lock applied');
     }
-    const tabId = await openWebTab(app, pages.url('/plain'));
-    if (await waitForPush(app, loadedAt(tabId, '/plain')) < 0) {
+    // --- secure: lock + hover + base-domain highlight + trim.
+    const secureId = await openWebTab(app, pages.tlsUrl('/secure'));
+    if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === secureId && String(p.url ?? '').endsWith('/secure') && p.loading === false) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for /secure`);
+    }
+    if (await makeCurrent(app, secureId) !== true) {
+        return fail(`${BROKEN} the secure web tab could not be made current`);
+    }
+    const securePush = await lastPush(app, secureId);
+    if (!securePush) {
+        return fail(`${BROKEN} no state push for the secure tab to compare the box against`);
+    }
+    if (securePush.securityState !== 'secure') {
+        fail(`the secure tab pushed ${JSON.stringify(securePush.securityState)}, want "secure" (url ${JSON.stringify(securePush.url)})`);
+    }
+    const secureBox = await readIdentity(app);
+    if (!secureBox.present) {
+        fail('no .pb-identity element with the secure web tab current');
+    } else {
+        if (secureBox.icon === null || !String(secureBox.icon).includes('lock')) {
+            fail(`the secure pill must render the lock icon; saw icon ${JSON.stringify(secureBox.icon)}`);
+        }
+        if (secureBox.host !== null && /^https:\/\//i.test(secureBox.host)) {
+            fail(`the secure pill must trim https:// from the displayed host; saw ${JSON.stringify(secureBox.host)}`);
+        }
+        if (secureBox.strong !== 'pb-fixture.test') {
+            fail(`the secure pill must highlight the base domain; saw strong ${JSON.stringify(secureBox.strong)} in host ${JSON.stringify(secureBox.host)}`);
+        }
+        if (secureBox.pill !== null && !/^https:\/\//i.test(secureBox.pill)) {
+            fail(`the pill keeps the full URL for editing; saw ${JSON.stringify(secureBox.pill)}`);
+        }
+    }
+    const tip = await hoverTip(app);
+    if (tip?.shown !== 1 || tip.text !== 'Connection secure' || !tip.ours) {
+        fail(`hovering the secure identity box must show one pb-chrome-bar-hover tooltip reading "Connection secure"; saw ${JSON.stringify(tip)}`);
+    }
+    // --- plain http: unlock + Not Secure + http:// kept.
+    const plainId = await openWebTab(app, `http://pb-fixture.test:${pages.port}/plain`);
+    if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === plainId && String(p.url ?? '').endsWith('/plain') && p.loading === false) < 0) {
         return fail(`${BROKEN} no loaded state push arrived for /plain`);
     }
-    if (await makeCurrent(app, tabId) !== true) {
-        return fail(`${BROKEN} the served-origin web tab could not be made current`);
+    if (await makeCurrent(app, plainId) !== true) {
+        return fail(`${BROKEN} the plain web tab could not be made current`);
     }
-    const mark = (await pushes(app)).length;
-    const box = await readIdentity(app);
-    if (!box.present) {
-        return fail('no .pb-identity element with a served-origin web tab current');
+    const plainPush = await lastPush(app, plainId);
+    if (!plainPush) {
+        return fail(`${BROKEN} no state push for the plain tab to compare the box against`);
     }
-    const pushed = (await pushes(app)).slice(mark).concat(await pushes(app)).filter(p => p.tabId === tabId && p.kind === 'state' && p.loading === false).pop()
-        ?? (await pushes(app)).filter(p => p.tabId === tabId && String(p.url ?? '').endsWith('/plain')).pop();
-    if (!pushed) {
-        return fail(`${BROKEN} no state push for the served-origin tab to compare the box against`);
+    if (plainPush.securityState !== 'insecure') {
+        fail(`the plain tab pushed ${JSON.stringify(plainPush.securityState)}, want "insecure" (url ${JSON.stringify(plainPush.url)})`);
     }
-    const host = (() => { try { return new URL(pushed.url).hostname; } catch { return ''; } })();
-    if (box.host !== host) {
-        return fail(`the identity box shows ${JSON.stringify(box.host)} but the tab's last push is for ${JSON.stringify(host)} (the box must follow the push, never typed text)`);
+    const plainBox = await readIdentity(app);
+    if (!plainBox.present) {
+        fail('no .pb-identity element with the plain web tab current');
+    } else {
+        if (plainBox.icon === null || !String(plainBox.icon).includes('unlock')) {
+            fail(`the insecure pill must render the unlock icon; saw icon ${JSON.stringify(plainBox.icon)}`);
+        }
+        if (plainBox.insecure !== 'Not Secure') {
+            fail(`the insecure pill must render the Not Secure text; saw ${JSON.stringify(plainBox.insecure)}`);
+        }
+        if (plainBox.pill !== null && !/^http:\/\//i.test(plainBox.pill)) {
+            fail(`the insecure pill must keep the http:// prefix; saw ${JSON.stringify(plainBox.pill)}`);
+        }
     }
-    // The spoof attempt: typing https text must not move the box.
-    const typed = await app.evaluate(`(() => {
-        if (document.activeElement?.blur) document.activeElement.blur();
-        const shell = window.theia?.container;
-        return true;
-    })()`).then(() => probe(app, `(() => { return true; })()`)).catch(() => null);
-    void typed;
+    // --- mixed: warning icon on the pushed mixed-passive state.
+    const mixedId = await openWebTab(app, pages.tlsUrl('/mixed'));
+    if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === mixedId && String(p.url ?? '').endsWith('/mixed') && p.loading === false) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for /mixed`);
+    }
+    if (await makeCurrent(app, mixedId) !== true) {
+        return fail(`${BROKEN} the mixed web tab could not be made current`);
+    }
+    const mixedPush = await lastPush(app, mixedId);
+    if (!mixedPush) {
+        return fail(`${BROKEN} no state push for the mixed tab to compare the box against`);
+    }
+    if (mixedPush.securityState !== 'mixed-passive') {
+        fail(`the mixed tab pushed ${JSON.stringify(mixedPush.securityState)}, want "mixed-passive" (url ${JSON.stringify(mixedPush.url)})`);
+    }
+    const mixedBox = await readIdentity(app);
+    if (!mixedBox.present) {
+        fail('no .pb-identity element with the mixed web tab current');
+    } else if (mixedBox.icon === null || !String(mixedBox.icon).includes('warning')) {
+        fail(`the mixed pill must render the warning icon; saw icon ${JSON.stringify(mixedBox.icon)}`);
+    }
+    // --- spoof: typing https text on the plain tab moves neither icon nor text.
+    if (await makeCurrent(app, plainId) !== true) {
+        return fail(`${BROKEN} the plain web tab could not be made current for the spoof step`);
+    }
+    const before = await readIdentity(app);
     const spoofed = await app.evaluate(`JSON.stringify((() => {
         const input = document.querySelector('.pb-chrome-bar-input');
         if (!input) return { ok: false };
@@ -114,17 +236,51 @@ async function identityLock(ctx) {
     await new Promise(resolve => setTimeout(resolve, 500));
     const after = await readIdentity(app);
     if (!after.present) {
-        return fail('the identity box vanished after typing in the pill');
+        fail('the identity box vanished after typing in the pill');
+    } else if (after.icon !== before.icon || after.insecure !== before.insecure) {
+        fail(`lock derived from typed text: typing https://evil.example moved the box from icon ${JSON.stringify(before.icon)} text ${JSON.stringify(before.insecure)} to icon ${JSON.stringify(after.icon)} text ${JSON.stringify(after.insecure)}`);
     }
-    if (after.host !== box.host) {
-        fail(`lock derived from typed text: typing https://evil.example moved the box from ${JSON.stringify(box.host)} to ${JSON.stringify(after.host)}`);
+    // --- IDN: the mixed-script host in localDomains resolves to loopback
+    // and its pushed displaySpec is the url.domainToASCII punycode.
+    const idnAscii = domainToASCII('pаypal-fixture.test');
+    const idnId = await openWebTab(app, `http://${idnAscii}:${pages.port}/plain`);
+    if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === idnId && String(p.url ?? '').includes('/plain') && p.loading === false) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the IDN tab`);
     }
-    if (plant === 'typed-lock' && after.icon !== null && String(after.icon).includes('lock')) {
-        note('the typed-text plant shows a lock icon for typed https text');
+    const idnPush = await lastPush(app, idnId);
+    if (!idnPush) {
+        return fail(`${BROKEN} no state push for the IDN tab to compare against`);
+    }
+    if (idnPush.displaySpec !== idnAscii) {
+        fail(`the IDN tab pushed displaySpec ${JSON.stringify(idnPush.displaySpec)}, want the punycode ${JSON.stringify(idnAscii)}`);
+    }
+}
+
+async function identityLocal(ctx) {
+    const { app, pages, fail } = ctx;
+    const tabId = await openWebTab(app, pages.url('/plain'));
+    if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && String(p.url ?? '').endsWith('/plain') && p.loading === false) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for /plain`);
+    }
+    if (await makeCurrent(app, tabId) !== true) {
+        return fail(`${BROKEN} the served-origin web tab could not be made current`);
+    }
+    const pushed = await lastPush(app, tabId);
+    if (!pushed) {
+        return fail(`${BROKEN} no state push for the served-origin tab to compare the box against`);
+    }
+    if (pushed.securityState !== 'local') {
+        fail(`the served-origin tab pushed ${JSON.stringify(pushed.securityState)}, want "local" (url ${JSON.stringify(pushed.url)})`);
+    }
+    const box = await readIdentity(app);
+    if (!box.present) {
+        fail('no .pb-identity element with a served-origin web tab current');
+    } else if (box.icon !== null) {
+        fail(`the local pill must render no icon; saw icon ${JSON.stringify(box.icon)}`);
     }
     // An editor tab shows no identity box at all.
     const editor = await probe(app, `await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile');
-        return await (async () => { const { until } = await import('./lib/pb-relaunch.mjs').catch(() => ({})); return !!get('EditorManager').currentEditor; })();`);
+        return !!get('EditorManager').currentEditor;`);
     if (editor !== true) {
         return fail(`${BROKEN} no untitled editor could be opened`);
     }
@@ -136,14 +292,20 @@ async function identityLock(ctx) {
     await probe(app, `get('EditorManager').currentEditor?.close(); return true;`).catch(() => null);
 }
 
-const SCENARIOS = { 'identity-lock': identityLock };
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
 const NOT_LANDED = ['site-panel', 'clear-data', 'shield', 'app-menu'];
 
-/** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
-async function runSession(names, plant = '') {
-    const pages = await serveNavPages(PAGES);
+/**
+ * One session over `names`; returns `[{ name, failures, notes, notScored }]`
+ * or throws. `tls` selects the fixture session (CA trust + https twin);
+ * each session opens at most four web tabs.
+ */
+async function runSession(names, plant = '', tls = false) {
+    const pages = await serveNavPages(PAGES, tls ? { tls: { port: TLS_PORT } } : {});
+    pages.port = new URL(pages.origin).port;
+    setPlainPort(pages.port);
     const shared = { cleanups: [] };
     try {
         return await withProbeShell(async app => {
@@ -169,7 +331,7 @@ async function runSession(names, plant = '') {
                 results.push(result);
             }
             return results;
-        });
+        }, tls ? { extraPrefs: EXTRA_PREFS, trustFixtureCA: true } : {});
     } finally {
         await pages.close();
         for (const cleanup of shared.cleanups) {
@@ -211,28 +373,31 @@ function selectedScenarios(args) {
 }
 
 const PLANTS = [
-    { plant: 'typed-lock', target: 'identity-lock', run: ['identity-lock'], expect: 'lock derived from typed text' },
+    { plant: 'typed-lock', target: 'identity-tls', run: ['identity-tls'], expect: 'lock derived from typed text', tls: true },
 ];
 
 async function selfTest() {
     let failed = 0;
-    try {
-        const clean = await runSession(['identity-lock']);
+    for (const session of [['identity-local'], ['identity-tls']]) {
+        let clean;
+        try {
+            clean = await runSession(session, '', session[0] === 'identity-tls');
+        } catch (error) {
+            console.error(`${NAME} --self-test: FAIL -- harness: the clean control could not be driven: ${error.message}`);
+            return 1;
+        }
         const red = clean.filter(r => r.failures.length);
         if (red.length) {
             failed++;
             console.error(`${NAME} --self-test: FAIL -- the clean control is not green: ${red.map(r => `${r.name}: ${r.failures.join(' | ')}`).join('; ')}`);
         } else {
-            console.log('  ok  clean control (no plant) -> green');
+            console.log(`  ok  clean control (${session[0]}, no plant) -> green`);
         }
-    } catch (error) {
-        console.error(`${NAME} --self-test: FAIL -- harness: the clean control could not be driven: ${error.message}`);
-        return 1;
     }
     for (const c of PLANTS) {
         let results;
         try {
-            results = await runSession(c.run, c.plant);
+            results = await runSession(c.run, c.plant, c.tls);
         } catch (error) {
             failed++;
             console.error(`${NAME} --self-test: FAIL -- harness: '${c.plant}' could not be driven: ${error.message}`);
@@ -263,7 +428,18 @@ async function selfTest() {
 
 async function main(args) {
     try {
-        return report(await runSession(selectedScenarios(args)));
+        const names = selectedScenarios(args);
+        // Split across two sessions (4-tab limit): the TLS session first.
+        const tlsNames = names.filter(n => n === 'identity-tls');
+        const localNames = names.filter(n => n !== 'identity-tls');
+        const results = [];
+        if (tlsNames.length) {
+            results.push(...await runSession(tlsNames, '', true));
+        }
+        if (localNames.length) {
+            results.push(...await runSession(localNames, ''));
+        }
+        return report(results);
     } catch (error) {
         console.error(error.message.startsWith('harness:') ? error.message : `harness: ${error.message}`);
         return 1;
@@ -276,6 +452,4 @@ if (args.includes('--help')) {
     process.exit(0);
 }
 // No .planning/ literals: the harness serves its own pages, never the plan tree.
-void inChrome;
-void isState;
 process.exit(args.includes('--self-test') ? await selfTest() : await main(args));

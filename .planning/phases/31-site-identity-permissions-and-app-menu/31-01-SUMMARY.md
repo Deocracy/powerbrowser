@@ -19,7 +19,8 @@ affects: [31-02 panel rows, 31-03 clear-data and shield, 31-04 hamburger menu]
 actuals:
   tokens: 92000
   tasks: 3
-  commits: 3
+  commits: 5
+  plan_head_before: 024ce71
 
 # Tech tracking
 tech-stack:
@@ -45,7 +46,8 @@ key-files:
 
 key-decisions:
   - "Decode chrome-side with the browser-siteIdentity.js recipe; push the enum, never the bitfield (D-31-01/D-31-04)"
-  - "Identity box reads pushed state only; lockFromTypedText is the live plant's seam and returns false clean (D-31-09)"
+  - "Local-origin trust reads securityUI.isSecureContext with the principal's isOriginPotentiallyTrustworthy as fallback (HIGH-1 loopback fix)"
+  - "Identity box reads pushed state only; the lockFromTypedText seam is deleted and both plants re-insert the original render-line derivation (HIGH-3/MEDIUM-5)"
   - "webTabSiteInfo is tab-navigation under the privileged-kind rule: tabId only, principal from the overlay (D-31-05)"
   - "Later plans' live scenarios run as SKIP *-not-landed, never pass, until plans 02-04 land them"
 
@@ -68,7 +70,7 @@ coverage:
     requirement: "SITE-02"
     verification:
       - kind: e2e
-        ref: "node scripts/verify-site-identity-live.mjs --scenario identity-lock"
+        ref: "node scripts/verify-site-identity-live.mjs --scenario identity-tls,identity-local"
         status: unknown
   - id: D3
     description: "Host display with registrable-domain highlight and panel shell"
@@ -89,13 +91,16 @@ coverage:
   carries `NOTIFY_SECURITY` and `NOTIFY_CONTENT_BLOCKING`.
 - Pure `site-identity-table.ts` lands with `SECURITY_STATES`, `PERMISSION_IDS`
   (the six upstream IDs), `STOCK_PAGES` and `MENU_ORDER`.
-- The pill identity box renders pushed state only; the `typed-lock` seam
-  (`lockFromTypedText`, clean = false) lets the live plant restore a
-  text-derived lock and go red naming it.
+- The pill identity box renders pushed state only; the typed-text seam is
+  deleted -- both plants re-insert the original
+  `this.inputValue.trim().startsWith('https://')` render-line derivation
+  and go red naming it.
 - `webTabSiteInfo` read path (principal-keyed) plus the panel shell with
-  header / `not-available` fallback, Esc and outside-click close.
-- `verify-site-identity.mjs` (10 cases, 7 plants, all red-naming) plus
-  `verify-site-identity-live.mjs` (`identity-lock` + `typed-lock` plant);
+  state-specific `aria-label`, base-domain caption and connection text
+  (local renders properly, no fallback), Esc and outside-click close.
+- `verify-site-identity.mjs` (10 cases, 10 plants, all red-naming) plus
+  `verify-site-identity-live.mjs` (TLS `identity-tls` + `identity-local`
+  sessions, two-session 4-tab split, `typed-lock` plant);
   `site-identity` / `site-identity-self-test` registry rows.
 
 ## Commits
@@ -107,7 +112,7 @@ coverage:
 ## Static results
 
 - `node scripts/verify-site-identity.mjs`: PASS (10 cases)
-- `node scripts/verify-site-identity.mjs --self-test`: PASS (7 plants)
+- `node scripts/verify-site-identity.mjs --self-test`: PASS (10 plants)
 - `node scripts/verify-web-tab-bridge.mjs` + `--self-test`: PASS (13 kinds, 21 plants)
 - `node scripts/verify-shell-error-copy.mjs`: PASS
 - `tsc --noEmit` chrome-bar + tab-uris: green
@@ -124,22 +129,29 @@ coverage:
 environment rows — `verify-downstream-fixtures*`,
 `installer-build-proof-self-test`, `sql-store-soak*` (the plan's
 sanctioned env-fail set) plus `gui07-strip-spike-verdict*`, which fails
-identically on the clean tree (verified via `git stash`) and is owned by
-the plan-reorg worktrack, not this plan.
+identically on the clean tree and is owned by the plan-reorg worktrack,
+not this plan.
 
 ## Deviations
 
 - `inventory/brand-tokens.json` (not plan-named): reconciled the frozen
   `-PLAN.md` count 49 → 59. Required — the ten new INTERNAL-APIS.md
   provenance citations would otherwise fail the permanent brand gate.
-- Live scenario asserts served-origin `local` state rather than https/http
-  fixtures: the sandbox has no TLS or mixed-content harness, and the
-  plan's own constraint (served-origin tabs only) admits this shape.
+- `site-panel.tsx` (plan-named) was not created: the panel shell lives in
+  `address-bar.tsx`'s `.pb-chrome-bar-dropdown` portal family (same
+  family as every other pill dropdown), so no new blocking-layer entry
+  and no new file. Recorded here as the deviation, not a silent rename.
+- Live scenarios split across two sessions (`identity-tls`,
+  `identity-local`) for the harness's 4-tab limit; the TLS twin serves
+  beside `serveNavPages` (`node:https` with the committed
+  `scripts/fixtures/tls/` leaf) with the fixture hosts in
+  `network.dns.localDomains` and the CA trusted in the probe profile only.
 
 ## Blockers
 
 - None for static work. Live rows pending (Claude): Theia build +
-  `identity-lock` scenario + live `--self-test` per 31-01-LIVE-HANDOFF.md.
+  `identity-tls` + `identity-local` scenarios + live `--self-test`
+  per 31-01-LIVE-HANDOFF.md (two sessions, 4-tab limit).
 
 ## Handoff
 

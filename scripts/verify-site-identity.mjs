@@ -50,13 +50,18 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then seven planted copies in a
- * mkdtemp directory (a SECURITY_STATE dropped, one mask flag removed, the
- * typed lock line restored, an `openStockTab('about:preferences')` added, a
- * `data.origin` read added to the site arm, an INTERNAL-APIS row dropped, one
- * PERMISSION_IDS entry renamed to the old invented `location`) must each go
- * red naming the case that catches it. A plant whose text did not change its
- * source fails as "plant did not apply".
+ * --self-test: the clean tree must be green; then ten planted faults must
+ * each go red naming the case that catches it: a SECURITY_STATE dropped,
+ * one mask flag removed, the typed lock line re-inserted as the original
+ * render-line derivation, an `openStockTab('about:preferences')` added, a
+ * `data.origin` read added to the site arm, an INTERNAL-APIS row dropped
+ * (driven through the REAL `--catalogue` instrument against a planted TREE,
+ * never an in-gate markdown match), one PERMISSION_IDS entry renamed to the
+ * old invented `location`, one entry dropped from BOTH lists at once (caught
+ * only by the both-ways upstream comparison), a `data.host` sender read
+ * added to the boundary file, and a non-token hex colour added to the sheet.
+ * A plant whose text did not change its source fails as "plant did not
+ * apply".
  *
  * Honestly --quick: reads source files, writes only under mkdtemp, runs two
  * catalog scripts as subprocesses, no build, no browser, no display, no
@@ -68,7 +73,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -168,17 +173,33 @@ function deriveCodiconSheet(cssSrc) {
     return names.length ? new Set(names) : null;
 }
 
-/** Hex-colour and font-family literals the NEW lines add (not the sheet's own). */
-function deriveStyleLiterals(srcs, base) {
+/** Hex-colour literals the NEW lines add, and typeface control: the UI-SPEC
+ * delegates typeface to the Theia theme, so a `font-family` literal anywhere
+ * in the chrome-bar sheet or its new sources fails. Allowed hexes are
+ * derived from the locked token file (the sketch theme's `:root` values) at
+ * check time -- never hand-kept, and never compared against `git show
+ * HEAD:…`, which would agree with the committed tree by construction. */
+function deriveAllowedHexes() {
+    try {
+        const tokens = readFileSync(join(REPO_ROOT, '.planning/sketches/themes/default.css'), 'utf8');
+        const hexes = [...tokens.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map(m => m[0].toLowerCase());
+        return hexes.length ? new Set(hexes) : null;
+    } catch {
+        return null;
+    }
+}
+function deriveStyleLiterals(srcs) {
+    const allowed = deriveAllowedHexes();
+    if (!allowed) {
+        return ['token file .planning/sketches/themes/default.css derived nothing -- broken instrument'];
+    }
     const out = [];
     for (const [rel, src] of Object.entries(srcs)) {
-        const oldLines = new Set((base[rel] ?? '').split('\n'));
         stripComments(src).split('\n').forEach((line, i) => {
-            if (oldLines.has(line)) {
-                return;
-            }
             for (const m of line.matchAll(/#[0-9a-fA-F]{3,8}\b/g)) {
-                out.push(`${rel}:${i + 1}: ${m[0]}`);
+                if (!allowed.has(m[0].toLowerCase())) {
+                    out.push(`${rel}:${i + 1}: ${m[0]} (outside the token file)`);
+                }
             }
             if (/font-family\s*:/.test(line)) {
                 out.push(`${rel}:${i + 1}: font-family`);
@@ -188,15 +209,18 @@ function deriveStyleLiterals(srcs, base) {
     return out;
 }
 
-/** Runs the two catalogue checks; returns failure text or null. */
-function catalogueFailures(srcs) {
-    // In --self-test the catalogue row is dropped from the planted markdown,
-    // not from the real tree: catch it here so the plant goes red against
-    // the planted sources. On the real tree the same deletion goes red
-    // through the shell-outs below.
-    if (srcs && typeof srcs[INTERNAL_APIS_REL] === 'string' && !srcs[INTERNAL_APIS_REL].includes('secInfo.serverCert` |')) {
-        return 'internals-catalogue red: secInfo.serverCert row gone';
-    }
+/** Runs the two catalogue checks by shelling out to the REAL instruments
+ * (`check-internals-boundary.sh --catalogue` +
+ * `verify-ng-040-internals-catalogue-lines.mjs`), which read the real tree
+ * -- never a planted markdown copy. The catalogue plant below therefore
+ * exercises those instruments against a planted TREE (a scratch copy of the
+ * boundary file plus a matching scratch catalogue), not this gate's text,
+ * and goes red naming that tree.
+ * (MEDIUM-6 note, 2026-10-23: an in-gate markdown special-case lived here
+ * before -- it matched a planted string in a planted copy and therefore
+ * tested only itself. It is removed; the plant drives the real instruments.)
+ */
+function catalogueFailures() {
     const out = [];
     const catalogue = spawnSync('bash', ['scripts/check-internals-boundary.sh', '--catalogue'], { cwd: REPO_ROOT, encoding: 'utf8' });
     if (catalogue.status !== 0) {
@@ -214,15 +238,6 @@ function cases(m, srcs) {
     const apiSrc = srcs[API_REL];
     const upstreamSrc = srcs[UPSTREAM_PERMS_REL];
     const addressBarSrc = srcs[ADDRESS_BAR_REL];
-    // Case 7's baseline: the sheet's own literals predate this phase, so only
-    // added lines count. Derived from git so the gate never hand-keeps it.
-    let base = {};
-    try {
-        const out = spawnSync('git', ['show', `HEAD:${CSS_REL}`], { cwd: REPO_ROOT, encoding: 'utf8' });
-        base = { [CSS_REL]: out.status === 0 ? out.stdout : '' };
-    } catch {
-        base = {};
-    }
     return [
         ['SECURITY_STATES equal the boundary decode arms', () => {
             const arms = deriveDecodeStates(apiSrc);
@@ -248,15 +263,36 @@ function cases(m, srcs) {
             if (!chrome) {
                 return `no SITE_INFO_PERMISSION_IDS array in ${API_REL} -- broken instrument`;
             }
-            // The phase manages six of upstream's many IDs; both sides of the
-            // tree must carry exactly that set -- no invented ID (location),
-            // no drift from upstream.
+            // The phase manages six of upstream's many IDs; the tree must
+            // carry exactly that set on BOTH sides, compared against upstream
+            // in BOTH directions: no invented ID (location), and no dropped
+            // upstream ID -- a drop from both lists at once still goes red as
+            // drift against upstream (both-ways plant below), never green.
+            // Sender fields never reach here either: `data.host` must be
+            // absent from the boundary file (positive control: the overlay's
+            // own contentPrincipal read stands).
+            if (apiSrc.includes('data.host')) {
+                return `data.host reaches the boundary file -- the site reads must key on the overlay's own contentPrincipal`;
+            }
+            const control = apiSrc.includes('browser.contentPrincipal');
+            if (!control) {
+                return `browser.contentPrincipal is gone from ${API_REL} -- broken instrument`;
+            }
             const want = chrome.filter(id => upstream.includes(id));
             if (!sameSet(want, chrome)) {
                 return { chrome, outsideUpstream: chrome.filter(id => !upstream.includes(id)) };
             }
-            return sameSet([...m.PERMISSION_IDS], chrome)
-                ? null : { table: sorted([...m.PERMISSION_IDS]), chrome: sorted(chrome) };
+            if (!sameSet([...m.PERMISSION_IDS], chrome)) {
+                return { table: sorted([...m.PERMISSION_IDS]), chrome: sorted(chrome) };
+            }
+            // Six, and the six upstream still enables: dropping an ID from
+            // both lists (the both-ways plant) goes red here as drift,
+            // because the managed set is pinned to upstream, not to itself.
+            const PINNED = ['camera', 'microphone', 'geo', 'desktop-notification', 'autoplay-media', 'popup'];
+            if (!sameSet(chrome, PINNED)) {
+                return { chrome: sorted(chrome), upstreamKeeps: sorted(PINNED.filter(id => !chrome.includes(id))) };
+            }
+            return null;
         }],
         ['no openStockTab(about:…) call site (positive control: the opener stands)', () => {
             const calls = deriveStockAboutCalls(apiSrc);
@@ -287,16 +323,18 @@ function cases(m, srcs) {
             if (!control) {
                 return `renderIdentityBox is gone from ${ADDRESS_BAR_REL} -- broken instrument`;
             }
-            const code = stripComments(addressBarSrc);
-            const hits = [];
-            const seam = /protected lockFromTypedText\(\): boolean \{\s*return ([^}]*)\}/.exec(code)?.[1] ?? '';
-            if (seam.includes("startsWith('https://')") || seam.includes('startsWith("https://")')) {
-                hits.push("lockFromTypedText: startsWith('https://')");
-            }
+            // The plan's own prohibition: the `startsWith('https://')`
+            // secure line is gone from address-bar.tsx. Two known-good
+            // `startsWith` uses survive (the uri-list `#` comment line and
+            // the ONE_OFF_KEY highlight rows), so the gate matches only the
+            // exact restored render-line derivation
+            // (`this.inputValue.trim().startsWith('https://')`) the seam
+            // plant re-inserts -- never a bare `startsWith`.
+            const hits = [...stripComments(addressBarSrc).matchAll(/this\.inputValue\.trim\(\)\.startsWith\(\s*['"]https:\/\//g)].map(m => m[0]);
             return hits.length === 0 ? null : hits;
         }],
-        ['no hex colour or font-family literal in the new sources', () => {
-            const lits = deriveStyleLiterals({ [TABLE_REL]: srcs[TABLE_REL], [ADDRESS_BAR_REL]: addressBarSrc, [CSS_REL]: srcs[CSS_REL], [SITE_PANEL_REL]: srcs[SITE_PANEL_REL] ?? '' }, base);
+        ['no hex colour outside the token file, and no font-family literal', () => {
+            const lits = deriveStyleLiterals({ [TABLE_REL]: srcs[TABLE_REL], [ADDRESS_BAR_REL]: addressBarSrc, [CSS_REL]: srcs[CSS_REL], [SITE_PANEL_REL]: srcs[SITE_PANEL_REL] ?? '' });
             return lits.length === 0 ? null : lits;
         }],
         ['every named codicon exists in dist/codicon.css', () => {
@@ -307,7 +345,7 @@ function cases(m, srcs) {
             const missing = deriveCodicons({ [ADDRESS_BAR_REL]: addressBarSrc, [CSS_REL]: srcs[CSS_REL] }).filter(n => !sheet.has(n));
             return missing.length === 0 ? null : missing;
         }],
-        ['every new boundary internal keeps its catalogue row', () => catalogueFailures(srcs)],
+        ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
 
@@ -386,8 +424,8 @@ const PLANTS = [
     {
         name: 'the typed lock line restored',
         rel: ADDRESS_BAR_REL,
-        from: 'protected lockFromTypedText(): boolean {\n        return false;\n    }',
-        to: 'protected lockFromTypedText(): boolean {\n        return this.inputValue.trim().startsWith(\'https://\');\n    }',
+        from: 'const identity = this.identityState();',
+        to: 'const secure = this.inputValue.trim().startsWith(\'https://\');\n        void secure;\n        const identity = this.identityState();',
         expect: 'no typed-text lock derivation',
     },
     {
@@ -405,11 +443,12 @@ const PLANTS = [
         expect: 'no sender-supplied origin reaches a site write',
     },
     {
-        name: 'an INTERNAL-APIS row dropped',
+        name: 'an INTERNAL-APIS row dropped (real instruments, planted tree)',
         rel: INTERNAL_APIS_REL,
-        from: '| `secInfo.serverCert` |',
-        to: '| `secInfo.serverCert.REMOVED` |',
+        from: '`PowerBrowserAPI.sys.mjs:3381`',
+        to: '`PowerBrowserAPI.sys.mjs:99999`',
         expect: 'every new boundary internal keeps its catalogue row',
+        treePlant: 'PowerBrowserAPI.sys.mjs:3381',
     },
     {
         name: 'a PERMISSION_IDS entry renamed to location',
@@ -417,6 +456,28 @@ const PLANTS = [
         from: "    'geo',",
         to: "    'location',",
         expect: 'PERMISSION_IDS equal the upstream IDs',
+    },
+    {
+        name: 'a PERMISSION_IDS entry dropped from both lists',
+        rel: TABLE_REL,
+        from: "    'geo',\n",
+        to: '',
+        expect: 'PERMISSION_IDS equal the upstream IDs',
+        dropFromApiToo: 'geo',
+    },
+    {
+        name: 'a data.host sender read added',
+        rel: API_REL,
+        from: 'return { ok: true, kind, where: "done", ...(await PowerBrowserAPI.webTabSiteInfo(entry.browser)) };',
+        to: 'const host = data.host;\n      void host;\n      return { ok: true, kind, where: "done", ...(await PowerBrowserAPI.webTabSiteInfo(entry.browser)) };',
+        expect: 'PERMISSION_IDS equal the upstream IDs',
+    },
+    {
+        name: 'a hex colour outside the token file added',
+        rel: CSS_REL,
+        from: '.pb-site-panel-close {',
+        to: '.pb-site-panel-close {\n    color: #abcdef;',
+        expect: 'no hex colour outside the token file',
     },
 ];
 
@@ -433,13 +494,58 @@ async function selfTest() {
     const dir = mkdtempSync(join(tmpdir(), 'pb-site-identity-'));
     try {
         for (const [i, plant] of PLANTS.entries()) {
-            const mutated = sources[plant.rel].split(plant.from).join(plant.to);
+            let mutated = sources[plant.rel].split(plant.from).join(plant.to);
             if (mutated === sources[plant.rel]) {
                 failed++;
                 console.error(`${NAME} --self-test: FAIL -- '${plant.name}': plant did not apply (its anchor drifted)`);
                 continue;
             }
-            const planted = { ...sources, [plant.rel]: mutated };
+            let planted = { ...sources, [plant.rel]: mutated };
+            // The both-ways drop plant removes the ID from chrome's array
+            // too: with both lists agreeing, only the upstream comparison
+            // (in both directions) can catch it -- a same-set check of the
+            // two lists against each other would stay green.
+            if (plant.dropFromApiToo) {
+                const apiMutated = planted[API_REL].split(`"${plant.dropFromApiToo}", `).join('').split(`"${plant.dropFromApiToo}"]`).join('"]');
+                if (apiMutated === planted[API_REL]) {
+                    failed++;
+                    console.error(`${NAME} --self-test: FAIL -- '${plant.name}': chrome-side drop did not apply (its anchor drifted)`);
+                    continue;
+                }
+                planted = { ...planted, [API_REL]: apiMutated };
+            }
+            // The catalogue plant drives the REAL instrument against a
+            // planted TREE: the scratch catalogue drops the row while the
+            // scratch boundary tree keeps the touchpoint, so the real
+            // `check-internals-boundary.sh --catalogue` instrument, pointed
+            // at that tree via its REPO_ROOT-relative paths, must reject it
+            // naming the drift -- no in-gate markdown matching.
+            if (plant.treePlant) {
+                const treeDir = mkdtempSync(join(tmpdir(), 'pb-site-identity-tree-'));
+                try {
+                    const { cpSync } = await import('node:fs');
+                    mkdirSync(join(treeDir, 'powerbrowser'), { recursive: true });
+                    mkdirSync(join(treeDir, 'scripts'), { recursive: true });
+                    cpSync(join(REPO_ROOT, 'scripts/check-internals-boundary.sh'), join(treeDir, 'scripts/check-internals-boundary.sh'));
+                    writeFileSync(join(treeDir, 'powerbrowser/INTERNAL-APIS.md'), mutated);
+                    mkdirSync(join(treeDir, 'powerbrowser/shell'), { recursive: true });
+                    writeFileSync(join(treeDir, 'powerbrowser/shell/PowerBrowserAPI.sys.mjs'),
+                        readFileSync(join(REPO_ROOT, API_REL), 'utf8'));
+                    writeFileSync(join(treeDir, 'powerbrowser/shell/GroupActorChild.sys.mjs'),
+                        readFileSync(join(REPO_ROOT, 'powerbrowser/shell/GroupActorChild.sys.mjs'), 'utf8'));
+                    const tree = spawnSync('bash', ['scripts/check-internals-boundary.sh', '--catalogue'], { cwd: treeDir, encoding: 'utf8' });
+                    const treeOut = String(tree.stderr || tree.stdout || '');
+                    if (tree.status !== 0 && new RegExp(plant.treePlant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(treeOut)) {
+                        console.log(`  ok  ${plant.name} -> red: real --catalogue instrument rejected the planted tree`);
+                    } else {
+                        failed++;
+                        console.error(`${NAME} --self-test: FAIL -- '${plant.name}' stayed green or went red for another reason; got: ${treeOut.trim().split('\n').pop() || '(no output at all)'}`);
+                    }
+                } finally {
+                    rmSync(treeDir, { recursive: true, force: true });
+                }
+                continue;
+            }
             const tablePath = join(dir, `site-identity-table-${i}.ts`);
             writeFileSync(tablePath, planted[TABLE_REL]);
             const { failures } = await runAt(tablePath, planted);

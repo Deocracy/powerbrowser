@@ -627,7 +627,16 @@ const EXPECTED_NAV_COPY = new Set([
   "Connection secure",
   "Not Secure",
   "This page has a security problem",
+  "This page is served from this device",
   "Show site information for ${name}",
+  "Connection secure, show site information for ${name}",
+  "Not Secure, show site information for ${name}",
+  "Security problem, show site information for ${name}",
+  "Local page, show site information for ${name}",
+  "Secure connection to ${name}",
+  "Not a secure connection to ${name}",
+  "There is a security problem with ${name}",
+  "Local page on ${name}",
   "${name} can't show site information for this page. Try reloading the page.",
 ]);
 

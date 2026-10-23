@@ -241,11 +241,19 @@ function profileLocked(profileDir) {
  * (an app that did not quit) must not bring its stock windows back into the
  * next launch, where they would sit beside the shell's own context.
  * withFirefoxPage appends its own override to this file (f4818a0).
+ * `extraPrefs` (Phase 31: the TLS fixture hosts) appends one `user_pref`
+ * line per entry, so the prefs are in place before the first launch --
+ * prefs that only take effect at startup (e.g. `network.dns.localDomains`)
+ * cannot be set later through any probe.
  */
-export async function makeProfile() {
+export async function makeProfile(extraPrefs = {}) {
     const profileDir = await mkdtemp(join(tmpdir(), 'pb-ng-c-profile-'));
     const configHome = await mkdtemp(join(tmpdir(), 'pb-ng-c-config-'));
-    await writeFile(join(profileDir, 'user.js'), 'user_pref("browser.sessionstore.resume_from_crash", false);\n');
+    const lines = ['user_pref("browser.sessionstore.resume_from_crash", false);'];
+    for (const [key, value] of Object.entries(extraPrefs)) {
+        lines.push(`user_pref(${JSON.stringify(key)}, ${JSON.stringify(value)});`);
+    }
+    await writeFile(join(profileDir, 'user.js'), lines.join('\n') + '\n');
     process.env.XDG_CONFIG_HOME = configHome;
     return {
         profileDir,
