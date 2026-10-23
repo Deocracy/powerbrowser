@@ -2,18 +2,17 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 30
-current_phase_name: Address-Bar Modes and Command Centre
-status: verifying
+current_phase: 31
+status: executing
 stopped_at: Completed 30-06-PLAN.md
-last_updated: "2026-10-22T22:38:59.102Z"
+last_updated: "2026-10-23T03:39:40.462Z"
 last_activity: 2026-10-22
-last_activity_desc: 30-06 complete (Go-to row from the local classifier with visit-only commits; Ctrl+L, Alt+D and F6 to Address mode; all 30 address-bar live scenarios, the 29-plant self-test, nav-keys-live and web-tab-live green); Phase 30 ready for verification
-state_head: fdec14b5af9d7da6c2ef2886cc0e2b74be24ba75
+last_activity_desc: Phase 31 execution started
+state_head: b9a95c7c1f5354bdbcda155797d9a56e5084be26
 progress:
   total_phases: 13
   completed_phases: 1
-  total_plans: 59
+  total_plans: 65
   completed_plans: 24
   percent: 8
 ---
@@ -25,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 30
+**Current focus:** Phase 31
 
 ## Current Position
 
-Phase: 30 (Address-Bar Modes and Command Centre) — EXECUTING
-Plan: 6 of 6
-Status: Phase complete — ready for verification
-Last activity: 2026-10-22 — 30-06 complete (Go-to row from the local classifier with visit-only commits; Ctrl+L, Alt+D and F6 to Address mode; all 30 address-bar live scenarios, the 29-plant self-test, nav-keys-live and web-tab-live green); Phase 30 ready for verification
+Phase: 31 — EXECUTING
+Plan: 1 of ?
+Status: Executing Phase 31
+Last activity: 2026-10-22 — Phase 31 execution started
 
 Progress: [█░░░░░░░░░] 8%
 
