@@ -366,6 +366,8 @@ export class WebTabWidget extends BaseWidget {
 
     protected raf = 0;
     protected lastSent = '';
+    /** A focusPage() waiting for the publish that shows the overlay. */
+    protected focusWanted = false;
     protected resizeObserver: ResizeObserver | undefined;
     protected listening = false;
     protected stateNode: HTMLDivElement;
@@ -530,6 +532,7 @@ export class WebTabWidget extends BaseWidget {
                 return;
             }
             const r = this.node.getBoundingClientRect();
+            const showable = this.isAttached && this.isVisible && this.hasPage;
             const msg: WebTabMessage = {
                 kind: 'webTabGeometry',
                 tabId: this.tabId,
@@ -537,25 +540,32 @@ export class WebTabWidget extends BaseWidget {
                 y: Math.round(r.top),
                 w: Math.round(r.width),
                 h: Math.round(r.height),
-                visible: this.isAttached && this.isVisible && this.hasPage && !blockingLayerOpen(),
+                visible: showable && !blockingLayerOpen(),
             };
             const key = JSON.stringify(msg);
-            if (key === this.lastSent) {
-                return;
+            if (key !== this.lastSent) {
+                this.lastSent = key;
+                // Not awaited: `publish()` stays synchronous for its many callers.
+                // The rAF coalescing and the `lastSent` dedupe above are what bound
+                // the number of outstanding requests during a splitter drag, and
+                // each request drops its listener on settle or at the ack timeout.
+                void this.channel.request(msg).then(reply => {
+                    if (this.isDisposed) {
+                        return;
+                    }
+                    if (reply.where === UNKNOWN_TAB_OUTCOME) {
+                        this.setLostView(true);
+                    }
+                });
             }
-            this.lastSent = key;
-            // Not awaited: `publish()` stays synchronous for its many callers.
-            // The rAF coalescing and the `lastSent` dedupe above are what bound
-            // the number of outstanding requests during a splitter drag, and
-            // each request drops its listener on settle or at the ack timeout.
-            void this.channel.request(msg).then(reply => {
-                if (this.isDisposed) {
-                    return;
+            // After the geometry: chrome applies messages in order. Held while
+            // only a blocking layer hides the page; dropped if the tab cannot show.
+            if (this.focusWanted && (msg.visible || !showable)) {
+                this.focusWanted = false;
+                if (msg.visible) {
+                    this.channel.send({ kind: 'webTabFocus', tabId: this.tabId });
                 }
-                if (reply.where === UNKNOWN_TAB_OUTCOME) {
-                    this.setLostView(true);
-                }
-            });
+            }
         });
     }
 
@@ -654,8 +664,16 @@ export class WebTabWidget extends BaseWidget {
         return reply;
     }
 
+    /**
+     * Gives the page keyboard focus. Gecko cannot focus a hidden <browser>,
+     * and chrome shows the overlay only when a geometry publish says so, a
+     * frame or more after a menu or dropdown closes or the tab is shown. So
+     * the focus rides the next publish and reaches chrome after the geometry
+     * that shows the page, never before it.
+     */
     focusPage(): void {
-        this.channel.send({ kind: 'webTabFocus', tabId: this.tabId });
+        this.focusWanted = true;
+        this.publish();
     }
 
     /** NAV-01: stops the page's load; the next state push turns Stop back into Reload. */

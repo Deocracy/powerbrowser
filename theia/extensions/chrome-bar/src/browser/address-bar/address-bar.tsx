@@ -729,34 +729,10 @@ export class AddressBar {
         }
         await this.commitText(text);
         const tab = currentWebTab();
+        // The focus survives the load: Gecko keeps a focused overlay focused across a browsing-context switch.
         if (tab && !this.commitFailed && !this.noSearch) {
-            this.focusPageWhenLoaded(tab);
+            tab.focusPage();
         }
-    }
-
-    /**
-     * BAR-10: moves focus to `tab`'s page once the load just started has
-     * finished, if the pill still has focus and no new edit. A focus given
-     * earlier is lost when the navigation commits into a new browsing context
-     * (measured live: the page took focus, then dropped it 32ms later).
-     */
-    protected focusPageWhenLoaded(tab: WebTabWidget): void {
-        let started = false;
-        const done = (): void => {
-            subscription.dispose();
-            clearTimeout(timer);
-        };
-        const subscription = tab.onDidChangeState(state => {
-            started = started || state.loading;
-            if (started && !state.loading) {
-                done();
-                if (document.activeElement === this.pillRef?.querySelector('input') && this.inputValue === this.committedAddress) {
-                    tab.focusPage();
-                }
-            }
-        });
-        // A load that never reports back does not hold a later load's focus hostage.
-        const timer = setTimeout(done, 30000);
     }
 
     /** BAR-10: the clipboard could not be read: one failure row under the pill. */

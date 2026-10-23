@@ -3324,7 +3324,7 @@ export const PowerBrowserAPI = Object.freeze({
             PowerBrowserAPI.log("error", `[web-tab] writeTabRow failed for ${entry.uri}: ${err && err.message ? err.message : err}`);
           });
         }
-        scheduleWebTabState(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
+        scheduleWebTabState(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument, true);
       },
       onStateChange(webProgress, request, stateFlags) {
         if (!webProgress.isTopLevel || !(stateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK)) {
@@ -3340,7 +3340,7 @@ export const PowerBrowserAPI = Object.freeze({
         if (!starting && (stateFlags & Ci.nsIWebProgressListener.STATE_STOP) && /^https?:\/\//i.test(browser.currentURI.spec)) {
           PowerBrowserAPI.scheduleSettleCapture(entry.uri, win);
         }
-        scheduleWebTabState(theiaBrowser, tabId, browser, starting);
+        scheduleWebTabState(theiaBrowser, tabId, browser, starting, !starting);
       },
     };
     browser.addProgressListener(entry.listener, Ci.nsIWebProgress.NOTIFY_LOCATION | Ci.nsIWebProgress.NOTIFY_STATE_NETWORK);
@@ -3357,6 +3357,8 @@ export const PowerBrowserAPI = Object.freeze({
       scheduleWebTabState(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
     };
     browser.addEventListener("pagetitlechanged", entry.titleListener);
+    // A browsing-context switch leaves a placeholder until the new page's location change (scheduleWebTabState).
+    browser.addEventListener("DidChangeBrowserRemoteness", () => switchingOverlays.add(browser));
     webTabs.set(tabId, entry);
     // NG-034: a tab the frontend reopened from last session's snapshot, with
     // its history armed, gets its back/forward history back; any other tab
@@ -3371,7 +3373,10 @@ export const PowerBrowserAPI = Object.freeze({
       });
       return "opened";
     }
-    PowerBrowserAPI.firstWebTabLoad(tabId, entry, spec);
+    // UF-30-01: not awaited, so a rejection is logged here; err.name only, never the URL.
+    PowerBrowserAPI.firstWebTabLoad(tabId, entry, spec).catch(err => {
+      PowerBrowserAPI.log("error", `[web-tab] first load failed (${err && err.name ? err.name : "error"})`);
+    });
     return "opened";
   },
 
@@ -4271,7 +4276,20 @@ const activeTabByFrame = new WeakMap();
 // store section's note.
 const pendingStatesByWindow = new WeakMap();
 
-function scheduleWebTabState(frame, tabId, browser, loading) {
+// Overlays mid browsing-context switch. A switch (a process change, or the
+// BFCache keeping the old page) rebuilds the <browser>'s web navigation
+// (browser-custom-element.mjs finishChangeRemoteness), which then reads
+// about:blank until the new page's location change. Pushing that placeholder
+// told the frontend the tab had no page: it hid the overlay for a frame, and
+// a hidden overlay drops chrome's focus (the focus fixup rule) and refuses a
+// new one. So nothing is pushed from DidChangeBrowserRemoteness until a
+// top-level location change or network stop settles the tab (`settled`).
+const switchingOverlays = new WeakSet();
+
+function scheduleWebTabState(frame, tabId, browser, loading, settled = false) {
+  if (settled) {
+    switchingOverlays.delete(browser);
+  }
   const win = frame.ownerDocument.defaultView;
   let pending = pendingStatesByWindow.get(win);
   if (!pending) {
@@ -4280,7 +4298,7 @@ function scheduleWebTabState(frame, tabId, browser, loading) {
     win.requestAnimationFrame(() => {
       pendingStatesByWindow.delete(win);
       for (const [id, rec] of pending) {
-        if (webTabs.get(id)?.browser === rec.browser) {
+        if (webTabs.get(id)?.browser === rec.browser && !switchingOverlays.has(rec.browser)) {
           PowerBrowserAPI.webTabPush(rec.theiaBrowser, id, rec.browser, rec.loading);
         }
       }
