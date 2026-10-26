@@ -492,7 +492,13 @@ Plans:
   4. After a login, the user is offered to save or update the password
   5. Per-tab notification bars appear for a blocked popup, a hung script and a protocol handler, and their actions work (Allow on a blocked popup opens it as a web tab)
 
-**Plans**: TBD
+**Plans**: 4 plans (strictly sequential waves; DSH codes, Claude checks; prompts answer only via Firefox's own buttons, Chris 2026-10-25)
+
+Plans:
+- [ ] 37-01-PLAN.md (wave 1) — Wave 0 gates plus the first end-to-end tracer.
+- [ ] 37-02-PLAN.md (wave 2) — Remember, the WebRTC device template and the sharing indicator, on top of the 37-01
+- [ ] 37-03-PLAN.md (wave 3) — Dialogs, with the Chris gate.
+- [ ] 37-04-PLAN.md (wave 4) — Password save and update, and the three per-tab notification bars.
 **UI hint**: yes
 
 ### Phase 38: WebExtensions
