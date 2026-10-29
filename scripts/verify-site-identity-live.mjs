@@ -158,7 +158,7 @@ async function identityTls(ctx) {
             const secure = this.inputValue.trim().startsWith('https://');
             if (!secure) return original.call(this);
             // The pre-31 lock followed the typed text; shadow the pushed state with it.
-            this.identityState = () => ({ state: 'secure', displaySpec: '', baseDomain: null });
+            this.identityState = () => ({ state: 'secure', displaySpec: '', baseDomain: null, permissionIcons: [], permissionLabels: [] });
             try { return original.call(this); } finally { delete this.identityState; }
         };
         return true;`) === true) {
@@ -384,6 +384,12 @@ async function waitFor(read, pred, timeoutMs = 8000) {
 
 const rowOf = (panel, id) => panel.rows.find(row => row.id === id);
 
+/** Opens the panel and waits until chrome's reply has filled its rows (a click before that reads no row). */
+async function openPanelReady(app, count) {
+    await openPanel(app);
+    return waitFor(() => panelRead(app), p => p.present && p.rows.length === count);
+}
+
 /** The managed IDs in table order, from the tree's table (never a copy here). */
 async function tableIds() {
     const table = await import(pathToFileURL(join(REPO_ROOT, TABLE_REL)).href);
@@ -463,7 +469,7 @@ async function sitePanel(ctx) {
         if (want === 'allow') {
             // Persistence: close, reopen, and the stored allow is read back from chrome.
             await closePanel(app);
-            await openPanel(app);
+            await openPanelReady(app, ids.length);
             const again = await waitFor(() => panelRead(app), p => p.present && rowOf(p, 'camera')?.state === 'allow');
             if (rowOf(again, 'camera')?.state !== 'allow') {
                 fail(`camera "allow" did not persist across a reopen; saw ${JSON.stringify(rowOf(again, 'camera')?.state ?? again.empty)}`);
@@ -511,7 +517,7 @@ async function sitePanel(ctx) {
     if (!await clickRow(app, 'camera')) {
         return fail(`${BROKEN} the camera row is not on screen after the navigation`);
     }
-    const afterWrite = await waitFor(() => panelRead(app), p => !!p.empty || (p.present && rowOf(p, 'camera')?.state !== 'allow'), 6000);
+    const afterWrite = await waitFor(() => panelRead(app), p => !!p.empty, 6000);
     if (!afterWrite.empty) {
         fail(`the write for the origin the panel showed was not refused after the tab moved; the panel shows ${JSON.stringify(afterWrite.present ? rowOf(afterWrite, 'camera')?.state : afterWrite)}`);
     }
@@ -548,7 +554,7 @@ async function sitePanel(ctx) {
     if (threeIcons.icons.length !== 3 || threeIcons.overflow !== '+1') {
         fail(`four non-default permissions must show three icons and +1; saw ${JSON.stringify(threeIcons)}`);
     }
-    await openPanel(app);
+    await openPanelReady(app, ids.length);
     for (const id of ['camera', 'microphone', 'geo', 'desktop-notification']) {
         // allow -> block -> default: each click waits for chrome's reply before the next, so no click reads a stale state.
         for (let step = 0; step < 2; step++) {
@@ -567,7 +573,7 @@ async function sitePanel(ctx) {
         fail(`with every permission at default the identity box must show no icons; saw ${JSON.stringify(none)}`);
     }
     // --- autoplay icon: block sounds, then block all, the icon stays and the copy follows.
-    await openPanel(app);
+    await openPanelReady(app, ids.length);
     for (const [want, word] of [['block-audible', 'Block sounds'], ['block-all', 'Block all']]) {
         await clickRow(app, 'autoplay-media');
         const got = await waitFor(() => panelRead(app), p => p.present && rowOf(p, 'autoplay-media')?.state === want);
@@ -579,7 +585,7 @@ async function sitePanel(ctx) {
         if (!icon.icons.includes('codicon-play')) {
             fail(`an autoplay-media "${want}" must keep its icon in the identity box; saw ${JSON.stringify(icon)}`);
         }
-        await openPanel(app);
+        await openPanelReady(app, ids.length);
     }
     // Reset autoplay-media to default: block all -> default is one click.
     await clickRow(app, 'autoplay-media');
