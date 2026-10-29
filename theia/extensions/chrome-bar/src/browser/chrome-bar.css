@@ -1056,3 +1056,24 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     user-select: none;
     -moz-user-select: none;
 }
+
+/* SITE-06 (plan 02): the permission icons in the identity box (UI-SPEC: 12px, muted ink). */
+.pb-identity-perms {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pb-identity-perm {
+    font-size: 12px;
+    width: 12px;
+    height: 12px;
+    color: var(--theia-descriptionForeground);
+}
+
+.pb-identity-overflow {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--theia-descriptionForeground);
+}

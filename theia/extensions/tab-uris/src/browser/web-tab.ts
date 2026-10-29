@@ -170,6 +170,10 @@ export interface WebTabState {
     baseDomain?: string | null;
     /** Phase 31 (D-31-02): the content-blocking log length chrome stashed. */
     blockedTrackers?: number;
+    /** Phase 31 plan 02 (SITE-06): the ids of the non-default permissions, table order. */
+    permissionIcons?: string[];
+    /** Phase 31 plan 02: the upstream label of each id in permissionIcons, same order. */
+    permissionLabels?: string[];
 }
 
 /**
@@ -291,6 +295,8 @@ export class WebTabChannel {
                     ? detail.baseDomain as string | null
                     : widget.baseDomain,
                 blockedTrackers: typeof detail.blockedTrackers === 'number' ? detail.blockedTrackers : widget.blockedTrackers,
+                permissionIcons: Array.isArray(detail.permissionIcons) ? detail.permissionIcons.filter((id): id is string => typeof id === 'string') : widget.permissionIcons,
+                permissionLabels: Array.isArray(detail.permissionLabels) ? detail.permissionLabels.filter((label): label is string => typeof label === 'string') : widget.permissionLabels,
             });
         });
     }
@@ -404,6 +410,10 @@ export class WebTabWidget extends BaseWidget {
     baseDomain: string | null | undefined;
     /** Phase 31 (D-31-02): the last pushed blocked-tracker count. */
     blockedTrackers = 0;
+    /** Phase 31 plan 02 (SITE-06): the non-default permission ids, table order; the identity box's icons. */
+    permissionIcons: string[] = [];
+    /** Phase 31 plan 02: the labels of permissionIcons, same order; the icons' tooltip. */
+    permissionLabels: string[] = [];
 
     protected readonly stateEmitter = new Emitter<WebTabState>();
     readonly onDidChangeState: TheiaEvent<WebTabState> = this.stateEmitter.event;
@@ -740,7 +750,25 @@ export class WebTabWidget extends BaseWidget {
      * the principal is a web page; the principal itself is chrome's, never sent.
      */
     setPermission(id: string, state: string, origin: string): Promise<WebTabSiteInfo> {
-        return this.channel.request({ kind: 'webTabSetPermission', tabId: this.tabId, id, state, origin }) as Promise<WebTabSiteInfo>;
+        return this.channel.request({ kind: 'webTabSetPermission', tabId: this.tabId, id, state, origin })
+            .then(reply => {
+                this.refreshPermissionIcons(reply as WebTabSiteInfo);
+                return reply as WebTabSiteInfo;
+            }) as Promise<WebTabSiteInfo>;
+    }
+
+    /**
+     * Phase 31 plan 02 (SITE-06): the identity box's icons follow a permission
+     * reply without waiting for the next state push. The rows are chrome's own
+     * (the reply's `permissions`); a refused or unanswered write changes nothing.
+     */
+    protected refreshPermissionIcons(reply: WebTabSiteInfo): void {
+        if (reply.ok !== true || reply.where !== 'applied' || !Array.isArray(reply.permissions)) {
+            return;
+        }
+        const shown = reply.permissions.filter(row => row.state !== 'default');
+        this.permissionIcons = shown.map(row => row.id);
+        this.permissionLabels = shown.map(row => row.label ?? '');
     }
 
     applyState(state: WebTabState): void {
@@ -760,6 +788,12 @@ export class WebTabWidget extends BaseWidget {
         }
         if (state.blockedTrackers !== undefined) {
             this.blockedTrackers = state.blockedTrackers;
+        }
+        if (state.permissionIcons !== undefined) {
+            this.permissionIcons = state.permissionIcons;
+        }
+        if (state.permissionLabels !== undefined) {
+            this.permissionLabels = state.permissionLabels;
         }
         if (this.loading) {
             const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;

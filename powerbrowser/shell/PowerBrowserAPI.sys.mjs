@@ -3462,6 +3462,8 @@ export const PowerBrowserAPI = Object.freeze({
     try {
       const pageSpec = browser.currentURI ? browser.currentURI.spec : "";
       const identity = PowerBrowserAPI.webTabIdentity(browser, pageSpec);
+      // Phase 31 plan 02 (SITE-06): the non-default permissions, table order, in the same push.
+      const shown = webTabPermissionRows(browser).filter(row => row.state !== "default");
       theiaBrowser.browsingContext.currentWindowGlobal
         .getActor(GROUP_ACTOR_NAME)
         .sendAsyncMessage("PowerBrowserWebTabState", {
@@ -3476,6 +3478,8 @@ export const PowerBrowserAPI = Object.freeze({
           displaySpec: identity.displaySpec,
           baseDomain: identity.baseDomain,
           blockedTrackers: identity.blockedTrackers,
+          permissionIcons: shown.map(row => row.id),
+          permissionLabels: shown.map(row => row.label ?? ""),
         });
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] state push for ${tabId} failed: ${err && err.message ? err.message : err}`);

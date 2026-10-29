@@ -34,7 +34,7 @@ import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes'
 import type { CommandCentreAddressBarMode } from './command-centre';
 import { CHROME_BAR_COPY, appSubject } from '../chrome-bar-copy';
 import { SECURITY_STATES } from '../site-identity/site-identity-table';
-import { SitePanel } from '../site-identity/site-panel';
+import { PERMISSION_GLYPH_CLASS, SitePanel } from '../site-identity/site-panel';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
 } from '../chrome-bar-preferences';
@@ -264,19 +264,21 @@ export class AddressBar {
      * current web tab's last pushed state only -- never from pill text, so
      * typing cannot spoof it. A non-web widget (an editor) has no identity.
      */
-    protected identityState(): { state: string; displaySpec: string; baseDomain: string | null } | undefined {
+    protected identityState(): { state: string; displaySpec: string; baseDomain: string | null; permissionIcons: string[]; permissionLabels: string[] } | undefined {
         const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
         if (!(tab instanceof WebTabWidget) || !tab.hasPage) {
             return undefined;
         }
         // Read through the pushed-state fields; `in` keeps this compiling
         // against the published tab-uris lib until the next Theia build.
-        const pushed = tab as WebTabWidget & { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown };
+        const pushed = tab as WebTabWidget & { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown; permissionIcons?: unknown; permissionLabels?: unknown };
         const raw = typeof pushed.securityState === 'string' ? pushed.securityState : 'none';
         const state = (SECURITY_STATES as readonly string[]).includes(raw) ? raw : 'none';
         const displaySpec = typeof pushed.displaySpec === 'string' ? pushed.displaySpec : '';
         const baseDomain = typeof pushed.baseDomain === 'string' ? pushed.baseDomain : null;
-        return { state, displaySpec, baseDomain };
+        const permissionIcons = Array.isArray(pushed.permissionIcons) ? pushed.permissionIcons.filter((id): id is string => typeof id === 'string') : [];
+        const permissionLabels = Array.isArray(pushed.permissionLabels) ? pushed.permissionLabels.filter((label): label is string => typeof label === 'string') : [];
+        return { state, displaySpec, baseDomain, permissionIcons, permissionLabels };
     }
 
     /**
@@ -330,6 +332,7 @@ export class AddressBar {
                 onMouseDown={e => e.preventDefault()}
                 onClick={e => this.openSitePanel(e.currentTarget)}
             >
+                {this.renderPermissionIcons(identity)}
                 <span className='pb-identity-host'>{host}</span>
             </button>;
         }
@@ -351,8 +354,37 @@ export class AddressBar {
         >
             <span className={`pb-identity-icon codicon ${icon}${warning ? ' is-warning' : ''}`} aria-hidden='true' />
             {identity.state === 'insecure' && <span className='pb-identity-insecure'>{CHROME_BAR_COPY.connectionInsecure}</span>}
+            {this.renderPermissionIcons(identity)}
             <span className='pb-identity-host'>{host}</span>
         </button>;
+    }
+
+    /**
+     * Phase 31 plan 02 (SITE-06, UI-SPEC identity box): up to three 12px icons
+     * for the non-default permissions, then `+n`. The tooltip lists every
+     * non-default permission by chrome's label. Rendered from pushed state
+     * (and the permission reply's refresh), never from a stored copy.
+     */
+    protected renderPermissionIcons(identity: { permissionIcons: string[]; permissionLabels: string[] }): React.ReactNode {
+        const icons = identity.permissionIcons;
+        if (icons.length === 0) {
+            return undefined;
+        }
+        const shown = icons.slice(0, 3);
+        const overflow = icons.length > shown.length ? CHROME_BAR_COPY.permissionOverflow(icons.length - shown.length) : undefined;
+        const tip = CHROME_BAR_COPY.permissionIconsTip(identity.permissionLabels.filter(label => label).join(', '));
+        return <span
+            className='pb-identity-perms'
+            onPointerEnter={e => this.hover.requestHover({
+                content: tip,
+                target: e.currentTarget,
+                position: 'bottom',
+                cssClasses: ['pb-chrome-bar-hover'],
+            })}
+        >
+            {shown.map(id => <span key={id} className={`pb-identity-perm codicon ${PERMISSION_GLYPH_CLASS[id] ?? ''}`} aria-hidden='true' />)}
+            {overflow !== undefined && <span className='pb-identity-overflow'>{overflow}</span>}
+        </span>;
     }
 
     /**
