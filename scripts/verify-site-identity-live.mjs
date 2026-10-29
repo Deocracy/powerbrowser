@@ -45,6 +45,7 @@
 
 import {
     BROKEN,
+    focusTheiaFrame,
     makeCurrent,
     openWebTab,
     pushes,
@@ -96,13 +97,23 @@ const readIdentity = app => app.evaluate(`JSON.stringify((() => {
     };
 })())`).then(JSON.parse);
 
-/** Focuses the pill, reads its text, then blurs it: the focused text is the full URL (SITE-03). */
-const focusPill = app => probe(app, `const input = document.querySelector('.pb-chrome-bar-input');
+/**
+ * Focuses the pill, reads its text, then blurs it: the focused text is the full URL (SITE-03).
+ * The Theia frame is focused first: without it the document lacks focus and Gecko never fires
+ * the input's focus event, so the handler under test would not run.
+ */
+const focusPill = async app => {
+    if (await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} the Theia frame could not be made chrome's active element`);
+    }
+    return probe(app, `const input = document.querySelector('.pb-chrome-bar-input');
     if (!input) return null;
     input.focus();
+    if (!document.hasFocus() || document.activeElement !== input) return null;
     const text = input.value;
     input.blur();
     return text;`);
+};
 
 /** The last loaded state push for `tabId`. */
 const lastPush = async (app, tabId) =>
@@ -164,11 +175,11 @@ async function identityTls(ctx) {
             fail(`the secure pill must highlight the base domain; saw strong ${JSON.stringify(secureBox.strong)} in host ${JSON.stringify(secureBox.host)}`);
         }
         // SITE-03: unfocused, the pill trims https://; focused, it holds the full URL.
-        if (secureBox.pill !== null && /^https:\/\//i.test(secureBox.pill)) {
+        if (secureBox.pill === null || /^https:\/\//i.test(secureBox.pill)) {
             fail(`the unfocused secure pill must trim https://; saw ${JSON.stringify(secureBox.pill)}`);
         }
         const focusedPill = await focusPill(app);
-        if (focusedPill !== null && !/^https:\/\//i.test(String(focusedPill))) {
+        if (focusedPill === null || !/^https:\/\//i.test(String(focusedPill))) {
             fail(`the focused secure pill must hold the full URL with https://; saw ${JSON.stringify(focusedPill)}`);
         }
     }
