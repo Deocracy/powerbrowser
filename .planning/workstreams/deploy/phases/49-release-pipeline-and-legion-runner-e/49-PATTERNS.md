@@ -221,6 +221,8 @@ function safeGetter(get) {
 
 **Projection + set equality, not hand-kept lists** (`scripts/verify-repo-controls.mjs:130-147`): keep only declared keys, compare arrays as sets so an addition and a removal are both red. `channel-live` applies the same to `parseUpdateXml` output vs the manifest: offered `appVersion`/`buildID` vs `GET /releases/tags/v<key>` (`draft:false`), `HEAD Content-Length` vs descriptor `size`, `GET` MAR sha512 vs `hashValue`, `https` + `/releases/download/<tag>/` URL form (latest-download URL is red).
 
+> Superseded by the 2026-10-29 owner ruling (49-CONTEXT.md, "Inherited constraint: update download host"): the `/releases/download/` form in the paragraph above is replaced by the MAR-origin form `<MAR origin>/<tag>/<asset>`.
+
 **CONTROLS-style table + `context`/`runChecks` split** (`scripts/verify-repo-controls.mjs:551-646`, `697-734`): one table of comparators owns the live surface; `runChecks(root, overrides)` takes `overrides.get` so the self-test runs with no network and no `gh`. The self-test serves the declared state back in the live response shape and plants each widening (`scripts/verify-repo-controls.mjs:794-814` `fakeState`, `899-923` baseline-then-plants loop):
 
 ```js
@@ -228,6 +230,8 @@ const baseline = runChecks(REPO_ROOT, { ...fixed, get: getterOf(base), ...extra 
 // self-test plants mutate a clone of the served-back state, each red naming the control
 // (scripts/verify-repo-controls.mjs:910-923, condensed)
 ```
+
+> Superseded by the 2026-10-29 owner ruling (49-CONTEXT.md, "Inherited constraint: update download host"): the latest-download plant is replaced by the nine plants in plan 49-04 Task 2.
 
 `channel-live --self-test` follows the same loop over mkdtemp manifest/tree/server fixtures (RESEARCH: wrong `hashValue`, missing target file, 404 MAR, size mismatch, latest-download URL — each red naming target + value). Honestly-quick note for the header: `node:crypto` plus text files in mkdtemp (precedent: `scripts/verify-mar-update-hop.mjs:94-100` `marDigest`, header at `scripts/verify-mar-update-hop.mjs:44` "Honestly --quick (self-test only): node:crypto plus text files in mkdtemp. No build, no browser, no display, no network.").
 

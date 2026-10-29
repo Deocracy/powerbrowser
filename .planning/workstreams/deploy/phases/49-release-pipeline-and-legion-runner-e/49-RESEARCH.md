@@ -49,6 +49,8 @@ Project skills checked: `.claude/skills/` holds only `sketch-findings-Power-Brow
 | UPD-17 | `channel-live` last in `release.yml` + daily in sweep: each public `update.xml` byte-equals its repo copy, each MAR URL HEADs 200, offered version == latest Release | SUMMARY must-have (channel-live as Floorp does) + ARCHITECTURE §4.4 sweep item 7. S5 `verify-update-channel-live.mjs` design survives with new inputs: derive host/path/channel/BUILD_TARGET set from the build job's `release-manifest.json` (never literals, never an objdir the hosted runner lacks); fetch through the baked 11-segment path (exercises `_redirects`, not the file path); parse with imported `parseUpdateXml` (`verify-mar-update-hop.mjs:125`); HEAD Content-Length == descriptor size; GET MAR sha512 == hashValue; require `https` + immutable `/releases/download/<tag>/` form (latest-download URL is red); compare appVersion/buildID vs `GET /releases/tags/v<key>` (`draft:false`). |
 | INF-04 | One cold hosted fallback Linux build measured (no Actions cache, sccache off); duration + disk in `docs/BUILD.md` | PITFALLS Pitfall 5 (no cache in release path; INF-04 runs cold — amends SEED-002 checklist item 22) + Out of Scope (`Actions cache in the release path`, `Nix in the sign job`). `verify-workflows.mjs` `no-cache` rule enforces it. `docs/BUILD.md` attribution rule (tree + host + toolchain per figure) governs the recorded row. Phase 58 reuses the fallback during the ESR-175 dual-build window (UPS-03). Plans measure, not run, the build if no value exists yet (49-CONTEXT). |
 
+> Superseded by the 2026-10-29 owner ruling: see 49-CONTEXT.md, "Inherited constraint: update download host (Phase 46 owner ruling 2026-10-25, amended 2026-10-29)". The patch URL is `<MAR origin>/<tag>/<asset>`, not a `/releases/download/` URL, and the R2 key is `<tag>/<asset>`.
+
 ## Architecture Responsibility Map
 
 | Capability | Owner (this phase) | Tree / CI | GitHub server | legion (NixOS) | External hosts |
@@ -215,6 +217,8 @@ Draft creation carries every asset in one call (`gh release create "$TAG" --draf
 
 R2 copy (DIST-08, in `sign-publish`, same env):
 
+> Superseded by the 2026-10-29 owner ruling (49-CONTEXT.md, "Inherited constraint: update download host"): the R2 key is `<tag>/<asset>`, not `mar-fallback/`.
+
 ```bash
 wrangler r2 object put "mar-fallback/$BUILD_TARGET/$TAG.mar" --file "$SIGNED" --remote
 # token: R2 object-write, scoped to the MAR fallback bucket only, from the `release` env
@@ -236,6 +240,8 @@ Channel-live (UPD-17, `channel-live` job + sweep row; live half full-tier, self-
 - Inputs: `--manifest <release-manifest.json>` (baked `[AppUpdate]` URL, `[App]` Version/BuildID, `OS_TARGET`, `TARGET_XPCOM_ABI`, `MOZ_UPDATE_CHANNEL`, joined BUILD_TARGET, on-disk asset filenames). No objdir reads on the hosted runner.
 - Per target: fetch `update.xml` through the baked 11-segment path (exercises `_redirects`); `parseUpdateXml`; `HEAD <patch URL>` Content-Length == descriptor `size`; `GET` MAR sha512 == `hashValue`; URL is `https` + `/releases/download/<tag>/` (latest-download form is red); `appVersion`/`buildID` vs `GET /releases/tags/v<key>`; offered version == latest Release tag's version.
 - Self-test plants (S5 list, still correct): wrong `hashValue`, missing target file, 404 MAR, size mismatch, latest-download URL — each red naming target + value.
+
+> Superseded by the 2026-10-29 owner ruling (49-CONTEXT.md, "Inherited constraint: update download host"): the `/releases/download/` form and the latest-download plant in the two bullets above are replaced by the MAR-origin form and the nine plants in plan 49-04 Task 2.
 
 Toolchain baseline in container (AUTO-05):
 
@@ -286,6 +292,8 @@ Registry rows (labels proposed; planner may rename, but one row + self-test per 
 | `mar-channel-gate` | quick | `.mozconfig` emission + fixture MAR product-info blocks | fixture MAR with foreign channel accepted; gate reading `--channel` as MAR id; `signmar -v` against non-tracked DER; sign-before-verify order swapped |
 | `release-asset-set` | quick | `release-manifest.json` fixture + tree (notices, source-tarball rule, tag shape) | dropped asset; extra asset; stable-name drift; versioned-name drift; publish-before-equality step order swapped |
 | `channel-live` / `channel-live-self-test` | full / quick | Manifest + live Release + Pages (live); mkdtemp manifest/tree/server (self-test) | wrong `hashValue`; missing target; 404 MAR; size mismatch; latest-download URL (S5's five, still the right five) |
+
+> Superseded by the 2026-10-29 owner ruling (49-CONTEXT.md, "Inherited constraint: update download host"): the latest-download plant and the `/releases/download/` form in the `channel-live` row above are replaced by the nine plants in plan 49-04 Task 2.
 
 `workflows` row: extend its `GOOD_RELEASE` fixture to the 4-job shape (add `descriptor` + `channel-live` jobs, `sha` input, `retention-days: 1`) rather than duplicating its parser. `repo-controls` row: unchanged (asserts SEC-11/GH-07/GH-08/App-sets; Phase 49 consumes its green). `descriptor-monotonic`, `packaged-launch`, `install-matrix`, `portable-elf`, `sidecar-no-symlinks`, `package-target-natives` rows: consumed from Phases 44/45, not re-declared.
 
