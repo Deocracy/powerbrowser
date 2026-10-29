@@ -191,7 +191,7 @@ export type WebTabMessage =
     | { kind: 'webTabGotoIndex'; tabId: string; index: number }
     | { kind: 'webTabActivated'; tabId: string | null }
     | { kind: 'webTabSiteInfo'; tabId: string }
-    | { kind: 'webTabSetPermission'; tabId: string; id: string; state: string };
+    | { kind: 'webTabSetPermission'; tabId: string; id: string; state: string; origin: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -238,6 +238,8 @@ export interface WebTabPermissionRow {
 
 /** Phase 31 (SITE-04): `webTabSiteInfo`'s reply; `ok` false or no `permissions` means the panel cannot show. */
 export interface WebTabSiteInfo extends WebTabReply {
+    /** The overlay's web origin, or null for a page a permission write would refuse; the panel echoes it on a write. */
+    origin?: string | null;
     securityState?: string;
     displaySpec?: string;
     baseDomain?: string | null;
@@ -733,11 +735,12 @@ export class WebTabWidget extends BaseWidget {
 
     /**
      * Phase 31 plan 02 (D-31-05/D-31-06): one managed permission for this tab's
-     * principal. Called only from the site panel's row handler; chrome reads the
-     * principal itself, so the request carries the tab, the id and the state.
+     * principal. Called only from the site panel's row handler. Chrome writes
+     * only while the tab still shows `origin` (the one the panel displayed) and
+     * the principal is a web page; the principal itself is chrome's, never sent.
      */
-    setPermission(id: string, state: string): Promise<WebTabSiteInfo> {
-        return this.channel.request({ kind: 'webTabSetPermission', tabId: this.tabId, id, state }) as Promise<WebTabSiteInfo>;
+    setPermission(id: string, state: string, origin: string): Promise<WebTabSiteInfo> {
+        return this.channel.request({ kind: 'webTabSetPermission', tabId: this.tabId, id, state, origin }) as Promise<WebTabSiteInfo>;
     }
 
     applyState(state: WebTabState): void {

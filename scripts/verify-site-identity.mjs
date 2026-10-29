@@ -382,8 +382,21 @@ function cases(m, srcs) {
             if (!control) {
                 return `webTabSiteInfo(entry.browser) is gone from ${API_REL} -- broken instrument`;
             }
-            const writes = [...stripComments(apiSrc).matchAll(/data\.origin/g)].map(x => x[0]);
-            return writes.length === 0 ? null : writes;
+            // Phase 31 plan 02 (review fix, TOCTOU): the write arm's ONLY use of
+            // the sender's origin is the echo compare against the overlay's own
+            // principal origin. Any other use (a key, a log field, a second
+            // read) is a sender-supplied site write and goes red.
+            const code = stripComments(apiSrc);
+            const compare = 'principal.origin !== data.origin';
+            if (!code.includes(compare)) {
+                return `the webTabSetPermission origin echo compare is gone (${compare}) -- a write could land on the wrong site`;
+            }
+            if (!code.includes('const principal = entry.browser.contentPrincipal;')) {
+                return `the write arm no longer keys on entry.browser.contentPrincipal -- broken instrument or a sender key`;
+            }
+            // The type guard (`typeof data.origin !== "string"`) is a validation read, not a use.
+            const uses = [...code.replace(/typeof data\.origin !== "string"/g, '').matchAll(/data\.origin/g)].map(x => x[0]);
+            return uses.length === 1 ? null : { senderOriginUses: uses.length, want: 'the one echo compare, nothing else' };
         }],
         ['MENU_ORDER ids equal the rendered hamburger menuIds', () => {
             const rendered = [...stripComments(addressBarSrc).matchAll(/menuId:\s*'([^']+)'/g)].map(x => x[1]);
@@ -576,6 +589,13 @@ const PLANTS = [
         from: 'return { ok: true, kind, where: "done", ...(await PowerBrowserAPI.webTabSiteInfo(entry.browser)) };',
         to: 'const origin = data.origin;\n      return { ok: true, kind, where: "done", ...(await PowerBrowserAPI.webTabSiteInfo(entry.browser)) };',
         expect: 'no sender-supplied origin reaches a site write',
+    },
+    {
+        name: 'the origin echo compare dropped',
+        rel: API_REL,
+        from: 'principal.origin !== data.origin',
+        to: 'false',
+        expect: 'the webTabSetPermission origin echo compare is gone',
     },
     {
         name: 'an INTERNAL-APIS row dropped (real instruments, planted tree)',

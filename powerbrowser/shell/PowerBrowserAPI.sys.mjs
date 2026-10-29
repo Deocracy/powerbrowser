@@ -3698,6 +3698,7 @@ export const PowerBrowserAPI = Object.freeze({
       shieldCount = 0;
     }
     return {
+      origin: webTabPermissionOrigin(browser),
       securityState: identity.securityState,
       displaySpec: identity.displaySpec,
       baseDomain: identity.baseDomain,
@@ -4487,6 +4488,20 @@ function webTabPermissionStateName(id, capability) {
   return capability === lazy.SitePermissions.BLOCK ? "block" : "default";
 }
 
+// Phase 31 plan 02 (review fix, TOCTOU): only a web page's content principal
+// (http or https) takes a permission write. isContentPrincipal and scheme are
+// nsIPrincipal attributes (upstream/caps/nsIPrincipal.idl:607, :377).
+function webTabPermissionPrincipalOk(principal) {
+  return !!principal && principal.isContentPrincipal === true && (principal.scheme === "http" || principal.scheme === "https");
+}
+
+// The origin the panel displays and echoes back on a write; null for any
+// principal a write would refuse.
+function webTabPermissionOrigin(browser) {
+  const principal = browser.contentPrincipal;
+  return webTabPermissionPrincipalOk(principal) ? principal.origin : null;
+}
+
 // One row per managed permission, in table order: the state on this
 // overlay's own principal and the upstream label (getPermissionLabel), so
 // no permission name is kept by hand on either side. Primitives only.
@@ -4607,26 +4622,35 @@ async function handleWebTabAction(data, actorRef) {
     // Phase 31 plan 02 (D-31-05/D-31-06, SITE-04): one managed permission on
     // this tab's own principal. A permission change is privileged (it changes
     // site state, not navigation), so the frontend sends it only from the
-    // panel's row handler. tabId, id and state are the whole input; the
-    // principal is the overlay's contentPrincipal, never a sender field. The
-    // reply carries the refreshed rows, so the panel re-renders from it.
+    // panel's row handler. The write lands only when the tab still shows the
+    // origin the panel displayed (`data.origin` is compared, never used as a
+    // key), and only for a web page; otherwise nothing is written. The reply
+    // carries the refreshed rows, so the panel re-renders from it.
     case "webTabSetPermission": {
       if (!webTabIdIsValid(data.tabId)) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
       const capability = SITE_INFO_PERMISSION_IDS.includes(data.id) ? webTabPermissionCapability(data.id, data.state) : undefined;
-      if (capability === undefined) {
-        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an unknown permission id or state" };
+      if (capability === undefined || typeof data.origin !== "string") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an unknown permission id, state or origin" };
       }
       const entry = webTabs.get(data.tabId);
       if (!entry) {
         return { ok: true, kind, where: "unknown-tab" };
       }
       const principal = entry.browser.contentPrincipal;
+      if (!webTabPermissionPrincipalOk(principal) || principal.origin !== data.origin) {
+        // Logged without the URL or the origin: the kind and the reason only.
+        PowerBrowserAPI.log("warn", "[web-tab] permission write refused: the tab is no longer on the shown web page");
+        return { ok: false, reason: "site-changed", message: "handleWebTabAction: the tab is no longer on the site the panel showed" };
+      }
       try {
-        if (capability === null) {
-          lazy.SitePermissions.removeFromPrincipal(principal, data.id);
-        } else {
+        // The browser argument also clears the tab-scoped temporary state for
+        // this id (SitePermissions.sys.mjs:631-644, removeFromPrincipalForBrowser);
+        // upstream's panel revokes the same way (browser-sitePermissionPanel.js:949-957).
+        // A persistent value is then written on the same principal.
+        lazy.SitePermissions.removeFromPrincipal(principal, data.id, entry.browser);
+        if (capability !== null) {
           lazy.SitePermissions.setForPrincipal(principal, data.id, capability);
         }
       } catch (err) {
