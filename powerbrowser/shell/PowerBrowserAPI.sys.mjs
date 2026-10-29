@@ -3322,12 +3322,15 @@ export const PowerBrowserAPI = Object.freeze({
         if (!webProgress.isTopLevel) {
           return;
         }
-        // Phase 31 (D-31-01/D-31-02): a top-level location change resets
-        // the stashed shield count with the identity, so the next push --
-        // in the same frame as the new url -- never shows the old page's.
-        entry.blockedTrackers = 0;
         const locationSpec = location.spec;
         const sameDocument = !!(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT);
+        // Phase 31 (D-31-01/D-31-02): a top-level, non-same-document location
+        // change resets the stashed shield count with the identity, so the
+        // next push -- in the same frame as the new url -- never shows the
+        // old page's. A hash change or pushState keeps the page's count.
+        if (!sameDocument) {
+          entry.blockedTrackers = 0;
+        }
         if (!sameDocument && /^https?:\/\//i.test(locationSpec)) {
           // NG-002: a navigation updates this tab's row in place -- group, x/y,
           // ord and thumbnail stay.
@@ -3549,8 +3552,9 @@ export const PowerBrowserAPI = Object.freeze({
       // so it must be parsed before counting: `{ origin: [[state, blocked],
       // ...] }` (browser-siteProtections.js:1026 `_processContentBlockingLog`).
       // A count is derived only fresh -- the entry stash above, reset on
-      // every top-level location change, wins when present, so a stale or
-      // blockerless page can never repeat the old page's count.
+      // every top-level, non-same-document location change, wins when
+      // present, so a stale or blockerless page can never repeat the old
+      // page's count.
       const entry = [...webTabs.values()].find(candidate => candidate.browser === browser);
       if (entry && typeof entry.blockedTrackers === "number") {
         blockedTrackers = entry.blockedTrackers;
@@ -3565,9 +3569,15 @@ export const PowerBrowserAPI = Object.freeze({
 
   /**
    * Phase 31 (D-31-02/SITE-08): one overlay's blocked-tracker count -- the
-   * number of origins in its parsed content-blocking log. Guards every step:
-   * null, non-string, and unparseable logs read 0 rather than throwing the
-   * push out.
+   * number of origins in its parsed content-blocking log with at least one
+   * state carrying a blocking bit. Loaded and allowed states never count.
+   * The blocking bits are the STATE_BLOCKED_* flags upstream's categories
+   * test (browser-siteProtections.js:358 fingerprinting, :427 suspicious
+   * fingerprinting, :443 cryptomining, :480-481 tracking and email tracking,
+   * :1186 social tracking), and an origin counts when one of its states
+   * passes the blocking test (browser-siteProtections.js:250 and :306).
+   * Guards every step: null, non-string, and unparseable logs read 0 rather
+   * than throwing the push out.
    */
   webTabBlockedTrackerCount(browser) {
     try {
@@ -3584,7 +3594,15 @@ export const PowerBrowserAPI = Object.freeze({
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         return 0;
       }
-      return Object.keys(parsed).length;
+      const blocked =
+        Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT |
+        Ci.nsIWebProgressListener.STATE_BLOCKED_EMAILTRACKING_CONTENT |
+        Ci.nsIWebProgressListener.STATE_BLOCKED_FINGERPRINTING_CONTENT |
+        Ci.nsIWebProgressListener.STATE_BLOCKED_SUSPICIOUS_FINGERPRINTING |
+        Ci.nsIWebProgressListener.STATE_BLOCKED_CRYPTOMINING_CONTENT |
+        Ci.nsIWebProgressListener.STATE_BLOCKED_SOCIALTRACKING_CONTENT;
+      // Each origin's value is its list of [state, blocked] pairs.
+      return Object.values(parsed).filter(actions => Array.isArray(actions) && actions.some(pair => Array.isArray(pair) && (pair[0] & blocked) !== 0)).length;
     } catch (err) {
       return 0;
     }

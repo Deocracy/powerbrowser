@@ -279,20 +279,15 @@ export class AddressBar {
     }
 
     /**
-     * Phase 31 (SITE-03, D-31-10): the host line for the identity box.
-     * SITE-03 trims `https://` only on `secure` pages; `http://` never
-     * trims. Chrome's `displaySpec` is a bare host (it carries no port), so
-     * the trim applies to the pill text the box renders beside: on `secure`
-     * a leading `https://` and nothing else is trimmed; the pill keeps the
-     * full URL for editing and copy. The registrable domain highlights when
-     * it is a suffix of the display host.
+     * Phase 31 (SITE-03, D-31-10): the host line for the identity box, from
+     * Chrome's `displaySpec` (Unicode for a secure IDN host, punycode
+     * otherwise). The `https://` trim is the pill input's (`pillText`), not
+     * this line. A `:port` is stripped so the registrable domain, the suffix
+     * `identityHost` highlights, matches the bare host.
      */
     protected identityHostText(identity: { state: string; displaySpec: string; baseDomain: string | null }): string {
-        let host = identity.displaySpec || this.committedAddress.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
-        if (identity.state === 'secure' && /^https:\/\//i.test(this.committedAddress)) {
-            host = this.committedAddress.replace(/^https:\/\//i, '').split('/')[0];
-        }
-        return host;
+        const host = identity.displaySpec || this.committedAddress.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
+        return host.replace(/:\d+$/, '');
     }
     protected identityHost(identity: { state: string; displaySpec: string; baseDomain: string | null }): React.ReactNode {
         const host = this.identityHostText(identity);
@@ -310,10 +305,9 @@ export class AddressBar {
      * `insecure` the crossed lock + `Not Secure`; `mixed-passive`/`broken`
      * the warning; `local` the host with no icon; `none`/non-web renders
      * nothing. Click opens the panel shell (plan 02). No typed-text input is
-     * read anywhere here -- the plan's static case asserts the
-     * `startsWith('https://')` secure line is absent from this file, so a
-     * restored text-derived lock must re-insert the original render-line
-     * derivation (`this.inputValue.trim().startsWith('https://')`) to go red.
+     * read anywhere here: the plan's static case asserts that no scheme test
+     * on the typed text survives in this file, so a restored text-derived
+     * lock would have to re-add one to go red.
      */
     protected renderIdentityBox(): React.ReactNode {
         const identity = this.identityState();
@@ -325,10 +319,8 @@ export class AddressBar {
                 : identity.state === 'local' ? CHROME_BAR_COPY.connectionLocal
                     : CHROME_BAR_COPY.connectionWarning;
         const host = this.identityHost(identity);
-        const label = identity.state === 'secure' ? CHROME_BAR_COPY.identitySecureLabel(this.identityHostText(identity))
-            : identity.state === 'insecure' ? CHROME_BAR_COPY.identityInsecureLabel(this.identityHostText(identity))
-                : identity.state === 'local' ? CHROME_BAR_COPY.identityLocalLabel(this.identityHostText(identity))
-                    : CHROME_BAR_COPY.identityWarningLabel(this.identityHostText(identity));
+        // UI-SPEC "Identity box": the box's aria-label is the panel's open copy plus the host.
+        const label = CHROME_BAR_COPY.sitePanelOpen(this.identityHostText(identity));
         if (identity.state === 'local') {
             return <button
                 type='button'
@@ -406,6 +398,8 @@ export class AddressBar {
 
     protected inputValue = '';
     protected committedAddress = '';
+    /** Phase 31 (SITE-03): whether the pill input holds focus; see `pillText`. */
+    protected pillFocused = false;
     /** BAR-11: the rows on screen, composed by address-bar-rows from the parts below. */
     protected rows: Row[] = [];
     protected dropdownOpen = false;
@@ -2022,15 +2016,33 @@ export class AddressBar {
         return `pb-chrome-bar-oneoff-${index}`;
     }
 
-    protected onInputBlur = (): void => {
+    protected onInputBlur = (e: React.FocusEvent<HTMLInputElement>): void => {
+        this.pillFocused = false;
+        e.currentTarget.value = this.pillText();
         this.closeDropdown();
         this.closeModesMenu();
         this.closeSitePanel();
         this.update();
     };
 
+    /**
+     * Phase 31 (SITE-03, D-31-10): the pill's text. Unfocused, on a `secure`
+     * page showing its committed URL, the `https://` scheme is trimmed. Focus
+     * restores the full URL first, so select-all and copy act on it. Typed or
+     * drafted text (not the committed URL) is never trimmed.
+     */
+    protected pillText(): string {
+        const trim = !this.pillFocused && this.inputValue === this.committedAddress
+            && /^https:\/\//i.test(this.inputValue) && this.identityState()?.state === 'secure';
+        return trim ? this.inputValue.replace(/^https:\/\//i, '') : this.inputValue;
+    }
+
     /** BAR-04: engines can change after startup (added in a stock window), so focus re-reads them. */
-    protected onInputFocus = (): void => {
+    protected onInputFocus = (e: React.FocusEvent<HTMLInputElement>): void => {
+        // Phase 31 (SITE-03): focus shows the full URL before the press or Tab selects it.
+        this.pillFocused = true;
+        e.currentTarget.value = this.inputValue;
+        this.update();
         void this.refreshEngines();
         // SMODE-01: focus in a local mode opens its zero-query list (or the list for the kept text).
         const local = this.localMode();
@@ -2322,7 +2334,7 @@ export class AddressBar {
                     aria-autocomplete='both'
                     aria-activedescendant={activeId}
                     spellCheck={false}
-                    value={this.inputValue}
+                    value={this.pillText()}
                     onChange={this.onInputChange}
                     ref={this.inputRef}
                     onKeyDown={this.onInputKeyDown}
@@ -2361,8 +2373,9 @@ export class AddressBar {
         const icon = state === 'secure' ? 'codicon-lock'
             : state === 'insecure' ? 'codicon-unlock'
                 : state === 'mixed-passive' || state === 'broken' ? 'codicon-warning' : null;
-        const connection = state === 'secure' ? CHROME_BAR_COPY.siteConnectionSecure(display)
-            : state === 'insecure' ? CHROME_BAR_COPY.siteConnectionInsecure(display)
+        // UI-SPEC "Copywriting Contract": the secure and insecure header lines are fixed copy.
+        const connection = state === 'secure' ? CHROME_BAR_COPY.siteConnectionSecure
+            : state === 'insecure' ? CHROME_BAR_COPY.siteConnectionInsecure
                 : state === 'local' ? CHROME_BAR_COPY.siteConnectionLocal(display)
                     : state === 'mixed-passive' || state === 'broken' ? CHROME_BAR_COPY.siteConnectionWarning(display)
                         : null;
@@ -2371,13 +2384,15 @@ export class AddressBar {
                 : state === 'local' ? CHROME_BAR_COPY.identityLocalLabel(display)
                     : state === 'mixed-passive' || state === 'broken' ? CHROME_BAR_COPY.identityWarningLabel(display)
                         : CHROME_BAR_COPY.connectionWarning;
+        // UI-SPEC geometry: connection line, host line (14px), base domain as its own 12px caption line.
         const header = info && connection && state !== 'none'
             ? <div className='pb-site-panel-header'>
                 {icon && <span className={`pb-site-panel-icon codicon ${icon}${state === 'mixed-passive' || state === 'broken' ? ' is-warning' : ''}`} aria-hidden='true' />}
-                <span className='pb-site-panel-host'>{base && display.length > base.length && display.toLowerCase().endsWith(base.toLowerCase()) && display[display.length - base.length - 1] === '.'
-                    ? <>{display.slice(0, display.length - base.length)}<strong>{display.slice(display.length - base.length)}</strong></>
-                    : <>{display}</>}</span>
-                <span className='pb-site-panel-connection'>{connection}</span>
+                <div className='pb-site-panel-titles'>
+                    <span className='pb-site-panel-connection'>{connection}</span>
+                    <span className='pb-site-panel-host'>{display}</span>
+                    {base && <span className='pb-site-panel-base'>{base}</span>}
+                </div>
             </div>
             : undefined;
         return createPortal(

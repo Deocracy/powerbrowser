@@ -445,10 +445,10 @@ const PLANTS = [
     {
         name: 'an INTERNAL-APIS row dropped (real instruments, planted tree)',
         rel: INTERNAL_APIS_REL,
-        from: '`PowerBrowserAPI.sys.mjs:3381`',
+        from: '`PowerBrowserAPI.sys.mjs:3384`',
         to: '`PowerBrowserAPI.sys.mjs:99999`',
         expect: 'every new boundary internal keeps its catalogue row',
-        treePlant: 'PowerBrowserAPI.sys.mjs:3381',
+        treePlant: 'PowerBrowserAPI.sys.mjs:3384',
     },
     {
         name: 'a PERMISSION_IDS entry renamed to location',
