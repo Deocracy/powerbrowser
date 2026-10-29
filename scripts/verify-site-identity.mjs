@@ -53,11 +53,20 @@
  *  11. the panel header copy equals the UI-SPEC copy rows (`Connection
  *      secure`, `Connection not secure`), and the identity box's aria-label
  *      is `CHROME_BAR_COPY.sitePanelOpen(host)`.
+ *  12. (plan 02) the write arm accepts exactly the panel states, derived from
+ *      `webTabPermissionCapability` and compared with the table's cycles; the
+ *      autoplay-media constants it maps to are the upstream states array
+ *      (SitePermissions.sys.mjs:888-892);
+ *  13. (plan 02) no hand-kept permission label map in the site-identity
+ *      sources (labels come from `getPermissionLabel`), and the permission
+ *      glyph map is keyed by PERMISSION_IDS;
+ *  14. (plan 02, review fix) the write arm's only sender-origin use is the
+ *      echo compare against the overlay's own principal origin.
  *
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then eighteen planted faults
+ * --self-test: the clean tree must be green; then twenty-one planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -102,7 +111,7 @@ const UPSTREAM_IDL_REL = 'upstream/uriloader/base/nsIWebProgressListener.idl';
 const UI_SPEC_REL = '.planning/phases/31-site-identity-permissions-and-app-menu/31-UI-SPEC.md';
 const INTERNAL_APIS_REL = 'powerbrowser/INTERNAL-APIS.md';
 const CODICON_REL = 'theia/node_modules/@vscode/codicons/dist/codicon.css';
-const EXPORTS = ['SECURITY_STATES', 'PERMISSION_IDS', 'STOCK_PAGES', 'MENU_ORDER'];
+const EXPORTS = ['SECURITY_STATES', 'PERMISSION_IDS', 'STOCK_PAGES', 'MENU_ORDER', 'PERMISSION_STATES', 'AUTOPLAY_PERMISSION_STATES'];
 
 const sameSet = (a, b) => a.length === b.length && new Set(a).size === a.length && a.every(x => b.includes(x));
 const sorted = a => [...a].sort();
@@ -217,6 +226,38 @@ function deriveMethodSource(src, name) {
         }
     }
     return null;
+}
+
+/**
+ * Plan 02: the chrome write arm's state literals and the SitePermissions
+ * constants it maps them to, read from `webTabPermissionCapability`'s body.
+ */
+function deriveWriteArm(apiSrc) {
+    const code = stripComments(apiSrc);
+    const at = code.indexOf('function webTabPermissionCapability(');
+    if (at < 0) {
+        return null;
+    }
+    const next = code.indexOf('\nfunction ', at + 1);
+    const body = code.slice(at, next < 0 ? undefined : next);
+    const states = [...new Set([...body.matchAll(/state === "([^"]+)"/g)].map(x => x[1]))];
+    const consts = [...new Set([...body.matchAll(/lazy\.SitePermissions\.([A-Z_]+)/g)].map(x => x[1]))];
+    return { states, consts };
+}
+
+/** The upstream autoplay-media states array (SitePermissions.sys.mjs:888-892), by constant name. */
+function deriveUpstreamAutoplayStates(upstreamSrc) {
+    const at = upstreamSrc.indexOf('"autoplay-media": {');
+    if (at < 0) {
+        return null;
+    }
+    const m = /states:\s*\[([^\]]*)\]/.exec(upstreamSrc.slice(at));
+    return m ? [...m[1].matchAll(/SitePermissions\.([A-Z_]+)/g)].map(x => x[1]) : null;
+}
+
+/** The keys of the permission glyph map in site-panel.tsx (icons by upstream ID). */
+function deriveGlyphKeys(panelSrc) {
+    return [...stripComments(panelSrc ?? '').matchAll(/^\s+'?([a-z-]+)'?: 'codicon-/gm)].map(x => x[1]);
 }
 
 /** Chrome's own permission-ID array literal. */
@@ -398,6 +439,39 @@ function cases(m, srcs) {
             const uses = [...code.replace(/typeof data\.origin !== "string"/g, '').matchAll(/data\.origin/g)].map(x => x[0]);
             return uses.length === 1 ? null : { senderOriginUses: uses.length, want: 'the one echo compare, nothing else' };
         }],
+        ['the write arm accepts exactly the panel states (derived from the arm and the table)', () => {
+            const arm = deriveWriteArm(apiSrc);
+            if (!arm || arm.states.length === 0) {
+                return `no webTabPermissionCapability state literals in ${API_REL} -- broken instrument`;
+            }
+            const table = [...new Set([...m.PERMISSION_STATES, ...m.AUTOPLAY_PERMISSION_STATES])];
+            return sameSet(arm.states, table) ? null : { chrome: sorted(arm.states), table: sorted(table) };
+        }],
+        ['the autoplay write constants are the upstream autoplay states (SitePermissions.sys.mjs:888-892)', () => {
+            const arm = deriveWriteArm(apiSrc);
+            const upstreamAuto = deriveUpstreamAutoplayStates(upstreamSrc);
+            if (!arm || !upstreamAuto) {
+                return `no webTabPermissionCapability constants or upstream autoplay states array -- broken instrument`;
+            }
+            const want = ['ALLOW', 'BLOCK', 'AUTOPLAY_BLOCKED_ALL'];
+            return sameSet(upstreamAuto, want) && sameSet(arm.consts, want)
+                ? null : { upstream: sorted(upstreamAuto), chrome: sorted(arm.consts) };
+        }],
+        ['no hand-kept permission label map (labels come from getPermissionLabel)', () => {
+            if (!apiSrc.includes('lazy.SitePermissions.getPermissionLabel(')) {
+                return `getPermissionLabel is gone from ${API_REL} -- broken instrument`;
+            }
+            const label = /\blabel\s*:\s*['"`]/;
+            const hits = [TABLE_REL, SITE_PANEL_REL].filter(rel => label.test(stripComments(srcs[rel] ?? '')));
+            return hits.length === 0 ? null : hits;
+        }],
+        ['the permission glyph map is keyed by PERMISSION_IDS', () => {
+            const keys = deriveGlyphKeys(srcs[SITE_PANEL_REL]);
+            if (keys.length === 0) {
+                return `no permission glyph map in ${SITE_PANEL_REL} -- broken instrument`;
+            }
+            return sameSet(keys, m.PERMISSION_IDS) ? null : { glyphs: sorted(keys), table: sorted(m.PERMISSION_IDS) };
+        }],
         ['MENU_ORDER ids equal the rendered hamburger menuIds', () => {
             const rendered = [...stripComments(addressBarSrc).matchAll(/menuId:\s*'([^']+)'/g)].map(x => x[1]);
             if (rendered.length === 0) {
@@ -492,7 +566,7 @@ function cases(m, srcs) {
             if (!sheet) {
                 return `${CODICON_REL} derived nothing -- broken instrument`;
             }
-            const missing = deriveCodicons({ [ADDRESS_BAR_REL]: addressBarSrc, [CSS_REL]: srcs[CSS_REL] }).filter(n => !sheet.has(n));
+            const missing = deriveCodicons({ [ADDRESS_BAR_REL]: addressBarSrc, [CSS_REL]: srcs[CSS_REL], [SITE_PANEL_REL]: srcs[SITE_PANEL_REL] ?? '' }).filter(n => !sheet.has(n));
             return missing.length === 0 ? null : missing;
         }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
@@ -586,14 +660,35 @@ const PLANTS = [
         expect: 'no openStockTab(about:…',
     },
     {
-        name: 'a data.origin write added',
+        name: 'origin-write: a data.origin write added',
         rel: API_REL,
         from: 'return { ok: true, kind, where: "done", ...(await PowerBrowserAPI.webTabSiteInfo(entry.browser)) };',
         to: 'const origin = data.origin;\n      return { ok: true, kind, where: "done", ...(await PowerBrowserAPI.webTabSiteInfo(entry.browser)) };',
         expect: 'no sender-supplied origin reaches a site write',
     },
     {
-        name: 'the origin echo compare dropped',
+        name: 'hand-labels: a permission label map added to the panel',
+        rel: SITE_PANEL_REL,
+        from: 'export const PERMISSION_GLYPH_CLASS',
+        to: "export const PERMISSION_LABELS: Readonly<Record<string, { label: string }>> = Object.freeze({ camera: { label: 'Camera' } });\n\nexport const PERMISSION_GLYPH_CLASS",
+        expect: 'no hand-kept permission label map',
+    },
+    {
+        name: 'glyph-drift: a permission glyph keyed by an invented ID',
+        rel: SITE_PANEL_REL,
+        from: "    popup: 'codicon-window',",
+        to: "    popups: 'codicon-window',",
+        expect: 'the permission glyph map is keyed by PERMISSION_IDS',
+    },
+    {
+        name: 'write-state-drift: the write arm accepts a state the panel never shows',
+        rel: API_REL,
+        from: 'if (state === "block-all") {',
+        to: 'if (state === "block-everything") {',
+        expect: 'the write arm accepts exactly the panel states',
+    },
+    {
+        name: 'origin-compare: the origin echo compare dropped',
         rel: API_REL,
         from: 'principal.origin !== data.origin',
         to: 'false',
@@ -608,7 +703,7 @@ const PLANTS = [
         treePlant: 'PowerBrowserAPI.sys.mjs:3384',
     },
     {
-        name: 'a PERMISSION_IDS entry renamed to location',
+        name: 'invented-id: a PERMISSION_IDS entry renamed to location',
         rel: TABLE_REL,
         from: "    'geo',",
         to: "    'location',",

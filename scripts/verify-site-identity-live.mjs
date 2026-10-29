@@ -29,6 +29,16 @@
  * Both sessions assert the pushed `securityState` (via the tab's last
  * state push) AND the DOM per case -- never one without the other.
  *
+ * Session C -- `site-panel` (own TLS browser, one tab): the panel's connection
+ * and certificate block, six tri-state rows in table order, camera and
+ * autoplay-media round trips with persistence across a reopen, the identity
+ * box icons (three plus +1, back to none, autoplay icon kept), and the origin
+ * race: the panel shows origin A, the tab navigates to origin B, the write is
+ * refused, and camera stays default on B.
+ * Plant `perm-refused` makes the permission reply refused (expected red
+ * "can't show site information"); plant `icons-stale` stops the reply from
+ * refreshing the identity box (expected red "icons did not update").
+ *
  * Plant `typed-lock`: re-inserts the original render-line derivation
  * (`this.inputValue.trim().startsWith('https://')` on the live
  * `AddressBar`) so the pill follows typed text; expected red
@@ -46,6 +56,7 @@
 import {
     BROKEN,
     focusTheiaFrame,
+    loadedAt,
     makeCurrent,
     openWebTab,
     pushes,
@@ -53,10 +64,14 @@ import {
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
-import { domainToASCII } from 'node:url';
+import { domainToASCII, pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { probe } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-site-identity-live';
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const TABLE_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/site-identity-table.ts';
 
 // The fixture hosts, derived from the README at check time -- never
 // re-spelled here. The leaf covers the bare and www names; the mixed-script
@@ -319,10 +334,263 @@ async function identityLocal(ctx) {
     await probe(app, `get('EditorManager').currentEditor?.close(); return true;`).catch(() => null);
 }
 
-const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal };
+/** The panel's whole read, as text: rows (id, state, label, state word), copy rows, the connection line. */
+const PANEL_READ = `JSON.stringify((() => {
+    const panel = document.querySelector('.pb-site-panel');
+    if (!panel) return { present: false, rows: [], cert: [] };
+    return {
+        present: true,
+        rows: [...panel.querySelectorAll('.pb-site-panel-row')].map(r => ({
+            id: r.getAttribute('data-permission'),
+            state: r.getAttribute('data-state'),
+            label: r.querySelector('.pb-site-panel-row-label')?.textContent ?? null,
+            word: r.querySelector('.pb-site-panel-row-state')?.textContent ?? null,
+        })),
+        empty: panel.querySelector('.pb-site-panel-empty')?.textContent ?? null,
+        noPerms: panel.querySelector('.pb-site-panel-empty-row')?.textContent ?? null,
+        cert: [...panel.querySelectorAll('.pb-site-panel-cert-row')].map(c => c.textContent),
+        connection: panel.querySelector('.pb-site-panel-connection')?.textContent ?? null,
+    };
+})())`;
+
+/** The identity box's permission icons and the +n overflow text, from the live DOM. */
+const ICON_READ = `JSON.stringify((() => {
+    const box = document.querySelector('.pb-identity');
+    if (!box) return { present: false, icons: [], overflow: null };
+    return {
+        present: true,
+        icons: [...box.querySelectorAll('.pb-identity-perm')].map(i => [...i.classList].find(c => c.startsWith('codicon-') && c !== 'codicon') ?? null),
+        overflow: box.querySelector('.pb-identity-overflow')?.textContent ?? null,
+    };
+})())`;
+
+const panelRead = app => app.evaluate(PANEL_READ).then(JSON.parse);
+const iconRead = app => app.evaluate(ICON_READ).then(JSON.parse);
+const openPanel = app => app.evaluate(`(() => { const b = document.querySelector('.pb-identity'); if (!b) return false; b.click(); return true; })()`);
+const closePanel = app => app.evaluate(`(() => { const c = document.querySelector('.pb-site-panel .pb-site-panel-close'); if (!c) return false; c.click(); return true; })()`);
+const clickRow = (app, id) => app.evaluate(`(() => { const r = document.querySelector('.pb-site-panel [data-permission="${id}"]'); if (!r) return false; r.click(); return true; })()`);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Polls `read` until `pred` holds or the timeout ends; returns the last read either way. */
+async function waitFor(read, pred, timeoutMs = 8000) {
+    const end = Date.now() + timeoutMs;
+    let last = await read();
+    while (!pred(last) && Date.now() < end) {
+        await sleep(150);
+        last = await read();
+    }
+    return last;
+}
+
+const rowOf = (panel, id) => panel.rows.find(row => row.id === id);
+
+/** The managed IDs in table order, from the tree's table (never a copy here). */
+async function tableIds() {
+    const table = await import(pathToFileURL(join(REPO_ROOT, TABLE_REL)).href);
+    return { ids: [...table.PERMISSION_IDS], autoplay: [...table.AUTOPLAY_PERMISSION_STATES] };
+}
+
+/**
+ * Plan 02 (SITE-04..06): the site panel on a served https page. Covers the
+ * certificate block, six tri-state rows in table order with persistence across
+ * a reopen, the autoplay four-state cycle, the identity-box icons, and the
+ * origin race: the panel shows origin A, the tab navigates to B, and the write
+ * is refused, so nothing lands on B.
+ */
+async function sitePanel(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const { ids, autoplay } = await tableIds();
+    const secureId = await openWebTab(app, pages.tlsUrl('/secure'));
+    if (await waitForPush(app, loadedAt(secureId, '/secure')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for /secure`);
+    }
+    if (await makeCurrent(app, secureId) !== true) {
+        return fail(`${BROKEN} the secure web tab could not be made current`);
+    }
+    const securePush = await lastPush(app, secureId);
+    if (!securePush || securePush.securityState !== 'secure') {
+        return fail(`${BROKEN} the secure tab pushed ${JSON.stringify(securePush?.securityState)}, want "secure"`);
+    }
+    // Plants: applied to the live tab's prototype, so the panel's own calls take them.
+    if (plant === 'perm-refused' || plant === 'icons-stale') {
+        const body = plant === 'perm-refused'
+            ? "proto.setPermission = async function () { return { ok: false, reason: 'validation' }; };"
+            : 'proto.refreshPermissionIcons = function () {};';
+        const applied = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(secureId)});
+            if (!w) return false;
+            const proto = Object.getPrototypeOf(w);
+            ${body}
+            return true;`);
+        if (applied === true) {
+            note(`PLANT ${plant} applied`);
+        }
+    }
+    // --- open: connection, certificate, six rows in table order, all default (the empty row).
+    if (!await openPanel(app)) {
+        return fail(`${BROKEN} the identity box could not be clicked`);
+    }
+    const opened = await waitFor(() => panelRead(app), p => p.present && p.rows.length === ids.length);
+    if (!opened.present || opened.rows.length !== ids.length) {
+        return fail(`the site panel did not open with the managed rows; saw empty=${JSON.stringify(opened.empty)} rows=${opened.rows.length}`);
+    }
+    if (JSON.stringify(opened.rows.map(row => row.id)) !== JSON.stringify(ids)) {
+        fail(`the permission rows are ${JSON.stringify(opened.rows.map(row => row.id))}, want the table order ${JSON.stringify(ids)}`);
+    }
+    if (opened.connection !== 'Connection secure') {
+        fail(`the secure panel must read "Connection secure"; saw ${JSON.stringify(opened.connection)}`);
+    }
+    if (!opened.cert.some(text => text.startsWith('Issued to:')) || !opened.cert.some(text => text.startsWith('Issued by:'))) {
+        fail(`the secure page's certificate block must show "Issued to:" and "Issued by:"; saw ${JSON.stringify(opened.cert)}`);
+    }
+    if (opened.noPerms !== 'No special permissions set for this site') {
+        fail(`a site with no special permissions must show the empty row; saw ${JSON.stringify(opened.noPerms)}`);
+    }
+    // --- camera: default -> allow -> block -> default, each reply read back; allow persists across a reopen; icons follow.
+    const cameraCycle = [['allow', 'Allowed'], ['block', 'Blocked'], ['default', 'Use default']];
+    const refusedAt = async (label, panel) => fail(`the ${label} write was refused: the panel shows ${JSON.stringify(panel.empty)}`);
+    for (const [want, word] of cameraCycle) {
+        if (!await clickRow(app, 'camera')) {
+            return fail(`${BROKEN} the camera row is not on screen`);
+        }
+        const panel = await waitFor(() => panelRead(app), p => p.present ? rowOf(p, 'camera')?.state === want : !!p.empty);
+        if (panel.empty) {
+            return refusedAt('camera', panel);
+        }
+        const row = rowOf(panel, 'camera');
+        if (row?.state !== want || row?.word !== word) {
+            return fail(`camera row did not reach "${want}" with the copy "${word}"; saw state ${JSON.stringify(row?.state)} copy ${JSON.stringify(row?.word)}`);
+        }
+        if (want === 'allow') {
+            // Persistence: close, reopen, and the stored allow is read back from chrome.
+            await closePanel(app);
+            await openPanel(app);
+            const again = await waitFor(() => panelRead(app), p => p.present && rowOf(p, 'camera')?.state === 'allow');
+            if (rowOf(again, 'camera')?.state !== 'allow') {
+                fail(`camera "allow" did not persist across a reopen; saw ${JSON.stringify(rowOf(again, 'camera')?.state ?? again.empty)}`);
+            }
+            const icons = await iconRead(app);
+            if (!icons.present || !icons.icons.includes('codicon-eye')) {
+                fail(`icons did not update after the camera reply: ${JSON.stringify(icons)}`);
+            }
+        }
+    }
+    // --- autoplay-media: default -> allow -> block sounds -> block all -> default.
+    const autoplayCycle = [['allow', 'Allowed'], ['block-audible', 'Block sounds'], ['block-all', 'Block all'], ['default', 'Use default']];
+    if (JSON.stringify(autoplay) !== JSON.stringify(['allow', 'block-audible', 'block-all', 'default'])) {
+        fail(`the autoplay cycle is ${JSON.stringify(autoplay)}, want Allow, Block sounds, Block all, Use default`);
+    }
+    for (const [want, word] of autoplayCycle) {
+        if (!await clickRow(app, 'autoplay-media')) {
+            return fail(`${BROKEN} the autoplay-media row is not on screen`);
+        }
+        const panel = await waitFor(() => panelRead(app), p => p.present ? rowOf(p, 'autoplay-media')?.state === want : !!p.empty);
+        if (panel.empty) {
+            return refusedAt('autoplay-media', panel);
+        }
+        const row = rowOf(panel, 'autoplay-media');
+        if (row?.state !== want || row?.word !== word) {
+            fail(`autoplay-media row did not reach "${want}" with the copy "${word}"; saw state ${JSON.stringify(row?.state)} copy ${JSON.stringify(row?.word)}`);
+        }
+    }
+    // --- the origin race (review fix): the panel shows origin A; the tab moves to origin B; the write must be refused.
+    const plainUrl = `http://pb-fixture.test:${pages.port}/plain`;
+    // Origin A is on screen with camera at default; the panel keeps showing A's rows through the navigation.
+    const shownA = await waitFor(() => panelRead(app), p => p.present && rowOf(p, 'camera')?.state === 'default');
+    if (!shownA.present || rowOf(shownA, 'camera')?.state !== 'default') {
+        return fail(`${BROKEN} the panel for origin A did not show camera at default before the origin race`);
+    }
+    const moved = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(secureId)});
+        const reply = await w.navigate(${JSON.stringify(plainUrl)});
+        return reply && reply.ok === true;`);
+    if (moved !== true) {
+        return fail(`${BROKEN} the tab could not navigate to the second origin`);
+    }
+    if (await waitForPush(app, loadedAt(secureId, '/plain')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for /plain after the navigation`);
+    }
+    if (!await clickRow(app, 'camera')) {
+        return fail(`${BROKEN} the camera row is not on screen after the navigation`);
+    }
+    const afterWrite = await waitFor(() => panelRead(app), p => !!p.empty || (p.present && rowOf(p, 'camera')?.state !== 'allow'), 6000);
+    if (!afterWrite.empty) {
+        fail(`the write for the origin the panel showed was not refused after the tab moved; the panel shows ${JSON.stringify(afterWrite.present ? rowOf(afterWrite, 'camera')?.state : afterWrite)}`);
+    }
+    // Reopen on the new origin: camera must be default there (nothing landed on B), no certificate on http, Not Secure.
+    await closePanel(app);
+    if (!await openPanel(app)) {
+        return fail(`${BROKEN} the identity box could not be clicked after the navigation`);
+    }
+    const onB = await waitFor(() => panelRead(app), p => p.present && p.rows.length === ids.length);
+    if (!onB.present) {
+        return fail(`${BROKEN} the panel did not reopen on the new origin; saw ${JSON.stringify(onB.empty)}`);
+    }
+    if (rowOf(onB, 'camera')?.state !== 'default') {
+        fail(`the camera permission landed on the new origin after the tab moved: state ${JSON.stringify(rowOf(onB, 'camera')?.state)}`);
+    }
+    if (onB.connection !== 'Connection not secure') {
+        fail(`the http origin must read "Connection not secure"; saw ${JSON.stringify(onB.connection)}`);
+    }
+    if (onB.cert.length !== 0) {
+        fail(`a page without a secure connection must show no certificate block; saw ${JSON.stringify(onB.cert)}`);
+    }
+    // --- icons on the new origin: four non-default -> three icons and +1; back to default -> none.
+    for (const id of ['camera', 'microphone', 'geo', 'desktop-notification']) {
+        if (!await clickRow(app, id)) {
+            return fail(`${BROKEN} the ${id} row is not on screen`);
+        }
+        const got = await waitFor(() => panelRead(app), p => p.present && rowOf(p, id)?.state === 'allow');
+        if (rowOf(got, id)?.state !== 'allow') {
+            return fail(`${id} did not reach "allow" for the icon check; saw ${JSON.stringify(rowOf(got, id)?.state ?? got.empty)}`);
+        }
+    }
+    await closePanel(app);
+    const threeIcons = await waitFor(() => iconRead(app), i => i.icons.length === 3);
+    if (threeIcons.icons.length !== 3 || threeIcons.overflow !== '+1') {
+        fail(`four non-default permissions must show three icons and +1; saw ${JSON.stringify(threeIcons)}`);
+    }
+    await openPanel(app);
+    for (const id of ['camera', 'microphone', 'geo', 'desktop-notification']) {
+        // allow -> block -> default: each click waits for chrome's reply before the next, so no click reads a stale state.
+        for (let step = 0; step < 2; step++) {
+            const before = rowOf(await panelRead(app), id)?.state;
+            await clickRow(app, id);
+            await waitFor(() => panelRead(app), p => p.present && rowOf(p, id)?.state !== before);
+        }
+        const reset = await waitFor(() => panelRead(app), p => p.present && rowOf(p, id)?.state === 'default');
+        if (rowOf(reset, id)?.state !== 'default') {
+            fail(`${id} did not return to "default" for the icon reset; saw ${JSON.stringify(rowOf(reset, id)?.state ?? reset.empty)}`);
+        }
+    }
+    await closePanel(app);
+    const none = await waitFor(() => iconRead(app), i => i.icons.length === 0);
+    if (none.icons.length !== 0 || none.overflow !== null) {
+        fail(`with every permission at default the identity box must show no icons; saw ${JSON.stringify(none)}`);
+    }
+    // --- autoplay icon: block sounds, then block all, the icon stays and the copy follows.
+    await openPanel(app);
+    for (const [want, word] of [['block-audible', 'Block sounds'], ['block-all', 'Block all']]) {
+        await clickRow(app, 'autoplay-media');
+        const got = await waitFor(() => panelRead(app), p => p.present && rowOf(p, 'autoplay-media')?.state === want);
+        if (rowOf(got, 'autoplay-media')?.word !== word) {
+            fail(`autoplay-media must read "${word}" at "${want}"; saw state ${JSON.stringify(rowOf(got, 'autoplay-media')?.state)} copy ${JSON.stringify(rowOf(got, 'autoplay-media')?.word)}`);
+        }
+        await closePanel(app);
+        const icon = await waitFor(() => iconRead(app), i => i.icons.includes('codicon-play'));
+        if (!icon.icons.includes('codicon-play')) {
+            fail(`an autoplay-media "${want}" must keep its icon in the identity box; saw ${JSON.stringify(icon)}`);
+        }
+        await openPanel(app);
+    }
+    // Reset autoplay-media to default: block all -> default is one click.
+    await clickRow(app, 'autoplay-media');
+    await waitFor(() => panelRead(app), p => p.present && rowOf(p, 'autoplay-media')?.state === 'default');
+    await closePanel(app);
+}
+
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
-const NOT_LANDED = ['site-panel', 'clear-data', 'shield', 'app-menu'];
+const NOT_LANDED = ['clear-data', 'shield', 'app-menu'];
 
 /**
  * One session over `names`; returns `[{ name, failures, notes, notScored }]`
@@ -401,14 +669,18 @@ function selectedScenarios(args) {
 
 const PLANTS = [
     { plant: 'typed-lock', target: 'identity-tls', run: ['identity-tls'], expect: 'lock derived from typed text', tls: true },
+    // The panel's write comes back refused: the panel shows the unavailable copy, which names the refusal.
+    { plant: 'perm-refused', target: 'site-panel', run: ['site-panel'], expect: "can't show site information", tls: true },
+    // The permission reply does not refresh the identity box: the icons stay stale.
+    { plant: 'icons-stale', target: 'site-panel', run: ['site-panel'], expect: 'icons did not update', tls: true },
 ];
 
 async function selfTest() {
     let failed = 0;
-    for (const session of [['identity-local'], ['identity-tls']]) {
+    for (const session of [['identity-local'], ['identity-tls'], ['site-panel']]) {
         let clean;
         try {
-            clean = await runSession(session, '', session[0] === 'identity-tls');
+            clean = await runSession(session, '', session[0] !== 'identity-local');
         } catch (error) {
             console.error(`${NAME} --self-test: FAIL -- harness: the clean control could not be driven: ${error.message}`);
             return 1;
@@ -456,15 +728,13 @@ async function selfTest() {
 async function main(args) {
     try {
         const names = selectedScenarios(args);
-        // Split across two sessions (4-tab limit): the TLS session first.
-        const tlsNames = names.filter(n => n === 'identity-tls');
-        const localNames = names.filter(n => n !== 'identity-tls');
+        // One session per scenario group (4-tab limit): the TLS identity session,
+        // the site-panel session (its own TLS browser), then the local session.
         const results = [];
-        if (tlsNames.length) {
-            results.push(...await runSession(tlsNames, '', true));
-        }
-        if (localNames.length) {
-            results.push(...await runSession(localNames, ''));
+        for (const [name, tls] of [['identity-tls', true], ['site-panel', true], ['identity-local', false]]) {
+            if (names.includes(name)) {
+                results.push(...await runSession([name], '', tls));
+            }
         }
         return report(results);
     } catch (error) {
