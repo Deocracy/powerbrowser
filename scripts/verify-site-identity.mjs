@@ -398,7 +398,7 @@ function cases(m, srcs) {
             if (!control) {
                 return `renderIdentityBox is gone from ${ADDRESS_BAR_REL} -- broken instrument`;
             }
-            // The plan's own check (31-01-PLAN.md): `startsWith('https://')`
+            // The phase plan's own check: `startsWith('https://')`
             // appears nowhere in address-bar.tsx. Applied to the raw text,
             // comments included, so no prose in the file can carry it.
             const hits = [...addressBarSrc.matchAll(/startsWith\(\s*['"]https:\/\/['"]\s*\)/g)].map(m => m[0]);
