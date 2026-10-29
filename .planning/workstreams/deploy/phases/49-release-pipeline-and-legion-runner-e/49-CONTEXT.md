@@ -73,13 +73,13 @@ Start from `.planning/research/v1.6-deploy/SUMMARY.md` ("Phase E" lines 282-294,
 </specifics>
 
 <constraints>
-## Inherited constraint: update download host (Phase 46 owner ruling, 2026-10-25)
+## Inherited constraint: update download host (Phase 46 owner ruling 2026-10-25, amended 2026-10-29)
 
-- The update descriptor's `patchURL` (and `servedMarUrl`) must point at `release-assets.githubusercontent.com` or the updates host, never at a `github.com/<org>/<repo>/releases/download/...` URL.
-- Reason: `github.com` is `user-initiated` in `powerbrowser/endpoint-allowlist.json`. An unattended MAR fetch that touches it fails the verdict model (`scripts/lib/endpoint-verdict.mjs`).
-- Guard: `scripts/verify-update-download-host.mjs` (quick row) fails on any tracked descriptor template, generator output or fixture that names the github.com download form as an update source.
-- Conflict to resolve in this phase: `49-04-PLAN.md` (T-49-14 and `verify-channel-live`) currently requires the immutable `/releases/download/<tag>/` github.com form as the descriptor's patch URL. That plan must be revised to the release-assets form before the descriptor builder ships. The release-assets URL is not a stable permalink, so the builder must resolve the asset URL at publish time or serve the MAR from the updates host; choose one and record it here.
-- Phase 50 (`50-02-PLAN.md`, `50-RESEARCH.md` servedMarUrl fixture) carries the same github.com form and inherits this constraint.
+- The descriptor's `patchURL` (and `servedMarUrl`) names `https://downloads.powerbrowser.org/<tag>/<asset>`: the R2 bucket, served on its own custom domain, is the primary MAR origin (owner ruling 2026-10-29). It is never a `github.com/.../releases/download/` URL (github.com is `user-initiated`; an unattended fetch fails `scripts/lib/endpoint-verdict.mjs`).
+- Why not `release-assets.githubusercontent.com`: GitHub's redirect target is a signed URL that expires about one hour after issue (`se=` one hour after `skt=`, observed 2026-10-29), so a static descriptor cannot name it. Why not the updates host: Pages caps a single file at 25 MiB.
+- Consequences: `endpoint-allowlist.json` gains an `allow` row for `downloads.powerbrowser.org`; the `release-assets.githubusercontent.com` row loses its updater justification (Phase 50 criterion 5 observes the R2 host instead). R2 keys are `<tag>/<asset>` and write-once (the copy refuses to overwrite), which replaces the immutable-Release-URL argument of T-49-14. The GitHub Release keeps the same signed bytes as the archival copy. REL-02's R2-repoint withdraw mode is removed: withdraw is no-update only.
+- Owner steps added to the R2 checkpoint (49-05 Task 3): attach `downloads.powerbrowser.org` as the bucket's custom domain with public read; no `r2.dev` URL.
+- Guard: `scripts/verify-update-download-host.mjs` (quick row).
 </constraints>
 
 <deferred>

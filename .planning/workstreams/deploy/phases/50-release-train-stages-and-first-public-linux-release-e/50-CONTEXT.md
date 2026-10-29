@@ -69,10 +69,12 @@ Start from `.planning/research/v1.6-deploy/SUMMARY.md` Phase E and Architecture 
 </specifics>
 
 <constraints>
-## Inherited constraint: update download host (Phase 46 owner ruling, 2026-10-25)
+## Inherited constraint: update download host (Phase 46 owner ruling 2026-10-25, amended 2026-10-29)
 
-- The descriptor's `patchURL` and `servedMarUrl` must name `release-assets.githubusercontent.com` or the updates host, never a `github.com/.../releases/download/` URL. The full rule and its conflicts with 49-04-PLAN.md are recorded in 49-CONTEXT.md.
-- 50-02-PLAN.md (the drill, its `servedMarUrl` assertion, and the `hop.json` `served: release` fixture in 50-RESEARCH.md) asserts the immutable github.com form. Revise those assertions to the release-assets or updates-host form before execution.
+- The descriptor's `patchURL` (and `servedMarUrl`) names `https://downloads.powerbrowser.org/<tag>/<asset>`: the R2 bucket, served on its own custom domain, is the primary MAR origin (owner ruling 2026-10-29). It is never a `github.com/.../releases/download/` URL (github.com is `user-initiated`; an unattended fetch fails `scripts/lib/endpoint-verdict.mjs`).
+- Why not `release-assets.githubusercontent.com`: GitHub's redirect target is a signed URL that expires about one hour after issue (`se=` one hour after `skt=`, observed 2026-10-29), so a static descriptor cannot name it. Why not the updates host: Pages caps a single file at 25 MiB.
+- Consequences: `endpoint-allowlist.json` gains an `allow` row for `downloads.powerbrowser.org`; the `release-assets.githubusercontent.com` row loses its updater justification (Phase 50 criterion 5 observes the R2 host instead). R2 keys are `<tag>/<asset>` and write-once (the copy refuses to overwrite), which replaces the immutable-Release-URL argument of T-49-14. The GitHub Release keeps the same signed bytes as the archival copy. REL-02's R2-repoint withdraw mode is removed: withdraw is no-update only.
+- Owner steps added to the R2 checkpoint (49-05 Task 3): attach `downloads.powerbrowser.org` as the bucket's custom domain with public read; no `r2.dev` URL.
 - Guard: `scripts/verify-update-download-host.mjs` (quick row).
 </constraints>
 
