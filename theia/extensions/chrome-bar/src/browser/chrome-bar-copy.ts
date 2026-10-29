@@ -87,6 +87,23 @@ export const CHROME_BAR_COPY = Object.freeze({
     siteConnectionWarning: (host: string) => `There is a security problem with ${host}`,
     siteConnectionLocal: (host: string) => `Local page on ${host}`,
     siteUnavailable: (subject: string) => `${subject} can't show site information for this page. Try reloading the page.`,
+    // Phase 31 plan 02 (SITE-04..06): the panel's permission rows and certificate block.
+    permissionsHeading: 'Permissions',
+    noPermissions: 'No special permissions set for this site',
+    permissionAllow: 'Allowed',
+    permissionBlock: 'Blocked',
+    permissionBlockAudible: 'Block sounds',
+    permissionBlockAll: 'Block all',
+    permissionDefault: 'Use default',
+    permissionLabelFallback: 'Site permission',
+    permissionControlLabel: (permission: string, host: string, state: string) => `${permission} for ${host}: ${state}`,
+    permissionIconsTip: (labels: string) => `Site permissions set: ${labels}`,
+    permissionOverflow: (count: number) => `+${count}`,
+    certificateHeading: 'Certificate',
+    certIssuedTo: (name: string) => `Issued to: ${name}`,
+    certIssuedBy: (name: string) => `Issued by: ${name}`,
+    certValid: (dates: string) => `Valid: ${dates}`,
+    certDates: (from: string, to: string) => `${from} to ${to}`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

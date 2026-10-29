@@ -637,6 +637,22 @@ const EXPECTED_NAV_COPY = new Set([
   "There is a security problem with ${name}",
   "Local page on ${name}",
   "${name} can't show site information for this page. Try reloading the page.",
+  "Permissions",
+  "No special permissions set for this site",
+  "Allowed",
+  "Blocked",
+  "Block sounds",
+  "Block all",
+  "Use default",
+  "Site permission",
+  "${name} for ${name}: ${name}",
+  "Site permissions set: ${name}",
+  "+${name}",
+  "Certificate",
+  "Issued to: ${name}",
+  "Issued by: ${name}",
+  "Valid: ${name}",
+  "${name} to ${name}",
 ]);
 
 /**

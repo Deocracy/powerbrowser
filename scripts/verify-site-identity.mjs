@@ -57,7 +57,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then seventeen planted faults
+ * --self-test: the clean tree must be green; then eighteen planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -472,10 +472,12 @@ function cases(m, srcs) {
             if (Object.keys(drift).length) {
                 return drift;
             }
-            const code = stripComments(addressBarSrc);
-            if (!/CHROME_BAR_COPY\.siteConnectionSecure\b/.test(code) || !/CHROME_BAR_COPY\.siteConnectionInsecure\b/.test(code)) {
-                return `the site panel header no longer renders the copy keys in ${ADDRESS_BAR_REL}`;
+            // Plan 02 moved the panel into site-panel.tsx; the header copy keys live there.
+            const panelCode = stripComments(srcs[SITE_PANEL_REL] ?? '');
+            if (!/CHROME_BAR_COPY\.siteConnectionSecure\b/.test(panelCode) || !/CHROME_BAR_COPY\.siteConnectionInsecure\b/.test(panelCode)) {
+                return `the site panel header no longer renders the copy keys in ${SITE_PANEL_REL}`;
             }
+            const code = stripComments(addressBarSrc);
             if (!/const label = CHROME_BAR_COPY\.sitePanelOpen\(/.test(code) || !/aria-label=\{label\}/.test(code)) {
                 return 'the identity box aria-label is not CHROME_BAR_COPY.sitePanelOpen(host) (UI-SPEC identity box)';
             }
@@ -595,7 +597,7 @@ const PLANTS = [
         rel: API_REL,
         from: 'principal.origin !== data.origin',
         to: 'false',
-        expect: 'the webTabSetPermission origin echo compare is gone',
+        expect: 'no sender-supplied origin reaches a site write',
     },
     {
         name: 'an INTERNAL-APIS row dropped (real instruments, planted tree)',

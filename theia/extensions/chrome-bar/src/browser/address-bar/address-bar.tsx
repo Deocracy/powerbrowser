@@ -20,7 +20,7 @@ import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import pDebounce from 'p-debounce';
 import { MessageLoop } from '@theia/core/shared/@lumino/messaging';
-import { EMPTY_PAGE_URL, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { EMPTY_PAGE_URL, WebTabOpenHandler, WebTabSiteInfo, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
 import { ChromeStoreClient, ResolvedAddress, SearchEngineList } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
@@ -34,6 +34,7 @@ import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes'
 import type { CommandCentreAddressBarMode } from './command-centre';
 import { CHROME_BAR_COPY, appSubject } from '../chrome-bar-copy';
 import { SECURITY_STATES } from '../site-identity/site-identity-table';
+import { SitePanel } from '../site-identity/site-panel';
 import {
     DEFAULT_SEARCH_ENGINE_PREFERENCE, DEFAULT_SEARCH_ENGINE_PROPERTY, HOME_PAGE_PREFERENCE, SEARCH_SUGGESTIONS_PREFERENCE,
 } from '../chrome-bar-preferences';
@@ -327,7 +328,7 @@ export class AddressBar {
                 className='pb-identity'
                 aria-label={label}
                 onMouseDown={e => e.preventDefault()}
-                onClick={() => this.openSitePanel()}
+                onClick={e => this.openSitePanel(e.currentTarget)}
             >
                 <span className='pb-identity-host'>{host}</span>
             </button>;
@@ -346,7 +347,7 @@ export class AddressBar {
                 cssClasses: ['pb-chrome-bar-hover'],
             })}
             onMouseDown={e => e.preventDefault()}
-            onClick={() => this.openSitePanel()}
+            onClick={e => this.openSitePanel(e.currentTarget)}
         >
             <span className={`pb-identity-icon codicon ${icon}${warning ? ' is-warning' : ''}`} aria-hidden='true' />
             {identity.state === 'insecure' && <span className='pb-identity-insecure'>{CHROME_BAR_COPY.connectionInsecure}</span>}
@@ -355,46 +356,76 @@ export class AddressBar {
     }
 
     /**
-     * Phase 31 (SITE-01/02): the panel opener. Requests this tab's site
-     * information through the privileged kind from the click handler only;
-     * renders the panel shell (header or `not-available` fallback) in the
-     * same `.pb-chrome-bar-dropdown` portal family as every other pill
-     * dropdown. Full permission rows land in plan 02 task 1 -- this wires
-     * open/close/Esc/outside-click and the `webTabSiteInfo` request.
+     * Phase 31 (SITE-01/02, plan 02): the panel opener. Requests this tab's
+     * site information from the click handler only, anchors the panel under
+     * the identity box that was clicked, and shows the panel when chrome
+     * answered `done` with its rows. Any other reply (unknown-tab, refused,
+     * no answer) opens the panel with the unavailable copy.
      */
-    protected async openSitePanel(): Promise<void> {
+    protected async openSitePanel(anchor?: HTMLElement): Promise<void> {
         const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
-        let info: { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown } | null = null;
-        // Read through the pushed-state request field; `in` keeps this
-        // compiling against the published tab-uris lib until the next Theia
-        // build (same seam as identityState's pushed fields above).
-        const requester = tab as WebTabWidget & { siteInfo?: unknown };
-        if (tab instanceof WebTabWidget && typeof requester.siteInfo === 'function') {
+        const rect = (anchor ?? this.pillRef)?.getBoundingClientRect();
+        this.sitePanelAnchor = { top: Math.round((rect?.bottom ?? 0) + 4), left: Math.round(rect?.left ?? 0) };
+        let info: WebTabSiteInfo | null = null;
+        if (tab instanceof WebTabWidget) {
             try {
-                info = await (requester.siteInfo as () => Promise<{ securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown }>)();
+                info = await tab.siteInfo();
             } catch {
                 info = null;
             }
         }
-        this.sitePanelInfo = info && typeof info === 'object' && (info as { ok?: unknown }).ok !== false ? info : null;
+        this.sitePanelTab = tab instanceof WebTabWidget ? tab : null;
+        this.sitePanelInfo = info && info.ok === true && info.where === 'done' && Array.isArray(info.permissions) && typeof info.origin === 'string' ? info : null;
         this.sitePanelOpen = true;
         this.update();
     }
 
-    /** Phase 31 (SITE-01/02): the panel shell's last `webTabSiteInfo` reply; null on `unknown-tab`/refused. */
-    protected sitePanelInfo: { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown } | null = null;
+    /** Phase 31 (SITE-01/02): the panel's last `webTabSiteInfo` reply, or null when the panel shows the unavailable copy. */
+    protected sitePanelInfo: WebTabSiteInfo | null = null;
 
-    /** Phase 31 (SITE-01): whether the panel shell shows. */
+    /** Phase 31 (SITE-04, plan 02): the tab the open panel describes; its permission writes go to this tab only. */
+    protected sitePanelTab: WebTabWidget | null = null;
+
+    /** Phase 31 (plan 02): the panel's top-left corner in viewport pixels, under the identity box. */
+    protected sitePanelAnchor: { top: number; left: number } = { top: 0, left: 0 };
+
+    /** Phase 31 (SITE-01): whether the panel shows. */
     protected sitePanelOpen = false;
 
-    /** Phase 31 (SITE-02): closes the panel shell. */
+    /** Phase 31 (SITE-02): closes the panel.  */
     protected closeSitePanel = (): void => {
         if (this.sitePanelOpen) {
             this.sitePanelOpen = false;
             this.sitePanelInfo = null;
+            this.sitePanelTab = null;
             this.update();
         }
     };
+
+    /**
+     * Phase 31 (SITE-04/06, plan 02, D-31-05/D-31-06): one permission row's
+     * change, sent to the panel's tab. Chrome's reply carries the refreshed
+     * rows, which replace the panel's; a refused or failed write takes the
+     * panel to the unavailable copy instead of showing a state chrome did not confirm.
+     */
+    protected async setSitePermission(id: string, state: string): Promise<void> {
+        const tab = this.sitePanelTab;
+        const origin = this.sitePanelInfo?.origin;
+        let reply: WebTabSiteInfo | null = null;
+        if (tab && typeof origin === 'string') {
+            try {
+                reply = await tab.setPermission(id, state, origin);
+            } catch {
+                reply = null;
+            }
+        }
+        if (reply && reply.ok === true && reply.where === 'applied' && Array.isArray(reply.permissions) && this.sitePanelInfo) {
+            this.sitePanelInfo = { ...this.sitePanelInfo, permissions: reply.permissions };
+        } else {
+            this.sitePanelInfo = null;
+        }
+        this.update();
+    }
 
     protected inputValue = '';
     protected committedAddress = '';
@@ -2021,7 +2052,11 @@ export class AddressBar {
         e.currentTarget.value = this.pillText();
         this.closeDropdown();
         this.closeModesMenu();
-        this.closeSitePanel();
+        // Focus moving into the site panel is not an outside click; the panel closes itself on blur.
+        const next = e.relatedTarget;
+        if (!(next instanceof Element && next.closest('.pb-site-panel'))) {
+            this.closeSitePanel();
+        }
         this.update();
     };
 
@@ -2350,67 +2385,26 @@ export class AddressBar {
             </div>
             {this.renderDropdown()}
             {this.renderModesMenu()}
-            {this.renderSitePanelFallback()}
+            {this.renderSitePanel()}
         </>;
     }
 
     /**
-     * Phase 31 (SITE-01/02): the panel shell -- identity click renders the
-     * `.pb-chrome-bar-dropdown.pb-site-panel` portal (D-31-14) with a header
-     * (state icon + displaySpec + baseDomain) from the `webTabSiteInfo`
-     * reply, else the `not-available` fallback copy on `unknown-tab` or a
-     * refused reply. Esc and outside-click (blur of the whole bar) close it.
+     * Phase 31 (SITE-01/02, plan 02): the site panel, rendered by
+     * `site-identity/site-panel.tsx` in the `.pb-chrome-bar-dropdown` portal
+     * family (D-31-14). Esc and outside-click close it.
      */
-    protected renderSitePanelFallback(): React.ReactNode {
+    protected renderSitePanel(): React.ReactNode {
         if (!this.sitePanelOpen) {
             return undefined;
         }
-        const info = this.sitePanelInfo;
-        const display = typeof info?.displaySpec === 'string' && info.displaySpec ? info.displaySpec : this.committedAddress;
-        const raw = typeof info?.securityState === 'string' ? info.securityState : 'none';
-        const state = (SECURITY_STATES as readonly string[]).includes(raw) ? raw : 'none';
-        const base = typeof info?.baseDomain === 'string' && info.baseDomain ? info.baseDomain : null;
-        const icon = state === 'secure' ? 'codicon-lock'
-            : state === 'insecure' ? 'codicon-unlock'
-                : state === 'mixed-passive' || state === 'broken' ? 'codicon-warning' : null;
-        // UI-SPEC "Copywriting Contract": the secure and insecure header lines are fixed copy.
-        const connection = state === 'secure' ? CHROME_BAR_COPY.siteConnectionSecure
-            : state === 'insecure' ? CHROME_BAR_COPY.siteConnectionInsecure
-                : state === 'local' ? CHROME_BAR_COPY.siteConnectionLocal(display)
-                    : state === 'mixed-passive' || state === 'broken' ? CHROME_BAR_COPY.siteConnectionWarning(display)
-                        : null;
-        const labelled = state === 'secure' ? CHROME_BAR_COPY.identitySecureLabel(display)
-            : state === 'insecure' ? CHROME_BAR_COPY.identityInsecureLabel(display)
-                : state === 'local' ? CHROME_BAR_COPY.identityLocalLabel(display)
-                    : state === 'mixed-passive' || state === 'broken' ? CHROME_BAR_COPY.identityWarningLabel(display)
-                        : CHROME_BAR_COPY.connectionWarning;
-        // UI-SPEC geometry: connection line, host line (14px), base domain as its own 12px caption line.
-        const header = info && connection && state !== 'none'
-            ? <div className='pb-site-panel-header'>
-                {icon && <span className={`pb-site-panel-icon codicon ${icon}${state === 'mixed-passive' || state === 'broken' ? ' is-warning' : ''}`} aria-hidden='true' />}
-                <div className='pb-site-panel-titles'>
-                    <span className='pb-site-panel-connection'>{connection}</span>
-                    <span className='pb-site-panel-host'>{display}</span>
-                    {base && <span className='pb-site-panel-base'>{base}</span>}
-                </div>
-            </div>
-            : undefined;
-        return createPortal(
-            <div
-                className='pb-chrome-bar-dropdown pb-site-panel'
-                role='dialog'
-                aria-label={labelled}
-                tabIndex={-1}
-                onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); this.closeSitePanel(); } }}
-                ref={node => node?.focus()}
-            >
-                {header ?? <div className='pb-site-panel-empty'>{CHROME_BAR_COPY.siteUnavailable(appSubject())}</div>}
-                <button type='button' className='pb-site-panel-close' onMouseDown={e => e.preventDefault()} onClick={this.closeSitePanel}>
-                    <span className='codicon codicon-close' aria-hidden='true' />
-                </button>
-            </div>,
-            document.body
-        );
+        return <SitePanel
+            info={this.sitePanelInfo}
+            anchor={this.sitePanelAnchor}
+            committedAddress={this.committedAddress}
+            onClose={this.closeSitePanel}
+            onSetPermission={(id, state) => { void this.setSitePermission(id, state); }}
+        />;
     }
 
     /** SMODE-03: a mode's label -- Address, the engine's name, or the contribution's label. */
