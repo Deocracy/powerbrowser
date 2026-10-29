@@ -9,9 +9,10 @@
  * Session A -- `identity-tls` (at most 4 web tabs: secure, plain,
  * mixed, idn-spoof):
  *   - `https://www.<fixture>/secure` pushes `secure` and the pill renders
- *     the lock icon, the `Connection secure` hover text, the base-domain
- *     highlight (`<strong>` around the registrable domain) and the trimmed
- *     host (no leading `https://`);
+ *     the lock icon, the `Connection secure` hover text and the base-domain
+ *     highlight (`<strong>` around the registrable domain); the unfocused
+ *     pill text has no leading `https://`, and focusing it restores the
+ *     full URL (SITE-03, D-31-10);
  *   - `http://<fixture>/plain` pushes `insecure` and the pill renders the
  *     unlock icon, the `Not Secure` text, and keeps the `http://` prefix in
  *     the pill;
@@ -48,7 +49,6 @@ import {
     openWebTab,
     pushes,
     serveNavPages,
-    trustFixtureCA,
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
@@ -95,6 +95,14 @@ const readIdentity = app => app.evaluate(`JSON.stringify((() => {
         pill: document.querySelector('.pb-chrome-bar-input')?.value ?? null,
     };
 })())`).then(JSON.parse);
+
+/** Focuses the pill, reads its text, then blurs it: the focused text is the full URL (SITE-03). */
+const focusPill = app => probe(app, `const input = document.querySelector('.pb-chrome-bar-input');
+    if (!input) return null;
+    input.focus();
+    const text = input.value;
+    input.blur();
+    return text;`);
 
 /** The last loaded state push for `tabId`. */
 const lastPush = async (app, tabId) =>
@@ -152,14 +160,16 @@ async function identityTls(ctx) {
         if (secureBox.icon === null || !String(secureBox.icon).includes('lock')) {
             fail(`the secure pill must render the lock icon; saw icon ${JSON.stringify(secureBox.icon)}`);
         }
-        if (secureBox.host !== null && /^https:\/\//i.test(secureBox.host)) {
-            fail(`the secure pill must trim https:// from the displayed host; saw ${JSON.stringify(secureBox.host)}`);
-        }
         if (secureBox.strong !== 'pb-fixture.test') {
             fail(`the secure pill must highlight the base domain; saw strong ${JSON.stringify(secureBox.strong)} in host ${JSON.stringify(secureBox.host)}`);
         }
-        if (secureBox.pill !== null && !/^https:\/\//i.test(secureBox.pill)) {
-            fail(`the pill keeps the full URL for editing; saw ${JSON.stringify(secureBox.pill)}`);
+        // SITE-03: unfocused, the pill trims https://; focused, it holds the full URL.
+        if (secureBox.pill !== null && /^https:\/\//i.test(secureBox.pill)) {
+            fail(`the unfocused secure pill must trim https://; saw ${JSON.stringify(secureBox.pill)}`);
+        }
+        const focusedPill = await focusPill(app);
+        if (focusedPill !== null && !/^https:\/\//i.test(String(focusedPill))) {
+            fail(`the focused secure pill must hold the full URL with https://; saw ${JSON.stringify(focusedPill)}`);
         }
     }
     const tip = await hoverTip(app);

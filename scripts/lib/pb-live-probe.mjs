@@ -73,10 +73,10 @@ export async function trustFixtureCA(app) {
     const pemPath = join(REPO_ROOT, 'scripts/fixtures/tls/test-ca.pem').replace(/\\/g, '/');
     const b64 = readFileSync(pemPath, 'utf8').split('\n').filter(l => l && !l.startsWith('-----')).join('');
     const expr = `(async () => {
-        const C = globalThis["C"+"c"] ?? globalThis["Compo"+"nents"].classes;
-        const I = globalThis["C"+"i"] ?? globalThis["Compo"+"nents"].interfaces;
-        const certdb = C['@mozilla.org/security/x509certdb;1'].getService(I["nsIX509"+"CertDB"]);
-        certdb["addCert"+"FromBase64"](${JSON.stringify(b64)}, 'C,,');
+        const C = globalThis.Cc ?? Components.classes;
+        const I = globalThis.Ci ?? Components.interfaces;
+        const certdb = C['@mozilla.org/security/x509certdb;1'].getService(I.nsIX509CertDB);
+        certdb.addCertFromBase64(${JSON.stringify(b64)}, 'C,,');
         return true;
     })()`;
     return app.send('script.evaluate', {
@@ -239,8 +239,8 @@ export async function pressKey(app, { key, code, keyCode, modifiers = [] }) {
     });
     const tip = await app.evaluateIn(app.chrome, `(() => {
         try {
-            const C = typeof globalThis["C"+"c"] !== 'undefined' ? globalThis["C"+"c"] : globalThis["Compo"+"nents"].classes;
-            const I = typeof globalThis["C"+"i"] !== 'undefined' ? globalThis["C"+"i"] : globalThis["Compo"+"nents"].interfaces;
+            const C = typeof Cc !== 'undefined' ? Cc : Components.classes;
+            const I = typeof Ci !== 'undefined' ? Ci : Components.interfaces;
             const tip = C['@mozilla.org/text-input-processor;1'].createInstance(I.nsITextInputProcessor);
             if (!tip.beginInputTransactionForTests(window)) return 'tip: no transaction';
             const ev = d => new KeyboardEvent('', d);

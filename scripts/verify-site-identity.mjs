@@ -18,14 +18,13 @@
  *   2. the overlay listener mask line (the `addProgressListener` call in
  *      `webTabOpen`) contains both `NOTIFY_SECURITY` and
  *      `NOTIFY_CONTENT_BLOCKING`;
- *   3. `PERMISSION_IDS` equals the upstream permission-ID set, derived
- *      independently of the plans' arrays: the gate parses
- *      `upstream/browser/modules/SitePermissions.sys.mjs` at check time --
- *      the `listPermissions()` region plus the `gPermissions` `_permissions`
- *      keys -- filtered to the six IDs chrome's own array carries, and
- *      compares by set equality against BOTH the Theia table and the
- *      chrome-side array (so an invented ID such as `location` goes red on
- *      both sides, and a dropped upstream ID goes red as drift);
+ *   3. `PERMISSION_IDS` equals the managed permission IDs, and chrome's
+ *      array agrees. The managed six are the IDs UI-SPEC names ("Permission
+ *      IDs are the upstream Firefox IDs (...)"); each must be a `_permissions`
+ *      key parsed from `upstream/browser/modules/SitePermissions.sys.mjs` at
+ *      check time (so an invented ID such as `location` goes red), and the
+ *      Theia table and the chrome-side array must equal the managed set by
+ *      set equality (so a dropped ID goes red as drift on both sides);
  *   4. `STOCK_PAGES` equals the `openStockPage` switch arms -- this plan
  *      lands no such switch, so the gate asserts the ABSENCE of an
  *      `openStockTab('about:…')` call site with a positive control (the
@@ -36,30 +35,41 @@
  *      never pass, never silent; the sibling write-arm case asserts no
  *      sender-supplied origin (the `data.origin` T-31-05 shape) with a
  *      positive control on the overlay-derived read;
- *   6. absence: no typed-text lock derivation in `address-bar.tsx` (the
- *      `startsWith('https://')` secure line is gone); no hex colour or
- *      `font-family` literal in the new `@powerbrowser/*` sources; with a
- *      positive control (the identity box the lock became is still found);
+ *   6. absence: `startsWith('https://')` appears nowhere in `address-bar.tsx`
+ *      (the plan's own check, comments included: no typed-text lock); no hex
+ *      colour or `font-family` literal in the new `@powerbrowser/*` sources;
+ *      with a positive control (the identity box the lock became is still found);
  *   7. every `codicon-*` glyph named by the new sources exists in
  *      `theia/node_modules/@vscode/codicons/dist/codicon.css` (derived);
  *   8. every new boundary internal has an INTERNAL-APIS.md row whose line
  *      still matches (delegated to `check-internals-boundary.sh
  *      --catalogue` + `verify-ng-040-internals-catalogue-lines.mjs`, run
- *      here so the registry row covers it).
+ *      here so the registry row covers it);
+ *   9. the shield count is behaviour-checked: `webTabBlockedTrackerCount`
+ *      is run on a fixture log (loaded and allowed states, and blocked
+ *      ones) with the blocking bits derived from upstream's
+ *      `nsIWebProgressListener.idl`; it must count the blocked origins only;
+ *  10. the shield reset sits inside the `!sameDocument` guard;
+ *  11. the panel header copy equals the UI-SPEC copy rows (`Connection
+ *      secure`, `Connection not secure`), and the identity box's aria-label
+ *      is `CHROME_BAR_COPY.sitePanelOpen(host)`.
  *
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then ten planted faults must
- * each go red naming the case that catches it: a SECURITY_STATE dropped,
- * one mask flag removed, the typed lock line re-inserted as the original
- * render-line derivation, an `openStockTab('about:preferences')` added, a
- * `data.origin` read added to the site arm, an INTERNAL-APIS row dropped
- * (driven through the REAL `--catalogue` instrument against a planted TREE,
- * never an in-gate markdown match), one PERMISSION_IDS entry renamed to the
- * old invented `location`, one entry dropped from BOTH lists at once (caught
- * only by the both-ways upstream comparison), a `data.host` sender read
- * added to the boundary file, and a non-token hex colour added to the sheet.
+ * --self-test: the clean tree must be green; then seventeen planted faults
+ * must each go red naming the case that catches it: a SECURITY_STATE
+ * dropped, one mask flag removed, the typed lock line re-inserted, an
+ * `openStockTab('about:preferences')` added, a `data.origin` read added to
+ * the site arm, an INTERNAL-APIS row dropped (driven through the REAL
+ * `--catalogue` instrument against a planted TREE, never an in-gate markdown
+ * match), one PERMISSION_IDS entry renamed to the invented `location`, one
+ * entry dropped from BOTH lists at once (caught by the comparison with the
+ * managed set), a `data.host` sender read added to the boundary file, a
+ * non-token hex colour and a font-family literal added to the sheet, a
+ * loaded and an allowed state counted as blocked, every logged origin
+ * counted, the shield reset moved out of the same-document guard, the
+ * connection copy drifted, and the identity box label changed.
  * A plant whose text did not change its source fails as "plant did not
  * apply".
  *
@@ -88,6 +98,8 @@ const COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
 const CSS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar.css';
 const SITE_PANEL_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/site-panel.tsx';
 const UPSTREAM_PERMS_REL = 'upstream/browser/modules/SitePermissions.sys.mjs';
+const UPSTREAM_IDL_REL = 'upstream/uriloader/base/nsIWebProgressListener.idl';
+const UI_SPEC_REL = '.planning/phases/31-site-identity-permissions-and-app-menu/31-UI-SPEC.md';
 const INTERNAL_APIS_REL = 'powerbrowser/INTERNAL-APIS.md';
 const CODICON_REL = 'theia/node_modules/@vscode/codicons/dist/codicon.css';
 const EXPORTS = ['SECURITY_STATES', 'PERMISSION_IDS', 'STOCK_PAGES', 'MENU_ORDER'];
@@ -142,6 +154,69 @@ function deriveUpstreamIds(upstreamSrc) {
     const body = upstreamSrc.slice(open, end);
     const ids = [...body.matchAll(/^\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z][\w-]*))\s*:\s*\{/gm)].map(m => m[1] ?? m[2] ?? m[3]);
     return ids.length ? ids : null;
+}
+
+/**
+ * The managed permission IDs, from the UI-SPEC sentence that names them
+ * ("Permission IDs are the upstream Firefox IDs (`camera`, ...)"). The
+ * managed six are a design decision, not a derivable fact: upstream's
+ * enabled set depends on preferences, so the gate takes the six from the
+ * design contract and checks each one against upstream's `_permissions` keys.
+ */
+function deriveSpecPermissionIds(uiSpecSrc) {
+    const m = /Permission IDs are the upstream Firefox IDs \(([^)]*)\)/.exec(uiSpecSrc ?? '');
+    if (!m) {
+        return null;
+    }
+    const ids = [...m[1].matchAll(/`([^`]+)`/g)].map(x => x[1]);
+    return ids.length ? ids : null;
+}
+
+/** The copy cell of a UI-SPEC copy-table row, its first backticked token. */
+function deriveSpecCopy(uiSpecSrc, rowLabel) {
+    const row = (uiSpecSrc ?? '').split('\n').find(line => line.startsWith(`| ${rowLabel} |`));
+    const m = /`([^`]+)`/.exec(row ? row.split('|')[2] ?? '' : '');
+    return m ? m[1] : null;
+}
+
+/** A `key: '…',` string literal in chrome-bar-copy.ts (the file imports Theia, so it is read as text). */
+function deriveCopyLiteral(copySrc, key) {
+    const m = new RegExp(`^\\s*${key}: '([^']*)',`, 'm').exec(copySrc ?? '');
+    return m ? m[1] : null;
+}
+
+/** The `STATE_*` constants of upstream's nsIWebProgressListener IDL, name to value (hex, decimal or `1 << n`). */
+function deriveWebProgressStates(idlSrc) {
+    const out = {};
+    for (const m of (idlSrc ?? '').matchAll(/const unsigned long (STATE_[A-Z0-9_]+)\s*=\s*([^;]+);/g)) {
+        const expr = m[2].trim();
+        const shifted = /^1 << (\d+)$/.exec(expr);
+        const value = shifted ? 2 ** Number(shifted[1]) : /^(0x[0-9a-f]+|\d+)$/i.test(expr) ? Number(expr) : null;
+        if (value !== null) {
+            out[m[1]] = value;
+        }
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+/** The source of one two-space-indented object method taking `(browser)`, braces matched; null when absent. */
+function deriveMethodSource(src, name) {
+    const start = new RegExp(`^  ${name}\\(browser\\) \\{`, 'm').exec(src ?? '');
+    if (!start) {
+        return null;
+    }
+    let depth = 0;
+    for (let i = start.index + start[0].length - 1; i < src.length; i++) {
+        if (src[i] === '{') {
+            depth += 1;
+        } else if (src[i] === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                return src.slice(start.index, i + 1);
+            }
+        }
+    }
+    return null;
 }
 
 /** Chrome's own permission-ID array literal. */
@@ -257,17 +332,21 @@ function cases(m, srcs) {
         ['PERMISSION_IDS equal the upstream IDs, and chrome agrees', () => {
             const upstream = deriveUpstreamIds(upstreamSrc);
             const chrome = deriveChromeIds(apiSrc);
+            const managed = deriveSpecPermissionIds(srcs[UI_SPEC_REL]);
             if (!upstream) {
                 return `no _permissions table in ${UPSTREAM_PERMS_REL} -- broken instrument`;
             }
             if (!chrome) {
                 return `no SITE_INFO_PERMISSION_IDS array in ${API_REL} -- broken instrument`;
             }
-            // The phase manages six of upstream's many IDs; the tree must
-            // carry exactly that set on BOTH sides, compared against upstream
-            // in BOTH directions: no invented ID (location), and no dropped
-            // upstream ID -- a drop from both lists at once still goes red as
-            // drift against upstream (both-ways plant below), never green.
+            if (!managed) {
+                return `no "Permission IDs are the upstream Firefox IDs (...)" list in ${UI_SPEC_REL} -- broken instrument`;
+            }
+            // The managed set is the six UI-SPEC names; the tree must carry
+            // exactly that set on BOTH sides, and every ID on either side must
+            // be a `_permissions` key upstream defines: no invented ID
+            // (location), and no dropped managed ID -- a drop from both lists
+            // at once still goes red as drift against the managed set.
             // Sender fields never reach here either: `data.host` must be
             // absent from the boundary file (positive control: the overlay's
             // own contentPrincipal read stands).
@@ -278,19 +357,15 @@ function cases(m, srcs) {
             if (!control) {
                 return `browser.contentPrincipal is gone from ${API_REL} -- broken instrument`;
             }
-            const want = chrome.filter(id => upstream.includes(id));
-            if (!sameSet(want, chrome)) {
-                return { chrome, outsideUpstream: chrome.filter(id => !upstream.includes(id)) };
+            const outsideUpstream = [...new Set([...managed, ...chrome])].filter(id => !upstream.includes(id));
+            if (outsideUpstream.length) {
+                return { outsideUpstream };
             }
-            if (!sameSet([...m.PERMISSION_IDS], chrome)) {
-                return { table: sorted([...m.PERMISSION_IDS]), chrome: sorted(chrome) };
+            if (!sameSet(managed, chrome)) {
+                return { managed: sorted(managed), chrome: sorted(chrome) };
             }
-            // Six, and the six upstream still enables: dropping an ID from
-            // both lists (the both-ways plant) goes red here as drift,
-            // because the managed set is pinned to upstream, not to itself.
-            const PINNED = ['camera', 'microphone', 'geo', 'desktop-notification', 'autoplay-media', 'popup'];
-            if (!sameSet(chrome, PINNED)) {
-                return { chrome: sorted(chrome), upstreamKeeps: sorted(PINNED.filter(id => !chrome.includes(id))) };
+            if (!sameSet([...m.PERMISSION_IDS], managed)) {
+                return { table: sorted([...m.PERMISSION_IDS]), managed: sorted(managed) };
             }
             return null;
         }],
@@ -323,15 +398,75 @@ function cases(m, srcs) {
             if (!control) {
                 return `renderIdentityBox is gone from ${ADDRESS_BAR_REL} -- broken instrument`;
             }
-            // The plan's own prohibition: the `startsWith('https://')`
-            // secure line is gone from address-bar.tsx. Two known-good
-            // `startsWith` uses survive (the uri-list `#` comment line and
-            // the ONE_OFF_KEY highlight rows), so the gate matches only the
-            // exact restored render-line derivation
-            // (`this.inputValue.trim().startsWith('https://')`) the seam
-            // plant re-inserts -- never a bare `startsWith`.
-            const hits = [...stripComments(addressBarSrc).matchAll(/this\.inputValue\.trim\(\)\.startsWith\(\s*['"]https:\/\//g)].map(m => m[0]);
+            // The plan's own check (31-01-PLAN.md): `startsWith('https://')`
+            // appears nowhere in address-bar.tsx. Applied to the raw text,
+            // comments included, so no prose in the file can carry it.
+            const hits = [...addressBarSrc.matchAll(/startsWith\(\s*['"]https:\/\/['"]\s*\)/g)].map(m => m[0]);
             return hits.length === 0 ? null : hits;
+        }],
+        ['shield count counts blocked origins only (upstream blocking bits, behaviour-checked)', () => {
+            const body = deriveMethodSource(apiSrc, 'webTabBlockedTrackerCount');
+            if (!body) {
+                return `no webTabBlockedTrackerCount(browser) method in ${API_REL} -- broken instrument`;
+            }
+            const flags = deriveWebProgressStates(srcs[UPSTREAM_IDL_REL]);
+            const named = ['STATE_LOADED_LEVEL_1_TRACKING_CONTENT', 'STATE_LOADED_LEVEL_2_TRACKING_CONTENT', 'STATE_ALLOWED_TRACKING_CONTENT',
+                'STATE_BLOCKED_TRACKING_CONTENT', 'STATE_BLOCKED_FINGERPRINTING_CONTENT'];
+            const absent = flags ? named.filter(name => !(name in flags)) : named;
+            if (absent.length) {
+                return `${UPSTREAM_IDL_REL} does not define ${absent.join(', ')} -- broken instrument`;
+            }
+            const f = name => flags[name];
+            // Four origins: two loaded or allowed only (never counted), two with a blocking bit.
+            const log = {
+                'loaded.test': [[f('STATE_LOADED_LEVEL_1_TRACKING_CONTENT'), false]],
+                'allowed.test': [[f('STATE_ALLOWED_TRACKING_CONTENT'), false]],
+                'blocked.test': [[f('STATE_BLOCKED_TRACKING_CONTENT'), true]],
+                'mixed.test': [[f('STATE_LOADED_LEVEL_2_TRACKING_CONTENT'), false], [f('STATE_BLOCKED_FINGERPRINTING_CONTENT'), true]],
+            };
+            let got;
+            try {
+                const count = new Function('Ci', `return ({ ${body} }).webTabBlockedTrackerCount;`)({ nsIWebProgressListener: flags });
+                got = count({ getContentBlockingLog: () => JSON.stringify(log) });
+            } catch (error) {
+                return `threw ${error.message}`;
+            }
+            return got === 2 ? null : { counted: got, want: 2 };
+        }],
+        ['shield count resets only on a top-level, non-same-document location change', () => {
+            const code = stripComments(apiSrc);
+            if (!code.includes('LOCATION_CHANGE_SAME_DOCUMENT')) {
+                return `the same-document flag is gone from ${API_REL} -- broken instrument`;
+            }
+            return /if \(!sameDocument\) \{\s*entry\.blockedTrackers = 0;\s*\}/.test(code)
+                ? null : 'the blockedTrackers reset is not guarded by !sameDocument';
+        }],
+        ['panel header copy equals the UI-SPEC rows, and the identity box names the panel', () => {
+            const specSecure = deriveSpecCopy(srcs[UI_SPEC_REL], 'Site panel header (secure)');
+            const specInsecure = deriveSpecCopy(srcs[UI_SPEC_REL], 'Site panel header (insecure)');
+            if (!specSecure || !specInsecure) {
+                return `the UI-SPEC site-panel header rows derived nothing in ${UI_SPEC_REL} -- broken instrument`;
+            }
+            const drift = {};
+            const treeSecure = deriveCopyLiteral(srcs[COPY_REL], 'siteConnectionSecure');
+            const treeInsecure = deriveCopyLiteral(srcs[COPY_REL], 'siteConnectionInsecure');
+            if (treeSecure !== specSecure) {
+                drift.secure = { tree: treeSecure, spec: specSecure };
+            }
+            if (treeInsecure !== specInsecure) {
+                drift.insecure = { tree: treeInsecure, spec: specInsecure };
+            }
+            if (Object.keys(drift).length) {
+                return drift;
+            }
+            const code = stripComments(addressBarSrc);
+            if (!/CHROME_BAR_COPY\.siteConnectionSecure\b/.test(code) || !/CHROME_BAR_COPY\.siteConnectionInsecure\b/.test(code)) {
+                return `the site panel header no longer renders the copy keys in ${ADDRESS_BAR_REL}`;
+            }
+            if (!/const label = CHROME_BAR_COPY\.sitePanelOpen\(/.test(code) || !/aria-label=\{label\}/.test(code)) {
+                return 'the identity box aria-label is not CHROME_BAR_COPY.sitePanelOpen(host) (UI-SPEC identity box)';
+            }
+            return null;
         }],
         ['no hex colour outside the token file, and no font-family literal', () => {
             const lits = deriveStyleLiterals({ [TABLE_REL]: srcs[TABLE_REL], [ADDRESS_BAR_REL]: addressBarSrc, [CSS_REL]: srcs[CSS_REL], [SITE_PANEL_REL]: srcs[SITE_PANEL_REL] ?? '' });
@@ -388,7 +523,7 @@ const read = rel => {
         return '';
     }
 };
-const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, CODICON_REL, INTERNAL_APIS_REL];
+const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL];
 const readSources = () => Object.fromEntries(SOURCES.map(rel => [rel, read(rel)]));
 
 async function main() {
@@ -478,6 +613,55 @@ const PLANTS = [
         from: '.pb-site-panel-close {',
         to: '.pb-site-panel-close {\n    color: #abcdef;',
         expect: 'no hex colour outside the token file',
+    },
+    {
+        name: 'a font-family literal added',
+        rel: CSS_REL,
+        from: '.pb-site-panel-close {',
+        to: '.pb-site-panel-close {\n    font-family: serif;',
+        expect: 'no hex colour outside the token file, and no font-family literal',
+    },
+    {
+        name: 'a loaded state counted as blocked',
+        rel: API_REL,
+        from: '(pair[0] & blocked) !== 0',
+        to: '(pair[0] & (blocked | Ci.nsIWebProgressListener.STATE_LOADED_LEVEL_1_TRACKING_CONTENT)) !== 0',
+        expect: 'shield count counts blocked origins only',
+    },
+    {
+        name: 'an allowed state counted as blocked',
+        rel: API_REL,
+        from: '(pair[0] & blocked) !== 0',
+        to: '(pair[0] & (blocked | Ci.nsIWebProgressListener.STATE_ALLOWED_TRACKING_CONTENT)) !== 0',
+        expect: 'shield count counts blocked origins only',
+    },
+    {
+        name: 'every logged origin counted again',
+        rel: API_REL,
+        from: 'return Object.values(parsed).filter(actions => Array.isArray(actions) && actions.some(pair => Array.isArray(pair) && (pair[0] & blocked) !== 0)).length;',
+        to: 'return Object.keys(parsed).length;',
+        expect: 'shield count counts blocked origins only',
+    },
+    {
+        name: 'the shield reset moved out of the same-document guard',
+        rel: API_REL,
+        from: '        if (!sameDocument) {\n          entry.blockedTrackers = 0;\n        }\n',
+        to: '        entry.blockedTrackers = 0;\n',
+        expect: 'shield count resets only on a top-level, non-same-document location change',
+    },
+    {
+        name: 'the connection copy drifted from the UI-SPEC row',
+        rel: COPY_REL,
+        from: "siteConnectionSecure: 'Connection secure',",
+        to: "siteConnectionSecure: 'Secure connection',",
+        expect: 'panel header copy equals the UI-SPEC rows',
+    },
+    {
+        name: 'the identity box label is not the panel-open copy',
+        rel: ADDRESS_BAR_REL,
+        from: 'const label = CHROME_BAR_COPY.sitePanelOpen(this.identityHostText(identity));',
+        to: 'const label = CHROME_BAR_COPY.identityLocalLabel(this.identityHostText(identity));',
+        expect: 'panel header copy equals the UI-SPEC rows',
     },
 ];
 
