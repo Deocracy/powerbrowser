@@ -19,8 +19,9 @@ affects: [31-02 panel rows, 31-03 clear-data and shield, 31-04 hamburger menu]
 actuals:
   tokens: 92000
   tasks: 3
-  commits: 5
-  plan_head_before: 024ce71
+  commits: 13
+  plan_head_before: 3e8d991
+  plan_head_after: a9aeb1b
 
 # Tech tracking
 tech-stack:
@@ -105,14 +106,56 @@ coverage:
 
 ## Commits
 
+Plan 31-01 commits, oldest first. The count is measured with
+`git rev-list --count --grep=31-01 3e8d991..a9aeb1b`; the range also holds
+other phases' commits, so the grep restricts it to this plan. The docs
+commit that carries this file is not counted here.
+
 - `2fda8d5` feat(31-01): widen web-tab push with site identity decode
 - `ee57320` feat(31-01): pill identity box plus site panel shell
 - `024ce71` test(31-01): site-identity static gate plus live harness
+- `f4da947` docs(31-01): live handoff plus plan summary
+- `b79dd84` test(31-01): live harness fixes found running the site-identity checks (Claude harness commit)
+- `f07eb4b` test(31-01): test-only TLS fixture (CA certificate, pb-fixture.test leaf) for the site-identity live checks
+- `f54869a` fix(31-01): loopback trust via isSecureContext, JSON shield count, https trim, panel copy
+- `00ab49f` test(31-01): TLS live sessions, derived gates, handoff and summary
+- `33049dc` docs(31-01): correct plant counts and brand scan file count
+- `0f27a5c` test(31-01): typed-lock plant follows typed text; IDN pill and warning colour asserted (Claude harness commit)
+- `0e65416` fix(31-01): trim https in the unfocused pill, displaySpec host, blocked-only shield count, panel copy (fix round 3)
+- `417d15e` test(31-01): static gate derives the managed IDs, pins shield and copy; live pill flip; plain identifiers (fix round 3)
+- `a9aeb1b` test(31-01): drop a plan-file citation that moved the brand-residue count (fix round 3)
+
+## Fix round 3
+
+Live check failed on the pill and the shield count. The round's ten items:
+
+1. Unfocused secure pill trims `https://`; focus restores the full URL.
+   `address-bar.tsx` `pillText`, `onInputFocus`, `onInputBlur`. Harness flipped
+   in `verify-site-identity-live.mjs`; the never-failing host check is gone.
+2. `identityHostText` reads `displaySpec` again and strips a `:port`.
+   `address-bar.tsx` `identityHostText`.
+3. Shield count counts blocked origins only, with the six `STATE_BLOCKED_*`
+   terms; the reset runs only on a top-level, non-same-document change.
+   `PowerBrowserAPI.sys.mjs` `webTabBlockedTrackerCount` and the progress
+   listener's `onLocationChange`. Static case plus two plants.
+4. `startsWith('https://')` appears nowhere in `address-bar.tsx`, comments
+   included; the two comments were reworded.
+5. The hand-kept PINNED list is gone. The managed set is taken from the
+   UI-SPEC sentence that names it, and each ID is checked against upstream's
+   `_permissions` keys (see Deviations).
+6. The identifier splits in `scripts/lib/pb-live-probe.mjs` are reverted to
+   `Cc`, `Ci`, `Components`, `addCertFromBase64`.
+7. The unused `trustFixtureCA` import is removed.
+8. Identity box `aria-label` is `sitePanelOpen(host)`; panel header reads
+   `Connection secure` / `Connection not secure`, with the base domain as a
+   12px caption. Static copy case pins both.
+9. Font-family plant added beside the hex plant.
+10. This file: `plan_head_before` is `3e8d991`, and every 31-01 commit is listed.
 
 ## Static results
 
-- `node scripts/verify-site-identity.mjs`: PASS (10 cases)
-- `node scripts/verify-site-identity.mjs --self-test`: PASS (10 plants)
+- `node scripts/verify-site-identity.mjs`: PASS (13 cases)
+- `node scripts/verify-site-identity.mjs --self-test`: PASS (17 plants)
 - `node scripts/verify-web-tab-bridge.mjs` + `--self-test`: PASS (13 kinds, 21 plants)
 - `node scripts/verify-shell-error-copy.mjs`: PASS
 - `tsc --noEmit` chrome-bar + tab-uris: green
@@ -125,12 +168,9 @@ coverage:
 
 ## --quick result
 
-`scripts/verify-platform.sh --quick`: FAIL only on pre-existing
-environment rows — `verify-downstream-fixtures*`,
-`installer-build-proof-self-test`, `sql-store-soak*` (the plan's
-sanctioned env-fail set) plus `gui07-strip-spike-verdict*`, which fails
-identically on the clean tree and is owned by the plan-reorg worktrack,
-not this plan.
+`scripts/verify-platform.sh --quick` after fix round 3: PASS, all rows
+(`verify-platform: PASS -- all checks passed`). The brand-residue scan
+(`node scripts/scan-brand-residue.mjs`) is PASS over 392 files.
 
 ## Deviations
 
@@ -146,6 +186,21 @@ not this plan.
   beside `serveNavPages` (`node:https` with the committed
   `scripts/fixtures/tls/` leaf) with the fixture hosts in
   `network.dns.localDomains` and the CA trusted in the probe profile only.
+- Fix round 3, item 5: the managed permission set cannot be derived from
+  upstream `gPermissions` alone. Upstream's enabled set depends on
+  preferences and holds about twenty IDs. The gate takes the six managed IDs
+  from the UI-SPEC sentence that names them, and checks each against the
+  `_permissions` keys parsed at check time.
+- Fix round 3, item 8: the panel header is 48px (was 32px), and the base
+  domain is a separate caption line. `siteConnectionSecure` and
+  `siteConnectionInsecure` are fixed strings now, so `verify-shell-error-copy.mjs`
+  pins `Connection not secure` in place of the two retired host-bearing lines.
+- Fix round 3: the `--fix` mode of `verify-ng-040-internals-catalogue-lines.mjs`
+  moved three rows to the wrong lines. The catalogue was restored from HEAD
+  and every row remapped by a line diff of `PowerBrowserAPI.sys.mjs`; six
+  rows were added for the `STATE_BLOCKED_*` terms.
+- Fix round 3: the `-PLAN.md` brand-residue count (59 held) moved once when
+  a comment named the plan file. The citation was removed, not reconciled.
 
 ## Blockers
 
