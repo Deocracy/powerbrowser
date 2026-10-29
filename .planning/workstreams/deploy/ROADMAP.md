@@ -319,7 +319,7 @@ Plans:
   2. The real-release hop drill (`served: release`) runs N to N+1 from a clean non-Nix container or VM on legion and proves hosts, hash, version, signature, allowed channels and attestation, with each fault plant red.
   3. The withdraw job commits the no-update descriptor for every target (or repoints at the R2 copy), reruns `channel-live`, and marks the Release per the recorded immutable-release probe; no Release is deleted.
   4. The first public Linux release is published: bump PR merged, `release` approved, hop drill passed, /download live, descriptor released after the owner's `descriptor` approval, and `docs/KNOWN-ISSUES.md` copied into one pinned issue.
-  5. At the first public release, the UPD-15 `github.com` and `release-assets.githubusercontent.com` allowlist rows are observed at layer 3, and the sweep's runner-online, channel-liveness and download-count rows report live values.
+  5. At the first public release, the update download from `downloads.powerbrowser.org` (the R2 MAR origin) is observed at layer 3 with no unattended `github.com` or `release-assets.githubusercontent.com` request, and the sweep's runner-online, channel-liveness and download-count rows report live values.
 
 **External gate**: Per-release owner approvals (`release`; `descriptor` after the owner's own N-1 to N hop); the ESR 153 calendar decides which point release becomes the first public release.
 **Research flag**: Shares Phase 49's E flags.

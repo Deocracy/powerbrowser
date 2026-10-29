@@ -11,7 +11,7 @@ Phase 50 closes the Linux loop: the train carries one release from a merged bump
 The work splits cleanly. The executor builds locally, against the SPEC text of the unlanded phases (43, 44, 46, 47, 48, 49) as written in ROADMAP/REQUIREMENTS/SUMMARY:
 
 - **TRAIN-10:** extend the Phase 43 `scripts/release-train.mjs` state table with eight states (BUILDING, AWAITING_APPROVAL, PUBLISHED, DESCRIPTOR_WAIT, DESCRIPTOR_LIVE, LIVE_RED, WITHDRAWN, DONE), derived from the `release.yml` run, pending deployments, the Release, and the `powerbrowser-updates` contents; add the dispatch-`release.yml`-with-merge-SHA step plus the exact-run link; add the SHA-validation first step to `release.yml` (the only `release.yml` edit this phase owns); extend `release-train-logic-self-test` with one fixture per new state plus SHA plants, still set-equality.
-- **REL-02:** add a `workflow_dispatch` withdraw workflow in `powerbrowser-updates` (bot App token, installed on both repos per GH-10) that commits the no-update descriptor per target (or repoints at the R2 MAR copy), reruns `channel-live`, and marks the product Release per the pre-recorded immutable-release probe; never delete.
+- **REL-02:** add a `workflow_dispatch` withdraw workflow in `powerbrowser-updates` (bot App token, installed on both repos per GH-10) that commits the no-update descriptor per target, reruns `channel-live`, and marks the product Release per the pre-recorded immutable-release probe; never delete.
 - **GH-15:** add one report-job step that copies `docs/KNOWN-ISSUES.md` bytes into one pinned issue (create once, update by exact-bytes compare).
 - **UPD-16:** add a `served: release` mode to the existing hop script (not a second script) with the release assertion set, run from a clean non-Nix container/VM on legion, with one fault plant per property.
 - **REL-03:** execute the first public Linux release as owner checkpoints (bump PR merge, `release` approval, hop passed, /download live, `descriptor` approval after the owner's own N-1 to N hop), ending with `checkpoint:human-action` / `checkpoint:human-approval` steps; the executor merges, approves, pushes, or marks nothing.
@@ -63,7 +63,7 @@ All other implementation choices are at Claude's discretion — discuss phase wa
 | ID | Full text (from REQUIREMENTS.md) | Research Support |
 |----|-------------|------------------|
 | TRAIN-10 | The train adds the states BUILDING, AWAITING_APPROVAL, PUBLISHED, DESCRIPTOR_WAIT, DESCRIPTOR_LIVE, LIVE_RED, WITHDRAWN and DONE, derived from the `release.yml` run, pending deployments, the Release and the `powerbrowser-updates` contents. It dispatches `release.yml` with the merge SHA after the bump PR merges, and links the exact run in the tracking issue. Before building, `release.yml` validates that the dispatched SHA is the tip of `main`, or an ancestor of it whose commit changes `configuration.toml`, and exits otherwise. (E) | §Pattern 1 (per-state REST shapes + derivation table), §Pattern 2 (SHA-validation placement + the workflows-tree conjunct), §Pattern 6 (self-test extension: fixture per state, set-equality, SHA plants), §Validation |
-| REL-02 | A `workflow_dispatch` withdraw job in `powerbrowser-updates` commits the no-update descriptor for every target, or repoints at the R2 MAR copy, and reruns `channel-live`. It marks the product repo's Release as a pre-release with a bot App token (the App is installed on both repos, GH-10). A probe, run before the first public release and recorded in `docs/RELEASING.md`, shows whether immutable releases still allow the pre-release flag change; if not, the withdraw job marks the withdrawal in the Release notes instead. Releases are never deleted, and the fix is a new revision. (E) | §Pattern 3 (where it lives, token scope, no-update bytes, R2 alternative, channel-live rerun mode, probe procedure, never-delete), §Validation |
+| REL-02 | A `workflow_dispatch` withdraw job in `powerbrowser-updates` commits the no-update descriptor for every target and reruns `channel-live`. It marks the product repo's Release as a pre-release with a bot App token (the App is installed on both repos, GH-10). A probe, run before the first public release and recorded in `docs/RELEASING.md`, shows whether immutable releases still allow the pre-release flag change; if not, the withdraw job marks the withdrawal in the Release notes instead. Releases are never deleted, and the fix is a new revision. (E) | §Pattern 3 (where it lives, token scope, no-update bytes, R2 alternative, channel-live rerun mode, probe procedure, never-delete), §Validation |
 | GH-15 | Once a train reaches PUBLISHED, the train's report job copies `docs/KNOWN-ISSUES.md` into one pinned issue. (E) | §Pattern 4 (create-once/update-by-bytes rule, pin via GraphQL with manual fallback, source-at-merge-SHA), §Validation |
 | UPD-16 | The real-release hop drill (`served: release`) runs N to N+1 from a clean non-Nix Linux container or VM on legion. It proves hosts, hash, version, signature, allowed channels and attestation, with fault plants. (E) | §Pattern 5 (`served` selector, inputs, six-property assertion list, plant list, clean non-Nix procedure, auth handling for attestation), §Validation |
 | REL-03 | The first public Linux release is published: the bump PR merged, `release` approved, the hop drill passed, /download live, and the descriptor released after the owner's `descriptor` approval. (E) | §Release procedure (owner checkpoint sequence, calendar rule, criterion-5 observation), §What Phase 50 Must NOT Build, §Validation |
@@ -173,7 +173,7 @@ No npm, PyPI, crates, or container package is installed by this phase.
   DESCRIPTOR_LIVE → DONE (issue closed) | LIVE_RED (issue + fix-by-new-revision)
         │
   withdraw path (REL-02, separate workflow in powerbrowser-updates)
-        │  no-update descriptor per target (or R2 repoint) → channel-live rerun
+        │  no-update descriptor per target → channel-live rerun
         └──► Release marked (prerelease flag per probe, else notes) → WITHDRAWN
                 → tracking issue reopened; fix is a NEW revision (never delete)
 
@@ -228,7 +228,7 @@ The state list, the BUILD_TARGET set, and the asset set are all derived at check
 | DESCRIPTOR_WAIT | PUBLISHED **and** (`pendingDeployments` names `descriptor` **or** run waiting on the 1440-min timer) **and** updates contents not yet the release descriptor | notify owner (descriptor approval after own N-1→N hop, decision 18); wait |
 | DESCRIPTOR_LIVE | updates contents byte-equal the served public descriptor **and** `channelLive` green (byte-equal repo copy, MAR HEAD 200, offered version == latest Release) | close tracking issue (TRAIN-02), move to DONE |
 | LIVE_RED | descriptors present but `channelLive` red (byte mismatch / MAR 404 / version drift) | label `train:blocked`, assign owner, link failing log (TRAIN-06 Phase F owns the fixer routing; Phase 50 only opens/links, never starts the fixer for `release.yml` failures — SUMMARY correction 2) |
-| WITHDRAWN | `release.prerelease == true` (probe-allowed branch) **or** `release.body` carries the withdrawal marker (notes branch) **and** descriptors are no-update (or R2-repointed) | reopen tracking issue (TRAIN-02); report renders the new-revision instruction |
+| WITHDRAWN | `release.prerelease == true` (probe-allowed branch) **or** `release.body` carries the withdrawal marker (notes branch) **and** descriptors are no-update | reopen tracking issue (TRAIN-02); report renders the new-revision instruction |
 | DONE | DESCRIPTOR_LIVE **and** tracking issue closed | terminal; no action |
 
 Disambiguation rules the planner must encode (all follow the "derive from tree, compare" discipline):
@@ -313,7 +313,7 @@ DIST-02's separate "exits without building when the derived release key is not g
 
 ### Pattern 3: Withdraw without deleting (REL-02)
 
-**Where it lives.** A standalone workflow `withdraw.yml` in the **`powerbrowser-updates`** repo (404 today; created empty in Phase 41 per GH-10, filled by Phase 47). Rationale: the descriptor write is a Contents write on the updates repo; placing the job there keeps the product repo's `release.yml` trust map untouched and gives the withdraw token the narrowest scope. Trigger `workflow_dispatch` only, with required inputs `{ tag, mode: no-update | r2-fallback, reason }`. Hosted runner (`ubuntu-latest`), pinned SHA `uses:`, no cache, no `pull_request` trigger — the `workflows`-row equivalent the planner writes for the updates repo (or an explicit cross-repo note, since the Phase 41 `workflows` row covers the product repo only).
+**Where it lives.** A standalone workflow `withdraw.yml` in the **`powerbrowser-updates`** repo (404 today; created empty in Phase 41 per GH-10, filled by Phase 47). Rationale: the descriptor write is a Contents write on the updates repo; placing the job there keeps the product repo's `release.yml` trust map untouched and gives the withdraw token the narrowest scope. Trigger `workflow_dispatch` only, with required inputs `{ tag, reason } (withdraw is no-update only)`. Hosted runner (`ubuntu-latest`), pinned SHA `uses:`, no cache, no `pull_request` trigger — the `workflows`-row equivalent the planner writes for the updates repo (or an explicit cross-repo note, since the Phase 41 `workflows` row covers the product repo only).
 
 **Token scope (GH-10).** The bot App is installed on `powerbrowser`, `powerbrowser-updates`, and the tap repo, with Contents/PRs/Issues read-write (no Workflows). The withdraw job mints the bot App token just before use via `actions/create-github-app-token` with the App id + private key held as an **updates-repo secret** (owner action; the key itself was created in Phase 43 as the first consumer — 41-RESEARCH A5). Per-step `permission-contents: write` minimum; the same token PATCHes the product Release (cross-repo, same installation — allowed because the App is installed on both). Token lifetime is 1 hour (SUMMARY Pitfall 5); mint-then-use in adjacent steps, never at job start for a 24h-spanning job (this job is minutes long, so one mint suffices).
 
@@ -326,12 +326,11 @@ DIST-02's separate "exits without building when the derived release key is not g
 
 (with trailing newline; the S5 "two-line no-update document"). The withdraw job writes these bytes identically for every target in the manifest-derived target set (derived from the Release's `release-manifest.json` asset / the Phase 44 target table — never a hand-kept list), commits with message `Withdraw <tag>: no-update descriptors (<reason>)`, and pushes to `powerbrowser-updates` `main`. Byte-identity across targets is asserted by re-reading the commit and comparing as a set.
 
-**R2 fallback alternative.** When `mode: r2-fallback`, instead of no-update the job writes per-target descriptors whose `<patch URL>` points at the R2 MAR copy (`sign-publish` copied each MAR to R2 per DIST-08) with the same `hashValue`/`size` as the Release MAR (same bytes, different origin). Use when the Release MAR itself is fine but the GitHub asset path is the problem; otherwise prefer no-update (a bad MAR must not stay offered from any origin).
+**No R2 repoint mode.** Superseded by the owner ruling of 2026-10-29: R2 at `downloads.powerbrowser.org` is the primary MAR origin, so there is no second origin to repoint to. Withdraw is no-update only.
 
-**Channel-live rerun.** After the commit, the job reruns the UPD-17 checks in the mode matching `mode`:
+**Channel-live rerun.** After the commit, the job reruns the UPD-17 checks in withdrawn mode:
 
-- `no-update`: assert each public `update.xml` serves the no-update bytes (HTTP 200 with `<updates></updates>` and no `<patch>`), i.e. expect-empty rather than expect-release. Running the unmodified `channel-live` (which requires offered version == latest Release) would go red by design — the plan must not call that a failure.
-- `r2-fallback`: assert each MAR URL answers HEAD 200 at the R2 origin with matching Content-Length, and the descriptor hash matches the R2 bytes.
+- Assert each public `update.xml` serves the no-update bytes (HTTP 200 with `<updates></updates>` and no `<patch>`), i.e. expect-empty rather than expect-release. Running the unmodified `channel-live` (which requires offered version == latest Release) would go red by design — the plan must not call that a failure.
 
 Recommend implementing this as `verify-update-channel-live.mjs --withdrawn <tag>` (or a `--mode` flag Phase 49's script owns and Phase 50 extends) so the expectation flip is explicit and self-tested, rather than forking a second script.
 
@@ -391,7 +390,7 @@ mutation { pinIssue(input: { issueId: "<node id of the issue>" }) { issue { id }
 
 **Inputs (Release assets + public descriptor).**
 
-- `hop.json` with `served: "release"` + existing keys (`n`, `nplus1`, `mar`, `descriptor`, `servedUrl`, `servedMarUrl`, `result`, `postHop`). `n` = installed published tarball (N), `nplus1` = Release MAR under test. `servedUrl` = the baked 11-segment public descriptor URL (exercises `_redirects`, not the file path); `servedMarUrl` = the immutable `/releases/download/<tag>/` asset URL (never a latest-download form — the live gate reddens those).
+- `hop.json` with `served: "release"` + existing keys (`n`, `nplus1`, `mar`, `descriptor`, `servedUrl`, `servedMarUrl`, `result`, `postHop`). `n` = installed published tarball (N), `nplus1` = Release MAR under test. `servedUrl` = the baked 11-segment public descriptor URL (exercises `_redirects`, not the file path); `servedMarUrl` = the write-once `https://downloads.powerbrowser.org/<tag>/<asset>` URL (DIST-08 primary MAR origin; never a `github.com` `/releases/download/` URL, never a `release-assets` URL, never a latest-download key — an unattended fetch of github.com fails `endpoint-verdict`).
 - `update.xml` = the public descriptor bytes as served.
 - The downloaded MAR bytes (via `gh release download <tag>` on the host, copied into the container, or `curl -fsSL` inside — planner picks; the bytes are what matters).
 - `client-resolver.log` = `MOZ_LOG=nsHostResolver:5` capture across the whole check→download→stage→apply cycle, plus `app.update.log=true`.
@@ -399,19 +398,19 @@ mutation { pinIssue(input: { issueId: "<node id of the issue>" }) { issue { id }
 
 **Assertion list (release set; each names file + values on failure).**
 
-1. **Hosts:** the descriptor host **and** the MAR host both present in the sifted resolver hosts (anchored `Resolving host [...]` sift, the existing `siftResolverHosts`). Expected after the 302: `updates.powerbrowser.org` + `github.com` + `release-assets.githubusercontent.com` (the UPD-15 rows, observed at layer 3 per criterion 5). Zero `*.mozilla.org` / `*.mozilla.net`. Capture-broken detectors kept: empty extract fails; serving host must appear unless literal IP.
+1. **Hosts:** the descriptor host **and** the MAR host both present in the sifted resolver hosts (anchored `Resolving host [...]` sift, the existing `siftResolverHosts`). Expected: `updates.powerbrowser.org` + `downloads.powerbrowser.org` (the UPD-15 layer-3 hosts per criterion 5); `github.com` and `release-assets.githubusercontent.com` must be absent, and either one present is red naming the host (absence judged over the client's own Resolving lines with the capture-broken detectors, as for the Mozilla check). Zero `*.mozilla.org` / `*.mozilla.net`. Capture-broken detectors kept: empty extract fails; serving host must appear unless literal IP.
 2. **Hash:** downloaded MAR `sha512` == descriptor `hashValue`; byte `size` == descriptor `size` (recompute from bytes with `marDigest`, never trust the descriptor's own claim alone).
 3. **Version:** distinct `buildID`s with `appVersion` not older (`nplus1.appVersion >= n.appVersion` in ESR-version ordering). This **replaces** the loopback distinct-versions rule — not a relaxation: the ratified version scheme keeps `appVersion` at the ESR version and `UpdateService.sys.mjs:1954-1962` (`updateIsAtLeastAsOldAs`) refuses an offer only when versions compare equal **and** buildIDs match, so same-appVersion/distinct-buildID is exactly what the client treats as an upgrade (S5 context, [VERIFIED] upstream read).
 4. **Signature:** `signmar -v` against the tracked DER(s) passes on the downloaded MAR (primary DER; Phase 44's secondary slot accepted — the `ng065` "secondary key only accepted" precedent). Which DER set is derived from `brand/` + `patches/030-*` at check time, never a literal.
 5. **Allowed channels:** the MAR's embedded product-info channel equals `ACCEPTED_MAR_CHANNEL_IDS` (SEC-07 enforcement, re-proven on the served bytes — the sign-time check is not re-trusted blindly). Channel ids derive from `updateChannel(config)` (`powerbrowser-default`), compared with the `update-channel` row's vocabulary.
 6. **Attestation:** `gh attestation verify <mar> --repo <owner>/<repo>` passes (online form), or the offline `--bundle` form verifies against a bundle fetched on the host. Either way the attestation covers the upload (WEB-02 states this honestly on /download: "the attestation covers the upload rather than the legion build").
 
-**Fault-plant list (self-test; control green first, each plant red naming the drift — the existing `expectRed` pattern).** Minimum: unsigned MAR; wrong-channel MAR; tampered MAR byte (hash mismatch); `http://` patch URL; resolver log missing the MAR host; same-buildID hop (N == N+1 buildID); Mozilla host in the resolver log (`aus5.mozilla.org`); attestation failure (tampered MAR or wrong `--repo`); latest-download patch URL; descriptor not byte-identical to a fresh `buildUpdateXml` emission from the MAR bytes (hand-edit detector, kept from loopback). Each plant names the file and the values.
+**Fault-plant list (self-test; control green first, each plant red naming the drift — the existing `expectRed` pattern).** Minimum: unsigned MAR; wrong-channel MAR; tampered MAR byte (hash mismatch); `http://` patch URL; resolver log missing the MAR host; same-buildID hop (N == N+1 buildID); Mozilla host in the resolver log (`aus5.mozilla.org`); attestation failure (tampered MAR or wrong `--repo`); latest-download patch URL; forbidden-origin servedMarUrl (github.com `/releases/download/` or `release-assets.githubusercontent.com`); github.com or release-assets line in the resolver log; descriptor not byte-identical to a fresh `buildUpdateXml` emission from the MAR bytes (hand-edit detector, kept from loopback). Each plant names the file and the values.
 
-**Clean non-Nix container/VM procedure on legion.** Why: the release tarball must run with no Nix present (`portable-elf`: no `/nix/store` interpreter/RUNPATH, glibc ≤ the 2.19 sysroot ceiling derived at check time) — a Nix host would mask exactly the failure the drill exists to catch; and a dirty profile would mask residue bugs. Procedure (owner executes per CONTEXT; executor scripts it):
+**Clean non-Nix container/VM procedure on legion.** Why: the release tarball must run with no Nix present (`portable-elf`: no `/nix/store` interpreter/RUNPATH, glibc ≤ the 2.28 floor in `powerbrowser/packaging/portability-floor.json`) — a Nix host would mask exactly the failure the drill exists to catch; and a dirty profile would mask residue bugs. Procedure (owner executes per CONTEXT; executor scripts it):
 
 ```sh
-# on legion, fresh room, no Nix mount, network on (must reach updates + github)
+# on legion, fresh room, no Nix mount, network on (must reach updates + downloads)
 podman run --rm -it --network=host \
   -v /path/to/N.tar.xz:/in/N.tar.xz:ro -v /path/to/Nplus1.mar:/in/Nplus1.mar:ro \
   -v /path/to/evidence:/out \
@@ -552,8 +551,7 @@ on:
   workflow_dispatch:
     inputs:
       tag: { description: "Release tag to withdraw (v<ESR>-<revision>)", required: true, type: string }
-      mode: { description: "no-update or r2-fallback", required: true, type: string }
-      reason: { description: "Why (recorded in the commit + Release notes)", required: true, type: string }
+            reason: { description: "Why (recorded in the commit + Release notes)", required: true, type: string }
 permissions:
   contents: read
 jobs:
@@ -576,12 +574,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ inputs.tag }}
-          MODE: ${{ inputs.mode }}
           REASON: ${{ inputs.reason }}
         run: |
           set -eu
           # targets derived from the Release manifest, never a literal list
-          # write identical no-update bytes (or R2 repoint per MODE), commit, push
+          # write identical no-update bytes, commit, push
       - name: Rerun channel-live in withdrawn mode
         run: node scripts/verify-update-channel-live.mjs --withdrawn "$TAG"  # or the updates-repo equivalent
       - name: Mark the Release (flag per probe, else notes)
@@ -605,13 +602,13 @@ Owner/repo literals above follow the file's own repo context; the product-side s
   "mar": "powerbrowser-153.5.1-2.linux-x86_64.mar",
   "descriptor": "update.xml",
   "servedUrl": "https://updates.powerbrowser.org/update/6/powerbrowser/153.5.1/20261124000000/Linux_x86_64-gcc3/en-US/default/Linux%206.18.49%20(GTK%203.24.49)/ISET%3ASSE4_2%2CMEM%3A63456/default/default/update.xml",
-  "servedMarUrl": "https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v153.5.1-2/powerbrowser-153.5.1-2.linux-x86_64.mar",
+  "servedMarUrl": "https://downloads.powerbrowser.org/v153.5.1-2/powerbrowser-153.5.1-2.linux-x86_64.mar",
   "result": "applied",
   "postHop": { "version": "153.5.1", "buildID": "20261124000000" }
 }
 ```
 
-Note the same-appVersion/distinct-buildID shape (Pitfall 6) and the immutable versioned asset URL (never latest-download).
+Note the same-appVersion/distinct-buildID shape (Pitfall 6) and the write-once `<tag>/<asset>` key on `downloads.powerbrowser.org` (never a latest-download form, never `github.com`).
 
 ### Self-test fixture sketch (one per state; live response shape)
 
@@ -640,13 +637,13 @@ Note the same-appVersion/distinct-buildID shape (Pitfall 6) and the immutable ve
 | `scripts/release-train.mjs` skeleton, `detect-upstreams.mjs`, TRAIN-01/02/03/08/09 base states + bump automation | 43 (INF-03, TRAIN-01/02/03/08/09, AUTO-01/04/06/07) | **Extend only** (8 state rows + fixtures). Do not redesign derive/next/render or the clock |
 | `scripts/build-update-xml.mjs`, `descriptor-monotonic` row | 44 (UPD-14, UPD-26, SEC-05/09) | **Assume present.** The descriptor job's monotonic gate is a precondition, not a deliverable |
 | Portable tarball + complete MAR, container build, `portable-elf`/`sidecar-no-symlinks`/`package-target-natives` rows | 45 (PKG-17/22/18/23/04/05/06/07/21, UPD-29) | **Assume present as hop inputs.** Do not rebuild the container |
-| `mar-update-hop` fork mode, update UI/copy rows, allowlist release pass rows | 46 (UPD-18..24/27/32/15/28) | **Extend only** (`served: release` mode). The `github.com` allowlist row exists (`user-initiated`); `release-assets.githubusercontent.com` + `crash-reports.mozilla.com` rows arrive via the drill observation per S5/UPD-05 — add exactly what the drill resolves, nothing more |
+| `mar-update-hop` fork mode, update UI/copy rows, allowlist release pass rows | 46 (UPD-18..24/27/32/15/28) | **Extend only** (`served: release` mode). The `github.com` allowlist row exists (`user-initiated`); `downloads.powerbrowser.org` + `crash-reports.mozilla.com` rows arrive via the drill observation per S5/UPD-05 — add exactly what the drill resolves, nothing more; the `release-assets.githubusercontent.com` row loses its updater justification and the drill does not add it |
 | `powerbrowser-updates` Pages host, `_redirects`, `/download`, `/privacy`, `/legal`, mail | 47 (INF-01/02/06, DIST-03, WEB-01..05, TEL-08) | **Observe only** (REL-03 "/download live", criterion-5 probes). Do not build pages or redirects |
 | Maintenance sweep issue + rows (`runner-online`, `channel-liveness`, `download-count`, TRAIN-07), watchdog (MON-01), telemetry Worker | 48 (TEL-06/10/11, TRAIN-07, MON-01) | **Observe only at criterion 5**: record the three rows' live values at the first public release. Do not add rows |
 | Supersede/chemspill (TRAIN-04), red-stage routing + fixer start (TRAIN-06), sweep extension (TRAIN-11), second major (TRAIN-05) | 51/52 (F) | **Do not pre-build.** Leave the table + set-equality harness able to absorb them |
 | Sweep rows for renewals/Dependabot/CodeQL/Codeberg, fixer, triage, mirror, status page | 51/52/53 | Out of scope entirely |
 
-Criterion 5 (ROADMAP Phase 50 §5) is **observation-only**: layer-3 observation of the two asset hosts (`github.com`, `release-assets.githubusercontent.com`) during the real hop, plus recording the sweep's `runner-online`, `channel-liveness`, and `download-count` live values at the first public release. No new rows are built here.
+Criterion 5 (ROADMAP Phase 50 §5) is **observation-only**: layer-3 observation of the downloads host (`downloads.powerbrowser.org`, with `updates.powerbrowser.org`) during the real hop, with `github.com` and `release-assets.githubusercontent.com` absent from the updater's resolver log, plus recording the sweep's `runner-online`, `channel-liveness`, and `download-count` live values at the first public release. No new rows are built here.
 
 ## Assumptions Log
 
@@ -671,7 +668,7 @@ Criterion 5 (ROADMAP Phase 50 §5) is **observation-only**: layer-3 observation 
 2. **Which ESR point release becomes the first public release.** External calendar gate (153.7 on 2026-11-10, else 153.8, …). The plan records the rule; the owner picks by merging/approving. *(Blocks REL-03 execution, not planning.)*
 3. **Per-release approvals (`release`; `descriptor` after the owner's own N-1→N hop).** Owner actions at execution time; the plan ends with the exact commands/gates. *(Blocks DONE; plans build everything short of it.)*
 4. **GraphQL `pinIssue` with the bot App token (GH-15 fallback).** If refused, one owner click pins the issue; record date + who. *(Does not block the body-maintenance job.)*
-5. **R2 MAR fallback availability (DIST-08, Phase 49) for the withdraw `r2-fallback` mode.** If R2 is not yet enabled, `mode: r2-fallback` is refused with a named error until it is; `no-update` always works. *(Does not block REL-02.)*
+5. **R2 repoint withdraw mode:** removed by the owner ruling of 2026-10-29 (R2 is the primary origin); withdraw is no-update only.
 6. **Second owner account for notification-independent approval.** Per 41-RESEARCH Pitfall 7, self-triggered deployment approvals may not push; the descriptor approval should be reachable. *(Advisory; GH-18 drill precedent.)*
 
 ### Executor probes (the planner's executor answers locally before claiming green)
@@ -698,9 +695,9 @@ Criterion 5 (ROADMAP Phase 50 §5) is **observation-only**: layer-3 observation 
 |--------|----------|-----------|-------------------|-------------|
 | TRAIN-10 (states) | 8 states derived from runs/pending/Releases/contents; one transition/run; exact run linked | static, quick (fixtures, set-equality) | `scripts/verify-platform.sh --only release-train-logic-self-test` | ❌ new in Phase 43 (`scripts/release-train.mjs`); Phase 50 extends fixtures |
 | TRAIN-10 (dispatch+SHA) | dispatch with merge SHA; SHA==tip or manifest-touching ancestor + workflows-identity, else exit | static plant (quick) + live run observation | self-test plants (non-tip, non-manifest ancestor, workflows-divergent) + first real dispatch green | ❌ `release.yml` is Phase 49; SHA step added here |
-| REL-02 | no-update (or R2) descriptors per target; channel-live rerun in withdrawn mode; Release marked per probe; never delete | static shape (quick, if planner adds a row) + live withdraw drill (full, owner) | `--only <withdraw-row>-self-test` (if added) + owner-executed withdraw on a probe tag | ❌ new `withdraw.yml` in `powerbrowser-updates` |
+| REL-02 | no-update descriptors per target; channel-live rerun in withdrawn mode; Release marked per probe; never delete | static shape (quick, if planner adds a row) + live withdraw drill (full, owner) | `--only <withdraw-row>-self-test` (if added) + owner-executed withdraw on a probe tag | ❌ new `withdraw.yml` in `powerbrowser-updates` |
 | GH-15 | KNOWN-ISSUES bytes in one pinned issue; create-once/PATCH-on-diff | static bytes-compare plant (quick) + live PUBLISHED observation | self-test: differing bytes → PATCH, identical → no-op, duplicates → red | ❌ report-job step (Phase 43 job, Phase 50 step) |
-| UPD-16 | `served: release` N→N+1 from clean non-Nix room proves hosts/hash/version/signature/channels/attestation | static plants (quick) + live drill (full, owner on legion) | `node scripts/verify-mar-update-hop.mjs --self-test` (9 plants) + `scripts/verify-platform.sh --only mar-update-hop` against real evidence | ◐ script exists; `served` selector + plants new |
+| UPD-16 | `served: release` N→N+1 from clean non-Nix room proves hosts/hash/version/signature/channels/attestation | static plants (quick) + live drill (full, owner on legion) | `node scripts/verify-mar-update-hop.mjs --self-test` (11 plants) + `scripts/verify-platform.sh --only mar-update-hop` against real evidence | ◐ script exists; `served` selector + plants new |
 | REL-03 | bump merged, `release` approved, hop passed, /download live, descriptor after `descriptor` approval | manual-only (owner checkpoints) + observation | exact `gh` commands in `checkpoint:human-action`/`approval` steps; criterion-5 sweep/allowlist values recorded | — (procedure, not a row) |
 | Criterion 5 | asset hosts at layer 3; sweep runner/channel/download rows live | observation (full, live) | `bash scripts/verify-endpoints.sh --layer 3` facility + sweep issue values pasted into the release record | — (no new rows) |
 
@@ -732,7 +729,7 @@ The registry and the self-test conventions exist (`mar-update-hop`, `release-ide
 | Release created from a SHA the bot cannot publish | Denial of service (stuck train) | Fail fast in SHA validation with the rebase instruction; run link by `head_sha` so the stuck run is diagnosable |
 | Forged descriptor steering updaters | Spoofing / Tampering | Signature + channel + hash checks at sign time; byte-identity + hash-recompute + attestation in the hop; `channel-live` as the pipeline's final job |
 | Asset replaced after publication | Tampering | Immutable releases + draft-carrying-all-assets + single publish; versioned URLs only (latest-download red) |
-| Withdrawn-but-still-offered MAR | Tampering | No-update (or R2) descriptors + withdrawn-mode channel-live rerun + Release marking + reopened tracking issue; fix always a new revision |
+| Withdrawn-but-still-offered MAR | Tampering | No-update descriptors + withdrawn-mode channel-live rerun + Release marking + reopened tracking issue; fix always a new revision |
 | Prompt injection reaching a write token via issue/PR text | Tampering | GH-12 event-text rule on all new steps; report job builds prompts/bodies from trusted fields only (run URLs, SHAs, file bytes it fetched itself) |
 | History rewrite / tag forgery | Tampering / Repudiation | `main-integrity` (no bypass) + `release-tags` (bot-only bypass); owner `current_user_can_bypass: never` asserted by `repo-controls` |
 

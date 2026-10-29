@@ -24,7 +24,7 @@ with reasons or executor-probe notes.
 | issue create (`POST repos/{o}/{r}/issues`) | INTEGRATE | tracking issue plus one KNOWN-ISSUES pinned issue (create once, plan 50-04 Task 1) |
 | issue update (`PATCH repos/{o}/{r}/issues/{n}` body only on bytes-differ) | INTEGRATE | report job renders then PATCHes only when rendered bytes differ; otherwise no-op |
 | release update (`PATCH repos/{o}/{r}/releases/{id}` prerelease true plus body append) | INTEGRATE | withdraw marking per the recorded probe verdict (flag branch iff allowed, else notes-only); assets, tag, draft untouched |
-| updates-repo contents write (commit no-update descriptor per target, or R2 repoint) | INTEGRATE | withdraw job commits `Withdraw <tag>: no-update descriptors (<reason>)` to updates main, re-read and set-compared |
+| updates-repo contents write (commit no-update descriptor per target) | INTEGRATE | withdraw job commits `Withdraw <tag>: no-update descriptors (<reason>)` to updates main, re-read and set-compared |
 | GraphQL `pinIssue` mutation (issue node id) | INTEGRATE | pinning has no REST endpoint; primary pin path with the bot App token (1 of max 3 pinned, budget in RELEASING.md); fallback one owner click recorded with date plus who |
 | release download (`gh release download <tag>`) | INTEGRATE | hop drill fetches the MAR bytes plus the attestation bundle on the host (read-only into the clean container) |
 | attestation verify (`gh attestation verify <mar> [--bundle <bundle>] --repo <owner>/<repo>`) | INTEGRATE | hop attestation assertion; offline bundle form preferred in the credential-free container, host-side login form as recorded fallback; absent bundle plus absent login is red, never SKIP |
