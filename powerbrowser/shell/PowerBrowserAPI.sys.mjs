@@ -3676,17 +3676,8 @@ export const PowerBrowserAPI = Object.freeze({
       validFrom = null;
       validTo = null;
     }
-    let permissions = [];
-    try {
-      const all = lazy.SitePermissions.getAllForBrowser(browser);
-      if (Array.isArray(all)) {
-        permissions = all
-          .filter(row => row && SITE_INFO_PERMISSION_IDS.includes(row.id))
-          .map(row => ({ id: String(row.id), state: row.state, scope: row.scope ?? null }));
-      }
-    } catch (err) {
-      permissions = [];
-    }
+    // Phase 31 plan 02: the six managed rows in table order, state and label.
+    const permissions = webTabPermissionRows(browser);
     let hasData = false;
     try {
       const host = browser.currentURI && typeof browser.currentURI.asciiHost === "string" ? browser.currentURI.asciiHost : "";
@@ -4441,13 +4432,87 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
 // carries. Chrome never imports the Theia table; the static gate compares
 // the two by set equality.
 const SITE_INFO_PERMISSION_IDS = ["camera", "microphone", "geo", "desktop-notification", "autoplay-media", "popup"];
+
+// Phase 31 plan 02 (D-31-05/D-31-06): the panel's write vocabulary. The
+// state names are the tri-state the panel cycles; the capability each maps
+// to is an upstream SitePermissions constant. `null` means "use default"
+// (removeFromPrincipal); `undefined` means the state is not one of this
+// permission's states, and the write is refused before anything is touched.
+// autoplay-media alone has the block-audible / block-all pair
+// (SitePermissions.sys.mjs:888-892).
+function webTabPermissionCapability(id, state) {
+  if (state === "default") {
+    return null;
+  }
+  if (state === "allow") {
+    return lazy.SitePermissions.ALLOW;
+  }
+  if (id === "autoplay-media") {
+    if (state === "block-audible") {
+      return lazy.SitePermissions.BLOCK;
+    }
+    if (state === "block-all") {
+      return lazy.SitePermissions.AUTOPLAY_BLOCKED_ALL;
+    }
+    return undefined;
+  }
+  if (state === "block") {
+    return lazy.SitePermissions.BLOCK;
+  }
+  return undefined;
+}
+
+// The read half: an upstream capability back to the panel's state name. A
+// capability this table does not name reads as "default".
+function webTabPermissionStateName(id, capability) {
+  if (capability === lazy.SitePermissions.ALLOW) {
+    return "allow";
+  }
+  if (id === "autoplay-media") {
+    if (capability === lazy.SitePermissions.BLOCK) {
+      return "block-audible";
+    }
+    if (capability === lazy.SitePermissions.AUTOPLAY_BLOCKED_ALL) {
+      return "block-all";
+    }
+    return "default";
+  }
+  return capability === lazy.SitePermissions.BLOCK ? "block" : "default";
+}
+
+// One row per managed permission, in table order: the state on this
+// overlay's own principal and the upstream label (getPermissionLabel), so
+// no permission name is kept by hand on either side. Primitives only.
+function webTabPermissionRows(browser) {
+  let set = [];
+  try {
+    const all = lazy.SitePermissions.getAllForBrowser(browser);
+    set = Array.isArray(all) ? all.filter(row => row && SITE_INFO_PERMISSION_IDS.includes(row.id)) : [];
+  } catch (err) {
+    set = [];
+  }
+  return SITE_INFO_PERMISSION_IDS.map(id => {
+    const row = set.find(candidate => candidate.id === id);
+    let label = null;
+    try {
+      label = lazy.SitePermissions.getPermissionLabel(id);
+    } catch (err) {
+      label = null;
+    }
+    return {
+      id,
+      state: row ? webTabPermissionStateName(id, row.state) : "default",
+      label: typeof label === "string" && label ? label : null,
+    };
+  });
+}
 
 async function handleWebTabAction(data, actorRef) {
   if (!groupSenderIsTheia(actorRef)) {
@@ -4528,8 +4593,7 @@ async function handleWebTabAction(data, actorRef) {
     // permissions, the site-data probe and the shield state all derive from
     // the overlay chrome already holds -- never from a sender field, so a
     // frame can only read its own tab's site. Primitives only, like the
-    // history arm above. No setForPrincipal/removeFromPrincipal call here;
-    // the write arms arrive in plan 02.
+    // history arm above. The writes are the webTabSetPermission arm below.
     case "webTabSiteInfo": {
       if (!webTabIdIsValid(data.tabId)) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
@@ -4539,6 +4603,37 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: true, kind, where: "unknown-tab" };
       }
       return { ok: true, kind, where: "done", ...(await PowerBrowserAPI.webTabSiteInfo(entry.browser)) };
+    }
+    // Phase 31 plan 02 (D-31-05/D-31-06, SITE-04): one managed permission on
+    // this tab's own principal. A permission change is privileged (it changes
+    // site state, not navigation), so the frontend sends it only from the
+    // panel's row handler. tabId, id and state are the whole input; the
+    // principal is the overlay's contentPrincipal, never a sender field. The
+    // reply carries the refreshed rows, so the panel re-renders from it.
+    case "webTabSetPermission": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      const capability = SITE_INFO_PERMISSION_IDS.includes(data.id) ? webTabPermissionCapability(data.id, data.state) : undefined;
+      if (capability === undefined) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an unknown permission id or state" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      const principal = entry.browser.contentPrincipal;
+      try {
+        if (capability === null) {
+          lazy.SitePermissions.removeFromPrincipal(principal, data.id);
+        } else {
+          lazy.SitePermissions.setForPrincipal(principal, data.id, capability);
+        }
+      } catch (err) {
+        PowerBrowserAPI.log("error", `[web-tab] permission write failed: ${err && err.message ? err.message : err}`);
+        return { ok: false, reason: "write-failed", message: "handleWebTabAction: the permission write failed" };
+      }
+      return { ok: true, kind, where: "applied", permissions: webTabPermissionRows(entry.browser) };
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };

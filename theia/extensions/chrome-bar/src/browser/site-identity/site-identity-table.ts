@@ -73,3 +73,22 @@ export const MENU_ORDER: readonly MenuEntry[] = Object.freeze([
     { menuId: 'help', stockPage: 'support', minPhase: 31 },
     { menuId: 'quit', minPhase: 31 },
 ]);
+
+/**
+ * Phase 31 plan 02 (D-31-05/D-31-06, SITE-04): the panel's tri-state cycle.
+ * Every managed permission cycles Allow -> Block -> Use default, except
+ * autoplay-media, whose upstream states are ALLOW, BLOCK and
+ * AUTOPLAY_BLOCKED_ALL (SitePermissions.sys.mjs:888-892): it cycles
+ * Allow -> Block sounds -> Block all -> Use default. The chrome write arm
+ * (webTabPermissionCapability) accepts exactly these names; the gate derives
+ * that set from the arm and compares it with these lists.
+ */
+export const PERMISSION_STATES: readonly string[] = Object.freeze(['allow', 'block', 'default']);
+export const AUTOPLAY_PERMISSION_STATES: readonly string[] = Object.freeze(['allow', 'block-audible', 'block-all', 'default']);
+
+/** The state a click on a permission row moves to: the next entry of its cycle, wrapping. */
+export function nextPermissionState(id: string, state: string): string {
+    const cycle = id === 'autoplay-media' ? AUTOPLAY_PERMISSION_STATES : PERMISSION_STATES;
+    const at = cycle.indexOf(state);
+    return cycle[(at + 1) % cycle.length];
+}

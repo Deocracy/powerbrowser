@@ -57,6 +57,11 @@ const TAB_URIS_DIR = 'theia/extensions/tab-uris/src/browser';
  * Phase 31 (SITE-04..06): `webTabSiteInfo` is tab-navigation -- the panel's
  * read of this tab's own site, keyed chrome-side by the overlay's principal,
  * never a sender field, so it reaches no other tab's state.
+ * Phase 31 plan 02 (D-31-05/D-31-11): `webTabSetPermission` is the first
+ * privileged webTab kind (it writes site permissions). The gate admits the
+ * privileged class only under checkWebTabPrivileged: the frontend method
+ * exists, it is called only from the chrome-bar event-handler tree, and no
+ * command or keybinding file names the kind or calls its method.
  */
 const KIND_CLASS_NAMES = ['tab-navigation', 'tab-lifecycle', 'selection', 'privileged'];
 const KIND_CLASSES = new Map([
@@ -73,6 +78,7 @@ const KIND_CLASSES = new Map([
     ['webTabGeometry', 'tab-lifecycle'],
     ['webTabActivated', 'selection'],
     ['webTabSiteInfo', 'tab-navigation'],
+    ['webTabSetPermission', 'privileged'],
 ]);
 
 /**
@@ -426,12 +432,48 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
     for (const [kind, kindClass] of KIND_CLASSES) {
         if (!KIND_CLASS_NAMES.includes(kindClass)) {
             failures.push(`classification: ${kind} has the unknown class '${kindClass}'`);
-        } else if (kindClass === 'privileged') {
-            failures.push(`classification: ${kind} is privileged -- Phase 27's rule admits no privileged webTab kind without a deliberate change to this gate and INTERNAL-APIS.md`);
         }
     }
+    failures.push(...checkWebTabPrivileged(src, KIND_CLASSES));
 
     failures.push(...checkStoreKinds(src, storeClasses));
+    return failures;
+}
+
+/**
+ * Privileged webTab kinds (Phase 31 plan 02): a kind that changes site state
+ * outside a tab's own navigation, lifecycle or selection. The frontend method is
+ * the kind without its `webTab` prefix, first letter lower-cased
+ * (webTabSetPermission -> setPermission). Each privileged kind must have that
+ * method in web-tab.ts, be called only from the chrome-bar event-handler tree,
+ * and be named or called by no command or keybinding file.
+ */
+function checkWebTabPrivileged(src, classes) {
+    const failures = [];
+    const commandLike = Object.entries(src).filter(([file, text]) =>
+        (text.includes('registerCommand(') || text.includes('registerKeybinding(')) && file.startsWith(`${CHROME_BAR_DIR}/`));
+    for (const [kind, kindClass] of classes) {
+        if (kindClass !== 'privileged') {
+            continue;
+        }
+        const method = kind.replace(/^webTab/, '').replace(/^[A-Z]/, c => c.toLowerCase());
+        if (!new RegExp(`^\\s+${method}\\(`, 'm').test(src[WEB_TAB] ?? '')) {
+            failures.push(`classification: the privileged webTab kind ${kind} has no frontend method ${method}( in ${WEB_TAB}`);
+        }
+        for (const [file, text] of Object.entries(src)) {
+            if (text.includes(`.${method}(`) && !file.startsWith(`${CHROME_BAR_DIR}/`) && file !== WEB_TAB) {
+                failures.push(`classification: the privileged webTab kind ${kind} is called outside the chrome-bar event-handler tree, in ${file}`);
+            }
+            if (text.includes(`.${method}(`) && file.startsWith(`${CHROME_BAR_DIR}/`) && (text.includes('registerCommand(') || text.includes('registerKeybinding('))) {
+                failures.push(`classification: the privileged webTab kind ${kind} is called from a command or keybinding file, ${file}`);
+            }
+        }
+        for (const [file, text] of commandLike) {
+            if (new RegExp(`\\b${kind}\\b`).test(text)) {
+                failures.push(`classification: the privileged webTab kind ${kind} is named by a command or keybinding file, ${file}`);
+            }
+        }
+    }
     return failures;
 }
 
@@ -663,6 +705,30 @@ function selfTest() {
                 [API]: replaceWithin(clean[API], 'async function handleWebTabAction(', '\n}', 'switch (kind) {', 'switch (kind) {\n    case "webTabPlantedArm": { break; }'),
             },
             expect: 'webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): webTabPlantedArm',
+        },
+        // Phase 31 plan 02: the privileged webTab class is admitted only under its call-site rules.
+        {
+            name: 'planted privileged permission call from a command file',
+            sources: {
+                ...clean,
+                [COMMANDS]: clean[COMMANDS] + "\nexport const plantedCommand = () => { registerCommand({}); currentWebTab()?.setPermission('camera', 'allow'); };\n",
+            },
+            expect: `the privileged webTab kind webTabSetPermission is called from a command or keybinding file, ${COMMANDS}`,
+        },
+        {
+            name: 'planted privileged permission call outside the chrome-bar tree',
+            sources: { ...clean, [MODULE]: clean[MODULE] + "\nexport const plantedCall = (tab) => tab.setPermission('camera', 'allow');\n" },
+            expect: `the privileged webTab kind webTabSetPermission is called outside the chrome-bar event-handler tree, in ${MODULE}`,
+        },
+        {
+            name: 'planted privileged kind named in a keybinding file',
+            sources: { ...clean, [KEYBINDINGS]: clean[KEYBINDINGS] + "\nexport const plantedKey = 'webTabSetPermission'; registerKeybinding({});\n" },
+            expect: `the privileged webTab kind webTabSetPermission is named by a command or keybinding file, ${KEYBINDINGS}`,
+        },
+        {
+            name: 'planted loss of the privileged frontend method',
+            sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace(/^(\s+)setPermission\(/m, '$1setPermissionGone(') },
+            expect: 'the privileged webTab kind webTabSetPermission has no frontend method setPermission(',
         },
     ];
 
