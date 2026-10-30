@@ -96,6 +96,7 @@ async function run(cmd) {
     else if (cmd.op === 'send') result = await browser.tabs.sendMessage(cmd.tabId, cmd.message);
     else if (cmd.op === 'update') result = brief(await browser.tabs.update(cmd.tabId, cmd.props));
     else if (cmd.op === 'updateExtPage') result = brief(await browser.tabs.update(cmd.tabId, { url: browser.runtime.getURL('page.html') }));
+    else if (cmd.op === 'updateExtPagePinned') result = brief(await browser.tabs.update(cmd.tabId, { url: browser.runtime.getURL('page.html'), pinned: true }));
     else if (cmd.op === 'pageShown') result = await browser.pageAction.isShown({ tabId: cmd.tabId });
     else if (cmd.op === 'windows') {
       const w = await browser.windows[cmd.method](cmd.info || {});
@@ -966,17 +967,17 @@ const RESTORE_WALL_KEY = `document.documentElement.setAttribute('extensiontabhos
 
 async function scenarioSchemeWall({ app, plant }) {
   const A = await openAndCommit(app, '/a');
-  if (plant) {
+  if (plant && plant.late) {
     const applied = await chromeJson(app, plant.late());
     if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant wall-unkeyed did not land');
   }
   let refusal = null;
   try {
-    await command('updateExtPage', { tabId: A.extId });
+    await command(plant && plant.refusalOp ? plant.refusalOp : 'updateExtPage', { tabId: A.extId });
   } catch (e) {
     refusal = e.message;
   }
-  if (plant) await chromeJson(app, RESTORE_WALL_KEY);
+  if (plant && plant.late) await chromeJson(app, RESTORE_WALL_KEY);
   await sleep(1000);
   const seen = await command('get', { tabId: A.extId });
   const overlay = await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(A.webTabId)});
@@ -988,6 +989,9 @@ async function scenarioSchemeWall({ app, plant }) {
     return verdict(false, null, `web tab /a changed after the refused update: tabs.get ${seen.url}, overlay ${overlay.spec}`);
   }
   if (refusal === null) return verdict(false, null, 'tabs.update to a moz-extension URL was not refused');
+  if (!refusal.includes('Illegal URL')) {
+    return verdict(false, null, `the refusal was not the URL wall's Illegal URL rejection, so the wall is unproven: ${refusal}`);
+  }
   // Positive control in the same session: an http update loads /d through the same onUpdated recorder.
   await command('update', { tabId: A.extId, props: { url: url('/d') } });
   const updated = await tryWait(r => r.kind === 'updated' && r.tabId === A.extId && String(r.url).endsWith('/d'), 20000);
@@ -1152,6 +1156,7 @@ const PLANTS = {
   'selected-not-visible': { scenario: 'toolbar-target', expect: 'toolbar action acted on /a, not the page on screen /c', body: PLANT_SELECTED_TO_FIRST },
   'stock-badge-missing': { scenario: 'gui01', expect: 'stock window button has no badge', late: () => PLANT_STOCK_BADGE_MISSING },
   'wall-unkeyed': { scenario: 'scheme-wall', expect: 'web tab navigated to an extension page', late: () => PLANT_WALL_UNKEYED },
+  'wall-elsewhere': { scenario: 'scheme-wall', expect: 'not the URL wall', refusalOp: 'updateExtPagePinned' },
   'theia-in-tabs-late': { scenario: 'theia-never', expect: 'Theia frame visible to extensions', late: () => PLANT_THEIA_IN_TABS },
 };
 
