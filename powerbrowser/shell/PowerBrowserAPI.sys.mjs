@@ -5502,3 +5502,42 @@ async function openStockPageFromMenu(page) {
   PowerBrowserAPI.focusWindow(win);
   return where;
 }
+
+// WR-04: upstream's CanCloseWindow (browser.js:3633-3690) asks each browser's permitUnload, because
+// nsGlobalWindowOuter::CanClose (nsGlobalWindowOuter.cpp:5975) reaches only the chrome document of a
+// window with no nsIBrowserDOMWindow. The shell has none, so the Theia <browser> was never asked.
+const shellQuitVeto = {
+  observe(subject) {
+    if (!subject || typeof subject.data !== "boolean" || subject.data) {
+      return;
+    }
+    if (!shellBrowsersPermitUnload()) {
+      subject.data = true;
+    }
+  },
+};
+
+function shellBrowsersPermitUnload() {
+  for (const win of Services.wm.getEnumerator("powerbrowser:main")) {
+    for (const browser of win.document.querySelectorAll("browser")) {
+      if (!browser.isConnected) {
+        continue;
+      }
+      let permitted = true;
+      try {
+        permitted = browser.permitUnload().permitUnload;
+      } catch (err) {
+        PowerBrowserAPI.log("error", `Leave check failed (${err && err.name ? err.name : "error"}); quitting anyway.`);
+      }
+      if (!permitted) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+Services.obs.addObserver(shellQuitVeto, "quit-application-requested");
+
+// For the live check's self-test only: the quit-typed plant removes the veto through this. No product code calls removeObserver.
+export const PowerBrowserQuitVeto = Object.freeze({ observer: shellQuitVeto, topic: "quit-application-requested" });

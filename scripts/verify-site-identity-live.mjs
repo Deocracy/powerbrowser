@@ -1487,16 +1487,19 @@ async function quitRow(ctx) {
     await afterQuit(ctx, `the ${quit.label} row`);
 }
 
+/** Chrome-context expression: the window showing permitUnload's leave prompt, or null. */
+const LEAVE_DIALOG = `(() => { const en = Services.wm.getEnumerator(null); while (en.hasMoreElements()) { const w = en.getNext(); if (String(w.location && w.location.href) === 'chrome://global/content/commonDialog.xhtml') return w; } return null; })()`;
+
 /**
  * WR-04: a quit with an unsaved editor that a real user typed into. The Theia document is its own top-level context
  * (http://127.0.0.1:<sidecar>/): a trusted pointer click and trusted keys are sent to it, so the document gets the
  * user activation that Gecko's beforeunload veto needs (dom.require_user_interaction_for_beforeunload). Then Ctrl+Q
  * goes through the chrome route. The quit must be held and a leave prompt must appear, which is then dismissed as
- * "stay" (Escape in the shell's chrome document; BiDi cannot answer it, a privileged-scope prompt). The reported
+ * "stay" (Escape sent to the leave prompt's own window, a window-modal commonDialog; BiDi cannot answer it). The reported
  * outcome is what happened: a quit that exits on Ctrl+Q with no prompt fails here, and nothing is weakened.
  */
 async function quitTyped(ctx) {
-    const { app, pages, fail, note } = ctx;
+    const { app, pages, plant, fail, note } = ctx;
     if (await quitWebTab(app, pages) !== true) {
         return fail(`${BROKEN} the served page did not load twice`);
     }
@@ -1524,6 +1527,16 @@ async function quitTyped(ctx) {
     if (!freshProfileForQuit(app)) {
         return fail(`${BROKEN} the fresh profile already holds the history file`);
     }
+    if (plant === 'quit-no-veto') {
+        const removed = await app.evaluateIn(app.chrome, `(() => {
+            const V = ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs').PowerBrowserQuitVeto;
+            Services.obs.removeObserver(V.observer, V.topic);
+            return true;
+        })()`).catch(() => false);
+        if (removed === true) {
+            note('PLANT quit-no-veto applied (the shell quit veto is removed)');
+        }
+    }
     let sendError = null;
     try {
         await pressKey(app, { key: 'q', code: 'KeyQ', keyCode: 81, modifiers: ['accel'] });
@@ -1531,10 +1544,11 @@ async function quitTyped(ctx) {
         // The quit runs inside the key event, so the BiDi channel can close before the key reply arrives.
         sendError = error.message;
     }
-    note(`Ctrl+Q sent through the chrome route after typing (${keyRoute.last}${sendError ? `; channel closed: ${sendError}` : ''})`);
+    note(`Ctrl+Q sent through the chrome route after typing (${keyRoute.last}${sendError ? `; key reply: ${sendError}` : ''})`);
     // awaitExit also needs the profile lock released, so a closed channel is read directly as exited.
     const socketOpen = async () => { try { await app.send('browsingContext.getTree', {}); return true; } catch { return false; } };
-    const socketClosed = sendError !== null || !(await socketOpen());
+    // A BiDi timeout is a held quit: the Ctrl+Q keydown runs inside the quit's nested loop, so its reply waits for the leave prompt.
+    const socketClosed = sendError !== null ? !/timed out after/.test(sendError) : !(await socketOpen());
     const held = socketClosed ? 'exited' : await app.awaitExit(6000);
     if (held === 'exited' || socketClosed) {
         return fail(`the quit exited on Ctrl+Q with an unsaved editor the user typed into (exit code ${JSON.stringify(app.exitCode())}): no leave prompt held it, although Theia's beforeunload handler prevents the default`);
@@ -1543,12 +1557,36 @@ async function quitTyped(ctx) {
         const hits = [...document.querySelectorAll('*')].filter(el => /prompt|modal|dialog/i.test(el.localName) && el.getClientRects().length > 0);
         return hits.map(el => el.localName).slice(0, 8);
     })()`).catch(() => null);
-    if (!Array.isArray(promptNodes) || promptNodes.length === 0) {
+    // permitUnload's leave prompt is a window-modal commonDialog (the shell has no tab-modal prompt box), not a node in the shell document.
+    const leaveDialog = await app.evaluateIn(app.chrome, `(() => {
+        const w = ${LEAVE_DIALOG};
+        const text = (w?.document.getElementById('infoBody')?.textContent ?? '').trim();
+        return /leave/i.test(text) ? { text: text.slice(0, 240) } : null;
+    })()`).catch(() => null);
+    if (!leaveDialog && (!Array.isArray(promptNodes) || promptNodes.length === 0)) {
         const windows = await app.evaluateIn(app.chrome, `(() => { const out = []; const en = Services.wm.getEnumerator(null); while (en.hasMoreElements()) { const w = en.getNext(); out.push(String(w.location && w.location.href)); } return out; })()`).catch(() => null);
         return fail(`the quit with an unsaved editor was held (the browser is still running), but no leave prompt is shown: no prompt node in the chrome document; windows ${JSON.stringify(windows)}`);
     }
-    await pressKey(app, { key: 'Escape', code: 'Escape', keyCode: 27 });
-    note(`leave prompt ${JSON.stringify(promptNodes)} dismissed with Escape ("stay")`);
+    if (leaveDialog) {
+        const escaped = await app.evaluateIn(app.chrome, `(() => {
+            const w = ${LEAVE_DIALOG};
+            const C = typeof Cc !== 'undefined' ? Cc : Components.classes;
+            const I = typeof Ci !== 'undefined' ? Ci : Components.interfaces;
+            const tip = C['@mozilla.org/text-input-processor;1'].createInstance(I.nsITextInputProcessor);
+            if (!w || !tip.beginInputTransactionForTests(w)) return 'no transaction';
+            const ev = d => new KeyboardEvent('', d);
+            tip.keydown(ev({ key: 'Escape', code: 'Escape', keyCode: 27 }));
+            tip.keyup(ev({ key: 'Escape', code: 'Escape', keyCode: 27 }));
+            return 'escaped';
+        })()`).catch(error => `error: ${error.message}`);
+        if (escaped !== 'escaped') {
+            return fail(`${BROKEN} the leave prompt could not be dismissed with Escape (${JSON.stringify(escaped)})`);
+        }
+        note(`leave prompt ${JSON.stringify(leaveDialog)} dismissed with Escape ("stay")`);
+    } else {
+        await pressKey(app, { key: 'Escape', code: 'Escape', keyCode: 27 });
+        note(`leave prompt ${JSON.stringify(promptNodes)} dismissed with Escape ("stay")`);
+    }
     if (await app.awaitExit(3000) === 'exited') {
         fail('the browser exited after the leave prompt was dismissed with "stay": the declined quit went on');
     }
@@ -1668,13 +1706,15 @@ const PLANTS = [
     { plant: 'menu-dead-stock', target: 'app-menu', run: ['app-menu'], expect: 'did not open its stock page', tls: false },
     // Plan 05 (MENU-04): the Quit row sends nothing, so the browser never exits and the exit check names it.
     { plant: 'quit-dead-row', target: 'quit-row', run: ['quit-row'], expect: 'quit did not exit', tls: false },
+    // WR-04: the shell's quit veto is removed, so Ctrl+Q exits with the unsaved editor and no leave prompt.
+    { plant: 'quit-no-veto', target: 'quit-typed', run: ['quit-typed'], expect: 'no leave prompt held it', tls: false },
 ];
 
 async function selfTest() {
     let failed = 0;
     // A quit ends its launch, so each quit scenario is alone in its session (no TLS fixture).
-    const ALONE = ['identity-local', 'app-menu', 'quit-key', 'quit-row'];
-    for (const session of [['identity-local'], ['identity-tls'], ['site-panel'], ['clear-data'], ['shield'], ['app-menu'], ['quit-key'], ['quit-row']]) {
+    const ALONE = ['identity-local', 'app-menu', 'quit-key', 'quit-row', 'quit-typed'];
+    for (const session of [['identity-local'], ['identity-tls'], ['site-panel'], ['clear-data'], ['shield'], ['app-menu'], ['quit-key'], ['quit-row'], ['quit-typed']]) {
         let clean;
         try {
             clean = await runSession(session, '', !ALONE.includes(session[0]));
