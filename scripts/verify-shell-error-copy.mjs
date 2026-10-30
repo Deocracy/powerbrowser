@@ -659,6 +659,12 @@ const EXPECTED_NAV_COPY = new Set([
   "Clear",
   "Cancel",
   "${name} couldn't clear data for this site. Try again from the site information panel.",
+  "No trackers detected on this page",
+  "1 tracker blocked",
+  "${name} trackers blocked",
+  "Turn off protection for this site",
+  "Turn protection back on",
+  "Tracking protection is off for this site",
 ]);
 
 /**

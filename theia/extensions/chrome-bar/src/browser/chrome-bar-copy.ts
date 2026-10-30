@@ -111,6 +111,13 @@ export const CHROME_BAR_COPY = Object.freeze({
     clearDataConfirm: 'Clear',
     clearDataCancel: 'Cancel',
     clearDataFailed: (subject: string) => `${subject} couldn't clear data for this site. Try again from the site information panel.`,
+    // Phase 31 plan 03 (SITE-08, UI-SPEC shield rows): the count line, the exception toggle and the box tooltip.
+    shieldClean: 'No trackers detected on this page',
+    trackerBlockedOne: '1 tracker blocked',
+    trackersBlocked: (count: number) => `${count} trackers blocked`,
+    shieldTurnOff: 'Turn off protection for this site',
+    shieldTurnOn: 'Turn protection back on',
+    shieldExcepted: 'Tracking protection is off for this site',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

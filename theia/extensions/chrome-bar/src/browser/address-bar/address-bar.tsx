@@ -21,7 +21,7 @@ import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { ConfirmDialog } from '@theia/core/lib/browser/dialogs';
 import pDebounce from 'p-debounce';
 import { MessageLoop } from '@theia/core/shared/@lumino/messaging';
-import { EMPTY_PAGE_URL, WebTabOpenHandler, WebTabSiteInfo, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { EMPTY_PAGE_URL, WebTabOpenHandler, WebTabShieldReply, WebTabSiteInfo, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
 import { ChromeStoreClient, ResolvedAddress, SearchEngineList } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
@@ -265,21 +265,22 @@ export class AddressBar {
      * current web tab's last pushed state only -- never from pill text, so
      * typing cannot spoof it. A non-web widget (an editor) has no identity.
      */
-    protected identityState(): { state: string; displaySpec: string; baseDomain: string | null; permissionIcons: string[]; permissionLabels: string[] } | undefined {
+    protected identityState(): { state: string; displaySpec: string; baseDomain: string | null; permissionIcons: string[]; permissionLabels: string[]; shieldExcepted: boolean } | undefined {
         const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
         if (!(tab instanceof WebTabWidget) || !tab.hasPage) {
             return undefined;
         }
         // Read through the pushed-state fields; `in` keeps this compiling
         // against the published tab-uris lib until the next Theia build.
-        const pushed = tab as WebTabWidget & { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown; permissionIcons?: unknown; permissionLabels?: unknown };
+        const pushed = tab as WebTabWidget & { securityState?: unknown; displaySpec?: unknown; baseDomain?: unknown; permissionIcons?: unknown; permissionLabels?: unknown; shieldExcepted?: unknown };
         const raw = typeof pushed.securityState === 'string' ? pushed.securityState : 'none';
         const state = (SECURITY_STATES as readonly string[]).includes(raw) ? raw : 'none';
         const displaySpec = typeof pushed.displaySpec === 'string' ? pushed.displaySpec : '';
         const baseDomain = typeof pushed.baseDomain === 'string' ? pushed.baseDomain : null;
         const permissionIcons = Array.isArray(pushed.permissionIcons) ? pushed.permissionIcons.filter((id): id is string => typeof id === 'string') : [];
         const permissionLabels = Array.isArray(pushed.permissionLabels) ? pushed.permissionLabels.filter((label): label is string => typeof label === 'string') : [];
-        return { state, displaySpec, baseDomain, permissionIcons, permissionLabels };
+        const shieldExcepted = pushed.shieldExcepted === true;
+        return { state, displaySpec, baseDomain, permissionIcons, permissionLabels, shieldExcepted };
     }
 
     /**
@@ -334,6 +335,7 @@ export class AddressBar {
                 onClick={e => this.openSitePanel(e.currentTarget)}
             >
                 {this.renderPermissionIcons(identity)}
+                {this.renderShieldIcon(identity)}
                 <span className='pb-identity-host'>{host}</span>
             </button>;
         }
@@ -356,8 +358,31 @@ export class AddressBar {
             <span className={`pb-identity-icon codicon ${icon}${warning ? ' is-warning' : ''}`} aria-hidden='true' />
             {identity.state === 'insecure' && <span className='pb-identity-insecure'>{CHROME_BAR_COPY.connectionInsecure}</span>}
             {this.renderPermissionIcons(identity)}
+            {this.renderShieldIcon(identity)}
             <span className='pb-identity-host'>{host}</span>
         </button>;
+    }
+
+    /**
+     * Phase 31 plan 03 (SITE-08, UI-SPEC identity box): the shield for a site
+     * with a non-default tracking-protection exception, in warning ink. A site
+     * on the default protection shows no shield. Rendered from pushed state
+     * (and the shield reply's refresh), never from a stored copy.
+     */
+    protected renderShieldIcon(identity: { shieldExcepted: boolean }): React.ReactNode {
+        if (!identity.shieldExcepted) {
+            return undefined;
+        }
+        return <span
+            className='pb-identity-shield codicon codicon-shield'
+            aria-hidden='true'
+            onPointerEnter={e => this.hover.requestHover({
+                content: CHROME_BAR_COPY.shieldExcepted,
+                target: e.currentTarget,
+                position: 'bottom',
+                cssClasses: ['pb-chrome-bar-hover'],
+            })}
+        />;
     }
 
     /**
@@ -511,6 +536,31 @@ export class AddressBar {
         }
         if (reply && reply.ok === true && reply.where === 'applied' && Array.isArray(reply.permissions) && this.sitePanelInfo) {
             this.sitePanelInfo = { ...this.sitePanelInfo, permissions: reply.permissions };
+        } else {
+            this.sitePanelInfo = null;
+        }
+        this.update();
+    }
+
+    /**
+     * Phase 31 plan 03 (SITE-08, D-31-06): the shield row's change, sent to the
+     * panel's tab only. The reply's exception state refreshes the panel and the
+     * identity box; a refused or failed change takes the panel to the
+     * unavailable copy, as a refused permission write does.
+     */
+    protected async setSiteShield(except: boolean): Promise<void> {
+        const tab = this.sitePanelTab;
+        const origin = this.sitePanelInfo?.origin;
+        let reply: WebTabShieldReply | null = null;
+        if (tab && typeof origin === 'string') {
+            try {
+                reply = await tab.shieldToggle(origin, except);
+            } catch {
+                reply = null;
+            }
+        }
+        if (reply && reply.ok === true && reply.where === 'applied' && typeof reply.excepted === 'boolean' && this.sitePanelInfo) {
+            this.sitePanelInfo = { ...this.sitePanelInfo, shield: { count: this.sitePanelInfo.shield?.count ?? 0, excepted: reply.excepted } };
         } else {
             this.sitePanelInfo = null;
         }
@@ -2497,6 +2547,7 @@ export class AddressBar {
             onClose={this.closeSitePanel}
             onSetPermission={(id, state) => { void this.setSitePermission(id, state); }}
             onClearSiteData={() => { void this.clearSiteDataFromPanel(); }}
+            onToggleShield={except => { void this.setSiteShield(except); }}
         />;
     }
 

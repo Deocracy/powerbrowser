@@ -258,6 +258,10 @@ export interface WebTabSiteInfo extends WebTabReply {
     validFrom?: string | null;
     validTo?: string | null;
     permissions?: WebTabPermissionRow[];
+    /** Phase 31 plan 03 (SITE-07): whether the site still has site data. */
+    hasData?: boolean;
+    /** Phase 31 plan 03 (SITE-08): the blocked-tracker count and whether the site has an exception. */
+    shield?: { count: number; excepted: boolean };
 }
 
 /** Phase 31 plan 03 (SITE-08): `webTabShieldToggle`'s reply; `excepted` is the exception as chrome reads it after the change. */

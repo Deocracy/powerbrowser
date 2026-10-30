@@ -48,11 +48,13 @@ export interface SitePanelProps {
     onSetPermission(id: string, state: string): void;
     /** Phase 31 plan 03: the clear-data row; the owner opens the confirm and clears on accept. */
     onClearSiteData(): void;
+    /** Phase 31 plan 03 (SITE-08): the shield toggle; `except` is the exception state to set. */
+    onToggleShield(except: boolean): void;
 }
 
 /** Phase 31 plan 02: the site panel, portalled to the body like every pill dropdown. */
 export function SitePanel(props: SitePanelProps): React.ReactElement {
-    const { info, anchor, intents, committedAddress, notice, onClose, onSetPermission, onClearSiteData } = props;
+    const { info, anchor, intents, committedAddress, notice, onClose, onSetPermission, onClearSiteData, onToggleShield } = props;
     const rootRef = React.useRef<HTMLDivElement>(null);
     // Focus on mount only: a re-render (a permission reply) must not pull focus back from a row.
     React.useEffect(() => { rootRef.current?.focus(); }, []);
@@ -135,6 +137,24 @@ export function SitePanel(props: SitePanelProps): React.ReactElement {
                         <span className='pb-site-panel-row-state'>{stateText}</span>
                     </button>;
                 })}
+            </div>}
+            {usable && info?.shield && <div className='pb-site-panel-section'>
+                <div className='pb-site-panel-shield-count' data-shield-count={info.shield.count} data-shield-excepted={info.shield.excepted}>
+                    {info.shield.excepted ? CHROME_BAR_COPY.shieldExcepted
+                        : info.shield.count === 0 ? CHROME_BAR_COPY.shieldClean
+                            : info.shield.count === 1 ? CHROME_BAR_COPY.trackerBlockedOne
+                                : CHROME_BAR_COPY.trackersBlocked(info.shield.count)}
+                </div>
+                {(info.shield.count > 0 || info.shield.excepted) && <button
+                    type='button'
+                    className='pb-site-panel-row'
+                    data-action='shield-toggle'
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => onToggleShield(!info.shield?.excepted)}
+                >
+                    <span className='pb-site-panel-row-icon codicon codicon-shield' aria-hidden='true' />
+                    <span className='pb-site-panel-row-label'>{info.shield.excepted ? CHROME_BAR_COPY.shieldTurnOn : CHROME_BAR_COPY.shieldTurnOff}</span>
+                </button>}
             </div>}
             {usable && <div className='pb-site-panel-section'>
                 <button
