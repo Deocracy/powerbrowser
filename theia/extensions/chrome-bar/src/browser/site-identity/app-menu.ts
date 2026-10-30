@@ -102,17 +102,23 @@ export function buildAppMenu(rows: readonly AppMenuRow[], wired: readonly string
             },
         });
     }
+    // Theia draws a separator before and after every group node, so a group first would open the
+    // menu on a separator (browser-menu-plugin.js createItems). The first group's rows sit at the root.
+    const [first, ...rest] = groups;
     return {
         id: APP_MENU_ID,
         sortString: '0',
         isVisible: () => true,
         isEmpty: () => groups.length === 0,
-        children: groups.map((g, i) => ({
-            id: `${APP_MENU_ID}.group-${g.group}`,
-            sortString: String(i).padStart(2, '0'),
-            isVisible: () => true,
-            isEmpty: () => g.leaves.length === 0,
-            children: g.leaves,
-        })),
+        children: [
+            ...(first ? first.leaves : []),
+            ...rest.map((g, i) => ({
+                id: `${APP_MENU_ID}.group-${g.group}`,
+                sortString: String(i + 1).padStart(2, '0'),
+                isVisible: () => true,
+                isEmpty: () => g.leaves.length === 0,
+                children: g.leaves,
+            })),
+        ],
     };
 }

@@ -388,6 +388,49 @@ function deriveRowLabels(widgetSrc, copySrc) {
     return out.size ? out : null;
 }
 
+/** The separator token in a drawn or wanted menu sequence. */
+const SEPARATOR = '|';
+
+/**
+ * What Theia draws for a root menu, in order (@theia/core browser-menu-plugin.js createItems): a
+ * group node draws a separator before it, unless one already precedes it, and one after it; the
+ * trailing separators are dropped. A leaf at the root draws its own item. Ids are returned without
+ * the menu prefix.
+ */
+function drawnSequence(menu, prefix) {
+    const out = [];
+    for (const node of menu.children) {
+        if (Array.isArray(node.children)) {
+            const items = node.children.map(leaf => leaf.id.slice(prefix.length));
+            if (items.length) {
+                if (out[out.length - 1] !== SEPARATOR) {
+                    out.push(SEPARATOR);
+                }
+                out.push(...items);
+                out.push(SEPARATOR);
+            }
+        } else {
+            out.push(node.id.slice(prefix.length));
+        }
+    }
+    while (out[out.length - 1] === SEPARATOR) {
+        out.pop();
+    }
+    return out;
+}
+
+/** The sequence this phase's table wants: its rows in order, a separator where the group changes. */
+function wantSequence(rows) {
+    const out = [];
+    rows.forEach((row, i) => {
+        if (i > 0 && rows[i - 1].group !== row.group) {
+            out.push(SEPARATOR);
+        }
+        out.push(row.menuId);
+    });
+    return out;
+}
+
 /** Runs the two catalogue checks by shelling out to the REAL instruments
  * (`check-internals-boundary.sh --catalogue` +
  * `verify-ng-040-internals-catalogue-lines.mjs`), which read the real tree
@@ -564,29 +607,27 @@ function cases(m, srcs, mm) {
             return sameSet(keys, m.PERMISSION_IDS) ? null : { glyphs: sorted(keys), table: sorted(m.PERMISSION_IDS) };
         }],
         // Phase 31 plan 04 (MENU-01/02): the hamburger. The builder runs in Node (app-menu.ts is import-free),
-        // so the rendered menu is checked, not a copy of it. Case 5's name is kept: it is the rendered-equals-table case.
+        // so the drawn menu is checked, not a copy of it. Case 5's name is kept: the rendered-ids case.
         ['MENU_ORDER ids equal the rendered hamburger menuIds (the builder run in Node, the phase rows only)', () => {
             const rows = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE);
             const menu = mm.buildAppMenu(m.MENU_ORDER, mm.WIRED_MENU_IDS, m.MENU_PHASE, { label: id => id, run: () => undefined });
-            const prefix = `${mm.APP_MENU_ID}.`;
-            const rendered = menu.children.map(group => group.children.map(leaf => leaf.id.startsWith(prefix) ? leaf.id.slice(prefix.length) : leaf.id));
-            const want = [...new Set(rows.map(row => row.group))].map(g => rows.filter(row => row.group === g).map(row => row.menuId));
-            if (JSON.stringify(rendered) !== JSON.stringify(want)) {
-                return { order: rendered, want };
-            }
-            const enabled = menu.children.flatMap(group => group.children.map(leaf => leaf.isEnabled()));
-            const flat = rendered.flat();
-            const wantEnabled = flat.map(id => mm.WIRED_MENU_IDS.includes(id));
-            return JSON.stringify(enabled) === JSON.stringify(wantEnabled) ? null : { enabled, wantEnabled };
+            const drawn = drawnSequence(menu, `${mm.APP_MENU_ID}.`).filter(id => id !== SEPARATOR);
+            const want = rows.map(row => row.menuId);
+            return JSON.stringify(drawn) === JSON.stringify(want) ? null : { drawn, want };
         }],
-        ['the rendered app menu equals the table rows of this phase (order, groups, enablement)', () => {
+        ['the rendered app menu equals the table rows of this phase (order, separators, enablement)', () => {
             const rows = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE);
             const menu = mm.buildAppMenu(m.MENU_ORDER, mm.WIRED_MENU_IDS, m.MENU_PHASE, { label: id => id, run: () => undefined });
             const prefix = `${mm.APP_MENU_ID}.`;
-            const rendered = menu.children.map(group => group.children.map(leaf => leaf.id.startsWith(prefix) ? leaf.id.slice(prefix.length) : leaf.id));
-            const want = [...new Set(rows.map(row => row.group))].map(g => rows.filter(row => row.group === g).map(row => row.menuId));
-            const menuRoot = { rendered: rendered.map(group => group.join(',')).join(' | '), want: want.map(group => group.join(',')).join(' | ') };
-            return JSON.stringify(rendered) === JSON.stringify(want) ? null : menuRoot;
+            const drawn = drawnSequence(menu, prefix);
+            const want = wantSequence(rows);
+            if (JSON.stringify(drawn) !== JSON.stringify(want)) {
+                return { drawn: drawn.join(' '), want: want.join(' ') };
+            }
+            const leaves = [...menu.children.filter(node => !Array.isArray(node.children)), ...menu.children.flatMap(node => (Array.isArray(node.children) ? node.children : []))];
+            const enabled = leaves.map(leaf => leaf.isEnabled());
+            const wantEnabled = leaves.map(leaf => mm.WIRED_MENU_IDS.includes(leaf.id.slice(prefix.length)));
+            return JSON.stringify(enabled) === JSON.stringify(wantEnabled) ? null : { enabled, wantEnabled };
         }],
         ['the app menu order and separators match the UI-SPEC hamburger entries (derived)', () => {
             const cell = deriveSpecHamburgerCell(srcs[UI_SPEC_REL]);
@@ -1086,6 +1127,13 @@ const PLANTS = [
         rel: APP_MENU_REL,
         from: 'for (const { row, enabled } of applyMenuOrder(rows, wired, phase)) {',
         to: 'for (const { row, enabled } of applyMenuOrder(rows, wired, phase).reverse()) {',
+        expect: 'the rendered app menu equals the table rows of this phase',
+    },
+    {
+        name: 'a leading separator: the first group wrapped in a group node',
+        rel: APP_MENU_REL,
+        from: '            ...(first ? first.leaves : []),',
+        to: "            ...(first ? [{ id: `${APP_MENU_ID}.group-first`, sortString: '00', isVisible: () => true, isEmpty: () => false, children: first.leaves }] : []),",
         expect: 'the rendered app menu equals the table rows of this phase',
     },
     {
