@@ -1,0 +1,28 @@
+{
+  "labels": [
+    { "name": "type/bug", "color": "d73a4a", "description": "Something is not working as documented" },
+    { "name": "type/feature", "color": "a2eeef", "description": "A request for new behavior or a new capability" },
+    { "name": "os/linux", "color": "c5def5", "description": "Seen on Linux" },
+    { "name": "os/windows", "color": "c5def5", "description": "Seen on Windows" },
+    { "name": "os/macos", "color": "c5def5", "description": "Seen on macOS" },
+    { "name": "format/tarball", "color": "bfd4f2", "description": "Installed from the tarball" },
+    { "name": "format/nsis", "color": "bfd4f2", "description": "Installed with the Windows installer" },
+    { "name": "format/dmg", "color": "bfd4f2", "description": "Installed from the macOS disk image" },
+    { "name": "format/nix", "color": "bfd4f2", "description": "Installed with Nix" },
+    { "name": "area/updates", "color": "0075ca", "description": "Checking for and installing updates" },
+    { "name": "area/build", "color": "0075ca", "description": "Building PowerBrowser from source" },
+    { "name": "area/docs", "color": "0075ca", "description": "Documentation" },
+    { "name": "area/website", "color": "0075ca", "description": "The powerbrowser.org website" },
+    { "name": "needs-triage", "color": "fbca02", "description": "Not yet reviewed by a maintainer" },
+    { "name": "needs-info", "color": "d4c5f9", "description": "Waiting for more details from the reporter" },
+    { "name": "confirmed", "color": "0e8a16", "description": "A maintainer reproduced the problem" },
+    { "name": "duplicate", "color": "cfd3d7", "description": "Already reported. The linked issue is the next step" },
+    { "name": "wontfix", "color": "cccccc", "description": "Not planned. The reply gives the reason and any next step" },
+    { "name": "good-first-issue", "color": "7057ff", "description": "A small, self-contained task for a first contribution" },
+    { "name": "security", "color": "ee0701", "description": "Security related. Report privately as described in SECURITY.md" },
+    { "name": "upstream", "color": "5319e7", "description": "The cause is in an upstream project this build depends on" },
+    { "name": "release-train", "color": "0052cc", "description": "Part of a release train" },
+    { "name": "claude-fix", "color": "6f42c1", "description": "Queued for an automated fix attempt" },
+    { "name": "train:blocked", "color": "b60205", "description": "A release train is blocked. The linked issue says why" }
+  ]
+}
