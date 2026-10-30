@@ -115,7 +115,17 @@ const STORE_KIND_CLASSES = new Map([
     ['savePageCopy', 'store-write'],
     ['removeHistoryEntry', 'privileged'],
     ['readClipboardText', 'privileged'],
+    // Phase 31 plan 04 (MENU-02, D-31-07): opens a stock page from an app-menu row. It writes no
+    // Places row, reads no clipboard and sends nothing off the machine, so it is a store-write
+    // (the class savePageCopy has), never privileged and never relayed.
+    ['openStockPage', 'store-write'],
 ]);
+/**
+ * Phase 31 plan 04: store kinds the app menu sends straight from the Theia window to chrome. Each
+ * must be classed and must stay out of TAB_STORE_RELAY_KINDS: a set-equality absence, so a relayed
+ * menu kind goes red by name.
+ */
+const MENU_ONLY_STORE_KINDS = ['openStockPage'];
 const STORE_PROTOCOL = `${TAB_URIS_DIR}/tab-store-access-protocol.ts`;
 const STORE_CLIENT = `${TAB_URIS_DIR}/chrome-store-client.ts`;
 const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/address-bar/address-bar.tsx`;
@@ -522,6 +532,11 @@ function checkStoreKinds(src, storeClasses) {
         if (relayLiteral[1].includes('...TAB_STORE_WRITE_OPS')) {
             writeOps.forEach(op => relayed.add(op));
         }
+        for (const kind of MENU_ONLY_STORE_KINDS) {
+            if (relayed.has(kind)) {
+                failures.push(`store-kinds: the menu-only kind ${kind} is relayed from the backend (TAB_STORE_RELAY_KINDS)`);
+            }
+        }
         for (const [kind, kindClass] of storeClasses) {
             if ((kindClass === 'network' || kindClass === 'privileged') && relayed.has(kind)) {
                 failures.push(`store-kinds: the ${kindClass} kind ${kind} is relayed from the backend (TAB_STORE_RELAY_KINDS)`);
@@ -604,6 +619,17 @@ function selfTest() {
             sources: clean,
             storeClasses: classedAs('plantedStale', 'read'),
             expect: 'STORE_KIND_CLASSES entries with no store kind left (stale): plantedStale',
+        },
+        {
+            name: 'planted unclassified openStockPage',
+            sources: clean,
+            storeClasses: new Map([...STORE_KIND_CLASSES].filter(([kind]) => kind !== 'openStockPage')),
+            expect: 'store kinds with no STORE_KIND_CLASSES entry (classify each under the privileged-kind rule): openStockPage',
+        },
+        {
+            name: 'planted openStockPage in the backend relay',
+            sources: { ...clean, [STORE_PROTOCOL]: relaying('openStockPage') },
+            expect: 'the menu-only kind openStockPage is relayed from the backend (TAB_STORE_RELAY_KINDS)',
         },
         {
             name: 'planted privileged kind in the backend relay',

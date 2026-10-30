@@ -206,6 +206,15 @@ export class ChromeStoreClient {
         return this.field<string>({ kind: 'readClipboardText' }, 'text');
     }
 
+    /** Phase 31 plan 04 (MENU-02, D-31-07): opens one stock page by its enum name; chrome holds the URL. Resolves chrome's outcome word. A store-write, sent only from the app menu's row handler. */
+    async openStockPage(page: string): Promise<string> {
+        const reply = await this.request({ kind: 'openStockPage', page });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `openStockPage failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply.where);
+    }
+
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
     queryTabsWithPlaces(query: TabPlacesQuery = {}): Promise<TabPlacesRow[]> {
         return this.field<TabPlacesRow[]>({ kind: 'queryTabsWithPlaces', ...query }, 'rows');

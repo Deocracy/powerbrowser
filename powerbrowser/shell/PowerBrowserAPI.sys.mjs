@@ -4028,6 +4028,7 @@ const STORE_REQUEST_KINDS = new Set([
   "autofillOrigin",
   "removeHistoryEntry",
   "readClipboardText",
+  "openStockPage",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -4125,6 +4126,12 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "readClipboardText": {
         return { ok: true, kind, text: readClipboardText() };
+      }
+      // Phase 31 plan 04 (MENU-02, D-31-07): a stock page from the app menu. The
+      // page is an enum value; the URL for a trusted-tab page is fixed in
+      // openStockPageFromMenu, never sent by the frontend.
+      case "openStockPage": {
+        return { ok: true, kind, where: await openStockPageFromMenu(data.page) };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -5344,4 +5351,75 @@ async function purgeSiteTabRows(host) {
       await conn.execute("DELETE FROM tabs WHERE uri = :uri", { uri });
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 31 plan 04 (MENU-02, D-31-07): the app menu's stock pages.
+//
+// The hamburger sends a page NAME, never a URL: `openStockPage {page}` is the
+// whole wire. Settings and Add-ons open through the stock window's own entry
+// points, the functions upstream's menus call (utilityOverlay.js:381,
+// browser-addons.js:1956). Passwords, Processes and Help open their about:
+// page as a trusted tab, as upstream's Quick Actions does
+// (QuickActionsLoaderDefault.sys.mjs:185) and by the same trusted-tab call as
+// browser.js:4873. openStockTab is never used for these: its load carries a null
+// principal, which cannot load about:preferences or about:logins.
+// ---------------------------------------------------------------------------
+
+/** The trusted about: page each trusted-tab stock page opens. Settings and Add-ons have their own entry points. */
+const STOCK_PAGE_TRUSTED_URLS = Object.freeze({
+  passwords: "about:logins",
+  processes: "about:processes",
+  support: "about:support",
+});
+
+/** A stock window's startup, polled: the window's own delayed-startup flag, never a Services observer. */
+async function stockWindowStarted(win) {
+  const deadline = Date.now() + 15000;
+  while (!win.closed && !(win.gBrowserInit && win.gBrowserInit.delayedStartupFinished)) {
+    if (Date.now() > deadline) {
+      throw new Error("openStockPage: the stock window did not finish starting");
+    }
+    await new Promise(resolve => win.setTimeout(resolve, 50));
+  }
+  if (win.closed) {
+    throw new Error("openStockPage: the stock window closed while starting");
+  }
+}
+
+/**
+ * Opens one stock page in the most recent stock window, or in a new one when
+ * none is open. Returns "opened" or "opened-window". A page name outside the
+ * enum is refused before any window is touched. Errors from the stock entry
+ * points are logged by name only: a URL, a title or a path is never logged.
+ */
+async function openStockPageFromMenu(page) {
+  switch (page) {
+    case "settings":
+    case "addons":
+    case "passwords":
+    case "processes":
+    case "support":
+      break;
+    default:
+      throw new Error("openStockPage: refusing an unknown page");
+  }
+  let where = "opened";
+  let win = Services.wm.getMostRecentWindow("navigator:browser");
+  if (!win || win.closed) {
+    win = PowerBrowserAPI.openBrowserWindow("about:newtab");
+    where = "opened-window";
+  }
+  await stockWindowStarted(win);
+  const failed = err => PowerBrowserAPI.log("error", `[openStockPage] ${page} failed: ${err && err.name ? err.name : "error"}`);
+  if (page === "settings") {
+    Promise.resolve(win.openPreferences()).catch(failed);
+  } else if (page === "addons") {
+    Promise.resolve(win.BrowserAddonUI.openAddonsMgr()).catch(failed);
+  } else {
+    const tab = win.gBrowser.addTrustedTab(STOCK_PAGE_TRUSTED_URLS[page]);
+    win.gBrowser.selectedTab = tab;
+  }
+  PowerBrowserAPI.focusWindow(win);
+  return where;
 }
