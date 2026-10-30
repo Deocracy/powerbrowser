@@ -30,7 +30,12 @@
  * literal is a table id with a relay action (the AppCommand listener's ids);
  * (10) every BUTTON_SHORTCUTS entry names only PAGE_SHORTCUTS rows, its
  * `aria` equals formatAria over those rows, and its tooltip (formatTooltip of
- * the first row) is at most 26 characters (NAV-05).
+ * the first row) is at most 26 characters (NAV-05); (11) Ctrl+Q (Phase 31 plan
+ * 05, MENU-04): the QUIT_KEY literal is one chrome-reserved row mirroring
+ * Firefox's key_quitApplication (Linux), its command calls quitApplication()
+ * and it is never disabled, no PAGE_KEYS or PAGE_SHORTCUTS row and no Theia
+ * keybinding takes Ctrl+Q, and the Quit row's badge in CHROME_BAR_COPY is the
+ * formatter's label for that row.
  *
  * Honestly --quick: reads text sources only. No build, no browser, no
  * display, no network.
@@ -51,6 +56,8 @@ const CHROME_REL = 'powerbrowser/shell/powerbrowser.js';
 const FRONTEND_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts';
 const SETS_REL = 'upstream/browser/base/content/browser-sets.inc.xhtml';
 const FTL_REL = 'upstream/browser/locales/en-US/browser/browserSets.ftl';
+const KEYBINDINGS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-keybindings.ts';
+const COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
 
 /**
  * The one hand-kept list: reserved rows with no upstream <key> to point at.
@@ -570,11 +577,50 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
             }
         }
     }
+    // (11) Ctrl+Q: one chrome-reserved quit row (not a PAGE_KEYS row: it has no relay action), Firefox's own key.
+    const quitLiteral = /const QUIT_KEY\s*=\s*(\{[^}]*\})/.exec(chromeSrc);
+    const quit = quitLiteral ? objectRow(quitLiteral[1]) : null;
+    if (!quit || quit.key === undefined) {
+        failures.push(`${CHROME_REL}: broken instrument -- the QUIT_KEY literal was not found, so the Ctrl+Q row cannot be checked`);
+    } else {
+        if (String(quit.key).toUpperCase() !== 'Q' || [...mods(quit)].sort().join(',') !== 'accel') {
+            failures.push(`${CHROME_REL}: quit key: the Ctrl+Q row is not key Q with accel only (row ${quit.key}, ${quit.modifiers})`);
+        }
+        if (quit.reserved !== true) {
+            failures.push(`${CHROME_REL}: quit key: the Ctrl+Q row is not chrome-reserved (a page or Theia could swallow it)`);
+        }
+        const fx = upstream.get('key_quitApplication');
+        if (!fx || !fx.reserved || !sameKey(quit, fx) || !sameMods(quit, fx)) {
+            failures.push(`${CHROME_REL}: quit key: the Ctrl+Q row differs from Firefox's key_quitApplication (${fx ? describe(fx) : 'not defined on Linux'})`);
+        }
+        const quitCommand = /quitKey\.addEventListener\(\s*"command"\s*,\s*\(\)\s*=>\s*\{\s*PowerBrowserAPI\.quitApplication\(\);?\s*\}\s*\)/.test(chromeSrc);
+        if (!quitCommand) {
+            failures.push(`${CHROME_REL}: quit key: the Ctrl+Q command does not call quitApplication() (the one quit path)`);
+        }
+        if (/quitKey\.setAttribute\(\s*"disabled"/.test(chromeSrc) || !/diagnosticsKeyset\.appendChild\(quitKey\)/.test(chromeSrc)) {
+            failures.push(`${CHROME_REL}: quit key: the Ctrl+Q row is disabled, or is not appended to the keyset`);
+        }
+    }
+    for (const row of [...chrome, ...frontend]) {
+        if (String(row.key ?? '').toUpperCase() === 'Q' && mods(row).has('accel')) {
+            failures.push(`${row.id}: binds Ctrl+Q; the quit key is the one Ctrl+Q row (quit key, D-31-13)`);
+        }
+    }
+    if (/['"](?:ctrlcmd|ctrl)\+q['"]/i.test(stripComments(sources[KEYBINDINGS_REL] ?? ''))) {
+        failures.push(`${KEYBINDINGS_REL}: registers Ctrl+Q; the chrome-reserved quit row is the single implementation (D-31-13)`);
+    }
+    const badgeTemplate = /^\s*menuQuit: \([^)]*\) => `([^`]*)`,/m.exec(sources[COPY_REL] ?? '')?.[1];
+    if (quit && quit.key !== undefined) {
+        const badge = formatLabel(quit);
+        if (badgeTemplate === undefined || !badgeTemplate.endsWith(` (${badge})`)) {
+            failures.push(`${COPY_REL}: quit key: the Quit row badge ${JSON.stringify(badgeTemplate ?? null)} is not the Ctrl+Q label ${JSON.stringify(badge)}`);
+        }
+    }
     return { failures, counts: { buttons: buttons?.length ?? 0, literalIds, rows: chrome.length, actions: actionIds.length, upstream: upstream.size, reserved: chrome.filter(r => r.reserved === true).length, reply: replyRows.length } };
 }
 
 function readSources() {
-    return Object.fromEntries([CHROME_REL, FRONTEND_REL, SETS_REL, FTL_REL].map(rel => [rel, readFileSync(join(REPO_ROOT, rel), 'utf8')]));
+    return Object.fromEntries([CHROME_REL, FRONTEND_REL, SETS_REL, FTL_REL, KEYBINDINGS_REL, COPY_REL].map(rel => [rel, readFileSync(join(REPO_ROOT, rel), 'utf8')]));
 }
 
 function main() {
@@ -585,7 +631,7 @@ function main() {
         }
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved; ${counts.literalIds} literal relayed ids are table ids; ${counts.buttons} nav buttons name table rows with derived aria and tooltips of at most 26 characters`);
+    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved; ${counts.literalIds} literal relayed ids are table ids; ${counts.buttons} nav buttons name table rows with derived aria and tooltips of at most 26 characters; Ctrl+Q is the one chrome-reserved quit row (Firefox's key_quitApplication), with no Theia binding`);
     return 0;
 }
 
@@ -614,6 +660,10 @@ const PLANTS = [
     { name: 'button aria drift', rel: FRONTEND_REL, from: "aria: 'Alt+ArrowLeft'", to: "aria: 'Alt+Left'", expect: 'back: aria "Alt+Left"' },
     { name: 'button naming a missing row', rel: FRONTEND_REL, from: "rows: ['home']", to: "rows: ['goHome']", expect: 'home: names row goHome' },
     { name: 'creation loop without the disabled write', rel: CHROME_REL, from: '      key.setAttribute("disabled", "true");\n', to: '', expect: 'does not set disabled="true" unconditionally' },
+    { name: 'ctrl-q-unreserved', rel: CHROME_REL, from: 'const QUIT_KEY = { key: "Q", modifiers: "accel", reserved: true,', to: 'const QUIT_KEY = { key: "Q", modifiers: "accel", reserved: false,', expect: 'quit key: the Ctrl+Q row is not chrome-reserved' },
+    { name: 'ctrl-q-no-quit-call', rel: CHROME_REL, from: 'quitKey.addEventListener("command", () => {\n      PowerBrowserAPI.quitApplication();', to: 'quitKey.addEventListener("command", () => {\n      PowerBrowserAPI.log("info", "planted");', expect: 'quit key: the Ctrl+Q command does not call quitApplication()' },
+    { name: 'ctrl-q-theia-binding', rel: KEYBINDINGS_REL, from: '    registerKeybindings(keybindings: KeybindingRegistry): void {\n', to: "    registerKeybindings(keybindings: KeybindingRegistry): void {\n        keybindings.registerKeybinding({ command: CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID, keybinding: 'ctrlcmd+q' });\n", expect: `${KEYBINDINGS_REL}: registers Ctrl+Q` },
+    { name: 'quit-badge-drift', rel: COPY_REL, from: 'menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,', to: 'menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Alt+Q)`,', expect: 'quit key: the Quit row badge' },
 ];
 
 function selfTest() {

@@ -318,6 +318,23 @@ document.addEventListener(
     });
     diagnosticsKeyset.appendChild(diagnosticsKey);
 
+    // Phase 31 plan 05 (MENU-04, D-31-13): Ctrl+Q quits the application through the one quit path,
+    // quitApplication(). A chrome-reserved <key> (Pitfall 4): no page and no Theia keybinding can
+    // swallow it. It mirrors Firefox's key_quitApplication (browser-sets.inc.xhtml:352-366, Linux:
+    // accel, reserved; the command runs goQuitApplication, browser-sets.js:103-105). This shell window
+    // includes no browser-sets.inc.xhtml, so this row is the only Ctrl+Q here. It is not a page-key
+    // row: never disabled, never relayed to Theia. The menu's Quit row sends quitRequest to the same call.
+    const QUIT_KEY = { key: "Q", modifiers: "accel", reserved: true, firefox: "key_quitApplication" };
+    const quitKey = document.createXULElement("key");
+    quitKey.setAttribute("id", "powerbrowser-quit-key");
+    quitKey.setAttribute("key", QUIT_KEY.key);
+    quitKey.setAttribute("modifiers", QUIT_KEY.modifiers);
+    quitKey.setAttribute("reserved", String(QUIT_KEY.reserved));
+    quitKey.addEventListener("command", () => {
+      PowerBrowserAPI.quitApplication();
+    });
+    diagnosticsKeyset.appendChild(quitKey);
+
     // Ctrl+L is no longer reserved here: it is the page-scoped `focusAddressL`
     // row below, under the 2026-10-20 ruling (this supersedes 14.1-UI-SPEC A13).
     // The guaranteed exits from a page are now the reserved rows, as in Firefox.
