@@ -507,8 +507,13 @@ function compareLabels(c, declared, live, ctx) {
     ];
 }
 
+// GitHub's limits on a label name and description (gh label create refuses a longer one).
+const LABEL_NAME_MAX = 50;
+const LABEL_DESCRIPTION_MAX = 100;
+
 // The declared set itself, checked against the real tree on every run: non-empty,
-// every entry shaped, and unique case-insensitively (a form matches a label by name).
+// every entry shaped, within GitHub's length limits, and unique case-insensitively
+// (a form matches a label by name).
 function labelSetFailures(ctx) {
     const c = CONTROLS.find(x => x.id === 'labels');
     const body = ctx.bodies[c.file];
@@ -519,6 +524,8 @@ function labelSetFailures(ctx) {
     for (const l of list) {
         if (typeof l?.name !== 'string' || l.name === '' || !/^[0-9a-f]{6}$/.test(l.color ?? '') || typeof l.description !== 'string') {
             f.push(`${where(c)}: entry ${show(l)} needs a name, a six-digit lowercase hex color and a description. Next step: fix it in ${SETTINGS_REL}/${c.file}.`);
+        } else if (l.name.length > LABEL_NAME_MAX || l.description.length > LABEL_DESCRIPTION_MAX) {
+            f.push(`${where(c)}: label ${show(l.name)} is over GitHub's limits (a name is at most ${LABEL_NAME_MAX} characters, a description at most ${LABEL_DESCRIPTION_MAX}), so gh label create would refuse it. Next step: shorten it in ${SETTINGS_REL}/${c.file}.`);
         }
     }
     const byKey = new Map();
@@ -1108,6 +1115,8 @@ function selfTest() {
         ['an empty labels array', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels = []; return b; } }, ['labels.json', 'empty']],
         ['a declared label with a malformed color', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels[0].color = '#d73a4a'; return b; } }, ['labels.json', 'six-digit']],
         ['labels.json removed', { listSettings: () => listed.filter(f => f !== 'labels.json') }, ['labels.json', 'missing']],
+        ['a label description over GitHub\'s 100-character limit', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels[0].description = 'x'.repeat(LABEL_DESCRIPTION_MAX + 1); return b; } }, ['labels.json', 'at most 100']],
+        ['a label name over GitHub\'s 50-character limit', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels[0].name = 'x'.repeat(LABEL_NAME_MAX + 1); return b; } }, ['labels.json', 'at most 50']],
     ];
 
     let failed = 0;
