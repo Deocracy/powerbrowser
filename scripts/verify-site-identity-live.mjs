@@ -48,6 +48,14 @@
  * Plant `clear-signout` (token removed before the clear), `shield-stale` (box
  * shield not rendered), `shield-leak` (exception written on the second site).
  *
+ * Session F -- `app-menu` (one served page, the stock windows): the hamburger opens the
+ * per-request menu in Coding, Browsing and Organising; the rows read in the tree's
+ * order with the Coming soon caption on the unwired Quit row; Settings, Passwords,
+ * Add-ons and Help each open their stock page in one stock window, one tab on the
+ * page, with the web tab unchanged; the disabled Quit row does nothing.
+ * Plant `menu-dead-stock` makes openStockPage resolve without opening (red
+ * "did not open its stock page").
+ *
  * Plant `typed-lock`: re-inserts the original render-line derivation
  * (`this.inputValue.trim().startsWith('https://')` on the live
  * `AddressBar`) so the pill follows typed text; expected red
@@ -64,6 +72,7 @@
 
 import {
     BROKEN,
+    appNameExpr,
     focusTheiaFrame,
     inChrome,
     loadedAt,
@@ -926,10 +935,236 @@ async function shield(ctx) {
 
 }
 
-const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield };
+// ---------------------------------------------------------------------------
+// Plan 04 (MENU-01/02): the application menu. The rows, their order, their separator
+// groups, their labels and their wiring are read from the tree (the table, app-menu.ts,
+// the widget's label switch and CHROME_BAR_COPY); nothing here copies them.
+// ---------------------------------------------------------------------------
+const APP_MENU_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/app-menu.ts';
+const MENU_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+const COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
+const APP_MENU_MODES = ['Coding', 'Browsing', 'Organising'];
+/** The stock page each stock row opens; the about: addresses are what the stock pages load. */
+const STOCK_ROW_PAGES = [['Settings', 'about:preferences'], ['Passwords', 'about:logins'], ['Add-ons', 'about:addons'], ['Help', 'about:support']];
+
+/** The raw copy template of a CHROME_BAR_COPY key (its interpolations left as ${...}). */
+function copyTemplate(copySrc, key) {
+    const plain = new RegExp(`^\\s*${key}: '([^']*)',`, 'm').exec(copySrc);
+    if (plain) {
+        return plain[1];
+    }
+    const template = new RegExp(`^\\s*${key}: \\([^)]*\\) => \`([^\`]*)\`,`, 'm').exec(copySrc);
+    if (!template) {
+        throw new Error(`${BROKEN} no CHROME_BAR_COPY entry for ${key} in ${COPY_REL}`);
+    }
+    return template[1];
+}
+
+/**
+ * The menu this tree should show in this phase: the table rows of this phase in table
+ * order, each with its label (the widget's switch names the copy key, the configured name
+ * fills {App}) and whether it is unwired (then captioned Coming soon). The separator count
+ * is the number of groups less one.
+ */
+async function expectedAppMenu(app) {
+    const copy = readFileSync(join(REPO_ROOT, COPY_REL), 'utf8');
+    const widget = readFileSync(join(REPO_ROOT, MENU_WIDGET_REL), 'utf8');
+    const fn = /function appMenuLabel\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(widget)?.[1];
+    if (!fn) {
+        throw new Error(`${BROKEN} no appMenuLabel switch in ${MENU_WIDGET_REL}`);
+    }
+    const keys = new Map([...fn.matchAll(/case '([a-z-]+)': return CHROME_BAR_COPY\.([A-Za-z]+)/g)].map(x => [x[1], x[2]]));
+    const subject = await app.evaluate(appNameExpr);
+    if (typeof subject !== 'string' || !subject) {
+        throw new Error(`${BROKEN} the configured application name is not readable, so the labels prove nothing`);
+    }
+    const table = await import(pathToFileURL(join(REPO_ROOT, TABLE_REL)).href);
+    const menu = await import(pathToFileURL(join(REPO_ROOT, APP_MENU_REL)).href);
+    const rows = table.MENU_ORDER.filter(entry => entry.minPhase <= table.MENU_PHASE);
+    const labelOf = id => {
+        const key = keys.get(id);
+        if (!key) {
+            throw new Error(`${BROKEN} no label for menu row ${id}`);
+        }
+        return copyTemplate(copy, key).replace(/\$\{[^}]+\}/g, subject);
+    };
+    const caption = copyTemplate(copy, 'comingSoonRow');
+    const menuRows = rows.map(row => {
+        const enabled = menu.WIRED_MENU_IDS.includes(row.menuId);
+        const label = labelOf(row.menuId);
+        return { id: row.menuId, group: row.group, label: enabled ? label : caption.replace(/\$\{label\}/g, label), disabled: !enabled };
+    });
+    // The drawn sequence: a separator wherever the group changes, none before the first row or after the last.
+    const sequence = menuRows.flatMap((row, i) => (i > 0 && menuRows[i - 1].group !== row.group ? ['|', row.label] : [row.label]));
+    return { rows: menuRows, sequence, separators: new Set(rows.map(row => row.group)).size - 1 };
+}
+
+/** The visible application menu (the last shown one: a closed menu may stay in the DOM). */
+const VISIBLE_APP_MENU = `[...document.querySelectorAll('.lm-Menu.pb-app-menu')].filter(m => m.getClientRects().length > 0).pop()`;
+/** The menu as drawn: its rows (label, disabled) and its label-less items (the separators). */
+const readAppMenu = app => app.evaluate(`JSON.stringify((() => {
+    const menu = ${VISIBLE_APP_MENU};
+    if (!menu) return { present: false, rows: [], separators: 0 };
+    const items = [...menu.querySelectorAll('.lm-Menu-item')];
+    const text = i => (i.querySelector('.lm-Menu-itemLabel')?.textContent ?? '').trim();
+    const rows = items.filter(i => text(i) !== '').map(i => ({ label: text(i), disabled: i.classList.contains('lm-mod-disabled') }));
+    // A separator is an item with no label text; the sequence keeps both, in drawn order.
+    const sequence = items.map(i => (text(i) === '' ? '|' : text(i)));
+    return { present: true, rows, sequence, separators: items.length - rows.length };
+})())`).then(JSON.parse);
+const hamburgerOpen = app => app.evaluate(`(() => { const b = document.querySelector('.pb-chrome-bar button[aria-label="Application menu"]'); if (!b) return false; b.click(); return true; })()`);
+const selectMode = (app, mode) => app.evaluate(`(() => { const b = [...document.querySelectorAll('.pb-chrome-bar-segment')].find(x => x.textContent.trim() === ${JSON.stringify(mode)}); if (!b) return false; b.click(); return true; })()`);
+const modeActive = (app, mode) => app.evaluate(`(() => { const b = [...document.querySelectorAll('.pb-chrome-bar-segment')].find(x => x.textContent.trim() === ${JSON.stringify(mode)}); return !!b && b.getAttribute('aria-pressed') === 'true'; })()`);
+/** Activates a row the way a pointer does: move, then mouse-up on the row. A disabled row ignores it. */
+const clickMenuRow = (app, label) => app.evaluate(`(() => {
+    const menu = ${VISIBLE_APP_MENU};
+    const item = menu && [...menu.querySelectorAll('.lm-Menu-item')].find(i => i.querySelector('.lm-Menu-itemLabel')?.textContent.trim() === ${JSON.stringify(label)});
+    if (!item) return 'no-row';
+    const r = item.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    item.dispatchEvent(new MouseEvent('mousemove', at));
+    item.dispatchEvent(new MouseEvent('mouseup', { ...at, button: 0 }));
+    return 'clicked';
+})()`);
+const closeMenu = app => app.evaluate(`(() => {
+    const menu = ${VISIBLE_APP_MENU};
+    if (menu) menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+    return true;
+})()`);
+/** The stock windows, each as the addresses of its tabs (a chrome read of addresses only; no title or content). */
+const stockWindows = app => inChrome(app, `const out = [];
+    for (const w of Services.wm.getEnumerator('navigator:browser')) {
+        if (w.gBrowser) out.push([...w.gBrowser.tabs].map(t => t.linkedBrowser.currentURI.spec));
+    }
+    return JSON.stringify(out);`).then(raw => JSON.parse(String(raw)));
+/** Closes every stock window; true when none is left. The shell stays up (GUI-01). */
+async function closeStockWindows(app) {
+    await inChrome(app, `for (const w of [...Services.wm.getEnumerator('navigator:browser')]) { w.close(); } return true;`);
+    const left = await waitFor(() => stockWindows(app), w => w.length === 0, 8000);
+    return left.length === 0;
+}
+
+/**
+ * Plan 04 (MENU-01/02): the hamburger in each mode, the rows and separators against the tree,
+ * the four stock rows (one stock window, one tab on the page, the web tab unchanged), and the
+ * disabled Quit row. Plant `menu-dead-stock` makes the store call resolve without opening.
+ */
+async function appMenu(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const want = await expectedAppMenu(app);
+    const webId = await openWebTab(app, pages.url('/plain'));
+    if (await waitForPush(app, loadedAt(webId, '/plain')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the web page`);
+    }
+    if (await makeCurrent(app, webId) !== true) {
+        return fail(`${BROKEN} the web tab could not be made current`);
+    }
+    const pageUrl = (await lastPush(app, webId))?.url;
+    if (typeof pageUrl !== 'string' || !pageUrl) {
+        return fail(`${BROKEN} the web tab pushed no url, so the no-navigation check would prove nothing`);
+    }
+    if (plant === 'menu-dead-stock') {
+        const applied = await probe(app, `const store = get('ChromeStoreClient'); if (!store) return false;
+            Object.getPrototypeOf(store).openStockPage = async () => 'opened';
+            return true;`);
+        if (applied === true) {
+            note('PLANT menu-dead-stock applied (openStockPage resolves without opening a page)');
+        }
+    }
+    const wantLabels = want.rows.map(row => row.label);
+    const wantDisabled = want.rows.map(row => row.disabled);
+    // 1. The hamburger in every mode, and the rows, their disabled state and the separators.
+    for (const mode of APP_MENU_MODES) {
+        if (await selectMode(app, mode) !== true) {
+            return fail(`${BROKEN} the ${mode} mode segment is not in the chrome bar`);
+        }
+        if (await waitFor(() => modeActive(app, mode), v => v === true, 6000) !== true) {
+            fail(`the ${mode} mode did not become the pressed segment`);
+        }
+        if (await hamburgerOpen(app) !== true) {
+            return fail(`${BROKEN} the application menu button is not in the ${mode} chrome bar`);
+        }
+        const menu = await waitFor(() => readAppMenu(app), r => r.present && r.rows.length > 0, 6000);
+        if (!menu.present || menu.rows.length === 0) {
+            fail(`the application menu did not open in ${mode}`);
+            continue;
+        }
+        const labels = menu.rows.map(row => row.label);
+        if (JSON.stringify(labels) !== JSON.stringify(wantLabels)) {
+            fail(`the ${mode} menu rows are ${JSON.stringify(labels)}, want ${JSON.stringify(wantLabels)} (Firefox order, this phase's rows)`);
+        }
+        const disabled = menu.rows.map(row => row.disabled);
+        if (JSON.stringify(disabled) !== JSON.stringify(wantDisabled)) {
+            fail(`the ${mode} menu disabled rows are ${JSON.stringify(disabled)}, want ${JSON.stringify(wantDisabled)}`);
+        }
+        if (JSON.stringify(menu.sequence) !== JSON.stringify(want.sequence)) {
+            fail(`the ${mode} menu draws ${JSON.stringify(menu.sequence)}, want ${JSON.stringify(want.sequence)} (a separator only between groups)`);
+        }
+        await closeMenu(app);
+        await waitFor(() => app.evaluate(`!(${VISIBLE_APP_MENU})`), v => v === true, 3000);
+    }
+    // 2. Each stock row: no stock window before, then one stock window with one tab on the page.
+    for (const [label, url] of STOCK_ROW_PAGES) {
+        if (await closeStockWindows(app) !== true) {
+            return fail(`${BROKEN} the stock windows could not be closed before the ${label} row`);
+        }
+        if (await hamburgerOpen(app) !== true) {
+            return fail(`${BROKEN} the application menu button is not in the chrome bar (${label})`);
+        }
+        await waitFor(() => readAppMenu(app), r => r.present && r.rows.length > 0, 6000);
+        if (await clickMenuRow(app, label) !== 'clicked') {
+            return fail(`${BROKEN} the ${label} row is not in the open menu`);
+        }
+        const shown = await waitFor(() => stockWindows(app), w => w.some(tabs => tabs.includes(url)), 10000);
+        if (!shown.some(tabs => tabs.includes(url))) {
+            fail(`the ${label} row did not open its stock page (no stock window shows ${url})`);
+            await closeMenu(app);
+            continue;
+        }
+        if (shown.length !== 1) {
+            fail(`the ${label} row opened ${shown.length} stock windows, want one`);
+        }
+        const onPage = shown.flat().filter(tab => tab === url).length;
+        if (onPage !== 1) {
+            fail(`the ${label} row left ${onPage} tabs on ${url}, want one`);
+        }
+        const after = (await lastPush(app, webId))?.url;
+        if (after !== pageUrl) {
+            fail(`the ${label} row navigated the web tab (${JSON.stringify(after)}, was ${JSON.stringify(pageUrl)})`);
+        }
+    }
+    // 3. The unwired row is disabled, and a click on it opens or closes nothing.
+    const quit = want.rows.find(row => row.disabled);
+    if (!quit) {
+        return fail(`${BROKEN} the menu has no unwired row, so the disabled-row check proves nothing`);
+    }
+    if (await closeStockWindows(app) !== true) {
+        return fail(`${BROKEN} the stock windows could not be closed before the disabled row`);
+    }
+    if (await hamburgerOpen(app) !== true) {
+        return fail(`${BROKEN} the application menu button is not in the chrome bar (disabled row)`);
+    }
+    const quitMenu = await waitFor(() => readAppMenu(app), r => r.present && r.rows.length > 0, 6000);
+    const quitRow = quitMenu.rows.find(row => row.label === quit.label);
+    if (!quitRow || quitRow.disabled !== true) {
+        fail(`the ${quit.label} row is not read as disabled (${JSON.stringify(quitRow ?? null)})`);
+    }
+    await clickMenuRow(app, quit.label);
+    await sleep(800);
+    if (await probe(app, 'return true') !== true) {
+        fail('the shell did not answer after a click on the disabled row');
+    }
+    const afterClick = await stockWindows(app);
+    if (afterClick.length !== 0) {
+        fail(`the disabled ${quit.label} row opened a stock window (${afterClick.length})`);
+    }
+    await closeMenu(app);
+}
+
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
-const NOT_LANDED = ['app-menu'];
+const NOT_LANDED = [];
 
 /** Plan 03 (SITE-08): the shield session runs with tracking protection on, so the fixture's tracker is blocked. */
 const SCENARIO_PREFS = { shield: { 'privacy.trackingprotection.enabled': true } };
@@ -1026,14 +1261,16 @@ const PLANTS = [
     { plant: 'shield-stale', target: 'shield', run: ['shield'], expect: 'shield icon did not update', tls: false },
     // The exception is also written on the second site: the isolation check names it.
     { plant: 'shield-leak', target: 'shield', run: ['shield'], expect: 'wrong site', tls: false },
+    // Plan 04 (MENU-02): the Settings row never opens its stock page; the stock-page check names it.
+    { plant: 'menu-dead-stock', target: 'app-menu', run: ['app-menu'], expect: 'did not open its stock page', tls: false },
 ];
 
 async function selfTest() {
     let failed = 0;
-    for (const session of [['identity-local'], ['identity-tls'], ['site-panel'], ['clear-data'], ['shield']]) {
+    for (const session of [['identity-local'], ['identity-tls'], ['site-panel'], ['clear-data'], ['shield'], ['app-menu']]) {
         let clean;
         try {
-            clean = await runSession(session, '', session[0] !== 'identity-local');
+            clean = await runSession(session, '', session[0] !== 'identity-local' && session[0] !== 'app-menu');
         } catch (error) {
             console.error(`${NAME} --self-test: FAIL -- harness: the clean control could not be driven: ${error.message}`);
             return 1;
@@ -1084,7 +1321,7 @@ async function main(args) {
         // One session per scenario group (4-tab limit): the TLS identity session,
         // the site-panel session (its own TLS browser), then the local session.
         const results = [];
-        for (const [name, tls] of [['identity-tls', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false]]) {
+        for (const [name, tls] of [['identity-tls', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false]]) {
             if (names.includes(name)) {
                 results.push(...await runSession([name], '', tls));
             }
