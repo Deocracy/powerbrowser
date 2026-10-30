@@ -5657,6 +5657,9 @@ function pickNextSelection(host, index) {
 // as tabbrowser does. The forwarder is held on the host record, because the web
 // progress holds its listeners weakly. busy follows the top-level network state,
 // and label follows the page title.
+// The locations an overlay may hold (D-05): the same allow-list as the shell walls, plus the empty page.
+const OVERLAY_LOCATION = /^(?:https?:\/\/|about:blank$)/i;
+
 function attachProgress(host, browser, node) {
   const { STATE_IS_NETWORK, STATE_START, STATE_STOP } = Ci.nsIWebProgressListener;
   const fan = (name, args) => {
@@ -5680,7 +5683,20 @@ function attachProgress(host, browser, node) {
       }
       fan("onStateChange", [webProgress, request, flags, status]);
     },
-    onLocationChange: (...args) => fan("onLocationChange", args),
+    onLocationChange(webProgress, request, location, flags) {
+      const sameDocument = Boolean(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT);
+      // T-31.1-20 (D-05, D-17): an overlay holds only http(s) and about:blank. A top-level load that lands elsewhere,
+      // such as an extension page a webRequest listener redirected to, is stopped and replaced with about:blank. The
+      // trackers never hear of the stopped location.
+      if (webProgress.isTopLevel && !sameDocument && !OVERLAY_LOCATION.test(location.spec)) {
+        browser.stop();
+        browser.fixupAndLoadURIString("about:blank", {
+          triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}),
+        });
+        return;
+      }
+      fan("onLocationChange", [webProgress, request, location, flags]);
+    },
     onStatusChange: (...args) => fan("onStatusChange", args),
     onProgressChange: (...args) => fan("onProgressChange", args),
     onSecurityChange: (...args) => fan("onSecurityChange", args),

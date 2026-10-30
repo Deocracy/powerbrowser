@@ -57,10 +57,11 @@ const MANIFEST = {
   name: 'PB tab host probe',
   version: '1.0',
   browser_specific_settings: { gecko: { id: EXT_ID } },
-  permissions: ['tabs', 'webRequest', 'webNavigation', '<all_urls>'],
+  permissions: ['tabs', 'webRequest', 'webRequestBlocking', 'webNavigation', '<all_urls>'],
   background: { scripts: ['background.js'] },
   content_scripts: [{ matches: ['<all_urls>'], js: ['content.js'], run_at: 'document_idle' }],
   browser_action: { default_title: 'PB tab host probe' },
+  web_accessible_resources: ['page.html'],
   page_action: { default_title: 'PB tab host probe page', show_matches: ['<all_urls>'] },
   commands: { 'pb-probe-command': { suggested_key: { default: 'Ctrl+Shift+Y' }, description: 'PB tab host probe' } },
 };
@@ -80,6 +81,7 @@ browser.tabs.onActivated.addListener(i => post({ kind: 'activated', tabId: i.tab
 browser.tabs.onUpdated.addListener((id, change, t) => post({ kind: 'updated', tabId: id, change, url: t && t.url, title: t && t.title, windowId: t && t.windowId }));
 browser.tabs.onRemoved.addListener((id, info) => post({ kind: 'removed', tabId: id, windowId: info.windowId, isWindowClosing: info.isWindowClosing }));
 browser.webRequest.onBeforeRequest.addListener(d => post({ kind: 'request', tabId: d.tabId, url: d.url, type: d.type, frameId: d.frameId }), { urls: ['<all_urls>'] }); // every type: the Theia frame's documents and subresources reach the recorder (WR-01)
+browser.webRequest.onBeforeRequest.addListener(d => (d.url.endsWith('/redirect-me') ? { redirectUrl: browser.runtime.getURL('page.html') } : {}), { urls: ['<all_urls>'], types: ['main_frame'] }, ['blocking']);
 browser.webNavigation.onCommitted.addListener(d => post({ kind: 'committed', tabId: d.tabId, url: d.url, frameId: d.frameId }));
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg && msg.kind === 'hello') {
@@ -1169,6 +1171,33 @@ async function scenarioRefusedWrite({ app }) {
   return verdict(true, `tabs.update with pinned: true (${pinned}) and with active: true on an unselected tab (${switched}) were refused before any navigation: tab A stayed /a; the selected tab B took url and active: true together and loaded /c`, null);
 }
 
+// T-31.1-20 (D-05, D-17): a webRequest listener that redirects a top-level overlay load to a web-accessible extension
+// page never passes the tabs.update wall. The overlay must not end on that page: the shell stops the load and loads
+// about:blank in its place.
+async function scenarioExtensionRedirect({ app, plant }) {
+  const A = await openAndCommit(app, '/a');
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late(A));
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant redirect-guard-off did not land');
+  }
+  await command('update', { tabId: A.extId, props: { url: url('/redirect-me') } });
+  await sleep(4000);
+  const seen = await command('get', { tabId: A.extId });
+  const overlay = await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(A.webTabId)});
+    return { spec: o ? o.currentURI.spec : null };`);
+  if (String(seen.url).startsWith('moz-extension:') || String(overlay.spec).startsWith('moz-extension:')) {
+    return verdict(false, null, `web tab navigated to an extension page: tabs.get ${seen.url}, overlay ${overlay.spec}`);
+  }
+  if (overlay.spec !== 'about:blank') {
+    return verdict(false, null, `the redirected load was not replaced with about:blank: tabs.get ${seen.url}, overlay ${overlay.spec}`);
+  }
+  // Positive control, same session: an http update still loads /d through the same recorder.
+  await command('update', { tabId: A.extId, props: { url: url('/d') } });
+  const updated = await tryWait(r => r.kind === 'updated' && r.tabId === A.extId && String(r.url).endsWith('/d'), 20000);
+  if (!updated) return verdict(false, null, `positive control: tabs.update to http(s) after the redirect did not load /d (tab id ${A.extId})`);
+  return verdict(true, `a blocking webRequest redirect of tabs.update to /redirect-me put an extension page in the overlay; the shell stopped it and the overlay ended on about:blank (tabs.get ${seen.url}); a later tabs.update to http(s) loaded /d`, null);
+}
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
@@ -1184,10 +1213,19 @@ const SCENARIOS = {
   gui01: scenarioGui01,
   'scheme-wall': scenarioSchemeWall,
   'refused-write': scenarioRefusedWrite,
+  'extension-redirect': scenarioExtensionRedirect,
   'theia-never': scenarioTheiaNever,
 };
 
 // Each plant names its scenario, the expected red text, and the chrome-scope mutation.
+// The shell's replacement load is suppressed on this overlay, so the extension page stays (T-31.1-20).
+const PLANT_REDIRECT_GUARD_OFF = tabId => `
+  const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(tabId)});
+  if (!o) return { landed: false };
+  const load = o.fixupAndLoadURIString.bind(o);
+  o.fixupAndLoadURIString = (uri, options) => (uri === 'about:blank' ? undefined : load(uri, options));
+  return { landed: true };`;
+
 const PLANTS = {
   'theia-in-tabs': { scenario: 'query', expect: 'Theia frame visible to extensions', body: PLANT_THEIA_IN_TABS },
   'no-tab-for-browser': { scenario: 'sender', expect: 'sender.tab missing', body: PLANT_NO_TAB_FOR_BROWSER },
@@ -1205,6 +1243,7 @@ const PLANTS = {
   'wall-elsewhere': { scenario: 'scheme-wall', expect: 'not the URL wall', refusalOp: 'updateExtPagePinned' },
   // A sender record naming the Theia origin gets through to the recorder; the sender scenario must go red on it.
   'theia-record': { scenario: 'sender', expect: 'Theia frame visible to extensions', record: theia => ({ kind: 'sender', tabId: -1, url: `${theia.origin}/`, href: `${theia.origin}/`, frameId: 0 }) },
+  'redirect-guard-off': { scenario: 'extension-redirect', expect: 'web tab navigated to an extension page', late: A => PLANT_REDIRECT_GUARD_OFF(A.webTabId) },
   'theia-in-tabs-late': { scenario: 'theia-never', expect: 'Theia frame visible to extensions', late: () => PLANT_THEIA_IN_TABS },
 };
 
