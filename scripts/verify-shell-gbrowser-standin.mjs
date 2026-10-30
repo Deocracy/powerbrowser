@@ -84,7 +84,7 @@
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const NAME = 'verify-shell-gbrowser-standin';
@@ -815,8 +815,15 @@ function selfTest() {
   );
 }
 
-if (process.argv.includes('--self-test')) {
-  selfTest();
-} else {
-  main();
+// deriveImplemented is exported for verify-ext-tab-host-scope.mjs (its host:
+// claims run this same literal parser). Importing the module runs nothing.
+export { deriveImplemented };
+
+const IS_ENTRY = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (IS_ENTRY) {
+  if (process.argv.includes('--self-test')) {
+    selfTest();
+  } else {
+    main();
+  }
 }

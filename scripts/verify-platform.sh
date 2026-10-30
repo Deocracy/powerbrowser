@@ -3666,6 +3666,14 @@ run_own_checks() {
     # guard's removed, weakened and misplaced plants must go red naming it.
     "ext-tab-host-patch-guards|node $REPO_ROOT/scripts/verify-ext-tab-host-patch-guards.mjs"
     "ext-tab-host-patch-guards-self-test|node $REPO_ROOT/scripts/verify-ext-tab-host-patch-guards.mjs --self-test"
+    # EXT-05 (plan 31.1-03): the scope gate. Four derived families: per-window
+    # consumers of browserWindows()/addOpenListener() (sites from the pristine
+    # bytes, skips and claims from the post-image), the Theia-frame exclusion,
+    # the scheme wall and the shell window type. Honestly --quick: text reads,
+    # read-only git show and ls-tree, and a scratch git apply. The self-test
+    # rides alongside: every planted fault must go red naming its drift.
+    "ext-tab-host-scope|node $REPO_ROOT/scripts/verify-ext-tab-host-scope.mjs"
+    "ext-tab-host-scope-self-test|node $REPO_ROOT/scripts/verify-ext-tab-host-scope.mjs --self-test"
     "fetch-upstream-self-test|bash $REPO_ROOT/scripts/fetch-upstream.sh --self-test"
     # NEW (05-02): the ESR pin-agreement gate -- configuration.toml's
     # [upstreams] tag equals the generated shell fragment, the workflow
