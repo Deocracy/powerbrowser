@@ -25,8 +25,9 @@
 //     sensitive. A declared label that no form or workflow names is a triage
 //     label applied by hand and is not a fault.
 //  5. Config. config.yml sets blank_issues_enabled: false explicitly and carries
-//     contact links, each with name, url and about, one pointing at the
-//     repository security policy and one at Discussions.
+//     contact links, each with name, url and about. One url must equal exactly
+//     the repository security policy URL and one exactly its Discussions URL,
+//     both built from configuration.toml's owner and repo (repoSlug).
 //  6. Vacuity. No form that references any label is a FAIL: an agreement over
 //     nothing is vacuous.
 //
@@ -39,6 +40,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { repoSlug } from './verify-repo-controls.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'labels';
@@ -220,7 +223,17 @@ function checkBugFields(rel, doc, fail) {
     }
 }
 
-function checkConfig(rel, doc, fail) {
+// The owner and repo come from configuration.toml, through the same repoSlug the repo-controls row uses.
+function slugOf(root, fail) {
+    try {
+        return repoSlug(root);
+    } catch (e) {
+        fail('configuration.toml', '', firstLine(e));
+        return null;
+    }
+}
+
+function checkConfig(rel, doc, fail, slug) {
     if (!isObj(doc)) {
         fail(rel, '', `${rel} is not a mapping. Next step: fix the file.`);
         return;
@@ -237,12 +250,16 @@ function checkConfig(rel, doc, fail) {
             }
         }
     });
+    if (slug === null) return; // configuration.toml is already reported
+    // Exact URLs, so a link to another host or another repository does not pass.
     const urls = links.map(l => String(l?.url ?? ''));
-    if (!urls.some(u => u.includes('/security/policy'))) {
-        fail(rel, 'security', `${rel}: no contact link points at the security policy. Next step: add a link to the repository security policy (GH-14).`);
+    const policy = `https://github.com/${slug.owner}/${slug.repo}/security/policy`;
+    const discussions = `https://github.com/${slug.owner}/${slug.repo}/discussions`;
+    if (!urls.includes(policy)) {
+        fail(rel, 'security', `${rel}: no contact link points at ${policy}, the repository security policy. Next step: set that exact URL as a contact link (GH-14).`);
     }
-    if (!urls.some(u => u.includes('/discussions'))) {
-        fail(rel, 'discussions', `${rel}: no contact link points at Discussions. Next step: add a link to the Discussions index.`);
+    if (!urls.includes(discussions)) {
+        fail(rel, 'discussions', `${rel}: no contact link points at ${discussions}, the repository Discussions index. Next step: set that exact URL as a contact link.`);
     }
 }
 
@@ -260,6 +277,7 @@ export function runChecks(root, overrides = {}) {
     };
 
     const declared = declaredSet(t, fail);
+    const slug = overrides.slug !== undefined ? overrides.slug : slugOf(root, fail);
 
     const listed = t.list(FORMS_DIR);
     for (const f of listed.filter(x => !FORM_FILES.includes(x))) {
@@ -273,7 +291,7 @@ export function runChecks(root, overrides = {}) {
         const doc = parseFile(t, rel, fail);
         if (doc === undefined) continue;
         if (f === 'config.yml') {
-            checkConfig(rel, doc, fail);
+            checkConfig(rel, doc, fail, slug);
             continue;
         }
         if (!isObj(doc)) {
@@ -374,6 +392,8 @@ function selfTest() {
         ['bug form field os renamed', formPlant(BUG, d => { d.body.find(e => e.id === 'os').id = 'operating_system'; return d; }), [BUG, '"os"']],
         ['config.yml with blank issues on', formPlant(CONFIG, d => { d.blank_issues_enabled = true; return d; }), [CONFIG, 'blank_issues_enabled']],
         ['config.yml without a Discussions link', formPlant(CONFIG, d => { d.contact_links = d.contact_links.filter(l => !l.url.includes('/discussions')); return d; }), [CONFIG, 'Discussions']],
+        ['a security link on another host', formPlant(CONFIG, d => { d.contact_links.find(l => l.url.includes('/security/policy')).url = 'https://evil.example/security/policy'; return d; }), [CONFIG, 'security policy']],
+        ['a Discussions link to another repository', formPlant(CONFIG, d => { d.contact_links.find(l => l.url.includes('/discussions')).url = 'https://github.com/DeBIOS-Foundation/planted-other/discussions'; return d; }), [CONFIG, 'Discussions']],
         ['config.yml contact link without about', formPlant(CONFIG, d => { delete d.contact_links[0].about; return d; }), [CONFIG, 'about']],
         ['a duplicate key in a form', { extra: { [BUG]: `${readTree(BUG)}\nlabels: ["planted"]\n` } }, [BUG, 'could not be parsed']],
     ];
