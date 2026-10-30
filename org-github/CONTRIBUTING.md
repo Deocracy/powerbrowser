@@ -4,9 +4,9 @@ Thank you for helping. This guide applies to every repository in the organizatio
 
 ## Before you start
 
-- **A question or an idea to discuss:** start a discussion in the project's Discussions.
-- **A bug:** open a bug report from the **New issue** page. Include the facts the form asks for.
-- **A feature:** open a feature request from the same page, describing the problem before the change.
+- **A question or an idea to discuss:** start a discussion where the repository provides Discussions. Otherwise, open an issue.
+- **A bug:** open an issue, or use the bug report form where the repository has one. Include the version, the operating system and the steps that show the problem.
+- **A feature:** open an issue, or use the feature request form where the repository has one. Describe the problem before the change.
 - **A security problem:** do not use issues or discussions. Follow the organization's SECURITY.md.
 
 ## Proposing a change
