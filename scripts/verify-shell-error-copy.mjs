@@ -655,6 +655,8 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} to ${name}",
   "Clear cookies and site data…",
   "Clear data for ${name}?",
+  "This clears cookies and site data for ${name} and all of its subdomains.",
+  "Closed tabs for ${name} are removed too.",
   "You stay signed in to ${name}.",
   "Clear",
   "Cancel",
