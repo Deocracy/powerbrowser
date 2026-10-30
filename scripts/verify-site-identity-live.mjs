@@ -261,7 +261,8 @@ async function identityTls(ctx) {
         if (plainBox.insecure !== 'Not Secure') {
             fail(`the insecure pill must render the Not Secure text; saw ${JSON.stringify(plainBox.insecure)}`);
         }
-        if (plainBox.pill !== null && !/^http:\/\//i.test(plainBox.pill)) {
+        // WR-09: a missing pill reads as broken, never as a pass.
+        if (plainBox.pill === null || !/^http:\/\//i.test(plainBox.pill)) {
             fail(`the insecure pill must keep the http:// prefix; saw ${JSON.stringify(plainBox.pill)}`);
         }
     }
@@ -699,8 +700,10 @@ async function sitePanel(ctx) {
         if (row?.state !== want || row?.stored !== stored || row?.word !== COPY[want]) {
             fail(`autoplay-media after step ${step} must read "${COPY[want]}" (effective ${want}, stored ${stored}); saw state ${JSON.stringify(row?.state)} stored ${JSON.stringify(row?.stored)} copy ${JSON.stringify(row?.word)}`);
         }
-        const icon = await waitFor(() => iconRead(app), i => i.icons.includes('codicon-play') === (stored !== 'default'));
-        if (icon.icons.includes('codicon-play') !== (stored !== 'default')) {
+        const icon = await waitFor(() => iconRead(app), i => i.present === true && i.icons.includes('codicon-play') === (stored !== 'default'));
+        if (icon.present !== true) {
+            fail(`${BROKEN} no identity box for the autoplay icon after step ${step}`);
+        } else if (icon.icons.includes('codicon-play') !== (stored !== 'default')) {
             fail(`the autoplay icon after step ${step} must be ${stored !== 'default' ? 'present' : 'absent'} (saved entry ${stored}); saw ${JSON.stringify(icon)}`);
         }
     }
@@ -774,8 +777,11 @@ async function sitePanel(ctx) {
         }
     }
     await closePanel(app);
-    const none = await waitFor(() => iconRead(app), i => i.icons.length === 0);
-    if (none.icons.length !== 0 || none.overflow !== null) {
+    // WR-09: "no icons" needs the box present (ICON_READ reports present:false and no icons when it is gone).
+    const none = await waitFor(() => iconRead(app), i => i.present === true && i.icons.length === 0);
+    if (none.present !== true) {
+        fail(`${BROKEN} no identity box to read the icons from with every permission at default; saw ${JSON.stringify(none)}`);
+    } else if (none.icons.length !== 0 || none.overflow !== null) {
         fail(`with every permission at default the identity box must show no icons; saw ${JSON.stringify(none)}`);
     }
 }
@@ -1079,6 +1085,9 @@ async function shield(ctx) {
     const closedOn = await waitFor(() => app.evaluate(`!!document.querySelector('.pb-site-panel')`), v => v === false, 8000);
     if (closedOn !== false) {
         fail('the panel stayed open after protection came back on; it must close with the reload');
+    }
+    if (await app.evaluate(`!!document.querySelector('.pb-identity')`) !== true) {
+        fail(`${BROKEN} no identity box after protection came back on, so the shield read is vacuous`);
     }
     const iconGone = await waitFor(() => shieldIconOn(app), v => v === false, 8000);
     if (iconGone !== false) {
