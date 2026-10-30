@@ -1,6 +1,8 @@
 {
   "two_factor_requirement_enabled": true,
   "owners": [
-    "ServerDestroyer"
+    "HarmonySprings",
+    "ServerDestroyer",
+    "stasadance"
   ]
 }
