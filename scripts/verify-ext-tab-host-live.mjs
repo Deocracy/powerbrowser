@@ -19,10 +19,12 @@
 //     function, windowTracker.isBrowserWindow(window) true, and tabTracker
 //     getBrowserData as a function.
 //
-// Scenarios (Task 2): query, sender, webrequest.
-// Scenarios (Task 3): events, active-tab, ide-retain, focus-follow, window-type,
-// execute. The probe extension is written from the literals in this file into a
-// temporary directory, and removed when the run ends.
+// Scenarios (31.1-02): query, sender, webrequest, events, active-tab, ide-retain,
+// focus-follow, window-type, execute. Scenarios (31.1-04): adversarial-starts (the
+// chrome-error recorder with its positive control, zero tabs, IDE current, first
+// tab), toolbar-target, gui01 (the stock window with the shell admitted),
+// scheme-wall and theia-never. The fixtures are written from the literals in this
+// file into temporary directories, and removed when the session ends.
 //
 //   node scripts/verify-ext-tab-host-live.mjs [--scenario a,b] [--self-test]
 //
@@ -34,7 +36,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withProbeShell, openWebTab, makeCurrent, focusOverlay, focusTheiaFrame } from './lib/pb-live-probe.mjs';
-import { REPO_ROOT, probe } from './lib/pb-relaunch.mjs';
+import { REPO_ROOT, probe, stockTabOn } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-ext-tab-host-live';
 const EXT_ID = 'pb-ext-tab-host-probe@powerbrowser.test';
@@ -58,13 +60,21 @@ const MANIFEST = {
   permissions: ['tabs', 'webRequest', 'webNavigation', '<all_urls>'],
   background: { scripts: ['background.js'] },
   content_scripts: [{ matches: ['<all_urls>'], js: ['content.js'], run_at: 'document_idle' }],
+  browser_action: { default_title: 'PB tab host probe' },
+  page_action: { default_title: 'PB tab host probe page', show_matches: ['<all_urls>'] },
+  commands: { 'pb-probe-command': { suggested_key: { default: 'Ctrl+Shift+Y' }, description: 'PB tab host probe' } },
 };
+
+const PAGE = '<!doctype html><title>PB probe extension page</title><body>extension page</body>';
 
 // Every record goes to the harness's /log endpoint. Commands arrive on /cmd.
 const BACKGROUND = `
 const ORIGIN = __ORIGIN__;
-const post = rec => fetch(ORIGIN + '/log', { method: 'POST', body: JSON.stringify(rec) }).catch(() => {});
+const post = rec => { fetch(ORIGIN + '/log', { method: 'POST', body: JSON.stringify(rec) }).catch(() => {}); };
 const brief = t => t && { id: t.id, url: t.url, windowId: t.windowId, active: t.active, title: t.title, favIconUrl: t.favIconUrl, status: t.status };
+post({ kind: 'started' });
+browser.tabs.onZoomChange.addListener(z => post({ kind: 'zoom', tabId: z && z.tabId }));
+browser.browserAction.onClicked.addListener(tab => post({ kind: 'clicked', tabId: tab.id, url: tab.url, windowId: tab.windowId }));
 browser.tabs.onCreated.addListener(t => post({ kind: 'created', tab: brief(t) }));
 browser.tabs.onActivated.addListener(i => post({ kind: 'activated', tabId: i.tabId, windowId: i.windowId, previousTabId: i.previousTabId }));
 browser.tabs.onUpdated.addListener((id, change, t) => post({ kind: 'updated', tabId: id, change, url: t && t.url, title: t && t.title, windowId: t && t.windowId }));
@@ -84,6 +94,9 @@ async function run(cmd) {
     else if (cmd.op === 'get') result = brief(await browser.tabs.get(cmd.tabId));
     else if (cmd.op === 'exec') result = await browser.tabs.executeScript(cmd.tabId, { code: cmd.code });
     else if (cmd.op === 'send') result = await browser.tabs.sendMessage(cmd.tabId, cmd.message);
+    else if (cmd.op === 'update') result = brief(await browser.tabs.update(cmd.tabId, cmd.props));
+    else if (cmd.op === 'updateExtPage') result = brief(await browser.tabs.update(cmd.tabId, { url: browser.runtime.getURL('page.html') }));
+    else if (cmd.op === 'pageShown') result = await browser.pageAction.isShown({ tabId: cmd.tabId });
     else if (cmd.op === 'windows') {
       const w = await browser.windows[cmd.method](cmd.info || {});
       result = Array.isArray(w) ? w.map(x => ({ id: x.id, type: x.type, focused: x.focused })) : { id: w.id, type: w.type };
@@ -108,8 +121,10 @@ browser.runtime.onMessage.addListener(msg => (msg === 'ping' ? Promise.resolve(l
 // The served origin: /a, /b, /c and /d are pages with an icon link; /cmd and /log are the probe channel.
 // ---------------------------------------------------------------------------
 
-let session = { logs: [], queue: [] };
+let session = { logs: [], queue: [], fuQueue: [] };
 let opSeq = 0;
+// Every add-on directory a session writes; removed when the session ends.
+const sessionDirs = [];
 
 const server = createServer((req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
@@ -135,6 +150,12 @@ const server = createServer((req, res) => {
     session.queue = [];
     return;
   }
+  if (path === '/fucmd') {
+    res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+    res.end(JSON.stringify(session.fuQueue));
+    session.fuQueue = [];
+    return;
+  }
   if (path === '/icon.png') {
     res.writeHead(200, { 'content-type': 'image/png' });
     res.end(PNG);
@@ -152,8 +173,90 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const ORIGIN = `http://127.0.0.1:${server.address().port}`;
 const url = path => `${ORIGIN}${path}`;
 
+// ---------------------------------------------------------------------------
+// Fixtures: the probe (all scenarios), an activeTab-only action, and the GUI-01 furniture.
+// ---------------------------------------------------------------------------
+
+const fixture = (id, name, manifest, extra) => ({ id, name, files: { 'manifest.json': JSON.stringify(manifest), ...extra } });
+const withOrigin = source => source.replace('__ORIGIN__', JSON.stringify(ORIGIN));
+const PROBE = fixture(EXT_ID, 'probe', MANIFEST, { 'background.js': withOrigin(BACKGROUND), 'content.js': CONTENT, 'page.html': PAGE });
+
+const AT_ID = 'pb-ext-tab-host-activetab@powerbrowser.test';
+const AT_MANIFEST = {
+  manifest_version: 2,
+  name: 'PB activeTab probe',
+  version: '1.0',
+  browser_specific_settings: { gecko: { id: AT_ID } },
+  permissions: ['activeTab'],
+  background: { scripts: ['background.js'] },
+  browser_action: { default_title: 'PB activeTab probe' },
+};
+const AT_BACKGROUND = `
+const ORIGIN = __ORIGIN__;
+const post = rec => { fetch(ORIGIN + '/log', { method: 'POST', body: JSON.stringify(rec) }).catch(() => {}); };
+browser.browserAction.onClicked.addListener(async tab => {
+  let path = null;
+  let err = null;
+  try { path = (await browser.tabs.executeScript({ code: 'location.pathname' }))[0]; } catch (e) { err = String((e && e.message) || e); }
+  post({ kind: 'at-clicked', tabId: tab.id, path, err });
+});
+`;
+const ACTIVE = fixture(AT_ID, 'activeTab', AT_MANIFEST, { 'background.js': withOrigin(AT_BACKGROUND) });
+
+const FURN_ID = 'pb-ext-tab-host-furniture@powerbrowser.test';
+const FURN_MANIFEST = {
+  manifest_version: 2,
+  name: 'PB tab host furniture',
+  version: '1.0',
+  browser_specific_settings: { gecko: { id: FURN_ID } },
+  permissions: ['tabs', 'menus', 'sessions', '<all_urls>'],
+  background: { scripts: ['background.js'] },
+  browser_action: { default_title: 'PB tab host furniture', default_area: 'navbar' },
+  sidebar_action: { default_panel: 'sidebar.html', default_title: 'PB tab host furniture' },
+  commands: { _execute_sidebar_action: { suggested_key: { default: 'Ctrl+Shift+U' }, description: 'PB sidebar' } },
+};
+const FURN_BACKGROUND = `
+const ORIGIN = __ORIGIN__;
+const post = rec => { fetch(ORIGIN + '/log', { method: 'POST', body: JSON.stringify(rec) }).catch(() => {}); };
+post({ kind: 'fu.started' });
+browser.tabs.onZoomChange.addListener(z => post({ kind: 'zoom', tabId: z && z.tabId }));
+const ops = {
+  setBadgeGlobal: ({ text }) => browser.browserAction.setBadgeText({ text }),
+  menusCreate: async () => String(browser.menus.create({ id: 'pb-tab-host-furniture', title: 'PB furniture item', contexts: ['page'] })),
+  recentlyClosed: () => browser.sessions.getRecentlyClosed().then(r => r.length),
+  sidebarIsOpen: () => browser.sidebarAction.isOpen({}),
+};
+setInterval(async () => {
+  let cmds;
+  try { cmds = await (await fetch(ORIGIN + '/fucmd')).json(); } catch { return; }
+  for (const c of cmds) {
+    try {
+      const r = await ops[c.op](c.args || {});
+      post({ kind: 'fu-result', opId: c.opId, ok: true, result: r === undefined ? null : r });
+    } catch (e) {
+      post({ kind: 'fu-result', opId: c.opId, ok: false, error: String((e && e.message) || e) });
+    }
+  }
+}, 150);
+`;
+const FURNITURE = fixture(FURN_ID, 'furniture', FURN_MANIFEST, {
+  'background.js': withOrigin(FURN_BACKGROUND),
+  'sidebar.html': '<!doctype html><title>PB sidebar</title><body>sidebar</body>',
+});
+
 function resetSession() {
-  session = { logs: [], queue: [] };
+  session = { logs: [], queue: [], fuQueue: [] };
+}
+
+// Records from index `from` onward that match pred, polled for up to timeoutMs. undefined on timeout.
+async function waitSince(from, pred, timeoutMs = 15000) {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    const hit = session.logs.slice(from).find(pred);
+    if (hit) return hit;
+    if (Date.now() > end) return undefined;
+    await sleep(150);
+  }
 }
 
 async function waitFor(pred, what, timeoutMs = 20000) {
@@ -197,11 +300,25 @@ async function chromeJson(app, body) {
   return JSON.parse(text);
 }
 
-async function installProbe(app) {
-  const dir = await mkdtemp(join(tmpdir(), 'pb-ext-tab-host-probe-'));
-  await writeFile(join(dir, 'manifest.json'), JSON.stringify(MANIFEST));
-  await writeFile(join(dir, 'background.js'), BACKGROUND.replace('__ORIGIN__', JSON.stringify(ORIGIN)));
-  await writeFile(join(dir, 'content.js'), CONTENT);
+// The same, in a named chrome context (a stock browser window).
+async function chromeJsonIn(app, context, body) {
+  return JSON.parse(await app.evaluateIn(context, `JSON.stringify((() => { ${body} })())`));
+}
+
+// One command for the furniture extension: queued on /fucmd, answered on /log.
+async function fuCommand(app, op, args = {}) {
+  const opId = `fu${++opSeq}`;
+  session.fuQueue.push({ op, opId, args });
+  return waitFor(r => r.kind === 'fu-result' && r.opId === opId, `furniture ${op} answer`, 20000);
+}
+
+// Writes a fixture into a fresh directory and installs it as a temporary add-on.
+async function installFixture(app, fixture) {
+  const dir = await mkdtemp(join(tmpdir(), 'pb-ext-tab-host-fixture-'));
+  sessionDirs.push(dir);
+  for (const [name, body] of Object.entries(fixture.files)) {
+    await writeFile(join(dir, name), body);
+  }
   const installed = JSON.parse(
     await app.evaluateIn(
       app.chrome,
@@ -216,9 +333,14 @@ async function installProbe(app) {
       })()`
     )
   );
-  if (installed.error || installed.id !== EXT_ID) {
-    throw new Error(`BROKEN INSTRUMENT: the probe extension did not install: ${JSON.stringify(installed)}`);
+  if (installed.error || installed.id !== fixture.id) {
+    throw new Error(`BROKEN INSTRUMENT: the ${fixture.name} extension did not install: ${JSON.stringify(installed)}`);
   }
+  return dir;
+}
+
+async function installProbe(app) {
+  const dir = await installFixture(app, PROBE);
   const pre = await chromeJson(
     app,
     `${IMPORT_EXT}
@@ -567,6 +689,404 @@ const PLANT_SWAPPED_BROWSER = (aId, bId) => `
   nodeA.linkedBrowser = find(${JSON.stringify(bId)});
   return { landed: nodeA.linkedBrowser === find(${JSON.stringify(bId)}) };`;
 
+// ---------------------------------------------------------------------------
+// Phase 31.1 plan 04. The chrome-error recorder, the adversarial starts, the toolbar target, GUI-01
+// with the shell admitted, the extension-path scheme wall and the session-wide Theia absence.
+// ---------------------------------------------------------------------------
+
+// The recorder is installed in every session before the first install. Its positive control is a planted
+// nsIScriptError from a matching source; it must be captured before any absence counts, and it is removed
+// from the record afterwards. A recorder that cannot see its own control is a broken instrument.
+const RECORDER_CONTROL = 'pb-recorder-control';
+
+async function installErrorRecorder(app) {
+  const r = JSON.parse(await app.evaluateIn(app.chrome, `(async () => {
+    const CONTROL = ${JSON.stringify(RECORDER_CONTROL)};
+    if (!window.__pbErrs) {
+      window.__pbErrs = [];
+      window.__pbSeen = 0;
+      window.__pbErrListener = { observe(m) {
+        window.__pbSeen++;
+        try {
+          m.QueryInterface(Ci.nsIScriptError);
+          if (/ext-|Extension|PageActions|CustomizableUI|SessionStore|Sidebar/i.test(m.sourceName + ' ' + m.errorMessage)) {
+            window.__pbErrs.push({ msg: m.errorMessage, src: m.sourceName, line: m.lineNumber });
+          }
+        } catch (e) {}
+      } };
+      Services.console.registerListener(window.__pbErrListener);
+    }
+    const ctl = Cc['@mozilla.org/scripterror;1'].createInstance(Ci.nsIScriptError);
+    ctl.init(CONTROL, 'resource://gre/modules/ext-recorder-control.js', 1, 0, Ci.nsIScriptError.errorFlag, 'pb-recorder', false, false);
+    Services.console.logMessage(ctl);
+    for (let i = 0; i < 20 && !window.__pbErrs.some(e => e.msg === CONTROL); i++) await new Promise(res => setTimeout(res, 100));
+    const captured = window.__pbErrs.some(e => e.msg === CONTROL);
+    window.__pbErrs = window.__pbErrs.filter(e => e.msg !== CONTROL);
+    return JSON.stringify({ captured, seen: window.__pbSeen });
+  })()`));
+  if (!r.captured) {
+    throw new Error(`BROKEN INSTRUMENT: the chrome-error recorder did not capture its planted nsIScriptError control (listener saw ${r.seen} console message(s))`);
+  }
+}
+
+const recordedErrors = async app => JSON.parse(await app.evaluateIn(app.chrome, 'JSON.stringify(window.__pbErrs || [])'));
+const describeErrors = errs => errs.map(e => `${e.msg} @ ${String(e.src).split('/').pop()}:${e.line}`).join('; ');
+const startFailure = reason => `page_action extension failed to start: ${reason}`;
+const startedCount = () => session.logs.filter(r => r.kind === 'started').length;
+
+async function waitStarted(atLeast, timeoutMs = 20000) {
+  const end = Date.now() + timeoutMs;
+  while (startedCount() < atLeast) {
+    if (Date.now() > end) return false;
+    await sleep(150);
+  }
+  return true;
+}
+
+// Reloads the probe in chrome scope. Resolves { ok } or { error }.
+async function reloadProbe(app) {
+  return JSON.parse(await app.evaluateIn(app.chrome, `(async () => {
+    try {
+      const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+      const addon = await AddonManager.getAddonByID(${JSON.stringify(EXT_ID)});
+      await addon.reload();
+      return JSON.stringify({ ok: true });
+    } catch (e) { return JSON.stringify({ error: String(e) }); }
+  })()`));
+}
+
+// Any framework error the recorder holds, as a start failure; null when none.
+async function startErrorVerdict(app) {
+  const errs = await recordedErrors(app);
+  return errs.length ? startFailure(`the extension framework recorded ${errs.length} error(s): ${describeErrors(errs)}`) : null;
+}
+
+const PLANT_BAD_SELECTED_TAB = `
+  const before = Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get;
+  Object.defineProperty(window.gBrowser, 'selectedTab', { configurable: true, get() { return {}; } });
+  return { landed: Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get !== before };`;
+
+// Zero web tabs, the IDE current, then the first tab after zero: a reload starts the extension each time.
+async function scenarioAdversarialStarts({ app, plant }) {
+  if (!(await waitStarted(1))) return verdict(false, null, startFailure('no started report after the install'));
+  if (plant) {
+    const A = await openAndCommit(app, '/a');
+    const applied = await chromeJson(app, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant bad-selected-tab did not land');
+    const n = startedCount();
+    const r = await reloadProbe(app);
+    if (r.error) return verdict(false, null, startFailure(`reload with web tab ${A.extId} open rejected: ${r.error}`));
+    if (!(await waitStarted(n + 1))) return verdict(false, null, startFailure(`no started report after a reload with web tab ${A.extId} open`));
+    const e = await startErrorVerdict(app);
+    return e ? verdict(false, null, e) : verdict(true, 'the planted selectedTab did not fail the start', null);
+  }
+  // (a) zero web tabs: reload and require a second started, with no framework error.
+  let n = startedCount();
+  let r = await reloadProbe(app);
+  if (r.error) return verdict(false, null, startFailure(`reload at zero web tabs rejected: ${r.error}`));
+  if (!(await waitStarted(n + 1))) return verdict(false, null, startFailure('no started report after a reload at zero web tabs'));
+  const errA = await startErrorVerdict(app);
+  if (errA) return verdict(false, null, errA);
+  // (b) the IDE current with /a open: reload, then the active tab and chrome's selectedTab are still /a.
+  const A = await openAndCommit(app, '/a');
+  await probe(app, `await get('CommandRegistry').executeCommand('preferences:open'); await sleep(800); return true;`);
+  await focusTheiaFrame(app);
+  n = startedCount();
+  r = await reloadProbe(app);
+  if (r.error) return verdict(false, null, startFailure(`reload with the IDE current rejected: ${r.error}`));
+  if (!(await waitStarted(n + 1))) return verdict(false, null, startFailure('no started report after a reload with the IDE current'));
+  const errB = await startErrorVerdict(app);
+  if (errB) return verdict(false, null, errB);
+  await focusTheiaFrame(app);
+  const activeOnA = await command('query', { info: { active: true, currentWindow: true } });
+  const selected = await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(A.webTabId)});
+    const node = window.gBrowser.selectedTab;
+    return { isNull: node === null, isA: Boolean(node) && node.linkedBrowser === o };`);
+  if (activeOnA.length !== 1 || activeOnA[0].id !== A.extId || selected.isNull || !selected.isA) {
+    return verdict(false, null, `active tab moved off /a while the IDE was current: query ${JSON.stringify(activeOnA)}, selectedTab null ${selected.isNull}, selectedTab is /a ${selected.isA}`);
+  }
+  // (c) close /a (zero web tabs), then open /b: onCreated for /b and pageAction.isShown true for /b.
+  await chromeJson(app, `const API = ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserAPI;
+    API.webTabClose(${JSON.stringify(A.webTabId)});
+    return { landed: true };`);
+  if (!(await tryWait(x => x.kind === 'removed' && x.tabId === A.extId, 15000))) {
+    return verdict(false, null, `onRemoved for /a never arrived after its close (tab ${A.extId})`);
+  }
+  const zero = await command('query', { info: {} });
+  if (zero.length !== 0) return verdict(false, null, `zero web tabs after the close: tabs.query returned ${JSON.stringify(zero)}`);
+  const B = await openAndCommit(app, '/b');
+  const createdB = session.logs.some(x => x.kind === 'created' && x.tab && x.tab.id === B.extId);
+  let shown = false;
+  const endShown = Date.now() + 8000;
+  while (!shown && Date.now() < endShown) {
+    shown = (await command('pageShown', { tabId: B.extId })) === true;
+    if (!shown) await sleep(300);
+  }
+  if (!createdB || !shown) {
+    return verdict(false, null, `first tab after zero: onCreated for /b ${createdB}, pageAction.isShown for /b ${shown}`);
+  }
+  const errC = await startErrorVerdict(app);
+  if (errC) return verdict(false, null, errC);
+  return verdict(true, `zero web tabs: reload started it; IDE current: reload started it, active tab stayed /a (${A.extId}) and selectedTab is /a's node; after the close of /a, zero tabs; first tab /b (${B.extId}): onCreated and pageAction.isShown true. Recorder positive control captured before the install; no extension-framework error recorded`, null);
+}
+
+// Toolbar action target: the shell acts on the page on screen, for a page_action-owning probe and an activeTab-only action.
+const PLANT_SELECTED_TO_FIRST = `
+  const before = Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get;
+  Object.defineProperty(window.gBrowser, 'selectedTab', { configurable: true, get() { return window.gBrowser.tabs[0] ?? null; } });
+  return { landed: Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get !== before };`;
+
+const pathOf = u => {
+  try {
+    return new URL(String(u)).pathname;
+  } catch {
+    return String(u);
+  }
+};
+
+async function stockContext(app) {
+  return (await app.contexts('chrome')).find(entry => entry.url.startsWith('chrome://browser/content/browser.xhtml'));
+}
+
+// Triggers the action through the parent entry point in a chrome context; resolves to the next matching record.
+async function triggerAndWait(app, context, extId, kind) {
+  const from = session.logs.length;
+  const result = await app.evaluateIn(context, `(() => {
+    try {
+      const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+      const g = ExtensionParent.apiManager.global;
+      g.browserActionFor(WebExtensionPolicy.getByID(${JSON.stringify(extId)}).extension).triggerAction(window);
+      return 'returned';
+    } catch (e) { return 'threw: ' + e; }
+  })()`);
+  if (result !== 'returned') return { result, record: undefined };
+  return { result, record: await waitSince(from, r => r.kind === kind) };
+}
+
+async function scenarioToolbarTarget({ app }) {
+  await installFixture(app, ACTIVE);
+  const A = await openAndCommit(app, '/a');
+  const C = await openAndCommit(app, '/c');
+  if (!(await makeCurrent(app, C.webTabId))) {
+    return verdict(false, null, `the page on screen did not become /c (tab ${C.extId})`);
+  }
+  const probeShell = await triggerAndWait(app, app.chrome, EXT_ID, 'clicked');
+  if (!probeShell.record) return verdict(false, null, `toolbar action on the shell reached no onClicked (${probeShell.result})`);
+  if (probeShell.record.tabId !== C.extId || pathOf(probeShell.record.url) !== '/c') {
+    return verdict(false, null, `toolbar action acted on ${pathOf(probeShell.record.url)}, not the page on screen /c (tab ${probeShell.record.tabId}, expected ${C.extId}; /a is ${A.extId})`);
+  }
+  const atShell = await triggerAndWait(app, app.chrome, AT_ID, 'at-clicked');
+  if (!atShell.record || atShell.record.tabId !== C.extId || atShell.record.path !== '/c') {
+    return verdict(false, null, `activeTab action on the shell acted on ${atShell.record ? atShell.record.path : 'nothing'}, not the page on screen /c`);
+  }
+  // A GUI-01 stock window on /s takes the action on its own tab; the shell still acts on its page.
+  await probe(app, `await get('CommandRegistry').executeCommand('powerbrowser.open-browser-window', ${JSON.stringify(url('/s'))}); return true;`);
+  await stockTabOn(app, url('/s'), 30000);
+  const stock = await stockContext(app);
+  if (!stock) throw new Error('BROKEN INSTRUMENT: no stock browser window context after the GUI-01 open');
+  const probeStock = await triggerAndWait(app, stock.context, EXT_ID, 'clicked');
+  const atStock = await triggerAndWait(app, stock.context, AT_ID, 'at-clicked');
+  if (!probeStock.record || pathOf(probeStock.record.url) !== '/s') {
+    return verdict(false, null, `toolbar action in the stock window acted on ${probeStock.record ? pathOf(probeStock.record.url) : 'nothing'}, not /s`);
+  }
+  if (!atStock.record || atStock.record.path !== '/s') {
+    return verdict(false, null, `activeTab action in the stock window acted on ${atStock.record ? atStock.record.path : 'nothing'}, not /s`);
+  }
+  await app.evaluateIn(app.chrome, 'window.focus(); true');
+  if (!(await makeCurrent(app, C.webTabId))) return verdict(false, null, `after the shell focus, /c did not become current`);
+  const again = await triggerAndWait(app, app.chrome, EXT_ID, 'clicked');
+  if (!again.record || again.record.tabId !== C.extId) {
+    return verdict(false, null, `after focusing the shell and making /c current, the toolbar action acted on ${again.record ? pathOf(again.record.url) : 'nothing'}, not /c`);
+  }
+  return verdict(true, `toolbar action on the shell acted on /c (${C.extId}), the page on screen; activeTab-only action acted on /c; with a stock window on /s, the stock action acted on /s and the shell still acted on /c (${again.record.tabId})`, null);
+}
+
+// GUI-01 with the shell admitted: badge, sessions, sidebarAction, menus and the commands keyset in the stock window.
+const PLANT_STOCK_BADGE_MISSING = `
+  const node = [...document.querySelectorAll('[data-extensionid]')].find(n => n.getAttribute('data-extensionid') === ${JSON.stringify(FURN_ID)});
+  if (!node) return { landed: false };
+  node.remove();
+  return { landed: true };`;
+
+async function stockBadgeWait(app, context) {
+  const end = Date.now() + 8000;
+  for (;;) {
+    const b = JSON.parse(await app.evaluateIn(context, `JSON.stringify((() => {
+      const n = [...document.querySelectorAll('[data-extensionid]')].find(x => x.getAttribute('data-extensionid') === ${JSON.stringify(FURN_ID)});
+      return { node: Boolean(n), badge: n ? (n.getAttribute('badge') || (n.querySelector('.toolbarbutton-badge') || {}).textContent || '') : '' };
+    })())`));
+    if ((b.node && b.badge === 'X') || Date.now() > end) return b;
+    await sleep(250);
+  }
+}
+
+async function scenarioGui01({ app, plant }) {
+  await probe(app, `await get('CommandRegistry').executeCommand('powerbrowser.open-browser-window', ${JSON.stringify(url('/s'))}); return true;`);
+  await stockTabOn(app, url('/s'), 30000);
+  const stock = await stockContext(app);
+  if (!stock) throw new Error('BROKEN INSTRUMENT: no stock browser window context after the GUI-01 open');
+  await installFixture(app, FURNITURE);
+  if (!(await waitSince(0, r => r.kind === 'fu.started', 20000))) {
+    return verdict(false, null, 'the furniture extension did not start with the stock window open');
+  }
+  if (plant) {
+    const applied = await chromeJsonIn(app, stock.context, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant stock-badge-missing did not land');
+  }
+  const set = await fuCommand(app, 'setBadgeGlobal', { text: 'X' });
+  if (!set.ok) return verdict(false, null, `browserAction.setBadgeText rejected: ${set.error}`);
+  const badge = await stockBadgeWait(app, stock.context);
+  if (!badge.node || badge.badge !== 'X') {
+    return verdict(false, null, `stock window button has no badge 'X': node present ${badge.node}, badge '${badge.badge}'`);
+  }
+  const recent = await fuCommand(app, 'recentlyClosed');
+  const menu = await fuCommand(app, 'menusCreate');
+  const side = await fuCommand(app, 'sidebarIsOpen');
+  const failed = [['sessions.getRecentlyClosed', recent], ['menus.create', menu], ['sidebarAction.isOpen', side]].find(([, r]) => !r.ok);
+  if (failed) return verdict(false, null, `${failed[0]} rejected: ${failed[1].error}`);
+  const keysetExpr = `const { ExtensionCommon } = ChromeUtils.importESModule('resource://gre/modules/ExtensionCommon.sys.mjs');
+    const id = 'ext-keyset-id-' + ExtensionCommon.makeWidgetId(${JSON.stringify(FURN_ID)});
+    return { id, present: document.getElementById(id) !== null };`;
+  const keyset = await chromeJsonIn(app, stock.context, keysetExpr);
+  // Informational only: the shell's keyset is not asserted here (Phase 38 owns the shell's command surface).
+  const shellKeyset = await chromeJson(app, keysetExpr);
+  if (!keyset.present) return verdict(false, null, `stock window has no keyset ${keyset.id} for the extension's commands`);
+  const errs = await recordedErrors(app);
+  if (errs.length) return verdict(false, null, `extension framework error recorded in the GUI-01 session: ${describeErrors(errs)}`);
+  return verdict(true, `stock window badge 'X' shown; sessions.getRecentlyClosed resolved (${recent.result}); menus.create resolved (${menu.result}); sidebarAction.isOpen resolved (${side.result}); keyset ${keyset.id} present in the stock window (shell keyset present ${shellKeyset.present}, informational); no framework error`, null);
+}
+
+// The extension-path scheme wall: tabs.update to a moz-extension URL is refused; http(s) still loads.
+const PLANT_WALL_UNKEYED = `
+  const root = document.documentElement;
+  const had = root.hasAttribute('extensiontabhost');
+  root.removeAttribute('extensiontabhost');
+  return { landed: had && !root.hasAttribute('extensiontabhost') };`;
+const RESTORE_WALL_KEY = `document.documentElement.setAttribute('extensiontabhost', 'true'); return { restored: true };`;
+
+async function scenarioSchemeWall({ app, plant }) {
+  const A = await openAndCommit(app, '/a');
+  if (plant) {
+    const applied = await chromeJson(app, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant wall-unkeyed did not land');
+  }
+  let refusal = null;
+  try {
+    await command('updateExtPage', { tabId: A.extId });
+  } catch (e) {
+    refusal = e.message;
+  }
+  if (plant) await chromeJson(app, RESTORE_WALL_KEY);
+  await sleep(1000);
+  const seen = await command('get', { tabId: A.extId });
+  const overlay = await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(A.webTabId)});
+    return { spec: o ? o.currentURI.spec : null };`);
+  if (String(seen.url).startsWith('moz-extension:') || String(overlay.spec).startsWith('moz-extension:')) {
+    return verdict(false, null, `web tab navigated to an extension page: tabs.get ${seen.url}, overlay ${overlay.spec}`);
+  }
+  if (!String(seen.url).endsWith('/a') || !String(overlay.spec).endsWith('/a')) {
+    return verdict(false, null, `web tab /a changed after the refused update: tabs.get ${seen.url}, overlay ${overlay.spec}`);
+  }
+  if (refusal === null) return verdict(false, null, 'tabs.update to a moz-extension URL was not refused');
+  // Positive control in the same session: an http update loads /d through the same onUpdated recorder.
+  await command('update', { tabId: A.extId, props: { url: url('/d') } });
+  const updated = await tryWait(r => r.kind === 'updated' && r.tabId === A.extId && String(r.url).endsWith('/d'), 20000);
+  const after = await command('get', { tabId: A.extId });
+  if (!updated || !String(after.url).endsWith('/d')) {
+    return verdict(false, null, `positive control: tabs.update to http(s) did not load /d (onUpdated ${Boolean(updated)}, tabs.get ${after.url})`);
+  }
+  return verdict(true, `tabs.update to a moz-extension URL refused (${refusal}); the tab stayed /a in tabs.get and in chrome; tabs.update to http(s) loaded /d (onUpdated and tabs.get)`, null);
+}
+
+// Theia absence over a session of up to four web tabs. Every absence has the same-session controls below.
+const tabIdsOf = r => {
+  switch (r.kind) {
+    case 'created':
+      return r.tab ? [r.tab.id] : [];
+    case 'updated':
+    case 'removed':
+    case 'activated':
+    case 'request':
+    case 'committed':
+    case 'sender':
+      return [r.tabId];
+    default:
+      return [];
+  }
+};
+
+async function scenarioTheiaNever({ app, theia, plant }) {
+  const origin0 = await app.evaluate('location.origin');
+  if (origin0 !== theia.origin) {
+    return verdict(false, null, `WebDriver origin at the start is ${origin0}, expected the Theia origin ${theia.origin}`);
+  }
+  const tabs = [];
+  const absent = async where => {
+    const info = await theiaInfo(app);
+    if (info.extensionId !== -1) return `Theia frame visible to extensions: ${where}: getBrowserData(frame).tabId is ${info.extensionId}`;
+    const listed = (await command('query', { info: {} })).filter(t => String(t.url).startsWith(theia.origin));
+    if (listed.length) return `Theia frame visible to extensions: ${where}: tabs.query listed ${JSON.stringify(listed)}`;
+    if (session.logs.some(r => JSON.stringify(r).includes(theia.origin))) {
+      return `Theia frame visible to extensions: ${where}: an extension record names the Theia origin ${theia.origin}`;
+    }
+    const webIds = tabs.map(t => t.extId);
+    for (const r of session.logs) {
+      for (const id of tabIdsOf(r)) {
+        if (!webIds.includes(id)) return `a ${r.kind} record named tab id ${id}, which is no web tab of this session (${where})`;
+      }
+    }
+    return null;
+  };
+  const step = async (where, opener) => {
+    const tab = opener ? await opener() : null;
+    if (tab) tabs.push(tab);
+    return absent(where);
+  };
+  let v = await step('after tab A', () => openAndCommit(app, '/a'));
+  if (v) return verdict(false, null, v);
+  v = await step('after tab B', () => openAndCommit(app, '/b'));
+  if (v) return verdict(false, null, v);
+  await makeCurrent(app, tabs[0].webTabId);
+  await makeCurrent(app, tabs[1].webTabId);
+  v = await step('after activating A and B', null);
+  if (v) return verdict(false, null, v);
+  v = await step('after tab C', () => openAndCommit(app, '/c'));
+  if (v) return verdict(false, null, v);
+  if (plant) {
+    const applied = await chromeJson(app, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant theia-in-tabs-late did not land');
+    v = await absent('after the third web tab, with the planted node');
+    return v ? verdict(false, null, v) : verdict(true, 'the planted Theia node was not seen', null);
+  }
+  v = await step('after tab D', () => openAndCommit(app, '/d'));
+  if (v) return verdict(false, null, v);
+  const [A, B, C] = tabs;
+  await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(B.webTabId)});
+    o.fixupAndLoadURIString(${JSON.stringify(url('/c'))}, { triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}) });
+    return { landed: true };`);
+  const navB = await tryWait(r => r.kind === 'committed' && r.tabId === B.extId && String(r.url).endsWith('/c'), 30000);
+  if (!navB) return verdict(false, null, `navigation of tab B to /c was not reported by webNavigation.onCommitted for tab ${B.extId}`);
+  v = await absent('after navigating B to /c');
+  if (v) return verdict(false, null, v);
+  await chromeJson(app, `const API = ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserAPI;
+    API.webTabClose(${JSON.stringify(C.webTabId)});
+    return { landed: true };`);
+  if (!(await tryWait(r => r.kind === 'removed' && r.tabId === C.extId, 15000))) {
+    return verdict(false, null, `onRemoved for closed tab C (${C.extId}) never arrived`);
+  }
+  v = await absent('after closing C');
+  if (v) return verdict(false, null, v);
+  // Positive controls, same session: WebDriver still reaches the frame at the end, and every tab was reported.
+  const origin1 = await app.evaluate('location.origin');
+  const first = await chromeJson(app, `return { frameFirst: window.gBrowser.webDriverTabs[0].linkedBrowser === document.getElementById('powerbrowser-content') };`);
+  const reported = tabs.every(t => session.logs.some(r => r.kind === 'created' && r.tab && r.tab.id === t.extId));
+  const committed = tabs.every(t => session.logs.some(r => r.kind === 'committed' && r.tabId === t.extId));
+  if (origin1 !== theia.origin || !first.frameFirst || !reported || !committed) {
+    return verdict(false, null, `positive controls failed: WebDriver origin ${origin1}, webDriverTabs[0] is the frame ${first.frameFirst}, every tab created ${reported}, every tab committed ${committed}`);
+  }
+  return verdict(true, `four web tabs (${tabs.map(t => t.extId).join(', ')}), activated, B navigated to /c, C closed: no tabs.query row, event, request, sender report or record named the Theia origin, and every tab id was a web tab of this session; getBrowserData(frame).tabId stayed -1 at every step; WebDriver still reached the frame at both ends (${origin1}); every opened tab was reported`, null);
+}
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
@@ -577,6 +1097,11 @@ const SCENARIOS = {
   'focus-follow': scenarioFocusFollow,
   'window-type': scenarioWindowType,
   execute: scenarioExecute,
+  'adversarial-starts': scenarioAdversarialStarts,
+  'toolbar-target': scenarioToolbarTarget,
+  gui01: scenarioGui01,
+  'scheme-wall': scenarioSchemeWall,
+  'theia-never': scenarioTheiaNever,
 };
 
 // Each plant names its scenario, the expected red text, and the chrome-scope mutation.
@@ -590,6 +1115,11 @@ const PLANTS = {
   'focus-ignored': { scenario: 'focus-follow', expect: 'active tab did not follow page focus', body: PLANT_FOCUS_IGNORED },
   'popup-type': { scenario: 'window-type', expect: 'shell window reported as popup', body: PLANT_POPUP_TYPE },
   'swapped-browser': { scenario: 'execute', expect: 'executeScript on tab A ran in /b', late: PLANT_SWAPPED_BROWSER },
+  'bad-selected-tab': { scenario: 'adversarial-starts', expect: 'page_action extension failed to start', late: () => PLANT_BAD_SELECTED_TAB },
+  'selected-not-visible': { scenario: 'toolbar-target', expect: 'toolbar action acted on /a, not the page on screen /c', body: PLANT_SELECTED_TO_FIRST },
+  'stock-badge-missing': { scenario: 'gui01', expect: 'stock window button has no badge', late: () => PLANT_STOCK_BADGE_MISSING },
+  'wall-unkeyed': { scenario: 'scheme-wall', expect: 'web tab navigated to an extension page', late: () => PLANT_WALL_UNKEYED },
+  'theia-in-tabs-late': { scenario: 'theia-never', expect: 'Theia frame visible to extensions', late: () => PLANT_THEIA_IN_TABS },
 };
 
 // ---------------------------------------------------------------------------
@@ -611,11 +1141,11 @@ async function stampCheck() {
 async function runSession(scenarioName, plantName = null) {
   resetSession();
   const plant = plantName ? PLANTS[plantName] : null;
-  const probeDir = { value: null };
   try {
     return await withProbeShell(
       async app => {
-        probeDir.value = await installProbe(app);
+        await installErrorRecorder(app);
+        await installProbe(app);
         const theia = await waitForTheiaOrigin(app);
         if (plant && plant.body) {
           const applied = await chromeJson(app, plant.body);
@@ -632,7 +1162,7 @@ async function runSession(scenarioName, plantName = null) {
     if (text.startsWith('BROKEN INSTRUMENT')) return { broken: true, ok: false, detail: null, fail: text };
     return { ok: false, detail: null, fail: text };
   } finally {
-    if (probeDir.value) await rm(probeDir.value, { recursive: true, force: true });
+    for (const dir of sessionDirs.splice(0)) await rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -673,7 +1203,7 @@ async function main() {
       console.log(`  control ${plant.scenario}: PASS -- the clean run is green before the plant`);
       const red = await runSession(plant.scenario, plantName);
       if (!red.ok && red.fail && red.fail.includes(plant.expect)) {
-        console.log(`  ok  plant ${plantName} -> red, naming '${plant.expect}'`);
+        console.log(`  ok  plant ${plantName} -> red, naming '${plant.expect}': ${red.fail}`);
       } else {
         failed++;
         console.log(`${NAME} --self-test: FAIL -- plant ${plantName} did not go red naming '${plant.expect}': ${red.fail}`);
