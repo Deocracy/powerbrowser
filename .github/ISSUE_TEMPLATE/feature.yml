@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a new behavior or a capability for PowerBrowser.
+title: "[Feature]: "
+labels: ["type/feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the suggestion. A maintainer reviews every new request.
+        Describe the problem first, then the change you would like.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The change you would like
+      description: What PowerBrowser should do instead.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Optional. Other ways to reach the same result.
+    validations:
+      required: false

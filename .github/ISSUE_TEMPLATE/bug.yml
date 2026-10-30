@@ -1,0 +1,58 @@
+name: Bug report
+description: Report something in PowerBrowser that does not work as documented.
+title: "[Bug]: "
+labels: ["type/bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting this. A maintainer reviews every new report.
+        Describe what you saw. Do not paste passwords, tokens or private keys into this form.
+  - type: input
+    id: version
+    attributes:
+      label: PowerBrowser version
+      description: The version shown in the About dialog.
+      placeholder: "for example 153.5.1-1"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Your operating system and its version.
+      placeholder: "for example Ubuntu 26.04, Windows 11 or macOS 15"
+    validations:
+      required: true
+  - type: input
+    id: install_format
+    attributes:
+      label: How PowerBrowser was installed
+      description: The install format you used.
+      placeholder: "tarball, Windows installer, macOS disk image or Nix"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact steps that cause the problem, in order.
+      placeholder: |
+        1. Open PowerBrowser.
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Optional. Paste any error text or log lines. Remove personal details first.
+    validations:
+      required: false
