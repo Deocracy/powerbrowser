@@ -13,10 +13,14 @@
 //     text fields version, os and install_format under their frozen ids. The
 //     feature form names type/feature and needs-triage.
 //  3. Workflow writers. Every .github/workflows/*.yml is parsed, and only
-//     issue-label writers are read: a run: line calling gh issue or gh pr with
-//     --label or --add-label, and a step whose uses: names a label or issue
-//     action and whose with.labels is set. runs-on is never read, so a runner
-//     name can never satisfy the agreement.
+//     label writers are read: a run: command, with backslash continuations
+//     joined, calling gh issue or gh pr create or edit with --label, --label=,
+//     --add-label or -l; a gh api .../labels call with a labels[] body field; a
+//     step whose uses: names a label or issue action and whose with.labels is
+//     set; and a github-script step whose script calls addLabels or sets a
+//     labels: [ ... ] array of quoted names. runs-on is never read, so a runner
+//     name can never satisfy the agreement. A label held in a variable is not
+//     read here and is not checked.
 //  4. Agreement. Every referenced label equals a declared name exactly, case
 //     sensitive. A declared label that no form or workflow names is a triage
 //     label applied by hand and is not a fault.
@@ -113,9 +117,19 @@ function labelValues(rel, value, fail) {
     return out;
 }
 
-// --gh issue/pr create|edit with --label or --add-label, one value per flag.
-const LABEL_FLAG = /--(?:add-)?label[ =]+(?:"([^"]*)"|'([^']*)'|([^\s"']+))/g;
+// A backslash at a line end continues the command, so run: text is joined before any line is matched.
+const joinContinuations = (text) => text.replace(/\\\r?\n[ \t]*/g, ' ');
 const ISSUE_CMD = /\bgh\s+(?:issue|pr)\s+(?:create|edit)\b/;
+// --label x, --label=x, --label "x", --add-label x, and -l x. The -l form needs a
+// leading space, so a flag such as --tail is not read as a label.
+const LABEL_FLAG = /(?:--(?:add-)?label|(?<=\s)-l)(?:\s+|=)(?:"([^"]*)"|'([^']*)'|([^\s"']+))/g;
+// gh api .../labels with a labels[] or labels body field, given by -f, -F, --field or --raw-field.
+const API_LABELS_PATH = /\bgh\s+api\b.*\/labels\b/;
+const API_LABEL_FIELD = /(?:-f|-F|--field|--raw-field)(?:\s+|=)["']?labels(?:\[\])?=([^\s"']+)/g;
+// github-script: the quoted names inside a labels: [ ... ] array, in a script that adds labels.
+const SCRIPT_WRITER = /\baddLabels\s*\(|\blabels\s*:/;
+const SCRIPT_LABEL_ARRAY = /\blabels\s*:\s*\[([^\]]*)\]/g;
+const SCRIPT_LITERAL = /(['"])([^'"\n]*)\1/g;
 
 function workflowWriters(rel, doc, addRef) {
     const jobs = isObj(doc?.jobs) ? Object.values(doc.jobs) : [];
@@ -123,16 +137,29 @@ function workflowWriters(rel, doc, addRef) {
         const steps = Array.isArray(job?.steps) ? job.steps : [];
         for (const step of steps) {
             if (typeof step?.run === 'string') {
-                for (const line of step.run.split('\n')) {
-                    if (!ISSUE_CMD.test(line)) continue;
-                    for (const m of line.matchAll(LABEL_FLAG)) {
-                        for (const label of labelValues(rel, m[1] ?? m[2] ?? m[3], () => {})) addRef(rel, label);
+                for (const line of joinContinuations(step.run).split('\n')) {
+                    if (ISSUE_CMD.test(line)) {
+                        for (const m of line.matchAll(LABEL_FLAG)) {
+                            for (const label of labelValues(rel, m[1] ?? m[2] ?? m[3], () => {})) addRef(rel, label);
+                        }
+                    }
+                    if (API_LABELS_PATH.test(line)) {
+                        for (const m of line.matchAll(API_LABEL_FIELD)) {
+                            for (const label of labelValues(rel, m[1], () => {})) addRef(rel, label);
+                        }
                     }
                 }
             }
             const w = step?.with;
             if (isObj(w) && w.labels !== undefined && typeof step.uses === 'string' && /label|issue/i.test(step.uses)) {
                 for (const label of labelValues(rel, w.labels, () => {})) addRef(rel, label);
+            }
+            if (isObj(w) && typeof w.script === 'string' && /github-script/i.test(String(step.uses)) && SCRIPT_WRITER.test(w.script)) {
+                for (const m of w.script.matchAll(SCRIPT_LABEL_ARRAY)) {
+                    for (const lit of m[1].matchAll(SCRIPT_LITERAL)) {
+                        if (lit[2].trim() !== '') addRef(rel, lit[2].trim());
+                    }
+                }
             }
         }
     }
@@ -307,6 +334,10 @@ const workflowPlant = (name, runsOn, run) => ({
         [`${WORKFLOWS_DIR}/${name}`]: `on: workflow_dispatch\njobs:\n  triage:\n    runs-on: [${runsOn}]\n    steps:\n      - run: ${JSON.stringify(run)}\n`,
     },
 });
+const stepPlant = (name, step) => ({
+    extra: { [`${WORKFLOWS_DIR}/${name}`]: yaml.dump({ on: 'workflow_dispatch', jobs: { triage: { 'runs-on': 'ubuntu-latest', steps: [step] } } }) },
+});
+const SCRIPT = 'actions/github-script@v7';
 const merged = (...plants) => ({ extra: Object.assign({}, ...plants.map(p => p.extra ?? {})), hidden: plants.flatMap(p => p.hidden ?? []) });
 
 const BUG = `${FORMS_DIR}/bug.yml`;
@@ -326,6 +357,13 @@ function selfTest() {
         ['an undeclared label in a form', formPlant(BUG, d => { d.labels.push('planted-undeclared'); return d; }), [BUG, 'planted-undeclared']],
         ['an undeclared label in a workflow snippet', workflowPlant('planted-labels.yml', 'self-hosted, legion', 'gh issue edit 1 --add-label planted-undeclared'), ['planted-labels.yml', 'planted-undeclared']],
         ['a case-variant form label', formPlant(BUG, d => { d.labels = ['Type/Bug', 'needs-triage']; return d; }), ['"Type/Bug"', 'not declared']],
+        ['a --label flag with a space', workflowPlant('planted-space.yml', 'ubuntu-latest', 'gh issue edit 1 --label planted-undeclared'), ['planted-space.yml', 'planted-undeclared']],
+        ['a --label=value flag', workflowPlant('planted-equals.yml', 'ubuntu-latest', 'gh issue edit 1 --label=planted-undeclared'), ['planted-equals.yml', 'planted-undeclared']],
+        ['a -l short flag', workflowPlant('planted-short.yml', 'ubuntu-latest', 'gh issue create --title x -l planted-undeclared'), ['planted-short.yml', 'planted-undeclared']],
+        ['a --label on a backslash-continued line', stepPlant('planted-continued.yml', { run: 'gh issue create \\\n  --title planted \\\n  --label planted-undeclared' }), ['planted-continued.yml', 'planted-undeclared']],
+        ['a gh api labels body field', stepPlant('planted-api.yml', { run: 'gh api repos/o/r/issues/1/labels -f labels[]=planted-undeclared' }), ['planted-api.yml', 'planted-undeclared']],
+        ['a github-script addLabels array', stepPlant('planted-addlabels.yml', { uses: SCRIPT, with: { script: "await github.rest.issues.addLabels({ owner, repo, issue_number: 1, labels: ['planted-undeclared'] });" } }), ['planted-addlabels.yml', 'planted-undeclared']],
+        ['a github-script labels array', stepPlant('planted-array.yml', { uses: SCRIPT, with: { script: 'await github.rest.issues.create({ owner, repo, title: "x", labels: ["planted-undeclared"] });' } }), ['planted-array.yml', 'planted-undeclared']],
         ['an expression as a workflow label', workflowPlant('planted-labels.yml', 'ubuntu-latest', 'gh issue edit 1 --add-label "${{ inputs.label }}"'), ['planted-labels.yml', 'expression']],
         ['a malformed labels.json', { extra: { [LABELS_REL]: '{ "labels": [ ' } }, [LABELS_REL, 'JSON']],
         ['a case-variant duplicate in labels.json', labelsPlant(b => { b.labels.push({ name: 'TYPE/BUG', color: 'd73a4a', description: 'planted' }); }), ['"TYPE/BUG"', 'one label']],
