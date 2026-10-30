@@ -17,11 +17,11 @@ provides:
 
 # Actuals — pairs with the plan's `estimate` to calibrate future estimates.
 actuals:
-  tokens: 20764    # chars/4 over the added lines of the code commits (git diff 6d5170c..9c097a6, powerbrowser/theia/scripts)
+  tokens: 20804   # chars/4 over the added lines of the code commits (git diff 6d5170c..fb88c70, powerbrowser/theia/scripts)
   tasks: 3
-  commits: 5       # MEASURED: git rev-list --count 6d5170c..9c097a6
+  commits: 6       # MEASURED: git rev-list --count 6d5170c..fb88c70
   plan_head_before: 6d5170c4d7bd3224700574a617b5c960c836854e
-  plan_head_after: 9c097a607606032907c2a6188ae9a83959da36b7
+  plan_head_after: fb88c70
 
 # Tech tracking
 tech-stack:
@@ -123,6 +123,7 @@ Plan 31-03 commits, oldest first (`git log --oneline 6d5170c..HEAD`):
 - `916e0cf` feat(31-03): shield count, exception toggle and identity-box shield (SITE-08)
 - `bb48f47` test(31-03): static gate for the clear exemption and the shield scope (SITE-07/08)
 - `9c097a6` test(31-03): live clear-data and shield scenarios with planted faults (SITE-07/08)
+- `fb88c70` fix(31-03): close the site panel after an applied shield change (live run found the stale count)
 
 The docs commit that carries this file and the handoff is not counted, as in 31-01 and 31-02.
 
