@@ -665,6 +665,14 @@ const EXPECTED_NAV_COPY = new Set([
   "Turn off protection for this site",
   "Turn protection back on",
   "Tracking protection is off for this site",
+  "Application menu",
+  "New Tab",
+  "Settings",
+  "Passwords",
+  "Add-ons",
+  "Help",
+  "Quit ${name}",
+  "${name} (Coming soon)",
 ]);
 
 /**

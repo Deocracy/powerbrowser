@@ -118,6 +118,15 @@ export const CHROME_BAR_COPY = Object.freeze({
     shieldTurnOff: 'Turn off protection for this site',
     shieldTurnOn: 'Turn protection back on',
     shieldExcepted: 'Tracking protection is off for this site',
+    // Phase 31 plan 04 (MENU-01/02, UI-SPEC hamburger): the button, the rows and the captions.
+    appMenu: 'Application menu',
+    menuNewTab: 'New Tab',
+    menuSettings: 'Settings',
+    menuPasswords: 'Passwords',
+    menuAddons: 'Add-ons',
+    menuHelp: 'Help',
+    menuQuit: (subject: string) => `Quit ${subject}`,
+    comingSoonRow: (label: string) => `${label} (Coming soon)`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

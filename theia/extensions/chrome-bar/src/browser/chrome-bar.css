@@ -1105,3 +1105,12 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     height: 16px;
     color: var(--theia-notificationsWarningIcon-foreground);
 }
+
+/* Phase 31 plan 04 (MENU-01, UI-SPEC hamburger): the application menu sheet, 280px wide with 32px rows. */
+.lm-Menu.pb-app-menu {
+    width: 280px;
+    min-width: 280px;
+}
+.lm-Menu.pb-app-menu .lm-Menu-item {
+    height: 32px;
+}

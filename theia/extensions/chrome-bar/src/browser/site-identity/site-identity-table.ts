@@ -52,26 +52,36 @@ export const STOCK_PAGES: readonly StockPage[] = Object.freeze([
     'support',
 ]);
 
-/** One hamburger row: its stable id, the stock page it opens (absent: a bar feature), and the plan that lands it. */
+/**
+ * One hamburger row: its stable id, the stock page it opens (absent: a bar
+ * feature or Quit), the phase that lands it (`minPhase`), and its Firefox
+ * separator group (rows of one group sit together; a separator falls between
+ * groups).
+ */
 export interface MenuEntry {
     menuId: string;
     stockPage?: StockPage;
     minPhase: number;
+    group: number;
 }
 
+/** The phase this phase lands: rows with a higher `minPhase` are MENU-03 slots, reserved and absent. */
+export const MENU_PHASE = 31;
+
 /**
- * D-31-08/D-31-11: the hamburger in Firefox order, filtered at render time
- * to rows whose `minPhase` has landed. The gate reads the same table; plans
- * 02/04 land the rows this plan only skips over.
+ * D-31-08/D-31-11: the hamburger in Firefox order (UI-SPEC: New Tab, History,
+ * Downloads, separator, Settings, Passwords, Add-ons, separator, Help,
+ * separator, Quit). History is a MENU-03 row (REQUIREMENTS MENU-03, Phase 33),
+ * so its slot is reserved at `minPhase` 33 and not rendered in this phase.
  */
 export const MENU_ORDER: readonly MenuEntry[] = Object.freeze([
-    { menuId: 'new-tab', minPhase: 27 },
-    { menuId: 'history', minPhase: 27 },
-    { menuId: 'settings', stockPage: 'settings', minPhase: 31 },
-    { menuId: 'passwords', stockPage: 'passwords', minPhase: 31 },
-    { menuId: 'addons', stockPage: 'addons', minPhase: 31 },
-    { menuId: 'help', stockPage: 'support', minPhase: 31 },
-    { menuId: 'quit', minPhase: 31 },
+    { menuId: 'new-tab', minPhase: 27, group: 1 },
+    { menuId: 'history', minPhase: 33, group: 1 },
+    { menuId: 'settings', stockPage: 'settings', minPhase: 31, group: 2 },
+    { menuId: 'passwords', stockPage: 'passwords', minPhase: 31, group: 2 },
+    { menuId: 'addons', stockPage: 'addons', minPhase: 31, group: 2 },
+    { menuId: 'help', stockPage: 'support', minPhase: 31, group: 3 },
+    { menuId: 'quit', minPhase: 31, group: 4 },
 ]);
 
 /**

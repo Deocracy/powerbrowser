@@ -34,11 +34,34 @@ import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 import { OrganisingWidget } from '@powerbrowser/modes/lib/browser/organising-widget';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
+import { ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
+import { MENU_ORDER, MENU_PHASE } from './site-identity/site-identity-table';
+import { APP_MENU_ID, AppMenuRow, WIRED_MENU_IDS, buildAppMenu } from './site-identity/app-menu';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
 import '../../src/browser/chrome-bar.css';
 
 /** NAV-03: the session-history menu's path. The menu is built per request from the history reply, never registered. */
 const HISTORY_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-history'];
+
+/** Phase 31 plan 04 (MENU-01): the hamburger's per-request menu path. Built on each open, never registered. */
+const APP_MENU_PATH: MenuPath = [APP_MENU_ID];
+
+/**
+ * Phase 31 plan 04 (MENU-01/02): a menu row's label from CHROME_BAR_COPY. A row
+ * with no case is a table row this widget does not know, so it throws rather
+ * than show an identifier.
+ */
+function appMenuLabel(menuId: string): string {
+    switch (menuId) {
+        case 'new-tab': return CHROME_BAR_COPY.menuNewTab;
+        case 'settings': return CHROME_BAR_COPY.menuSettings;
+        case 'passwords': return CHROME_BAR_COPY.menuPasswords;
+        case 'addons': return CHROME_BAR_COPY.menuAddons;
+        case 'help': return CHROME_BAR_COPY.menuHelp;
+        case 'quit': return CHROME_BAR_COPY.menuQuit(appSubject());
+        default: throw new Error(`no label for menu row ${menuId}`);
+    }
+}
 
 /** NAV-03: Firefox's click-hold delay before Back/Forward open the history menu. */
 const HISTORY_HOLD_MS = 500;
@@ -122,6 +145,10 @@ export class ChromeBarWidget extends ReactWidget {
     /** NAV-03: renders the Back/Forward session-history menu as a stock `.lm-Menu`. */
     @inject(ContextMenuRenderer)
     protected readonly menus: ContextMenuRenderer;
+
+    /** Phase 31 plan 04 (MENU-02): the stock-page store kind, sent only from the app menu's row handler. */
+    @inject(ChromeStoreClient)
+    protected readonly store: ChromeStoreClient;
 
     /** NAV-06: middle-click and Ctrl+click open a background tab; a dropped link a foreground one. */
     @inject(WebTabOpenHandler)
@@ -389,6 +416,53 @@ export class ChromeBarWidget extends ReactWidget {
         this.openHistoryMenu(e.currentTarget);
     };
 
+    /** Phase 31 plan 04 (MENU-01): the hamburger opens the per-request application menu under the button. */
+    protected onAppMenuClick = (e: ButtonEvent): void => {
+        this.openAppMenu(e.currentTarget);
+    };
+
+    protected openAppMenu(button: HTMLElement): void {
+        const menu = buildAppMenu(MENU_ORDER, WIRED_MENU_IDS, MENU_PHASE, {
+            label: (menuId, enabled) => (enabled ? appMenuLabel(menuId) : CHROME_BAR_COPY.comingSoonRow(appMenuLabel(menuId))),
+            run: row => this.runAppMenuRow(row),
+        });
+        const rect = button.getBoundingClientRect();
+        const before = new Set(Array.from(document.querySelectorAll('.lm-Menu')));
+        this.menus.render({
+            menuPath: APP_MENU_PATH,
+            menu,
+            anchor: { x: rect.left, y: rect.bottom },
+            context: button,
+            includeAnchorArg: false,
+        });
+        // The renderer takes no class; the menu it just drew is marked so the sheet can size it (MENU-01, UI-SPEC 280px).
+        for (const element of Array.from(document.querySelectorAll('.lm-Menu'))) {
+            if (!before.has(element)) {
+                element.classList.add('pb-app-menu');
+            }
+        }
+    }
+
+    /** Phase 31 plan 04: a wired row's action. The builder never calls this for a disabled row. */
+    protected runAppMenuRow(row: AppMenuRow): void {
+        if (row.menuId === 'new-tab') {
+            void this.runCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)();
+            return;
+        }
+        if (row.stockPage) {
+            void this.openStockPageRow(row.stockPage);
+        }
+    }
+
+    /** Phase 31 plan 04 (MENU-02): opens one stock page by its enum name; a failure is logged by error name only. */
+    protected async openStockPageRow(page: string): Promise<void> {
+        try {
+            await this.store.openStockPage(page);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening a stock page failed:', error instanceof Error ? error.name : typeof error);
+        }
+    }
+
     protected runCommand = (id: string) => async (): Promise<void> => {
         try {
             await this.commands.executeCommand(id);
@@ -616,6 +690,15 @@ export class ChromeBarWidget extends ReactWidget {
                 onDrop={this.onNewTabDrop}
             >
                 <span className='codicon codicon-plus' />
+            </button>
+            <button
+                className='pb-chrome-bar-button'
+                aria-label={CHROME_BAR_COPY.appMenu}
+                title={CHROME_BAR_COPY.appMenu}
+                aria-haspopup='menu'
+                onClick={this.onAppMenuClick}
+            >
+                <span className='codicon codicon-menu' />
             </button>
             <div className='pb-chrome-bar-toggle' role='group' aria-label='Mode'>
                 {ChromeBarWidget.MODES.map(name => (
