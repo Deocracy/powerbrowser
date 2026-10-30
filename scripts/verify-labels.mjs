@@ -49,6 +49,8 @@ const SELF_REL = 'scripts/verify-labels.mjs';
 const LABELS_REL = '.github/settings/labels.json';
 const FORMS_DIR = '.github/ISSUE_TEMPLATE';
 const WORKFLOWS_DIR = '.github/workflows';
+// Frozen by the GH-01 contract in the Phase 42 CONTEXT (.planning/workstreams/deploy/phases/42-community-surface-and-release-documentation-a/42-CONTEXT.md),
+// so the form files, the required labels and the BUG_IDS are not derived from the tree: TEL-05 (Phase 53) prefills those ids by name.
 const FORM_FILES = Object.freeze(['bug.yml', 'feature.yml', 'config.yml']);
 // The labels each form must name, and the text fields the bug form freezes for the in-app report link.
 const REQUIRED_LABELS = Object.freeze({
