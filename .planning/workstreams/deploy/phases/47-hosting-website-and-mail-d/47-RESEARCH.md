@@ -47,7 +47,7 @@ None — discuss phase skipped.
 | ID | Description (from REQUIREMENTS.md) | Research Support |
 |----|------------------------------------|------------------|
 | INF-01 | DNS for powerbrowser.org moves from Namecheap to Cloudflare. The Namecheap records, mail forwarding and redirects are inventoried before the move, DNSSEC is off during it, and every inventoried record resolves after it. | DNS-move procedure, inventory pattern, verification commands |
-| INF-06 | The Cloudflare account has 2FA, and every Cloudflare credential has one named holder: a wrangler deploy token in the scheduler and telemetry repos only; an R2 object-write token scoped to the MAR fallback bucket, held only as a `release` environment secret (DIST-08); and no Cloudflare token in the maintenance sweep, which writes download counts through the telemetry Worker (TEL-11). Each token has a `docs/RENEWALS.md` row. | Credential-hygiene design, RENEWALS row shape, sweep token-absence check |
+| INF-06 | The Cloudflare account has 2FA, and every Cloudflare credential has one named holder: a wrangler deploy token in the scheduler and telemetry repos only; an R2 object-write token scoped to the MAR origin bucket (primary, owner ruling 2026-10-29), held only as a `release` environment secret (DIST-08); and no Cloudflare token in the maintenance sweep, which writes download counts through the telemetry Worker (TEL-11). Each token has a `docs/RENEWALS.md` row. | Credential-hygiene design, RENEWALS row shape, sweep token-absence check |
 | DIST-03 | `powerbrowser-updates` deploys to Cloudflare Pages at updates.powerbrowser.org with one `update.xml` per channel and BUILD_TARGET plus one `_redirects` 200 rule. A live probe of a real 11-segment update URL, with the escapes and parentheses a client sends, returns the descriptor. The full-tier row `updates-repo-static` asserts through `gh api` that `powerbrowser-updates` has no `functions/` and no `_worker.js`; its self-test plants each in a fixture listing. | `_redirects` semantics, probe shapes, registry-row + self-test design |
 | INF-02 | Cloudflare Email Routing delivers security@, contact@ and privacy@powerbrowser.org to the owner, shown by one test message to each. | Email Routing setup, test-message proof pattern |
 | WEB-01 | powerbrowser.org's home page is static HTML with zero external requests and no per-release version facts. It spells the product "PowerBrowser" (fixing `index.html:348`) and carries the footer sentence "DeBIOS Foundation and PowerBrowser are not officially associated with Mozilla or its products". | Static-site content contract, zero-third-party pattern |
@@ -75,7 +75,7 @@ The single genuine technical open item is the live `_redirects` probe on the 11-
 | Update descriptor serving | CDN / Static (Pages + `_redirects` proxy) | — | Byte-static `update.xml` per channel/target; rewrite is edge config, not compute |
 | `/.well-known/security.txt` | CDN / Static (zone feature) | — | Served dynamically by the Cloudflare zone, not by either Pages project |
 | Inbound mail (security@/contact@/privacy@) | Cloudflare Email Routing | Owner mailbox | Forwarding only; no mailbox, no Worker, no storage on Cloudflare |
-| MAR bytes | GitHub Releases (forge) | R2 fallback origin (Phase 49) | Pages caps single assets at 25 MiB; a MAR is far larger, so bytes never touch Pages |
+| MAR bytes | R2 at downloads.powerbrowser.org (primary, owner ruling 2026-10-29) | GitHub Release (archival copy) | Pages caps single assets at 25 MiB; a MAR is far larger, so bytes never touch Pages |
 | Static-only enforcement of updates repo | CI / verification (registry row) | — | `gh api` read-back in this repo's driver; the updates repo itself carries no checks |
 | Credential holders and renewal dates | Repo docs (`docs/RENEWALS.md`) | Release-train sweep (Phase 48 reads them) | Dates are data; the sweep, not this phase, turns them into alerts |
 
@@ -362,7 +362,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 
 **Deprecated/outdated:**
 - The `/download /#download 302` line: no consumer after multi-page ships; do not carry it.
-- Any plan to serve MAR bytes from Pages: Pages caps single assets at 25 MiB [CITED: https://developers.cloudflare.com/pages/platform/limits/]; MARs stay on Releases (+ R2 fallback in Phase 49).
+- Any plan to serve MAR bytes from Pages: Pages caps single assets at 25 MiB [CITED: https://developers.cloudflare.com/pages/platform/limits/]; MARs are served from R2 (downloads.powerbrowser.org, Phase 49).
 
 ## Assumptions Log
 
@@ -482,7 +482,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 |---------------|---------|------------------|
 | V1 Architecture | yes | Static-only hosts; trust boundaries drawn below; no compute on the update path |
 | V2 Authentication | partial | GitHub App (no PATs, no Workflows permission) for repo writes; Cloudflare 2FA (owner, dashboard) — verified manually, not by row |
-| V4 Access Control | yes | R2 token scoped to the MAR fallback bucket, `release` env only; wrangler deploy token in scheduler/telemetry repos only; sweep holds no Cloudflare token (static grep + TEL-11 Worker route) |
+| V4 Access Control | yes | R2 token scoped to the MAR origin bucket (primary, owner ruling 2026-10-29), `release` env only; wrangler deploy token in scheduler/telemetry repos only; sweep holds no Cloudflare token (static grep + TEL-11 Worker route) |
 | V5 Input Validation | yes | `_redirects` placeholders match one segment; unknown BUILD_TARGET must 404 rather than serve another target's bytes (live probe) |
 | V6 Cryptography | yes | DNSSEC off-during-move then re-established; TLS terminated at Cloudflare; MAR signatures untouched by this phase (SEC-07/Phase 49) |
 | V7 Errors & Logging | yes | No internal identifiers in site copy (review gate); probe failures assert positive invariants, never log-line absence |
