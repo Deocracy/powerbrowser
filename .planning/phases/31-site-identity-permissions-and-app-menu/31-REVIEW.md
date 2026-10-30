@@ -386,6 +386,36 @@ declines the prompt.
 
 ---
 
+## Fix status
+
+Applied 2026-10-29 on `main` (one commit per finding; the commits that touched two findings or a
+catalogue remap are named). Checks run at the end: `verify-site-identity.mjs` and `--self-test` (52 plants),
+`verify-site-identity-live.mjs` (every scenario), its `--self-test` (the clean control and 9 plants),
+`verify-nav-keys-live.mjs`, `verify-platform.sh --quick`, `scan-brand-residue.mjs`, both internals-boundary checks.
+
+| ID | Status | Commit | Note |
+|----|--------|--------|------|
+| CR-01 | FIXED | 32bff7c | An overridden certificate takes the warning bucket (`broken`), not `secure`. Upstream's distinct "verified by you" tooltip (`browser-siteIdentity.js:939-946`) is not replicated: a `shortcut:` comment records it. Live `identity-override` (fixture CA untrusted, override in the probe profile only) passes; with the old condition it goes red. Static plant added. |
+| CR-02 | FIXED | 86df510 | The state router forwards `shieldExcepted`. The static case derives the pushed keys and the router keys and compares them. Live `shield` navigates the excepted tab to a second site and back. Runtime plant `router-drops-shield` goes red. |
+| O-31-A | FIXED | 86df510 | Same root as CR-02. |
+| CR-03 | FIXED | 83904ec | Scope is the registrable domain for cookies and storage alike, as upstream (`browser-siteIdentity.js:473-475`, `SiteDataManager.remove` over `deleteDataFromSite`). The token cookie stays exempt by name and host. The dialog names the domain and says it covers subdomains. D-31-12 is revised. The review's exact-host suggestion is not taken. The 31-03 summary's "accepted by design" wording is now wrong and is not edited here. Live `clear-scope` (`pb-fixture.test` / `www.pb-fixture.test`, TLS session) passes; with origin-only storage it goes red (`store:seeded`). `clear-data` still passes. |
+| WR-06 | FIXED | 2e57534 | The purge has its own `try`: a tab-store failure after a successful clear is logged and the reply stays `cleared`. The closed-tab removal is disclosed in the confirm text (product call: disclose, not drop). Static plant added. |
+| O-31-B | FIXED | 2e57534 | The three `handleWebTabAction` failure logs carry a fixed string. Static case derives the handler body and requires no `err.message` on any log line in it. |
+| WR-01 | FIXED | 73faf06 | The origin and host are captured before the await; a page change returns `where: "site-changed"`. Static case and plant. No live race step. |
+| WR-02 | FIXED | febd06a | `identityHostText` uses `displaySpec` as it is; the port strip and IPv6 brackets apply to the committed-address fallback only. Static case and plant. No live IPv6 step yet. |
+| WR-08 | FIXED | febd06a, f84981e | `baseDomain` is converted with `convertToDisplayIDN` in chrome. f84981e removes a duplicated plan citation that moved the frozen `-PLAN.md` count. Static case and plant. No live Unicode-host highlight step yet. |
+| WR-03 | FIXED | d16a43f | `notBefore`/`notAfter` are `PRTime`; formatted in chrome (UTC). Live `site-panel` asserts a `Valid:` row with both dates (passes). |
+| WR-05 | FIXED | 96a8430, a82cbc3 | No client intents map. The cycle runs over effective states (`permissionOrder`); each click changes what the row shows, for popup and for autoplay under ALLOWED and BLOCKED_ALL defaults. Live `site-panel` clicks popup three times from its default; `site-panel-autoplay-allowed` (new session, pref asserted) passes. |
+| WR-04 | PARTIAL (not fixed) | 3090e37 (6ceaa4d superseded) | FIXED: `quitRequest` replies `cancelled` when the quit is declined (`attemptingQuit`, set only after every `CanClose`); the fast-shutdown stage is restored on a decline. Static case and plant. NOT FIXED: the unsaved-editor veto is not honoured in this build. Live `quit-typed` (a real trusted pointer click and typing into an untitled editor; Ctrl+Q through the chrome route) exits 0 with no leave prompt, although Theia's `beforeunload` handler prevents the default (checked by dispatching a cancelable `beforeunload`). Gecko's gate is `dom.require_user_interaction_for_beforeunload` plus `UserHasInteracted`; which part fails here was not isolated. The scenario fails on that outcome and is not weakened. Options need a product decision: a global pref change affects web tabs, and a custom quit confirm is ruled out by UI-SPEC :117. The 31-05 summary's "no product decision needed" is not accurate and needs correcting. |
+| WR-07 | FIXED | 3f66136 | The stock-window poll uses the module `sleep()`. Static case and plant. No live step (closing a stock window mid-poll is not driven). |
+| WR-09 | PARTIAL | e8335a7 | FIXED: every "none" read needs `present === true`; a null pill is a failure; the autoplay icon check needs the box. NOT CHANGED, on purpose: `EXPECTED_NAV_COPY` (`verify-shell-error-copy.mjs`) is the reviewed copy list; the gate already derives the strings from `CHROME_BAR_COPY` and compares both ways, so a derived list would agree with itself. `STOCK_ROW_PAGES` labels-to-pages has no tree source; the static gate pins the page set to the `openStockPage` switch. Not addressed: the synchronous `input.value` read after `focus()` (not in the requested set). |
+| IN-01..04 | not in scope | — | Info findings were not requested for this pass. |
+
+Live results on the final run: `identity-tls`, `identity-override`, `clear-scope`, `site-panel`,
+`site-panel-autoplay-allowed`, `identity-local`, `clear-data`, `shield`, `app-menu`, `quit-key`, `quit-row` PASS;
+`quit-typed` FAIL (WR-04, above). The live `--self-test` passes (clean control green; 9 plants red).
+`verify-nav-keys-live.mjs` passes.
+
 _Reviewed: 2026-10-29_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
