@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then forty-two planted faults
+ * --self-test: the clean tree must be green; then forty-three planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -850,11 +850,28 @@ function cases(m, srcs, mm) {
         }],
         ['no modal site-data prompt and no SiteDataManager.remove or Sanitizer.sanitize in the clear path', () => {
             const code = stripComments(apiSrc);
-            if (!code.includes('Services.clearData.deleteDataFromPrincipal(principal, true, flags, resolve)')) {
-                return 'the storage clear is not Services.clearData.deleteDataFromPrincipal(principal, true, flags, resolve) -- broken instrument or a different clear';
+            if (!code.includes('Services.clearData.deleteDataFromSite(schemeless, attrs, true, flags, resolve)')) {
+                return 'the storage clear is not Services.clearData.deleteDataFromSite(schemeless, attrs, true, flags, resolve) -- broken instrument or a different clear';
             }
             const forbidden = ['promptSiteDataRemoval', 'SiteDataManager.remove(', 'Sanitizer.sanitize('].filter(name => apiSrc.includes(name) && code.includes(name));
             return forbidden.length === 0 ? null : forbidden;
+        }],
+        ['the cookie and storage clears share the registrable-domain scope (CR-03)', () => {
+            // Both halves take their scope from one variable, derived from the page's host by
+            // the registrable-domain rule (upstream browser-siteIdentity.js:473-475).
+            const code = stripComments(apiSrc);
+            const fn = /async function webTabClearSiteData\(browser, principal\) \{([\s\S]*?)\n\}\n/.exec(code)?.[1];
+            if (!fn) {
+                return `no webTabClearSiteData body in ${API_REL} -- broken instrument`;
+            }
+            const siteFn = /function webTabSite\(principal\) \{\s*return lazy\.SiteDataManager\.getBaseDomainFromHost\(principal\.asciiHost\);\s*\}/.test(code);
+            const sited = fn.includes('const site = webTabSite(principal);');
+            const cookieReads = [...fn.matchAll(/getCookiesFromHost\(([^,]+),/g)].map(m => m[1].trim());
+            const storage = fn.includes('const schemeless = Services.eTLD.getSchemelessSiteFromHost(site);') && fn.includes('deleteDataFromSite(schemeless,');
+            if (!siteFn || !sited || !storage || cookieReads.length !== 2 || cookieReads.some(arg => arg !== 'site')) {
+                return { webTabSite: siteFn, siteVariable: sited, storageScope: storage, cookieReads, want: 'both cookie reads and the storage clear on site' };
+            }
+            return null;
         }],
         ['the storage clear excludes cookies (CLEAR_COOKIES subtracted from the site-data group)', () => {
             const code = stripComments(apiSrc);
@@ -1139,6 +1156,13 @@ const PLANTS = [
         from: 'async function webTabClearSiteData(browser, principal) {',
         to: 'async function webTabClearSiteData(browser, principal) {\n  void lazy.SiteDataManager.promptSiteDataRemoval;',
         expect: 'no modal site-data prompt and no SiteDataManager.remove',
+    },
+    {
+        name: 'cookie-scope-drift: the cookie reads take the exact host, the storage clear the site',
+        rel: API_REL,
+        from: '  const cookies = Services.cookies.getCookiesFromHost(site, attrs);',
+        to: '  const cookies = Services.cookies.getCookiesFromHost(principal.asciiHost, attrs);',
+        expect: 'the cookie and storage clears share the registrable-domain scope (CR-03)',
     },
     {
         name: 'clear-cookies-flag: the storage clear keeps CLEAR_COOKIES',

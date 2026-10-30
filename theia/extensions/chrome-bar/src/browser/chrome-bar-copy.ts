@@ -106,7 +106,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     certDates: (from: string, to: string) => `${from} to ${to}`,
     // Phase 31 plan 03 (SITE-07, UI-SPEC clear-data row): the row, its confirm and the failure notice.
     clearDataRow: 'Clear cookies and site data…',
-    clearDataTitle: (host: string) => `Clear data for ${host}?`,
+    clearDataTitle: (site: string) => `Clear data for ${site}?`,
+    clearDataScope: (site: string) => `This clears cookies and site data for ${site} and all of its subdomains.`,
     clearDataStaysSignedIn: (subject: string) => `You stay signed in to ${subject}.`,
     clearDataConfirm: 'Clear',
     clearDataCancel: 'Cancel',

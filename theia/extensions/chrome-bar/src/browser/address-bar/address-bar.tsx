@@ -484,6 +484,8 @@ export class AddressBar {
         const tab = this.sitePanelTab;
         const origin = this.sitePanelInfo?.origin;
         const host = this.identityHostText({ state: 'none', displaySpec: this.sitePanelInfo?.displaySpec ?? '', baseDomain: null });
+        // CR-03: the scope of the clear is the registrable domain (browser-siteIdentity.js:473-475); the dialog names it.
+        const site = this.sitePanelInfo?.baseDomain || host;
         this.closeSitePanel();
         if (!(tab instanceof WebTabWidget) || typeof origin !== 'string') {
             return;
@@ -491,8 +493,8 @@ export class AddressBar {
         let confirmed: boolean | undefined = false;
         try {
             const dialog = new ConfirmDialog({
-                title: CHROME_BAR_COPY.clearDataTitle(host),
-                msg: CHROME_BAR_COPY.clearDataStaysSignedIn(appSubject()),
+                title: CHROME_BAR_COPY.clearDataTitle(site),
+                msg: `${CHROME_BAR_COPY.clearDataScope(site)} ${CHROME_BAR_COPY.clearDataStaysSignedIn(appSubject())}`,
                 ok: CHROME_BAR_COPY.clearDataConfirm,
                 cancel: CHROME_BAR_COPY.clearDataCancel,
             });

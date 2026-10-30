@@ -120,6 +120,10 @@ const PAGES = {
     '/tracker': { title: 'Tracker Page', body: '<p>tracker</p>', extra: () => '<img src="http://trackertest.org/t.gif">' },
     // Plan 03 (SITE-07): a page that leaves its own site data: a marker cookie set by the page's script, as real site data is.
     '/seed': { title: 'Seed Page', body: '<p>seed</p>', extra: () => "<script>document.cookie = 'pb-clear-marker=seeded; path=/; SameSite=Lax';</script>" },
+    // CR-03: the clear's scope is the registrable domain. The seed page writes its origin's storage and a
+    // cookie for the base domain; the read page reports both through its title, which the state push carries.
+    '/seed-store': { title: 'Seed Store', body: '<p>seed store</p>', extra: () => "<script>localStorage.setItem('pb-scope-sibling', 'seeded'); document.cookie = 'pb-scope-base=seeded; domain=pb-fixture.test; path=/; SameSite=Lax';</script>" },
+    '/read-store': { title: 'Read Store', body: '<p>read store</p>', extra: () => "<script>document.title = 'store:' + (localStorage.getItem('pb-scope-sibling') || 'gone') + ':cookie:' + (document.cookie.includes('pb-scope-base=') ? 'present' : 'gone');</script>" },
     // The mixed page's http: subresource port is known only after listen,
     // so the handler closes over the mutable cell below (set in runSession).
     '/mixed': { title: 'Mixed Page', body: '<p>mixed</p>', extra: () => `<img src="http://pb-fixture.test:${plainPortOf()}/plain">` },
@@ -445,6 +449,49 @@ async function identityOverride(ctx) {
     }
     if (!String(box.icon ?? '').split(' ').includes('codicon-warning')) {
         fail(`the overridden pill must render the warning icon; saw icon ${JSON.stringify(box.icon)}`);
+    }
+}
+
+/**
+ * CR-03 (upstream browser-siteIdentity.js:473-475): the clear's scope is the
+ * registrable domain, for cookies and storage alike. The bare host seeds its
+ * storage and a base-domain cookie; the www host runs the clear. The bare host's
+ * storage must be gone too. The old origin-only storage clear left it, so this
+ * step goes red on the old behaviour.
+ */
+async function clearScope(ctx) {
+    const { app, pages, fail } = ctx;
+    const bare = pages.tlsOrigin.replace(FIXTURE_HOSTS[1], FIXTURE_HOSTS[0]);
+    const seedId = await openWebTab(app, `${bare}/seed-store`);
+    if (await waitForPush(app, loadedAt(seedId, '/seed-store')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the bare-host seed page`);
+    }
+    if (!(await cookieNamesFor(app, FIXTURE_HOSTS[0])).includes('pb-scope-base')) {
+        return fail(`${BROKEN} the base-domain cookie is not in the jar before the clear`);
+    }
+    const wwwId = await openWebTab(app, pages.tlsUrl('/seed-store'));
+    if (await waitForPush(app, loadedAt(wwwId, '/seed-store')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the www seed page`);
+    }
+    if (await makeCurrent(app, wwwId) !== true) {
+        return fail(`${BROKEN} the www web tab could not be made current`);
+    }
+    const step = await clearFromPanel(app);
+    if (step !== 'done') {
+        return fail(`${BROKEN} ${step}`);
+    }
+    const names = await waitFor(() => cookieNamesFor(app, FIXTURE_HOSTS[0]), list => !list.includes('pb-scope-base'), 8000);
+    if (names.includes('pb-scope-base')) {
+        fail('the clear from www.pb-fixture.test left the base-domain cookie on pb-fixture.test');
+    }
+    const readId = await openWebTab(app, `${bare}/read-store`);
+    const readAt = await waitForPush(app, loadedAt(readId, '/read-store'));
+    if (readAt < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the bare-host read page`);
+    }
+    const title = (await pushes(app))[readAt].title;
+    if (title !== 'store:gone:cookie:gone') {
+        fail(`the clear from www.pb-fixture.test left the bare host's site data (the read page reports ${JSON.stringify(title)}, want "store:gone:cookie:gone"): the clear scope is the registrable domain`);
     }
 }
 
@@ -1398,7 +1445,7 @@ async function quitRow(ctx) {
 /** Scenarios whose TLS session serves the fixture leaf without trusting its CA. */
 const UNTRUSTED_TLS = ['identity-override'];
 
-const SCENARIOS = { 'identity-tls': identityTls, 'identity-override': identityOverride, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-override': identityOverride, 'clear-scope': clearScope, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
 const NOT_LANDED = [];
@@ -1564,7 +1611,7 @@ async function main(args) {
         // the site-panel session (its own TLS browser), then the local session.
         const results = [];
         // quit-key and quit-row each end their own launch, so each runs in a session of its own.
-        for (const [name, tls] of [['identity-tls', true], ['identity-override', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false]]) {
+        for (const [name, tls] of [['identity-tls', true], ['identity-override', true], ['clear-scope', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false]]) {
             if (names.includes(name)) {
                 results.push(...await runSession([name], '', tls));
             }

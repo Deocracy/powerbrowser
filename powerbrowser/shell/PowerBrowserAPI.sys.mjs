@@ -4725,7 +4725,7 @@ async function handleWebTabAction(data, actorRef) {
           PowerBrowserAPI.log("error", `[web-tab] site-data clear refused: ${outcome}`);
           return { ok: false, reason: outcome, message: "handleWebTabAction: the site data clear did not complete" };
         }
-        await purgeSiteTabRows(principal.asciiHost);
+        await purgeSiteTabRows(webTabSite(principal));
         return { ok: true, kind, where: "cleared", hasData: await webTabSiteHasData(principal.asciiHost) };
       } catch (err) {
         PowerBrowserAPI.log("error", `[web-tab] site-data clear failed: ${err && err.message ? err.message : err}`);
@@ -5300,18 +5300,26 @@ function webTabTokenCookie(cookie) {
   return cookie.name === TOKEN_COOKIE_NAME && cookie.host === TOKEN_COOKIE_HOST;
 }
 
-// The clear, in order. (1) Host cookies one by one, every cookie but the token
-// (SiteDataManager.sys.mjs:503-512 is the per-cookie precedent). (2) The site's
-// non-cookie storage through the principal with the cookie-excluding flag set
-// (Sanitizer.sys.mjs:1273-1280 is the principal precedent). It never calls
-// SiteDataManager.remove: its deleteDataFromSite pass uses
-// CLEAR_COOKIES_AND_SITE_DATA and re-deletes every cookie after the loop
-// (SiteDataManager.sys.mjs:547-552). Re-verified last: the token count may not
-// fall, else "token-cookie" and the caller refuses the reply.
+// The scope of the clear: the registrable domain of the page's host. Upstream
+// clears this same scope from the identity panel (browser-siteIdentity.js:473-475,
+// SiteDataManager.remove -> deleteDataFromSite, SiteDataManager.sys.mjs:528-560).
+// An IP literal or a single-label host is its own site (getBaseDomainFromHost falls back).
+function webTabSite(principal) {
+  return lazy.SiteDataManager.getBaseDomainFromHost(principal.asciiHost);
+}
+
+// The clear, in order, over one scope: the site (above) and the principal's origin
+// attributes, for cookies and storage alike (CR-03: the two halves never disagree).
+// (1) Site cookies one by one, every cookie but the token (SiteDataManager.sys.mjs:503-512
+// is the per-cookie precedent). (2) The site's non-cookie storage through
+// deleteDataFromSite with the cookie-excluding flag set, because the upstream pass
+// uses CLEAR_COOKIES_AND_SITE_DATA and would re-delete the token cookie after the loop
+// (SiteDataManager.sys.mjs:547-552). Re-verified last: the token count may not fall,
+// else "token-cookie" and the caller refuses the reply.
 async function webTabClearSiteData(browser, principal) {
-  const host = principal.asciiHost;
+  const site = webTabSite(principal);
   const attrs = principal.originAttributes;
-  const cookies = Services.cookies.getCookiesFromHost(host, attrs);
+  const cookies = Services.cookies.getCookiesFromHost(site, attrs);
   const tokensBefore = cookies.filter(webTabTokenCookie).length;
   for (const cookie of cookies) {
     if (!webTabTokenCookie(cookie)) {
@@ -5319,8 +5327,9 @@ async function webTabClearSiteData(browser, principal) {
     }
   }
   const flags = Ci.nsIClearDataService.CLEAR_COOKIES_AND_SITE_DATA & ~Ci.nsIClearDataService.CLEAR_COOKIES;
-  await new Promise(resolve => Services.clearData.deleteDataFromPrincipal(principal, true, flags, resolve));
-  const tokensAfter = Services.cookies.getCookiesFromHost(host, attrs).filter(webTabTokenCookie).length;
+  const schemeless = Services.eTLD.getSchemelessSiteFromHost(site);
+  await new Promise(resolve => Services.clearData.deleteDataFromSite(schemeless, attrs, true, flags, resolve));
+  const tokensAfter = Services.cookies.getCookiesFromHost(site, attrs).filter(webTabTokenCookie).length;
   return tokensAfter < tokensBefore ? "token-cookie" : "cleared";
 }
 
@@ -5344,22 +5353,24 @@ function webTabShieldExcepted(browser) {
   }
 }
 
-// The tab-store rows of one site: thumbnails of every row for the host are
-// cleared, and closed rows for it are removed (the closed-tab history of that
-// site). Group members are kept, so no group loses a tab. Rows are matched
-// by the host of their own url column (a row's key is not its URL).
-async function purgeSiteTabRows(host) {
+// The tab-store rows of one site (the scope of the clear, CR-03): thumbnails of
+// every row for the site are cleared, and closed rows for it are removed. Group
+// members are kept, so no group loses a tab. A row is matched by the registrable
+// domain of its own url host (a row's key is not its URL), ports ignored like the
+// cookie and storage scope. URL.hostname keeps an IPv6 literal's brackets; they go first.
+async function purgeSiteTabRows(site) {
   const conn = await PowerBrowserAPI.openTabStore();
   const rows = await conn.execute("SELECT uri, url, closed_at, group_id FROM tabs");
   for (const row of rows) {
     const uri = row.getResultByName("uri");
-    let rowHost = null;
+    let rowSite = null;
     try {
-      rowHost = new URL(String(row.getResultByName("url"))).hostname;
+      const rowHost = new URL(String(row.getResultByName("url"))).hostname.replace(/^\[(.*)\]$/, "$1");
+      rowSite = lazy.SiteDataManager.getBaseDomainFromHost(rowHost);
     } catch (err) {
-      rowHost = null;
+      rowSite = null;
     }
-    if (rowHost !== host) {
+    if (rowSite !== site) {
       continue;
     }
     await conn.execute("UPDATE tabs SET thumbnail = NULL WHERE uri = :uri", { uri });
