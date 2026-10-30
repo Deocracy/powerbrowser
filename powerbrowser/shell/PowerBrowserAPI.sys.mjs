@@ -5414,7 +5414,8 @@ async function stockWindowStarted(win) {
     if (Date.now() > deadline) {
       throw new Error("openStockPage: the stock window did not finish starting");
     }
-    await new Promise(resolve => win.setTimeout(resolve, 50));
+    // WR-07: the module's sleep(), not win.setTimeout: a window's timer never fires once the window is destroyed.
+    await PowerBrowserAPI.sleep(50);
   }
   if (win.closed) {
     throw new Error("openStockPage: the stock window closed while starting");

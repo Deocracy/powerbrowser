@@ -929,6 +929,19 @@ function cases(m, srcs, mm) {
             const own = /const outcome = await webTabClearSiteData\(entry\.browser, principal\);[\s\S]*?try \{\s*await purgeSiteTabRows\(webTabSite\(principal\)\);\s*\} catch \(err\) \{/.test(code);
             return own ? null : 'the purge is not in its own try after the clear outcome: a tab-store failure would report the cleared clear as write-failed';
         }],
+        ['the stock-window startup poll uses the module sleep, not a window timer (WR-07)', () => {
+            const code = stripComments(apiSrc);
+            const start = code.indexOf('async function stockWindowStarted(win) {');
+            if (start < 0) {
+                return `no stockWindowStarted in ${API_REL} -- broken instrument`;
+            }
+            const end = code.indexOf('\n}\n', start);
+            const body = code.slice(start, end < 0 ? undefined : end);
+            if (/win\.setTimeout/.test(body)) {
+                return 'the poll waits on win.setTimeout, which never fires once the stock window is destroyed (the openStockPage reply would hang)';
+            }
+            return body.includes('await PowerBrowserAPI.sleep(') ? null : 'the poll does not wait on the module sleep()';
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -1030,6 +1043,13 @@ const PLANTS = [
         from: "    'local',\n",
         to: '',
         expect: 'SECURITY_STATES equal the boundary decode arms',
+    },
+    {
+        name: 'the stock-window poll waits on a window timer (WR-07)',
+        rel: API_REL,
+        from: '    await PowerBrowserAPI.sleep(50);',
+        to: '    await new Promise(resolve => win.setTimeout(resolve, 50));',
+        expect: 'the stock-window startup poll uses the module sleep, not a window timer (WR-07)',
     },
     {
         name: 'the purge joins the clear try (WR-06)',
