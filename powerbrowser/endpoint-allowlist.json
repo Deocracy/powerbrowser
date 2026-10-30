@@ -140,21 +140,25 @@
     {
       "host": "open-vsx.org",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the extension feature. The Open VSX registry the sidecar is configured with (VSX_REGISTRY_URL in powerbrowser/shell/TheiaService.sys.mjs, and the application start script). It is contacted only when the user searches for, installs or updates an extension: the frontend's search request (layer 3) and the backend's install download (layer 4)."
     },
     {
       "host": "openvsx.eclipsecontent.org",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the extension feature. Open VSX's download storage: the registry answers the .vsix download URL (open-vsx.org/api/<namespace>/<name>/<version>/file/<name>.vsix) with a 302 to this host, and the sidecar's backend fetched the probe extension's .vsix from it during the NG-069 probe install (observed 2026-09-25). It is contacted only when the user searches for, installs or updates an extension: search results' icons (open-vsx.org/api/<namespace>/<name>/<version>/file/icon.png) redirect here too."
     },
     {
       "host": "api.anthropic.com",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-anthropic (the @anthropic-ai/sdk base URL). It is contacted only after the user configures an Anthropic API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup."
     },
     {
       "host": "api.openai.com",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-openai (the openai package base URL). It is contacted only after the user configures an OpenAI API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup."
     }
   ],
