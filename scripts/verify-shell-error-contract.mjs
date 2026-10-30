@@ -422,7 +422,27 @@ async function loadShippedSources(supervisorPath, shellPath, tag, overrides = {}
   sandbox.ChromeUtils = {
     importESModule: (url) => {
       if (url.includes("PowerBrowserAPI.sys.mjs")) {
-        return { PowerBrowserAPI: api };
+        // The bootstrap installs the Phase 31.1 tab host at load. The error
+        // contract does not exercise it (the live suite drives the real host),
+        // so the stand-in only has to return the accessor shape the literal reads.
+        const tabHost = {
+          tabs: () => [],
+          selectedTab: () => null,
+          selectedBrowser: () => null,
+          currentURI: () => null,
+          getTabForBrowser: () => null,
+          getBrowserForTab: () => null,
+          isTab: () => false,
+          getIcon: () => null,
+          setIcon() {},
+          getTabSharingState: () => ({}),
+          addTabsProgressListener() {},
+          removeTabsProgressListener() {},
+          refuse() {
+            throw new Error("tab host is not under test in the error contract");
+          },
+        };
+        return { PowerBrowserAPI: api, PowerBrowserTabHost: { install: () => tabHost } };
       }
       if (url.includes("TheiaService.sys.mjs")) {
         return { TheiaService };

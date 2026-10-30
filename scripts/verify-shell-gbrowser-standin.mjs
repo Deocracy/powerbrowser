@@ -1,78 +1,88 @@
 #!/usr/bin/env node
 // scripts/verify-shell-gbrowser-standin.mjs
 //
-// G-14.1.1-19 gate (plan 14.1.1-04): the shell window's `gBrowser` stand-in
-// implements exactly the member set upstream calls on it.
+// G-14.1.1-19 gate (plan 14.1.1-04), rewritten by Phase 31.1 plan 02 Task 1 for
+// the extension tab host: the shell window's `gBrowser` implements exactly the
+// member set that upstream USES on it, and its `gBrowserInit` shim implements
+// exactly the members upstream reads from it.
 //
-// The shell window is deliberately not Firefox chrome and has no tabbrowser,
-// but privileged upstream code still reaches `win.gBrowser` and calls members
-// on it. Those calls are optional-chained on the RECEIVER
-// (`this?.documentGlobal?.gBrowser?.getTabForBrowser(this)`), so a non-nullish
-// stand-in missing the member THROWS rather than short-circuiting -- once per
-// overlay creation, burying the next real chrome-side error in the same log.
-//
-// This gate is a POSITIVE set-equality assertion, deliberately, and that
-// choice is the point rather than an implementation detail. The reported
-// defect is "no TypeError appears in the launch log", but CLAUDE.md's first
-// verification rule forbids asserting on the ABSENCE of a log line whose
-// emitter you do not control: an absence assertion over Gecko's console can
-// never be shown to go red. So the invariant is restated as something the
-// tree can prove -- the implemented member set EQUALS the set upstream calls
-// -- which goes red on an upstream rebase that adds a call AND on a
-// stand-in member that is deleted or added unreviewed.
+// Why a member gate at all. The shell window is deliberately not Firefox chrome
+// and has no tabbrowser, but privileged upstream code still reaches
+// `win.gBrowser`. A member that is missing throws a TypeError at the call (or,
+// for an optional chain on the RECEIVER, once per overlay). This gate is a
+// POSITIVE set-equality assertion, because CLAUDE.md's first verification rule
+// forbids asserting on the ABSENCE of a log line whose emitter the check does
+// not control. The invariant is restated as something the tree proves: the
+// implemented member set EQUALS the set upstream uses.
 //
 // Both sides are DERIVED at check time (CLAUDE.md `## Verification` rule 2):
 //
-//   REQUIRED     -- every member name invoked on a `gBrowser` receiver in the
-//                   upstream call-site files, optional chaining included. The
-//                   file list is itself DERIVED (27-03): the one widget file in
-//                   UPSTREAM_SCOPE plus every `*Parent.sys.mjs` directly under
-//                   its actor directories, so an actor parent a rebase adds is
-//                   in scope without an edit here. Read-only: this gate never
-//                   writes to `upstream/`.
-//   IMPLEMENTED  -- the top-level members of the `window.gBrowser` object
-//                   literal in powerbrowser/shell/powerbrowser.js, parsed by
-//                   brace matching with comment lines skipped the way the
-//                   internals-boundary scan skips them, so a member named
-//                   only in a comment cannot satisfy the set.
+//   REQUIRED (gBrowser)
+//     actor scope     -- UPSTREAM_SCOPE: the widget file plus every
+//                        *Parent.sys.mjs under upstream/browser/actors and
+//                        upstream/toolkit/actors. Calls only, as before.
+//     extension scope -- every non-test *.js/*.mjs under
+//                        upstream/browser/components/extensions/ and
+//                        upstream/toolkit/components/extensions/, listed by
+//                        read-only `git -C upstream ls-tree -r --name-only HEAD`.
+//                        Every member access counts: call, read, assignment or
+//                        destructuring. Tracker code reads members as data.
+//     receivers       -- in both scopes: `gBrowser`, any `.getTabBrowser()`
+//                        result chained directly, and any identifier bound in the
+//                        same file from an expression ending in `.gBrowser` or
+//                        `.getTabBrowser()`. The host makes getTabBrowser() non-null
+//                        for overlays (toolkit/content/widgets/browser-custom-element.mjs:950-955).
+//   REQUIRED (gBrowserInit)
+//     both scopes     -- every member accessed on `gBrowserInit`.
+//   IMPLEMENTED (gBrowser)
+//     the top-level members of the `window.gBrowser = {` literal in
+//     powerbrowser/shell/powerbrowser.js, parsed by brace matching with comment
+//     lines skipped, so a name that appears only in a comment cannot satisfy the set.
+//   IMPLEMENTED (gBrowserInit)
+//     the members of the `gBrowserInit = {` literal in
+//     powerbrowser/shell/PowerBrowserAPI.sys.mjs. That file must hold exactly one
+//     such definition; zero or two is a broken instrument.
 //
-// The comparison is: REQUIRED == IMPLEMENTED methods ∪ DELIBERATELY_ABSENT.
-// DELIBERATELY_ABSENT names the members upstream calls that the stand-in must
-// NOT implement, each with its verified reason -- implementing them would mean
-// fabricating a tab or a tabbrowser for a privileged actor to act on. Four
-// failure kinds, each named: UNIMPLEMENTED (required, neither implemented nor
-// absent -- the rebase case), STALE ABSENCE (listed absent, no longer called),
-// CONTRADICTION (both implemented and listed absent), DEAD SURFACE
-// (implemented, nobody calls it).
+// The comparison for gBrowser is: REQUIRED == IMPLEMENTED methods ∪
+// DELIBERATELY_ABSENT. DELIBERATELY_ABSENT names the members upstream uses that
+// the shell must NOT implement, each with its verified reason. Failure kinds,
+// each named: UNIMPLEMENTED (required, neither implemented nor absent), STALE
+// ABSENCE (absent, no longer used), CONTRADICTION (implemented and absent), DEAD
+// SURFACE (implemented, nobody uses it), MISSING DATA MEMBER, STALE DATA MEMBER,
+// and for gBrowserInit the same four shapes named `gBrowserInit.<member>`.
 //
-// DATA_MEMBERS below is the other hand-kept entry in this file, and it carries
-// its reason: `tabs` is a data property no upstream `gBrowser`-receiver call
-// site can derive (WebDriver reaches it through a local `tabBrowser` binding
-// in remote/shared/TabManager.sys.mjs, never as `gBrowser.tabs(...)`). It is
-// held OUT of the upstream-call comparison and asserted PRESENT separately,
-// so deleting it is still red.
+// DATA_MEMBERS are data properties, held out of the comparison and asserted on
+// their own. `tabs` and `webDriverTabs` are read by WebDriver and extensions
+// through a receiver the derivation cannot name (remote/shared/TabManager.sys.mjs
+// reads `webDriverTabs` through a local `tabBrowser` binding, and 050 adds that
+// read). `webDriverTabs` is therefore also asserted against the 050 patch text.
 //
-// An empty derivation on either side fails distinctly as a broken instrument.
-// A negated or set-equality assertion over a walk that found nothing is not a
+// An empty derivation on any side fails distinctly as a broken instrument. A
+// negated or set-equality assertion over a walk that found nothing is not a
 // clean tree.
 //
-// This file is exempt from its own scan by basename -- it must spell the
-// shapes it matches, the same reason the internals-boundary guard exempts its
-// boundary file.
+// This file is exempt from its own scan by basename: it must spell the shapes it
+// matches.
 //
-// Honestly --quick: it reads text files only. No build, no browser, no
-// display, no network.
+// Honestly --quick: it reads text files only. No build, no browser, no display,
+// no network. `git ls-tree` reads the local object store only.
 //
-// Self-test (--self-test): asserts the unmodified tree green first, then
-// plants faults, each asserted to have LANDED and each required to go red
-// NAMING the drift: (a) a staged stand-in with one implemented member
-// removed; (b) a staged copy of one derived upstream file with a new member
-// call added; (c) a staged stand-in carrying a surplus member nothing upstream
-// calls; (d) an empty upstream file list; (e) a NEW caller file written into a
-// copy of a scanned actor directory; (f) a stale entry added to a copy of
-// DELIBERATELY_ABSENT; (g) an implemented member also listed absent.
+// Self-test (--self-test): asserts the unmodified tree green, then plants faults,
+// each asserted to have LANDED and each required to go red NAMING the drift:
+//   (a) a staged stand-in with one implemented member removed;
+//   (b) a staged copy of one actor-scope file with a new member call added;
+//   (c) a staged stand-in carrying a surplus member nothing upstream uses;
+//   (d) an empty actor-scope file list (broken instrument);
+//   (e) a NEW caller file written into a copy of a scanned actor directory;
+//   (f) a stale entry added to a copy of DELIBERATELY_ABSENT;
+//   (g) an implemented member also listed absent;
+//   (p) a staged extension-scope copy that only READS gBrowser.zzzPlantedRead;
+//   (q) a staged actor parent that calls a member through a bound getTabBrowser() receiver;
+//   (r) a staged gBrowserInit literal without isAdoptingTab;
+//   (s) staged patch text without the TabManager hunk (STALE DATA MEMBER webDriverTabs).
 
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,7 +92,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..');
 const SELF_BASENAME = 'verify-shell-gbrowser-standin.mjs';
 
-// READ ONLY. The SCOPE is reviewable here; the file list is derived from it.
+// READ ONLY. The SCOPE is reviewable here; the file lists are derived from it.
 // Never written by this gate: the upstream checkout must not change.
 const UPSTREAM_SCOPE = {
   files: [
@@ -104,9 +114,19 @@ const UPSTREAM_SCOPE = {
 };
 const PARENT_SUFFIX = 'Parent.sys.mjs';
 
-// The upstream call-site files: the scope's widget files plus every
-// *Parent.sys.mjs directly under each scope directory, sorted. An unreadable
-// directory is reported as unreadable, never as an empty clean list.
+// The extension scope: every non-test source file under these upstream prefixes.
+const EXTENSION_PREFIXES = ['browser/components/extensions/', 'toolkit/components/extensions/'];
+
+const SHELL_FILE = 'powerbrowser/shell/powerbrowser.js';
+const BOUNDARY_FILE = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
+const PATCH_FILE = 'patches/050-extension-tab-host.patch';
+const STANDIN_ANCHOR = 'window.gBrowser';
+const SHIM_ANCHOR = 'gBrowserInit = {';
+const ID = '[A-Za-z_$][\\w$]*';
+
+// The upstream call-site files for the actor scope: the scope's widget files plus
+// every *Parent.sys.mjs directly under each scope directory, sorted. An
+// unreadable directory is reported as unreadable, never as an empty clean list.
 function deriveCallSiteFiles(scope = UPSTREAM_SCOPE) {
   const files = scope.files.map(([p]) => p);
   const unreadable = [];
@@ -126,9 +146,46 @@ function deriveCallSiteFiles(scope = UPSTREAM_SCOPE) {
   return { files: files.sort(), unreadable };
 }
 
-// Members upstream calls that the stand-in deliberately does NOT implement.
-// Each reason was checked against the pinned tag. Implementing any of them
-// would mean handing a privileged actor a fabricated tab or tabbrowser.
+// The extension scope, from the pinned tree's file list (read-only).
+function deriveExtensionFiles() {
+  let listing;
+  try {
+    listing = execFileSync('git', ['-C', join(REPO_ROOT, 'upstream'), 'ls-tree', '-r', '--name-only', 'HEAD'], {
+      encoding: 'utf8',
+      maxBuffer: 1 << 28,
+    });
+  } catch {
+    return { files: [], unreadable: ['git -C upstream ls-tree -r HEAD'] };
+  }
+  const files = listing
+    .split('\n')
+    .filter(p => EXTENSION_PREFIXES.some(prefix => p.startsWith(prefix)))
+    .filter(p => /\.m?js$/.test(p))
+    .filter(p => !p.split('/').some(seg => seg === 'test' || seg === 'tests'))
+    .map(p => `upstream/${p}`);
+  return { files: files.sort(), unreadable: [] };
+}
+
+// Data properties: held out of the call comparison and asserted present.
+// `webDriverTabs` also asserts that the 050 patch adds a line reading it.
+const DATA_MEMBERS = new Map([
+  [
+    'tabs',
+    { reason: 'extensions read gBrowser.tabs as data (tabs.query, the tab events) and WebDriver reads it through remote/shared/TabManager.sys.mjs; no gBrowser-receiver call site can name it', patchLine: null },
+  ],
+  [
+    'webDriverTabs',
+    {
+      reason: 'WebDriver reaches the Theia frame and every overlay through gBrowser.webDriverTabs, read by the 050 TabManager hunk (remote/shared/TabManager.sys.mjs); the hunk must stay in the patch',
+      patchLine: /^\+.*\btabBrowser\.webDriverTabs\b/m,
+    },
+  ],
+]);
+
+// Members upstream uses that the shell deliberately does NOT implement. Each reason
+// was checked against the pinned tag. Implementing one would mean handing a
+// privileged actor or an extension a tab, tabbrowser behaviour or window furniture
+// the shell does not have.
 const DELIBERATELY_ABSENT = new Map([
   [
     'getTabDialogBox',
@@ -140,35 +197,84 @@ const DELIBERATELY_ABSENT = new Map([
   ],
   [
     'getNotificationBox',
-    'BlockedSiteParent calls it on browser.getTabBrowser(), which is null for every shell overlay: getTabBrowser returns gBrowser only when gBrowser.getTabForBrowser(this) is truthy, and the stand-in returns null',
+    'BlockedSiteParent (:39, :78), DecoderDoctorParent (:102), EncryptedMediaParent (:152, :188), PluginParent (:131) and SpeechDispatcherParent (:61) call it on a getTabBrowser() receiver, which the Phase 31.1 host makes non-null for overlays. The shell has no notification box (Phase 37 furniture), so each call throws a TypeError on the missing member, the outcome the old null receiver gave',
   ],
   [
-    'removeTab',
-    'AboutTabCrashedParent calls it on browser.getTabBrowser(), the same null receiver as getNotificationBox',
+    'swapBrowsers',
+    'browser-custom-element.mjs:1617 is reached only when both browsers have a tabbrowser (:1611-1612), an XPCOM swapDocShells path. The host gives every overlay a tabbrowser, so the call now reaches the missing member and throws a TypeError, where the old null receiver skipped it. powerbrowser/shell calls neither swapDocShells nor swapBrowsers. Open item: no roadmap phase names this path; Phase 36 (browser adoption) is the nearest owner',
+  ],
+  [
+    'updateBrowserSharing',
+    'WebRTCParent.sys.mjs:155 reads its receiver from browser.documentGlobal.gBrowser (:153) and reports camera, microphone and screen sharing, which is Phase 37 furniture. The old stand-in also lacked the member, so the TypeError is pre-existing; the receiver widening revealed it',
   ],
   [
     'refreshBlocked',
     'KNOWN GAP: RefreshBlockerParent calls it on the stand-in itself, but the actor is registered only while accessibility.blockautorefresh is on; with that pref on the call throws a TypeError, and the notification bar it would show belongs to Phase 37',
   ],
-]);
-
-const SHELL_FILE = 'powerbrowser/shell/powerbrowser.js';
-const STANDIN_ANCHOR = 'window.gBrowser';
-
-// The ONE hand-kept list in this file, each entry with its reason. A data
-// property cannot be derived from a `gBrowser`-receiver CALL site, so it is
-// held out of the set-equality comparison and asserted present on its own.
-const DATA_MEMBERS = new Map([
+  // Extension-scope members the shell does not implement yet. Each is reached only
+  // from an extension API WRITE (or an install or identity path), never from an
+  // EXT-05 read path (tabs.query, tabs.get, tabs.on*, windows.get*, sender.tab, the
+  // webRequest and webNavigation tab ids). Each group names its verified call sites.
+  ...absentGroup(
+    ['moveTabTo', 'moveTabsBefore', 'moveTabsAfter', 'pinTab', 'unpinTab', 'addToMultiSelectedTabs', 'removeFromMultiSelectedTabs', 'lockClearMultiSelectionOnce'],
+    'tabs.update pin and highlight writes (ext-tabs.js:926-947) and tab moves (ext-tabs.js:1811, :1847; ext-tabGroups.js:245) reach it. Tab order, pinning and multi-selection are Phase 34 furniture, so the call throws a TypeError on the missing member'
+  ),
   [
-    'tabs',
-    'WebDriver finds content browsing contexts through win.gBrowser.tabs and identifies each by its browser permanentKey; remote/shared/TabManager.sys.mjs reaches it through a local tabBrowser binding, so no gBrowser-receiver call site exists to derive it from',
+    '_insertBrowser',
+    'ext-tabs.js:913 is in the else branch of `if (nativeTab.linkedPanel)` (ext-tabs.js:903-905). Every host node carries a linkedPanel (makeTabNode, PowerBrowserAPI.sys.mjs), so the branch is unreachable. Phase 34 owns the tab-strip move path that would reach it',
+  ],
+  ...absentGroup(
+    ['adoptTab', 'adoptTabGroup', 'adoptSplitView'],
+    'a tab or group moved into another window is adopted through these (ext-tabs.js:1193, :1207; ext-tabGroups.js:243). Window adoption is Phase 36, so the call throws a TypeError on the missing member'
+  ),
+  ...absentGroup(
+    ['discardBrowser', 'prepareDiscardBrowser', 'duplicateTab', 'warmupTab', 'removeTabs', 'setSuccessor', 'replaceInSuccession', 'addTabGroup', 'getTabGroupById', 'isSplitViewWrapper'],
+    'tabs.discard, tabs.duplicate, tabs.warmup, tabs.remove and tabs.group writes reach it (ext-tabs.js:851, :862, :866, :970, :992, :1246, :1637, :1780, :1788, :1839). They are Phase 38 extension API writes, so the call throws a TypeError on the missing member'
+  ),
+  [
+    'hideTab',
+    'tabs.hide reaches it (ext-tabs.js:1672). Phase 38 owns the hide write; until then no host node is ever hidden',
+  ],
+  [
+    'showTab',
+    'the unload loop at ext-tabs.js:58-66 calls it only for a tab whose `hidden` is set. No host node is hidden (hideTab is absent, ext-tabs.js:1672), so it is unreachable until Phase 38 adds hide',
+  ],
+  [
+    'updateTitlebar',
+    'windows.update with a titlePreface calls it on the shell window (ext-windows.js:540). Title furniture and windows.update writes are Phase 38; the call throws a TypeError on the missing member',
+  ],
+  [
+    'loadURI',
+    'replaceUrlInTab (ext-browser.js:140) runs for the chrome_url_overrides and chrome_settings_overrides install paths (ext-url-overrides.js:52, ext-chrome-settings-overrides.js:56), which hand it a window gBrowser. The shell has no tab to replace, so the call throws a TypeError. Owned by Phase 38 (the EXT-09 install flow)',
+  ],
+  [
+    'webNavigation',
+    'the browser.identity web-auth cancel path reads it (ext-identity.js:85). Identity is a Phase 38 extension-sign-in surface and is not on an EXT-05 read path',
   ],
 ]);
 
-// A member CALL on a gBrowser receiver, optional chaining included. A bare
-// `win.gBrowser` read or a `gBrowser` passed as an argument is not a member
-// call and must not enter the required set.
-const GBROWSER_CALL = /\bgBrowser\s*\??\.\s*([A-Za-z_$][\w$]*)\s*\(/g;
+// One reason shared by a group of members: [name, reason] pairs for the Map.
+function absentGroup(names, reason) {
+  return names.map(name => [name, reason]);
+}
+
+// A member CALL or READ on a receiver pattern, optional chaining included.
+// Returns the member names; `callsOnly` keeps only the names followed by `(`.
+function accessesOn(code, receiver, callsOnly) {
+  const names = new Set();
+  const re = new RegExp(`${receiver}\\s*\\??\\.\\s*(${ID})(\\s*\\()?`, 'g');
+  let m;
+  while ((m = re.exec(code)) !== null) {
+    if (!callsOnly || m[2]) names.add(m[1]);
+  }
+  return names;
+}
+
+// `let x = <expr>.gBrowser` or `= <expr>.getTabBrowser()`, the expression ending the
+// statement. The binding name is then a receiver in the same file.
+const BIND_RE = /\b(?:let|const|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;\n]*?(?:\.gBrowser|\.getTabBrowser\(\))(?=\s*(?:[;),]|$))/gm;
+// `let { a, b: c } = <expr>.gBrowser`: destructuring reads members as data.
+const DESTR_RE = /\b(?:let|const|var)\s*\{([^}\n]*)\}\s*=\s*[^;\n]*?(?:\.gBrowser|\.getTabBrowser\(\))(?=\s*(?:[;),]|$))/gm;
 
 function isCommentLine(line) {
   const trimmed = line.replace(/^\s+/, '');
@@ -191,7 +297,32 @@ function readSource(path) {
   }
 }
 
-function deriveRequired(files) {
+// gBrowser members used by one comment-stripped source. `callsOnly` is the actor
+// scope rule; the extension scope passes false and counts every access.
+function gBrowserMembersOf(code, callsOnly) {
+  const members = new Set();
+  for (const n of accessesOn(code, '\\bgBrowser', callsOnly)) members.add(n);
+  for (const n of accessesOn(code, '\\.getTabBrowser\\(\\)', callsOnly)) members.add(n);
+  const bound = new Set();
+  for (const m of code.matchAll(BIND_RE)) bound.add(m[1]);
+  for (const id of bound) {
+    const escaped = id.replace(/\$/g, '\\$');
+    for (const n of accessesOn(code, `(?<![\\w$.])${escaped}`, callsOnly)) members.add(n);
+  }
+  if (!callsOnly) {
+    for (const m of code.matchAll(DESTR_RE)) {
+      for (const part of m[1].split(',')) {
+        const name = part.split(':')[0].trim();
+        if (new RegExp(`^${ID}$`).test(name)) members.add(name);
+      }
+    }
+  }
+  return members;
+}
+
+// Derives the gBrowser REQUIRED set over a list of files. `callsOnly` applies to
+// the whole list (actor scope true, extension scope false).
+function deriveRequired(files, callsOnly) {
   const members = new Set();
   const unreadable = [];
   for (const path of files) {
@@ -201,20 +332,26 @@ function deriveRequired(files) {
       unreadable.push(path);
       continue;
     }
-    const code = stripCommentLines(src);
-    let m;
-    GBROWSER_CALL.lastIndex = 0;
-    while ((m = GBROWSER_CALL.exec(code)) !== null) {
-      members.add(m[1]);
-    }
+    for (const n of gBrowserMembersOf(stripCommentLines(src), callsOnly)) members.add(n);
   }
   return { members, unreadable };
 }
 
-// Top-level member names of the object literal that follows `anchor`, by
-// brace matching over comment-stripped source with string literals skipped.
-// Returns null when the anchor or its literal cannot be found at all -- a
-// distinct broken-instrument outcome, never an empty clean set.
+// Every member accessed on `gBrowserInit` over a list of files (reads and calls).
+function deriveShimRequired(files) {
+  const members = new Set();
+  for (const path of files) {
+    const src = readSource(path);
+    if (src === null || path.split('/').pop() === SELF_BASENAME) continue;
+    for (const n of accessesOn(stripCommentLines(src), '(?<![\\w$])gBrowserInit', false)) members.add(n);
+  }
+  return members;
+}
+
+// Top-level member names of the object literal that follows `anchor`, by brace
+// matching over comment-stripped source with string literals skipped. Returns
+// null when the anchor or its literal cannot be found at all: a distinct
+// broken-instrument outcome, never an empty clean set.
 function objectLiteralMembers(code, anchor) {
   const at = code.indexOf(anchor);
   if (at === -1) return null;
@@ -250,7 +387,7 @@ function objectLiteralMembers(code, anchor) {
       let k = j;
       while (k < code.length && /\s/.test(code[k])) k++;
       // A key is an identifier followed by `:` (property) or `(` (method
-      // shorthand). Anything else at depth 1 is not a member name.
+      // shorthand, getter, setter). Anything else at depth 1 is not a member name.
       if (code[k] === ':' || code[k] === '(') members.add(word);
       i = j - 1;
     }
@@ -266,20 +403,43 @@ function deriveImplemented(shellFile) {
   return { members, reason: '' };
 }
 
+// The gBrowserInit literal: exactly one definition in the boundary file.
+function deriveShimImplemented(boundaryFile) {
+  const src = readSource(boundaryFile);
+  if (src === null) return { members: null, reason: 'unreadable', count: 0 };
+  const code = stripCommentLines(src);
+  const count = (code.match(/\bgBrowserInit\s*=\s*\{/g) || []).length;
+  if (count !== 1) return { members: null, reason: 'definitions', count };
+  const members = objectLiteralMembers(code, SHIM_ANCHOR);
+  if (members === null) return { members: null, reason: 'no-literal', count };
+  return { members, reason: '', count };
+}
+
 function sorted(set) {
   return [...set].sort();
 }
 
-function runScan(upstreamFiles, shellFile, absent = DELIBERATELY_ABSENT) {
-  if (upstreamFiles.length === 0) {
-    return { ok: false, reason: 'empty-upstream', detail: 'no upstream call-site files were supplied' };
+// `inputs` = { actorFiles, extensionFiles, shellFile, boundaryFile, patchFile, absent }.
+function runScan(inputs) {
+  const { actorFiles, extensionFiles, shellFile, boundaryFile, patchFile } = inputs;
+  const absent = inputs.absent ?? DELIBERATELY_ABSENT;
+  if (actorFiles.length === 0) {
+    return { ok: false, reason: 'empty-upstream', detail: 'no actor-scope call-site files were supplied' };
   }
-  const { members: required, unreadable } = deriveRequired(upstreamFiles);
-  if (unreadable.length) {
-    return { ok: false, reason: 'unreadable-upstream', detail: unreadable.join(', ') };
+  if (extensionFiles.length === 0) {
+    return { ok: false, reason: 'empty-extension', detail: 'no extension-scope files were derived' };
   }
+  const actor = deriveRequired(actorFiles, true);
+  if (actor.unreadable.length) {
+    return { ok: false, reason: 'unreadable-upstream', detail: actor.unreadable.join(', ') };
+  }
+  const ext = deriveRequired(extensionFiles, false);
+  if (ext.unreadable.length) {
+    return { ok: false, reason: 'unreadable-upstream', detail: ext.unreadable.join(', ') };
+  }
+  const required = new Set([...actor.members, ...ext.members]);
   if (required.size === 0) {
-    return { ok: false, reason: 'empty-required', detail: 'derived zero gBrowser member calls from the upstream call sites' };
+    return { ok: false, reason: 'empty-required', detail: 'derived zero gBrowser member uses from the upstream call sites' };
   }
 
   const impl = deriveImplemented(shellFile);
@@ -290,12 +450,33 @@ function runScan(upstreamFiles, shellFile, absent = DELIBERATELY_ABSENT) {
     return { ok: false, reason: 'empty-implemented', detail: shellFile };
   }
 
-  const missingData = [...DATA_MEMBERS.keys()].filter(k => !impl.members.has(k));
+  const dataNames = [...DATA_MEMBERS.keys()];
+  const missingData = dataNames.filter(k => !impl.members.has(k));
+  const staleData = [];
+  for (const [name, spec] of DATA_MEMBERS) {
+    if (!spec.patchLine) continue;
+    const patch = readSource(patchFile);
+    if (patch === null) return { ok: false, reason: 'unreadable-patch', detail: patchFile };
+    if (!spec.patchLine.test(patch)) staleData.push(name);
+  }
   const methods = new Set([...impl.members].filter(m => !DATA_MEMBERS.has(m)));
-  const unimplemented = sorted(new Set([...required].filter(m => !methods.has(m) && !absent.has(m))));
-  const staleAbsent = sorted(new Set([...absent.keys()].filter(m => !required.has(m))));
+  const requiredMethods = new Set([...required].filter(m => !DATA_MEMBERS.has(m)));
+  const unimplemented = sorted(new Set([...requiredMethods].filter(m => !methods.has(m) && !absent.has(m))));
+  const staleAbsent = sorted(new Set([...absent.keys()].filter(m => !requiredMethods.has(m))));
   const contradiction = sorted(new Set([...absent.keys()].filter(m => methods.has(m))));
-  const surplus = sorted(new Set([...methods].filter(m => !required.has(m))));
+  const surplus = sorted(new Set([...methods].filter(m => !requiredMethods.has(m))));
+
+  // gBrowserInit: the second comparison.
+  const shellRequired = new Set([...deriveShimRequired([...actorFiles, ...extensionFiles])]);
+  const shim = deriveShimImplemented(boundaryFile);
+  if (shellRequired.size === 0) {
+    return { ok: false, reason: 'empty-shim-required', detail: 'derived zero gBrowserInit member accesses' };
+  }
+  if (shim.members === null) {
+    return { ok: false, reason: `shim-${shim.reason}`, detail: `${boundaryFile} (${shim.count} gBrowserInit definitions)` };
+  }
+  const shimUnimplemented = sorted([...shellRequired].filter(m => !shim.members.has(m)));
+  const shimSurplus = sorted([...shim.members].filter(m => !shellRequired.has(m)));
 
   return {
     ok:
@@ -303,10 +484,14 @@ function runScan(upstreamFiles, shellFile, absent = DELIBERATELY_ABSENT) {
       staleAbsent.length === 0 &&
       contradiction.length === 0 &&
       surplus.length === 0 &&
-      missingData.length === 0,
+      missingData.length === 0 &&
+      staleData.length === 0 &&
+      shimUnimplemented.length === 0 &&
+      shimSurplus.length === 0,
     reason: '',
-    fileCount: upstreamFiles.length,
-    required: sorted(required),
+    fileCount: actorFiles.length,
+    extensionFileCount: extensionFiles.length,
+    required: sorted(requiredMethods),
     implemented: sorted(impl.members),
     methods: sorted(methods),
     absent: sorted(new Set(absent.keys())),
@@ -315,16 +500,28 @@ function runScan(upstreamFiles, shellFile, absent = DELIBERATELY_ABSENT) {
     contradiction,
     surplus,
     missingData,
+    staleData,
+    shellRequired: sorted(shellRequired),
+    shimImplemented: sorted(shim.members),
+    shimUnimplemented,
+    shimSurplus,
+    absentFor: absent,
   };
 }
 
-function reportFailure(result, absent = DELIBERATELY_ABSENT) {
+function reportFailure(result) {
   switch (result.reason) {
     case 'empty-upstream':
       console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. A set comparison over an empty upstream file list proves nothing.`);
       return;
+    case 'empty-extension':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. The extension scope must not be empty.`);
+      return;
     case 'unreadable-upstream':
       console.error(`${NAME}: FAIL -- broken instrument: unreadable upstream call site(s): ${result.detail}`);
+      return;
+    case 'unreadable-patch':
+      console.error(`${NAME}: FAIL -- broken instrument: cannot read ${result.detail}`);
       return;
     case 'empty-required':
       console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. An empty required set is a broken derivation, not a clean tree.`);
@@ -338,32 +535,57 @@ function reportFailure(result, absent = DELIBERATELY_ABSENT) {
     case 'empty-implemented':
       console.error(`${NAME}: FAIL -- broken instrument: the ${STANDIN_ANCHOR} literal in ${result.detail} has no members at all`);
       return;
+    case 'empty-shim-required':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. An empty gBrowserInit set is a broken derivation.`);
+      return;
+    case 'shim-definitions':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. Exactly one gBrowserInit shim definition is allowed, in the boundary file.`);
+      return;
+    case 'shim-no-literal':
+      console.error(`${NAME}: FAIL -- broken instrument: no balanced '${SHIM_ANCHOR} ... }' literal found in ${result.detail}`);
+      return;
+    case 'shim-unreadable':
+      console.error(`${NAME}: FAIL -- broken instrument: cannot read ${result.detail}`);
+      return;
     default:
       break;
   }
-  console.error(`${NAME}: FAIL -- the shell gBrowser stand-in does not match what upstream calls on it`);
-  console.error(`  required (derived from ${result.fileCount} upstream files): ${result.required.join(', ')}`);
+  console.error(`${NAME}: FAIL -- the shell gBrowser stand-in or gBrowserInit shim does not match what upstream uses`);
+  console.error(`  required gBrowser members (actor ${result.fileCount} files + extension ${result.extensionFileCount} files): ${result.required.join(', ')}`);
   console.error(`  implemented (derived from ${SHELL_FILE}): ${result.implemented.join(', ')}`);
   console.error(`  deliberately absent: ${result.absent.join(', ')}`);
   for (const m of result.unimplemented) {
-    console.error(`  UNIMPLEMENTED: '${m}' is called on a gBrowser receiver upstream but the stand-in neither implements it nor records it in DELIBERATELY_ABSENT -- implement it, or record why it must stay absent`);
+    console.error(`  UNIMPLEMENTED: '${m}' is used on a gBrowser receiver upstream but the stand-in neither implements it nor records it in DELIBERATELY_ABSENT -- implement it, or record why it must stay absent`);
   }
   for (const m of result.staleAbsent) {
-    console.error(`  STALE ABSENCE: '${m}' is in DELIBERATELY_ABSENT but nothing upstream calls it any more -- remove the entry (${absent.get(m)})`);
+    console.error(`  STALE ABSENCE: '${m}' is in DELIBERATELY_ABSENT but nothing upstream uses it any more -- remove the entry (${result.absentFor.get(m)})`);
   }
   for (const m of result.contradiction) {
     console.error(`  CONTRADICTION: '${m}' is implemented on the stand-in AND listed in DELIBERATELY_ABSENT -- one of the two is wrong`);
   }
   for (const m of result.surplus) {
-    console.error(`  DEAD SURFACE: '${m}' is implemented on the stand-in but nothing upstream calls it -- remove it rather than carry it`);
+    console.error(`  DEAD SURFACE: '${m}' is implemented on the stand-in but nothing upstream uses it -- remove it rather than carry it`);
   }
   for (const m of result.missingData) {
-    console.error(`  MISSING DATA MEMBER: '${m}' -- ${DATA_MEMBERS.get(m)}`);
+    console.error(`  MISSING DATA MEMBER: '${m}' -- ${DATA_MEMBERS.get(m).reason}`);
+  }
+  for (const m of result.staleData) {
+    console.error(`  STALE DATA MEMBER: '${m}' -- ${patchLineReason(m)}`);
+  }
+  for (const m of result.shimUnimplemented) {
+    console.error(`  UNIMPLEMENTED: 'gBrowserInit.${m}' is read upstream or by the shell, but the gBrowserInit shim in ${BOUNDARY_FILE} does not define it`);
+  }
+  for (const m of result.shimSurplus) {
+    console.error(`  DEAD SURFACE: 'gBrowserInit.${m}' is defined by the shim but nothing reads it`);
   }
 }
 
-// Resolve the scope to files, failing distinctly on an unreadable directory.
-function scopeFilesOrExit(scope, label) {
+function patchLineReason(name) {
+  return `${PATCH_FILE} no longer adds a line reading ${name}; the WebDriver path would go blind`;
+}
+
+// Resolve the actor scope to files, failing distinctly on an unreadable directory.
+function actorFilesOrExit(scope, label) {
   const { files, unreadable } = deriveCallSiteFiles(scope);
   if (unreadable.length) {
     console.error(`${NAME}${label}: FAIL -- broken instrument: unreadable upstream actor director${unreadable.length > 1 ? 'ies' : 'y'}: ${unreadable.join(', ')}`);
@@ -372,27 +594,46 @@ function scopeFilesOrExit(scope, label) {
   return files;
 }
 
+function extensionFilesOrExit(label) {
+  const { files, unreadable } = deriveExtensionFiles();
+  if (unreadable.length || files.length === 0) {
+    console.error(`${NAME}${label}: FAIL -- broken instrument: cannot derive the extension scope (${unreadable.join(', ') || 'zero files'})`);
+    process.exit(1);
+  }
+  return files;
+}
+
+function currentInputs() {
+  return {
+    actorFiles: actorFilesOrExit(UPSTREAM_SCOPE, ''),
+    extensionFiles: extensionFilesOrExit(''),
+    shellFile: SHELL_FILE,
+    boundaryFile: BOUNDARY_FILE,
+    patchFile: PATCH_FILE,
+  };
+}
+
 function main() {
-  const files = scopeFilesOrExit(UPSTREAM_SCOPE, '');
-  const result = runScan(files, SHELL_FILE);
+  const inputs = currentInputs();
+  const result = runScan(inputs);
   if (!result.ok) {
     reportFailure(result);
     process.exit(1);
   }
   console.log(
-    `${NAME}: PASS -- required {${result.required.join(', ')}} derived from ${result.fileCount} upstream files equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present`
+    `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}`
   );
 }
 
 function selfTest() {
-  const realUpstream = scopeFilesOrExit(UPSTREAM_SCOPE, ' --self-test');
-  const baseline = runScan(realUpstream, SHELL_FILE);
+  const real = currentInputs();
+  const baseline = runScan(real);
   if (!baseline.ok) {
     console.error(`${NAME} --self-test: FAIL -- the unmodified tree is already red, so the planted-fault results below would be meaningless:`);
     reportFailure(baseline);
     process.exit(1);
   }
-  console.log(`${NAME} --self-test: unmodified tree green -- required {${baseline.required.join(', ')}} == implemented {${baseline.methods.join(', ')}} + absent {${baseline.absent.join(', ')}} over ${baseline.fileCount} files; planting faults`);
+  console.log(`${NAME} --self-test: unmodified tree green -- gBrowser required {${baseline.required.join(', ')}} == implemented + absent over ${baseline.fileCount} actor and ${baseline.extensionFileCount} extension files; gBrowserInit {${baseline.shellRequired.join(', ')}}; planting faults`);
 
   const methods = baseline.methods;
   const victim = methods[0];
@@ -400,88 +641,77 @@ function selfTest() {
   if (/\s/.test(stage)) throw new Error(`${NAME}: FAIL -- stage path contains a space: ${stage}`);
   let failed = 0;
 
-  // A stand-in fixture built from a member list, so a plant is unambiguous
-  // and exercises the same literal parser the real check uses.
+  // A stand-in fixture from a member list: 'tabs' and 'webDriverTabs' are getters,
+  // the rest methods, so a plant is unambiguous and exercises the real parser.
   const writeStandIn = (path, members) => {
-    const body = members.map(m => (m === 'tabs' ? '  tabs: [{ linkedBrowser: b }],' : `  ${m}() { return null; },`)).join('\n');
+    const body = members
+      .map(m => (DATA_MEMBERS.has(m) ? `  get ${m}() { return null; },` : `  ${m}() { return null; },`))
+      .join('\n');
     writeFileSync(path, `window.gBrowser = {\n${body}\n};\n`);
   };
+  const fail = msg => {
+    console.error(`${NAME} --self-test: FAIL -- ${msg}`);
+    failed++;
+  };
+  const ok = msg => console.log(`  ok  ${msg}`);
 
   try {
-    // Plant (a): an implemented member removed from the stand-in.
+    // (a) an implemented member removed from the stand-in.
     {
       const path = join(stage, 'standin-missing.js');
-      writeStandIn(path, ['tabs', ...methods.filter(m => m !== victim)]);
+      writeStandIn(path, [...DATA_MEMBERS.keys(), ...methods.filter(m => m !== victim)]);
       const impl = deriveImplemented(path);
       if (!impl.members || impl.members.has(victim)) {
-        console.error(`${NAME} --self-test: FAIL -- 'missing member' plant did not land (${victim} still parsed as implemented)`);
-        failed++;
+        fail(`'missing member' plant did not land (${victim} still parsed as implemented)`);
       } else {
-        const r = runScan(realUpstream, path);
+        const r = runScan({ ...real, shellFile: path });
         if (r.ok || !r.unimplemented?.includes(victim)) {
-          console.error(`${NAME} --self-test: FAIL -- removing '${victim}' did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented, surplus: r.surplus })}`);
-          failed++;
-        } else {
-          console.log(`  ok  stand-in missing '${victim}' -> red, naming it UNIMPLEMENTED`);
-        }
+          fail(`removing '${victim}' did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
+        } else ok(`stand-in missing '${victim}' -> red, naming it UNIMPLEMENTED`);
       }
     }
 
-    // Plant (b): a staged copy of one derived upstream file gaining a new
-    // gBrowser member call; the rest of the derived list passes unchanged.
+    // (b) a staged copy of one actor-scope file gaining a new member call.
     {
       const planted = 'zzzPlantedRebaseMember';
-      const source = realUpstream.find(p => p.endsWith('/LinkHandlerParent.sys.mjs')) ?? realUpstream[0];
+      const source = real.actorFiles.find(p => p.endsWith('/LinkHandlerParent.sys.mjs')) ?? real.actorFiles[0];
       const path = join(stage, 'upstream-new-call.sys.mjs');
       writeFileSync(path, `${readSource(source)}\nfunction plantedRebase(gBrowser, tab) {\n  return gBrowser.${planted}(tab);\n}\n`);
-      const landed = readFileSync(path, 'utf8').includes(`gBrowser.${planted}(`);
-      if (!landed) {
-        console.error(`${NAME} --self-test: FAIL -- 'new upstream call' plant did not land`);
-        failed++;
+      if (!readFileSync(path, 'utf8').includes(`gBrowser.${planted}(`)) {
+        fail(`'new upstream call' plant did not land`);
       } else {
-        const r = runScan([path, ...realUpstream.filter(p => p !== source)], SHELL_FILE);
+        const r = runScan({ ...real, actorFiles: [path, ...real.actorFiles.filter(p => p !== source)] });
         if (r.ok || !r.unimplemented?.includes(planted)) {
-          console.error(`${NAME} --self-test: FAIL -- a new upstream member call did not go red naming '${planted}'; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
-          failed++;
-        } else {
-          console.log(`  ok  upstream rebase adding '${planted}' to ${source.split('/').pop()} -> red, naming it UNIMPLEMENTED`);
-        }
+          fail(`a new upstream member call did not go red naming '${planted}'; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
+        } else ok(`upstream rebase adding '${planted}' to ${source.split('/').pop()} -> red, naming it UNIMPLEMENTED`);
       }
     }
 
-    // Plant (c): a surplus stand-in member nothing upstream calls.
+    // (c) a surplus stand-in member nothing upstream uses.
     {
       const planted = 'zzzDeadSurfaceMember';
       const path = join(stage, 'standin-surplus.js');
-      writeStandIn(path, ['tabs', ...methods, planted]);
+      writeStandIn(path, [...DATA_MEMBERS.keys(), ...methods, planted]);
       const impl = deriveImplemented(path);
       if (!impl.members || !impl.members.has(planted)) {
-        console.error(`${NAME} --self-test: FAIL -- 'surplus member' plant did not land`);
-        failed++;
+        fail(`'surplus member' plant did not land`);
       } else {
-        const r = runScan(realUpstream, path);
+        const r = runScan({ ...real, shellFile: path });
         if (r.ok || !r.surplus?.includes(planted)) {
-          console.error(`${NAME} --self-test: FAIL -- a surplus stand-in member did not go red naming '${planted}'; got: ${JSON.stringify({ reason: r.reason, surplus: r.surplus })}`);
-          failed++;
-        } else {
-          console.log(`  ok  stand-in surplus '${planted}' -> red, naming it DEAD SURFACE`);
-        }
+          fail(`a surplus stand-in member did not go red naming '${planted}'; got: ${JSON.stringify({ reason: r.reason, surplus: r.surplus })}`);
+        } else ok(`stand-in surplus '${planted}' -> red, naming it DEAD SURFACE`);
       }
     }
 
-    // Plant (d): an empty upstream file list is a broken instrument, never clean.
+    // (d) an empty actor-scope file list is a broken instrument, never clean.
     {
-      const r = runScan([], SHELL_FILE);
+      const r = runScan({ ...real, actorFiles: [] });
       if (r.ok || r.reason !== 'empty-upstream') {
-        console.error(`${NAME} --self-test: FAIL -- an empty upstream file list did not fail distinctly as a broken instrument; got reason='${r.reason}'`);
-        failed++;
-      } else {
-        console.log(`  ok  empty upstream file list -> distinct broken-instrument failure, not clean`);
-      }
+        fail(`an empty actor-scope file list did not fail distinctly as a broken instrument; got reason='${r.reason}'`);
+      } else ok(`empty actor-scope file list -> distinct broken-instrument failure, not clean`);
     }
 
-    // Plant (e): a NEW caller file in a copy of a scanned actor directory.
-    // Proves the file list is derived: no edit here brings the file into scope.
+    // (e) a NEW caller file in a copy of a scanned actor directory: the file list is derived.
     {
       const planted = 'zzzNewActorParentMember';
       const [dir] = UPSTREAM_SCOPE.dirs[0];
@@ -495,68 +725,94 @@ function selfTest() {
       const scope = { files: UPSTREAM_SCOPE.files, dirs: [[copy, 'self-test copy'], ...UPSTREAM_SCOPE.dirs.slice(1)] };
       const { files } = deriveCallSiteFiles(scope);
       if (!files.includes(`${copy}/${newFile}`)) {
-        console.error(`${NAME} --self-test: FAIL -- 'new caller file' plant did not land (${newFile} not in the derived file list)`);
-        failed++;
+        fail(`'new caller file' plant did not land (${newFile} not in the derived file list)`);
       } else {
-        const r = runScan(files, SHELL_FILE);
+        const r = runScan({ ...real, actorFiles: files });
         if (r.ok || !r.unimplemented?.includes(planted)) {
-          console.error(`${NAME} --self-test: FAIL -- a new actor parent calling '${planted}' did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
-          failed++;
-        } else {
-          console.log(`  ok  new caller file ${newFile} in a copy of ${dir} -> red, naming '${planted}' UNIMPLEMENTED`);
-        }
+          fail(`a new actor parent calling '${planted}' did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
+        } else ok(`new caller file ${newFile} in a copy of ${dir} -> red, naming '${planted}' UNIMPLEMENTED`);
       }
     }
 
-    // Plant (f): a stale entry in a copy of DELIBERATELY_ABSENT.
+    // (f) a stale entry in a copy of DELIBERATELY_ABSENT.
     {
       const planted = 'zzzStaleAbsentMember';
       const absent = new Map([...DELIBERATELY_ABSENT, [planted, 'self-test stale entry']]);
-      if (!absent.has(planted)) {
-        console.error(`${NAME} --self-test: FAIL -- 'stale absence' plant did not land`);
-        failed++;
-      } else {
-        const r = runScan(realUpstream, SHELL_FILE, absent);
-        if (r.ok || !r.staleAbsent?.includes(planted)) {
-          console.error(`${NAME} --self-test: FAIL -- a stale DELIBERATELY_ABSENT entry did not go red naming '${planted}'; got: ${JSON.stringify({ reason: r.reason, staleAbsent: r.staleAbsent })}`);
-          failed++;
-        } else {
-          console.log(`  ok  DELIBERATELY_ABSENT carrying '${planted}' -> red, naming it STALE ABSENCE`);
-        }
-      }
+      const r = runScan({ ...real, absent });
+      if (r.ok || !r.staleAbsent?.includes(planted)) {
+        fail(`a stale DELIBERATELY_ABSENT entry did not go red naming '${planted}'; got: ${JSON.stringify({ reason: r.reason, staleAbsent: r.staleAbsent })}`);
+      } else ok(`DELIBERATELY_ABSENT carrying '${planted}' -> red, naming it STALE ABSENCE`);
     }
 
-    // Plant (g): an implemented member also listed absent.
+    // (g) an implemented member also listed absent.
     {
       const absent = new Map([...DELIBERATELY_ABSENT, [victim, 'self-test contradiction']]);
-      const r = runScan(realUpstream, SHELL_FILE, absent);
+      const r = runScan({ ...real, absent });
       if (r.ok || !r.contradiction?.includes(victim)) {
-        console.error(`${NAME} --self-test: FAIL -- '${victim}' both implemented and listed absent did not go red naming it; got: ${JSON.stringify({ reason: r.reason, contradiction: r.contradiction })}`);
-        failed++;
-      } else {
-        console.log(`  ok  '${victim}' implemented and listed absent -> red, naming it CONTRADICTION`);
-      }
+        fail(`'${victim}' both implemented and listed absent did not go red naming it; got: ${JSON.stringify({ reason: r.reason, contradiction: r.contradiction })}`);
+      } else ok(`'${victim}' implemented and listed absent -> red, naming it CONTRADICTION`);
     }
 
-    // Positive control on the data member: dropping `tabs` is red too, so the
-    // hold-out is not a blanket exemption.
+    // Positive control on the data members: dropping `tabs` is red too.
     {
       const path = join(stage, 'standin-no-tabs.js');
-      writeStandIn(path, methods);
-      const r = runScan(realUpstream, path);
+      writeStandIn(path, [DATA_MEMBERS.keys().next().value === 'tabs' ? 'webDriverTabs' : 'tabs', ...methods]);
+      const r = runScan({ ...real, shellFile: path });
       if (r.ok || !r.missingData?.includes('tabs')) {
-        console.error(`${NAME} --self-test: FAIL -- dropping the 'tabs' data member did not go red naming it; got: ${JSON.stringify({ reason: r.reason, missingData: r.missingData })}`);
-        failed++;
-      } else {
-        console.log(`  ok  stand-in missing 'tabs' -> red, naming it MISSING DATA MEMBER`);
-      }
+        fail(`dropping the 'tabs' data member did not go red naming it; got: ${JSON.stringify({ reason: r.reason, missingData: r.missingData })}`);
+      } else ok(`stand-in missing 'tabs' -> red, naming it MISSING DATA MEMBER`);
+    }
+
+    // (p) a staged extension-scope copy that only READS gBrowser.zzzPlantedRead.
+    {
+      const planted = 'zzzPlantedRead';
+      const path = join(stage, 'extension-read.js');
+      writeFileSync(path, `export function plantedRead(win) {\n  return win.gBrowser.${planted};\n}\n`);
+      const r = runScan({ ...real, extensionFiles: [...real.extensionFiles, path] });
+      if (r.ok || !r.unimplemented?.includes(planted)) {
+        fail(`an extension-scope read of '${planted}' did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
+      } else ok(`extension-scope read of '${planted}' -> red, naming it UNIMPLEMENTED (reads count in the extension scope)`);
+    }
+
+    // (q) an actor parent calling through a bound getTabBrowser() receiver.
+    {
+      const planted = 'zzzPlantedViaReceiver';
+      const path = join(stage, 'actor-receiver.sys.mjs');
+      writeFileSync(path, `export function plantedReceiver(browser, x) {\n  let tb = browser.getTabBrowser();\n  tb.${planted}(x);\n}\n`);
+      const r = runScan({ ...real, actorFiles: [...real.actorFiles, path] });
+      if (r.ok || !r.unimplemented?.includes(planted)) {
+        fail(`a call through a bound getTabBrowser() receiver did not go red naming '${planted}'; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
+      } else ok(`call through bound getTabBrowser() receiver '${planted}' -> red, naming it UNIMPLEMENTED (receiver widening)`);
+    }
+
+    // (r) a gBrowserInit literal without isAdoptingTab.
+    {
+      const path = join(stage, 'boundary-no-adopting.mjs');
+      writeFileSync(path, `win.gBrowserInit = { delayedStartupFinished: true, getTabToAdopt: () => null };\n`);
+      const r = runScan({ ...real, boundaryFile: path });
+      if (r.ok || !r.shimUnimplemented?.includes('isAdoptingTab')) {
+        fail(`a gBrowserInit literal without isAdoptingTab did not go red naming 'gBrowserInit.isAdoptingTab'; got: ${JSON.stringify({ reason: r.reason, shimUnimplemented: r.shimUnimplemented })}`);
+      } else ok(`gBrowserInit literal without isAdoptingTab -> red, naming 'gBrowserInit.isAdoptingTab' UNIMPLEMENTED`);
+    }
+
+    // (s) staged patch text without the TabManager hunk.
+    {
+      const path = join(stage, 'patch-no-webdrivertabs.patch');
+      const patch = readSource(PATCH_FILE) ?? '';
+      writeFileSync(path, patch.split('\n').filter(line => !/^\+.*\btabBrowser\.webDriverTabs\b/.test(line)).join('\n'));
+      const r = runScan({ ...real, patchFile: path });
+      if (r.ok || !r.staleData?.includes('webDriverTabs')) {
+        fail(`patch text without the webDriverTabs hunk did not go red naming it; got: ${JSON.stringify({ reason: r.reason, staleData: r.staleData })}`);
+      } else ok(`050 patch text without the TabManager hunk -> red, naming STALE DATA MEMBER 'webDriverTabs'`);
     }
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
 
   if (failed) process.exit(1);
-  console.log(`${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member); the empty file list failed distinctly`);
+  console.log(
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk); the empty file list failed distinctly`
+  );
 }
 
 if (process.argv.includes('--self-test')) {

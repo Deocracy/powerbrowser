@@ -19,7 +19,7 @@ document.addEventListener(
   () => {
     dump("POWERBROWSER_SHELL_READY chrome://powerbrowser/content/powerbrowser.xhtml\n");
 
-    const { PowerBrowserAPI, PowerBrowserWebTabs } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
+    const { PowerBrowserAPI, PowerBrowserWebTabs, PowerBrowserTabHost } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
 
     const browserElement = document.getElementById("powerbrowser-content");
     const loadingElement = document.getElementById("powerbrowser-loading");
@@ -53,50 +53,82 @@ document.addEventListener(
         })}\n`
       );
 
-    // WebDriver finds content browsing contexts through `win.gBrowser.tabs`
-    // (remote/shared/TabManager.sys.mjs) and identifies each one by its
-    // browser's `permanentKey` (remote/shared/NavigableManager.sys.mjs returns
-    // a null context id without one). The shell is deliberately not Firefox
-    // chrome and has no tabbrowser, so it presents its single browser through
-    // that same shape -- also the seed of the chrome-owned tab model the
-    // post-4.0 bridge needs.
+    // WebDriver reaches the Theia frame and every overlay through
+    // `gBrowser.webDriverTabs` (remote/shared/TabManager.sys.mjs, the 050
+    // hunk), and identifies each browser by its `permanentKey`
+    // (remote/shared/NavigableManager.sys.mjs). Extensions read `tabs` only,
+    // so the Theia frame never appears to them (D-06 as amended).
     //
-    // 14.1.1-04 (G-14.1.1-19), widened in 27-03: the three members beside
-    // `tabs` are the members upstream CALLS on a gBrowser receiver at the
-    // pinned tag that this stand-in implements. The required set is derived
-    // from browser-custom-element.mjs plus every *Parent.sys.mjs under
-    // upstream/browser/actors and upstream/toolkit/actors. Five more members
-    // upstream calls (getNotificationBox, getTabDialogBox, refreshBlocked,
-    // removeTab, setTabLabelForAuthPrompts) are deliberately absent, each
-    // with its reason in the gate's DELIBERATELY_ABSENT; refreshBlocked is a
-    // known gap (it throws only with accessibility.blockautorefresh on).
-    // Those call sites optional-chain the RECEIVER, not the member, so a
-    // non-nullish stand-in missing the member threw once per overlay creation
-    // and buried the next real chrome-side error in the same log.
-    // scripts/verify-shell-gbrowser-standin.mjs re-derives both sides at
-    // --quick time and compares as set equality, so an upstream rebase adding a
-    // call and a member deleted or added here each go red by name.
+    // The member set is derived by scripts/verify-shell-gbrowser-standin.mjs
+    // from the actor scope and the extension scope, and compared as set
+    // equality, so an upstream rebase adding a call and a member deleted or
+    // added here each go red by name.
     //
-    // None of them synthesises a tab object: a fabricated tab handed to
-    // LinkHandlerParent or ContextMenuParent would let privileged actors act on
-    // a tab that does not exist.
+    // The never-synthesise rule is reversed for the tab host only (Phase 28
+    // sign-off, 2026-10-21): each host node stands for one live overlay that
+    // PowerBrowserAPI created and removes when it closes. The Theia frame never
+    // gets a node. The host lives in PowerBrowserAPI.sys.mjs (Phase 31.1).
     browserElement.permanentKey = PowerBrowserAPI.createPermanentKey();
+    const host = PowerBrowserTabHost.install(window, browserElement);
+    const theiaRecord = { linkedBrowser: browserElement };
     window.gBrowser = {
-      tabs: [{ linkedBrowser: browserElement }],
-      // No tab strip here, so no browser has a tab record. Returning null is
-      // what makes the upstream optional chain's condition false and its caller
-      // take the no-tab branch -- the behaviour that already applied before the throw.
-      getTabForBrowser() {
-        return null;
+      get tabs() {
+        return host.tabs();
       },
-      // The overlay records PowerBrowserAPI.webTabOpen pushes onto `tabs` carry
-      // exactly this field; anything else has no linked browser.
+      get webDriverTabs() {
+        return [theiaRecord, ...host.tabs()];
+      },
+      get selectedTab() {
+        return host.selectedTab();
+      },
+      // Switching tabs is Phase 34/36/38 routing; a silent switch would answer wrongly.
+      set selectedTab(_tab) {
+        host.refuse("switch tabs");
+      },
+      get selectedTabs() {
+        return host.selectedTab() ? [host.selectedTab()] : [];
+      },
+      get selectedBrowser() {
+        return host.selectedBrowser();
+      },
+      get currentURI() {
+        return host.currentURI();
+      },
+      pinnedTabCount: 0,
+      tabGroups: [],
+      getTabForBrowser(browser) {
+        return host.getTabForBrowser(browser);
+      },
       getBrowserForTab(tab) {
-        return (tab && tab.linkedBrowser) || null;
+        return host.getBrowserForTab(tab);
       },
-      // No-op: there is no tab strip to paint a favicon on.
-      setIcon() {},
+      isTab(tab) {
+        return host.isTab(tab);
+      },
+      getIcon(tab) {
+        return host.getIcon(tab);
+      },
+      setIcon(tab, url) {
+        host.setIcon(tab, url);
+      },
+      getTabSharingState(tab) {
+        return host.getTabSharingState(tab);
+      },
+      addTabsProgressListener(listener) {
+        host.addTabsProgressListener(listener);
+      },
+      removeTabsProgressListener(listener) {
+        host.removeTabsProgressListener(listener);
+      },
+      // Opening and closing a tab for an extension is routed to Theia in a later phase (36/38).
+      addTab() {
+        host.refuse("open a tab");
+      },
+      removeTab(_tab) {
+        host.refuse("close a tab");
+      },
     };
+    document.documentElement.setAttribute("extensiontabhost", "true");
 
     // Exposed for plan 04-04's TheiaService.sys.mjs to call once the
     // backend is ready: navigates the content browser to the Theia

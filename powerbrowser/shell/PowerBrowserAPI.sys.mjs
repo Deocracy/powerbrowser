@@ -3305,12 +3305,8 @@ export const PowerBrowserAPI = Object.freeze({
     });
     doc.body.appendChild(browser);
     browser.docShellIsActive = false;
-    // The shape powerbrowser.js:63-64 already fakes for the one content
-    // browser: WebDriver finds top-level contexts through win.gBrowser.tabs
-    // and addresses each by its browser's permanentKey. Pushing the overlay
-    // here is what makes it a BiDi-addressable context, which is what the
-    // live check observes.
-    win.gBrowser.tabs.push({ linkedBrowser: browser });
+    // WebDriver reaches the overlay through gBrowser.webDriverTabs (the 050
+    // TabManager hunk); extensions see it as a tab node (tabHostAddTab below).
     // NG-001: the row key is the tab's identity -- the key the frontend sent
     // (a reopened card's row) or web:<tabId> -- never the page URL.
     // NG-034: that value is also the web-tab history key (saveWebTabHistories).
@@ -3411,6 +3407,7 @@ export const PowerBrowserAPI = Object.freeze({
     // A browsing-context switch leaves a placeholder until the new page's location change (scheduleWebTabState).
     browser.addEventListener("DidChangeBrowserRemoteness", () => switchingOverlays.add(browser));
     webTabs.set(tabId, entry);
+    tabHostAddTab(win, tabId, browser);
     // NG-034: a tab the frontend reopened from last session's snapshot, with
     // its history armed, gets its back/forward history back; any other tab
     // loads its URL through the null-principal navigate below.
@@ -3819,8 +3816,8 @@ export const PowerBrowserAPI = Object.freeze({
   },
 
   /**
-   * GUI-02 (14.1-01): drops one overlay -- element, BiDi tab record, host
-   * entry. Idempotent: a tab this host does not hold answers "unknown-tab"
+   * GUI-02 (14.1-01): drops one overlay -- element, its tab node (Phase
+   * 31.1), host entry. Idempotent: a tab this host does not hold answers "unknown-tab"
    * and touches nothing.
    */
   webTabClose(tabId) {
@@ -3848,16 +3845,8 @@ export const PowerBrowserAPI = Object.freeze({
         PowerBrowserAPI.log("error", `[web-tab] removeTabRow failed for ${entry.uri}: ${err && err.message ? err.message : err}`);
       });
     }
-    try {
-      const tabs = win.gBrowser.tabs;
-      const index = tabs.findIndex(tab => tab.linkedBrowser === browser);
-      if (index !== -1) {
-        tabs.splice(index, 1);
-      }
-    } catch {
-      // The tab record is best-effort on teardown; the element removal
-      // below is what frees the docshell.
-    }
+    // The tab node goes first: TabClose reads it while it is still in the strip.
+    tabHostDropTab(win, browser);
     browser.remove();
     webTabs.delete(tabId);
     return "closed";
@@ -5541,3 +5530,192 @@ Services.obs.addObserver(shellQuitVeto, "quit-application-requested");
 
 // For the live check's self-test only: the quit-typed plant removes the veto through this. No product code calls removeObserver.
 export const PowerBrowserQuitVeto = Object.freeze({ observer: shellQuitVeto, topic: "quit-application-requested" });
+
+// Phase 31.1: the extension tab host.
+//
+// An installed extension reads the shell window's gBrowser (the tabbrowser
+// shape), so each web tab, one live overlay <browser>, is presented as one real
+// XUL node in a hidden strip. The node is created when the overlay opens and
+// removed when it closes. The Theia frame never gets a node (D-06 as amended):
+// WebDriver reaches it through gBrowser.webDriverTabs, and extensions read
+// gBrowser.tabs only. The never-synthesise rule in powerbrowser.js is reversed
+// for this host alone (Phase 28 sign-off, 2026-10-21): every node stands for one
+// live overlay. This section sits at the end of the file on purpose: nothing
+// above the last catalogued internals line moves.
+
+// The host record per shell window. install() is the only writer.
+const tabHosts = new WeakMap();
+
+function fireTabEvent(node, type, detail) {
+  node.dispatchEvent(new node.ownerDocument.defaultView.CustomEvent(type, { bubbles: true, detail }));
+}
+
+// A host node is one the host created and the strip still holds. The Theia
+// record and any plain object are not host nodes.
+function isHostTab(host, tab) {
+  return Boolean(tab) && tab.parentNode === host.strip;
+}
+
+// The fields the extension trackers read (ext-browser.js, ext-tabs-base.js).
+// Mute is Phase 32's: there is no toggleMuteAudio here, so a write fails loudly.
+function makeTabNode(host, browser) {
+  const node = host.strip.ownerDocument.createXULElement("hbox");
+  host.counter += 1;
+  Object.assign(node, {
+    linkedBrowser: browser,
+    linkedPanel: `powerbrowser-panel-${host.counter}`,
+    pinned: false,
+    hidden: false,
+    multiselected: false,
+    muted: false,
+    muteReason: undefined,
+    soundPlaying: false,
+    undiscardable: false,
+    openerTab: null,
+    group: null,
+    splitview: null,
+    userContextId: 0,
+    lastAccessed: Date.now(),
+    label: "",
+    image: null,
+    successor: null,
+    closing: false,
+  });
+  Object.defineProperties(node, {
+    _tPos: { get() { return Array.prototype.indexOf.call(host.strip.children, this); } },
+    selected: { get() { return host.selected === this; } },
+  });
+  return node;
+}
+
+function selectNode(host, node) {
+  if (host.selected === node) {
+    return;
+  }
+  const previousTab = host.selected;
+  host.selected = node;
+  node.lastAccessed = Date.now();
+  fireTabEvent(node, "TabSelect", { previousTab });
+}
+
+// Called by webTabOpen once the overlay is in webTabs. The first overlay, or
+// the one the Theia frame already named selected, becomes the selection.
+function tabHostAddTab(win, tabId, browser) {
+  const host = tabHosts.get(win);
+  // D-06: only an overlay gets a node. The Theia frame lacks this group.
+  if (!host || browser.getAttribute("messagemanagergroup") !== "browsers") {
+    return;
+  }
+  const node = makeTabNode(host, browser);
+  host.strip.appendChild(node);
+  host.byBrowser.set(browser, node);
+  host.byTabId.set(tabId, node);
+  const becameSelected = host.selected === null;
+  if (becameSelected) {
+    host.selected = node;
+  }
+  fireTabEvent(node, "TabOpen", { adoptedTab: null });
+  if (becameSelected) {
+    fireTabEvent(node, "TabSelect", { previousTab: null });
+  }
+  if (activeTabByFrame.get(host.theiaBrowser) === tabId) {
+    selectNode(host, node);
+  }
+}
+
+// The next selection when the selected tab closes: the tab activeTabByFrame
+// names if it is live, else the tab now at the same index (the previous tab
+// when the closed one was last), else null.
+function pickNextSelection(host, index) {
+  const preferredId = activeTabByFrame.get(host.theiaBrowser);
+  const preferred = preferredId === undefined ? undefined : host.byTabId.get(preferredId);
+  if (preferred) {
+    return preferred;
+  }
+  const children = host.strip.children;
+  return children.length ? children[Math.min(index, children.length - 1)] : null;
+}
+
+// Called by webTabClose before browser.remove(). TabClose fires while the node
+// is still in the strip, with closing set, so the tracker reads no id from it.
+function tabHostDropTab(win, browser) {
+  const host = tabHosts.get(win);
+  const node = host ? host.byBrowser.get(browser) : undefined;
+  if (!node) {
+    return;
+  }
+  node.closing = true;
+  fireTabEvent(node, "TabClose", { adoptedBy: null });
+  const index = node._tPos;
+  host.strip.removeChild(node);
+  host.byBrowser.delete(browser);
+  for (const [tabId, tab] of host.byTabId) {
+    if (tab === node) {
+      host.byTabId.delete(tabId);
+    }
+  }
+  if (host.selected !== node) {
+    return;
+  }
+  host.selected = null;
+  const next = pickNextSelection(host, index);
+  if (next) {
+    host.selected = next;
+    next.lastAccessed = Date.now();
+    fireTabEvent(next, "TabSelect", { previousTab: node });
+  }
+}
+
+export const PowerBrowserTabHost = Object.freeze({
+  /**
+   * Installs the host in the shell window `win`, whose Theia frame is
+   * `theiaBrowser`. Creates the hidden strip, defines the gBrowserInit shim
+   * and returns the accessors powerbrowser.js delegates to. A second install
+   * for the same window throws.
+   */
+  install(win, theiaBrowser) {
+    if (tabHosts.has(win)) {
+      throw new Error("PowerBrowser's tab host is already installed in this window.");
+    }
+    const doc = win.document;
+    const strip = doc.createXULElement("hbox");
+    strip.id = "powerbrowser-tab-host";
+    strip.setAttribute("hidden", "true");
+    doc.documentElement.appendChild(strip);
+    const host = {
+      win,
+      strip,
+      theiaBrowser,
+      byBrowser: new Map(),
+      byTabId: new Map(),
+      selected: null,
+      progressListeners: new Set(),
+      counter: 0,
+    };
+    tabHosts.set(win, host);
+    win.gBrowserInit = { delayedStartupFinished: true, getTabToAdopt: () => null, isAdoptingTab: () => false };
+    return Object.freeze({
+      tabs: () => [...strip.children],
+      selectedTab: () => host.selected,
+      selectedBrowser: () => (host.selected ? host.selected.linkedBrowser : null),
+      currentURI: () => (host.selected ? host.selected.linkedBrowser.currentURI : null),
+      getTabForBrowser: browser => host.byBrowser.get(browser) ?? null,
+      getBrowserForTab: tab => (isHostTab(host, tab) ? tab.linkedBrowser : null),
+      isTab: tab => isHostTab(host, tab),
+      getIcon: tab => (isHostTab(host, tab) ? tab.image : null),
+      setIcon(tab, url) {
+        if (!isHostTab(host, tab) || typeof url !== "string") {
+          return;
+        }
+        tab.image = url;
+        fireTabEvent(tab, "TabAttrModified", { changed: ["image"] });
+      },
+      getTabSharingState: () => ({ camera: undefined, microphone: undefined, screen: undefined }),
+      addTabsProgressListener: listener => host.progressListeners.add(listener),
+      removeTabsProgressListener: listener => host.progressListeners.delete(listener),
+      refuse(action) {
+        throw new Error(`PowerBrowser cannot ${action} for an extension yet.`);
+      },
+    });
+  },
+});
