@@ -544,9 +544,10 @@ export class AddressBar {
 
     /**
      * Phase 31 plan 03 (SITE-08, D-31-06): the shield row's change, sent to the
-     * panel's tab only. The reply's exception state refreshes the panel and the
-     * identity box; a refused or failed change takes the panel to the
-     * unavailable copy, as a refused permission write does.
+     * panel's tab only. The identity box's shield follows the reply (the tab's
+     * refresh); an applied change closes the panel, since the tab reloads. A
+     * refused or failed change takes the panel to the unavailable copy, as a
+     * refused permission write does.
      */
     protected async setSiteShield(except: boolean): Promise<void> {
         const tab = this.sitePanelTab;
@@ -559,11 +560,13 @@ export class AddressBar {
                 reply = null;
             }
         }
-        if (reply && reply.ok === true && reply.where === 'applied' && typeof reply.excepted === 'boolean' && this.sitePanelInfo) {
-            this.sitePanelInfo = { ...this.sitePanelInfo, shield: { count: this.sitePanelInfo.shield?.count ?? 0, excepted: reply.excepted } };
-        } else {
-            this.sitePanelInfo = null;
+        // Applied: the tab reloads, so the panel closes as upstream's does (browser-siteProtections.js:2754-2757);
+        // the next open reads the count from the reloaded page. Refused: the panel shows the unavailable copy.
+        if (reply && reply.ok === true && reply.where === 'applied' && typeof reply.excepted === 'boolean') {
+            this.closeSitePanel();
+            return;
         }
+        this.sitePanelInfo = null;
         this.update();
     }
 
