@@ -638,11 +638,38 @@ function groupFamily(ctx, out) {
   }
 }
 
+// (f) selection hooks (WR-03, D-13). tabHostSelectById has exactly two callers: one in pushPageFocus (page focus) and
+// one in the webTabActivated arm (Theia's selected web tab). Each is pinned on its own, so removing either goes red.
+function selectionFamily(ctx, out) {
+  const F = 'selection';
+  const before = out.failures.length;
+  const api = stripComments(ctx.text(API_REL)).split('\n');
+  const calls = [];
+  api.forEach((l, i) => { if (/tabHostSelectById\(/.test(l) && !/function\s+tabHostSelectById\(/.test(l)) calls.push(i); });
+  if (calls.length !== 2) failOut(out, F, 'tabHostSelectById', 'CALL COUNT', `tabHostSelectById( is called ${calls.length} time(s); the rule is two, pushPageFocus and the webTabActivated arm`);
+  const within = (lo, hi) => calls.filter(i => i >= lo && i <= hi).length;
+  const pp = methodSpan(api, 'pushPageFocus');
+  if (pp.error) return brokenOut(out, F, 'pushPageFocus', pp.error);
+  if (within(pp.start, pp.end) !== 1) {
+    failOut(out, F, 'pushPageFocus', 'PAGE FOCUS HOOK', `pushPageFocus has ${within(pp.start, pp.end)} tabHostSelectById call(s); page focus must select its tab (D-13), so it needs one`);
+  }
+  const arm = api.findIndex(l => /^\s*case "webTabActivated": \{\s*$/.test(l));
+  if (arm < 0) return brokenOut(out, F, 'webTabActivated', 'no case "webTabActivated": arm in PowerBrowserAPI.sys.mjs');
+  const armEnd = closeLine(api, arm);
+  if (armEnd < 0) return brokenOut(out, F, 'webTabActivated', 'the webTabActivated arm does not close');
+  if (within(arm, armEnd) !== 1) {
+    failOut(out, F, 'webTabActivated', 'ACTIVATION HOOK', `the webTabActivated arm has ${within(arm, armEnd)} tabHostSelectById call(s); Theia's selected web tab must select (D-13), so it needs one`);
+  }
+  if (out.failures.length === before) {
+    out.passes.push('selection PASS -- tabHostSelectById has one call in pushPageFocus (page focus, D-13), one in the webTabActivated arm, and no other call');
+  }
+}
+
 // Runs every family. A family that cannot derive its inputs reports a broken instrument and the next one still runs.
 function checkAll(opts = {}) {
   const ctx = makeCtx(opts);
   const out = { failures: [], passes: [], keys: [] };
-  const fams = [['consumers', consumersFamily], ['theia-exclusion', theiaFamily], ['scheme-wall', wallFamily], ['window-type', windowTypeFamily], ['messagemanagergroup', groupFamily]];
+  const fams = [['consumers', consumersFamily], ['theia-exclusion', theiaFamily], ['scheme-wall', wallFamily], ['window-type', windowTypeFamily], ['messagemanagergroup', groupFamily], ['selection', selectionFamily]];
   for (const [name, fn] of fams) {
     try {
       fn(ctx, out);
@@ -853,6 +880,22 @@ function selfTest() {
       expect('messagemanagergroup set from powerbrowser.js', has(res, f => f.family === 'messagemanagergroup' && f.kind === 'WRITE SITE' && f.text.includes('powerbrowser.js')), 1, 'WRITE SITE naming powerbrowser.js');
     }
   }
+  // selection hooks (WR-03): each caller removed on its own goes red.
+  {
+    const text = replaceInSpan(apiRaw, 'pushPageFocus', 'tabHostSelectById(theiaBrowser, tabId);', '');
+    if (landed('pushPageFocus without its selection', text !== apiRaw)) {
+      const res = checkAll({ texts: new Map([[API_REL, text]]) });
+      expect('pushPageFocus without its selection', has(res, f => f.family === 'selection' && f.id === 'pushPageFocus' && f.kind === 'PAGE FOCUS HOOK'), 1, 'PAGE FOCUS HOOK naming pushPageFocus');
+    }
+  }
+  {
+    const text = apiRaw.replace('tabHostSelectById(actorRef.browsingContext.top.embedderElement, data.tabId);', '');
+    if (landed('webTabActivated arm without its selection', text !== apiRaw)) {
+      const res = checkAll({ texts: new Map([[API_REL, text]]) });
+      expect('webTabActivated arm without its selection', has(res, f => f.family === 'selection' && f.id === 'webTabActivated' && f.kind === 'ACTIVATION HOOK'), 1, 'ACTIVATION HOOK naming webTabActivated');
+    }
+  }
+
   if (bad) {
     console.error(`${NAME} --self-test: FAIL -- ${bad} plant(s) or control(s) did not behave as required`);
     return 1;
