@@ -4,15 +4,15 @@ fixed_at: 2026-10-30T03:32:57Z
 review_path: .planning/workstreams/deploy/phases/47-hosting-website-and-mail-d/47-REVIEW.md
 iteration: 1
 findings_in_scope: 10
-fixed: 7
-partial: 1
+fixed: 8
+partial: 0
 skipped: 2
 status: partial
 ---
 
 # Phase 47: Code Review Fix Report
 
-**Fixed at:** 2026-10-30T03:32:57Z
+**Fixed at:** 2026-10-30T03:32:57Z (WR-02 completed in a later pass; see its entry)
 **Source review:** .planning/workstreams/deploy/phases/47-hosting-website-and-mail-d/47-REVIEW.md
 **Branch:** dsh/phase-47
 **Working copy:** /home/chris/gsd-workspaces/deploy/dsh/phase-47 (edits and commits made directly on the branch; no worktree, as directed)
@@ -20,11 +20,10 @@ status: partial
 
 **Summary:**
 - Findings in scope: 10 (WR-01 to WR-05, IN-01 to IN-05)
-- Fixed: 7 (WR-01, WR-03, WR-04, WR-05, IN-01, IN-04, IN-05)
-- Partial: 1 (WR-02: check committed, real-tree row red on four hosts, owner decision needed)
+- Fixed: 8 (WR-01, WR-02, WR-03, WR-04, WR-05, IN-01, IN-04, IN-05)
 - Skipped: 2 (IN-02, IN-03, skipped by instruction)
 
-**Gate state:** `scripts/verify-platform.sh --quick` exits 1. The only failing row is `privacy-hosts` (WR-02). Its cause is recorded under WR-02 below. The full-tier `website-publish-ready` row (WR-04) is red by design until the placeholders are filled.
+**Gate state:** `scripts/verify-platform.sh --quick` exits 0 (PASS). The full-tier `website-publish-ready` row (WR-04) is red by design until the placeholders are filled. The full-tier `updates-repo-static` live row (IN-01) is red until the owner pushes the updates tree.
 
 ## Fixed Issues
 
@@ -33,6 +32,17 @@ status: partial
 **Files modified:** `scripts/verify-release-identity.mjs`, `scripts/verify-platform.sh`
 **Commit:** 295a0bf
 **Applied fix:** `NO_UPDATE` now matches the whole file: an optional XML prolog, one empty updates element (`<updates></updates>` or `<updates/>`), then nothing else. Six self-test plants went red naming the descriptor: a comment-wrapped fragment, a wrapper element, an empty updates element with a truncated tail, an empty updates element with an unterminated update element, junk around `<updates/>`, and the earlier truncated-prefix case. The real placeholder `updates-staging/default/Linux_x86_64-gcc3/update.xml` stays green. The self-test pass line now counts its cases.
+
+### WR-02: Privacy page lists the superseded MAR host and omits the R2 origin
+
+**Files modified:** `powerbrowser/endpoint-allowlist.json`, `scripts/verify-privacy-hosts.mjs` (new), `website-staging/privacy.html`, `scripts/verify-platform.sh`
+**Commits:** f5759cf (the first derive-and-compare check), 4022fda (trigger key on four allow rows), 6ec94cc (the two-list page and check)
+**Applied fix:**
+- Four allow rows gained `"trigger": "user-feature"`: api.anthropic.com, api.openai.com, open-vsx.org and openvsx.eclipsecontent.org. Their disposition stays `allow`, because the sidecar's extension-install download is checked unattended by the locked verify-ng-069 script, and `user-initiated` would turn that check red. Before the commit, every reader of the allowlist was checked for an unknown-key rejection: the allowlist-schema check reads only host, disposition and reason; the doc-consistency check, verify-theia-endpoints, verify-webextensions, verify-endpoints.sh, the shared verdict library and the read-only verify-ng-069 static check read only host and disposition or do a presence test. None rejects an extra key, so no reader was changed. The four rows' existing self-tests and the schema, doc-consistency, theia-endpoints and webextensions rows all pass.
+- `website-staging/privacy.html` has two lists. The first, "Hosts the browser may contact without your action", holds the 11 allow rows without a trigger. The second, "Hosts contacted only after you use a feature", holds the four user-feature rows, in plain language (AI chat after an API key is added and a request is sent; the extension catalogue when an extension is searched for, installed or updated). The text carries no internal identifiers. Each host code carries `data-unattended-host` or `data-feature-host`, so the error-field list on the page is never parsed as hosts.
+- `privacy-hosts` derives both sets and compares each to its list as a separate set equality, naming each host on one side only. It also fails on an allow row with an unknown trigger value. Real-tree result: PASS, 15 hosts in both lists.
+- `privacy-hosts-self-test` plants, per list: an extra page host, a missing page host, an allowlist addition and an allowlist removal. It also plants a feature host listed in the unattended list, an allow row with an unknown trigger, and a page with no marked host. All 11 plants go red naming their host, attribute or trigger. The self-test baseline is a fixture built from the derived sets, so it does not depend on the real page.
+- The page itself was not swapped to `downloads.powerbrowser.org`, per instruction.
 
 ### WR-03: legal.html links two files that are not in the staged site
 
@@ -74,27 +84,6 @@ Scope note: the review's first half (keep the payload keys, add plain-language g
 **Commits:** d62696f (spelling), 8e7383c (follow-up that restores one space the first commit dropped before the LICENSING link). The branch was not amended, per the commit rule, so IN-05 has two commits.
 **Applied fix:** `licence` is now `license` throughout the legal page: the heading, the body sentence and the third-party sentence. The verbatim manifest line `License: PolyForm Noncommercial 1.0.0` was already in that spelling and is unchanged.
 
-## Partial
-
-### WR-02: Privacy page lists the superseded MAR host and omits the R2 origin
-
-**Status:** partial. The check is committed and its self-test passes. The real-tree row is red, and the cause needs an owner decision.
-**Files modified:** `scripts/verify-privacy-hosts.mjs` (new), `website-staging/privacy.html`, `scripts/verify-platform.sh`
-**Commit:** f5759cf
-**Applied fix:** New quick row `privacy-hosts` derives the set of `allow` hosts from `powerbrowser/endpoint-allowlist.json`, excludes IPv4 and IPv6 loopback literals, and compares it as a set with the hosts marked `data-unattended-host` in `website-staging/privacy.html`. The page text is unchanged; only the marker attribute was added to each host code, so the error-field list on the same page is never parsed as hosts. The self-test uses a fixture built from the derived set, so it does not depend on today's drift. It plants an extra page host, a missing page host, an allowlist addition, an allowlist removal and a page with no marked host, and each goes red naming its host or attribute. The page itself was not swapped to `downloads.powerbrowser.org`, per instruction.
-
-**Open (blocks the quick gate):** The real-tree `privacy-hosts` row fails on four hosts. Each has `disposition: "allow"` in the allowlist, yet its reason text begins "User-initiated (NG-069, R15)" and describes contact only after a user action:
-- api.anthropic.com
-- api.openai.com
-- open-vsx.org
-- openvsx.eclipsecontent.org
-
-The page does not list them, which matches their reasons. Under the file's own comment, `allow` means "may be contacted unattended", so the derivation reads them as unattended. These two readings cannot both hold. Two ways to resolve it, neither applied here:
-1. Retag the four entries to `user-initiated`. This matches their reasons and the UPD-33 disposition. It changes what layer 3 and the NG-069 layer-4 probe enforce, and those scripts were not in scope to re-verify.
-2. List the four on the privacy page. This states unattended contact that their reasons say does not happen, so it is not recommended.
-
-Option 1 is the cleaner fix, and it is an allowlist policy change, so it was not applied.
-
 ## Skipped Issues
 
 ### IN-02: updates-repo-static self-test never drives ghGet
@@ -108,14 +97,14 @@ Option 1 is the cleaner fix, and it is an allowlist policy change, so it was not
 ## Verification
 
 - Each fix ran its own check and self-test before committing. Each commit was staged with explicit paths and committed with a pathspec, so no other staged file could join it.
-- `scripts/scan-brand-residue.mjs` ran after each new file was staged. It passed every time, most recently over 431 scanned files.
-- The self-test of each new or changed check was run once through the registry with `--quick --only`: `privacy-hosts-self-test`, `website-publish-ready-self-test`, `legal-page-verbatim-self-test`, `release-identity-self-test` and `updates-repo-static-self-test` all PASS.
-- `scripts/verify-platform.sh --quick` exit 1. Only `privacy-hosts` fails, for the reason under WR-02. The baseline before these changes was exit 0.
+- `scripts/scan-brand-residue.mjs` ran after each new file was staged, and again before the WR-02 commits. It passed every time, most recently over 431 scanned files.
+- The self-test of each new or changed check was run through the registry with `--quick --only`: `privacy-hosts-self-test`, `website-publish-ready-self-test`, `legal-page-verbatim-self-test`, `release-identity-self-test` and `updates-repo-static-self-test` all PASS. `privacy-hosts` (the real-tree row) also PASSES.
+- `scripts/verify-platform.sh --quick` exit 0 (PASS) after the WR-02 commits.
 - `website-publish-ready` (full tier) fails by design: three placeholder markers remain.
 - `updates-repo-static` (full tier, live read) fails: the GitHub repository `DeBIOS-Foundation/powerbrowser-updates` is empty (HTTP 409). This was red before this change and is not affected by it. Its self-test is green.
 - Where verification ran: every gate ran in the clone at /home/chris/gsd-workspaces/deploy/dsh/phase-47 on branch dsh/phase-47. No worktree was created. Numbers are reproducible from that checkout.
 - Untracked files not committed: `.planning/workstreams/deploy/config.json` and `47-REVIEW.md`, which were untracked before this run.
-- Forbidden paths were not touched: `ledger/` and `scripts/verify-ng-*.mjs`. No commit message contains that word.
+- Forbidden paths were not touched: `ledger/` and `scripts/verify-ng-*.mjs` (the verify-ng-069 script was read, never edited or run). No commit message contains that word.
 
 ---
 
