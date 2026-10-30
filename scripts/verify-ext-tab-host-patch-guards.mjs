@@ -57,6 +57,7 @@ const PARENT = 'browser/components/extensions/parent/';
 const PAGE_ACTION = PARENT + 'ext-pageAction.js';
 const BROWSER = PARENT + 'ext-browser.js';
 const TABS = PARENT + 'ext-tabs.js';
+const TABS_BASE = 'toolkit/components/extensions/parent/ext-tabs-base.js';
 const SHORTCUTS = 'toolkit/components/extensions/ExtensionShortcuts.sys.mjs';
 
 // mode: 'replace' = the anchor is a `-` line and the guard is its `+` change block;
@@ -120,6 +121,32 @@ const WEAKEN = {
   G8: { find: 'if (windowTracker.isTabHostWindow(event.nativeTab', replace: 'if (!windowTracker.isTabHostWindow(event.nativeTab' },
   G9: { find: 'url !== "about:blank" &&', replace: 'url !== "about:blank" ||' },
 };
+
+// Hunks of 050 that no GUARDS row carries. An entry names one needle found in an added line of one file, and why
+// that hunk needs no shape guard. A hunk is covered when a GUARDS row or an entry carries it. An entry that matches
+// no hunk is stale, and an entry with no reason is refused. The table is hand-kept; the coverage phase derives the
+// hunks and fails on any hunk it does not cover.
+const SKIP_REASON = 'per-window skip in a browserWindows() consumer; verify-ext-tab-host-scope.mjs derives this site and requires the skip';
+const EXEMPT = [
+  { file: PARENT + 'ext-browserAction.js', needle: 'if (windowTracker.isTabHostWindow(window)) {', reason: SKIP_REASON },
+  { file: PARENT + 'ext-menus.js', needle: 'if (windowTracker.isTabHostWindow(window)) {', reason: SKIP_REASON },
+  { file: PARENT + 'ext-sessions.js', needle: 'if (windowTracker.isTabHostWindow(window)) {', reason: SKIP_REASON },
+  { file: PARENT + 'ext-sidebarAction.js', needle: 'if (windowTracker.isTabHostWindow(window)) {', reason: SKIP_REASON },
+  { file: PARENT + 'ext-sidebarAction.js', needle: 'isTabHostWindow(window) || !this.extension.canAccessWindow(window)',
+    reason: 'a tab host window takes the branch for a window the extension cannot access; the shell has no sidebar (T-31.1-04)' },
+  { file: PARENT + 'ext-sidebarAction.js', needle: 'if (!SidebarController) {',
+    reason: 'isOpen answers false when SidebarController is absent, as it is in the shell (T-31.1-04)' },
+  { file: PARENT + 'ext-tabs.js', needle: 'if (windowTracker.isTabHostWindow(window)) {',
+    reason: 'zoom-loop skip: the shell has no ZoomManager, so the onZoomChange registration skips it; Phase 32 plan 32-09 removes the skip' },
+  { file: 'remote/shared/TabManager.sys.mjs', needle: 'tabBrowser.webDriverTabs',
+    reason: 'WebDriver reads the Theia frame through webDriverTabs (D-06); no extension-scope file reads it (theia-exclusion family)' },
+  { file: TABS_BASE, needle: 'isTabHostWindow(window) {',
+    reason: 'the tracker opt-in: a window with the extensiontabhost attribute is a browser window (D-08, D-14)' },
+  { file: TABS_BASE, needle: '_mostRecentBrowserWindow(nonPB) {',
+    reason: 'the topmost-window rewrite: the most recent browser window, else a tab host window, else the old result; the fall-through order is not checked statically (IN-07)' },
+  { file: TABS_BASE, needle: 'return this._mostRecentBrowserWindow(false);', reason: 'topWindow reads the rewrite (its own entry above carries the rule)' },
+  { file: TABS_BASE, needle: 'return this._mostRecentBrowserWindow(true);', reason: 'topNonPBWindow reads the rewrite (its own entry above carries the rule)' },
+];
 
 const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 'return']);
 
@@ -328,6 +355,7 @@ function bulletSet(buildText) {
 // pristine (Map path -> text), post (Map path -> text).
 function check(opts = {}) {
   const patchPath = opts.patchPath ?? PATCH;
+  const exempt = opts.exempt ?? EXEMPT;
   const patchesDir = opts.patchesDir ?? PATCHES_DIR;
   const pristineOverride = opts.pristine ?? new Map();
   const postOverride = opts.post ?? new Map();
@@ -464,6 +492,33 @@ function check(opts = {}) {
       failures.push({ id: 'D-74', kind: 'LOGIC SET', text: `D-74: the docs/BUILD.md bullet ${name} names no logic patch in ${patchesDir}` });
     }
   }
+  // Phase E: every added hunk of 050 is carried by a GUARDS row or named by an EXEMPT entry with a reason. The hunks
+  // are derived from the parsed patch, so a new unguarded hunk goes red at the next run.
+  const guardHunks = new Set();
+  for (const g of GUARDS) {
+    const b = findBlock(files, g);
+    if (b) guardHunks.add(b.hunk);
+  }
+  const exemptHit = new Set();
+  for (const f of files) {
+    f.hunks.forEach((h, hi) => {
+      const added = h.body.filter(l => l.raw[0] === '+').map(l => l.raw.slice(1));
+      const hit = exempt.filter(e => e.file === f.path && added.some(s => s.includes(e.needle)));
+      hit.forEach(e => exemptHit.add(e));
+      if (guardHunks.has(h) || hit.length) return;
+      const first = (added[0] ?? '(no added line)').trim();
+      failures.push({ id: 'coverage', kind: 'UNCOVERED', text: `coverage UNCOVERED -- ${f.path} hunk ${hi + 1} (first added line ${JSON.stringify(first)}) has no GUARDS row and no named exemption` });
+    });
+  }
+  for (const e of exempt) {
+    if (!e.reason || !e.reason.trim()) {
+      failures.push({ id: 'coverage', kind: 'EXEMPT REASON', text: `coverage EXEMPT REASON -- ${e.file}: ${JSON.stringify(e.needle)} has no reason` });
+    }
+    if (!exemptHit.has(e)) {
+      failures.push({ id: 'coverage', kind: 'STALE EXEMPTION', text: `coverage STALE EXEMPTION -- ${e.file}: ${JSON.stringify(e.needle)} matches no added hunk of 050` });
+    }
+  }
+
   return { failures, sites, logic };
 }
 
@@ -604,6 +659,23 @@ function selfTest() {
     if (landedOk('G6 anchor duplicated', g6Dup !== g6Text)) {
       expectRed('G6 anchor duplicated', check({ pristine: new Map([[g6.file, g6Dup]]) }),
         f => f.id === 'G6' && f.kind === 'ANCHOR DRIFT', { kind: 'ANCHOR DRIFT', id: 'G6' });
+    }
+
+    // Coverage (WR-05): a dropped exemption leaves its hunk uncovered; a stale or reason-less entry is refused; a
+    // renamed added line in the patch leaves a new unguarded hunk and a stale entry.
+    const noSidebarEx = EXEMPT.filter(e => !e.needle.includes('if (!SidebarController) {'));
+    if (landedOk('coverage: exemption dropped', noSidebarEx.length < EXEMPT.length)) {
+      expectRed('coverage: exemption dropped', check({ exempt: noSidebarEx }),
+        f => f.id === 'coverage' && f.kind === 'UNCOVERED' && f.text.includes('ext-sidebarAction.js'), { kind: 'UNCOVERED', id: 'coverage' });
+    }
+    expectRed('coverage: stale exemption', check({ exempt: [...EXEMPT, { file: TABS, needle: 'zzzPlantedNeedle', reason: 'x' }] }),
+      f => f.id === 'coverage' && f.kind === 'STALE EXEMPTION' && f.text.includes('zzzPlantedNeedle'), { kind: 'STALE EXEMPTION', id: 'coverage' });
+    expectRed('coverage: exemption without a reason', check({ exempt: EXEMPT.map((e, i) => (i === 0 ? { ...e, reason: '  ' } : e)) }),
+      f => f.id === 'coverage' && f.kind === 'EXEMPT REASON', { kind: 'EXEMPT REASON', id: 'coverage' });
+    const sbText = clean.replace('+    if (!SidebarController) {', '+    if (!SidebarCtl) {');
+    if (landedOk('coverage: sidebar guard renamed in the patch', sbText !== clean)) {
+      expectRed('coverage: sidebar guard renamed in the patch', check({ patchPath: withPatch('coverage-sidebar.patch', sbText) }),
+        f => f.id === 'coverage' && f.kind === 'UNCOVERED' && f.text.includes('ext-sidebarAction.js'), { kind: 'UNCOVERED', id: 'coverage' });
     }
 
     // The URL wall (G9) negated in two places: the tab-host test flipped, and the regex test's own negation dropped.

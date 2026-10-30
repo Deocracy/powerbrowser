@@ -77,15 +77,15 @@ const REASONED = [
   { key: 'ext-pageAction.js:onManifestEntry', why: 'zero-tab show_matches loop (G1) and the updateButton skip', claims: ['guard:G1@onManifestEntry', 'callee:updateButton'] },
   { key: 'ExtensionShortcuts.sys.mjs:registerKeys', why: 'sidebar shortcut skipped for a tab host window (G6)', claims: ['guard:G6@registerKeysToDocument'] },
   { key: 'ExtensionShortcuts.sys.mjs:register', why: 'open listener reaches registerKeysToDocument (G6)', claims: ['guard:G6@registerKeysToDocument'] },
-  { key: 'ExtensionShortcuts.sys.mjs:unregister', why: 'design: removes this extension keysets; the shell keyset is removed like any window, and keysets otherwise stay in the shell as Phase 38 plan 38-05 expects', claims: ['design'] },
+  { key: 'ExtensionShortcuts.sys.mjs:unregister', why: 'design: removes this extension keysets; the shell keyset is removed like any window, and keysets otherwise stay in the shell as Phase 38 plan 38-05 expects', claims: ['admits'] },
   { key: 'ext-browser.js:init', why: 'open listener reaches _handleWindowOpen, which guards a zero-tab window (G4)', claims: ['guard:G4@_handleWindowOpen'] },
   { key: 'ext-tabGroups.js:queryGroups', why: 'tabGroups is a member of the shell literal', claims: ['host:tabGroups'] },
   { key: 'ext-tabs-base.js:addListener#3', why: 'progress listener registration is a shell member', claims: ['host:addTabsProgressListener'] },
   { key: 'ext-tabs-base.js:removeListener', why: 'progress listener removal is a shell member', claims: ['host:removeTabsProgressListener'] },
-  { key: 'ext-tabs-base.js:addOpenListener', why: 'design: the tracker own deferred admission of incomplete windows', claims: ['design'] },
-  { key: 'ext-tabs-base.js:addListener', why: 'design: the tracker registering its own open listener', claims: ['design'] },
-  { key: 'ext-tabs-base.js:addListener#2', why: 'design: the tracker registering its own open listener', claims: ['design'] },
-  { key: 'ext-browser.js:getAll', why: 'design: windows.getAll lists the shell window', claims: ['design'] },
+  { key: 'ext-tabs-base.js:addOpenListener', why: 'design: the tracker own deferred admission of incomplete windows', claims: ['admits'] },
+  { key: 'ext-tabs-base.js:addListener', why: 'design: the tracker registering its own open listener', claims: ['admits'] },
+  { key: 'ext-tabs-base.js:addListener#2', why: 'design: the tracker registering its own open listener', claims: ['admits'] },
+  { key: 'ext-browser.js:getAll', why: 'design: windows.getAll lists the shell window', claims: ['admits'] },
 ];
 
 // ---- git inputs (cached) ---------------------------------------------------
@@ -330,8 +330,24 @@ function guardHolds(lines, added, id, method) {
   return null;
 }
 
-function claimError(ctx, file, claim, lines) {
-  if (claim === 'design' || claim.startsWith('design:')) return null;
+// The innermost definition enclosing the site, in the post-image, carries no isTabHostWindow test. A reason that says
+// the design admits the shell at a site is checkable only in this negative form: a skip added there contradicts it.
+function admitsHolds(lines, idx) {
+  if (idx < 0) return 'the site is not in the post-image';
+  const enc = enclosing(lines, idx).found[0];
+  if (!enc) return 'the site sits in no definition';
+  const end = closeLine(lines, enc.line);
+  if (end < 0) return `the definition of ${enc.name} does not close`;
+  for (let i = enc.line; i <= end; i++) {
+    if (!isCommentLine(lines[i].trim()) && /\bisTabHostWindow\(/.test(lines[i])) {
+      return `${enc.name} tests isTabHostWindow at line ${i + 1}; the design admits the shell at this site, so the skip contradicts it`;
+    }
+  }
+  return null;
+}
+
+function claimError(ctx, file, claim, lines, idx) {
+  if (claim === 'admits') return admitsHolds(lines, idx);
   let m;
   if ((m = /^callee:([\w$]+)$/.exec(claim))) return calleeHolds(lines, m[1]);
   if ((m = /^guard:(G\d+)@([\w$.]+)$/.exec(claim))) return guardHolds(lines, addedLines(ctx.patchText, file), m[1], m[2]);
@@ -432,7 +448,7 @@ function consumersFamily(ctx, out) {
     } else if (reason) {
       reasoned++;
       for (const claim of reason.claims) {
-        const err = claimError(ctx, s.file, claim, post.lines);
+        const err = claimError(ctx, s.file, claim, post.lines, hit ? hit.idx : -1);
         if (err) failOut(out, F, s.key, 'CLAIM FAILED', `${claim} -- ${err}`);
       }
     }
@@ -731,12 +747,12 @@ function selfTest() {
     }
   }
   {
-    const extra = [...REASONED, { key: 'ext-browser.js:zzzPlantedReason', why: 'plant', claims: ['design'] }];
+    const extra = [...REASONED, { key: 'ext-browser.js:zzzPlantedReason', why: 'plant', claims: ['admits'] }];
     const res = checkAll({ reasons: extra });
     expect('REASONED with an extra key', has(res, f => f.kind === 'STALE REASON' && f.id === 'ext-browser.js:zzzPlantedReason'), 1, 'STALE REASON naming ext-browser.js:zzzPlantedReason');
   }
   {
-    const extra = [...REASONED, { key: 'ext-sessions.js:getRecentlyClosed', why: 'plant', claims: ['design'] }];
+    const extra = [...REASONED, { key: 'ext-sessions.js:getRecentlyClosed', why: 'plant', claims: ['admits'] }];
     const res = checkAll({ reasons: extra });
     expect('reasoned key that is also skipped', has(res, f => f.kind === 'CONTRADICTION' && f.id === 'ext-sessions.js:getRecentlyClosed'), 1, 'CONTRADICTION naming ext-sessions.js:getRecentlyClosed');
   }
@@ -853,6 +869,16 @@ function selfTest() {
     }
   }
 
+  // admits (WR-05): a tab-host test planted into ExtensionShortcuts unregister, where the design admits the shell.
+  {
+    const sc = 'toolkit/components/extensions/ExtensionShortcuts.sys.mjs';
+    const orig = gitShow(sc);
+    const text = orig.replace('  unregister() {\n', '  unregister() {\n    lazy.global.windowTracker.isTabHostWindow(null);\n');
+    if (landed('tab-host test in unregister', text !== orig)) {
+      const res = checkAll({ pristine: new Map([[sc, text]]) });
+      expect('tab-host test in unregister', has(res, f => f.family === 'consumers' && f.kind === 'CLAIM FAILED' && f.text.includes('admits')), 1, 'CLAIM FAILED naming admits');
+    }
+  }
   // window-type
   {
     const text = apiRaw.replace('"chrome,dialog=no,all,toolbar"', '"chrome,dialog=no,all"');
