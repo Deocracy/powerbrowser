@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then forty-one planted faults
+ * --self-test: the clean tree must be green; then forty-two planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -881,6 +881,20 @@ function cases(m, srcs, mm) {
             const push = /shieldExcepted: webTabShieldExcepted\(browser\)/.test(stripComments(apiSrc));
             return push ? null : 'the state push no longer carries shieldExcepted (the identity box would not learn of an exception with url)';
         }],
+        ['the state router forwards every pushed field (CR-02, O-31-A)', () => {
+            // The pushed field names are read from chrome's sendAsyncMessage literal,
+            // the forwarded ones from the router's applyState literal; both sides derived.
+            // Anchored on kind: "state", the page push (webTabPush); the flushShellState send is another literal.
+            const push = /sendAsyncMessage\("PowerBrowserWebTabState", \{\s*kind: "state",([\s\S]*?)\n\s*\}\);/.exec(stripComments(apiSrc));
+            const router = /widget\.applyState\(\{([\s\S]*?)\n\s*\}\);/.exec(stripComments(srcs[WEB_TAB_REL] ?? ''));
+            if (!push || !router) {
+                return `no PowerBrowserWebTabState push literal in ${API_REL} or no widget.applyState literal in ${WEB_TAB_REL} -- broken instrument`;
+            }
+            const keys = body => [...body.matchAll(/^\s+(\w+):/gm)].map(m => m[1]);
+            const pushed = keys(push[1]).filter(k => k !== 'kind' && k !== 'tabId');
+            const routed = keys(router[1]);
+            return sameSet(pushed, routed) ? null : { pushed: sorted(pushed), routed: sorted(routed), dropped: sorted(pushed.filter(k => !routed.includes(k))) };
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -982,6 +996,13 @@ const PLANTS = [
         from: "    'local',\n",
         to: '',
         expect: 'SECURITY_STATES equal the boundary decode arms',
+    },
+    {
+        name: 'the state router drops shieldExcepted',
+        rel: WEB_TAB_REL,
+        from: "                shieldExcepted: typeof detail.shieldExcepted === 'boolean' ? detail.shieldExcepted : widget.shieldExcepted,\n",
+        to: '',
+        expect: 'the state router forwards every pushed field (CR-02, O-31-A)',
     },
     {
         name: 'the secure arm stops excluding a user-overridden certificate',

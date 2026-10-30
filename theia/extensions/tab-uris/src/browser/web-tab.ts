@@ -318,6 +318,8 @@ export class WebTabChannel {
                 blockedTrackers: typeof detail.blockedTrackers === 'number' ? detail.blockedTrackers : widget.blockedTrackers,
                 permissionIcons: Array.isArray(detail.permissionIcons) ? detail.permissionIcons.filter((id): id is string => typeof id === 'string') : widget.permissionIcons,
                 permissionLabels: Array.isArray(detail.permissionLabels) ? detail.permissionLabels.filter((label): label is string => typeof label === 'string') : widget.permissionLabels,
+                // CR-02 / O-31-A: chrome pushes this on every state push, so a navigation resets it with the page.
+                shieldExcepted: typeof detail.shieldExcepted === 'boolean' ? detail.shieldExcepted : widget.shieldExcepted,
             });
         });
     }

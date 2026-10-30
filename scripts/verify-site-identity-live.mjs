@@ -717,6 +717,11 @@ const frameStatus = app => probe(app, `const r = await fetch(location.href, { ca
 const exceptionOn = (app, tabId) => inChrome(app, `const b = overlayOf(${JSON.stringify(tabId)});
     if (!b) return null;
     return ChromeUtils.importESModule('resource://gre/modules/ContentBlockingAllowList.sys.mjs').ContentBlockingAllowList.includes(b);`);
+/** Navigates an existing web tab through its widget (WebTabWidget.navigate); 'ok' when chrome applied it. */
+const navigateWebTab = (app, tabId, url) => probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+    if (!w) return 'no-widget';
+    const reply = await w.navigate(${JSON.stringify(url)});
+    return reply && reply.ok === true ? 'ok' : JSON.stringify(reply);`);
 /** Chrome's per-site exception write for one overlay (the leak plant's fault injection). */
 const exceptionAdd = (app, tabId) => inChrome(app, `const b = overlayOf(${JSON.stringify(tabId)});
     if (!b) return null;
@@ -911,6 +916,18 @@ async function shield(ctx) {
     if (await exceptionOn(app, trackId) !== false || await exceptionOn(app, secondId) !== false) {
         return fail(`${BROKEN} an exception was already set before the first toggle (the profile is not clean)`);
     }
+    if (plant === 'router-drops-shield') {
+        // The pre-fix router: applyState never receives shieldExcepted from a push.
+        const applied = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(trackId)});
+            if (!w) return false;
+            const proto = Object.getPrototypeOf(w);
+            const original = proto.applyState;
+            proto.applyState = function (state) { const { shieldExcepted, ...rest } = state; return original.call(this, rest); };
+            return true;`);
+        if (applied === true) {
+            note('PLANT router-drops-shield applied (the state push drops shieldExcepted)');
+        }
+    }
     if (plant === 'shield-stale') {
         const applied = await probe(app, `const ab = get('AddressBar'); if (!ab) return false;
             Object.getPrototypeOf(ab).renderShieldIcon = function () { return undefined; };
@@ -980,6 +997,51 @@ async function shield(ctx) {
         fail(`after protection came back on the blocked count must return; saw ${JSON.stringify(counted.count)} excepted ${JSON.stringify(counted.excepted)}`);
     }
     await closePanel(app);
+    // CR-02 / O-31-A: the box shield follows the page the tab shows, not the last
+    // reply. Except the tracker site, navigate the same tab to a second site (no
+    // exception: no shield, no off copy), then back to the excepted site (shield on).
+    const excepting = await reopenUntil(app, r => r.present && r.toggle === 'Turn off protection for this site');
+    if (excepting.toggle !== 'Turn off protection for this site' || !(await clickShieldToggle(app))) {
+        return fail(`${BROKEN} the tracker site could not be excepted again for the navigation steps`);
+    }
+    await waitFor(() => app.evaluate(`!!document.querySelector('.pb-site-panel')`), v => v === false, 8000);
+    if (await waitFor(() => shieldIconOn(app), v => v === true, 8000) !== true) {
+        fail('navigation steps: the box shield did not show for the excepted tracker site before the navigation');
+    }
+    const beforeSecond = (await pushes(app)).length;
+    const navigated = await navigateWebTab(app, trackId, `http://localhost:${pages.port}/plain`);
+    if (navigated !== 'ok' || await waitForPush(app, loadedAt(trackId, '/plain'), { from: beforeSecond }) < 0) {
+        return fail(`${BROKEN} the excepted tab did not load the second site (navigate ${JSON.stringify(navigated)})`);
+    }
+    if (await waitFor(() => shieldIconOn(app), v => v === false, 8000) !== false) {
+        const tail = (await pushes(app)).filter(p => p.tabId === trackId).slice(-3).map(p => [p.url, p.loading, p.shieldExcepted]);
+        fail(`the box shield stayed after the excepted tab navigated to a second site with no exception (CR-02: the router dropped shieldExcepted); last pushes ${JSON.stringify(tail)}, chrome exception ${JSON.stringify(await exceptionOn(app, trackId))}`);
+    }
+    const onSecond = await reopenUntil(app, r => r.present && r.excepted === 'false');
+    if (onSecond.excepted !== 'false' || onSecond.count === 'Tracking protection is off for this site') {
+        fail(`after navigating to a second site with no exception the panel still reads the off copy; saw excepted ${JSON.stringify(onSecond.excepted)} count ${JSON.stringify(onSecond.count)}`);
+    }
+    await closePanel(app);
+    const beforeBack = (await pushes(app)).length;
+    const back = await navigateWebTab(app, trackId, pages.url('/tracker'));
+    if (back !== 'ok' || await waitForPush(app, loadedAt(trackId, '/tracker'), { from: beforeBack }) < 0) {
+        return fail(`${BROKEN} the tab did not load the excepted site again (navigate ${JSON.stringify(back)})`);
+    }
+    if (await waitFor(() => shieldIconOn(app), v => v === true, 8000) !== true) {
+        fail('navigating back to the site with a pre-set exception did not show the box shield');
+    }
+    const onExcepted = await reopenUntil(app, r => r.present && r.excepted === 'true');
+    if (onExcepted.excepted !== 'true' || onExcepted.count !== 'Tracking protection is off for this site') {
+        fail(`navigating back to the site with a pre-set exception must show the off copy; saw excepted ${JSON.stringify(onExcepted.excepted)} count ${JSON.stringify(onExcepted.count)}`);
+    }
+    // Cleanup: protection back on for the tracker site, so the run ends with no exception.
+    if (!(await clickShieldToggle(app))) {
+        return fail(`${BROKEN} the shield toggle is not in the panel for the cleanup`);
+    }
+    await waitFor(() => app.evaluate(`!!document.querySelector('.pb-site-panel')`), v => v === false, 8000);
+    if (await exceptionOn(app, trackId) !== false) {
+        fail('chrome still holds the exception for the tracker page after the navigation steps');
+    }
     if (await exceptionOn(app, secondId) !== false) {
         fail('wrong site: the second site has a tracking-protection exception at the end of the run');
     }
@@ -1436,6 +1498,7 @@ const PLANTS = [
     { plant: 'shield-stale', target: 'shield', run: ['shield'], expect: 'shield icon did not update', tls: false },
     // The exception is also written on the second site: the isolation check names it.
     { plant: 'shield-leak', target: 'shield', run: ['shield'], expect: 'wrong site', tls: false },
+    { plant: 'router-drops-shield', target: 'shield', run: ['shield'], expect: 'the box shield stayed', tls: false },
     // Plan 04 (MENU-02): the Settings row never opens its stock page; the stock-page check names it.
     { plant: 'menu-dead-stock', target: 'app-menu', run: ['app-menu'], expect: 'did not open its stock page', tls: false },
     // Plan 05 (MENU-04): the Quit row sends nothing, so the browser never exits and the exit check names it.
