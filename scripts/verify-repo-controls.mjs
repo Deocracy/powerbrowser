@@ -467,30 +467,31 @@ function orgOwnerSteps(c, declared) {
 // The declared set is labels.json. Names are the contract; color and description
 // are presentation, so a re-tint never goes red. Label writes are owner steps
 // (gh label create --force, gh label delete): this control lists them and never
-// writes, so a second dry-run prints the same plan.
+// writes. The delete lines come from the live label list read at plan time:
+// live minus declared, compared case-insensitively. A label already deleted is
+// not live, so it is not printed.
 //
-// Canonical names, decided at 42-01 Task 1 (labels.json is strict JSON and
-// carries no comment): good-first-issue is hyphenated, and the space-named
-// GitHub default is deleted at apply; train:blocked keeps its colon form; the
-// five live gsd:* automation labels are deleted at apply, not declared.
+// Canonical names (labels.json is strict JSON and carries no comment):
+// good-first-issue is hyphenated, the space-named GitHub default is deleted at
+// apply, train:blocked keeps its colon form, and the gsd:* automation labels are
+// declared and kept.
 const LABELS_PATH = 'repos/{owner}/{repo}/labels?per_page=100';
 const LABEL_STEP = 'the owner runs the gh label line that node scripts/apply-repo-controls.mjs prints (plan 42-04)';
-// The live defaults and automation labels observed on 2026-10-22, before the apply.
-// Advisory: the generic line in labelOwnerSteps names the rest, so a live label
-// absent from this list is still removed. A line whose label is already gone is skipped.
-const LABELS_REMOVED = ['accessibility', 'bug', 'documentation', 'enhancement', 'good first issue', 'help wanted', 'invalid', 'question',
-    'gsd:approved', 'gsd:blocked', 'gsd:escalated', 'gsd:ready', 'gsd:rework'];
 const shq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 
+// Live names no declared name matches. GitHub compares label names case-insensitively.
+function labelExtras(declaredNames, liveNames) {
+    const keys = new Set(declaredNames.filter(n => typeof n === 'string').map(n => n.toLowerCase()));
+    return [...new Set(liveNames.filter(n => !keys.has(String(n).toLowerCase())))].sort();
+}
+
 // The creates come first, in labels.json order, so no delete runs before its replacement exists.
-function labelOwnerSteps(c, declared, ctx) {
+function labelOwnerSteps(c, declared, ctx, live) {
     const R = `${ctx.slug.owner}/${ctx.slug.repo}`;
-    // GitHub label names are case-insensitive: a declared 'Bug' is the live 'bug', so it is never deleted.
-    const keep = new Set((declared.labels ?? []).map(l => String(l.name).toLowerCase()));
+    const extras = labelExtras((declared.labels ?? []).map(l => l?.name), live.map(l => l?.name));
     return [
         ...(declared.labels ?? []).map(l => `gh label create ${shq(l.name)} --color ${shq(l.color)} --description ${shq(l.description)} --force -R ${R}`),
-        ...LABELS_REMOVED.filter(n => !keep.has(n.toLowerCase())).map(n => `gh label delete ${shq(n)} -R ${R} --yes`),
-        `Delete any other live label that ${SETTINGS_REL}/labels.json does not name: gh label delete <name> -R ${R} --yes`,
+        ...extras.filter(n => typeof n === 'string').map(n => `gh label delete ${shq(n)} -R ${R} --yes`),
     ];
 }
 
@@ -499,9 +500,7 @@ function compareLabels(c, declared, live, ctx) {
     const want = (declared.labels ?? []).map(l => l?.name);
     const got = live.map(l => l?.name);
     const missing = [...new Set(want.filter(n => !got.includes(n)))].sort();
-    // Case-insensitive, as GitHub compares names: a live 'bug' is not extra when 'Bug' is declared.
-    const wantKeys = new Set(want.map(n => String(n).toLowerCase()));
-    const extra = [...new Set(got.filter(n => !wantKeys.has(String(n).toLowerCase())))].sort();
+    const extra = labelExtras(want, got);
     return [
         ...missing.map(n => `${where(c)}: declared label ${show(n)} is missing live. Next step: ${LABEL_STEP}.`),
         ...extra.map(n => `${where(c)}: live label ${show(n)} is extra: no ${SETTINGS_REL}/labels.json names it. Next step: ${LABEL_STEP}, or declare it in a reviewed commit.`),
@@ -721,6 +720,7 @@ export const CONTROLS = Object.freeze([
         file: 'labels.json',
         write: null,
         ownerSteps: labelOwnerSteps,
+        liveOwnerSteps: true, // the delete lines are derived from the live list, so planWrites reads it
         read: LABELS_PATH,
         compare: compareLabels,
     },
@@ -827,7 +827,11 @@ export function planWrites(root, get = ghGet, overrides = {}) {
     for (const c of CONTROLS) {
         const declared = declaredOf(c, ctx.bodies);
         if (declared === undefined) continue; // already in errors
-        if (c.ownerSteps) ownerSteps.push(...c.ownerSteps(c, declared, ctx));
+        if (c.liveOwnerSteps) {
+            const r = ctx.get(ctx.fill(c.read));
+            if (r.ok && Array.isArray(r.body)) ownerSteps.push(...c.ownerSteps(c, declared, ctx, r.body));
+            else errors.push(`${c.id}: the owner steps need the live state, which could not be read (${r.ok ? `GET ${ctx.fill(c.read)} returned ${show(r.body)}, not a list` : r.why}). Next step: fix the read, then re-run the plan.`);
+        } else if (c.ownerSteps) ownerSteps.push(...c.ownerSteps(c, declared, ctx));
         if (c.write === null) continue;
         const step = c.plan
             ? c.plan(c, declared, ctx)
@@ -1218,6 +1222,20 @@ function selfTest() {
             console.log(`  ok  a declared 'Bug' over a live 'bug' -> no 'gh label delete' line and no 'is extra' failure`);
         } else {
             console.error(`${NAME}: --self-test FAIL -- a declared 'Bug' over a live 'bug' got a delete line (${deletesBug}) or an 'is extra' failure (${flaggedExtra})`);
+            failed += 1;
+        }
+    }
+    {
+        // WR-02: the delete lines are live minus declared. A default already deleted (absent live) is not printed; a live extra is.
+        const deletesOf = (state) => planWrites(REPO_ROOT, getterOf(state), fixed).ownerSteps.filter(x => x.startsWith('gh label delete '));
+        const none = deletesOf(base);
+        const withExtra = clone(base);
+        withExtra[ctx.fill(LABELS_PATH)].push({ id: 6997, node_id: 'LA_planted_accessibility', name: 'accessibility', color: 'f143ab', default: true, description: '' });
+        const one = deletesOf(withExtra);
+        if (none.length === 0 && one.length === 1 && one[0].startsWith("gh label delete 'accessibility' ")) {
+            console.log(`  ok  delete lines follow the live list -> none for a label already deleted, one for a live 'accessibility'`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- delete lines: ${none.length} with no extra live label, ${one.length} with one: ${one.join(' | ')}`);
             failed += 1;
         }
     }
