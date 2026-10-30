@@ -642,6 +642,16 @@ section of `docs/BUILD.md` is the boundary's home instead) and
 `powerbrowser/INTERNAL-APIS.md` (that catalogues `PowerBrowserAPI.sys.mjs`
 touchpoints, none of which exist until Phase 4).
 
+### Logic patches (D-74 as amended 2026-10-21)
+
+The patch stack stays config-only except for the logic patches listed below. Each
+is JS-only and brand-free, and each exists because a behaviour cannot be
+reached chrome-side: the extension tracker gate is opened only by a patch
+(Phase 28 sign-off, 2026-10-21). `scripts/verify-ext-tab-host-patch-guards.mjs`
+derives this set from `patches/` and compares it with the bullets here.
+
+- `050-extension-tab-host.patch` — opens the extension tracker gate for the tab host window and carries its guards.
+
 ## Endpoints and the one carve-out (D-83–D-88)
 
 `powerbrowser/endpoint-allowlist.json` is the single machine-readable source of

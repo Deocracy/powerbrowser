@@ -3658,6 +3658,14 @@ run_own_checks() {
     # stack as the clean control proving the red is plant-caused.
     "check-patch-surface-brand-values|bash $REPO_ROOT/scripts/check-patch-surface.sh --brand-values"
     "check-patch-surface-brand-values-self-test|bash $REPO_ROOT/scripts/check-patch-surface.sh --self-test-brand"
+    # EXT-05 (plan 31.1-01 Task 2): the guard-shape gate for patch 050. It
+    # derives each guard's site by an indentation walk over the post-image and
+    # the D-74 logic-patch set from patches/ and docs/BUILD.md. Honestly --quick:
+    # it reads text, runs read-only git show on upstream/, and applies the patch
+    # only inside a mktemp -d directory. The self-test rides alongside: each
+    # guard's removed, weakened and misplaced plants must go red naming it.
+    "ext-tab-host-patch-guards|node $REPO_ROOT/scripts/verify-ext-tab-host-patch-guards.mjs"
+    "ext-tab-host-patch-guards-self-test|node $REPO_ROOT/scripts/verify-ext-tab-host-patch-guards.mjs --self-test"
     "fetch-upstream-self-test|bash $REPO_ROOT/scripts/fetch-upstream.sh --self-test"
     # NEW (05-02): the ESR pin-agreement gate -- configuration.toml's
     # [upstreams] tag equals the generated shell fragment, the workflow

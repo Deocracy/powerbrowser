@@ -3,8 +3,9 @@
 # prose. Two modes, one script, one registry:
 #
 #  * Compiled-suffix scan (default): fails if any patches/*.patch touches a
-#    compiled-file path -- this phase's entire Gecko patch surface is meant
-#    to be config-only (D-74).
+#    compiled-file path -- the Gecko patch surface is config-only, except the
+#    logic patches docs/BUILD.md names under D-74 as amended (the set is
+#    derived by scripts/verify-ext-tab-host-patch-guards.mjs).
 #  * Brand-value scan (05-01, MIG-05; default): fails if any ADDED (+) line
 #    of patches/*.patch carries a downstream-varying brand or config value;
 #    every value lives under generated/. The value set is DERIVED from
