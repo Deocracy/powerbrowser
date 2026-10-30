@@ -62,6 +62,21 @@
  *      no SiteDataManager.remove or Sanitizer.sanitize, and subtracts CLEAR_COOKIES;
  *  16. (plan 03, SITE-08) the shield exception is written on entry.browser only,
  *      and the box shield follows the reply and the pushed exception;
+ * 17. (plan 04, MENU-01) the stock pages in the openStockPage switch
+ *      (`openStockPageFromMenu`) equal STOCK_PAGES, with a positive control on the arm;
+ * 18. (plan 04) the app menu's order and separator groups equal the UI-SPEC
+ *      "Hamburger entries" sentence, read from the copy row (derived: each
+ *      phase row's label is found in the sentence, in table order, and a
+ *      `separator` falls between two rows exactly when their groups differ);
+ * 19. (plan 04) the rendered menu (the builder run in Node) equals the table rows
+ *      of this phase: order, separator groups and enablement; a MENU-03 slot is absent;
+ * 20. (plan 04) the wired rows are the rows the tree acts on: new-tab (the registered
+ *      command), the stock pages (STOCK_PAGES, sent by name), and quit only once
+ *      `quitRequest` exists (plan 05);
+ * 21. (plan 04) every rendered row has a label in the widget switch, from CHROME_BAR_COPY;
+ * 22. (plan 04, D-31-07) stock pages open by name only: no `about:` URL, `window.open(`,
+ *      `openStockTab(` or `webTabOpen(` in the site-identity sources, with the widget's
+ *      `this.store.openStockPage(page)` as the positive control;
  *  13. (plan 02) no hand-kept permission label map in the site-identity
  *      sources (labels come from `getPermissionLabel`), and the permission
  *      glyph map is keyed by PERMISSION_IDS;
@@ -71,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then twenty-eight planted faults
+ * --self-test: the clean tree must be green; then thirty-five planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -121,7 +136,13 @@ const UI_SPEC_REL = '.planning/phases/31-site-identity-permissions-and-app-menu/
 const INTERNAL_APIS_REL = 'powerbrowser/INTERNAL-APIS.md';
 const CODICON_REL = 'theia/node_modules/@vscode/codicons/dist/codicon.css';
 const TOKEN_GATE_REL = 'theia/extensions/token-gate/src/node/token-gate-backend-contribution.ts';
-const EXPORTS = ['SECURITY_STATES', 'PERMISSION_IDS', 'STOCK_PAGES', 'MENU_ORDER', 'PERMISSION_STATES', 'AUTOPLAY_PERMISSION_STATES'];
+const APP_MENU_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/app-menu.ts';
+const WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+const CMD_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
+const STORE_CLIENT_REL = 'theia/extensions/tab-uris/src/browser/chrome-store-client.ts';
+const EXPORTS = ['SECURITY_STATES', 'PERMISSION_IDS', 'STOCK_PAGES', 'MENU_ORDER', 'MENU_PHASE', 'PERMISSION_STATES', 'AUTOPLAY_PERMISSION_STATES'];
+/** Plan 04: the menu builder's exports, imported beside the table (app-menu.ts is import-free too). */
+const MENU_EXPORTS = ['APP_MENU_ID', 'WIRED_MENU_IDS', 'applyMenuOrder', 'buildAppMenu'];
 
 const sameSet = (a, b) => a.length === b.length && new Set(a).size === a.length && a.every(x => b.includes(x));
 const sorted = a => [...a].sort();
@@ -335,6 +356,38 @@ function deriveStyleLiterals(srcs) {
     return out;
 }
 
+/** The UI-SPEC "Hamburger entries" copy-row cell (the Firefox-order sentence); null when the row is gone. */
+function deriveSpecHamburgerCell(uiSpecSrc) {
+    const row = (uiSpecSrc ?? '').split('\n').find(line => line.startsWith('| Hamburger entries |'));
+    return row ? row.split('|')[2] ?? null : null;
+}
+
+/** A CHROME_BAR_COPY value by key: a plain literal, or a template whose one interpolation reads as {App}. */
+function deriveCopyValue(copySrc, key) {
+    const plain = new RegExp(`^\\s*${key}: '([^']*)',`, 'm').exec(copySrc ?? '');
+    if (plain) {
+        return plain[1];
+    }
+    const template = new RegExp(`^\\s*${key}: \\([^)]*\\) => \`([^\`]*)\`,`, 'm').exec(copySrc ?? '');
+    return template ? template[1].replace(/\$\{[^}]+\}/g, '{App}') : null;
+}
+
+/** Row id -> its label, from the widget's appMenuLabel switch and CHROME_BAR_COPY; null when the switch is gone. */
+function deriveRowLabels(widgetSrc, copySrc) {
+    const fn = /function appMenuLabel\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(stripComments(widgetSrc ?? ''));
+    if (!fn) {
+        return null;
+    }
+    const out = new Map();
+    for (const m of fn[1].matchAll(/case '([a-z-]+)': return CHROME_BAR_COPY\.([A-Za-z]+)/g)) {
+        const label = deriveCopyValue(copySrc, m[2]);
+        if (label !== null) {
+            out.set(m[1], label);
+        }
+    }
+    return out.size ? out : null;
+}
+
 /** Runs the two catalogue checks by shelling out to the REAL instruments
  * (`check-internals-boundary.sh --catalogue` +
  * `verify-ng-040-internals-catalogue-lines.mjs`), which read the real tree
@@ -360,7 +413,7 @@ function catalogueFailures() {
 }
 
 /** The cases: each returns null when it holds, else what it got. */
-function cases(m, srcs) {
+function cases(m, srcs, mm) {
     const apiSrc = srcs[API_REL];
     const upstreamSrc = srcs[UPSTREAM_PERMS_REL];
     const addressBarSrc = srcs[ADDRESS_BAR_REL];
@@ -510,13 +563,99 @@ function cases(m, srcs) {
             }
             return sameSet(keys, m.PERMISSION_IDS) ? null : { glyphs: sorted(keys), table: sorted(m.PERMISSION_IDS) };
         }],
-        ['MENU_ORDER ids equal the rendered hamburger menuIds', () => {
-            const rendered = [...stripComments(addressBarSrc).matchAll(/menuId:\s*'([^']+)'/g)].map(x => x[1]);
-            if (rendered.length === 0) {
-                return 'SKIP menu-not-landed';
+        // Phase 31 plan 04 (MENU-01/02): the hamburger. The builder runs in Node (app-menu.ts is import-free),
+        // so the rendered menu is checked, not a copy of it. Case 5's name is kept: it is the rendered-equals-table case.
+        ['MENU_ORDER ids equal the rendered hamburger menuIds (the builder run in Node, the phase rows only)', () => {
+            const rows = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE);
+            const menu = mm.buildAppMenu(m.MENU_ORDER, mm.WIRED_MENU_IDS, m.MENU_PHASE, { label: id => id, run: () => undefined });
+            const prefix = `${mm.APP_MENU_ID}.`;
+            const rendered = menu.children.map(group => group.children.map(leaf => leaf.id.startsWith(prefix) ? leaf.id.slice(prefix.length) : leaf.id));
+            const want = [...new Set(rows.map(row => row.group))].map(g => rows.filter(row => row.group === g).map(row => row.menuId));
+            if (JSON.stringify(rendered) !== JSON.stringify(want)) {
+                return { order: rendered, want };
             }
-            const ids = m.MENU_ORDER.map(entry => entry.menuId);
-            return sameSet(ids, rendered) ? null : { table: sorted(ids), rendered: sorted(rendered) };
+            const enabled = menu.children.flatMap(group => group.children.map(leaf => leaf.isEnabled()));
+            const flat = rendered.flat();
+            const wantEnabled = flat.map(id => mm.WIRED_MENU_IDS.includes(id));
+            return JSON.stringify(enabled) === JSON.stringify(wantEnabled) ? null : { enabled, wantEnabled };
+        }],
+        ['the rendered app menu equals the table rows of this phase (order, groups, enablement)', () => {
+            const rows = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE);
+            const menu = mm.buildAppMenu(m.MENU_ORDER, mm.WIRED_MENU_IDS, m.MENU_PHASE, { label: id => id, run: () => undefined });
+            const prefix = `${mm.APP_MENU_ID}.`;
+            const rendered = menu.children.map(group => group.children.map(leaf => leaf.id.startsWith(prefix) ? leaf.id.slice(prefix.length) : leaf.id));
+            const want = [...new Set(rows.map(row => row.group))].map(g => rows.filter(row => row.group === g).map(row => row.menuId));
+            const menuRoot = { rendered: rendered.map(group => group.join(',')).join(' | '), want: want.map(group => group.join(',')).join(' | ') };
+            return JSON.stringify(rendered) === JSON.stringify(want) ? null : menuRoot;
+        }],
+        ['the app menu order and separators match the UI-SPEC hamburger entries (derived)', () => {
+            const cell = deriveSpecHamburgerCell(srcs[UI_SPEC_REL]);
+            if (!cell) {
+                return `no "Hamburger entries" row in ${UI_SPEC_REL} -- broken instrument`;
+            }
+            const labels = deriveRowLabels(srcs[WIDGET_REL], srcs[COPY_REL]);
+            if (!labels) {
+                return `no appMenuLabel switch in ${WIDGET_REL} -- broken instrument`;
+            }
+            const rows = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE);
+            const unlabelled = rows.filter(row => !labels.has(row.menuId)).map(row => row.menuId);
+            if (unlabelled.length) {
+                return { unlabelled };
+            }
+            const at = rows.map(row => cell.indexOf(`\`${labels.get(row.menuId)}\``));
+            const absent = rows.filter((_, i) => at[i] < 0).map(row => labels.get(row.menuId));
+            if (absent.length) {
+                return { absentFromUiSpec: absent };
+            }
+            const ordered = at.every((pos, i) => i === 0 || pos > at[i - 1]);
+            if (!ordered) {
+                return { order: rows.map(row => row.menuId), uiSpecPositions: at };
+            }
+            const separatorsAgree = rows.slice(1).every((row, i) => cell.slice(at[i], at[i + 1]).includes('separator') === (row.group !== rows[i].group));
+            return separatorsAgree ? null : { separators: 'a separator falls where the table groups differ from the UI-SPEC sentence, or misses where they do not' };
+        }],
+        ['every rendered row has a label (derived from the widget switch and CHROME_BAR_COPY)', () => {
+            const labels = deriveRowLabels(srcs[WIDGET_REL], srcs[COPY_REL]);
+            if (!labels) {
+                return `no appMenuLabel switch in ${WIDGET_REL} -- broken instrument`;
+            }
+            const rows = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE).map(entry => entry.menuId);
+            const missing = rows.filter(id => !labels.has(id));
+            const surplus = [...labels.keys()].filter(id => !rows.includes(id));
+            return missing.length || surplus.length ? { missing, surplus } : null;
+        }],
+        ['the wired rows are the rows this tree acts on (new-tab command, stock pages, quit once quitRequest exists)', () => {
+            const widget = stripComments(srcs[WIDGET_REL] ?? '');
+            const commands = stripComments(srcs[CMD_REL] ?? '');
+            const newTab = /commands\.registerCommand\(CHROME_BAR_NEW_TAB,/.test(commands) && widget.includes('this.runCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)');
+            const stockSent = widget.includes('this.store.openStockPage(');
+            const quit = /\bquitRequest\(/.test(stripComments(srcs[STORE_CLIENT_REL] ?? ''));
+            const expected = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE).filter(row => {
+                if (row.menuId === 'new-tab') {
+                    return newTab;
+                }
+                if (row.menuId === 'quit') {
+                    return quit;
+                }
+                return !!row.stockPage && m.STOCK_PAGES.includes(row.stockPage) && stockSent;
+            }).map(row => row.menuId);
+            return sameSet(expected, mm.WIRED_MENU_IDS) ? null : { expected: sorted(expected), wired: sorted(mm.WIRED_MENU_IDS) };
+        }],
+        ['STOCK_PAGES equal the openStockPage switch arms (positive control: the switch stands)', () => {
+            const fn = /async function openStockPageFromMenu\(page\) \{([\s\S]*?)\n\}\n/.exec(apiSrc);
+            if (!fn) {
+                return `no openStockPageFromMenu in ${API_REL} -- broken instrument`;
+            }
+            const arms = [...stripComments(fn[1]).matchAll(/case "([a-z]+)":/g)].map(x => x[1]);
+            return sameSet(arms, m.STOCK_PAGES) ? null : { arms: sorted(arms), table: sorted(m.STOCK_PAGES) };
+        }],
+        ['stock pages open by name only: no URL, window.open or openStockTab in site-identity/ (positive control: the store call stands)', () => {
+            if (!stripComments(srcs[WIDGET_REL] ?? '').includes('this.store.openStockPage(page)')) {
+                return `the widget no longer sends the stock page by name (this.store.openStockPage(page)) in ${WIDGET_REL} -- broken instrument or a URL path`;
+            }
+            const hits = [TABLE_REL, APP_MENU_REL, SITE_PANEL_REL].flatMap(rel =>
+                [...stripComments(srcs[rel] ?? '').matchAll(/about:[a-z]+|window\.open\s*\(|openStockTab\(|webTabOpen\(/g)].map(x => `${rel}: ${x[0]}`));
+            return hits.length === 0 ? null : hits;
         }],
         ['no typed-text lock derivation (positive control: the identity box stands)', () => {
             const control = stripComments(addressBarSrc).includes('renderIdentityBox');
@@ -675,7 +814,7 @@ function cases(m, srcs) {
 }
 
 /** Runs every case against the table at `tablePath` and the sources' text (by rel path). */
-async function runAt(tablePath, srcs) {
+async function runAt(tablePath, srcs, menuPath) {
     let m;
     try {
         m = await import(pathToFileURL(tablePath).href);
@@ -686,9 +825,19 @@ async function runAt(tablePath, srcs) {
     if (missing.length) {
         return { oks: [], failures: [`exports: the site-identity table exports no ${missing.join(', ')} -- broken instrument, nothing was tested`] };
     }
+    let mm;
+    try {
+        mm = await import(pathToFileURL(menuPath).href);
+    } catch (error) {
+        return { oks: [], failures: [`import: the app menu module could not be loaded (${error.message})`] };
+    }
+    const missingMenu = MENU_EXPORTS.filter(name => mm[name] === undefined);
+    if (missingMenu.length) {
+        return { oks: [], failures: [`exports: the app menu module exports no ${missingMenu.join(', ')} -- broken instrument, nothing was tested`] };
+    }
     const oks = [];
     const failures = [];
-    for (const [name, run] of cases(m, srcs)) {
+    for (const [name, run] of cases(m, srcs, mm)) {
         let got;
         try {
             got = run();
@@ -713,11 +862,11 @@ const read = rel => {
         return '';
     }
 };
-const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL, TOKEN_GATE_REL];
+const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL, TOKEN_GATE_REL, APP_MENU_REL, WIDGET_REL, CMD_REL, STORE_CLIENT_REL];
 const readSources = () => Object.fromEntries(SOURCES.map(rel => [rel, read(rel)]));
 
 async function main() {
-    const { oks, failures } = await runAt(join(REPO_ROOT, TABLE_REL), readSources());
+    const { oks, failures } = await runAt(join(REPO_ROOT, TABLE_REL), readSources(), join(REPO_ROOT, APP_MENU_REL));
     for (const name of oks) {
         console.log(`  ok  ${name}`);
     }
@@ -924,6 +1073,56 @@ const PLANTS = [
         to: "siteConnectionSecure: 'Secure connection',",
         expect: 'panel header copy equals the UI-SPEC rows',
     },
+    // Phase 31 plan 04 (MENU-01/02): the hamburger's order, builder, MENU-03 slots, stock pages and wired set.
+    {
+        name: 'menu-out-of-order: the table lists Add-ons before Passwords',
+        rel: TABLE_REL,
+        from: "    { menuId: 'passwords', stockPage: 'passwords', minPhase: 31, group: 2 },\n    { menuId: 'addons', stockPage: 'addons', minPhase: 31, group: 2 },\n",
+        to: "    { menuId: 'addons', stockPage: 'addons', minPhase: 31, group: 2 },\n    { menuId: 'passwords', stockPage: 'passwords', minPhase: 31, group: 2 },\n",
+        expect: 'the app menu order and separators match the UI-SPEC hamburger entries',
+    },
+    {
+        name: 'menu-out-of-order: the builder renders the rows in reverse',
+        rel: APP_MENU_REL,
+        from: 'for (const { row, enabled } of applyMenuOrder(rows, wired, phase)) {',
+        to: 'for (const { row, enabled } of applyMenuOrder(rows, wired, phase).reverse()) {',
+        expect: 'the rendered app menu equals the table rows of this phase',
+    },
+    {
+        name: 'menu-extra: a MENU-03 slot rendered',
+        rel: APP_MENU_REL,
+        from: '.filter(row => row.minPhase <= phase)',
+        to: '.filter(row => row.minPhase <= phase || row.minPhase > 0)',
+        expect: 'the rendered app menu equals the table rows of this phase',
+    },
+    {
+        name: 'stock-url: a settings URL in the menu module',
+        rel: APP_MENU_REL,
+        from: "export const APP_MENU_ID = 'powerbrowser-app-menu';",
+        to: "export const APP_MENU_ID = 'powerbrowser-app-menu';\nexport const SETTINGS_URL = 'about:preferences';",
+        expect: 'stock pages open by name only',
+    },
+    {
+        name: 'quit wired before plan 05 lands its kind',
+        rel: APP_MENU_REL,
+        from: "Object.freeze(['new-tab', 'settings', 'passwords', 'addons', 'help']);",
+        to: "Object.freeze(['new-tab', 'settings', 'passwords', 'addons', 'help', 'quit']);",
+        expect: 'the wired rows are the rows this tree acts on',
+    },
+    {
+        name: 'a row label dropped from the widget switch',
+        rel: WIDGET_REL,
+        from: "        case 'help': return CHROME_BAR_COPY.menuHelp;\n",
+        to: '',
+        expect: 'every rendered row has a label',
+    },
+    {
+        name: 'a stock page dropped from the openStockPage switch',
+        rel: API_REL,
+        from: '    case "processes":\n    case "support":\n      break;',
+        to: '    case "support":\n      break;',
+        expect: 'STOCK_PAGES equal the openStockPage switch arms',
+    },
     {
         name: 'the identity box label is not the panel-open copy',
         rel: ADDRESS_BAR_REL,
@@ -936,7 +1135,7 @@ const PLANTS = [
 async function selfTest() {
     let failed = 0;
     const sources = readSources();
-    const clean = await runAt(join(REPO_ROOT, TABLE_REL), sources);
+    const clean = await runAt(join(REPO_ROOT, TABLE_REL), sources, join(REPO_ROOT, APP_MENU_REL));
     const cleanRed = clean.failures.filter(f => !f.includes('SKIP'));
     if (cleanRed.length) {
         console.error(`${NAME} --self-test: FAIL -- the clean tree is not green: ${cleanRed.join(' | ')}`);
@@ -1000,7 +1199,9 @@ async function selfTest() {
             }
             const tablePath = join(dir, `site-identity-table-${i}.ts`);
             writeFileSync(tablePath, planted[TABLE_REL]);
-            const { failures } = await runAt(tablePath, planted);
+            const menuPath = join(dir, `app-menu-${i}.ts`);
+            writeFileSync(menuPath, planted[APP_MENU_REL]);
+            const { failures } = await runAt(tablePath, planted, menuPath);
             const named = failures.find(f => f.startsWith(plant.expect));
             if (named) {
                 console.log(`  ok  ${plant.name} -> red: ${named}`);
