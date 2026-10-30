@@ -485,9 +485,11 @@ const shq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 // The creates come first, in labels.json order, so no delete runs before its replacement exists.
 function labelOwnerSteps(c, declared, ctx) {
     const R = `${ctx.slug.owner}/${ctx.slug.repo}`;
+    // GitHub label names are case-insensitive: a declared 'Bug' is the live 'bug', so it is never deleted.
+    const keep = new Set((declared.labels ?? []).map(l => String(l.name).toLowerCase()));
     return [
         ...(declared.labels ?? []).map(l => `gh label create ${shq(l.name)} --color ${shq(l.color)} --description ${shq(l.description)} --force -R ${R}`),
-        ...LABELS_REMOVED.map(n => `gh label delete ${shq(n)} -R ${R} --yes`),
+        ...LABELS_REMOVED.filter(n => !keep.has(n.toLowerCase())).map(n => `gh label delete ${shq(n)} -R ${R} --yes`),
         `Delete any other live label that ${SETTINGS_REL}/labels.json does not name: gh label delete <name> -R ${R} --yes`,
     ];
 }
@@ -497,7 +499,9 @@ function compareLabels(c, declared, live, ctx) {
     const want = (declared.labels ?? []).map(l => l?.name);
     const got = live.map(l => l?.name);
     const missing = [...new Set(want.filter(n => !got.includes(n)))].sort();
-    const extra = [...new Set(got.filter(n => !want.includes(n)))].sort();
+    // Case-insensitive, as GitHub compares names: a live 'bug' is not extra when 'Bug' is declared.
+    const wantKeys = new Set(want.map(n => String(n).toLowerCase()));
+    const extra = [...new Set(got.filter(n => !wantKeys.has(String(n).toLowerCase())))].sort();
     return [
         ...missing.map(n => `${where(c)}: declared label ${show(n)} is missing live. Next step: ${LABEL_STEP}.`),
         ...extra.map(n => `${where(c)}: live label ${show(n)} is extra: no ${SETTINGS_REL}/labels.json names it. Next step: ${LABEL_STEP}, or declare it in a reviewed commit.`),
@@ -1195,6 +1199,25 @@ function selfTest() {
             console.log(`  ok  planWrites lists ${ownerSteps.length} owner UI step(s) and no write for org or apps`);
         } else {
             console.error(`${NAME}: --self-test FAIL -- owner UI steps: ${ownerSteps.join(' | ') || '(none)'}`);
+            failed += 1;
+        }
+    }
+    {
+        // WR-01: label names are case-insensitive. A declared 'Bug' over a live 'bug' gets no delete line and no 'extra' failure.
+        const declaredBug = (f) => {
+            const b = readBody(f);
+            if (f === 'labels.json') b.labels.push({ name: 'Bug', color: 'd73a4a', description: 'planted' });
+            return b;
+        };
+        const s = clone(base);
+        s[ctx.fill(LABELS_PATH)].push({ id: 6998, node_id: 'LA_planted_bug', name: 'bug', color: 'd73a4a', default: true, description: '' });
+        const { ownerSteps } = planWrites(REPO_ROOT, getterOf(s), { ...fixed, readBody: declaredBug });
+        const deletesBug = ownerSteps.some(x => x.startsWith("gh label delete 'bug' "));
+        const flaggedExtra = run({ readBody: declaredBug, get: getterOf(s) }).failures.some(f => f.includes('"bug"') && f.includes('is extra'));
+        if (!deletesBug && !flaggedExtra) {
+            console.log(`  ok  a declared 'Bug' over a live 'bug' -> no 'gh label delete' line and no 'is extra' failure`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- a declared 'Bug' over a live 'bug' got a delete line (${deletesBug}) or an 'is extra' failure (${flaggedExtra})`);
             failed += 1;
         }
     }
