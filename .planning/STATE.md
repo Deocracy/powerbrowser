@@ -2,12 +2,12 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 31
+current_phase: 31.1
 status: executing
-stopped_at: Completed 30-06-PLAN.md
+stopped_at: Phase 31 verified human_needed (deferred); starting 31.1
 last_updated: "2026-10-23T03:39:40.462Z"
-last_activity: 2026-10-22
-last_activity_desc: Phase 31 execution started
+last_activity: 2026-10-29
+last_activity_desc: Phase 31 verified and secured; Phase 31.1 next
 state_head: b9a95c7c1f5354bdbcda155797d9a56e5084be26
 progress:
   total_phases: 13
@@ -24,7 +24,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 31
+**Current focus:** Phase 31.1
 
 ## Current Position
 
@@ -511,6 +511,7 @@ with "autonomous interactive".
 | 27 | verification_deferred_human (70/71 verified; real-input key/mouse checks, hold cleanup, visuals, judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 27 |
 | 29 | verification_deferred_human (74/81 verified; review clean after 2 fix iterations, security SECURED 40/40; rebrand run, real IME, pill keyboard/mouse, visuals, OS drag, packaged engine list, 7 review fixes untested live, judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 29 |
 | 30 | verification_deferred_human (52/55 verified, no gaps; review 1 critical + 6 warnings fixed, security SECURED 24/24; real typing/IME, visuals vs 30-MOCKUPS.html, placeholder suffix IN-05, confirm D-34, WR-02 in Bookmarks/History, @alias default, 3 judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 30 |
+| 31 | verification_deferred_human (5/5 criteria, 11/11 requirements, no gaps; review 3 critical + 9 warnings fixed incl. WR-04 quit leave prompt, live 12/12 PASS, security SECURED 12/12 re-audited on the fixes; pixel review of identity box, site panel, hamburger and 280px sheet, real-keyboard menu/ConfirmDialog/shield, real Ctrl+Q incl. Monaco unsaved editor and Leave, OS session-end quit, confirm the registrable-domain clear scope (D-31-12, also wipes Theia frame storage on 127.0.0.1, O-31-D) — Chris at end of milestone) | /gsd-verify-work 31 |
 | focus-fix | verification_deferred_human (overlay focus race fixed c423f1a, 15/15 loops; on a real keyboard: F6 from the pill with suggestions open then type, Paste & Go then Down scrolls, same-site link then Down scrolls — Chris at end of milestone; record .planning/debug/overlay-focus-intermittent.md) | /gsd-debug overlay-focus-intermittent |
 
 ## Deferred Items

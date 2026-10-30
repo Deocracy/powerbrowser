@@ -323,11 +323,11 @@ Plans:
 **Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
-- [ ] 31-01-PLAN.md (wave 1) — Lead the phase with one end-to-end tracer: chrome computes the real connection state and the pill renders it.
-- [ ] 31-02-PLAN.md (wave 2) — Build the site information panel on the plan-01 read path: connection + certificate, tri-state permission rows keyed by the overlay's principal, and permission icons in the identit
-- [ ] 31-03-PLAN.md (wave 3) — Add site-data clearing with the token-cookie exemption and the tracking shield with per-site exception, both in the site panel.
-- [ ] 31-04-PLAN.md (wave 4) — Build the Firefox-ordered hamburger with stock-page entries and Quit, closing the phase.
-- [ ] 31-05-PLAN.md (wave 5) — Give the menu Quit row its route to chrome and reserve Ctrl+Q chrome-side, closing the phase.
+- [x] 31-01-PLAN.md (wave 1) — Lead the phase with one end-to-end tracer: chrome computes the real connection state and the pill renders it.
+- [x] 31-02-PLAN.md (wave 2) — Build the site information panel on the plan-01 read path: connection + certificate, tri-state permission rows keyed by the overlay's principal, and permission icons in the identit
+- [x] 31-03-PLAN.md (wave 3) — Add site-data clearing with the token-cookie exemption and the tracking shield with per-site exception, both in the site panel.
+- [x] 31-04-PLAN.md (wave 4) — Build the Firefox-ordered hamburger with stock-page entries and Quit, closing the phase.
+- [x] 31-05-PLAN.md (wave 5) — Give the menu Quit row its route to chrome and reserve Ctrl+Q chrome-side, closing the phase.
 **UI hint**: yes
 
 ### Phase 31.1: Extension Tab Host (INSERTED)
