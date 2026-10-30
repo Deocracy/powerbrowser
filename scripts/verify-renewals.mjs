@@ -8,14 +8,21 @@
 //  1. Table. A header row of exactly Item, Expiry, Last checked, Owner action,
 //     Source, followed by a separator and pipe rows. A missing header is red. A
 //     row with another column count is unparseable and red, naming the row.
-//  2. Dates. Each row's Expiry cell holds an ISO date, a Month YYYY, a bare year,
-//     blank (no expiry) or unknown (not recorded). Its Last checked cell holds an
-//     ISO date.
+//  2. Dates. Each row's Expiry cell is a whole date, a whole bare year, a whole
+//     Month YYYY, blank (no expiry) or unknown (not recorded). Its Last checked cell
+//     is a whole ISO date. Every date must be a real calendar date: 2026-02-31 and
+//     2026-13-45 are red. A cell with extra words around a date is red.
 //  3. Owner action. Each row's action cell begins with an imperative verb from
 //     VERBS, so every row names what the owner does.
 //  4. Items. No two rows name the same item, ignoring case and surrounding
 //     space. A merged duplicate would hide a missed renewal, so both rows are named.
-//  5. Vacuity. A table with no rows is red.
+//  5. Floor. Every item in REQUIRED_ITEMS has a row, matched as a case-insensitive
+//     prefix of the Item cell. A deleted row is red. The list is a floor, not a
+//     ceiling: a new renewable item needs no entry.
+//  6. Table shape. The separator has the header's column count. Once the table
+//     ends, no later line may carry a pipe, so a blank line or a row without its
+//     leading pipe cannot end the scan quietly and leave rows unchecked.
+//  7. Vacuity. A table with no rows is red.
 //
 // The calendar check (a date within 30 days) is not here: it is the maintenance
 // sweep's renewals-due row (Phase 48). This row reads one file and writes nothing.
@@ -33,7 +40,38 @@ const SELF_REL = 'scripts/verify-renewals.mjs';
 const REGISTER_REL = 'docs/RENEWALS.md';
 const HEADER = Object.freeze(['Item', 'Expiry', 'Last checked', 'Owner action', 'Source']);
 const VERBS = Object.freeze(['renew', 'rotate', 're-verify', 'replace', 'confirm', 'decide', 'ship', 'record', 'check', 'review']);
-const DATE = /\b\d{4}-\d{2}-\d{2}\b|\b(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}\b|\b(?:19|20)\d{2}\b/;
+const MONTHS = 'January|February|March|April|May|June|July|August|September|October|November|December';
+// The committed required-items list. It holds the DOC-04 family (Domain, Apple
+// Developer membership, MAR signing certificate) and every row present when it was
+// written. A key matches a row whose Item cell starts with it, ignoring case. Wording
+// changes to a row that keep the prefix need no edit here; a retired item is removed
+// from this list in the same reviewed commit that retires its row.
+const REQUIRED_ITEMS = Object.freeze([
+    'Google Safe Browsing API key',
+    'Domain powerbrowser.org',
+    'Apple Developer membership',
+    'Developer ID certificate',
+    'Azure Artifact Signing identity validation',
+    'App private key, powerbrowser-bot',
+    'App private key, powerbrowser-clock',
+    'Cachix token',
+    'Cloudflare wrangler deploy token',
+    'Cloudflare R2 object-write token',
+    'Telemetry route shared secret',
+    'Codeberg deploy token',
+    'Anthropic key, fixer',
+    'Anthropic key, triage',
+    'winget submission credential',
+    'MAR signing certificate',
+    'Node 24 end of life',
+    'ESR 153 final point release',
+    'ESR 175 nightly train',
+    'ESR 175 beta train',
+    'ESR 175 release train',
+]);
+const WHOLE_ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
+const WHOLE_YEAR = /^(?:19|20)\d{2}$/;
+const WHOLE_MONTH_YEAR = new RegExp(`^(?:${MONTHS}) (?:19|20)\\d{2}$`);
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -49,6 +87,24 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const cellsOf = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
 const isPipeRow = (line) => line.trim().startsWith('|');
 const isSeparator = (line) => /^\|\s*-/.test(line.trim());
+// A real calendar date: the round trip through Date keeps year, month and day.
+function isRealIso(cell) {
+    const m = WHOLE_ISO.exec(cell);
+    if (!m) return false;
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const t = new Date(Date.UTC(y, mo - 1, d));
+    return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+}
+// Null when the Expiry cell is acceptable, else the reason it is not.
+function expiryProblem(cell) {
+    if (cell === '' || cell === 'unknown' || WHOLE_YEAR.test(cell) || WHOLE_MONTH_YEAR.test(cell)) return null;
+    if (WHOLE_ISO.test(cell)) return isRealIso(cell) ? null : 'is not a real calendar date';
+    return 'holds no whole date, bare year or Month YYYY, and is neither blank nor unknown';
+}
+function checkedProblem(cell) {
+    if (WHOLE_ISO.test(cell)) return isRealIso(cell) ? null : 'is not a real calendar date';
+    return 'holds no whole ISO date';
+}
 
 export function runChecks(root, overrides = {}) {
     const text = overrides.text ?? readFileSync(join(root, REGISTER_REL), 'utf8');
@@ -65,7 +121,11 @@ export function runChecks(root, overrides = {}) {
     const seen = new Map();
     let rows = 0;
     let i = h + 1;
-    if (i < lines.length && isSeparator(lines[i])) i += 1;
+    if (i < lines.length && isSeparator(lines[i])) {
+        const cols = cellsOf(lines[i]).length;
+        if (cols !== HEADER.length) fail(i + 1, `${REGISTER_REL}:${i + 1} is a separator with ${cols} columns, not ${HEADER.length}, so the table is not laid out as its header declares. Next step: restore the separator to ${HEADER.length} columns.`);
+        i += 1;
+    }
     for (; i < lines.length && isPipeRow(lines[i]); i += 1) {
         const n = i + 1;
         const cells = cellsOf(lines[i]);
@@ -80,15 +140,28 @@ export function runChecks(root, overrides = {}) {
         } else {
             seen.set(item.toLowerCase(), [...(seen.get(item.toLowerCase()) ?? []), { n, item }]);
         }
-        if (expiry !== '' && expiry !== 'unknown' && !DATE.test(expiry)) {
-            fail(n, `${REGISTER_REL}:${n} (${item}): the Expiry cell ${show(expiry)} holds no ISO date, Month YYYY or year, and is neither blank nor unknown. Next step: put the expiry or the deadline in the Expiry cell, or write unknown.`);
+        const expiryWhy = expiryProblem(expiry);
+        if (expiryWhy !== null) {
+            fail(n, `${REGISTER_REL}:${n} (${item}): the Expiry cell ${show(expiry)} ${expiryWhy}. Next step: put a real date, a bare year, Month YYYY, blank or unknown in the Expiry cell.`);
         }
-        if (!DATE.test(checked)) {
-            fail(n, `${REGISTER_REL}:${n} (${item}): the Last checked cell ${show(checked)} holds no ISO date. Next step: put the date this item was last checked in that cell.`);
+        const checkedWhy = checkedProblem(checked);
+        if (checkedWhy !== null) {
+            fail(n, `${REGISTER_REL}:${n} (${item}): the Last checked cell ${show(checked)} ${checkedWhy}. Next step: put the ISO date this item was last checked in that cell.`);
         }
         const verb = (action.split(/\s+/)[0] ?? '').toLowerCase();
         if (!VERBS.includes(verb)) {
             fail(n, `${REGISTER_REL}:${n} (${item}): the owner action ${show(action)} does not begin with an imperative verb (${VERBS.join(', ')}). Next step: write the action as what the owner does.`);
+        }
+    }
+    for (let k = i; k < lines.length; k += 1) {
+        if (lines[k].trim() !== '' && lines[k].includes('|')) {
+            fail(k + 1, `${REGISTER_REL}:${k + 1} (${cellsOf(lines[k])[0]}) sits after the table ends, so it is not checked. Next step: keep every row in one contiguous table, each starting with a pipe, with no blank line inside it.`);
+        }
+    }
+    const present = [...seen.values()].flat().map(g => g.item.toLowerCase());
+    for (const key of REQUIRED_ITEMS) {
+        if (!present.some(item => item.startsWith(key.toLowerCase()))) {
+            fail(h + 1, `${REGISTER_REL}: required item ${show(key)} has no row. Next step: restore its row; if the item is retired, remove it from REQUIRED_ITEMS in ${SELF_REL} in the same reviewed commit.`);
         }
     }
     for (const group of seen.values()) {
@@ -163,6 +236,17 @@ function selfTest() {
             const kept = lines.filter((l, idx) => idx <= h + 1 || !isPipeRow(l));
             lines.splice(0, lines.length, ...kept);
         }), ['no rows']],
+        ['a blank line inside the table', mutate((lines) => { lines.splice(rowAt(lines, 'Apple Developer membership'), 0, ''); }), ['Apple Developer membership', 'sits after the table ends']],
+        ['a row without its leading pipe after the table', mutate((lines) => {
+            const i = rowAt(lines, 'ESR 175 release train');
+            lines[i] = lines[i].trim().replace(/^\|\s*/, '');
+        }), ['ESR 175 release train', 'sits after the table ends']],
+        ['an expiry that is not a real calendar date (2026-13-45)', setCell('Domain powerbrowser.org', 1, '2026-13-45'), ['Domain powerbrowser.org', '2026-13-45', 'real calendar date']],
+        ['an expiry on a day that does not exist (2026-02-31)', setCell('Apple Developer membership', 1, '2026-02-31'), ['Apple Developer membership', '2026-02-31', 'real calendar date']],
+        ['an expiry with words around a year', setCell('Cachix token', 1, 'soon, see the 2026 plan'), ['Cachix token', 'soon, see the 2026 plan']],
+        ['a last-checked date that is not real', setCell('Cachix token', 2, '2026-02-30'), ['Cachix token', '2026-02-30', 'real calendar date']],
+        ['a deleted row', mutate((lines) => { lines.splice(rowAt(lines, 'Domain powerbrowser.org'), 1); }), ['Domain powerbrowser.org', 'has no row']],
+        ['a separator with the wrong column count', mutate((lines) => { lines[lines.findIndex(isSeparator)] = '| --- | --- | --- |'; }), ['separator', '3 columns']],
     ];
 
     let failed = 0;
@@ -178,6 +262,7 @@ function selfTest() {
 
     const controls = [
         ['a Month YYYY deadline in the Expiry cell', setCell('Node 24 end of life', 1, 'April 2028')],
+        ['a blank Expiry on a row that does not expire', setCell('App private key, powerbrowser-bot', 1, '')],
     ];
     for (const [name, overrides] of controls) {
         const { failures } = runChecks(REPO_ROOT, overrides);
