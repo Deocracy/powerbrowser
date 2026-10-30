@@ -463,6 +463,85 @@ function orgOwnerSteps(c, declared) {
     ];
 }
 
+// --- labels (GH-13) -----------------------------------------------------------
+// The declared set is labels.json. Names are the contract; color and description
+// are presentation, so a re-tint never goes red. Label writes are owner steps
+// (gh label create --force, gh label delete): this control lists them and never
+// writes. The delete lines come from the live label list read at plan time:
+// live minus declared, compared case-insensitively. A label already deleted is
+// not live, so it is not printed.
+//
+// Canonical names (labels.json is strict JSON and carries no comment):
+// good-first-issue is hyphenated, the space-named GitHub default is deleted at
+// apply, train:blocked keeps its colon form, and the gsd:* automation labels are
+// declared and kept.
+const LABELS_PATH = 'repos/{owner}/{repo}/labels?per_page=100';
+const LABEL_STEP = 'the owner runs the gh label line that node scripts/apply-repo-controls.mjs prints (plan 42-04)';
+const shq = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+
+// Live names no declared name matches. GitHub compares label names case-insensitively.
+function labelExtras(declaredNames, liveNames) {
+    const keys = new Set(declaredNames.filter(n => typeof n === 'string').map(n => n.toLowerCase()));
+    return [...new Set(liveNames.filter(n => !keys.has(String(n).toLowerCase())))].sort();
+}
+
+// The creates come first, in labels.json order, so no delete runs before its replacement exists.
+function labelOwnerSteps(c, declared, ctx, live) {
+    const R = `${ctx.slug.owner}/${ctx.slug.repo}`;
+    const extras = labelExtras((declared.labels ?? []).map(l => l?.name), live.map(l => l?.name));
+    return [
+        ...(declared.labels ?? []).map(l => `gh label create ${shq(l.name)} --color ${shq(l.color)} --description ${shq(l.description)} --force -R ${R}`),
+        ...extras.filter(n => typeof n === 'string').map(n => `gh label delete ${shq(n)} -R ${R} --yes`),
+    ];
+}
+
+function compareLabels(c, declared, live, ctx) {
+    if (!Array.isArray(live)) return [`${where(c)}: GET ${ctx.fill(c.read)} returned ${show(live)}, not a list. Next step: check the endpoint in ${SELF_REL}.`];
+    const want = (declared.labels ?? []).map(l => l?.name);
+    const got = live.map(l => l?.name);
+    const missing = [...new Set(want.filter(n => !got.includes(n)))].sort();
+    const extra = labelExtras(want, got);
+    return [
+        ...missing.map(n => `${where(c)}: declared label ${show(n)} is missing live. Next step: ${LABEL_STEP}.`),
+        ...extra.map(n => `${where(c)}: live label ${show(n)} is extra: no ${SETTINGS_REL}/labels.json names it. Next step: ${LABEL_STEP}, or declare it in a reviewed commit.`),
+    ];
+}
+
+// GitHub's limits on a label name and description (gh label create refuses a longer one).
+const LABEL_NAME_MAX = 50;
+const LABEL_DESCRIPTION_MAX = 100;
+
+// The declared set itself, checked against the real tree on every run: non-empty,
+// every entry shaped, within GitHub's length limits, and unique case-insensitively
+// (a form matches a label by name).
+function labelSetFailures(ctx) {
+    const c = CONTROLS.find(x => x.id === 'labels');
+    const body = ctx.bodies[c.file];
+    if (body === undefined) return [];
+    const list = Array.isArray(body.labels) ? body.labels : [];
+    if (list.length === 0) return [`${where(c)}: the declared labels array is empty or missing, so no label is declared. Next step: restore it from git.`];
+    const f = [];
+    for (const l of list) {
+        if (typeof l?.name !== 'string' || l.name === '' || !/^[0-9a-f]{6}$/.test(l.color ?? '') || typeof l.description !== 'string') {
+            f.push(`${where(c)}: entry ${show(l)} needs a name, a six-digit lowercase hex color and a description. Next step: fix it in ${SETTINGS_REL}/${c.file}.`);
+        } else if (l.name.length > LABEL_NAME_MAX || l.description.length > LABEL_DESCRIPTION_MAX) {
+            f.push(`${where(c)}: label ${show(l.name)} is over GitHub's limits (a name is at most ${LABEL_NAME_MAX} characters, a description at most ${LABEL_DESCRIPTION_MAX}), so gh label create would refuse it. Next step: shorten it in ${SETTINGS_REL}/${c.file}.`);
+        }
+    }
+    const byKey = new Map();
+    for (const l of list.filter(x => typeof x?.name === 'string')) {
+        const k = l.name.toLowerCase();
+        byKey.set(k, [...(byKey.get(k) ?? []), l.name]);
+    }
+    for (const k of [...byKey.keys()].sort()) {
+        const names = byKey.get(k);
+        if (names.length > 1) {
+            f.push(`${where(c)}: declared names ${names.map(show).join(', ')} are one label when case is ignored, so the set holds a duplicate. Next step: keep one spelling in ${SETTINGS_REL}/${c.file}.`);
+        }
+    }
+    return f;
+}
+
 // --- the static tag-pattern check (no network) -------------------------------
 
 // Ruleset ref patterns are fnmatch: ** crosses '/', * and ? stay within one
@@ -643,6 +722,15 @@ export const CONTROLS = Object.freeze([
         read: INSTALLATIONS_PATH,
         compare: compareApps,
     },
+    {
+        id: 'labels',
+        file: 'labels.json',
+        write: null,
+        ownerSteps: labelOwnerSteps,
+        liveOwnerSteps: true, // the delete lines are derived from the live list, so planWrites reads it
+        read: LABELS_PATH,
+        compare: compareLabels,
+    },
 ].map(Object.freeze));
 
 const ownedFiles = (c) => c.files ?? (c.file ? [c.file] : []);
@@ -714,6 +802,7 @@ export function runChecks(root, overrides = {}) {
     const ctx = context(root, overrides, failures);
     if (ctx.slug === null) return { failures, compared, slug: null };
     failures.push(...tagPatternFailures(ctx, overrides.tags !== undefined ? overrides.tags : gitTags(root)));
+    failures.push(...labelSetFailures(ctx));
     for (const c of CONTROLS) {
         const declared = declaredOf(c, ctx.bodies);
         if (declared === undefined) continue; // already red: missing or unparseable
@@ -745,7 +834,11 @@ export function planWrites(root, get = ghGet, overrides = {}) {
     for (const c of CONTROLS) {
         const declared = declaredOf(c, ctx.bodies);
         if (declared === undefined) continue; // already in errors
-        if (c.ownerSteps) ownerSteps.push(...c.ownerSteps(c, declared));
+        if (c.liveOwnerSteps) {
+            const r = ctx.get(ctx.fill(c.read));
+            if (r.ok && Array.isArray(r.body)) ownerSteps.push(...c.ownerSteps(c, declared, ctx, r.body));
+            else errors.push(`${c.id}: the owner steps need the live state, which could not be read (${r.ok ? `GET ${ctx.fill(c.read)} returned ${show(r.body)}, not a list` : r.why}). Next step: fix the read, then re-run the plan.`);
+        } else if (c.ownerSteps) ownerSteps.push(...c.ownerSteps(c, declared, ctx));
         if (c.write === null) continue;
         const step = c.plan
             ? c.plan(c, declared, ctx)
@@ -808,6 +901,9 @@ function fakeState(ctx) {
         },
         [p('repos/{owner}/{repo}/actions/secrets?per_page=100')]: { total_count: 0, secrets: [] },
         [p(RELEASES_PATH)]: [],
+        [p(LABELS_PATH)]: (b['labels.json']?.labels ?? []).map((l, i) => ({
+            id: 6000 + i, node_id: `LA_fixture${i}`, name: l.name, color: l.color, default: false, description: l.description,
+        })),
         ...fakeEnvironments(ctx),
         ...fakeRulesets(ctx),
     };
@@ -1012,6 +1108,15 @@ function selfTest() {
         ['a missing settings file', { listSettings: () => listed.filter(f => f !== 'actions-permissions.json') }, ['actions-permissions.json', 'missing']],
         ['an empty settings directory', { listSettings: () => [] }, [SETTINGS_REL, 'empty']],
         ['a getter that throws', { get: () => { throw new Error('planted: gh is not installed'); } }, ['could not be read', 'planted: gh is not installed']],
+        ['a live label outside the declared set', mutated((s, p) => { s[p(LABELS_PATH)].push({ id: 6999, name: 'planted-extra', color: 'ffffff', default: false, description: '' }); }), ['labels', '"planted-extra"', 'is extra']],
+        ['a declared label missing live', mutated((s, p) => { s[p(LABELS_PATH)] = s[p(LABELS_PATH)].filter(l => l.name !== 'type/bug'); }), ['labels', '"type/bug"', 'is missing live']],
+        ['a labels endpoint that throws', { get: (path) => { if (path.includes('/labels')) throw new Error('planted: labels endpoint refused'); return getterOf(base)(path); } }, ['labels', 'could not be read', 'planted: labels endpoint refused']],
+        ['a case-variant duplicate in labels.json', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels.push({ name: 'TYPE/BUG', color: 'd73a4a', description: 'planted' }); return b; } }, ['"TYPE/BUG"', 'duplicate']],
+        ['an empty labels array', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels = []; return b; } }, ['labels.json', 'empty']],
+        ['a declared label with a malformed color', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels[0].color = '#d73a4a'; return b; } }, ['labels.json', 'six-digit']],
+        ['labels.json removed', { listSettings: () => listed.filter(f => f !== 'labels.json') }, ['labels.json', 'missing']],
+        ['a label description over GitHub\'s 100-character limit', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels[0].description = 'x'.repeat(LABEL_DESCRIPTION_MAX + 1); return b; } }, ['labels.json', 'at most 100']],
+        ['a label name over GitHub\'s 50-character limit', { readBody: (f) => { const b = readBody(f); if (f === 'labels.json') b.labels[0].name = 'x'.repeat(LABEL_NAME_MAX + 1); return b; } }, ['labels.json', 'at most 50']],
     ];
 
     let failed = 0;
@@ -1028,6 +1133,11 @@ function selfTest() {
     // Controls: keys GitHub owns never decide.
     const controls = [
         ['immutable releases enforced_by_owner true', set('repos/{owner}/{repo}/immutable-releases', 'enforced_by_owner', true)],
+        ['a label re-tinted and re-described (names are the contract)', mutated((s, p) => {
+            const l = s[p(LABELS_PATH)].find(x => x.name === 'type/bug');
+            l.color = 'ffffff';
+            l.description = 're-described by a planted drift';
+        })],
         ['an OrganizationAdmin actor returned with actor_id 1', ruleMut('main-review', (r) => { r.bypass_actors[0].actor_id = 1; })],
         ['the bot repository list and permission keys in reversed order', mutated((s, p) => {
             s[APP_REPOS_PATH.replace('{id}', FAKE_INSTALLATION_ID)].repositories.reverse();
@@ -1102,6 +1212,39 @@ function selfTest() {
             console.log(`  ok  planWrites lists ${ownerSteps.length} owner UI step(s) and no write for org or apps`);
         } else {
             console.error(`${NAME}: --self-test FAIL -- owner UI steps: ${ownerSteps.join(' | ') || '(none)'}`);
+            failed += 1;
+        }
+    }
+    {
+        // WR-01: label names are case-insensitive. A declared 'Bug' over a live 'bug' gets no delete line and no 'extra' failure.
+        const declaredBug = (f) => {
+            const b = readBody(f);
+            if (f === 'labels.json') b.labels.push({ name: 'Bug', color: 'd73a4a', description: 'planted' });
+            return b;
+        };
+        const s = clone(base);
+        s[ctx.fill(LABELS_PATH)].push({ id: 6998, node_id: 'LA_planted_bug', name: 'bug', color: 'd73a4a', default: true, description: '' });
+        const { ownerSteps } = planWrites(REPO_ROOT, getterOf(s), { ...fixed, readBody: declaredBug });
+        const deletesBug = ownerSteps.some(x => x.startsWith("gh label delete 'bug' "));
+        const flaggedExtra = run({ readBody: declaredBug, get: getterOf(s) }).failures.some(f => f.includes('"bug"') && f.includes('is extra'));
+        if (!deletesBug && !flaggedExtra) {
+            console.log(`  ok  a declared 'Bug' over a live 'bug' -> no 'gh label delete' line and no 'is extra' failure`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- a declared 'Bug' over a live 'bug' got a delete line (${deletesBug}) or an 'is extra' failure (${flaggedExtra})`);
+            failed += 1;
+        }
+    }
+    {
+        // WR-02: the delete lines are live minus declared. A default already deleted (absent live) is not printed; a live extra is.
+        const deletesOf = (state) => planWrites(REPO_ROOT, getterOf(state), fixed).ownerSteps.filter(x => x.startsWith('gh label delete '));
+        const none = deletesOf(base);
+        const withExtra = clone(base);
+        withExtra[ctx.fill(LABELS_PATH)].push({ id: 6997, node_id: 'LA_planted_accessibility', name: 'accessibility', color: 'f143ab', default: true, description: '' });
+        const one = deletesOf(withExtra);
+        if (none.length === 0 && one.length === 1 && one[0].startsWith("gh label delete 'accessibility' ")) {
+            console.log(`  ok  delete lines follow the live list -> none for a label already deleted, one for a live 'accessibility'`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- delete lines: ${none.length} with no extra live label, ${one.length} with one: ${one.join(' | ')}`);
             failed += 1;
         }
     }

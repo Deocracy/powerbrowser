@@ -4794,6 +4794,37 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
+    # workflow issue-label writer names must be declared in .github/settings/labels.json, and
+    # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
+    # --quick: file reads and YAML parsing (js-yaml from theia/) only; no build, browser,
+    # display or network. The live label set is the full-tier repo-controls row.
+    "labels|node $REPO_ROOT/scripts/verify-labels.mjs"
+    # labels-self-test plants, in memory, an undeclared label in a form and in a workflow
+    # snippet, a case-variant label, an expression label, a malformed labels.json, a case-variant
+    # duplicate, zero forms, an extra form, a missing form, and config.yml and form-field faults;
+    # each red naming the file and label. Green controls: a runner name in runs-on, and a quoted
+    # label with a space. It writes nothing.
+    "labels-self-test|node $REPO_ROOT/scripts/verify-labels.mjs --self-test"
+    # NEW (Phase 42, DOC-04): the renewals register, structure only. Every row of docs/RENEWALS.md
+    # carries a recognizable date and an owner action that begins with an imperative verb, and no
+    # item is named twice. No calendar math: the 30-day red is the maintenance sweep's renewals-due
+    # row (Phase 48). Honestly --quick: one file read; no network, build, browser or display.
+    "renewals|node $REPO_ROOT/scripts/verify-renewals.mjs"
+    # renewals-self-test plants, in memory, a dateless row, an actionless row, a non-imperative
+    # action, a row with a missing cell, a missing table header, a duplicate item and a table with
+    # no rows, each red naming the row; a Month YYYY deadline stays green. It writes nothing.
+    "renewals-self-test|node $REPO_ROOT/scripts/verify-renewals.mjs --self-test"
+    # NEW (Phase 42, GH-14): the community files. The set is derived from the tree (SECURITY.md,
+    # CONTRIBUTING.md and CODE_OF_CONDUCT.md at the root when present, .github/ISSUE_TEMPLATE/ and
+    # org-github/) and compared with the committed list in the script header, so a deleted required
+    # file and an unreviewed added file both go red. Each derived file is also scanned for internal
+    # identifiers in visitor text, with the shape rule shell-error-copy-no-internals uses. Honestly
+    # --quick: file reads only; no network, build, browser or display.
+    "community-files|node $REPO_ROOT/scripts/verify-community-files.mjs"
+    # community-files-self-test deletes one required file and plants one identifier and one unlisted
+    # file, in memory, and requires each to go red naming the file. It writes nothing.
+    "community-files-self-test|node $REPO_ROOT/scripts/verify-community-files.mjs --self-test"
     # NEW (Phase 46, UPD-19): the chrome/frontend shell-request kind contract.
     # Derives the accepted kinds from handleShellMessage cases plus
     # SHELL_MESSAGE_KINDS and the dispatched kinds from the Theia shell-state
