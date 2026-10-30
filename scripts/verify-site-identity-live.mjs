@@ -39,6 +39,15 @@
  * "can't show site information"); plant `icons-stale` stops the reply from
  * refreshing the identity box (expected red "icons did not update").
  *
+ * Session D -- `clear-data` (one tab on 127.0.0.1 and one on localhost): the
+ * clear-data row, its confirm, the marker cookie gone, the IDE token cookie and
+ * a same-origin frame request still signed in, and hasData false for localhost.
+ * Session E -- `shield` (a tracker page on 127.0.0.1 and a localhost page): the
+ * count line, off then on, the chrome-side exception, the box shield, and the
+ * second site unchanged.
+ * Plant `clear-signout` (token removed before the clear), `shield-stale` (box
+ * shield not rendered), `shield-leak` (exception written on the second site).
+ *
  * Plant `typed-lock`: re-inserts the original render-line derivation
  * (`this.inputValue.trim().startsWith('https://')` on the live
  * `AddressBar`) so the pill follows typed text; expected red
@@ -92,6 +101,10 @@ const EXTRA_PREFS = {
 const PAGES = {
     '/secure': { title: 'Secure Page', body: '<p>secure</p>' },
     '/plain': { title: 'Plain Page', body: '<p>plain</p>' },
+    // Plan 03 (SITE-08): a page whose tracker host the bundled classifier blocks (trackertest.org); the request never resolves.
+    '/tracker': { title: 'Tracker Page', body: '<p>tracker</p>', extra: () => '<img src="http://trackertest.org/t.gif">' },
+    // Plan 03 (SITE-07): a page that leaves its own site data: a marker cookie set by the page's script, as real site data is.
+    '/seed': { title: 'Seed Page', body: '<p>seed</p>', extra: () => "<script>document.cookie = 'pb-clear-marker=seeded; path=/; SameSite=Lax';</script>" },
     // The mixed page's http: subresource port is known only after listen,
     // so the handler closes over the mutable cell below (set in runSession).
     '/mixed': { title: 'Mixed Page', body: '<p>mixed</p>', extra: () => `<img src="http://pb-fixture.test:${plainPortOf()}/plain">` },
@@ -342,7 +355,7 @@ const PANEL_READ = `JSON.stringify((() => {
     if (!panel) return { present: false, rows: [], cert: [] };
     return {
         present: true,
-        rows: [...panel.querySelectorAll('.pb-site-panel-row')].map(r => ({
+        rows: [...panel.querySelectorAll('.pb-site-panel-row[data-permission]')].map(r => ({
             id: r.getAttribute('data-permission'),
             state: r.getAttribute('data-state'),
             stored: r.getAttribute('data-stored'),
@@ -612,10 +625,319 @@ async function sitePanel(ctx) {
     }
 }
 
-const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel };
+
+/** Plan 03 (SITE-07): the token cookie's name, read from the boundary's literal at check time (never copied here). */
+function tokenCookieName() {
+    const src = readFileSync(join(REPO_ROOT, 'powerbrowser/shell/PowerBrowserAPI.sys.mjs'), 'utf8');
+    const name = /\nconst TOKEN_COOKIE_NAME = "([^"]+)";/.exec(src)?.[1];
+    if (!name) {
+        throw new Error(`${BROKEN} PowerBrowserAPI.sys.mjs declares no TOKEN_COOKIE_NAME literal -- broken instrument`);
+    }
+    return name;
+}
+
+/** Cookie names the jar holds for a host (chrome-scope read; no value is read). */
+// The names come back joined: the chrome read wraps an array of strings in remote values, which is not a list here.
+const cookieNamesFor = async (app, host) => {
+    const raw = await inChrome(app, `return Services.cookies.getCookiesFromHost(${JSON.stringify(host)}, {}).map(c => c.name).join('\\n');`);
+    if (typeof raw !== 'string') {
+        throw new Error(`${BROKEN} the cookie read for ${host} returned ${JSON.stringify(raw)}, not names`);
+    }
+    return raw.split('\n').filter(Boolean);
+};
+/** Removes every cookie of one name for a host; returns how many went. */
+const removeCookiesNamed = (app, host, name) => inChrome(app, `let n = 0;
+    for (const c of Services.cookies.getCookiesFromHost(${JSON.stringify(host)}, {})) {
+        if (c.name === ${JSON.stringify(name)}) { Services.cookies.remove(c.host, c.name, c.path, c.originAttributes); n++; }
+    }
+    return n;`);
+/** The status of a same-origin request from the Theia frame: 200 only while the frame is signed in. */
+const frameStatus = app => probe(app, `const r = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin' }); return r.status;`);
+/** Whether chrome's per-site exception holds for one overlay; null when the overlay is gone (never a pass). */
+const exceptionOn = (app, tabId) => inChrome(app, `const b = overlayOf(${JSON.stringify(tabId)});
+    if (!b) return null;
+    return ChromeUtils.importESModule('resource://gre/modules/ContentBlockingAllowList.sys.mjs').ContentBlockingAllowList.includes(b);`);
+/** Chrome's per-site exception write for one overlay (the leak plant's fault injection). */
+const exceptionAdd = (app, tabId) => inChrome(app, `const b = overlayOf(${JSON.stringify(tabId)});
+    if (!b) return null;
+    ChromeUtils.importESModule('resource://gre/modules/ContentBlockingAllowList.sys.mjs').ContentBlockingAllowList.add(b);
+    return true;`);
+
+/** The shield rows of the open panel, read from the live DOM. */
+const SHIELD_READ = `JSON.stringify((() => {
+    const panel = document.querySelector('.pb-site-panel');
+    if (!panel) return { present: false };
+    const count = panel.querySelector('.pb-site-panel-shield-count');
+    const toggle = panel.querySelector('[data-action="shield-toggle"]');
+    return {
+        present: true,
+        count: count?.textContent ?? null,
+        excepted: count?.getAttribute('data-shield-excepted') ?? null,
+        toggle: toggle?.querySelector('.pb-site-panel-row-label')?.textContent ?? null,
+    };
+})())`;
+const shieldRead = app => app.evaluate(SHIELD_READ).then(JSON.parse);
+const shieldIconOn = app => app.evaluate(`!!document.querySelector('.pb-identity .pb-identity-shield')`);
+const clickShieldToggle = app => app.evaluate(`(() => { const t = document.querySelector('.pb-site-panel [data-action="shield-toggle"]'); if (!t) return false; t.click(); return true; })()`);
+const clickClearRow = app => app.evaluate(`(() => { const r = document.querySelector('.pb-site-panel [data-action="clear-site-data"]'); if (!r) return false; r.click(); return true; })()`);
+/** Clicks the dialog's Clear button; the dialog is Theia's ConfirmDialog. */
+const confirmClear = app => app.evaluate(`(() => {
+    const dialog = document.querySelector('.dialogBlock');
+    if (!dialog) return 'no-dialog';
+    const button = [...dialog.querySelectorAll('button')].find(b => b.textContent.trim() === 'Clear');
+    if (!button) return 'no-button';
+    button.click();
+    return 'clicked';
+})()`);
+
+/** Chrome's SiteDataManager.hasSiteData for a host, as 'true' | 'false' | 'error' (async, read back in a second call). */
+async function hasDataFor(app, host) {
+    await inChrome(app, `window.__pbHasData = 'pending';
+        ChromeUtils.importESModule('resource:///modules/SiteDataManager.sys.mjs').SiteDataManager.hasSiteData(${JSON.stringify(host)})
+            .then(v => { window.__pbHasData = v === true ? 'true' : 'false'; }, () => { window.__pbHasData = 'error'; });
+        return true;`);
+    return waitFor(() => inChrome(app, `return window.__pbHasData;`), v => v === 'true' || v === 'false' || v === 'error', 8000);
+}
+
+/** Opens the panel from the identity box and clicks its clear row, then confirms; returns the step that stopped, or 'done'. */
+async function clearFromPanel(app) {
+    if (!await openPanel(app)) {
+        return 'the identity box could not be clicked';
+    }
+    const row = await waitFor(() => app.evaluate(`!!document.querySelector('.pb-site-panel [data-action="clear-site-data"]')`), v => v === true);
+    if (row !== true) {
+        return 'the clear-data row is not in the panel';
+    }
+    await clickClearRow(app);
+    const dialog = await waitFor(() => app.evaluate(`!!document.querySelector('.dialogBlock')`), v => v === true);
+    if (dialog !== true) {
+        return 'the clear confirm did not open';
+    }
+    const clicked = await confirmClear(app);
+    return clicked === 'clicked' ? 'done' : `the confirm button was not found (${clicked})`;
+}
+
+/**
+ * Plan 03 (SITE-07, D-31-12): the clear-data row on a served 127.0.0.1 tab and a
+ * localhost tab. The marker cookie goes; the token cookie stays; the frame stays
+ * signed in (a same-origin request still returns 200). Plant `clear-signout`
+ * removes the token just before the clear, the fault a clear without the
+ * exemption would cause; the check must go red naming "signed out".
+ */
+async function clearData(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const token = tokenCookieName();
+    const MARK = 'pb-clear-marker';
+    const loopId = await openWebTab(app, pages.url('/seed'));
+    if (await waitForPush(app, loadedAt(loopId, '/seed')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the 127.0.0.1 page`);
+    }
+    if (await makeCurrent(app, loopId) !== true) {
+        return fail(`${BROKEN} the 127.0.0.1 web tab could not be made current`);
+    }
+    // Positive controls: the token is in the jar and the page's marker is there, before the clear.
+    if (!(await cookieNamesFor(app, '127.0.0.1')).includes(token)) {
+        return fail(`${BROKEN} the token cookie is not in the jar before the clear, so nothing proves the exemption`);
+    }
+    if (!(await cookieNamesFor(app, '127.0.0.1')).includes(MARK)) {
+        return fail(`${BROKEN} the page's marker cookie is not in the jar before the clear (the page did not set it)`);
+    }
+    if (plant === 'clear-signout') {
+        const removed = await removeCookiesNamed(app, '127.0.0.1', token);
+        note(`PLANT clear-signout applied (token cookies removed before the clear: ${removed})`);
+    }
+    const step = await clearFromPanel(app);
+    if (step !== 'done') {
+        return fail(`${BROKEN} ${step}`);
+    }
+    const marked = await waitFor(() => cookieNamesFor(app, '127.0.0.1'), names => !names.includes(MARK), 8000);
+    if (marked.includes(MARK)) {
+        fail('the clear left the planted marker cookie on 127.0.0.1: the site data was not cleared');
+    }
+    if (!(await cookieNamesFor(app, '127.0.0.1')).includes(token)) {
+        fail('the IDE session was signed out by the clear: the token cookie is gone');
+    }
+    const status = await frameStatus(app);
+    if (status !== 200) {
+        fail(`the IDE session was signed out by the clear: a same-origin frame request returned ${JSON.stringify(status)}, want 200`);
+    }
+    // localhost: no token cookie on that host; the marker goes and the frame stays signed in.
+    const localId = await openWebTab(app, `http://localhost:${pages.port}/seed`);
+    if (await waitForPush(app, loadedAt(localId, '/seed')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the localhost page`);
+    }
+    if (await makeCurrent(app, localId) !== true) {
+        return fail(`${BROKEN} the localhost web tab could not be made current`);
+    }
+    if (!(await cookieNamesFor(app, 'localhost')).includes(MARK)) {
+        return fail(`${BROKEN} the page's marker cookie is not in the jar for localhost before the clear`);
+    }
+    if (await hasDataFor(app, 'localhost') !== 'true') {
+        return fail(`${BROKEN} localhost reports no site data before the clear (the marker is there), so hasData after it proves nothing`);
+    }
+    const stepLocal = await clearFromPanel(app);
+    if (stepLocal !== 'done') {
+        return fail(`${BROKEN} on localhost: ${stepLocal}`);
+    }
+    const localMarked = await waitFor(() => cookieNamesFor(app, 'localhost'), names => !names.includes(MARK), 8000);
+    if (localMarked.includes(MARK)) {
+        fail('the clear left the planted marker cookie on localhost: the site data was not cleared');
+    }
+    if (!(await cookieNamesFor(app, '127.0.0.1')).includes(token)) {
+        fail('the IDE session was signed out by the clear on localhost: the token cookie is gone');
+    }
+    const localStatus = await frameStatus(app);
+    if (localStatus !== 200) {
+        fail(`the IDE session was signed out by the clear on localhost: a same-origin frame request returned ${JSON.stringify(localStatus)}, want 200`);
+    }
+    // hasData after the localhost clear: chrome's own probe for that host (the reply's value is not on screen).
+    const hasData = await hasDataFor(app, 'localhost');
+    if (hasData !== 'false') {
+        fail(`the localhost site still reports site data after the clear (${JSON.stringify(hasData)}, want "false")`);
+    }
+    await closePanel(app).catch(() => null);
+}
+
+/** A blocked-tracker count line: the one-tracker copy or the many-trackers copy. */
+const BLOCKED_COUNT = /^(1 tracker blocked|\d+ trackers blocked)$/;
+
+/**
+ * Reopens the panel until a fresh read satisfies `pred` (each open is a new
+ * site-info read, so the count follows the reloaded page); returns the last read.
+ */
+async function reopenUntil(app, pred, timeoutMs = 10000) {
+    const end = Date.now() + timeoutMs;
+    let read = null;
+    for (;;) {
+        await closePanel(app);
+        await openPanel(app);
+        read = await waitFor(() => shieldRead(app), r => r.present && r.count !== null, 6000);
+        if (pred(read) || Date.now() > end) {
+            return read;
+        }
+        await sleep(300);
+    }
+}
+
+/**
+ * Plan 03 (SITE-08, D-31-06): the shield on a tracker page (the bundled
+ * classifier blocks trackertest.org, so its count is real). Off then on, for
+ * this site only: the count line, the toggle, the chrome-side exception and the
+ * identity-box shield follow each change; a second site's exception stays off.
+ * Plant `shield-stale` removes the box shield's render, so the icon cannot show
+ * the change (red "shield icon did not update"); plant `shield-leak` puts the
+ * exception on the second site (red "wrong site").
+ */
+async function shield(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const trackId = await openWebTab(app, pages.url('/tracker'));
+    if (await waitForPush(app, loadedAt(trackId, '/tracker')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the tracker page`);
+    }
+    if (await makeCurrent(app, trackId) !== true) {
+        return fail(`${BROKEN} the tracker web tab could not be made current`);
+    }
+    const seen = await waitFor(() => lastPush(app, trackId), p => !!p && p.blockedTrackers >= 1, 8000);
+    if (!seen || !(seen.blockedTrackers >= 1)) {
+        return fail(`${BROKEN} the tracker page reported blockedTrackers ${JSON.stringify(seen?.blockedTrackers ?? null)}; the bundled classifier did not block its tracker host`);
+    }
+    const secondId = await openWebTab(app, `http://localhost:${pages.port}/plain`);
+    if (await waitForPush(app, loadedAt(secondId, '/plain')) < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the second site`);
+    }
+    if (await makeCurrent(app, trackId) !== true) {
+        return fail(`${BROKEN} the tracker web tab could not be made current again`);
+    }
+    if (await exceptionOn(app, trackId) !== false || await exceptionOn(app, secondId) !== false) {
+        return fail(`${BROKEN} an exception was already set before the first toggle (the profile is not clean)`);
+    }
+    if (plant === 'shield-stale') {
+        const applied = await probe(app, `const ab = get('AddressBar'); if (!ab) return false;
+            Object.getPrototypeOf(ab).renderShieldIcon = function () { return undefined; };
+            return true;`);
+        if (applied === true) {
+            note('PLANT shield-stale applied (the box shield is never rendered)');
+        }
+    }
+    // Opening the panel: the count line shows the blocked count, and the toggle offers "off".
+    if (!await openPanel(app)) {
+        return fail(`${BROKEN} the identity box could not be clicked`);
+    }
+    const onCount = await waitFor(() => shieldRead(app), r => r.present && r.count !== null && BLOCKED_COUNT.test(r.count));
+    if (!BLOCKED_COUNT.test(onCount.count ?? '')) {
+        fail(`the protected tracker page must show its blocked count; saw ${JSON.stringify(onCount.count)}`);
+    }
+    if (onCount.toggle !== 'Turn off protection for this site') {
+        fail(`the blocked page's toggle must read "Turn off protection for this site"; saw ${JSON.stringify(onCount.toggle)}`);
+    }
+    // Off: an applied change closes the panel (the tab reloads); the box shield follows the reply.
+    if (!await clickShieldToggle(app)) {
+        return fail(`${BROKEN} the shield toggle is not in the panel`);
+    }
+    const closedOff = await waitFor(() => app.evaluate(`!!document.querySelector('.pb-site-panel')`), v => v === false, 8000);
+    if (closedOff !== false) {
+        fail('the panel stayed open after the shield change; the tab reloads, so the panel must close (upstream closes its popup here)');
+    }
+    const icon = await waitFor(() => shieldIconOn(app), v => v === true, 8000);
+    if (icon !== true) {
+        fail('shield icon did not update after the toggle: the identity box shows no shield for the excepted site');
+    }
+    if (await exceptionOn(app, trackId) !== true) {
+        fail('chrome does not hold the exception for the tracker page after the toggle');
+    }
+    if (plant === 'shield-leak') {
+        const leaked = await exceptionAdd(app, secondId);
+        note(`PLANT shield-leak applied (the second site's exception written: ${leaked})`);
+    }
+    if (await exceptionOn(app, secondId) !== false) {
+        fail('wrong site: the second site has a tracking-protection exception after the tracker page was excepted');
+    }
+    // Reopened on the excepted page: the count line reads the excepted copy and the toggle offers "back on".
+    const excepted = await reopenUntil(app, r => r.excepted === 'true');
+    if (excepted.excepted !== 'true' || excepted.count !== 'Tracking protection is off for this site') {
+        fail(`with protection off the count line must read "Tracking protection is off for this site"; saw ${JSON.stringify(excepted.count)} excepted ${JSON.stringify(excepted.excepted)}`);
+    }
+    if (excepted.toggle !== 'Turn protection back on') {
+        fail(`with protection off the row must read "Turn protection back on"; saw ${JSON.stringify(excepted.toggle)}`);
+    }
+    // On again: the exception goes; the page reloads and counts its tracker again; the box shield goes.
+    if (!await clickShieldToggle(app)) {
+        return fail(`${BROKEN} the shield toggle is not in the panel on the second open`);
+    }
+    const closedOn = await waitFor(() => app.evaluate(`!!document.querySelector('.pb-site-panel')`), v => v === false, 8000);
+    if (closedOn !== false) {
+        fail('the panel stayed open after protection came back on; it must close with the reload');
+    }
+    const iconGone = await waitFor(() => shieldIconOn(app), v => v === false, 8000);
+    if (iconGone !== false) {
+        fail('the box shield stayed after protection came back on');
+    }
+    if (await exceptionOn(app, trackId) !== false) {
+        fail('chrome still holds the exception for the tracker page after protection came back on');
+    }
+    const counted = await reopenUntil(app, r => BLOCKED_COUNT.test(r.count ?? ''));
+    if (!BLOCKED_COUNT.test(counted.count ?? '')) {
+        fail(`after protection came back on the blocked count must return; saw ${JSON.stringify(counted.count)} excepted ${JSON.stringify(counted.excepted)}`);
+    }
+    await closePanel(app);
+    if (await exceptionOn(app, secondId) !== false) {
+        fail('wrong site: the second site has a tracking-protection exception at the end of the run');
+    }
+
+}
+
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
-const NOT_LANDED = ['clear-data', 'shield', 'app-menu'];
+const NOT_LANDED = ['app-menu'];
+
+/** Plan 03 (SITE-08): the shield session runs with tracking protection on, so the fixture's tracker is blocked. */
+const SCENARIO_PREFS = { shield: { 'privacy.trackingprotection.enabled': true } };
+
+/** The profile prefs for one session: the scenarios' own, then the fixture prefs for a TLS session. */
+function sessionPrefs(names, tls) {
+    return Object.assign({}, ...names.map(name => SCENARIO_PREFS[name] ?? {}), tls ? EXTRA_PREFS : {});
+}
 
 /**
  * One session over `names`; returns `[{ name, failures, notes, notScored }]`
@@ -651,7 +973,7 @@ async function runSession(names, plant = '', tls = false) {
                 results.push(result);
             }
             return results;
-        }, tls ? { extraPrefs: EXTRA_PREFS, trustFixtureCA: true } : {});
+        }, { extraPrefs: sessionPrefs(names, tls), trustFixtureCA: tls });
     } finally {
         await pages.close();
         for (const cleanup of shared.cleanups) {
@@ -698,11 +1020,17 @@ const PLANTS = [
     { plant: 'perm-refused', target: 'site-panel', run: ['site-panel'], expect: "can't show site information", tls: true },
     // The permission reply does not refresh the identity box: the icons stay stale.
     { plant: 'icons-stale', target: 'site-panel', run: ['site-panel'], expect: 'icons did not update', tls: true },
+    // The token cookie is gone before the clear: the signed-in checks must name it.
+    { plant: 'clear-signout', target: 'clear-data', run: ['clear-data'], expect: 'signed out', tls: false },
+    // The box shield is never rendered: the change cannot reach the identity box.
+    { plant: 'shield-stale', target: 'shield', run: ['shield'], expect: 'shield icon did not update', tls: false },
+    // The exception is also written on the second site: the isolation check names it.
+    { plant: 'shield-leak', target: 'shield', run: ['shield'], expect: 'wrong site', tls: false },
 ];
 
 async function selfTest() {
     let failed = 0;
-    for (const session of [['identity-local'], ['identity-tls'], ['site-panel']]) {
+    for (const session of [['identity-local'], ['identity-tls'], ['site-panel'], ['clear-data'], ['shield']]) {
         let clean;
         try {
             clean = await runSession(session, '', session[0] !== 'identity-local');
@@ -756,7 +1084,7 @@ async function main(args) {
         // One session per scenario group (4-tab limit): the TLS identity session,
         // the site-panel session (its own TLS browser), then the local session.
         const results = [];
-        for (const [name, tls] of [['identity-tls', true], ['site-panel', true], ['identity-local', false]]) {
+        for (const [name, tls] of [['identity-tls', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false]]) {
             if (names.includes(name)) {
                 results.push(...await runSession([name], '', tls));
             }

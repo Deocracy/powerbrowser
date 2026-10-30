@@ -5054,13 +5054,15 @@ run_own_checks() {
       "address-bar-live|node $REPO_ROOT/scripts/verify-address-bar-live.mjs"
       "address-bar-live-self-test|node $REPO_ROOT/scripts/verify-address-bar-live.mjs --self-test"
 
-      # NEW (31-01/31-02, SITE-01..06): the site-identity live gate. identity-tls
-      # and identity-local (31-01) and site-panel (31-02: certificate, six
-      # tri-state rows, icons, the origin race) run in their own sessions with the
-      # startup cache purged (MOZ_PURGE_CACHES=1). Needs the built browser and the
-      # last Theia app build, so never --quick. The self-test runs a clean control
-      # per session, then one session per planted fault (typed-lock, perm-refused,
-      # icons-stale).
+      # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
+      # and identity-local (31-01), site-panel (31-02: certificate, six tri-state
+      # rows, icons, the origin race), and clear-data and shield (31-03: the
+      # token-cookie exemption on 127.0.0.1 and localhost, the shield count, the
+      # per-site exception and the second-site isolation) run in their own sessions
+      # with the startup cache purged (MOZ_PURGE_CACHES=1). Needs the built browser
+      # and the last Theia app build, so never --quick. The self-test runs a clean
+      # control per session, then one session per planted fault (typed-lock,
+      # perm-refused, icons-stale, clear-signout, shield-stale, shield-leak).
       "site-identity-live|node $REPO_ROOT/scripts/verify-site-identity-live.mjs"
       "site-identity-live-self-test|node $REPO_ROOT/scripts/verify-site-identity-live.mjs --self-test"
 
