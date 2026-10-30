@@ -132,6 +132,7 @@ const CSS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar.css';
 const SITE_PANEL_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/site-panel.tsx';
 const UPSTREAM_PERMS_REL = 'upstream/browser/modules/SitePermissions.sys.mjs';
 const UPSTREAM_IDL_REL = 'upstream/uriloader/base/nsIWebProgressListener.idl';
+const UPSTREAM_CERT_VALIDITY_REL = 'upstream/security/manager/ssl/nsIX509CertValidity.idl';
 const UI_SPEC_REL = '.planning/phases/31-site-identity-permissions-and-app-menu/31-UI-SPEC.md';
 const INTERNAL_APIS_REL = 'powerbrowser/INTERNAL-APIS.md';
 const CODICON_REL = 'theia/node_modules/@vscode/codicons/dist/codicon.css';
@@ -976,6 +977,23 @@ function cases(m, srcs, mm) {
             return code.includes('baseDomain = Cc["@mozilla.org/network/idn-service;1"].getService(Ci.nsIIDNService).convertToDisplayIDN(baseDomain);')
                 ? null : 'the pushed baseDomain is not converted with convertToDisplayIDN, so the highlight never matches a Unicode host';
         }],
+        ['the certificate validity dates are formatted from PRTime, not read as strings (WR-03)', () => {
+            const code = stripComments(apiSrc);
+            const start = code.indexOf('  async webTabSiteInfo(browser) {');
+            const end = start < 0 ? -1 : code.indexOf('\n  },\n', start);
+            if (start < 0 || end < 0) {
+                return `no webTabSiteInfo in ${API_REL} -- broken instrument`;
+            }
+            const body = code.slice(start, end);
+            const stringGuard = /typeof validity\.notBefore === "string"/.test(body);
+            const formatted = body.includes('validFrom = webTabCertDate(validity.notBefore);') && body.includes('validTo = webTabCertDate(validity.notAfter);');
+            const idl = srcs[UPSTREAM_CERT_VALIDITY_REL] ?? '';
+            const prTime = /readonly attribute PRTime notBefore;/.test(idl) && /readonly attribute PRTime notAfter;/.test(idl);
+            if (!prTime) {
+                return `nsIX509CertValidity.idl no longer declares notBefore/notAfter as PRTime -- broken instrument`;
+            }
+            return !stringGuard && formatted ? null : { stringGuard, formattedFromPRTime: formatted, want: 'webTabCertDate(validity.notBefore) and notAfter, no string guard' };
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -1029,7 +1047,7 @@ const read = rel => {
         return '';
     }
 };
-const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL, TOKEN_GATE_REL, APP_MENU_REL, WIDGET_REL, CMD_REL, STORE_CLIENT_REL];
+const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UPSTREAM_CERT_VALIDITY_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL, TOKEN_GATE_REL, APP_MENU_REL, WIDGET_REL, CMD_REL, STORE_CLIENT_REL];
 /**
  * Phase 31 plan 05 (MENU-04, D-31-13, T-31-06): every source that could spell a quit, read from the tree
  * at check time: powerbrowser/shell and each theia/extensions/<name>/src (never lib/ or node_modules).
@@ -1077,6 +1095,13 @@ const PLANTS = [
         from: "    'local',\n",
         to: '',
         expect: 'SECURITY_STATES equal the boundary decode arms',
+    },
+    {
+        name: 'the certificate dates are read as strings (WR-03)',
+        rel: API_REL,
+        from: 'validFrom = webTabCertDate(validity.notBefore);',
+        to: 'validFrom = typeof validity.notBefore === "string" ? validity.notBefore : null;',
+        expect: 'the certificate validity dates are formatted from PRTime, not read as strings (WR-03)',
     },
     {
         name: 'the identity host strips the port from the chrome displaySpec (WR-02)',

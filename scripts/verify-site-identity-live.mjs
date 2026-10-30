@@ -592,6 +592,11 @@ async function sitePanel(ctx) {
     if (!opened.cert.some(text => text.startsWith('Issued to:')) || !opened.cert.some(text => text.startsWith('Issued by:'))) {
         fail(`the secure page's certificate block must show "Issued to:" and "Issued by:"; saw ${JSON.stringify(opened.cert)}`);
     }
+    // WR-03: the "Valid:" row renders with the two dates (a year in each read is the non-empty check).
+    const valid = opened.cert.find(text => text.startsWith('Valid: '));
+    if (!valid || !/^Valid: \S.* to \S.*\d{4}/.test(valid)) {
+        fail(`the secure page's certificate block must show a "Valid:" row with both dates; saw ${JSON.stringify(opened.cert)}`);
+    }
     if (opened.noPerms !== 'No special permissions set for this site') {
         fail(`a site with no special permissions must show the empty row; saw ${JSON.stringify(opened.noPerms)}`);
     }

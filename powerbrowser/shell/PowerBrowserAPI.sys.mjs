@@ -3687,8 +3687,8 @@ export const PowerBrowserAPI = Object.freeze({
           : (typeof cert.commonName === "string" ? cert.commonName : null);
         const validity = cert.validity;
         if (validity) {
-          validFrom = typeof validity.notBefore === "string" ? validity.notBefore : null;
-          validTo = typeof validity.notAfter === "string" ? validity.notAfter : null;
+          validFrom = webTabCertDate(validity.notBefore);
+          validTo = webTabCertDate(validity.notAfter);
         }
       }
     } catch (err) {
@@ -5311,6 +5311,20 @@ async function searchPlacesRestricted(text, limit, restrict) {
 // Phase 31 plan 03 (SITE-07/08): the site-data clear and the shield exception.
 // Chrome-only helpers the webTabClearSiteData and webTabShieldToggle arms call.
 // ---------------------------------------------------------------------------
+
+// WR-03: nsIX509CertValidity.notBefore and notAfter are PRTime (microseconds since
+// the epoch, nsIX509CertValidity.idl:17-23), not strings, so the "Valid:" row formats
+// them here. UTC, so the date does not depend on the machine's zone. Null when unreadable.
+function webTabCertDate(prTime) {
+  if (typeof prTime !== "number" || !Number.isFinite(prTime)) {
+    return null;
+  }
+  const date = new Date(prTime / 1000);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }).format(date);
+}
 
 // The token cookie is host-only on the sidecar's loopback origin (see the
 // token-cookie strip above). Exempt by name AND host: a same-named cookie on
