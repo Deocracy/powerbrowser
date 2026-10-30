@@ -4760,6 +4760,11 @@ run_own_checks() {
     # the page omits, an allowlist removal the page still lists, and a page with no marked host, each
     # red naming its host or attribute; the real page and allowlist stay green first. It writes nothing.
     "privacy-hosts-self-test|node $REPO_ROOT/scripts/verify-privacy-hosts.mjs --self-test"
+    # NEW (Phase 47, WR-04): website-publish-ready-self-test plants an OWNER TO FILL marker, a
+    # class="pending" block and an empty site over a clean fixture that carries a CSS .pending
+    # selector (which must stay green); each red naming its file or marker. It writes nothing.
+    # The live read of website-staging/ is the full-tier website-publish-ready row.
+    "website-publish-ready-self-test|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs --self-test"
     # NEW (Phase 41, GH-12 and GH-08): the trust-boundary rules over every workflow --
     # SHA-pinned and admitted uses:, set equality with actions-selected.json, and the GH-12
     # runner, permission, trigger, cache and event-text rules. Honestly --quick: YAML parsing
@@ -5214,6 +5219,12 @@ run_own_checks() {
       # read-only gh api against the live updates repo (network, gh auth with repo and read:org);
       # green only after the owner pushes the static tree at plan 47-04. Fails closed when unreadable.
       "updates-repo-static|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs"
+
+      # NEW (Phase 47, WR-04): the staged website pages carry no OWNER TO FILL marker and no
+      # class="pending" block. Full tier, deliberately: the placeholders are intentional until the
+      # owner fills them, so this row stays red until then. It must be green before the website
+      # push (docs/RELEASING.md, the website section).
+      "website-publish-ready|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs"
     )
   fi
 

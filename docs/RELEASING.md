@@ -204,7 +204,7 @@ here owns.
 | `linux-release-pipeline-and-update-channel` | Create the public repository `DeBIOS-Foundation/powerbrowser-updates` with a root `_redirects` and a placeholder no-update descriptor at `default/Linux_x86_64-gcc3/update.xml`; create the Cloudflare Pages project (empty build command, output `/`); add `updates.powerbrowser.org` as a custom domain | Cloudflare account and DNS |
 | `linux-release-pipeline-and-update-channel` | Probe the eleven-segment path live with real client segment shapes, then switch to a minimal `_worker.js` if the placeholder rule does not match, and record which mechanism shipped | Live infrastructure; the branch cannot be decided from documentation |
 | `linux-release-pipeline-and-update-channel` | Create a fine-grained PAT with Contents write on `powerbrowser-updates` only; store it as a `release` environment secret | Secret custody |
-| `linux-release-pipeline-and-update-channel` | Fill the four website routes (`/`, `/download`, `/privacy`, `/legal`, each a real file, no fragment redirect); deploy `powerbrowser.org` | Site repository and Pages |
+| `linux-release-pipeline-and-update-channel` | Fill the four website routes (`/`, `/download`, `/privacy`, `/legal`, each a real file, no fragment redirect); with the `website-publish-ready` row green, deploy `powerbrowser.org` | Site repository and Pages |
 | `linux-release-pipeline-and-update-channel` | Approve the `release` environment gate after reviewing the artifact list and the descriptor commit diff; hold any announcement until the release-mode hop drill is green | The approval is the only point at which the MAR key is used |
 | `windows-unsigned` | Provision the `pkg-win11` guest: confirm the media, create or start the libvirt NAT network, create a **new** `pkg-win11` disk (leave the pre-existing shut-off `win11` domain alone), define the domain with qcow2 nvram, install Windows 11, install the QEMU guest agent and stock Firefox, take the `clean-baseline` snapshot | `sudo` for `qemu:///system` |
 | `windows-unsigned` | Run the five-cell Windows matrix from the snapshot and write the record | Guest interaction and verbatim dialog capture |
@@ -432,6 +432,12 @@ project with no build step. It has four real routes, each a file that returns 20
 fragment redirect (the single-page `#download` redirect is retired) and no website
 `_redirects` file: every route is a real file. `/.well-known/security.txt` is served through the
 zone-level security.txt feature, not a static file.
+
+**Before the website push**, the full-tier `website-publish-ready` row of
+`scripts/verify-platform.sh` must be green. It stays red while any staged page carries an
+`OWNER TO FILL` placeholder or a `class="pending"` block, and both are intentional until the
+owner fills them. Run `scripts/verify-platform.sh --only website-publish-ready` after filling
+them, and do not push the site while it is red.
 
 Zone security.txt procedure: enable the feature on the zone, with the Contact address
 `mailto:security@powerbrowser.org`. Measured result: pending the owner checkpoint
