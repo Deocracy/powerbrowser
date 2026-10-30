@@ -4774,6 +4774,15 @@ run_own_checks() {
     # each red naming the file and label. Green controls: a runner name in runs-on, and a quoted
     # label with a space. It writes nothing.
     "labels-self-test|node $REPO_ROOT/scripts/verify-labels.mjs --self-test"
+    # NEW (Phase 42, DOC-04): the renewals register, structure only. Every row of docs/RENEWALS.md
+    # carries a recognizable date and an owner action that begins with an imperative verb, and no
+    # item is named twice. No calendar math: the 30-day red is the maintenance sweep's renewals-due
+    # row (Phase 48). Honestly --quick: one file read; no network, build, browser or display.
+    "renewals|node $REPO_ROOT/scripts/verify-renewals.mjs"
+    # renewals-self-test plants, in memory, a dateless row, an actionless row, a non-imperative
+    # action, a row with a missing cell, a missing table header, a duplicate item and a table with
+    # no rows, each red naming the row; a Month YYYY deadline stays green. It writes nothing.
+    "renewals-self-test|node $REPO_ROOT/scripts/verify-renewals.mjs --self-test"
     # NEW (Phase 46, UPD-19): the chrome/frontend shell-request kind contract.
     # Derives the accepted kinds from handleShellMessage cases plus
     # SHELL_MESSAGE_KINDS and the dispatched kinds from the Theia shell-state
