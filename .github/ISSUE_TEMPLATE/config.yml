@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/DeBIOS-Foundation/powerbrowser/security/policy
+    url: https://github.com/Deocracy/powerbrowser/security/policy
     about: Report a vulnerability privately. Do not open a public issue for it.
   - name: Ask a question or start a discussion
-    url: https://github.com/DeBIOS-Foundation/powerbrowser/discussions
+    url: https://github.com/Deocracy/powerbrowser/discussions
     about: Questions and general discussion about PowerBrowser belong in Discussions, not in bug reports.

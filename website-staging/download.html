@@ -44,20 +44,20 @@
 
   <h2>Linux x86_64</h2>
   <div class="card">
-    <p><a href="https://github.com/DeBIOS-Foundation/powerbrowser/releases/latest/download/powerbrowser-linux-x86_64.tar.xz">powerbrowser-linux-x86_64.tar.xz</a></p>
+    <p><a href="https://github.com/Deocracy/powerbrowser/releases/latest/download/powerbrowser-linux-x86_64.tar.xz">powerbrowser-linux-x86_64.tar.xz</a></p>
     <p class="muted">The download link always points at the latest release. The file name follows the stable asset-name form.</p>
   </div>
 
   <h2>Checksums</h2>
-  <p>Download <a href="https://github.com/DeBIOS-Foundation/powerbrowser/releases/latest/download/SHA256SUMS">SHA256SUMS</a> from the same release and check the archive against it:</p>
+  <p>Download <a href="https://github.com/Deocracy/powerbrowser/releases/latest/download/SHA256SUMS">SHA256SUMS</a> from the same release and check the archive against it:</p>
   <pre><code>sha256sum --check --ignore-missing SHA256SUMS</code></pre>
 
   <h2>Verify the attestation</h2>
   <p>The attestation covers the upload rather than the build host. It shows that the release workflow of this repository published these exact bytes. It does not cover the build host that produced them.</p>
-  <pre><code>gh attestation verify powerbrowser-linux-x86_64.tar.xz --repo DeBIOS-Foundation/powerbrowser</code></pre>
+  <pre><code>gh attestation verify powerbrowser-linux-x86_64.tar.xz --repo Deocracy/powerbrowser</code></pre>
   <p>The <code>gh</code> tool needs a GitHub login before it can verify online. Run <code>gh auth login</code> once on the verifying machine.</p>
   <p>Offline alternative: on a machine that cannot reach GitHub, save the attestation bundle for the archive and pass it with <code>--bundle</code>:</p>
-  <pre><code>gh attestation verify powerbrowser-linux-x86_64.tar.xz --repo DeBIOS-Foundation/powerbrowser --bundle &lt;bundle-file&gt;</code></pre>
+  <pre><code>gh attestation verify powerbrowser-linux-x86_64.tar.xz --repo Deocracy/powerbrowser --bundle &lt;bundle-file&gt;</code></pre>
 
   <h2>Signing status</h2>
   <ul>

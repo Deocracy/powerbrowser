@@ -40,7 +40,7 @@ A number written here that no stage measured is a defect, not a placeholder.
 
 ### Architecture in one paragraph
 
-The release tag `v<ESR>-<revision>` on `DeBIOS-Foundation/powerbrowser` is created
+The release tag `v<ESR>-<revision>` on `Deocracy/powerbrowser` is created
 by `release.yml`'s `sign-publish` job with the `powerbrowser-bot` App token, after
 the `release` approval (DIST-07, Phase 49), and the `release-tags` ruleset refuses
 that tag pattern from every other actor, the owner included (GH-06).
@@ -61,7 +61,7 @@ database (`signmar -d <db> -n powerbrowser-mar -v`, see the verify form in
 `SHA256SUMS`, creates the GitHub Release as a **draft** carrying every asset,
 attests build provenance, emits one `update.xml` per BUILD_TARGET with
 `scripts/build-update-xml.mjs --emit`, commits the descriptor tree to
-`DeBIOS-Foundation/powerbrowser-updates`, and only then publishes. Cloudflare
+`Deocracy/powerbrowser-updates`, and only then publishes. Cloudflare
 Pages serves that descriptor repository at `updates.powerbrowser.org`, where one
 `_redirects` rule maps the eleven-segment path baked into `application.ini` onto
 `<channel>/<BUILD_TARGET>/update.xml`. An installed client reads the update host
@@ -191,17 +191,17 @@ here owns.
 | Stage | Step | Why a human |
 |---|---|---|
 | `prerequisites-and-hardening` | Confirm `git rev-list --count main..origin/main` is 0, `git push origin main`, watch `verify.yml` to success, then push every `v1.*` milestone tag | Push authority; the milestone tags' own tag-triggered runs are red by design on trees predating `fb90e73` |
-| `prerequisites-and-hardening` | Enable 2FA on the owner account; confirm the committer email is listed and **verified**; enable organisation-wide 2FA in `DeBIOS-Foundation` settings | UI-only settings; the organisation PATCH endpoint does not expose the 2FA requirement |
+| `prerequisites-and-hardening` | Enable 2FA on the owner account; confirm the committer email is listed and **verified**; enable organisation-wide 2FA in the hosting organisation settings | UI-only settings; the organisation PATCH endpoint does not expose the 2FA requirement |
 | `prerequisites-and-hardening` | Create and install both GitHub Apps, require org 2FA, add the second owner, store both recovery-code sets offline, run the apply script, and run the runner-group probe and the notification drills (Phase 41 plan 41-04) | App creation, org 2FA and ownership are UI-only; `--yes` writes to the live org and runs only from the owner's terminal |
 | `mar-signing-and-update-integrity` | Confirm `gh auth status` shows the owner and the `release` environment exists | Account |
 | `mar-signing-and-update-integrity` | The MAR key ceremony (below) | Private key custody |
 | `mar-signing-and-update-integrity` | The MAR key ceremony (key store lives on `legion` at `~/.config/powerbrowser-release/mar-key/`; optional `.p12` backup to the offline medium) and one MAR signed with that store's key for the loopback proof | Private key custody |
 | `packaged-product-correctness-linux` | Node provenance: read the version from `nix develop .#theia --command node --version`, fetch `SHASUMS256.txt` with its `SHASUMS256.txt.sig` from the same `nodejs.org/dist/<version>/` directory, import and confirm the Node.js release signing keys (origin: the nodejs/release-keys repository, verified out of band against the keys the installer already trusts), `gpg --verify SHASUMS256.txt`, take the `linux-x64` sha256, pin it, and write the shipped-licences and provenance section of `docs/BUILD.md` | Key trust decision |
-| `linux-release-pipeline-and-update-channel` | Create a fine-grained PAT limited to `DeBIOS-Foundation/powerbrowser` with self-hosted-runner read/write only; write it root-owned mode 0600 to `/var/lib/secrets/github-runner-pat` | Secret custody plus `pkexec` |
+| `linux-release-pipeline-and-update-channel` | Create a fine-grained PAT limited to `Deocracy/powerbrowser` with self-hosted-runner read/write only; write it root-owned mode 0600 to `/var/lib/secrets/github-runner-pat` | Secret custody plus `pkexec` |
 | `linux-release-pipeline-and-update-channel` | Add the `services.github-runners` block to `/etc/nixos/configuration.nix` and apply it | Root on `legion` |
 | `linux-release-pipeline-and-update-channel` | Set fork pull request workflows from outside collaborators to **Require approval for all external contributors**; read back `fork-pr-approval.json` rather than re-applying | Repository settings UI |
 | `linux-release-pipeline-and-update-channel` | Confirm the `release` environment still carries a required reviewer and that the MAR key is an **environment** secret; create no repository-level Actions secret (`repo-controls` asserts that count stays zero) | Read-back of a control the owner owns |
-| `linux-release-pipeline-and-update-channel` | Create the public repository `DeBIOS-Foundation/powerbrowser-updates` with a root `_redirects` and a placeholder no-update descriptor at `default/Linux_x86_64-gcc3/update.xml`; create the Cloudflare Pages project (empty build command, output `/`); add `updates.powerbrowser.org` as a custom domain | Cloudflare account and DNS |
+| `linux-release-pipeline-and-update-channel` | Create the public repository `Deocracy/powerbrowser-updates` with a root `_redirects` and a placeholder no-update descriptor at `default/Linux_x86_64-gcc3/update.xml`; create the Cloudflare Pages project (empty build command, output `/`); add `updates.powerbrowser.org` as a custom domain | Cloudflare account and DNS |
 | `linux-release-pipeline-and-update-channel` | Probe the eleven-segment path live with real client segment shapes, then switch to a minimal `_worker.js` if the placeholder rule does not match, and record which mechanism shipped | Live infrastructure; the branch cannot be decided from documentation |
 | `linux-release-pipeline-and-update-channel` | Create a fine-grained PAT with Contents write on `powerbrowser-updates` only; store it as a `release` environment secret | Secret custody |
 | `linux-release-pipeline-and-update-channel` | Fill the four website routes (`/`, `/download`, `/privacy`, `/legal`, each a real file, no fragment redirect); with the `website-publish-ready` row green, deploy `powerbrowser.org` | Site repository and Pages |
@@ -269,7 +269,7 @@ Then add to `/etc/nixos/configuration.nix`:
 ```nix
 services.github-runners.powerbrowser-release = {
   enable = true;
-  url = "https://github.com/DeBIOS-Foundation/powerbrowser";
+  url = "https://github.com/Deocracy/powerbrowser";
   tokenFile = "/var/lib/secrets/github-runner-pat";
   tokenType = "access";
   ephemeral = true;
@@ -395,7 +395,7 @@ is part of the deferred release pipeline row.
 
 Two Pages projects, both on the Free plan.
 
-**`updates.powerbrowser.org`** serves `DeBIOS-Foundation/powerbrowser-updates` with
+**`updates.powerbrowser.org`** serves `Deocracy/powerbrowser-updates` with
 an empty build command and output `/`. Its tree is
 `<channel>/<BUILD_TARGET>/update.xml`, with a placeholder at
 `default/Linux_x86_64-gcc3/update.xml` whose body is the two-line no-update document.
@@ -652,7 +652,7 @@ is `never`. Milestone tags `v1.x` never release and never match the pattern.
 fast run:
 
 ```
-gh run watch --repo DeBIOS-Foundation/powerbrowser --exit-status "$(gh run list --repo DeBIOS-Foundation/powerbrowser --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch --repo Deocracy/powerbrowser --exit-status "$(gh run list --repo Deocracy/powerbrowser --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 
 Look at: that the job took the `[self-hosted, legion]` runner, that it emitted
@@ -667,13 +667,13 @@ the descriptor commit that the job will push to `powerbrowser-updates`.
 **6. Confirm the Release published and the descriptor landed.**
 
 ```
-gh release view "$TAG" --repo DeBIOS-Foundation/powerbrowser --json isDraft,assets
+gh release view "$TAG" --repo Deocracy/powerbrowser --json isDraft,assets
 ```
 
 Look for `isDraft false` and, in the asset list, the versioned and stable pair for
 each target plus `SHA256SUMS`, `LICENSING.md`, `THIRD-PARTY-NOTICES.txt`, the MAR
 and the source tarball. Then confirm the descriptor commit exists in
-`DeBIOS-Foundation/powerbrowser-updates` and that the live descriptor now carries a
+`Deocracy/powerbrowser-updates` and that the live descriptor now carries a
 complete patch rather than the empty `updates` element.
 
 **7. The liveness row.** `release.yml`'s final job `channel-live` runs
@@ -989,7 +989,7 @@ failing. Check the unit and the registration:
 
 ```
 systemctl status github-runner-powerbrowser-release.service
-gh api repos/DeBIOS-Foundation/powerbrowser/actions/runners --jq '.runners[] | {name, status, labels: [.labels[].name]}'
+gh api repos/Deocracy/powerbrowser/actions/runners --jq '.runners[] | {name, status, labels: [.labels[].name]}'
 ```
 
 Because the runner is ephemeral it de-registers after each job and re-registers on

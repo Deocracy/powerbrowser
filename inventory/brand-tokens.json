@@ -874,6 +874,34 @@
         "powerbrowser/branding/release/pref/firefox-branding.js"
       ],
       "reason": "COUNT MOVED 75 -> 77 (Phase 46, 46-04 Task 2): +1 per variant -- the identity.fxaccounts.enabled=false line joins FIREFOX_BRANDING_BASE_LINES; the key is upstream's (browser/app/profile/firefox.js:2311), only the false value is ours. Every Gecko pref key under branding/*/pref/firefox-branding.js is upstream's, not ours -- and none of them contains a brand token, so the only thing the rename touches in these two files is comment text naming the product or a repo path. This row's count is the assertion that the pref statements themselves came through untouched; verify-endpoints.sh layer 1 asserts each key's value against endpoint-allowlist.json on the installed, unpreprocessed copy. COUNT MOVED 73 -> 75 (plan 40-06, UPD-25): +1 per variant -- the app.update.langpack.enabled=false line joins FIREFOX_BRANDING_BASE_LINES; the key is upstream's (browser/app/profile/firefox.js:175), only the false value is ours. COUNT MOVED 69 -> 73 (plan 40-05, UPD-13): +2 per variant -- the About dialog's app.releaseNotesURL and app.releaseNotesURL.aboutDialog lines join the two existing update-wizard URL lines under the RELEASE_LINK_ANCHOR splice; all four keys are upstream's, only their [urls]-derived values are ours. COUNT MOVED 67 -> 69 (plan 04-04): +2 from the TEL-03 manifest-driven breakpad.reportURL line, one per variant -- the pref KEY is upstream's (browser/app/profile/firefox.js:1551), only its blanked value is ours."
+    },
+    {
+      "token": "Deocracy/powerbrowser",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "Deocracy/powerbrowser",
+      "expected_count": 27,
+      "expected_files": [
+        ".github/ISSUE_TEMPLATE/config.yml",
+        "SUPPORT.md",
+        "configuration.toml",
+        "docs/RELEASING.md",
+        "powerbrowser/branding/dev/pref/firefox-branding.js",
+        "powerbrowser/branding/release/pref/firefox-branding.js",
+        "website-staging/download.html",
+        "website-staging/legal.html"
+      ],
+      "only_in": [
+        ".github/ISSUE_TEMPLATE/config.yml",
+        "SUPPORT.md",
+        "configuration.toml",
+        "docs/RELEASING.md",
+        "powerbrowser/branding/dev/pref/firefox-branding.js",
+        "powerbrowser/branding/release/pref/firefox-branding.js",
+        "website-staging/download.html",
+        "website-staging/legal.html"
+      ],
+      "reason": "Owner ruling 2026-10-29: the release home (GitHub repository, Releases, Discussions, security policy and attestation subject) is hosted at github.com/Deocracy/powerbrowser, which already meets SEC-06 (org 2FA required, three owners). Class coincidental, not frozen: it contains the residue probe, and coincidental rows are excluded from the --extra-root claim set, so it cannot swallow a real brand token elsewhere. This is the hosting slug only, set by configuration.toml [urls] release_notes and the docs and pages that name the repository; it is not a product brand. The vendor, copyright holder and trademark stay DeBIOS Foundation (same ruling). Any other occurrence of the vendor token stays a failure."
     }
   ]
 }

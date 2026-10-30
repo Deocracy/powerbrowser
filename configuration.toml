@@ -90,7 +90,7 @@ support_url = "https://powerbrowser.org"
 # unattended (endpoint-allowlist disposition user-initiated).
 [urls]
 update = "https://updates.powerbrowser.org/update.xml"
-release_notes = "https://github.com/DeBIOS-Foundation/powerbrowser/releases"
+release_notes = "https://github.com/Deocracy/powerbrowser/releases"
 homepage = "https://powerbrowser.org"
 
 # Product telemetry (TEL-01/TEL-02). level is one of off, crash, error, all

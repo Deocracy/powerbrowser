@@ -19,10 +19,10 @@ pref("startup.homepage_welcome_url", "");
 pref("startup.homepage_welcome_url.additional", "");
 
 // UPD-13: About-dialog release-notes and manual-update links, derived from configuration.toml [urls].
-pref("app.releaseNotesURL", "https://github.com/DeBIOS-Foundation/powerbrowser/releases");
-pref("app.releaseNotesURL.aboutDialog", "https://github.com/DeBIOS-Foundation/powerbrowser/releases");
+pref("app.releaseNotesURL", "https://github.com/Deocracy/powerbrowser/releases");
+pref("app.releaseNotesURL.aboutDialog", "https://github.com/Deocracy/powerbrowser/releases");
 pref("app.update.url.manual", "https://powerbrowser.org");
-pref("app.update.url.details", "https://github.com/DeBIOS-Foundation/powerbrowser/releases");
+pref("app.update.url.details", "https://github.com/Deocracy/powerbrowser/releases");
 
 // UPD-25: language packs are not updated with the app; release scope is en-US only (PKG-09). Upstream default true at browser/app/profile/firefox.js:175.
 pref("app.update.langpack.enabled", false);
