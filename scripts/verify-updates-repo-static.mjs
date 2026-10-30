@@ -18,6 +18,8 @@
 //  4. Fail closed. A getter that throws, a malformed result, a non-2xx response,
 //     unparseable JSON, a truncated listing, a non-array tree or an empty tree is
 //     a FAIL naming the tree endpoint, never a SKIP and never a PASS.
+//  5. Presence. The same tree must hold the _redirects rule and at least one
+//     */update.xml descriptor. A tree with no compute that serves nothing is a FAIL.
 //
 // Usage:
 //   node scripts/verify-updates-repo-static.mjs
@@ -41,6 +43,8 @@ const UPDATES_SUFFIX = '-updates';
 const BRANCH = 'main';
 const FUNCTIONS_DIR = 'functions';
 const ROOT_WORKER = '_worker.js';
+const REDIRECTS = '_redirects';
+const DESCRIPTOR_SUFFIX = '/update.xml'; // a */update.xml: at least one directory level above it
 const NEXT_AUTH = 'Next step: run gh auth status (the row needs the repo and read:org scopes); an absent or empty repo reads the same way until the static tree is pushed.';
 
 // --- owner and repo ---------------------------------------------------------
@@ -139,6 +143,15 @@ export function runChecks(root, overrides = {}) {
             failures.push(`${entry.path} is ${reason} in ${slug.owner}/${slug.updatesRepo}. Any compute on this host silently disables the _redirects 200 rule. Next step: remove the file from the updates repo; the tree must hold static files only.`);
         }
     }
+    // Presence, read from the same listing: a rule-less or descriptor-less tree serves nothing.
+    const paths = body.tree.map(entry => entry?.path).filter(p => typeof p === 'string');
+    const NEXT_PUSH = `Next step: push the staged updates tree (updates-staging/) to ${slug.owner}/${slug.updatesRepo} ${BRANCH}.`;
+    if (!paths.includes(REDIRECTS)) {
+        failures.push(`GET ${endpoint} lists no ${REDIRECTS} in ${slug.owner}/${slug.updatesRepo}, so the 200 rule that routes the update channel is absent. ${NEXT_PUSH}`);
+    }
+    if (!paths.some(p => p.endsWith(DESCRIPTOR_SUFFIX))) {
+        failures.push(`GET ${endpoint} lists no */update.xml descriptor in ${slug.owner}/${slug.updatesRepo}, so the channel offers no update document. ${NEXT_PUSH}`);
+    }
     return { failures, compared: body.tree.length, slug, endpoint };
 }
 
@@ -167,7 +180,7 @@ function main() {
         result.failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${result.compared} tree path(s) of ${target} hold no functions directory and no root-level worker file`);
+    console.log(`${NAME}: PASS -- ${result.compared} tree path(s) of ${target} hold no functions directory and no root-level worker file, and carry ${REDIRECTS} and a */update.xml descriptor`);
     return 0;
 }
 
@@ -212,6 +225,8 @@ function selfTest() {
         ['an empty listing', serveTree([]), endpoint],
         ['a getter that throws', { get: () => { throw new Error('planted getter fault'); } }, endpoint],
         ['a malformed getter result', { get: () => undefined }, endpoint],
+        ['a tree with no _redirects rule', serveTree(CLEAN.filter(p => p !== REDIRECTS)), REDIRECTS],
+        ['a tree with no */update.xml descriptor', serveTree(CLEAN.filter(p => !p.endsWith(DESCRIPTOR_SUFFIX))), DESCRIPTOR_SUFFIX],
     ];
     for (const [name, serve, must] of plants) {
         const { failures } = runChecks(REPO_ROOT, { slug, ...serve });

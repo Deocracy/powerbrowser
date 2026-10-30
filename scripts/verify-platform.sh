@@ -4747,7 +4747,8 @@ run_own_checks() {
     # NEW (Phase 47, DIST-03): updates-repo-static-self-test plants, in memory only, a functions
     # hook file, a root-level _worker.js, a nested functions path, a truncated listing, a non-array
     # tree, an empty listing, a throwing getter, a malformed result, a non-github release_notes host
-    # and an unknown argument, each red naming its path, endpoint or key over a clean static tree
+    # an unknown argument, a tree with no _redirects rule and a tree with no */update.xml descriptor
+    # (IN-01), each red naming its path, endpoint or key over a clean static tree
     # that must stay green first. Honestly --quick: in-memory, no network and no gh; it writes nothing.
     # The live read-back is the full-tier updates-repo-static row.
     "updates-repo-static-self-test|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs --self-test"
