@@ -4762,6 +4762,18 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
+    # workflow issue-label writer names must be declared in .github/settings/labels.json, and
+    # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
+    # --quick: file reads and YAML parsing (js-yaml from theia/) only; no build, browser,
+    # display or network. The live label set is the full-tier repo-controls row.
+    "labels|node $REPO_ROOT/scripts/verify-labels.mjs"
+    # labels-self-test plants, in memory, an undeclared label in a form and in a workflow
+    # snippet, a case-variant label, an expression label, a malformed labels.json, a case-variant
+    # duplicate, zero forms, an extra form, a missing form, and config.yml and form-field faults;
+    # each red naming the file and label. Green controls: a runner name in runs-on, and a quoted
+    # label with a space. It writes nothing.
+    "labels-self-test|node $REPO_ROOT/scripts/verify-labels.mjs --self-test"
     # NEW (Phase 46, UPD-19): the chrome/frontend shell-request kind contract.
     # Derives the accepted kinds from handleShellMessage cases plus
     # SHELL_MESSAGE_KINDS and the dispatched kinds from the Theia shell-state
