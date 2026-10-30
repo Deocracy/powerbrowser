@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then thirty-five planted faults
+ * --self-test: the clean tree must be green; then forty-one planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -468,6 +468,17 @@ function cases(m, srcs, mm) {
             }
             return sameSet([...m.SECURITY_STATES], arms)
                 ? null : { table: sorted([...m.SECURITY_STATES]), decode: sorted(arms) };
+        }],
+        ['a user-overridden certificate stays out of the secure arm (CR-01)', () => {
+            // The bit is read from upstream's IDL, so the name is not a hand-kept value.
+            const bit = deriveWebProgressStates(srcs[UPSTREAM_IDL_REL])?.STATE_CERT_USER_OVERRIDDEN;
+            if (!bit) {
+                return `no STATE_CERT_USER_OVERRIDDEN in ${UPSTREAM_IDL_REL} -- broken instrument`;
+            }
+            const code = stripComments(apiSrc);
+            const read = /const overridden = !!\(state & wpl\.STATE_CERT_USER_OVERRIDDEN\);/.test(code);
+            const arm = /if \(isSecure && !isBroken && !isInsecure && !overridden\) \{\s*securityState = "secure";/.test(code);
+            return read && arm ? null : `the secure arm does not exclude STATE_CERT_USER_OVERRIDDEN (${bit}); upstream browser-siteIdentity.js:827,878,939-946`;
         }],
         ['overlay mask carries NOTIFY_SECURITY and NOTIFY_CONTENT_BLOCKING', () => {
             const mask = deriveMaskFlags(apiSrc);
@@ -971,6 +982,13 @@ const PLANTS = [
         from: "    'local',\n",
         to: '',
         expect: 'SECURITY_STATES equal the boundary decode arms',
+    },
+    {
+        name: 'the secure arm stops excluding a user-overridden certificate',
+        rel: API_REL,
+        from: 'if (isSecure && !isBroken && !isInsecure && !overridden) {',
+        to: 'if (isSecure && !isBroken && !isInsecure) {',
+        expect: 'a user-overridden certificate stays out of the secure arm (CR-01)',
     },
     {
         name: 'one mask flag removed',

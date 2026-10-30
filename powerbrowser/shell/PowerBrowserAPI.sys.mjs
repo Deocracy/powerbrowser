@@ -3520,9 +3520,15 @@ export const PowerBrowserAPI = Object.freeze({
       const mixedActiveLoaded = !!(state & wpl.STATE_LOADED_MIXED_ACTIVE_CONTENT);
       const mixedDisplayBlocked = !!(state & wpl.STATE_BLOCKED_MIXED_DISPLAY_CONTENT);
       const mixedActiveBlocked = !!(state & wpl.STATE_BLOCKED_MIXED_ACTIVE_CONTENT);
-      if (isSecure && !isBroken && !isInsecure) {
+      // CR-01: a certificate the user accepted past an error is STATE_IS_SECURE
+      // with STATE_CERT_USER_OVERRIDDEN (nsNSSCallbacks.cpp:1211-1235). Upstream
+      // keeps it out of the CA-verified path (browser-siteIdentity.js:827, 878,
+      // 939-946). It takes the warning bucket here, so no "Connection secure" text.
+      // shortcut: no distinct "verified by you" state (upstream tooltip, :939-946), warning copy instead; upgrade with a new SECURITY_STATES entry.
+      const overridden = !!(state & wpl.STATE_CERT_USER_OVERRIDDEN);
+      if (isSecure && !isBroken && !isInsecure && !overridden) {
         securityState = "secure";
-      } else if (isBroken || (isSecure && isInsecure)) {
+      } else if (isBroken || (isSecure && (isInsecure || overridden))) {
         securityState = (mixedPassiveLoaded && !mixedActiveLoaded && !mixedDisplayBlocked && !mixedActiveBlocked) ? "mixed-passive" : "broken";
       } else if (PowerBrowserAPI.webTabIsLocalOrigin(browser)) {
         securityState = "local";

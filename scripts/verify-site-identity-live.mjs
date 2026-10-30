@@ -29,6 +29,9 @@
  * Both sessions assert the pushed `securityState` (via the tab's last
  * state push) AND the DOM per case -- never one without the other.
  *
+ * Session A2 -- `identity-override` (own TLS browser, fixture CA NOT trusted, one tab):
+ *   the override is added in the probe profile only; the page pushes `broken`,
+ *   never `secure` (CR-01), and the pill renders the warning icon.
  * Session C -- `site-panel` (own TLS browser, one tab): the panel's connection
  * and certificate block, six tri-state rows in table order, camera and
  * autoplay-media round trips with persistence across a reopen, the identity
@@ -400,6 +403,51 @@ const clickRow = (app, id) => app.evaluate(`(() => { const r = document.querySel
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /** Polls `read` until `pred` holds or the timeout ends; returns the last read either way. */
+/**
+ * CR-01 (upstream browser-siteIdentity.js:827, 878, 939-946): a page the user
+ * loaded past a certificate error is STATE_IS_SECURE with
+ * STATE_CERT_USER_OVERRIDDEN, and must not push `secure`. This session does not
+ * trust the fixture CA (UNTRUSTED_TLS), so the leaf is an untrusted certificate;
+ * the override is added in the probe profile only, through nsICertOverrideService.
+ */
+async function identityOverride(ctx) {
+    const { app, pages, fail } = ctx;
+    const pemPath = join(REPO_ROOT, 'scripts/fixtures/tls/pb-fixture.pem');
+    const leafB64 = readFileSync(pemPath, 'utf8').split('-----END CERTIFICATE-----')[0]
+        .split('-----BEGIN CERTIFICATE-----')[1].replace(/\s+/g, '');
+    const url = new URL(pages.tlsUrl('/secure'));
+    const added = await inChrome(app, `const C = globalThis.Cc ?? Components.classes;
+        const I = globalThis.Ci ?? Components.interfaces;
+        const cert = C['@mozilla.org/security/x509certdb;1'].getService(I.nsIX509CertDB).constructX509FromBase64(${JSON.stringify(leafB64)});
+        C['@mozilla.org/security/certoverride;1'].getService(I.nsICertOverrideService)
+            .rememberValidityOverride(${JSON.stringify(url.hostname)}, ${Number(url.port)}, {}, cert, false);
+        return true;`);
+    if (added !== true) {
+        return fail(`${BROKEN} the certificate override could not be added in the probe profile`);
+    }
+    const id = await openWebTab(app, pages.tlsUrl('/secure'));
+    const push = await waitForPush(app, p => p && p.kind === 'state' && p.tabId === id && String(p.url ?? '').endsWith('/secure') && p.loading === false);
+    if (push < 0) {
+        return fail(`${BROKEN} no loaded state push arrived for the overridden /secure page`);
+    }
+    const pushed = (await pushes(app))[push];
+    if (pushed.securityState === 'secure') {
+        fail('a user-overridden certificate pushed "secure" (CR-01: the lock would say the connection is verified)');
+    } else if (pushed.securityState !== 'broken') {
+        fail(`the overridden page pushed ${JSON.stringify(pushed.securityState)}, want "broken" (the warning bucket)`);
+    }
+    if (await makeCurrent(app, id) !== true) {
+        return fail(`${BROKEN} the overridden web tab could not be made current`);
+    }
+    const box = await readIdentity(app);
+    if (!box.present) {
+        return fail('no .pb-identity element with the overridden web tab current');
+    }
+    if (!String(box.icon ?? '').split(' ').includes('codicon-warning')) {
+        fail(`the overridden pill must render the warning icon; saw icon ${JSON.stringify(box.icon)}`);
+    }
+}
+
 async function waitFor(read, pred, timeoutMs = 8000) {
     const end = Date.now() + timeoutMs;
     let last = await read();
@@ -1285,7 +1333,10 @@ async function quitRow(ctx) {
     await afterQuit(ctx, `the ${quit.label} row`);
 }
 
-const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
+/** Scenarios whose TLS session serves the fixture leaf without trusting its CA. */
+const UNTRUSTED_TLS = ['identity-override'];
+
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-override': identityOverride, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
 const NOT_LANDED = [];
@@ -1332,7 +1383,7 @@ async function runSession(names, plant = '', tls = false) {
                 results.push(result);
             }
             return results;
-        }, { extraPrefs: sessionPrefs(names, tls), trustFixtureCA: tls });
+        }, { extraPrefs: sessionPrefs(names, tls), trustFixtureCA: tls && !names.some(n => UNTRUSTED_TLS.includes(n)) });
     } finally {
         await pages.close();
         for (const cleanup of shared.cleanups) {
@@ -1450,7 +1501,7 @@ async function main(args) {
         // the site-panel session (its own TLS browser), then the local session.
         const results = [];
         // quit-key and quit-row each end their own launch, so each runs in a session of its own.
-        for (const [name, tls] of [['identity-tls', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false]]) {
+        for (const [name, tls] of [['identity-tls', true], ['identity-override', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false]]) {
             if (names.includes(name)) {
                 results.push(...await runSession([name], '', tls));
             }
