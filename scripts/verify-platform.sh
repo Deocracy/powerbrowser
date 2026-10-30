@@ -4783,6 +4783,16 @@ run_own_checks() {
     # action, a row with a missing cell, a missing table header, a duplicate item and a table with
     # no rows, each red naming the row; a Month YYYY deadline stays green. It writes nothing.
     "renewals-self-test|node $REPO_ROOT/scripts/verify-renewals.mjs --self-test"
+    # NEW (Phase 42, GH-14): the community files. The set is derived from the tree (SECURITY.md,
+    # CONTRIBUTING.md and CODE_OF_CONDUCT.md at the root when present, .github/ISSUE_TEMPLATE/ and
+    # org-github/) and compared with the committed list in the script header, so a deleted required
+    # file and an unreviewed added file both go red. Each derived file is also scanned for internal
+    # identifiers in visitor text, with the shape rule shell-error-copy-no-internals uses. Honestly
+    # --quick: file reads only; no network, build, browser or display.
+    "community-files|node $REPO_ROOT/scripts/verify-community-files.mjs"
+    # community-files-self-test deletes one required file and plants one identifier and one unlisted
+    # file, in memory, and requires each to go red naming the file. It writes nothing.
+    "community-files-self-test|node $REPO_ROOT/scripts/verify-community-files.mjs --self-test"
     # NEW (Phase 46, UPD-19): the chrome/frontend shell-request kind contract.
     # Derives the accepted kinds from handleShellMessage cases plus
     # SHELL_MESSAGE_KINDS and the dispatched kinds from the Theia shell-state
