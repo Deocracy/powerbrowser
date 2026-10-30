@@ -50,9 +50,10 @@
  *
  * Session F -- `app-menu` (one served page, the stock windows): the hamburger opens the
  * per-request menu in Coding, Browsing and Organising; the rows read in the tree's
- * order with the Coming soon caption on the unwired Quit row; Settings, Passwords,
- * Add-ons and Help each open their stock page in one stock window, one tab on the
- * page, with the web tab unchanged; the disabled Quit row does nothing.
+ * order, Quit enabled (plan 05); Settings, Passwords, Add-ons and Help each open
+ * their stock page in one stock window, one tab on the page, with the web tab unchanged.
+ * Quit's own click and Ctrl+Q are the quit-key and quit-row scenarios (plan 05), each
+ * alone in its launch because a quit ends the application.
  * Plant `menu-dead-stock` makes openStockPage resolve without opening (red
  * "did not open its stock page").
  *
@@ -1045,9 +1046,10 @@ async function closeStockWindows(app) {
 }
 
 /**
- * Plan 04 (MENU-01/02): the hamburger in each mode, the rows and separators against the tree,
- * the four stock rows (one stock window, one tab on the page, the web tab unchanged), and the
- * disabled Quit row. Plant `menu-dead-stock` makes the store call resolve without opening.
+ * Plan 04 (MENU-01/02), plan 05 (MENU-04): the hamburger in each mode, the rows and separators
+ * against the tree, the four stock rows (one stock window, one tab on the page, the web tab
+ * unchanged), and the Quit row enabled. Plant `menu-dead-stock` makes the store call resolve
+ * without opening.
  */
 async function appMenu(ctx) {
     const { app, pages, plant, fail, note } = ctx;
@@ -1133,30 +1135,19 @@ async function appMenu(ctx) {
             fail(`the ${label} row navigated the web tab (${JSON.stringify(after)}, was ${JSON.stringify(pageUrl)})`);
         }
     }
-    // 3. The unwired row is disabled, and a click on it opens or closes nothing.
-    const quit = want.rows.find(row => row.disabled);
+    // 3. Quit is wired (plan 05): its row reads enabled. A click on it quits the application, so the
+    //    click itself is checked alone in its own launch (quit-row); this scenario only reads the row.
+    const quit = want.rows.find(row => row.id === 'quit');
     if (!quit) {
-        return fail(`${BROKEN} the menu has no unwired row, so the disabled-row check proves nothing`);
-    }
-    if (await closeStockWindows(app) !== true) {
-        return fail(`${BROKEN} the stock windows could not be closed before the disabled row`);
+        return fail(`${BROKEN} the menu has no Quit row`);
     }
     if (await hamburgerOpen(app) !== true) {
-        return fail(`${BROKEN} the application menu button is not in the chrome bar (disabled row)`);
+        return fail(`${BROKEN} the application menu button is not in the chrome bar (Quit row)`);
     }
     const quitMenu = await waitFor(() => readAppMenu(app), r => r.present && r.rows.length > 0, 6000);
     const quitRow = quitMenu.rows.find(row => row.label === quit.label);
-    if (!quitRow || quitRow.disabled !== true) {
-        fail(`the ${quit.label} row is not read as disabled (${JSON.stringify(quitRow ?? null)})`);
-    }
-    await clickMenuRow(app, quit.label);
-    await sleep(800);
-    if (await probe(app, 'return true') !== true) {
-        fail('the shell did not answer after a click on the disabled row');
-    }
-    const afterClick = await stockWindows(app);
-    if (afterClick.length !== 0) {
-        fail(`the disabled ${quit.label} row opened a stock window (${afterClick.length})`);
+    if (!quitRow || quitRow.disabled !== false) {
+        fail(`the ${quit.label} row is not read as enabled (${JSON.stringify(quitRow ?? null)})`);
     }
     await closeMenu(app);
 }

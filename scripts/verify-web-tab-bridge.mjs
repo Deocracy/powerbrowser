@@ -97,8 +97,13 @@ const KIND_CLASSES = new Map([
  * searchSuggestions (29-06) is the first network kind and removeHistoryEntry
  * (29-09) the first privileged one. The first entry of each was a deliberate
  * edit here and in powerbrowser/INTERNAL-APIS.md.
+ * `lifecycle` (Phase 31 plan 05, D-31-13) = a chrome-lifetime transition: it
+ * ends the application, never touches user data, and is never relayed. Its
+ * only senders are the chrome bar widget's own row handler and its client
+ * method, and no command or keybinding may name it (the Ctrl+Q key is a
+ * chrome <key> row, not a store kind). quitRequest is the first entry.
  */
-const STORE_KIND_CLASS_NAMES = ['read', 'store-write', 'network', 'privileged'];
+const STORE_KIND_CLASS_NAMES = ['read', 'store-write', 'network', 'privileged', 'lifecycle'];
 const STORE_KIND_CLASSES = new Map([
     ['readHistoryEntry', 'read'],
     ['readBookmarkByUrl', 'read'],
@@ -119,6 +124,8 @@ const STORE_KIND_CLASSES = new Map([
     // Places row, reads no clipboard and sends nothing off the machine, so it is a store-write
     // (the class savePageCopy has), never privileged and never relayed.
     ['openStockPage', 'store-write'],
+    // Phase 31 plan 05 (MENU-04, D-31-13): the Quit row. The one existing quit path, reached only from the widget's row.
+    ['quitRequest', 'lifecycle'],
 ]);
 /**
  * Phase 31 plan 04: store kinds the app menu sends straight from the Theia window to chrome. Each
@@ -129,6 +136,8 @@ const MENU_ONLY_STORE_KINDS = ['openStockPage'];
 const STORE_PROTOCOL = `${TAB_URIS_DIR}/tab-store-access-protocol.ts`;
 const STORE_CLIENT = `${TAB_URIS_DIR}/chrome-store-client.ts`;
 const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/address-bar/address-bar.tsx`;
+/** Phase 31 plan 05: the chrome bar widget, which sends the Quit row's `quitRequest` (the lifecycle caller). */
+const CHROME_BAR_WIDGET_FILE = `${CHROME_BAR_DIR}/chrome-bar-widget.tsx`;
 
 /** Stock `HttpOpenHandler`'s priority; the web-tab handler must exceed it. */
 const STOCK_HTTP_HANDLER_PRIORITY = 500;
@@ -538,27 +547,29 @@ function checkStoreKinds(src, storeClasses) {
             }
         }
         for (const [kind, kindClass] of storeClasses) {
-            if ((kindClass === 'network' || kindClass === 'privileged') && relayed.has(kind)) {
+            if ((kindClass === 'network' || kindClass === 'privileged' || kindClass === 'lifecycle') && relayed.has(kind)) {
                 failures.push(`store-kinds: the ${kindClass} kind ${kind} is relayed from the backend (TAB_STORE_RELAY_KINDS)`);
             }
         }
     }
 
-    const callers = new Set([STORE_CLIENT, CHROME_BAR_WIDGET]);
     for (const [kind, kindClass] of storeClasses) {
-        if (kindClass !== 'privileged') {
+        if (kindClass !== 'privileged' && kindClass !== 'lifecycle') {
             continue;
         }
+        // A privileged kind is sent from the address pill; a lifecycle kind from the chrome bar widget (its Quit row).
+        const home = kindClass === 'lifecycle' ? CHROME_BAR_WIDGET_FILE : CHROME_BAR_WIDGET;
+        const callers = new Set([STORE_CLIENT, home]);
         if (!new RegExp(`^\\s+(?:async\\s+)?${kind}\\(`, 'm').test(src[STORE_CLIENT] ?? '')) {
-            failures.push(`store-kinds: the privileged kind ${kind} has no same-named ChromeStoreClient method ${kind}( in ${STORE_CLIENT}`);
+            failures.push(`store-kinds: the ${kindClass} kind ${kind} has no same-named ChromeStoreClient method ${kind}( in ${STORE_CLIENT}`);
         }
         const named = new RegExp(`\\b${kind}\\b`);
         for (const [file, text] of Object.entries(src)) {
             if (!callers.has(file) && text.includes(`.${kind}(`)) {
-                failures.push(`store-kinds: the privileged kind ${kind} is called outside ${CHROME_BAR_WIDGET}, in ${file}`);
+                failures.push(`store-kinds: the ${kindClass} kind ${kind} is called outside ${home}, in ${file}`);
             }
             if ((text.includes('registerCommand(') || text.includes('registerKeybinding(')) && named.test(text)) {
-                failures.push(`store-kinds: the privileged kind ${kind} is named by a command or keybinding file, ${file}`);
+                failures.push(`store-kinds: the ${kindClass} kind ${kind} is named by a command or keybinding file, ${file}`);
             }
         }
     }
@@ -653,6 +664,32 @@ function selfTest() {
             sources: { ...clean, [API]: withStoreKind('plantedPrivileged'), [KEYBINDINGS]: clean[KEYBINDINGS] + "\nconst plantedRow = 'plantedPrivileged';\n" },
             storeClasses: classedAs('plantedPrivileged', 'privileged'),
             expect: `the privileged kind plantedPrivileged is named by a command or keybinding file, ${KEYBINDINGS}`,
+        },
+        {
+            name: 'planted unclassified quitRequest',
+            sources: clean,
+            storeClasses: new Map([...STORE_KIND_CLASSES].filter(([kind]) => kind !== 'quitRequest')),
+            expect: 'store kinds with no STORE_KIND_CLASSES entry (classify each under the privileged-kind rule): quitRequest',
+        },
+        {
+            name: 'planted quitRequest in the backend relay',
+            sources: { ...clean, [STORE_PROTOCOL]: relaying('quitRequest') },
+            expect: 'the lifecycle kind quitRequest is relayed from the backend (TAB_STORE_RELAY_KINDS)',
+        },
+        {
+            name: 'planted quitRequest without its client method',
+            sources: { ...clean, [STORE_CLIENT]: clean[STORE_CLIENT].replace('async quitRequest(', 'async quitRequestGone(') },
+            expect: 'the lifecycle kind quitRequest has no same-named ChromeStoreClient method quitRequest(',
+        },
+        {
+            name: 'planted lifecycle call from chrome-bar-commands.ts',
+            sources: { ...clean, [COMMANDS]: clean[COMMANDS] + '\nvoid this.store.quitRequest();\n' },
+            expect: `the lifecycle kind quitRequest is called outside ${CHROME_BAR_WIDGET_FILE}, in ${COMMANDS}`,
+        },
+        {
+            name: 'planted lifecycle kind named in chrome-bar-keybindings.ts',
+            sources: { ...clean, [KEYBINDINGS]: clean[KEYBINDINGS] + "\nconst plantedRow = 'quitRequest';\n" },
+            expect: `the lifecycle kind quitRequest is named by a command or keybinding file, ${KEYBINDINGS}`,
         },
         {
             name: 'planted network kind in the backend relay',

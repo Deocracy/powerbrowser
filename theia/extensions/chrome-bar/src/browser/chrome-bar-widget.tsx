@@ -449,8 +449,24 @@ export class ChromeBarWidget extends ReactWidget {
             void this.runCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)();
             return;
         }
+        if (row.menuId === 'quit') {
+            void this.quitApplicationRow();
+            return;
+        }
         if (row.stockPage) {
             void this.openStockPageRow(row.stockPage);
+        }
+    }
+
+    /**
+     * Phase 31 plan 05 (MENU-04, D-31-13): the Quit row sends the quitRequest store kind; chrome calls the one
+     * quit path. The Theia side holds no quit implementation. A cancelled quit is an answer, not a failure.
+     */
+    protected async quitApplicationRow(): Promise<void> {
+        try {
+            await this.store.quitRequest();
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] quitting failed:', error instanceof Error ? error.name : typeof error);
         }
     }
 

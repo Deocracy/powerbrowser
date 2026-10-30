@@ -4029,6 +4029,7 @@ const STORE_REQUEST_KINDS = new Set([
   "removeHistoryEntry",
   "readClipboardText",
   "openStockPage",
+  "quitRequest",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -4132,6 +4133,15 @@ async function handleStoreRequest(data, actorRef) {
       // openStockPageFromMenu, never sent by the frontend.
       case "openStockPage": {
         return { ok: true, kind, where: await openStockPageFromMenu(data.page) };
+      }
+      // Phase 31 plan 05 (MENU-04, D-31-13): the menu's Quit row. No argument is read:
+      // the one existing quit path decides. A quit-requested observer may cancel it
+      // (a page's leave prompt), which is a reply, not an error.
+      case "quitRequest": {
+        if (!PowerBrowserAPI.quitApplication()) {
+          return { ok: false, kind, reason: "cancelled" };
+        }
+        return { ok: true, kind, where: "applied" };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };

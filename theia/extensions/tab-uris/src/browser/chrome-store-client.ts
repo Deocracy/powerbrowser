@@ -215,6 +215,22 @@ export class ChromeStoreClient {
         return String(reply.where);
     }
 
+    /**
+     * Phase 31 plan 05 (MENU-04, D-31-13): quits the application through chrome's one quit path. Resolves
+     * 'applied', or 'cancelled' when a quit-requested observer declined (a page's leave prompt): an answer, not
+     * an error. A lifecycle kind, sent only from the chrome bar widget's Quit row handler.
+     */
+    async quitRequest(): Promise<string> {
+        const reply = await this.request({ kind: 'quitRequest' });
+        if (reply.ok) {
+            return String(reply.where);
+        }
+        if (reply.reason === 'cancelled') {
+            return 'cancelled';
+        }
+        throw new Error(reply.message ?? `quitRequest failed (${reply.reason ?? 'store'})`);
+    }
+
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
     queryTabsWithPlaces(query: TabPlacesQuery = {}): Promise<TabPlacesRow[]> {
         return this.field<TabPlacesRow[]>({ kind: 'queryTabsWithPlaces', ...query }, 'rows');

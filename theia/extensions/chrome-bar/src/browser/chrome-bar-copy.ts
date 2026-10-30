@@ -125,7 +125,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     menuPasswords: 'Passwords',
     menuAddons: 'Add-ons',
     menuHelp: 'Help',
-    menuQuit: (subject: string) => `Quit ${subject}`,
+    // Phase 31 plan 05: a text badge, not a Theia accelerator: the Ctrl+Q key is chrome's reserved <key> row (powerbrowser.js).
+    menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,
     comingSoonRow: (label: string) => `${label} (Coming soon)`,
 });
 

@@ -18,12 +18,11 @@
 export const APP_MENU_ID = 'powerbrowser-app-menu';
 
 /**
- * The rows whose action this tree wires: the new-tab command and the stock
- * pages. Quit joins in plan 05 (31-05), when its `quitRequest` kind lands; until
- * then it renders disabled. The static gate derives this set from
- * chrome-bar-commands.ts and STOCK_PAGES.
+ * The rows whose action this tree wires: the new-tab command, the stock pages and
+ * Quit (plan 05, MENU-04: the `quitRequest` store kind). The static gate derives
+ * this set from chrome-bar-commands.ts, STOCK_PAGES and the client's quitRequest.
  */
-export const WIRED_MENU_IDS: readonly string[] = Object.freeze(['new-tab', 'settings', 'passwords', 'addons', 'help']);
+export const WIRED_MENU_IDS: readonly string[] = Object.freeze(['new-tab', 'settings', 'passwords', 'addons', 'help', 'quit']);
 
 /** A table row, structurally (MenuEntry in site-identity-table.ts). */
 export interface AppMenuRow {

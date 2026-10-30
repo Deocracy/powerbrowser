@@ -671,7 +671,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Passwords",
   "Add-ons",
   "Help",
-  "Quit ${name}",
+  "Quit ${name} (Ctrl+Q)",
   "${name} (Coming soon)",
 ]);
 

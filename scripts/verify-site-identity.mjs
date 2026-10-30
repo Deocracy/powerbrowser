@@ -116,7 +116,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -643,7 +643,15 @@ function cases(m, srcs, mm) {
             if (unlabelled.length) {
                 return { unlabelled };
             }
-            const at = rows.map(row => cell.indexOf(`\`${labels.get(row.menuId)}\``));
+            // The UI-SPEC names a shortcut as a badge ("`Quit {App}` with `Ctrl+Q` badge"), so a row label's
+            // trailing " (<keys>)" is compared as that badge, and the row's name is what the sentence must carry.
+            const specBadge = /`(Ctrl\+[A-Z])` badge/.exec(cell)?.[1] ?? null;
+            const quitLabel = labels.get('quit') ?? '';
+            if (specBadge !== null && !quitLabel.endsWith(` (${specBadge})`)) {
+                return { badge: `the Quit row label ${JSON.stringify(quitLabel)} lacks the UI-SPEC badge (${specBadge})` };
+            }
+            const nameOf = label => label.replace(/ \(Ctrl\+[A-Z]\)$/, '');
+            const at = rows.map(row => cell.indexOf(`\`${nameOf(labels.get(row.menuId))}\``));
             const absent = rows.filter((_, i) => at[i] < 0).map(row => labels.get(row.menuId));
             if (absent.length) {
                 return { absentFromUiSpec: absent };
@@ -681,6 +689,18 @@ function cases(m, srcs, mm) {
                 return !!row.stockPage && m.STOCK_PAGES.includes(row.stockPage) && stockSent;
             }).map(row => row.menuId);
             return sameSet(expected, mm.WIRED_MENU_IDS) ? null : { expected: sorted(expected), wired: sorted(mm.WIRED_MENU_IDS) };
+        }],
+        ['the Quit row sends quitRequest from its own handler (the widget arm and the client method, no other quit)', () => {
+            const widget = stripComments(srcs[WIDGET_REL] ?? '');
+            const armed = /row\.menuId === 'quit'\)\s*\{\s*void this\.quitApplicationRow\(\);/.test(widget);
+            const sends = /protected async quitApplicationRow\(\)[\s\S]{0,200}?await this\.store\.quitRequest\(\);/.test(widget);
+            return armed && sends ? null : { armed, sends };
+        }],
+        ['one quit path: Services.startup.quit is spelled only by the boundary (PowerBrowserAPI.sys.mjs), in the tree', () => {
+            const hits = Object.entries(srcs)
+                .filter(([rel, text]) => rel !== API_REL && /\.(m?js|tsx?|xhtml)$/.test(rel) && /Services\.startup\.quit\b|eAttemptQuit|eForceQuit/.test(stripComments(text)))
+                .map(([rel]) => rel);
+            return hits.length === 0 ? null : { spellers: hits };
         }],
         ['STOCK_PAGES equal the openStockPage switch arms (positive control: the switch stands)', () => {
             const fn = /async function openStockPageFromMenu\(page\) \{([\s\S]*?)\n\}\n/.exec(apiSrc);
@@ -904,7 +924,30 @@ const read = rel => {
     }
 };
 const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL, TOKEN_GATE_REL, APP_MENU_REL, WIDGET_REL, CMD_REL, STORE_CLIENT_REL];
-const readSources = () => Object.fromEntries(SOURCES.map(rel => [rel, read(rel)]));
+/**
+ * Phase 31 plan 05 (MENU-04, D-31-13, T-31-06): every source that could spell a quit, read from the tree
+ * at check time: powerbrowser/shell and each theia/extensions/<name>/src (never lib/ or node_modules).
+ * The one-quit-path case below derives its answer from this map, so a second speller anywhere in the
+ * tree goes red by name.
+ */
+const QUIT_SCAN_ROOTS = ['powerbrowser/shell', 'theia/extensions'];
+function scanQuitFiles() {
+    const out = {};
+    for (const root of QUIT_SCAN_ROOTS) {
+        for (const name of readdirSync(join(REPO_ROOT, root), { recursive: true })) {
+            const rel = `${root}/${name}`;
+            if (!/\.(m?js|tsx?|xhtml)$/.test(name) || /(^|\/)(node_modules|lib)\//.test(name)) {
+                continue;
+            }
+            if (root === 'theia/extensions' && !/^[^/]+\/src\//.test(name)) {
+                continue;
+            }
+            out[rel] = read(rel);
+        }
+    }
+    return out;
+}
+const readSources = () => ({ ...Object.fromEntries(SOURCES.map(rel => [rel, read(rel)])), ...scanQuitFiles() });
 
 async function main() {
     const { oks, failures } = await runAt(join(REPO_ROOT, TABLE_REL), readSources(), join(REPO_ROOT, APP_MENU_REL));
@@ -1151,11 +1194,39 @@ const PLANTS = [
         expect: 'stock pages open by name only',
     },
     {
-        name: 'quit wired before plan 05 lands its kind',
-        rel: APP_MENU_REL,
-        from: "Object.freeze(['new-tab', 'settings', 'passwords', 'addons', 'help']);",
-        to: "Object.freeze(['new-tab', 'settings', 'passwords', 'addons', 'help', 'quit']);",
+        name: 'quit wired without its client method',
+        rel: STORE_CLIENT_REL,
+        from: 'async quitRequest(',
+        to: 'async quitRequestGone(',
         expect: 'the wired rows are the rows this tree acts on',
+    },
+    {
+        name: 'quit unwired though its kind exists',
+        rel: APP_MENU_REL,
+        from: "'help', 'quit']);",
+        to: "'help']);",
+        expect: 'the wired rows are the rows this tree acts on',
+    },
+    {
+        name: 'Quit badge dropped from the copy',
+        rel: COPY_REL,
+        from: 'menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,',
+        to: 'menuQuit: (subject: string) => `Quit ${subject}`,',
+        expect: 'the app menu order and separators match the UI-SPEC hamburger entries (derived)',
+    },
+    {
+        name: 'Quit row sends nothing',
+        rel: WIDGET_REL,
+        from: 'await this.store.quitRequest();',
+        to: 'await Promise.resolve();',
+        expect: 'the Quit row sends quitRequest from its own handler',
+    },
+    {
+        name: 'quit-second-path: a second Services.startup.quit in the tree',
+        rel: 'powerbrowser/shell/powerbrowser.js',
+        from: 'const quitFromCoreClose = () => {',
+        to: 'const quitFromCoreClose = () => {\n      Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit);',
+        expect: 'one quit path: Services.startup.quit is spelled only by the boundary',
     },
     {
         name: 'a row label dropped from the widget switch',
