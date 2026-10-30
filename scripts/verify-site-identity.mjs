@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then forty-five planted faults
+ * --self-test: the clean tree must be green; then forty-six planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -942,6 +942,23 @@ function cases(m, srcs, mm) {
             }
             return body.includes('await PowerBrowserAPI.sleep(') ? null : 'the poll does not wait on the module sleep()';
         }],
+        ['webTabSiteInfo captures the origin before its await and refuses a page change (WR-01)', () => {
+            const code = stripComments(apiSrc);
+            const start = code.indexOf('  async webTabSiteInfo(browser) {');
+            if (start < 0) {
+                return `no webTabSiteInfo in ${API_REL} -- broken instrument`;
+            }
+            const end = code.indexOf('\n  },\n', start);
+            const body = code.slice(start, end < 0 ? undefined : end);
+            const await_ = body.indexOf('await lazy.SiteDataManager.hasSiteData(host)');
+            const captured = body.indexOf('const origin = webTabPermissionOrigin(browser);');
+            const refusal = body.indexOf('if (webTabPermissionOrigin(browser) !== origin) {');
+            const refuses = refusal > await_ && /return \{ where: "site-changed" \};/.test(body.slice(refusal, refusal + 160));
+            const replyUsesCaptured = /\n\s+origin,\n/.test(body);
+            return await_ > 0 && captured >= 0 && captured < await_ && refuses && replyUsesCaptured
+                ? null
+                : { awaitAt: await_, capturedAt: captured, refusesAfterAwait: refuses, replyUsesCapturedOrigin: replyUsesCaptured };
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -1043,6 +1060,13 @@ const PLANTS = [
         from: "    'local',\n",
         to: '',
         expect: 'SECURITY_STATES equal the boundary decode arms',
+    },
+    {
+        name: 'the site info reads the origin after its await (WR-01)',
+        rel: API_REL,
+        from: '      origin,\n      securityState: identity.securityState,',
+        to: '      origin: webTabPermissionOrigin(browser),\n      securityState: identity.securityState,',
+        expect: 'webTabSiteInfo captures the origin before its await and refuses a page change (WR-01)',
     },
     {
         name: 'the stock-window poll waits on a window timer (WR-07)',

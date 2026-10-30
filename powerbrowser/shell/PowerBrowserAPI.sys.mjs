@@ -3664,6 +3664,10 @@ export const PowerBrowserAPI = Object.freeze({
   async webTabSiteInfo(browser) {
     const pageSpec = browser.currentURI ? browser.currentURI.spec : "";
     const identity = PowerBrowserAPI.webTabIdentity(browser, pageSpec);
+    // WR-01: the origin and host are captured before the only await. The panel echoes
+    // the origin on a write, so it must belong to the same page as the rows below it.
+    const origin = webTabPermissionOrigin(browser);
+    const host = browser.currentURI && typeof browser.currentURI.asciiHost === "string" ? browser.currentURI.asciiHost : "";
     let issuer = null;
     let subject = null;
     let validFrom = null;
@@ -3692,10 +3696,15 @@ export const PowerBrowserAPI = Object.freeze({
     const permissions = webTabPermissionRows(browser);
     let hasData = false;
     try {
-      const host = browser.currentURI && typeof browser.currentURI.asciiHost === "string" ? browser.currentURI.asciiHost : "";
       hasData = host ? await lazy.SiteDataManager.hasSiteData(host) : false;
     } catch (err) {
       hasData = false;
+    }
+    // WR-01: the overlay may have navigated during the await. Then the rows above are page A's
+    // and the origin would be page B's: refuse the reply rather than mix them.
+    // The origin is null for a non-web page, so null === null is "unchanged" there too.
+    if (webTabPermissionOrigin(browser) !== origin) {
+      return { where: "site-changed" };
     }
     let shieldExcepted = false;
     try {
@@ -3710,7 +3719,7 @@ export const PowerBrowserAPI = Object.freeze({
       shieldCount = 0;
     }
     return {
-      origin: webTabPermissionOrigin(browser),
+      origin,
       securityState: identity.securityState,
       displaySpec: identity.displaySpec,
       baseDomain: identity.baseDomain,
