@@ -174,6 +174,8 @@ export interface WebTabState {
     permissionIcons?: string[];
     /** Phase 31 plan 02: the upstream label of each id in permissionIcons, same order. */
     permissionLabels?: string[];
+    /** Phase 31 plan 03 (SITE-08): whether the site has a tracking-protection exception; the identity box's shield. */
+    shieldExcepted?: boolean;
 }
 
 /**
@@ -195,7 +197,9 @@ export type WebTabMessage =
     | { kind: 'webTabGotoIndex'; tabId: string; index: number }
     | { kind: 'webTabActivated'; tabId: string | null }
     | { kind: 'webTabSiteInfo'; tabId: string }
-    | { kind: 'webTabSetPermission'; tabId: string; id: string; state: string; origin: string };
+    | { kind: 'webTabSetPermission'; tabId: string; id: string; state: string; origin: string }
+    | { kind: 'webTabClearSiteData'; tabId: string; origin: string }
+    | { kind: 'webTabShieldToggle'; tabId: string; origin: string; except: boolean };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -254,6 +258,17 @@ export interface WebTabSiteInfo extends WebTabReply {
     validFrom?: string | null;
     validTo?: string | null;
     permissions?: WebTabPermissionRow[];
+}
+
+/** Phase 31 plan 03 (SITE-08): `webTabShieldToggle`'s reply; `excepted` is the exception as chrome reads it after the change. */
+export interface WebTabShieldReply extends WebTabReply {
+    excepted?: boolean;
+}
+
+/** Phase 31 plan 03 (SITE-07): `webTabClearSiteData`'s reply; `where` is `cleared` on success. */
+export interface WebTabClearReply extends WebTabReply {
+    /** Whether the host still has site data after the clear (an exempt token cookie on 127.0.0.1 counts). */
+    hasData?: boolean;
 }
 
 /**
@@ -416,6 +431,8 @@ export class WebTabWidget extends BaseWidget {
     permissionIcons: string[] = [];
     /** Phase 31 plan 02: the labels of permissionIcons, same order; the icons' tooltip. */
     permissionLabels: string[] = [];
+    /** Phase 31 plan 03 (SITE-08): the last pushed or replied exception state; the identity box's shield. */
+    shieldExcepted = false;
 
     protected readonly stateEmitter = new Emitter<WebTabState>();
     readonly onDidChangeState: TheiaEvent<WebTabState> = this.stateEmitter.event;
@@ -760,6 +777,36 @@ export class WebTabWidget extends BaseWidget {
     }
 
     /**
+     * Phase 31 plan 03 (SITE-07, D-31-12): clears this tab's site data (cookies
+     * except the token, then non-cookie storage). Called only from the site
+     * panel's confirm accept handler; chrome clears only while the tab still
+     * shows `origin`, the origin the panel displayed.
+     */
+    clearSiteData(origin: string): Promise<WebTabClearReply> {
+        return this.channel.request({ kind: 'webTabClearSiteData', tabId: this.tabId, origin }) as Promise<WebTabClearReply>;
+    }
+
+    /**
+     * Phase 31 plan 03 (SITE-08, D-31-06): this site's tracking-protection
+     * exception. Called only from the site panel's shield row handler; chrome
+     * changes only the tab the panel showed (`origin` echo) and reloads it.
+     */
+    shieldToggle(origin: string, except: boolean): Promise<WebTabShieldReply> {
+        return this.channel.request({ kind: 'webTabShieldToggle', tabId: this.tabId, origin, except })
+            .then(reply => {
+                this.refreshShield(reply as WebTabShieldReply);
+                return reply as WebTabShieldReply;
+            }) as Promise<WebTabShieldReply>;
+    }
+
+    /** Phase 31 plan 03 (SITE-08): the identity box's shield follows a shield reply without waiting for the next push. */
+    protected refreshShield(reply: WebTabShieldReply): void {
+        if (reply.ok === true && reply.where === 'applied' && typeof reply.excepted === 'boolean') {
+            this.shieldExcepted = reply.excepted;
+        }
+    }
+
+    /**
      * Phase 31 plan 02 (SITE-06): the identity box's icons follow a permission
      * reply without waiting for the next state push. The rows are chrome's own
      * (the reply's `permissions`); a refused or unanswered write changes nothing.
@@ -796,6 +843,9 @@ export class WebTabWidget extends BaseWidget {
         }
         if (state.permissionLabels !== undefined) {
             this.permissionLabels = state.permissionLabels;
+        }
+        if (state.shieldExcepted !== undefined) {
+            this.shieldExcepted = state.shieldExcepted;
         }
         if (this.loading) {
             const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;

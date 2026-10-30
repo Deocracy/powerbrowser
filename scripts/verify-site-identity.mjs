@@ -435,9 +435,19 @@ function cases(m, srcs) {
             if (!code.includes('const principal = entry.browser.contentPrincipal;')) {
                 return `the write arm no longer keys on entry.browser.contentPrincipal -- broken instrument or a sender key`;
             }
+            // Phase 31 plan 03: every privileged write arm takes the same echo, and
+            // nothing else. One compare per write arm (permission, clear, shield),
+            // and no other use of the sender's origin anywhere in the file.
+            const writeArms = ['webTabSetPermission', 'webTabClearSiteData', 'webTabShieldToggle'];
+            const missingArms = writeArms.filter(name => !code.includes(`case "${name}"`));
+            if (missingArms.length) {
+                return `the write arm(s) ${missingArms.join(', ')} are gone from ${API_REL} -- broken instrument or a write without the echo`;
+            }
             // The type guard (`typeof data.origin !== "string"`) is a validation read, not a use.
             const uses = [...code.replace(/typeof data\.origin !== "string"/g, '').matchAll(/data\.origin/g)].map(x => x[0]);
-            return uses.length === 1 ? null : { senderOriginUses: uses.length, want: 'the one echo compare, nothing else' };
+            const compares = code.split(compare).length - 1;
+            return uses.length === writeArms.length && compares === writeArms.length
+                ? null : { senderOriginUses: uses.length, echoCompares: compares, want: 'one echo compare per write arm, nothing else' };
         }],
         ['the write arm accepts exactly the panel states (derived from the arm and the table)', () => {
             const arm = deriveWriteArm(apiSrc);

@@ -3478,6 +3478,8 @@ export const PowerBrowserAPI = Object.freeze({
           displaySpec: identity.displaySpec,
           baseDomain: identity.baseDomain,
           blockedTrackers: identity.blockedTrackers,
+          // Phase 31 plan 03 (SITE-08): the site's tracking-protection exception, in the same push as url.
+          shieldExcepted: webTabShieldExcepted(browser),
           permissionIcons: shown.map(row => row.id),
           permissionLabels: shown.map(row => row.label ?? ""),
         });
@@ -4437,7 +4439,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4676,6 +4678,68 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "write-failed", message: "handleWebTabAction: the permission write failed" };
       }
       return { ok: true, kind, where: "applied", permissions: webTabPermissionRows(entry.browser) };
+    }
+    // Phase 31 plan 03 (SITE-07, D-31-12, T-31-03): this tab's site data. A
+    // privileged write, so it takes the same origin echo as the permission
+    // write above, and the host is the overlay's own principal's, never a
+    // sender field. The token-cookie exemption lives in webTabClearSiteData.
+    case "webTabClearSiteData": {
+      if (!webTabIdIsValid(data.tabId) || typeof data.origin !== "string") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed tabId or origin" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      const principal = entry.browser.contentPrincipal;
+      if (!webTabPermissionPrincipalOk(principal) || principal.origin !== data.origin) {
+        PowerBrowserAPI.log("warn", "[web-tab] site-data clear refused: the tab is no longer on the shown web page");
+        return { ok: false, reason: "site-changed", message: "handleWebTabAction: the tab is no longer on the site the panel showed" };
+      }
+      try {
+        const outcome = await webTabClearSiteData(entry.browser, principal);
+        if (outcome !== "cleared") {
+          PowerBrowserAPI.log("error", `[web-tab] site-data clear refused: ${outcome}`);
+          return { ok: false, reason: outcome, message: "handleWebTabAction: the site data clear did not complete" };
+        }
+        await purgeSiteTabRows(principal.asciiHost);
+        return { ok: true, kind, where: "cleared", hasData: await webTabSiteHasData(principal.asciiHost) };
+      } catch (err) {
+        PowerBrowserAPI.log("error", `[web-tab] site-data clear failed: ${err && err.message ? err.message : err}`);
+        return { ok: false, reason: "write-failed", message: "handleWebTabAction: the site data clear failed" };
+      }
+    }
+    // Phase 31 plan 03 (SITE-08, D-31-06, T-31-04): this site's tracking
+    // protection exception, on the overlay's own content principal (the same
+    // origin echo as above). The exception is browser-scoped, so it can only
+    // reach the tab the panel showed. Upstream reloads the tab after the
+    // change (browser-siteProtections.js:2687-2691, browser-trustPanel.js:853-857),
+    // so the reload is part of the write.
+    case "webTabShieldToggle": {
+      if (!webTabIdIsValid(data.tabId) || typeof data.origin !== "string" || typeof data.except !== "boolean") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed tabId, origin or except flag" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      const principal = entry.browser.contentPrincipal;
+      if (!webTabPermissionPrincipalOk(principal) || principal.origin !== data.origin) {
+        PowerBrowserAPI.log("warn", "[web-tab] shield change refused: the tab is no longer on the shown web page");
+        return { ok: false, reason: "site-changed", message: "handleWebTabAction: the tab is no longer on the site the panel showed" };
+      }
+      try {
+        if (data.except) {
+          lazy.ContentBlockingAllowList.add(entry.browser);
+        } else {
+          lazy.ContentBlockingAllowList.remove(entry.browser);
+        }
+      } catch (err) {
+        PowerBrowserAPI.log("error", `[web-tab] shield change failed: ${err && err.message ? err.message : err}`);
+        return { ok: false, reason: "write-failed", message: "handleWebTabAction: the shield change failed" };
+      }
+      entry.browser.reload();
+      return { ok: true, kind, where: "applied", excepted: webTabShieldExcepted(entry.browser) };
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -5197,4 +5261,87 @@ async function searchPlacesRestricted(text, limit, restrict) {
     frecency: row.getResultByName("frecency"),
     bookmarked: row.getResultByName("bookmark_guid") !== null,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 31 plan 03 (SITE-07/08): the site-data clear and the shield exception.
+// Chrome-only helpers the webTabClearSiteData and webTabShieldToggle arms call.
+// ---------------------------------------------------------------------------
+
+// The token cookie is host-only on the sidecar's loopback origin (see the
+// token-cookie strip above). Exempt by name AND host: a same-named cookie on
+// another host is site data like any other.
+const TOKEN_COOKIE_HOST = "127.0.0.1";
+
+function webTabTokenCookie(cookie) {
+  return cookie.name === TOKEN_COOKIE_NAME && cookie.host === TOKEN_COOKIE_HOST;
+}
+
+// The clear, in order. (1) Host cookies one by one, every cookie but the token
+// (SiteDataManager.sys.mjs:503-512 is the per-cookie precedent). (2) The site's
+// non-cookie storage through the principal with the cookie-excluding flag set
+// (Sanitizer.sys.mjs:1273-1280 is the principal precedent). It never calls
+// SiteDataManager.remove: its deleteDataFromSite pass uses
+// CLEAR_COOKIES_AND_SITE_DATA and re-deletes every cookie after the loop
+// (SiteDataManager.sys.mjs:547-552). Re-verified last: the token count may not
+// fall, else "token-cookie" and the caller refuses the reply.
+async function webTabClearSiteData(browser, principal) {
+  const host = principal.asciiHost;
+  const attrs = principal.originAttributes;
+  const cookies = Services.cookies.getCookiesFromHost(host, attrs);
+  const tokensBefore = cookies.filter(webTabTokenCookie).length;
+  for (const cookie of cookies) {
+    if (!webTabTokenCookie(cookie)) {
+      Services.cookies.remove(cookie.host, cookie.name, cookie.path, cookie.originAttributes);
+    }
+  }
+  const flags = Ci.nsIClearDataService.CLEAR_COOKIES_AND_SITE_DATA & ~Ci.nsIClearDataService.CLEAR_COOKIES;
+  await new Promise(resolve => Services.clearData.deleteDataFromPrincipal(principal, true, flags, resolve));
+  const tokensAfter = Services.cookies.getCookiesFromHost(host, attrs).filter(webTabTokenCookie).length;
+  return tokensAfter < tokensBefore ? "token-cookie" : "cleared";
+}
+
+// Whether the host still has site data. A read that throws is "no data", the
+// same fallback webTabSiteInfo uses.
+async function webTabSiteHasData(host) {
+  try {
+    return !!(await lazy.SiteDataManager.hasSiteData(host));
+  } catch (err) {
+    return false;
+  }
+}
+
+// Whether the overlay's site has a tracking-protection exception. A read that
+// throws (no content principal yet) is "no exception".
+function webTabShieldExcepted(browser) {
+  try {
+    return !!lazy.ContentBlockingAllowList.includes(browser);
+  } catch (err) {
+    return false;
+  }
+}
+
+// The tab-store rows of one site: thumbnails of every row for the host are
+// cleared, and closed rows for it are removed (the closed-tab history of that
+// site). Group members are kept, so no group loses a tab. Rows are matched
+// by the host of their own url column (a row's key is not its URL).
+async function purgeSiteTabRows(host) {
+  const conn = await PowerBrowserAPI.openTabStore();
+  const rows = await conn.execute("SELECT uri, url, closed_at, group_id FROM tabs");
+  for (const row of rows) {
+    const uri = row.getResultByName("uri");
+    let rowHost = null;
+    try {
+      rowHost = new URL(String(row.getResultByName("url"))).hostname;
+    } catch (err) {
+      rowHost = null;
+    }
+    if (rowHost !== host) {
+      continue;
+    }
+    await conn.execute("UPDATE tabs SET thumbnail = NULL WHERE uri = :uri", { uri });
+    if (row.getResultByName("closed_at") !== null && row.getResultByName("group_id") === null) {
+      await conn.execute("DELETE FROM tabs WHERE uri = :uri", { uri });
+    }
+  }
 }

@@ -79,6 +79,10 @@ const KIND_CLASSES = new Map([
     ['webTabActivated', 'selection'],
     ['webTabSiteInfo', 'tab-navigation'],
     ['webTabSetPermission', 'privileged'],
+    // Phase 31 plan 03 (SITE-07, D-31-12): clearing a site's data is a site-state write, so privileged.
+    ['webTabClearSiteData', 'privileged'],
+    // Phase 31 plan 03 (SITE-08, D-31-06): the per-site shield exception is a site-state write, so privileged.
+    ['webTabShieldToggle', 'privileged'],
 ]);
 
 /**
