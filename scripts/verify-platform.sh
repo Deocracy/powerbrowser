@@ -4765,6 +4765,13 @@ run_own_checks() {
     # selector (which must stay green); each red naming its file or marker. It writes nothing.
     # The live read of website-staging/ is the full-tier website-publish-ready row.
     "website-publish-ready-self-test|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs --self-test"
+    # NEW (Phase 47, WR-05): the legal page carries the configuration.toml [legal] license, copyright
+    # holder and trademark notice verbatim. Values come from generate.mjs resolveConfig, not a regex
+    # over the TOML. Honestly --quick: one manifest resolution and one text read.
+    "legal-page-verbatim|node $REPO_ROOT/scripts/verify-legal-page.mjs"
+    # legal-page-verbatim-self-test plants one edited value per [legal] key over a fixture carrying
+    # each value verbatim; each edit goes red naming its key. It writes nothing.
+    "legal-page-verbatim-self-test|node $REPO_ROOT/scripts/verify-legal-page.mjs --self-test"
     # NEW (Phase 41, GH-12 and GH-08): the trust-boundary rules over every workflow --
     # SHA-pinned and admitted uses:, set equality with actions-selected.json, and the GH-12
     # runner, permission, trigger, cache and event-text rules. Honestly --quick: YAML parsing
