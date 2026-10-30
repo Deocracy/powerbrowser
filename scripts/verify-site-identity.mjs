@@ -57,6 +57,11 @@
  *      `webTabPermissionCapability` and compared with the table's cycles; the
  *      autoplay-media constants it maps to are the upstream states array
  *      (SitePermissions.sys.mjs:888-892);
+ *  15. (plan 03, SITE-07) the clear keeps the token cookie by name and host
+ *      (TOKEN_COOKIE_NAME, agreeing with the token gate), has no modal prompt,
+ *      no SiteDataManager.remove or Sanitizer.sanitize, and subtracts CLEAR_COOKIES;
+ *  16. (plan 03, SITE-08) the shield exception is written on entry.browser only,
+ *      and the box shield follows the reply and the pushed exception;
  *  13. (plan 02) no hand-kept permission label map in the site-identity
  *      sources (labels come from `getPermissionLabel`), and the permission
  *      glyph map is keyed by PERMISSION_IDS;
@@ -66,7 +71,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then twenty-two planted faults
+ * --self-test: the clean tree must be green; then twenty-eight planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -78,7 +83,11 @@
  * non-token hex colour and a font-family literal added to the sheet, a
  * loaded and an allowed state counted as blocked, every logged origin
  * counted, the shield reset moved out of the same-document guard, the
- * connection copy drifted, and the identity box label changed.
+ * connection copy drifted, and the identity box label changed; plan 03 adds the
+ * token cookie removed by the clear, a token name that drifts from the token
+ * gate, the window-modal prompt, CLEAR_COOKIES left in the storage flags, the
+ * shield exception written on another tab, and the shield reply not refreshing
+ * the box.
  * A plant whose text did not change its source fails as "plant did not
  * apply".
  *
@@ -111,6 +120,7 @@ const UPSTREAM_IDL_REL = 'upstream/uriloader/base/nsIWebProgressListener.idl';
 const UI_SPEC_REL = '.planning/phases/31-site-identity-permissions-and-app-menu/31-UI-SPEC.md';
 const INTERNAL_APIS_REL = 'powerbrowser/INTERNAL-APIS.md';
 const CODICON_REL = 'theia/node_modules/@vscode/codicons/dist/codicon.css';
+const TOKEN_GATE_REL = 'theia/extensions/token-gate/src/node/token-gate-backend-contribution.ts';
 const EXPORTS = ['SECURITY_STATES', 'PERMISSION_IDS', 'STOCK_PAGES', 'MENU_ORDER', 'PERMISSION_STATES', 'AUTOPLAY_PERMISSION_STATES'];
 
 const sameSet = (a, b) => a.length === b.length && new Set(a).size === a.length && a.every(x => b.includes(x));
@@ -597,6 +607,69 @@ function cases(m, srcs) {
             const missing = deriveCodicons({ [ADDRESS_BAR_REL]: addressBarSrc, [CSS_REL]: srcs[CSS_REL], [SITE_PANEL_REL]: srcs[SITE_PANEL_REL] ?? '' }).filter(n => !sheet.has(n));
             return missing.length === 0 ? null : missing;
         }],
+        // Phase 31 plan 03 (SITE-07, D-31-12, T-31-03): the clear arm's exemption.
+        ['the clear keeps the token cookie by name and host (derived from TOKEN_COOKIE_NAME, agreeing with the token gate)', () => {
+            const code = stripComments(apiSrc);
+            const literal = /\nconst TOKEN_COOKIE_NAME = "([^"]+)";/.exec(apiSrc)?.[1];
+            if (!literal) {
+                return `no TOKEN_COOKIE_NAME literal in ${API_REL} -- broken instrument`;
+            }
+            const gate = /export const POWERBROWSER_TOKEN_COOKIE_NAME = '([^']+)'/.exec(srcs[TOKEN_GATE_REL] ?? '')?.[1];
+            if (!gate) {
+                return `no POWERBROWSER_TOKEN_COOKIE_NAME in ${TOKEN_GATE_REL} -- broken instrument`;
+            }
+            if (gate !== literal) {
+                return { boundary: literal, tokenGate: gate, want: 'the same name' };
+            }
+            const exempt = /function webTabTokenCookie\(cookie\) \{\s*return cookie\.name === TOKEN_COOKIE_NAME && cookie\.host === TOKEN_COOKIE_HOST;\s*\}/;
+            if (!exempt.test(code)) {
+                return 'the token exemption is not "cookie.name === TOKEN_COOKIE_NAME && cookie.host === TOKEN_COOKIE_HOST" (the clear would not keep the token)';
+            }
+            const clear = code.indexOf('async function webTabClearSiteData(');
+            if (clear < 0) {
+                return `no webTabClearSiteData in ${API_REL} -- broken instrument`;
+            }
+            const next = code.indexOf('\nasync function ', clear + 1);
+            const body = code.slice(clear, next < 0 ? undefined : next);
+            if (!body.includes('if (!webTabTokenCookie(cookie)) {')) {
+                return 'the per-cookie removal is not guarded by webTabTokenCookie -- the token would be removed';
+            }
+            const removes = [...code.matchAll(/Services\.cookies\.remove\(/g)].length;
+            return removes === 1 && body.includes('Services.cookies.remove(') ? null : { cookieRemoveCalls: removes, want: 'one, in the clear helper loop' };
+        }],
+        ['no modal site-data prompt and no SiteDataManager.remove or Sanitizer.sanitize in the clear path', () => {
+            const code = stripComments(apiSrc);
+            if (!code.includes('Services.clearData.deleteDataFromPrincipal(principal, true, flags, resolve)')) {
+                return 'the storage clear is not Services.clearData.deleteDataFromPrincipal(principal, true, flags, resolve) -- broken instrument or a different clear';
+            }
+            const forbidden = ['promptSiteDataRemoval', 'SiteDataManager.remove(', 'Sanitizer.sanitize('].filter(name => apiSrc.includes(name) && code.includes(name));
+            return forbidden.length === 0 ? null : forbidden;
+        }],
+        ['the storage clear excludes cookies (CLEAR_COOKIES subtracted from the site-data group)', () => {
+            const code = stripComments(apiSrc);
+            return code.includes('const flags = Ci.nsIClearDataService.CLEAR_COOKIES_AND_SITE_DATA & ~Ci.nsIClearDataService.CLEAR_COOKIES;')
+                ? null : 'the storage clear flags do not subtract CLEAR_COOKIES';
+        }],
+        // Phase 31 plan 03 (SITE-08, D-31-06, T-31-04): the shield exception is browser-scoped to the tab the panel showed.
+        ['the shield exception is written on the overlay the panel showed only (wrong site)', () => {
+            const code = stripComments(apiSrc);
+            const add = 'lazy.ContentBlockingAllowList.add(entry.browser);';
+            const remove = 'lazy.ContentBlockingAllowList.remove(entry.browser);';
+            if (!code.includes(add) || !code.includes(remove)) {
+                return `the shield arm no longer applies the exception to its own entry.browser (${add} / ${remove}) -- a write could land on another site`;
+            }
+            const calls = [...code.matchAll(/ContentBlockingAllowList\.(add|remove)\(([^)]*)\)/g)].map(m => m[2]);
+            return calls.every(arg => arg === 'entry.browser') && calls.length === 2
+                ? null : { calls, want: 'two calls, both on entry.browser' };
+        }],
+        ['the box shield follows the shield reply and the pushed exception (web tab side)', () => {
+            const web = stripComments(srcs[WEB_TAB_REL] ?? '');
+            if (!web.includes('this.refreshShield(reply as WebTabShieldReply);') || !web.includes('this.shieldExcepted = reply.excepted;')) {
+                return `the shield reply no longer refreshes the identity box in ${WEB_TAB_REL}`;
+            }
+            const push = /shieldExcepted: webTabShieldExcepted\(browser\)/.test(stripComments(apiSrc));
+            return push ? null : 'the state push no longer carries shieldExcepted (the identity box would not learn of an exception with url)';
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -640,7 +713,7 @@ const read = rel => {
         return '';
     }
 };
-const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL];
+const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL, TOKEN_GATE_REL];
 const readSources = () => Object.fromEntries(SOURCES.map(rel => [rel, read(rel)]));
 
 async function main() {
@@ -772,6 +845,49 @@ const PLANTS = [
         from: '.pb-site-panel-close {',
         to: '.pb-site-panel-close {\n    font-family: serif;',
         expect: 'no hex colour outside the token file, and no font-family literal',
+    },
+    // Phase 31 plan 03 (SITE-07/08): the clear path and the shield exception.
+    {
+        name: 'token-cleared: the clear removes every host cookie, the token included',
+        rel: API_REL,
+        from: '    if (!webTabTokenCookie(cookie)) {',
+        to: '    if (true) {',
+        expect: 'the clear keeps the token cookie by name and host',
+    },
+    {
+        name: 'token-name-drift: the boundary token name differs from the token gate',
+        rel: API_REL,
+        from: 'const TOKEN_COOKIE_NAME = "POWERBROWSER_TOKEN";',
+        to: 'const TOKEN_COOKIE_NAME = "POWERBROWSER_TOKEN_OLD";',
+        expect: 'the clear keeps the token cookie by name and host',
+    },
+    {
+        name: 'modal-confirm: the window-modal site-data prompt added to the clear',
+        rel: API_REL,
+        from: 'async function webTabClearSiteData(browser, principal) {',
+        to: 'async function webTabClearSiteData(browser, principal) {\n  void lazy.SiteDataManager.promptSiteDataRemoval;',
+        expect: 'no modal site-data prompt and no SiteDataManager.remove',
+    },
+    {
+        name: 'clear-cookies-flag: the storage clear keeps CLEAR_COOKIES',
+        rel: API_REL,
+        from: ' & ~Ci.nsIClearDataService.CLEAR_COOKIES;',
+        to: ';',
+        expect: 'the storage clear excludes cookies',
+    },
+    {
+        name: 'shield-leak: the exception written on another tab',
+        rel: API_REL,
+        from: 'lazy.ContentBlockingAllowList.add(entry.browser);',
+        to: 'lazy.ContentBlockingAllowList.add([...webTabs.values()][0].browser);',
+        expect: 'the shield exception is written on the overlay the panel showed only',
+    },
+    {
+        name: 'shield-stale: the shield reply does not refresh the identity box',
+        rel: WEB_TAB_REL,
+        from: 'this.shieldExcepted = reply.excepted;',
+        to: 'void reply;',
+        expect: 'the box shield follows the shield reply',
     },
     {
         name: 'a loaded state counted as blocked',
