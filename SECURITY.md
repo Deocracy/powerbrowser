@@ -18,7 +18,7 @@ Do not send passwords, tokens or private keys. If one of them is part of the pro
 
 ## Supported versions
 
-Only the latest release receives security fixes. Update to the latest release before you report a problem that an older release may already have fixed.
+Only the latest release receives security fixes. Update to the latest release before you report a problem that an older release may already have fixed. No public release has shipped yet, so there is no older version to report against.
 
 ## What to expect
 
