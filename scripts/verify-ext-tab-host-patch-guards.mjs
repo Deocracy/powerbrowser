@@ -97,6 +97,16 @@ const GUARDS = [
     anchor: 'let tabCreated = (eventName, event) => {', site: 'register.tabCreated',
     regexes: [/^\s*if \(windowTracker\.isTabHostWindow\(event\.nativeTab\.documentGlobal\)\) \{\s*$/, /^\s*return;\s*$/],
     why: 'tab-created reads the shell ZoomManager, which the shell lacks' },
+  { id: 'G10', file: TABS, mode: 'before',
+    anchor: 'if (updateProperties.url !== null) {', site: 'getAPI.update',
+    regexes: [
+      /^\s*if \(windowTracker\.isTabHostWindow\(nativeTab\.documentGlobal\)\) \{\s*$/,
+      /^\s*updateProperties\.pinned !== null \|\|\s*$/,
+      /^\s*updateProperties\.highlighted !== null \|\|\s*$/,
+      /^\s*updateProperties\.muted !== null \|\|\s*$/,
+      /^\s*\(updateProperties\.active && tabbrowser\.selectedTab !== nativeTab\)\s*$/,
+    ],
+    why: 'a tab host window refuses pinned, highlighted, muted and a switch to another tab before any write runs (WR-07)' },
   { id: 'G9', file: TABS, mode: 'after',
     anchor: 'let url = context.uri.resolve(updateProperties.url);', site: 'getAPI.update',
     regexes: [
@@ -119,6 +129,7 @@ const WEAKEN = {
   G6: { find: 'if (sidebarKey && ', replace: 'if (sidebarKey || ' },
   G7: { drop: /^\s*try \{\s*$/ },
   G8: { find: 'if (windowTracker.isTabHostWindow(event.nativeTab', replace: 'if (!windowTracker.isTabHostWindow(event.nativeTab' },
+  G10: { find: 'updateProperties.pinned !== null ||', replace: 'updateProperties.pinned !== null &&' },
   G9: { find: 'url !== "about:blank" &&', replace: 'url !== "about:blank" ||' },
 };
 

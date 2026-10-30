@@ -81,9 +81,12 @@ document.addEventListener(
       get selectedTab() {
         return host.selectedTab();
       },
-      // Switching tabs is Phase 34/36/38 routing; a silent switch would answer wrongly.
-      set selectedTab(_tab) {
-        host.refuse("switch tabs");
+      // Switching tabs is Phase 34/36/38 routing; a silent switch would answer wrongly. Re-selecting the tab that
+      // is already selected changes nothing, so tabs.update({ active: true }) on it does not throw after a navigation.
+      set selectedTab(tab) {
+        if (tab !== host.selectedTab()) {
+          host.refuse("switch tabs");
+        }
       },
       get selectedTabs() {
         return host.selectedTab() ? [host.selectedTab()] : [];

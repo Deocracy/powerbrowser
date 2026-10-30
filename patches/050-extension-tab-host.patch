@@ -217,11 +217,28 @@ index ec06766887..ed2be4a747 100644
    }
  
 diff --git a/browser/components/extensions/parent/ext-tabs.js b/browser/components/extensions/parent/ext-tabs.js
-index f342748d4b..6c8d690a44 100644
+index f342748d4b..c11b68a6d2 100644
 --- a/browser/components/extensions/parent/ext-tabs.js
 +++ b/browser/components/extensions/parent/ext-tabs.js
-@@ -874,6 +874,14 @@ this.tabs = class extends ExtensionAPIPersistent {
+@@ -872,8 +872,31 @@ this.tabs = class extends ExtensionAPIPersistent {
  
+           let tabbrowser = nativeTab.documentGlobal.gBrowser;
+ 
++          // WR-07: a tab host window refuses the writes it cannot make before any write runs, so a refusal applies
++          // nothing. The checks follow upstream order: navigation, then active, highlighted, muted and pinned.
++          if (windowTracker.isTabHostWindow(nativeTab.documentGlobal)) {
++            if (
++              updateProperties.pinned !== null ||
++              updateProperties.highlighted !== null ||
++              updateProperties.muted !== null ||
++              (updateProperties.active && tabbrowser.selectedTab !== nativeTab)
++            ) {
++              return Promise.reject({
++                message: "Changing the pinned, highlighted, muted or active state of this tab is not supported yet.",
++              });
++            }
++          }
++
            if (updateProperties.url !== null) {
              let url = context.uri.resolve(updateProperties.url);
 +            // The shell's own walls allow only http(s) and about:blank.
@@ -235,7 +252,7 @@ index f342748d4b..6c8d690a44 100644
  
              let options = {
                flags: updateProperties.loadReplace
-@@ -1328,6 +1336,9 @@ this.tabs = class extends ExtensionAPIPersistent {
+@@ -1328,6 +1351,9 @@ this.tabs = class extends ExtensionAPIPersistent {
  
              // Store the zoom level for all existing tabs.
              for (let window of windowTracker.browserWindows()) {
@@ -245,7 +262,7 @@ index f342748d4b..6c8d690a44 100644
                if (!context.canAccessWindow(window)) {
                  continue;
                }
-@@ -1338,6 +1349,10 @@ this.tabs = class extends ExtensionAPIPersistent {
+@@ -1338,6 +1364,10 @@ this.tabs = class extends ExtensionAPIPersistent {
              }
  
              let tabCreated = (eventName, event) => {

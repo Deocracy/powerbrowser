@@ -1087,6 +1087,38 @@ async function scenarioTheiaNever({ app, theia, plant }) {
   return verdict(true, `four web tabs (${tabs.map(t => t.extId).join(', ')}), activated, B navigated to /c, C closed: no tabs.query row, event, request, sender report or record named the Theia origin, and every tab id was a web tab of this session; getBrowserData(frame).tabId stayed -1 at every step; WebDriver still reached the frame at both ends (${origin1}); every opened tab was reported`, null);
 }
 
+// tabs.update fields the shell cannot write are refused before the URL loads (WR-07), so a refused write applies
+// nothing. A pinned write and an active: true write to an unselected tab are both refused; the selected tab still
+// takes a URL and active: true together.
+async function scenarioRefusedWrite({ app }) {
+  const A = await openAndCommit(app, '/a');
+  const B = await openAndCommit(app, '/b');
+  await makeCurrent(app, B.webTabId);
+  const refuse = async props => {
+    try {
+      await command('update', { tabId: A.extId, props });
+      return null;
+    } catch (e) {
+      return e.message;
+    }
+  };
+  const pinned = await refuse({ url: url('/d'), pinned: true });
+  if (pinned === null) return verdict(false, null, 'tabs.update with pinned: true was not refused');
+  const switched = await refuse({ url: url('/d'), active: true });
+  if (switched === null) return verdict(false, null, 'tabs.update with active: true on a tab that is not selected was not refused');
+  await sleep(1500);
+  const seen = await command('get', { tabId: A.extId });
+  const navigated = session.logs.some(r => r.kind === 'committed' && r.tabId === A.extId && String(r.url).endsWith('/d'));
+  if (navigated || !String(seen.url).endsWith('/a')) {
+    return verdict(false, null, `a refused tabs.update still navigated tab A: tabs.get ${seen.url}, /d committed ${navigated}`);
+  }
+  // Positive control: the selected tab takes a URL and active: true in one update.
+  await command('update', { tabId: B.extId, props: { url: url('/c'), active: true } });
+  const loaded = await tryWait(r => r.kind === 'committed' && r.tabId === B.extId && String(r.url).endsWith('/c'), 30000);
+  if (!loaded) return verdict(false, null, `positive control: tabs.update with url and active: true on the selected tab B (${B.extId}) did not load /c`);
+  return verdict(true, `tabs.update with pinned: true (${pinned}) and with active: true on an unselected tab (${switched}) were refused before any navigation: tab A stayed /a; the selected tab B took url and active: true together and loaded /c`, null);
+}
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
@@ -1101,6 +1133,7 @@ const SCENARIOS = {
   'toolbar-target': scenarioToolbarTarget,
   gui01: scenarioGui01,
   'scheme-wall': scenarioSchemeWall,
+  'refused-write': scenarioRefusedWrite,
   'theia-never': scenarioTheiaNever,
 };
 
