@@ -204,7 +204,7 @@ here owns.
 | `linux-release-pipeline-and-update-channel` | Create the public repository `DeBIOS-Foundation/powerbrowser-updates` with a root `_redirects` and a placeholder no-update descriptor at `default/Linux_x86_64-gcc3/update.xml`; create the Cloudflare Pages project (empty build command, output `/`); add `updates.powerbrowser.org` as a custom domain | Cloudflare account and DNS |
 | `linux-release-pipeline-and-update-channel` | Probe the eleven-segment path live with real client segment shapes, then switch to a minimal `_worker.js` if the placeholder rule does not match, and record which mechanism shipped | Live infrastructure; the branch cannot be decided from documentation |
 | `linux-release-pipeline-and-update-channel` | Create a fine-grained PAT with Contents write on `powerbrowser-updates` only; store it as a `release` environment secret | Secret custody |
-| `linux-release-pipeline-and-update-channel` | Fill the website `#download` section and add `/download /#download 302`; deploy `powerbrowser.org` | Site repository and Pages |
+| `linux-release-pipeline-and-update-channel` | Fill the four website routes (`/`, `/download`, `/privacy`, `/legal`, each a real file, no fragment redirect); with the `website-publish-ready` row green, deploy `powerbrowser.org` | Site repository and Pages |
 | `linux-release-pipeline-and-update-channel` | Approve the `release` environment gate after reviewing the artifact list and the descriptor commit diff; hold any announcement until the release-mode hop drill is green | The approval is the only point at which the MAR key is used |
 | `windows-unsigned` | Provision the `pkg-win11` guest: confirm the media, create or start the libvirt NAT network, create a **new** `pkg-win11` disk (leave the pre-existing shut-off `win11` domain alone), define the domain with qcow2 nvram, install Windows 11, install the QEMU guest agent and stock Firefox, take the `clean-baseline` snapshot | `sudo` for `qemu:///system` |
 | `windows-unsigned` | Run the five-cell Windows matrix from the snapshot and write the record | Guest interaction and verbatim dialog capture |
@@ -212,7 +212,7 @@ here owns.
 | `macos-adhoc-signed` | Transfer the DMG, verify its SHA256 on the Mac, install to a user-writable folder, record the Gatekeeper refusal verbatim and the Open Anyway path, confirm the Theia interface and the icon, record both Darwin BUILD_TARGET strings, run one hop from the writable location, repeat from `/Applications` and record what the updater does, uninstall and record residue | The whole point of the session |
 | `macos-adhoc-signed` | Push the macOS build job and the flipped asset condition only after the matrix record exists and its gate is green | Release gate |
 | `reports-bug-error-crash` | Create the events DNS record on `powerbrowser.org` (proxied), the D1 database and its one-table schema, deploy the Worker, add the rate-limiting rule, and record the database id, wrangler version, deployed version id, threshold and period | Cloudflare account |
-| `reports-bug-error-crash` | Copy `docs/PRIVACY.md` into the website repository as `/privacy` without rewording and confirm Cloudflare serves it 200 | Site repository |
+| `reports-bug-error-crash` | Copy `website-staging/privacy.html` into the website repository as `/privacy` without rewording and confirm Cloudflare serves it 200 | Site repository |
 | `reports-bug-error-crash` | From outside the Cloudflare account post one synthetic event (200), one over-cap body (413) and one burst past the rate limit (blocked); paste all three responses verbatim | An external vantage point |
 | `reports-bug-error-crash` | Record both TEL-06 deferrals as named rows, and decide the crash-reporter gate in writing as `RETIRED` or `HELD` | Owner decision; under `RETIRED` the milestone owner amends the exclusion row, not this plan set |
 | `listings-and-cadence` | Under an ADMIT verdict, regenerate and rename the four Flathub files, substitute the five `@RELEASE_*@` tokens, optionally validate locally, and open the Flathub submission PR from the owner's account | The submission is made under a person's identity |
@@ -417,15 +417,36 @@ Whichever mechanism ships is recorded here by the stage. Do not proceed on an
 unprobed rule. An unknown BUILD_TARGET must return 404, not another target's
 descriptor.
 
-MAR bytes stay on GitHub Release assets: Pages caps assets at 25 MiB and a MAR is
-far larger.
+MAR bytes never go on Pages: Pages caps assets at 25 MiB and a MAR is far larger.
+The primary MAR origin is R2 at `downloads.powerbrowser.org` (owner ruling
+2026-10-29), and the update descriptor's `patchURL` names that host. The GitHub
+Release keeps the same signed bytes as the archival copy.
 
-**`powerbrowser.org`** serves the single-page website repository. The `#download`
-section carries OS detection, the stable asset links, the Linux-only and en-US-only
-statements, and the unsigned-build notes; a one-line `_redirects` carrying
-`/download /#download 302` makes the documented URL real on a single-page site.
-`/privacy` is added by the reports stage from `docs/PRIVACY.md`, copied without
-rewording so the repository copy stays the reviewable source.
+The staged updates tree lives in this repository at `updates-staging/` and is copied,
+unchanged, into the `powerbrowser-updates` repository for the owner push.
+
+**`powerbrowser.org`** serves the multi-page website repository as a Cloudflare Pages
+project with no build step. It has four real routes, each a file that returns 200:
+`/` (`index.html`), `/download` (`download.html`), `/privacy` (`privacy.html`) and
+`/legal` (`legal.html`). The sources are staged at `website-staging/`. There is no
+fragment redirect (the single-page `#download` redirect is retired) and no website
+`_redirects` file: every route is a real file. `/.well-known/security.txt` is served through the
+zone-level security.txt feature, not a static file.
+
+**Before the website push**, the full-tier `website-publish-ready` row of
+`scripts/verify-platform.sh` must be green. It stays red while any staged page carries an
+`OWNER TO FILL` placeholder or a `class="pending"` block, and both are intentional until the
+owner fills them. Run `scripts/verify-platform.sh --only website-publish-ready` after filling
+them, and do not push the site while it is red.
+
+Zone security.txt procedure: enable the feature on the zone, with the Contact address
+`mailto:security@powerbrowser.org`. Measured result: pending the owner checkpoint
+(plan 47-04).
+
+Email Routing proof shape: send one test message to each of `security@`, `contact@` and
+`privacy@` from a sender that is not the destination address, because a message sent
+from the destination address proves nothing. Measured results: pending the owner
+checkpoint (plan 47-04).
 
 ### The Windows VM
 
@@ -715,9 +736,10 @@ token or is renamed without it is recorded by stage
 Assets that carry no target token and are attached once per Release: `SHA256SUMS`,
 `LICENSING.md`, `THIRD-PARTY-NOTICES.txt`, and the source tarball.
 
-A descriptor's patch URL is always the versioned immutable
-`/releases/download/<tag>/` form and never the latest-download form. The live
-channel gate reddens on a latest-download URL.
+A descriptor's patch URL names the R2 MAR origin, `https://downloads.powerbrowser.org/<tag>/<asset>`
+(owner ruling 2026-10-29). It is never a github.com `/releases/download/` URL, because
+github.com is user-initiated and an unattended fetch from it fails the endpoint verdict.
+The live channel gate reddens on a latest-download URL.
 
 ### Partner search codes (UPD-15, recorded 46-04)
 

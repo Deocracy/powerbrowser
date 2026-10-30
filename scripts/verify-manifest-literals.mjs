@@ -152,6 +152,11 @@ const ALLOWLIST = [
   { slot: 'legal.trademark_notice', file: 'theia/extensions/branding/src/browser/powerbrowser-about-dialog.tsx', reason: 'own-trademark notice fallback owned by the generator derivation' },
   { slot: 'product.vendor_display', file: 'theia/extensions/branding/src/browser/powerbrowser-welcome-widget.tsx', reason: 'comment recording why the inherited org URL was replaced' },
   { slot: 'product.vendor_display', file: 'powerbrowser/branding/release/locales/en-US/brand.ftl', reason: 'hand-written vendor short-name term owned by the manifest' },
+  { slot: 'product.vendor_display', file: 'website-staging/index.html', reason: 'public home page footer: the non-association sentence, verbatim copy the manifest owns' },
+  { slot: 'product.vendor_display', file: 'website-staging/download.html', reason: 'public download page footer: the non-association sentence, verbatim copy the manifest owns' },
+  { slot: 'product.vendor_display', file: 'website-staging/privacy.html', reason: 'public privacy page footer: the non-association sentence, verbatim copy the manifest owns' },
+  { slot: 'product.vendor_display', file: 'website-staging/legal.html', reason: 'public legal page: the copyright holder line and the non-association footer, verbatim copy the manifest owns' },
+  { slot: 'legal.trademark_notice', file: 'website-staging/legal.html', reason: 'public legal page trademark line, verbatim copy of the manifest legal value' },
   { slot: 'product.vendor_display', file: 'ledger/history/log.jsonl', reason: 'append-only delivery-kit ledger log; record-fail stores failing check output verbatim, and branding checks print the configured values' },
 ];
 

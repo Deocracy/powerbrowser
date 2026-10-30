@@ -4690,8 +4690,9 @@ run_own_checks() {
     # descriptor and every release-shaped git tag HEAD contains. Honestly --quick: git plumbing and text
     # reads only, no build, browser, display or network.
     "release-identity|node $REPO_ROOT/scripts/verify-release-identity.mjs"
-    # release-identity-self-test plants seven faults in one mkdtemp git repo (two version
-    # literals, an off-pin milestone, two descriptor versions, two tags) and keeps five
+    # release-identity-self-test plants thirteen faults in one mkdtemp git repo (two version
+    # literals, an off-pin milestone, two descriptor versions, six no-update descriptor
+    # fragments that must not pass as a no-update document (WR-01), two tags) and keeps six
     # controls green, among them a commit after a release tag and a higher tag on a commit
     # HEAD does not contain (WR-02); it writes nothing in the repository.
     "release-identity-self-test|node $REPO_ROOT/scripts/verify-release-identity.mjs --self-test"
@@ -4743,6 +4744,37 @@ run_own_checks() {
     # that throws -- each red naming the control. Honestly --quick: in-memory, with no network
     # and no gh; it writes nothing. The live read-back is the full-tier repo-controls row.
     "repo-controls-self-test|node $REPO_ROOT/scripts/verify-repo-controls.mjs --self-test"
+    # NEW (Phase 47, DIST-03): updates-repo-static-self-test plants, in memory only, a functions
+    # hook file, a root-level _worker.js, a nested functions path, a truncated listing, a non-array
+    # tree, an empty listing, a throwing getter, a malformed result, a non-github release_notes host
+    # an unknown argument, a tree with no _redirects rule and a tree with no */update.xml descriptor
+    # (IN-01), each red naming its path, endpoint or key over a clean static tree
+    # that must stay green first. Honestly --quick: in-memory, no network and no gh; it writes nothing.
+    # The live read-back is the full-tier updates-repo-static row.
+    "updates-repo-static-self-test|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs --self-test"
+    # NEW (Phase 47, WR-02): the privacy page's two host lists each equal, as a set, the hosts the
+    # endpoint allowlist derives into that group: allow rows with no trigger (contacted without any
+    # action) and allow rows with trigger user-feature (contacted only after a feature is used).
+    # Loopback excluded. Derived at check time; red naming any host on one side only.
+    # Honestly --quick: two text reads, no build, browser, display or network.
+    "privacy-hosts|node $REPO_ROOT/scripts/verify-privacy-hosts.mjs"
+    # privacy-hosts-self-test plants, per list, an extra page host, a missing page host, an allowlist
+    # addition and an allowlist removal; plus a feature host listed in the unattended list, an allow
+    # row with an unknown trigger, and a page with no marked host, each
+    # red naming its host or attribute; the real page and allowlist stay green first. It writes nothing.
+    "privacy-hosts-self-test|node $REPO_ROOT/scripts/verify-privacy-hosts.mjs --self-test"
+    # NEW (Phase 47, WR-04): website-publish-ready-self-test plants an OWNER TO FILL marker, a
+    # class="pending" block and an empty site over a clean fixture that carries a CSS .pending
+    # selector (which must stay green); each red naming its file or marker. It writes nothing.
+    # The live read of website-staging/ is the full-tier website-publish-ready row.
+    "website-publish-ready-self-test|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs --self-test"
+    # NEW (Phase 47, WR-05): the legal page carries the configuration.toml [legal] license, copyright
+    # holder and trademark notice verbatim. Values come from generate.mjs resolveConfig, not a regex
+    # over the TOML. Honestly --quick: one manifest resolution and one text read.
+    "legal-page-verbatim|node $REPO_ROOT/scripts/verify-legal-page.mjs"
+    # legal-page-verbatim-self-test plants one edited value per [legal] key over a fixture carrying
+    # each value verbatim; each edit goes red naming its key. It writes nothing.
+    "legal-page-verbatim-self-test|node $REPO_ROOT/scripts/verify-legal-page.mjs --self-test"
     # NEW (Phase 41, GH-12 and GH-08): the trust-boundary rules over every workflow --
     # SHA-pinned and admitted uses:, set equality with actions-selected.json, and the GH-12
     # runner, permission, trigger, cache and event-text rules. Honestly --quick: YAML parsing
@@ -5191,6 +5223,18 @@ run_own_checks() {
       # Full tier: read-only gh api against the live org and repo (network, gh auth with repo
       # and read:org); green only after the owner applies the settings at plan 41-04.
       "repo-controls|node $REPO_ROOT/scripts/verify-repo-controls.mjs"
+
+      # NEW (Phase 47, DIST-03): the live updates repo holds no functions/ directory and no root
+      # _worker.js, by the absence property over one read-only recursive tree listing. Full tier:
+      # read-only gh api against the live updates repo (network, gh auth with repo and read:org);
+      # green only after the owner pushes the static tree at plan 47-04. Fails closed when unreadable.
+      "updates-repo-static|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs"
+
+      # NEW (Phase 47, WR-04): the staged website pages carry no OWNER TO FILL marker and no
+      # class="pending" block. Full tier, deliberately: the placeholders are intentional until the
+      # owner fills them, so this row stays red until then. It must be green before the website
+      # push (docs/RELEASING.md, the website section).
+      "website-publish-ready|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs"
     )
   fi
 
