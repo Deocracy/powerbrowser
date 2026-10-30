@@ -653,6 +653,12 @@ const EXPECTED_NAV_COPY = new Set([
   "Issued by: ${name}",
   "Valid: ${name}",
   "${name} to ${name}",
+  "Clear cookies and site data…",
+  "Clear data for ${name}?",
+  "You stay signed in to ${name}.",
+  "Clear",
+  "Cancel",
+  "${name} couldn't clear data for this site. Try again from the site information panel.",
 ]);
 
 /**

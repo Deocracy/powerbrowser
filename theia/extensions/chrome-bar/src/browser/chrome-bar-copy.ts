@@ -104,6 +104,13 @@ export const CHROME_BAR_COPY = Object.freeze({
     certIssuedBy: (name: string) => `Issued by: ${name}`,
     certValid: (dates: string) => `Valid: ${dates}`,
     certDates: (from: string, to: string) => `${from} to ${to}`,
+    // Phase 31 plan 03 (SITE-07, UI-SPEC clear-data row): the row, its confirm and the failure notice.
+    clearDataRow: 'Clear cookies and site data…',
+    clearDataTitle: (host: string) => `Clear data for ${host}?`,
+    clearDataStaysSignedIn: (subject: string) => `You stay signed in to ${subject}.`,
+    clearDataConfirm: 'Clear',
+    clearDataCancel: 'Cancel',
+    clearDataFailed: (subject: string) => `${subject} couldn't clear data for this site. Try again from the site information panel.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

@@ -447,6 +447,14 @@
     color: var(--theia-descriptionForeground);
 }
 
+/* Phase 31 plan 03: the one-line notice for a refused or failed action (UI-SPEC Label role). */
+.pb-site-panel-notice {
+    padding: 8px 12px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--theia-notificationsWarningIcon-foreground);
+}
+
 .pb-chrome-bar-input {
     flex: 1 1 auto;
     min-width: 0;

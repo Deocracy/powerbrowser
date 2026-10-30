@@ -42,13 +42,17 @@ export interface SitePanelProps {
     intents: Readonly<Record<string, string>>;
     /** The pill's typed-or-committed text; the host line falls back to it when chrome gave no display host. */
     committedAddress: string;
+    /** A one-line failure notice for the last action (for example a refused clear); null when there is none. */
+    notice: string | null;
     onClose(): void;
     onSetPermission(id: string, state: string): void;
+    /** Phase 31 plan 03: the clear-data row; the owner opens the confirm and clears on accept. */
+    onClearSiteData(): void;
 }
 
 /** Phase 31 plan 02: the site panel, portalled to the body like every pill dropdown. */
 export function SitePanel(props: SitePanelProps): React.ReactElement {
-    const { info, anchor, intents, committedAddress, onClose, onSetPermission } = props;
+    const { info, anchor, intents, committedAddress, notice, onClose, onSetPermission, onClearSiteData } = props;
     const rootRef = React.useRef<HTMLDivElement>(null);
     // Focus on mount only: a re-render (a permission reply) must not pull focus back from a row.
     React.useEffect(() => { rootRef.current?.focus(); }, []);
@@ -92,6 +96,7 @@ export function SitePanel(props: SitePanelProps): React.ReactElement {
             onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
             onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) { onClose(); } }}
         >
+            {notice && <div className='pb-site-panel-notice' role='alert'>{notice}</div>}
             {usable
                 ? <div className='pb-site-panel-header'>
                     {icon && <span className={`pb-site-panel-icon codicon ${icon}${state === 'mixed-passive' || state === 'broken' ? ' is-warning' : ''}`} aria-hidden='true' />}
@@ -130,6 +135,18 @@ export function SitePanel(props: SitePanelProps): React.ReactElement {
                         <span className='pb-site-panel-row-state'>{stateText}</span>
                     </button>;
                 })}
+            </div>}
+            {usable && <div className='pb-site-panel-section'>
+                <button
+                    type='button'
+                    className='pb-site-panel-row'
+                    data-action='clear-site-data'
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => onClearSiteData()}
+                >
+                    <span className='pb-site-panel-row-icon codicon codicon-trash' aria-hidden='true' />
+                    <span className='pb-site-panel-row-label'>{CHROME_BAR_COPY.clearDataRow}</span>
+                </button>
             </div>}
             <button type='button' className='pb-site-panel-close' onMouseDown={e => e.preventDefault()} onClick={onClose}>
                 <span className='codicon codicon-close' aria-hidden='true' />

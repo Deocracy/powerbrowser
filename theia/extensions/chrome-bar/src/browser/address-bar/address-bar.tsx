@@ -18,6 +18,7 @@ import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
 import { LabelParser } from '@theia/core/lib/browser/label-parser';
 import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
+import { ConfirmDialog } from '@theia/core/lib/browser/dialogs';
 import pDebounce from 'p-debounce';
 import { MessageLoop } from '@theia/core/shared/@lumino/messaging';
 import { EMPTY_PAGE_URL, WebTabOpenHandler, WebTabSiteInfo, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -439,9 +440,56 @@ export class AddressBar {
             this.sitePanelInfo = null;
             this.sitePanelTab = null;
             this.sitePanelIntents = {};
+            this.sitePanelNotice = null;
             this.update();
         }
     };
+
+    /** Phase 31 plan 03: a one-line failure notice shown at the top of the reopened panel; cleared on close. */
+    protected sitePanelNotice: string | null = null;
+
+    /**
+     * Phase 31 plan 03 (SITE-07, D-31-12): the panel's clear-data row. The
+     * panel closes first (its blur handler would close it under the dialog),
+     * the confirm is a ConfirmDialog (never the window-modal site-data prompt),
+     * and only its accept handler sends the clear, for the origin the panel
+     * displayed. A refused or failed clear reopens the panel with the notice.
+     */
+    protected async clearSiteDataFromPanel(): Promise<void> {
+        const tab = this.sitePanelTab;
+        const origin = this.sitePanelInfo?.origin;
+        const host = this.identityHostText({ state: 'none', displaySpec: this.sitePanelInfo?.displaySpec ?? '', baseDomain: null });
+        this.closeSitePanel();
+        if (!(tab instanceof WebTabWidget) || typeof origin !== 'string') {
+            return;
+        }
+        let confirmed: boolean | undefined = false;
+        try {
+            const dialog = new ConfirmDialog({
+                title: CHROME_BAR_COPY.clearDataTitle(host),
+                msg: CHROME_BAR_COPY.clearDataStaysSignedIn(appSubject()),
+                ok: CHROME_BAR_COPY.clearDataConfirm,
+                cancel: CHROME_BAR_COPY.clearDataCancel,
+            });
+            confirmed = await dialog.open();
+        } catch {
+            return;
+        }
+        if (!confirmed) {
+            return;
+        }
+        let reply: { ok?: boolean; where?: string } | null = null;
+        try {
+            reply = await tab.clearSiteData(origin);
+        } catch {
+            reply = null;
+        }
+        if (reply && reply.ok === true && reply.where === 'cleared') {
+            return;
+        }
+        this.sitePanelNotice = CHROME_BAR_COPY.clearDataFailed(appSubject());
+        await this.openSitePanel();
+    }
 
     /**
      * Phase 31 (SITE-04/06, plan 02, D-31-05/D-31-06): one permission row's
@@ -2445,8 +2493,10 @@ export class AddressBar {
             anchor={this.sitePanelAnchor}
             intents={this.sitePanelIntents}
             committedAddress={this.committedAddress}
+            notice={this.sitePanelNotice}
             onClose={this.closeSitePanel}
             onSetPermission={(id, state) => { void this.setSitePermission(id, state); }}
+            onClearSiteData={() => { void this.clearSiteDataFromPanel(); }}
         />;
     }
 
