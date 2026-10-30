@@ -37,7 +37,7 @@
 // red naming its drift. The I2 control must stay green with the same derived keys.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -596,11 +596,53 @@ function windowTypeFamily(ctx, out) {
   }
 }
 
+// (e) messagemanagergroup (WR-02, UF-31.1-03). The Theia frame carries no group, and that absence keeps content
+// scripts out of it (D-06, ExtensionPolicyService.cpp:371-382). Every write of the attribute under powerbrowser/shell
+// is derived from the tree. The one allowed write is webTabOpen's overlay literal. A getAttribute read is not a write.
+function groupFamily(ctx, out) {
+  const F = 'messagemanagergroup';
+  const before = out.failures.length;
+  const rels = readdirSync(join(ROOT, 'powerbrowser/shell')).filter(f => /\.(xhtml|js|mjs)$/.test(f)).sort()
+    .map(f => `powerbrowser/shell/${f}`);
+  const frames = [];
+  for (const rel of rels.filter(r => r.endsWith('.xhtml'))) {
+    ctx.text(rel).split('\n').forEach((l, i) => {
+      if (/<xul:browser\b[^>]*\bid="powerbrowser-content"/.test(l)) frames.push({ rel, line: i, text: l });
+    });
+  }
+  if (frames.length !== 1) return brokenOut(out, F, 'powerbrowser-content', `${frames.length} xul:browser elements with id powerbrowser-content (need exactly one)`);
+  if (/messagemanagergroup/.test(frames[0].text)) {
+    failOut(out, F, 'powerbrowser-content', 'THEIA FRAME GROUP', `${frames[0].rel}:${frames[0].line + 1} sets messagemanagergroup on the Theia frame; the frame must carry none (D-06)`);
+  }
+  const writes = [];
+  for (const rel of rels) {
+    stripComments(ctx.text(rel)).split('\n').forEach((l, i) => {
+      if (!/messagemanagergroup/.test(l) || /getAttribute\(\s*["']messagemanagergroup["']\s*\)/.test(l)) return;
+      writes.push({ rel, line: i, text: l.trim() });
+    });
+  }
+  const api = stripComments(ctx.text(API_REL)).split('\n');
+  const wto = methodSpan(api, 'webTabOpen');
+  if (wto.error) return brokenOut(out, F, 'webTabOpen', wto.error);
+  for (const w of writes) {
+    const overlay = w.rel === API_REL && w.text.includes('messagemanagergroup: "browsers"') && w.line >= wto.start && w.line <= wto.end;
+    if (!overlay) {
+      failOut(out, F, `${w.rel}:${w.line + 1}`, 'WRITE SITE', `${w.rel}:${w.line + 1} writes messagemanagergroup (${w.text}); the only write allowed is webTabOpen's overlay literal`);
+    }
+  }
+  if (!writes.some(w => w.rel === API_REL && w.text.includes('messagemanagergroup: "browsers"') && w.line >= wto.start && w.line <= wto.end)) {
+    failOut(out, F, 'webTabOpen', 'OVERLAY LITERAL', 'webTabOpen does not write messagemanagergroup "browsers" on the overlay it creates');
+  }
+  if (out.failures.length === before) {
+    out.passes.push(`messagemanagergroup PASS -- the Theia frame ${frames[0].rel}:${frames[0].line + 1} carries no group; the only write under ${rels.length} powerbrowser/shell files is webTabOpen's overlay literal`);
+  }
+}
+
 // Runs every family. A family that cannot derive its inputs reports a broken instrument and the next one still runs.
 function checkAll(opts = {}) {
   const ctx = makeCtx(opts);
   const out = { failures: [], passes: [], keys: [] };
-  const fams = [['consumers', consumersFamily], ['theia-exclusion', theiaFamily], ['scheme-wall', wallFamily], ['window-type', windowTypeFamily]];
+  const fams = [['consumers', consumersFamily], ['theia-exclusion', theiaFamily], ['scheme-wall', wallFamily], ['window-type', windowTypeFamily], ['messagemanagergroup', groupFamily]];
   for (const [name, fn] of fams) {
     try {
       fn(ctx, out);
@@ -793,6 +835,24 @@ function selfTest() {
     }
   }
 
+  // messagemanagergroup (WR-02): the frame gets the group in the XHTML, or a setAttribute appears in the JS.
+  {
+    const xh = 'powerbrowser/shell/powerbrowser.xhtml';
+    const xraw = readFileSync(join(ROOT, xh), 'utf8');
+    const text = xraw.replace('id="powerbrowser-content" ', 'id="powerbrowser-content" messagemanagergroup="browsers" ');
+    if (landed('messagemanagergroup on the Theia frame (XHTML)', text !== xraw)) {
+      const res = checkAll({ texts: new Map([[xh, text]]) });
+      expect('messagemanagergroup on the Theia frame (XHTML)', has(res, f => f.family === 'messagemanagergroup' && f.kind === 'THEIA FRAME GROUP' && f.text.includes('powerbrowser.xhtml')), 1, 'THEIA FRAME GROUP naming powerbrowser.xhtml');
+    }
+  }
+  {
+    const js = 'powerbrowser/shell/powerbrowser.js';
+    const text = `${jsRaw}\ndocument.getElementById("powerbrowser-content").setAttribute("messagemanagergroup", "browsers");\n`;
+    if (landed('messagemanagergroup set from powerbrowser.js', text !== jsRaw)) {
+      const res = checkAll({ texts: new Map([[js, text]]) });
+      expect('messagemanagergroup set from powerbrowser.js', has(res, f => f.family === 'messagemanagergroup' && f.kind === 'WRITE SITE' && f.text.includes('powerbrowser.js')), 1, 'WRITE SITE naming powerbrowser.js');
+    }
+  }
   if (bad) {
     console.error(`${NAME} --self-test: FAIL -- ${bad} plant(s) or control(s) did not behave as required`);
     return 1;
