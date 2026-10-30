@@ -23,6 +23,11 @@
     { "name": "upstream", "color": "5319e7", "description": "The cause is in an upstream project this build depends on" },
     { "name": "release-train", "color": "0052cc", "description": "Part of a release train" },
     { "name": "claude-fix", "color": "6f42c1", "description": "Queued for an automated fix attempt" },
-    { "name": "train:blocked", "color": "b60205", "description": "A release train is blocked. The linked issue says why" }
+    { "name": "train:blocked", "color": "b60205", "description": "A release train is blocked. The linked issue says why" },
+    { "name": "gsd:ready", "color": "ededed", "description": "Issue is ready for the automated build workflow to pick up" },
+    { "name": "gsd:approved", "color": "ededed", "description": "Pull request passed automated review. A maintainer still merges it" },
+    { "name": "gsd:rework", "color": "ededed", "description": "Pull request needs changes. The automated build workflow revises it" },
+    { "name": "gsd:blocked", "color": "ededed", "description": "Automated work is paused. The linked issue or pull request says why" },
+    { "name": "gsd:escalated", "color": "ededed", "description": "Automated work stopped and needs a maintainer decision" }
   ]
 }
