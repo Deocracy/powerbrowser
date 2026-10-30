@@ -33,8 +33,8 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { withProbeShell, openWebTab } from './lib/pb-live-probe.mjs';
-import { REPO_ROOT } from './lib/pb-relaunch.mjs';
+import { withProbeShell, openWebTab, makeCurrent, focusOverlay, focusTheiaFrame } from './lib/pb-live-probe.mjs';
+import { REPO_ROOT, probe } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-ext-tab-host-live';
 const EXT_ID = 'pb-ext-tab-host-probe@powerbrowser.test';
@@ -84,6 +84,10 @@ async function run(cmd) {
     else if (cmd.op === 'get') result = brief(await browser.tabs.get(cmd.tabId));
     else if (cmd.op === 'exec') result = await browser.tabs.executeScript(cmd.tabId, { code: cmd.code });
     else if (cmd.op === 'send') result = await browser.tabs.sendMessage(cmd.tabId, cmd.message);
+    else if (cmd.op === 'windows') {
+      const w = await browser.windows[cmd.method](cmd.info || {});
+      result = Array.isArray(w) ? w.map(x => ({ id: x.id, type: x.type, focused: x.focused })) : { id: w.id, type: w.type };
+    }
     else throw new Error('unknown op ' + cmd.op);
     post({ kind: 'result', opId: cmd.opId, ok: true, result });
   } catch (e) {
@@ -97,6 +101,7 @@ setInterval(() => {
 
 const CONTENT = `
 browser.runtime.sendMessage({ kind: 'hello', href: location.href }).catch(() => {});
+browser.runtime.onMessage.addListener(msg => (msg === 'ping' ? Promise.resolve(location.pathname) : undefined));
 `;
 
 // ---------------------------------------------------------------------------
@@ -398,10 +403,180 @@ async function scenarioWebrequest({ app }) {
   return verdict(true, `webRequest.onBeforeRequest and webNavigation.onCommitted for /c both carry tabId ${extId}; committed frameId 0`, null);
 }
 
+const shellWindow = async () => command('windows', { method: 'getCurrent' });
+
+// Events: created x2, activated (A, previousTabId B), updated for B (url /c, loading then complete, title), removed A (not window closing).
+async function scenarioEvents({ app }) {
+  const A = await openAndCommit(app, '/a');
+  const B = await openAndCommit(app, '/b');
+  await makeCurrent(app, B.webTabId);
+  await makeCurrent(app, A.webTabId);
+  const win = await shellWindow();
+  // Navigate B to /c through the overlay's own load path (the same call webTabNavigate makes).
+  await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(B.webTabId)});
+    o.fixupAndLoadURIString(${JSON.stringify(url('/c'))}, { triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}) });
+    return { landed: true };`);
+  const navigated = await tryWait(r => r.kind === 'updated' && r.tabId === B.extId && r.change && r.change.status === 'complete' && String(r.url).endsWith('/c'), 30000);
+  await chromeJson(app, `const API = ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserAPI;
+    API.webTabClose(${JSON.stringify(A.webTabId)});
+    return { landed: true };`);
+  const removed = await tryWait(r => r.kind === 'removed' && r.tabId === A.extId, 15000);
+  const created = [A.extId, B.extId].every(id => session.logs.some(r => r.kind === 'created' && r.tab && r.tab.id === id));
+  const activated = session.logs.find(r => r.kind === 'activated' && r.tabId === A.extId && r.previousTabId === B.extId);
+  if (!activated) {
+    return verdict(false, null, `onActivated did not fire for tab A with previousTabId B: activated records ${JSON.stringify(session.logs.filter(r => r.kind === 'activated'))}`);
+  }
+  const loading = session.logs.some(r => r.kind === 'updated' && r.tabId === B.extId && r.change && r.change.status === 'loading');
+  const titled = session.logs.some(r => r.kind === 'updated' && r.tabId === B.extId && r.change && r.change.title === 'page /c');
+  if (!navigated || !loading || !titled) {
+    return verdict(false, null, `onUpdated for B: navigated ${Boolean(navigated)}, loading ${loading}, title 'page /c' ${titled}`);
+  }
+  if (!removed || removed.isWindowClosing !== false || !created) {
+    return verdict(false, null, `onRemoved for A ${JSON.stringify(removed)} or onCreated for both tabs missing (created ${created})`);
+  }
+  const windowIds = session.logs.filter(r => ['created', 'activated', 'updated', 'removed'].includes(r.kind)).map(r => (r.tab ? r.tab.windowId : r.windowId));
+  if (windowIds.some(id => id !== win.id)) {
+    return verdict(false, null, `event windowId ${JSON.stringify(windowIds)} differs from the shell ${win.id}`);
+  }
+  return verdict(true, `onCreated for A ${A.extId} and B ${B.extId}; onActivated A with previousTabId ${B.extId}; onUpdated B to /c with loading then complete and title; onRemoved A with isWindowClosing false; every windowId is the shell ${win.id}`, null);
+}
+
+// Active tab follows Theia's selection; windows.getAll/getCurrent/getLastFocused report the shell.
+async function scenarioActiveTab({ app }) {
+  const A = await openAndCommit(app, '/a');
+  const B = await openAndCommit(app, '/b');
+  const active = async () => command('query', { info: { active: true, currentWindow: true } });
+  await makeCurrent(app, A.webTabId);
+  const onA = await active();
+  await makeCurrent(app, B.webTabId);
+  const onB = await active();
+  if (onA.length !== 1 || onA[0].id !== A.extId || onB.length !== 1 || onB[0].id !== B.extId) {
+    return verdict(false, null, `active tab did not follow the selected web tab: A current gave ${JSON.stringify(onA)}, B current gave ${JSON.stringify(onB)}`);
+  }
+  const all = await command('windows', { method: 'getAll' });
+  const current = await command('windows', { method: 'getCurrent' });
+  const last = await command('windows', { method: 'getLastFocused' });
+  if (!all.some(w => w.id === current.id) || last.id !== current.id) {
+    return verdict(false, null, `windows.getAll ${JSON.stringify(all)}, getCurrent ${current.id}, getLastFocused ${last.id}`);
+  }
+  return verdict(true, `active tab is A (${A.extId}) while A is selected and B (${B.extId}) when B is selected; windows.getAll lists the shell ${current.id}, getCurrent and getLastFocused return it`, null);
+}
+
+// The IDE has focus: the last web tab stays the active tab, and chrome's selectedTab is that node.
+async function scenarioIdeRetain({ app }) {
+  const A = await openAndCommit(app, '/a');
+  const B = await openAndCommit(app, '/b');
+  await makeCurrent(app, B.webTabId);
+  await probe(app, `await get('CommandRegistry').executeCommand('preferences:open'); await sleep(800); return true;`);
+  await focusTheiaFrame(app);
+  const onB = await command('query', { info: { active: true, currentWindow: true } });
+  const chromeSelected = await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(B.webTabId)});
+    const node = window.gBrowser.selectedTab;
+    return { isNull: node === null, isB: Boolean(node) && node.linkedBrowser === o };`);
+  if (onB.length !== 1 || onB[0].id !== B.extId || chromeSelected.isNull) {
+    return verdict(false, null, `active tab cleared while the IDE has focus: active query ${JSON.stringify(onB)}, selectedTab null ${chromeSelected.isNull}`);
+  }
+  return verdict(true, `with the preferences editor current, the active tab is still B (${B.extId}) and chrome's selectedTab is B's node (${chromeSelected.isB})`, null);
+}
+
+// Page focus selects its overlay even when the other overlay is Theia's current (D-13, split view).
+// The split leaves B current (Lumino makes an added widget current). Page focus goes to A. The
+// assertion is that A is the active tab. Measured: Lumino moves Theia's current to A with the DOM
+// focus, so this layout does not isolate page focus from Theia's current; the detail records both.
+async function scenarioFocusFollow({ app }) {
+  const A = await openAndCommit(app, '/a');
+  const B = await openAndCommit(app, '/b');
+  await makeCurrent(app, B.webTabId);
+  await probe(app, `const shell = get('ApplicationShell');
+    const wa = get('WebTabChannel').widgetOf(${JSON.stringify(A.webTabId)});
+    const wb = get('WebTabChannel').widgetOf(${JSON.stringify(B.webTabId)});
+    shell.addWidget(wb, { area: 'main', mode: 'split-right', ref: wa });
+    await sleep(600);
+    return true;`);
+  const theiaOwner = () => probe(app, `const shell = get('ApplicationShell'); return shell.mainPanel.currentTitle?.owner?.id ?? null;`);
+  const currentBefore = await theiaOwner();
+  const focused = await focusOverlay(app, A.webTabId);
+  await sleep(800);
+  const active = await command('query', { info: { active: true, currentWindow: true } });
+  const currentAfter = await theiaOwner();
+  if (!focused || active.length !== 1 || active[0].id !== A.extId) {
+    return verdict(false, null, `active tab did not follow page focus: focus ${focused}, active ${JSON.stringify(active)}, expected A ${A.extId} (Theia current before ${currentBefore}, after ${currentAfter})`);
+  }
+  return verdict(true, `page focus on A (${A.extId}), split beside B, makes A the active tab; Theia's current before ${currentBefore}, after ${currentAfter}`, null);
+}
+
+// The shell is a normal window: windows.getAll types it normal, and the normal filter includes it.
+async function scenarioWindowType({ app }) {
+  await openAndCommit(app, '/a');
+  const current = await command('windows', { method: 'getCurrent' });
+  const all = await command('windows', { method: 'getAll' });
+  const normal = await command('windows', { method: 'getAll', info: { windowTypes: ['normal'] } });
+  const shell = all.find(w => w.id === current.id);
+  const toolbar = await chromeJson(app, `return { visible: window.toolbar.visible === true };`);
+  if (!shell || shell.type !== 'normal' || !normal.some(w => w.id === current.id) || !toolbar.visible) {
+    return verdict(false, null, `shell window reported as popup: type ${shell ? shell.type : 'missing'}, normal filter ${JSON.stringify(normal.map(w => w.id))}, toolbar visible ${toolbar.visible}`);
+  }
+  return verdict(true, `windows.getAll reports the shell ${current.id} as type normal; windowTypes ['normal'] includes it; window.toolbar.visible is true`, null);
+}
+
+// executeScript and sendMessage by id reach the page of that id, not the selected one.
+async function scenarioExecute({ app, plant }) {
+  const A = await openAndCommit(app, '/a');
+  const B = await openAndCommit(app, '/b');
+  await makeCurrent(app, B.webTabId);
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late(A.webTabId, B.webTabId));
+    if (!applied.landed) {
+      throw new Error('BROKEN INSTRUMENT: plant swapped-browser did not land');
+    }
+  }
+  const ran = await command('exec', { tabId: A.extId, code: 'location.pathname' });
+  if (!Array.isArray(ran) || ran[0] !== '/a') {
+    return verdict(false, null, `executeScript on tab A ran in ${Array.isArray(ran) ? ran[0] : JSON.stringify(ran)}, expected /a`);
+  }
+  const replied = await command('send', { tabId: A.extId, message: 'ping' });
+  if (replied !== '/a') {
+    return verdict(false, null, `sendMessage(A, ping) answered from ${replied}, expected /a`);
+  }
+  return verdict(true, `executeScript(A) returned ["/a"] with B current; sendMessage(A, 'ping') answered from /a`, null);
+}
+
+// ---- Task 3 plants (merged into PLANTS) ----
+const PLANT_NO_TABSELECT = `
+  window.addEventListener('TabSelect', event => event.stopImmediatePropagation(), true);
+  return { landed: true };`;
+const PLANT_STALE_ACTIVE = `
+  const before = Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get;
+  Object.defineProperty(window.gBrowser, 'selectedTab', { configurable: true, get() { return window.gBrowser.tabs[0] ?? null; } });
+  return { landed: Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get !== before };`;
+const PLANT_CLEAR_ON_IDE = `
+  const before = Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get;
+  Object.defineProperty(window.gBrowser, 'selectedTab', { configurable: true, get() { return null; } });
+  return { landed: Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get !== before };`;
+const PLANT_FOCUS_IGNORED = `
+  const before = Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get;
+  Object.defineProperty(window.gBrowser, 'selectedTab', { configurable: true, get() { return window.gBrowser.tabs[1] ?? null; } });
+  return { landed: Object.getOwnPropertyDescriptor(window.gBrowser, 'selectedTab').get !== before };`;
+const PLANT_POPUP_TYPE = `
+  const aw = window.docShell.treeOwner.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIAppWindow);
+  aw.chromeFlags &= ~Ci.nsIWebBrowserChrome.CHROME_TOOLBAR;
+  return { landed: (aw.chromeFlags & Ci.nsIWebBrowserChrome.CHROME_TOOLBAR) === 0 };`;
+const PLANT_SWAPPED_BROWSER = (aId, bId) => `
+  const find = id => [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === id);
+  const nodeA = window.gBrowser.getTabForBrowser(find(${JSON.stringify(aId)}));
+  nodeA.linkedBrowser = find(${JSON.stringify(bId)});
+  return { landed: nodeA.linkedBrowser === find(${JSON.stringify(bId)}) };`;
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
   webrequest: scenarioWebrequest,
+  events: scenarioEvents,
+  'active-tab': scenarioActiveTab,
+  'ide-retain': scenarioIdeRetain,
+  'focus-follow': scenarioFocusFollow,
+  'window-type': scenarioWindowType,
+  execute: scenarioExecute,
 };
 
 // Each plant names its scenario, the expected red text, and the chrome-scope mutation.
@@ -409,6 +584,12 @@ const PLANTS = {
   'theia-in-tabs': { scenario: 'query', expect: 'Theia frame visible to extensions', body: PLANT_THEIA_IN_TABS },
   'no-tab-for-browser': { scenario: 'sender', expect: 'sender.tab missing', body: PLANT_NO_TAB_FOR_BROWSER },
   'no-tab-for-browser-net': { scenario: 'webrequest', expect: 'network event carried tabId -1', body: PLANT_NO_TAB_FOR_BROWSER },
+  'no-tabselect': { scenario: 'events', expect: 'onActivated did not fire', body: PLANT_NO_TABSELECT },
+  'stale-active': { scenario: 'active-tab', expect: 'active tab did not follow the selected web tab', body: PLANT_STALE_ACTIVE },
+  'clear-on-ide': { scenario: 'ide-retain', expect: 'active tab cleared while the IDE has focus', body: PLANT_CLEAR_ON_IDE },
+  'focus-ignored': { scenario: 'focus-follow', expect: 'active tab did not follow page focus', body: PLANT_FOCUS_IGNORED },
+  'popup-type': { scenario: 'window-type', expect: 'shell window reported as popup', body: PLANT_POPUP_TYPE },
+  'swapped-browser': { scenario: 'execute', expect: 'executeScript on tab A ran in /b', late: PLANT_SWAPPED_BROWSER },
 };
 
 // ---------------------------------------------------------------------------
@@ -436,13 +617,13 @@ async function runSession(scenarioName, plantName = null) {
       async app => {
         probeDir.value = await installProbe(app);
         const theia = await waitForTheiaOrigin(app);
-        if (plant) {
+        if (plant && plant.body) {
           const applied = await chromeJson(app, plant.body);
           if (!applied.landed) {
             throw new Error(`BROKEN INSTRUMENT: plant ${plantName} did not land`);
           }
         }
-        return await SCENARIOS[scenarioName]({ app, theia });
+        return await SCENARIOS[scenarioName]({ app, theia, plant });
       },
       { extraPrefs: { 'xpinstall.signatures.required': false, 'extensions.logging.enabled': true } }
     );

@@ -1042,7 +1042,9 @@ export const PowerBrowserAPI = Object.freeze({
       null,
       "chrome://powerbrowser/content/powerbrowser.xhtml",
       "_blank",
-      "chrome,dialog=no,all",
+      // toolbar: a null-argument window is not a dialog, so `all` is ignored (nsWindowWatcher.cpp:286);
+      // the explicit toolbar flag sets CHROME_TOOLBAR, which WindowBase.type reads as normal (:1972-1974).
+      "chrome,dialog=no,all,toolbar",
       null
     );
   },
@@ -4663,6 +4665,10 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
       activeTabByFrame.set(actorRef.browsingContext.top.embedderElement, data.tabId);
+      // A null (the IDE has focus) changes no selection: D-04, the last web tab stays active.
+      if (data.tabId !== null) {
+        tabHostSelectById(actorRef.browsingContext.top.embedderElement, data.tabId);
+      }
       return { ok: true, kind, where: "applied" };
     }
     // Phase 31 (SITE-04..06, D-31-05/D-31-06): this tab's site information
@@ -4878,6 +4884,10 @@ export const PowerBrowserWebTabs = Object.freeze({
 
   /** Tells the Theia frame which page has focus (`tabId`) or that none has (`null`). */
   pushPageFocus(theiaBrowser, tabId) {
+    // Page focus selects its tab (D-13): the overlay the user types in is the one an extension sees as active.
+    if (tabId !== null) {
+      tabHostSelectById(theiaBrowser, tabId);
+    }
     const windowGlobal = theiaBrowser.browsingContext?.currentWindowGlobal ?? null;
     const last = lastPageFocusByFrame.get(theiaBrowser);
     if (last && last.windowGlobal === windowGlobal && last.tabId === tabId) {
@@ -5610,6 +5620,7 @@ function tabHostAddTab(win, tabId, browser) {
   host.strip.appendChild(node);
   host.byBrowser.set(browser, node);
   host.byTabId.set(tabId, node);
+  attachProgress(host, browser, node);
   const becameSelected = host.selected === null;
   if (becameSelected) {
     host.selected = node;
@@ -5636,6 +5647,82 @@ function pickNextSelection(host, index) {
   return children.length ? children[Math.min(index, children.length - 1)] : null;
 }
 
+// Tabs-progress fan-out (002a tabhost.js:113-130). The overlay's web progress
+// reaches every tabs-progress listener the trackers registered, browser first,
+// as tabbrowser does. The forwarder is held on the host record, because the web
+// progress holds its listeners weakly. busy follows the top-level network state,
+// and label follows the page title.
+function attachProgress(host, browser, node) {
+  const { STATE_IS_NETWORK, STATE_START, STATE_STOP } = Ci.nsIWebProgressListener;
+  const fan = (name, args) => {
+    for (const listener of host.progressListeners) {
+      if (typeof listener[name] === "function") {
+        listener[name](browser, ...args);
+      }
+    }
+  };
+  const forwarder = {
+    QueryInterface: ChromeUtils.generateQI(["nsIWebProgressListener", "nsISupportsWeakReference"]),
+    onStateChange(webProgress, request, flags, status) {
+      if ((flags & STATE_IS_NETWORK) && webProgress.isTopLevel) {
+        if (flags & STATE_START) {
+          node.setAttribute("busy", "true");
+        }
+        if (flags & STATE_STOP) {
+          node.removeAttribute("busy");
+        }
+        fireTabEvent(node, "TabAttrModified", { changed: ["busy"] });
+      }
+      fan("onStateChange", [webProgress, request, flags, status]);
+    },
+    onLocationChange: (...args) => fan("onLocationChange", args),
+    onStatusChange: (...args) => fan("onStatusChange", args),
+    onProgressChange: (...args) => fan("onProgressChange", args),
+    onSecurityChange: (...args) => fan("onSecurityChange", args),
+    onContentBlockingEvent: (...args) => fan("onContentBlockingEvent", args),
+  };
+  browser.addProgressListener(forwarder, Ci.nsIWebProgress.NOTIFY_ALL);
+  host.forwarders.set(browser, forwarder);
+  const titleListener = () => {
+    node.label = browser.contentTitle;
+    fireTabEvent(node, "TabAttrModified", { changed: ["label"] });
+  };
+  browser.addEventListener("pagetitlechanged", titleListener);
+  host.titleListeners.set(browser, titleListener);
+}
+
+// Best-effort teardown, the same idiom as webTabClose's listener removal.
+function detachProgress(host, browser) {
+  const forwarder = host.forwarders.get(browser);
+  if (forwarder) {
+    try {
+      browser.removeProgressListener(forwarder);
+    } catch {
+      // best-effort: a frameloader already torn down throws here
+    }
+    host.forwarders.delete(browser);
+  }
+  const titleListener = host.titleListeners.get(browser);
+  if (titleListener) {
+    try {
+      browser.removeEventListener("pagetitlechanged", titleListener);
+    } catch {
+      // best-effort
+    }
+    host.titleListeners.delete(browser);
+  }
+}
+
+// Selects the node of web tab tabId when this host holds one. Called by the
+// webTabActivated arm and by pushPageFocus; a null from either never reaches it.
+function tabHostSelectById(theiaBrowser, tabId) {
+  const host = tabHosts.get(theiaBrowser.ownerDocument.defaultView);
+  const node = host ? host.byTabId.get(tabId) : undefined;
+  if (node) {
+    selectNode(host, node);
+  }
+}
+
 // Called by webTabClose before browser.remove(). TabClose fires while the node
 // is still in the strip, with closing set, so the tracker reads no id from it.
 function tabHostDropTab(win, browser) {
@@ -5649,6 +5736,7 @@ function tabHostDropTab(win, browser) {
   const index = node._tPos;
   host.strip.removeChild(node);
   host.byBrowser.delete(browser);
+  detachProgress(host, browser);
   for (const [tabId, tab] of host.byTabId) {
     if (tab === node) {
       host.byTabId.delete(tabId);
@@ -5690,6 +5778,8 @@ export const PowerBrowserTabHost = Object.freeze({
       byTabId: new Map(),
       selected: null,
       progressListeners: new Set(),
+      forwarders: new Map(),
+      titleListeners: new Map(),
       counter: 0,
     };
     tabHosts.set(win, host);
