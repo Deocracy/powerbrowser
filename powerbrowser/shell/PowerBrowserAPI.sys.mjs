@@ -5659,6 +5659,8 @@ function pickNextSelection(host, index) {
 // and label follows the page title.
 // The locations an overlay may hold (D-05): the same allow-list as the shell walls, plus the empty page.
 const OVERLAY_LOCATION = /^(?:https?:\/\/|about:blank$)/i;
+// The icon URLs a tab may take from the shell (tabbrowser.js:1368-1372); a remote icon is refused.
+const LOCAL_ICON_PROTOCOLS = ["chrome:", "about:", "resource:", "data:"];
 
 function attachProgress(host, browser, node) {
   const { STATE_IS_NETWORK, STATE_START, STATE_STOP } = Ci.nsIWebProgressListener;
@@ -5694,6 +5696,12 @@ function attachProgress(host, browser, node) {
           triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}),
         });
         return;
+      }
+      // WR-08 (tabbrowser.js:9650-9657): a new top-level document clears the tab's icon until its own icon arrives,
+      // so tabs.get never reports the previous page's icon. Same-document changes (hash, pushState) keep it.
+      if (webProgress.isTopLevel && !sameDocument && webProgress.isLoadingDocument && node.image) {
+        node.image = null;
+        fireTabEvent(node, "TabAttrModified", { changed: ["image"] });
       }
       fan("onLocationChange", [webProgress, request, location, flags]);
     },
@@ -5815,10 +5823,20 @@ export const PowerBrowserTabHost = Object.freeze({
       isTab: tab => isHostTab(host, tab),
       getIcon: tab => (isHostTab(host, tab) ? tab.image : null),
       setIcon(tab, url) {
-        if (!isHostTab(host, tab) || typeof url !== "string") {
+        if (!isHostTab(host, tab)) {
           return;
         }
-        tab.image = url;
+        // WR-08, upstream's contract (tabbrowser.js:1362-1386): an nsIURI is read by its spec, and a remote icon URL is
+        // refused. An empty string clears the icon.
+        const spec = url instanceof Ci.nsIURI ? url.spec : url;
+        if (typeof spec !== "string") {
+          return;
+        }
+        if (spec !== "" && !LOCAL_ICON_PROTOCOLS.some(protocol => spec.startsWith(protocol))) {
+          PowerBrowserAPI.log("error", "[tab-host] refused a remote tab icon URL (only chrome, about, resource and data icons are local)");
+          return;
+        }
+        tab.image = spec || null;
         fireTabEvent(tab, "TabAttrModified", { changed: ["image"] });
       },
       getTabSharingState: () => ({ camera: undefined, microphone: undefined, screen: undefined }),

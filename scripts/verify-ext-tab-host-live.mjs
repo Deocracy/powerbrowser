@@ -164,6 +164,11 @@ const server = createServer((req, res) => {
     res.end(PNG);
     return;
   }
+  if (path === '/plain') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><title>page /plain</title><body>live page /plain, no icon</body>');
+    return;
+  }
   if (/^\/[a-z]$/.test(path)) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(`<!doctype html><title>page ${path}</title><link rel="icon" href="/icon.png"><body>live page ${path}</body>`);
@@ -1198,6 +1203,38 @@ async function scenarioExtensionRedirect({ app, plant }) {
   return verdict(true, `a blocking webRequest redirect of tabs.update to /redirect-me put an extension page in the overlay; the shell stopped it and the overlay ended on about:blank (tabs.get ${seen.url}); a later tabs.update to http(s) loaded /d`, null);
 }
 
+// WR-08 (tabbrowser.js:9650-9657): a top-level navigation clears the overlay's favicon until its own icon arrives, so
+// tabs.get never reports the previous page's icon. /plain carries no icon link.
+async function scenarioFaviconClear({ app, plant }) {
+  const A = await openAndCommit(app, '/b');
+  const iconOf = async () => (await command('get', { tabId: A.extId })).favIconUrl || null;
+  const waitIcon = async () => {
+    const end = Date.now() + 30000;
+    for (;;) {
+      const icon = await iconOf();
+      if (icon && String(icon).startsWith('data:image/png;base64,')) return icon;
+      if (Date.now() > end) return null;
+      await sleep(300);
+    }
+  };
+  if (!(await waitIcon())) return verdict(false, null, 'positive control: the favicon of /b never reached tabs.get');
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late(A));
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant favicon-stale did not land');
+  }
+  await command('update', { tabId: A.extId, props: { url: url('/plain') } });
+  if (!(await tryWait(r => r.kind === 'committed' && r.tabId === A.extId && String(r.url).endsWith('/plain'), 30000))) {
+    return verdict(false, null, `the navigation of tab ${A.extId} to /plain was not reported by webNavigation.onCommitted`);
+  }
+  await sleep(2000);
+  const stale = await iconOf();
+  if (stale) return verdict(false, null, `favicon survived a top-level navigation: tabs.get reports ${String(stale).slice(0, 40)} on /plain, which has no icon`);
+  // Positive control: the next page's own icon arrives after the clear.
+  await command('update', { tabId: A.extId, props: { url: url('/c') } });
+  if (!(await waitIcon())) return verdict(false, null, 'positive control: the favicon of /c did not arrive after the clear');
+  return verdict(true, `the favicon of /b reached tabs.get; a top-level navigation to /plain (no icon link) cleared it; the favicon of /c arrived after the clear`, null);
+}
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
@@ -1214,6 +1251,7 @@ const SCENARIOS = {
   'scheme-wall': scenarioSchemeWall,
   'refused-write': scenarioRefusedWrite,
   'extension-redirect': scenarioExtensionRedirect,
+  'favicon-clear': scenarioFaviconClear,
   'theia-never': scenarioTheiaNever,
 };
 
@@ -1224,6 +1262,14 @@ const PLANT_REDIRECT_GUARD_OFF = tabId => `
   if (!o) return { landed: false };
   const load = o.fixupAndLoadURIString.bind(o);
   o.fixupAndLoadURIString = (uri, options) => (uri === 'about:blank' ? undefined : load(uri, options));
+  return { landed: true };`;
+
+// The overlay's tab node keeps its icon, so the clear on navigation is ignored (WR-08).
+const PLANT_FAVICON_STALE = tabId => `
+  const node = [...window.gBrowser.tabs].find(t => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(t.linkedBrowser) === ${JSON.stringify(tabId)});
+  if (!node || !node.image) return { landed: false };
+  const keep = node.image;
+  Object.defineProperty(node, 'image', { configurable: true, get: () => keep, set: () => {} });
   return { landed: true };`;
 
 const PLANTS = {
@@ -1244,6 +1290,7 @@ const PLANTS = {
   // A sender record naming the Theia origin gets through to the recorder; the sender scenario must go red on it.
   'theia-record': { scenario: 'sender', expect: 'Theia frame visible to extensions', record: theia => ({ kind: 'sender', tabId: -1, url: `${theia.origin}/`, href: `${theia.origin}/`, frameId: 0 }) },
   'redirect-guard-off': { scenario: 'extension-redirect', expect: 'web tab navigated to an extension page', late: A => PLANT_REDIRECT_GUARD_OFF(A.webTabId) },
+  'favicon-stale': { scenario: 'favicon-clear', expect: 'favicon survived a top-level navigation', late: A => PLANT_FAVICON_STALE(A.webTabId) },
   'theia-in-tabs-late': { scenario: 'theia-never', expect: 'Theia frame visible to extensions', late: () => PLANT_THEIA_IN_TABS },
 };
 
