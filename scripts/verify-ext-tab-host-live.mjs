@@ -79,7 +79,7 @@ browser.tabs.onCreated.addListener(t => post({ kind: 'created', tab: brief(t) })
 browser.tabs.onActivated.addListener(i => post({ kind: 'activated', tabId: i.tabId, windowId: i.windowId, previousTabId: i.previousTabId }));
 browser.tabs.onUpdated.addListener((id, change, t) => post({ kind: 'updated', tabId: id, change, url: t && t.url, title: t && t.title, windowId: t && t.windowId }));
 browser.tabs.onRemoved.addListener((id, info) => post({ kind: 'removed', tabId: id, windowId: info.windowId, isWindowClosing: info.isWindowClosing }));
-browser.webRequest.onBeforeRequest.addListener(d => post({ kind: 'request', tabId: d.tabId, url: d.url, type: d.type, frameId: d.frameId }), { urls: ['<all_urls>'], types: ['main_frame'] });
+browser.webRequest.onBeforeRequest.addListener(d => post({ kind: 'request', tabId: d.tabId, url: d.url, type: d.type, frameId: d.frameId }), { urls: ['<all_urls>'] }); // every type: the Theia frame's documents and subresources reach the recorder (WR-01)
 browser.webNavigation.onCommitted.addListener(d => post({ kind: 'committed', tabId: d.tabId, url: d.url, frameId: d.frameId }));
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg && msg.kind === 'hello') {
@@ -396,6 +396,22 @@ async function waitForTheiaOrigin(app) {
   }
 }
 
+// Reloads the Theia frame after the probe is installed, so its documents and requests pass the recorders (WR-01).
+// Returns once the frame has been idle for about two seconds on the Theia origin.
+async function reloadTheiaFrame(app, theia) {
+  await chromeJson(app, `document.getElementById('powerbrowser-content').reload(); return { landed: true };`);
+  const end = Date.now() + 90000;
+  let idle = 0;
+  for (;;) {
+    await sleep(500);
+    const info = await chromeJson(app, `const f = document.getElementById('powerbrowser-content');
+      return { loading: f.webProgress.isLoadingDocument, origin: f.currentURI ? f.currentURI.spec : null };`);
+    idle = info.loading ? 0 : idle + 1;
+    if (idle >= 4 && info.origin && new URL(info.origin).origin === theia.origin) return;
+    if (Date.now() > end) throw new Error('BROKEN INSTRUMENT: the Theia frame did not finish reloading');
+  }
+}
+
 // Opens a web tab. extId is -1 when the trackers cannot name the overlay.
 async function openTab(app, path) {
   const webTabId = await openWebTab(app, url(path));
@@ -477,8 +493,10 @@ async function scenarioQuery({ app, theia }) {
 }
 
 // The content script in a web tab reports sender.tab with its real id, frameId 0 and the favicon.
-async function scenarioSender({ app }) {
-  const { extId } = await openTab(app, '/b');
+async function scenarioSender({ app, theia, plant }) {
+  if (plant && plant.record) session.logs.push(plant.record(theia));
+  await reloadTheiaFrame(app, theia);
+  const { webTabId, extId } = await openTab(app, '/b');
   const report = await tryWait(r => r.kind === 'sender' && String(r.href).endsWith('/b'), 30000);
   if (!report) {
     return verdict(false, null, `sender.tab missing: no content-script report for /b reached the extension (overlay tab id ${extId})`);
@@ -488,6 +506,12 @@ async function scenarioSender({ app }) {
   }
   if (!String(report.url).endsWith('/b') || report.frameId !== 0) {
     return verdict(false, null, `sender.tab missing: sender.tab.url ${report.url}, frameId ${report.frameId}`);
+  }
+  // WR-01: the frame reloaded after install, so a content script that reached it has reported by now.
+  await sleep(2000);
+  const theiaReports = session.logs.filter(r => r.kind === 'sender' && String(r.href).startsWith(theia.origin)).length;
+  if (theiaReports !== 0) {
+    return verdict(false, null, `Theia frame visible to extensions: ${theiaReports} content-script report(s) named the Theia origin ${theia.origin} after the frame reloaded`);
   }
   // Favicon: LinkHandlerParent -> gBrowser.setIcon -> gBrowser.getIcon -> tabs.get(...).favIconUrl.
   // Firefox hands the icon back re-encoded as a data: URL, so the served /icon.png shows as a PNG data URL.
@@ -505,6 +529,16 @@ async function scenarioSender({ app }) {
   const fromOther = reports.filter(r => !String(r.href).startsWith(ORIGIN)).length;
   if (fromServed === 0 || fromOther !== 0) {
     return verdict(false, null, `sender reports: ${fromServed} from the served origin, ${fromOther} from elsewhere`);
+  }
+  // Positive control, same session: reloading the overlay produces its own request and sender records.
+  const mark = session.logs.length;
+  await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(webTabId)});
+    o.reload();
+    return { landed: true };`);
+  const reloadedRequest = await tryWait(r => session.logs.indexOf(r) >= mark && r.kind === 'request' && r.tabId === extId && String(r.url).endsWith('/b'), 20000);
+  const reloadedSender = await tryWait(r => session.logs.indexOf(r) >= mark && r.kind === 'sender' && String(r.href).endsWith('/b'), 20000);
+  if (!reloadedRequest || !reloadedSender) {
+    return verdict(false, null, `positive control: reloading the /b overlay (tab id ${extId}) produced ${reloadedRequest ? 'its request' : 'no request'} and ${reloadedSender ? 'its sender report' : 'no sender report'}`);
   }
   return verdict(true, `content script in /b sent sender.tab id ${report.tabId} (url ends /b, frameId 0); favIconUrl reached tabs.get; ${fromServed} report(s) from the served origin, none from elsewhere`, null);
 }
@@ -1024,18 +1058,29 @@ async function scenarioTheiaNever({ app, theia, plant }) {
   if (origin0 !== theia.origin) {
     return verdict(false, null, `WebDriver origin at the start is ${origin0}, expected the Theia origin ${theia.origin}`);
   }
+  await reloadTheiaFrame(app, theia);
+  // Positive control: the reloaded frame's own request reached the recorder, so an absence below is not blind.
+  const reach = await tryWait(r => r.kind === 'request' && r.tabId === -1 && String(r.url).startsWith(theia.origin), 30000);
+  if (!reach) {
+    return verdict(false, null, `positive control: after the Theia frame reloaded, the probe recorded no webRequest for the Theia origin ${theia.origin}, so the absence below cannot be trusted`);
+  }
   const tabs = [];
   const absent = async where => {
     const info = await theiaInfo(app);
     if (info.extensionId !== -1) return `Theia frame visible to extensions: ${where}: getBrowserData(frame).tabId is ${info.extensionId}`;
     const listed = (await command('query', { info: {} })).filter(t => String(t.url).startsWith(theia.origin));
     if (listed.length) return `Theia frame visible to extensions: ${where}: tabs.query listed ${JSON.stringify(listed)}`;
-    if (session.logs.some(r => JSON.stringify(r).includes(theia.origin))) {
-      return `Theia frame visible to extensions: ${where}: an extension record names the Theia origin ${theia.origin}`;
+    // Named records: only a webRequest record of the frame's own request with tab id -1 is allowed. That leg is the
+    // known gap UF-31.1-02 (Phase 38): the product does not hide the frame from network observers.
+    const named = session.logs.filter(r => JSON.stringify(r).includes(theia.origin));
+    const leaked = named.find(r => !(r.kind === 'request' && r.tabId === -1));
+    if (leaked) {
+      return `Theia frame visible to extensions: ${where}: an extension record named the Theia origin ${theia.origin} (${leaked.kind}, tab id ${leaked.tabId})`;
     }
     const webIds = tabs.map(t => t.extId);
     for (const r of session.logs) {
       for (const id of tabIdsOf(r)) {
+        if (r.kind === 'request' && id === -1) continue; // non-tab requests, the frame's own included (UF-31.1-02)
         if (!webIds.includes(id)) return `a ${r.kind} record named tab id ${id}, which is no web tab of this session (${where})`;
       }
     }
@@ -1088,7 +1133,8 @@ async function scenarioTheiaNever({ app, theia, plant }) {
   if (origin1 !== theia.origin || !first.frameFirst || !reported || !committed) {
     return verdict(false, null, `positive controls failed: WebDriver origin ${origin1}, webDriverTabs[0] is the frame ${first.frameFirst}, every tab created ${reported}, every tab committed ${committed}`);
   }
-  return verdict(true, `four web tabs (${tabs.map(t => t.extId).join(', ')}), activated, B navigated to /c, C closed: no tabs.query row, event, request, sender report or record named the Theia origin, and every tab id was a web tab of this session; getBrowserData(frame).tabId stayed -1 at every step; WebDriver still reached the frame at both ends (${origin1}); every opened tab was reported`, null);
+  const gap = session.logs.filter(r => r.kind === 'request' && r.tabId === -1 && String(r.url).startsWith(theia.origin)).length;
+  return verdict(true, `four web tabs (${tabs.map(t => t.extId).join(', ')}), activated, B navigated to /c, C closed: no tabs.query row, event, sender report or other record named the Theia origin, and every tab id was a web tab of this session; the webRequest records of the frame's own requests (tabId -1, known gap UF-31.1-02) were ${gap} and are not counted as a leak; getBrowserData(frame).tabId stayed -1 at every step; WebDriver still reached the frame at both ends (${origin1}); every opened tab was reported`, null);
 }
 
 // tabs.update fields the shell cannot write are refused before the URL loads (WR-07), so a refused write applies
@@ -1157,6 +1203,8 @@ const PLANTS = {
   'stock-badge-missing': { scenario: 'gui01', expect: 'stock window button has no badge', late: () => PLANT_STOCK_BADGE_MISSING },
   'wall-unkeyed': { scenario: 'scheme-wall', expect: 'web tab navigated to an extension page', late: () => PLANT_WALL_UNKEYED },
   'wall-elsewhere': { scenario: 'scheme-wall', expect: 'not the URL wall', refusalOp: 'updateExtPagePinned' },
+  // A sender record naming the Theia origin gets through to the recorder; the sender scenario must go red on it.
+  'theia-record': { scenario: 'sender', expect: 'Theia frame visible to extensions', record: theia => ({ kind: 'sender', tabId: -1, url: `${theia.origin}/`, href: `${theia.origin}/`, frameId: 0 }) },
   'theia-in-tabs-late': { scenario: 'theia-never', expect: 'Theia frame visible to extensions', late: () => PLANT_THEIA_IN_TABS },
 };
 
