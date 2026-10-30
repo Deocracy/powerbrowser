@@ -3847,8 +3847,13 @@ export const PowerBrowserAPI = Object.freeze({
         PowerBrowserAPI.log("error", `[web-tab] removeTabRow failed for ${entry.uri}: ${err && err.message ? err.message : err}`);
       });
     }
-    // The tab node goes first: TabClose reads it while it is still in the strip.
-    tabHostDropTab(win, browser);
+    // The tab node goes first: TabClose reads it while it is still in the strip. A throw here must not skip
+    // browser.remove() (the docshell is freed by the removal) or webTabs.delete(); the close proceeds either way.
+    try {
+      tabHostDropTab(win, browser);
+    } catch {
+      PowerBrowserAPI.log("error", "[web-tab] tab host drop failed; the overlay is closed anyway");
+    }
     browser.remove();
     webTabs.delete(tabId);
     return "closed";
