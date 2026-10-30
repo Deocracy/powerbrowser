@@ -487,6 +487,8 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
             waitFor: (expr, opts) => waitFor(evaluate, expr, opts),
             screenshot,
             topLevelContexts,
+            // Phase 31 plan 05: the browser's exit status (null while it runs), for the quit checks.
+            exitCode: () => child.exitCode,
         });
     } finally {
         if (ws && client && ws.readyState === WebSocket.OPEN) {

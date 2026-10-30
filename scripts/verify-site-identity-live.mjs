@@ -76,9 +76,11 @@ import {
     appNameExpr,
     focusTheiaFrame,
     inChrome,
+    keyRoute,
     loadedAt,
     makeCurrent,
     openWebTab,
+    pressKey,
     pushes,
     serveNavPages,
     waitForPush,
@@ -87,7 +89,7 @@ import {
 import { domainToASCII, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { probe } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-site-identity-live';
@@ -1152,7 +1154,138 @@ async function appMenu(ctx) {
     await closeMenu(app);
 }
 
-const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu };
+// ---------------------------------------------------------------------------
+// Plan 05 (MENU-04, D-31-13): quit. A quit ends the application, so each quit scenario runs alone
+// in its own launch (its own session; see main and selfTest). The quit path's own mark is the quit
+// flush: quit-application-granted writes the web-tab history file into the profile
+// (PowerBrowserAPI.saveWebTabHistories). A fresh profile holds no such file before the quit, so the
+// file after the exit proves the flush ran, and the exit status comes from the browser process.
+// ---------------------------------------------------------------------------
+const QUIT_BOUNDARY_REL = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
+
+/** The history file's name, read from the boundary (WEB_TAB_HISTORY_FILE_NAME), never spelled here. */
+function quitHistoryFileName() {
+    const name = /const WEB_TAB_HISTORY_FILE_NAME = "([^"]+)";/.exec(readFileSync(join(REPO_ROOT, QUIT_BOUNDARY_REL), 'utf8'))?.[1];
+    if (!name) {
+        throw new Error(`${BROKEN} WEB_TAB_HISTORY_FILE_NAME is not in ${QUIT_BOUNDARY_REL}`);
+    }
+    return name;
+}
+
+/** The dirty-editor fixture: an untitled editor with an unsaved change. Returns 'dirty' or what Theia reads. */
+const openDirtyEditor = app => probe(app, `await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile');
+    const widget = get('EditorManager').currentEditor;
+    if (!widget) return 'no-editor';
+    widget.editor.getControl().getModel().setValue('unsaved change');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    return widget.editor.document.dirty === true ? 'dirty' : 'clean';`);
+
+/** A served web tab with two loads (its back/forward history is what the quit flush saves). True when both loaded. */
+async function quitWebTab(app, pages) {
+    const webId = await openWebTab(app, pages.url('/plain'));
+    if (await waitForPush(app, loadedAt(webId, '/plain')) < 0) {
+        return false;
+    }
+    const moved = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(webId)});
+        const reply = await w.navigate(${JSON.stringify(pages.url('/seed'))});
+        return reply && reply.ok === true;`);
+    return moved === true && await waitForPush(app, loadedAt(webId, '/seed')) >= 0;
+}
+
+/** Before a quit: the fresh profile holds no history file yet, so the file read after the exit can only be the quit's own. */
+function freshProfileForQuit(app) {
+    return !existsSync(join(app.profileDir, quitHistoryFileName()));
+}
+
+/** The checks after a quit was requested: the exit, its status, and the flush file. */
+async function afterQuit(ctx, what) {
+    const { app, fail } = ctx;
+    const file = join(app.profileDir, quitHistoryFileName());
+    const exit = await app.awaitExit(15000);
+    if (exit !== 'exited') {
+        return fail(`${what}: quit did not exit within 15 s (the browser still answers)`);
+    }
+    const code = await waitFor(() => app.exitCode(), c => c !== null, 8000);
+    if (code !== 0) {
+        fail(`${what}: the browser exited with ${JSON.stringify(code)}, want 0`);
+    }
+    if (!existsSync(file)) {
+        return fail(`${what}: the quit flush did not run (no ${quitHistoryFileName()} in the profile)`);
+    }
+    let saved = null;
+    try {
+        saved = JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+        return fail(`${what}: the flushed history file is not JSON`);
+    }
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved) || Object.keys(saved).length === 0) {
+        fail(`${what}: the flushed history holds no web tab (the tab had two loads)`);
+    }
+}
+
+/** Ctrl+Q with the Theia frame focused and a dirty editor open: the reserved chrome key quits, and the flush runs. */
+async function quitKey(ctx) {
+    const { app, pages, fail, note } = ctx;
+    if (await quitWebTab(app, pages) !== true) {
+        return fail(`${BROKEN} the served page did not load twice`);
+    }
+    const dirty = await openDirtyEditor(app);
+    if (dirty !== 'dirty') {
+        return fail(`${BROKEN} the editor fixture reads ${JSON.stringify(dirty)}, not dirty, so the quit proves nothing about unsaved work`);
+    }
+    if (await focusTheiaFrame(app) !== true) {
+        return fail(`${BROKEN} the Theia frame did not take focus before the key`);
+    }
+    if (!freshProfileForQuit(app)) {
+        return fail(`${BROKEN} the fresh profile already holds the history file, so the flush check proves nothing`);
+    }
+    await pressKey(app, { key: 'q', code: 'KeyQ', keyCode: 81, modifiers: ['accel'] });
+    note(`Ctrl+Q pressed (route ${keyRoute.last})`);
+    await afterQuit(ctx, 'Ctrl+Q');
+}
+
+/** The Quit row: enabled in the menu, and its click quits through the same path. Plant `quit-dead-row`: the row sends nothing. */
+async function quitRow(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const want = await expectedAppMenu(app);
+    const quit = want.rows.find(row => row.id === 'quit');
+    if (!quit) {
+        return fail(`${BROKEN} the menu has no Quit row`);
+    }
+    if (await quitWebTab(app, pages) !== true) {
+        return fail(`${BROKEN} the served page did not load twice`);
+    }
+    const dirty = await openDirtyEditor(app);
+    if (dirty !== 'dirty') {
+        return fail(`${BROKEN} the editor fixture reads ${JSON.stringify(dirty)}, not dirty, so the quit proves nothing about unsaved work`);
+    }
+    if (plant === 'quit-dead-row') {
+        const applied = await probe(app, `const store = get('ChromeStoreClient'); if (!store) return false;
+            Object.getPrototypeOf(store).quitRequest = async () => 'applied';
+            return true;`);
+        if (applied === true) {
+            note('PLANT quit-dead-row applied (quitRequest resolves without quitting)');
+        }
+    }
+    if (!freshProfileForQuit(app)) {
+        return fail(`${BROKEN} the fresh profile already holds the history file, so the flush check proves nothing`);
+    }
+    if (await hamburgerOpen(app) !== true) {
+        return fail(`${BROKEN} the application menu button is not in the chrome bar`);
+    }
+    const menu = await waitFor(() => readAppMenu(app), r => r.present && r.rows.length > 0, 6000);
+    const row = menu.rows.find(r => r.label === quit.label);
+    if (!row || row.disabled !== false) {
+        return fail(`the ${quit.label} row is not read as enabled (${JSON.stringify(row ?? null)})`);
+    }
+    if (await clickMenuRow(app, quit.label) !== 'clicked') {
+        return fail(`${BROKEN} the ${quit.label} row is not in the open menu`);
+    }
+    note(`clicked ${quit.label}`);
+    await afterQuit(ctx, `the ${quit.label} row`);
+}
+
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
 const NOT_LANDED = [];
@@ -1254,14 +1387,18 @@ const PLANTS = [
     { plant: 'shield-leak', target: 'shield', run: ['shield'], expect: 'wrong site', tls: false },
     // Plan 04 (MENU-02): the Settings row never opens its stock page; the stock-page check names it.
     { plant: 'menu-dead-stock', target: 'app-menu', run: ['app-menu'], expect: 'did not open its stock page', tls: false },
+    // Plan 05 (MENU-04): the Quit row sends nothing, so the browser never exits and the exit check names it.
+    { plant: 'quit-dead-row', target: 'quit-row', run: ['quit-row'], expect: 'quit did not exit', tls: false },
 ];
 
 async function selfTest() {
     let failed = 0;
-    for (const session of [['identity-local'], ['identity-tls'], ['site-panel'], ['clear-data'], ['shield'], ['app-menu']]) {
+    // A quit ends its launch, so each quit scenario is alone in its session (no TLS fixture).
+    const ALONE = ['identity-local', 'app-menu', 'quit-key', 'quit-row'];
+    for (const session of [['identity-local'], ['identity-tls'], ['site-panel'], ['clear-data'], ['shield'], ['app-menu'], ['quit-key'], ['quit-row']]) {
         let clean;
         try {
-            clean = await runSession(session, '', session[0] !== 'identity-local' && session[0] !== 'app-menu');
+            clean = await runSession(session, '', !ALONE.includes(session[0]));
         } catch (error) {
             console.error(`${NAME} --self-test: FAIL -- harness: the clean control could not be driven: ${error.message}`);
             return 1;
@@ -1312,7 +1449,8 @@ async function main(args) {
         // One session per scenario group (4-tab limit): the TLS identity session,
         // the site-panel session (its own TLS browser), then the local session.
         const results = [];
-        for (const [name, tls] of [['identity-tls', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false]]) {
+        // quit-key and quit-row each end their own launch, so each runs in a session of its own.
+        for (const [name, tls] of [['identity-tls', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false]]) {
             if (names.includes(name)) {
                 results.push(...await runSession([name], '', tls));
             }

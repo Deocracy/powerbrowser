@@ -275,7 +275,7 @@ export async function makeProfile(extraPrefs = {}) {
  * leaves the profile in place.
  */
 export async function withShell(profile, fn) {
-    return withFirefoxPage('', async ({ evaluate, evaluateIn, send, waitFor }) => {
+    return withFirefoxPage('', async ({ evaluate, evaluateIn, send, waitFor, exitCode }) => {
         await waitFor('window.theia && window.theia.container ? true : false', { timeoutMs: 120000 });
         await waitFor(`(() => { try { ${GET_BY_NAME}
             return __getByName(window.theia.container, 'FrontendApplicationStateService').state === 'ready';
@@ -286,6 +286,18 @@ export async function withShell(profile, fn) {
         const chrome = (await pollFor(async () => (await contexts('chrome')).find(entry => entry.url === SHELL_DOCUMENT_URL),
             30000, 'a chrome context for the shell document')).context;
         const hadLock = profileLocked(profile.profileDir);
+        // Resolves 'exited' once the socket is closed and the profile lock is gone, else 'timeout'.
+        const awaitExit = async (timeoutMs = 30000) => {
+            try {
+                await pollFor(async () => {
+                    const socketClosed = await send('browsingContext.getTree', {}).then(() => false, () => true);
+                    return socketClosed && !(hadLock && profileLocked(profile.profileDir));
+                }, timeoutMs, 'the browser to exit');
+                return 'exited';
+            } catch {
+                return 'timeout';
+            }
+        };
         const app = {
             evaluate,
             evaluateIn,
@@ -293,6 +305,8 @@ export async function withShell(profile, fn) {
             contexts,
             chrome,
             port: Number(await evaluate('location.port')),
+            awaitExit,
+            exitCode,
             async quit({ how = 'button', timeoutMs = 30000 } = {}) {
                 // 'desktop-close' is the desktop's close as Gecko delivers it
                 // (AppWindow::RequestWindowClose, xpfe/appshell/AppWindow.cpp):
@@ -305,15 +319,7 @@ export async function withShell(profile, fn) {
                     : `document.getElementById('powerbrowser-window-close').click(); true`;
                 // Not awaited: the chrome document may go away before the call returns.
                 evaluateIn(chrome, expression).catch(() => undefined);
-                try {
-                    await pollFor(async () => {
-                        const socketClosed = await send('browsingContext.getTree', {}).then(() => false, () => true);
-                        return socketClosed && !(hadLock && profileLocked(profile.profileDir));
-                    }, timeoutMs, 'the browser to exit');
-                    return 'exited';
-                } catch {
-                    return 'timeout';
-                }
+                return awaitExit(timeoutMs);
             },
         };
         return fn(app);

@@ -45,6 +45,8 @@ export async function withProbeShell(fn, opts = {}) {
     console.log('purgecaches: MOZ_PURGE_CACHES=1');
     try {
         return await withShell(profile, async app => {
+            // Phase 31 plan 05: the quit checks read the profile's files after the browser exits.
+            app.profileDir = profile.profileDir;
             await installPushRecorder(app);
             await installFireRecorder(app);
             if (opts.trustFixtureCA) {

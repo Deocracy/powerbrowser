@@ -5063,6 +5063,11 @@ run_own_checks() {
       # and the last Theia app build, so never --quick. The self-test runs a clean
       # control per session, then one session per planted fault (typed-lock,
       # perm-refused, icons-stale, clear-signout, shield-stale, shield-leak).
+      # 31-04: app-menu (the hamburger rows, the stock pages, one stock window each).
+      # 31-05 (MENU-04): quit-key (Ctrl+Q with a dirty editor, Theia focused) and
+      # quit-row (the Quit menu row) each run alone in their own launch, because a
+      # quit ends the application; they check the exit status (0), the quit flush
+      # file in the probe's own profile, and the plant quit-dead-row.
       "site-identity-live|node $REPO_ROOT/scripts/verify-site-identity-live.mjs"
       "site-identity-live-self-test|node $REPO_ROOT/scripts/verify-site-identity-live.mjs --self-test"
 
