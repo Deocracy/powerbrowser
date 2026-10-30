@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then forty-six planted faults
+ * --self-test: the clean tree must be green; then forty-eight planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -959,6 +959,23 @@ function cases(m, srcs, mm) {
                 ? null
                 : { awaitAt: await_, capturedAt: captured, refusesAfterAwait: refuses, replyUsesCapturedOrigin: replyUsesCaptured };
         }],
+        ['the identity host is the displaySpec as it is, a port stripped only from the fallback (WR-02)', () => {
+            const src = stripComments(addressBarSrc ?? '');
+            const start = src.indexOf('protected identityHostText(');
+            if (start < 0) {
+                return `no identityHostText in ${ADDRESS_BAR_REL} -- broken instrument`;
+            }
+            const end = src.indexOf('\n    }\n', start);
+            const body = src.slice(start, end < 0 ? undefined : end);
+            const direct = /if \(identity\.displaySpec\) \{\s*return identity\.displaySpec;\s*\}/.test(body);
+            const fallbackBrackets = /\(\\\[\[\^\\\]\]\+\\\]\|\[\^:\]\+\)\(\?::\\d\+\)\?\$/.test(body);
+            return direct && fallbackBrackets ? null : { displaySpecReturnedAsIs: direct, ipv6AwareFallback: fallbackBrackets };
+        }],
+        ['the base domain is sent in display form, as displaySpec is (WR-08)', () => {
+            const code = stripComments(apiSrc);
+            return code.includes('baseDomain = Cc["@mozilla.org/network/idn-service;1"].getService(Ci.nsIIDNService).convertToDisplayIDN(baseDomain);')
+                ? null : 'the pushed baseDomain is not converted with convertToDisplayIDN, so the highlight never matches a Unicode host';
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -1060,6 +1077,20 @@ const PLANTS = [
         from: "    'local',\n",
         to: '',
         expect: 'SECURITY_STATES equal the boundary decode arms',
+    },
+    {
+        name: 'the identity host strips the port from the chrome displaySpec (WR-02)',
+        rel: ADDRESS_BAR_REL,
+        from: 'if (identity.displaySpec) {\n            return identity.displaySpec;',
+        to: "if (identity.displaySpec) {\n            return identity.displaySpec.replace(/:\\d+$/, '');",
+        expect: 'the identity host is the displaySpec as it is, a port stripped only from the fallback (WR-02)',
+    },
+    {
+        name: 'the pushed base domain stays in punycode (WR-08)',
+        rel: API_REL,
+        from: '          if (typeof baseDomain === "string" && baseDomain) {\n            baseDomain = Cc["@mozilla.org/network/idn-service;1"].getService(Ci.nsIIDNService).convertToDisplayIDN(baseDomain);\n          }',
+        to: '',
+        expect: 'the base domain is sent in display form, as displaySpec is (WR-08)',
     },
     {
         name: 'the site info reads the origin after its await (WR-01)',

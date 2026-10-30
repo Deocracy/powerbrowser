@@ -3548,6 +3548,11 @@ export const PowerBrowserAPI = Object.freeze({
         }
         try {
           baseDomain = lazy.SiteDataManager.getBaseDomainFromHost(uri.host);
+          // WR-08: the same display form as displaySpec (the same convertToDisplayIDN policy), so the
+          // chrome bar's registrable-domain highlight matches a Unicode host instead of its punycode.
+          if (typeof baseDomain === "string" && baseDomain) {
+            baseDomain = Cc["@mozilla.org/network/idn-service;1"].getService(Ci.nsIIDNService).convertToDisplayIDN(baseDomain);
+          }
         } catch (err) {
           baseDomain = null;
         }

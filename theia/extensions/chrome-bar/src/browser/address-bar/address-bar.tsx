@@ -287,12 +287,19 @@ export class AddressBar {
      * Phase 31 (SITE-03, D-31-10): the host line for the identity box, from
      * Chrome's `displaySpec` (Unicode for a secure IDN host, punycode
      * otherwise). The `https://` trim is the pill input's (`pillText`), not
-     * this line. A `:port` is stripped so the registrable domain, the suffix
-     * `identityHost` highlights, matches the bare host.
+     * this line. Chrome's displaySpec is nsIURI.host: no port, and no brackets
+     * for an IPv6 literal (nsStandardURL.h:604-618), so it is used as it is
+     * (WR-02: stripping a `:digits` suffix turned `::1` into `:`). The fallback
+     * reads the committed address, where a port can appear; it is stripped there,
+     * and the brackets of an IPv6 literal are removed so both paths agree.
      */
     protected identityHostText(identity: { state: string; displaySpec: string; baseDomain: string | null }): string {
-        const host = identity.displaySpec || this.committedAddress.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
-        return host.replace(/:\d+$/, '');
+        if (identity.displaySpec) {
+            return identity.displaySpec;
+        }
+        const authority = this.committedAddress.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
+        const parts = /^(\[[^\]]+\]|[^:]+)(?::\d+)?$/.exec(authority);
+        return parts ? parts[1].replace(/^\[|\]$/g, '') : authority;
     }
     protected identityHost(identity: { state: string; displaySpec: string; baseDomain: string | null }): React.ReactNode {
         const host = this.identityHostText(identity);
