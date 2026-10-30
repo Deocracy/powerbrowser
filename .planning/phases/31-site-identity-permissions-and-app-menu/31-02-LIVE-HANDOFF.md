@@ -48,8 +48,15 @@ node scripts/verify-site-identity-live.mjs --scenario site-panel
     (`Use default`), each state read back from chrome's reply, and `allow`
     still present after closing and reopening the panel;
   - the identity box shows the eye icon after the camera reply;
-  - autoplay-media `allow` → `block-audible` (`Block sounds`) →
-    `block-all` (`Block all`) → `default`;
+  - autoplay-media (Firefox parity, orchestrator decision): the row reads the
+    effective state, so with the shipped `media.autoplay.default=BLOCKED` the
+    starting row reads `Block sounds` with no saved entry. The cycle is
+    default (`Block sounds`, stored `default`) → allow (`Allowed`, icon) →
+    block-audible (`Block sounds`, stored `default`, no icon, because
+    block-audible equals the default and is never saved, SitePermissions.sys.mjs:575-580) →
+    block-all (`Block all`, icon) → default (`Block sounds`, no icon). The
+    expected default is read from `media.autoplay.default` in chrome at check
+    time and mapped through `nsIAutoplay.idl` and `getDefault`, never assumed;
   - the origin race (review fix): the panel shows origin A, the tab
     navigates to origin B, a camera write is refused (the panel shows the
     unavailable copy), and on reopen camera is `default` on B, B reads
@@ -57,8 +64,7 @@ node scripts/verify-site-identity-live.mjs --scenario site-panel
   - four non-default permissions show three icons and `+1`; resetting all four
     to default shows no icons;
   - an autoplay-media `block-audible` or `block-all` keeps its icon in the box.
-- Last run: **FAIL** on the autoplay-media steps only. See "Open blocker"
-  below. Every other step passed in that run.
+- Last run (build after 150a0e2): `site-panel: PASS`.
 
 ### 3. Live self-test (plants go red)
 
@@ -70,9 +76,10 @@ node scripts/verify-site-identity-live.mjs --self-test
   every planted fault red on its target: `typed-lock` (naming
   `lock derived from typed text`), `perm-refused` (naming
   `can't show site information`), `icons-stale` (naming `icons did not update`).
-- Last run: the three plants went red on their targets as required. The
-  clean `site-panel` control is red, for the autoplay-media reason only, so
-  the overall self-test is FAIL.
+- Last run (build after 150a0e2): the clean controls of `identity-local`,
+  `identity-tls` and `site-panel` are green, and the three plants went red on
+  their targets; `--self-test: PASS -- the clean control is green and all 3
+  planted faults went red: typed-lock, perm-refused, icons-stale`.
 
 ### 4. Static gates (no browser)
 
@@ -89,32 +96,27 @@ node scripts/scan-brand-residue.mjs
   faults all red; bridge PASS with 25 planted faults red; `--quick` exit 0;
   brand scan PASS.
 
-## Open blocker: autoplay-media "Block sounds" is not storable under the default pref
+## Autoplay effective-state read (Firefox parity, decided by the orchestrator)
 
 Upstream's default for `media.autoplay.default` is `BLOCKED`
-(`upstream/modules/libpref/init/StaticPrefList.yaml:11938-11940`, value 1).
-`SitePermissions.getDefault("autoplay-media")` maps that to `SitePermissions.BLOCK`
+(`upstream/modules/libpref/init/StaticPrefList.yaml:11938-11940`, value 1),
+and `getDefault("autoplay-media")` maps it to `BLOCK`
 (`upstream/browser/modules/SitePermissions.sys.mjs:863-884`). `setForPrincipal`
-removes any entry equal to the default (`SitePermissions.sys.mjs:575-580`),
-so a per-site `block-audible` write is a removal and reads back as
-`default` ("Use default"). The product sets no autoplay pref, so this is the
-shipped behaviour. The plan's round trip `default → allow → block-audible →
-block-all → default` cannot pass as written.
+never saves a default-equal entry (`SitePermissions.sys.mjs:575-580`), so
+`block-audible` under the shipped default is not stored. Upstream's panel reads
+the effective state through `getForPrincipal` (fallback `getDefault`,
+`SitePermissions.sys.mjs:461-462`) and shows the default-equal value
+(`browser-sitePermissionPanel.js:755-780`). This plan follows that read:
+rows show the effective state, the cycle and the identity-box icon key on the
+saved state (`stored`).
 
-Options for a decision, not taken here:
-1. Read the effective state with `SitePermissions.getForPrincipal` (its
-   fallback is `getDefault`, `SitePermissions.sys.mjs:461-462`, which is what
-   upstream's panel shows). Absent autoplay then reads as `block-audible`
-   ("Block sounds") under the default pref.
-2. Store `block-audible` through `Services.perms.addFromPrincipal` directly,
-   with catalogue rows. This bypasses upstream's equal-to-default removal.
-3. Remove `block-audible` from the autoplay cycle. This contradicts the
-   plan's must-have "autoplay-media four-state incl. block-audible".
+Recorded as a Deviation in `31-02-SUMMARY.md`: "Autoplay effective-state read
+(Firefox parity); block-audible equals the shipped default so it is not stored."
 
 ## Files this handoff covers
 
 - `scripts/verify-site-identity-live.mjs`: `site-panel`, `PLANTS` entries
   `perm-refused` and `icons-stale`, `openPanelReady`, `PANEL_READ`, `ICON_READ`.
-- `scripts/verify-site-identity.mjs`: cases 12-14 and the four new plants.
+- `scripts/verify-site-identity.mjs`: cases 12-15 and the five new plants.
 - `scripts/verify-platform.sh`: rows `site-identity-live` and
   `site-identity-live-self-test` (full run, not `--quick`).

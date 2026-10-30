@@ -19,9 +19,9 @@ provides:
 actuals:
   tokens: 22000    # chars/4 over the added lines of the 7 code commits (git diff 60bc121..HEAD)
   tasks: 3
-  commits: 7       # MEASURED: git rev-list --count 60bc121..HEAD (code commits; the docs commit carrying this file is not counted, as in 31-01)
+  commits: 9       # MEASURED: git rev-list --count --grep=31-02 60bc121..HEAD over the code commits (the docs commits carrying this file are not counted, as in 31-01)
   plan_head_before: 60bc1216298ffbf61e7a21d244c40cb7821b6059
-  plan_head_after: fc09872
+  plan_head_after: 7a964f4
 
 # Tech tracking
 tech-stack:
@@ -71,8 +71,8 @@ coverage:
     requirement: "SITE-05"
     verification:
       - kind: e2e
-        ref: "node scripts/verify-site-identity-live.mjs --scenario site-panel (camera round trip and reopen persistence pass; autoplay-media steps fail, see Blockers)"
-        status: unknown
+        ref: "node scripts/verify-site-identity-live.mjs --scenario site-panel (camera round trip, reopen persistence and the autoplay-media cycle pass)"
+        status: pass
       - kind: unit
         ref: "node scripts/verify-site-identity.mjs"
         status: pass
@@ -128,8 +128,8 @@ coverage:
 ## Commits
 
 Plan 31-02 commits, oldest first. The count is measured with
-`git rev-list --count --grep=31-02 60bc121..fc09872` (7); the docs commit that
-carries this file is not counted here.
+`git rev-list --count --grep=31-02 60bc121..7a964f4` (9 code commits); the docs
+commits that carry this file are not counted here.
 
 - `ffe1599` feat(31-02): webTabSetPermission kind and the six permission rows in webTabSiteInfo
 - `6501cc3` fix(31-02): permission writes land only on the origin the panel showed; revoke clears tab temporaries (review fix)
@@ -138,6 +138,10 @@ carries this file is not counted here.
 - `4464134` test(31-02): permission gate cases and the site-panel live scenario with plants
 - `56f2548` fix(31-02): live site-panel reopens wait for rows; typed-lock plant matches the identity shape
 - `fc09872` docs(31-02): catalogue rows name the plan task without the plan filename
+- `150a0e2` fix(31-02): permission rows show the effective state; cycle and icons key on the saved state (orchestrator decision on the autoplay blocker)
+- `7a964f4` test(31-02): effective-versus-stored static case; autoplay live steps read the pref default in chrome
+- `0dfb3da` docs(31-02): live handoff and plan summary (the first version)
+- the docs commit that carries this revision (not counted above)
 
 ## Review fix (orchestrator security review of ffe1599)
 
@@ -164,8 +168,8 @@ Both findings were fixed in `6501cc3`:
 
 ## Static results
 
-- `node scripts/verify-site-identity.mjs`: PASS (17 cases)
-- `node scripts/verify-site-identity.mjs --self-test`: PASS (21 planted faults)
+- `node scripts/verify-site-identity.mjs`: PASS (18 cases)
+- `node scripts/verify-site-identity.mjs --self-test`: PASS (22 planted faults)
 - `node scripts/verify-web-tab-bridge.mjs` + `--self-test`: PASS (14 webTab kinds; 25 planted faults)
 - `node scripts/verify-ng-040-internals-catalogue-lines.mjs`: PASS
 - `scripts/check-internals-boundary.sh` plain + `--catalogue`: PASS
@@ -176,26 +180,37 @@ Both findings were fixed in `6501cc3`:
 
 ## Live results
 
-Theia built with `yarn build` (exit 0) from HEAD after `0c845b3`'s Theia changes;
-the sequence and PASS definitions are in `31-02-LIVE-HANDOFF.md`.
+Theia built with `yarn build` (exit 0) after `150a0e2`; the sequence and PASS
+definitions are in `31-02-LIVE-HANDOFF.md`.
 
-- `identity-tls: PASS`
-- `identity-local: PASS`
-- `site-panel`: FAIL, autoplay-media steps only. Every other step passed:
-  - `Connection secure` and the certificate block (`Issued to:`, `Issued by:`) present;
-  - six rows in table order, and the empty row while all are default;
-  - camera `Allowed` → `Blocked` → `Use default`, and `allow` persisted across a reopen;
-  - the eye icon after the camera reply;
-  - origin race: camera refused after the tab moved to origin B (the panel showed the unavailable copy); on B camera is `default`, `Connection not secure`, no certificate block;
-  - four non-default → three icons and `+1`; reset → no icons.
-  - Failing lines: `site-panel: FAIL -- autoplay-media row did not reach "block-audible" with the copy "Block sounds"; saw state "default" copy "Use default"`, then the `block-all` line, and the autoplay icon lines (see Blockers).
-- `--self-test`: the `typed-lock` plant goes red on `identity-tls`
-  (`lock derived from typed text`), `perm-refused` goes red on `site-panel`
-  (`can't show site information`), and `icons-stale` goes red on `site-panel`
-  (`icons did not update`). The clean `site-panel` control is red for the
-  autoplay reason, so the overall self-test is FAIL.
+- `identity-tls: PASS` (earlier run, after 0c845b3; not re-run after 150a0e2)
+- `identity-local: PASS` (same)
+- `site-panel: PASS` (after 150a0e2). Passing steps, in order: `Connection secure`
+  and the certificate block (`Issued to:`, `Issued by:`); six rows in table order;
+  camera `Allowed` → `Blocked` → `Use default` with reopen persistence; the eye icon
+  after the camera reply; the autoplay-media cycle at the pref default (`Block sounds`
+  with no saved entry), then `Allowed` (icon), `Block sounds` (no saved entry, no
+  icon), `Block all` (icon), `Block sounds` (no icon); the origin race (camera write
+  refused after the tab moved; on the new origin camera is `default`,
+  `Connection not secure`, no certificate block); four non-default → three icons
+  and `+1`; reset → no icons.
+- `--self-test: PASS -- the clean control is green and all 3 planted faults went red: typed-lock, perm-refused, icons-stale`.
+  The three clean controls (`identity-local`, `identity-tls`, `site-panel`) are
+  green. The plants: `typed-lock` red on `identity-tls` (`lock derived from typed text`),
+  `perm-refused` red on `site-panel` (`can't show site information`), `icons-stale`
+  red on `site-panel` (`icons did not update`).
 
 ## Deviations
+
+- **Autoplay effective-state read (Firefox parity); block-audible equals the shipped default so it is not stored.**
+  Decided by the orchestrator (option 1 of the blocker). Rows read the effective
+  state with `SitePermissions.getForPrincipal` (fallback `getDefault`,
+  `upstream/browser/modules/SitePermissions.sys.mjs:461-462`), as upstream's
+  panel does (`upstream/browser/base/content/browser-sitePermissionPanel.js:755-780`).
+  Writes are unchanged: a default-equal write is a removal
+  (`SitePermissions.sys.mjs:575-580`). The cycle and the identity-box icons key on
+  the saved state (`stored`). The pref default is read in chrome at check time and mapped through
+  `upstream/dom/media/autoplay/nsIAutoplay.idl:13-15`, never assumed.
 
 - **`site-panel.tsx` now exists** (the 31-01 deviation is resolved as the plan
   directs): the panel moved out of `address-bar.tsx`. The identity click still
@@ -235,34 +250,12 @@ the sequence and PASS definitions are in `31-02-LIVE-HANDOFF.md`.
 
 ## Blockers
 
-### 1. autoplay-media "Block sounds" cannot be stored under the shipped default (design decision needed)
-
-- Upstream's default for `media.autoplay.default` is `BLOCKED`
-  (`upstream/modules/libpref/init/StaticPrefList.yaml:11938-11940`). The product
-  sets no autoplay pref.
-- `SitePermissions.getDefault("autoplay-media")` returns `BLOCK` for that pref
-  (`upstream/browser/modules/SitePermissions.sys.mjs:863-884`).
-- `setForPrincipal` removes any entry equal to the default
-  (`SitePermissions.sys.mjs:575-580`). So a per-site `block-audible` write is a
-  removal and reads back as `default` ("Use default").
-- The plan's round trip `default → allow → block-audible → block-all → default`
-  therefore fails at its second step, and the identity-box icon for `block-audible`
-  never appears.
-- Options (not taken; recorded in `31-02-LIVE-HANDOFF.md`): (1) read the effective
-  state through `SitePermissions.getForPrincipal` (fallback `getDefault`,
-  `SitePermissions.sys.mjs:461-462`), which is what upstream's panel shows; (2) store
-  `block-audible` through `Services.perms.addFromPrincipal` with catalogue rows; (3)
-  drop `block-audible` from the cycle, which contradicts the plan's must-have.
-- Attempts: the step failed in both full `site-panel` runs and in the live self-test
-  after the harness fixes. The failure is the same each time, so it is not a harness race.
-
-The live `site-panel` row and the clean self-test control stay red. The check was not
-weakened.
+None open. The autoplay-media blocker from the first run is resolved by the
+effective-state read above (orchestrator decision; see Deviations).
 
 ## Not done
 
 - Pixel check on KDE Wayland against UI-SPEC (manual; not run).
-- Autoplay-media round trip and autoplay icon (Blocker 1).
 - The plan's `identity-lock,site-panel` verify line (scenario name does not exist).
 
 ## Deferred human verification
