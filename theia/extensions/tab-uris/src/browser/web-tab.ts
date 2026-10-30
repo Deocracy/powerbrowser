@@ -234,8 +234,10 @@ export interface WebTabReply {
 /** Phase 31 plan 02: one managed permission on this tab's principal, in table order. */
 export interface WebTabPermissionRow {
     id: string;
-    /** `allow`, `block`, `block-audible`, `block-all` or `default` (the panel's tri-state). */
+    /** The effective state the row shows: `allow`, `block`, `block-audible`, `block-all` or `default`. */
     state: string;
+    /** The saved state: `default` when no entry is saved (an entry equal to the default is never saved). Drives the cycle and the identity-box icons. */
+    stored: string;
     /** The upstream label (`getPermissionLabel`), or null when upstream has none. */
     label: string | null;
 }
@@ -766,7 +768,7 @@ export class WebTabWidget extends BaseWidget {
         if (reply.ok !== true || reply.where !== 'applied' || !Array.isArray(reply.permissions)) {
             return;
         }
-        const shown = reply.permissions.filter(row => row.state !== 'default');
+        const shown = reply.permissions.filter(row => row.stored !== 'default');
         this.permissionIcons = shown.map(row => row.id);
         this.permissionLabels = shown.map(row => row.label ?? '');
     }

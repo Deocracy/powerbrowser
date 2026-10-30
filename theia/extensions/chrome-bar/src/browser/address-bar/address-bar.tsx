@@ -408,12 +408,20 @@ export class AddressBar {
         }
         this.sitePanelTab = tab instanceof WebTabWidget ? tab : null;
         this.sitePanelInfo = info && info.ok === true && info.where === 'done' && Array.isArray(info.permissions) && typeof info.origin === 'string' ? info : null;
+        this.sitePanelIntents = {};
         this.sitePanelOpen = true;
         this.update();
     }
 
     /** Phase 31 (SITE-01/02): the panel's last `webTabSiteInfo` reply, or null when the panel shows the unavailable copy. */
     protected sitePanelInfo: WebTabSiteInfo | null = null;
+
+    /**
+     * Phase 31 (plan 02, Firefox parity): the state the user last chose per row in the open panel.
+     * An autoplay-media "block-audible" equal to the shipped default is never saved
+     * (SitePermissions.sys.mjs:575-580), so the next click must come from the choice, not the read-back.
+     */
+    protected sitePanelIntents: Record<string, string> = {};
 
     /** Phase 31 (SITE-04, plan 02): the tab the open panel describes; its permission writes go to this tab only. */
     protected sitePanelTab: WebTabWidget | null = null;
@@ -430,6 +438,7 @@ export class AddressBar {
             this.sitePanelOpen = false;
             this.sitePanelInfo = null;
             this.sitePanelTab = null;
+            this.sitePanelIntents = {};
             this.update();
         }
     };
@@ -443,6 +452,7 @@ export class AddressBar {
     protected async setSitePermission(id: string, state: string): Promise<void> {
         const tab = this.sitePanelTab;
         const origin = this.sitePanelInfo?.origin;
+        this.sitePanelIntents = { ...this.sitePanelIntents, [id]: state };
         let reply: WebTabSiteInfo | null = null;
         if (tab && typeof origin === 'string') {
             try {
@@ -2433,6 +2443,7 @@ export class AddressBar {
         return <SitePanel
             info={this.sitePanelInfo}
             anchor={this.sitePanelAnchor}
+            intents={this.sitePanelIntents}
             committedAddress={this.committedAddress}
             onClose={this.closeSitePanel}
             onSetPermission={(id, state) => { void this.setSitePermission(id, state); }}

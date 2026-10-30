@@ -38,6 +38,8 @@ export interface SitePanelProps {
     info: WebTabSiteInfo | null;
     /** The panel's top-left corner in viewport pixels: under the identity box. */
     anchor: { top: number; left: number };
+    /** The state the user last chose per row in this open panel; a click moves from it when present, else from the row's stored state. */
+    intents: Readonly<Record<string, string>>;
     /** The pill's typed-or-committed text; the host line falls back to it when chrome gave no display host. */
     committedAddress: string;
     onClose(): void;
@@ -46,7 +48,7 @@ export interface SitePanelProps {
 
 /** Phase 31 plan 02: the site panel, portalled to the body like every pill dropdown. */
 export function SitePanel(props: SitePanelProps): React.ReactElement {
-    const { info, anchor, committedAddress, onClose, onSetPermission } = props;
+    const { info, anchor, intents, committedAddress, onClose, onSetPermission } = props;
     const rootRef = React.useRef<HTMLDivElement>(null);
     // Focus on mount only: a re-render (a permission reply) must not pull focus back from a row.
     React.useEffect(() => { rootRef.current?.focus(); }, []);
@@ -70,7 +72,8 @@ export function SitePanel(props: SitePanelProps): React.ReactElement {
                     : CHROME_BAR_COPY.connectionWarning;
     const usable = !!info && connection !== null && state !== 'none' && Array.isArray(info.permissions);
     const permissions: WebTabPermissionRow[] = usable && info?.permissions ? info.permissions : [];
-    const allDefault = permissions.every(row => row.state === 'default');
+    // The empty row says no entry is saved; a default-equal effective state is not a saved entry.
+    const allDefault = permissions.every(row => row.stored === 'default');
     // The certificate is shown for a secure page only, as read-only text: issuer, subject and validity.
     const issuedTo = typeof info?.subject === 'string' && info.subject ? info.subject : null;
     const issuedBy = typeof info?.issuer === 'string' && info.issuer ? info.issuer : null;
@@ -117,9 +120,10 @@ export function SitePanel(props: SitePanelProps): React.ReactElement {
                         className='pb-site-panel-row'
                         data-permission={row.id}
                         data-state={row.state}
+                        data-stored={row.stored}
                         aria-label={CHROME_BAR_COPY.permissionControlLabel(label, display, stateText)}
                         onMouseDown={e => e.preventDefault()}
-                        onClick={() => onSetPermission(row.id, nextPermissionState(row.id, row.state))}
+                        onClick={() => onSetPermission(row.id, nextPermissionState(row.id, intents[row.id] ?? row.stored))}
                     >
                         <span className={`pb-site-panel-row-icon codicon ${PERMISSION_GLYPH_CLASS[row.id] ?? ''}`} aria-hidden='true' />
                         <span className='pb-site-panel-row-label'>{label}</span>

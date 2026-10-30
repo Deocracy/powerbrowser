@@ -3463,7 +3463,7 @@ export const PowerBrowserAPI = Object.freeze({
       const pageSpec = browser.currentURI ? browser.currentURI.spec : "";
       const identity = PowerBrowserAPI.webTabIdentity(browser, pageSpec);
       // Phase 31 plan 02 (SITE-06): the non-default permissions, table order, in the same push.
-      const shown = webTabPermissionRows(browser).filter(row => row.state !== "default");
+      const shown = webTabPermissionRows(browser).filter(row => row.stored !== "default");
       theiaBrowser.browsingContext.currentWindowGlobal
         .getActor(GROUP_ACTOR_NAME)
         .sendAsyncMessage("PowerBrowserWebTabState", {
@@ -4506,28 +4506,42 @@ function webTabPermissionOrigin(browser) {
   return webTabPermissionPrincipalOk(principal) ? principal.origin : null;
 }
 
-// One row per managed permission, in table order: the state on this
-// overlay's own principal and the upstream label (getPermissionLabel), so
-// no permission name is kept by hand on either side. Primitives only.
+// One row per managed permission, in table order. `state` is the EFFECTIVE
+// state on this overlay's own principal, read as upstream's panel reads it:
+// getForPrincipal falls back to getDefault for an absent entry
+// (SitePermissions.sys.mjs:461-462), so autoplay-media under the shipped
+// media.autoplay.default=BLOCKED reads block-audible. `stored` is the state
+// that is actually saved, which is "default" whenever the effective state
+// equals the default: upstream never saves a default-equal entry
+// (SitePermissions.sys.mjs:575-580), and the panel's cycle and the identity
+// box's icons key on `stored`. `label` is the upstream label
+// (getPermissionLabel), so no permission name is kept by hand.
 function webTabPermissionRows(browser) {
-  let set = [];
-  try {
-    const all = lazy.SitePermissions.getAllForBrowser(browser);
-    set = Array.isArray(all) ? all.filter(row => row && SITE_INFO_PERMISSION_IDS.includes(row.id)) : [];
-  } catch (err) {
-    set = [];
-  }
+  const principal = browser.contentPrincipal;
   return SITE_INFO_PERMISSION_IDS.map(id => {
-    const row = set.find(candidate => candidate.id === id);
+    let effective = null;
+    let defaultCapability = null;
+    try {
+      effective = lazy.SitePermissions.getForPrincipal(principal, id, browser).state;
+    } catch (err) {
+      effective = null;
+    }
+    try {
+      defaultCapability = lazy.SitePermissions.getDefault(id);
+    } catch (err) {
+      defaultCapability = null;
+    }
     let label = null;
     try {
       label = lazy.SitePermissions.getPermissionLabel(id);
     } catch (err) {
       label = null;
     }
+    const state = effective === null ? "default" : webTabPermissionStateName(id, effective);
     return {
       id,
-      state: row ? webTabPermissionStateName(id, row.state) : "default",
+      state,
+      stored: effective === null || effective === defaultCapability ? "default" : state,
       label: typeof label === "string" && label ? label : null,
     };
   });
