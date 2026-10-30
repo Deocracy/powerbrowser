@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then forty-nine planted faults
+ * --self-test: the clean tree must be green; then fifty planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -1025,6 +1025,22 @@ function cases(m, srcs, mm) {
                 ? null
                 : { panelUsesRowState: wired, chromeSendsDefaultState: rowDefault, clientIntentsGone: noIntents };
         }],
+        ['a declined quit is reported as declined: the shutdown check follows the quit, the pref follows the check (WR-04)', () => {
+            const code = stripComments(apiSrc);
+            const start = code.indexOf('  quitApplication() {');
+            const end = start < 0 ? -1 : code.indexOf('\n  },\n', start);
+            if (start < 0 || end < 0) {
+                return `no quitApplication in ${API_REL} -- broken instrument`;
+            }
+            const body = code.slice(start, end);
+            const quit = body.indexOf('Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit);');
+            const check = body.indexOf('if (!Services.startup.shuttingDown) {');
+            const pref = body.indexOf('setIntPref("toolkit.shutdown.fastShutdownStage", 0)');
+            const declines = /if \(!Services\.startup\.shuttingDown\) \{\s*return false;/.test(body);
+            return quit >= 0 && check > quit && pref > check && declines
+                ? null
+                : { quitAt: quit, checkAt: check, prefAt: pref, declinedReturnsFalse: declines };
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -1133,6 +1149,13 @@ const PLANTS = [
         from: '        if (!order.includes(effective)) {',
         to: '        if (true) {',
         expect: 'no permission cycle step is dead, for every default the table names (WR-05)',
+    },
+    {
+        name: 'a declined quit is not checked (WR-04)',
+        rel: API_REL,
+        from: '    if (!Services.startup.shuttingDown) {\n      return false;\n    }\n',
+        to: '',
+        expect: 'a declined quit is reported as declined: the shutdown check follows the quit, the pref follows the check (WR-04)',
     },
     {
         name: 'the certificate dates are read as strings (WR-03)',

@@ -1378,13 +1378,6 @@ function quitHistoryFileName() {
 }
 
 /** The dirty-editor fixture: an untitled editor with an unsaved change. Returns 'dirty' or what Theia reads. */
-const openDirtyEditor = app => probe(app, `await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile');
-    const widget = get('EditorManager').currentEditor;
-    if (!widget) return 'no-editor';
-    widget.editor.getControl().getModel().setValue('unsaved change');
-    await new Promise(resolve => setTimeout(resolve, 500));
-    return widget.editor.document.dirty === true ? 'dirty' : 'clean';`);
-
 /** A served web tab with two loads (its back/forward history is what the quit flush saves). True when both loaded. */
 async function quitWebTab(app, pages) {
     const webId = await openWebTab(app, pages.url('/plain'));
@@ -1428,15 +1421,14 @@ async function afterQuit(ctx, what) {
     }
 }
 
-/** Ctrl+Q with the Theia frame focused and a dirty editor open: the reserved chrome key quits, and the flush runs. */
+/**
+ * Ctrl+Q with the Theia frame focused and nothing unsaved: the reserved chrome key quits, the browser exits 0,
+ * and the flush runs. (An unsaved editor is quit-typed's case: its veto needs real user input, not a fixture write.)
+ */
 async function quitKey(ctx) {
     const { app, pages, fail, note } = ctx;
     if (await quitWebTab(app, pages) !== true) {
         return fail(`${BROKEN} the served page did not load twice`);
-    }
-    const dirty = await openDirtyEditor(app);
-    if (dirty !== 'dirty') {
-        return fail(`${BROKEN} the editor fixture reads ${JSON.stringify(dirty)}, not dirty, so the quit proves nothing about unsaved work`);
     }
     if (await focusTheiaFrame(app) !== true) {
         return fail(`${BROKEN} the Theia frame did not take focus before the key`);
@@ -1449,7 +1441,7 @@ async function quitKey(ctx) {
     await afterQuit(ctx, 'Ctrl+Q');
 }
 
-/** The Quit row: enabled in the menu, and its click quits through the same path. Plant `quit-dead-row`: the row sends nothing. */
+/** The Quit row, with nothing unsaved: enabled in the menu, and its click quits through the same path. Plant `quit-dead-row`: the row sends nothing. */
 async function quitRow(ctx) {
     const { app, pages, plant, fail, note } = ctx;
     const want = await expectedAppMenu(app);
@@ -1459,10 +1451,6 @@ async function quitRow(ctx) {
     }
     if (await quitWebTab(app, pages) !== true) {
         return fail(`${BROKEN} the served page did not load twice`);
-    }
-    const dirty = await openDirtyEditor(app);
-    if (dirty !== 'dirty') {
-        return fail(`${BROKEN} the editor fixture reads ${JSON.stringify(dirty)}, not dirty, so the quit proves nothing about unsaved work`);
     }
     if (plant === 'quit-dead-row') {
         const applied = await probe(app, `const store = get('ChromeStoreClient'); if (!store) return false;
@@ -1490,10 +1478,77 @@ async function quitRow(ctx) {
     await afterQuit(ctx, `the ${quit.label} row`);
 }
 
+/**
+ * WR-04: a quit with an unsaved editor that a real user typed into. The Theia document is its own top-level context
+ * (http://127.0.0.1:<sidecar>/): a trusted pointer click and trusted keys are sent to it, so the document gets the
+ * user activation that Gecko's beforeunload veto needs (dom.require_user_interaction_for_beforeunload). Then Ctrl+Q
+ * goes through the chrome route. The quit must be held and a leave prompt must appear, which is then dismissed as
+ * "stay" (Escape in the shell's chrome document; BiDi cannot answer it, a privileged-scope prompt). The reported
+ * outcome is what happened: a quit that exits on Ctrl+Q with no prompt fails here, and nothing is weakened.
+ */
+async function quitTyped(ctx) {
+    const { app, pages, fail, note } = ctx;
+    if (await quitWebTab(app, pages) !== true) {
+        return fail(`${BROKEN} the served page did not load twice`);
+    }
+    const tree = await app.send('browsingContext.getTree', {});
+    const theia = (tree.contexts || []).find(c => /^http:\/\/127\.0\.0\.1:\d+\/$/.test(c.url) && !c.url.startsWith(pages.origin));
+    if (!theia) {
+        return fail(`${BROKEN} no Theia browsing context in the tree (${JSON.stringify((tree.contexts || []).map(c => c.url))})`);
+    }
+    const opened = await probe(app, `await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile');
+        return get('EditorManager').currentEditor ? 'opened' : 'no-editor';`);
+    if (opened !== 'opened') {
+        return fail(`${BROKEN} the untitled editor did not open (${JSON.stringify(opened)})`);
+    }
+    if (await focusTheiaFrame(app) !== true) {
+        return fail(`${BROKEN} the Theia frame did not take focus before the typing`);
+    }
+    await app.send('input.performActions', { context: theia.context, actions: [{ type: 'pointer', id: 'pb-mouse', parameters: { pointerType: 'mouse' }, actions: [{ type: 'pointerMove', x: 640, y: 420, duration: 0 }, { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }] }] });
+    await app.send('input.performActions', { context: theia.context, actions: [{ type: 'key', id: 'pb-type', actions: [...'unsaved'].flatMap(ch => [{ type: 'keyDown', value: ch }, { type: 'keyUp', value: ch }]) }] });
+    const dirty = await probe(app, `await new Promise(resolve => setTimeout(resolve, 500));
+        const w = get('EditorManager').currentEditor;
+        return w && w.editor.document.dirty === true ? 'dirty' : 'clean';`);
+    if (dirty !== 'dirty') {
+        return fail(`${BROKEN} typing did not make the editor dirty (${JSON.stringify(dirty)}), so the quit proves nothing about unsaved work`);
+    }
+    if (!freshProfileForQuit(app)) {
+        return fail(`${BROKEN} the fresh profile already holds the history file`);
+    }
+    let sendError = null;
+    try {
+        await pressKey(app, { key: 'q', code: 'KeyQ', keyCode: 81, modifiers: ['accel'] });
+    } catch (error) {
+        // The quit runs inside the key event, so the BiDi channel can close before the key reply arrives.
+        sendError = error.message;
+    }
+    note(`Ctrl+Q sent through the chrome route after typing (${keyRoute.last}${sendError ? `; channel closed: ${sendError}` : ''})`);
+    // awaitExit also needs the profile lock released, so a closed channel is read directly as exited.
+    const socketOpen = async () => { try { await app.send('browsingContext.getTree', {}); return true; } catch { return false; } };
+    const socketClosed = sendError !== null || !(await socketOpen());
+    const held = socketClosed ? 'exited' : await app.awaitExit(6000);
+    if (held === 'exited' || socketClosed) {
+        return fail(`the quit exited on Ctrl+Q with an unsaved editor the user typed into (exit code ${JSON.stringify(app.exitCode())}): no leave prompt held it, although Theia's beforeunload handler prevents the default`);
+    }
+    const promptNodes = await app.evaluateIn(app.chrome, `(() => {
+        const hits = [...document.querySelectorAll('*')].filter(el => /prompt|modal|dialog/i.test(el.localName) && el.getClientRects().length > 0);
+        return hits.map(el => el.localName).slice(0, 8);
+    })()`).catch(() => null);
+    if (!Array.isArray(promptNodes) || promptNodes.length === 0) {
+        const windows = await app.evaluateIn(app.chrome, `(() => { const out = []; const en = Services.wm.getEnumerator(null); while (en.hasMoreElements()) { const w = en.getNext(); out.push(String(w.location && w.location.href)); } return out; })()`).catch(() => null);
+        return fail(`the quit with an unsaved editor was held (the browser is still running), but no leave prompt is shown: no prompt node in the chrome document; windows ${JSON.stringify(windows)}`);
+    }
+    await pressKey(app, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    note(`leave prompt ${JSON.stringify(promptNodes)} dismissed with Escape ("stay")`);
+    if (await app.awaitExit(3000) === 'exited') {
+        fail('the browser exited after the leave prompt was dismissed with "stay": the declined quit went on');
+    }
+}
+
 /** Scenarios whose TLS session serves the fixture leaf without trusting its CA. */
 const UNTRUSTED_TLS = ['identity-override'];
 
-const SCENARIOS = { 'identity-tls': identityTls, 'identity-override': identityOverride, 'clear-scope': clearScope, 'site-panel-autoplay-allowed': sitePanelAllowed, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-override': identityOverride, 'clear-scope': clearScope, 'site-panel-autoplay-allowed': sitePanelAllowed, 'quit-typed': quitTyped, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
 const NOT_LANDED = [];
@@ -1665,7 +1720,7 @@ async function main(args) {
         // the site-panel session (its own TLS browser), then the local session.
         const results = [];
         // quit-key and quit-row each end their own launch, so each runs in a session of its own.
-        for (const [name, tls] of [['identity-tls', true], ['identity-override', true], ['clear-scope', true], ['site-panel', true], ['site-panel-autoplay-allowed', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false]]) {
+        for (const [name, tls] of [['identity-tls', true], ['identity-override', true], ['clear-scope', true], ['site-panel', true], ['site-panel-autoplay-allowed', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false], ['quit-typed', false]]) {
             if (names.includes(name)) {
                 results.push(...await runSession([name], '', tls));
             }
