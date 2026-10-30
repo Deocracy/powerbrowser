@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy - PowerBrowser</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #1c1b22; color: #fbfbfe; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; line-height: 1.55; font-size: 16px; }
+  a { color: #00a6f5; }
+  a:hover { text-decoration: underline; }
+  header, main, footer { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+  header { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding-top: 20px; padding-bottom: 12px; border-bottom: 1px solid #3f3e4a; }
+  header .brand { font-weight: 600; color: #fbfbfe; text-decoration: none; margin-right: auto; }
+  header nav a { color: #8ad4ff; text-decoration: none; margin-left: 16px; }
+  main { padding-top: 28px; padding-bottom: 28px; }
+  h1 { font-size: 1.875rem; line-height: 1.2; margin: 0 0 16px; font-weight: 650; }
+  h2 { font-size: 1.125rem; margin: 28px 0 8px; font-weight: 600; }
+  p { margin: 0 0 12px; }
+  ul { margin: 0 0 12px; padding-left: 20px; }
+  li { margin-bottom: 6px; }
+  .muted { color: #9a99a8; }
+  .card { background: #2b2a33; border: 1px solid #3f3e4a; border-radius: 8px; padding: 14px 16px; margin: 0 0 12px; }
+  .pending { border-left: 3px solid #8ad4ff; padding-left: 12px; color: #fbfbfe; }
+  code, pre { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.875rem; }
+  code { background: #2b2a33; border-radius: 4px; padding: 1px 5px; }
+  pre { background: #2b2a33; border: 1px solid #3f3e4a; border-radius: 8px; padding: 12px; overflow-x: auto; }
+  footer { border-top: 1px solid #3f3e4a; margin-top: 32px; padding-top: 16px; padding-bottom: 32px; color: #9a99a8; font-size: 0.875rem; }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="./">PowerBrowser</a>
+  <nav>
+    <a href="download.html">Download</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="legal.html">Legal</a>
+  </nav>
+</header>
+<main>
+  <h1>Privacy</h1>
+
+  <h2>Error reports (off by default)</h2>
+  <p>PowerBrowser sends an error report only if you turn error reporting on. Error reporting is off until you choose to enable it. When it is on, each report carries exactly these seven fields:</p>
+  <ul>
+    <li><code>type</code>: the kind of error.</li>
+    <li><code>basename</code>: the file name of the code that raised the error, without its folder.</li>
+    <li><code>line</code> and <code>column</code>: the position of the error in that file.</li>
+    <li><code>version</code>: the PowerBrowser version.</li>
+    <li><code>buildID</code>: the build identifier of this installation.</li>
+    <li><code>OS</code>: the operating system name and version.</li>
+  </ul>
+  <p>A report never includes the error message or the stack trace.</p>
+
+  <h2>Retention</h2>
+  <p>Error reports are kept for 30 days.</p>
+
+  <h2>Who processes reports</h2>
+  <p>Cloudflare is the only processor of error reports. No other company receives them.</p>
+
+  <h2>Hosts the browser may contact without your action</h2>
+  <p>PowerBrowser may contact these hosts without a click from you:</p>
+  <ul>
+    <li><code>firefox.settings.services.mozilla.com</code>, <code>content-signature-2.cdn.mozilla.net</code>, <code>firefox-settings-attachments.cdn.mozilla.net</code>: Remote Settings, which supplies filter lists, certificate revocation data and other configuration.</li>
+    <li><code>safebrowsing.google.com</code>, <code>safebrowsing.googleapis.com</code>: Google Safe Browsing, which checks pages against known malicious sites.</li>
+    <li><code>updates.powerbrowser.org</code>: checks for PowerBrowser updates.</li>
+    <li><code>release-assets.githubusercontent.com</code>: downloads update files.</li>
+    <li><code>update.googleapis.com</code>, <code>www.google.com</code>, <code>dl.google.com</code>, <code>edgedl.me.gvt1.com</code>: the Widevine content decryption module, which is checked for updates and downloaded when needed for protected media.</li>
+  </ul>
+  <p>The browser also talks to a service on this computer. That traffic does not leave the machine.</p>
+
+  <h2>Contact</h2>
+  <p>Privacy questions: <a href="mailto:privacy@powerbrowser.org">privacy@powerbrowser.org</a></p>
+  <p class="pending">Postal address: [OWNER TO FILL BEFORE PUBLICATION]</p>
+</main>
+<footer>
+  <p>DeBIOS Foundation and PowerBrowser are not officially associated with Mozilla or its products.</p>
+</footer>
+</body>
+</html>

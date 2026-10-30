@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download - PowerBrowser</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #1c1b22; color: #fbfbfe; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; line-height: 1.55; font-size: 16px; }
+  a { color: #00a6f5; }
+  a:hover { text-decoration: underline; }
+  header, main, footer { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+  header { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding-top: 20px; padding-bottom: 12px; border-bottom: 1px solid #3f3e4a; }
+  header .brand { font-weight: 600; color: #fbfbfe; text-decoration: none; margin-right: auto; }
+  header nav a { color: #8ad4ff; text-decoration: none; margin-left: 16px; }
+  main { padding-top: 28px; padding-bottom: 28px; }
+  h1 { font-size: 1.875rem; line-height: 1.2; margin: 0 0 16px; font-weight: 650; }
+  h2 { font-size: 1.125rem; margin: 28px 0 8px; font-weight: 600; }
+  p { margin: 0 0 12px; }
+  ul { margin: 0 0 12px; padding-left: 20px; }
+  li { margin-bottom: 6px; }
+  .muted { color: #9a99a8; }
+  .card { background: #2b2a33; border: 1px solid #3f3e4a; border-radius: 8px; padding: 14px 16px; margin: 0 0 12px; }
+  .pending { border-left: 3px solid #8ad4ff; padding-left: 12px; color: #fbfbfe; }
+  code, pre { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.875rem; }
+  code { background: #2b2a33; border-radius: 4px; padding: 1px 5px; }
+  pre { background: #2b2a33; border: 1px solid #3f3e4a; border-radius: 8px; padding: 12px; overflow-x: auto; }
+  footer { border-top: 1px solid #3f3e4a; margin-top: 32px; padding-top: 16px; padding-bottom: 32px; color: #9a99a8; font-size: 0.875rem; }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="./">PowerBrowser</a>
+  <nav>
+    <a href="download.html">Download</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="legal.html">Legal</a>
+  </nav>
+</header>
+<main>
+  <h1>Download PowerBrowser</h1>
+  <p>This release is for Linux on 64-bit x86 (x86_64). The interface is available in English (en-US) only.</p>
+
+  <h2>Linux x86_64</h2>
+  <div class="card">
+    <p><a href="https://github.com/DeBIOS-Foundation/powerbrowser/releases/latest/download/powerbrowser-linux-x86_64.tar.xz">powerbrowser-linux-x86_64.tar.xz</a></p>
+    <p class="muted">The download link always points at the latest release. The file name follows the stable asset-name form.</p>
+  </div>
+
+  <h2>Checksums</h2>
+  <p>Download <a href="https://github.com/DeBIOS-Foundation/powerbrowser/releases/latest/download/SHA256SUMS">SHA256SUMS</a> from the same release and check the archive against it:</p>
+  <pre><code>sha256sum --check --ignore-missing SHA256SUMS</code></pre>
+
+  <h2>Verify the attestation</h2>
+  <p>The attestation covers the upload rather than the build host. It shows that the release workflow of this repository published these exact bytes. It does not cover the build host that produced them.</p>
+  <pre><code>gh attestation verify powerbrowser-linux-x86_64.tar.xz --repo DeBIOS-Foundation/powerbrowser</code></pre>
+  <p>The <code>gh</code> tool needs a GitHub login before it can verify online. Run <code>gh auth login</code> once on the verifying machine.</p>
+  <p>Offline alternative: on a machine that cannot reach GitHub, save the attestation bundle for the archive and pass it with <code>--bundle</code>:</p>
+  <pre><code>gh attestation verify powerbrowser-linux-x86_64.tar.xz --repo DeBIOS-Foundation/powerbrowser --bundle &lt;bundle-file&gt;</code></pre>
+
+  <h2>Signing status</h2>
+  <ul>
+    <li><strong>Linux x86_64:</strong> the archive is not signed with a platform code-signing key. Check it with SHA256SUMS and the attestation.</li>
+    <li><strong>Windows:</strong> no build is published yet. The planned build is unsigned.</li>
+    <li><strong>macOS:</strong> no build is published yet. The planned build is ad-hoc signed and not notarized.</li>
+  </ul>
+
+  <h2>System requirements</h2>
+  <p>Linux on 64-bit x86 (x86_64). No other platform is supported in this release.</p>
+
+  <h2>Language</h2>
+  <p>English (en-US) only.</p>
+
+  <h2>Update file size</h2>
+  <p class="pending">Pending. The size of the complete update file is measured on the release build. No size is stated until that measurement exists.</p>
+</main>
+<footer>
+  <p>DeBIOS Foundation and PowerBrowser are not officially associated with Mozilla or its products.</p>
+</footer>
+</body>
+</html>
