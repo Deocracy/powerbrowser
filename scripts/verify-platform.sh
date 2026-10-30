@@ -4690,8 +4690,9 @@ run_own_checks() {
     # descriptor and every release-shaped git tag HEAD contains. Honestly --quick: git plumbing and text
     # reads only, no build, browser, display or network.
     "release-identity|node $REPO_ROOT/scripts/verify-release-identity.mjs"
-    # release-identity-self-test plants seven faults in one mkdtemp git repo (two version
-    # literals, an off-pin milestone, two descriptor versions, two tags) and keeps five
+    # release-identity-self-test plants thirteen faults in one mkdtemp git repo (two version
+    # literals, an off-pin milestone, two descriptor versions, six no-update descriptor
+    # fragments that must not pass as a no-update document (WR-01), two tags) and keeps six
     # controls green, among them a commit after a release tag and a higher tag on a commit
     # HEAD does not contain (WR-02); it writes nothing in the repository.
     "release-identity-self-test|node $REPO_ROOT/scripts/verify-release-identity.mjs --self-test"

@@ -141,8 +141,10 @@ function runChecks(root, overrides = {}) {
     const displayWant = releaseKey.slice(1);
     // A no-update document (Phase 47, the updates-host placeholder): an explicit
     // empty updates element offers no update, so it states no version to agree with.
-    // A file with no updates element at all is still unreadable and stays red.
-    const NO_UPDATE = /<updates(\s[^>]*)?>\s*<\/updates>|<updates(\s[^>]*)?\/>/;
+    // Anchored to the whole file: an optional XML prolog, then one empty updates
+    // element, then nothing else. Any other text (a comment, a wrapper element, a
+    // truncated tail, an update element) leaves the file unreadable and it stays red.
+    const NO_UPDATE = /^\s*(<\?xml[^>]*\?>\s*)?<updates(\s[^>]*)?(\/>|>\s*<\/updates>)\s*$/;
     for (const rel of descriptors) {
         const text = read(rel) ?? '';
         const elements = text.match(/<update\s[^>]*>/g) ?? [];
@@ -211,6 +213,7 @@ function selfTest() {
     };
     const overrides = { git: a => g(...a) };
     let failed = 0;
+    let summary = '';
     try {
         g('init', '-q');
         // The manifest is copied, so the tag and key are derived, never typed here.
@@ -267,6 +270,32 @@ function selfTest() {
                 undo: () => { g('rm', '-q', '-f', DESC_REL); },
             },
             {
+                // WR-01: the no-update rule must match the whole file, not a fragment of it.
+                name: 'no-update fragment inside a comment', expect: DESC_REL,
+                plant: () => { put(DESC_REL, '<!-- <updates></updates> -->\n'); g('add', DESC_REL); },
+                undo: () => { g('rm', '-q', '-f', DESC_REL); },
+            },
+            {
+                name: 'no-update fragment inside a wrapper element', expect: DESC_REL,
+                plant: () => { put(DESC_REL, '<foo><updates></updates>'); g('add', DESC_REL); },
+                undo: () => { g('rm', '-q', '-f', DESC_REL); },
+            },
+            {
+                name: 'empty updates element followed by a truncated tail', expect: DESC_REL,
+                plant: () => { put(DESC_REL, '<?xml version="1.0"?>\n<updates></updates>\n<upd'); g('add', DESC_REL); },
+                undo: () => { g('rm', '-q', '-f', DESC_REL); },
+            },
+            {
+                name: 'empty updates element followed by an unterminated update element', expect: DESC_REL,
+                plant: () => { put(DESC_REL, '<updates></updates><update appVersion="1"'); g('add', DESC_REL); },
+                undo: () => { g('rm', '-q', '-f', DESC_REL); },
+            },
+            {
+                name: 'junk around a self-closing updates element', expect: DESC_REL,
+                plant: () => { put(DESC_REL, '<?xml version="1.0"?>\n<garbage>junk<updates/>\n'); g('add', DESC_REL); },
+                undo: () => { g('rm', '-q', '-f', DESC_REL); },
+            },
+            {
                 name: 'HEAD tagged one revision above the key', expect: `v${esrVersion}-${revision + 1}`,
                 plant: () => g('tag', `v${esrVersion}-${revision + 1}`), undo: () => g('tag', '-d', `v${esrVersion}-${revision + 1}`),
             },
@@ -306,6 +335,8 @@ function selfTest() {
             },
         ];
 
+        let reds = 0;
+        let greens = 0;
         for (const c of cases) {
             c.plant();
             const { failures } = runChecks(tmp, overrides);
@@ -316,6 +347,7 @@ function selfTest() {
                     console.error(`${NAME}: --self-test FAIL -- '${c.name}' went red but must stay green:\n${text}`);
                     failed += 1;
                 } else {
+                    greens += 1;
                     console.log(`  ${c.name}: green`);
                 }
                 continue;
@@ -327,9 +359,11 @@ function selfTest() {
                 console.error(`${NAME}: --self-test FAIL -- '${c.name}' leaked a checkout path into its output: ${text}`);
                 failed += 1;
             } else {
+                reds += 1;
                 console.log(`  ${c.name}: red -- ${failures.find(f => f.includes(c.expect))}`);
             }
         }
+        summary = `${reds} planted fault(s) went red naming the file or tag, and ${greens} control(s) stayed green`;
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }
@@ -337,7 +371,7 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    console.log(`${NAME}: --self-test PASS -- all eight planted faults went red naming the file or tag, and the six controls stayed green`);
+    console.log(`${NAME}: --self-test PASS -- ${summary}`);
     return 0;
 }
 
