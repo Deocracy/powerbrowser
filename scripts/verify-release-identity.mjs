@@ -139,11 +139,15 @@ function runChecks(root, overrides = {}) {
     // --- 3. tracked update.xml descriptors ----------------------------------
     const descriptors = tracked.filter(rel => rel === 'update.xml' || rel.endsWith('/update.xml'));
     const displayWant = releaseKey.slice(1);
+    // A no-update document (Phase 47, the updates-host placeholder): an explicit
+    // empty updates element offers no update, so it states no version to agree with.
+    // A file with no updates element at all is still unreadable and stays red.
+    const NO_UPDATE = /<updates(\s[^>]*)?>\s*<\/updates>|<updates(\s[^>]*)?\/>/;
     for (const rel of descriptors) {
         const text = read(rel) ?? '';
         const elements = text.match(/<update\s[^>]*>/g) ?? [];
-        if (elements.length === 0) {
-            failures.push(`${rel} carries no <update> element, so it states no version to agree with. Next step: restore the descriptor or remove it from version control.`);
+        if (elements.length === 0 && !NO_UPDATE.test(text)) {
+            failures.push(`${rel} carries no <update> element and no empty <updates> document, so it states no version to agree with. Next step: restore the descriptor or remove it from version control.`);
         }
         for (const el of elements) {
             const app = /\bappVersion="([^"]*)"/.exec(el)?.[1];
@@ -257,6 +261,12 @@ function selfTest() {
                 undo: () => { g('rm', '-q', '-f', DESC_REL); },
             },
             {
+                // A truncated descriptor with no updates element is unreadable, not a no-update document.
+                name: 'descriptor truncated before its updates element', expect: DESC_REL,
+                plant: () => { put(DESC_REL, '<?xml version="1.0"?>\n<upd'); g('add', DESC_REL); },
+                undo: () => { g('rm', '-q', '-f', DESC_REL); },
+            },
+            {
                 name: 'HEAD tagged one revision above the key', expect: `v${esrVersion}-${revision + 1}`,
                 plant: () => g('tag', `v${esrVersion}-${revision + 1}`), undo: () => g('tag', '-d', `v${esrVersion}-${revision + 1}`),
             },
@@ -286,6 +296,12 @@ function selfTest() {
             {
                 name: 'control: matching descriptor', expect: null,
                 plant: () => { put(DESC_REL, descriptor(`appVersion="${esrVersion}" displayVersion="${releaseKey.slice(1)}"`)); g('add', DESC_REL); },
+                undo: () => { g('rm', '-q', '-f', DESC_REL); },
+            },
+            {
+                // The updates-host placeholder: an explicit empty updates element offers no update.
+                name: 'control: empty updates document (no update offered)', expect: null,
+                plant: () => { put(DESC_REL, '<?xml version="1.0"?>\n<updates></updates>\n'); g('add', DESC_REL); },
                 undo: () => { g('rm', '-q', '-f', DESC_REL); },
             },
         ];
@@ -321,7 +337,7 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    console.log(`${NAME}: --self-test PASS -- all seven planted faults went red naming the file or tag, and the five controls stayed green`);
+    console.log(`${NAME}: --self-test PASS -- all eight planted faults went red naming the file or tag, and the six controls stayed green`);
     return 0;
 }
 
