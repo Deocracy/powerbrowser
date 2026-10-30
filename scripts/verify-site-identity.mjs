@@ -1025,7 +1025,7 @@ function cases(m, srcs, mm) {
                 ? null
                 : { panelUsesRowState: wired, chromeSendsDefaultState: rowDefault, clientIntentsGone: noIntents };
         }],
-        ['a declined quit is reported as declined: the shutdown check follows the quit, the pref follows the check (WR-04)', () => {
+        ['a declined quit is reported as declined, and the full-shutdown stage is set before the quit and restored on a decline (WR-04)', () => {
             const code = stripComments(apiSrc);
             const start = code.indexOf('  quitApplication() {');
             const end = start < 0 ? -1 : code.indexOf('\n  },\n', start);
@@ -1033,13 +1033,13 @@ function cases(m, srcs, mm) {
                 return `no quitApplication in ${API_REL} -- broken instrument`;
             }
             const body = code.slice(start, end);
+            const set = body.indexOf('defaults.setIntPref(shutdownPref, 0);');
             const quit = body.indexOf('Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit);');
-            const check = body.indexOf('if (!Services.startup.shuttingDown) {');
-            const pref = body.indexOf('setIntPref("toolkit.shutdown.fastShutdownStage", 0)');
-            const declines = /if \(!Services\.startup\.shuttingDown\) \{\s*return false;/.test(body);
-            return quit >= 0 && check > quit && pref > check && declines
+            const check = body.indexOf('if (!Services.startup.attemptingQuit) {');
+            const declines = /if \(!Services\.startup\.attemptingQuit\) \{\s*defaults\.setIntPref\(shutdownPref, previousStage\);\s*return false;/.test(body);
+            return set >= 0 && set < quit && quit < check && declines
                 ? null
-                : { quitAt: quit, checkAt: check, prefAt: pref, declinedReturnsFalse: declines };
+                : { stageSetAt: set, quitAt: quit, checkAt: check, declinedRestoresAndReturnsFalse: declines };
         }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
@@ -1155,7 +1155,7 @@ const PLANTS = [
         rel: API_REL,
         from: '    if (!Services.startup.shuttingDown) {\n      return false;\n    }\n',
         to: '',
-        expect: 'a declined quit is reported as declined: the shutdown check follows the quit, the pref follows the check (WR-04)',
+        expect: 'a declined quit is reported as declined, and the full-shutdown stage is set before the quit and restored on a decline (WR-04)',
     },
     {
         name: 'the certificate dates are read as strings (WR-03)',

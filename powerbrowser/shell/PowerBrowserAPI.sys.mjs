@@ -711,22 +711,26 @@ export const PowerBrowserAPI = Object.freeze({
     if (cancelQuit.data) {
       return false;
     }
-    // WR-04: quit() returns without quitting when a window's CanClose vetoes it
-    // (nsAppStartup.cpp:394-396: the Theia beforeunload leave prompt). shuttingDown
-    // is set only after every CanClose passed (nsAppStartup.cpp:411), so a declined
-    // quit is reported as one.
-    Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit);
-    if (!Services.startup.shuttingDown) {
-      return false;
-    }
     // A full shutdown, not release Gecko's fast shutdown: stage 1 _exit()s
     // inside XPCOM shutdown before XREMain unlocks the profile
     // (nsAppRunner.cpp, "see bug #386739"), so the profile's `lock` symlink
     // outlived every quit and the exit could not be observed by it. Default
-    // branch: this quit only, never written to prefs.js. Written after the veto
-    // check (WR-04), so a declined quit leaves slow shutdown as it was; XPCOM
-    // shutdown runs after this call returns, so it still applies.
-    Services.prefs.getDefaultBranch("").setIntPref("toolkit.shutdown.fastShutdownStage", 0);
+    // branch: this quit only, never written to prefs.js. Set before quit(): a
+    // quit that a veto defers can run later, and it must still be a full shutdown.
+    const defaults = Services.prefs.getDefaultBranch("");
+    const shutdownPref = "toolkit.shutdown.fastShutdownStage";
+    const previousStage = defaults.getIntPref(shutdownPref);
+    defaults.setIntPref(shutdownPref, 0);
+    // WR-04: quit() returns without quitting when a window's CanClose vetoes it
+    // (nsAppStartup.cpp:394-396: the Theia beforeunload leave prompt). attemptingQuit
+    // is set in the same call only once every CanClose passed (nsAppStartup.cpp:440-441),
+    // so a declined quit is reported as one, and the stage goes back to its default.
+    // (shuttingDown is not used: it tracks AppShutdownConfirmed, which comes later.)
+    Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit);
+    if (!Services.startup.attemptingQuit) {
+      defaults.setIntPref(shutdownPref, previousStage);
+      return false;
+    }
     return true;
   },
 
