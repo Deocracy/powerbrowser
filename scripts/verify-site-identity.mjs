@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then fifty planted faults
+ * --self-test: the clean tree must be green; then fifty-two planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -1153,7 +1153,7 @@ const PLANTS = [
     {
         name: 'a declined quit is not checked (WR-04)',
         rel: API_REL,
-        from: '    if (!Services.startup.shuttingDown) {\n      return false;\n    }\n',
+        from: '    if (!Services.startup.attemptingQuit) {\n      defaults.setIntPref(shutdownPref, previousStage);\n      return false;\n    }\n',
         to: '',
         expect: 'a declined quit is reported as declined, and the full-shutdown stage is set before the quit and restored on a decline (WR-04)',
     },
@@ -1286,10 +1286,10 @@ const PLANTS = [
     {
         name: 'an INTERNAL-APIS row dropped (real instruments, planted tree)',
         rel: INTERNAL_APIS_REL,
-        from: '`PowerBrowserAPI.sys.mjs:3384`',
+        from: '`PowerBrowserAPI.sys.mjs:729`',
         to: '`PowerBrowserAPI.sys.mjs:99999`',
         expect: 'every new boundary internal keeps its catalogue row',
-        treePlant: 'PowerBrowserAPI.sys.mjs:3384',
+        treePlant: 'PowerBrowserAPI.sys.mjs:729',
     },
     {
         name: 'invented-id: a PERMISSION_IDS entry renamed to location',
