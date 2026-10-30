@@ -5042,6 +5042,16 @@ run_own_checks() {
       "gui02-web-tab-live|node $REPO_ROOT/scripts/verify-web-tab-live.mjs"
       "gui02-web-tab-live-self-test|node $REPO_ROOT/scripts/verify-web-tab-live.mjs --self-test"
 
+      # Phase 31.1 (EXT-05): an installed extension sees the shell's web tabs
+      # as real tabs (query, events, active tab, sender.tab, webRequest and
+      # webNavigation ids, executeScript and sendMessage by id), with the Theia
+      # frame absent from every extension-visible path. It needs the binary
+      # built with patch 050 (the stamp is checked first) and the last Theia
+      # build. It is not --quick: each scenario boots its own session. The
+      # self-test boots a clean control and one session per plant.
+      "ext-tab-host-live|node $REPO_ROOT/scripts/verify-ext-tab-host-live.mjs"
+      "ext-tab-host-live-self-test|node $REPO_ROOT/scripts/verify-ext-tab-host-live.mjs --self-test"
+
       # NEW (Phase 27): the navigation buttons and the page-focus keys, driven
       # in the built shell with keys synthesised at the parent and the startup
       # cache purged (MOZ_PURGE_CACHES=1). Needs the built binary and the last
