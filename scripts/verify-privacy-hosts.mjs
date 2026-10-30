@@ -1,19 +1,26 @@
 #!/usr/bin/env node
 // scripts/verify-privacy-hosts.mjs
 //
-// The privacy-hosts row (Phase 47, WR-02). The privacy page states the hosts the
-// browser may contact without a click. That list must equal, as a set, the hosts
-// powerbrowser/endpoint-allowlist.json marks allow (may be contacted unattended).
-// The allowlist is the source; the page is compared to it, never copied from it.
+// The privacy-hosts row (Phase 47, WR-02). The privacy page states two lists of
+// hosts, and each must equal, as a set, the hosts powerbrowser/endpoint-allowlist.json
+// derives into that group. The allowlist is the source; the page is compared to it,
+// never copied from it.
 //
-//  1. Derive. The hosts whose disposition is `allow` in the allowlist's hosts array,
-//     minus loopback literals. Loopback never leaves the machine, and the page
-//     describes that traffic in prose ("a service on this computer").
-//  2. Read. Every element in website-staging/privacy.html that carries a
-//     data-unattended-host attribute. The attribute marks the host codes, so the
-//     error-field list on the same page is never parsed as hosts.
-//  3. Compare as sets. A host on one side only is red and named. A page with no
-//     marked host is red: an unparseable page proves nothing.
+//  1. Derive. From the allowlist's hosts array, minus loopback literals:
+//       unattended  -- disposition allow and no trigger: contacted without any action.
+//       feature     -- disposition allow and trigger "user-feature": contacted only
+//                      after the user uses a feature (an AI provider the user
+//                      configured, or extension search and install).
+//     An allow row with any other trigger value is a failure: it fits neither group.
+//     Loopback never leaves the machine, and the page describes that traffic in prose.
+//  2. Read. Every element in website-staging/privacy.html that carries
+//     data-unattended-host, and every element that carries data-feature-host. The
+//     attributes mark the host codes, so the error-field list on the same page is
+//     never parsed as hosts.
+//  3. Compare as two sets. A host on one side only is red and named, which covers an
+//     addition and a removal in either direction. A host listed in the wrong group is
+//     red in both groups. A group with no marked host is red: an unparseable page
+//     proves nothing.
 //
 // Usage:
 //   node scripts/verify-privacy-hosts.mjs
@@ -30,40 +37,68 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'privacy-hosts';
 const ALLOWLIST_REL = 'powerbrowser/endpoint-allowlist.json';
 const PAGE_REL = 'website-staging/privacy.html';
-const ATTR = 'data-unattended-host';
-const ATTR_RE = new RegExp(`${ATTR}="([^"]*)"`, 'g');
+const FEATURE_TRIGGER = 'user-feature';
+
+// One entry per list on the page. `derives` decides membership from an allow row.
+const GROUPS = [
+    {
+        attr: 'data-unattended-host',
+        label: 'contacted without any action',
+        derives: h => h.trigger === undefined,
+    },
+    {
+        attr: 'data-feature-host',
+        label: 'contacted only after a feature is used',
+        derives: h => h.trigger === FEATURE_TRIGGER,
+    },
+];
 
 export function isLoopback(host) {
     return /^127\.\d+\.\d+\.\d+$/.test(host) || host === '::1';
 }
 
-/** The allow-dispositioned hosts, loopback excluded. */
-export function derivedHosts(allowlist) {
-    return new Set(allowlist.hosts
-        .filter(h => h.disposition === 'allow' && !isLoopback(h.host))
-        .map(h => h.host));
+/** The allow rows, loopback excluded, as the hosts array holds them. */
+function allowRows(allowlist) {
+    return allowlist.hosts.filter(h => h.disposition === 'allow' && !isLoopback(h.host));
 }
 
-/** The hosts the page marks with the attribute. */
-export function pageHosts(html) {
-    return new Set([...html.matchAll(ATTR_RE)].map(m => m[1]));
+/** The hosts a group derives from the allowlist. */
+export function derivedHosts(allowlist, group) {
+    return new Set(allowRows(allowlist).filter(group.derives).map(h => h.host));
 }
 
-/** The failures naming every host on one side only, and the counts compared. */
+/** The hosts the page marks with a group's attribute. */
+export function pageHosts(html, attr) {
+    const re = new RegExp(`${attr}="([^"]*)"`, 'g');
+    return new Set([...html.matchAll(re)].map(m => m[1]));
+}
+
+/** Failures for both groups, the allow rows with an unknown trigger, and the counts. */
 export function drift(allowlist, html) {
-    const want = derivedHosts(allowlist);
-    const got = pageHosts(html);
     const failures = [];
-    if (got.size === 0) {
-        failures.push(`${PAGE_REL} carries no ${ATTR} attribute, so it states no host list to compare. Next step: restore the attribute on each host code in the unattended-hosts list.`);
+    for (const h of allowRows(allowlist)) {
+        if (h.trigger !== undefined && h.trigger !== FEATURE_TRIGGER) {
+            failures.push(`${ALLOWLIST_REL} row ${h.host} has trigger ${JSON.stringify(h.trigger)}, which fits neither privacy list. Next step: use "${FEATURE_TRIGGER}" or remove the key.`);
+        }
     }
-    for (const host of [...want].filter(h => !got.has(h)).sort()) {
-        failures.push(`${host} is allowed unattended in ${ALLOWLIST_REL} but ${PAGE_REL} does not list it. Next step: add it to the unattended-hosts list in ${PAGE_REL}, or correct its disposition in the allowlist.`);
+    let wantTotal = 0;
+    let gotTotal = 0;
+    for (const group of GROUPS) {
+        const want = derivedHosts(allowlist, group);
+        const got = pageHosts(html, group.attr);
+        wantTotal += want.size;
+        gotTotal += got.size;
+        if (got.size === 0) {
+            failures.push(`${PAGE_REL} carries no ${group.attr} attribute, so the list of hosts ${group.label} is not stated. Next step: restore the attribute on each host code in that list.`);
+        }
+        for (const host of [...want].filter(h => !got.has(h)).sort()) {
+            failures.push(`${host} is ${group.label} in ${ALLOWLIST_REL}, but ${PAGE_REL} does not list it under ${group.attr}. Next step: add it to that list in ${PAGE_REL}, or correct its allowlist row.`);
+        }
+        for (const host of [...got].filter(h => !want.has(h)).sort()) {
+            failures.push(`${PAGE_REL} lists ${host} under ${group.attr}, but ${ALLOWLIST_REL} does not place it in the group "${group.label}". Next step: move it to the right list in ${PAGE_REL}, or correct its allowlist row.`);
+        }
     }
-    for (const host of [...got].filter(h => !want.has(h)).sort()) {
-        failures.push(`${PAGE_REL} lists ${host} as contacted without a click, but ${ALLOWLIST_REL} does not allow it unattended. Next step: remove it from the list in ${PAGE_REL}, or correct the allowlist disposition.`);
-    }
-    return { failures, want: want.size, got: got.size };
+    return { failures, want: wantTotal, got: gotTotal };
 }
 
 function readAllowlist(root) {
@@ -95,7 +130,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- the ${want} unattended host(s) allowed in ${ALLOWLIST_REL} match the ${got} listed in ${PAGE_REL}`);
+    console.log(`${NAME}: PASS -- the ${want} host(s) derived from ${ALLOWLIST_REL} match the ${got} listed in ${PAGE_REL}, in both lists`);
     return 0;
 }
 
@@ -107,35 +142,51 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- could not read ${ALLOWLIST_REL} (${e.code ?? e.message}), so no plant would mean anything`);
         return 1;
     }
-    // The fixture page lists exactly the derived hosts, so the baseline is green by
-    // construction. Whether the real page agrees today is the row's job, not this
+    // The fixture page lists exactly the derived hosts in each group, so the baseline is
+    // green by construction. Whether the real page agrees today is the row's job, not this
     // self-test's: a self-test that went red on real drift would hide the planted faults.
-    const html = [...derivedHosts(allowlist)].sort()
-        .map(h => `<code ${ATTR}="${h}">${h}</code>`).join('\n');
+    const [unattendedGroup, featureGroup] = GROUPS;
+    const unattended = [...derivedHosts(allowlist, unattendedGroup)].sort();
+    const feature = [...derivedHosts(allowlist, featureGroup)].sort();
+    const fixtureLines = (attr, hosts) => hosts.map(h => `<code ${attr}="${h}">${h}</code>`).join('\n');
+    const html = `${fixtureLines(unattendedGroup.attr, unattended)}\n${fixtureLines(featureGroup.attr, feature)}`;
     const baseline = drift(allowlist, html);
     if (baseline.failures.length > 0) {
         console.error(`${NAME}: --self-test FAIL -- the fixture page built from the allowlist is not green, so the planted-fault results would mean nothing:`);
         baseline.failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`  ok  baseline: a fixture page listing the derived hosts -> green (${baseline.want} host(s))`);
+    console.log(`  ok  baseline: a fixture page listing the derived hosts in both groups -> green (${baseline.want} host(s))`);
 
-    const EXTRA = 'planted-extra.example.net';
-    const firstHost = [...derivedHosts(allowlist)].sort()[0];
-    // Each plant edits one value in memory. A page plant that does not change the
-    // fixture is itself a failure, because its red would not be plant-caused.
-    const withExtra = `${html}\n<code ${ATTR}="${EXTRA}">${EXTRA}</code>`;
-    const withoutFirst = html.replace(`${ATTR}="${firstHost}"`, 'data-planted-away=""');
-    const withoutAttr = html.replaceAll(`${ATTR}=`, 'data-planted-away=');
+    const EXTRA_U = 'planted-extra.example.net';
+    const EXTRA_F = 'planted-feature.example.net';
+    const firstU = unattended[0];
+    const firstF = feature[0];
+    const withExtraU = `${html}\n<code ${unattendedGroup.attr}="${EXTRA_U}">${EXTRA_U}</code>`;
+    const withExtraF = `${html}\n<code ${featureGroup.attr}="${EXTRA_F}">${EXTRA_F}</code>`;
+    const withoutU = html.replace(`${unattendedGroup.attr}="${firstU}"`, 'data-planted-away=""');
+    const withoutF = html.replace(`${featureGroup.attr}="${firstF}"`, 'data-planted-away=""');
+    const wrongGroup = html.replace(`${featureGroup.attr}="${firstF}"`, `${unattendedGroup.attr}="${firstF}"`);
+    const noMarkedU = html.replaceAll(`${unattendedGroup.attr}=`, 'data-planted-away=');
+    const withRowU = (row) => ({ hosts: [...allowlist.hosts, row] });
+    const dropRow = host => ({ hosts: allowlist.hosts.filter(h => h.host !== host) });
+
+    // [name, page edited?, page text, verdict, host or attribute the red must name]
     const plants = [
-        // [name, page edited?, page text, verdict, host or attribute the red must name]
-        ['an extra host on the page', true, withExtra, drift(allowlist, withExtra), EXTRA],
-        ['a missing host on the page', true, withoutFirst, drift(allowlist, withoutFirst), firstHost],
-        ['an allowlist addition the page does not list', false, html,
-            drift({ hosts: [...allowlist.hosts, { host: EXTRA, disposition: 'allow', reason: 'planted' }] }, html), EXTRA],
-        ['an allowlist removal the page still lists', false, html,
-            drift({ hosts: allowlist.hosts.filter(h => h.host !== firstHost) }, html), firstHost],
-        ['a page with no marked host', true, withoutAttr, drift(allowlist, withoutAttr), ATTR],
+        ['an extra host on the unattended list', true, withExtraU, drift(allowlist, withExtraU), EXTRA_U],
+        ['a missing host on the unattended list', true, withoutU, drift(allowlist, withoutU), firstU],
+        ['an unattended allowlist addition the list omits', false, html,
+            drift(withRowU({ host: EXTRA_U, disposition: 'allow', reason: 'planted' }), html), EXTRA_U],
+        ['an unattended allowlist removal the list still shows', false, html, drift(dropRow(firstU), html), firstU],
+        ['an extra host on the feature list', true, withExtraF, drift(allowlist, withExtraF), EXTRA_F],
+        ['a missing host on the feature list', true, withoutF, drift(allowlist, withoutF), firstF],
+        ['a feature allowlist addition the list omits', false, html,
+            drift(withRowU({ host: EXTRA_F, disposition: 'allow', trigger: FEATURE_TRIGGER, reason: 'planted' }), html), EXTRA_F],
+        ['a feature allowlist removal the list still shows', false, html, drift(dropRow(firstF), html), firstF],
+        ['a feature-triggered host listed in the unattended list', true, wrongGroup, drift(allowlist, wrongGroup), firstF],
+        ['an allow row with an unknown trigger', false, html,
+            drift({ hosts: allowlist.hosts.map(h => (h.host === firstU ? { ...h, trigger: 'planted-trigger' } : h)) }, html), firstU],
+        ['a page with no unattended-marked host', true, noMarkedU, drift(allowlist, noMarkedU), unattendedGroup.attr],
     ];
 
     let failed = 0;
@@ -151,7 +202,7 @@ function selfTest() {
         }
     }
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- the fixture baseline stayed green and ${plants.length} planted faults each went red naming their host or attribute`);
+    console.log(`${NAME}: --self-test PASS -- the fixture baseline stayed green and ${plants.length} planted faults each went red naming their host, attribute or trigger`);
     return 0;
 }
 

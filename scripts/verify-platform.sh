@@ -4752,13 +4752,15 @@ run_own_checks() {
     # that must stay green first. Honestly --quick: in-memory, no network and no gh; it writes nothing.
     # The live read-back is the full-tier updates-repo-static row.
     "updates-repo-static-self-test|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs --self-test"
-    # NEW (Phase 47, WR-02): the privacy page's unattended-host list equals, as a set, the
-    # allow-dispositioned hosts of powerbrowser/endpoint-allowlist.json (loopback excluded).
-    # Derived from the allowlist at check time; red naming any host on one side only.
+    # NEW (Phase 47, WR-02): the privacy page's two host lists each equal, as a set, the hosts the
+    # endpoint allowlist derives into that group: allow rows with no trigger (contacted without any
+    # action) and allow rows with trigger user-feature (contacted only after a feature is used).
+    # Loopback excluded. Derived at check time; red naming any host on one side only.
     # Honestly --quick: two text reads, no build, browser, display or network.
     "privacy-hosts|node $REPO_ROOT/scripts/verify-privacy-hosts.mjs"
-    # privacy-hosts-self-test plants an extra page host, a missing page host, an allowlist addition
-    # the page omits, an allowlist removal the page still lists, and a page with no marked host, each
+    # privacy-hosts-self-test plants, per list, an extra page host, a missing page host, an allowlist
+    # addition and an allowlist removal; plus a feature host listed in the unattended list, an allow
+    # row with an unknown trigger, and a page with no marked host, each
     # red naming its host or attribute; the real page and allowlist stay green first. It writes nothing.
     "privacy-hosts-self-test|node $REPO_ROOT/scripts/verify-privacy-hosts.mjs --self-test"
     # NEW (Phase 47, WR-04): website-publish-ready-self-test plants an OWNER TO FILL marker, a

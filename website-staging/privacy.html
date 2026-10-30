@@ -60,13 +60,20 @@
   <p>Cloudflare is the only processor of error reports. No other company receives them.</p>
 
   <h2>Hosts the browser may contact without your action</h2>
-  <p>PowerBrowser may contact these hosts without a click from you:</p>
+  <p>PowerBrowser may contact these hosts without a click or any other action from you:</p>
   <ul>
     <li><code data-unattended-host="firefox.settings.services.mozilla.com">firefox.settings.services.mozilla.com</code>, <code data-unattended-host="content-signature-2.cdn.mozilla.net">content-signature-2.cdn.mozilla.net</code>, <code data-unattended-host="firefox-settings-attachments.cdn.mozilla.net">firefox-settings-attachments.cdn.mozilla.net</code>: Remote Settings, which supplies filter lists, certificate revocation data and other configuration.</li>
     <li><code data-unattended-host="safebrowsing.google.com">safebrowsing.google.com</code>, <code data-unattended-host="safebrowsing.googleapis.com">safebrowsing.googleapis.com</code>: Google Safe Browsing, which checks pages against known malicious sites.</li>
     <li><code data-unattended-host="updates.powerbrowser.org">updates.powerbrowser.org</code>: checks for PowerBrowser updates.</li>
     <li><code data-unattended-host="release-assets.githubusercontent.com">release-assets.githubusercontent.com</code>: downloads update files.</li>
     <li><code data-unattended-host="update.googleapis.com">update.googleapis.com</code>, <code data-unattended-host="www.google.com">www.google.com</code>, <code data-unattended-host="dl.google.com">dl.google.com</code>, <code data-unattended-host="edgedl.me.gvt1.com">edgedl.me.gvt1.com</code>: the Widevine content decryption module, which is checked for updates and downloaded when needed for protected media.</li>
+  </ul>
+  <h2>Hosts contacted only after you use a feature</h2>
+  <p>These hosts are contacted only when you use the feature that needs them:</p>
+  <ul>
+    <li><code data-feature-host="api.anthropic.com">api.anthropic.com</code>: the AI chat feature, after you add an Anthropic API key and send a request.</li>
+    <li><code data-feature-host="api.openai.com">api.openai.com</code>: the AI chat feature, after you add an OpenAI API key and send a request.</li>
+    <li><code data-feature-host="open-vsx.org">open-vsx.org</code> and <code data-feature-host="openvsx.eclipsecontent.org">openvsx.eclipsecontent.org</code>: the extension catalogue, when you search for, install or update an extension.</li>
   </ul>
   <p>The browser also talks to a service on this computer. That traffic does not leave the machine.</p>
 
