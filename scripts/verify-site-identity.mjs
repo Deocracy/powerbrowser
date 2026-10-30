@@ -66,7 +66,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then twenty-one planted faults
+ * --self-test: the clean tree must be green; then twenty-two planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -465,6 +465,24 @@ function cases(m, srcs) {
             const hits = [TABLE_REL, SITE_PANEL_REL].filter(rel => label.test(stripComments(srcs[rel] ?? '')));
             return hits.length === 0 ? null : hits;
         }],
+        ['rows show the effective state; the cycle and the identity-box icons key on the stored state (Firefox parity)', () => {
+            const code = stripComments(apiSrc);
+            const effective = 'lazy.SitePermissions.getForPrincipal(principal, id, browser)';
+            if (!code.includes(effective)) {
+                return `the rows no longer read the effective state (${effective}) -- broken instrument or a regression to the stored-only read`;
+            }
+            const storedRule = 'stored: effective === null || effective === defaultCapability ? "default" : state';
+            if (!code.includes(storedRule)) {
+                return `the stored state rule is gone (${storedRule}) -- an autoplay default-equal entry would read as saved`;
+            }
+            const iconRule = /const shown = webTabPermissionRows\(browser\)\.filter\(row => row\.stored !== "default"\);/;
+            if (!iconRule.test(code)) {
+                return 'the identity-box icons no longer key on the stored state (row.stored !== "default")';
+            }
+            const refresh = stripComments(srcs[WEB_TAB_REL] ?? '');
+            return refresh.includes("reply.permissions.filter(row => row.stored !== 'default')")
+                ? null : 'the tab-side icon refresh no longer keys on row.stored';
+        }],
         ['the permission glyph map is keyed by PERMISSION_IDS', () => {
             const keys = deriveGlyphKeys(srcs[SITE_PANEL_REL]);
             if (keys.length === 0) {
@@ -679,6 +697,13 @@ const PLANTS = [
         from: "    popup: 'codicon-window',",
         to: "    popups: 'codicon-window',",
         expect: 'the permission glyph map is keyed by PERMISSION_IDS',
+    },
+    {
+        name: 'icons-on-effective-state: the push keys its icons on the effective state',
+        rel: API_REL,
+        from: 'const shown = webTabPermissionRows(browser).filter(row => row.stored !== "default");',
+        to: 'const shown = webTabPermissionRows(browser).filter(row => row.state !== "default");',
+        expect: 'rows show the effective state; the cycle and the identity-box icons key on the stored state',
     },
     {
         name: 'write-state-drift: the write arm accepts a state the panel never shows',

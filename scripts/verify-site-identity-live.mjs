@@ -32,7 +32,7 @@
  * Session C -- `site-panel` (own TLS browser, one tab): the panel's connection
  * and certificate block, six tri-state rows in table order, camera and
  * autoplay-media round trips with persistence across a reopen, the identity
- * box icons (three plus +1, back to none, autoplay icon kept), and the origin
+ * box icons (three plus +1, back to none), autoplay-media read as the pref default (Firefox parity), and the origin
  * race: the panel shows origin A, the tab navigates to origin B, the write is
  * refused, and camera stays default on B.
  * Plant `perm-refused` makes the permission reply refused (expected red
@@ -56,6 +56,7 @@
 import {
     BROKEN,
     focusTheiaFrame,
+    inChrome,
     loadedAt,
     makeCurrent,
     openWebTab,
@@ -67,6 +68,7 @@ import {
 import { domainToASCII, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { probe } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-site-identity-live';
@@ -343,6 +345,7 @@ const PANEL_READ = `JSON.stringify((() => {
         rows: [...panel.querySelectorAll('.pb-site-panel-row')].map(r => ({
             id: r.getAttribute('data-permission'),
             state: r.getAttribute('data-state'),
+            stored: r.getAttribute('data-stored'),
             label: r.querySelector('.pb-site-panel-row-label')?.textContent ?? null,
             word: r.querySelector('.pb-site-panel-row-state')?.textContent ?? null,
         })),
@@ -388,6 +391,27 @@ const rowOf = (panel, id) => panel.rows.find(row => row.id === id);
 async function openPanelReady(app, count) {
     await openPanel(app);
     return waitFor(() => panelRead(app), p => p.present && p.rows.length === count);
+}
+
+/**
+ * The autoplay-media effective default, read from media.autoplay.default in
+ * chrome (never assumed). Mapped the way upstream's getDefault maps the pref
+ * (SitePermissions.sys.mjs:863-884): ALLOWED -> allow, BLOCKED_ALL -> block-all,
+ * anything else -> block-audible. The pref values come from nsIAutoplay.idl
+ * (upstream/dom/media/autoplay/nsIAutoplay.idl:13-15), parsed at check time.
+ */
+async function autoplayDefault(app) {
+    const idl = readFileSync(join(REPO_ROOT, 'upstream/dom/media/autoplay/nsIAutoplay.idl'), 'utf8');
+    const consts = Object.fromEntries([...idl.matchAll(/const uint32_t (\w+) = (\d+);/g)].map(m => [m[1], Number(m[2])]));
+    if (!Number.isInteger(consts.ALLOWED) || !Number.isInteger(consts.BLOCKED_ALL)) {
+        throw new Error(`${BROKEN} nsIAutoplay.idl defines no ALLOWED/BLOCKED_ALL -- broken instrument`);
+    }
+    const pref = await inChrome(app, `return Services.prefs.getIntPref('media.autoplay.default', 1);`);
+    if (!Number.isInteger(pref)) {
+        throw new Error(`${BROKEN} media.autoplay.default did not read as an integer in chrome: ${JSON.stringify(pref)}`);
+    }
+    const name = pref === consts.ALLOWED ? 'allow' : pref === consts.BLOCKED_ALL ? 'block-all' : 'block-audible';
+    return { pref, name };
 }
 
 /** The managed IDs in table order, from the tree's table (never a copy here). */
@@ -480,22 +504,36 @@ async function sitePanel(ctx) {
             }
         }
     }
-    // --- autoplay-media: default -> allow -> block sounds -> block all -> default.
-    const autoplayCycle = [['allow', 'Allowed'], ['block-audible', 'Block sounds'], ['block-all', 'Block all'], ['default', 'Use default']];
-    if (JSON.stringify(autoplay) !== JSON.stringify(['allow', 'block-audible', 'block-all', 'default'])) {
-        fail(`the autoplay cycle is ${JSON.stringify(autoplay)}, want Allow, Block sounds, Block all, Use default`);
+    // --- autoplay-media (Firefox parity): the row shows the effective state, so an absent entry reads as the
+    // pref's default; the cycle is stored-based (default -> allow -> block sounds -> block all -> default); the icon
+    // shows only for a saved entry. Expected words and the default come from the pref, read in chrome.
+    const COPY = { allow: 'Allowed', 'block-audible': 'Block sounds', 'block-all': 'Block all', default: 'Use default' };
+    const auto = await autoplayDefault(app);
+    if (JSON.stringify(autoplay) !== JSON.stringify(['default', 'allow', 'block-audible', 'block-all'])) {
+        fail(`the autoplay cycle is ${JSON.stringify(autoplay)}, want Use default, Allow, Block sounds, Block all`);
     }
-    for (const [want, word] of autoplayCycle) {
+    const startRow = rowOf(opened, 'autoplay-media');
+    if (startRow?.state !== auto.name || startRow?.stored !== 'default' || startRow?.word !== COPY[auto.name]) {
+        fail(`with media.autoplay.default=${auto.pref} the autoplay row must read "${COPY[auto.name]}" with no saved entry; saw state ${JSON.stringify(startRow?.state)} stored ${JSON.stringify(startRow?.stored)} copy ${JSON.stringify(startRow?.word)}`);
+    }
+    // The default-equal state is never saved (SitePermissions.sys.mjs:575-580): stored is 'default' when the chosen name equals the pref's default.
+    const storedFor = want => (want === 'default' || want === auto.name ? 'default' : want);
+    for (const want of ['allow', 'block-audible', 'block-all', 'default']) {
         if (!await clickRow(app, 'autoplay-media')) {
             return fail(`${BROKEN} the autoplay-media row is not on screen`);
         }
-        const panel = await waitFor(() => panelRead(app), p => p.present ? rowOf(p, 'autoplay-media')?.state === want : !!p.empty);
+        const effective = want === 'default' ? auto.name : want;
+        const panel = await waitFor(() => panelRead(app), p => p.present ? rowOf(p, 'autoplay-media')?.stored === storedFor(want) && rowOf(p, 'autoplay-media')?.state === effective : !!p.empty);
         if (panel.empty) {
             return refusedAt('autoplay-media', panel);
         }
         const row = rowOf(panel, 'autoplay-media');
-        if (row?.state !== want || row?.word !== word) {
-            fail(`autoplay-media row did not reach "${want}" with the copy "${word}"; saw state ${JSON.stringify(row?.state)} copy ${JSON.stringify(row?.word)}`);
+        if (row?.state !== effective || row?.stored !== storedFor(want) || row?.word !== COPY[effective]) {
+            fail(`autoplay-media after "${want}" must read "${COPY[effective]}" (effective ${effective}, stored ${storedFor(want)}); saw state ${JSON.stringify(row?.state)} stored ${JSON.stringify(row?.stored)} copy ${JSON.stringify(row?.word)}`);
+        }
+        const icon = await waitFor(() => iconRead(app), i => i.icons.includes('codicon-play') === (storedFor(want) !== 'default'));
+        if (icon.icons.includes('codicon-play') !== (storedFor(want) !== 'default')) {
+            fail(`the autoplay icon after "${want}" must be ${storedFor(want) !== 'default' ? 'present' : 'absent'} (saved entry ${storedFor(want)}); saw ${JSON.stringify(icon)}`);
         }
     }
     // --- the origin race (review fix): the panel shows origin A; the tab moves to origin B; the write must be refused.
@@ -572,25 +610,6 @@ async function sitePanel(ctx) {
     if (none.icons.length !== 0 || none.overflow !== null) {
         fail(`with every permission at default the identity box must show no icons; saw ${JSON.stringify(none)}`);
     }
-    // --- autoplay icon: block sounds, then block all, the icon stays and the copy follows.
-    await openPanelReady(app, ids.length);
-    for (const [want, word] of [['block-audible', 'Block sounds'], ['block-all', 'Block all']]) {
-        await clickRow(app, 'autoplay-media');
-        const got = await waitFor(() => panelRead(app), p => p.present && rowOf(p, 'autoplay-media')?.state === want);
-        if (rowOf(got, 'autoplay-media')?.word !== word) {
-            fail(`autoplay-media must read "${word}" at "${want}"; saw state ${JSON.stringify(rowOf(got, 'autoplay-media')?.state)} copy ${JSON.stringify(rowOf(got, 'autoplay-media')?.word)}`);
-        }
-        await closePanel(app);
-        const icon = await waitFor(() => iconRead(app), i => i.icons.includes('codicon-play'));
-        if (!icon.icons.includes('codicon-play')) {
-            fail(`an autoplay-media "${want}" must keep its icon in the identity box; saw ${JSON.stringify(icon)}`);
-        }
-        await openPanelReady(app, ids.length);
-    }
-    // Reset autoplay-media to default: block all -> default is one click.
-    await clickRow(app, 'autoplay-media');
-    await waitFor(() => panelRead(app), p => p.present && rowOf(p, 'autoplay-media')?.state === 'default');
-    await closePanel(app);
 }
 
 const SCENARIOS = { 'identity-tls': identityTls, 'identity-local': identityLocal, 'site-panel': sitePanel };
