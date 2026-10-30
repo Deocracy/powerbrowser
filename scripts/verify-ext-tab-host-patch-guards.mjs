@@ -96,6 +96,16 @@ const GUARDS = [
     anchor: 'let tabCreated = (eventName, event) => {', site: 'register.tabCreated',
     regexes: [/^\s*if \(windowTracker\.isTabHostWindow\(event\.nativeTab\.documentGlobal\)\) \{\s*$/, /^\s*return;\s*$/],
     why: 'tab-created reads the shell ZoomManager, which the shell lacks' },
+  { id: 'G9', file: TABS, mode: 'after',
+    anchor: 'let url = context.uri.resolve(updateProperties.url);', site: 'getAPI.update',
+    regexes: [
+      /^\s*if \(\s*$/,
+      /^\s*windowTracker\.isTabHostWindow\(nativeTab\.documentGlobal\) &&\s*$/,
+      /^\s*url !== "about:blank" &&\s*$/,
+      /^\s*!\/\^https\?:\\\/\\\/\/i\.test\(url\)\s*$/,
+      /^\s*return Promise\.reject\(\{ message: `Illegal URL: \$\{url\}` \}\);\s*$/,
+    ],
+    why: 'a tabs.update in a tab host window refuses every URL but http(s) and about:blank (D-05, D-17)' },
 ];
 
 // The weakening plant for each guard: one `+` line changed (or one dropped).
@@ -108,6 +118,7 @@ const WEAKEN = {
   G6: { find: 'if (sidebarKey && ', replace: 'if (sidebarKey || ' },
   G7: { drop: /^\s*try \{\s*$/ },
   G8: { find: 'if (windowTracker.isTabHostWindow(event.nativeTab', replace: 'if (!windowTracker.isTabHostWindow(event.nativeTab' },
+  G9: { find: 'url !== "about:blank" &&', replace: 'url !== "about:blank" ||' },
 };
 
 const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 'return']);
@@ -367,7 +378,8 @@ function check(opts = {}) {
       drift = true;
       continue;
     }
-    const at = g.mode === 'after' ? hits[0] + 1 : hits[0];
+    // An after-row sits in the method of the first non-blank line below its anchor.
+    const at = g.mode === 'after' ? nextNonBlank(pl, hits[0] + 1) : hits[0];
     const site = at < pl.length ? enclosing(pl, at).site : '';
     if (site !== g.site) {
       fail(g, 'ANCHOR DRIFT', `the anchor sits in ${site || 'no definition'}, the row says ${g.site}`);
@@ -456,6 +468,12 @@ function check(opts = {}) {
 }
 
 // ---- plants (self-test only; each writes into a mktemp -d directory) -------
+
+function nextNonBlank(lines, i) {
+  let j = i;
+  while (j < lines.length - 1 && lines[j].trim() === '') j++;
+  return j;
+}
 
 function findPlusIndex(b, pred) {
   return b.plus.find(j => pred(b.hunk.body[j].raw.slice(1)));
@@ -586,6 +604,19 @@ function selfTest() {
     if (landedOk('G6 anchor duplicated', g6Dup !== g6Text)) {
       expectRed('G6 anchor duplicated', check({ pristine: new Map([[g6.file, g6Dup]]) }),
         f => f.id === 'G6' && f.kind === 'ANCHOR DRIFT', { kind: 'ANCHOR DRIFT', id: 'G6' });
+    }
+
+    // The URL wall (G9) negated in two places: the tab-host test flipped, and the regex test's own negation dropped.
+    // Neither is a single-line `||` or `&&` change, so each needs its own plant.
+    const g9Text = clean.replace('+              windowTracker.isTabHostWindow(nativeTab.documentGlobal) &&', '+              !windowTracker.isTabHostWindow(nativeTab.documentGlobal) &&');
+    if (landedOk('G9 tab-host test negated', g9Text !== clean)) {
+      expectRed('G9 tab-host test negated', check({ patchPath: withPatch('G9-host-negated.patch', g9Text) }),
+        f => f.id === 'G9' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G9' });
+    }
+    const g9Regex = clean.replace('+              !/^https?:\\/\\//i.test(url)', '+              /^https?:\\/\\//i.test(url)');
+    if (landedOk('G9 scheme regex negation dropped', g9Regex !== clean)) {
+      expectRed('G9 scheme regex negation dropped', check({ patchPath: withPatch('G9-regex-negation.patch', g9Regex) }),
+        f => f.id === 'G9' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G9' });
     }
 
     // A second logic patch staged under another name.
