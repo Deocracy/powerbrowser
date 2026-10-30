@@ -108,6 +108,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     clearDataRow: 'Clear cookies and site data…',
     clearDataTitle: (site: string) => `Clear data for ${site}?`,
     clearDataScope: (site: string) => `This clears cookies and site data for ${site} and all of its subdomains.`,
+    // WR-06: the tab-store deletion is disclosed (closed-tab rows for the site are removed, not only thumbnails).
+    clearDataClosedTabs: (site: string) => `Closed tabs for ${site} are removed too.`,
     clearDataStaysSignedIn: (subject: string) => `You stay signed in to ${subject}.`,
     clearDataConfirm: 'Clear',
     clearDataCancel: 'Cancel',

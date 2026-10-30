@@ -494,7 +494,7 @@ export class AddressBar {
         try {
             const dialog = new ConfirmDialog({
                 title: CHROME_BAR_COPY.clearDataTitle(site),
-                msg: `${CHROME_BAR_COPY.clearDataScope(site)} ${CHROME_BAR_COPY.clearDataStaysSignedIn(appSubject())}`,
+                msg: `${CHROME_BAR_COPY.clearDataScope(site)} ${CHROME_BAR_COPY.clearDataClosedTabs(site)} ${CHROME_BAR_COPY.clearDataStaysSignedIn(appSubject())}`,
                 ok: CHROME_BAR_COPY.clearDataConfirm,
                 cancel: CHROME_BAR_COPY.clearDataCancel,
             });

@@ -4697,7 +4697,8 @@ async function handleWebTabAction(data, actorRef) {
           lazy.SitePermissions.setForPrincipal(principal, data.id, capability);
         }
       } catch (err) {
-        PowerBrowserAPI.log("error", `[web-tab] permission write failed: ${err && err.message ? err.message : err}`);
+        // O-31-B: a fixed string; err.message is never logged here (SitePermissions texts are fixed, but nothing guarantees it).
+        PowerBrowserAPI.log("error", "[web-tab] permission write failed");
         return { ok: false, reason: "write-failed", message: "handleWebTabAction: the permission write failed" };
       }
       return { ok: true, kind, where: "applied", permissions: webTabPermissionRows(entry.browser) };
@@ -4725,10 +4726,16 @@ async function handleWebTabAction(data, actorRef) {
           PowerBrowserAPI.log("error", `[web-tab] site-data clear refused: ${outcome}`);
           return { ok: false, reason: outcome, message: "handleWebTabAction: the site data clear did not complete" };
         }
-        await purgeSiteTabRows(webTabSite(principal));
+        // WR-06: cookies and storage are already gone here. A tab-store failure is logged and
+        // does not turn the reply into "write-failed" (the UI would then offer a retry that clears nothing).
+        try {
+          await purgeSiteTabRows(webTabSite(principal));
+        } catch (err) {
+          PowerBrowserAPI.log("error", "[web-tab] site-data clear: the tab-store rows were not purged");
+        }
         return { ok: true, kind, where: "cleared", hasData: await webTabSiteHasData(principal.asciiHost) };
       } catch (err) {
-        PowerBrowserAPI.log("error", `[web-tab] site-data clear failed: ${err && err.message ? err.message : err}`);
+        PowerBrowserAPI.log("error", "[web-tab] site-data clear failed");
         return { ok: false, reason: "write-failed", message: "handleWebTabAction: the site data clear failed" };
       }
     }
@@ -4758,7 +4765,7 @@ async function handleWebTabAction(data, actorRef) {
           lazy.ContentBlockingAllowList.remove(entry.browser);
         }
       } catch (err) {
-        PowerBrowserAPI.log("error", `[web-tab] shield change failed: ${err && err.message ? err.message : err}`);
+        PowerBrowserAPI.log("error", "[web-tab] shield change failed");
         return { ok: false, reason: "write-failed", message: "handleWebTabAction: the shield change failed" };
       }
       entry.browser.reload();

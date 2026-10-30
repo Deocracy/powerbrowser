@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then forty-three planted faults
+ * --self-test: the clean tree must be green; then forty-five planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -912,6 +912,23 @@ function cases(m, srcs, mm) {
             const routed = keys(router[1]);
             return sameSet(pushed, routed) ? null : { pushed: sorted(pushed), routed: sorted(routed), dropped: sorted(pushed.filter(k => !routed.includes(k))) };
         }],
+        ['the web-tab action arms log no err.message (O-31-B)', () => {
+            // The handler body is cut at its closing brace (a column-0 `}` line), never by a name.
+            const code = stripComments(apiSrc);
+            const start = code.indexOf('async function handleWebTabAction(');
+            if (start < 0) {
+                return `no handleWebTabAction in ${API_REL} -- broken instrument`;
+            }
+            const end = code.indexOf('\n}\n', start);
+            const body = code.slice(start, end < 0 ? undefined : end);
+            const leaks = body.split('\n').filter(line => /\.log\(/.test(line) && /err\.message/.test(line));
+            return leaks.length === 0 ? null : leaks.map(line => line.trim());
+        }],
+        ['the tab-store purge runs in its own try after a cleared clear (WR-06)', () => {
+            const code = stripComments(apiSrc);
+            const own = /const outcome = await webTabClearSiteData\(entry\.browser, principal\);[\s\S]*?try \{\s*await purgeSiteTabRows\(webTabSite\(principal\)\);\s*\} catch \(err\) \{/.test(code);
+            return own ? null : 'the purge is not in its own try after the clear outcome: a tab-store failure would report the cleared clear as write-failed';
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -1013,6 +1030,20 @@ const PLANTS = [
         from: "    'local',\n",
         to: '',
         expect: 'SECURITY_STATES equal the boundary decode arms',
+    },
+    {
+        name: 'the purge joins the clear try (WR-06)',
+        rel: API_REL,
+        from: '        try {\n          await purgeSiteTabRows(webTabSite(principal));\n        } catch (err) {\n          PowerBrowserAPI.log("error", "[web-tab] site-data clear: the tab-store rows were not purged");\n        }\n',
+        to: '        await purgeSiteTabRows(webTabSite(principal));\n',
+        expect: 'the tab-store purge runs in its own try after a cleared clear (WR-06)',
+    },
+    {
+        name: 'a web-tab arm logs err.message again (O-31-B)',
+        rel: API_REL,
+        from: 'PowerBrowserAPI.log("error", "[web-tab] shield change failed");',
+        to: 'PowerBrowserAPI.log("error", `[web-tab] shield change failed: ${err && err.message ? err.message : err}`);',
+        expect: 'the web-tab action arms log no err.message (O-31-B)',
     },
     {
         name: 'the state router drops shieldExcepted',
