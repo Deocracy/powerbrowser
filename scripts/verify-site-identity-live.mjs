@@ -495,6 +495,15 @@ async function clearScope(ctx) {
     }
 }
 
+/** The site-panel run with the ALLOWED default: the session must really read media.autoplay.default=ALLOWED. */
+async function sitePanelAllowed(ctx) {
+    const auto = await autoplayDefault(ctx.app);
+    if (auto.name !== 'allow') {
+        return ctx.fail(`${BROKEN} the ALLOWED session did not apply media.autoplay.default=ALLOWED (read ${auto.pref})`);
+    }
+    return sitePanel(ctx);
+}
+
 async function waitFor(read, pred, timeoutMs = 8000) {
     const end = Date.now() + timeoutMs;
     let last = await read();
@@ -537,7 +546,7 @@ async function autoplayDefault(app) {
 /** The managed IDs in table order, from the tree's table (never a copy here). */
 async function tableIds() {
     const table = await import(pathToFileURL(join(REPO_ROOT, TABLE_REL)).href);
-    return { ids: [...table.PERMISSION_IDS], autoplay: [...table.AUTOPLAY_PERMISSION_STATES] };
+    return { ids: [...table.PERMISSION_IDS], autoplay: [...table.AUTOPLAY_PERMISSION_STATES], permissionOrder: table.permissionOrder };
 }
 
 /**
@@ -549,7 +558,7 @@ async function tableIds() {
  */
 async function sitePanel(ctx) {
     const { app, pages, plant, fail, note } = ctx;
-    const { ids, autoplay } = await tableIds();
+    const { ids, autoplay, permissionOrder } = await tableIds();
     const secureId = await openWebTab(app, pages.tlsUrl('/secure'));
     if (await waitForPush(app, loadedAt(secureId, '/secure')) < 0) {
         return fail(`${BROKEN} no loaded state push arrived for /secure`);
@@ -629,6 +638,36 @@ async function sitePanel(ctx) {
             }
         }
     }
+    // --- popup (WR-05): the default is read from SitePermissions.getDefault in chrome (upstream's popup
+    // default is BLOCK, SitePermissions.sys.mjs:1001-1003), so the row starts there with no saved entry. Each
+    // click must change what the row shows: the step from the default to "Use default" changes nothing and
+    // is skipped, so three clicks from the default alternate between the two effective states.
+    const popupDefault = await inChrome(app, `const SP = ChromeUtils.importESModule('resource:///modules/SitePermissions.sys.mjs').SitePermissions;
+        const d = SP.getDefault('popup');
+        return d === SP.ALLOW ? 'allow' : d === SP.BLOCK ? 'block' : 'default';`);
+    if (!['allow', 'block', 'default'].includes(popupDefault)) {
+        return fail(`${BROKEN} SitePermissions.getDefault("popup") is not a state the cycle names: ${JSON.stringify(popupDefault)}`);
+    }
+    const startPopup = rowOf(await panelRead(app), 'popup');
+    if (startPopup?.state !== popupDefault || startPopup?.stored !== 'default') {
+        fail(`the popup row must start at its default "${popupDefault}" with no saved entry; saw state ${JSON.stringify(startPopup?.state)} stored ${JSON.stringify(startPopup?.stored)}`);
+    }
+    let previousPopup = popupDefault;
+    for (let click = 1; click <= 3; click++) {
+        if (!await clickRow(app, 'popup')) {
+            return fail(`${BROKEN} the popup row is not on screen`);
+        }
+        const panel = await waitFor(() => panelRead(app), p => p.present ? !!rowOf(p, 'popup') && rowOf(p, 'popup').state !== previousPopup : !!p.empty);
+        if (panel.empty) {
+            return refusedAt('popup', panel);
+        }
+        const now = rowOf(panel, 'popup')?.state;
+        if (now === previousPopup) {
+            fail(`popup click ${click} was a dead click: the row stayed "${previousPopup}"`);
+            break;
+        }
+        previousPopup = now;
+    }
     // --- autoplay-media (Firefox parity): the row shows the effective state, so an absent entry reads as the
     // pref's default; the cycle is stored-based (default -> allow -> block sounds -> block all -> default); the icon
     // shows only for a saved entry. Expected words and the default come from the pref, read in chrome.
@@ -642,23 +681,27 @@ async function sitePanel(ctx) {
         fail(`with media.autoplay.default=${auto.pref} the autoplay row must read "${COPY[auto.name]}" with no saved entry; saw state ${JSON.stringify(startRow?.state)} stored ${JSON.stringify(startRow?.stored)} copy ${JSON.stringify(startRow?.word)}`);
     }
     // The default-equal state is never saved (SitePermissions.sys.mjs:575-580): stored is 'default' when the chosen name equals the pref's default.
-    const storedFor = want => (want === 'default' || want === auto.name ? 'default' : want);
-    for (const want of ['allow', 'block-audible', 'block-all', 'default']) {
+    // WR-05: the cycle is the table's order over effective states, each once (permissionOrder), read from the
+    // table at check time. From the default it runs through the other states and back, and every step changes the row.
+    const order = permissionOrder('autoplay-media', auto.name);
+    const start = order.indexOf(auto.name);
+    for (let step = 1; step <= order.length; step++) {
+        const want = order[(start + step) % order.length];
+        const stored = want === auto.name ? 'default' : want;
         if (!await clickRow(app, 'autoplay-media')) {
             return fail(`${BROKEN} the autoplay-media row is not on screen`);
         }
-        const effective = want === 'default' ? auto.name : want;
-        const panel = await waitFor(() => panelRead(app), p => p.present ? rowOf(p, 'autoplay-media')?.stored === storedFor(want) && rowOf(p, 'autoplay-media')?.state === effective : !!p.empty);
+        const panel = await waitFor(() => panelRead(app), p => p.present ? rowOf(p, 'autoplay-media')?.stored === stored && rowOf(p, 'autoplay-media')?.state === want : !!p.empty);
         if (panel.empty) {
             return refusedAt('autoplay-media', panel);
         }
         const row = rowOf(panel, 'autoplay-media');
-        if (row?.state !== effective || row?.stored !== storedFor(want) || row?.word !== COPY[effective]) {
-            fail(`autoplay-media after "${want}" must read "${COPY[effective]}" (effective ${effective}, stored ${storedFor(want)}); saw state ${JSON.stringify(row?.state)} stored ${JSON.stringify(row?.stored)} copy ${JSON.stringify(row?.word)}`);
+        if (row?.state !== want || row?.stored !== stored || row?.word !== COPY[want]) {
+            fail(`autoplay-media after step ${step} must read "${COPY[want]}" (effective ${want}, stored ${stored}); saw state ${JSON.stringify(row?.state)} stored ${JSON.stringify(row?.stored)} copy ${JSON.stringify(row?.word)}`);
         }
-        const icon = await waitFor(() => iconRead(app), i => i.icons.includes('codicon-play') === (storedFor(want) !== 'default'));
-        if (icon.icons.includes('codicon-play') !== (storedFor(want) !== 'default')) {
-            fail(`the autoplay icon after "${want}" must be ${storedFor(want) !== 'default' ? 'present' : 'absent'} (saved entry ${storedFor(want)}); saw ${JSON.stringify(icon)}`);
+        const icon = await waitFor(() => iconRead(app), i => i.icons.includes('codicon-play') === (stored !== 'default'));
+        if (icon.icons.includes('codicon-play') !== (stored !== 'default')) {
+            fail(`the autoplay icon after step ${step} must be ${stored !== 'default' ? 'present' : 'absent'} (saved entry ${stored}); saw ${JSON.stringify(icon)}`);
         }
     }
     // --- the origin race (review fix): the panel shows origin A; the tab moves to origin B; the write must be refused.
@@ -1450,13 +1493,19 @@ async function quitRow(ctx) {
 /** Scenarios whose TLS session serves the fixture leaf without trusting its CA. */
 const UNTRUSTED_TLS = ['identity-override'];
 
-const SCENARIOS = { 'identity-tls': identityTls, 'identity-override': identityOverride, 'clear-scope': clearScope, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
+const SCENARIOS = { 'identity-tls': identityTls, 'identity-override': identityOverride, 'clear-scope': clearScope, 'site-panel-autoplay-allowed': sitePanelAllowed, 'identity-local': identityLocal, 'site-panel': sitePanel, 'clear-data': clearData, shield, 'app-menu': appMenu, 'quit-key': quitKey, 'quit-row': quitRow };
 
 /** Later plans' scenarios: skipped until their plan lands them (never pass, never silent). */
 const NOT_LANDED = [];
 
 /** Plan 03 (SITE-08): the shield session runs with tracking protection on, so the fixture's tracker is blocked. */
-const SCENARIO_PREFS = { shield: { 'privacy.trackingprotection.enabled': true } };
+// WR-05: the site-panel run again with media.autoplay.default=ALLOWED (the value is nsIAutoplay.idl's ALLOWED),
+// so the autoplay cycle is checked from a default-equal "Allowed" as well as the shipped BLOCKED.
+const AUTOPLAY_ALLOWED = Number(/const uint32_t ALLOWED = (\d+);/.exec(readFileSync(join(REPO_ROOT, 'upstream/dom/media/autoplay/nsIAutoplay.idl'), 'utf8'))?.[1]);
+const SCENARIO_PREFS = {
+    shield: { 'privacy.trackingprotection.enabled': true },
+    'site-panel-autoplay-allowed': { 'media.autoplay.default': AUTOPLAY_ALLOWED },
+};
 
 /** The profile prefs for one session: the scenarios' own, then the fixture prefs for a TLS session. */
 function sessionPrefs(names, tls) {
@@ -1616,7 +1665,7 @@ async function main(args) {
         // the site-panel session (its own TLS browser), then the local session.
         const results = [];
         // quit-key and quit-row each end their own launch, so each runs in a session of its own.
-        for (const [name, tls] of [['identity-tls', true], ['identity-override', true], ['clear-scope', true], ['site-panel', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false]]) {
+        for (const [name, tls] of [['identity-tls', true], ['identity-override', true], ['clear-scope', true], ['site-panel', true], ['site-panel-autoplay-allowed', true], ['identity-local', false], ['clear-data', false], ['shield', false], ['app-menu', false], ['quit-key', false], ['quit-row', false]]) {
             if (names.includes(name)) {
                 results.push(...await runSession([name], '', tls));
             }

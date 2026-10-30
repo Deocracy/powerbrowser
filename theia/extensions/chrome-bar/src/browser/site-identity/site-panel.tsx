@@ -39,7 +39,6 @@ export interface SitePanelProps {
     /** The panel's top-left corner in viewport pixels: under the identity box. */
     anchor: { top: number; left: number };
     /** The state the user last chose per row in this open panel; a click moves from it when present, else from the row's stored state. */
-    intents: Readonly<Record<string, string>>;
     /** The pill's typed-or-committed text; the host line falls back to it when chrome gave no display host. */
     committedAddress: string;
     /** A one-line failure notice for the last action (for example a refused clear); null when there is none. */
@@ -54,7 +53,7 @@ export interface SitePanelProps {
 
 /** Phase 31 plan 02: the site panel, portalled to the body like every pill dropdown. */
 export function SitePanel(props: SitePanelProps): React.ReactElement {
-    const { info, anchor, intents, committedAddress, notice, onClose, onSetPermission, onClearSiteData, onToggleShield } = props;
+    const { info, anchor, committedAddress, notice, onClose, onSetPermission, onClearSiteData, onToggleShield } = props;
     const rootRef = React.useRef<HTMLDivElement>(null);
     // Focus on mount only: a re-render (a permission reply) must not pull focus back from a row.
     React.useEffect(() => { rootRef.current?.focus(); }, []);
@@ -130,7 +129,7 @@ export function SitePanel(props: SitePanelProps): React.ReactElement {
                         data-stored={row.stored}
                         aria-label={CHROME_BAR_COPY.permissionControlLabel(label, display, stateText)}
                         onMouseDown={e => e.preventDefault()}
-                        onClick={() => onSetPermission(row.id, nextPermissionState(row.id, intents[row.id] ?? row.stored))}
+                        onClick={() => onSetPermission(row.id, nextPermissionState(row.id, row.state, row.defaultState ?? 'default'))}
                     >
                         <span className={`pb-site-panel-row-icon codicon ${PERMISSION_GLYPH_CLASS[row.id] ?? ''}`} aria-hidden='true' />
                         <span className='pb-site-panel-row-label'>{label}</span>

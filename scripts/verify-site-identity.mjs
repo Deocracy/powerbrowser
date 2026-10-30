@@ -86,7 +86,7 @@
  * Each case prints `ok <case>`; the run ends `verify-site-identity: PASS`
  * or one `verify-site-identity: FAIL -- <case>: <got>` line per red case.
  *
- * --self-test: the clean tree must be green; then forty-eight planted faults
+ * --self-test: the clean tree must be green; then forty-nine planted faults
  * must each go red naming the case that catches it: a SECURITY_STATE
  * dropped, one mask flag removed, the typed lock line re-inserted, an
  * `openStockTab('about:preferences')` added, a `data.origin` read added to
@@ -141,7 +141,7 @@ const APP_MENU_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/app-
 const WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
 const CMD_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
 const STORE_CLIENT_REL = 'theia/extensions/tab-uris/src/browser/chrome-store-client.ts';
-const EXPORTS = ['SECURITY_STATES', 'PERMISSION_IDS', 'STOCK_PAGES', 'MENU_ORDER', 'MENU_PHASE', 'PERMISSION_STATES', 'AUTOPLAY_PERMISSION_STATES'];
+const EXPORTS = ['SECURITY_STATES', 'PERMISSION_IDS', 'STOCK_PAGES', 'MENU_ORDER', 'MENU_PHASE', 'PERMISSION_STATES', 'AUTOPLAY_PERMISSION_STATES', 'permissionOrder', 'nextPermissionState'];
 /** Plan 04: the menu builder's exports, imported beside the table (app-menu.ts is import-free too). */
 const MENU_EXPORTS = ['APP_MENU_ID', 'WIRED_MENU_IDS', 'applyMenuOrder', 'buildAppMenu'];
 
@@ -994,6 +994,37 @@ function cases(m, srcs, mm) {
             }
             return !stringGuard && formatted ? null : { stringGuard, formattedFromPRTime: formatted, want: 'webTabCertDate(validity.notBefore) and notAfter, no string guard' };
         }],
+        ['no permission cycle step is dead, for every default the table names (WR-05)', () => {
+            // Behaviour, not text: the order is derived by the table module, and every step is taken from it.
+            const defaults = [...new Set([...m.PERMISSION_STATES, ...m.AUTOPLAY_PERMISSION_STATES])];
+            for (const id of m.PERMISSION_IDS) {
+                for (const d of defaults) {
+                    const order = m.permissionOrder(id, d);
+                    if (new Set(order).size !== order.length) {
+                        return { id, defaultState: d, order, want: 'each effective state listed once' };
+                    }
+                    for (const cur of order) {
+                        const target = m.nextPermissionState(id, cur, d);
+                        const effective = target === 'default' ? d : target;
+                        if (order.length > 1 && effective === cur) {
+                            return { id, defaultState: d, from: cur, dead: target };
+                        }
+                        if (!order.includes(effective)) {
+                            return { id, defaultState: d, from: cur, outside: effective };
+                        }
+                    }
+                }
+            }
+            // The panel's click is the reply's effective state and the table's default, nothing stored on the client.
+            const panel = stripComments(srcs[SITE_PANEL_REL] ?? '');
+            const address = stripComments(addressBarSrc ?? '');
+            const wired = panel.includes("nextPermissionState(row.id, row.state, row.defaultState ?? 'default')");
+            const rowDefault = stripComments(apiSrc).includes('defaultState: webTabPermissionStateName(id, defaultCapability),');
+            const noIntents = !/sitePanelIntents|intents=\{/.test(address) && !/intents\[/.test(panel);
+            return wired && rowDefault && noIntents
+                ? null
+                : { panelUsesRowState: wired, chromeSendsDefaultState: rowDefault, clientIntentsGone: noIntents };
+        }],
         ['every new boundary internal keeps its catalogue row', () => catalogueFailures()],
     ];
 }
@@ -1095,6 +1126,13 @@ const PLANTS = [
         from: "    'local',\n",
         to: '',
         expect: 'SECURITY_STATES equal the boundary decode arms',
+    },
+    {
+        name: 'the permission order lists a default-equal state twice (WR-05)',
+        rel: TABLE_REL,
+        from: '        if (!order.includes(effective)) {',
+        to: '        if (true) {',
+        expect: 'no permission cycle step is dead, for every default the table names (WR-05)',
     },
     {
         name: 'the certificate dates are read as strings (WR-03)',

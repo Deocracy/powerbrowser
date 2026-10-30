@@ -98,14 +98,34 @@ export const PERMISSION_STATES: readonly string[] = Object.freeze(['default', 'a
 export const AUTOPLAY_PERMISSION_STATES: readonly string[] = Object.freeze(['default', 'allow', 'block-audible', 'block-all']);
 
 /**
- * The state a click on a permission row moves to: the next entry of its cycle
- * after `from`, wrapping. `from` is the row's stored state, or the state the
- * user last chose in the open panel (an autoplay-media "block-audible" that
- * equals the shipped default is never stored, so the choice is kept by the
- * panel, not read back). An unknown `from` starts the cycle at its first entry.
+ * WR-05: the effective states of a permission's cycle, in cycle order, each once.
+ * "default" reads as `defaultState` (what the permission shows with no saved
+ * entry), so an entry equal to the default is the same state as the default and
+ * is listed at its first position only. Popup (default block) is [block, allow];
+ * autoplay-media with the BLOCKED default is [block-audible, allow, block-all].
  */
-export function nextPermissionState(id: string, from: string): string {
+export function permissionOrder(id: string, defaultState: string): string[] {
     const cycle = id === 'autoplay-media' ? AUTOPLAY_PERMISSION_STATES : PERMISSION_STATES;
-    const at = cycle.indexOf(from);
-    return cycle[(at + 1) % cycle.length];
+    const order: string[] = [];
+    for (const entry of cycle) {
+        const effective = entry === 'default' ? defaultState : entry;
+        if (!order.includes(effective)) {
+            order.push(effective);
+        }
+    }
+    return order;
+}
+
+/**
+ * The state a click on a permission row moves to: the next effective state of
+ * its order after `current` (the reply's effective state), wrapping. A target
+ * equal to the default is written as "default", which removes the saved entry
+ * (SitePermissions.sys.mjs:575-580). No client memory is needed: the reply's
+ * effective state is the only input, so no click can be dead. An unknown
+ * `current` starts at the first entry.
+ */
+export function nextPermissionState(id: string, current: string, defaultState: string): string {
+    const order = permissionOrder(id, defaultState);
+    const target = order[(order.indexOf(current) + 1) % order.length];
+    return target === defaultState ? 'default' : target;
 }

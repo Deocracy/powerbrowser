@@ -237,6 +237,8 @@ export interface WebTabReply {
 
 /** Phase 31 plan 02: one managed permission on this tab's principal, in table order. */
 export interface WebTabPermissionRow {
+    /** WR-05: the state name the permission reads as with no saved entry (the default). */
+    defaultState?: string;
     id: string;
     /** The effective state the row shows: `allow`, `block`, `block-audible`, `block-all` or `default`. */
     state: string;

@@ -4581,6 +4581,9 @@ function webTabPermissionRows(browser) {
       id,
       state,
       stored: effective === null || effective === defaultCapability ? "default" : state,
+      // WR-05: the name the default reads as, so the panel's cycle can skip a step that
+      // would not change the effective state (popup defaults to block; "default" is then block).
+      defaultState: webTabPermissionStateName(id, defaultCapability),
       label: typeof label === "string" && label ? label : null,
     };
   });
