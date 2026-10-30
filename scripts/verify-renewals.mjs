@@ -5,10 +5,12 @@
 // the one table of every renewable item the release machinery depends on. This
 // row checks its structure only:
 //
-//  1. Table. A header row of exactly Item, Date, Owner action, Source, followed
-//     by a separator and pipe rows. A missing header is red. A row with another
-//     column count is unparseable and red, naming the row.
-//  2. Date. Each row's date cell holds an ISO date, a Month YYYY, or a bare year.
+//  1. Table. A header row of exactly Item, Expiry, Last checked, Owner action,
+//     Source, followed by a separator and pipe rows. A missing header is red. A
+//     row with another column count is unparseable and red, naming the row.
+//  2. Dates. Each row's Expiry cell holds an ISO date, a Month YYYY, a bare year,
+//     blank (no expiry) or unknown (not recorded). Its Last checked cell holds an
+//     ISO date.
 //  3. Owner action. Each row's action cell begins with an imperative verb from
 //     VERBS, so every row names what the owner does.
 //  4. Items. No two rows name the same item, ignoring case and surrounding
@@ -29,7 +31,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'renewals';
 const SELF_REL = 'scripts/verify-renewals.mjs';
 const REGISTER_REL = 'docs/RENEWALS.md';
-const HEADER = Object.freeze(['Item', 'Date', 'Owner action', 'Source']);
+const HEADER = Object.freeze(['Item', 'Expiry', 'Last checked', 'Owner action', 'Source']);
 const VERBS = Object.freeze(['renew', 'rotate', 're-verify', 'replace', 'confirm', 'decide', 'ship', 'record', 'check', 'review']);
 const DATE = /\b\d{4}-\d{2}-\d{2}\b|\b(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}\b|\b(?:19|20)\d{2}\b/;
 
@@ -72,14 +74,17 @@ export function runChecks(root, overrides = {}) {
             continue;
         }
         rows += 1;
-        const [item, date, action] = cells;
+        const [item, expiry, checked, action] = cells;
         if (item === '') {
             fail(n, `${REGISTER_REL}:${n} has no item name. Next step: name the renewable item in its first cell.`);
         } else {
             seen.set(item.toLowerCase(), [...(seen.get(item.toLowerCase()) ?? []), { n, item }]);
         }
-        if (!DATE.test(date)) {
-            fail(n, `${REGISTER_REL}:${n} (${item}): the date cell ${show(date)} holds no ISO date, Month YYYY or year. Next step: put the expiry or the deadline in the date cell.`);
+        if (expiry !== '' && expiry !== 'unknown' && !DATE.test(expiry)) {
+            fail(n, `${REGISTER_REL}:${n} (${item}): the Expiry cell ${show(expiry)} holds no ISO date, Month YYYY or year, and is neither blank nor unknown. Next step: put the expiry or the deadline in the Expiry cell, or write unknown.`);
+        }
+        if (!DATE.test(checked)) {
+            fail(n, `${REGISTER_REL}:${n} (${item}): the Last checked cell ${show(checked)} holds no ISO date. Next step: put the date this item was last checked in that cell.`);
         }
         const verb = (action.split(/\s+/)[0] ?? '').toLowerCase();
         if (!VERBS.includes(verb)) {
@@ -107,7 +112,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${rows} row(s) in ${REGISTER_REL} each carry a date and an owner action, and no item is named twice`);
+    console.log(`${NAME}: PASS -- ${rows} row(s) in ${REGISTER_REL} each carry an Expiry cell, a Last checked date and an owner action, and no item is named twice`);
     return 0;
 }
 
@@ -138,9 +143,9 @@ function selfTest() {
     const lastRowIndex = (lines) => lines.reduce((acc, l, idx) => (isPipeRow(l) && idx > 0 ? idx : acc), -1);
 
     const plants = [
-        ['a dateless row', setCell('Domain powerbrowser.org', 1, 'soon'), ['Domain powerbrowser.org', 'date cell']],
-        ['an actionless row', setCell('Apple Developer membership', 2, ''), ['Apple Developer membership', 'owner action']],
-        ['a non-imperative owner action', setCell('Cachix token', 2, 'The token is rotated yearly'), ['Cachix token', 'imperative verb']],
+        ['a row with no last-checked date', setCell('Domain powerbrowser.org', 2, 'soon'), ['Domain powerbrowser.org', 'Last checked']],
+        ['an actionless row', setCell('Apple Developer membership', 3, ''), ['Apple Developer membership', 'owner action']],
+        ['a non-imperative owner action', setCell('Cachix token', 3, 'The token is rotated yearly'), ['Cachix token', 'imperative verb']],
         ['a row with a missing cell', mutate((lines) => {
             const i = rowAt(lines, 'Node 24 end of life');
             lines[i] = '| Node 24 end of life | 2028-04-30 |';
@@ -172,7 +177,7 @@ function selfTest() {
     }
 
     const controls = [
-        ['a Month YYYY deadline in the date cell', setCell('Node 24 end of life', 1, 'April 2028')],
+        ['a Month YYYY deadline in the Expiry cell', setCell('Node 24 end of life', 1, 'April 2028')],
     ];
     for (const [name, overrides] of controls) {
         const { failures } = runChecks(REPO_ROOT, overrides);
