@@ -4743,6 +4743,13 @@ run_own_checks() {
     # that throws -- each red naming the control. Honestly --quick: in-memory, with no network
     # and no gh; it writes nothing. The live read-back is the full-tier repo-controls row.
     "repo-controls-self-test|node $REPO_ROOT/scripts/verify-repo-controls.mjs --self-test"
+    # NEW (Phase 47, DIST-03): updates-repo-static-self-test plants, in memory only, a functions
+    # hook file, a root-level _worker.js, a nested functions path, a truncated listing, a non-array
+    # tree, an empty listing, a throwing getter, a malformed result, a non-github release_notes host
+    # and an unknown argument, each red naming its path, endpoint or key over a clean static tree
+    # that must stay green first. Honestly --quick: in-memory, no network and no gh; it writes nothing.
+    # The live read-back is the full-tier updates-repo-static row.
+    "updates-repo-static-self-test|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs --self-test"
     # NEW (Phase 41, GH-12 and GH-08): the trust-boundary rules over every workflow --
     # SHA-pinned and admitted uses:, set equality with actions-selected.json, and the GH-12
     # runner, permission, trigger, cache and event-text rules. Honestly --quick: YAML parsing
@@ -5191,6 +5198,12 @@ run_own_checks() {
       # Full tier: read-only gh api against the live org and repo (network, gh auth with repo
       # and read:org); green only after the owner applies the settings at plan 41-04.
       "repo-controls|node $REPO_ROOT/scripts/verify-repo-controls.mjs"
+
+      # NEW (Phase 47, DIST-03): the live updates repo holds no functions/ directory and no root
+      # _worker.js, by the absence property over one read-only recursive tree listing. Full tier:
+      # read-only gh api against the live updates repo (network, gh auth with repo and read:org);
+      # green only after the owner pushes the static tree at plan 47-04. Fails closed when unreadable.
+      "updates-repo-static|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs"
     )
   fi
 
