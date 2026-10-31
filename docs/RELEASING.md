@@ -941,6 +941,67 @@ checkpoint.
 `FIREFOX_153_23_0esr_RELEASE` present dispatches 153.23) stays in the detector self-test.
 The train never depends on an undocumented `FIREFOX_ESR153` key.
 
+### Rebase onto 175 (UPS-01)
+
+The rebase moves the four hook-only patches from the pinned ESR onto the 175 tag by
+regeneration only. A hunk body is never edited by hand: a hand-edited hunk replays as a
+silent no-op (CLAUDE.md; Pitfall 2 of the Phase 58 research). A patch that does not replay
+is a conflict to report, not an edit to make.
+
+**Scratch tree, never the live one.** The 175 replay runs on a runner-local upstream
+(`rebase-upstream.sh --tag <175 tag>` in the uptake lane). Locally, the same steps run on a
+scratch clone at the pinned commit, and `upstream/` is not touched:
+
+```sh
+git clone --no-checkout --shared <repo>/upstream <scratch>/upstream
+git -C <scratch>/upstream checkout -q <175 tag>
+scripts/apply-patches.sh --upstream <scratch>/upstream
+scripts/regenerate-patches.sh --check --upstream <scratch>/upstream
+scripts/check-patch-surface.sh
+node scripts/scan-brand-residue.mjs --extra-root <scratch>/upstream
+scripts/verify-platform.sh --quick
+```
+
+Every step must exit 0. `apply-patches.sh` takes `--upstream` and `--patches` for the scratch
+tree; with no argument it replays onto the live `upstream/`, as `rebase-upstream.sh` does.
+
+**Drift-risk order and the invariant each patch must keep.** Replay and check the patches in
+this order, highest drift first. After each replay, confirm the invariant line is still in
+the patch's `+` lines.
+
+1. `030-powerbrowser-mar-certificates` (`toolkit/mozapps/update/updater/moz.build`, highest
+   drift). Invariant: the fork certificate fills both slots on every channel
+   (`primary_cert.inputs` and `secondary_cert.inputs` both name `mar-primary.der`).
+2. `040-powerbrowser-nsis` (`browser/installer/windows/nsis/defines.nsi.in` and
+   `installer.nsi`, high drift). Invariants: `AppName` is `@MOZ_APP_NAME@`,
+   `CERTIFICATE_NAME` is `${CompanyName}`, `TELEMETRY_BASE_URL` is empty, and the installer
+   ping returns early. The issuer string (`DigiCert ... 2021 CA1`) is the drift to expect.
+3. `010-powerbrowser-identity` (`browser/moz.configure`, medium drift). Invariant:
+   `include("../identity.configure")` is the one hook line.
+4. `020-powerbrowser-shell` (`browser/moz.build`, lowest drift). Invariant: the one `DIRS`
+   entry for `../powerbrowser/shell`. It fails only if the `DIRS` block is restructured.
+
+**NOTE and FAIL** (`regenerate-patches.sh --check`):
+
+- NOTE with PASS: a moved file whose `+` and `-` lines still match. Regenerate the patch in
+  write mode on the scratch tree, check it again byte for byte, and commit it with the pin
+  bump. The NOTE names the file.
+- FAIL: `did not apply`, `added/removed lines differ`, `dropped <path>`, or an empty
+  regeneration. Stop. Do not edit the patch. Record one conflict issue,
+  `ESR <tag>: patch <NNN> did not apply`, with the patch name, the tags, the files, the
+  verbatim apply log, the pre-image and replayed blob hashes, the moved-file list and the
+  surface result. Route fixable classes (F1 patch-replay conflict, F2 red bump PR) to the
+  fixer on a `chore/esr-175*` branch (A-58-3, Phase 52). A branch like that does not exist
+  until the owner approves the 175 conflict writer (`BLOCKED.md` item 1).
+
+**Toolchain re-record** (D-73 tuple: tree, host, toolchain and date). `toolchain-baseline.txt`
+is re-recorded once, against the 175 release container that `build-linux` actually uses. Run
+`scripts/toolchain-baseline.sh --container` inside that container after its bootstrap build.
+Copy each measured line into the file. Never type a value, and never leave an `UNMEASURED`
+line in a committed file. Do not reuse the 153 baseline for a 175 build. The file is
+deny-listed for the fixer (FIX-11). Record the tree (`git rev-parse HEAD`), the host, the
+container image and the date beside the new baseline.
+
 ---
 
 ## Verification map
