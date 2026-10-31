@@ -665,7 +665,7 @@ jobs:
           repositories: ${{ steps.repo-name.outputs.name }}
           permission-contents: read
           permission-pull-requests: read
-          permission-dependabot-alerts: read
+          permission-vulnerability-alerts: read
           permission-security-events: read
 
       # Each read is its own fallback: a failed read leaves its output empty, which the facts carry as null (no-data).
