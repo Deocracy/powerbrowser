@@ -89,20 +89,20 @@ export function compareTargets(manifest, declaredDoc) {
 
 // Sweep-report contract: workflow enabled-state and last-run age, from the gh api field names.
 export function sweepVerdict(workflow, lastRunAt, nowMs = Date.now()) {
-    const msgs = [];
+    const out = [];
     const name = workflow.name ?? workflow.path ?? 'unnamed workflow';
     if (workflow.state !== 'active') {
-        msgs.push(`workflow '${name}' is ${workflow.state}, not active, so its status checks do not run. Next step: enable the workflow in the status repository.`);
+        out.push({ rule: 'disabled', msg: `workflow '${name}' is ${workflow.state}, not active, so its status checks do not run. Next step: enable the workflow in the status repository.` });
     }
     if (!lastRunAt) {
-        msgs.push(`workflow '${name}' has no run on record. Next step: dispatch it once and re-check.`);
+        out.push({ rule: 'no-run', msg: `workflow '${name}' has no run on record. Next step: dispatch it once and re-check.` });
     } else {
         const hours = (nowMs - Date.parse(lastRunAt)) / 3600000;
         if (hours > MAX_AGE_HOURS) {
-            msgs.push(`workflow '${name}' last ran ${Math.round(hours)} hours ago, beyond ${MAX_AGE_HOURS} hours. Next step: read the last run's log and the schedule.`);
+            out.push({ rule: 'stale', msg: `workflow '${name}' last ran ${Math.round(hours)} hours ago, beyond ${MAX_AGE_HOURS} hours. Next step: read the last run's log and the schedule.` });
         }
     }
-    return msgs;
+    return out;
 }
 
 // Product-repository rule: no workflow carries a schedule key (D-77).
@@ -176,7 +176,7 @@ async function liveMain() {
             failures.push(`workflow '${wf.name}' runs could not be read (${e.message.split('\n')[0]}). Next step: check gh access to ${slug}.`);
             continue;
         }
-        failures.push(...sweepVerdict(wf, lastRunAt));
+        failures.push(...sweepVerdict(wf, lastRunAt).map(f => f.msg));
     }
     if (workflows.length === 0) failures.push(`${slug} has no workflows. Next step: add the Upptime monitor workflow from the template.`);
     if (failures.length > 0) {
@@ -206,24 +206,23 @@ function selfTest(root) {
         return 1;
     }
 
+    // [name, the rule-tagged failures the probe returns, the rule, the fragment the message must name].
     const plants = [
         ['dropped website target', compareTargets(manifest, { ...declaredDoc, targets: declaredDoc.targets.filter(t => t.id !== 'website') }).failures, 'dropped', "'website'"],
         ['added search target', compareTargets(manifest, { ...declaredDoc, targets: [...declaredDoc.targets, { id: 'search', source: 'urls.search' }] }).failures, 'added', "'search'"],
         ['events endpoint declared in the manifest but not in the targets', compareTargets({ ...manifest, telemetry: { endpoint: 'https://telemetry.example.org/v1/events' } }, declaredDoc).failures, 'dropped', "'events'"],
-        ['disabled status workflow', sweepVerdict({ name: 'Status sweep', state: 'disabled_manually' }, '2026-10-31T10:00:00Z', now), 'disabled', "'Status sweep'"],
+        ['disabled status workflow', sweepVerdict({ name: 'Status sweep', state: 'disabled_manually' }, '2026-10-31T10:00:00Z', now), 'disabled', 'is disabled_manually'],
         ['stale last-run age', sweepVerdict(active, '2026-10-20T10:00:00Z', now), 'stale', 'hours ago'],
         ['schedule key added to a product workflow', scheduleFailures({ '.github/workflows/x.yml': 'on:\n  schedule:\n    - cron: "0 3 * * *"\n' }), 'no-schedule', '.github/workflows/x.yml'],
     ];
     let failed = 0;
-    for (const [name, result, rule, fragment] of plants) {
-        // Every result is normalised to text; a finding must name the fragment (target, workflow or file).
-        const texts = result.map(f => (typeof f === 'string' ? f : `${f.file} [${f.rule}]: ${f.msg}`));
-        const named = texts.some(t => t.includes(fragment));
-        const ruled = result.every(f => typeof f === 'string') || result.some(f => f.rule === rule);
-        if (named && ruled) {
-            console.log(`  ok  ${name} -> red, naming ${fragment}`);
+    for (const [name, found, rule, fragment] of plants) {
+        // A finding must carry the rule and name the fragment (target, workflow or file) in its message.
+        const hit = found.some(f => f.rule === rule && `${f.file ?? ''} ${f.msg}`.includes(fragment));
+        if (hit) {
+            console.log(`  ok  ${name} -> red, naming '${fragment}' [${rule}]`);
         } else {
-            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${fragment} [${rule}]; got: ${texts.join(' | ') || '(no failures at all)'}`);
+            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${fragment} [${rule}]; got: ${found.map(f => `${f.rule}: ${f.msg}`).join(' | ') || '(no failures at all)'}`);
             failed += 1;
         }
     }

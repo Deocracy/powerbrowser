@@ -197,25 +197,28 @@ function selfTest(root) {
 
     const H = 'a'.repeat(40);
     const L = 'b'.repeat(40);
-    // [name, red?, probe() returns true when the drift is detected, expected fragment]
+    // [name, red?, the failure texts the probe returns, fragment the red text must name].
+    // A red plant passes only when a failure text contains the fragment; a green plant passes only when none is returned.
+    const texts = list => list.map(x => (Array.isArray(x) ? x.join(' ') : x));
     const plants = [
-        ['lagged SHA pair', true, () => shaCompare(H, L).length > 0, 'the mirror lags'],
-        ['matching SHA pair', false, () => shaCompare(H, H).length > 0, null],
-        ['token literal in the service', true, () => tokenFailures({ [SERVICE_REL]: `${serviceText}\nEnvironment=CODEBERG_TOKEN=abc\n` }, {}).length > 0, SERVICE_REL],
-        ['token path in the service', true, () => tokenFailures({ [SERVICE_REL]: serviceText.replace('ExecStart=', 'LoadCredential=codeberg:/var/lib/token\nExecStart=') }, {}).length > 0, SERVICE_REL],
-        ['weekly timer', true, () => timerRules(timerText.replace('OnCalendar=daily', 'OnCalendar=weekly')).length > 0, 'OnCalendar'],
+        ['lagged SHA pair', true, shaCompare(H, L), 'the mirror lags'],
+        ['matching SHA pair', false, shaCompare(H, H), null],
+        ['token literal in the service', true, tokenFailures({ [SERVICE_REL]: `${serviceText}\nEnvironment=CODEBERG_TOKEN=abc\n` }, {}), 'names token material'],
+        ['token path in the service', true, tokenFailures({ [SERVICE_REL]: serviceText.replace('ExecStart=', 'LoadCredential=codeberg:/var/lib/token\nExecStart=') }, {}), "'LoadCredential'"],
+        ['weekly timer', true, timerRules(timerText.replace('OnCalendar=daily', 'OnCalendar=weekly')), 'OnCalendar'],
         // Anchored on the setting line: the header comment also spells Persistent=true.
-        ['Persistent dropped', true, () => timerRules(timerText.replace('\nPersistent=true\n', '\nPersistent=false\n')).length > 0, 'Persistent'],
-        ['--mirror added', true, () => serviceRules(serviceText.replace('git push --prune', 'git push --mirror --prune')).length > 0, '--mirror'],
+        ['Persistent dropped', true, timerRules(timerText.replace('\nPersistent=true\n', '\nPersistent=false\n')), 'Persistent'],
+        ['--mirror added', true, serviceRules(serviceText.replace('git push --prune', 'git push --mirror --prune')), '--mirror'],
     ];
     let failed = 0;
-    for (const [name, red, probe, fragment] of plants) {
-        const hit = probe();
-        if (hit !== red) {
-            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go ${red ? 'red' : 'green'}${fragment ? `, naming ${fragment}` : ''}`);
+    for (const [name, red, found, fragment] of plants) {
+        const msgs = texts(found);
+        const ok = red ? msgs.some(m => m.includes(fragment)) : msgs.length === 0;
+        if (!ok) {
+            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go ${red ? `red naming '${fragment}'` : 'green'}; got: ${msgs.join(' | ') || '(no failures at all)'}`);
             failed += 1;
         } else {
-            console.log(`  ok  ${name} -> ${red ? 'red' : 'green'}${red && fragment ? `, naming ${fragment}` : ''}`);
+            console.log(`  ok  ${name} -> ${red ? `red, naming '${fragment}'` : 'green'}`);
         }
     }
     if (failed > 0) return 1;
