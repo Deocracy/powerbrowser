@@ -7,21 +7,22 @@
 //
 //  1. Derivation. The expected repo is read from configuration.toml [urls] release_notes
 //     (https://github.com/<owner>/<repo>/releases). No repo literal is kept in this file.
-//  2. Refusal table. The tracked hook text runs under bash with only the three runner variables set,
-//     fed on stdin, so nothing is written. The release triple must exit 0. Each refusal row must exit
-//     non-zero and name the expected value on stderr: a foreign-branch GITHUB_WORKFLOW_REF, a push
-//     event, a wrong GITHUB_REPOSITORY, and an empty triple.
+//  2. Refusal table. The tracked hook text runs under bash with an empty environment plus only the
+//     planted variables (the equivalent of env -i), fed on stdin, so nothing is written. The release
+//     triple must exit 0. Each refusal row must exit non-zero and name the expected value on stderr:
+//     a foreign-branch GITHUB_WORKFLOW_REF, a push event, a wrong GITHUB_REPOSITORY, an empty triple,
+//     and a hostile environment (BASH_ENV, ENV, an exported function shadowing [, exit, echo or builtin).
 //  3. Placement. Every job on the powerbrowser-release label starts with the main-and-dispatch refusal
 //     (step 1) and carries the full-SHA check as step 2, before any checkout. A legion job missing
 //     either is red, naming the job.
 //  4. Vacuity. At least one legion job must exist, or the placement proves nothing.
 //
-// --self-test plants four faults in memory (the foreign-branch ref, the push event and the wrong repo
-// in the hook text, and a legion job without the SHA step) and requires each to go red naming the
-// drift. The row itself writes nothing.
+// --self-test plants faults in memory (a dropped test, a weakened `[` test, a dropped hostile-environment
+// guard and posix mode in the hook text, and a legion job without the SHA step) and requires each to
+// go red naming the row it now wrongly accepts. The row itself writes nothing.
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -85,22 +86,37 @@ const describeTriple = (triple) => {
     return parts.length > 0 ? parts.join(', ') : 'no runner variables set';
 };
 
-function runHook(hookText, triple) {
-    const env = { PATH: process.env.PATH ?? '/usr/bin:/bin' };
-    for (const [k, v] of Object.entries(triple)) env[k] = v;
-    const r = spawnSync('bash', ['-s'], { input: hookText, env, encoding: 'utf8', timeout: 10000 });
+// The bash that runs the hook. An absolute path, because the hook runs with no PATH at all.
+const BASH = [...['/run/current-system/sw/bin', '/usr/bin', '/bin'], ...(process.env.PATH ?? '').split(':')]
+    .map(d => join(d, 'bash')).find(p => existsSync(p)) ?? 'bash';
+
+// vars is the whole environment of the hook process: nothing is inherited, so the hook sees exactly the
+// planted variables (env -i plus those variables).
+function runHook(hookText, vars) {
+    const r = spawnSync(BASH, ['--noprofile', '--norc', '-s'], { input: hookText, env: vars, encoding: 'utf8', timeout: 10000 });
     return { status: r.status, stderr: r.stderr ?? '', error: r.error };
 }
 
 function refusalTable(expected) {
     const release = { GITHUB_REPOSITORY: expected.repo, GITHUB_WORKFLOW_REF: expected.ref, GITHUB_EVENT_NAME: 'workflow_dispatch' };
+    const foreign = { GITHUB_REPOSITORY: WRONG_REPO, GITHUB_WORKFLOW_REF: `${WRONG_REPO}/${WORKFLOW_REL}@refs/heads/feature-branch`, GITHUB_EVENT_NAME: 'push' };
     const foreignRef = `${expected.repo}/${WORKFLOW_REL}@refs/heads/feature-branch`;
+    // A function exported into the environment is how a hostile job would replace a test or an exit.
+    const fn = (name, body) => ({ [`BASH_FUNC_${name}%%`]: `() { ${body}; }` });
     return [
         { name: 'release triple', triple: release, accept: true },
         { name: 'foreign-branch workflow ref', triple: { ...release, GITHUB_WORKFLOW_REF: foreignRef }, expect: expected.ref },
         { name: 'push event', triple: { ...release, GITHUB_EVENT_NAME: 'push' }, expect: 'workflow_dispatch' },
         { name: 'wrong repo', triple: { ...release, GITHUB_REPOSITORY: WRONG_REPO }, expect: expected.repo },
         { name: 'empty triple', triple: {}, expect: expected.repo },
+        { name: 'BASH_ENV set with the release triple', triple: { ...release, BASH_ENV: '/dev/null' }, expect: 'BASH_ENV' },
+        { name: 'empty BASH_ENV with the release triple', triple: { ...release, BASH_ENV: '' }, expect: 'BASH_ENV' },
+        { name: 'ENV set with the release triple', triple: { ...release, ENV: '/dev/null' }, expect: 'ENV' },
+        { name: 'exported function [ with the release triple', triple: { ...release, ...fn('[', 'return 0') }, expect: 'exported shell function' },
+        { name: 'exported function [ shadowing the tests', triple: { ...foreign, ...fn('[', 'return 0') }, expect: 'exported shell function' },
+        { name: 'exported function exit shadowing the refusal', triple: { ...foreign, ...fn('exit', 'builtin exit 0') }, expect: 'exported shell function' },
+        { name: 'exported function echo shadowing the message', triple: { ...foreign, ...fn('echo', ':') }, expect: 'exported shell function' },
+        { name: 'exported function builtin shadowing the builtin prefix', triple: { ...foreign, ...fn('builtin', 'exit 0') }, expect: expected.repo },
     ];
 }
 
@@ -202,7 +218,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${HOOK_REL} accepts only the release triple for ${expected.repo} and refuses a foreign branch ref, a push event, a wrong repo and an empty triple, naming the expected value; ${legionCount} ${LEGION_LABEL} job(s) start with the main-and-dispatch refusal and carry the full-SHA check second, before any checkout.`);
+    console.log(`${NAME}: PASS -- ${HOOK_REL} accepts only the release triple for ${expected.repo} and refuses a foreign branch ref, a push event, a wrong repo, an empty triple and a hostile environment (BASH_ENV, ENV, an exported function shadowing [, exit, echo or builtin), naming the expected value; ${legionCount} ${LEGION_LABEL} job(s) start with the main-and-dispatch refusal and carry the full-SHA check second, before any checkout.`);
     return 0;
 }
 
@@ -221,14 +237,24 @@ function selfTest() {
     console.log(`  ok  baseline -> green`);
     const repo = baseline.expected.repo;
 
-    // Each hook plant drops the one line that carries the named variable's test. The anchor must match
-    // exactly one line, so an edit that renames the variable goes red here, not silently.
-    const hookWithoutLine = (marker) => (rel) => {
+    // A hook plant edits the real hook text. Its anchor must match exactly one line, so an edit that
+    // renames the variable goes red here, not silently. edit returns the replacement line, or null to drop it.
+    const hookEdit = (test, edit) => (rel) => {
         if (rel !== HOOK_REL) return realRead(rel);
         const lines = realRead(HOOK_REL).split('\n');
-        const hits = lines.filter(l => l.includes(marker));
-        if (hits.length !== 1) throw new Error(`self-test anchor '${marker}' matches ${hits.length} line(s) in ${HOOK_REL}`);
-        return lines.filter(l => !l.includes(marker)).join('\n');
+        const hits = lines.filter(test);
+        if (hits.length !== 1) throw new Error(`self-test anchor ${test} matches ${hits.length} line(s) in ${HOOK_REL}`);
+        return lines.map(l => (test(l) ? edit(l) : l)).filter(l => l !== null).join('\n');
+    };
+    const withoutLine = (marker) => hookEdit(l => l.includes(marker), () => null);
+    const withoutPosixMode = hookEdit(l => l === 'POSIXLY_CORRECT=1', () => null);
+    // The first hook of this plan: single-bracket tests and no exported-function guard.
+    const singleBracketNoGuard = (rel) => {
+        if (rel !== HOOK_REL) return realRead(rel);
+        const text = realRead(HOOK_REL);
+        const weak = text.replace(/^\[\[ "\$(\w+)" == ('[^']*') \]\]/gm, '[ "$$$1" = $2 ]').split('\n').filter(l => !l.includes('export -f)')).join('\n');
+        if (weak === text || !weak.includes('[ "$ref" = ')) throw new Error(`self-test anchor 'single-bracket tests' does not apply to ${HOOK_REL}`);
+        return weak;
     };
 
     const withoutShaStep = () => {
@@ -240,29 +266,34 @@ function selfTest() {
         return wf;
     };
 
-    // Each plant: [name, overrides, file, needle one, needle two]. Red must name the file, the drifted
-    // variable or job, and the value or check that drifted.
+    // Each plant: [name, overrides, ...needles]. Red must carry every needle in one failure: the file, the
+    // drifted variable or job, and the value, or the name of the row the weakened hook now wrongly accepts.
     const plants = [
-        ['foreign-branch GITHUB_WORKFLOW_REF accepted', { read: hookWithoutLine('"$ref" = ') }, HOOK_REL, 'GITHUB_WORKFLOW_REF', `${repo}/${WORKFLOW_REL}@refs/heads/feature-branch`],
-        ['push event accepted', { read: hookWithoutLine('"$event" = ') }, HOOK_REL, 'GITHUB_EVENT_NAME', "GITHUB_EVENT_NAME='push'"],
-        ['wrong repo accepted', { read: hookWithoutLine('"$repo" = ') }, HOOK_REL, 'GITHUB_REPOSITORY', WRONG_REPO],
+        ['foreign-branch GITHUB_WORKFLOW_REF accepted', { read: withoutLine('"$ref" == ') }, HOOK_REL, 'GITHUB_WORKFLOW_REF', `${repo}/${WORKFLOW_REL}@refs/heads/feature-branch`],
+        ['push event accepted', { read: withoutLine('"$event" == ') }, HOOK_REL, 'GITHUB_EVENT_NAME', "GITHUB_EVENT_NAME='push'"],
+        ['wrong repo accepted', { read: withoutLine('"$repo" == ') }, HOOK_REL, 'GITHUB_REPOSITORY', WRONG_REPO],
+        ['exported-function guard dropped', { read: withoutLine('export -f)') }, HOOK_REL, 'accepted the exported function [ with the release triple'],
+        ['BASH_ENV guard dropped', { read: withoutLine('[[ ! -v BASH_ENV') }, HOOK_REL, 'accepted the BASH_ENV set with the release triple'],
+        ['posix mode dropped', { read: withoutPosixMode }, HOOK_REL, 'accepted the exported function exit shadowing the refusal'],
+        ['single-bracket tests without the function guard', { read: singleBracketNoGuard }, HOOK_REL, 'accepted the exported function [ shadowing the tests'],
         ['legion job without the SHA step', { workflow: withoutShaStep() }, WORKFLOW_REL, BUILD_JOB, 'full-SHA'],
     ];
 
     let failed = 0;
-    for (const [name, overrides, file, variable, value] of plants) {
+    for (const [name, overrides, ...needles] of plants) {
         const { failures } = runChecks(REPO_ROOT, { read: realRead, ...overrides });
-        const hit = failures.some(f => f.includes(file) && f.includes(variable) && f.includes(value));
+        const hit = failures.some(f => needles.every(n => f.includes(n)));
+        const named = needles.map(n => `'${n}'`).join(' and ');
         if (hit) {
-            console.log(`  ok  ${name} -> red, naming '${file}', '${variable}' and '${value}'`);
+            console.log(`  ok  ${name} -> red, naming ${named}`);
         } else {
-            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${file}', '${variable}' and '${value}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${named}; got: ${failures.join(' | ') || '(no failures at all)'}`);
             failed += 1;
         }
     }
 
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- the unmodified hook and release.yml are green and ${plants.length} planted faults went red naming the file, the variable or job, and the value. It writes nothing: the hook runs on stdin.`);
+    console.log(`${NAME}: --self-test PASS -- the unmodified hook and release.yml are green and ${plants.length} planted faults went red naming the file, the variable or job, the value or the row now wrongly accepted. It writes nothing: the hook runs on stdin.`);
     return 0;
 }
 
