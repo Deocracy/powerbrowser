@@ -22,10 +22,10 @@
 //     age is RETENTION_DAYS. The Worker source has no in-Worker throttle rule and no CORS header.
 //  5. No credential. No file in worker/ assigns a credential-shaped value.
 //
-// SELF-TEST. The unmutated tree is green first. Then each plant goes red naming its rule: a handler
-// plant feeds the real fetch a faulty input and requires its named verdict; a descriptor plant rewrites a
-// copy of the descriptor in a mkdtemp root and requires the named key. Every rejection plant also proves
-// nothing reached the store.
+// SELF-TEST. The unmutated tree is green first. Then each plant goes red naming its rule: a handler plant
+// makes a one-line mutation of a COPY of the Worker in a mkdtemp directory, loads that copy and runs every
+// Worker check against it; a descriptor plant rewrites a copy of the descriptor and requires the named key.
+// A plant that leaves the gate green would mean nothing, and the control proves a red is plant-caused.
 //
 // Honestly --quick: in-process Requests and an in-memory store. No build, no browser, no display, no network.
 //
@@ -37,10 +37,25 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as collector from './crash-collector.mjs';
-import worker, * as crashSubmit from '../worker/crash-submit.mjs';
+import * as realWorker from '../worker/crash-submit.mjs';
+
+// The Worker under test. Every handler check reads these two; a plant swaps them for a mutated copy.
+let crashSubmit = realWorker;
+let worker = realWorker.default;
+let importCounter = 0;
+async function withWorkerAt(path, fn) {
+    const mod = await import(`${pathToFileURL(path).href}?plant=${importCounter++}`);
+    const saved = [crashSubmit, worker];
+    [crashSubmit, worker] = [mod, mod.default];
+    try {
+        return await fn();
+    } finally {
+        [crashSubmit, worker] = saved;
+    }
+}
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-worker-submit';
@@ -188,6 +203,11 @@ function hostileBattery() {
         {
             name: 'very long part name',
             bytes: buildMultipart([dump, { name: 'N'.repeat(100000), data: 'x' }, WELL_FORMED_PARTS()[1]]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'part name over the name cap but inside the header cap',
+            bytes: buildMultipart([dump, { name: 'M'.repeat(crashSubmit.MAX_PART_NAME_LENGTH + 1), data: 'x' }, WELL_FORMED_PARTS()[1]]),
             ct: CONTENT_TYPE,
         },
         {
@@ -483,15 +503,17 @@ function floodProblems(workerPath) {
     return problems;
 }
 
-/** Store fault: the dump lands and the record write fails, so the dump is removed and nothing is stored. */
+/** Store fault: a record write fault removes the dump, and a dump write fault leaves no record. Nothing is stored either way. */
 async function storeFaultProblems() {
     const problems = [];
-    const store = memoryStore({ failOn: '.json' });
-    const verdict = await drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), store);
-    if (verdict.status !== 500 || verdict.body !== `Discarded=${crashSubmit.REASON_STORE_UNAVAILABLE}`) {
-        problems.push(`a record write fault answered ${verdict.status} ${JSON.stringify(verdict.body)}, want 500 store_unavailable`);
+    for (const [failOn, what] of [['.json', 'record'], ['.dmp', 'minidump']]) {
+        const store = memoryStore({ failOn });
+        const verdict = await drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), store);
+        if (verdict.status !== 500 || verdict.body !== `Discarded=${crashSubmit.REASON_STORE_UNAVAILABLE}`) {
+            problems.push(`a ${what} write fault answered ${verdict.status} ${JSON.stringify(verdict.body)}, want 500 store_unavailable`);
+        }
+        if (store.objects.size !== 0) problems.push(`a ${what} write fault left ${store.objects.size} orphaned object(s)`);
     }
-    if (store.objects.size !== 0) problems.push(`a record write fault left ${store.objects.size} orphaned object(s)`);
     return problems;
 }
 
@@ -510,8 +532,8 @@ async function concurrencyProblems() {
     const burst = memoryStore();
     for (let i = 0; i < 61; i += 1) {
         const verdict = await drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), burst);
-        if (verdict.status !== 200) {
-            problems.push(`submit ${i + 1} in one minute answered ${verdict.status}; the Worker must not throttle in-process (the zone rule does)`);
+        if (verdict.status !== 200 || !verdict.body.startsWith('CrashID=')) {
+            problems.push(`submit ${i + 1} in one minute answered ${verdict.status} ${JSON.stringify(verdict.body)}; the Worker must not throttle in-process (the zone rule does)`);
             break;
         }
     }
@@ -552,19 +574,22 @@ function descriptorProblems(root) {
     return problems;
 }
 
-async function runChecks(root) {
-    const problems = [
+/** Every check that reads the Worker module (the real one, or a mutated copy for a plant). */
+async function workerProblems(workerPath) {
+    return [
         ...sharedNameDisagreements(),
         ...parserDisagreements(),
         ...(await handlerProblems()),
         ...(await acceptProblems()),
         ...(await hostileNameProblems()),
-        ...floodProblems(resolve(root, SOURCE_REL)),
+        ...floodProblems(workerPath),
         ...(await storeFaultProblems()),
         ...(await concurrencyProblems()),
-        ...descriptorProblems(root),
     ];
-    return problems;
+}
+
+async function runChecks(root) {
+    return [...(await workerProblems(resolve(root, SOURCE_REL))), ...descriptorProblems(root)];
 }
 
 // --- main and self-test ------------------------------------------------------------------
@@ -594,49 +619,38 @@ async function selfTest() {
     }
     console.log('  ok  unmutated control -> the Worker and the collector agree and every verdict holds');
 
-    // Handler plants: each feeds the real fetch a faulty input and requires its named verdict. The rule
-    // names are the contract's; a Worker that regressed on any one of them goes red naming it here.
-    const plants = [
-        ['malformed content-type', async () => {
-            const v = await drive(submitRequest(buildMultipart(WELL_FORMED_PARTS()), { ct: 'text/plain' }), memoryStore());
-            return v.status === 400 && v.body === `Discarded=${crashSubmit.REASON_WRONG_CONTENT_TYPE}`;
-        }],
-        ['missing minidump', async () => {
-            const store = memoryStore();
-            const v = await drive(submitRequest(buildMultipart([WELL_FORMED_PARTS()[1]])), store);
-            return v.status === 400 && v.body === `Discarded=${crashSubmit.REASON_NO_MINIDUMP}` && store.objects.size === 0;
-        }],
-        ['oversized body', async () => {
-            const store = memoryStore();
-            const v = await drive(submitRequest(Buffer.alloc(crashSubmit.MAX_BODY_BYTES + 1, 0x41)), store);
-            return v.status === 413 && v.body === `Discarded=${crashSubmit.REASON_OVERSIZED}` && store.objects.size === 0;
-        }],
-        ['non-allowlisted key dropped', async () => {
-            const store = memoryStore();
-            const v = await drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), store);
-            const id = /^CrashID=(.+)$/.exec(v.body)?.[1];
-            const record = id ? JSON.parse(store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.json`)) : null;
-            return v.status === 200 && record !== null && record.annotations.NotAllowlisted === undefined && record.annotations.Nested === undefined;
-        }],
-        ['malformed extra kept', async () => {
-            const store = memoryStore();
-            const v = await drive(submitRequest(buildMultipart([
-                { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
-                { name: crashSubmit.EXTRA_PART_NAME, data: '{"ProductName":' },
-            ])), store);
-            const id = /^CrashID=(.+)$/.exec(v.body)?.[1];
-            const record = id ? JSON.parse(store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.json`)) : null;
-            return v.status === 200 && record !== null && Object.keys(record.annotations).length === 0 && store.objects.has(`${crashSubmit.CRASH_PREFIX}${id}.dmp`);
-        }],
-        ['store fault leaves nothing', async () => {
-            const problems = await storeFaultProblems();
-            return problems.length === 0;
-        }],
+    // Handler plants: each is a one-line mutation of a COPY of the Worker, loaded and run through every
+    // Worker check. The unmutated control above is green, so a red is the mutation's, and it must name its rule.
+    const handlerPlants = [
+        ['allowlist filter removed', 'if (!ANNOTATION_ALLOWLIST.includes(key)) return;', '', 'allowlisted scalars'],
+        ['client part names stored', '(RECORDABLE_PART_NAMES.includes(part.name) ? part.name : OTHER_PART_NAME)', 'part.name', 'client part name'],
+        ['name read from filename', 'const name = dispositionName(latin1(chunk.subarray(0, headerEnd)));', 'const name = /name="([^"]*)"/i.exec(latin1(chunk.subarray(0, headerEnd)))?.[1] ?? null;', 'filename before name'],
+        ['second minidump part allowed', '.length !== 1) return', '.length < 1) return', 'two minidump parts'],
+        ['delimiter cap not applied while scanning', 'if (out.length > maxDelimiters) return null;', '', 'delimiter flood'],
+        ['boundary floor removed', 'boundary.length < MIN_BOUNDARY_LENGTH ||', '', 'one-character boundary'],
+        ['header cap removed', 'chunk.subarray(0, MAX_HEADER_BYTES + 4)', 'chunk', 'very long header block'],
+        ['part name cap removed', ' || name.length > MAX_PART_NAME_LENGTH', '', 'part name over the name cap'],
+        ['MDMP check removed', 'minidump.data.byteLength < MIN_MINIDUMP_BYTES || !MDMP_MAGIC.every((byte, i) => minidump.data[i] === byte)', 'false', 'without the MDMP signature'],
+        ['delete on record failure removed', 'await env.CRASH_STORE.delete(dumpKey);', 'void dumpKey;', 'orphaned'],
+        ['record written before the minidump', 'await env.CRASH_STORE.put(dumpKey, minidump.data.slice());', 'await env.CRASH_STORE.put(recordKey, record);\n        await env.CRASH_STORE.put(dumpKey, minidump.data.slice());', 'minidump write fault'],
+        ['in-Worker throttle added', "const verdict = await handleCrashSubmit({", "globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n        if (globalThis.__plantSent > 60) return toResponse({ status: 200, body: 'Discarded=throttled' });\n        const verdict = await handleCrashSubmit({", 'must not throttle in-process'],
     ];
-    for (const [rule, probe] of plants) {
-        const ok = await probe();
-        if (!ok) complain(rule, 'did not hold: the Worker answered a faulty input with the wrong verdict or left a stored object');
-        else console.log(`  ok  ${rule} -> the named verdict holds and nothing is stored`);
+    for (const [rule, find, replace, needle] of handlerPlants) {
+        const dir = mkdtempSync(join(tmpdir(), 'verify-worker-submit-selftest-'));
+        try {
+            const copy = join(dir, 'crash-submit.mjs');
+            const original = readFileSync(join(REPO_ROOT, SOURCE_REL), 'utf8');
+            if (!original.includes(find)) {
+                complain(rule, `planted no fault at all: the text to mutate was not found in ${SOURCE_REL}`);
+                continue;
+            }
+            writeFileSync(copy, original.replace(find, replace), 'utf8');
+            const problems = await withWorkerAt(copy, () => workerProblems(copy));
+            if (!problems.some(p => p.includes(needle))) complain(rule, `did not go red naming '${needle}'; got: ${problems.slice(0, 3).join(' | ') || '(no failures)'}`);
+            else console.log(`  ok  ${rule} -> red, naming '${needle}'`);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
     }
 
     // Descriptor plants: a copy of the tree's worker descriptors, one fault each, must go red naming its key.
