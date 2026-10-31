@@ -96,6 +96,7 @@
 // Usage:
 //   node scripts/release-train.mjs --self-test
 //   node scripts/release-train.mjs --fix-guard <facts.json>      (the derive job's live FIX-01 and FIX-05 guard)
+//   node scripts/release-train.mjs --run-titles <run-id> <repo> <workflow-path> <runs.json>...   (the earlier dispatch runs' titles; refuses a cut-off list)
 //   node scripts/release-train.mjs --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>
 //   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false> <replay-result> <detect-result>
 //                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
@@ -615,14 +616,18 @@ export function isBotActor(login) {
 }
 
 /**
- * The fix attempts spent for one release key and class. Counts the fix workflow runs whose
- * run-name is exactly `fix <key> <class> attempt <n>`, whatever fix-gate decided: a rejected
- * attempt still spends the budget. A run with the claude-fix label and no matching run-name
- * is not counted. runs: [{ name, verdict, labels }]. Pure.
+ * The fix attempts spent for one release key, class and check fingerprint (IN-02). Counts the fix workflow
+ * runs whose run-name is exactly `fix <key> <class> attempt <n> <fingerprint>`, whatever fix-gate decided: a
+ * rejected attempt still spends the budget, and so does a dispatch that died in the derive job after its title was
+ * formed. A red on another commit has another fingerprint and its own budget (the NEEDS_OWNER text: a dispatch with a
+ * new fingerprint clears it). A run with the claude-fix label and no matching run-name is not counted.
+ * runs: [{ name, verdict, labels }]. Pure.
  */
-export function fixAttempts(runs, key, cls) {
+export function fixAttempts(runs, key, cls, fingerprint) {
     const prefix = `fix ${key} ${cls} attempt `;
-    return runs.filter(r => typeof r.name === 'string' && r.name.startsWith(prefix) && FIX_RUN_ATTEMPT_RE.test(r.name.slice(prefix.length))).length;
+    const suffix = ` ${fingerprint}`;
+    return runs.filter(r => typeof r.name === 'string' && r.name.startsWith(prefix) && r.name.endsWith(suffix)
+        && FIX_RUN_ATTEMPT_RE.test(r.name.slice(prefix.length, r.name.length - suffix.length))).length;
 }
 
 /**
@@ -646,6 +651,12 @@ export function fixerInputsCheck(i) {
     if (!FINGERPRINT_RE.test(i.fingerprint ?? '')) bad('fingerprint', 'the fingerprint is not exactly <check-label>@<40-hex base sha>');
     if (!ATTEMPT_RE.test(String(i.attempt ?? '')) || Number(i.attempt) > FIX_BUDGET) bad('attempt', `attempt ${JSON.stringify(i.attempt)} is not an integer from 1 to ${FIX_BUDGET}`);
     if (!keyGreater(i.releaseKey, i.latestTag)) bad('key-not-greater', `release key ${i.releaseKey} is not strictly greater than the latest Release ${i.latestTag ?? '(none)'}`);
+    // IN-02: a key greater than the latest Release is not enough: the budget is per key, so a dispatcher could reset it by inventing a
+    // greater key. The key must be the one the target tag makes: its ESR groups are the tag's.
+    const tagVersion = TAG_SHAPE_RE.test(i.targetTag ?? '') ? tagToVersion(i.targetTag) : null;
+    if (FIX_KEY_RE.test(i.releaseKey ?? '') && tagVersion !== null && !String(i.releaseKey).startsWith(`v${tagVersion.esrVersion}-`)) {
+        bad('key-not-current', `release key ${i.releaseKey} is not the current release key of the target tag ${i.targetTag} (v${tagVersion.esrVersion}-<revision>)`);
+    }
     return out;
 }
 
@@ -685,6 +696,28 @@ export function fixerDispatch(f) {
 }
 
 /**
+ * The display titles of the earlier dispatch runs of this workflow in this repository, for the budget count (IN-01). The runs
+ * endpoint lists at most 1000 results and a busy workflow (a dispatch every few minutes) pushes old fix runs out of that window,
+ * which would reset a budget silently. The caller therefore reads one narrow query per dispatching actor (the owner and the
+ * actor of this run: a fix run is dispatched by a person), and each query is { total, runs }: total is the endpoint's total_count and
+ * runs every run returned across the pages. A query that returned fewer runs than its total is a failure, never a smaller count.
+ * Returns { titles, failures }. Pure.
+ */
+export function priorRunTitles(queries, { runId, repo, path }) {
+    const failures = [];
+    const seen = new Map();
+    queries.forEach((q, n) => {
+        const runs = Array.isArray(q?.runs) ? q.runs : [];
+        if (!Number.isInteger(q?.total) || q.total > runs.length) failures.push(`run query ${n} returned ${runs.length} of ${q?.total} run(s): the list is cut off (the runs endpoint returns at most 1000), so earlier fix runs may be missing and the budget cannot be counted`);
+        for (const r of runs) seen.set(r?.id, r);
+    });
+    const titles = [...seen.values()]
+        .filter(r => r?.event === 'workflow_dispatch' && Number(r.id) < Number(runId) && String(r.path ?? '').split('@')[0] === path && r.head_repository?.full_name === repo && typeof r.display_title === 'string')
+        .map(r => r.display_title);
+    return { titles, failures };
+}
+
+/**
  * The live FIX-01 and FIX-05 guard the derive job runs for every fixer dispatch (CR-04). `dispatched` is the seven
  * inputs as given (already shape-checked by fixerInputsCheck); the rest are facts the workflow read from GitHub:
  * actor, author (the base commit's author login), headRepository (the repository the target branch lives in),
@@ -697,9 +730,9 @@ export function fixerGuard(g) {
     const d = g.dispatched ?? {};
     const [checkLabel = '', baseSha = ''] = String(d.fingerprint ?? '').split('@');
     const state = Object.keys(FIXER_CLASS_OF).find(k => FIXER_CLASS_OF[k] === d.class);
-    const spent = fixAttempts((g.runs ?? []).map(name => ({ name })), d['release-key'], d.class);
+    const spent = fixAttempts((g.runs ?? []).map(name => ({ name })), d['release-key'], d.class, d.fingerprint);
     if (String(d.attempt) !== String(spent + 1)) {
-        return [{ guard: 'attempt', msg: `attempt ${JSON.stringify(d.attempt)} does not follow the ${spent} fix run(s) already spent for ${d['release-key']} ${d.class}; dispatch attempt ${spent + 1}` }];
+        return [{ guard: 'attempt', msg: `attempt ${JSON.stringify(d.attempt)} does not follow the ${spent} fix run(s) already spent for ${d['release-key']} ${d.class} at ${d.fingerprint}; dispatch attempt ${spent + 1}` }];
     }
     const r = fixerDispatch({
         source: checkLabel === 'release' ? 'release.yml' : (d.class === 'F3' ? 'verify' : 'bump'),
@@ -795,6 +828,24 @@ function fixerInputsCli([releaseKey, cls, branch, targetTag, fingerprint, attemp
 }
 
 /** The derive job's live guard (CR-04). facts.json holds fixerGuard's facts. Exit 0 when the dispatch may run. */
+function runTitlesCli([runId, repo, path, ...files]) {
+    const queries = [];
+    for (const f of files) {
+        try { queries.push(JSON.parse(readFileSync(f, 'utf8'))); } catch (e) {
+            console.error(`${NAME}: FAIL -- the run list ${f} could not be read (${e.code ?? e.message}). Next step: re-run the derive job.`);
+            return 1;
+        }
+    }
+    if (queries.length === 0) { console.error(`${NAME}: FAIL -- no run list was given. Next step: pass one { total, runs } file per dispatching actor.`); return 2; }
+    const { titles, failures } = priorRunTitles(queries, { runId, repo, path });
+    if (failures.length > 0) {
+        failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}. Next step: dispatch again once fewer runs are listed, or ask the owner to clear old dispatch runs.`));
+        return 1;
+    }
+    console.log(JSON.stringify(titles));
+    return 0;
+}
+
 function fixerGuardCli([factsPath]) {
     let facts;
     try { facts = JSON.parse(readFileSync(factsPath, 'utf8')); } catch (e) {
@@ -2243,6 +2294,7 @@ function selfTest(mode = 'all') {
             ['attempt 7', { attempt: '7' }, 'integer from 1 to'],
             ['attempt 0', { attempt: '0' }, 'integer from 1 to'],
             ['attempt FIX_BUDGET + 1', { attempt: String(FIX_BUDGET + 1) }, 'integer from 1 to'],
+            ['a release key of another ESR than the target tag (an invented greater key)', { releaseKey: 'v153.24.0-1' }, 'not the current release key'],
         ].map(([name, over, expect]) => ({ name: `a dispatch input check that accepts ${name}`, run: () => fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F2', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', latestTag: FIX_OLD_KEY, ...over }).map(x => x.msg), expect })),
     ];
     const dispatchGreens = [
@@ -2275,8 +2327,12 @@ function selfTest(mode = 'all') {
     // CR-04: the live guard. attempt comes from the run list, not from the input.
     const gDispatched = (over = {}) => ({ reason: 'fix', 'release-key': FIX_KEY, class: 'F2', 'target-branch': `chore/esr-${FIX_TAG}`, 'target-tag': FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', ...over });
     const gFacts = (over = {}, dOver = {}) => ({ dispatched: gDispatched(dOver), actor: FIX_OWNER, author: FIX_OWNER, headRepository: FIX_REPO, repository: FIX_REPO, ownerLogin: FIX_OWNER, latestTag: FIX_OLD_KEY, runs: [], ...over });
-    const prior = (n, cls = 'F2', key = FIX_KEY) => `fix ${key} ${cls} attempt ${n}`;
+    const FP = `verify@${FIX_SHA}`;
+    const prior = (n, cls = 'F2', key = FIX_KEY, fp = FP) => `fix ${key} ${cls} attempt ${n} ${fp}`;
     const guardMsgs = (over, dOver) => fixerGuard(gFacts(over, dOver)).map(x => `${x.guard}: ${x.msg}`);
+    const WF_PATH = '.github/workflows/release-train.yml';
+    const RT = { runId: 5000, repo: FIX_REPO, path: WF_PATH };
+    const rrun = (id, over = {}) => ({ id, event: 'workflow_dispatch', path: `${WF_PATH}@refs/heads/main`, head_repository: { full_name: FIX_REPO }, display_title: prior(id % 3 + 1), ...over });
     const attemptPlants = [
         { name: 'a repeated attempt 1 after one spent fix run', run: () => guardMsgs({ runs: [prior(1)] }), expect: 'does not follow' },
         { name: 'attempt 7 with no fix run spent', run: () => guardMsgs({}, { attempt: '7' }), expect: 'does not follow' },
@@ -2286,16 +2342,34 @@ function selfTest(mode = 'all') {
         { name: 'a target branch that lives in a fork', run: () => guardMsgs({ headRepository: 'fixture-fork/powerbrowser' }), expect: 'fork' },
         { name: 'a release-check fingerprint', run: () => guardMsgs({}, { fingerprint: `release@${FIX_SHA}` }), expect: 'release.yml' },
         { name: 'a release key equal to the latest Release through the live guard', run: () => guardMsgs({ latestTag: FIX_KEY }), expect: 'key-not-greater' },
+        // IN-02: the budget is per key, class and fingerprint.
+        { name: 'attempt 2 after a spent run at another fingerprint (the budget is per fingerprint)', run: () => guardMsgs({ runs: [prior(1, 'F2', FIX_KEY, `verify@${'b'.repeat(40)}`)] }, { attempt: '2' }), expect: 'does not follow' },
+        // IN-01: a cut-off run list is a refusal, never a smaller count.
+        { name: 'a run list cut off at 1000 of 1400', run: () => priorRunTitles([{ total: 1400, runs: Array.from({ length: 1000 }, (_, n) => rrun(n + 1)) }], RT).failures, expect: 'cut off' },
+        { name: 'a run list with no usable total_count', run: () => priorRunTitles([{ runs: [rrun(1)] }], RT).failures, expect: 'cut off' },
     ];
     const attemptGreens = [
+        {
+            name: 'control: two actors\' run lists merge by run id; another workflow, repository, event and a newer run are dropped',
+            run: () => {
+                const a = { total: 3, runs: [rrun(10), rrun(11), rrun(9000)] };
+                const b = { total: 3, runs: [rrun(11), rrun(12, { path: '.github/workflows/verify.yml@refs/heads/main' }), rrun(13, { head_repository: { full_name: 'fixture-fork/powerbrowser' } })] };
+                const c = { total: 1, runs: [rrun(14, { event: 'schedule' })] };
+                const { titles, failures } = priorRunTitles([a, b, c], RT);
+                return failures.length === 0 && titles.length === 2 ? [] : [`got ${titles.length} title(s) and ${failures.length} failure(s): ${titles.join(' | ')}`];
+            },
+        },
+        { name: 'control: a complete run list under the cap is accepted', run: () => priorRunTitles([{ total: 2, runs: [rrun(1), rrun(2)] }], RT).failures },
+        { name: 'control: a fix run at another fingerprint is not counted', run: () => (fixAttempts([{ name: prior(1, 'F2', FIX_KEY, `verify@${'b'.repeat(40)}`) }], FIX_KEY, 'F2', FP) === 0 ? [] : ['a run at another fingerprint was counted']) },
+        { name: 'control: a release key of the target tag with another revision is the current key', run: () => fixerInputsCheck({ releaseKey: 'v153.23.0-2', cls: 'F2', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: FP, attempt: '1', latestTag: FIX_OLD_KEY }).map(x => x.msg) },
         { name: 'control: attempt 1 with no fix run spent is admitted', run: () => fixerGuard(gFacts()).map(x => x.msg) },
         { name: 'control: attempt 2 after one spent fix run is admitted', run: () => fixerGuard(gFacts({ runs: [prior(1)] }, { attempt: '2' })).map(x => x.msg) },
         { name: 'control: runs of another key, another class and a dry run are not spent', run: () => fixerGuard(gFacts({ runs: [prior(1, 'F2', FIX_OLD_KEY), prior(1, 'F3'), `fix dry-run ${FIX_KEY} F2 attempt 1`, 'release train tick'] })).map(x => x.msg) },
-        { name: 'control: a fix run of another release key is not counted against this key', run: () => (fixAttempts([{ name: `fix ${FIX_OLD_KEY} F1 attempt 1`, verdict: 'pass', labels: [] }], FIX_KEY, 'F1') === 0 ? [] : [`attempt for ${FIX_OLD_KEY} counted against ${FIX_KEY}`]) },
-        { name: 'control: a fix run whose gate rejected it still spends the budget', run: () => (fixAttempts([{ name: `fix ${FIX_KEY} F1 attempt 1`, verdict: 'reject', labels: [] }], FIX_KEY, 'F1') === 1 ? [] : ['a rejected attempt was not counted']) },
-        { name: 'control: a claude-fix label with no fix run-name is not counted', run: () => (fixAttempts([{ name: 'release-train', verdict: null, labels: ['claude-fix'] }], FIX_KEY, 'F1') === 0 ? [] : ['a label was counted as an attempt']) },
-        { name: 'control: attempts for another class are not counted', run: () => (fixAttempts([{ name: `fix ${FIX_KEY} F2 attempt 1`, verdict: 'pass', labels: [] }], FIX_KEY, 'F1') === 0 ? [] : ['another class was counted']) },
-        { name: 'control: a non-numeric attempt suffix is not counted', run: () => (fixAttempts([{ name: `fix ${FIX_KEY} F1 attempt x`, verdict: null, labels: [] }], FIX_KEY, 'F1') === 0 ? [] : ['a non-numeric attempt was counted']) },
+        { name: 'control: a fix run of another release key is not counted against this key', run: () => (fixAttempts([{ name: prior(1, 'F1', FIX_OLD_KEY), verdict: 'pass', labels: [] }], FIX_KEY, 'F1', FP) === 0 ? [] : [`attempt for ${FIX_OLD_KEY} counted against ${FIX_KEY}`]) },
+        { name: 'control: a fix run whose gate rejected it still spends the budget', run: () => (fixAttempts([{ name: prior(1, 'F1'), verdict: 'reject', labels: [] }], FIX_KEY, 'F1', FP) === 1 ? [] : ['a rejected attempt was not counted']) },
+        { name: 'control: a claude-fix label with no fix run-name is not counted', run: () => (fixAttempts([{ name: 'release-train', verdict: null, labels: ['claude-fix'] }], FIX_KEY, 'F1', FP) === 0 ? [] : ['a label was counted as an attempt']) },
+        { name: 'control: attempts for another class are not counted', run: () => (fixAttempts([{ name: prior(1, 'F2'), verdict: 'pass', labels: [] }], FIX_KEY, 'F1', FP) === 0 ? [] : ['another class was counted']) },
+        { name: 'control: a non-numeric attempt suffix is not counted', run: () => (fixAttempts([{ name: prior('x', 'F1'), verdict: null, labels: [] }], FIX_KEY, 'F1', FP) === 0 ? [] : ['a non-numeric attempt was counted']) },
         { name: 'control: one prior fix run leaves a red stage fixable', run: () => (derive({ ...FIXTURES.CONFLICT.facts, fixAttempts: 1 }) === 'CONFLICT' ? [] : ['one prior run moved the stage']) },
         { name: 'control: two prior fix runs move a further red to NEEDS_OWNER', run: () => (derive({ ...FIXTURES.CONFLICT.facts, fixAttempts: 2 }) === 'NEEDS_OWNER' ? [] : ['two prior runs did not move the stage']) },
         { name: 'control: a red open bump PR with two prior runs moves to NEEDS_OWNER', run: () => (derive({ ...FIXTURES.BUMP_RED.facts, fixAttempts: 2 }) === 'NEEDS_OWNER' ? [] : ['a red bump PR did not move']) },
@@ -2483,6 +2557,7 @@ if (isEntry) {
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
     if (args[0] === '--fixer-inputs' && args.length === 8) process.exit(fixerInputsCli(args.slice(1)));
     if (args[0] === '--fix-guard' && args.length === 2) process.exit(fixerGuardCli(args.slice(1)));
+    if (args[0] === '--run-titles' && args.length >= 5) process.exit(runTitlesCli(args.slice(1)));
     if (args[0] === '--uptake-would-write' && args.length === 6) process.exit(uptakeWouldWriteCli(args.slice(1)));
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
     if (args[0] === '--sweep-due' && (args.length === 2 || args.length === 3)) process.exit(sweepDueCli(args.slice(1)));

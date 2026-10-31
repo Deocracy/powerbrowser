@@ -461,6 +461,17 @@ function runChecks(root, overrides = {}) {
                 if (ev.has(t)) fail(rel, WF_LEVEL, 'no-pr-trigger', `is triggered by ${t}; a release path must never run on a pull request. Next step: remove the ${t} trigger.`);
             }
         }
+        // IN-02 (re-review): the fix budget is counted from the display title, per key, class and fingerprint, so the title must be exactly
+        // that, and the derive job must read the earlier runs through the checked reader (a cut-off list is a refusal, IN-01).
+        if (file === FIXER_FILE && wf.jobs?.derive !== undefined) {
+            const rn = String(wf['run-name'] ?? '');
+            if (!rn.includes("format('fix {0} {1} attempt {2} {3}', inputs.release-key, inputs.class, inputs.attempt, inputs.fingerprint)")) {
+                fail(rel, WF_LEVEL, 'fixer-spend', `run-name does not title a fix run \`fix <release-key> <class> attempt <n> <fingerprint>\`, so the attempt count (fixAttempts) cannot find the earlier runs of one key, class and fingerprint. Next step: restore the run-name format.`);
+            }
+            const derive = wf.jobs?.derive;
+            const readsRuns = (derive?.steps ?? []).some(x => typeof x.run === 'string' && /release-train\.mjs\s+--run-titles\b/.test(x.run));
+            if (!readsRuns) fail(rel, 'derive', 'fixer-spend', `the derive job does not read the earlier runs through scripts/release-train.mjs --run-titles, so a run list cut off at the API's 1000-result window could silently reset the attempt budget. Next step: read them with --run-titles.`);
+        }
         const runOn = wf.on?.workflow_run?.workflows;
         if (runOn !== undefined) [].concat(runOn).forEach(n => sources.add(String(n)));
         const wfRun = ev.has('workflow_run');
@@ -1379,6 +1390,9 @@ function selfTest() {
         ['fix-pr App token with workflows write as well', gateEdit('          permission-pull-requests: write\n\n      # The one step that holds the token', '          permission-pull-requests: write\n          permission-workflows: write\n\n      # The one step that holds the token'), rel(T), 'fix-pr', 'fixer-gate', 'not exactly contents and pull-requests write'],
         ['fix-pr not re-running the pure stages on the digest-checked bytes', gateEdit('          node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF"', '          true'), rel(T), 'fix-pr', 'fixer-gate', '--static-only'],
         ['a claude step inside fix-pr', gateEdit("      - name: Mint the bot App token\n        id: app\n        if: ${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}\n", `      - uses: ${FIX_PIN}\n        if: \${{ !inputs.dry-run }}\n      - name: Mint the bot App token\n        id: app\n        if: \${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}\n`), rel(T), 'fix-pr', 'fixer-gate', 'claude-code-action step'],
+        // IN-01, IN-02 (re-review): the run-name carries the fingerprint, and the derive job reads the runs through the checked reader.
+        ['run-name without the fingerprint', rtEdit("format('fix {0} {1} attempt {2} {3}', inputs.release-key, inputs.class, inputs.attempt, inputs.fingerprint)", "format('fix {0} {1} attempt {2}', inputs.release-key, inputs.class, inputs.attempt)"), rel(T), WF_LEVEL, 'fixer-spend', 'run-name does not title a fix run'],
+        ['derive reading the runs without the cut-off check', rtEdit('release-train.mjs --run-titles "$GITHUB_RUN_ID"', 'release-train.mjs --ignored-titles "$GITHUB_RUN_ID"'), rel(T), 'derive', 'fixer-spend', '--run-titles'],
         // WR-07 (re-review): the fix and fix-gate jobs free disk space as rebase-upstream.yml does, before the upstream fetch.
         ['fix job without the Free disk space step', gateEdit('      - name: Free disk space\n        run: |\n          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache\n          df -h\n\n      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # The pinned Claude Code CLI', '      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # The pinned Claude Code CLI'), rel(T), 'fix', 'fixer-gate', 'frees disk space'],
         ['fix-gate without the Free disk space step', gateEdit("      - name: Free disk space\n        run: |\n          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache\n          df -h\n\n      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # This run's artifact only", "      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # This run's artifact only"), rel(T), 'fix-gate', 'fixer-gate', 'frees disk space'],

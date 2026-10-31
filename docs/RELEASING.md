@@ -592,16 +592,21 @@ others are in-tree and asserted by the `workflows` row (`fixer-spend`, `fixer-to
   recorded here, and its review date is in `docs/RENEWALS.md`.
 - `--max-turns 40` on the `fix` job's Claude step, so one attempt is bounded.
 - `timeout-minutes: 90` on the `fix` job, so one attempt is bounded in time.
-- At most two attempts per (release key, class), enforced live. The derive job counts the
+- At most two attempts per (release key, class, fingerprint), enforced live. The derive job counts the
   earlier `release-train.yml` dispatch runs of this repository whose display title is
-  `fix <key> <class> attempt <n>` (a dry run is titled `fix dry-run ...` and is not counted;
-  a run that `fix-gate` rejects still counts), admits only attempt number spent + 1, and
+  `fix <key> <class> attempt <n> <fingerprint>` (a dry run is titled `fix dry-run ...` and is not counted;
+  a run that `fix-gate` rejects still counts, and so does a dispatch that fails in the derive job after its
+  title was formed: the next dispatch is then attempt 2), admits only attempt number spent + 1, and
   `scripts/release-train.mjs --fix-guard` refuses once the budget is spent. No fixer run is
   re-runnable: the derive job refuses "Re-run all jobs" (`github.run_attempt` is not 1), and
   `fix`, `fix-gate` and `fix-pr` each carry `github.run_attempt == 1` in their own `if:`,
   because "Re-run failed jobs" keeps derive's earlier result and would otherwise start the
   failed job again and spend model budget the count cannot see (the `fixer-gate` rule and its
   plants hold all three terms). The owner dispatches the next attempt instead. The
+  runs are read as one query per dispatching actor (the owner and the actor of the run, because the
+  unfiltered list is capped at 1000 results); a list cut off at that cap is a refusal, never a smaller count
+  (`release-train.mjs --run-titles`). The release key must be the current key of the target tag (its ESR
+  groups are the tag's), so a dispatcher cannot reset the budget by inventing a greater key. The
   `NEEDS_OWNER` train state that a spent budget implies is part of the train's pure state
   table only: no job writes the tracking issue yet (see Fixer routing), so the refusal is
   the red derive job and its log, and the owner decides.
