@@ -49,9 +49,12 @@
  *           and a relative, non-html, oversized or unknown-tab request is refused. Plant: the export is
  *           skipped, so no file lands.
  *
- * Not in this file, by design: the edit-today probe. It needs the edit command
- * route that plan 32-06 owns, so it records no verdict here, and a build plan
- * that reads the verdict file reports a blocker instead of assuming.
+ *   edit-today  PROBE (record only, 32-06 Task 0): per frozen edit command, whether the chrome
+ *           route (the Controllers actor, the route a Theia-initiated Edit item takes) reaches the
+ *           page editor and performs the command, and whether the page's own key does the same with
+ *           the page focused. The page reports selection, length and the copy, cut and paste events
+ *           through its title and cancels those events, so the probe reads no page text and writes
+ *           no clipboard data. Verdict written to scripts/lib/pb-probe-verdicts.json.
  *
  * Preflight: the binary must carry the current patch 050. The sha256 of
  * patches/050-extension-tab-host.patch must equal the stamp in
@@ -99,7 +102,26 @@ function toneWav() {
     return Buffer.concat([header, data]);
 }
 
-/** The fixture origin: /find, /media, /tone.wav and an attachment at /download. Every GET is recorded. */
+/**
+ * The edit-today page. The title carries `ed s<selStart> e<selEnd> n<length> c<copies> x<cuts> p<pastes>`,
+ * refreshed by a poll so a chrome-driven selection change also shows. copy, cut and paste are cancelled.
+ */
+const EDIT_PAGE = `<!doctype html><html><head><title>Edit fixture</title></head><body><textarea id="t">alpha beta gamma</textarea><script>
+const t = document.getElementById('t');
+let c = 0, x = 0, p = 0, last = '';
+document.addEventListener('copy', e => { c++; e.preventDefault(); });
+document.addEventListener('cut', e => { x++; e.preventDefault(); });
+document.addEventListener('paste', e => { p++; e.preventDefault(); });
+// The overlay is shown in the background until chrome focuses it: refocus the editor when the window gets focus.
+window.addEventListener('focus', () => t.focus());
+t.focus(); t.setSelectionRange(6, 10);
+setInterval(() => {
+  const s = 'ed s' + t.selectionStart + ' e' + t.selectionEnd + ' n' + t.value.length + ' c' + c + ' x' + x + ' p' + p;
+  if (s !== last) { last = s; document.title = s; }
+}, 50);
+</script></body></html>`;
+
+/** The fixture origin: /find, /media, /tone.wav, /edit and an attachment at /download. Every GET is recorded. */
 async function serveFixtures(downloadBody) {
     const requests = [];
     const wav = toneWav();
@@ -123,6 +145,10 @@ async function serveFixtures(downloadBody) {
         } else if (path === '/save.css') {
             response.writeHead(200, { 'content-type': 'text/css' });
             response.end('p { color: rgb(18, 52, 86); }');
+        } else if (path === '/edit') {
+            // edit-today: the page reports its selection, length and the copy/cut/paste events through its title.
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(EDIT_PAGE);
         } else if (path === '/download') {
             response.writeHead(200, {
                 'content-type': 'application/octet-stream',
@@ -594,6 +620,79 @@ async function probePrintToday(app, origin, printDir) {
     return result.dialogService ? 'completes-silent-pdf-dialog-service-present' : 'completes-silent-pdf-dialog-service-missing';
 }
 
+/** The frozen edit command set (32-06): the boundary accepts exactly these, and the probe asks about each. */
+const EDIT_CMDS = ['cmd_undo', 'cmd_redo', 'cmd_cut', 'cmd_copy', 'cmd_paste', 'cmd_pasteNoFormatting', 'cmd_selectAll', 'cmd_delete'];
+
+/** A state push of `tabId` whose title matches `re`; the predicate runs in node over the pushes. */
+const editTitle = (tabId, re) => p => p && p.kind === 'state' && p.tabId === tabId && re.test(String(p.title));
+
+/**
+ * PROBE edit-today: the chrome route (the Controllers actor, which a Theia-initiated Edit item
+ * would use) and the page's own key, each checked against the title the edit page reports.
+ * Records a verdict; never pass or fail. A missing page report or actor is a broken instrument.
+ */
+async function probeEditToday(app, origin) {
+    const keyTab = await openLoaded(app, `${origin}/edit`, '/edit');
+    if (await waitForPush(app, editTitle(keyTab.tabId, /^ed s6 e10 n16 c0 x0 p0$/), { from: keyTab.from, timeoutMs: 15000 }) < 0) {
+        throw new Error(`${BROKEN} the edit page never reported its selection in its title`);
+    }
+    if (await focusOverlay(app, keyTab.tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${keyTab.tabId} could not be focused for the key path`);
+    }
+    const keys = {};
+    const keyRun = async (name, spec, re) => {
+        const mark = (await pushes(app)).length;
+        await pressKey(app, spec);
+        keys[name] = await waitForPush(app, editTitle(keyTab.tabId, re), { from: mark, timeoutMs: 6000 }) >= 0;
+    };
+    await keyRun('cmd_selectAll', { key: 'a', code: 'KeyA', keyCode: 65, modifiers: ['accel'] }, /^ed s0 e16 n16 c0 x0 p0$/);
+    await keyRun('cmd_copy', { key: 'c', code: 'KeyC', keyCode: 67, modifiers: ['accel'] }, /^ed s0 e16 n16 c1 x0 p0$/);
+    await keyRun('cmd_cut', { key: 'x', code: 'KeyX', keyCode: 88, modifiers: ['accel'] }, /^ed s0 e16 n16 c1 x1 p0$/);
+    await keyRun('cmd_paste', { key: 'v', code: 'KeyV', keyCode: 86, modifiers: ['accel'] }, /^ed s0 e16 n16 c1 x1 p1$/);
+    await keyRun('cmd_delete', { key: 'Delete', code: 'Delete', keyCode: 46 }, /^ed s0 e0 n0 c1 x1 p1$/);
+    await keyRun('cmd_undo', { key: 'z', code: 'KeyZ', keyCode: 90, modifiers: ['accel'] }, /^ed s\d+ e\d+ n16 c1 x1 p1$/);
+    await keyRun('cmd_redo', { key: 'Z', code: 'KeyZ', keyCode: 90, modifiers: ['accel', 'shift'] }, /^ed s\d+ e\d+ n0 c1 x1 p1$/);
+
+    const chromeTab = await openLoaded(app, `${origin}/edit`, '/edit');
+    if (await waitForPush(app, editTitle(chromeTab.tabId, /^ed s6 e10 n16 c0 x0 p0$/), { from: chromeTab.from, timeoutMs: 15000 }) < 0) {
+        throw new Error(`${BROKEN} the second edit page never reported its selection in its title`);
+    }
+    if (await focusOverlay(app, chromeTab.tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${chromeTab.tabId} could not be focused for the chrome path`);
+    }
+    const chrome = {};
+    const chromeRun = async (name, re) => {
+        const mark = (await pushes(app)).length;
+        const sent = await inChrome(app, `const o = overlayOf(${JSON.stringify(chromeTab.tabId)});
+            if (!o) return 'no-overlay';
+            try { o.browsingContext.currentWindowGlobal.getActor('Controllers').doCommand(${JSON.stringify(name)}); return 'sent'; }
+            catch (err) { return 'no-actor'; }`);
+        if (sent !== 'sent') {
+            throw new Error(`${BROKEN} the chrome path could not send ${name} (${sent})`);
+        }
+        chrome[name] = await waitForPush(app, editTitle(chromeTab.tabId, re), { from: mark, timeoutMs: 6000 }) >= 0;
+    };
+    // The selection is "beta" (s6 e10) until cmd_delete; the event counters are cumulative.
+    await chromeRun('cmd_copy', /^ed s6 e10 n16 c1 x0 p0$/);
+    await chromeRun('cmd_cut', /^ed s6 e10 n16 c1 x1 p0$/);
+    await chromeRun('cmd_paste', /^ed s6 e10 n16 c1 x1 p1$/);
+    await chromeRun('cmd_pasteNoFormatting', /^ed s6 e10 n16 c1 x1 p2$/);
+    await chromeRun('cmd_delete', /^ed s6 e6 n12 c1 x1 p\d+$/);
+    await chromeRun('cmd_undo', /^ed s\d+ e\d+ n16 c1 x1 p\d+$/);
+    await chromeRun('cmd_redo', /^ed s\d+ e\d+ n12 c1 x1 p\d+$/);
+    await chromeRun('cmd_selectAll', /^ed s0 e12 n12 c1 x1 p\d+$/);
+
+    const names = list => EDIT_CMDS.filter(name => list[name] === true);
+    const failed = list => EDIT_CMDS.filter(name => list[name] === false);
+    return [
+        `chrome-help=${names(chrome).join(',')}`,
+        `chrome-no-effect=${failed(chrome).join(',')}`,
+        `content-native=${names(keys).join(',')}`,
+        `key-no-effect=${failed(keys).join(',')}`,
+        `keys-not-probed=${EDIT_CMDS.filter(name => !(name in keys)).join(',')}`,
+    ].join(';');
+}
+
 /** The verdict file's key for each probe, merged into the file in place. */
 async function recordVerdict(key, verdict) {
     let current = {};
@@ -644,6 +743,12 @@ const SCENARIOS = {
     },
     print: (app, fx) => scenarioPrint(app, fx.origin),
     save: (app, fx) => scenarioSave(app, fx.origin),
+    'edit-today': async (app, fx) => {
+        const verdict = await probeEditToday(app, fx.origin);
+        await recordVerdict('edit-today', verdict);
+        console.log(`  verdict edit-today: ${verdict}`);
+        return null;
+    },
     'print-today': async (app, fx) => {
         const printDir = await mkdtemp(join(tmpdir(), 'pb-32-03-print-'));
         try {

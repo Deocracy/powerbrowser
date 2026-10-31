@@ -1,4 +1,5 @@
 {
   "downloads-today": "saved-to-download-dir-without-prompt",
-  "print-today": "completes-silent-pdf-dialog-service-present"
+  "print-today": "completes-silent-pdf-dialog-service-present",
+  "edit-today": "chrome-help=cmd_undo,cmd_redo,cmd_cut,cmd_copy,cmd_paste,cmd_selectAll,cmd_delete;chrome-no-effect=cmd_pasteNoFormatting;content-native=cmd_undo,cmd_redo,cmd_cut,cmd_copy,cmd_paste,cmd_selectAll,cmd_delete;key-no-effect=;keys-not-probed=cmd_pasteNoFormatting"
 }
