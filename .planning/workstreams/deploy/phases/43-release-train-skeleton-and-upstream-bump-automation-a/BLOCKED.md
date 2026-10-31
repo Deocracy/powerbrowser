@@ -42,3 +42,38 @@ path meets. Merges are seen on the next tick instead of immediately.
   of scope for v1.6. No file change is needed.
 
 **Who decides:** the owner. Nothing in plans 43-03 or 43-04 depends on the choice.
+
+## 2. Owner prerequisites for the first live bot PR
+
+**Plan:** 43-04 (bump-pr), and the owner checkpoint in 43-05 (not executed in this run).
+
+**What is blocked:** a live `bump-pr` run cannot mint the App token until the owner creates and
+installs the bot App and stores its credentials. The workflow reads these, and nothing in the repo
+creates them:
+
+- the App installed on the `powerbrowser` repository only, with contents and pull-requests write
+  (the App settings file is `.github/settings/app-powerbrowser-bot.json`);
+- repository variable `BOT_APP_ID` (the App's numeric id);
+- environment secret `BOT_APP_PRIVATE_KEY` in the `bot` environment (the App's PKCS#8 key);
+- the `bot` environment itself (`.github/settings/environment-bot.json`), with its reviewer rule.
+
+**Why it matters:** the dry-run path needs none of these and was proven statically. The first live
+ESR or Node PR is the calendar exit test in 43-05.
+
+**Owner steps:** create and install the App, set the variable and the secret as above, then dispatch
+the train with `dry-run: true` and read the printed would-write lines before a live dispatch.
+
+## 3. Live tracking-issue writer is not wired (skipped piece)
+
+**Plan:** 43-02 Task 1 described the `report` job's find, render, PATCH and comment steps; 43-03
+delivered the pure protocol (`findExactlyOne`, `render`, `renderConflict`) with its self-test.
+
+**What is skipped:** the `report` job's live write. It refuses with a candidate and a live run,
+rather than leaving the release without a tracking view. Wiring it needs a live state
+derivation: the open chore/esr-<tag> PR, its check runs, and the latest published Release. `derive`
+is fixture-backed in the workflow, so the writer has no live facts to render from.
+
+**Owner or next-plan decision:** approve the live facts source (read-only `gh` calls in `derive`,
+per the workstream's read-only rule), then the writer can be wired to the pure module. Until then,
+a live candidate run ends red at `report`, which is the intended failure mode.
+
