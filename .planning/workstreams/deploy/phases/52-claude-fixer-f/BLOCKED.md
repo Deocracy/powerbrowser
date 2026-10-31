@@ -48,22 +48,29 @@ or a live dispatch. Nothing here was run, and no live write was made.
   seven fixer inputs for a real red branch, then confirm the `fix`, `fix-gate` and `fix-pr`
   jobs, the `claude-fix/*` branch and the PR with its labels and assignee.
 
-## 5. Gate stage 7 rejects a clean diff in the gate's worktree (engineering, blocks item 4)
+## 5. Gate stage 7 rejects a clean diff in the gate's worktree (RESOLVED in the 52-03/04 review fix)
 
-- **What.** In the drill, a docs-only control diff passed stages 1 to 6 and stopped at
-  stage 7, `diff-theia-core.sh --quick`, with `yarn check --integrity` reporting an integrity
-  mismatch. The same script passes on unmodified HEAD in the checkout it was installed in. The
-  gate runs it in the patched worktree that `verify-fix-gate.mjs` builds from a copy of
-  `theia/node_modules`. So the real fix-gate job would refuse every diff, which is fail-closed,
-  but no fix could ever land.
-- **Diagnosis so far.** The copied tree has no absolute symlinks (58 relative ones). Reproducing
-  with only `package.json` and `yarn.lock` copied failed for a different reason (no workspace
-  packages), so it is not the cause. The cause is still open.
-- **Not changed in this run.** The gate's stage 7 and the copy logic are the reviewed 52-01 and
-  52-02 surfaces. Changing them needs a reproduction in a worktree that carries the workspace tree.
-- **Owner or next-plan step.** Reproduce with `scripts/verify-fix-gate.mjs --diff=<docs-only diff> --tag=<pin>`
-  inside `nix develop .#theia`, read the `yarn check` output in the worktree, and fix the copy or
-  the stage. Then rerun the drill; the control must pass stage 7 before item 4 can run.
+- **Cause.** `theia/node_modules/.yarn-integrity` records `modulesFolders` that include
+  `applications/browser/node_modules`, which is git-ignored, so the gate's `git worktree add` did not create it and
+  `yarn check --integrity` failed. Stage 8 would then have failed on the git-ignored build output the `--quick` rows read.
+- **Fix.** The gate derives every git-ignored input from the trusted checkout (`git status --ignored`, minus the Gecko build
+  outputs `--quick` never reads) and the module folders from `.yarn-integrity`, and copies them into the worktree. The
+  fix-gate job prepares the trusted tree the way `verify.yml` does, including `yarn build`. See commit 25ef9364.
+- **Proof.** The real gate on a docs-only control passes all eight stages in this clone, with and without `--tag`, and through
+  `scripts/fixer-isolate.sh`; a `CLAUDE.md` plant is rejected at `[path]`.
+
+## 6. Live proof of the fixer isolation on ubuntu-latest (owner or next run, after item 4's prerequisites)
+
+- **What.** The fix-gate job runs the gate through `scripts/fixer-isolate.sh`: an unprivileged user namespace when the runner
+  allows it, otherwise `sudo -n unshare --net` and `setpriv` back to the runner uid with no_new_privs. Only the first form was
+  exercised here (this host allows `unshare -rn`). The sudo form, and the CI preparation step (`generate`, fetch,
+  `yarn install`, the drivelist rebuild, `yarn build`), are written from `verify.yml` and the review's guidance but have not run
+  on a GitHub-hosted runner.
+- **Owner step.** On the first live dispatch, read the fix-gate log: the gate must reach stage 8, and the
+  `fixer-isolate-self-test` row inside stage 8 must pass by checking the ambient state (it cannot make a second namespace there). If the runner offers neither namespace form the gate fails closed and says so.
+- **Also unverified live.** The derive job's run listing (`gh api .../actions/workflows/release-train.yml/runs`) and the
+  author lookup for the guard, the `gh run list --workflow <check>.yml --commit` log selection, and `npm ci` plus
+  `install.cjs` for the pinned Claude Code CLI. Each was checked against the reviewer's reproduction or by shape only.
 
 ## What was not run
 
