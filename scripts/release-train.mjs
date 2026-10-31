@@ -1263,7 +1263,8 @@ export function statusesOf(body) {
  * decision (create, update with a patch flag, or fail) comes from findExactlyOne over the pinned issues.
  * A comment is posted only for a row red now that was not red in the stored previous state. The body
  * of the issue is never the source of the previous statuses: when the stored state is missing or names
- * another issue, every red row is newly red (fail-safe notify). A staying-red re-run posts no comment.
+ * another issue, every red row is newly red (fail-safe notify). A staying-red re-run posts no comment, and neither
+ * does a red that returns after a no-data day (the stored state carries the red through no-data).
  * Returns the plan and the state to store for the next run. Pure.
  */
 export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = null } = {}) {
@@ -1271,11 +1272,14 @@ export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = 
     // The owner creates the issue in the web UI (CRLF), and the API may trim the final newline: compare the
     // normalised bytes so the PATCH runs on a real difference only.
     const decision = findExactlyOne(pinned.map(i => ({ ...i, body: normBody(i.body) })), { ...rendered, body: normBody(rendered.body) });
-    const state = { number: pinned.length === 1 ? pinned[0].number : null, statuses: statusesOf(rendered.body) };
-    if (decision.action !== 'update') return { ...decision, comment: null, newlyRed: [], state };
-    const usable = stored !== null && typeof stored === 'object' && stored.number === pinned[0].number
+    const usable = pinned.length === 1 && stored !== null && typeof stored === 'object' && stored.number === pinned[0].number
         && stored.statuses !== null && typeof stored.statuses === 'object';
     const prior = usable ? stored.statuses : null;
+    // A row that reads no-data between two reds is the same unresolved condition, not a recovery: the stored state keeps the
+    // last red through a no-data day, so red, no-data, red posts one comment. Only a green day (an observed recovery) resets it.
+    const carried = Object.fromEntries(Object.entries(statusesOf(rendered.body)).map(([n, st]) => [n, st === 'no-data' && prior?.[n] === 'red' ? 'red' : st]));
+    const state = { number: pinned.length === 1 ? pinned[0].number : null, statuses: carried };
+    if (decision.action !== 'update') return { ...decision, comment: null, newlyRed: [], state };
     const newlyRed = parseRows(rendered.body).filter(r => r.status === 'red' && (prior === null || prior[r.name] !== 'red'));
     if (newlyRed.length === 0) return { ...decision, comment: null, newlyRed: [], state };
     return { ...decision, comment: transitionComment(newlyRed, ownerLogin), newlyRed: newlyRed.map(r => r.name), state };
@@ -1549,6 +1553,22 @@ function maintenanceSelfTest() {
             const two = renderMaintenance(stateOf(f())).body;
             return one === two ? [] : ['two renders over the same facts differ'];
         } },
+        { name: 'control: red, no-data, red posts exactly one comment, and red, green, red posts two', run: () => {
+            const redNow = renderMaintenance(stateOf(facts({ dependabotAlerts: T.alertMax + 1 })));
+            const noData = renderMaintenance(stateOf(facts({ dependabotAlerts: null })));
+            const green = renderMaintenance(stateOf(facts()));
+            const step = (prevState, rendered) => nextMaintenance([issueBy(rendered.body)], rendered, { ownerLogin: OWNER, stored: prevState });
+            const first = step(storedOf(priorBody), redNow);
+            const mid = step(first.state, noData);
+            const again = step(mid.state, redNow);
+            const afterGreen = step(step(first.state, green).state, redNow);
+            const failures = [];
+            if (first.comment === null) failures.push('the first red posted no comment');
+            if (mid.state.statuses['dependabot-alerts'] !== 'red') failures.push(`the no-data day stored ${mid.state.statuses['dependabot-alerts']}, not the carried red`);
+            if (again.comment !== null) failures.push('a red after one no-data day posted a second comment for one unresolved condition');
+            if (afterGreen.comment === null) failures.push('a red after an observed green posted no comment');
+            return failures;
+        } },
         { name: 'control: two rows turn red together and the transition posts one comment naming both', run: () => {
             const d = nextMaintenance([issueBy(priorBody)], redRendered, { ownerLogin: OWNER, stored: storedOf(priorBody) });
             const named = ['watchdog-age', 'synthetic events POST'].every(n => d.comment?.includes(n));
@@ -1725,6 +1745,12 @@ function maintenanceSelfTest() {
             run: () => (selectStateRun(withState(mutate)) === null ? [`${label} was refused as the previous state`] : []),
             expect: 'was refused as the previous state',
         })),
+        { name: 'a stored state that recorded no-data over a red (the carry lost)', run: () => {
+            const redNow = renderMaintenance(stateOf(facts({ dependabotAlerts: T.alertMax + 1 })));
+            const stored = { number: 7, statuses: { ...statusesOf(redNow.body), 'dependabot-alerts': 'no-data' } };
+            const d = nextMaintenance([issueBy(redNow.body)], redNow, { ownerLogin: OWNER, stored });
+            return d.comment === null ? [] : ['a red after a no-data day was re-commented for one unresolved condition'];
+        }, expect: 'was re-commented for one unresolved condition' },
         { name: 'a stored state that names another issue', run: () => {
             const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: { number: 99, statuses: statusesOf(redBody) } });
             return d.newlyRed.length > 0 ? ['a stored state of another issue was ignored, so every red row is newly red'] : [];
