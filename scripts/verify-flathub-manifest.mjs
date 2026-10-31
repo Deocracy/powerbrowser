@@ -12,7 +12,9 @@
 //                            BaseApp, org.mozilla.firefox.BaseApp, as `base` on the same branch. The BaseApp is a
 //                            base application, never the runtime (CR-04; Flathub's org.mozilla.firefox.BaseApp
 //                            manifest builds on org.freedesktop.Platform at the branch it is published for);
-//  4. persist                --persist=.<vendor_machine, lowercased> in finish-args (.debios);
+//  4. persist and sandbox    --persist=.<vendor_machine, lowercased> in finish-args (.debios), and finish-args equal the
+//                            least-privilege allow-list as a set (WR-10): fallback-x11 beside wayland, never plain x11,
+//                            and no filesystem or bus-name grant. The allow-list is a policy, so it is kept by hand here;
 //  5. Flatpak-only disable   the build commands merge DisableAppUpdate into the staged policies copy;
 //                            the policies-update-split row compares the values;
 //  6. checker data           the archive source carries x-checker-data with a url-template naming the release
@@ -63,6 +65,9 @@ const COPY_REL = 'docs/download-flatpak.md';
 const BASEAPP_REF = 'org.mozilla.firefox.BaseApp';
 const RUNTIME_REF = 'org.freedesktop.Platform';
 const SDK_REF = 'org.freedesktop.Sdk';
+// Policy allow-list for the sandbox (the one place a hand-kept list is right): X11 only as a fallback to Wayland, the
+// network for the browser, and the dri device for GL. Anything else is a grant someone has to add here on purpose.
+const SANDBOX_ALLOW = ['--share=ipc', '--socket=fallback-x11', '--socket=wayland', '--socket=pulseaudio', '--share=network', '--device=dri'];
 const BRANCH_RE = /^\d{2}\.\d{2}$/;
 const VERIFY_PLACEHOLDER = '@FLATHUB_VERIFICATION_TOKEN@';
 
@@ -148,6 +153,11 @@ export function runChecks(root, overrides = {}) {
         if (!(manifest['finish-args'] ?? []).includes(persist)) {
             fail(MANIFEST_REL, `finish-args lacks ${persist}, so the per-user data would not survive an update (finish-args)`, `add ${persist} to finish-args.`);
         }
+        // 4b. least privilege: finish-args equal the allow-list as a set
+        const have = new Set(manifest['finish-args'] ?? []);
+        const want = new Set([...SANDBOX_ALLOW, persist]);
+        for (const a of have) if (!want.has(a)) fail(MANIFEST_REL, `finish-args grants ${a}, which is not on the least-privilege allow-list`, `remove ${a}; the sandbox grants only ${[...want].join(' ')}.`);
+        for (const a of want) if (!have.has(a)) fail(MANIFEST_REL, `finish-args lacks ${a} from the least-privilege allow-list`, `add ${a}.`);
         // 5. the Flatpak-only disable key
         const commands = (manifest.modules ?? []).flatMap(m => (Array.isArray(m['build-commands']) ? m['build-commands'] : [])).join('\n');
         if (!/DisableAppUpdate/.test(commands)) {
@@ -360,6 +370,18 @@ function selfTest() {
         {
             name: 'copy source names a directory the tarball does not hold', expect: 'build commands fail',
             overrides: withManifest(d => { d.modules[0]['build-commands'][1] = 'cp -a browser /app/lib/powerbrowser'; }),
+        },
+        {
+            name: 'plain X11 socket instead of fallback-x11', expect: 'grants --socket=x11',
+            overrides: withManifest(d => { d['finish-args'] = d['finish-args'].map(a => (a === '--socket=fallback-x11' ? '--socket=x11' : a)); }),
+        },
+        {
+            name: 'host filesystem granted', expect: 'grants --filesystem=host',
+            overrides: withManifest(d => { d['finish-args'].push('--filesystem=host'); }),
+        },
+        {
+            name: 'session bus name talk granted', expect: 'grants --talk-name=org.freedesktop.Flatpak',
+            overrides: withManifest(d => { d['finish-args'].push('--talk-name=org.freedesktop.Flatpak'); }),
         },
         {
             name: '--persist removed from finish-args', expect: '--persist=',

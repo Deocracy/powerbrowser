@@ -105,3 +105,12 @@ Owner reply (record verbatim, with the date): ____
 
 1. On a clean machine with the live cache configured, run `nix build .#powerbrowser`.
 2. Paste the substitute log, verbatim, into the 56-05 evidence.
+
+### Flatpak sandbox grants (for the Flathub reviewer)
+
+The manifest grants `--socket=fallback-x11` beside `--socket=wayland` (X11 only when no Wayland session exists),
+`--socket=pulseaudio`, `--device=dri`, `--share=ipc`, `--share=network` and `--persist=.debios`. It grants no
+filesystem and no bus name; the flathub-manifest row compares `finish-args` with that list as a set. With
+`--share=network` the sidecar's loopback listener is reachable by other processes of the host and by other
+network-sharing Flatpaks, so its per-session token is the only barrier. That is the design, and it is stated here
+so the reviewer sees it.
