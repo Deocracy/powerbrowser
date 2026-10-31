@@ -5032,6 +5032,19 @@ run_own_checks() {
     # only; no network, no gh, no build. It writes nothing. The live sweep and the pinned issue are the
     # plan 48-05 owner checkpoint.
     "release-train-maintenance-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
+    # NEW (Phase 51 review CR-01, WR-04, WR-06, IN-01 to IN-03): the live reads behind the Phase 51 sweep rows. The repo-facts,
+    # security-reads and codeberg steps of the maintenance-probe job are read with js-yaml and executed unchanged under bash -e
+    # with a stub gh and a stub curl on PATH. A count is written only from a successful, well-shaped read: empty output, a 403 JSON
+    # error body, a 5xx page, a gh failure that still prints an empty list, an error object with exit 0 and a page of non-objects
+    # write nothing (the row then renders no-data, never 0 and never red); a zero-length list from a successful read is a real 0.
+    # The default branch is read (a rename moves the requests), an unset Codeberg mirror writes nothing and a declared one always
+    # writes the pair. The repoControls deferral marker and every probe output name are checked from the workflow text.
+    # Honestly --quick: bash, jq and node in mkdtemp; no network, gh, build or display.
+    "sweep-reads|node $REPO_ROOT/scripts/verify-sweep-reads.mjs"
+    # sweep-reads-self-test plants the exit status ignored, the page shape unchecked or too loose, --slurp dropped, the branch
+    # hard-coded to main in the activity and Codeberg reads, an unset mirror reported as declared, a renamed probe output, an
+    # undeclared render env and a removed deferral marker, each over the real step text; each goes red naming its drift.
+    "sweep-reads-self-test|node $REPO_ROOT/scripts/verify-sweep-reads.mjs --self-test"
     # NEW (Phase 52, FIX-07/FIX-11): fix-gate-self-test serves a green control diff, then one
     # planted diff per .github/fix-gate-deny.json entry (the plant list read from the deny file
     # itself), a registry-named file, a hand-edited patch hunk, a vacuous diff, a compiled-file

@@ -1054,20 +1054,25 @@ function codeqlPushAgeRow(f) {
     if (t === null) return maintRow(name, 'red', THRESHOLD_UNREADABLE);
     const days = Math.floor((f.nowMs - f.codeqlLastPushMs) / DAY_MS);
     return f.nowMs - f.codeqlLastPushMs > t.pushAgeDays * DAY_MS
-        ? maintRow(name, 'red', `the last push to main is ${days} day(s) old, past the ${t.pushAgeDays}-day warning before the CodeQL default-setup auto-disable`)
-        : maintRow(name, 'green', `the last push to main is ${days} day(s) old`);
+        ? maintRow(name, 'red', `the last push to the default branch is ${days} day(s) old, past the ${t.pushAgeDays}-day warning before the CodeQL default-setup auto-disable`)
+        : maintRow(name, 'green', `the last push to the default branch is ${days} day(s) old`);
 }
 
 /**
- * Codeberg main against GitHub main, full 40-hex lowercase SHAs only. Any other pair (a short SHA, a missing
- * read, no mirror declared) is no-data: never red, never a comment, with the note naming the Phase 53 mirror. Pure.
+ * Codeberg main against GitHub's default branch. The probe writes nothing when no mirror is declared (the
+ * vars.CODEBERG_MIRROR slug is unset): that is no-data naming the Phase 53 mirror. When a mirror is declared it
+ * always writes { configured: true, codeberg, github }, each side a full 40-hex lowercase SHA or null for a side
+ * that could not be read. A declared mirror that did not answer with a SHA is red (a deleted or renamed mirror
+ * must not hide forever); a GitHub side that could not be read is no-data (not the mirror's fault). Pure.
  */
 function codebergRow(f) {
     const name = 'codeberg-mirror';
     const c = f.codeberg;
-    if (c === null || typeof c !== 'object' || !SHA_RE.test(c.codeberg ?? '') || !SHA_RE.test(c.github ?? '')) {
-        return maintRow(name, 'no-data', 'no full Codeberg and GitHub main SHA pair this run; the row renders no-data until the Phase 53 mirror exists');
+    if (c === null || typeof c !== 'object' || c.configured !== true) {
+        return maintRow(name, 'no-data', 'no Codeberg mirror is declared (vars.CODEBERG_MIRROR is unset); the row renders no-data until the Phase 53 mirror exists');
     }
+    if (!SHA_RE.test(c.github ?? '')) return maintRow(name, 'no-data', 'a Codeberg mirror is declared, but GitHub main could not be read as a full SHA this run');
+    if (!SHA_RE.test(c.codeberg ?? '')) return maintRow(name, 'red', 'a Codeberg mirror is declared, but it did not answer with a full main SHA (unreachable, renamed or deleted)');
     return c.codeberg === c.github
         ? maintRow(name, 'green', `Codeberg main ${c.codeberg.slice(0, 12)} matches GitHub main`)
         : maintRow(name, 'red', `Codeberg main ${c.codeberg.slice(0, 12)} differs from GitHub main ${c.github.slice(0, 12)}`);
@@ -1484,13 +1489,13 @@ function maintenanceSelfTest() {
             const lines = (d.comment ?? '').split('\n').filter(l => l.startsWith('- '));
             return d.newlyRed.join(',') === 'renewals-due' && lines.length === 1 && lines[0].startsWith('- renewals-due:') ? [] : [`the planted red row gave ${JSON.stringify(d.newlyRed)} with ${lines.length} comment line(s)`];
         } },
-        { name: 'control: two identical full SHAs render green, and a short SHA is no-data', run: () => {
-            const same = rowOf(stateOf(facts({ codeberg: { codeberg: SHA_A, github: SHA_A } })), 'codeberg-mirror').status;
-            const short = rowOf(stateOf(facts({ codeberg: { codeberg: 'abc1234', github: 'abc1234' } })), 'codeberg-mirror').status;
-            return same === 'green' && short === 'no-data' ? [] : [`equal full SHAs gave ${same}, a short pair gave ${short}`];
+        { name: 'control: two identical full SHAs render green, an unset mirror and an unreadable GitHub side are no-data', run: () => {
+            const row = c => rowOf(stateOf(facts({ codeberg: c })), 'codeberg-mirror').status;
+            const got = [row({ configured: true, codeberg: SHA_A, github: SHA_A }), row(null), row({ configured: true, codeberg: SHA_A, github: null }), row({ codeberg: SHA_A, github: SHA_A })];
+            return got.join(',') === 'green,no-data,no-data,no-data' ? [] : [`equal SHAs, an unset mirror, an unreadable GitHub side and an undeclared pair gave ${got.join(',')}`];
         } },
         { name: 'control: two sweep renders over unchanged facts print byte-identical bodies', run: () => {
-            const f = () => facts({ renewalsText: REN_ROW(day(12)), dependabotAlerts: 2, codeberg: { codeberg: SHA_A, github: SHA_B } });
+            const f = () => facts({ renewalsText: REN_ROW(day(12)), dependabotAlerts: 2, codeberg: { configured: true, codeberg: SHA_A, github: SHA_B } });
             const one = renderMaintenance(stateOf(f())).body;
             const two = renderMaintenance(stateOf(f())).body;
             return one === two ? [] : ['two renders over the same facts differ'];
@@ -1637,7 +1642,9 @@ function maintenanceSelfTest() {
         { name: 'one open Dependabot alert', run: () => reds(stateOf(facts({ dependabotAlerts: 1 }))), expect: '1 open Dependabot alert(s) against a limit of 0' },
         { name: 'one open CodeQL alert', run: () => reds(stateOf(facts({ codeqlAlerts: 1 }))), expect: '1 open CodeQL alert(s) against a limit of 0' },
         { name: 'a last push to main 151 days old', run: () => reds(stateOf(facts({ codeqlLastPushMs: NOW - 151 * DAY_MS }))), expect: 'past the 150-day warning' },
-        { name: 'Codeberg main lagging GitHub main by full SHA', run: () => reds(stateOf(facts({ codeberg: { codeberg: SHA_A, github: SHA_B } }))), expect: 'differs from GitHub main' },
+        { name: 'Codeberg main lagging GitHub main by full SHA', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: SHA_A, github: SHA_B } }))), expect: 'differs from GitHub main' },
+        { name: 'a declared Codeberg mirror that did not answer', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: null, github: SHA_B } }))), expect: 'did not answer with a full main SHA' },
+        { name: 'a declared Codeberg mirror that answered a short SHA', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: 'abc1234', github: SHA_B } }))), expect: 'did not answer with a full main SHA' },
         { name: 'two owner-authored tracking issues share the maintenance title', run: () => { const d = nextMaintenance([issueBy(priorBody, OWNER, 7), issueBy('other', OWNER, 9)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: null }); return d.action === 'fail' ? [d.reason] : []; }, expect: 'open tracking issues' },
         // Each state plant breaks exactly one rule of the one admissible run and calls the real selector, so deleting
         // that rule from selectStateArtifact turns exactly that plant green and the self-test red.
