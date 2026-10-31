@@ -189,3 +189,11 @@ Supersedes Blocker 1 and the `audio` row above. The defect was in the launch env
 - **Commit.** `16c7875`.
 - **Live result (this tree).** `--scenario audio` PASS three runs in a row; `--scenario find,zoom,audio,downloads` all PASS; `--self-test` PASS (two clean controls, two planted faults red). With the fix disabled (the binary launched from a path with no `config.status`), `audio` FAILs again.
 - **Open risk.** The dev binary at `objdir/dist/bin/powerbrowser` produces no sound when started by hand outside a dev wrapper, for the same reason. This commit fixes the harness only; a release package must put libpulse on the loader path (not addressed here).
+
+## Orchestrator close-out (2026-10-31)
+
+Audio is fixed (16c7875) and passes live; find, zoom, mute and downloads-today are proven. The print-today and edit-today probes need the Ctrl+P and edit-command routes, so they move to the plans that build those routes: 32-03 records print-today and 32-06 records edit-today as their first task. The plan is marked complete on that basis.
+
+Follow-ups recorded, not fixed here:
+- `scenarioFind` waits for FindNext `from: hit`, which includes the push that already matched, so that wait cannot fail; it should be `hit + 1` (pass to 32-02, which owns the find UI).
+- A hand-started `objdir/dist/bin/powerbrowser` outside a Nix wrapper still cannot load libpulse and plays no sound; release packaging must put libpulse on the loader path.
