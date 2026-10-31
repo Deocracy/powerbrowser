@@ -3833,6 +3833,8 @@ run_own_checks() {
     "page-tools-find-self-test|node $REPO_ROOT/scripts/verify-page-tools-find.mjs --self-test"
     "page-tools-zoom-mute|node $REPO_ROOT/scripts/verify-page-tools-zoom-mute.mjs"
     "page-tools-zoom-mute-self-test|node $REPO_ROOT/scripts/verify-page-tools-zoom-mute.mjs --self-test"
+    "page-tools-downloads|node $REPO_ROOT/scripts/verify-page-tools-downloads.mjs"
+    "page-tools-downloads-self-test|node $REPO_ROOT/scripts/verify-page-tools-downloads.mjs --self-test"
 
     # NEW (Phase 29, BAR-02; REQUIREMENTS technical ruling 2026-10-20): the
     # Theia token cookie never reaches a server on another loopback port. Pins

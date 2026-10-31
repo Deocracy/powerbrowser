@@ -94,6 +94,8 @@ const KIND_CLASSES = new Map([
     // Phase 32 plan 01 (PAGE-05): mute changes this tab's audio state only; it is per-tab selection state
     // beside webTabActivated, so selection. It is an explicit boolean, never a toggle.
     ['webTabMute', 'selection'],
+    ['webTabDownloadsSubscribe', 'selection'],
+    ['webTabDownloadsAction', 'selection'],
 ]);
 
 /**

@@ -190,6 +190,38 @@ export interface WebTabState {
     soundPlaying: boolean;
 }
 
+/** Phase 32 plan 04 (PAGE-06): a row action, the frozen set the chrome arm accepts. */
+export type DownloadAction = 'cancel' | 'launch' | 'showContainingDirectory' | 'remove' | 'retry';
+
+/**
+ * Phase 32 plan 04 (PAGE-06): one Downloads row as chrome serializes it. The
+ * frame never gets a path or an error text: a failed row offers Retry.
+ */
+export interface WebTabDownloadRow {
+    id: number;
+    url: string;
+    filename: string;
+    bytesTotal: number;
+    bytesReceived: number;
+    state: 'in-progress' | 'finished' | 'canceled' | 'failed';
+    succeeded: boolean;
+    canceled: boolean;
+    error: boolean;
+}
+
+const DOWNLOAD_STATES: readonly string[] = ['in-progress', 'finished', 'canceled', 'failed'];
+
+/** Phase 32 plan 04 (PAGE-06): the rows of one downloadsChanged push; a malformed row is dropped, never rendered. */
+export function downloadRowsOf(detail: Record<string, unknown>): WebTabDownloadRow[] {
+    if (!Array.isArray(detail.rows)) {
+        return [];
+    }
+    return detail.rows.filter((row): row is WebTabDownloadRow => !!row && typeof row === 'object'
+        && typeof (row as WebTabDownloadRow).id === 'number'
+        && typeof (row as WebTabDownloadRow).filename === 'string'
+        && DOWNLOAD_STATES.includes((row as WebTabDownloadRow).state));
+}
+
 /**
  * The web-tab kinds chrome serves: eight in `handleGroupMutation`, and the
  * Phase 27 kinds in `handleWebTabAction` (the boundary file's end-of-file
@@ -219,6 +251,9 @@ export type WebTabMessage =
     | { kind: 'webTabZoomIn'; tabId: string }
     | { kind: 'webTabZoomOut'; tabId: string }
     | { kind: 'webTabZoomReset'; tabId: string }
+    // Phase 32 plan 04 (PAGE-06): the Downloads view. Rows arrive in downloadsChanged pushes; the replies carry only the outcome.
+    | { kind: 'webTabDownloadsSubscribe'; tabId: string }
+    | { kind: 'webTabDownloadsAction'; tabId: string; id: number; action: DownloadAction }
     // Phase 32 plan 01 (PAGE-05): mute is an explicit flag, never a toggle.
     | { kind: 'webTabMute'; tabId: string; muted: boolean };
 
@@ -354,7 +389,17 @@ export class WebTabChannel {
                 soundPlaying: typeof detail.soundPlaying === 'boolean' ? detail.soundPlaying : widget.soundPlaying,
             });
         });
+        // Phase 32 plan 04 (PAGE-06): the Downloads rows arrive whole in each push; the bar reads them through onDidChangeDownloads.
+        this.onPush('downloadsChanged', detail => {
+            this.downloadRows = downloadRowsOf(detail);
+            this.downloadsEmitter.fire(this.downloadRows);
+        });
     }
+
+    /** Phase 32 plan 04 (PAGE-06): the last Downloads rows chrome pushed, newest first. */
+    downloadRows: WebTabDownloadRow[] = [];
+    private readonly downloadsEmitter = new Emitter<WebTabDownloadRow[]>();
+    readonly onDidChangeDownloads: TheiaEvent<WebTabDownloadRow[]> = this.downloadsEmitter.event;
 
     /**
      * Subscribes to one push kind on the one chrome push event. Later phases

@@ -4498,7 +4498,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4924,6 +4924,30 @@ async function handleWebTabAction(data, actorRef) {
       }
       webTabPagePush(entry.browser);
       return { ok: true, kind, where: "applied", audioMuted: entry.browser.audioMuted === true };
+    }
+    // Page tools (32-04, PAGE-06): the Downloads view. The subscribe installs the one chrome-side
+    // view (idempotent) and makes the sending frame the push target. The action runs chrome-side
+    // on the row id this file assigned; the frame never names a path.
+    case "webTabDownloadsSubscribe": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      try {
+        await webTabDownloadsSubscribe(actorRef.browsingContext.top.embedderElement);
+      } catch {
+        PowerBrowserAPI.log("error", "[downloads] the view install failed");
+        return { ok: false, reason: "unavailable", message: "handleWebTabAction: the downloads list is not available" };
+      }
+      return { ok: true, kind, where: "subscribed" };
+    }
+    case "webTabDownloadsAction": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      if (!Number.isInteger(data.id) || !WEB_TAB_DOWNLOAD_ACTIONS.includes(data.action)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a download id that is not an integer, or an action outside the set" };
+      }
+      return { ok: true, kind, where: await webTabDownloadAction(data.id, data.action) };
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -6146,3 +6170,144 @@ export const PowerBrowserTabHost = Object.freeze({
     });
   },
 });
+
+// ---------------------------------------------------------------------------
+// Phase 32 plan 04 (PAGE-06): the Downloads view. One chrome-side view on the
+// combined Downloads list serializes every row into a downloadsChanged push.
+// A Download object never leaves chrome: its row id is a counter this file
+// assigns, and a row carries the filename, never the path. The shell builds
+// its own list here, because the stock panel needs a stock browser window.
+// Module-level, like the page-tools helpers above.
+// ---------------------------------------------------------------------------
+const downloadsLazy = {};
+ChromeUtils.defineESModuleGetters(downloadsLazy, {
+  Downloads: "resource://gre/modules/Downloads.sys.mjs",
+});
+
+const WEB_TAB_DOWNLOAD_ACTIONS = Object.freeze(["cancel", "launch", "showContainingDirectory", "remove", "retry"]);
+// shortcut: the newest 50 rows per push bound the panel; older rows stay in the Downloads list, upgrade if paging is needed.
+const WEB_TAB_DOWNLOAD_ROWS_MAX = 50;
+
+const downloadsState = {
+  frame: null, // the Theia frame element that last subscribed: the push target
+  installed: null, // one install promise, so two subscribes share one view
+  list: null,
+  rows: new Map(), // row id -> serialized row, in first-seen order
+  ids: new WeakMap(), // Download -> row id
+  byId: new Map(), // row id -> Download, chrome-side only
+  nextId: 1,
+  batching: false,
+};
+
+// Serializes one Download to primitives. No path, no error text: a failed row shows the Retry action.
+function webTabDownloadSerialize(download) {
+  let id = downloadsState.ids.get(download);
+  if (id === undefined) {
+    id = downloadsState.nextId++;
+    downloadsState.ids.set(download, id);
+  }
+  downloadsState.byId.set(id, download);
+  const state = download.succeeded ? "finished" : download.canceled ? "canceled" : download.error ? "failed" : "in-progress";
+  return {
+    id,
+    url: String(download.source?.url ?? ""),
+    filename: String(download.target?.path ?? "").split(/[\\/]/).pop(),
+    bytesTotal: Number(download.totalBytes) || 0,
+    bytesReceived: Number(download.currentBytes) || 0,
+    state,
+    succeeded: download.succeeded === true,
+    canceled: download.canceled === true,
+    error: !!download.error,
+  };
+}
+
+// Every view callback pushes the whole bounded row list; a batch (the replay at addView) pushes once at its end.
+function webTabDownloadsPush() {
+  const frame = downloadsState.frame;
+  if (!frame || downloadsState.batching) {
+    return;
+  }
+  const rows = [...downloadsState.rows.values()].reverse().slice(0, WEB_TAB_DOWNLOAD_ROWS_MAX);
+  sendWebTabPush(frame, { kind: "downloadsChanged", rows });
+}
+
+const downloadsView = {
+  onDownloadBatchStarting() {
+    downloadsState.batching = true;
+  },
+  onDownloadBatchEnded() {
+    downloadsState.batching = false;
+    webTabDownloadsPush();
+  },
+  onDownloadAdded(download) {
+    const row = webTabDownloadSerialize(download);
+    downloadsState.rows.set(row.id, row);
+    webTabDownloadsPush();
+  },
+  onDownloadChanged(download) {
+    const row = webTabDownloadSerialize(download);
+    downloadsState.rows.set(row.id, row);
+    webTabDownloadsPush();
+  },
+  onDownloadRemoved(download) {
+    const id = downloadsState.ids.get(download);
+    downloadsState.rows.delete(id);
+    downloadsState.byId.delete(id);
+    webTabDownloadsPush();
+  },
+};
+
+// Removes the view when the application quits, so the list is not notified after its frame is gone.
+const downloadsQuitObserver = {
+  observe() {
+    downloadsState.list?.removeView(downloadsView);
+  },
+};
+
+// Installs the view once; every later subscribe only re-points the push at the sending frame.
+function webTabDownloadsSubscribe(frame) {
+  downloadsState.frame = frame;
+  if (!downloadsState.installed) {
+    downloadsState.installed = (async () => {
+      const list = await downloadsLazy.Downloads.getList(downloadsLazy.Downloads.ALL);
+      downloadsState.list = list;
+      list.addView(downloadsView);
+      Services.obs.addObserver(downloadsQuitObserver, "quit-application-granted");
+    })();
+  }
+  return downloadsState.installed;
+}
+
+// Runs one row action chrome-side. Launch and reveal are OS actions; the frame only names the row.
+async function webTabDownloadAction(id, action) {
+  const download = downloadsState.byId.get(id);
+  if (!download) {
+    return "unknown-download";
+  }
+  try {
+    switch (action) {
+      case "cancel":
+        await download.cancel();
+        await download.removePartialData();
+        break;
+      case "launch":
+        await download.launch();
+        break;
+      case "showContainingDirectory":
+        await download.showContainingDirectory();
+        break;
+      case "retry":
+        download.start().catch(err => PowerBrowserAPI.log("error", `[downloads] retry attempt ended: ${err && err.message ? err.message : err}`));
+        break;
+      case "remove":
+        await downloadsState.list.remove(download);
+        break;
+      default:
+        return "unknown-action";
+    }
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[downloads] ${action} failed: ${err && err.message ? err.message : err}`);
+    return "failed";
+  }
+  return "done";
+}

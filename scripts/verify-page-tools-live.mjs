@@ -19,6 +19,10 @@
  *   zoom    ZoomIn raises the pushed zoom above 1; ZoomReset returns it to 1.
  *   audio   A tone that plays from a served page reports soundPlaying; Mute
  *           reports audioMuted true, Unmute reports it false.
+ *   downloads  Phase 32 plan 04 (PAGE-06): a page-started slow download becomes a
+ *           row with bytes in a downloadsChanged push; Cancel stops it; Retry
+ *           finishes it. Plant silent-download (no view) must go red, naming
+ *           'row missing'.
  *   downloads-today  PROBE (record only): a page-started download of an
  *           attachment. The verdict is what it does today, written to
  *           scripts/lib/pb-probe-verdicts.json; it is never pass or fail.
@@ -42,7 +46,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT, probe } from './lib/pb-relaunch.mjs';
-import { loadedAt, openWebTab, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { loadedAt, openWebTab, pushes, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'page-tools-live';
 const VERDICTS = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'pb-probe-verdicts.json');
@@ -95,6 +99,29 @@ async function serveFixtures(downloadBody) {
                 'content-disposition': 'attachment; filename="probe.bin"',
             });
             response.end(downloadBody);
+        } else if (path === '/slow-download') {
+            // Three 64 KiB chunks one second apart: long enough to cancel mid-transfer, short enough to finish on retry.
+            const chunk = Buffer.alloc(65536, 0x61);
+            response.writeHead(200, {
+                'content-type': 'application/octet-stream',
+                'content-length': chunk.length * 3,
+                'content-disposition': 'attachment; filename="probe-slow.bin"',
+            });
+            response.write(chunk);
+            let sent = 1;
+            const timer = setInterval(() => {
+                if (response.destroyed) {
+                    clearInterval(timer);
+                    return;
+                }
+                response.write(chunk);
+                sent += 1;
+                if (sent === 3) {
+                    clearInterval(timer);
+                    response.end();
+                }
+            }, 1000);
+            response.on('close', () => clearInterval(timer));
         } else {
             response.writeHead(404, { 'content-type': 'text/plain' });
             response.end('not found');
@@ -193,6 +220,54 @@ async function scenarioAudio(app, origin) {
 }
 
 /**
+ * downloads (PAGE-06): a page-started download becomes a row with bytes in a
+ * downloadsChanged push; Cancel stops it; Retry restarts it to a finished row.
+ * The served request log must show the page's own request (no silent save).
+ * `subscribe: false` is the planted fault: no view, so no row can be pushed.
+ * Open and Show in folder are not driven: they launch OS applications.
+ */
+async function scenarioDownloads(app, fx, { subscribe = true } = {}) {
+    const { tabId, from } = await openLoaded(app, `${fx.origin}/find`, '/find');
+    if (subscribe) {
+        const reply = await channelRequest(app, { kind: 'webTabDownloadsSubscribe', tabId });
+        if (reply?.ok !== true) {
+            return `the subscribe reply was not ok (${JSON.stringify(reply)})`;
+        }
+    }
+    const rowIn = async (pred, after, timeoutMs) => {
+        const at = await waitForPush(app, p => p && p.kind === 'downloadsChanged' && (p.rows ?? []).some(pred), { from: after, timeoutMs });
+        return at < 0 ? { at } : { at, row: (await pushes(app))[at].rows.find(pred) };
+    };
+    await channelRequest(app, { kind: 'webTabNavigate', tabId, url: `${fx.origin}/slow-download` });
+    const started = await rowIn(r => r.filename === 'probe-slow.bin' && r.state === 'in-progress' && r.bytesReceived > 0, from, 15000);
+    if (started.at < 0) {
+        return 'row missing: no downloadsChanged push carried an in-progress probe-slow.bin row with bytes within 15 s';
+    }
+    if (!fx.requests.some(r => r.path === '/slow-download')) {
+        return 'the served request log holds no /slow-download request, so the download was not page-started';
+    }
+    const { id } = started.row;
+    const canceledReply = await channelRequest(app, { kind: 'webTabDownloadsAction', tabId, id, action: 'cancel' });
+    if (canceledReply?.where !== 'done') {
+        return `Cancel did not run (${JSON.stringify(canceledReply)})`;
+    }
+    const canceled = await rowIn(r => r.id === id && r.state === 'canceled', started.at, 10000);
+    if (canceled.at < 0) {
+        return 'Cancel did not reach a canceled row in a push within 10 s';
+    }
+    const retriedReply = await channelRequest(app, { kind: 'webTabDownloadsAction', tabId, id, action: 'retry' });
+    if (retriedReply?.where !== 'done') {
+        return `Retry did not run (${JSON.stringify(retriedReply)})`;
+    }
+    const finished = await rowIn(r => r.id === id && r.state === 'finished' && r.succeeded === true, canceled.at, 20000);
+    if (finished.at >= 0) {
+        return null;
+    }
+    const last = (await pushes(app)).filter(p => p.kind === 'downloadsChanged').flatMap(p => p.rows).filter(r => r.id === id).pop();
+    return `Retry did not restart the transfer to a finished row within 20 s (last row: ${JSON.stringify(last ?? null)})`;
+}
+
+/**
  * PROBE downloads-today: a page-started download of an attachment, observed
  * for 15 s. Records what happens today as a verdict; never a pass or fail.
  */
@@ -250,6 +325,7 @@ const SCENARIOS = {
     find: (app, fx) => scenarioFind(app, fx.origin),
     zoom: (app, fx) => scenarioZoom(app, fx.origin),
     audio: (app, fx) => scenarioAudio(app, fx.origin),
+    downloads: (app, fx) => scenarioDownloads(app, fx),
     'downloads-today': async (app, fx, downloadDir) => {
         const verdict = await probeDownloadsToday(app, fx.origin, fx.requests, downloadDir);
         await recordVerdict('downloads-today', verdict);
@@ -269,6 +345,12 @@ const PLANTS = [
         run: (app, fx) => scenarioFind(app, fx.origin, 'webTabFindDropped'),
         expect: 'no findMatches push',
     },
+    {
+        plant: 'silent-download',
+        target: 'downloads',
+        run: (app, fx) => scenarioDownloads(app, fx, { subscribe: false }),
+        expect: 'row missing',
+    },
 ];
 
 async function selfTest() {
@@ -278,12 +360,15 @@ async function selfTest() {
         return 1;
     }
     let failed = 0;
-    const control = await runSession('find-control', (app, fx) => scenarioFind(app, fx.origin));
-    if (control !== null) {
-        console.error(`${NAME} --self-test: FAIL -- the clean control for find is red: ${control}`);
-        return 1;
+    // One clean control per target scenario: a planted fault is only meaningful against its own green run.
+    for (const target of new Set(PLANTS.map(planted => planted.target))) {
+        const control = await runSession(`${target}-control`, (app, fx) => SCENARIOS[target](app, fx));
+        if (control !== null) {
+            console.error(`${NAME} --self-test: FAIL -- the clean control for ${target} is red: ${control}`);
+            return 1;
+        }
+        console.log(`  ok  clean control for ${target} -> green`);
     }
-    console.log('  ok  clean control for find -> green');
     for (const planted of PLANTS) {
         const got = await runSession(planted.plant, planted.run);
         if (!got || !got.includes(planted.expect)) {
