@@ -3,25 +3,30 @@
 //
 // The MON-01 gate (Phase 48, plan 48-04, NAME watchdog). The watchdog source docs/watchdog.yml is applied by
 // the owner to powerbrowser-updates at plan 48-05 and never to the product repository (D-77). This gate proves
-// the decision and the source's shape in the tree, offline:
+// the watchdog's decision and its source's shape in the tree, offline:
 //
-//  1. The decision. decideWatchdog over an in-memory run table: a run started 25 hours ago opens no issue; a run
-//     started 27 hours ago opens exactly one issue, with the run link and the timestamps; no run at all opens one
-//     issue naming the missing run; an open issue with the same title suppresses a second one.
+//  1. The decision, on the workflow's own shell. The `run:` bodies of the latest, decide and open steps are
+//     extracted from the YAML and run under bash with a stub gh on PATH, the step env resolved from the YAML's
+//     own env mapping. A run started 25 hours ago opens nothing; 27 hours opens exactly one issue carrying the
+//     run link and both timestamps and the fixed label; no run at all opens one issue naming the missing run;
+//     an open issue of the watchdog's own (bot author, fixed label, same title) suppresses a second; a stranger's
+//     same-title issue does not, because the dedupe query is by author and label (the stub records the argv and
+//     the gate asserts it). There is no JavaScript twin of the decision: what is tested is what runs.
 //  2. The source text, parsed with the repo's js-yaml (theia/): exactly the schedule and workflow_dispatch
 //     triggers (no workflow_run, so no unguarded wake), one schedule entry with cron 17 6 * * *, one job on
-//     ubuntu-latest, read-only permissions except issues write, no secret reference, no App token, the runs
-//     API read with per_page=1, the 26-hour threshold (-ge 93600), the fixed title, SHA-pinned uses:, and no
-//     github.event text in any run.
-//  3. The product repository. No file under .github/workflows carries a schedule key.
+//     ubuntu-latest, issues write as the only grant, no secret reference, no App token, the 26-hour threshold
+//     (-ge 93600), the fixed title and label, SHA-pinned uses:, and no github.event text in any run.
+//  3. The product repository. No workflow under .github/workflows has a schedule trigger (parsed, so
+//     `on: [push, schedule]` and `on: schedule` count).
 //
 // Usage:
 //   node scripts/verify-watchdog.mjs             the gate: prints "watchdog: PASS" when every check holds
-//   node scripts/verify-watchdog.mjs --self-test the control first (the real tree and fixtures), then the planted
-//                                                faults; each plant must go red naming its drift
+//   node scripts/verify-watchdog.mjs --self-test the control first (the real tree), then the planted faults;
+//                                                each plant must go red naming its drift
 // Any other argument: FAIL, exit 2.
 
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -34,9 +39,12 @@ const WATCHDOG_REL = 'docs/watchdog.yml';
 const WF_DIR = join(REPO_ROOT, '.github', 'workflows');
 export const WINDOW_HOURS = 26;
 export const TITLE = `release-train has not run in ${WINDOW_HOURS} h`;
+export const LABEL = 'release-train-watchdog';
+export const AUTHOR = 'app/github-actions';
 export const CRON = '17 6 * * *';
 export const RUNS_PATH = 'actions/workflows/release-train.yml/runs?per_page=1';
-const HOUR_MS = 3600000;
+const OWNER = 'DeBIOS-Foundation';
+const HOUR_S = 3600;
 const ALLOWED_TRIGGERS = Object.freeze(['schedule', 'workflow_dispatch']);
 const SHA_USE = /@[0-9a-f]{40}$/;
 
@@ -46,33 +54,6 @@ try {
 } catch {
     console.error(`${NAME}: FAIL -- broken instrument: js-yaml is not installed in theia/ (run yarn install in theia/ first)`);
     process.exit(1);
-}
-
-/**
- * The watchdog decision. latestStartedAtMs: the started_at of the newest release-train run in epoch ms, or null
- * when no run is recorded. openTitles: the titles of the open issues in this repository. Pure.
- * windowHours defaults to the 26-hour window; the self-test plants a different one.
- */
-export function decideWatchdog({ latestStartedAtMs, nowMs, openTitles = [], windowHours = WINDOW_HOURS }) {
-    if (openTitles.includes(`release-train has not run in ${windowHours} h`)) {
-        return { open: false, reason: `an open issue titled "${TITLE}" already exists, so no second one is opened` };
-    }
-    if (typeof latestStartedAtMs !== 'number' || !Number.isFinite(latestStartedAtMs)) {
-        return { open: true, reason: 'no release-train run is recorded in the product repository' };
-    }
-    const ageHours = (nowMs - latestStartedAtMs) / HOUR_MS;
-    if (ageHours >= windowHours) {
-        return { open: true, reason: `the last release-train run started ${ageHours.toFixed(1)} h ago, at or past ${windowHours} h` };
-    }
-    return { open: false, reason: `the last release-train run started ${ageHours.toFixed(1)} h ago, within ${windowHours} h` };
-}
-
-/** The issue body: the run link and both timestamps; a missing run is named as missing. Pure. */
-export function renderIssueBody(run, nowIso) {
-    if (run === null) {
-        return [TITLE, '', 'No release-train run is recorded in the product repository, so the train has never run or its history is gone.', '', `Checked at: ${nowIso}`, ''].join('\n');
-    }
-    return [TITLE, '', `Latest release-train run: ${run.html_url}`, `Run started at: ${run.run_started_at}`, `Checked at: ${nowIso}`, ''].join('\n');
 }
 
 /** The source text checks. Returns the failures, each naming its drift. Pure over the text. */
@@ -107,7 +88,7 @@ export function checkWatchdogText(text) {
         }
         for (const [scope, level] of Object.entries(perms)) {
             if (scope === 'contents' && level !== 'read') failures.push(`contents is ${level}, not read. Next step: the watchdog reads only.`);
-            if (scope !== 'contents' && scope !== 'issues') failures.push(`scope ${scope} is ${level}; the watchdog holds contents read and issues write in its own repository only. Next step: drop it.`);
+            if (scope !== 'contents' && scope !== 'issues') failures.push(`scope ${scope} is ${level}; the watchdog holds issues write in its own repository only. Next step: drop it.`);
             if (scope === 'issues' && level !== 'write' && level !== 'read') failures.push(`issues is ${level}. Next step: issues write is the only write.`);
         }
     }
@@ -117,6 +98,7 @@ export function checkWatchdogText(text) {
     if (!text.includes(RUNS_PATH)) failures.push(`the runs API read ${RUNS_PATH} is not present. Next step: read the product repository's newest release-train run.`);
     if (!text.includes(`-ge ${WINDOW_HOURS * 3600}`)) failures.push(`the ${WINDOW_HOURS}-hour threshold (-ge ${WINDOW_HOURS * 3600}) is not in the decision. Next step: set the window to ${WINDOW_HOURS} hours.`);
     if (!text.includes(TITLE)) failures.push(`the issue title "${TITLE}" is not present. Next step: restore the fixed title.`);
+    if (!text.includes(LABEL)) failures.push(`the fixed label ${LABEL} is not present. Next step: restore it; the dedupe filters on it.`);
     for (const job of jobs) {
         for (const step of job.steps ?? []) {
             if (typeof step.uses === 'string' && !SHA_USE.test(step.uses)) failures.push(`uses ${step.uses} is not pinned to a 40-hex SHA. Next step: pin it.`);
@@ -126,38 +108,171 @@ export function checkWatchdogText(text) {
     return failures;
 }
 
-/** The product repository carries no schedule key. dir: a .github/workflows directory. Pure over the files. */
+/** True when a workflow's `on:` has a schedule trigger, in string, list or mapping form. */
+function hasScheduleTrigger(on) {
+    if (typeof on === 'string') return on === 'schedule';
+    if (Array.isArray(on)) return on.includes('schedule');
+    return on !== null && typeof on === 'object' && 'schedule' in on;
+}
+
+/** The product repository carries no schedule trigger. dir: a .github/workflows directory. Pure over the files. */
 export function checkProductSchedules(dir) {
     const failures = [];
     for (const file of readdirSync(dir)) {
         if (!/\.ya?ml$/.test(file)) continue;
-        const text = readFileSync(join(dir, file), 'utf8');
-        if (/^\s*schedule\s*:/m.test(text)) failures.push(`${file} carries a schedule key: the product repository never schedules (D-77). Next step: remove it; the clock is the Worker.`);
+        let doc;
+        try {
+            doc = yaml.load(readFileSync(join(dir, file), 'utf8'));
+        } catch (e) {
+            failures.push(`${file} does not parse as YAML (${e.message}), so its triggers cannot be checked. Next step: fix the file.`);
+            continue;
+        }
+        if (hasScheduleTrigger(doc?.on)) failures.push(`${file} carries a schedule key: the product repository never schedules (D-77). Next step: remove it; the clock is the Worker.`);
     }
     return failures;
 }
 
-function controlFixtures() {
-    const now = Date.UTC(2026, 10, 1, 6, 17, 0);
-    const run = (hours) => ({ html_url: 'https://github.com/DeBIOS-Foundation/powerbrowser/actions/runs/42', run_started_at: new Date(now - hours * HOUR_MS).toISOString() });
-    return { now, run };
+// ---------------------------------------------------------------------------------------------
+// The decision, run as the workflow runs it.
+// ---------------------------------------------------------------------------------------------
+
+const STUB_GH = `#!/usr/bin/env bash
+# Stub gh for the watchdog gate: records argv, answers only what the watchdog asks.
+printf '%s\\n' "$*" >> "$STUB_LOG"
+case "$1" in
+  api) if [ -n "\${STUB_RUN:-}" ]; then printf '%s' "$STUB_RUN"; fi ;;
+  issue) if [ "$2" = "list" ]; then printf '%s' "\${STUB_COUNT:-0}"; fi ;;
+esac
+exit 0
+`;
+
+/** Resolve one ${{ }} value from the YAML's own env mapping against the outputs so far. */
+function resolveExpression(value, ctx) {
+    if (typeof value !== 'string') return String(value);
+    return value.replace(/\$\{\{\s*(.+?)\s*\}\}/g, (_, expr) => {
+        let m;
+        if ((m = /^steps\.([\w-]+)\.outputs\.([\w-]+)$/.exec(expr))) return ctx.outputs[m[1]]?.[m[2]] ?? '';
+        if (expr === 'github.token') return 'stub-token';
+        if (expr === 'github.repository_owner') return OWNER;
+        if ((m = /^vars\.(\w+) \|\| '([^']*)'$/.exec(expr))) return m[2];
+        throw new Error(`broken instrument: the gate cannot resolve \${{ ${expr} }}; teach resolveExpression about it`);
+    });
 }
 
-/** The decision controls (green when the decision is right). Returns the failures. */
-function decisionControls() {
-    const { now, run } = controlFixtures();
+function evalCondition(cond, ctx) {
+    if (cond === undefined) return true;
+    const m = /^\$\{\{\s*steps\.([\w-]+)\.outputs\.([\w-]+) == '(\w+)'\s*\}\}$/.exec(String(cond));
+    if (!m) throw new Error(`broken instrument: the gate cannot evaluate the step condition ${JSON.stringify(cond)}`);
+    return (ctx.outputs[m[1]]?.[m[2]] ?? '') === m[3];
+}
+
+/**
+ * Run the watchdog's steps under bash against a scenario and return what they did. scenario: { runHoursAgo: number
+ * | null (no run), openOwn: the count of the watchdog's own open issues the stub reports, authorUnset: bool }.
+ */
+export function runWatchdog(text, scenario) {
+    const doc = yaml.load(text);
+    const job = Object.values(doc.jobs)[0];
+    const dir = mkdtempSync(join(tmpdir(), 'watchdog-run-'));
+    try {
+        const bin = join(dir, 'bin');
+        const log = join(dir, 'gh.log');
+        const out = join(dir, 'github-output');
+        mkdirSync(bin);
+        writeFileSync(log, '');
+        writeFileSync(join(bin, 'gh'), STUB_GH);
+        chmodSync(join(bin, 'gh'), 0o755);
+        const nowS = Math.floor(Date.now() / 1000);
+        const run = scenario.runHoursAgo === null ? '' : JSON.stringify({
+            run_started_at: new Date((nowS - scenario.runHoursAgo * HOUR_S) * 1000).toISOString().replace('.000', ''),
+            html_url: 'https://github.com/DeBIOS-Foundation/powerbrowser/actions/runs/42',
+        });
+        const ctx = { outputs: {} };
+        const calls = [];
+        for (const step of job.steps) {
+            if (typeof step.run !== 'string') continue;
+            if (!evalCondition(step.if, ctx)) continue;
+            const env = {
+                PATH: `${bin}:${process.env.PATH}`,
+                HOME: dir,
+                RUNNER_TEMP: dir,
+                GITHUB_OUTPUT: out,
+                GITHUB_REPOSITORY: `${OWNER}/powerbrowser-updates`,
+                STUB_LOG: log,
+                STUB_RUN: run,
+                STUB_COUNT: String(scenario.openOwn ?? 0),
+            };
+            for (const [key, value] of Object.entries(step.env ?? {})) env[key] = resolveExpression(value, ctx);
+            if (scenario.authorUnset && 'WATCHDOG_AUTHOR' in env) env.WATCHDOG_AUTHOR = '';
+            writeFileSync(out, '');
+            // stdin is /dev/null, not the default socket pair: bash reads the system bashrc when stdin is a socket (rshd
+            // detection), and on NixOS that resets PATH, so the stub gh would be skipped.
+            const r = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], { env, encoding: 'utf8', cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+            const outputs = {};
+            for (const line of readFileSync(out, 'utf8').split('\n')) {
+                const i = line.indexOf('=');
+                if (i > 0) outputs[line.slice(0, i)] = line.slice(i + 1);
+            }
+            if (step.id) ctx.outputs[step.id] = outputs;
+            calls.push({ name: step.name, status: r.status, stderr: r.stderr });
+        }
+        const argv = readFileSync(log, 'utf8').split('\n').filter(l => l !== '');
+        const bodyPath = join(dir, 'watchdog-body.md');
+        return {
+            calls,
+            argv,
+            body: existsSync(bodyPath) ? readFileSync(bodyPath, 'utf8') : null,
+            created: argv.filter(l => l.startsWith('issue create')),
+            labelCreated: argv.filter(l => l.startsWith('label create')),
+        };
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+const unclean = r => r.calls.filter(c => c.status !== 0).map(c => `${c.name}: ${c.stderr.trim()}`).join(' | ');
+
+/** The decision scenarios over the workflow's own shell. Returns the failures. */
+export function decisionFailures(text) {
     const failures = [];
-    const silent25 = decideWatchdog({ latestStartedAtMs: now - 25 * HOUR_MS, nowMs: now });
-    if (silent25.open) failures.push(`a 25-hour silence opened an issue: ${silent25.reason}`);
-    const silent27 = decideWatchdog({ latestStartedAtMs: now - 27 * HOUR_MS, nowMs: now });
-    if (!silent27.open) failures.push(`a 27-hour silence opened no issue: ${silent27.reason}`);
-    const body27 = renderIssueBody(run(27), new Date(now).toISOString());
-    if (!body27.includes(run(27).html_url) || !body27.includes(run(27).run_started_at)) failures.push('the 27-hour issue body lacks the run link or the start timestamp');
-    const missing = decideWatchdog({ latestStartedAtMs: null, nowMs: now });
-    if (!missing.open || !missing.reason.includes('no release-train run is recorded')) failures.push(`a missing run did not open one issue naming it: ${missing.reason}`);
-    if (!renderIssueBody(null, new Date(now).toISOString()).includes('No release-train run is recorded')) failures.push('the missing-run issue body does not name the missing run');
-    const deduped = decideWatchdog({ latestStartedAtMs: now - 27 * HOUR_MS, nowMs: now, openTitles: [TITLE] });
-    if (deduped.open) failures.push('a second issue with the open title would be opened');
+    try {
+        let r = runWatchdog(text, { runHoursAgo: 25 });
+        if (unclean(r)) failures.push(`the 25-hour scenario did not run clean: ${unclean(r)}`);
+        if (r.created.length > 0) failures.push(`a 25-hour silence opened an issue (${r.created.length} gh issue create call(s)). Next step: the window is 26 hours.`);
+        const latest = r.argv.find(l => l.startsWith('api '));
+        const want = `api repos/${OWNER}/powerbrowser/${RUNS_PATH} `;
+        if (latest === undefined || !latest.startsWith(want)) failures.push(`the runs read was ${JSON.stringify(latest)}, not ${want.trim()}: the watchdog must read the product repository's newest release-train run. Next step: restore the runs path.`);
+
+        r = runWatchdog(text, { runHoursAgo: 27 });
+        if (unclean(r)) failures.push(`the 27-hour scenario did not run clean: ${unclean(r)}`);
+        if (r.created.length !== 1) failures.push(`a 27-hour silence opened ${r.created.length} issue(s), not one. Next step: open exactly one issue when the last run started 26 hours ago or more.`);
+        else {
+            const c = r.created[0];
+            if (!c.includes(`--title ${TITLE}`) || !c.includes(`--label ${LABEL}`)) failures.push(`the opened issue was not created with the fixed title and label: ${c}. Next step: restore --title and --label.`);
+            const body = r.body ?? '';
+            if (!body.includes('actions/runs/42') || !body.includes('Run started at:') || !body.includes('Checked at:')) failures.push('the 27-hour issue body lacks the run link or the timestamps. Next step: restore the body.');
+            if (r.labelCreated.length !== 1) failures.push('the fixed label is not created before the issue, so issue creation fails in a repository without it. Next step: gh label create --force before gh issue create.');
+        }
+        const list = r.argv.find(l => l.startsWith('issue list'));
+        if (list === undefined) failures.push('the dedupe never listed the open issues. Next step: restore the dedupe query.');
+        else {
+            if (!list.includes(`--author ${AUTHOR}`)) failures.push(`the dedupe query counts issues by any author (${list}): a stranger could open the title and silence the watchdog. Next step: filter --author ${AUTHOR}.`);
+            if (!list.includes(`--label ${LABEL}`)) failures.push(`the dedupe query does not filter on the fixed label ${LABEL} (${list}). Next step: filter --label.`);
+            if (!list.includes('--state open')) failures.push(`the dedupe query does not filter on open issues (${list}). Next step: filter --state open.`);
+        }
+
+        r = runWatchdog(text, { runHoursAgo: null });
+        if (r.created.length !== 1) failures.push(`a missing run opened ${r.created.length} issue(s), not one. Next step: a repository with no release-train run is silent too.`);
+        else if (!(r.body ?? '').includes('No release-train run is recorded')) failures.push('the missing-run issue body does not name the missing run. Next step: restore the missing-run body.');
+
+        r = runWatchdog(text, { runHoursAgo: 27, openOwn: 1 });
+        if (r.created.length > 0) failures.push('an open issue of the watchdog\'s own (deduped) still opened a second one. Next step: count the open issue and open nothing.');
+
+        r = runWatchdog(text, { runHoursAgo: 27, openOwn: 1, authorUnset: true });
+        if (r.created.length !== 1) failures.push(`with WATCHDOG_AUTHOR unset the watchdog opened ${r.created.length} issue(s), not one: an unset author must skip the dedupe and alert, never stay silent. Next step: guard the dedupe on a non-empty author.`);
+    } catch (e) {
+        failures.push(`the decision scenarios did not run (${e.message}). Next step: fix the watchdog's run bodies or the gate's step resolver.`);
+    }
     return failures;
 }
 
@@ -165,50 +280,80 @@ function realText() {
     return readFileSync(join(REPO_ROOT, WATCHDOG_REL), 'utf8');
 }
 
+function allFailures(text) {
+    return [...decisionFailures(text), ...checkWatchdogText(text), ...checkProductSchedules(WF_DIR)];
+}
+
 function gate() {
-    const failures = [...decisionControls(), ...checkWatchdogText(realText()), ...checkProductSchedules(WF_DIR)];
+    const failures = allFailures(realText());
     if (failures.length > 0) {
         failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- the 25-hour silence opens no issue, the 27-hour silence opens one with the run link, a missing run opens one naming it, the source is schedule-only with one 06:17 UTC cron, GITHUB_TOKEN read only, and the product repository carries no schedule key`);
+    console.log(`${NAME}: PASS -- the workflow's own shell, run under a stub gh, opens nothing at 25 hours, one issue with the run link at 27 hours, one naming the missing run, and none when its own issue is open (author and label query); the source is schedule-only with one 06:17 UTC cron, GITHUB_TOKEN, issues write only, and the product repository carries no schedule trigger`);
     return 0;
 }
 
 function selfTest() {
-    const controlFailures = [...decisionControls(), ...checkWatchdogText(realText()), ...checkProductSchedules(WF_DIR)];
+    const text = realText();
+    const controlFailures = allFailures(text);
     if (controlFailures.length > 0) {
         console.error(`${NAME}: --self-test FAIL -- the unmutated control is already red, so the planted results would mean nothing:`);
         controlFailures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log('  ok  control: the real source, the decision fixtures and the product repository -> green');
-    const { now, run } = controlFixtures();
-    const text = realText();
+    console.log('  ok  control: the real source under a stub gh, the source checks and the product repository -> green');
     const runStep = '    steps:\n';
+    // Each plant changes one rule of the real source. The decision plants are caught by the shell run, the source
+    // plants by the text checks; every plant calls the real function under test.
+    const edit = (find, replace) => {
+        if (text.split(find).length !== 2) throw new Error(`broken instrument: plant anchor ${JSON.stringify(find)} is not unique in ${WATCHDOG_REL}`);
+        return text.replace(find, replace);
+    };
+    const scheduleDir = (name, content) => {
+        const dir = mkdtempSync(join(tmpdir(), 'watchdog-wf-'));
+        try {
+            writeFileSync(join(dir, name), content);
+            return checkProductSchedules(dir);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    };
     const plants = [
-        { name: 'an unguarded workflow_run wake', run: () => checkWatchdogText(text.replace('on:\n  schedule:', 'on:\n  workflow_run:\n    workflows: [Verify static layers]\n  schedule:')), expect: 'trigger workflow_run is not allowed' },
-        { name: 'an event-text read in a run step', run: () => checkWatchdogText(text.replace(runStep, `${runStep}      - name: planted\n        run: echo "\${{ github.event.issue.title }}"\n`)), expect: 'github.event' },
-        { name: 'a secret reference', run: () => checkWatchdogText(text.replace('GH_TOKEN: ${{ github.token }}', 'GH_TOKEN: ${{ secrets.WATCHDOG_TOKEN }}')), expect: 'secrets.' },
-        { name: 'a drifted cron', run: () => checkWatchdogText(text.replace("cron: '17 6 * * *'", "cron: '17 7 * * *'")), expect: 'is not 17 6 * * *' },
-        { name: 'a 25-hour threshold in the decision', run: () => checkWatchdogText(text.replace('-ge 93600', '-ge 90000')), expect: 'the 26-hour threshold' },
-        { name: 'a product-repository schedule key', run: () => {
-            const dir = mkdtempSync(join(tmpdir(), 'watchdog-wf-'));
-            try {
-                writeFileSync(join(dir, 'verify.yml'), 'on:\n  schedule:\n    - cron: "0 0 * * *"\n');
-                return checkProductSchedules(dir);
-            } finally {
-                rmSync(dir, { recursive: true, force: true });
-            }
-        }, expect: 'carries a schedule key' },
-        { name: 'a 25-hour silence that opens an issue', run: () => {
-            const d = decideWatchdog({ latestStartedAtMs: now - 25 * HOUR_MS, nowMs: now, windowHours: 25 });
-            return d.open ? [`a 25-hour silence opens an issue under a 25-hour window: ${d.reason}`] : [];
-        }, expect: 'a 25-hour silence opens an issue' },
+        { name: 'an unguarded workflow_run wake', run: () => checkWatchdogText(edit('on:\n  schedule:', 'on:\n  workflow_run:\n    workflows: [Verify static layers]\n  schedule:')), expect: 'trigger workflow_run is not allowed' },
+        { name: 'an event-text read in a run step', run: () => checkWatchdogText(edit(runStep, `${runStep}      - name: planted\n        run: echo "\${{ github.event.issue.title }}"\n`)), expect: 'github.event' },
+        { name: 'a secret reference', run: () => checkWatchdogText(edit('GH_TOKEN: ${{ github.token }}\n          OWNER:', 'GH_TOKEN: ${{ secrets.WATCHDOG_TOKEN }}\n          OWNER:')), expect: 'secrets.' },
+        { name: 'a drifted cron', run: () => checkWatchdogText(edit("cron: '17 6 * * *'", "cron: '17 7 * * *'")), expect: 'is not 17 6 * * *' },
+        { name: 'a 25-hour threshold in the decision', run: () => checkWatchdogText(edit('-ge 93600', '-ge 90000')), expect: 'the 26-hour threshold' },
+        { name: 'a contents write scope', run: () => checkWatchdogText(edit('    permissions:\n      issues: write\n', '    permissions:\n      contents: write\n      issues: write\n')), expect: 'contents is write' },
+        { name: 'the fixed label dropped from the source', run: () => checkWatchdogText(text.split(LABEL).join('some-label')), expect: 'the fixed label' },
+        { name: 'a product-repository schedule key', run: () => scheduleDir('verify.yml', 'on:\n  schedule:\n    - cron: "0 0 * * *"\n'), expect: 'carries a schedule key' },
+        { name: 'a product-repository schedule inside an on: list', run: () => scheduleDir('verify.yml', 'on: [push, schedule]\njobs: {}\n'), expect: 'carries a schedule key' },
+        { name: 'a product-repository schedule as the only on: string', run: () => scheduleDir('verify.yml', 'on: schedule\njobs: {}\n'), expect: 'carries a schedule key' },
+        { name: 'the dedupe gate inverted (-gt 0 becomes -lt 0)', run: () => decisionFailures(edit('if [ "$OPEN_COUNT" -gt 0 ]', 'if [ "$OPEN_COUNT" -lt 0 ]')), expect: 'still opened a second one' },
+        { name: 'the dedupe removed', run: () => decisionFailures(edit('if [ "$OPEN_COUNT" -gt 0 ]; then OPEN=false; fi', ':')), expect: 'still opened a second one' },
+        { name: 'the dedupe counting issues by any author', run: () => decisionFailures(edit(' --author "$WATCHDOG_AUTHOR"', '')), expect: 'counts issues by any author' },
+        { name: 'the dedupe not filtering on the fixed label', run: () => decisionFailures(edit(' --label "$WATCHDOG_LABEL" --search', ' --search')), expect: 'does not filter on the fixed label' },
+        { name: 'the dedupe not filtering on open issues', run: () => decisionFailures(edit('--state open --author', '--author')), expect: 'does not filter on open issues' },
+        { name: 'an unset author leaving the watchdog silent', run: () => decisionFailures(edit('if [ -n "$WATCHDOG_AUTHOR" ]; then', 'if true; then')), expect: 'unset author must skip the dedupe' },
+        { name: 'the missing-run branch removed', run: () => decisionFailures(edit('[ -z "$AGE_S" ] || ', '')), expect: 'a missing run opened' },
+        { name: 'the open decision turned off (OPEN=true becomes OPEN=false)', run: () => decisionFailures(edit('then OPEN=true; fi', 'then OPEN=false; fi')), expect: 'a 27-hour silence opened' },
+        { name: 'the age subtraction reversed', run: () => decisionFailures(edit('$(( ($(date -u +%s) - $(date -u -d "$STARTED" +%s)) ))', '$(( ($(date -u -d "$STARTED" +%s) - $(date -u +%s)) ))')), expect: 'a 27-hour silence opened' },
+        { name: 'the open gate inverted', run: () => decisionFailures(edit("steps.decide.outputs.open == 'true'", "steps.decide.outputs.open == 'false'")), expect: 'a 25-hour silence opened an issue' },
+        { name: 'the runs path pointing at the wrong repository', run: () => decisionFailures(edit('powerbrowser/actions/workflows', 'powerbrowser-updates/actions/workflows')), expect: 'the runs read was' },
+        { name: 'the opened issue without its label', run: () => decisionFailures(edit(' --label "$WATCHDOG_LABEL" --body-file', ' --body-file')), expect: 'not created with the fixed title and label' },
+        { name: 'the fixed label never created', run: () => decisionFailures(edit('gh label create', ': gh label create')), expect: 'label is not created' },
     ];
     let failed = 0;
     for (const p of plants) {
-        const failures = p.run();
+        let failures;
+        try {
+            failures = p.run();
+        } catch (e) {
+            console.error(`${NAME}: --self-test FAIL -- '${p.name}' broke the instrument: ${e.message}`);
+            failed += 1;
+            continue;
+        }
         if (failures.some(f => f.includes(p.expect))) console.log(`  ok  ${p.name} -> red, naming '${p.expect}'`);
         else { console.error(`${NAME}: --self-test FAIL -- '${p.name}' did not go red naming '${p.expect}'; got: ${failures.join(' | ') || '(nothing)'}`); failed += 1; }
     }
@@ -216,7 +361,7 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- ${failed} plant(s) did not go red naming their drift`);
         return 1;
     }
-    console.log(`${NAME}: --self-test PASS -- ${plants.length} planted faults went red naming their drift, with the control green first (25-hour silence, 27-hour issue with the link, and missing-run cases proven)`);
+    console.log(`${NAME}: --self-test PASS -- ${plants.length} planted faults went red naming their drift, with the control green first (the decision runs on the workflow's own shell under a stub gh)`);
     return 0;
 }
 
