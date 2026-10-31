@@ -719,7 +719,13 @@ const FIXTURES = Object.freeze({ ...FIXTURES_153, ...UPTAKE_FIXTURES });
 
 // The sign-publish stale-approval predicate: the same comparator release.yml calls (exit 0 = the key is
 // newer than the latest Release and may sign). Run as a child process, so the predicate is the shipped one.
-const signGuardExit = (key, latest) => spawnSync(process.execPath, [resolve(REPO_ROOT, 'scripts/release-key-newer.mjs'), key, latest], { encoding: 'utf8' });
+// Exact exit codes: 0 sign, 1 equal or older, 2 not a release key. A spawn failure or a signal is neither (status null), so
+// it can never pass for a refusal: signGuardExit returns the code or throws.
+const signGuardExit = (key, latest) => {
+    const r = spawnSync(process.execPath, [resolve(REPO_ROOT, 'scripts/release-key-newer.mjs'), key, latest], { encoding: 'utf8' });
+    if (r.error !== undefined || r.status === null) throw new Error(`the comparator did not run to an exit code (${r.error?.message ?? `signal ${r.signal}`}). Next step: check scripts/release-key-newer.mjs.`);
+    return r.status;
+};
 
 /** Failures for a conflict decision that writes anything under the patch directory. Pure. */
 export function conflictWriteFailures(decision) {
@@ -873,16 +879,18 @@ function selfTest() {
             name: 'sign-job-newer-release-exit: a stale approval whose key is not newer than the latest published Release',
             // release.yml's newer_guard and newer_guard_final call the same comparator; a refusal must not be a proceed.
             run: () => {
-                const r = signGuardExit('v153.23.0-1', 'v153.23.0-2');
-                return r.status === 0 ? ['sign guard proceeds for v153.23.0-1 under latest v153.23.0-2'] : ['the latest published Release v153.23.0-2 is not older than v153.23.0-1 (comparator exit ' + r.status + '); nothing is signed'];
+                const code = signGuardExit('v153.23.0-1', 'v153.23.0-2');
+                if (code !== 1) return [`the comparator exited ${code}, not 1 (older), for v153.23.0-1 under latest v153.23.0-2`];
+                return [`the latest published Release v153.23.0-2 is not older than v153.23.0-1 (comparator exit ${code}); nothing is signed`];
             },
             expect: 'is not older than v153.23.0-1',
         },
         {
             name: 'sign-job-malformed-latest: a latest tag that is not a release key is never a proceed',
             run: () => {
-                const r = signGuardExit('v153.23.0-2', 'latest');
-                return r.status === 0 ? ['a malformed latest tag proceeded'] : [`the release key or the latest Release tag could not be compared (exit ${r.status}); nothing is signed`];
+                const code = signGuardExit('v153.23.0-2', 'latest');
+                if (code !== 2) return [`the comparator exited ${code}, not 2 (malformed), for latest tag 'latest'`];
+                return [`the release key or the latest Release tag could not be compared (exit ${code}); nothing is signed`];
             },
             expect: 'could not be compared',
         },
@@ -1066,8 +1074,8 @@ function selfTest() {
         {
             name: 'control: the sign guard proceeds on the newest key and refuses an equal key',
             run: () => {
-                const proceeds = signGuardExit('v153.23.0-2', 'v153.23.0-1').status === 0;
-                const refusesEqual = signGuardExit('v153.23.0-1', 'v153.23.0-1').status !== 0;
+                const proceeds = signGuardExit('v153.23.0-2', 'v153.23.0-1') === 0;
+                const refusesEqual = signGuardExit('v153.23.0-1', 'v153.23.0-1') === 1;
                 return proceeds && refusesEqual ? [] : ['the sign guard did not proceed on the newest key, or proceeded on an equal key'];
             },
         },
