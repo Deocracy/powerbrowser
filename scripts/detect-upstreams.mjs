@@ -56,6 +56,18 @@ const NODE_PLATFORM = 'linux-x64';
 
 const args = process.argv.slice(2);
 
+/** The CLI modes: --self-test, --pin, and --listing <file> [--firefox-esr <value>]. Anything else is null. */
+export function parseArgs(argv) {
+    if (argv.length === 0) return { mode: 'skip' };
+    if (argv.length === 1 && argv[0] === '--self-test') return { mode: 'self-test' };
+    if (argv.length === 1 && argv[0] === '--pin') return { mode: 'pin' };
+    if (argv[0] === '--listing' && argv.length >= 2 && argv[1] !== '') {
+        if (argv.length === 2) return { mode: 'listing', path: argv[1], firefoxEsr: undefined };
+        if (argv.length === 4 && argv[2] === '--firefox-esr' && argv[3] !== '') return { mode: 'listing', path: argv[1], firefoxEsr: argv[3] };
+    }
+    return null;
+}
+
 /** The ESR version and numeric tuple of an *esr_RELEASE tag, or null. */
 export function tagToVersion(tag) {
     const m = typeof tag === 'string' ? ESR_RELEASE_TAG.exec(tag) : null;
@@ -231,8 +243,35 @@ function summarize(result) {
     return `pin ${e.pin}; ${candidate}`;
 }
 
-function main() {
-    if (args.includes('--self-test')) return selfTest();
+function main(parsed) {
+    if (parsed.mode === 'self-test') return selfTest();
+    if (parsed.mode === 'pin') {
+        const derived = derivePin(REPO_ROOT, {});
+        if (derived.failures.length > 0) {
+            derived.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
+            return 1;
+        }
+        console.log(derived.pin);
+        return 0;
+    }
+    if (parsed.mode === 'listing') {
+        let text;
+        try {
+            text = readFileSync(parsed.path, 'utf8');
+        } catch (e) {
+            console.error(`${NAME}: FAIL -- the tag listing ${parsed.path} could not be read (${e.code ?? e.message}). Next step: check the detect job's listing step, then re-run.`);
+            return 1;
+        }
+        const tags = text.split('\n').map(t => t.trim()).filter(t => t !== '');
+        const result = runChecks(REPO_ROOT, { tags, firefoxEsr: parsed.firefoxEsr });
+        result.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
+        if (result.failures.length > 0) return 1;
+        result.notes.forEach(n => console.log(`${NAME}: NOTE -- ${n}`));
+        console.log(`${NAME}: PASS -- ${summarize(result)}`);
+        console.log(`candidate=${result.decision.esr.candidate?.tag ?? ''}`);
+        return 0;
+    }
+    // Default run: the live listing is the detect job's, so this run SKIPs it.
     const result = runChecks(REPO_ROOT);
     for (const s of result.skipped) console.log(`${NAME}: SKIP -- ${s}`);
     if (result.failures.length > 0) {
@@ -324,12 +363,11 @@ function selfTest() {
 
 // Run only as the entry point, so importing the exports (release-train.mjs does) has no side effects.
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    for (const a of args) {
-        if (a !== '--self-test') {
-            console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
-            console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the decisions discriminate.`);
-            process.exit(2);
-        }
+    const parsed = parseArgs(args);
+    if (parsed === null) {
+        console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
+        console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --pin, or node ${SELF_REL} --listing <file>.`);
+        process.exit(2);
     }
-    process.exit(main());
+    process.exit(main(parsed));
 }

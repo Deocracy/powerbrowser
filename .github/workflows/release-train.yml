@@ -1,0 +1,251 @@
+# The release train reconciler (Phase 43, TRAIN-01). Each run wakes, re-derives
+# the state of the release from facts, makes at most one transition per release
+# per run, re-renders the tracking view, and exits. Nothing is remembered between
+# runs: the tracking issue is a view, never an input.
+#
+# Wake sources. workflow_dispatch carries the reason (tick from the scheduler
+# clock, owner, or self) and the dry-run switch. The hourly clock is the start
+# (the phase goal). The planned workflow_run wake on a completed Verify static
+# layers run is held out pending the owner's decision (see BLOCKED.md). There is
+# deliberately no schedule key here (D-77): the Worker clock dispatches this
+# workflow.
+#
+# Jobs. derive validates the inputs and proves the pure logic on fixtures before
+# anything acts. detect lists the ESR release tags under the pinned major and
+# decides the bump. bump calls rebase-upstream.yml, the one replay definition,
+# with the candidate tag. bump-pr opens or updates chore/esr-<tag> in the bot
+# environment. report owns the only issues write in this file.
+#
+# Not here yet: the live GitHub facts behind derive (open PRs, check runs, the
+# Release list) are fixture-backed until plan 43-03 wires them, the Node 24
+# detector job lands in plan 43-04, release.yml joins the wake list and the
+# release-stage states arrive with Phase 50, and the maintenance sweep is Phase 48.
+#
+# Dry-run. Every step that commits, opens, comments or dispatches carries
+# inputs.dry-run in its if: and prints what it would write instead. A dry run
+# still validates, decides and replays, because the replay writes nothing outside
+# the runner.
+#
+# Trust. Every job carries the same-repository guard for a workflow_run wake, no
+# job holds a secret except bump-pr, and every dispatched value is validated first.
+
+name: Release train
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why the train woke: tick (the scheduler clock), owner, or self"
+        required: true
+        type: string
+      dry-run:
+        description: "Validate, decide and render; commit, open, comment and dispatch nothing"
+        required: false
+        type: boolean
+        default: false
+      release:
+        description: "Release key v<ESR>-<revision> to act on (optional)"
+        required: false
+        type: string
+      tag:
+        description: "ESR release tag to bump to (optional; never a _BUILDn tag)"
+        required: false
+        type: string
+  # workflow_run: ['Verify static layers'] is HELD OUT. zizmor's dangerous-triggers
+  # audit flags it, and the repo rule forbids suppressing that finding. The owner
+  # decides whether to re-add it; see the phase BLOCKED.md. The guards below stay
+  # in place so re-adding the trigger is the only change needed.
+
+permissions: {}
+
+concurrency:
+  group: release-train
+
+jobs:
+  derive:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      reason: ${{ steps.validate.outputs.reason }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Validate the dispatched inputs
+        id: validate
+        env:
+          EVENT: ${{ github.event_name }}
+          REASON: ${{ inputs.reason }}
+          TAG: ${{ inputs.tag }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          set -eu
+          # A workflow_run wake carries no dispatched reason; it is a self wake.
+          if [ "$EVENT" = "workflow_run" ]; then REASON=self; fi
+          case "$REASON" in
+            tick|owner|self) ;;
+            *) echo "release-train: FAIL -- reason must be tick, owner or self, got '$REASON'. Next step: dispatch with one of those." >&2; exit 1 ;;
+          esac
+          if [ -n "$TAG" ]; then
+            case "$TAG" in
+              *_BUILD*) echo "release-train: FAIL -- tag '$TAG' is a _BUILDn candidate, which is never a release. Next step: dispatch an *esr_RELEASE tag." >&2; exit 1 ;;
+            esac
+            printf '%s\n' "$TAG" | grep -Eq '^[A-Za-z]+_[0-9]+_[0-9]+(_[0-9]+)?esr_RELEASE$' \
+              || { echo "release-train: FAIL -- tag '$TAG' is not an *esr_RELEASE tag. Next step: dispatch an *esr_RELEASE tag." >&2; exit 1; }
+          fi
+          if [ -n "$RELEASE" ]; then
+            printf '%s\n' "$RELEASE" | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?-[0-9]+$' \
+              || { echo "release-train: FAIL -- release '$RELEASE' is not a release key v<ESR>-<revision>. Next step: dispatch the key as shown on the tracking issue." >&2; exit 1; }
+            echo "release-train: NOTE -- the release key is shape-checked only; the greater-than-latest Release check lands with live Releases in Phase 50." >&2
+          fi
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+
+      - name: Prove the train logic on fixtures before acting
+        run: node scripts/release-train.mjs --self-test
+
+      - name: Prove the detector on fixtures before acting
+        run: node scripts/detect-upstreams.mjs --self-test
+
+  detect:
+    needs: derive
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      candidate: ${{ steps.decide.outputs.candidate }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Read the pin from configuration.toml
+        id: pin
+        run: |
+          echo "pin=$(node scripts/detect-upstreams.mjs --pin)" >> "$GITHUB_OUTPUT"
+
+      # The listing is a live fetch of the upstream's tags. A dry run prints the
+      # fetch it would make and lists nothing; the decision below then sees no
+      # candidate and the bump is skipped, so a dry run never replays a live tag.
+      - name: List the ESR release tags under the pinned major (skipped in dry-run)
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+          PIN: ${{ steps.pin.outputs.pin }}
+          REMOTE: https://github.com/mozilla-firefox/firefox.git
+        run: |
+          set -eu
+          MAJOR=$(printf '%s\n' "$PIN" | sed -n 's/^[A-Za-z]*_\([0-9]*\)_.*/\1/p')
+          : > "$RUNNER_TEMP/tags.txt"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry-run: would run git ls-remote --tags --refs against the upstream and keep refs/tags/FIREFOX_${MAJOR}_*esr_RELEASE, deciding against pin $PIN"
+            exit 0
+          fi
+          git ls-remote --tags --refs "$REMOTE" \
+            | sed -n 's#.*refs/tags/##p' \
+            | grep -E "^FIREFOX_${MAJOR}_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" > "$RUNNER_TEMP/tags.txt" || true
+
+      - name: Read the product-details advisory value (skipped in dry-run)
+        id: advisory
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -eu
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry-run: would read FIREFOX_ESR from product-details (advisory only)"
+            exit 0
+          fi
+          VALUE=$(curl -fsSL https://product-details.mozilla.org/1.0/firefox_versions.json \
+            | node -e 'let s = ""; process.stdin.on("data", d => s += d).on("end", () => console.log(JSON.parse(s).FIREFOX_ESR))')
+          echo "esr=$VALUE" >> "$GITHUB_OUTPUT"
+
+      - name: Decide the bump
+        id: decide
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+          ADVISORY: ${{ steps.advisory.outputs.esr }}
+        run: |
+          set -eu
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry-run: would decide the bump from the listing; no candidate is carried into the replay"
+            echo "candidate=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$ADVISORY" ]; then
+            OUT=$(node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --firefox-esr "$ADVISORY")
+          else
+            OUT=$(node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt")
+          fi
+          printf '%s\n' "$OUT"
+          printf '%s\n' "$OUT" | grep '^candidate=' >> "$GITHUB_OUTPUT"
+
+  bump:
+    needs: [derive, detect]
+    if: ${{ (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) && needs.detect.outputs.candidate != '' }}
+    # The replay is the one definition in rebase-upstream.yml. It writes nothing
+    # outside the runner, so it runs in a dry run too; the publishing step is gated.
+    uses: ./.github/workflows/rebase-upstream.yml
+    with:
+      tag: ${{ needs.detect.outputs.candidate }}
+    permissions:
+      contents: read
+
+  bump-pr:
+    needs: [derive, detect, bump]
+    if: ${{ (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) && needs.bump.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: bot
+    permissions: {}
+    steps:
+      - name: Print the branch and PR this run would open (dry-run)
+        if: ${{ inputs.dry-run }}
+        env:
+          CANDIDATE: ${{ needs.detect.outputs.candidate }}
+        run: |
+          echo "dry-run: would open or update chore/esr-${CANDIDATE} with the pin move, the regenerated files and the replayed patches, and open its PR"
+
+      # The App-token branch and PR steps land in plan 43-04. Until then a live run
+      # that reaches this step refuses to act, so no run reports green while it
+      # has opened nothing.
+      - name: Refuse the live PR path until it is wired
+        if: ${{ !inputs.dry-run }}
+        run: |
+          echo "release-train: FAIL -- the bot PR path is not wired yet (plan 43-04). Next step: dispatch with dry-run until that plan lands." >&2
+          exit 1
+
+  report:
+    needs: [derive, detect, bump, bump-pr]
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - name: Report what this run decided
+        env:
+          REASON: ${{ needs.derive.outputs.reason }}
+          CANDIDATE: ${{ needs.detect.outputs.candidate }}
+          BUMP: ${{ needs.bump.result }}
+          BUMP_PR: ${{ needs.bump-pr.result }}
+        run: |
+          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} bump=${BUMP} bump-pr=${BUMP_PR}"
+
+      - name: Print the tracking issue this run would write (dry-run)
+        if: ${{ inputs.dry-run }}
+        run: |
+          echo "dry-run: would find or create the release-train tracking issue and render it from facts; nothing is written"
+
+      # The tracking-issue writer lands in plan 43-03. A live run with a candidate
+      # refuses to act rather than leave the release without its tracking view.
+      - name: Refuse the live tracking-issue write until it is wired
+        if: ${{ !inputs.dry-run && needs.detect.outputs.candidate != '' }}
+        run: |
+          echo "release-train: FAIL -- the tracking-issue writer is not wired yet (plan 43-03). Next step: dispatch with dry-run until that plan lands." >&2
+          exit 1
