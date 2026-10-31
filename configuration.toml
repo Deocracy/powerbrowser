@@ -93,6 +93,12 @@ update = "https://updates.powerbrowser.org/update.xml"
 release_notes = "https://github.com/Deocracy/powerbrowser/releases"
 homepage = "https://powerbrowser.org"
 
+# mar_origin is the primary MAR origin (owner ruling 2026-10-29): the host the update
+# descriptor's patch URLs name, <mar_origin>/<tag>/<asset>. It is https and names only a
+# host, with no path, port, query or trailing slash; generate refuses any other value by
+# name. It is never a click destination. Unset is recorded as null in the release manifest.
+mar_origin = "https://downloads.powerbrowser.org"
+
 # Product telemetry (TEL-01/TEL-02). level is one of off, crash, error, all
 # and defaults to off: an unset level resolves to off with the standard
 # D-08 default-echo, so a downstream omitting it inherits off rather than

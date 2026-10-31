@@ -4788,6 +4788,54 @@ run_own_checks() {
     # and the bot-job-gate rule (an environment-bound job with no negated job-level dry-run gate);
     # each red naming file and job. It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
+    # NEW (Phase 49, DIST-02): the release.yml shape the workflows row does not cover. Dispatch
+    # only with a required sha input; build-linux on the release runner label with no environment
+    # and no secret; the SHA-ancestor and key>tag gates before the first build step; retention-days
+    # 1 on every upload; no cache. Honestly --quick: YAML parsing (js-yaml from theia/) and file
+    # reads only; no build, browser, display or network.
+    "release-shape|node $REPO_ROOT/scripts/verify-release-shape.mjs"
+    # release-shape also pins the least-privilege invariant structurally (Phase 49 review): legion
+    # permissions exactly contents: read at workflow and job level, no secrets word in any form, no
+    # token input, only the workspace and the Safe Browsing key directory (the one recorded exception,
+    # an API key shipped in the binary) mounted; every build-linux step after the key gate carries its
+    # output as if:; sign-publish takes its commit from inputs.sha, re-gates, derives the key and
+    # builds signmar from the pinned source (the pin's tag equals configuration.toml); one concurrency
+    # group; the first step refuses any ref but main.
+    # release-shape-self-test plants one fault per rule in memory over the real release.yml text and
+    # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
+    # the file, the rule and the fault.
+    "release-shape-self-test|node $REPO_ROOT/scripts/verify-release-shape.mjs --self-test"
+    # NEW (Phase 49, SEC-07): the sign-publish channel gate. mar_channel_gate refuses a MAR whose
+    # product-info channel is not ACCEPTED_MAR_CHANNEL_IDS, cross-checks the `--channel` value against
+    # MOZ_UPDATE_CHANNEL, and never compares the MAR id with the update channel; signmar -s runs
+    # before signmar -v, and the verification uses the tracked DER. The comparands derive from
+    # generate.mjs updateChannel(). Honestly --quick: file reads and YAML parsing only.
+    "mar-channel-gate|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs"
+    # mar-channel-gate-self-test plants twelve faults in memory over the real release.yml text: a
+    # foreign-channel MAR accepted, the gate comparing the MAR id with --channel, a verification
+    # against a non-tracked DER, a dropped independent node:crypto check, a mismatch branch or
+    # cross-check without its exit 1, continue-on-error, `|| true` after signmar -v, an if: on the
+    # sign step, a runner-supplied signer, and a sign-before-verify swap. Each goes red naming the
+    # file and the fault. It writes nothing.
+    "mar-channel-gate-self-test|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs --self-test"
+    # NEW (Phase 49, DIST-07): the draft asset set equals the manifest-derived set (versioned and
+    # stable tarball and MAR, SHA256SUMS, the notices and the source tarball) as set equality, and
+    # the equality runs before the single publish, the bot App token is minted immediately before
+    # the publish, and no --generate-notes appears. Honestly --quick: file reads and YAML parsing;
+    # the live draft list is compared by the release job, never here.
+    "release-asset-set|node $REPO_ROOT/scripts/verify-release-asset-set.mjs"
+    # release-asset-set-self-test plants a dropped asset, an extra asset, a stable-name drift, a
+    # versioned-name drift, a publish-before-equality order, a fail-open publish chain, a missing R2
+    # gate, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
+    # step. It writes nothing.
+    "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
+    # NEW (Phase 49 review WR-09): the one key comparator behind the key>tag gate and the stale-approval
+    # guard. Exit 0 newer, 1 not newer, 2 an unparseable key or tag (an error, never "not newer").
+    "release-key-newer-self-test|node $REPO_ROOT/scripts/release-key-newer.mjs --self-test"
+    # NEW (Phase 49 review BL-01): the node:crypto MAR signature check run after signmar -v, independent
+    # of the signer. Its self-test builds signed MARs in memory and plants a flipped data byte, a flipped
+    # signature byte, another key, a changed algorithm id, zero signatures, truncation and bad magic.
+    "mar-signature-self-test|node $REPO_ROOT/scripts/verify-mar-signature.mjs --self-test"
     # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ at its default persona,
     # green only on exit 0. Honestly --quick, offline audit; the zizmor binary comes from the
     # theia shell or is self-provided through nix develop on first use, and absent tooling fails

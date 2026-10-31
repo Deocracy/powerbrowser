@@ -1396,6 +1396,35 @@ export function updateChannel(config) {
 }
 
 /**
+ * The primary MAR origin: [urls] mar_origin, the host the update descriptor's patch URLs
+ * name as <mar_origin>/<tag>/<asset> (owner ruling 2026-10-29). It is an https origin
+ * that names only a host: no path, port, query, fragment, userinfo or trailing slash.
+ * Unset returns null, and the release manifest then records null so the descriptor's
+ * form gate fails closed. Any other value is refused here by name, as urls.update is.
+ */
+export function marOrigin(config) {
+    const raw = config.urls?.mar_origin;
+    if (isUnset(raw)) return null;
+    const value = assertEmittable('urls.mar_origin', raw);
+    let hostOnly = false;
+    try {
+        const u = new URL(value);
+        hostOnly = u.protocol === 'https:' && u.pathname === '/' && u.search === '' && u.hash === ''
+            && u.username === '' && u.password === '' && u.port === ''
+            && value === `https://${u.hostname}`;
+    } catch {
+        hostOnly = false;
+    }
+    if (!hostOnly) {
+        report([
+            `urls.mar_origin is ${JSON.stringify(value)}, which is not an https origin that names only a host. `
+            + `Write it as [urls] mar_origin in ${MANIFEST_NAME}, for example "https://downloads.example.org", then run: ${RERUN}`,
+        ]);
+    }
+    return value;
+}
+
+/**
  * The root .mozconfig: the shared generated-from banner, a blank line, then
  * thirteen lines against the file Phase 1 wrote by hand.
  *
@@ -2855,6 +2884,9 @@ export function emitVersionTxt(config, variant) {
 }
 export function emitReleaseTxt(config, variant) {
     void variant;
+    // The release path reads mar_origin only after a 50-minute build (package-linux.sh); refuse a bad
+    // value here, in generate and generate --check, before any build (review WR-04).
+    marOrigin(config);
     return `${releaseIdentity(config).releaseKey}\n`;
 }
 

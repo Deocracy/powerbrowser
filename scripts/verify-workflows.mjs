@@ -30,9 +30,11 @@
 //                 Anything else is red, a bare self-hosted included: legion
 //                 carries the default self-hosted, linux and x64 labels.
 //                 Jobs with a job-level uses: have no runs-on and are exempt.
-//  legion         A legion job is release.yml with a job id build-* or
-//                 matrix-*, with no environment key, no `secrets.` in the
-//                 job or the workflow-level env, and no `secrets: inherit`.
+//  legion         A legion job carries a legion label: legion or the release
+//                 runner label powerbrowser-release. It is release.yml with a
+//                 job id build-* or matrix-*, with no environment key, no
+//                 `secrets.` in the job or the workflow-level env, and no
+//                 `secrets: inherit`.
 //  claude-code-action  A step using anthropics/claude-code-action@ needs a
 //                 hosted job, no actions/create-github-app-token@ step in the
 //                 same job, and effective contents other than write.
@@ -150,6 +152,9 @@ const FIXER_REFUSED_FLAGS = {
 };
 const SCOPES = ['actions', 'attestations', 'checks', 'contents', 'deployments', 'discussions', 'id-token', 'issues', 'models', 'packages', 'pages', 'pull-requests', 'repository-projects', 'security-events', 'statuses'];
 const HOSTED = /^(ubuntu|windows|macos)-[\w.-]+$/;
+// The legion label set: the generic legion label and the release runner label that
+// plan 49-01 registers the self-hosted runner under.
+const LEGION_LABELS = ['legion', 'powerbrowser-release'];
 const GUARD = 'github.event.workflow_run.head_repository.full_name == github.repository';
 const EVENT_TEXT = /\$\{\{[^}]*\bgithub\.event\.(issue|comment|pull_request|head_commit|review)/;
 const TRIO = ['contents', 'id-token', 'attestations'];
@@ -423,7 +428,7 @@ function runChecks(root, overrides = {}) {
                     fail(rel, jobId, 'runner', `has no runs-on. Next step: give it one GitHub-hosted label such as ubuntu-latest.`);
                 } else if (l.dynamic) {
                     fail(rel, jobId, 'runner', `runs-on ${shown}: runs-on must be literal so its runner is decidable. Next step: write the label out.`);
-                } else if (l.labels.includes('legion')) {
+                } else if (l.labels.some(x => LEGION_LABELS.includes(x))) {
                     if (!(file === 'release.yml' && /^(build|matrix)-/.test(jobId))) {
                         fail(rel, jobId, 'legion', `runs on legion (runs-on ${shown}), which is admitted only on release.yml jobs named build-* or matrix-*. Next step: run it on a GitHub-hosted label.`);
                     }
@@ -620,19 +625,24 @@ function selfTest() {
     }
     const H40 = 'abcdef0123456789abcdef0123456789abcdef01';
     const rel = f => `${WF_DIR}/${f}`;
-    // The good release.yml: build-linux on legion with contents read and no
-    // environment, sign-publish hosted with environment release and the trio.
+    // The good release.yml, the 4-job shape: dispatch only with a required sha input;
+    // build-linux on the release runner label with contents read and no environment;
+    // sign-publish hosted with environment release and the trio; descriptor and
+    // channel-live hosted, with no trio. The upload step carries retention-days 1.
     const R = 'release.yml';
     const GOOD_RELEASE = [
         'name: Release',
         'on:',
-        '  push:',
-        '    tags: ["v*"]',
+        '  workflow_dispatch:',
+        '    inputs:',
+        '      sha:',
+        '        required: true',
+        '        type: string',
         'permissions:',
         '  contents: read',
         'jobs:',
         '  build-linux:',
-        '    runs-on: [self-hosted, legion]',
+        '    runs-on: [self-hosted, powerbrowser-release]',
         '    permissions:',
         '      contents: read',
         '    steps:',
@@ -640,6 +650,9 @@ function selfTest() {
         '        with:',
         '          persist-credentials: false',
         '      - run: echo build',
+        `      - uses: actions/upload-artifact@${H40}`,
+        '        with:',
+        '          retention-days: 1',
         '  sign-publish:',
         '    needs: build-linux',
         '    runs-on: ubuntu-latest',
@@ -650,10 +663,25 @@ function selfTest() {
         '      attestations: write',
         '    steps:',
         '      - run: echo publish',
+        '  descriptor:',
+        '    needs: sign-publish',
+        '    runs-on: ubuntu-latest',
+        '    environment: descriptor',
+        '    permissions:',
+        '      contents: read',
+        '    steps:',
+        '      - run: echo descriptor',
+        '  channel-live:',
+        '    needs: descriptor',
+        '    runs-on: ubuntu-latest',
+        '    permissions:',
+        '      contents: read',
+        '    steps:',
+        '      - run: echo live',
         '',
     ].join('\n');
     const base = { ...files, [R]: GOOD_RELEASE };
-    const BUILD = '  build-linux:\n    runs-on: [self-hosted, legion]\n';
+    const BUILD = '  build-linux:\n    runs-on: [self-hosted, powerbrowser-release]\n';
     const job = (id, lines) => `  ${id}:\n${lines.map(l => `    ${l}`).join('\n')}\n`;
     const with_ = (extra) => ({ files: { ...base, ...extra } });
     const edit = (file, from, to) => {
@@ -809,7 +837,7 @@ function selfTest() {
         ['issues write through permissions: write-all', edit(V, V_PERMS, '    permissions: write-all\n'), rel(V), 'verify', 'issues-write', 'issues write'],
         ['issues write through the repository default write', { files: { ...base, 'plain.yml': plain(null) }, defaultPermissions: 'write' }, rel('plain.yml'), 'plain', 'issues-write', 'issues write'],
         ['write trio in job publish (not sign-publish)', append(R, job('publish', ['runs-on: ubuntu-latest', 'permissions:', '  contents: write', '  id-token: write', '  attestations: write', 'steps:', '  - run: echo x'])), rel(R), 'publish', 'write-trio', 'sign-publish'],
-        ['pull_request on release.yml', edit(R, 'on:\n  push:', 'on:\n  pull_request:\n  push:'), rel(R), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
+        ['pull_request on release.yml', edit(R, 'on:\n  workflow_dispatch:', 'on:\n  pull_request:\n  workflow_dispatch:'), rel(R), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
         ['pull_request_target on release-train.yml', with_({ 'release-train.yml': plain(null).replace('on: workflow_dispatch', 'on: [workflow_dispatch, pull_request_target]') }), rel('release-train.yml'), WF_LEVEL, 'no-pr-trigger', 'pull_request_target'],
         ['actions/cache in release.yml', edit(R, '      - run: echo build\n', `      - uses: actions/cache@${H40}\n      - run: echo build\n`), rel(R), 'build-linux', 'no-cache', 'actions/cache'],
         ['setup-node with cache: in release.yml', edit(R, '      - run: echo build\n', `      - uses: actions/setup-node@${H40}\n        with:\n          cache: yarn\n      - run: echo build\n`), rel(R), 'build-linux', 'no-cache', 'cache input'],

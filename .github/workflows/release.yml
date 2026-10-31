@@ -1,0 +1,449 @@
+# Release pipeline (DIST-02 skeleton; DIST-07, DIST-08, DIST-09, UPD-17 detail in later plans).
+#
+# One owner-approved dispatch runs four jobs in order:
+#   build-linux   self-hosted legion runner. No environment, no secret, no App token;
+#                 the default read-only GITHUB_TOKEN is the only token it sees. Its output
+#                 (tarball, MAR, manifest) is untrusted DATA: no later job executes it, and
+#                 nothing it prints decides anything for a job that holds a secret or a write token.
+#   sign-publish  the only hosted job holding the write trio, under environment release. It
+#                 re-runs the SHA gate on its own checkout of the dispatched sha, derives the
+#                 release key from that tree and refuses a manifest that disagrees, builds signmar
+#                 from the pinned Firefox source (scripts/build-signmar.sh, never from legion), and
+#                 gives the write token and the signing key only to the steps that need them.
+#   descriptor    under environment descriptor (owner reviewer plus the wait timer).
+#   channel-live  last; reads the public channel back, contents read only.
+#
+# Two gates run first in build-linux, before any compile. The SHA gate accepts the tip
+# of main or a configuration.toml-changing ancestor whose .github/workflows/ equals
+# main's. The key gate exits the run without building when the derived release key is
+# not strictly greater than the latest published Release tag (scripts/release-key-newer.mjs);
+# an unparseable tag is an error, never "not newer". Every build-linux step after the key
+# gate carries the key gate's output as its if:. The first step of build-linux and of
+# sign-publish refuses any ref but refs/heads/main and any event but workflow_dispatch; plan
+# 49-02's runner hook is the real control, this is defence in depth.
+#
+# Dispatch is the only trigger. Nothing here runs on a branch event, a tag event or a
+# timer, and the release-shape row (scripts/verify-release-shape.mjs) reads this text and
+# goes red on any other trigger. One release at a time: the concurrency group release never
+# cancels a run, and a stale draft for the same tag is replaced inside sign-publish.
+#
+# The one credential-shaped input legion can read is the Safe Browsing API key directory
+# PB_KEYDIR, mounted read-only into the build container. It is an API key that ships inside the
+# binary, not a signing or publishing credential, and it is the single explicit exception to
+# "legion holds no secret"; the release-shape row allows exactly that mount and nothing else.
+#
+# sign-publish ends in a deliberate failure BEFORE the bot token is minted, until plan 49-05 adds
+# the R2 copy of each signed MAR (DIST-08: the origin is populated before any Release is public)
+# and replaces that step. Until then a dispatch leaves a verified draft and publishes nothing,
+# and descriptor and channel-live end in a deliberate failure too. A release therefore cannot
+# publish a partial result, and a failed run can be re-dispatched at the same key.
+# Artifact names are unique per run: a re-run of one job conflicts with the stale artifact unless
+# upload-artifact overwrites it (it does), but start a fresh dispatch after a late failure.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "main commit to release: the tip of main, or a configuration.toml-changing ancestor whose .github/workflows/ equals main's"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    runs-on: [self-hosted, powerbrowser-release]
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.key_gate.outputs.build }}
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      # A full SHA only: a branch or tag name could resolve differently in checkout and in the gate.
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      - name: Check out the requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the release SHA (main tip, or a configuration.toml ancestor with main's workflows)
+        id: sha_gate
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          TIP="$(git rev-parse refs/remotes/origin/main)"
+          # Gate the commit actually checked out, and require it to be the one requested.
+          SHA="$(git rev-parse HEAD)"
+          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA" >&2; exit 1; }
+          if [ "$SHA" != "$TIP" ]; then
+            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main" >&2; exit 1; }
+            git show --name-only --format= "$SHA" | grep -x 'configuration.toml' >/dev/null \
+              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main" >&2; exit 1; }
+            git diff --quiet "$SHA" "$TIP" -- .github/workflows/ \
+              || { echo "::error::.github/workflows/ at $SHA differs from main; the bot App cannot create a Release for that target" >&2; exit 1; }
+          fi
+          echo "validated $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether the release key is newer than the latest Release (exit without building when not)
+        id: key_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          KEY="$(nix develop .#theia --command node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(releaseIdentity(config).releaseKey);" | tail -n 1)"
+          LATEST="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.draft == false)][0].tag_name // "none"')"
+          echo "release key $KEY, latest published Release $LATEST"
+          RC=0
+          if [ "$LATEST" != "none" ]; then
+            nix develop .#theia --command node scripts/release-key-newer.mjs "$KEY" "$LATEST" || RC=$?
+          fi
+          case "$RC" in
+            0) echo "build=true" >> "$GITHUB_OUTPUT" ;;
+            1)
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::release key $KEY is not newer than $LATEST; this run builds nothing"
+              echo "Nothing to build: release key $KEY is not newer than the latest Release $LATEST." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *) echo "::error::the release key or the latest Release tag could not be compared (exit $RC); nothing is built" >&2; exit 1 ;;
+          esac
+
+      - name: Generate the derived build surfaces
+        if: steps.key_gate.outputs.build == 'true'
+        run: nix develop .#theia --command node scripts/generate.mjs
+
+      - name: Fetch the pinned Firefox source and apply the patch stack
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-upstream.sh
+          bash scripts/apply-patches.sh
+
+      - name: Build the Theia sidecar (package-linux.sh needs theia/applications/browser/lib/backend/main.js)
+        if: steps.key_gate.outputs.build == 'true'
+        run: nix develop .#theia --command bash -c 'set -euo pipefail; cd theia; yarn install --ignore-scripts --frozen-lockfile; (cd node_modules/drivelist && node-gyp rebuild); yarn build'
+
+      - name: Build the release container image
+        if: steps.key_gate.outputs.build == 'true'
+        # legion is persistent: rebuild from the digest-pinned base every release, never from a cached layer.
+        run: podman build --pull=always --no-cache -t pb-gecko-build -f powerbrowser/packaging/Containerfile .
+
+      - name: Configure and build the release tree, then verify the toolchain baseline in the container
+        if: steps.key_gate.outputs.build == 'true'
+        env:
+          PB_KEYDIR: ${{ vars.PB_KEYDIR }}
+        run: |
+          set -euo pipefail
+          podman run --rm -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
+            pb-gecko-build bash -c 'MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container'
+
+      - name: Package the tarball and the release manifest
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          podman run --rm -v "$PWD:/src:rw" -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh
+
+      # Data only: the signer is built on a hosted runner from the pinned source, never taken from here.
+      - name: Upload the tarball, the complete MAR and the release manifest
+        if: steps.key_gate.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux
+          path: |
+            objdir-release/dist/*.tar.xz
+            objdir-release/dist/*.complete.mar
+            objdir-release/dist/release-manifest.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  sign-publish:
+    needs: build-linux
+    if: needs.build-linux.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      # The dispatch input, never a runner output: legion cannot choose the commit this job runs.
+      - name: Check out the dispatched commit (tracked DER, mozconfig emission, signmar pin and every script run here)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the release SHA (main tip, or a configuration.toml ancestor with main's workflows)
+        id: sha_gate
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          TIP="$(git rev-parse refs/remotes/origin/main)"
+          # Gate the commit actually checked out, and require it to be the one requested.
+          SHA="$(git rev-parse HEAD)"
+          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA" >&2; exit 1; }
+          if [ "$SHA" != "$TIP" ]; then
+            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main" >&2; exit 1; }
+            git show --name-only --format= "$SHA" | grep -x 'configuration.toml' >/dev/null \
+              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main" >&2; exit 1; }
+            git diff --quiet "$SHA" "$TIP" -- .github/workflows/ \
+              || { echo "::error::.github/workflows/ at $SHA differs from main; the bot App cannot create a Release for that target" >&2; exit 1; }
+          fi
+          echo "validated $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Download the release artifacts (untrusted data, copied and signed, never executed)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-linux
+          path: release
+
+      # The tag and every asset name come from the tree, never from the manifest legion wrote.
+      - name: Derive the release key from this tree and require the manifest to agree
+        id: derive_key
+        run: |
+          set -euo pipefail
+          DERIVED="$(node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(releaseIdentity(config).releaseKey);" | tail -n 1)"
+          [[ "$DERIVED" =~ ^v[0-9]+(\.[0-9]+)*-[0-9]+$ ]] || { echo "::error::derived release key '$DERIVED' is not v<esr>-<revision>" >&2; exit 1; }
+          MANIFEST_KEY="$(jq -r .release_key release/release-manifest.json)"
+          [ "$MANIFEST_KEY" = "$DERIVED" ] || { echo "::error::manifest release_key '$MANIFEST_KEY' differs from the key '$DERIVED' derived from $RELEASE_SHA; nothing is signed" >&2; exit 1; }
+          echo "tag=$DERIVED" >> "$GITHUB_OUTPUT"
+
+      - name: Install the NSS tools and the signmar build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends libnss3-tools libnss3-dev libnspr4-dev pkg-config g++
+
+      # Pinned source, hash-checked file by file; no secret and no write token is in this step's environment.
+      - name: Build signmar from the pinned Firefox source (never from the legion output)
+        id: signmar
+        run: |
+          set -euo pipefail
+          bash scripts/build-signmar.sh "$RUNNER_TEMP/signmar-bin"
+          echo "path=$RUNNER_TEMP/signmar-bin/signmar" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a stale approval (a Release at or above this key already exists)
+        id: newer_guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.derive_key.outputs.tag }}
+        run: |
+          set -euo pipefail
+          LATEST="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.draft == false)][0].tag_name // "none"')"
+          echo "release key $TAG, latest published Release $LATEST"
+          if [ "$LATEST" != "none" ]; then
+            RC=0
+            node scripts/release-key-newer.mjs "$TAG" "$LATEST" || RC=$?
+            [ "$RC" -eq 0 ] || { echo "::error::the latest published Release $LATEST is not older than $TAG (comparator exit $RC); this approval is stale and nothing is signed" >&2; exit 1; }
+          fi
+
+      - name: MAR channel gate (refuse a foreign MAR channel before any signing)
+        id: mar_channel_gate
+        env:
+          SIGNMAR: ${{ steps.signmar.outputs.path }}
+        run: |
+          set -euo pipefail
+          MAR="$(ls release/*.complete.mar)"
+          ACCEPTED="$(sed -n 's/^ac_add_options ACCEPTED_MAR_CHANNEL_IDS=//p' powerbrowser/packaging/mozconfig.release | tr -d '[:space:]')"
+          UPDATE_CHANNEL_MOZCONFIG="$(sed -n 's/^ac_add_options --enable-update-channel=//p' powerbrowser/packaging/mozconfig.release | tr -d '[:space:]')"
+          UPDATE_CHANNEL_MANIFEST="$(jq -r .update_channel release/release-manifest.json)"
+          if [ "$UPDATE_CHANNEL_MANIFEST" != "$UPDATE_CHANNEL_MOZCONFIG" ]; then
+            echo "::error::--channel $UPDATE_CHANNEL_MANIFEST disagrees with MOZ_UPDATE_CHANNEL $UPDATE_CHANNEL_MOZCONFIG; nothing is signed" >&2
+            exit 1
+          fi
+          MAR_CHANNEL="$("$SIGNMAR" -T "$MAR" | sed -n 's/.*[Cc]hannel[^:]*: *//p' | awk 'NR==1{print}' | tr -d '[:space:]')"
+          if [ -z "$ACCEPTED" ] || [ "$MAR_CHANNEL" != "$ACCEPTED" ]; then
+            echo "::error::MAR product-info channel '$MAR_CHANNEL' is not ACCEPTED_MAR_CHANNEL_IDS '$ACCEPTED' (MAR_CHANNEL_MISMATCH_ERROR); nothing is signed" >&2
+            exit 1
+          fi
+          echo "MAR channel $MAR_CHANNEL accepted"
+
+      - name: Sign the complete MAR (the key material is read only here, from the release environment)
+        id: sign_mar
+        env:
+          SIGNMAR: ${{ steps.signmar.outputs.path }}
+          MAR_SIGNING_P12_B64: ${{ secrets.MAR_SIGNING_P12_B64 }}
+          MAR_SIGNING_P12_PASSWORD: ${{ secrets.MAR_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          MAR="$(ls release/*.complete.mar)"
+          WORK="$RUNNER_TEMP/mar-sign"
+          mkdir -p "$WORK/db" release/signed
+          printf '%s' "$MAR_SIGNING_P12_B64" | base64 -d > "$WORK/mar.p12"
+          printf '%s' "$MAR_SIGNING_P12_PASSWORD" > "$WORK/pw"
+          certutil -N -d "sql:$WORK/db" --empty-password
+          pk12util -i "$WORK/mar.p12" -d "sql:$WORK/db" -k "$WORK/pw" -w "$WORK/pw"
+          "$SIGNMAR" -d "$WORK/db" -n powerbrowser-mar -s "$MAR" "release/signed/$(basename "$MAR")"
+
+      # Two verifiers, neither the signer's own: signmar -v built from the pinned source, and a node:crypto check
+      # (scripts/verify-mar-signature.mjs) that shares no code or library with signmar. Both read the tracked DER.
+      - name: Verify the signed MAR with signmar -v and with node:crypto against the tracked DER, before any upload
+        id: verify_mar
+        env:
+          SIGNMAR: ${{ steps.signmar.outputs.path }}
+        run: |
+          set -euo pipefail
+          SIGNED="$(ls release/signed/*.complete.mar)"
+          V="$RUNNER_TEMP/mar-verify"
+          mkdir -p "$V"
+          certutil -N -d "sql:$V" --empty-password
+          certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i powerbrowser/packaging/mar/mar-primary.der
+          "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED"
+          node scripts/verify-mar-signature.mjs "$SIGNED" powerbrowser/packaging/mar/mar-primary.der
+
+      - name: Remove the signing scratch databases
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/mar-sign" "$RUNNER_TEMP/mar-verify"
+
+      - name: Assemble the asset set (tree-derived names, SHA256SUMS, the source tarball and the notices)
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          node scripts/verify-release-asset-set.mjs --expected --manifest release/release-manifest.json > "$RUNNER_TEMP/expected.tsv"
+          TARBALL="$(ls release/*.tar.xz)"
+          MAR="$(ls release/signed/*.complete.mar)"
+          while IFS=$'\t' read -r KIND NAME; do
+            case "$KIND" in
+              versioned-tarball|stable-tarball) cp "$TARBALL" "assets/$NAME" ;;
+              versioned-mar|stable-mar) cp "$MAR" "assets/$NAME" ;;
+              notice) cp "$NAME" "assets/$NAME" ;;
+              source) git archive --format=tar.gz --prefix="${NAME%.tar.gz}/" -o "assets/$NAME" "$RELEASE_SHA" ;;
+            esac
+          done < "$RUNNER_TEMP/expected.tsv"
+          (cd assets && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS)
+
+      - name: Attest the build provenance of the release assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'assets/*'
+
+      - name: Create the draft Release with every asset in one call (no tag exists until the single publish)
+        id: draft_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.derive_key.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # A draft left by a failed run is replaced; a published Release at this tag is an error.
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id) \(.draft)\"" > "$RUNNER_TEMP/same-tag.txt"
+          while read -r ID DRAFT; do
+            [ "$DRAFT" = "true" ] || { echo "::error::a published Release $TAG already exists" >&2; exit 1; }
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$ID"
+          done < "$RUNNER_TEMP/same-tag.txt"
+          ESR="$(node --input-type=module -e "import { resolveConfig } from './scripts/generate.mjs'; console.log(resolveConfig('./configuration.toml').config.upstreams.firefox_esr_tag);")"
+          printf 'PowerBrowser %s, built from main at %s on the Gecko ESR base %s.\n' "$TAG" "$RELEASE_SHA" "$ESR" > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --draft --target "$RELEASE_SHA" --title "PowerBrowser $TAG" --notes-file "$RUNNER_TEMP/notes.md" --repo "$GITHUB_REPOSITORY" assets/*
+
+      - name: Compare the draft asset set with the tree-derived set (before the single publish)
+        id: asset_set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.derive_key.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name]' > "$RUNNER_TEMP/draft.json"
+          node scripts/verify-release-asset-set.mjs --manifest release/release-manifest.json --draft "$RUNNER_TEMP/draft.json"
+
+      # Replaced by plan 49-05's R2 copy of each signed MAR (DIST-08); remove this step in the same commit.
+      - name: Fail closed until the R2 copy is wired (the verified draft stays unpublished)
+        id: r2_gate
+        run: |
+          echo "::error::the R2 copy of each signed MAR (plan 49-05) is not wired; the draft is verified and left unpublished." >&2
+          exit 1
+
+      - name: Re-check that no newer Release appeared while this run was waiting (directly before the token mint)
+        id: newer_guard_final
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.derive_key.outputs.tag }}
+        run: |
+          set -euo pipefail
+          LATEST="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.draft == false)][0].tag_name // "none"')"
+          if [ "$LATEST" != "none" ]; then
+            RC=0
+            node scripts/release-key-newer.mjs "$TAG" "$LATEST" || RC=$?
+            [ "$RC" -eq 0 ] || { echo "::error::the latest published Release $LATEST is not older than $TAG (comparator exit $RC); nothing is published" >&2; exit 1; }
+          fi
+
+      - name: Mint the bot App token immediately before the publish (it expires within an hour and is revoked at job end)
+        id: bot
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Publish the Release once (the bot App creates the tag v<ESR>-<revision> here)
+        id: publish
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          TAG: ${{ steps.derive_key.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  descriptor:
+    needs: sign-publish
+    if: needs.sign-publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: descriptor
+    permissions:
+      contents: read
+    steps:
+      - name: Fail closed until the descriptor steps are wired
+        run: |
+          echo "::error::descriptor carries no commit steps in this revision; no update descriptor is written." >&2
+          exit 1
+
+  channel-live:
+    needs: descriptor
+    if: needs.descriptor.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Fail closed until the liveness steps are wired
+        run: |
+          echo "::error::channel-live carries no liveness steps in this revision." >&2
+          exit 1
