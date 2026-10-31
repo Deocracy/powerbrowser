@@ -95,7 +95,13 @@ while IFS= read -r hit; do
 done < <(grep -rlF "$ROOT/" "$RES/theia" "$RES/node" 2>/dev/null || true)
 
 # The bundle's precomplete must describe the staged files, because full MARs are made from it.
-( cd "$BUNDLE" && python3 "$ROOT/upstream/config/createprecomplete.py" )
+# createprecomplete.py takes the Mac layout (Contents/Resources/precomplete, walked from the bundle
+# root) only when its cwd is named Resources. From the bundle root it writes a stray precomplete at
+# X.app/ and leaves the real one stale, so it runs from $RES and both outcomes are checked.
+rm -f "$BUNDLE/precomplete"
+( cd "$RES" && python3 "$ROOT/upstream/config/createprecomplete.py" )
+test ! -e "$BUNDLE/precomplete" || fail "a stray precomplete landed at the bundle root: $BUNDLE/precomplete"
+grep -q 'remove "Contents/Resources/theia/' "$RES/precomplete" || fail "$RES/precomplete does not list the staged theia/ files"
 
 trap - ERR
 rm -f "$ARCHIVE.part"
