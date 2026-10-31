@@ -26,22 +26,26 @@ import { TELEMETRY_LEVEL_PREFERENCE, bindTelemetryPreferences } from './telemetr
 import { PowerBrowserTelemetryLogger } from './telemetry-logger';
 import { FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { TelemetryErrorCapture } from './telemetry-error-capture';
+import { readTelemetryBuildID, readTelemetryVersion } from './telemetry-enrichment';
 
 export interface PowerBrowserTelemetryConfig {
     level?: unknown;
     endpoint?: unknown;
+    version?: unknown;
+    buildID?: unknown;
 }
 
 // GEN-05's read-site shape carried over: synchronous read, try/catch with
-// a fail-closed fallback (an empty value or an unset provider is off).
-export function readTelemetryConfig(): { level: string; endpoint: string | undefined } {
+// a fail-closed fallback (an empty value or an unset provider is off, and
+// version and buildID are omitted, never guessed).
+export function readTelemetryConfig(): { level: string; endpoint: string | undefined; version: string | undefined; buildID: string | undefined } {
     try {
         const raw = FrontendApplicationConfigProvider.get()['powerbrowserTelemetry'] as PowerBrowserTelemetryConfig | undefined;
         const level = typeof raw?.level === 'string' && raw.level !== '' ? raw.level : 'off';
         const endpoint = typeof raw?.endpoint === 'string' && raw.endpoint !== '' ? raw.endpoint : undefined;
-        return { level, endpoint };
+        return { level, endpoint, version: readTelemetryVersion(raw?.version), buildID: readTelemetryBuildID(raw?.buildID) };
     } catch {
-        return { level: 'off', endpoint: undefined };
+        return { level: 'off', endpoint: undefined, version: undefined, buildID: undefined };
     }
 }
 

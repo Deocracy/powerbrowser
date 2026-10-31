@@ -41,7 +41,7 @@ export const TelemetryPreferenceSchema: PreferenceSchema = {
                 'Send usage and error telemetry to the configured endpoint.',
             ],
             default: 'off',
-            description: 'How much usage and error telemetry PowerBrowser sends to the configured endpoint.',
+            description: 'Send error reports to PowerBrowser. When this is on, PowerBrowser sends the error type, file name, line number, version and operating system when something goes wrong. It never sends page content or error messages. Turning this on also lets installed VS Code extensions send their own telemetry.',
         },
     },
 };
