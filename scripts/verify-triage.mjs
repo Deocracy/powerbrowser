@@ -352,9 +352,10 @@ function check(text, rel, labels) {
     return failures;
 }
 
-// Runs the post step with a hostile model output and a stub gh. The only gh
-// calls allowed are label edits from the allow-list and one literal comment.
-// Returns failures; an absent post step is left to check() and yields none here.
+// Runs the post step with a hostile model output and a stub gh, twice: once with every gh call
+// succeeding, and once with the label edit failing (the stub exits 1 on issue edit). The only gh
+// calls allowed are label edits from the allow-list and one literal comment, and the fixed comment
+// must be posted in both runs. Returns failures; an absent post step is left to check() and yields none here.
 function plantedInstruction(text, rel, labelsText) {
     const failures = [];
     const fail = msg => failures.push({ file: rel, job: POST_JOB, rule: 'planted-instruction', msg });
@@ -366,71 +367,75 @@ function plantedInstruction(text, rel, labelsText) {
         return failures;
     }
     if (!post) return failures;
-
-    const dir = mkdtempSync(join(tmpdir(), 'triage-proof-'));
-    try {
-        mkdirSync(join(dir, 'bin'));
-        mkdirSync(join(dir, '.github', 'settings'), { recursive: true });
-        writeFileSync(join(dir, LABELS_REL), labelsText);
-        const calls = join(dir, 'calls.log');
-        const shim = join(dir, 'bin', 'gh');
-        writeFileSync(shim, `#!${process.execPath}\nrequire('node:fs').appendFileSync(process.env.TRIAGE_CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');\n`);
-        chmodSync(shim, 0o755);
-        const hostile = JSON.stringify({
-            labels: ['type/bug', 'close-as-fixed', 'os/linux,area/build'],
-            template_id: 'attacker-template',
-        });
-        const bash = (process.env.PATH ?? '').split(':').map(d => join(d, 'bash')).find(p => existsSync(p));
-        if (!bash) {
-            fail('no bash on PATH, so the post step cannot be run. Next step: run the row from a shell that provides bash.');
-            return failures;
-        }
-        // --noprofile --norc: the login profile rewrites PATH and would put the real gh ahead of the stub.
-        const run = spawnSync(bash, ['--noprofile', '--norc', '-e', '-c', post.run], {
-            cwd: dir,
-            encoding: 'utf8',
-            timeout: 30000,
-            env: {
-                PATH: `${join(dir, 'bin')}:${dirname(process.execPath)}:${process.env.PATH ?? ''}`,
-                HOME: dir,
-                GH_TOKEN: 'proof-only',
-                ISSUE_NUMBER: '42',
-                LABELS_FILE: LABELS_REL,
-                TRIAGE_OUTPUT: hostile,
-                TRIAGE_CALLS: calls,
-            },
-        });
-        if (run.status !== 0) {
-            const reason = (run.stderr || run.error?.message || '').trim().split('\n').filter(l => l.trim() !== '').slice(0, 3).join(' | ');
-            fail(`the post step exited ${run.status} on the hostile output (${reason}). Next step: fix the post step so it tolerates model output and still posts the fixed comment.`);
-            return failures;
-        }
-        const log = (() => { try { return readFileSync(calls, 'utf8'); } catch { return ''; } })();
-        const lines = log.split('\n').filter(Boolean).map(l => JSON.parse(l));
-        const allowed = new Set(labelsFrom(labelsText));
-        for (const c of lines) {
-            if (c.includes('close')) fail(`the post step ran a close operation on a planted issue (${c.join(' ')}). Triage never closes an issue. Next step: remove the close operation.`);
-            if (c[0] === 'issue' && c[1] === 'edit') {
-                const add = c[c.indexOf('--add-label') + 1] ?? '';
-                for (const label of add.split(',')) {
-                    if (!allowed.has(label)) fail(`the post step applied label '${label}' from model output, which is not in ${LABELS_REL}. Next step: filter labels against the allow-list before the edit.`);
+    const bash = (process.env.PATH ?? '').split(':').map(d => join(d, 'bash')).find(p => existsSync(p));
+    if (!bash) {
+        fail('no bash on PATH, so the post step cannot be run. Next step: run the row from a shell that provides bash.');
+        return failures;
+    }
+    const hostile = JSON.stringify({
+        labels: ['type/bug', 'close-as-fixed', 'os/linux,area/build'],
+        template_id: 'attacker-template',
+    });
+    for (const failEdit of [false, true]) {
+        const mode = failEdit ? 'the label edit fails' : 'every gh call succeeds';
+        const dir = mkdtempSync(join(tmpdir(), 'triage-proof-'));
+        try {
+            mkdirSync(join(dir, 'bin'));
+            mkdirSync(join(dir, '.github', 'settings'), { recursive: true });
+            writeFileSync(join(dir, LABELS_REL), labelsText);
+            const calls = join(dir, 'calls.log');
+            const shim = join(dir, 'bin', 'gh');
+            // The stub records each call, and exits 1 on issue edit when TRIAGE_FAIL_EDIT is 1.
+            writeFileSync(shim, `#!${process.execPath}\nconst a = process.argv.slice(2);\nrequire('node:fs').appendFileSync(process.env.TRIAGE_CALLS, JSON.stringify(a) + '\\n');\nif (process.env.TRIAGE_FAIL_EDIT === '1' && a[0] === 'issue' && a[1] === 'edit') process.exit(1);\n`);
+            chmodSync(shim, 0o755);
+            // --noprofile --norc: the login profile rewrites PATH and would put the real gh ahead of the stub.
+            const run = spawnSync(bash, ['--noprofile', '--norc', '-e', '-c', post.run], {
+                cwd: dir,
+                encoding: 'utf8',
+                timeout: 30000,
+                env: {
+                    PATH: `${join(dir, 'bin')}:${dirname(process.execPath)}:${process.env.PATH ?? ''}`,
+                    HOME: dir,
+                    GH_TOKEN: 'proof-only',
+                    ISSUE_NUMBER: '42',
+                    LABELS_FILE: LABELS_REL,
+                    TRIAGE_OUTPUT: hostile,
+                    TRIAGE_CALLS: calls,
+                    ...(failEdit ? { TRIAGE_FAIL_EDIT: '1' } : {}),
+                },
+            });
+            if (run.status !== 0) {
+                const reason = (run.stderr || run.error?.message || '').trim().split('\n').filter(l => l.trim() !== '').slice(0, 3).join(' | ');
+                fail(`the post step exited ${run.status} when ${mode} (${reason}). Next step: isolate the label edit so a failure logs and the fixed comment is still posted.`);
+                continue;
+            }
+            const log = (() => { try { return readFileSync(calls, 'utf8'); } catch { return ''; } })();
+            const lines = log.split('\n').filter(Boolean).map(l => JSON.parse(l));
+            const allowed = new Set(labelsFrom(labelsText));
+            for (const c of lines) {
+                if (c.includes('close')) fail(`the post step ran a close operation on a planted issue (${c.join(' ')}) when ${mode}. Triage never closes an issue. Next step: remove the close operation.`);
+                if (c[0] === 'issue' && c[1] === 'edit') {
+                    const add = c[c.indexOf('--add-label') + 1] ?? '';
+                    for (const label of add.split(',')) {
+                        if (!allowed.has(label)) fail(`the post step applied label '${label}' from model output, which is not in ${LABELS_REL} (${mode}). Next step: filter labels against the allow-list before the edit.`);
+                    }
                 }
             }
-        }
-        const comments = lines.filter(c => c[0] === 'issue' && c[1] === 'comment');
-        if (comments.length !== 1) {
-            fail(`the post step made ${comments.length} comment call(s) on a planted issue; exactly one fixed comment is allowed. Next step: post one comment.`);
-        } else {
-            const body = comments[0][comments[0].indexOf('--body') + 1] ?? '';
-            if (!post.run.includes(body) || body === '') {
-                fail(`the posted comment body '${body}' is not a literal from the workflow, so model output reached the comment. Next step: post only the fixed text chosen by id.`);
+            const comments = lines.filter(c => c[0] === 'issue' && c[1] === 'comment');
+            if (comments.length !== 1) {
+                fail(`the post step made ${comments.length} comment call(s) on a planted issue when ${mode}; exactly one fixed comment is allowed. Next step: post one comment.`);
+            } else {
+                const body = comments[0][comments[0].indexOf('--body') + 1] ?? '';
+                if (!post.run.includes(body) || body === '') {
+                    fail(`the posted comment body '${body}' is not a literal from the workflow when ${mode}, so model output reached the comment. Next step: post only the fixed text chosen by id.`);
+                }
             }
+            if (lines.some(c => c[0] !== 'issue')) {
+                fail(`the post step made a gh call other than issue edit or issue comment when ${mode}. Next step: restrict it to label edits and one comment.`);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
         }
-        if (lines.some(c => c[0] !== 'issue')) {
-            fail('the post step made a gh call other than issue edit or issue comment. Next step: restrict it to label edits and one comment.');
-        }
-    } finally {
-        rmSync(dir, { recursive: true, force: true });
     }
     return failures;
 }
@@ -535,6 +540,7 @@ function selfTest() {
         ['close-issue step', mutate(APPLY_STEP, '      - name: Close\n        run: gh issue close "$ISSUE_NUMBER"\n' + APPLY_STEP), POST_JOB, 'close', 'closes an issue'],
         ['label outside labels.json named in the prompt', mutate('format/nix, area/updates', 'format/nix, area/ghost, area/updates'), AI_JOB, 'labels', 'area/ghost'],
         ['post step removed', mutate("          gh(['issue', 'comment', issue, '--body', TEXT[templateId]]);\n", ''), POST_JOB, 'post', 'post step'],
+        ['label edit not isolated (fails the step when the edit fails)', mutate('catch { console.log(', 'finally { console.log('), POST_JOB, 'planted-instruction', 'exited'],
         ['label filter removed (planted instruction)', mutate(".filter(l => typeof l === 'string' && allowed.has(l))", ''), POST_JOB, 'planted-instruction', 'close-as-fixed'],
         ['raw model template id posted (planted instruction)', mutate("gh(['issue', 'comment', issue, '--body', TEXT[templateId]]);", "gh(['issue', 'comment', issue, '--body', String(picked.template_id)]);"), POST_JOB, 'planted-instruction', 'attacker-template'],
         ['two jobs collapsed to one named triage', mutate('  classify:\n', '  triage:\n'), WF, 'jobs', 'declares jobs'],

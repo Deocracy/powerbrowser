@@ -145,6 +145,10 @@ jobs:
           const labels = Array.isArray(picked.labels) ? picked.labels.filter(l => typeof l === 'string' && allowed.has(l)) : [];
           const templateId = Object.hasOwn(TEXT, picked.template_id) ? picked.template_id : 'other';
           const gh = args => execFileSync('gh', args, { stdio: 'inherit' });
-          if (labels.length > 0) gh(['issue', 'edit', issue, '--add-label', labels.join(',')]);
+          // A label that is missing live must not suppress the fixed comment the reporter is owed.
+          if (labels.length > 0) {
+            try { gh(['issue', 'edit', issue, '--add-label', labels.join(',')]); }
+            catch { console.log('::warning::the label edit failed, so no label was added; the fixed comment is still posted'); }
+          }
           gh(['issue', 'comment', issue, '--body', TEXT[templateId]]);
           JS
