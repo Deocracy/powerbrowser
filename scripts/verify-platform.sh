@@ -4923,6 +4923,16 @@ run_own_checks() {
     # binary-cache-self-test plants a substituter and a trusted key disagreeing with their backends, a removed R2
     # block, an empty R2 endpoint, a removed RENEWALS row, and a Flatpak template naming another host.
     "binary-cache-self-test|node $REPO_ROOT/scripts/verify-binary-cache.mjs --self-test"
+    # NEW (Phase 56, PKG-20): the Flathub manifest, submission-shaped and static. The app id, the persist path,
+    # the TXT record name and the desktop and icon agreement derive from the tracked identity and branding;
+    # the runtime is the Firefox BaseApp ref; the Flatpak-only DisableAppUpdate merge and the checker data are
+    # present; the exception stays pending-owner-reply on the written-exception path, with one repack module.
+    # Honestly --quick: JSON, text and the tracked PNG bytes; no flatpak-builder, no network, no account.
+    "flathub-manifest|node $REPO_ROOT/scripts/verify-flathub-manifest.mjs"
+    # flathub-manifest-self-test plants a wrong runtime, a missing persist, a missing disable merge, missing checker
+    # data, a TXT record name off the homepage host, an approved exception, a second from-source module, a desktop
+    # Icon off the app id, a download copy leak and a cache interface missing the Cachix substituter.
+    "flathub-manifest-self-test|node $REPO_ROOT/scripts/verify-flathub-manifest.mjs --self-test"
     # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
     # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
     # own pinned group, one regex customManager captures the live configuration.toml theia_release,

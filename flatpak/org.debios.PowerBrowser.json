@@ -17,7 +17,9 @@
     {
       "name": "powerbrowser",
       "buildsystem": "simple",
-      "only-arches": ["x86_64"],
+      "only-arches": [
+        "x86_64"
+      ],
       "build-commands": [
         "mkdir -p /app/lib /app/bin /app/share/applications /app/share/icons/hicolor/128x128/apps",
         "cp -a powerbrowser /app/lib/powerbrowser",
@@ -49,5 +51,17 @@
         }
       ]
     }
-  ]
+  ],
+  "x-flathub-verification": {
+    "method": "dns-txt",
+    "record": "_flathub.powerbrowser.org",
+    "token": "@FLATHUB_VERIFICATION_TOKEN@",
+    "note": "The owner sets this TXT value at the Flathub verification step; the release refuses the placeholder (scripts/verify-flathub-manifest.mjs --release)."
+  },
+  "x-source-exception": {
+    "status": "pending-owner-reply",
+    "branch": "written-exception",
+    "named-alternative": "from-source manifest: a named follow-up, not built in this phase",
+    "request": "Linter-exception request and reviewer discretion for a prebuilt tarball repack; the owner records the written reply in docs/cache-flathub-checkpoint.md before the submission PR"
+  }
 }
