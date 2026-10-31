@@ -54,6 +54,10 @@
 //                 expression reading github.event.(issue|comment|
 //                 pull_request|head_commit|review), nested fields and
 //                 review_comment included.
+//  bot-job-gate   In release-train.yml only (Phase 43, TRAIN-08), a job that enters an
+//                 environment (the bot environment holds the App key and may wait on an
+//                 approval) carries a negated inputs.dry-run in its job-level if:, so a
+//                 dry run or a run with nothing to publish never reaches the environment.
 //  dry-run-gate   In release-train.yml only (Phase 43, TRAIN-08), every step that
 //                 commits, pushes, opens, comments, edits, dispatches, releases,
 //                 labels, calls a write method of the API, or uses an action outside
@@ -101,7 +105,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'dry-run-gate'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'dry-run-gate', 'bot-job-gate'];
 const SCOPES = ['actions', 'attestations', 'checks', 'contents', 'deployments', 'discussions', 'id-token', 'issues', 'models', 'packages', 'pages', 'pull-requests', 'repository-projects', 'security-events', 'statuses'];
 const HOSTED = /^(ubuntu|windows|macos)-[\w.-]+$/;
 const GUARD = 'github.event.workflow_run.head_repository.full_name == github.repository';
@@ -337,6 +341,12 @@ function runChecks(root, overrides = {}) {
                 });
             }
 
+            // bot-job-gate: a job that enters an environment is gated at job level, not only by its steps.
+            if (file === DRY_RUN_FILE && job.environment !== undefined) {
+                const jobCond = String(job.if ?? '');
+                if (!DRY_RUN_NEGATED.test(jobCond)) fail(rel, jobId, 'bot-job-gate', `enters environment ${JSON.stringify(job.environment)} with no negated ${DRY_RUN_GATE} in its job-level if:, so a dry run or a run with nothing to publish would reach the environment and wait on its approval. Next step: gate the job itself with if: \${{ !${DRY_RUN_GATE} && ... }}.`);
+            }
+
             // dry-run gate: every write step in release-train.yml names the gate in its if:.
             if (file === DRY_RUN_FILE) {
                 steps.forEach((s, i) => {
@@ -557,6 +567,9 @@ function selfTest() {
         ['ungated gh release create', withRt(d => d.jobs.report.steps.push({ run: 'gh release create v1 --notes x' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
         ['ungated curl -X POST', withRt(d => d.jobs.report.steps.push({ run: 'curl -X POST https://api.github.com/x' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
         ['ungated actions/github-script', withRt(d => d.jobs.report.steps.push({ uses: `actions/github-script@${H40}` })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        // WR-09: the environment-bound job is gated at job level, so a dry run never reaches the bot environment.
+        ['bump-pr without a job-level dry-run gate', withRt(d => { delete d.jobs['bump-pr'].if; }), rel(DRY_RUN_FILE), 'bump-pr', 'bot-job-gate', 'job-level if'],
+        ['bump-pr-node gated only by always()', withRt(d => { d.jobs['bump-pr-node'].if = '${{ always() }}'; }), rel(DRY_RUN_FILE), 'bump-pr-node', 'bot-job-gate', 'job-level if'],
         ['schedule key on release-train.yml', withRt(d => { d.on.schedule = [{ cron: '0 3 * * *' }]; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-schedule', 'schedule'],
         ['pull_request trigger on release-train.yml', withRt(d => { d.on.pull_request = null; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
         ['unguarded workflow_run job in release-train.yml', withRt(d => { d.on.workflow_run = { workflows: ['Verify static layers'], types: ['completed'] }; d.jobs.derive.if = 'true'; }), rel(DRY_RUN_FILE), 'derive', 'workflow-run-guard', 'head_repository'],

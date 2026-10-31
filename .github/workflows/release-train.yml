@@ -268,9 +268,9 @@ jobs:
 
   bump-pr:
     needs: [derive, detect, bump]
-    # always(): a skipped bump (no candidate) must not skip this job's own gates. Every step
-    # below gates itself on the bump result or the candidate, so nothing publishes without one.
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
+    # Entered only on a live run whose replay succeeded. A dry run and a run with no candidate
+    # never reach the bot environment, so no deployment waits for an approval for nothing.
+    if: ${{ !inputs.dry-run && needs.bump.result == 'success' && needs.detect.outputs.candidate != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     # The bot environment holds the App key. The only credential this job uses is the
@@ -278,14 +278,7 @@ jobs:
     environment: bot
     permissions: {}
     steps:
-      - name: Print the ESR branch this run would open (dry-run)
-        if: ${{ inputs.dry-run }}
-        env:
-          CANDIDATE: ${{ needs.detect.outputs.candidate }}
-        run: |
-          echo "dry-run: would open or update chore/esr-<tag> (pin move, regenerated files, replayed patches); candidate='${CANDIDATE}'"
-
-      - name: Mint the bot App token (skipped in dry-run)
+      - name: Mint the bot App token
         id: app
         if: ${{ !inputs.dry-run && needs.bump.result == 'success' && needs.detect.outputs.candidate != '' }}
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
@@ -382,7 +375,8 @@ jobs:
   # waits on it and a Node failure never reaches the ESR path.
   bump-pr-node:
     needs: [derive, detect-node]
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
+    # Entered only on a live run where detect-node verified a Node line newer than the pin.
+    if: ${{ !inputs.dry-run && needs.detect-node.result == 'success' && needs.detect-node.outputs.node-version != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The bot environment holds the App key. The only credential this job uses is the
@@ -390,14 +384,7 @@ jobs:
     environment: bot
     permissions: {}
     steps:
-      - name: Print the Node branch this run would open (dry-run)
-        if: ${{ inputs.dry-run }}
-        env:
-          NODE_VERSION: ${{ needs.detect-node.outputs.node-version }}
-        run: |
-          echo "dry-run: would open or update chore/node-v24.x (node-runtime.json: version, url, verified sha256); node='${NODE_VERSION}'"
-
-      - name: Mint the bot App token (skipped in dry-run)
+      - name: Mint the bot App token
         id: app
         if: ${{ !inputs.dry-run && needs.detect-node.result == 'success' && needs.detect-node.outputs.node-sha256 != '' }}
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2

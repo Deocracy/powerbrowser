@@ -4784,7 +4784,8 @@ run_own_checks() {
     # unadmitted foo/bar, an unused admission, an empty patterns_allowed, a duplicate on:, zero
     # workflows, each GH-12 fault over a good release.yml fixture, and the TRAIN-08 dry-run-gate
     # forms (an inverted or always()-wrapped gate, git push and commit including git -c, gh api
-    # write methods and implicit POST, gh release, curl -X, an action outside the read-only list);
+    # write methods and implicit POST, gh release, curl -X, an action outside the read-only list),
+    # and the bot-job-gate rule (an environment-bound job with no negated job-level dry-run gate);
     # each red naming file and job. It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
     # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ at its default persona,
