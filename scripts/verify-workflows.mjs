@@ -612,6 +612,16 @@ function runChecks(root, overrides = {}) {
                     for (const c of uses('actions/checkout@')) {
                         if ((c.with ?? {})['persist-credentials'] !== false) gf(`a checkout step does not set persist-credentials: false, so the job token stays in .git/config where the model's Read could reach it. Next step: set it.`);
                     }
+                    // WR-05, WR-07: the log is chosen by the fingerprint's commit, and its fence carries a nonce the prompt names.
+                    for (const x of steps) {
+                        for (const m of runText(x).matchAll(/gh\s+run\s+list\b[^\n]*/g)) {
+                            if (!/--commit\b/.test(m[0])) gf(`selects a failing run with \`${m[0].trim().slice(0, 80)}\` and no --commit, so the newest failure on a branch (possibly the fixer's own earlier run) can stand in for the one the fingerprint names. Next step: select by --commit "$BASE".`);
+                        }
+                    }
+                    for (const c of claude) {
+                        if (!/\$\{\{\s*steps\.[\w-]+\.outputs\.nonce\s*\}\}/.test(String(c.with?.prompt ?? ''))) gf(`the Claude prompt does not name the per-run nonce of the failing-log fence (steps.<id>.outputs.nonce), so the log can forge the fence markers. Next step: put the nonce in the prompt and in the fence lines.`);
+                    }
+                    if (!steps.some(x => /\$NONCE\b/.test(runText(x)) && /\/dev\/urandom|openssl\s+rand/.test(runText(x)))) gf(`no step builds the failing-log fence from a random nonce. Next step: generate a nonce from /dev/urandom and put it in both fence lines.`);
                     for (const o of ['diff-sha256', 'base-sha']) {
                         if (!/^\$\{\{\s*steps\.[\w-]+\.outputs\.[\w-]+\s*\}\}$/.test(String(job.outputs?.[o] ?? ''))) gf(`has no job output ${o} taken from a step, so the later jobs cannot bind the diff to what this job produced. Next step: export ${o} from a step that runs after or without the model.`);
                     }
@@ -947,6 +957,11 @@ function selfTest() {
         `      - uses: ${CHECKOUT}`,
         '        with:',
         '          persist-credentials: false',
+        '      - id: log',
+        '        run: |',
+        '          NONCE=$(head -c 16 /dev/urandom | od -An -tx1)',
+        '          echo "fence $NONCE"',
+        '          gh run list --workflow verify.yml --commit "$BASE" --status failure',
         `      - uses: ${FIX_PIN}`,
         '        if: ${{ !inputs.dry-run }}',
         '        with:',
@@ -957,7 +972,7 @@ function selfTest() {
         "          allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'",
         '          show_full_output: false',
         '          display_report: false',
-        "          prompt: 'Fix release ${{ inputs.release-key }}'",
+        "          prompt: 'Fix release ${{ inputs.release-key }} log ${{ steps.log.outputs.nonce }}'",
         `          claude_args: '${CLAUDE_ARGS}'`,
         '  fix-gate:',
         '    needs: fix',
@@ -1121,7 +1136,7 @@ function selfTest() {
         ['if: without the claude-fix/ head exclusion', fixerEdit(" && !startsWith(inputs.target-branch, 'claude-fix/')", ''), rel(T), 'fix', 'fixer-prompt', 'claude-fix/'],
         ['if: without the bot-actor exclusion', fixerEdit(" && github.actor != 'powerbrowser-bot[bot]'", ''), rel(T), 'fix', 'fixer-prompt', 'powerbrowser-bot[bot]'],
         ['allowed_bots star', fixerEdit("allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'", "allowed_bots: '*'"), rel(T), 'fix', 'fixer-prompt', 'allowed_bots'],
-        ['event text in the fixer prompt', fixerEdit("prompt: 'Fix release ${{ inputs.release-key }}'", 'prompt: ${{ github.event.pull_request.body }}'), rel(T), 'fix', 'event-text', 'with.prompt'],
+        ['event text in the fixer prompt', fixerEdit("prompt: 'Fix release ${{ inputs.release-key }} log ${{ steps.log.outputs.nonce }}'", 'prompt: ${{ github.event.pull_request.body }} ${{ steps.log.outputs.nonce }}'), rel(T), 'fix', 'event-text', 'with.prompt'],
         ['legion runner on fix', fixerEdit('    runs-on: ubuntu-latest\n    environment: fixer', '    runs-on: [self-hosted, legion]\n    environment: fixer'), rel(T), 'fix', 'legion', 'build-* or matrix-*'],
         ['bare self-hosted runner on fix', fixerEdit('    runs-on: ubuntu-latest\n    environment: fixer', '    runs-on: self-hosted\n    environment: fixer'), rel(T), 'fix', 'runner', '"self-hosted"'],
         ['actions/create-github-app-token beside Claude in fix', fixerEdit(`      - uses: ${FIX_PIN}`, `      - uses: ${FIX_APP}\n      - uses: ${FIX_PIN}`), rel(T), 'fix', 'claude-code-action', 'create-github-app-token'],
@@ -1197,6 +1212,9 @@ function selfTest() {
         ['fix-gate gating HEAD instead of the fix job base-sha', gateEdit('--ref="$BASE_SHA"', '--ref=HEAD'), rel(T), 'fix-gate', 'fixer-gate', 'base-sha'],
         ['fix-gate not checking the artifact digest', gateEdit('          DIFF_SHA256: ${{ needs.fix.outputs.diff-sha256 }}\n          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          DIFF=', '          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          DIFF='), rel(T), 'fix-gate', 'fixer-gate', 'sha256'],
         ['fix job checkout of work/ without persist-credentials false', gateEdit("          path: work\n          fetch-depth: 0\n          persist-credentials: false\n", "          path: work\n          fetch-depth: 0\n"), rel(T), 'fix', 'fixer-gate', 'persist-credentials'],
+        ['failing run chosen by branch, not by the fingerprint commit', gateEdit('gh run list --workflow "${CHECK}.yml" --commit "$BASE" --status failure', 'gh run list --branch "$TARGET" --status failure'), rel(T), 'fix', 'fixer-gate', 'no --commit'],
+        ['prompt without the fence nonce', { files: { ...files, [T]: files[T].split('${{ steps.log.outputs.nonce }}').join('') } }, rel(T), 'fix', 'fixer-gate', 'per-run nonce'],
+        ['fence built from constant markers (no nonce step)', gateEdit('NONCE=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d \' \\n\')', 'NONCE=fixed'), rel(T), 'fix', 'fixer-gate', 'random nonce'],
         ['fix job without the diff-sha256 output', gateEdit('      diff-sha256: ${{ steps.digest.outputs.diff-sha256 }}\n', ''), rel(T), 'fix', 'fixer-gate', 'diff-sha256'],
         ['fix job without the base-sha output', gateEdit('      base-sha: ${{ steps.base.outputs.base-sha }}\n    steps:', '    steps:'), rel(T), 'fix', 'fixer-gate', 'base-sha'],
         ['fix-pr if: without the verdict term', gateEdit(" && needs.fix-gate.outputs.verdict == 'pass'", ''), rel(T), 'fix-pr', 'fixer-gate', "verdict == 'pass'"],
