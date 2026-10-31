@@ -61,3 +61,26 @@ After item 1 is applied:
 No push, no `gh workflow run`, no App or token creation, no `gh` write, and no live apply. The
 measurements in the summary used local tooling only, plus network reads for the cold install in a
 scratch copy.
+
+## 5. Owner decision: flake.lock is not moved by the Theia PR (AUTO-02 partial)
+
+**Blocked piece:** AUTO-02's clause "`flake.lock` updates through the nix manager"
+(`.planning/workstreams/deploy/REQUIREMENTS.md`, AUTO-02 line).
+
+**Why:** the config no longer enables the nix manager, which Renovate defaults to off. The only flake
+input is `nixpkgs`, and the scope rule disables it, so no flake.lock change is ever proposed. The
+earlier config set `nix.enabled: true`; the manager ran and produced nothing. The verifier's `[nix]`
+rule now refuses re-enabling it. Research decision 19 keeps nixpkgs out of the Theia PR, and that
+reasoning holds, but it does not meet the requirement text.
+
+**Options (owner picks one):**
+
+- (a) Keep the separation and meet the text: a third packageRule for `nixpkgs` with its own groupName
+  and groupSlug, `automerge: false`, and its own branch prefix. The verifier's `[scope]` and `[nix]`
+  rules then change to "nixpkgs is in its own group, never in theia". Re-open research question 6
+  first.
+- (b) Amend AUTO-02 and ROADMAP Phase 51 criterion 1 to read "`flake.lock` is not moved by the Theia
+  PR". The nix manager stays off, and AUTO-02 can close on its other clauses.
+
+**Until one option is chosen:** AUTO-02 is partial. Nothing in this plan claims that flake.lock is
+updated.

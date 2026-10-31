@@ -24,7 +24,7 @@
 //  [config-parse]           it parses as JSON5 (comments and trailing commas only).
 //  [automerge]              automerge is false.
 //  [platform-automerge]     platformAutomerge is false.
-//  [nix]                    nix.enabled is true, so flake.lock is a managed file.
+//  [nix]                    the nix manager is off: nix.enabled is not true (owner decision, BLOCKED.md item 5).
 //  [branch-prefix]          branchPrefix starts with chore/theia-.
 //  [no-clock]               no schedule or timezone key at any depth (D-77).
 //  [vulnerability-alerts]   vulnerabilityAlerts is { enabled: false } and osvVulnerabilityAlerts is false (WR-02).
@@ -45,7 +45,7 @@
 //                           the flake root inputs) is disabled by a packageRule, and no @theia/*
 //                           resolution is. Without it Renovate opens chore/theia- branches for them.
 //  [licensing-hook]         postUpgradeTasks commands are the two licensing commands, fileFilters
-//                           are the five inputs, and executionMode is branch.
+//                           are the four inputs, and executionMode is branch.
 //  [licensing-inputs]       each fileFilters entry and each licensing generator exists in the tree.
 //  [allowed-post-upgrade]   allowedPostUpgradeCommands is absent from the repository config: it is
 //                           a self-hosted option, and Renovate ignores a repository value.
@@ -74,7 +74,7 @@ const MONACO_GROUP = 'theia-monaco-editor-core';
 const BRANCH_PREFIX = 'chore/theia-';
 const LICENSING_COMMANDS = ['node scripts/generate-licensing.mjs', 'node scripts/generate.mjs --check'];
 const LICENSING_SCRIPTS = ['scripts/generate-licensing.mjs', 'scripts/generate.mjs'];
-const FILE_FILTERS = ['THIRD-PARTY-NOTICES.txt', 'LICENSING.md', 'theia/yarn.lock', 'flake.lock', 'configuration.toml'];
+const FILE_FILTERS = ['THIRD-PARTY-NOTICES.txt', 'LICENSING.md', 'theia/yarn.lock', 'configuration.toml'];
 const CLOCK_KEYS = ['schedule', 'timezone'];
 const TOML_LINE = /^theia_release\s*=\s*"([^"]+)"/m;
 
@@ -245,8 +245,10 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
     if (cfg.osvVulnerabilityAlerts !== false) {
         fail('vulnerability-alerts', `osvVulnerabilityAlerts = ${JSON.stringify(cfg.osvVulnerabilityAlerts)}`, 'osvVulnerabilityAlerts must be false, or OSV remediation PRs bypass the scope rule');
     }
-    if (cfg.nix?.enabled !== true) {
-        fail('nix', `nix.enabled = ${JSON.stringify(cfg.nix?.enabled)}`, 'the nix manager must be enabled so flake.lock is a managed file');
+    // WR-01: nix is off by owner decision. Renovate defaults the manager to off, and the nixpkgs input is the only
+    // flake input, which the scope rule disables. Turning it on needs the separate nixpkgs group or an AUTO-02 amendment first.
+    if (cfg.nix?.enabled === true) {
+        fail('nix', `nix.enabled = ${JSON.stringify(cfg.nix.enabled)}`, 'the nix manager is off by owner decision (BLOCKED.md item 5); the Theia PR must not move flake.lock until AUTO-02 is amended or the nixpkgs group exists');
     }
     if (typeof cfg.branchPrefix !== 'string' || !cfg.branchPrefix.startsWith(BRANCH_PREFIX)) {
         fail('branch-prefix', `branchPrefix = ${JSON.stringify(cfg.branchPrefix)}`, `branchPrefix must start with ${BRANCH_PREFIX} so the fixer class matches the Theia branch`);
@@ -356,6 +358,7 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
     const disabledRules = rules.filter(r => r?.enabled === false);
     const selectsName = (r, n) => toList(r.matchPackageNames).some(m => patternTest(m, n));
     const pkgJson = (() => { try { return JSON.parse(read(PKG_REL) ?? 'null') ?? {}; } catch { return {}; } })();
+    // Kept although the nix manager is off: if it is ever re-enabled, nixpkgs must already be disabled.
     let flakeInputs = [];
     try { flakeInputs = Object.keys(JSON.parse(read('flake.lock') ?? 'null')?.nodes?.root?.inputs ?? {}); } catch { flakeInputs = []; }
     const nonTheia = [...new Set([
@@ -383,7 +386,7 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
         fail('licensing-hook', `commands [${commands.join(', ')}]`, `the post-upgrade commands must be exactly: ${LICENSING_COMMANDS.join('; ')}`);
     }
     if (!sameSet(fileFilters, FILE_FILTERS)) {
-        fail('licensing-hook', `fileFilters [${fileFilters.join(', ')}]`, `extra [${diff(fileFilters, FILE_FILTERS).join(', ')}], missing [${diff(FILE_FILTERS, fileFilters).join(', ')}]; the inputs are exactly the five notice, lock and pin files`);
+        fail('licensing-hook', `fileFilters [${fileFilters.join(', ')}]`, `extra [${diff(fileFilters, FILE_FILTERS).join(', ')}], missing [${diff(FILE_FILTERS, fileFilters).join(', ')}]; the inputs are exactly the four notice and pin files`);
     }
     if (pu.executionMode !== 'branch') {
         fail('licensing-hook', `executionMode = ${JSON.stringify(pu.executionMode)}`, 'executionMode must be branch: update runs the generator once per package, not once per branch');
@@ -420,7 +423,7 @@ function run() {
         console.error(`${NAME}: FAIL -- ${failures.length} rule(s) red in ${CONFIG_REL}. Next step: fix the rule named above in ${CONFIG_REL}, or the file it names.`);
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${CONFIG_REL}: the theia group selects ${facts.theiaMembers} @theia/* pins with ${MONACO} in its own pinned group; theia_release ${facts.release} is captured by one regex manager; automerge and platformAutomerge off; nix enabled; branchPrefix ${BRANCH_PREFIX}; no clock key; every non-Theia dependency disabled (${facts.nonTheia}); ${LICENSING_COMMANDS.length} post-upgrade commands and ${FILE_FILTERS.length} file filters`);
+    console.log(`${NAME}: PASS -- ${CONFIG_REL}: the theia group selects ${facts.theiaMembers} @theia/* pins with ${MONACO} in its own pinned group; theia_release ${facts.release} is captured by one regex manager; automerge and platformAutomerge off; nix manager off (flake.lock not moved, BLOCKED.md item 5); branchPrefix ${BRANCH_PREFIX}; no clock key; every non-Theia dependency disabled (${facts.nonTheia}); ${LICENSING_COMMANDS.length} post-upgrade commands and ${FILE_FILTERS.length} file filters`);
     return 0;
 }
 
@@ -443,7 +446,6 @@ function selfTest() {
         ignorePaths: ['.planning/**'],
         vulnerabilityAlerts: { enabled: false },
         osvVulnerabilityAlerts: false,
-        nix: { enabled: true },
         packageRules: [
             { matchPackageNames: ['/^(?!@theia\\/)/'], enabled: false },
             { matchPackageNames: ['/^@theia\\/(?!monaco-editor-core$)/'], groupName: THEIA_GROUP, groupSlug: THEIA_GROUP, rangeStrategy: 'pin' },
@@ -461,7 +463,7 @@ function selfTest() {
     const fixtureNames = { '@theia/core': '1.76.0', '@theia/ai-core': '1.76.0', [MONACO]: '1.108.201' };
     const clean = runChecks(REPO_ROOT, { configText: JSON.stringify(minimal), resolutions: fixtureNames, theiaRelease: '1.76.0' });
     if (clean.failures.length === 0) {
-        console.log('  ok  minimal clean fixture (two groups pinned, manager, nix, automerge off, hook) -> green');
+        console.log('  ok  minimal clean fixture (two groups pinned, manager, automerge off, hook) -> green');
     } else {
         console.error(`${NAME}: --self-test FAIL -- the clean fixture went red: ${clean.failures.map(f => `[${f.rule}] ${f.value}`).join('; ')}`);
         failed += 1;
@@ -501,12 +503,12 @@ function selfTest() {
         { label: 'vulnerabilityAlerts key removed', rule: 'vulnerability-alerts', mutate: c => { delete c.vulnerabilityAlerts; } },
         { label: 'osvVulnerabilityAlerts true', rule: 'vulnerability-alerts', mutate: c => { c.osvVulnerabilityAlerts = true; } },
         { label: 'osvVulnerabilityAlerts key removed', rule: 'vulnerability-alerts', mutate: c => { delete c.osvVulnerabilityAlerts; } },
-        { label: 'nix manager disabled', rule: 'nix', mutate: c => { c.nix.enabled = false; } },
+        { label: 'nix manager re-enabled', rule: 'nix', mutate: c => { c.nix = { enabled: true }; } },
         { label: 'schedule key at top level', rule: 'no-clock', mutate: c => { c.schedule = ['before 5am']; } },
         { label: 'timezone key inside a packageRule', rule: 'no-clock', mutate: c => { c.packageRules[0].timezone = 'UTC'; } },
         { label: 'branchPrefix renovate/', rule: 'branch-prefix', mutate: c => { c.branchPrefix = 'renovate/'; } },
         { label: 'licensing generator dropped from the hook', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.commands = [LICENSING_COMMANDS[1]]; } },
-        { label: 'flake.lock dropped from fileFilters', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.fileFilters = c.postUpgradeTasks.fileFilters.filter(f => f !== 'flake.lock'); } },
+        { label: 'flake.lock added to fileFilters', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.fileFilters.push('flake.lock'); } },
         { label: 'workflow path added to fileFilters', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.fileFilters.push('.github/workflows/verify.yml'); } },
         { label: 'hook executionMode update', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.executionMode = 'update'; } },
         { label: 'allowedPostUpgradeCommands set in the repository config', rule: 'allowed-post-upgrade', mutate: c => { c.allowedPostUpgradeCommands = ['^node scripts/generate\\.mjs --check$']; } },

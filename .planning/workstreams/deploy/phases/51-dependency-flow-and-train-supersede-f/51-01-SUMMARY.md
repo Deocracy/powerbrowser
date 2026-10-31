@@ -45,11 +45,12 @@ key-decisions:
 patterns-established:
   - "Renovate config semantics asserted by a quick row, validated against the real validator in a scratch run"
 
-requirements-completed: [AUTO-02]  # declarative half only; dispatch job and live first PR remain owner-gated (BLOCKED.md)
+requirements-completed: []
+requirements-partial: [AUTO-02]  # declarative half only; flake.lock is not moved (BLOCKED.md item 5); licensing row, dispatch job and first live PR owner-gated (items 1, 3, 6)
 
 duration: not recorded (start-time capture was skipped at executor start)
 completed: 2026-10-31
-status: complete
+status: partial
 commits: 1
 plan_head_before: 69659b446e1c91aa2654dbc59f5b5123f30b9e07
 plan_head_after: c50023c8d2f7eacd8deb5728ab8e1a36e8039d21

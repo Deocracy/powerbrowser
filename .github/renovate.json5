@@ -18,10 +18,11 @@
 //    configuration.toml is the single source for the Theia release this project composes. The version
 //    anchor is @theia/core, because every @theia/* moves in lockstep per Theia release. One mismatch report from a real run would
 //    disprove that anchor; until then it is an assumption, not a proof.
-//  - nix manager enabled, but the scope rule turns the nixpkgs flake input off. Movement of nixpkgs
-//    is an owner follow-up (research decision 19, toolchain-baseline), and a nixpkgs branch would
-//    take the chore/theia- prefix. Nothing in the Theia group changes a flake input, so the Theia PR
-//    does not change flake.lock.
+//  - The nix manager is off (Renovate's default; this file does not set it). So the Theia PR does not
+//    change flake.lock, and AUTO-02's "flake.lock updates through the nix manager" is NOT met. That is
+//    an owner decision (BLOCKED.md item 5): a separate nixpkgs group, or an amendment to AUTO-02.
+//    The scope rule still disables the nixpkgs input, so re-enabling nix cannot open a chore/theia-*
+//    branch for it.
 //  - automerge and platformAutomerge are false. The Theia PR merges only after owner review and a
 //    green verify.yml.
 //  - branchPrefix chore/theia-. A group branch is named by its slug, so the rendered name is
@@ -72,7 +73,6 @@
   // the Theia group (remediation updates are force-enabled). Security updates stay with AUTO-03.
   "vulnerabilityAlerts": { "enabled": false },
   "osvVulnerabilityAlerts": false,
-  "nix": { "enabled": true },
   "packageRules": [
     {
       // Renovate updates everything by default. This rule turns off every dependency that is not
@@ -105,7 +105,7 @@
   ],
   "postUpgradeTasks": {
     "commands": ["node scripts/generate-licensing.mjs", "node scripts/generate.mjs --check"],
-    "fileFilters": ["THIRD-PARTY-NOTICES.txt", "LICENSING.md", "theia/yarn.lock", "flake.lock", "configuration.toml"],
+    "fileFilters": ["THIRD-PARTY-NOTICES.txt", "LICENSING.md", "theia/yarn.lock", "configuration.toml"],
     "executionMode": "branch"
   }
 }
