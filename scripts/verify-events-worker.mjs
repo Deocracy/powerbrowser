@@ -93,6 +93,7 @@ const RULE = Object.freeze({
     usage: 'usage event skipped',
     schemaColumn: 'schema declares every column',
     noRoutes: 'no routes key',
+    workersDev: 'no workers.dev URL',
     credential: 'credential-shaped assignment in worker/',
 });
 
@@ -274,6 +275,10 @@ async function runStatic(root, worker) {
         ]) {
             if (!wrangler.includes(literal)) failures.push(`${WRANGLER_REL} does not state ${label} (${literal}). Next step: restore it in the descriptor.`);
         }
+        for (const key of ['workers_dev', 'preview_urls']) {
+            if (!new RegExp(`^${key}\\s*=\\s*false\\s*$`, 'm').test(wrangler)) failures.push(`${RULE.workersDev}: ${WRANGLER_REL} does not state ${key} = false, so a workers.dev URL would bypass the zone rate-limit rule. Next step: state ${key} = false at the top level.`);
+        }
+        if (!/\/download-counts/.test(wrangler.split('\n').filter(l => l.startsWith('#')).join('\n'))) failures.push(`${RULE.workersDev}: the runbook in ${WRANGLER_REL} does not name /download-counts in the rate-limit rule, which is its only guess limit. Next step: cover both routes in runbook step 6.`);
         if (/^\s*routes\s*=/m.test(wrangler)) failures.push(`${RULE.noRoutes}: ${WRANGLER_REL} states a routes key, but Phase 47 attaches the events hostname. Next step: remove the routes key.`);
         const placeholders = wrangler.split(PLACEHOLDER).length - 1;
         if (placeholders !== 1) failures.push(`${WRANGLER_REL} carries the database placeholder ${placeholders} time(s), not once. Next step: keep one database_id line with the placeholder; the owner replaces it at the checkpoint.`);
@@ -584,6 +589,8 @@ const PLANTS = [
     { rule: RULE.cors, rel: WORKER_REL, find: "        const cors = path === EVENTS_PATH ? corsHeaders(origin, false) : {};", replace: '        const cors = corsHeaders(origin, false);' },
     { rule: RULE.cors, rel: WORKER_REL, find: "        const cors = path === EVENTS_PATH ? corsHeaders(origin, false) : {};", replace: '        const cors = {};' },
     { rule: RULE.cors, rel: WORKER_REL, find: 'export const CORS_ORIGIN = /^http:\\/\\/127\\.0\\.0\\.1:\\d{1,5}$/;', replace: 'export const CORS_ORIGIN = /^http:\\/\\/localhost:\\d{1,5}$/;' },
+    { rule: RULE.workersDev, rel: WRANGLER_REL, find: 'workers_dev = false', replace: 'workers_dev = true' },
+    { rule: RULE.workersDev, rel: WRANGLER_REL, find: 'preview_urls = false\n', replace: '' },
     { rule: RULE.admitted, rel: WORKER_REL, find: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);", replace: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os', 'message']);" },
     { rule: RULE.schemaColumn, rel: SCHEMA_REL, find: '  "column" INTEGER,\n', replace: '' },
     { rule: RULE.noRoutes, rel: WRANGLER_REL, find: 'compatibility_date = "2026-10-31"', replace: 'compatibility_date = "2026-10-31"\nroutes = ["events.powerbrowser.org/events"]' },
