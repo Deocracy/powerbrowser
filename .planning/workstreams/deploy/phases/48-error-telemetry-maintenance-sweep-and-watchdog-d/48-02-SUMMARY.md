@@ -173,3 +173,22 @@ Payload: type, basename, line, column, version, buildID, OS (the wire keys are t
 - Plan 48-03 (maintenance sweep) calls POST /download-counts with the bot environment copy of the secret and reads the row's no-data state until Phases 49 and 50.
 - Plan 48-05 (owner checkpoint) runs the commands in worker/wrangler.toml: pinned wrangler version, d1 create, d1 execute of schema.sql, secret put, deploy, the rate-limit rule (threshold recorded verbatim), and one synthetic POST.
 - Owner decisions to check: the synthetic control flag (Rule 2 above), and whether the two new RENEWALS rows should merge with the existing combined row.
+
+## Code Review Fixes (Phase 48 review, plans 48-01 and 48-02)
+
+The review fixes are in `48-REVIEW-FIX.md`. They change this summary's earlier statements as follows:
+
+- **Superseded: throttle.** The per-instance 60-per-minute window is gone. The Worker keeps no counter; the one per-IP zone rule (now stated over both `/events` and `/download-counts`, with `workers_dev` and `preview_urls` off) is the rate limit. The `throttled_in_worker_cap` reason no longer exists.
+- **Superseded: body read.** The body cap is enforced from Content-Length before the read and while the body streams in; an unauthenticated download-count POST reads no body.
+- **Resolved: the synthetic flag.** The flag is honoured only when the request proves the shared secret; an anonymous flagged event is stored as a real one. The step 7 probe in `worker/wrangler.toml` sends the secret and uses the real envelope.
+- **Changed: wire contract.** Events are read from the sender's `{kind, name, data, at}` envelope; `name` is a stored column; `kind` `usage` is skipped, any other non-`error` kind or a shape mismatch answers 400 `malformed_event`; an empty events array answers 400 `malformed_batch`; a wrong method on a known path answers 405.
+- **Changed: `compatibility_date`** is the fixed past date 2025-01-01, not the day of writing.
+
+### Open owner decisions
+
+- **IN-03 (open, not changed): the usage path at level `all` is unfiltered.** `sendEventData(name, data)` still sends any event name and any data object to the endpoint when the level is `all`. The Worker now skips `usage` events, so nothing from that path is stored, but the data has already left the machine. The preference text discloses extension telemetry at "on" and does not say that `all` sends arbitrary payloads. Options: apply the admitted-key and shape filter to the usage path, or have `all` send nothing beyond the error path until a usage schema exists, and name the difference in the preference text. Owner to decide.
+- **IN-04 (open, not changed): Gecko `toolkit.telemetry.server` is repointed at the events Worker whenever the level is not `off`.** The unified-telemetry flags are compiled out, so this should be inert, but if any Gecko telemetry path is ever enabled it would POST non-error pings to the error endpoint. `verify-telemetry` check 5 asserts only the blank at level off. Options: add a check that the compile-out holds, or keep the Gecko pref blank for the Worker host. Owner to decide; worth a note in the privacy review.
+- **Residual from CR-03.** The generator now refuses a downstream that enables a level on the platform endpoint. A downstream at level `off` that omits `[telemetry] endpoint` still inherits the platform endpoint in its fragment, so a user who raises the preference in that build would send to the platform host. The review and the fix scope stop at "level is not off"; closing it means making every downstream state its own endpoint. Owner to decide.
+- **CORS origin.** The Theia page's origin is `http://127.0.0.1:<port>` with a per-launch port, so `Access-Control-Allow-Origin` echoes the request origin only when it matches that pattern. The dev app on `localhost:3000` is not allowed and cannot deliver reports. Not verified in a live browser; the 48-05 loopback live-delivery row is the first real check.
+- **D1 query limit.** The sender sends at most 20 events per POST. A hostile batch of up to 100 events becomes one `DB.batch` of up to 100 statements; the review cited a 50-query per-invocation limit on the free plan, which I did not re-verify. Not changed.
+
