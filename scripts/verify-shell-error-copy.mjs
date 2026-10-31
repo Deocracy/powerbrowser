@@ -596,6 +596,10 @@ const EXPECTED_NAV_COPY = new Set([
   "Reset zoom (Ctrl+0)",
   "Mute tab",
   "Unmute tab",
+  "Reader view",
+  "Exit reader view",
+  "Reader view isn't available for this page",
+  "View page source (Ctrl+U)",
   "${name} couldn't open the print dialog. Press Ctrl+P to try again.",
   "Save page as",
   "${name} couldn't save that page. Choose a different place and try again.",
@@ -717,7 +721,7 @@ const EXPECTED_SHORTCUT_COPY = new Set([
   "Ctrl+Tab", "Ctrl+Shift+Tab", "Ctrl+Page Down", "Ctrl+Page Up",
   "Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+6", "Alt+7", "Alt+8", "Alt+9",
   "F6", "Shift+F6",
-  "Ctrl+F", "F3", "Shift+F3", "Ctrl+=", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+M", "Ctrl+P", "Ctrl+S",
+  "Ctrl+F", "F3", "Shift+F3", "Ctrl+=", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+M", "Ctrl+P", "Ctrl+S", "Ctrl+U",
   "Back", "Forward", "Reload", "Stop", "Home", "New Tab",
 ]);
 

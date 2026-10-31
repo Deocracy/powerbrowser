@@ -8,8 +8,9 @@ import { Message } from '@theia/core/shared/@lumino/messaging';
 import { DockPanel, TabBar } from '@theia/core/shared/@lumino/widgets';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
-import { WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { CRASHED_COPY, WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { CHROME_BAR_COPY } from './chrome-bar-copy';
+import { safeIcon } from './address-bar/address-bar-rows';
 
 /** Marks a home-pane tab that the strip lists, so the pane's own bar does not. */
 const STRIP_ONLY_CLASS = 'pb-strip-only';
@@ -89,6 +90,9 @@ export class TabStripWidget extends ReactWidget {
     @inject(GroupModel)
     protected readonly groups: GroupModel;
 
+    @inject(WebTabChannel)
+    protected readonly channel: WebTabChannel;
+
     protected readonly toDispose = new DisposableCollection();
 
     @postConstruct()
@@ -106,6 +110,8 @@ export class TabStripWidget extends ReactWidget {
             this.shell.onDidRemoveWidget(() => this.update()),
             this.shell.onDidChangeCurrentWidget(() => this.update()),
             this.groups.onDidChange(() => this.update()),
+            // Phase 32 plan 08 (PAGE-04, PAGE-11): a pushed favicon or crash flag repaints the row's icon and mark.
+            this.channel.onDidChangeTabStatus(() => this.update()),
         ]);
         this.shell.mainPanel.onDidChangeCurrent(() => this.update());
         // A split moves a tab between panes without adding or removing it,
@@ -627,6 +633,20 @@ export class TabStripWidget extends ReactWidget {
         </div>;
     }
 
+    /**
+     * Phase 32 plan 08 (PAGE-04, PAGE-11): a crashed web tab shows the crash mark; otherwise its pushed favicon
+     * (a bounded data: icon, never fetched), else the globe. Showing an icon never touches the network.
+     */
+    protected renderTabIcon(widget: WebTabWidget): React.ReactNode {
+        if (widget.crashed) {
+            return <span className='codicon codicon-warning pb-tab-crashed' role='img' aria-label={CRASHED_COPY} title={CRASHED_COPY} />;
+        }
+        const image = safeIcon(widget.favicon);
+        return image
+            ? <img className='pb-tab-favicon' src={image} alt='' />
+            : <span className='codicon codicon-globe pb-tab-favicon' aria-hidden='true' />;
+    }
+
     protected renderTab(widget: Widget, active: boolean): React.ReactNode {
         const label = widget.title.label || widget.id;
         return <div
@@ -638,6 +658,7 @@ export class TabStripWidget extends ReactWidget {
             onClick={() => this.activateTab(widget)}
             onPointerDown={event => this.beginDrag(widget, event)}
         >
+            {widget instanceof WebTabWidget && this.renderTabIcon(widget)}
             <span className='pb-tab-title'>{label}</span>
             {/* Phase 32 plan 02 (PAGE-05): the audio mark. Muted-ink when muted; its click is the one tab mute affordance. */}
             {widget instanceof WebTabWidget && (widget.soundPlaying || widget.audioMuted) && <span

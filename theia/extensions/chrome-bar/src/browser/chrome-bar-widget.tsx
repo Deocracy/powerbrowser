@@ -796,6 +796,29 @@ export class ChromeBarWidget extends ReactWidget {
         </div>;
     }
 
+    /**
+     * PAGE-10 (32-08): the reader toggle beside the pill. Disabled, not removed, on a non-web tab (the 13-UI-SPEC layout
+     * stability rule); enabled only where the tab's own canToggleReader says so. It acts in the same tab.
+     */
+    protected renderReaderToggle(): React.ReactNode {
+        const tab = currentWebTab();
+        const inReader = tab?.isReaderMode === true;
+        const title = inReader ? CHROME_BAR_COPY.exitReaderView
+            : tab?.hasPage && tab.canToggleReader ? CHROME_BAR_COPY.readerView
+            : CHROME_BAR_COPY.readerUnavailable;
+        return <button
+            type='button'
+            className='pb-chrome-bar-button pb-chrome-bar-reader'
+            aria-label={title}
+            aria-pressed={inReader}
+            title={title}
+            disabled={!tab || !(inReader || tab.canToggleReader)}
+            onClick={() => void tab?.setReader(!inReader)}
+        >
+            <span className='codicon codicon-book' />
+        </button>;
+    }
+
     /** PAGE-02: the zoom chip, shown only while the pushed level is not 100%; one click resets it. */
     protected renderZoomChip(): React.ReactNode {
         const tab = currentWebTab();
@@ -1003,6 +1026,7 @@ export class ChromeBarWidget extends ReactWidget {
                 </button>
             )}
             {this.addressBar.render()}
+            {this.renderReaderToggle()}
             {this.renderZoomChip()}
             <button
                 className='pb-chrome-bar-button'

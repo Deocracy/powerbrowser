@@ -100,7 +100,8 @@ export class TabsAddressBarMode extends BuiltInAddressBarMode {
         return tabs
             .filter(w => w !== current && matches(text, w.title.label, w.url))
             .sort((a, b) => rank(a) - rank(b))
-            .map((w): Row => ({ key: 'tab:' + w.id, source: 'tab', title: w.title.label || w.url, caption: w.url, url: w.url, widgetId: w.id }));
+            // Phase 32 plan 08 (PAGE-04): the tab's pushed favicon; undefined keeps the Places icon cache as the fallback.
+            .map((w): Row => ({ key: 'tab:' + w.id, source: 'tab', title: w.title.label || w.url, caption: w.url, url: w.url, widgetId: w.id, icon: w.favicon ?? undefined }));
     }
 }
 

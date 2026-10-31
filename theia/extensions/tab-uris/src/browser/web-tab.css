@@ -56,4 +56,25 @@
     display: none;
 }
 
+/* PAGE-11 (32-08): the crashed tab's copy and Reload button. Existing tokens only; no new accent. */
+.pb-web-tab-state.is-crashed {
+    color: var(--color-text, #fbfbfe);
+}
+
+.pb-web-tab-reload {
+    margin-top: 12px;
+    padding: 4px 12px;
+    font: inherit;
+    color: var(--color-text, #fbfbfe);
+    background: transparent;
+    border: 1px solid var(--color-text-muted, #9a99a8);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.pb-web-tab-reload:focus-visible {
+    outline: 2px solid var(--color-primary, #00a6f5);
+    outline-offset: 2px;
+}
+
 }

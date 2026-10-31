@@ -70,6 +70,9 @@ const GROUP_RESPONSE_EVENT = 'PowerBrowserGroupResponse';
 export const NEW_TAB_LABEL = 'New Tab';
 const EMPTY_STATE_COPY = 'Type an address above to get started.';
 const LOST_VIEW_COPY = "PowerBrowser can't show this page right now. Choose Reload to try again, or close this tab.";
+/** Phase 32 plan 08 (PAGE-11, D-25c): the crashed-tab copy and its button label, verbatim. Text nodes only. */
+export const CRASHED_COPY = 'This tab crashed. Reload to try again.';
+export const CRASHED_RELOAD_LABEL = 'Reload tab';
 
 /**
  * Occlusion policy (UI-SPEC A8, Research Pitfall 3). The overlay is
@@ -383,6 +386,8 @@ export class WebTabChannel {
             if (!widget) {
                 return;
             }
+            const iconBefore = widget.favicon;
+            const crashedBefore = widget.crashed;
             widget.applyState({
                 url: typeof detail.url === 'string' ? detail.url : widget.url,
                 title: typeof detail.title === 'string' ? detail.title : '',
@@ -413,6 +418,9 @@ export class WebTabChannel {
                 crashed: typeof detail.crashed === 'boolean' ? detail.crashed : widget.crashed,
                 isReaderMode: typeof detail.isReaderMode === 'boolean' ? detail.isReaderMode : widget.isReaderMode,
             });
+            if (iconBefore !== widget.favicon || crashedBefore !== widget.crashed) {
+                this.tabStatusEmitter.fire(widget);
+            }
         });
         // Phase 32 plan 04 (PAGE-06): the Downloads rows arrive whole in each push; the bar reads them through onDidChangeDownloads.
         this.onPush('downloadsChanged', detail => {
@@ -425,6 +433,10 @@ export class WebTabChannel {
     downloadRows: WebTabDownloadRow[] = [];
     private readonly downloadsEmitter = new Emitter<WebTabDownloadRow[]>();
     readonly onDidChangeDownloads: TheiaEvent<WebTabDownloadRow[]> = this.downloadsEmitter.event;
+
+    /** Phase 32 plan 08 (PAGE-04, PAGE-11): fires when a web tab's pushed favicon or crash flag changes, so the strip redraws. */
+    private readonly tabStatusEmitter = new Emitter<WebTabWidget>();
+    readonly onDidChangeTabStatus: TheiaEvent<WebTabWidget> = this.tabStatusEmitter.event;
 
     /**
      * Subscribes to one push kind on the one chrome push event. Later phases
@@ -558,6 +570,11 @@ export class WebTabWidget extends BaseWidget {
     crashed = false;
     /** Phase 32 plan 07 (PAGE-10): the last pushed reader flag. */
     isReaderMode = false;
+    /**
+     * Phase 32 plan 08 (PAGE-10): the readability signal. No chrome push carries it yet (a 32-07 open item), so it stays
+     * false and the reader toggle is enabled only while the page is in reader view.
+     */
+    isArticle = false;
     /** Phase 31 plan 02 (SITE-06): the non-default permission ids, table order; the identity box's icons. */
     permissionIcons: string[] = [];
     /** Phase 31 plan 02: the labels of permissionIcons, same order; the icons' tooltip. */
@@ -598,8 +615,9 @@ export class WebTabWidget extends BaseWidget {
         this.title.iconClass = 'codicon codicon-globe';
         this.node.tabIndex = 0;
         this.addClass('pb-web-tab');
-        // The one child: the empty-state / lost-view line, a text node
-        // only. Live so a screen reader hears the state when it changes.
+        // The state text: the empty-state or lost-view line (text only), or
+        // the crash copy with its Reload button (PAGE-11). Live so a screen
+        // reader hears the state when it changes.
         this.stateNode = document.createElement('div');
         this.stateNode.className = 'pb-web-tab-state';
         this.stateNode.setAttribute('aria-live', 'polite');
@@ -620,6 +638,16 @@ export class WebTabWidget extends BaseWidget {
 
     /** The body text state. Fixed literals; the tab counter, empty-page URL, kinds and error text never reach it. */
     protected renderState(): void {
+        if (this.crashed) {
+            // PAGE-11 (32-08): the crash UI is this placeholder; publish() hides the overlay while the tab is crashed.
+            // Built once per crash: a repeat render would drop keyboard focus from the Reload button.
+            if (!this.stateNode.classList.contains('is-crashed')) {
+                this.renderCrashed();
+            }
+            this.stateNode.classList.remove('is-lost');
+            return;
+        }
+        this.stateNode.classList.remove('is-crashed');
         if (this.lostView) {
             this.stateNode.textContent = LOST_VIEW_COPY;
             this.stateNode.classList.add('is-lost');
@@ -630,6 +658,22 @@ export class WebTabWidget extends BaseWidget {
             this.stateNode.textContent = '';
             this.stateNode.classList.remove('is-lost');
         }
+    }
+
+    /** PAGE-11 (32-08): the contracted crash copy and its Reload button, which runs the existing reload path. */
+    protected renderCrashed(): void {
+        const text = document.createElement('span');
+        text.className = 'pb-web-tab-crash-copy';
+        text.textContent = CRASHED_COPY;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'pb-web-tab-reload';
+        button.textContent = CRASHED_RELOAD_LABEL;
+        button.addEventListener('click', () => void this.reload());
+        // The placeholder's Enter and Space handler hands focus to the page; the button keeps its own activation.
+        button.addEventListener('keydown', event => event.stopPropagation());
+        this.stateNode.replaceChildren(text, button);
+        this.stateNode.classList.add('is-crashed');
     }
 
     protected setLostView(lost: boolean): void {
@@ -739,7 +783,8 @@ export class WebTabWidget extends BaseWidget {
                 return;
             }
             const r = this.node.getBoundingClientRect();
-            const showable = this.isAttached && this.isVisible && this.hasPage;
+            // A crashed tab is not showable: the overlay hides and the placeholder carries the crash UI (PAGE-11, 32-08).
+            const showable = this.isAttached && this.isVisible && this.hasPage && !this.crashed;
             const msg: WebTabMessage = {
                 kind: 'webTabGeometry',
                 tabId: this.tabId,
@@ -824,6 +869,9 @@ export class WebTabWidget extends BaseWidget {
         if (this.lostView) {
             return this.reopen();
         }
+        if (this.crashed) {
+            return this.recreate();
+        }
         const reply = this.settle(await this.channel.request({ kind: 'webTabReload', tabId: this.tabId, ...(bypassCache ? { bypassCache: true } : {}) }));
         // "One Reload, not two" (G-14.1.1-4). The overlay was dropped between
         // the last geometry publish and this click, so `publish()`'s reply
@@ -834,6 +882,16 @@ export class WebTabWidget extends BaseWidget {
             return this.reopen();
         }
         return reply;
+    }
+
+    /**
+     * PAGE-11 (32-08): a crashed overlay has no remote tab, so webTabReload and a
+     * history jump both fail on it (live, 32-08). Its overlay is closed and opened
+     * again at the same URL with the same tab id instead.
+     */
+    protected async recreate(): Promise<WebTabReply> {
+        await this.channel.request({ kind: 'webTabClose', tabId: this.tabId });
+        return this.reopen();
     }
 
     /**
@@ -930,6 +988,30 @@ export class WebTabWidget extends BaseWidget {
     /** PAGE-02: back to 100%. */
     async zoomReset(): Promise<WebTabReply> {
         return this.settleUnknownTab(await this.channel.request({ kind: 'webTabZoomReset', tabId: this.tabId }));
+    }
+
+    /**
+     * PAGE-10 (32-08): the reader toggle is enabled on an article page, or while the page is already in reader view
+     * (so Exit stays reachable). Without a readability signal, an ordinary page has the toggle disabled.
+     */
+    get canToggleReader(): boolean {
+        return this.isReaderMode || this.isArticle;
+    }
+
+    /**
+     * PAGE-10 (32-08): enters or leaves reader view in this same tab, so Back and Forward keep the page's history.
+     * A refusal is a validation answer about the page, not a lost view, so it never blanks the tab.
+     */
+    async setReader(enter: boolean): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabReader', tabId: this.tabId, enter }));
+    }
+
+    /**
+     * PAGE-10 (32-08): loads this page's source in this same tab. Chrome mints the source URL itself; this widget
+     * sends only the tab id, so no view-source URL is ever held here.
+     */
+    async viewSource(): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabViewSource', tabId: this.tabId }));
     }
 
     /** PAGE-05: mutes or unmutes this tab. The flag is explicit, never a toggle; the reply reads `audioMuted` back. */
@@ -1072,6 +1154,7 @@ export class WebTabWidget extends BaseWidget {
         this.audioMuted = state.audioMuted;
         this.soundPlaying = state.soundPlaying;
         this.favicon = state.favicon;
+        const crashChanged = this.crashed !== state.crashed;
         this.crashed = state.crashed;
         this.isReaderMode = state.isReaderMode;
         if (state.permissionIcons !== undefined) {
@@ -1091,6 +1174,10 @@ export class WebTabWidget extends BaseWidget {
         }
         this.refreshTitle();
         this.renderState();
+        if (crashChanged) {
+            // The overlay shows or hides with the crash flag, so the geometry must be republished.
+            this.publish();
+        }
         this.stateEmitter.fire(state);
     }
 }

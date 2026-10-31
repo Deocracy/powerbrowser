@@ -67,6 +67,11 @@ export const CHROME_BAR_COPY = Object.freeze({
     zoomReset: 'Reset zoom (Ctrl+0)',
     muteTab: 'Mute tab',
     unmuteTab: 'Unmute tab',
+    // Phase 32 plan 08 (PAGE-10): the reader toggle and view source (32-UI-SPEC Copywriting Contract, Reader toggle and View source).
+    readerView: 'Reader view',
+    exitReaderView: 'Exit reader view',
+    readerUnavailable: "Reader view isn't available for this page",
+    viewSourceTooltip: 'View page source (Ctrl+U)',
     // Phase 32 plan 03 (PAGE-03): the print notice (32-UI-SPEC Copywriting Contract, Print failure).
     printFailed: (subject: string) => `${subject} couldn't open the print dialog. Press Ctrl+P to try again.`,
     // Phase 32 plan 05 (PAGE-08): the save dialog title and the save failure notice (32-UI-SPEC Copywriting Contract, Save page).
