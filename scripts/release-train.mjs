@@ -28,6 +28,14 @@
 //   verifyCheck   'success' | 'failure' | 'pending' | null on the bump PR
 //   ownerLogin    the owner's login, passed in by the workflow; never a literal here
 //
+// The uptake lane (TRAIN-05, UPS-01) keeps its own keys and states beside the five
+// above. A 175 candidate derives UPTAKE_* states: UPTAKE_DETECTED (replay due),
+// UPTAKE_CONFLICT (a patch did not apply), UPTAKE_RED (another replay FAIL) and
+// UPTAKE_REPLAYED (replay PASS, NOTE counts only). Its action is replay-only, note
+// or conflict-issue; no uptake state ever maps to a bump, a branch or a PR. Its
+// tracking issue is keyed by its own release key (release-train: v175.<x>-<rev>).
+// deriveUptake and uptakeGuard refuse any candidate that is not a uptake-major tag.
+//
 // Pure contract: derive(facts) -> state name or null; next(state) -> action;
 // render(state, facts) -> { title, body, labels, mention, assign, lock, close, writes };
 // findExactlyOne(found, rendered) -> the create, update or fail decision and whether
@@ -50,11 +58,13 @@
 //
 // Usage:
 //   node scripts/release-train.mjs --self-test
+//   node scripts/release-train.mjs --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>
+//   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false>
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { classifyTag, tagToVersion } from './detect-upstreams.mjs';
+import { classifyTag, tagToVersion, UPTAKE_MAJOR } from './detect-upstreams.mjs';
 
 const NAME = 'release-train-logic';
 const SELF_REL = 'scripts/release-train.mjs';
@@ -74,12 +84,25 @@ export const STATES = Object.freeze({
     BUMP_PR_GREEN: Object.freeze({ desc: 'bump PR open, pin moved, required verify check success' }),
 });
 
+// The uptake lane (TRAIN-05). Replay-only: no state here opens a branch, a PR or a dispatch.
+export const UPTAKE_STATES = Object.freeze({
+    UPTAKE_DETECTED: Object.freeze({ desc: 'a uptake-major *esr_RELEASE tag exists and its replay has not run: replay-only, no branch, no PR' }),
+    UPTAKE_CONFLICT: Object.freeze({ desc: 'the uptake replay FAILed in apply-patches: a patch did not apply' }),
+    UPTAKE_RED: Object.freeze({ desc: 'another uptake replay FAIL: a check or the brand scan, not a patch conflict' }),
+    UPTAKE_REPLAYED: Object.freeze({ desc: 'the uptake replay PASSed: NOTE counts only, nothing written' }),
+});
+export const ALL_STATES = Object.freeze({ ...STATES, ...UPTAKE_STATES });
+
 const ACTIONS = Object.freeze({
     DETECTED: 'bump',
     BUMPING: 'wait',
     CONFLICT: 'conflict-issue',
     BUMP_RED: 'wait-owner',
     BUMP_PR_GREEN: 'gate',
+    UPTAKE_DETECTED: 'replay-only',
+    UPTAKE_CONFLICT: 'conflict-issue',
+    UPTAKE_RED: 'wait-owner',
+    UPTAKE_REPLAYED: 'note',
 });
 
 /** The state a release is in, from facts, or null with nothing to do. Pure. */
@@ -102,6 +125,42 @@ export function next(state) {
     if (state === null) return 'idle';
     if (!Object.hasOwn(ACTIONS, state)) throw new Error(`no action for unknown state ${JSON.stringify(state)}`);
     return ACTIONS[state];
+}
+
+/**
+ * Null when the tag may be replayed on the uptake lane, else the named refusal. A 153 tag and
+ * a _BUILDn tag are both refused here. Pure.
+ */
+export function uptakeGuard(tag) {
+    const c = classifyTag(tag, UPTAKE_MAJOR, 'uptake');
+    return c.keep ? null : c.reason;
+}
+
+/**
+ * The uptake state for one candidate, or null when there is no candidate or the candidate is not
+ * a uptake-major tag (uptakeGuard names that refusal). Facts: candidateTag, stage (the first FAIL
+ * line the replay printed, or null) and replayed (true when the replay job ended success). Pure.
+ */
+export function deriveUptake(facts) {
+    const f = facts;
+    if (typeof f.candidateTag !== 'string' || uptakeGuard(f.candidateTag) !== null) return null;
+    if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'UPTAKE_CONFLICT';
+    if (typeof f.stage === 'string' && ANY_FAIL.test(f.stage)) return 'UPTAKE_RED';
+    if (f.replayed === true) return 'UPTAKE_REPLAYED';
+    return 'UPTAKE_DETECTED';
+}
+
+/**
+ * A bump branch must be the one its tag names, chore/esr-<tag>, so a branch and its tag can
+ * never disagree on major (Pitfall 1). UNWIRED: publish derives the branch from the tag
+ * (esrBranch in detect-upstreams.mjs), so this refusal guards any future writer that takes a
+ * branch name from elsewhere. Pure.
+ */
+export function branchTagFailure(branch, tag) {
+    const v = tagToVersion(tag);
+    if (v === null) return `the tag ${JSON.stringify(tag)} is not an *esr_RELEASE tag, so branch ${branch} names nothing. Next step: name the branch from a valid tag.`;
+    if (branch !== `chore/esr-${tag}`) return `branch ${branch} does not name tag ${tag} (major ${v.tuple[0]}), so the branch and the tag disagree. Next step: rename the branch to chore/esr-${tag}.`;
+    return null;
 }
 
 /** The patch number named by a conflict stage line, or null when the line names none. Pure. */
@@ -263,6 +322,45 @@ export function wouldWrite({ pinTag, tag, openPrNumber, stage }) {
     };
 }
 
+/**
+ * The would-write view for the uptake lane: the 175 candidate's state and action, and the conflict
+ * issue when the replay FAILed on a patch. Replay-only: it names what a live run would do and writes
+ * nothing. The tracking writer is unwired (BLOCKED.md item 3 of Phase 43), so the view prints the
+ * rendered body and does not PATCH. Pure.
+ */
+export function uptakeWouldWrite({ tag, stage, replayed }) {
+    if (tag === '') return { lines: ['release-train: would-write: uptake idle; no uptake-major tag is listed, so nothing is replayed'], failures: [] };
+    const guard = uptakeGuard(tag);
+    if (guard !== null) return { lines: [], failures: [`${guard}. Next step: pass only a uptake-major *esr_RELEASE tag to the replay lane.`] };
+    const facts = { candidateTag: tag, revision: 1, stage: stage === '' ? null : stage, replayed: replayed === true };
+    const state = deriveUptake(facts);
+    const action = next(state);
+    if (state === 'UPTAKE_CONFLICT') {
+        const reason = conflictStageReason(facts.stage);
+        if (reason !== null) return { lines: [`release-train: would-write: refused -- ${reason}`], failures: [] };
+        const decision = renderConflict(tag, conflictPatchNumber(facts.stage), facts.stage, '');
+        return {
+            lines: [`release-train: would-write: state=${state} action=${action}`, `would-write: conflict issue "${decision.title}", assigned to the owner; no patch is written`],
+            failures: conflictWriteFailures(decision),
+        };
+    }
+    const rendered = render(state, facts);
+    return {
+        lines: [`release-train: would-write: state=${state} action=${action}`, `would-write: uptake tracking issue "${rendered.title}" labels=${rendered.labels.join(',')}; the writer is not wired`, rendered.body],
+        failures: [],
+    };
+}
+
+function uptakeWouldWriteCli([tag, stage, replayed]) {
+    const view = uptakeWouldWrite({ tag, stage, replayed: replayed === 'true' });
+    view.lines.forEach(l => console.log(l));
+    if (view.failures.length > 0) {
+        view.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
+        return 1;
+    }
+    return 0;
+}
+
 function wouldWriteCli([pinTag, tag, openPrNumber, stage]) {
     if (tagToVersion(pinTag) === null) {
         console.error(`${NAME}: FAIL -- the pin ${JSON.stringify(pinTag)} is not an *esr_RELEASE tag. Next step: check the pin in configuration.toml.`);
@@ -345,13 +443,23 @@ const NEWER = esrTag(153, 23, 0);
 const BASE = Object.freeze({ pinTag: BASE_PIN, revision: 1, candidateTag: null, openPr: null, bumpConclusion: null, stage: null, verifyCheck: null, merged: false, pinUnchanged: false });
 // Each fixture carries its expected action as a literal. next() is checked against that
 // literal, never against ACTIONS, so a wrong entry in ACTIONS cannot agree with itself.
-const FIXTURES = Object.freeze({
+const FIXTURES_153 = Object.freeze({
     DETECTED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER }, action: 'bump' }),
     BUMPING: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 41 }, bumpConclusion: null }, action: 'wait' }),
     CONFLICT: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply (real conflict, not silent)' }, action: 'conflict-issue' }),
     BUMP_RED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 42 }, verifyCheck: 'failure' }, action: 'wait-owner' }),
     BUMP_PR_GREEN: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 43 }, verifyCheck: 'success', pinUnchanged: false }, action: 'gate' }),
 });
+// The uptake lane's fixtures, one per UPTAKE_* state. The candidate is a 175 tag, built from parts.
+const UPTAKE_TAG = esrTag(UPTAKE_MAJOR, 0, 0);
+const UPTAKE_BASE = Object.freeze({ candidateTag: UPTAKE_TAG, stage: null, replayed: false });
+const UPTAKE_FIXTURES = Object.freeze({
+    UPTAKE_DETECTED: Object.freeze({ facts: { ...UPTAKE_BASE }, action: 'replay-only' }),
+    UPTAKE_CONFLICT: Object.freeze({ facts: { ...UPTAKE_BASE, stage: 'apply-patches: FAIL -- 030-powerbrowser-mar-certificates.patch did not apply (real conflict, not silent)' }, action: 'conflict-issue' }),
+    UPTAKE_RED: Object.freeze({ facts: { ...UPTAKE_BASE, stage: 'rebase-upstream: FAIL -- scan-brand-residue.mjs found residual brand strings after the replay' }, action: 'wait-owner' }),
+    UPTAKE_REPLAYED: Object.freeze({ facts: { ...UPTAKE_BASE, replayed: true }, action: 'note' }),
+});
+const FIXTURES = Object.freeze({ ...FIXTURES_153, ...UPTAKE_FIXTURES });
 
 /** Failures for a conflict decision that writes anything under the patch directory. Pure. */
 export function conflictWriteFailures(decision) {
@@ -361,20 +469,21 @@ export function conflictWriteFailures(decision) {
 }
 
 function runChecks(overrides = {}) {
-    const states = overrides.states ?? Object.keys(STATES);
+    const states = overrides.states ?? Object.keys(ALL_STATES);
     const fixtures = overrides.fixtures ?? FIXTURES;
     const actionKeys = overrides.actionKeys ?? Object.keys(ACTIONS);
     const failures = [];
     const { onlyA: missingFixtures, onlyB: missingStates } = setDiff(states, Object.keys(fixtures));
     for (const s of missingFixtures) failures.push(`state ${s} has no fixture. Next step: add a fixture for ${s} beside the other states.`);
     for (const f of missingStates) failures.push(`fixture ${f} names no state in STATES. Next step: add ${f} to STATES, or delete the fixture.`);
-    const { onlyA: extraActions, onlyB: missingActions } = setDiff(actionKeys, Object.keys(STATES));
+    const { onlyA: extraActions, onlyB: missingActions } = setDiff(actionKeys, Object.keys(ALL_STATES));
     for (const a of extraActions) failures.push(`action ${a} names no state in STATES. Next step: delete it from ACTIONS, or add the state to STATES.`);
     for (const s of missingActions) failures.push(`state ${s} has no action in ACTIONS. Next step: map ${s} to its action in ACTIONS.`);
     for (const name of Object.keys(fixtures)) {
         if (!states.includes(name)) continue;
         const { facts, action: expected } = fixtures[name];
-        const got = derive(facts);
+        // The uptake lane derives with its own function, so a 175 fixture is never judged by the 153 table.
+        const got = name.startsWith('UPTAKE_') ? deriveUptake(facts) : derive(facts);
         if (got !== name) failures.push(`fixture ${name} derives ${got} instead of ${name}. Next step: fix derive() or the fixture facts.`);
         const action = next(got);
         if (action !== expected) failures.push(`fixture ${name} maps to action ${action}, not the expected ${expected}. Next step: fix next() or the expected action beside the fixture.`);
@@ -391,13 +500,13 @@ function selfTest() {
         baseline.failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`  ok  baseline -> five states, five fixtures with expected actions, set-equal; derive, next and render agree`);
+    console.log(`  ok  baseline -> ${Object.keys(ALL_STATES).length} states (${Object.keys(STATES).length} bump-lane, ${Object.keys(UPTAKE_STATES).length} uptake-lane), each with a fixture and an action, set-equal; derive, next and render agree`);
 
     const OWNER = 'owner-login-fixture';
     const trainPlants = [
         {
             name: 'a sixth state with no fixture',
-            run: () => runChecks({ states: [...Object.keys(STATES), 'BUILDING'] }).failures,
+            run: () => runChecks({ states: [...Object.keys(ALL_STATES), 'BUILDING'] }).failures,
             expect: 'BUILDING',
         },
         {
@@ -529,8 +638,38 @@ function selfTest() {
         },
     ];
 
+    // The uptake lane's faults (TRAIN-05, UPS-01): a 153 tag never reaches the 175 replay, a conflict
+    // names its patch, a conflict writes nothing under patches/, and a branch never names another tag.
+    const uptakePlants = [
+        {
+            name: 'a 153.x tag offered to the 175 uptake guard',
+            run: () => { const reason = uptakeGuard(NEWER); return reason === null ? [] : [reason]; },
+            expect: `major 153 is not the uptake major ${UPTAKE_MAJOR}`,
+        },
+        {
+            name: 'a 153.x tag offered as the uptake replay candidate',
+            run: () => uptakeWouldWrite({ tag: NEWER, stage: '', replayed: false }).failures,
+            expect: `not the uptake major ${UPTAKE_MAJOR}`,
+        },
+        {
+            name: 'a uptake conflict stage line naming no patch number',
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'FAIL -- apply-patches.sh failed replaying', replayed: false }).lines.filter(l => l.includes('refused')),
+            expect: 'names no patch number',
+        },
+        {
+            name: 'a uptake conflict decision that writes under the patch directory',
+            run: () => conflictWriteFailures({ ...renderConflict(UPTAKE_TAG, '030', 'log', 'diff'), writes: [`${PATCH_DIR}/030-powerbrowser-mar-certificates.patch`] }),
+            expect: `writes patches/030-powerbrowser-mar-certificates.patch under the patch directory`,
+        },
+        {
+            name: 'a bump branch named for a 175 tag while its tag is 153',
+            run: () => { const reason = branchTagFailure(`chore/esr-${UPTAKE_TAG}`, NEWER); return reason === null ? [] : [reason]; },
+            expect: `does not name tag ${NEWER}`,
+        },
+    ];
+
     let failed = 0;
-    for (const p of [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants]) {
+    for (const p of [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants, ...uptakePlants]) {
         const failures = p.run();
         const named = failures.find(f => f.includes(p.expect));
         if (failures.some(f => f.includes(REPO_ROOT))) {
@@ -543,7 +682,32 @@ function selfTest() {
             failed += 1;
         }
     }
-    for (const g of greens) {
+    const uptakeGreens = [
+        {
+            name: 'control: a 175 candidate is accepted by the uptake guard and derives UPTAKE_DETECTED',
+            run: () => {
+                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: false });
+                const ok = uptakeGuard(UPTAKE_TAG) === null && view.lines[0].includes('state=UPTAKE_DETECTED action=replay-only');
+                return ok ? [] : [`uptake view said ${view.lines[0]}`];
+            },
+        },
+        {
+            name: 'control: a 175 replay PASS derives UPTAKE_REPLAYED with the note action',
+            run: () => {
+                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: true });
+                return view.lines[0].includes('state=UPTAKE_REPLAYED action=note') ? [] : [`uptake PASS view said ${view.lines[0]}`];
+            },
+        },
+        {
+            name: 'control: the 153 and 175 keys differ, so their tracking issues never collide',
+            run: () => {
+                const bump = render('DETECTED', { ...FIXTURES.DETECTED.facts });
+                const uptake = render('UPTAKE_DETECTED', { ...UPTAKE_BASE });
+                return bump.title !== uptake.title && uptake.title.startsWith('release-train: v175.') ? [] : [`titles ${bump.title} and ${uptake.title} are not distinct per key`];
+            },
+        },
+    ];
+    for (const g of [...greens, ...uptakeGreens]) {
         const failures = g.run();
         if (failures.length === 0) {
             console.log(`  ok  ${g.name} -> green`);
@@ -556,8 +720,8 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    const total = trainPlants.length + conflictPlants.length + viewPlants.length + publishPlants.length;
-    console.log(`${NAME}: --self-test PASS -- ${Object.keys(STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length} controls stayed green`);
+    const total = trainPlants.length + conflictPlants.length + viewPlants.length + publishPlants.length + uptakePlants.length;
+    console.log(`${NAME}: --self-test PASS -- ${Object.keys(ALL_STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length + uptakeGreens.length} controls stayed green`);
     return 0;
 }
 
@@ -572,6 +736,7 @@ if (isEntry) {
     }
     if (args.length === 1 && args[0] === '--self-test') process.exit(selfTest());
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
+    if (args[0] === '--uptake-would-write' && args.length === 4) process.exit(uptakeWouldWriteCli(args.slice(1)));
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
     console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, or node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>.`);
