@@ -4525,7 +4525,7 @@ run_own_checks() {
 
     # NEW (Phase 48, TEL-10/TEL-11): the telemetry Worker's contract gate. It imports the Worker
     # and drives every rule against a stub D1: method, path, content type, parse, shape, the body
-    # and batch caps, the string cap, the per-window throttle, the authenticated download-count
+    # and batch caps, the string cap, no cross-caller throttle, the authenticated download-count
     # route, the per-day upsert, the 30-day retention, and the maintainer query that excludes
     # synthetic rows. It also cross-checks the admitted set against the producer, the privacy
     # page's retention, the schema columns, the wrangler descriptor, and that no credential

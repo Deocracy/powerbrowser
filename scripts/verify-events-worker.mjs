@@ -77,7 +77,7 @@ const RULE = Object.freeze({
     overCapBatch: 'over-cap batch',
     extraProp: 'extra-prop event',
     overLength: 'over-length string',
-    overRate: 'over-rate sequence',
+    noSuppress: 'one client cannot suppress another',
     unauthDownload: 'unauthenticated download-count POST',
     wrongSecret: 'wrong-secret download-count POST',
     malformedAuthed: 'malformed authenticated body',
@@ -181,7 +181,7 @@ function post(path, body, headers = {}) {
 }
 
 function freshState(nowMs = FIXED_NOW) {
-    return { nowMs, throttle: { acceptedAt: [] } };
+    return { nowMs };
 }
 
 /** One event in the sender's envelope: {kind, name, data, at}. */
@@ -395,23 +395,21 @@ async function runBehaviour(root, worker, secret) {
     }
     await expectRejected(RULE.content, post(worker.EVENTS_PATH, { events: [errorEvent({ type: 'T' }, { name: 'plugin failed: /home/alice/x' })] }), { status: 400, body: 'Discarded: malformed_event' });
 
-    // Over-rate sequence: MAX POSTs accepted, the next answers the discard and stores nothing.
-    if (worker.THROTTLE_MAX_POSTS > 1000) {
-        failures.push(`${RULE.overRate}: the budget is ${worker.THROTTLE_MAX_POSTS} POSTs, above the 1000 this gate can drive. Next step: lower THROTTLE_MAX_POSTS or raise the gate's bound.`);
-    } else {
+    // One client cannot suppress another: the Worker keeps no cross-caller counter, so a flood of POSTs
+    // (well past the 60 per minute the old in-Worker window allowed) never makes it discard a later
+    // caller's report. Driven through the real fetch handler, which holds the module-level state.
+    {
+        delete globalThis.__plantSent;
         const stub = makeStub();
-        const state = freshState();
-        const one = post(worker.EVENTS_PATH, { events: [errorEvent({ type: 'T' })] });
-        for (let i = 0; i < worker.THROTTLE_MAX_POSTS; i += 1) {
-            const verdict = await worker.handleEvents(one, env(stub), state);
-            if (verdict.status !== 200) {
-                failures.push(`${RULE.overRate}: POST ${i + 1} of ${worker.THROTTLE_MAX_POSTS} answered ${verdict.status}, not 200. Next step: the budget must admit THROTTLE_MAX_POSTS POSTs per window.`);
-                break;
-            }
+        const flood = 150;
+        const one = JSON.stringify({ events: [errorEvent({ type: 'T' })] });
+        let last;
+        for (let i = 0; i < flood; i += 1) {
+            last = await worker.default.fetch(new Request(`https://events.example.invalid${worker.EVENTS_PATH}`, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '203.0.113.7' }, body: one }), env(stub));
         }
-        const over = await worker.handleEvents(one, env(stub), state);
-        if (over.status !== 200 || over.body !== 'Discarded: throttled_in_worker_cap') failures.push(`${RULE.overRate}: POST ${worker.THROTTLE_MAX_POSTS + 1} answered ${over.status} ${JSON.stringify(over.body)}, not 200 "Discarded: throttled_in_worker_cap". Next step: restore the throttle guard in handleEvents.`);
-        if (stub.events.length !== worker.THROTTLE_MAX_POSTS) failures.push(`${RULE.overRate}: the store holds ${stub.events.length} row(s) after the discard, not ${worker.THROTTLE_MAX_POSTS}. Next step: a throttled POST stores nothing.`);
+        const other = await worker.default.fetch(new Request(`https://events.example.invalid${worker.EVENTS_PATH}`, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '198.51.100.9' }, body: one }), env(stub));
+        if (last.status !== 200 || other.status !== 200 || stub.events.length !== flood + 1) failures.push(`${RULE.noSuppress}: after ${flood} POSTs from one caller a second caller's POST answered ${other.status} ${JSON.stringify(await other.text())} and the store holds ${stub.events.length} of ${flood + 1} rows. Next step: keep no cross-caller counter in the Worker; the zone rule is the rate limit.`);
+        delete globalThis.__plantSent;
     }
 
     // CORS: the preflight and the origin allowance, driven through the real fetch handler.
@@ -547,7 +545,7 @@ async function main() {
         for (const f of failures) console.error(`  - ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- the Worker holds the admitted set, the retention, the caps, the throttle, the secret and the schema`);
+    console.log(`${NAME}: PASS -- the Worker holds the admitted set, the envelope, the retention, the caps, the secret and the schema`);
 }
 
 // --- self-test -----------------------------------------------------------------
@@ -571,7 +569,7 @@ const PLANTS = [
     { rule: RULE.overCapBatch, rel: WORKER_REL, find: ' || top.events.length > MAX_EVENTS', replace: '' },
     { rule: RULE.extraProp, rel: WORKER_REL, find: '    row.synthetic = event.synthetic === true ? 1 : 0;', replace: '    row.synthetic = event.synthetic === true ? 1 : 0;\n    row.message = event.message;' },
     { rule: RULE.overLength, rel: WORKER_REL, find: '    return value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value;', replace: '    return value;' },
-    { rule: RULE.overRate, rel: WORKER_REL, find: '    if (throttled(state.throttle, state.nowMs)) return discard(200, REASON_THROTTLED);', replace: '' },
+    { rule: RULE.noSuppress, rel: WORKER_REL, find: '    const admitted = top.events.map(admitEvent);', replace: "    globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n    if (globalThis.__plantSent > 60) return discard(200, 'throttled_in_worker_cap');\n    const admitted = top.events.map(admitEvent);" },
     { rule: RULE.unauthDownload, rel: WORKER_REL, find: '    if (!authorized(shape.headers?.authorization, env)) return empty(401);', replace: '' },
     { rule: RULE.wrongSecret, rel: WORKER_REL, find: "    return constantTimeEqual(header.slice('Bearer '.length), expected);", replace: "    return header.startsWith('Bearer ');" },
     { rule: RULE.malformedAuthed, rel: WORKER_REL, find: ' || !Number.isInteger(count) || count < 0', replace: '' },
