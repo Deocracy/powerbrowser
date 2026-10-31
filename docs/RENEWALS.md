@@ -23,6 +23,7 @@ Reading the columns: an ISO date in Expiry is an expiry or a deadline. A bare ye
 | Codeberg deploy token, legion mirror | unknown | 2026-10-29 | Rotate the token on legion, then re-verify that the mirror push succeeds. | GH-04 |
 | Anthropic key, fixer | unknown | 2026-10-29 | Rotate the key in the Anthropic Console, then replace the fixer environment secret. | FIX-08 |
 | Anthropic key, triage | unknown | 2026-10-29 | Rotate the key in its own Anthropic Console workspace, then replace the triage environment secret. | GH-03, GH-16 |
+| Anthropic Console workspace, triage (monthly spend limit) | unknown | 2026-10-31 | Confirm the triage workspace and its monthly spend limit at the 53-04 checkpoint, then record the limit and the OIDC-or-key outcome in docs/RELEASING.md. | GH-16, FIX-12 |
 | winget submission credential | unknown | 2026-10-29 | Decide the credential holder in Phase J, then enter its expiry in the Expiry cell and rotate it on that date. | DIST-04, DIST-12 |
 | MAR signing certificate | 2046 | 2026-10-29 | Confirm the expiry at the Phase B secondary-key ceremony, then replace this year with the ISO date. | SEC-09, DOC-04 |
 | Node 24 end of life | 2028-04-30 | 2026-10-29 | Decide the successor Node line before this date. | UPS-02 |
