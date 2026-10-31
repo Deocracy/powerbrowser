@@ -240,14 +240,18 @@ const newerOnSameLine = (newer, old) => {
  * The state a release is in, from facts, or null with nothing to do. Pure.
  * The TRAIN-04 arms run after the release-stage check, so a published release is never superseded:
  * (1) an open same-ESR chemspill revision preempts this scheduled train (chemspillOpen);
- * (2) a newer validated ESR tag preempts this open older train (newerTag). A chemspill revision
- *     train carries neither flag, so it falls through to the Phase 43 ladder and proceeds.
+ * (2) a newer validated ESR tag preempts this open older train (newerTag). Both arms apply to a
+ *     scheduled train only (revision 1): a chemspill revision train is never superseded, whatever
+ *     flags the collector sets, and falls through to the Phase 43 ladder.
  */
 export function derive(facts) {
     const f = facts;
     if (f.release) return deriveRelease(f.release);
-    if (f.openPr && f.chemspillOpen === true) return 'SUPERSEDED';
-    if (f.openPr && typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, f.candidateTag)) return 'SUPERSEDED';
+    // A revision (chemspill) train is never preempted: only a scheduled train (revision exactly 1) is superseded.
+    // Fail-safe: a missing or odd revision is treated as a revision, so nothing irreversible follows from it.
+    const scheduled = f.revision === 1;
+    if (f.openPr && scheduled && f.chemspillOpen === true) return 'SUPERSEDED';
+    if (f.openPr && scheduled && typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, f.candidateTag)) return 'SUPERSEDED';
     if (f.merged === true && f.pinUnchanged === true) return 'BUMP_RED';
     if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'CONFLICT';
     if (typeof f.stage === 'string' && ANY_FAIL.test(f.stage)) return 'BUMP_RED';
@@ -893,6 +897,15 @@ function selfTest() {
                 const revision = { ...BASE, candidateTag: BASE_PIN, revision: 2, openPr: { head: `chore/esr-${BASE_PIN}`, number: 44 }, verifyCheck: null };
                 const got = derive(revision);
                 return got === 'BUMPING' ? [] : [`the chemspill revision train derives ${got}, not BUMPING`];
+            },
+        },
+        {
+            name: 'control: a chemspill revision train stays its own train and ships under a newer ESR tag and an open-chemspill flag; the scheduled train beside it is superseded',
+            run: () => {
+                const revision = { ...BASE, candidateTag: BASE_PIN, revision: 2, openPr: { head: `chore/esr-${BASE_PIN}`, number: 44 }, verifyCheck: 'success', newerTag: NEWER, chemspillOpen: true };
+                const scheduled = { ...FIXTURES.BUMPING.facts, newerTag: NEWER, chemspillOpen: true };
+                const got = [derive(revision), derive(scheduled)];
+                return got[0] === 'BUMP_PR_GREEN' && got[1] === 'SUPERSEDED' ? [] : [`revision derives ${got[0]} (want BUMP_PR_GREEN), scheduled derives ${got[1]} (want SUPERSEDED)`];
             },
         },
         {
