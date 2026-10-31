@@ -181,10 +181,11 @@ function authorized(header, env) {
  * Reduce one client event, in the sender's envelope {kind, name, data, at}, to the stored row. Only
  * name and the ADMITTED_KEYS of data are read, each in its admitted shape; a value that fails its
  * shape makes the event malformed. synthetic is a control flag read as a boolean, never stored as
- * payload text. Returns null for an event that is not an error report (skipped, not stored) and
+ * payload text, and only honoured when the caller proved the shared secret (mayMarkSynthetic), so an
+ * anonymous client cannot hide its rows from the maintainer view. Returns null for an event that is not an error report (skipped, not stored) and
  * undefined for an error event whose envelope does not match (the batch is rejected).
  */
-export function admitEvent(event) {
+export function admitEvent(event, mayMarkSynthetic = false) {
     if (event.kind !== 'error') return event.kind === 'usage' ? null : undefined;
     if (typeof event.name !== 'string' || !NAME_SHAPE.test(event.name)) return undefined;
     if (event.data !== undefined && !isPlainObject(event.data)) return undefined;
@@ -196,7 +197,7 @@ export function admitEvent(event) {
         if (!valueOk(wire, value)) return undefined;
         row[COLUMN_FOR[wire]] = value;
     }
-    row.synthetic = event.synthetic === true ? 1 : 0;
+    row.synthetic = mayMarkSynthetic && event.synthetic === true ? 1 : 0;
     return row;
 }
 
@@ -221,7 +222,8 @@ export async function handleEvents(shape, env, state) {
     if (top === undefined) return discard(400, REASON_MALFORMED);
     if (!Array.isArray(top.events) || top.events.length > MAX_EVENTS) return discard(400, REASON_BATCH);
     if (!top.events.every(isPlainObject)) return discard(400, REASON_MALFORMED);
-    const admitted = top.events.map(admitEvent);
+    const trusted = authorized(shape.headers?.authorization, env);
+    const admitted = top.events.map(event => admitEvent(event, trusted));
     if (admitted.includes(undefined)) return discard(400, REASON_EVENT);
     const rows = admitted.filter(row => row !== null);
     try {

@@ -21,8 +21,10 @@
 #      URL would bypass it. Record the threshold and the period verbatim at the plan 48-05
 #      checkpoint. With workers_dev off and no route in this file, the Worker is unreachable until
 #      the Phase 47 hostname is attached; wrangler may warn about that on deploy.
-#   7. Synthetic POST verify:         curl -sS -X POST https://events.powerbrowser.org/events -H 'content-type: application/json' --data '{"events":[{"type":"synthetic.probe","synthetic":true}]}'
-#      Expect 200 and "ok: stored 1". That row is synthetic and the maintainer query excludes it.
+#   7. Synthetic POST verify:         curl -sS -X POST https://events.powerbrowser.org/events -H 'content-type: application/json' -H "authorization: Bearer $DOWNLOAD_COUNT_SECRET" --data '{"events":[{"kind":"error","name":"synthetic.probe","data":{"type":"SyntheticProbe"},"synthetic":true,"at":0}]}'
+#      Expect 200 and "ok: stored 1". The synthetic flag is honoured only with the shared secret (the
+#      same value as step 4, held in your shell); without the header the row is stored as a real one.
+#      The synthetic row is excluded by the maintainer query.
 
 name = "powerbrowser-events"
 main = "events-worker.mjs"

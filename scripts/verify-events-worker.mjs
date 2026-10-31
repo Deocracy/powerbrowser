@@ -84,6 +84,7 @@ const RULE = Object.freeze({
     duplicateAssetDay: 'duplicate asset-day POST',
     atomic: 'all-or-nothing batch write',
     synthetic: 'synthetic-marked event in the maintainer query',
+    syntheticAnon: 'anonymous synthetic flag',
     retention: 'retention window',
     admitted: 'admitted set equals the producer',
     contract: 'producer-to-Worker contract',
@@ -337,12 +338,21 @@ async function runBehaviour(root, worker, secret) {
     // Control: a well-formed batch is stored, the synthetic row is kept out of the maintainer query.
     {
         const stub = makeStub();
-        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS), env(stub), freshState());
+        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS, { authorization: `Bearer ${secret}` }), env(stub), freshState());
         if (verdict.status !== 200 || verdict.body !== 'ok: stored 3') failures.push(`${RULE.control}: a well-formed batch answered ${verdict.status} ${JSON.stringify(verdict.body)}, not 200 "ok: stored 3". Next step: restore the accept path.`);
         if (stub.events.length !== 3) failures.push(`${RULE.control}: the batch wrote ${stub.events.length} row(s), not 3. Next step: write one row per admitted event.`);
         const maintainer = await worker.listMaintainerEvents(stub);
         if (maintainer.length !== 2) failures.push(`${RULE.synthetic}: the maintainer query returned ${maintainer.length} row(s) for two real events and one synthetic probe; want 2. Next step: keep synthetic rows out of listMaintainerEvents.`);
         if (maintainer.some(r => r.synthetic !== 0)) failures.push(`${RULE.synthetic}: the maintainer query returned a synthetic row. Next step: filter synthetic = 0 in SQL.`);
+    }
+
+    // The synthetic flag is not client-settable: without the shared secret the row is stored as a real one.
+    {
+        const stub = makeStub();
+        for (const authorization of ['', 'Bearer wrong']) {
+            await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS, { authorization }), env(stub), freshState());
+        }
+        if (stub.events.some(r => r.synthetic !== 0)) failures.push(`${RULE.syntheticAnon}: an event marked synthetic by a caller without the shared secret was stored as synthetic, so an anonymous client can hide rows from the maintainer view. Next step: honour the flag only for a request that proves the secret.`);
     }
 
     const good = JSON.stringify(GOOD_EVENTS);
@@ -593,10 +603,11 @@ const PLANTS = [
     { rule: RULE.nonObjectTop, rel: WORKER_REL, find: 'return isPlainObject(value) ? value : undefined;', replace: 'return value;' },
     { rule: RULE.overCapBody, rel: WORKER_REL, find: '    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);\n    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)', replace: '    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)' },
     { rule: RULE.overCapBatch, rel: WORKER_REL, find: ' || top.events.length > MAX_EVENTS', replace: '' },
-    { rule: RULE.extraProp, rel: WORKER_REL, find: '    row.synthetic = event.synthetic === true ? 1 : 0;', replace: '    row.synthetic = event.synthetic === true ? 1 : 0;\n    row.message = event.message;' },
+    { rule: RULE.extraProp, rel: WORKER_REL, find: '    row.synthetic = mayMarkSynthetic && event.synthetic === true ? 1 : 0;', replace: '    row.synthetic = mayMarkSynthetic && event.synthetic === true ? 1 : 0;\n    row.message = event.message;' },
     { rule: RULE.overLength, rel: WORKER_REL, find: '    return value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value;', replace: '    return value;' },
+    { rule: RULE.syntheticAnon, rel: WORKER_REL, find: "const trusted = authorized(shape.headers?.authorization, env);", replace: 'const trusted = true;' },
     { rule: RULE.atomic, rel: WORKER_REL, find: 'if (rows.length > 0) await env.DB.batch(rows.map(row => env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs))));', replace: 'for (const row of rows) await env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs)).run();' },
-    { rule: RULE.noSuppress, rel: WORKER_REL, find: '    const admitted = top.events.map(admitEvent);', replace: "    globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n    if (globalThis.__plantSent > 60) return discard(200, 'throttled_in_worker_cap');\n    const admitted = top.events.map(admitEvent);" },
+    { rule: RULE.noSuppress, rel: WORKER_REL, find: '    const trusted = authorized(shape.headers?.authorization, env);', replace: "    globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n    if (globalThis.__plantSent > 60) return discard(200, 'throttled_in_worker_cap');\n    const trusted = authorized(shape.headers?.authorization, env);" },
     { rule: RULE.unauthDownload, rel: WORKER_REL, find: '    if (!authorized(shape.headers?.authorization, env)) return empty(401);', replace: '' },
     { rule: RULE.wrongSecret, rel: WORKER_REL, find: "    return constantTimeEqual(header.slice('Bearer '.length), expected);", replace: "    return header.startsWith('Bearer ');" },
     { rule: RULE.malformedAuthed, rel: WORKER_REL, find: ' || !Number.isInteger(count) || count < 0', replace: '' },
