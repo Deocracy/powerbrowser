@@ -596,8 +596,12 @@ others are in-tree and asserted by the `workflows` row (`fixer-spend`, `fixer-to
   earlier `release-train.yml` dispatch runs of this repository whose display title is
   `fix <key> <class> attempt <n>` (a dry run is titled `fix dry-run ...` and is not counted;
   a run that `fix-gate` rejects still counts), admits only attempt number spent + 1, and
-  `scripts/release-train.mjs --fix-guard` refuses once the budget is spent. A re-run of a
-  fixer run is refused, because it would spend model budget the count cannot see. The
+  `scripts/release-train.mjs --fix-guard` refuses once the budget is spent. No fixer run is
+  re-runnable: the derive job refuses "Re-run all jobs" (`github.run_attempt` is not 1), and
+  `fix`, `fix-gate` and `fix-pr` each carry `github.run_attempt == 1` in their own `if:`,
+  because "Re-run failed jobs" keeps derive's earlier result and would otherwise start the
+  failed job again and spend model budget the count cannot see (the `fixer-gate` rule and its
+  plants hold all three terms). The owner dispatches the next attempt instead. The
   `NEEDS_OWNER` train state that a spent budget implies is part of the train's pure state
   table only: no job writes the tracking issue yet (see Fixer routing), so the refusal is
   the red derive job and its log, and the owner decides.

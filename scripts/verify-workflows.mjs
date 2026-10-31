@@ -621,6 +621,10 @@ function runChecks(root, overrides = {}) {
                     if (w['run-id'] !== undefined && exprOf(w['run-id']) !== '${{github.run_id}}') gf(`a download-artifact step names run-id ${JSON.stringify(w['run-id'])}, not this run (\${{ github.run_id }}), so it could take another run's artifact. Next step: remove run-id.`);
                 }
                 const runText = (x) => (typeof x.run === 'string' ? x.run : '');
+                // WR-01 (re-review): "Re-run failed jobs" re-runs the failed fixer job with github.run_attempt 2 but keeps the derive job's
+                // result, so the derive job's own run_attempt refusal never sees it and each click would buy another model run the attempt
+                // count does not see. Every fixer job therefore refuses a run_attempt other than 1 itself.
+                if (!ifTerms(job).terms.includes('github.run_attempt == 1')) gf(`if: lacks the github.run_attempt == 1 term as a top-level && term, so "Re-run failed jobs" can start this job again (run_attempt 2 with derive's result kept) and spend model budget or publish with no attempt count. Next step: add github.run_attempt == 1 to the job's if: joined with &&.`);
                 if (jobId === 'fix') {
                     // WR-02: no credential on disk for the model to read: every checkout drops the token from .git/config.
                     for (const c of uses('actions/checkout@')) {
@@ -989,9 +993,9 @@ function selfTest() {
     const ALLOWED = 'Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read(work/**),Read(fixer-data/**),Read(upstream/**)';
     const DENIED = 'WebFetch,WebSearch,Read(//proc/**),Read(~/**),Read(.git/**),Read(work/.git/**),Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"';
     const CLAUDE_ARGS = `--max-turns 40 --allowedTools "${ALLOWED}" --disallowedTools "${DENIED}"`;
-    const FIX_IF = "github.event_name == 'workflow_dispatch' && inputs.reason == 'fix' && !startsWith(inputs.target-branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]' && github.actor != 'dependabot[bot]'";
-    const GATE_IF = "!inputs.dry-run && needs.fix.result == 'success'";
-    const PR_IF = "!inputs.dry-run && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256 && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha";
+    const FIX_IF = "github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.reason == 'fix' && !startsWith(inputs.target-branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]' && github.actor != 'dependabot[bot]'";
+    const GATE_IF = "!inputs.dry-run && github.run_attempt == 1 && needs.fix.result == 'success'";
+    const PR_IF = "!inputs.dry-run && github.run_attempt == 1 && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256 && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha";
     const GOOD_TRAIN = [
         'name: Release train',
         'on:',
@@ -1257,10 +1261,13 @@ function selfTest() {
     );
     // WR-01: the fix-gate and fix-pr isolation, each fact removed from the real release-train.yml (the reviewer's survivors
     // 1-7 and the CR-02 and CR-03 bindings). rtEdit throws when an anchor is gone, so a rewrite of the job fails loudly here.
-    const GATE_HEAD = "    if: ${{ !inputs.dry-run && needs.fix.result == 'success' }}\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n";
+    const GATE_HEAD = "    if: ${{ !inputs.dry-run && github.run_attempt == 1 && needs.fix.result == 'success' }}\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n";
     const DL_GATE = '      - name: Download the diff\n        if: ${{ !inputs.dry-run }}\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n';
     const gateEdit = (from, to) => rtEdit(from, to);
     plants.push(
+        ['fix job if: without the run_attempt term', gateEdit("    if: ${{ !inputs.dry-run && github.run_attempt == 1 && inputs.reason == 'fix'", "    if: ${{ !inputs.dry-run && inputs.reason == 'fix'"), rel(T), 'fix', 'fixer-gate', 'github.run_attempt == 1'],
+        ['fix-gate if: without the run_attempt term', gateEdit(GATE_HEAD, GATE_HEAD.replace(' && github.run_attempt == 1', '')), rel(T), 'fix-gate', 'fixer-gate', 'github.run_attempt == 1'],
+        ['fix-pr if: without the run_attempt term', gateEdit("    if: ${{ !inputs.dry-run && github.run_attempt == 1 && needs.fix-gate.result", "    if: ${{ !inputs.dry-run && needs.fix-gate.result"), rel(T), 'fix-pr', 'fixer-gate', 'github.run_attempt == 1'],
         ['fix-gate with environment bot', gateEdit(GATE_HEAD, `${GATE_HEAD}    environment: bot\n`), rel(T), 'fix-gate', 'fixer-gate', 'environment'],
         ['fix-gate reading secrets.BOT_APP_PRIVATE_KEY', gateEdit('    outputs:\n      verdict: ${{ steps.gate.outputs.verdict }}', '    env:\n      K: ${{ secrets.BOT_APP_PRIVATE_KEY }}\n    outputs:\n      verdict: ${{ steps.gate.outputs.verdict }}'), rel(T), 'fix-gate', 'fixer-gate', 'secrets.'],
         ['fix-gate with contents write and pull-requests write', gateEdit('    timeout-minutes: 60\n    permissions:\n      contents: read\n', '    timeout-minutes: 60\n    permissions:\n      contents: write\n      pull-requests: write\n'), rel(T), 'fix-gate', 'fixer-gate', 'contents: read'],
@@ -1283,7 +1290,7 @@ function selfTest() {
         ['fix-pr if: without the gate result term', gateEdit(" && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256", " && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256"), rel(T), 'fix-pr', 'fixer-gate', "result == 'success'"],
         ['fix-pr if: without the digest binding', gateEdit(' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256', ''), rel(T), 'fix-pr', 'fixer-gate', 'diff-sha256 =='],
         ['fix-pr if: without the base binding', gateEdit(' && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha }}\n    runs-on: ubuntu-latest\n    timeout-minutes: 30', ' }}\n    runs-on: ubuntu-latest\n    timeout-minutes: 30'), rel(T), 'fix-pr', 'fixer-gate', 'base-sha =='],
-        ['fix-pr not needing the fix job', gateEdit('    needs: [fix, fix-gate]\n    if: ${{ !inputs.dry-run && needs.fix-gate.result', '    needs: fix-gate\n    if: ${{ !inputs.dry-run && needs.fix-gate.result'), rel(T), 'fix-pr', 'fixer-gate', 'does not need fix'],
+        ['fix-pr not needing the fix job', gateEdit('    needs: [fix, fix-gate]\n    if: ${{ !inputs.dry-run && github.run_attempt == 1 && needs.fix-gate.result', '    needs: fix-gate\n    if: ${{ !inputs.dry-run && github.run_attempt == 1 && needs.fix-gate.result'), rel(T), 'fix-pr', 'fixer-gate', 'does not need fix'],
         ['fix-pr root checkout of the target branch', gateEdit("          ref: main\n          persist-credentials: false\n\n      - name: Check out the target at exactly the gated base commit, under target/", "          ref: ${{ inputs.target-branch }}\n          persist-credentials: false\n\n      - name: Check out the target at exactly the gated base commit, under target/"), rel(T), 'fix-pr', 'fixer-gate', 'not main'],
         ['fix-pr target checkout at the branch name instead of the base-sha', gateEdit('          ref: ${{ needs.fix.outputs.base-sha }}\n          path: target', '          ref: ${{ inputs.target-branch }}\n          path: target'), rel(T), 'fix-pr', 'fixer-gate', 'gated base-sha'],
         ['fix-pr App token read by a second step', gateEdit('          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          T() {', '          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n          LEAK: ${{ steps.app.outputs.token }}\n        run: |\n          set -euo pipefail\n          T() {'), rel(T), 'fix-pr', 'fixer-gate', 'read by 2 step(s)'],

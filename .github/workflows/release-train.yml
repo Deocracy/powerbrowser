@@ -1100,7 +1100,7 @@ jobs:
   # the only App-token minter, and it reads no model prose. Every write step carries the dry-run gate.
   fix:
     needs: derive
-    if: ${{ !inputs.dry-run && inputs.reason == 'fix' && github.event_name == 'workflow_dispatch' && github.actor != 'powerbrowser-bot[bot]' && github.actor != 'dependabot[bot]' && !startsWith(inputs.target-branch, 'claude-fix/') }}
+    if: ${{ !inputs.dry-run && github.run_attempt == 1 && inputs.reason == 'fix' && github.event_name == 'workflow_dispatch' && github.actor != 'powerbrowser-bot[bot]' && github.actor != 'dependabot[bot]' && !startsWith(inputs.target-branch, 'claude-fix/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: fixer
@@ -1261,7 +1261,7 @@ jobs:
   # model's code cannot set, so a forged output line cannot pass a rejected diff.
   fix-gate:
     needs: fix
-    if: ${{ !inputs.dry-run && needs.fix.result == 'success' }}
+    if: ${{ !inputs.dry-run && github.run_attempt == 1 && needs.fix.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -1334,7 +1334,7 @@ jobs:
   # the one that pushes the claude-fix branch and opens the PR from the trusted scripts.
   fix-pr:
     needs: [fix, fix-gate]
-    if: ${{ !inputs.dry-run && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256 && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha }}
+    if: ${{ !inputs.dry-run && github.run_attempt == 1 && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256 && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: bot
