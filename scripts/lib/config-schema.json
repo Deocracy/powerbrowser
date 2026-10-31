@@ -114,6 +114,13 @@
       "regex_help": "a web address starting with https:// and containing no spaces or control characters",
       "regex_example": "https://example.org/update"
     },
+    "urls.mar_origin": {
+      "type": "string",
+      "required": false,
+      "regex": "^https://[A-Za-z0-9.-]+$",
+      "regex_help": "an https address that names only a host, with no path, port, query or trailing slash",
+      "regex_example": "https://downloads.example.org"
+    },
     "urls.crash_report": {
       "type": "string",
       "required": false,

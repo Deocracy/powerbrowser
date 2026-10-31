@@ -104,16 +104,20 @@ done < <(grep -rlF "$ROOT/" "$STAGE/theia" "$STAGE/node" 2>/dev/null || true)
     RELEASE_KEY="$(node --input-type=module -e "import { resolveConfig, releaseIdentity } from '$ROOT/scripts/generate.mjs'; const { config } = resolveConfig('$ROOT/configuration.toml'); console.log(releaseIdentity(config).releaseKey);")"
     CHANNEL="$(node --input-type=module -e "import { resolveConfig, updateChannel } from '$ROOT/scripts/generate.mjs'; const { config } = resolveConfig('$ROOT/configuration.toml'); console.log(updateChannel(config).channel);")"
     MAR_CHANNEL="$(node --input-type=module -e "import { resolveConfig, updateChannel } from '$ROOT/scripts/generate.mjs'; const { config } = resolveConfig('$ROOT/configuration.toml'); console.log(updateChannel(config).marChannelId);")"
+    # [urls] mar_origin (DIST-08): the primary MAR origin, or empty when unset. The writer
+    # records an empty value as null, so the descriptor form gate can fail closed.
+    MAR_ORIGIN="$(node --input-type=module -e "import { resolveConfig, marOrigin } from '$ROOT/scripts/generate.mjs'; const { config } = resolveConfig('$ROOT/configuration.toml'); console.log(marOrigin(config) ?? '');")"
     # Beside the tarball only. A copy in $STAGE would be packed into the archive
     # the end user installs, and its host field names the build machine.
     # JSON.stringify escapes the values; printf did not.
     node --input-type=module -e '
         import { writeFileSync } from "node:fs";
-        const [out, version, releaseKey, channel, marChannel, tree, host] = process.argv.slice(1);
-        const manifest = { version, release_key: releaseKey, update_channel: channel, mar_channel_id: marChannel, tree, host,
+        const [out, version, releaseKey, channel, marChannel, marOrigin, tree, host] = process.argv.slice(1);
+        const manifest = { version, release_key: releaseKey, update_channel: channel, mar_channel_id: marChannel,
+            mar_origin: marOrigin === "" ? null : marOrigin, tree, host,
             toolchain: "container pb-gecko-build (--enable-bootstrap; see toolchain-baseline.txt)" };
         writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n");
-    ' "$OBJ/dist/release-manifest.json" "$VERSION" "$RELEASE_KEY" "$CHANNEL" "$MAR_CHANNEL" \
+    ' "$OBJ/dist/release-manifest.json" "$VERSION" "$RELEASE_KEY" "$CHANNEL" "$MAR_CHANNEL" "$MAR_ORIGIN" \
         "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" "$(hostname 2>/dev/null || echo unknown)"
     echo "package-linux: wrote $OBJ/dist/release-manifest.json (release $RELEASE_KEY, channel $CHANNEL)"
 }
