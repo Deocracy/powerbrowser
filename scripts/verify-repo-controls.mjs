@@ -164,6 +164,7 @@ function compareDefaultSetup(c, declared, live) {
     if (!isObj(live)) return [`${where(c)}: the live response is ${show(live)}, not an object. Next step: check the endpoint in ${SELF_REL}.`];
     const f = projection(c, { state: declared.state, query_suite: declared.query_suite }, live);
     const have = Array.isArray(live.languages) ? live.languages : [];
+    if (!Array.isArray(declared.languages) || declared.languages.length === 0) f.push(`${where(c)}: the declared body lists no languages, so the language comparison would hold vacuously. Next step: restore languages in ${c.file}.`);
     const missing = (declared.languages ?? []).filter(l => !have.includes(l));
     if (missing.length > 0) f.push(`${where(c)}: language(s) ${missing.join(', ')} not among the live languages ${show(live.languages)}. Next step: ${APPLY}.`);
     return f;
@@ -1144,6 +1145,8 @@ function selfTest() {
         ['a dependabot alerts read that fails with a 500', { get: (path) => (path.endsWith('/vulnerability-alerts') ? { ok: false, status: null, why: `GET ${path} could not be read (planted: HTTP 500). ${NEXT_AUTH}` } : getterOf(base)(path)) }, ['dependabot-alerts', 'planted: HTTP 500']],
         ['a 204 answer on a control that did not opt in', mutated((s, p) => { s[p('repos/{owner}/{repo}/private-vulnerability-reporting')] = NO_CONTENT; }), ['private-vulnerability-reporting', 'could not be read']],
         ['code scanning default setup not configured', set('repos/{owner}/{repo}/code-scanning/default-setup', 'state', 'not-configured'), ['code-scanning-default-setup', 'state is "not-configured" live', '.github/settings/code-scanning-default-setup.json']],
+        ['a declared code scanning body with an empty languages array', { readBody: (f) => { const b = readBody(f); if (f === 'code-scanning-default-setup.json') b.languages = []; return b; } }, ['code-scanning-default-setup', 'lists no languages']],
+        ['a declared code scanning body without the languages key', { readBody: (f) => { const b = readBody(f); if (f === 'code-scanning-default-setup.json') delete b.languages; return b; } }, ['code-scanning-default-setup', 'lists no languages']],
         ['code scanning default setup without javascript-typescript', set('repos/{owner}/{repo}/code-scanning/default-setup', 'languages', ['actions', 'python']), ['code-scanning-default-setup', 'javascript-typescript']],
         ['code scanning default setup with another query suite', set('repos/{owner}/{repo}/code-scanning/default-setup', 'query_suite', 'extended'), ['code-scanning-default-setup', 'query_suite']],
         ['an unreadable code scanning default setup', mutated((s, p) => { delete s[p('repos/{owner}/{repo}/code-scanning/default-setup')]; }), ['code-scanning-default-setup', 'could not be read']],
