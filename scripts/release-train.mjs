@@ -48,9 +48,18 @@
 // Honestly --quick: fixtures only. No network, no build, no browser, no display,
 // no gh. It writes nothing.
 //
+// The maintenance half (TRAIN-07, Phase 48) is pure too: deriveMaintenance over facts the sweep
+// reads, renderMaintenance for the pinned body (byte-stable), nextMaintenance for the exactly-one
+// write plan (one PATCH on a byte diff, one comment on a transition into red), and sweepDue for
+// the 06:00 UTC gate. The sweep's facts step and the report job's write step are the only callers.
+//
 // Usage:
 //   node scripts/release-train.mjs --self-test
+//   node scripts/release-train.mjs --sweep-due <epoch-seconds>
+//   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
+//   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out>
 
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -152,8 +161,8 @@ export function render(state, facts) {
  * The exactly-one rule over the issues a label-and-title find returned. Zero
  * creates, one updates (PATCH only when the stored bytes differ from the rendered
  * bytes), two or more fail naming every number and never PATCH. Pure.
- * UNWIRED: no workflow caller and no self-test plant until the live tracking writer
- * is approved (BLOCKED.md item 3).
+ * Wired to the maintenance writer only (nextMaintenance, called by the report job). The
+ * release-train tracking writer stays UNWIRED until BLOCKED.md item 3 is approved.
  */
 export function findExactlyOne(found, rendered) {
     if (found.length === 0) return { action: 'create', numbers: [], patch: false };
@@ -384,6 +393,337 @@ function runChecks(overrides = {}) {
     return { failures: failures.sort() };
 }
 
+// ---------------------------------------------------------------------------------------------
+// The maintenance half (Phase 48, TRAIN-07). Six rows derived from facts the sweep reads and the
+// probes it runs under the bot environment. Pure: facts in, rows out; render gives the pinned body.
+// The body is output only. The one read back is the previous body's row statuses, which decide a
+// transition into red (nextMaintenance) and never decide a state.
+// ---------------------------------------------------------------------------------------------
+
+export const MAINTENANCE_TITLE = 'release-train: maintenance';
+export const MAINTENANCE_ROW_NAMES = Object.freeze(['runner-online', 'esr-pin-age', 'channel-liveness', 'watchdog-age', 'synthetic events POST', 'download-count']);
+export const SWEEP_HOUR_UTC = 6;
+const DAY_MS = 86400000;
+const HOUR_MS = 3600000;
+const STALE_TAG_MS = 3 * DAY_MS;
+const WATCHDOG_LIMIT_MS = 26 * HOUR_MS;
+const NOT_PROBED = 'not probed in this run';
+const RUNNER_PHASE = 'no data until Phase 49';
+const CHANNEL_PHASE = 'no data until Phase 49';
+const DOWNLOAD_PHASE = 'no data until Phase 50';
+const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+
+const maintRow = (name, status, evidence) => ({ name, status, evidence });
+
+function compareTuple(a, b) {
+    for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] - b[i];
+    return 0;
+}
+
+function runnerRow(f) {
+    const name = 'runner-online';
+    if (typeof f.runnersOnline !== 'number') return maintRow(name, 'no-data', NOT_PROBED);
+    if (f.runnersOnline <= 0) return maintRow(name, 'no-data', RUNNER_PHASE);
+    return maintRow(name, 'green', `${f.runnersOnline} runner(s) online`);
+}
+
+function esrPinRow(f) {
+    const name = 'esr-pin-age';
+    const pin = tagToVersion(f.pinTag);
+    if (pin === null) return maintRow(name, 'red', `the pin ${JSON.stringify(f.pinTag)} is not an *esr_RELEASE tag`);
+    if (!Array.isArray(f.tags) || f.tags.length === 0) return maintRow(name, 'no-data', 'no tag listing');
+    const newer = [...new Set(f.tags)]
+        .map(t => classifyTag(t, pin.tuple[0]))
+        .filter(c => c.keep)
+        .map(c => c.version)
+        .filter(v => compareTuple(v.tuple, pin.tuple) > 0)
+        .sort((a, b) => compareTuple(a.tuple, b.tuple));
+    const releases = Array.isArray(f.releases) ? f.releases : [];
+    const matches = v => releases.filter(r => r && typeof r.tag_name === 'string' && r.tag_name.includes(v.esrVersion));
+    const stale = [];
+    for (const v of newer) {
+        const dated = f.tagDates?.[v.tag];
+        if (typeof dated !== 'number' || f.nowMs - dated <= STALE_TAG_MS) continue;
+        if (matches(v).some(r => r.draft !== true)) continue;
+        const days = Math.floor((f.nowMs - dated) / DAY_MS);
+        const draftOnly = matches(v).length > 0 ? ' (a draft Release does not count)' : '';
+        stale.push(`${v.tag} is ${days} day(s) old with no published Release${draftOnly}`);
+    }
+    const advisory = typeof f.advisoryEsr === 'string' && f.advisoryEsr !== '' ? `; product-details FIREFOX_ESR ${f.advisoryEsr} (advisory, not a gate)` : '';
+    if (stale.length > 0) return maintRow(name, 'red', `${stale.join('; ')}${advisory}`);
+    if (newer.length === 0) return maintRow(name, 'green', `pin ${f.pinTag} is the newest tag under major ${pin.tuple[0]}${advisory}`);
+    return maintRow(name, 'green', `pin ${f.pinTag}; ${newer.length} newer tag(s), none older than 3 days without a published Release${advisory}`);
+}
+
+function channelRow(f) {
+    const name = 'channel-liveness';
+    if (typeof f.channelOk !== 'boolean') return maintRow(name, 'no-data', CHANNEL_PHASE);
+    return f.channelOk
+        ? maintRow(name, 'green', 'every update.xml matches its repo copy and each MAR URL answers 200')
+        : maintRow(name, 'red', 'channel probe failed: an update.xml differs from its repo copy or a MAR URL is not 200');
+}
+
+function watchdogRow(f) {
+    const name = 'watchdog-age';
+    if (f.watchdogProbed !== true) return maintRow(name, 'no-data', NOT_PROBED);
+    if (typeof f.watchdogStartedAtMs !== 'number') return maintRow(name, 'red', 'no watchdog run recorded in powerbrowser-updates');
+    const ageMs = f.nowMs - f.watchdogStartedAtMs;
+    const text = `last watchdog run started ${Math.floor(ageMs / HOUR_MS)} h ago`;
+    return ageMs < WATCHDOG_LIMIT_MS
+        ? maintRow(name, 'green', text)
+        : maintRow(name, 'red', `${text}, at or past the 26 h limit`);
+}
+
+function syntheticRow(f) {
+    const name = 'synthetic events POST';
+    if (typeof f.syntheticStatus !== 'number') return maintRow(name, 'no-data', NOT_PROBED);
+    if (f.syntheticStatus >= 200 && f.syntheticStatus < 300) return maintRow(name, 'green', `synthetic probe answered ${f.syntheticStatus}; the row is marked synthetic and excluded from maintainer queries`);
+    return maintRow(name, 'red', `synthetic probe answered ${f.syntheticStatus}, not 2xx`);
+}
+
+function downloadRow(f) {
+    const name = 'download-count';
+    if (typeof f.downloadRows !== 'number' || f.downloadRows <= 0) return maintRow(name, 'no-data', DOWNLOAD_PHASE);
+    return maintRow(name, 'green', `${f.downloadRows} download-count row(s) in D1`);
+}
+
+/**
+ * The six maintenance rows, in the fixed order, from facts. Pure. facts: { pinTag, nowMs, tags,
+ * tagDates, releases, advisoryEsr, runnersOnline, watchdogProbed, watchdogStartedAtMs,
+ * syntheticStatus, channelOk, downloadRows }. A value the sweep did not observe is null (or
+ * watchdogProbed false), which renders as no-data, never as green.
+ */
+export function deriveMaintenance(facts) {
+    if (typeof facts?.nowMs !== 'number' || !Number.isFinite(facts.nowMs)) {
+        throw new Error('the maintenance facts carry no nowMs; the sweep must pass the run clock');
+    }
+    return {
+        rows: [runnerRow(facts), esrPinRow(facts), channelRow(facts), watchdogRow(facts), syntheticRow(facts), downloadRow(facts)],
+    };
+}
+
+/** The pinned body: the title, the six rows in the fixed order, and the debug snapshot. Pure and byte-stable. */
+export function renderMaintenance(state) {
+    const rank = name => { const i = MAINTENANCE_ROW_NAMES.indexOf(name); return i === -1 ? MAINTENANCE_ROW_NAMES.length : i; };
+    const ordered = [...state.rows].sort((a, b) => rank(a.name) - rank(b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const snapshot = JSON.stringify(Object.fromEntries(ordered.map(r => [r.name, r.status])));
+    const body = [
+        MAINTENANCE_TITLE,
+        '',
+        '| Row | Status | Evidence |',
+        '| --- | --- | --- |',
+        ...ordered.map(r => `| ${r.name} | ${r.status} | ${String(r.evidence).replace(/\|/g, '/')} |`),
+        '',
+        `<!-- release-train:maintenance-v1 ${snapshot} -->`,
+        '',
+    ].join('\n');
+    return { title: MAINTENANCE_TITLE, body };
+}
+
+/** The rows a rendered body carries, as { name, status, evidence }. Pure. */
+export function parseRows(body) {
+    const out = [];
+    for (const line of String(body ?? '').split('\n')) {
+        const m = /^\| (.+?) \| (green|red|no-data) \| (.*) \|$/.exec(line);
+        if (m) out.push(maintRow(m[1], m[2], m[3]));
+    }
+    return out;
+}
+
+/**
+ * The row-list set-equality assert: the derived rows and the rendered body's rows are the same
+ * six names, and no seventh row (a Phase 51 row, say) is present. Returns the drift. Pure.
+ */
+export function maintenanceRowDrift(state, body) {
+    const failures = [];
+    const derived = state.rows.map(r => r.name);
+    for (const n of derived) if (!MAINTENANCE_ROW_NAMES.includes(n)) failures.push(`row ${n} is not one of the six maintenance rows. Next step: remove it, or add it in a later phase's plan.`);
+    for (const n of MAINTENANCE_ROW_NAMES) if (!derived.includes(n)) failures.push(`row ${n} is missing from the derived state. Next step: restore it in deriveMaintenance.`);
+    const rendered = parseRows(body).map(r => r.name);
+    const { onlyA, onlyB } = setDiff(derived, rendered);
+    for (const n of onlyA) failures.push(`row ${n} is derived but not rendered. Next step: fix renderMaintenance.`);
+    for (const n of onlyB) failures.push(`row ${n} is rendered but not derived. Next step: fix renderMaintenance.`);
+    return failures;
+}
+
+/**
+ * The sweep runs on every dispatch tick at or after SWEEP_HOUR_UTC. Each due tick re-derives and
+ * re-renders; the PATCH runs only on a byte diff and the comment only on a transition into red, so a
+ * repeated due tick is idempotent. Pure.
+ */
+export function sweepDue(nowMs) {
+    return new Date(nowMs).getUTCHours() >= SWEEP_HOUR_UTC;
+}
+
+/** The comment text for a transition into red: one comment naming every newly red row. Pure. */
+function transitionComment(newlyRed, ownerLogin) {
+    const lines = newlyRed.map(r => `- ${r.name}: ${r.evidence}`);
+    const mention = ownerLogin !== null ? `@${ownerLogin} ` : '';
+    return [
+        `${mention}release-train: maintenance turned red for ${newlyRed.length} row(s):`,
+        ...lines,
+        '',
+        'Next step: fix the cause named in each row, then the next due tick re-renders the pinned issue.',
+        '',
+    ].join('\n');
+}
+
+/**
+ * The write plan for the pinned maintenance issue. found: the open issues with the maintenance
+ * title, as { number, body }. rendered: renderMaintenance output. Returns the exactly-one decision
+ * (create, update with a patch flag, or fail), and at most one comment, only when a row in the
+ * update path turned from non-red (or absent) to red. A staying-red re-run returns no comment. Pure.
+ */
+export function nextMaintenance(found, rendered, ownerLogin = null) {
+    const decision = findExactlyOne(found, rendered);
+    if (decision.action !== 'update') return { ...decision, comment: null, newlyRed: [] };
+    const prior = new Map(parseRows(found[0].body).map(r => [r.name, r.status]));
+    const newlyRed = parseRows(rendered.body).filter(r => r.status === 'red' && prior.get(r.name) !== 'red');
+    if (newlyRed.length === 0) return { ...decision, comment: null, newlyRed: [] };
+    return { ...decision, comment: transitionComment(newlyRed, ownerLogin), newlyRed: newlyRed.map(r => r.name) };
+}
+
+function readFacts(path) {
+    return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function sweepDueCli([nowSeconds]) {
+    const seconds = Number(nowSeconds);
+    if (!Number.isFinite(seconds)) {
+        console.error(`${NAME}: FAIL -- the sweep clock ${JSON.stringify(nowSeconds)} is not epoch seconds. Next step: pass date -u +%s.`);
+        return 2;
+    }
+    console.log(`due=${sweepDue(seconds * 1000)}`);
+    return 0;
+}
+
+function maintenanceCli([factsPath, bodyPath]) {
+    let state;
+    let rendered;
+    try {
+        state = deriveMaintenance(readFacts(factsPath));
+        rendered = renderMaintenance(state);
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- the maintenance facts did not derive (${e.message}). Next step: re-run the maintenance facts step.`);
+        return 1;
+    }
+    const drift = maintenanceRowDrift(state, rendered.body);
+    if (drift.length > 0) {
+        drift.forEach(d => console.error(`${NAME}: FAIL -- ${d}`));
+        return 1;
+    }
+    writeFileSync(bodyPath, rendered.body);
+    state.rows.forEach(r => console.log(`maintenance: ${r.name}=${r.status}`));
+    return 0;
+}
+
+function maintenancePlanCli([foundPath, bodyPath, commentPath]) {
+    let found;
+    let rendered;
+    try {
+        found = readFacts(foundPath).filter(i => i.title === MAINTENANCE_TITLE);
+        rendered = { title: MAINTENANCE_TITLE, body: readFileSync(bodyPath, 'utf8') };
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- the pinned-issue read or the rendered body did not load (${e.message}). Next step: re-run the report job.`);
+        return 1;
+    }
+    const raw = process.env.OWNER_LOGIN ?? '';
+    const ownerLogin = OWNER_RE.test(raw) ? raw : null;
+    const decision = nextMaintenance(found, rendered, ownerLogin);
+    if (decision.action === 'fail') {
+        console.error(`${NAME}: FAIL -- ${decision.reason}`);
+        return 1;
+    }
+    if (decision.comment !== null) writeFileSync(commentPath, decision.comment);
+    console.log(`action=${decision.action}`);
+    console.log(`number=${decision.numbers[0] ?? ''}`);
+    console.log(`patch=${decision.patch}`);
+    console.log(`comment=${decision.comment !== null}`);
+    return 0;
+}
+
+/** The maintenance self-test half: fixtures, controls green first, then each plant red naming its drift. */
+function maintenanceSelfTest() {
+    const NOW = Date.UTC(2026, 10, 1, 12, 0, 0);
+    const NEWER_153 = esrTag(153, 6, 0);
+    const TAG_175 = esrTag(175, 0, 0);
+    const facts = (over = {}) => ({
+        pinTag: BASE_PIN,
+        nowMs: NOW,
+        tags: [BASE_PIN, NEWER_153, TAG_175],
+        tagDates: { [NEWER_153]: NOW - DAY_MS, [TAG_175]: NOW - 30 * DAY_MS },
+        releases: [{ tag_name: 'v153.5.1-1', draft: false, prerelease: false }],
+        advisoryEsr: null,
+        runnersOnline: 1,
+        watchdogProbed: true,
+        watchdogStartedAtMs: NOW - 3 * HOUR_MS,
+        syntheticStatus: 200,
+        channelOk: null,
+        downloadRows: 0,
+        ...over,
+    });
+    const stateOf = f => deriveMaintenance(f);
+    const statuses = s => Object.fromEntries(s.rows.map(r => [r.name, r.status]));
+    const reds = s => s.rows.filter(r => r.status === 'red').map(r => `${r.name} red: ${r.evidence}`);
+    const wantStatuses = (s, want) => Object.keys(want).filter(k => statuses(s)[k] !== want[k]).map(k => `${k} is ${statuses(s)[k]}, not ${want[k]}`);
+    const DEFERRED_GREEN = { 'runner-online': 'green', 'esr-pin-age': 'green', 'channel-liveness': 'no-data', 'watchdog-age': 'green', 'synthetic events POST': 'green', 'download-count': 'no-data' };
+    const priorBody = renderMaintenance(stateOf(facts())).body;
+    const issue = body => [{ number: 7, title: MAINTENANCE_TITLE, body }];
+    const TWO_RED = facts({ watchdogStartedAtMs: NOW - 27 * HOUR_MS, syntheticStatus: 500 });
+    const controls = [
+        { name: 'control: the all-green fixture renders the expected statuses', run: () => wantStatuses(stateOf(facts()), DEFERRED_GREEN) },
+        { name: 'control: a 175 tag five days old with no Release is ignored under the 153 guard', run: () => wantStatuses(stateOf(facts({ tagDates: { [NEWER_153]: NOW - DAY_MS, [TAG_175]: NOW - 5 * DAY_MS } })), { 'esr-pin-age': 'green' }) },
+        { name: 'control: a 153 tag five days old with a published Release stays green', run: () => wantStatuses(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [{ tag_name: 'v153.6.0-1', draft: false, prerelease: false }] })), { 'esr-pin-age': 'green' }) },
+        { name: 'control: a watchdog run 25 hours old stays green', run: () => wantStatuses(stateOf(facts({ watchdogStartedAtMs: NOW - 25 * HOUR_MS })), { 'watchdog-age': 'green' }) },
+        { name: 'control: zero online runners is no-data naming Phase 49', run: () => { const r = stateOf(facts({ runnersOnline: 0 })).rows.find(x => x.name === 'runner-online'); return r.status === 'no-data' && r.evidence.includes('Phase 49') ? [] : [`runner-online is ${r.status} with "${r.evidence}"`]; } },
+        { name: 'control: an empty facts response renders six no-data rows', run: () => { const s = stateOf(facts({ tags: [], tagDates: {}, releases: [], runnersOnline: null, watchdogProbed: false, syntheticStatus: null, channelOk: null, downloadRows: 0 })); return s.rows.length === 6 && s.rows.every(r => r.status === 'no-data') ? [] : [`empty facts gave ${JSON.stringify(statuses(s))}`]; } },
+        { name: 'control: two rows turn red together and the transition posts one comment naming both', run: () => {
+            const d = nextMaintenance(issue(priorBody), renderMaintenance(stateOf(TWO_RED)), 'owner-login-fixture');
+            const named = ['watchdog-age', 'synthetic events POST'].every(n => d.comment?.includes(n));
+            return d.action === 'update' && d.patch === true && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' && named ? [] : [`transition gave ${JSON.stringify({ action: d.action, patch: d.patch, newlyRed: d.newlyRed })}`];
+        } },
+        { name: 'control: a staying-red re-run posts zero new comments', run: () => {
+            const red = renderMaintenance(stateOf(TWO_RED)).body;
+            const d = nextMaintenance(issue(red), renderMaintenance(stateOf(TWO_RED)), null);
+            return d.comment === null && d.patch === false ? [] : [`a staying-red re-run gave comment=${d.comment !== null} patch=${d.patch}`];
+        } },
+        { name: 'control: one tracking issue is patched only when its bytes differ', run: () => {
+            const same = nextMaintenance(issue(priorBody), renderMaintenance(stateOf(facts())), null);
+            const diff = nextMaintenance(issue('stale body'), renderMaintenance(stateOf(facts())), null);
+            return same.patch === false && diff.patch === true ? [] : [`same bytes patch=${same.patch}, differing bytes patch=${diff.patch}`];
+        } },
+        { name: 'control: the rendered body is byte-stable under shuffled facts order', run: () => {
+            const shuffled = facts({ tags: [TAG_175, NEWER_153, BASE_PIN], releases: [...facts().releases].reverse() });
+            return renderMaintenance(stateOf(facts())).body === renderMaintenance(stateOf(shuffled)).body ? [] : ['shuffled facts rendered different bytes'];
+        } },
+        { name: 'control: the derived rows and the rendered rows are the same six', run: () => maintenanceRowDrift(stateOf(facts()), renderMaintenance(stateOf(facts())).body) },
+        { name: 'control: the sweep is due at 06:00 UTC and not at 05:59', run: () => (sweepDue(Date.UTC(2026, 10, 1, 6, 0)) && !sweepDue(Date.UTC(2026, 10, 1, 5, 59)) ? [] : ['the 06:00 UTC gate is wrong']) },
+    ];
+    const plants = [
+        { name: 'a newer 153 tag five days old with no Release', run: () => reds(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [] }))), expect: 'with no published Release' },
+        { name: 'a draft Release as the only match for a stale tag', run: () => reds(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [{ tag_name: 'v153.6.0-1', draft: true, prerelease: false }] }))), expect: 'a draft Release does not count' },
+        { name: 'a watchdog run 27 hours old', run: () => reds(stateOf(facts({ watchdogStartedAtMs: NOW - 27 * HOUR_MS }))), expect: 'started 27 h ago' },
+        { name: 'no watchdog run recorded', run: () => reds(stateOf(facts({ watchdogStartedAtMs: null }))), expect: 'no watchdog run recorded' },
+        { name: 'a synthetic events POST answering 500', run: () => reds(stateOf(facts({ syntheticStatus: 500 }))), expect: 'answered 500' },
+        { name: 'a seventh row for a later phase', run: () => { const s = stateOf(facts()); return maintenanceRowDrift({ rows: [...s.rows, maintRow('renewals-due', 'green', 'x')] }, renderMaintenance(s).body); }, expect: 'renewals-due' },
+        { name: 'two tracking issues share the maintenance title', run: () => { const d = nextMaintenance([{ number: 7, body: priorBody }, { number: 9, body: 'other' }], renderMaintenance(stateOf(facts())), null); return d.action === 'fail' ? [d.reason] : []; }, expect: 'open tracking issues' },
+        { name: 'a workflow_run wake from a fork head', run: () => { const a = admitWakeRun({ headRepository: 'fork-owner/powerbrowser' }, 'DeBIOS-Foundation/powerbrowser'); return a.admit ? [] : [a.reason]; }, expect: 'from fork' },
+    ];
+    let failed = 0;
+    for (const c of controls) {
+        const failures = c.run();
+        if (failures.length === 0) console.log(`  ok  ${c.name} -> green`);
+        else { console.error(`${NAME}: --self-test FAIL -- '${c.name}' went red: ${failures.join(' | ')}`); failed += 1; }
+    }
+    for (const p of plants) {
+        const failures = p.run();
+        if (failures.some(f => f.includes(REPO_ROOT))) { console.error(`${NAME}: --self-test FAIL -- '${p.name}' leaked the checkout path`); failed += 1; continue; }
+        if (failures.some(f => f.includes(p.expect))) console.log(`  ok  ${p.name} -> red, naming '${p.expect}'`);
+        else { console.error(`${NAME}: --self-test FAIL -- '${p.name}' did not go red naming '${p.expect}'; got: ${failures.join(' | ') || '(nothing)'}`); failed += 1; }
+    }
+    return { failed, total: controls.length + plants.length };
+}
+
 function selfTest() {
     const baseline = runChecks();
     if (baseline.failures.length > 0) {
@@ -552,12 +892,14 @@ function selfTest() {
             failed += 1;
         }
     }
+    const maint = maintenanceSelfTest();
+    failed += maint.failed;
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
     const total = trainPlants.length + conflictPlants.length + viewPlants.length + publishPlants.length;
-    console.log(`${NAME}: --self-test PASS -- ${Object.keys(STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length} controls stayed green`);
+    console.log(`${NAME}: --self-test PASS -- ${Object.keys(STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length} controls stayed green; maintenance half: ${maint.total} case(s) proven (six rows, no-data branches, transition comments, exactly-one, fork head, draft Release)`);
     return 0;
 }
 
@@ -573,7 +915,10 @@ if (isEntry) {
     if (args.length === 1 && args[0] === '--self-test') process.exit(selfTest());
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
+    if (args[0] === '--sweep-due' && args.length === 2) process.exit(sweepDueCli(args.slice(1)));
+    if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
+    if (args[0] === '--maintenance-plan' && args.length === 4) process.exit(maintenancePlanCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, or node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>.`);
+    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds>, node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out>.`);
     process.exit(2);
 }
