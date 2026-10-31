@@ -889,6 +889,58 @@ Listing state lives in the Listings table that stage `listings-and-cadence` adds
 every deferral lives in the single `## Deferred signing items` register above. Do not
 add a second table for either.
 
+### ESR 175 uptake (UPS-01, TRAIN-05)
+
+The train tracks two ESR majors at the same time. The pinned major (153) keeps the bump
+path: a newer 153.x tag opens `chore/esr-<tag>` and updates its tracking issue. The
+uptake major (175, `UPTAKE_MAJOR` in `scripts/detect-upstreams.mjs`) is replay-only from
+the 175 beta: the newest 175 `*esr_RELEASE` tag is replayed and nothing is published from
+it.
+
+**Two keys.** Each release key owns one tracking issue, found by label and title on every
+run: `release-train: v153.x-r` for the bump line and `release-train: v175.x-r` for the
+uptake line. The body is rewritten only when its rendered bytes differ. A 153 tag never
+reaches the 175 replay, and a 175 tag never reaches the 153 bump: the guard refuses the
+foreign major in both lanes, and both self-tests plant that fault and require it to go
+red.
+
+**Replay-only procedure** (the `uptake-replay` job in `release-train.yml`):
+
+1. The detect job lists the 175 tags with the 153 tags and names the newest one.
+2. `uptake-replay` calls `rebase-upstream.yml`, the one replay definition. It fetches the
+   tag into a runner-local `upstream/`, then runs `apply-patches.sh`,
+   `check-patch-surface.sh`, `regenerate-patches.sh --check`, the brand scan and the
+   classifier.
+3. A PASS is `UPTAKE_REPLAYED`. A `NOTE` line counts patches that replay onto moved files
+   and is informational. Nothing is committed.
+4. A patch that does not apply is `UPTAKE_CONFLICT`. Its tracking view names the patch
+   (`ESR <tag>: patch <NNN> did not apply`) and carries the apply log and the upstream
+   diff, assigned to the owner. Any other replay FAIL is `UPTAKE_RED`, and the owner is
+   told to wait.
+5. Patches are changed only by `regenerate-patches.sh`, never by hand. Routing a fixable
+   conflict to fixer F1 or F2 on a `chore/esr-175*` branch is a ship step (plan 58-03), and
+   no such branch exists until the owner approves the 175 conflict writer.
+
+The uptake lane has no commit, push, PR, dispatch, environment or App token. The
+`uptake-lane` rule in `scripts/verify-workflows.mjs` holds the job to read-only scope and
+to the one replay definition. A dry run runs the same replay and prints the would-write
+view.
+
+**Naming.** Bump branches are `chore/esr-<tag>`, so the 153 and 175 branches never share a
+name. The release key comes from the tag (`v<ESR>-<revision>`), so the two lines cannot
+collide in a title either.
+
+**Calendar** (CONTEXT A-58-4). Nightly 2027-05-27. Beta 2027-06-10: the first replay-only
+run against a 175 tag. Release 2027-06-29: `175.0esr` is published. ESR 153 ends with
+153.27 on 2027-09-07. The ship checklist for 175.x is in plan 58-03, which is an owner
+checkpoint.
+
+**`FIREFOX_ESR` is advisory after the flip.** From 2027-06-29 product-details reports
+`175.0esr` as `FIREFOX_ESR`. The 153 line does not read it. Its candidate comes from the
+153 tag list, and the Phase 43 regression fixture (`FIREFOX_ESR=175.0esr` with
+`FIREFOX_153_23_0esr_RELEASE` present dispatches 153.23) stays in the detector self-test.
+The train never depends on an undocumented `FIREFOX_ESR153` key.
+
 ---
 
 ## Verification map
