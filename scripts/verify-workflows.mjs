@@ -39,9 +39,9 @@
 //  issues-write   Effective issues: write only on release-train.yml job
 //                 report and on any job in triage.yml.
 //  workflow-run-guard  Every job of a workflow_run-triggered workflow has an
-//                 `if` containing github.event.workflow_run.head_repository
-//                 .full_name == github.repository (whitespace collapsed,
-//                 ${{ }} stripped).
+//                 `if` whose top-level && terms include github.event.workflow_run
+//                 .head_repository.full_name == github.repository (whitespace
+//                 collapsed, ${{ }} stripped), and no top-level ||.
 //  workflow-run-chain  A workflow named in any on.workflow_run.workflows list
 //                 (matched by name:) is not itself workflow_run-triggered.
 //  write-trio     contents, id-token and attestations all at write only on
@@ -55,21 +55,27 @@
 //                 expression reading github.event.(issue|comment|
 //                 pull_request|head_commit|review), nested fields and
 //                 review_comment included.
-//  fixer-pin      In release-train.yml every anthropics/claude-code-action step is
-//                 exactly the pinned commit db77d4d3c98f... (v1.0.254; the tag
-//                 object is refused), has with.path_to_claude_code_executable, and
-//                 has no with.show_full_output or with.display_report set true.
-//  fixer-debug    No ACTIONS_STEP_DEBUG in the workflow, job or step env of a
-//                 fixer job (release-train.yml fix, fix-gate, fix-pr) or of a job
-//                 that runs claude-code-action.
-//  fixer-tools    The fix job's claude_args has --max-turns and an explicit
-//                 --allowedTools list with no bare Bash and no Edit or Write on
-//                 patches/. Granting Edit(work/**) or Write(work/**) also needs
-//                 --disallowedTools to deny both on work/**/patches/**.
-//  fixer-prompt   The fix job's if: holds the head_repository guard, the claude-fix/
-//                 head exclusion and the bot-actor exclusion. Its --disallowedTools
-//                 denies WebFetch and WebSearch, and its allowed_bots is exactly
-//                 renovate[bot],powerbrowser-bot[bot].
+//  fixer-pin      In every workflow (release-train.yml and triage.yml included, FIX-08)
+//                 every anthropics/claude-code-action step is exactly the pinned commit
+//                 db77d4d3c98f... (v1.0.254; the tag object is refused), has
+//                 with.path_to_claude_code_executable, and has no with.show_full_output
+//                 or with.display_report set true.
+//  fixer-debug    No ACTIONS_STEP_DEBUG anywhere in the workflow env or the job (env in
+//                 any form, a step's run or with text) of a fixer job (release-train.yml
+//                 fix, fix-gate, fix-pr) or of a job that runs claude-code-action.
+//  fixer-tools    Every claude-code-action step of the fix job has claude_args with one
+//                 --max-turns integer (1-100) and an explicit --allowedTools (or
+//                 --allowed-tools) list, space- or comma-separated, each entry read: no
+//                 Bash, Bash() or Bash(*), no bare Edit, Write, MultiEdit or NotebookEdit,
+//                 no such grant outside work/ or reaching patches/. A work/** grant also
+//                 needs --disallowedTools to deny that tool on work/**/patches/**. Refused
+//                 flags: --dangerously-skip-permissions, --permission-mode other than
+//                 default or plan (bypassPermissions and acceptEdits included),
+//                 --settings, --mcp-config, --add-dir, and any flag outside the allowlist.
+//  fixer-prompt   The fix job's if: is parsed: no top-level ||, and the head_repository
+//                 guard, the claude-fix/ head exclusion and the bot-actor exclusion are
+//                 each a top-level && term. Its --disallowedTools denies WebFetch and
+//                 WebSearch, and its allowed_bots is exactly renovate[bot],powerbrowser-bot[bot].
 //
 // Effective permissions: job permissions, else workflow permissions, else the
 // repository default (default_workflow_permissions in
@@ -121,6 +127,15 @@ const FIX_GUARDS = [
     ['claude-fix/', "!startsWith(github.event.workflow_run.head_branch, 'claude-fix/')"],
     ['powerbrowser-bot[bot]', "github.actor != 'powerbrowser-bot[bot]'"],
 ];
+// claude_args flags the fixer may pass; everything else is refused, with a reason for the known-dangerous ones.
+const FIXER_FLAGS = new Set(['--max-turns', '--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--permission-mode']);
+const FIXER_REFUSED_FLAGS = {
+    '--dangerously-skip-permissions': 'turns every permission check off',
+    '--allow-dangerously-skip-permissions': 'makes turning every permission check off available',
+    '--settings': 'can load settings that widen the allowlist',
+    '--mcp-config': 'adds tools outside the allowlist',
+    '--add-dir': 'widens the directories the tools reach',
+};
 const SCOPES = ['actions', 'attestations', 'checks', 'contents', 'deployments', 'discussions', 'id-token', 'issues', 'models', 'packages', 'pages', 'pull-requests', 'repository-projects', 'security-events', 'statuses'];
 const HOSTED = /^(ubuntu|windows|macos)-[\w.-]+$/;
 const GUARD = 'github.event.workflow_run.head_repository.full_name == github.repository';
@@ -171,15 +186,87 @@ function readWorkflows(root) {
     return out;
 }
 
-// A flag's value in claude_args: double-quoted, single-quoted, or one bare token.
-function flagValue(text, flag) {
-    const m = text.match(new RegExp(`${flag}(?:=|\\s+)(?:"([^"]*)"|'([^']*)'|(\\S+))`));
-    return m ? (m[1] ?? m[2] ?? m[3]) : null;
+// claude_args split the way a shell would: whitespace separates, '...' and "..." group, quotes are dropped.
+function argTokens(text) {
+    const out = [];
+    let cur = null;
+    let q = null;
+    for (const ch of text) {
+        if (q !== null) { if (ch === q) q = null; else cur += ch; continue; }
+        if (ch === '"' || ch === "'") { q = ch; cur ??= ''; continue; }
+        if (/\s/.test(ch)) { if (cur !== null) { out.push(cur); cur = null; } continue; }
+        cur = (cur ?? '') + ch;
+    }
+    if (cur !== null) out.push(cur);
+    return out;
 }
 
-// Entries of a comma-separated tool list; a comma inside parentheses does not split.
-function toolEntries(value) {
-    return value.split(/,(?![^(]*\))/).map(s => s.trim()).filter(Boolean);
+// [{ name, values }]: a flag and the tokens up to the next `--flag`; `--flag=value` gives one value.
+function claudeFlags(text) {
+    const flags = [];
+    for (const t of argTokens(text)) {
+        if (t.startsWith('--')) {
+            const eq = t.indexOf('=');
+            flags.push(eq > 0 ? { name: t.slice(0, eq), values: [t.slice(eq + 1)] } : { name: t, values: [] });
+        } else if (flags.length > 0) flags[flags.length - 1].values.push(t);
+        else flags.push({ name: '(positional)', values: [t] });
+    }
+    return flags;
+}
+
+// Entries of a tool list: comma or whitespace separated; a separator inside parentheses does not split.
+function toolEntries(values) {
+    const out = [];
+    let depth = 0;
+    let cur = '';
+    for (const ch of values.join(' ')) {
+        if (ch === '(') depth += 1;
+        else if (ch === ')') depth = Math.max(0, depth - 1);
+        if (depth === 0 && (ch === ',' || /\s/.test(ch))) { if (cur.trim() !== '') out.push(cur.trim()); cur = ''; continue; }
+        cur += ch;
+    }
+    if (cur.trim() !== '') out.push(cur.trim());
+    return out;
+}
+
+// Split an if: expression at a top-level operator (outside parentheses and 'strings').
+function splitTop(expr, op) {
+    const out = [];
+    let depth = 0;
+    let str = false;
+    let cur = '';
+    for (let i = 0; i < expr.length; i++) {
+        const ch = expr[i];
+        if (ch === "'") str = !str;
+        else if (!str && ch === '(') depth += 1;
+        else if (!str && ch === ')') depth -= 1;
+        if (!str && depth === 0 && expr.startsWith(op, i)) { out.push(cur.trim()); cur = ''; i += op.length - 1; continue; }
+        cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+}
+
+const unparen = (t) => {
+    for (;;) {
+        if (!(t.startsWith('(') && t.endsWith(')'))) return t;
+        let depth = 0;
+        let str = false;
+        for (let i = 0; i < t.length - 1; i++) {
+            if (t[i] === "'") str = !str;
+            else if (!str && t[i] === '(') depth += 1;
+            else if (!str && t[i] === ')') depth -= 1;
+            if (!str && depth === 0) return t;
+        }
+        t = t.slice(1, -1).trim();
+    }
+};
+
+// An if: as { or, terms }: `or` is true when a top-level || exists (the job can then run with a guard false);
+// terms are the top-level && terms, outer parentheses stripped, whitespace collapsed.
+function ifTerms(job) {
+    const cond = String(job.if ?? '').replace(/\$\{\{|\}\}/g, ' ').replace(/\s+/g, ' ').trim();
+    return { or: splitTop(cond, '||').length > 1, terms: splitTop(cond, '&&').map(unparen).map(t => t.replace(/\s+/g, ' ')) };
 }
 
 function runChecks(root, overrides = {}) {
@@ -334,54 +421,74 @@ function runChecks(root, overrides = {}) {
                 if (eff.contents === 'write') fail(rel, jobId, 'claude-code-action', `uses claude-code-action with effective contents write. Next step: give the job contents read.`);
             }
 
-            // FIX-08 / FIX-09 / FIX-04: the fixer's trust boundary. Only release-train.yml runs it.
+            // FIX-08 / FIX-09 / FIX-04: the fixer's trust boundary. Only release-train.yml runs the fixer jobs;
+            // the claude-code-action pin holds in every workflow (triage.yml too).
             const fixer = file === FIXER_FILE && FIXER_JOBS.includes(jobId);
             const claude = steps.filter(s => typeof s.uses === 'string' && s.uses.startsWith('anthropics/claude-code-action@'));
-            if (file === FIXER_FILE) {
-                for (const s of claude) {
-                    const w = s.with ?? {};
-                    if (s.uses !== FIX_PIN) fail(rel, jobId, 'fixer-pin', `uses '${s.uses}', which is not the pinned commit ${FIX_PIN} (v1.0.254; the tag object is a different hash). Next step: pin the step to ${FIX_PIN}.`);
-                    if (typeof w.path_to_claude_code_executable !== 'string' || w.path_to_claude_code_executable.trim() === '') fail(rel, jobId, 'fixer-pin', `with has no path_to_claude_code_executable, so the Claude Code binary is not pinned. Next step: set it to the pinned binary path.`);
-                    for (const k of ['show_full_output', 'display_report']) {
-                        if (w[k] === true || w[k] === 'true') fail(rel, jobId, 'fixer-pin', `with.${k} is true, which echoes model output into the log. Next step: set it to false.`);
-                    }
+            for (const s of claude) {
+                const w = s.with ?? {};
+                if (s.uses !== FIX_PIN) fail(rel, jobId, 'fixer-pin', `uses '${s.uses}', which is not the pinned commit ${FIX_PIN} (v1.0.254; the tag object is a different hash). Next step: pin the step to ${FIX_PIN}.`);
+                if (typeof w.path_to_claude_code_executable !== 'string' || w.path_to_claude_code_executable.trim() === '') fail(rel, jobId, 'fixer-pin', `with has no path_to_claude_code_executable, so the Claude Code binary is not pinned. Next step: set it to the pinned binary path.`);
+                for (const k of ['show_full_output', 'display_report']) {
+                    if (w[k] === true || w[k] === 'true') fail(rel, jobId, 'fixer-pin', `with.${k} is true, which echoes model output into the log. Next step: set it to false.`);
                 }
             }
             if (fixer || claude.length > 0) {
-                const envs = [['workflow env', wf.env], ['job env', job.env], ...steps.map((s, i) => [`step ${i} env`, s.env])];
-                for (const [where, env] of envs) {
-                    if (env && typeof env === 'object' && Object.hasOwn(env, 'ACTIONS_STEP_DEBUG')) fail(rel, jobId, 'fixer-debug', `${where} sets ACTIONS_STEP_DEBUG, and debug logging can echo the model's input. Next step: remove the key from the fixer job.`);
+                // Any form: an env map, an env expression string, or a run:/with: text that writes it to GITHUB_ENV.
+                for (const [where, v] of [['workflow env', wf.env], ['job', job]]) {
+                    if (/ACTIONS_STEP_DEBUG/i.test(JSON.stringify(v ?? null))) fail(rel, jobId, 'fixer-debug', `${where} mentions ACTIONS_STEP_DEBUG, and debug logging can echo the model's input. Next step: remove it from the fixer job.`);
                 }
             }
             if (fixer && jobId === 'fix') {
-                const w = claude[0]?.with ?? {};
-                const args = String(w.claude_args ?? '');
-                if (!/--max-turns\s+\d+/.test(args)) fail(rel, jobId, 'fixer-tools', `claude_args has no --max-turns, so the run is unbounded. Next step: add --max-turns 40.`);
-                const allowed = flagValue(args, '--allowedTools');
-                const denied = toolEntries(flagValue(args, '--disallowedTools') ?? '');
-                if (allowed === null) {
-                    fail(rel, jobId, 'fixer-tools', `claude_args has no --allowedTools list, so every tool is open. Next step: list the scoped tools explicitly.`);
-                } else {
-                    const entries = toolEntries(allowed);
-                    for (const e of entries) {
-                        if (e === 'Bash' || /^Bash\(\s*\)$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants bare ${e}, an unscoped shell. Next step: scope it, for example Bash(git -C work diff:*).`);
-                        const g = e.match(/^(Edit|Write)\((.*)\)$/);
-                        if (g && g[2].includes('patches')) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${g[1]}(${g[2]}), which reaches patches/. Next step: drop it; patches change only through scripts/regenerate-patches.sh.`);
+                for (const step of claude.length > 0 ? claude : [{}]) {
+                    const w = step.with ?? {};
+                    const flags = claudeFlags(String(w.claude_args ?? ''));
+                    const flagsOf = (...names) => flags.filter(f => names.includes(f.name));
+                    const turns = flagsOf('--max-turns');
+                    if (turns.length !== 1 || turns[0].values.length !== 1 || !/^\d+$/.test(turns[0].values[0]) || Number(turns[0].values[0]) < 1 || Number(turns[0].values[0]) > 100) fail(rel, jobId, 'fixer-tools', `claude_args needs exactly one --max-turns integer from 1 to 100, so the run is bounded. Next step: add --max-turns 40.`);
+                    for (const f of flags) {
+                        if (FIXER_FLAGS.has(f.name)) continue;
+                        const why = FIXER_REFUSED_FLAGS[f.name] ?? 'is not in the fixer flag allowlist';
+                        fail(rel, jobId, 'fixer-tools', `claude_args passes ${f.name}, which ${why}. Next step: remove it; the fixer flag allowlist changes only by a reviewed edit of ${SELF_REL}.`);
                     }
-                    if (entries.some(e => /^(Edit|Write)\(work\/\*\*\)$/.test(e))) {
-                        for (const t of ['Edit', 'Write']) {
+                    for (const f of flagsOf('--permission-mode')) {
+                        if (!(f.values.length === 1 && ['default', 'plan'].includes(f.values[0]))) fail(rel, jobId, 'fixer-tools', `claude_args passes --permission-mode ${f.values.join(' ') || '(no value)'}; bypassPermissions and acceptEdits skip the allowlist. Next step: drop --permission-mode, or use default or plan.`);
+                    }
+                    const allowedFlags = flagsOf('--allowedTools', '--allowed-tools');
+                    const denied = flagsOf('--disallowedTools', '--disallowed-tools').flatMap(f => toolEntries(f.values));
+                    if (allowedFlags.length === 0) {
+                        fail(rel, jobId, 'fixer-tools', `claude_args has no --allowedTools list, so every tool is open. Next step: list the scoped tools explicitly.`);
+                    } else {
+                        const entries = allowedFlags.flatMap(f => toolEntries(f.values));
+                        const granted = new Set();
+                        for (const e of entries) {
+                            if (/^Bash(\(\s*:?\*+\s*\)|\(\s*\))?$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${e}, an unscoped shell. Next step: scope it, for example Bash(git -C work diff:*).`);
+                            if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(e)) {
+                                fail(rel, jobId, 'fixer-tools', `--allowedTools grants bare ${e}, which reaches patches/ and every other path. Next step: scope it, for example ${e}(work/**).`);
+                                continue;
+                            }
+                            const g = e.match(/^(Edit|Write|MultiEdit|NotebookEdit)\((.*)\)$/);
+                            if (!g) continue;
+                            if (g[2].includes('patches')) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${g[1]}(${g[2]}), which reaches patches/. Next step: drop it; patches change only through scripts/regenerate-patches.sh.`);
+                            else if (!g[2].startsWith('work/') || g[2].includes('..')) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${g[1]}(${g[2]}), which is not confined to work/ and so reaches patches/. Next step: scope it to ${g[1]}(work/**).`);
+                            else if (g[2] === 'work/**') granted.add(g[1]);
+                        }
+                        // work/** reaches work/**/patches/**: each granted tool needs that path denied (Edit and Write always travel together).
+                        if (granted.has('Edit') || granted.has('Write')) { granted.add('Edit'); granted.add('Write'); }
+                        for (const t of granted) {
                             if (!denied.includes(`${t}(work/**/patches/**)`)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${t}(work/**), which reaches patches/, and --disallowedTools does not deny ${t}(work/**/patches/**). Next step: add that deny entry.`);
                         }
                     }
+                    for (const t of ['WebFetch', 'WebSearch']) {
+                        if (!denied.includes(t)) fail(rel, jobId, 'fixer-prompt', `--disallowedTools does not deny ${t}, so the model can reach the open web with repository text. Next step: add ${t} to --disallowedTools.`);
+                    }
+                    if (w.allowed_bots !== FIX_BOTS) fail(rel, jobId, 'fixer-prompt', `allowed_bots is '${w.allowed_bots ?? '(absent)'}', not the explicit list '${FIX_BOTS}'. A wildcard lets any bot steer the model. Next step: set allowed_bots to that list.`);
                 }
-                for (const t of ['WebFetch', 'WebSearch']) {
-                    if (!denied.includes(t)) fail(rel, jobId, 'fixer-prompt', `--disallowedTools does not deny ${t}, so the model can reach the open web with repository text. Next step: add ${t} to --disallowedTools.`);
-                }
-                const cond = String(job.if ?? '').replace(/\$\{\{|\}\}/g, ' ').replace(/\s+/g, ' ').trim();
+                const cond = ifTerms(job);
+                if (cond.or) fail(rel, jobId, 'fixer-prompt', `if: has a top-level ||, so the fixer can start with a guard false (for example always() || (...)). Next step: join the guards with && only.`);
                 for (const [kw, lit] of FIX_GUARDS) {
-                    if (!cond.includes(lit)) fail(rel, jobId, 'fixer-prompt', `if: lacks the ${kw} guard (${lit}), so a fork, a fixer head or the bot actor could start the fixer. Next step: add it to the job's if:.`);
+                    if (!cond.terms.includes(lit)) fail(rel, jobId, 'fixer-prompt', `if: lacks the ${kw} guard (${lit}) as a top-level && term, so a fork, a fixer head or the bot actor could start the fixer. Next step: add it to the job's if: joined with &&.`);
                 }
-                if (w.allowed_bots !== FIX_BOTS) fail(rel, jobId, 'fixer-prompt', `allowed_bots is '${w.allowed_bots ?? '(absent)'}', not the explicit list '${FIX_BOTS}'. A wildcard lets any bot steer the model. Next step: set allowed_bots to that list.`);
             }
 
             // permissions
@@ -394,8 +501,8 @@ function runChecks(root, overrides = {}) {
 
             // workflow_run guard
             if (wfRun) {
-                const cond = String(job.if ?? '').replace(/\$\{\{|\}\}/g, ' ').replace(/\s+/g, ' ').trim();
-                if (!cond.includes(GUARD)) fail(rel, jobId, 'workflow-run-guard', `runs on workflow_run without the guard '${GUARD}' in its if:, so a fork's run can trigger it. Next step: add the guard to the job's if:.`);
+                const cond = ifTerms(job);
+                if (cond.or || !cond.terms.includes(GUARD)) fail(rel, jobId, 'workflow-run-guard', `runs on workflow_run without the guard '${GUARD}' as a top-level && term of its if: (and no top-level ||), so a fork's run can trigger it. Next step: add the guard to the job's if: joined with &&.`);
             }
 
             // no cache in the release path or the fixer path (RESEARCH pitfall 5)
@@ -529,7 +636,7 @@ function selfTest() {
         '      - run: echo done',
         '',
     ].join('\n');
-    const assist = (perm, extraSteps = [], prompt = 'Review the change') => [
+    const assist = (perm, extraSteps = [], prompt = 'Review the change', pin = FIX_PIN) => [
         'name: Assist',
         'on: workflow_dispatch',
         'permissions:',
@@ -539,8 +646,9 @@ function selfTest() {
         '    runs-on: ubuntu-latest',
         '    steps:',
         ...extraSteps,
-        `      - uses: anthropics/claude-code-action@${H40}`,
+        `      - uses: ${pin}`,
         '        with:',
+        '          path_to_claude_code_executable: /opt/claude-pinned/claude',
         `          prompt: "${prompt}"`,
         '',
     ].join('\n');
@@ -685,6 +793,35 @@ function selfTest() {
         ['actions/create-github-app-token beside Claude in fix', fixerEdit(`      - uses: ${FIX_PIN}`, `      - uses: ${FIX_APP}\n      - uses: ${FIX_PIN}`), rel(T), 'fix', 'claude-code-action', 'create-github-app-token'],
         ['actions/cache in fix', fixerEdit(`      - uses: ${FIX_PIN}`, `      - uses: actions/cache@${H40}\n      - uses: ${FIX_PIN}`), rel(T), 'fix', 'no-cache', 'actions/cache'],
         ['setup-node with cache: in fix-gate', fixerEdit('    steps:\n      - run: echo gate', `    steps:\n      - uses: actions/setup-node@${H40}\n        with:\n          cache: yarn\n      - run: echo gate`), rel(T), 'fix-gate', 'no-cache', 'cache input'],
+        // FIX-08 in triage.yml (WR-07): the pin holds in every workflow, not only release-train.yml.
+        ['triage.yml pinned to the claude-code-action tag object', { files: { ...base, 'triage.yml': assist('read', [], 'Label the issue', 'anthropics/claude-code-action@c335fd6d' + '0'.repeat(32)) }, selected: withClaude }, rel('triage.yml'), 'assist', 'fixer-pin', 'db77d4d3'],
+        // WR-07: if: guards are parsed, not searched for substrings.
+        ['if: always() || (all three guards)', fixerEdit(`    if: "${FIX_IF}"`, `    if: "always() || (${FIX_IF})"`), rel(T), 'fix', 'fixer-prompt', '||'],
+        ['if: !(all three guards)', fixerEdit(`    if: "${FIX_IF}"`, `    if: "!(${FIX_IF})"`), rel(T), 'fix', 'fixer-prompt', 'head_repository'],
+        ['workflow_run guard behind always() ||', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true).replace(`if: \${{ ${GUARD} }}`, `if: \${{ always() || ${GUARD} }}`) }), rel('after.yml'), 'report', 'workflow-run-guard', 'head_repository'],
+        ['ACTIONS_STEP_DEBUG as an env expression string', fixerEdit('    concurrency: claude-fixer', "    concurrency: claude-fixer\n    env: ${{ fromJSON('{\"ACTIONS_STEP_DEBUG\":\"1\"}') }}"), rel(T), 'fix', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
+        ['ACTIONS_STEP_DEBUG written to GITHUB_ENV by a step', fixerEdit('    steps:\n      - run: echo gate', '    steps:\n      - run: echo ACTIONS_STEP_DEBUG=true >> "$GITHUB_ENV"\n      - run: echo gate'), rel(T), 'fix-gate', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
+        // WR-06: grants and flags that open the shell, reach patches/ or make the allowlist moot.
+        ['bare Edit in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit,Read'), rel(T), 'fix', 'fixer-tools', 'bare Edit'],
+        ['bare Write in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),Write,Read'), rel(T), 'fix', 'fixer-tools', 'bare Write'],
+        ['bare MultiEdit in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),MultiEdit,Read'), rel(T), 'fix', 'fixer-tools', 'bare MultiEdit'],
+        ['bare NotebookEdit in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),NotebookEdit,Read'), rel(T), 'fix', 'fixer-tools', 'bare NotebookEdit'],
+        ['Edit(**) in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(**),Read'), rel(T), 'fix', 'fixer-tools', 'Edit(**)'],
+        ['Edit(*) in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(*),Read'), rel(T), 'fix', 'fixer-tools', 'Edit(*)'],
+        ['MultiEdit(work/**) without its patches deny', fixerEdit('Edit(work/**),Read', 'Edit(work/**),MultiEdit(work/**),Read'), rel(T), 'fix', 'fixer-tools', 'MultiEdit(work/**/patches/**)'],
+        ['Bash(*) in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(*)'), rel(T), 'fix', 'fixer-tools', 'Bash(*)'],
+        ['Bash(:*) in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(:*)'), rel(T), 'fix', 'fixer-tools', 'Bash(:*)'],
+        ['space-separated --allowedTools Read Bash', fixerEdit(' --allowedTools "Bash(git -C work diff:*),Bash(scripts/regenerate-patches.sh:*),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read"', ' --allowedTools Read Bash'), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
+        ['bare Bash through the --allowed-tools alias', fixerEdit('--max-turns 40 ', '--max-turns 40 --allowed-tools Bash '), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
+        ['--dangerously-skip-permissions', fixerEdit('--max-turns 40 ', '--max-turns 40 --dangerously-skip-permissions '), rel(T), 'fix', 'fixer-tools', '--dangerously-skip-permissions'],
+        ['--permission-mode bypassPermissions', fixerEdit('--max-turns 40 ', '--max-turns 40 --permission-mode bypassPermissions '), rel(T), 'fix', 'fixer-tools', 'bypassPermissions'],
+        ['--permission-mode=acceptEdits', fixerEdit('--max-turns 40 ', '--max-turns 40 --permission-mode=acceptEdits '), rel(T), 'fix', 'fixer-tools', 'acceptEdits'],
+        ['--settings', fixerEdit('--max-turns 40 ', '--max-turns 40 --settings /tmp/s.json '), rel(T), 'fix', 'fixer-tools', '--settings'],
+        ['--mcp-config', fixerEdit('--max-turns 40 ', '--max-turns 40 --mcp-config /tmp/m.json '), rel(T), 'fix', 'fixer-tools', '--mcp-config'],
+        ['--add-dir', fixerEdit('--max-turns 40 ', '--max-turns 40 --add-dir /tmp '), rel(T), 'fix', 'fixer-tools', '--add-dir'],
+        ['a flag outside the allowlist', fixerEdit('--max-turns 40 ', '--max-turns 40 --append-system-prompt x '), rel(T), 'fix', 'fixer-tools', '--append-system-prompt'],
+        ['--max-turns 4000', fixerEdit('--max-turns 40 ', '--max-turns 4000 '), rel(T), 'fix', 'fixer-tools', '--max-turns'],
+        ['a second claude step with bare Bash', fixerEdit('  fix-gate:\n    needs: fix\n', `      - uses: ${FIX_PIN}\n        with:\n          path_to_claude_code_executable: /opt/claude-pinned/claude\n          allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'\n          claude_args: '--max-turns 40 --allowedTools Bash --disallowedTools "WebFetch,WebSearch"'\n  fix-gate:\n    needs: fix\n`), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
         ['admitted claude-code-action used by no workflow', { files: base, selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
     ];
     plants.push(...fixerPlants);
