@@ -48,6 +48,9 @@ EXPECT=$(sed -n 's/^expect=//p' <<<"$PLAN")
 
 # The App token authenticates the push. It is passed as a header, never in a URL or argv of a logged command.
 AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+# The base64 form is a usable credential that GitHub does not mask on its own, so register it
+# before anything could echo the -c extraheader argument (a trace, an error, a later set -x).
+echo "::add-mask::$AUTH"
 
 case "$ACTION" in
   create)
