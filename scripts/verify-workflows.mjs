@@ -147,11 +147,22 @@ const FIXER_FILE = 'release-train.yml';
 const FIXER_JOBS = ['fix', 'fix-gate', 'fix-pr'];
 const FIX_PIN = 'anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c';
 const FIX_BOTS = 'renovate[bot],powerbrowser-bot[bot]';
-const FIX_GUARDS = [
-    ['head_repository', 'github.event.workflow_run.head_repository.full_name == github.repository'],
-    ['claude-fix/', "!startsWith(github.event.workflow_run.head_branch, 'claude-fix/')"],
-    ['powerbrowser-bot[bot]', "github.actor != 'powerbrowser-bot[bot]'"],
-];
+// Two forms. workflow_dispatch (the live form): the fixer is started by a dispatch with reason fix, which the
+// derive job validated and which needs write access to dispatch, so no fork can reach it; the branch is the target
+// branch the dispatch names. workflow_run (held out): the head repository and head branch of the triggering run.
+const FIX_GUARD_FORMS = {
+    'workflow_dispatch': [
+        ['workflow_dispatch', "github.event_name == 'workflow_dispatch'"],
+        ['reason', "inputs.reason == 'fix'"],
+        ['claude-fix/', "!startsWith(inputs.target-branch, 'claude-fix/')"],
+        ['powerbrowser-bot[bot]', "github.actor != 'powerbrowser-bot[bot]'"],
+    ],
+    'workflow_run': [
+        ['head_repository', 'github.event.workflow_run.head_repository.full_name == github.repository'],
+        ['claude-fix/', "!startsWith(github.event.workflow_run.head_branch, 'claude-fix/')"],
+        ['powerbrowser-bot[bot]', "github.actor != 'powerbrowser-bot[bot]'"],
+    ],
+};
 // claude_args flags the fixer may pass; everything else is refused, with a reason for the known-dangerous ones.
 const FIXER_FLAGS = new Set(['--max-turns', '--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--permission-mode']);
 const FIXER_REFUSED_FLAGS = {
@@ -533,8 +544,10 @@ function runChecks(root, overrides = {}) {
                 if (concurrency !== 'claude-fixer') fail(rel, jobId, 'fixer-spend', `concurrency is ${JSON.stringify(concurrency) ?? '(absent)'}, not the claude-fixer group, so fixer attempts are not serialized. Next step: set concurrency: claude-fixer on the fix job.`);
                 const cond = ifTerms(job);
                 if (cond.or) fail(rel, jobId, 'fixer-prompt', `if: has a top-level ||, so the fixer can start with a guard false (for example always() || (...)). Next step: join the guards with && only.`);
-                for (const [kw, lit] of FIX_GUARDS) {
-                    if (!cond.terms.includes(lit)) fail(rel, jobId, 'fixer-prompt', `if: lacks the ${kw} guard (${lit}) as a top-level && term, so a fork, a fixer head or the bot actor could start the fixer. Next step: add it to the job's if: joined with &&.`);
+                const rawIf = String(job.if ?? '').replace(/\$\{\{|\}\}/g, ' ').replace(/\s+/g, ' ').trim();
+                const form = rawIf.includes("github.event_name == 'workflow_dispatch'") ? 'workflow_dispatch' : 'workflow_run';
+                for (const [kw, lit] of FIX_GUARD_FORMS[form]) {
+                    if (!cond.terms.includes(lit)) fail(rel, jobId, 'fixer-prompt', `if: lacks the ${kw} guard (${lit}) as a top-level && term of the ${form} form, so a fork, a fixer head or the bot actor could start the fixer. Next step: add it to the job's if: joined with &&.`);
                 }
             }
 
@@ -781,13 +794,16 @@ function selfTest() {
     const FIXER = FIX_PIN.split('@')[1];
     const FIX_APP = 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510';
     const CLAUDE_ARGS = '--max-turns 40 --allowedTools "Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read" --disallowedTools "WebFetch,WebSearch,Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"';
-    const FIX_IF = "github.event.workflow_run.head_repository.full_name == github.repository && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]'";
+    const FIX_IF = "github.event_name == 'workflow_dispatch' && inputs.reason == 'fix' && !startsWith(inputs.target-branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]'";
+    const GATE_IF = "!inputs.dry-run && needs.fix.result == 'success'";
+    const PR_IF = "!inputs.dry-run && needs.fix-gate.outputs.verdict == 'pass'";
     const GOOD_TRAIN = [
         'name: Release train',
         'on:',
-        '  workflow_run:',
-        '    workflows: [Verify static layers]',
-        '    types: [completed]',
+        '  workflow_dispatch:',
+        '    inputs:',
+        '      reason:',
+        '        type: string',
         'permissions: {}',
         'jobs:',
         '  fix:',
@@ -814,19 +830,19 @@ function selfTest() {
         "          allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'",
         '          show_full_output: false',
         '          display_report: false',
-        '          prompt: ${{ inputs.trusted-prompt }}',
+        "          prompt: 'Fix release ${{ inputs.release-key }}'",
         `          claude_args: '${CLAUDE_ARGS}'`,
         '  fix-gate:',
         '    needs: fix',
         '    runs-on: ubuntu-latest',
         '    permissions:',
         '      contents: read',
-        `    if: "${GUARD}"`,
+        `    if: "${GATE_IF}"`,
         '    steps:',
         '      - run: echo gate',
         '  fix-pr:',
         '    needs: fix-gate',
-        `    if: "!inputs.dry-run && needs.fix-gate.outputs.verdict == 'pass' && ${GUARD}"`,
+        `    if: "${PR_IF}"`,
         '    runs-on: ubuntu-latest',
         '    environment: bot',
         '    permissions: {}',
@@ -929,10 +945,10 @@ function selfTest() {
         ['Write(patches) granted in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),Write(work/**/patches/**),Read'), rel(T), 'fix', 'fixer-tools', 'Write(work/**/patches/**)'],
         ['Edit(work/**) granted with no patches deny', fixerEdit(',Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"', '"'), rel(T), 'fix', 'fixer-tools', 'Edit(work/**/patches/**)'],
         ['WebFetch not denied', fixerEdit('"WebFetch,WebSearch,', '"WebSearch,'), rel(T), 'fix', 'fixer-prompt', 'WebFetch'],
-        ['if: without the claude-fix/ head exclusion', fixerEdit(" && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/')", ''), rel(T), 'fix', 'fixer-prompt', 'claude-fix/'],
+        ['if: without the claude-fix/ head exclusion', fixerEdit(" && !startsWith(inputs.target-branch, 'claude-fix/')", ''), rel(T), 'fix', 'fixer-prompt', 'claude-fix/'],
         ['if: without the bot-actor exclusion', fixerEdit(" && github.actor != 'powerbrowser-bot[bot]'", ''), rel(T), 'fix', 'fixer-prompt', 'powerbrowser-bot[bot]'],
         ['allowed_bots star', fixerEdit("allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'", "allowed_bots: '*'"), rel(T), 'fix', 'fixer-prompt', 'allowed_bots'],
-        ['event text in the fixer prompt', fixerEdit('prompt: ${{ inputs.trusted-prompt }}', 'prompt: ${{ github.event.pull_request.body }}'), rel(T), 'fix', 'event-text', 'with.prompt'],
+        ['event text in the fixer prompt', fixerEdit("prompt: 'Fix release ${{ inputs.release-key }}'", 'prompt: ${{ github.event.pull_request.body }}'), rel(T), 'fix', 'event-text', 'with.prompt'],
         ['legion runner on fix', fixerEdit('    runs-on: ubuntu-latest\n    environment: fixer', '    runs-on: [self-hosted, legion]\n    environment: fixer'), rel(T), 'fix', 'legion', 'build-* or matrix-*'],
         ['bare self-hosted runner on fix', fixerEdit('    runs-on: ubuntu-latest\n    environment: fixer', '    runs-on: self-hosted\n    environment: fixer'), rel(T), 'fix', 'runner', '"self-hosted"'],
         ['actions/create-github-app-token beside Claude in fix', fixerEdit(`      - uses: ${FIX_PIN}`, `      - uses: ${FIX_APP}\n      - uses: ${FIX_PIN}`), rel(T), 'fix', 'claude-code-action', 'create-github-app-token'],
@@ -942,7 +958,7 @@ function selfTest() {
         ['triage.yml pinned to the claude-code-action tag object', { files: { ...base, 'triage.yml': assist('read', [], 'Label the issue', 'anthropics/claude-code-action@c335fd6d' + '0'.repeat(32)) }, selected: withClaude }, rel('triage.yml'), 'assist', 'fixer-pin', 'db77d4d3'],
         // WR-07: if: guards are parsed, not searched for substrings.
         ['if: always() || (all three guards)', fixerEdit(`    if: "!inputs.dry-run && ${FIX_IF}"`, `    if: "always() || (!inputs.dry-run && ${FIX_IF})"`), rel(T), 'fix', 'fixer-prompt', '||'],
-        ['if: !(all three guards)', fixerEdit(`    if: "!inputs.dry-run && ${FIX_IF}"`, `    if: "!(!inputs.dry-run && ${FIX_IF})"`), rel(T), 'fix', 'fixer-prompt', 'head_repository'],
+        ['if: !(all guards)', fixerEdit(`    if: "!inputs.dry-run && ${FIX_IF}"`, `    if: "!(!inputs.dry-run && ${FIX_IF})"`), rel(T), 'fix', 'fixer-prompt', 'workflow_dispatch'],
         ['workflow_run guard behind always() ||', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true).replace(`if: \${{ ${GUARD} }}`, `if: \${{ always() || ${GUARD} }}`) }), rel('after.yml'), 'report', 'workflow-run-guard', 'head_repository'],
         ['ACTIONS_STEP_DEBUG as an env expression string', fixerEdit('    concurrency: claude-fixer', "    concurrency: claude-fixer\n    env: ${{ fromJSON('{\"ACTIONS_STEP_DEBUG\":\"1\"}') }}"), rel(T), 'fix', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
         ['ACTIONS_STEP_DEBUG written to GITHUB_ENV by a step', fixerEdit('    steps:\n      - run: echo gate', '    steps:\n      - run: echo ACTIONS_STEP_DEBUG=true >> "$GITHUB_ENV"\n      - run: echo gate'), rel(T), 'fix-gate', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
@@ -967,7 +983,7 @@ function selfTest() {
         ['a flag outside the allowlist', fixerEdit('--max-turns 40 ', '--max-turns 40 --append-system-prompt x '), rel(T), 'fix', 'fixer-tools', '--append-system-prompt'],
         ['--max-turns 4000', fixerEdit('--max-turns 40 ', '--max-turns 4000 '), rel(T), 'fix', 'fixer-tools', '--max-turns'],
         ['a second claude step with bare Bash', fixerEdit('  fix-gate:\n    needs: fix\n', `      - uses: ${FIX_PIN}\n        with:\n          path_to_claude_code_executable: /opt/claude-pinned/claude\n          allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'\n          claude_args: '--max-turns 40 --allowedTools Bash --disallowedTools "WebFetch,WebSearch"'\n  fix-gate:\n    needs: fix\n`), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
-        ['admitted claude-code-action used by no workflow', { files: Object.fromEntries(Object.entries(base).filter(([k]) => !k.endsWith('triage.yml'))), selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
+        ['admitted claude-code-action used by no workflow', { files: Object.fromEntries(Object.entries(base).filter(([k]) => !k.endsWith('triage.yml') && k !== 'release-train.yml')), selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
     ];
     plants.push(...fixerPlants);
     // FIX-05 spend: the fix job's time bound and its serialized attempt group.
@@ -985,7 +1001,7 @@ function selfTest() {
         ['fix job without id-token write', fixerEdit('      id-token: write\n', ''), rel(T), 'fix', 'fixer-auth', 'id-token'],
         ['Claude step without the federation rule id', fixerEdit('          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}\n', ''), rel(T), 'fix', 'fixer-auth', 'anthropic_federation_rule_id'],
         ['Claude step without the organization id', fixerEdit('          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}\n', ''), rel(T), 'fix', 'fixer-auth', 'anthropic_organization_id'],
-        ['id-token write on fix-gate', fixerEdit('      contents: read\n    if: "' + GUARD + '"', '      contents: read\n      id-token: write\n    if: "' + GUARD + '"'), rel(T), 'fix-gate', 'fixer-auth', 'id-token'],
+        ['id-token write on fix-gate', fixerEdit('      contents: read\n    if: "' + GATE_IF + '"', '      contents: read\n      id-token: write\n    if: "' + GATE_IF + '"'), rel(T), 'fix-gate', 'fixer-auth', 'id-token'],
         ['ANTHROPIC_API_KEY referenced in fix-pr (environment bot)', fixerEdit('    permissions: {}\n    steps:', '    permissions: {}\n    env:\n      FALLBACK_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n    steps:'), rel(T), 'fix-pr', 'fixer-auth', 'fixer'],
     );
     plants.push(
@@ -1001,7 +1017,7 @@ function selfTest() {
     const controls = [
         ['good release.yml: build-linux on legion, sign-publish with the write trio', { files: base }],
         ['issues write on release-train.yml job report', with_({ 'release-train.yml': issuesJob('Release train', 'report') })],
-        ['issues write on triage.yml job apply', { ...with_({ 'triage.yml': issuesJob('Triage', 'apply') }), selected: withoutClaude }],
+        ['issues write on triage.yml job apply', { ...with_({ 'triage.yml': issuesJob('Triage', 'apply') }), selected: withClaude }],
         ['guarded workflow_run', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true) })],
         ['claude-code-action hosted with contents read', { files: { ...base, 'assist.yml': assist('read') }, selected: withClaude }],
         ['permissions: read-all over a write repository default', { files: { ...base, 'plain.yml': plain('read-all') }, defaultPermissions: 'write' }],
