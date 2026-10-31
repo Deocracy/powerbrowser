@@ -122,6 +122,14 @@ const BOUNDARY_FILE = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const PATCH_FILE = 'patches/050-extension-tab-host.patch';
 const STANDIN_ANCHOR = 'window.gBrowser';
 const SHIM_ANCHOR = 'gBrowserInit = {';
+// Phase 32 plan 09 (PAGE-02): the zoom shims under the Phase 27 policy, each compared the way gBrowserInit is. Each is
+// defined once in the boundary file as `win.<Name> = {`. A member upstream reads that the shim must not implement is
+// listed in ZOOM_SHIM_ABSENT with its reason; a listed member the shim implements is a CONTRADICTION.
+const ZOOM_SHIMS = ['ZoomManager', 'FullZoom', 'ZoomUI'];
+const ZOOM_SHIM_ABSENT = new Map([
+  ['FullZoom.reset', "KNOWN GAP: reached only by tabs.setZoom (ext-tabs.js:1266-1283), an extension zoom write; the shell's zoom is chrome-driven through the 32-01 webTabZoom arms, and the call keeps failing with a TypeError as it does today"],
+  ['FullZoom.setZoom', "KNOWN GAP: reached only by tabs.setZoom (ext-tabs.js:1266-1283), an extension zoom write; see FullZoom.reset"],
+]);
 const ID = '[A-Za-z_$][\\w$]*';
 
 // The upstream call-site files for the actor scope: the scope's widget files plus
@@ -415,6 +423,29 @@ function deriveShimImplemented(boundaryFile) {
   return { members, reason: '', count };
 }
 
+// Phase 32 plan 09: every member accessed on the bare receiver `name` over the actor and extension scopes, every access counted.
+function deriveZoomShimRequired(name, files) {
+  const members = new Set();
+  for (const path of files) {
+    const src = readSource(path);
+    if (src === null || path.split('/').pop() === SELF_BASENAME) continue;
+    for (const n of accessesOn(stripCommentLines(src), `(?<![\\w$])${name}`, false)) members.add(n);
+  }
+  return members;
+}
+
+// The `win.<name> = {` literal in the boundary file: exactly one definition, or a broken instrument.
+function deriveZoomShimImplemented(boundaryFile, name) {
+  const src = readSource(boundaryFile);
+  if (src === null) return { members: null, reason: 'unreadable', count: 0 };
+  const code = stripCommentLines(src);
+  const count = (code.match(new RegExp(`\\bwin\\.${name}\\s*=\\s*\\{`, 'g')) || []).length;
+  if (count !== 1) return { members: null, reason: 'definitions', count };
+  const members = objectLiteralMembers(code, `win.${name} = {`);
+  if (members === null) return { members: null, reason: 'no-literal', count };
+  return { members, reason: '', count };
+}
+
 function sorted(set) {
   return [...set].sort();
 }
@@ -478,6 +509,34 @@ function runScan(inputs) {
   const shimUnimplemented = sorted([...shellRequired].filter(m => !shim.members.has(m)));
   const shimSurplus = sorted([...shim.members].filter(m => !shellRequired.has(m)));
 
+  // Phase 32 plan 09: the zoom shims, the same comparison per shim.
+  const zoomAbsent = inputs.zoomAbsent ?? ZOOM_SHIM_ABSENT;
+  const zoomShims = [];
+  for (const name of ZOOM_SHIMS) {
+    const req = deriveZoomShimRequired(name, [...actorFiles, ...extensionFiles]);
+    if (req.size === 0) {
+      return { ok: false, reason: 'empty-zoom-required', detail: `derived zero ${name} member accesses` };
+    }
+    const zoomImpl = deriveZoomShimImplemented(boundaryFile, name);
+    if (zoomImpl.members === null) {
+      return { ok: false, reason: `zoom-shim-${zoomImpl.reason}`, detail: `${boundaryFile} (${name}: ${zoomImpl.count} definitions)` };
+    }
+    const absentOf = new Set([...zoomAbsent.keys()].filter(k => k.startsWith(`${name}.`)).map(k => k.slice(name.length + 1)));
+    zoomShims.push({
+      name,
+      required: sorted(req),
+      implemented: sorted(zoomImpl.members),
+      absent: sorted(absentOf),
+      unimplemented: sorted([...req].filter(m => !zoomImpl.members.has(m) && !absentOf.has(m))),
+      staleAbsent: sorted([...absentOf].filter(m => !req.has(m))),
+      contradiction: sorted([...absentOf].filter(m => zoomImpl.members.has(m))),
+      surplus: sorted([...zoomImpl.members].filter(m => !req.has(m))),
+    });
+  }
+  const zoomClean = zoomShims.every(
+    shim => shim.unimplemented.length === 0 && shim.staleAbsent.length === 0 && shim.contradiction.length === 0 && shim.surplus.length === 0
+  );
+
   return {
     ok:
       unimplemented.length === 0 &&
@@ -487,7 +546,9 @@ function runScan(inputs) {
       missingData.length === 0 &&
       staleData.length === 0 &&
       shimUnimplemented.length === 0 &&
-      shimSurplus.length === 0,
+      shimSurplus.length === 0 &&
+      zoomClean,
+    zoomShims,
     reason: '',
     fileCount: actorFiles.length,
     extensionFileCount: extensionFiles.length,
@@ -547,6 +608,18 @@ function reportFailure(result) {
     case 'shim-unreadable':
       console.error(`${NAME}: FAIL -- broken instrument: cannot read ${result.detail}`);
       return;
+    case 'empty-zoom-required':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. An empty zoom shim set is a broken derivation.`);
+      return;
+    case 'zoom-shim-definitions':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. Exactly one definition of each zoom shim is allowed, in the boundary file.`);
+      return;
+    case 'zoom-shim-no-literal':
+      console.error(`${NAME}: FAIL -- broken instrument: no balanced 'win.<zoom shim> = { ... }' literal found in ${result.detail}`);
+      return;
+    case 'zoom-shim-unreadable':
+      console.error(`${NAME}: FAIL -- broken instrument: cannot read ${result.detail}`);
+      return;
     default:
       break;
   }
@@ -577,6 +650,20 @@ function reportFailure(result) {
   }
   for (const m of result.shimSurplus) {
     console.error(`  DEAD SURFACE: 'gBrowserInit.${m}' is defined by the shim but nothing reads it`);
+  }
+  for (const shim of result.zoomShims ?? []) {
+    for (const m of shim.unimplemented) {
+      console.error(`  UNIMPLEMENTED: '${shim.name}.${m}' is read upstream on the zoom shim, but the ${shim.name} literal in ${BOUNDARY_FILE} neither implements it nor records it in ZOOM_SHIM_ABSENT`);
+    }
+    for (const m of shim.staleAbsent) {
+      console.error(`  STALE ABSENCE: '${shim.name}.${m}' is in ZOOM_SHIM_ABSENT but nothing upstream uses it any more`);
+    }
+    for (const m of shim.contradiction) {
+      console.error(`  CONTRADICTION: '${shim.name}.${m}' is implemented on the zoom shim AND listed in ZOOM_SHIM_ABSENT -- one of the two is wrong`);
+    }
+    for (const m of shim.surplus) {
+      console.error(`  DEAD SURFACE: '${shim.name}.${m}' is implemented on the zoom shim but nothing upstream reads it -- remove it rather than carry it`);
+    }
   }
 }
 
@@ -621,7 +708,9 @@ function main() {
     process.exit(1);
   }
   console.log(
-    `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}`
+    `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}; zoom shims ${result.zoomShims
+      .map(shim => `${shim.name} {${shim.implemented.join(', ')}}${shim.absent.length ? ` with ${shim.absent.join(', ')} absent with reasons` : ''}`)
+      .join('; ')}`
   );
 }
 
@@ -787,8 +876,12 @@ function selfTest() {
 
     // (r) a gBrowserInit literal without isAdoptingTab.
     {
+      // The real boundary file with isAdoptingTab removed from its gBrowserInit line; the zoom shims stay, so only this plant goes red.
       const path = join(stage, 'boundary-no-adopting.mjs');
-      writeFileSync(path, `win.gBrowserInit = { delayedStartupFinished: true, getTabToAdopt: () => null };\n`);
+      const boundaryText = readSource(BOUNDARY_FILE) ?? '';
+      const withoutAdopting = boundaryText.replace(/win\.gBrowserInit = \{[^\n]*\};/, 'win.gBrowserInit = { delayedStartupFinished: true, getTabToAdopt: () => null };');
+      if (withoutAdopting === boundaryText) throw new Error(`${NAME}: FAIL -- the gBrowserInit line was not found in ${BOUNDARY_FILE}`);
+      writeFileSync(path, withoutAdopting);
       const r = runScan({ ...real, boundaryFile: path });
       if (r.ok || !r.shimUnimplemented?.includes('isAdoptingTab')) {
         fail(`a gBrowserInit literal without isAdoptingTab did not go red naming 'gBrowserInit.isAdoptingTab'; got: ${JSON.stringify({ reason: r.reason, shimUnimplemented: r.shimUnimplemented })}`);
@@ -805,19 +898,73 @@ function selfTest() {
         fail(`patch text without the webDriverTabs hunk did not go red naming it; got: ${JSON.stringify({ reason: r.reason, staleData: r.staleData })}`);
       } else ok(`050 patch text without the TabManager hunk -> red, naming STALE DATA MEMBER 'webDriverTabs'`);
     }
+
+    // (t) a staged ZoomManager literal without MIN.
+    {
+      const src = readSource(BOUNDARY_FILE) ?? '';
+      const path = join(stage, 'boundary-zoom-no-min.mjs');
+      writeFileSync(path, src.split('\n').filter(line => !/^\s*get MIN\(\)/.test(line)).join('\n'));
+      if (/get MIN\(\)/.test(readFileSync(path, 'utf8'))) {
+        fail(`'ZoomManager without MIN' plant did not land (MIN still defined)`);
+      } else {
+        const r = runScan({ ...real, boundaryFile: path });
+        const shim = r.zoomShims?.find(x => x.name === 'ZoomManager');
+        if (r.ok || !shim?.unimplemented.includes('MIN')) {
+          fail(`a ZoomManager literal without MIN did not go red naming 'ZoomManager.MIN'; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim?.unimplemented })}`);
+        } else ok(`staged ZoomManager literal without MIN -> red, naming 'ZoomManager.MIN' UNIMPLEMENTED`);
+      }
+    }
+
+    // (u) a staged FullZoom literal with a surplus zoomIn.
+    {
+      const src = readSource(BOUNDARY_FILE) ?? '';
+      const anchor = 'siteSpecific: false,';
+      const path = join(stage, 'boundary-zoom-surplus.mjs');
+      if (src.split(anchor).length !== 2) {
+        fail(`the FullZoom literal anchor '${anchor}' is not unique in ${BOUNDARY_FILE}; the surplus plant cannot land`);
+      } else {
+        writeFileSync(path, src.replace(anchor, `${anchor}\n      zoomIn() { return null; },`));
+        const r = runScan({ ...real, boundaryFile: path });
+        const shim = r.zoomShims?.find(x => x.name === 'FullZoom');
+        if (r.ok || !shim?.surplus.includes('zoomIn')) {
+          fail(`a FullZoom literal with surplus zoomIn did not go red naming 'FullZoom.zoomIn'; got: ${JSON.stringify({ reason: r.reason, surplus: shim?.surplus })}`);
+        } else ok(`staged FullZoom literal with surplus zoomIn -> red, naming 'FullZoom.zoomIn' DEAD SURFACE`);
+      }
+    }
+
+    // (v) FullZoom.reset's absence reason removed.
+    {
+      const zoomAbsent = new Map([...ZOOM_SHIM_ABSENT].filter(([k]) => k !== 'FullZoom.reset'));
+      const r = runScan({ ...real, zoomAbsent });
+      const shim = r.zoomShims?.find(x => x.name === 'FullZoom');
+      if (r.ok || !shim?.unimplemented.includes('reset')) {
+        fail(`FullZoom.reset with its reason removed did not go red naming 'FullZoom.reset'; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim?.unimplemented })}`);
+      } else ok(`FullZoom.reset with no absence reason -> red, naming 'FullZoom.reset' UNIMPLEMENTED`);
+    }
+
+    // (w) two staged ZoomUI definitions: a broken instrument, never a clean comparison.
+    {
+      const src = readSource(BOUNDARY_FILE) ?? '';
+      const path = join(stage, 'boundary-zoom-twice.mjs');
+      writeFileSync(path, `${src}\nwin.ZoomUI = { getGlobalValue() { return 1; } };\n`);
+      const r = runScan({ ...real, boundaryFile: path });
+      if (r.ok || r.reason !== 'zoom-shim-definitions' || !String(r.detail).includes('ZoomUI')) {
+        fail(`two ZoomUI definitions did not fail as a broken instrument naming ZoomUI; got: ${JSON.stringify({ reason: r.reason, detail: r.detail })}`);
+      } else ok(`two staged 'win.ZoomUI = {' definitions -> broken instrument naming ZoomUI`);
+    }
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
 
   if (failed) process.exit(1);
   console.log(
-    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk); the empty file list failed distinctly`
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI); the empty file list failed distinctly`
   );
 }
 
-// deriveImplemented is exported for verify-ext-tab-host-scope.mjs (its host:
-// claims run this same literal parser). Importing the module runs nothing.
-export { deriveImplemented };
+// deriveImplemented and deriveZoomShimImplemented are exported for verify-ext-tab-host-scope.mjs (its host:
+// claims run these same literal parsers). Importing the module runs nothing.
+export { deriveImplemented, deriveZoomShimImplemented };
 
 const IS_ENTRY = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (IS_ENTRY) {

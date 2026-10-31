@@ -83,6 +83,8 @@ FORBIDDEN_PATTERNS=(
   'PopupNotifications' 'nsContextMenu' 'browserDOMWindow' 'openLinkIn' 'FullScreen' 'XULBrowserWindow'
   # Phase 31.1 tab-host shim under the Phase 27 policy: defined only in PowerBrowserAPI.sys.mjs (the host install), compared by verify-shell-gbrowser-standin.mjs.
   'gBrowserInit'
+  # Phase 32 zoom shims under the Phase 27 policy (plan 32-09): defined only in PowerBrowserAPI.sys.mjs (the host install), compared member by member by verify-shell-gbrowser-standin.mjs. A separate line, so 35-01's derivation from the Phase 27 line is unchanged.
+  'ZoomManager' 'FullZoom' 'ZoomUI'
 )
 
 is_conditional_pattern() {
@@ -365,7 +367,7 @@ EOF
   local plant_name plant_body
   # The Phase 27 shim globals are each planted as a one-line shim assignment.
   for plant_name in wrappedJSObject drawSnapshot IOUtils gBrowser \
-      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow gBrowserInit; do
+      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow gBrowserInit ZoomManager FullZoom ZoomUI; do
     case "$plant_name" in
       wrappedJSObject) plant_body='  return win.wrappedJSObject.JSON.parse(text);' ;;
       drawSnapshot) plant_body='  return browser.drawSnapshot(0, 0, 1, 1, 1, "white");' ;;

@@ -4913,16 +4913,11 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: true, kind, where: "unknown-tab" };
       }
       try {
-        if (data.muted) {
-          entry.browser.mute();
-        } else {
-          entry.browser.unmute();
-        }
+        tabHostSetMuted(entry.browser, data.muted, null);
       } catch {
         PowerBrowserAPI.log("error", "[web-tab] mute change failed");
         return { ok: false, reason: "write-failed", message: "handleWebTabAction: the mute change failed" };
       }
-      webTabPagePush(entry.browser);
       return { ok: true, kind, where: "applied", audioMuted: entry.browser.audioMuted === true };
     }
     // Page tools (32-04, PAGE-06): the Downloads view. The subscribe installs the one chrome-side
@@ -5085,10 +5080,12 @@ function attachWebTabPageListeners(frame, tabId, browser) {
   // reports sound playing; Stopped always fires. soundPlaying is therefore event-driven, as stock tabs' is.
   state.audioStarted = () => {
     state.soundPlaying = true;
+    tabHostSetSoundPlaying(browser, true);
     webTabPagePush(browser);
   };
   state.audioStopped = () => {
     state.soundPlaying = false;
+    tabHostSetSoundPlaying(browser, false);
     webTabPagePush(browser);
   };
   browser.addEventListener("DOMAudioPlaybackStarted", state.audioStarted);
@@ -5154,6 +5151,7 @@ function resetWebTabPage(browser) {
   const state = webTabPageState.get(browser);
   if (state) {
     state.soundPlaying = false;
+    tabHostSetSoundPlaying(browser, false);
   }
 }
 
@@ -5894,7 +5892,7 @@ function isHostTab(host, tab) {
 }
 
 // The fields the extension trackers read (ext-browser.js, ext-tabs-base.js).
-// Mute is Phase 32's: there is no toggleMuteAudio here, so a write fails loudly.
+// toggleMuteAudio goes through tabHostSetMuted, the one mute path (Phase 32 plan 09, PAGE-05).
 function makeTabNode(host, browser) {
   const node = host.strip.ownerDocument.createXULElement("hbox");
   host.counter += 1;
@@ -5917,6 +5915,10 @@ function makeTabNode(host, browser) {
     image: null,
     successor: null,
     closing: false,
+    // The stock toggle (tab.js:757-775): an extension's tabs.update({muted}) reaches here with its extension id as reason.
+    toggleMuteAudio(reason) {
+      tabHostSetMuted(this.linkedBrowser, !this.linkedBrowser.audioMuted, reason);
+    },
   });
   Object.defineProperties(node, {
     _tPos: { get() { return Array.prototype.indexOf.call(host.strip.children, this); } },
@@ -6074,6 +6076,39 @@ function tabHostSelectById(theiaBrowser, tabId) {
   }
 }
 
+// The host node of an overlay, or undefined for a browser the host does not hold.
+function tabHostNodeOf(browser) {
+  const host = tabHosts.get(browser.ownerDocument.defaultView);
+  return host ? host.byBrowser.get(browser) : undefined;
+}
+
+// Phase 32 plan 09 (PAGE-05): the one mute path. The webTabMute arm and an extension's toggleMuteAudio both come
+// here, so the overlay, the host node, the TabAttrModified event and Theia's state push always agree. A user mute
+// passes reason null, which reads as reason "user" (tab.js:772).
+function tabHostSetMuted(browser, muted, reason) {
+  if (muted) {
+    browser.mute();
+  } else {
+    browser.unmute();
+  }
+  const node = tabHostNodeOf(browser);
+  if (node) {
+    node.muted = browser.audioMuted === true;
+    node.muteReason = reason || null;
+    fireTabEvent(node, "TabAttrModified", { changed: ["muted"] });
+  }
+  webTabPagePush(browser);
+}
+
+// PAGE-05: the host node's soundPlaying follows the overlay's audio playback events; a change is announced once.
+function tabHostSetSoundPlaying(browser, playing) {
+  const node = tabHostNodeOf(browser);
+  if (node && node.soundPlaying !== playing) {
+    node.soundPlaying = playing;
+    fireTabEvent(node, "TabAttrModified", { changed: ["soundplaying"] });
+  }
+}
+
 // Called by webTabClose before browser.remove(). TabClose fires while the node
 // is still in the strip, with closing set, so the tracker reads no id from it.
 function tabHostDropTab(win, browser) {
@@ -6135,6 +6170,24 @@ export const PowerBrowserTabHost = Object.freeze({
     };
     tabHosts.set(win, host);
     win.gBrowserInit = { delayedStartupFinished: true, getTabToAdopt: () => null, isAdoptingTab: () => false };
+    // Phase 32 plan 09 (PAGE-02): the zoom shims under the Phase 27 policy. The shell zooms with fullZoom only (32-01), so
+    // the scope is per-tab. Compared member by member by verify-shell-gbrowser-standin.mjs.
+    win.ZoomManager = {
+      getZoomForBrowser(browser) {
+        const zoom = browser && typeof browser.fullZoom === "number" ? browser.fullZoom : 1;
+        return Math.round(zoom * 100) / 100;
+      },
+      get MIN() { return Services.prefs.getIntPref("zoom.minPercent", 30) / 100; },
+      get MAX() { return Services.prefs.getIntPref("zoom.maxPercent", 500) / 100; },
+    };
+    win.FullZoom = {
+      siteSpecific: false,
+    };
+    win.ZoomUI = {
+      getGlobalValue() {
+        return ChromeUtils.importESModule("resource:///modules/ZoomUI.sys.mjs").ZoomUI.getGlobalValue();
+      },
+    };
     return Object.freeze({
       tabs: () => [...strip.children],
       selectedTab: () => host.selected,

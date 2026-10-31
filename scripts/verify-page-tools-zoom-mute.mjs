@@ -162,8 +162,19 @@ function checkMute(sources) {
     if (!handler.includes('typeof data.muted !== "boolean"')) {
         failures.push('mute: the webTabMute arm does not refuse a non-boolean flag (the flag is explicit, never a toggle)');
     }
-    if (!handler.includes('entry.browser.mute()') || !handler.includes('entry.browser.unmute()')) {
-        failures.push('mute: the webTabMute arm does not drive the overlay mute()/unmute() pair');
+    // Phase 32 plan 09: the arm mutes through tabHostSetMuted, the one mute path, and that helper alone drives the
+    // overlay pair (the extension's toggleMuteAudio reaches it too). Derived, not a literal in the arm.
+    const helper = functionBody(api, 'tabHostSetMuted');
+    if (!handler.includes('tabHostSetMuted(entry.browser')) {
+        failures.push('mute: the webTabMute arm does not call tabHostSetMuted, the one mute path');
+    }
+    if (!helper.includes('browser.mute()') || !helper.includes('browser.unmute()')) {
+        failures.push('mute: tabHostSetMuted does not drive the overlay mute()/unmute() pair');
+    }
+    const muteCalls = (api.match(/\.mute\(\)/g) || []).length;
+    const unmuteCalls = (api.match(/\.unmute\(\)/g) || []).length;
+    if (muteCalls !== 1 || unmuteCalls !== 1) {
+        failures.push(`mute: the overlay mute()/unmute() calls are not confined to tabHostSetMuted (mute ${muteCalls}, unmute ${unmuteCalls}; expected one of each)`);
     }
 
     for (const key of Object.keys(sources).filter(k => k.startsWith(`${PILL_DIR}/`))) {
