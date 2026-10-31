@@ -46,6 +46,8 @@ const DERIV_REL = 'nix/pkg/powerbrowser-bin.nix';
 const FLAKE_REL = 'flake.nix';
 const FLATPAK_REL = 'flatpak/org.debios.PowerBrowser.json';
 const URL_TOKEN = '@RELEASE_URL@';
+const NIX_COPY_REL = 'docs/download-nix.md';
+const REPO_TOKEN = '@RELEASE_REPO@';
 const SHA_TOKEN = '@RELEASE_SHA256@';
 const TEMPLATE_TOKEN = '@RELEASE_URL_TEMPLATE@';
 const BOT_STEP = 'the DIST-12 bot PR (channel-manifests.yml, job flake-hash-pr) writes it with nix store prefetch-file on the published asset';
@@ -195,6 +197,19 @@ export function runChecks(root, overrides = {}) {
         if (literalVersion) fail(FLATPAK_REL, `carries the version literal ${JSON.stringify(literalVersion[0])}; every version reaches the manifest through a token`, 'replace the literal with the release token.');
     }
 
+    // --- 7. the /download Nix copy names the product, takes the repo token and carries no internal identifier ---
+    const copy = read(NIX_COPY_REL);
+    if (copy === null) {
+        fail(NIX_COPY_REL, 'is missing, so the /download Nix row has no paste-ready copy.', 'restore docs/download-nix.md from git.');
+    } else {
+        if (!/PowerBrowser/.test(copy)) fail(NIX_COPY_REL, 'does not name the product as PowerBrowser.', 'name the product in plain language.');
+        if (!copy.includes(REPO_TOKEN)) fail(NIX_COPY_REL, `does not carry ${REPO_TOKEN}, so the install line would name no release home`, `use ${REPO_TOKEN}; the owner renders it from the release home at paste time.`);
+        const leak = /app\.update|DisableAppUpdate|sha256|pref\s/i.exec(copy);
+        if (leak) fail(NIX_COPY_REL, `carries the internal identifier ${JSON.stringify(leak[0])}`, 'remove it; the copy is for readers, not for the policy or the hash.');
+        const v = /\b\d{2,}\.\d+\.\d+/.exec(copy);
+        if (v) fail(NIX_COPY_REL, `carries the version literal ${JSON.stringify(v[0])}`, 'remove it; the install and upgrade lines name no version.');
+    }
+
     notes.push(`release key ${facts.releaseKey}, tarball ${facts.tarballName}`);
     return { failures, notes, placeholder: record?.sha256 === SENTINEL_SRI };
 }
@@ -259,6 +274,14 @@ function selfTest() {
         {
             name: 'Flatpak x-checker-data missing', expect: 'x-checker-data',
             overrides: withPlant(FLATPAK_REL, t => t.replace('"x-checker-data": {', '"x-checker-data-removed": {')),
+        },
+        {
+            name: '/download Nix copy carries an internal identifier', expect: NIX_COPY_REL,
+            overrides: withPlant(NIX_COPY_REL, t => `${t}\nSet pref DisableAppUpdate for the package.\n`),
+        },
+        {
+            name: '/download Nix copy carries a version literal', expect: 'version literal',
+            overrides: withPlant(NIX_COPY_REL, t => t.replace('nix profile upgrade powerbrowser', 'nix profile upgrade powerbrowser 153.5.1')),
         },
         {
             name: 'control: unmodified tree stays green', expect: null,

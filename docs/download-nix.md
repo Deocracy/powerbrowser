@@ -4,7 +4,7 @@ PowerBrowser is available as a Nix package for 64-bit Linux. Nix installs the pr
 
 To install it into your profile, run:
 
-    nix profile add github:Deocracy/powerbrowser#powerbrowser
+    nix profile add github:@RELEASE_REPO@#powerbrowser
 
 To update to the newest release, run:
 
