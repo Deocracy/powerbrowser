@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "paths": [
+    ".github/**",
+    ".claude/**",
+    "CLAUDE.md",
+    "scripts/verify-platform.sh",
+    "patches/030-*",
+    "powerbrowser/packaging/mar/**",
+    "brand/mar-*.der",
+    "inventory/brand-tokens.json",
+    "powerbrowser/endpoint-allowlist.json",
+    ".github/settings/actions-selected.json",
+    "quick-baseline.txt",
+    "toolchain-baseline.txt",
+    "flake.lock"
+  ],
+  "notes": "Plus every file a verify-platform.sh registry row names, derived by parsing the registry at gate time (never hand-kept). Entries are path globs matched against the unified diff's ---/+++ paths."
+}
