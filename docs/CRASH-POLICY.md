@@ -124,16 +124,23 @@ minidump. Treat every `.dmp` object as sensitive.
 
 ## Retention
 
-Crash records are kept for **30 days** and then deleted.
+Crash records are configured to expire after **30 days**.
 
 - The collector sweeps its store directory on each accepted submit and
   removes records older than the window, so it needs no second job.
-- The receiver sets an R2 lifecycle rule over the `crash/` prefix that expires
-  objects after 30 days (`worker/crash-r2-lifecycle.json`). The Worker runs no
-  deletion code.
+- The receiver relies on an R2 lifecycle rule over the `crash/` prefix that
+  expires objects after 30 days. R2 applies expiry asynchronously, so an object
+  is normally gone within about a day after it reaches that age, not at the
+  second. The Worker runs no deletion code. A minidump orphaned by a failed
+  record write falls under the same rule.
+- `worker/crash-r2-lifecycle.json` is a record of the intended rule, in this
+  repository's own shape. It is not a file wrangler reads, and the gate checks
+  only that file against `RETENTION_DAYS`. The rule that is live is the one the
+  owner applies at the deploy runbook step and records, verbatim, in the
+  operator record; the bucket's own lifecycle listing is the proof.
 
-No minidump is kept indefinitely. A record that outlives the window is gone,
-not archived.
+No minidump is kept past its window by design. A record that outlives the
+window is gone once expiry has run, not archived.
 
 ## Throttle
 
