@@ -585,24 +585,46 @@ others are in-tree and asserted by the `workflows` row (`fixer-spend`, `fixer-to
   recorded here, and its review date is in `docs/RENEWALS.md`.
 - `--max-turns 40` on the `fix` job's Claude step, so one attempt is bounded.
 - `timeout-minutes: 90` on the `fix` job, so one attempt is bounded in time.
-- At most two attempts per (release key, class). The attempts are counted from the
-  `fix` runs whose run-name is `fix <key> <class> attempt <n>`, and a run that
-  `fix-gate` rejects still counts. The third failure moves the release to
-  NEEDS_OWNER, which is a state in the train's state table.
+- At most two attempts per (release key, class), enforced live. The derive job counts the
+  earlier `release-train.yml` dispatch runs of this repository whose display title is
+  `fix <key> <class> attempt <n>` (a dry run is titled `fix dry-run ...` and is not counted;
+  a run that `fix-gate` rejects still counts), admits only attempt number spent + 1, and
+  `scripts/release-train.mjs --fix-guard` refuses once the budget is spent. A re-run of a
+  fixer run is refused, because it would spend model budget the count cannot see. The
+  `NEEDS_OWNER` train state that a spent budget implies is part of the train's pure state
+  table only: no job writes the tracking issue yet (see Fixer routing), so the refusal is
+  the red derive job and its log, and the owner decides.
 - The `claude-fixer` concurrency group serializes every fix run, so two attempts
   never spend the budget at once.
 
 ### Fixer routing (TRAIN-06)
 
-- A red stage labels its tracking issue `train:blocked`, assigns the owner, and
-  links the failing log. The labels and the assignee come from the train's render.
-- The fixer starts only for the three classes: F1 (patch-replay conflict on
-  `chore/esr-*`), F2 (red bump PR on `chore/esr-*`, `chore/node-*` or `renovate/*`),
-  and F3 (red `main`). Every other dispatch is refused with the guard it failed.
-- A failed `release.yml` run opens an issue only, with no dispatch instruction in
-  its body. The fixer is never started for it.
-- The report job owns every issue write. The fixer's own writes are one PR, opened
-  by `fix-pr` in the bot environment.
+What is live and what is a contract that nothing runs yet:
+
+- Live. The fixer starts only by an owner's `reason=fix` dispatch, and only for F2 (a red
+  bump PR on `chore/esr-*`, `chore/node-*` or `renovate/*`) and F3 (red `main`). The derive
+  job refuses every other dispatch with the guard it failed: a bot actor, a `claude-fix/`
+  branch, an author that is neither the owner nor a permitted bot, a branch that is not in
+  this repository, a release key not above the latest Release, a spent budget, and a
+  `release` check (a failed `release.yml` run never starts the fixer; the owner reads that
+  run). F1 (a patch conflict at the new tag) is refused too: the model's only patch tool,
+  `scripts/regenerate-patches.sh`, needs the target's patch stack applied to `upstream/`,
+  and a stack in conflict does not apply, so a run would end with no diff. The owner
+  resolves patch conflicts.
+- Live. The fixer's own writes are one PR, opened by `fix-pr` in the bot environment after
+  the gate passed. `fix` exports the diff's sha256 and the base commit; `fix-gate` and
+  `fix-pr` check out exactly that base, check the artifact against the digest, and
+  `fix-pr` re-runs the pure gate stages on the bytes it publishes. The gate's executing
+  stages run with no network and no new privileges (`scripts/fixer-isolate.sh`). If the
+  publish plan refuses (a commit the bot did not author is on the `claude-fix/` branch)
+  `fix-pr` ends red; if the gated diff changes nothing, it ends with a warning and a job
+  summary and opens nothing.
+- Not wired. A red stage labelling its tracking issue `train:blocked`, assigning the owner
+  and linking the failing log is the pure `render` contract in `scripts/release-train.mjs`.
+  The `report` job prints the would-write view only, because the tracking-issue writer and
+  the live facts source wait for approval (BLOCKED.md item 3 of Phase 43). No issue is
+  opened or labelled by the train today, and nothing watches `release.yml`: after a red
+  run, the owner reads the run itself.
 
 ### The MAR key ceremony and custody
 
