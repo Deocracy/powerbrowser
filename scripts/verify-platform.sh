@@ -4878,6 +4878,15 @@ run_own_checks() {
     # node-runtime-targets-self-test plants a missing win32-x64 key, an extra key, a missing sha256, a
     # url-version mismatch and an empty set; each must go red naming the key. It writes nothing.
     "node-runtime-targets-self-test|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs --self-test"
+    # NEW (Phase 54, PKG-10 static half): the build-windows job of release.yml. Legion label set only,
+    # contents: read, no secret, environment or schedule, SHA-pinned uses, gates identical to build-linux,
+    # no fail-open step, repackage calls present, retention 1. Honestly --quick: YAML parse and text reads;
+    # the live cross-build on legion is the owner's at the 54-04 checkpoint, never a quick path.
+    "build-windows-shape|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs"
+    # build-windows-shape-self-test plants a moved runner, a secret, a write grant, a schedule, an unpinned
+    # uses, missing repackage calls, a removed key gate, a drifted sha gate, a dropped pipefail, a raised
+    # retention and an image build missing --no-cache; each must go red naming job and cause.
+    "build-windows-shape-self-test|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs --self-test"
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
