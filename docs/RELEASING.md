@@ -278,7 +278,7 @@ for the `objdir-release` rebuild. Both builds are auto tasks in their plans.
 | `mar-signing-and-update-integrity` | Carried out by non-GUI wave E Task 8 (NG-065): `patches/030-powerbrowser-mar-certificates.patch`; drop `--enable-unverified-updates`; tier-3 rebuild of N and N+1; fork-key signing per wave E plan Task 8 Produces, descriptor emission, updater-driven four-outcome proof (`ng065-mar-signature-enforced`) |
 | `packaged-product-correctness-linux` | Staging and packaging probe; `scripts/stage-sidecar.sh` and `patches/050-powerbrowser-package.patch`; application-directory resolution, profile-scoped Theia state, URL argument handling; variant-free legal notice; shell-side update-ready layer; four registry row pairs and `scripts/run-install-matrix.sh` |
 | `linux-release-pipeline-and-update-channel` | Derive the update-origin facts and write the procedure half of this document; `.github/workflows/release.yml` plus its static gate; the live channel gate; the release-mode hop drill and the observed allowlist rows |
-| `windows-unsigned` | Five routing verdicts; `.#firefox-win64` shell and the Windows mozconfig; the one-time `WINSYSROOT` cache population with `get_vs.py`, run from `upstream/` and written outside the repository; generated installer artwork and fork registry defines; `patches/050-powerbrowser-installer.patch` and the deny-host grep; the Windows build, sidecar staging, installer and MAR; the matrix gate, the copy gate, the WINNT descriptor row and the `build-windows` job |
+| `windows-unsigned` | Five routing verdicts; the release-container cross build and the generated Windows mozconfig (`powerbrowser/packaging/mozconfig-windows-x86_64`, `--disable-maintenance-service`); the one-time `WINSYSROOT` cache population with `get_vs.py`, run from `upstream/` and written outside the repository; generated installer artwork and fork registry defines; `patches/040-powerbrowser-nsis.patch` and the deny-host grep. Lineage: the installer patch this row used to call `050` is the tree's `040`; there is one installer patch file, not a second; the Windows build, sidecar staging, installer and MAR; the matrix gate, the copy gate, the WINNT descriptor row and the `build-windows` job |
 | `macos-adhoc-signed` | Toolchain probe; `.#firefox-macos` shell and two macOS mozconfigs; the five missing branding inputs; universal build, DMG, ad-hoc signature, one universal MAR and two Darwin descriptors; darwin Theia builds and the staged Node binary; five gates plus five self-tests |
 | `reports-bug-error-crash` | Substrate probe; the issue-tracker manifest key, issue form, Report a Bug command and prefill gate; diagnostics Copy button and shell copy scope; the events Worker and its contract gate; frontend error hooks with bounded enrichment; the live loopback delivery drill |
 | `listings-and-cadence` | Listing-admission probe; generator-emitted Flathub sources with tracked comparands; the winget submission step on the verdict branch and the listings gate; this document's maintenance section and its derived doc-to-automation gate |
@@ -854,8 +854,9 @@ unit rather than by cleaning a work directory. Keep disk headroom for the objdir
 release build needs: `objdir/` peaks around 14 GB on top of the roughly 5.6 GB
 `upstream/` checkout, and a Windows or macOS target adds its own objdir. `sccache`
 is already configured in `.mozconfig` and in the `.#firefox` shell; stages
-`windows-unsigned` and `macos-adhoc-signed` add `.#firefox-win64` and
-`.#firefox-macos`, which inherit the same export. The `.#theia` shell carries none
+`windows-unsigned` runs its cross build in the release container, which carries the
+same export, and `macos-adhoc-signed` adds `.#firefox-macos`, which inherits it.
+`flake.nix` defines no `.#firefox-win64` shell. The `.#theia` shell carries none
 and needs none. No second cache backend is added.
 
 ### Cloudflare upkeep
