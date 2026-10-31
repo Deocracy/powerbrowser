@@ -21,7 +21,7 @@
 //   node scripts/verify-package-target-natives.mjs [--target linux-x64]
 //   node scripts/verify-package-target-natives.mjs --self-test [--target linux-x64]
 
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +32,8 @@ const BUILD_CMD = 'podman run --rm -v "$PWD:/src:rw" -w /src pb-gecko-build bash
 
 const TARGETS = Object.freeze({
     'linux-x64': Object.freeze({ magic: Buffer.from([0x7f, 0x45, 0x4c, 0x46]), machine: Buffer.from([0x3e, 0x00]), label: 'ELF x86-64' }),
-    'win64': Object.freeze({ magic: Buffer.from([0x4d, 0x5a]), machine: null, label: 'PE32+' }),
+    // win64: MZ at 0, then the full PE32+ x86-64 header (see peHeaderFailure), not the MZ bytes alone.
+    'win64': Object.freeze({ magic: Buffer.from([0x4d, 0x5a]), machine: null, pe: true, label: 'PE32+' }),
     'macos': Object.freeze({ magic: Buffer.from([0xca, 0xfe, 0xba, 0xbe]), machine: null, label: 'Mach-O universal' }),
 });
 
@@ -42,6 +43,7 @@ let target = 'linux-x64';
 for (let i = 0; i < rawArgs.length; i += 1) {
     const a = rawArgs[i];
     if (a === '--self-test') SELF_TEST = true;
+    else if (a === '--stage') i += 1; // the value is read below, by rawArgs.indexOf('--stage')
     else if (a === '--target') {
         target = rawArgs[i + 1];
         i += 1;
@@ -55,8 +57,36 @@ for (let i = 0; i < rawArgs.length; i += 1) {
     }
 }
 
+// The Windows stage names its binaries node.exe and rg.exe; the POSIX names are checked too.
 function isNativeName(name) {
-    return name.endsWith('.node') || name === 'rg' || name === 'node';
+    return name.endsWith('.node') || ['rg', 'node', 'rg.exe', 'node.exe'].includes(name);
+}
+
+// PE32+ x86-64 from the first 4096 bytes: MZ at 0, e_lfanew at 0x3C, "PE\0\0" there, machine 0x8664,
+// optional-header magic 0x020B. A file that cannot be read is never accepted.
+function peHeaderFailure(path, rel) {
+    let head;
+    try {
+        const fd = openSync(path, 'r');
+        try {
+            const buf = Buffer.alloc(4096);
+            head = buf.subarray(0, readSync(fd, buf, 0, 4096, 0));
+        } finally {
+            closeSync(fd);
+        }
+    } catch {
+        return `${rel}: unreadable -- PE32+ x86-64 cannot be verified, so it is never accepted`;
+    }
+    if (head.length < 0x40) return `${rel}: truncated (fewer than 64 bytes), so no PE32+ header can be read -- never accepted`;
+    if (!head.subarray(0, 2).equals(Buffer.from([0x4d, 0x5a]))) return `${rel}: magic is not MZ (PE32+ expected)`;
+    const e = head.readUInt32LE(0x3c);
+    if (e + 26 > head.length) return `${rel}: PE header offset ${e} lies past the first 4096 bytes -- truncated or not PE32+`;
+    if (!head.subarray(e, e + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00]))) return `${rel}: no PE signature at offset ${e} -- not a PE image`;
+    const machine = head.readUInt16LE(e + 4);
+    if (machine !== 0x8664) return `${rel}: PE machine 0x${machine.toString(16)} is not x86-64 (0x8664) for --target win64 -- wrong-architecture binary`;
+    const opt = head.readUInt16LE(e + 24);
+    if (opt !== 0x020b) return `${rel}: optional header magic 0x${opt.toString(16)} is not PE32+ (0x020b)`;
+    return null;
 }
 
 function listNatives(root) {
@@ -68,6 +98,26 @@ function listNatives(root) {
             try { st = statSync(p); } catch { continue; }
             if (st.isDirectory()) walk(p);
             else if (st.isFile() && isNativeName(basename(p))) out.push(p);
+        }
+    };
+    walk(root);
+    return out.sort();
+}
+
+// Windows stage only: any file, whatever its name, that starts with the ELF magic is a Linux native that
+// isNativeName does not reach (a .so, a helper without an extension). Reads 4 bytes per file.
+function listForeignElf(root) {
+    const out = [];
+    const walk = (dir) => {
+        for (const n of readdirSync(dir)) {
+            const p = join(dir, n);
+            let st;
+            try { st = statSync(p); } catch { continue; }
+            if (st.isDirectory()) walk(p);
+            else if (st.isFile() && st.size >= 4 && !isNativeName(n)) {
+                const head = magicOf(p, 4);
+                if (head && head.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) out.push(p);
+            }
         }
     };
     walk(root);
@@ -92,6 +142,12 @@ function checkTree(root, targetId) {
         return { failures: [`EMPTY native universe under ${root} -- no .node, rg or node binary found (staging dropped the sidecar?)`], natives: 0 };
     }
     const failures = [];
+    if (spec.pe) {
+        for (const elf of listForeignElf(root)) {
+            const rel = elf.startsWith(`${root}/`) ? elf.slice(root.length + 1) : elf;
+            failures.push(`${rel}: ELF magic in a Windows stage -- a Linux native that carries no .node, rg or node name (--target ${targetId} expects PE32+ or no native at all)`);
+        }
+    }
     for (const native of natives) {
         const rel = native.startsWith(`${root}/`) ? native.slice(root.length + 1) : native;
         const head = magicOf(native, 20);
@@ -101,6 +157,11 @@ function checkTree(root, targetId) {
         }
         if (!head.subarray(0, spec.magic.length).equals(spec.magic)) {
             failures.push(`${rel}: magic ${head.subarray(0, 4).toString('hex')} is not ${spec.label} for --target ${targetId} -- wrong-OS sidecar?`);
+            continue;
+        }
+        if (spec.pe) {
+            const failure = peHeaderFailure(native, rel);
+            if (failure) failures.push(failure);
             continue;
         }
         if (spec.machine) {
@@ -174,6 +235,99 @@ function selfTest() {
                 ok = false;
             } else {
                 console.log(`${NAME}: --self-test -- EMPTY native universe Windows fixture REJECTED: ${res.failures[0]}`);
+            }
+        }
+
+        // Windows-stage PE32+ control and plants. The control is a synthetic PE32+ x86-64 header (MZ, e_lfanew
+        // 0x80, PE\0\0, machine 0x8664, optional magic 0x020b): it must pass. A Mach-O universal named as a
+        // stage binary and a magic-only MZ with no PE signature must each go red naming the file.
+        {
+            const pe = Buffer.alloc(0x200);
+            pe[0] = 0x4d;
+            pe[1] = 0x5a;
+            pe.writeUInt32LE(0x80, 0x3c);
+            pe.write('PE\0\0', 0x80, 'latin1');
+            pe.writeUInt16LE(0x8664, 0x84);
+            pe.writeUInt16LE(0x020b, 0x98);
+            const winClean = join(dir, 'win-clean');
+            mkdirSync(winClean, { recursive: true });
+            writeFileSync(join(winClean, 'node.exe'), pe);
+            writeFileSync(join(winClean, 'rg.exe'), pe);
+            const ctl = checkTree(winClean, 'win64');
+            if (ctl.failures.length !== 0) {
+                console.error(`${NAME}: --self-test FAIL -- the synthetic PE32+ x86-64 control is already red: ${ctl.failures.join(' | ')}`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- the synthetic PE32+ x86-64 Windows stage is GREEN (${ctl.natives} native)`);
+            }
+            const winPlant = join(dir, 'win-planted');
+            mkdirSync(winPlant, { recursive: true });
+            writeFileSync(join(winPlant, 'macho.node'), Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0x00, 0x00, 0x00, 0x02]));
+            writeFileSync(join(winPlant, 'mzonly.node'), Buffer.from([0x4d, 0x5a, 0x00, 0x00]));
+            const planted = checkTree(winPlant, 'win64');
+            const machoHit = planted.failures.find((f) => f.includes('macho.node') && f.includes('PE32+'));
+            const mzHit = planted.failures.find((f) => f.includes('mzonly.node') && (f.includes('PE') || f.includes('magic')));
+            if (!machoHit || !mzHit) {
+                console.error(`${NAME}: --self-test FAIL -- a Mach-O or a magic-only MZ stage binary was NOT rejected naming the file and PE32+`);
+                for (const f of planted.failures) console.error(`  - ${f}`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- Mach-O stage binary REJECTED: ${machoHit}`);
+                console.log(`${NAME}: --self-test -- magic-only MZ stage binary REJECTED: ${mzHit}`);
+            }
+        }
+
+        // PE branches, one synthetic file each (the cases above only reach the truncation and Mach-O branches).
+        // Every fixture is a well-formed PE32+ x86-64 header with exactly one field broken; the control above is the
+        // unbroken one. The wrong-OS plant is a synthetic ELF, so it runs whether or not a theia build exists.
+        {
+            const mkPe = ({ machine = 0x8664, opt = 0x020b, lfanew = 0x80, signature = true, size = 0x200 } = {}) => {
+                const b = Buffer.alloc(size);
+                b[0] = 0x4d;
+                b[1] = 0x5a;
+                b.writeUInt32LE(lfanew, 0x3c);
+                if (signature && lfanew + 26 <= size) {
+                    b.write('PE\0\0', lfanew, 'latin1');
+                    b.writeUInt16LE(machine, lfanew + 4);
+                    b.writeUInt16LE(opt, lfanew + 24);
+                }
+                return b;
+            };
+            const elf = Buffer.alloc(0x40);
+            Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01]).copy(elf);
+            const cases = [
+                ['i386.node', mkPe({ machine: 0x014c }), 'is not x86-64'],
+                ['arm64.node', mkPe({ machine: 0xaa64 }), 'is not x86-64'],
+                ['pe32.node', mkPe({ opt: 0x010b }), 'is not PE32+'],
+                ['farheader.node', mkPe({ lfanew: 0xffff }), 'lies past'],
+                ['nosignature.node', mkPe({ signature: false }), 'no PE signature'],
+                ['elf.node', elf, 'is not PE32+'],
+                ['spawn-helper', elf, 'ELF magic in a Windows stage'],
+                ['libnative.so', elf, 'ELF magic in a Windows stage'],
+            ];
+            const peDir = join(dir, 'pe-branches');
+            mkdirSync(peDir, { recursive: true });
+            for (const [file, bytes] of cases) writeFileSync(join(peDir, file), bytes);
+            const res = checkTree(peDir, 'win64');
+            for (const [file, , fragment] of cases) {
+                const hit = res.failures.find((f) => f.startsWith(`${file}:`) && f.includes(fragment));
+                if (!hit) {
+                    console.error(`${NAME}: --self-test FAIL -- ${file} was NOT rejected naming '${fragment}'`);
+                    for (const f of res.failures) console.error(`  - ${f}`);
+                    ok = false;
+                } else {
+                    console.log(`${NAME}: --self-test -- ${file} REJECTED: ${hit}`);
+                }
+            }
+            const exeDir = join(dir, 'exe-names');
+            mkdirSync(exeDir, { recursive: true });
+            writeFileSync(join(exeDir, 'uninstall-helper.exe'), mkPe({ machine: 0x014c }));
+            const exeRes = checkTree(exeDir, 'win64');
+            if (exeRes.failures.some((f) => f.includes('uninstall-helper.exe')) || !exeRes.failures.some((f) => f.includes('EMPTY native universe'))) {
+                console.error(`${NAME}: --self-test FAIL -- a 32-bit NSIS-style .exe was examined; only node.exe and rg.exe are Windows natives here (the installer's helper.exe is PE32 by design)`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- a 32-bit NSIS-style .exe is deliberately not examined (EMPTY universe reported)`);
             }
         }
 

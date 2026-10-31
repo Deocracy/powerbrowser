@@ -1425,6 +1425,59 @@ export function marOrigin(config) {
 }
 
 /**
+ * TEL-07 (57-02): the crash submit ORIGIN, derived from the ONE stated [urls].crash_report key. The
+ * same key drives the breakpad.reportURL view-link base (verbatim, mozillaEndpointPrefs) and this
+ * origin feeds --with-crashreporter-url, which moz.configure rstrips and application.ini.in joins
+ * with /submit. Only the origin (scheme, host, port) is kept: the path a stated value carries is the
+ * view-link base, never the submit target. Unset returns '' and emits nothing, so the tree stays
+ * byte-identical while the reporter is compiled out (TEL-13 owns the flip).
+ */
+export function crashReporterOrigin(config) {
+    const raw = config.urls?.crash_report;
+    if (isUnset(raw)) return '';
+    const value = assertEmittable('urls.crash_report', raw);
+    let origin = '';
+    try {
+        origin = new URL(value).origin;
+    } catch {
+        origin = '';
+    }
+    if (!origin.startsWith('https://')) {
+        report([
+            `urls.crash_report is ${JSON.stringify(value)}, which is not an https URL. `
+            + `Write your own https crash-report address as [urls] crash_report in ${MANIFEST_NAME}, for example "https://crash.example.org/report", then run: ${RERUN}`,
+        ]);
+    }
+    return origin;
+}
+
+/**
+ * TEL-13 (WR-09): the ONE switch that decides whether a generated mozconfig builds the native crash reporter.
+ * It stays false until plan 57-04 (the TEL-13 flip). The generator owns the pairing with the crash address:
+ * `--disable-crashreporter` is emitted exactly when this is false, and when it is true a configuration with no
+ * [urls].crash_report fails generation, because the stock default of --with-crashreporter-url is Mozilla's
+ * crash-reports.mozilla.com. The flip is therefore this constant, never the deletion of an emitted literal.
+ */
+const CRASH_REPORTER_ENABLED = false;
+
+/**
+ * The crash-reporter lines of a mozconfig for a derived submit origin ('' when [urls].crash_report is unset).
+ * Throws when the reporter would be enabled with no origin. Exported for the self-test, which plants that fault.
+ */
+export function crashReporterOptions(origin, enabled = CRASH_REPORTER_ENABLED) {
+    if (enabled && origin === '') {
+        throw new Error(
+            'the crash reporter would be built on with no crash address, so it would send to the stock Mozilla address. '
+            + `Write your own https crash-report address as [urls] crash_report in ${MANIFEST_NAME}, then run: ${RERUN}`,
+        );
+    }
+    return [
+        ...(enabled ? [] : ['ac_add_options --disable-crashreporter']),
+        ...(origin ? [`ac_add_options --with-crashreporter-url=${origin}`] : []),
+    ];
+}
+
+/**
  * The root .mozconfig: the shared generated-from banner, a blank line, then
  * thirteen lines against the file Phase 1 wrote by hand.
  *
@@ -1519,6 +1572,14 @@ function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) 
     // here. (It is still read and guarded where it IS emitted as content:
     // the desktop entry's Icon line.)
     const objdir = assertEmittable(variantPath(variant, 'objdir'), variant.objdir);
+    // TEL-07: empty while [urls].crash_report is unset, so no url line is emitted and the bytes do not move.
+    // WR-09: crashReporterOptions owns the disable line and the url line together.
+    let crashLines = [];
+    try {
+        crashLines = crashReporterOptions(crashReporterOrigin(config));
+    } catch (err) {
+        report([err.message]);
+    }
     const brandingDefault = bootstrap
         ? 'powerbrowser/branding-generated/release'
         : 'powerbrowser/branding-generated/dev';
@@ -1536,7 +1597,7 @@ function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) 
         ...(sbKeyfile ? [`ac_add_options --with-google-safebrowsing-api-keyfile=${sbKeyfile}`] : []),
         `ac_add_options --with-app-basename=${assertEmittable('identity.app_basename', config.identity.app_basename)}`,
         `ac_add_options --with-distribution-id=${assertEmittable('identity.distribution_id', config.identity.distribution_id)}`,
-        'ac_add_options --disable-crashreporter',
+        ...crashLines,
         'ac_add_options --with-ccache=sccache',
         'ac_add_options --with-branding=${POWERBROWSER_BRANDING:-' + brandingDefault + '}',
         `mk_add_options "export MOZ_APP_REMOTINGNAME=${assertEmittable('identity.remoting_name', config.identity.remoting_name)}"`,
@@ -1574,6 +1635,26 @@ function emitMozconfigMacos(config, variant, cpu) {
         'mk_add_options "export HFS_TOOL=$MOZ_FETCHES_DIR/dmg/hfsplus"',
     ];
     return emitMozconfigFor(config, { ...variant, objdir: target.objdir }, { bootstrap: false, sbKeyfile: null, tail });
+}
+
+/**
+ * Phase 54 (PKG-11): the per-target Windows mozconfig, through the SAME shared
+ * builder as the release and macOS rows (emitMozconfigFor). The release shape
+ * is the cross-build shape: the container bootstrap (--enable-bootstrap, the
+ * release branch's flags, the release SB keyfile mount) plus the Windows tail.
+ * The tail carries the target triple and --disable-maintenance-service, which
+ * keeps the NSIS maintenance service out of the build (T-54-01). No function
+ * body here spells the enabling flag, so the only way a build gets it is a
+ * reviewed edit to this tail, which the windows-mozconfig row then reds.
+ */
+// node: the powerbrowser/packaging/node-runtime.json key the Windows stage reads (PKG-13).
+export const WINDOWS_TARGET = Object.freeze({ triple: 'x86_64-pc-windows-msvc', objdir: 'objdir-windows-x86_64', node: 'win32-x64' });
+export function emitMozconfigWindows(config, variant) {
+    const tail = [
+        `ac_add_options --target=${WINDOWS_TARGET.triple}`,
+        'ac_add_options --disable-maintenance-service',
+    ];
+    return emitMozconfigFor(config, { ...variant, objdir: WINDOWS_TARGET.objdir }, { bootstrap: true, sbKeyfile: SB_KEYFILE_MOUNT, tail });
 }
 
 /**
@@ -3711,6 +3792,14 @@ export const TARGETS = Object.freeze([
         variant: 'dev',
         emit: (config, variant) => emitMozconfigMacos(config, variant, 'x86_64'),
     }),
+    // NEW (Phase 54, PKG-11): the x86_64 Windows mozconfig through the shared
+    // builder. A frozen copy authored once from the emitter, never edited to go green.
+    Object.freeze({
+        generated: 'packaging/mozconfig-windows-x86_64',
+        tracked: 'powerbrowser/packaging/mozconfig-windows-x86_64',
+        variant: 'dev',
+        emit: emitMozconfigWindows,
+    }),
     // NEW (Phase 45, PKG-17): the release .mozconfig variant. A frozen copy
     // of the release emission, authored once from the emitter and committed,
     // same contract as the hand-written files: on a red, the emitter is what
@@ -5440,6 +5529,64 @@ function selfTest() {
     // expected pairs are literals: deriving them through emitTheiaTelemetry
     // would make the control agree with the emitter no matter how wrong
     // both were.
+    // TEL-07 (57-02): the crash origin control. A stated https crash_report derives its origin (path
+    // dropped) and emits the --with-crashreporter-url line; an unset key derives '' and emits nothing.
+    // The expected values are literals, so the control cannot agree with the emitter by construction.
+    const crashOriginControl = (() => {
+        const fixtureDir = mkdtempSync(join(tmpdir(), 'generate-selftest-crash-origin-'));
+        try {
+            const checkOne = (toml, wantOrigin, label) => {
+                const fixturePath = join(fixtureDir, `crash-origin-${label}.toml`);
+                writeFileSync(fixturePath, toml, 'utf8');
+                const resolved = resolveConfig(MANIFEST_PATH, fixturePath);
+                if (resolved.failures.length > 0) {
+                    return [`the crash-origin ${label} fixture failed validation: ${resolved.failures.join(' | ')}`];
+                }
+                const dev = resolved.config.variants.find(v => v.id === 'dev');
+                const problems = [];
+                const origin = crashReporterOrigin(resolved.config);
+                if (origin !== wantOrigin) problems.push(`crashReporterOrigin is ${JSON.stringify(origin)} for ${label}, not ${JSON.stringify(wantOrigin)}`);
+                const mozconfig = emitMozconfig(resolved.config, dev);
+                if (wantOrigin === '' && mozconfig.includes('--with-crashreporter-url')) {
+                    problems.push(`${label} emitted --with-crashreporter-url though the key is unset`);
+                }
+                if (wantOrigin !== '' && !mozconfig.includes(`ac_add_options --with-crashreporter-url=${wantOrigin}\n`)) {
+                    problems.push(`${label} did not emit ac_add_options --with-crashreporter-url=${wantOrigin}`);
+                }
+                return problems;
+            };
+            return [
+                ...checkOne(`${FIXTURE_DOWNSTREAM}\ncrash_report = "https://crash.example.org/report"\n`, 'https://crash.example.org', 'stated'),
+                ...checkOne(FIXTURE_DOWNSTREAM, '', 'unset'),
+            ];
+        } finally {
+            rmSync(fixtureDir, { recursive: true, force: true });
+        }
+    })();
+    // WR-09: the pairing of the disable line with the crash address. The expected arrays are literals.
+    const crashEnableControl = (() => {
+        const problems = [];
+        const same = (got, want, what) => {
+            if (JSON.stringify(got) !== JSON.stringify(want)) problems.push(`${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+        };
+        const URL_LINE = 'ac_add_options --with-crashreporter-url=https://crash.example.org';
+        same(crashReporterOptions('', false), ['ac_add_options --disable-crashreporter'], 'compiled out, no key');
+        same(crashReporterOptions('https://crash.example.org', false), ['ac_add_options --disable-crashreporter', URL_LINE], 'compiled out, key stated');
+        same(crashReporterOptions('https://crash.example.org', true), [URL_LINE], 'enabled, key stated');
+        let thrown = null;
+        try {
+            crashReporterOptions('', true);
+        } catch (err) {
+            thrown = err;
+        }
+        if (thrown === null) problems.push('the reporter enabled with no crash_report key did not fail generation, so deleting the disable literal would build one that sends to Mozilla');
+        else if (!thrown.message.includes('crash_report')) problems.push(`the enabled-without-key failure does not name crash_report: ${thrown.message}`);
+        // The shipped mozconfig is still compiled out.
+        const shippedConfig = resolveConfig(MANIFEST_PATH, undefined).config;
+        const shipped = emitMozconfig(shippedConfig, shippedConfig.variants.find(v => v.id === 'dev'));
+        if (!shipped.includes('ac_add_options --disable-crashreporter\n')) problems.push('the dev mozconfig no longer carries --disable-crashreporter while the flip has not happened');
+        return problems;
+    })();
     const telemetryControl = (() => {
         const fixtureDir = mkdtempSync(join(tmpdir(), 'generate-selftest-telemetry-'));
         try {
@@ -6230,6 +6377,22 @@ function selfTest() {
             resolved: () => telemetryControl.length === 0,
         },
         {
+            // TEL-07 (57-02): the submit origin is derived from the ONE stated crash_report key (path
+            // dropped) and is inert while unset. The control proves the derivation on a fixture
+            // manifest; the real manifest states no key, so the reporter stays compiled out.
+            name: 'crash origin derives from the stated crash_report key and stays inert when unset',
+            probe: () => crashOriginControl,
+            holds: 'the stated https URL reduces to its origin and emits --with-crashreporter-url, and an unset key derives the empty origin and emits no line',
+            resolved: () => crashOriginControl.length === 0,
+        },
+        {
+            // WR-09: the flip is the generator's one constant, and it cannot be made without the crash address.
+            name: 'enabling the crash reporter without a crash_report key fails generation',
+            probe: () => crashEnableControl,
+            holds: 'the disable line is emitted exactly while the reporter is off, and enabling it with no crash_report key throws naming the key',
+            resolved: () => crashEnableControl.length === 0,
+        },
+        {
             // GEN-05 remainder. A theme id outside Theia's builtin set must
             // fail NAMING the key -- a typo'd theme silently falling back is
             // the failure, and the schema carries no pattern for ids by
@@ -6255,6 +6418,13 @@ function selfTest() {
             // manifest bug, not a coverage gap.
             name: 'crash-report URL outside https',
             toml: `${FIXTURE_DOWNSTREAM}\ncrash_report = "http://example.org/crash"\n`,
+            expect: 'urls.crash_report',
+        },
+        {
+            // IN-01. A user name and password in the crash address would be kept verbatim in
+            // breakpad.reportURL while the submit origin dropped them; the key refuses them.
+            name: 'crash-report URL carrying a user name and password',
+            toml: `${FIXTURE_DOWNSTREAM}\ncrash_report = "https://user:secret@crash.example.org/report"\n`,
             expect: 'urls.crash_report',
         },
         {

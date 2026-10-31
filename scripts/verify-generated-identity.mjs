@@ -151,6 +151,11 @@ const EXPECTED = Object.freeze([
     // NEW (Phase 55, PKG-14): the x86_64 macOS mozconfig, the second target through
     // the same shared builder. Same contract as the aarch64 entry above.
     'powerbrowser/packaging/mozconfig-macos-x86_64',
+    // NEW (Phase 54, PKG-11): the x86_64 Windows mozconfig through the same shared
+    // builder, with the target triple and --disable-maintenance-service as its tail.
+    // A deliberate contract change, so it lands here in the same commit as its
+    // TARGETS row; on a red, the emitter is what changes, never this comparand.
+    'powerbrowser/packaging/mozconfig-windows-x86_64',
 ]);
 
 /** Set difference reported by name, so a failure says WHICH path drifted. */

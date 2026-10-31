@@ -604,6 +604,19 @@ export const PowerBrowserAPI = Object.freeze({
   },
 
   /**
+   * UPD-30 (Phase 54): waits for `proc` to exit, resolving true once it has and false when `graceMs`
+   * passes first. Works on every platform because it awaits the Subprocess handle (its own wait()),
+   * not a pid probe. Never rejects: a wait() that rejects means the handle is already dead.
+   */
+  async waitForExit(proc, graceMs) {
+    try {
+      return await Promise.race([proc.wait().then(() => true), PowerBrowserAPI.sleep(graceMs).then(() => false)]);
+    } catch {
+      return true;
+    }
+  },
+
+  /**
    * Reads the next available chunk of text from `proc`'s named output
    * pipe ("stdout" or "stderr"), resolving null at end of stream.
    */
@@ -688,6 +701,17 @@ export const PowerBrowserAPI = Object.freeze({
     const observer = { observe: () => callback() };
     Services.obs.addObserver(observer, "quit-application-granted");
     return () => Services.obs.removeObserver(observer, "quit-application-granted");
+  },
+
+  /**
+   * UPD-30 (Phase 54): registers `fn` as the AsyncShutdown blocker that quit and restart both await.
+   * restartToUpdate quits with eRestart, which also raises quit-application-granted, so one
+   * registration covers both paths and the sidecar is reaped before the updater rename can run.
+   * AsyncShutdown rejects a second blocker under the same name, so the caller registers once per process.
+   */
+  addSidecarReapBlocker(fn) {
+    const { AsyncShutdown } = ChromeUtils.importESModule("resource://gre/modules/AsyncShutdown.sys.mjs");
+    AsyncShutdown.quitApplicationGranted.addBlocker("PowerBrowser: reap sidecar", fn);
   },
 
   /**
@@ -972,13 +996,19 @@ export const PowerBrowserAPI = Object.freeze({
    * (see `killProcess` above, which remains the correct call for an
    * already-spawned handle). `Subprocess.sys.mjs` has no API to signal a
    * pid it did not itself create, so this opens libc directly via
-   * js-ctypes. Linux-only per CLAUDE.md -- no cross-platform branch.
-   * Returns true only when the platform call itself returned 0; false on
-   * ESRCH (already gone), EPERM, or any other failure -- never throws.
+   * js-ctypes. The libc call exists on Linux only; on any other platform
+   * this returns false without touching ctypes (a Windows leftover is not
+   * reaped, see BLOCKED.md). Returns true only when the platform call itself
+   * returned 0; false on ESRCH (already gone), EPERM, a platform without
+   * libc, or any other failure -- never throws.
    */
   signalBarePid(pid, signal) {
-    const libc = lazy.ctypes.open("libc.so.6");
+    let libc = null;
     try {
+      if (lazy.AppConstants.platform !== "linux") {
+        return false;
+      }
+      libc = lazy.ctypes.open("libc.so.6");
       const kill = libc.declare(
         "kill",
         lazy.ctypes.default_abi,
@@ -990,7 +1020,11 @@ export const PowerBrowserAPI = Object.freeze({
     } catch {
       return false;
     } finally {
-      libc.close();
+      try {
+        libc?.close();
+      } catch {
+        // Closing is best-effort; the contract is never to throw.
+      }
     }
   },
 

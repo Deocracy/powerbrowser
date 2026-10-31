@@ -279,8 +279,53 @@ function selfTest() {
         }
     }
 
+    // Plants 3 and 4 (TEL-07, 57-02): a STATED [urls].crash_report is one key with two consumers.
+    // The fixture states the key inside [urls]; the fragment is derived from that fixture through the
+    // same resolver, so only the named half can fire. Plant 3: the crash host has no allowlist row,
+    // so an unattended resolution must go red NAMING it. Plant 4: the row is present, so coverage is
+    // green and the breakpad.reportURL expect (still blank) must go red NAMING the pref.
+    const statedCrashManifest = readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8')
+        .replace(/^\[urls\]\s*$/m, '[urls]\ncrash_report = "https://crash.example.org/report"');
+    const crashPlant = (label, needle, addAllowRow) => {
+        const dir = mkdtempSync(join(tmpdir(), 'theia-endpoints-selftest-'));
+        try {
+            copyInto(dir, ALLOWLIST_REL);
+            if (statedCrashManifest === readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8')) {
+                complain(label, 'planted no fault at all: the [urls] insertion did not land');
+                return;
+            }
+            writeFileSync(join(dir, MANIFEST_REL), statedCrashManifest, 'utf8');
+            if (addAllowRow) {
+                const allow = JSON.parse(readFileSync(join(dir, ALLOWLIST_REL), 'utf8'));
+                allow.hosts.push({
+                    host: 'crash.example.org',
+                    disposition: 'user-initiated',
+                    reason: 'Self-test plant only: covers the stated crash host so coverage stays green.',
+                });
+                writeFileSync(join(dir, ALLOWLIST_REL), JSON.stringify(allow, null, 2), 'utf8');
+            }
+            const { failures: resolveFailures, config } = resolveConfig(join(dir, MANIFEST_REL), undefined);
+            if (resolveFailures.length > 0) {
+                complain(label, `the fixture manifest is red for an unrelated reason: ${resolveFailures.join(' | ')}`);
+                return;
+            }
+            mkdirSync(join(dir, 'generated'), { recursive: true });
+            writeFileSync(join(dir, FRAGMENT_REL), emitEndpointHosts(config, { id: 'dev' }), 'utf8');
+            const { failures } = runChecks(dir);
+            if (!failures.some(f => f.includes(needle))) {
+                complain(label, `did not go red naming '${needle}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+            } else {
+                console.log(`  ok  ${label} -> red, naming '${needle}'`);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    crashPlant('unattended crash host', 'crash.example.org', false);
+    crashPlant('stated crash_report disagrees with breakpad.reportURL expect', 'breakpad.reportURL', true);
+
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 2 planted faults all behaved as pinned`);
+    console.log(`${NAME}: --self-test PASS -- 4 planted faults all behaved as pinned`);
     return 0;
 }
 

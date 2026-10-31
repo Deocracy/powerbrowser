@@ -26,6 +26,12 @@
 # the model and the federated credential but no App token; fix-gate holds no secret, no environment and
 # no id-token; fix-pr is the only App-token minter, and it reads no model prose.
 #
+# The maintenance sweep (Phase 48, TRAIN-07) runs once per UTC day, on the first dispatch tick at or past
+# 06:00 UTC that has no accepted sweep of today: sweep-clock decides the tick, maintenance-probe reads the
+# last watchdog run and sends one synthetic events POST under the bot environment, maintenance derives the six rows and renders the pinned
+# release-train: maintenance body, and report is the only job that edits that issue (a PATCH on a byte
+# diff, one comment on a transition into red, both live only). No schedule key: the clock is the Worker.
+#
 # The uptake lane (TRAIN-05, UPS-01). detect also lists the uptake major's tags (175,
 # from detect-upstreams.mjs --uptake-major) and names the newest one. uptake-replay
 # replays that tag through the same rebase-upstream.yml, read-only, and is never a
@@ -36,8 +42,7 @@
 # Not here yet: the live GitHub facts behind derive (check runs, the Release list) are
 # fixture-backed, and the release-stage states of release-train.mjs have no live collector
 # until the facts source and the tracking-issue writer are approved (BLOCKED.md item 3).
-# dispatch-release prints the run link to the job summary in the meantime, and the
-# maintenance sweep is Phase 48.
+# dispatch-release prints the run link to the job summary in the meantime.
 #
 # Dry-run. Every step that commits, opens, comments or dispatches carries a negated
 # inputs.dry-run in its if:. A dry run still validates, decides and replays, because
@@ -541,6 +546,267 @@ jobs:
           EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
           if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head chore/node-v24.x --title "$TITLE" --body "$BODY"; fi
 
+  # The sweep clock. No environment and no secret: it decides only whether this dispatch tick is the day's sweep
+  # tick (at or past 06:00 UTC, and no accepted sweep of today). A tick that is not due ends the sweep here, so the
+  # bot environment and the pinned issue are not touched.
+  #
+  # The previous sweep is the maintenance-state artifact of a successful run of this workflow on the repository's
+  # default branch, in this repository, of the train file, on an event the train uses, with its head sha on the
+  # default branch. The repository, default branch and id are read from the API, and the selection is the pure
+  # selectStateArtifact: a run or artifact from a fork, a feature branch, a tag, another workflow or another
+  # repository is never the previous sweep. The one lookup serves two decisions: today's sweep (this job) and the
+  # previous row statuses (report). Any error or absence leaves the outputs empty, which is the fail-safe path: the
+  # sweep is due and every red row is treated as newly red. A read, so no dry-run gate.
+  sweep-clock:
+    needs: derive
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.reason != 'fix' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      due: ${{ steps.due.outputs.due }}
+      prev-run-id: ${{ steps.prev.outputs.run-id }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Look up the previous maintenance sweep (read)
+        id: prev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/maint-lookup"
+          mkdir -p "$OUT"
+          gh api "repos/${GITHUB_REPOSITORY}" --jq '{branch: .default_branch, repo_id: .id}' > "$OUT/repo.json" 2>/dev/null || echo '{}' > "$OUT/repo.json"
+          BRANCH=$(jq -r '.branch // ""' "$OUT/repo.json")
+          REPO_ID=$(jq -r '.repo_id // 0' "$OUT/repo.json")
+          # 100 is the API maximum: hourly ticks leave up to 24 successful runs between two sweeps.
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-train.yml/runs?branch=${BRANCH:-none}&event=workflow_dispatch&status=success&per_page=100" --jq '.workflow_runs' > "$OUT/runs.json" 2>/dev/null || echo '[]' > "$OUT/runs.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=release-train-maintenance-state&per_page=100" --jq '.artifacts' > "$OUT/artifacts.json" 2>/dev/null || echo '[]' > "$OUT/artifacts.json"
+          # A run's head sha counts only when the default branch is identical to it or ahead of it (the
+          # sha is an ancestor of the default branch). Any error leaves the sha out: the fail-safe.
+          jq -r '.[].head_sha // empty' "$OUT/runs.json" | sort -u > "$OUT/shas.txt" || true
+          : > "$OUT/verified.txt"
+          while read -r SHA; do
+            [ -n "$SHA" ] || continue
+            STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${SHA}...${BRANCH:-none}" --jq '.status' 2>/dev/null || echo error)
+            if [ "$STATUS" = "identical" ] || [ "$STATUS" = "ahead" ]; then echo "$SHA" >> "$OUT/verified.txt"; fi
+          done < "$OUT/shas.txt"
+          SELECTED=$(node scripts/release-train.mjs --state-select "$OUT/runs.json" "$OUT/artifacts.json" "$GITHUB_REPOSITORY" "$REPO_ID" "$BRANCH" "$OUT/verified.txt" || true)
+          RUN_ID="${SELECTED%% *}"
+          CREATED=""
+          case "$SELECTED" in *" "*) CREATED="${SELECTED#* }" ;; esac
+          echo "run-id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "created-at=${CREATED}" >> "$GITHUB_OUTPUT"
+
+      # A decision only, so it runs in a dry run too: the dry run renders the sweep and prints it. A dry run
+      # ignores the "swept today" half, so it can be repeated after the live sweep; a live run honours it.
+      - name: Decide whether this tick is the day's sweep tick
+        id: due
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+          PREV_CREATED: ${{ steps.prev.outputs.created-at }}
+        run: |
+          set -eu
+          LAST=""
+          if [ "$DRY_RUN" != "true" ] && [ -n "$PREV_CREATED" ]; then LAST=$(date -u -d "$PREV_CREATED" +%s 2>/dev/null || true); fi
+          node scripts/release-train.mjs --sweep-due "$(date -u +%s)" "$LAST" > "$RUNNER_TEMP/due.txt"
+          cat "$RUNNER_TEMP/due.txt"
+          grep -E '^due=(true|false)$' "$RUNNER_TEMP/due.txt" >> "$GITHUB_OUTPUT"
+
+  # The only job that enters the bot environment in the sweep. It enters only on a live sweep tick
+  # (bot-job-gate), so a dry run and a tick that is not the day's sweep never wait on an approval. Its two
+  # reads are the start of the last successful scheduled watchdog run in powerbrowser-updates (App token,
+  # actions read on that one repository) and one synthetic POST to the events Worker, marked synthetic and
+  # authenticated with the bot copy of DOWNLOAD_COUNT_SECRET. It writes no issue. The online runner count
+  # (Administration read on powerbrowser) is deferred to Phase 49, which registers the first runner: the row
+  # renders no-data until then, so the grant would buy nothing yet and is not requested (BLOCKED.md item 2).
+  # Every step tolerates its own failure, so one failed read marks its own row and never removes the sweep.
+  maintenance-probe:
+    needs: [derive, sweep-clock]
+    if: ${{ !inputs.dry-run && needs.sweep-clock.outputs.due == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: bot
+    permissions:
+      contents: read
+    outputs:
+      watchdog-started-ms: ${{ steps.watchdog.outputs.started-ms }}
+      synthetic-status: ${{ steps.synthetic.outputs.status }}
+      synthetic-acked: ${{ steps.synthetic.outputs.acked }}
+    steps:
+      - name: Check out repo
+        if: ${{ !inputs.dry-run }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # One repository, one permission: the watchdog read needs Actions read on powerbrowser-updates only.
+      # A failed mint (the App lacks the grant, BLOCKED.md item 2) leaves the token empty; the read then fails
+      # and the watchdog-age row renders red, and the sweep still runs.
+      - name: Mint the bot App token for the watchdog read
+        id: app
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser-updates
+          permission-actions: read
+
+      # Only a successful scheduled run counts: a watchdog that fails every day, or a manual dispatch, must not
+      # keep the row green. A watchdog that has never run, or a read that fails, leaves the start empty and the
+      # sweep renders a red watchdog-age row; the read error is printed to the log, not discarded.
+      - name: Read the start of the last successful scheduled watchdog run (actions read, read only)
+        id: watchdog
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY_OWNER}/powerbrowser-updates/actions/workflows/watchdog.yml/runs?per_page=1&status=success&event=schedule" --jq '.workflow_runs[0].run_started_at // empty' || echo "release-train maintenance: the watchdog run read failed (see the error above)" >&2)
+          if [ -n "$STARTED" ]; then
+            echo "started-ms=$(date -u -d "$STARTED" +%s%3N)" >> "$GITHUB_OUTPUT"
+          else
+            echo "started-ms=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The bot copy of the shared secret marks this one POST synthetic, so the maintainer view excludes
+      # it. The endpoint is the one configuration.toml states under [telemetry]; it must be https and the request
+      # is bounded to 20 seconds. The secret goes to curl through a header file (printf is a builtin, so it is
+      # never on an argv), and the response body is read only for the Worker's synthetic acknowledgement: a
+      # wrong or missing secret still answers 200 (the probe is stored as a real row), so the row is green only
+      # when the body is exactly "ok: stored 1 synthetic 1". The secret is never printed.
+      - name: Send the synthetic events probe (bot copy of the shared secret, marked synthetic)
+        id: synthetic
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          SHARED_SECRET: ${{ secrets.DOWNLOAD_COUNT_SECRET }}
+        run: |
+          set -euo pipefail
+          ENDPOINT=$(awk '/^\[telemetry\]/ { in_block = 1; next } /^\[/ { in_block = 0 } in_block && /^endpoint = / { gsub(/"/, "", $3); print $3 }' configuration.toml)
+          STATUS=000
+          ACKED=false
+          if [ -z "$SHARED_SECRET" ]; then
+            echo "release-train maintenance: DOWNLOAD_COUNT_SECRET is empty in the bot environment; the probe is not sent" >&2
+          elif [[ $ENDPOINT != https://* ]]; then
+            echo "release-train maintenance: the telemetry endpoint in configuration.toml is not https; the probe is not sent" >&2
+          else
+            HEADERS="$RUNNER_TEMP/probe-headers"
+            BODY="$RUNNER_TEMP/probe-body.txt"
+            (umask 077; printf 'authorization: Bearer %s\n' "$SHARED_SECRET" > "$HEADERS")
+            STATUS=$(curl -sS --max-time 20 --proto '=https' -o "$BODY" -w '%{http_code}' -X POST "$ENDPOINT" -H 'content-type: application/json' -H "@${HEADERS}" --data '{"events":[{"kind":"error","name":"release-train.maintenance-probe","data":{"type":"MaintenanceProbe","os":"unknown"},"synthetic":true,"at":0}]}' || true)
+            rm -f "$HEADERS"
+            if [ -f "$BODY" ] && [ "$(cat "$BODY")" = "ok: stored 1 synthetic 1" ]; then ACKED=true; fi
+          fi
+          echo "status=${STATUS:-000}" >> "$GITHUB_OUTPUT"
+          echo "acked=${ACKED}" >> "$GITHUB_OUTPUT"
+
+  # The sweep's render. It reads the tag listing, the commit date of each tag under the pinned major, the
+  # Release list and the advisory product-details value (all reads), takes the probe outputs, derives the
+  # six rows and renders the pinned body. It writes nothing; the body is handed to report base64-encoded.
+  maintenance:
+    needs: [derive, sweep-clock, maintenance-probe]
+    # Runs on a failed probe too: a probe failure marks its own rows no-data and never removes the sweep.
+    if: ${{ always() && needs.sweep-clock.outputs.due == 'true' && needs.maintenance-probe.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      body-b64: ${{ steps.render.outputs.body-b64 }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Read the pin from configuration.toml
+        id: pin
+        run: |
+          set -eu
+          PIN=$(node scripts/detect-upstreams.mjs --pin)
+          echo "pin=${PIN}" >> "$GITHUB_OUTPUT"
+
+      - name: List the ESR release tags under the pinned major and their commit dates (read)
+        env:
+          PIN: ${{ steps.pin.outputs.pin }}
+          REMOTE: https://github.com/mozilla-firefox/firefox.git
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MAJOR=$(printf '%s\n' "$PIN" | sed -n 's/^[A-Za-z]*_\([0-9]*\)_.*/\1/p')
+          git ls-remote --tags "$REMOTE" > "$RUNNER_TEMP/refs.txt"
+          grep -E "^[0-9a-f]+[[:space:]]+refs/tags/FIREFOX_${MAJOR}_[0-9]+_[0-9]+(_[0-9]+)?esr_RELEASE$" "$RUNNER_TEMP/refs.txt" | sed 's#.*refs/tags/##' | sort -u > "$RUNNER_TEMP/tags.txt" || [ $? -eq 1 ]
+          : > "$RUNNER_TEMP/tag-dates.tsv"
+          while read -r TAG; do
+            # An annotated tag names its tag object on the plain line; the commit is on the peeled ^{} line.
+            SHA=$(awk -v t="refs/tags/${TAG}" '$2 == (t "^{}") { p = $1 } $2 == t { q = $1 } END { print (p != "" ? p : q) }' "$RUNNER_TEMP/refs.txt")
+            # A failed read leaves the tag undated; the esr-pin-age row then renders no-data for a newer tag, never green.
+            DATE=$(gh api "repos/mozilla-firefox/firefox/commits/${SHA}" --jq '.commit.committer.date' || echo "release-train maintenance: the commit date of ${TAG} could not be read" >&2)
+            if [ -n "$DATE" ]; then printf '%s\t%s\n' "$TAG" "$DATE" >> "$RUNNER_TEMP/tag-dates.tsv"; fi
+          done < "$RUNNER_TEMP/tags.txt"
+
+      - name: Read the Release list and the advisory product-details value (read)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '[.[] | {tag_name, draft, prerelease}]' | jq -s 'add // []' > "$RUNNER_TEMP/releases.json"
+          ADVISORY=$(curl -fsSL https://product-details.mozilla.org/1.0/firefox_versions.json | jq -r '.FIREFOX_ESR // empty' || true)
+          echo "$ADVISORY" > "$RUNNER_TEMP/advisory.txt"
+
+      # The facts are built from the reads above and the probe outputs. A probe that did not run is null,
+      # which the rows render as no-data; the body never carries a value the sweep did not observe.
+      - name: Build the facts and render the pinned body (no writes)
+        id: render
+        env:
+          PIN: ${{ steps.pin.outputs.pin }}
+          PROBE_RESULT: ${{ needs.maintenance-probe.result }}
+          PROBE_WATCHDOG_MS: ${{ needs.maintenance-probe.outputs.watchdog-started-ms }}
+          PROBE_SYNTHETIC: ${{ needs.maintenance-probe.outputs.synthetic-status }}
+          PROBE_ACKED: ${{ needs.maintenance-probe.outputs.synthetic-acked }}
+        run: |
+          set -euo pipefail
+          NOW_MS=$(date -u +%s%3N)
+          TAGS_JSON=$(jq -R -s 'split("\n") | map(select(. != ""))' "$RUNNER_TEMP/tags.txt")
+          DATES_JSON=$(jq -R -s 'split("\n") | map(select(. != "") | split("\t") | {(.[0]): ((.[1] | fromdateiso8601) * 1000)}) | add // {}' "$RUNNER_TEMP/tag-dates.tsv")
+          ADVISORY=$(cat "$RUNNER_TEMP/advisory.txt")
+          jq -n \
+            --arg pin "$PIN" \
+            --argjson now "$NOW_MS" \
+            --argjson tags "$TAGS_JSON" \
+            --argjson dates "$DATES_JSON" \
+            --slurpfile releases "$RUNNER_TEMP/releases.json" \
+            --arg advisory "$ADVISORY" \
+            --arg result "$PROBE_RESULT" \
+            --arg watchdog "${PROBE_WATCHDOG_MS:-}" \
+            --arg synthetic "${PROBE_SYNTHETIC:-}" \
+            --arg acked "${PROBE_ACKED:-}" \
+            '{
+              pinTag: $pin, nowMs: $now, tags: $tags, tagDates: $dates, releases: $releases[0],
+              advisoryEsr: (if $advisory == "" then null else $advisory end),
+              # The runner count (Administration read) arrives with Phase 49; null renders no-data, never green.
+              runnersOnline: null,
+              watchdogProbed: ($result == "success"),
+              watchdogStartedAtMs: (if $result == "success" and $watchdog != "" then ($watchdog | tonumber) else null end),
+              syntheticStatus: (if $result == "success" and $synthetic != "" then ($synthetic | tonumber) else null end),
+              syntheticAcked: ($acked == "true"),
+              channelOk: null,
+              downloadRows: 0
+            }' > "$RUNNER_TEMP/maintenance-facts.json"
+          node scripts/release-train.mjs --maintenance "$RUNNER_TEMP/maintenance-facts.json" "$RUNNER_TEMP/maintenance.md"
+          echo "body-b64=$(base64 -w0 "$RUNNER_TEMP/maintenance.md")" >> "$GITHUB_OUTPUT"
+
   # TRAIN-10: after the bump PR merges, dispatch release.yml with the merge SHA. The merged PR is
   # read from GitHub on every tick (no stored state): the newest merged PR for the pinned bump
   # branch names the SHA, and a release.yml run already at that SHA means nothing is dispatched
@@ -648,13 +914,15 @@ jobs:
           fi
 
   report:
-    needs: [derive, detect, detect-node, bump, uptake-replay, bump-pr, bump-pr-node, dispatch-release]
+    needs: [derive, detect, detect-node, bump, uptake-replay, bump-pr, bump-pr-node, dispatch-release, sweep-clock, maintenance-probe, maintenance]
     if: ${{ always() && ((github.event_name == 'workflow_dispatch' && inputs.reason != 'fix') || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       issues: write
+      # Read only: the previous-state artifact download crosses runs, which a private repository authorises through this scope.
+      actions: read
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -728,13 +996,111 @@ jobs:
           if [ "$UPTAKE_RESULT" = "success" ]; then REPLAYED=true; fi
           node scripts/release-train.mjs --uptake-would-write "$UPTAKE_TAG" "$UPTAKE_STAGE" "$REPLAYED" "$UPTAKE_RESULT" "$DETECT_RESULT"
 
+      # The pinned maintenance issue (TRAIN-07). Found read only, by author and label on the server (a title
+      # search alone returns the newest matches of any author, so strangers could push the owner's issue out of
+      # the window); the JS selection is the second check. An unset or malformed OWNER_LOGIN selects nothing.
+      # The write plan decides the
+      # one PATCH (on a byte diff) and the one comment (on a transition into red) for this run. A tick
+      # with no sweep, or a sweep that did not render, skips this block and writes nothing.
+      - name: Find the pinned maintenance issue (read)
+        id: maint-find
+        if: ${{ needs.maintenance.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER_LOGIN: ${{ vars.OWNER_LOGIN }}
+        run: |
+          set -euo pipefail
+          LOGIN_RE='^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$'
+          if [[ $OWNER_LOGIN =~ $LOGIN_RE ]]; then
+            gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --author "$OWNER_LOGIN" --label release-train --search 'in:title "release-train: maintenance"' --json number,title,body,author,labels > "$RUNNER_TEMP/maint-found.json"
+          else
+            echo "release-train maintenance: the repository variable OWNER_LOGIN is unset or not a login; no issue is searched or selected"
+            echo '[]' > "$RUNNER_TEMP/maint-found.json"
+          fi
+
+      - name: Download the previous maintenance state (read; absent is fail-safe)
+        id: maint-restore
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && needs.sweep-clock.outputs.prev-run-id != '' }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-train-maintenance-state
+          path: ${{ runner.temp }}/maint-state
+          run-id: ${{ needs.sweep-clock.outputs.prev-run-id }}
+          github-token: ${{ github.token }}
+
+      - name: Plan the write for the pinned maintenance issue (read)
+        id: maint-plan
+        if: ${{ needs.maintenance.result == 'success' }}
+        env:
+          OWNER_LOGIN: ${{ vars.OWNER_LOGIN }}
+          BODY_B64: ${{ needs.maintenance.outputs.body-b64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$BODY_B64" | base64 -d > "$RUNNER_TEMP/maint-body.md"
+          mkdir -p "$RUNNER_TEMP/maint-next"
+          node scripts/release-train.mjs --maintenance-plan "$RUNNER_TEMP/maint-found.json" "$RUNNER_TEMP/maint-body.md" "$RUNNER_TEMP/maint-comment.md" "$RUNNER_TEMP/maint-state/state.json" "$RUNNER_TEMP/maint-next/state.json" > "$RUNNER_TEMP/maint-plan.txt"
+          cat "$RUNNER_TEMP/maint-plan.txt"
+          grep -E '^(action|number|patch|comment)=' "$RUNNER_TEMP/maint-plan.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Print the maintenance write this run would make (dry-run)
+        if: ${{ inputs.dry-run }}
+        env:
+          SWEEP_DUE: ${{ needs.sweep-clock.outputs.due }}
+          MAINT_RESULT: ${{ needs.maintenance.result }}
+          ACTION: ${{ steps.maint-plan.outputs.action }}
+          NUMBER: ${{ steps.maint-plan.outputs.number }}
+          PATCH: ${{ steps.maint-plan.outputs.patch }}
+          COMMENT: ${{ steps.maint-plan.outputs.comment }}
+        run: |
+          if [ "$SWEEP_DUE" != "true" ]; then echo "dry-run: no maintenance sweep tick (before 06:00 UTC, or today's sweep already ran); nothing is written"; exit 0; fi
+          if [ "$MAINT_RESULT" != "success" ]; then echo "dry-run: the maintenance render did not succeed (${MAINT_RESULT}); nothing is written"; exit 0; fi
+          echo "dry-run: maintenance action=${ACTION} number=${NUMBER:-none} would-patch=${PATCH} would-comment=${COMMENT}; nothing is written"
+
+      - name: Report that no pinned maintenance issue exists yet (live)
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-plan.outputs.action == 'create' }}
+        run: |
+          echo "release-train maintenance: no pinned maintenance issue was selected. Either the owner has not pinned it yet (plan 48-05), or the repository variable OWNER_LOGIN is unset or names another account, or the issue lacks the release-train label. Nothing is created here."
+
+      - name: Patch the pinned maintenance issue on a byte diff (live only)
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-plan.outputs.patch == 'true' && steps.maint-plan.outputs.number != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ steps.maint-plan.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/maint-body.md"
+
+      - name: Comment on the pinned maintenance issue on a transition into red (live only)
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-plan.outputs.comment == 'true' && steps.maint-plan.outputs.number != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ steps.maint-plan.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/maint-comment.md"
+
+      # Live only, after the plan succeeded: the statuses this run rendered become the previous state for
+      # the next sweep. A dry run stores nothing.
+      - name: Save the maintenance state for the next sweep (live only)
+        id: maint-save
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-plan.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-train-maintenance-state
+          path: ${{ runner.temp }}/maint-next/state.json
+          retention-days: 90
+          if-no-files-found: error
+          # A re-run attempt of the same run would otherwise answer 409 on the first attempt's artifact.
+          overwrite: true
+
   # ---- The fixer (Phase 52, FIX-01 to FIX-12). Reached only by a dispatch with reason fix, which the
   # derive job validated. fix holds the model and the federated credential, and no App token. fix-gate
   # holds no secret, no environment and no id-token, because it runs the model's diff (CR-01). fix-pr is
   # the only App-token minter, and it reads no model prose. Every write step carries the dry-run gate.
   fix:
     needs: derive
-    if: ${{ !inputs.dry-run && inputs.reason == 'fix' && github.event_name == 'workflow_dispatch' && github.actor != 'powerbrowser-bot[bot]' && !startsWith(inputs.target-branch, 'claude-fix/') }}
+    if: ${{ !inputs.dry-run && inputs.reason == 'fix' && github.event_name == 'workflow_dispatch' && github.actor != 'powerbrowser-bot[bot]' && github.actor != 'dependabot[bot]' && !startsWith(inputs.target-branch, 'claude-fix/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: fixer
