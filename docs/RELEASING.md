@@ -784,6 +784,62 @@ rule holds for the Gecko toolchain: `scripts/toolchain-baseline.sh` regenerates
 
 ---
 
+## Train stages after the bump PR merges
+
+The release train (`scripts/release-train.mjs`, `.github/workflows/release-train.yml`)
+carries a release from a merged bump PR to a live descriptor. Every state is derived
+from GitHub facts only, never from a stored train state: the `release.yml` run at the
+merge SHA (matched by the run display title `Release <sha>`), its pending deployments (`release`, `descriptor`), the
+Release at the release key (draft, prerelease, assets, notes marker), the
+`powerbrowser-updates` descriptor bytes, the `channel-live` conclusion and the tracking
+issue state.
+
+Evaluation priority, first match wins: WITHDRAWN (the mark is authoritative), then, for
+a published Release, DESCRIPTOR_LIVE or DONE (served bytes equal and channel-live green;
+DONE only when the issue is already closed), LIVE_RED (a descriptor is present and
+channel-live is red or its bytes drifted), DESCRIPTOR_WAIT (the descriptor environment or
+its timer is engaged), PUBLISHED (asset set equal to the manifest-derived set, no
+descriptor or a no-update one). Before any Release exists: AWAITING_APPROVAL (run waiting
+on the `release` environment), then BUILDING (run in flight).
+
+The train makes at most one transition per release per run and ends at each owner gate:
+the bump merge, the `release` approval, the `descriptor` approval. LIVE_RED is sticky until
+a fresh green `channel-live`. A bad release is withdrawn by the mark and fixed by a new
+revision with a new tag; a Release is never deleted and no tag is reused.
+
+**Dispatch after the merge (`dispatch-release`).** On each tick the train reads the newest
+merged PR for the pinned bump branch `chore/esr-<pin>`, takes its merge commit SHA, counts
+the `release.yml` runs already dispatched for that SHA, and dispatches `release.yml` with
+`inputs.sha` set to that SHA only when the count is zero. A dispatched run's `head_sha` is
+the tip of main, never `inputs.sha`, so `release.yml` sets `run-name: Release ${{ inputs.sha }}`
+(pinned by the `release-shape` row) and the train identifies the run by that exact display
+title together with the `workflow_dispatch` event, the `release.yml` path and this
+repository as head repository. The run is resolved that way, never by `head_sha` or by
+recency, and linked in the job summary. The merged-PR lookup considers only same-repository
+PRs merged into `main`. The `dispatch-release` rows execute these steps against a fixture
+where main has advanced past the merge SHA.
+
+Token decision: `GITHUB_TOKEN` with `actions: write` granted on the `dispatch-release` job
+alone. The bot App token cannot dispatch (it holds no Actions scope, so the call returns
+403), and a clock App would add a second credential for one call. The job holds no
+environment, no App key and no contents write, so its only write is the dispatch. The
+dispatched input is named `sha`, the input `release.yml` already declares and the
+`release-shape` row pins, not `merge_sha`.
+
+Dry run: the reads run and the would-dispatch line is printed; the POST and the run poll do
+not run.
+
+**The SHA rule (release.yml, both build-linux and sign-publish).** A dispatched SHA passes
+only when it equals the tip of main, or when it is an ancestor of main whose own commit
+changes `configuration.toml` and whose `.github/workflows/` tree equals main's. Any other
+SHA exits 1 before the first build or sign step, naming the SHA, the tip and the next step.
+The workflows-tree conjunct exists because the bot App cannot create a Release for a target
+whose workflows differ from main's (404 or 403 far from the cause). The gate text is
+executed against scratch repositories by the `release-sha-gate` rows, so a change to it is
+what the plants test. The input is `sha`, as the release-shape row pins it.
+
+---
+
 ## Per-release procedure
 
 Read `docs/BUILD.md` for what each build step costs. A full Gecko build is roughly
@@ -900,6 +956,29 @@ equal **and** the build IDs match, so a same-appVersion distinct-buildID hop is
 exactly what the client treats as an upgrade.
 
 Hold the announcement and any package-manager submission until this drill is green.
+
+**Hop record (served: release).** The drill is the clean-room run in `docs/BUILD.md`
+("Clean-room drill for a published Release"). The owner pastes these fields back, and each
+one is what the release assertion set reads or what a reviewer audits:
+
+- `served`: `release`. The fork-server (`loopback`) record is a different proof.
+- `servedUrl` (the public descriptor, under `updates.powerbrowser.org`) and `servedMarUrl`
+  (`https://downloads.powerbrowser.org/<tag>/<asset>`, write-once). Any `github.com`,
+  `release-assets` or latest-download form is refused.
+- Resolver host lines: the `Resolving host [...]` set from `client-resolver.log`. It must name
+  both the update and the download host, and must name neither `github.com` nor
+  `release-assets.githubusercontent.com`, nor any `*.mozilla.org` or `*.mozilla.net` host.
+- `signmar -v` and `signmar -T` output, and the node:crypto check of
+  `scripts/verify-mar-signature.mjs` against `powerbrowser/packaging/mar/mar-primary.der`.
+- Attestation path taken: `bundle` (an offline `gh attestation verify --bundle`) or `host`
+  (a logged-in `gh attestation verify` on the host). Both pin `--signer-workflow` to this
+  repository's `release.yml`, `--source-ref refs/heads/main` and `--deny-self-hosted-runners`.
+  Never a skip.
+- Version pair: N and N+1 with their buildIDs. Same appVersion with a distinct buildID is the
+  ratified scheme, not a relaxation: `updateIsAtLeastAsOldAs` (the client's check) refuses an
+  offer only when the versions compare equal **and** the buildIDs match, so a distinct buildID
+  is an upgrade to the client.
+- Evidence path: `.mozbuild/mar-hop/`, with `hop.json` at `served: "release"`.
 
 ## Release asset names
 

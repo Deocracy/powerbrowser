@@ -9,6 +9,9 @@
 //                timed trigger is red naming the event.
 //  2. sha-input  on.workflow_dispatch.inputs.sha exists, is type string, is required,
 //                and carries no default, so a dispatch must name the commit.
+//     run-name   The workflow's run-name is exactly `Release ${{ inputs.sha }}`. A workflow_dispatch
+//                run's head_sha is the tip of the dispatched ref, so the release train finds its run
+//                by this display title (rule run-name); without it the train cannot tell runs apart.
 //  3. legion     Every job on the release label set has no environment key, permissions equal
 //                to exactly {contents: read} at job and workflow level, no `secrets` word in any
 //                form (secrets., secrets[, toJSON(secrets)) and no token, ssh-key or private-key
@@ -57,6 +60,7 @@ const LEGION_LABEL = 'powerbrowser-release';
 const BUILD_JOB = 'build-linux';
 const SIGN_JOB = 'sign-publish';
 const PIN_REL = 'powerbrowser/packaging/signmar/SOURCES.sha256';
+const RUN_NAME = 'Release ${{ inputs.sha }}';
 const KEY_IF = "steps.key_gate.outputs.build == 'true'";
 const UPLOAD = /^actions\/upload-artifact@/;
 const CACHE = /^actions\/cache@/;
@@ -135,6 +139,11 @@ function runChecks(root, overrides = {}) {
         if (sha.required !== true) fail('(workflow)', 'sha-input', `sha input is not required (required: ${JSON.stringify(sha.required)}). Next step: set required: true.`);
         if (sha.type !== 'string') fail('(workflow)', 'sha-input', `sha input has type ${JSON.stringify(sha.type)}. Next step: set type: string.`);
         if (Object.hasOwn(sha, 'default')) fail('(workflow)', 'sha-input', `sha input carries a default. Next step: remove it; a dispatch must name the commit.`);
+    }
+
+    // run-name: the release train correlates its dispatch with the run by this exact display title.
+    if (wf['run-name'] !== RUN_NAME) {
+        fail('(workflow)', 'run-name', `run-name is ${JSON.stringify(wf['run-name'] ?? null)}, not ${JSON.stringify(RUN_NAME)}. The release train identifies the run it dispatched by that display title (head_sha is the tip of main, not inputs.sha). Next step: restore run-name: ${RUN_NAME}.`);
     }
 
     // 3. legion placement and least privilege
@@ -384,6 +393,8 @@ function selfTest() {
     const plants = [
         ['pull_request trigger added', edit('on:\n  workflow_dispatch:', 'on:\n  pull_request:\n  workflow_dispatch:'), 'trigger', 'pull_request'],
         ['tag push trigger added', edit('on:\n  workflow_dispatch:', 'on:\n  push:\n    tags: ["v*"]\n  workflow_dispatch:'), 'trigger', 'push'],
+        ['run-name removed', edit('run-name: Release ${{ inputs.sha }}\n', ''), 'run-name', 'run-name is null'],
+        ['run-name without the sha', edit('run-name: Release ${{ inputs.sha }}\n', 'run-name: Release\n'), 'run-name', '"Release"'],
         ['sha input not required', edit('        required: true\n', '        required: false\n'), 'sha-input', 'required'],
         ['legion job build-linux with environment:', edit(RUNS_ON, `${RUNS_ON}    environment: release\n`), 'legion', 'environment'],
         ['legion job reaching a secrets. reference', edit('      RELEASE_SHA: ${{ inputs.sha }}\n', '      RELEASE_SHA: ${{ inputs.sha }}\n      PROBE: ${{ secrets.PROBE }}\n'), 'legion', 'secrets'],
