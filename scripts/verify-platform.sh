@@ -4933,6 +4933,25 @@ run_own_checks() {
     # data, a TXT record name off the homepage host, an approved exception, a second from-source module, a desktop
     # Icon off the app id, a download copy leak and a cache interface missing the Cachix substituter.
     "flathub-manifest-self-test|node $REPO_ROOT/scripts/verify-flathub-manifest.mjs --self-test"
+    # NEW (Phase 56, DIST-04): the winget set, a template rendered per release. PackageIdentifier, PackageVersion,
+    # the installer URL under the release key, the locale publisher, licence and release notes derive from the tree;
+    # InstallerSha256 renders the fixture bytes this row carries while the Windows asset is pending (A2); the
+    # WINGET_TOKEN custody row is present by structure. Honestly --quick: YAML parse (js-yaml from theia/) and text
+    # reads; no wingetcreate, no network, no credential.
+    "winget-manifest|node $REPO_ROOT/scripts/verify-winget-manifest.mjs"
+    # winget-manifest-self-test plants a neighbouring PackageVersion, an installer URL off the release-key shape, a
+    # SHA-256 literal, a removed fixture marker, a fixture under --release, a removed custody row, an arch node
+    # missing its Architecture, and a publisher drift; each goes red naming the file or value.
+    "winget-manifest-self-test|node $REPO_ROOT/scripts/verify-winget-manifest.mjs --self-test"
+    # NEW (Phase 56, DIST-11): the own-tap Homebrew cask, a template rendered per release. The version, url and sha256
+    # derive from the release key and the disk-image fixture (A3); verified: names the release host and owner path;
+    # auto_updates true; a livecheck block; the cask block and its stanzas; the darwin deferral marker naming A3 and
+    # Phase 55; and no signing claim. Honestly --quick: text reads and an in-memory fixture digest; ruby -c is an
+    # owner-checkpoint step through the locked nixpkgs.
+    "homebrew-cask|node $REPO_ROOT/scripts/verify-homebrew-cask.mjs"
+    # homebrew-cask-self-test plants auto_updates false, a verified host drift, a neighbouring version, an arm64
+    # enablement, a removed deferral marker, a signing claim, a removed zap stanza and a cask block header removed.
+    "homebrew-cask-self-test|node $REPO_ROOT/scripts/verify-homebrew-cask.mjs --self-test"
     # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
     # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
     # own pinned group, one regex customManager captures the live configuration.toml theia_release,

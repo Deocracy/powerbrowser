@@ -1,0 +1,8 @@
+# winget version manifest for PowerBrowser (DIST-04). Per-release values are tokens that the DIST-12
+# leg renders from the release key (wingetcreate update); scripts/verify-winget-manifest.mjs derives each
+# rendered value at check time. Nothing here is typed by hand per release.
+PackageIdentifier: "DeBIOSFoundation.PowerBrowser"
+PackageVersion: "@RELEASE_VERSION@"
+DefaultLocale: "en-US"
+ManifestType: "version"
+ManifestVersion: "1.6.0"

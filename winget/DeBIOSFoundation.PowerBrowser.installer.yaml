@@ -1,0 +1,25 @@
+# fixture: replaced by the Phase 54 asset at the first Windows release (assumption A2). Until the Windows row
+# of docs/RELEASING.md names a real asset, the asset name and the SHA-256 render the fixture the row derives.
+# wingetcreate update recomputes both from the published installer on each release.
+PackageIdentifier: "DeBIOSFoundation.PowerBrowser"
+PackageVersion: "@RELEASE_VERSION@"
+InstallerLocale: "en-US"
+Platform:
+  - "Windows.Desktop"
+MinimumOSVersion: "10.0.0.0"
+InstallerType: "nullsoft"
+Scope: "machine"
+InstallModes:
+  - "interactive"
+  - "silent"
+  - "silentWithProgress"
+InstallerSwitches:
+  Silent: "/S"
+  SilentWithProgress: "/S"
+UpgradeBehavior: "install"
+Installers:
+  - Architecture: "x64"
+    InstallerUrl: "https://github.com/@RELEASE_REPO@/releases/download/@RELEASE_KEY@/@WINDOWS_INSTALLER_ASSET@"
+    InstallerSha256: "@WINDOWS_INSTALLER_SHA256@"
+ManifestType: "installer"
+ManifestVersion: "1.6.0"
