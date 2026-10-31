@@ -182,6 +182,15 @@ function buildMultipart(parts) {
 const SELFTEST_CONTENT_TYPE = `multipart/form-data; boundary=${SELFTEST_BOUNDARY}`;
 const NOW = 1720000000000;
 
+// TEL-07 (57-02): Gecko's extra part shape is DERIVED from the pinned client source at check time, never
+// a literal here. The same declaration ng068 reads, so the two gates cannot disagree on the wire.
+const REPORT_RS = join(REPO_ROOT, 'upstream/toolkit/crashreporter/client/app/src/net/report.rs');
+function geckoExtraShape() {
+    const m = /name:\s*"extra",[\s\S]*?filename:\s*Some\("([^"]+)"\),\s*mime_type:\s*Some\("([^"]+)"\)/.exec(readFileSync(REPORT_RS, 'utf8'));
+    if (!m) throw new Error('broken instrument: report.rs no longer declares an `extra` MimePart with filename and mime_type');
+    return { filename: m[1], mime: m[2] };
+}
+
 function wellFormedBody() {
     return buildMultipart([
         { name: MINIDUMP_PART_NAME, filename: 'a1b2.dmp', data: Buffer.from('MINIDUMP-BYTES-FIXTURE') },
@@ -466,6 +475,81 @@ function selfTest() {
                 ok = false;
             } else {
                 console.log(`${NAME}: --self-test -- a deeply nested extra value was dropped and the report kept (${verdict.body})`);
+            }
+        }
+
+        // Plant 9 (TEL-07, 57-02): a Gecko-shaped extra part, its filename and MIME derived from report.rs.
+        // Allowlisted scalars are stored; a non-allowlisted key, an oversized allowlisted value and a
+        // non-scalar allowlisted value are each dropped -- one named rule per field, so a regression in
+        // any one of them goes red naming that rule.
+        {
+            const storeDir = storeOf('gecko-extra-mixed');
+            const shape = geckoExtraShape();
+            const extra = JSON.stringify({
+                ProductName: 'PowerBrowser',
+                Version: '1.6.0',
+                BuildID: '20261031000000',
+                Platform: 'Linux',
+                ReleaseChannel: 'release',
+                CrashTime: { unix: 1761900000 },
+                NotAllowlisted: 'dropped',
+                StartupTime: 'x'.repeat(MAX_ANNOTATION_BYTES + 1),
+                Nested: { a: 1 },
+            });
+            const verdict = handleSubmit({
+                body: buildMultipart([
+                    { name: MINIDUMP_PART_NAME, filename: 'g.dmp', data: Buffer.from('D') },
+                    { name: EXTRA_PART_NAME, filename: shape.filename, contentType: shape.mime, data: Buffer.from(extra) },
+                ]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir,
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            });
+            const id = /^CrashID=(.+)$/.exec(verdict.body)?.[1];
+            const record = id ? JSON.parse(readFileSync(join(storeDir, `${id}.json`), 'utf8')) : null;
+            const stored = record ? Object.keys(record.annotations).sort() : [];
+            // Non-allowlisted (NotAllowlisted, Nested), oversized (StartupTime) and non-scalar (CrashTime) keys are dropped.
+            const wantStored = ['BuildID', 'Platform', 'ProductName', 'ReleaseChannel', 'Version'];
+            if (verdict.status !== 200 || !record) {
+                console.error(`${NAME}: --self-test FAIL -- a Gecko-shaped extra part (${shape.filename}, ${shape.mime}) lost the report: answered ${verdict.status}, want 200 CrashID= with a stored record`);
+                ok = false;
+            } else if (JSON.stringify(stored) !== JSON.stringify(wantStored)) {
+                console.error(`${NAME}: --self-test FAIL -- the Gecko-shaped extra stored ${JSON.stringify(stored)}, want exactly the allowlisted scalars ${JSON.stringify(wantStored)} (non-allowlisted, oversized and non-scalar keys must be dropped)`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- a Gecko-shaped extra stored the allowlisted scalars and dropped the non-allowlisted, oversized and non-scalar keys`);
+            }
+        }
+
+        // Plant 10 (TEL-07, 57-02): a malformed extra part. Its annotations are dropped with nothing stored,
+        // and the report is kept: the minidump bytes land and the record carries no annotation from the part.
+        {
+            const storeDir = storeOf('gecko-extra-malformed');
+            const shape = geckoExtraShape();
+            const verdict = handleSubmit({
+                body: buildMultipart([
+                    { name: MINIDUMP_PART_NAME, filename: 'm.dmp', data: Buffer.from('D') },
+                    { name: EXTRA_PART_NAME, filename: shape.filename, contentType: shape.mime, data: Buffer.from('{"ProductName":"PowerBrowser",') },
+                ]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir,
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            });
+            const id = /^CrashID=(.+)$/.exec(verdict.body)?.[1];
+            const record = id ? JSON.parse(readFileSync(join(storeDir, `${id}.json`), 'utf8')) : null;
+            if (verdict.status !== 200 || !record) {
+                console.error(`${NAME}: --self-test FAIL -- a malformed extra part cost the whole report: answered ${verdict.status}, want 200 CrashID= with the minidump stored`);
+                ok = false;
+            } else if (Object.keys(record.annotations).length !== 0) {
+                console.error(`${NAME}: --self-test FAIL -- a malformed extra part stored annotations ${JSON.stringify(record.annotations)}, want none`);
+                ok = false;
+            } else if (record.minidumpBytes !== 1) {
+                console.error(`${NAME}: --self-test FAIL -- the minidump was not kept beside a malformed extra part (minidumpBytes ${record.minidumpBytes}, want 1)`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- a malformed Gecko-shaped extra part stored nothing and the report was kept`);
             }
         }
     } finally {
