@@ -34,8 +34,13 @@
 // The supersede rule (TRAIN-04) adds one terminal state, SUPERSEDED. An open train with a
 // newer validated ESR tag (facts.newerTag) or an open same-ESR chemspill revision
 // (facts.chemspillOpen) is superseded: routine, no owner page. derive() tries those two
-// arms after the release-stage check and before the Phase 43 ladder, so a chemspill
-// revision proceeds and preempts a scheduled train.
+// arms after the release-stage check and before the Phase 43 ladder, and only for a
+// scheduled train (revision 1), so a chemspill revision is never superseded. Those two
+// facts are transient, so SUPERSEDED is made sticky by a persisted one: supersededMark is
+// true when the key's tracking issue already carries the state/SUPERSEDED label that render
+// writes. supersedeCause(facts) is the one place the arm is decided, and render reads it.
+// Facts shape additions: newerTag, newerKey?, newerIssueUrl?, chemspillOpen, supersededMark.
+// No collector sets them yet (BLOCKED.md item 10).
 //
 // The uptake lane (TRAIN-05, UPS-01) keeps its own keys and states beside the five
 // above. A 175 candidate derives UPTAKE_* states: UPTAKE_DETECTED (replay due),
@@ -102,7 +107,7 @@ export const STATES = Object.freeze({
     LIVE_RED: Object.freeze({ desc: 'a release descriptor is present and channel-live is red, or its bytes drifted' }),
     WITHDRAWN: Object.freeze({ desc: 'the Release carries the withdrawal mark (prerelease flag or notes marker); authoritative' }),
     DONE: Object.freeze({ desc: 'DESCRIPTOR_LIVE facts with the tracking issue already closed (bookkeeping only)' }),
-    SUPERSEDED: Object.freeze({ desc: 'an open older train with a newer validated ESR tag, or with an open same-ESR chemspill revision: terminal, routine, no owner page (TRAIN-04)' }),
+    SUPERSEDED: Object.freeze({ desc: 'an open older train with a newer validated ESR tag, or with an open same-ESR chemspill revision: terminal and sticky once the issue carries the state/SUPERSEDED label (supersededMark), routine, no owner page (TRAIN-04)' }),
 });
 
 // The uptake lane (TRAIN-05). Replay-only: no state here opens a branch, a PR or a dispatch.
@@ -238,17 +243,21 @@ const newerOnSameLine = (newer, old) => {
 
 /**
  * Why a train is superseded (TRAIN-04): 'chemspill' (an open same-ESR revision), 'newer-esr' (a newer
- * validated tag on the same major), or null. Chemspill is tried first. derive and render both read this
+ * validated tag on the same major), 'marked' (supersededMark: the issue already carries the state), or null. Chemspill is tried first. derive and render both read this
  * one function, so the rendered view names the arm that fired. Both arms apply to a scheduled train
  * only (revision exactly 1): a chemspill revision train is never preempted, whatever flags the
  * collector sets. Fail-safe: a missing or odd revision counts as a revision, so nothing irreversible
  * follows from it. Pure.
  */
 export function supersedeCause(f) {
-    if (!f.openPr || f.revision !== 1) return null;
-    if (f.chemspillOpen === true) return 'chemspill';
-    if (typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, f.candidateTag)) return 'newer-esr';
-    return null;
+    if (f.openPr && f.revision === 1) {
+        if (f.chemspillOpen === true) return 'chemspill';
+        if (typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, f.candidateTag)) return 'newer-esr';
+    }
+    // Sticky (WR-01): the superseding facts are transient (the chemspill train publishes, a PR closes), but the
+    // tracking issue keeps its state/SUPERSEDED label. supersededMark is that persisted fact, read by the collector;
+    // without it a superseded key reverts to BUMP_PR_GREEN and pages the owner.
+    return f.supersededMark === true ? 'marked' : null;
 }
 
 /**
@@ -338,7 +347,8 @@ export function render(state, facts) {
         // The cause is the arm derive() fired; a SUPERSEDED view without one is a caller bug, not a view to guess.
         const cause = supersedeCause(facts);
         if (cause === null) throw new Error('render(SUPERSEDED) over facts that supersede nothing. Next step: render the state derive() returned for these facts.');
-        const by = facts.newerKey ?? (cause === 'chemspill' ? 'the open chemspill revision' : `v${tagToVersion(facts.newerTag).esrVersion}-1`);
+        const named = { chemspill: 'the open chemspill revision', marked: 'a newer train (recorded earlier on this issue)' };
+        const by = facts.newerKey ?? named[cause] ?? `v${tagToVersion(facts.newerTag).esrVersion}-1`;
         stateLines.push(`superseded by ${by}${facts.newerIssueUrl ? ` (${facts.newerIssueUrl})` : ''}. Routine: no owner action is needed on this issue.`);
     }
     const body = [
@@ -961,6 +971,19 @@ function selfTest() {
                 } catch (e) {
                     return /supersede nothing/.test(e.message) ? [] : [`unexpected error: ${e.message}`];
                 }
+            },
+        },
+        {
+            name: 'control: SUPERSEDED is sticky: a marked key stays SUPERSEDED after the superseding fact is gone, and does not page the owner; unmarked it reverts',
+            run: () => {
+                const gone = { ...FIXTURES.BUMP_PR_GREEN.facts, chemspillOpen: false };
+                const marked = { ...gone, supersededMark: true, ownerLogin: OWNER };
+                const view = render(derive(marked), marked);
+                const failures = [];
+                if (derive(gone) !== 'BUMP_PR_GREEN') failures.push(`an unmarked key with no superseding fact derives ${derive(gone)}, not BUMP_PR_GREEN`);
+                if (derive(marked) !== 'SUPERSEDED') failures.push(`a marked key derives ${derive(marked)}, not SUPERSEDED`);
+                if (view.mention !== null || view.assign.length > 0) failures.push('a marked key paged the owner');
+                return failures;
             },
         },
         {
