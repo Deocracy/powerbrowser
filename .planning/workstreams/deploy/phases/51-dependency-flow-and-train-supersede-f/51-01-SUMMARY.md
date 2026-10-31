@@ -9,7 +9,7 @@ requires:
     provides: .github/workflows/release-train.yml (dispatch inputs reason and dry-run), scripts/release-train.mjs
 provides:
   - .github/renovate.json5: declarative Theia inflow config (one grouped theia PR, monaco-editor-core separate, theia_release regex manager, automerge off, licensing post-upgrade hook, scope rule)
-  - scripts/verify-renovate-config.mjs: renovate-config quick row with a 30-plant self-test
+  - scripts/verify-renovate-config.mjs: renovate-config quick row with a 56-plant self-test (after the review fixes; 30 at c50023c8)
   - registry rows renovate-config and renovate-config-self-test in scripts/verify-platform.sh
 affects: [51-02 to 51-04 (depend on this config and on the chore/theia- prefix), phase-52 FIX-01 fixer class, phase-48 maintenance sweep (dispatch premise)]
 
@@ -65,6 +65,7 @@ Renovate Theia config (one grouped theia PR, monaco-editor-core separate, autome
 - Done: `.github/renovate.json5`, `scripts/verify-renovate-config.mjs`, two registry rows, and the research flag F measurement recorded in the config header. Commit `c50023c8` holds the config, the verifier and the rows. This SUMMARY and BLOCKED.md are committed separately.
 - Not done (missing premise, see BLOCKED.md item 1): the `renovate-theia` job in `.github/workflows/release-train.yml`, and the `renovatebot/github-action@*` entry in `.github/settings/actions-selected.json`.
 - Not done (owner, BLOCKED.md items 2 to 4): Renovate action SHA re-resolution, first live dispatch, merge review. Nothing was pushed, dispatched or applied live.
+- Review fixes (`51-01-REVIEW.md`, findings BL-01 to IN-03): six commits from `113dcf49` to `677d4c05`, status per finding in `51-01-REVIEW-FIX.md`. The fixes close BL-01 (fixture copies), WR-02, WR-03, WR-04 and the WR-01 config side. The nix manager is now off. AUTO-02 is **partial**, not complete: the flake.lock clause is unmet (BLOCKED.md item 5), and completion waits for one live PR with a green `licensing` row (BLOCKED.md item 6).
 
 ## Missing premise record
 
@@ -94,17 +95,18 @@ Run under `nix develop .#theia`, on a 16-core host, timed by a sampler that poll
 ## Verification
 
 - Baseline, before any edit: `scripts/verify-platform.sh --quick` exit 0, "all checks passed".
-- `scripts/verify-platform.sh --only renovate-config`: PASS. Line: `renovate-config: PASS -- .github/renovate.json5: the theia group selects 49 @theia/* pins with @theia/monaco-editor-core in its own pinned group; theia_release 1.76.0 is captured by one regex manager; automerge and platformAutomerge off; nix enabled; branchPrefix chore/theia-; no clock key; every non-Theia dependency disabled (6); 2 post-upgrade commands and 5 file filters`.
-- `scripts/verify-platform.sh --only renovate-config-self-test`: PASS, 30 planted faults each red on its named rule, plus the unmodified-tree control and a minimal clean fixture, 32 ok lines. Two consecutive runs of `renovate-config` are byte-identical.
+- `scripts/verify-platform.sh --only renovate-config`: PASS at `677d4c05`. Line: `renovate-config: PASS -- .github/renovate.json5: the theia group selects 49 @theia/* pins with @theia/monaco-editor-core in its own pinned group; theia_release 1.76.0 is captured by one regex manager; automerge and platformAutomerge off; nix manager off (flake.lock not moved, BLOCKED.md item 5); branchPrefix chore/theia-; no clock key; every non-Theia dependency disabled (6); 2 post-upgrade commands and 4 file filters`. The original line said "nix enabled", which was wrong: the nix manager was on but could never move flake.lock.
+- `scripts/verify-platform.sh --only renovate-config-self-test`: PASS at `677d4c05`, 56 planted faults each red on its named rule, plus the unmodified-tree control and a minimal clean fixture, 58 ok lines. The original 30-plant count is superseded by the review fixes. Two consecutive runs of `renovate-config` are byte-identical.
 - `--only workflows`, `--only workflows-self-test`, `--only zizmor`: PASS, unchanged by this plan.
 - `nix develop .#theia --command zizmor --version`: `zizmor 1.29.0`.
 - Renovate's own validator: `renovate-config-validator` 44.198.3, `--no-global --strict` on `.github/renovate.json5`: "Config validated successfully". A negative control (`executionOrder`, `allowedPostUpgradeCommands` added to a copy) produced errors and warnings, so the validator is not vacuous here.
 - Renovate 44.198.3 local platform, `dry-run=lookup`, in a scratch git repo with the same config and the tree's `theia/package.json`, `theia/yarn.lock`, `configuration.toml`, `flake.nix`, `flake.lock`:
-  - Current pins (no Theia update exists yet): no branch. The regex manager extracts `@theia/core` from `configuration.toml` (`replaceString` `theia_release = "1.76.0"`); npm extracts the 50 resolutions under the `resolutions` dep type.
-  - Seeded Theia pins at 1.75.0: 50 upgrades to 1.76.0, all on `chore/theia-theia`, "Returning 1 branch(es)".
-  - Seeded monaco at 1.100.0 with a matching `yarn.lock`: one more branch, `chore/theia-theia-monaco-editor-core`, to 1.108.201; "Returning 2 branch(es)".
+  - **Correction (IN-03, BL-01).** The "current pins: no branch" result above was wrong. It came from a scratch repo seeded with only some files, so it never saw the nine archived `configuration.toml` fixture copies. On a whole-tree copy of `c50023c8` the regex manager matched 10 files and produced 9 updates, one branch (`chore/theia-theia`), all rewriting archived fixtures. The BL-01 fix (anchored pattern, `ignorePaths: [".planning/**"]`) corrects this.
+  - **Whole tree at `677d4c05`** (`git archive HEAD` copy under `/tmp/claude-1000/rv51/tree-final`, 1374 tracked files, 10 tracked `configuration.toml` copies): "Matched 1 file(s) for manager regex", "0 flattened updates found", "Returning 0 branch(es)". The current-pins result is zero branches.
+  - **Positive control, same copy:** root `theia_release` set to `1.75.0` in the scratch copy only. "Matched 1 file(s)", "1 flattened updates found: @theia/core", "Returning 1 branch(es)", branch `chore/theia-theia`. The control shows the lookup can open a branch, and the fixtures contribute nothing.
+  - Earlier subset runs (not repeated on the whole tree): Theia pins seeded at 1.75.0 gave 50 upgrades on `chore/theia-theia`, and monaco seeded at 1.100.0 gave one more branch, `chore/theia-theia-monaco-editor-core`.
   - Before the scope rule, the same dry run opened `chore/theia-typescript-7.x`, `chore/theia-react-19.x`, `chore/theia-react-dom-19.x` and `chore/theia-pin-dependencies` for non-Theia packages. After the scope rule: none.
-- Acceptance greps on `.github/renovate.json5`: `MEASURED` 1, `timeout-minutes` 1, `ubuntu-latest` 1, `postUpgradeTasks` 1, `chore/theia-` 7, `schedule` 0, `timezone` 0, `monaco-editor-core` 7, `theia_release` 2.
+- Acceptance greps on `.github/renovate.json5` (counts at `c50023c8`, before the review fixes): `MEASURED` 1, `timeout-minutes` 1, `ubuntu-latest` 1, `postUpgradeTasks` 1, `chore/theia-` 7, `schedule` 0, `timezone` 0, `monaco-editor-core` 7, `theia_release` 2.
 - Admission grep `grep -c 'renovatebot/github-action@' .github/settings/actions-selected.json`: 0. This is deliberate; see adaptation 2.
 
 ## Adaptations to the plan
@@ -116,7 +118,7 @@ Run under `nix develop .#theia`, on a 16-core host, timed by a sampler that poll
 5. **`executionOrder` removed.** The validator rejects `postUpgradeTasks.executionOrder`. The hook uses `executionMode: "branch"`, so it runs once per branch after every upgrade in the group.
 6. **`allowedPostUpgradeCommands` moved out of the repository config.** The validator reports it as global-only in a repository config. The dispatch job must set `RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS` in its environment. The verifier's `allowed-post-upgrade` rule fails if the key appears in the repository file.
 7. **`fileMatch` replaced by `managerFilePatterns`.** The validator migrates `fileMatch` to `managerFilePatterns` in slash-regex form. The verifier's `theia-release-manager` rule also rejects `fileMatch`, so the file stays migration-free.
-8. **`flake.lock` not changed by the Theia PR.** The plan assumed the Theia PR updates `flake.lock`. It does not: `flake.lock` pins nixpkgs, and no Theia change touches a flake input. The nix manager is enabled as the plan requires, and the nixpkgs input is disabled by the scope rule (adaptation 3). This is an owner decision and is recorded in the config header.
+8. **`flake.lock` not changed by the Theia PR (AUTO-02 not met).** The plan assumed the Theia PR updates `flake.lock` through the nix manager. It does not. `flake.lock` pins only nixpkgs, and the scope rule disables that input. The first version set `nix.enabled: true`, which only ran a manager that proposed nothing, so the summary's "nix enabled" wording was misleading. The review fix (WR-01) removes the key, because Renovate defaults the nix manager to off, and removes `flake.lock` from the post-upgrade `fileFilters`. The verifier refuses `nix.enabled: true`. The owner decision is in BLOCKED.md item 5. AUTO-02 stays partial until that decision lands.
 9. **Branch names.** The plan said `chore/theia-<version>`. A group branch is named by its slug, so the rendered names are `chore/theia-theia` and `chore/theia-theia-monaco-editor-core`. The version is in the PR title and body. FIX-01 matches on the prefix, which holds. The first live run confirms the names (BLOCKED.md item 3).
 10. **Admission row placement.** The plan's behavior list put the admission set-equality in the `renovate-config` row. That check is in the `workflows` row's `admission-used` and `uses-admitted` rules, which cover the whole tree. The `renovate-config` row does not repeat it.
 11. **Measurement flags.** Cold figures use the project's install flags (adaptation in the Measurements section), not the bare command in the plan.
@@ -149,9 +151,9 @@ Target: `.github/workflows/release-train.yml`, new job `renovate-theia`, applied
 
 - Created files: `.github/renovate.json5`, `scripts/verify-renovate-config.mjs`, `BLOCKED.md`, and this file exist in the tree.
 - Commit `c50023c8` exists on `dsh/phase-51` with the three code paths.
-- `commits` measured from the ledger at write time: `git rev-list --count 69659b446e1c91aa2654dbc59f5b5123f30b9e07..HEAD` = 1.
+- `commits` measured from the ledger at write time: `git rev-list --count 69659b446e1c91aa2654dbc59f5b5123f30b9e07..HEAD` = 1 at `c50023c8`. Six review-fix commits follow (see Outcome).
 
-## Self-Check: PASSED
+## Self-Check: PASSED at c50023c8, re-checked at 677d4c05 (see 51-01-REVIEW-FIX.md)
 
 ## Known Stubs
 
