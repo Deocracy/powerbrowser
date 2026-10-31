@@ -9,10 +9,15 @@
 // Quick rules (each failure names the file and the drift, and ends with a next step):
 //  timer        codeberg-mirror.timer carries OnCalendar=daily, Persistent=true and WantedBy=timers.target.
 //  service      codeberg-mirror.service is Type=oneshot; its ExecStart pushes the codeberg remote by
-//               name with the heads and the tags refspecs, and never with --mirror.
-//  no-token     no non-comment line of the unit files names a token, secret, password, credential,
-//               EnvironmentFile or LoadCredential; no tracked workflow, settings or unit file assigns
-//               a Codeberg token literal.
+//               name with the heads and the tags refspecs, never with --mirror, --prune, --force or a
+//               + refspec; its ExecStartPre refuses a mirror without refs/heads/main.
+//  sandbox      the unit runs as DynamicUser with StateDirectory=codeberg-mirror, NoNewPrivileges,
+//               ProtectSystem=strict, ProtectHome and PrivateTmp, and TimeoutStartSec is at most 15min;
+//               RestrictAddressFamilies is exactly AF_INET AF_INET6 AF_UNIX.
+//  credential   the one LoadCredential line names mirror-push and an absolute source path outside this repository.
+//  no-token     no non-comment line of the unit files names a token, secret, password, credential or
+//               EnvironmentFile (LoadCredential is checked by credential); no tracked workflow, settings
+//               or unit file assigns a Codeberg token literal.
 //  sha-compare  the Codeberg main SHA equals the GitHub main SHA; a lagged pair is red naming the mirror.
 //
 // Live mode reads the declared mirror slug (owner/repo) from --slug= or the CODEBERG_MIRROR
@@ -87,6 +92,14 @@ export function timerRules(text) {
     return out;
 }
 
+// TimeoutStartSec as seconds: a bare number or an s/sec or min/m suffix. NaN when unparseable.
+function seconds(v) {
+    const m = /^(\d+)(s|sec|min|m)?$/.exec(v ?? '');
+    if (!m) return NaN;
+    const n = Number(m[1]);
+    return m[2] === 'min' || m[2] === 'm' ? n * 60 : n;
+}
+
 export function serviceRules(text) {
     const s = parseUnit(text);
     const out = [];
@@ -95,7 +108,32 @@ export function serviceRules(text) {
     if (!/\bpush\b/.test(exec) || !/\bcodeberg\b/.test(exec)) out.push('ExecStart does not push to the codeberg remote by name. Next step: push to the codeberg remote.');
     if (!exec.includes("'refs/heads/*:refs/heads/*'") || !exec.includes("'refs/tags/*:refs/tags/*'")) out.push('ExecStart does not push both the heads and the tags refspecs. Next step: push refs/heads/* and refs/tags/*.');
     if (/--mirror\b/.test(exec)) out.push('ExecStart uses --mirror, which pushes refs beyond heads and tags. Next step: push the heads and tags refspecs.');
+    if (/--prune\b/.test(exec)) out.push('ExecStart uses --prune, so a bad fetch could delete Codeberg refs. Next step: drop --prune from the push; git then refuses non-fast-forward updates.');
+    if (/--force\b/.test(exec) || /'\+refs\//.test(exec)) out.push('ExecStart forces the update with --force or a + refspec, which can rewrite Codeberg history. Next step: drop the force.');
+    for (const [key, want] of [['DynamicUser', 'yes'], ['NoNewPrivileges', 'yes'], ['ProtectSystem', 'strict'], ['ProtectHome', 'yes'], ['PrivateTmp', 'yes'], ['StateDirectory', 'codeberg-mirror']]) {
+        if (!valuesOf(s, 'Service', key).includes(want)) out.push(`${key} is not ${want}. Next step: set ${key}=${want} so the unit runs sandboxed as a dynamic user with its own state directory.`);
+    }
+    const timeout = valuesOf(s, 'Service', 'TimeoutStartSec')[0];
+    if (!(seconds(timeout) > 0 && seconds(timeout) <= 900)) out.push(`TimeoutStartSec is ${timeout ?? 'unset'}, not at most 15min, so a stalled fetch or push holds the unit forever. Next step: set TimeoutStartSec=15min.`);
+    const families = valuesOf(s, 'Service', 'RestrictAddressFamilies').join(' ').split(/\s+/).filter(Boolean).sort().join(' ');
+    if (families !== 'AF_INET AF_INET6 AF_UNIX') out.push(`RestrictAddressFamilies is '${families || 'unset'}', not AF_INET AF_INET6 AF_UNIX. Next step: allow only those three families.`);
+    if (!/show-ref --verify --quiet refs\/heads\/main/.test(valuesOf(s, 'Service', 'ExecStartPre').join(' '))) {
+        out.push('ExecStartPre has no check that refs/heads/main exists, so a mirror without main could publish. Next step: add the show-ref --verify check for refs/heads/main.');
+    }
     return out;
+}
+
+// The one LoadCredential line: exactly one, named mirror-push, with an absolute source path that is
+// not inside this repository. The token value is never in the unit.
+export function credentialRules(text, repoRoot) {
+    const lines = valuesOf(parseUnit(text), 'Service', 'LoadCredential');
+    if (lines.length !== 1) return [`has ${lines.length} LoadCredential lines, not one. Next step: keep one LoadCredential=mirror-push:<absolute path outside the repository>.`];
+    const m = /^([^:]+):(.*)$/.exec(lines[0]);
+    if (!m || m[1] !== 'mirror-push') return [`LoadCredential names '${(m ? m[1] : lines[0])}', not mirror-push. Next step: name the credential mirror-push.`];
+    const src = m[2];
+    if (!src.startsWith('/')) return [`LoadCredential source '${src}' is not an absolute path. Next step: point it at a root-owned file outside the repository.`];
+    if (src === repoRoot || src.startsWith(`${repoRoot}/`)) return [`LoadCredential source '${src}' is inside the repository. Next step: move the credential file outside the tree.`];
+    return [];
 }
 
 // units: { rel: text } for the two unit files; scanned: { rel: text } for the tracked files.
@@ -105,6 +143,7 @@ export function tokenFailures(units, scanned) {
         for (const raw of text.split('\n')) {
             const line = raw.trim();
             if (isComment(line)) continue;
+            if (/^LoadCredential=/.test(line)) continue; // checked by credentialRules
             if (TOKEN_LINE.test(line)) out.push([rel, `names token material on the line '${line.split('=')[0]}'. Next step: move the credential helper into the legion-local mirror repository config, outside this repository.`]);
         }
     }
@@ -135,6 +174,7 @@ function quick(root) {
     const serviceText = readFileSync(join(root, SERVICE_REL), 'utf8');
     for (const msg of timerRules(timerText)) failures.push({ file: TIMER_REL, rule: 'timer', msg });
     for (const msg of serviceRules(serviceText)) failures.push({ file: SERVICE_REL, rule: 'service', msg });
+    for (const msg of credentialRules(serviceText, root)) failures.push({ file: SERVICE_REL, rule: 'credential', msg });
     const scanned = {};
     for (const d of SCAN_DIRS) {
         for (const p of listFiles(join(root, d))) {
@@ -239,11 +279,21 @@ function selfTest(root) {
         ['lagged SHA pair', true, shaCompare(H, L), 'the mirror lags'],
         ['matching SHA pair', false, shaCompare(H, H), null],
         ['token literal in the service', true, tokenFailures({ [SERVICE_REL]: `${serviceText}\nEnvironment=CODEBERG_TOKEN=abc\n` }, {}), 'names token material'],
-        ['token path in the service', true, tokenFailures({ [SERVICE_REL]: serviceText.replace('ExecStart=', 'LoadCredential=codeberg:/var/lib/token\nExecStart=') }, {}), 'LoadCredential'],
+        ['credential named for a token, not mirror-push', true, credentialRules(serviceText.replace('LoadCredential=mirror-push:', 'LoadCredential=codeberg:'), root), 'LoadCredential'],
+        ['credential source inside the repository', true, credentialRules(serviceText.replace('/etc/codeberg-mirror/mirror-push', `${root}/systemd/mirror-push`), root), 'inside the repository'],
+        ['credential source relative', true, credentialRules(serviceText.replace('/etc/codeberg-mirror/mirror-push', 'systemd/mirror-push'), root), 'absolute'],
+        ['--prune added to the push', true, serviceRules(serviceText.replace('git push codeberg', 'git push --prune codeberg')), '--prune'],
+        ['force refspec added to the push', true, serviceRules(serviceText.replace("'refs/heads/*:refs/heads/*' 'refs/tags", "'+refs/heads/*:refs/heads/*' 'refs/tags")), 'force'],
+        ['DynamicUser removed', true, serviceRules(serviceText.replace('DynamicUser=yes\n', '')), 'DynamicUser'],
+        ['TimeoutStartSec removed', true, serviceRules(serviceText.replace('TimeoutStartSec=15min\n', '')), 'TimeoutStartSec'],
+        ['TimeoutStartSec widened to an hour', true, serviceRules(serviceText.replace('TimeoutStartSec=15min', 'TimeoutStartSec=60min')), 'TimeoutStartSec'],
+        ['ProtectSystem dropped', true, serviceRules(serviceText.replace('ProtectSystem=strict\n', '')), 'ProtectSystem'],
+        ['address families widened', true, serviceRules(serviceText.replace('AF_INET AF_INET6 AF_UNIX', 'AF_INET AF_INET6 AF_UNIX AF_NETLINK')), 'RestrictAddressFamilies'],
+        ['main guard removed', true, serviceRules(serviceText.replace(/ExecStartPre=.*show-ref.*\n/, '')), 'refs/heads/main'],
         ['weekly timer', true, timerRules(timerText.replace('OnCalendar=daily', 'OnCalendar=weekly')), 'OnCalendar'],
         // Anchored on the setting line: the header comment also spells Persistent=true.
         ['Persistent dropped', true, timerRules(timerText.replace('\nPersistent=true\n', '\nPersistent=false\n')), 'Persistent'],
-        ['--mirror added', true, serviceRules(serviceText.replace('git push --prune', 'git push --mirror --prune')), '--mirror'],
+        ['--mirror added', true, serviceRules(serviceText.replace('git push codeberg', 'git push --mirror codeberg')), '--mirror'],
     ];
     let failed = slugFailed;
     for (const [name, red, found, fragment] of plants) {

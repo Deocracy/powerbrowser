@@ -4818,9 +4818,11 @@ run_own_checks() {
     # the absence of token material, and proves the SHA-compare on in-memory pairs. Honestly --quick:
     # file reads only; no network, gh or build. The live compare is the full-tier codeberg-mirror-live row.
     "codeberg-mirror|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs"
-    # codeberg-mirror-self-test plants a lagged SHA pair, a token literal and a token path in the
-    # service, and a weekly timer, a dropped Persistent, and --mirror in the service; each goes red
-    # naming the drift. The matching pair stays green. It writes nothing.
+    # codeberg-mirror-self-test plants a lagged SHA pair, a token literal, a credential that is not
+    # mirror-push, a credential inside the repository, a relative credential, --prune, --mirror and a
+    # force refspec in the push, a dropped sandbox key, a widened timeout and address-family list, a
+    # removed main guard, and a weekly or non-persistent timer; each goes red naming the drift. The
+    # matching pair and the unmodified units stay green. It writes nothing.
     "codeberg-mirror-self-test|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --self-test"
     # NEW (Phase 53, MON-02): the Upptime target set. Derives the expected targets from the
     # configuration.toml urls and telemetry endpoint at check time and compares them with the

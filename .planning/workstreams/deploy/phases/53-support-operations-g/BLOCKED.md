@@ -21,7 +21,7 @@ Plans 53-01, 53-02 and 53-03 are built and committed on `dsh/phase-53`. Everythi
 - **What:** the legion timer and service are drafted under `systemd/`. Nothing is applied and no mirror exists.
 - **Owner steps:**
   1. Create the Codeberg account and a public mirror repository. Record `owner/repo`.
-  2. Create a deploy token with push access to that repository only. Store it on legion only, outside this repository, and configure the credential helper of the legion-local mirror repository at `/var/lib/codeberg-mirror/powerbrowser.git`. Add a RENEWALS row for the token with its rotation date.
+  2. Create a deploy token with push access to that repository only. Store it on legion only, in a root-readable file outside this repository at `/etc/codeberg-mirror/mirror-push` (mode 0600). The unit names that file in `LoadCredential=mirror-push:`. Configure the credential helper of the mirror repository at `/var/lib/codeberg-mirror/powerbrowser.git` to read `$CREDENTIALS_DIRECTORY/mirror-push`, and create that bare repository with `origin` and `codeberg` remotes inside `/var/lib/codeberg-mirror`. The unit runs as a dynamic user; check ownership after the first start. Add a RENEWALS row for the token with its rotation date.
   3. Apply `systemd/codeberg-mirror.service` and `systemd/codeberg-mirror.timer` through `/etc/nixos` (`pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nrs "apply codeberg mirror timer"'`), so the commit, the rebuild and the push happen in one step.
   4. Start the service once and record the first pushed SHA.
   5. Confirm the live row: `node scripts/verify-codeberg-mirror.mjs --live --slug=<owner>/<repo>`.

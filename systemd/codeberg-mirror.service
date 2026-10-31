@@ -1,9 +1,20 @@
 # GH-04 (Phase 53): pushes the default branch and the tags of the GitHub repository to the
 # Codeberg mirror. Runs on legion as a oneshot, started daily by codeberg-mirror.timer.
 #
-# The push credential lives on legion only, outside this repository. The owner configures the
-# credential helper of the legion-local mirror repository at apply time, so this unit names no
-# credential, token value or token path. The owner applies this file through /etc/nixos with nrs.
+# Sandbox: a dynamic user with its own state directory, no privileges, no home, no private
+# devices, and only the IPv4, IPv6 and local-socket families. TimeoutStartSec bounds a stalled
+# fetch or push, so the daily timer keeps firing.
+#
+# Credential: the owner stores the push token in a root-readable file outside this repository
+# and names that file in the LoadCredential= line below. systemd hands the unit a copy at
+# $CREDENTIALS_DIRECTORY/mirror-push. The legion-local mirror repository's credential helper
+# reads that copy. The token value and its path stay out of the tree; this file names only the
+# credential's name and the owner-held source path. The owner applies this file through
+# /etc/nixos with nrs.
+#
+# Push safety: the push is never forced and never prunes. git refuses a non-fast-forward update,
+# and a deleted ref never reaches Codeberg. The unit stops before the push when the fetched
+# mirror has no main branch, so an empty or wrong origin cannot publish.
 
 [Unit]
 Description=Push git heads and tags to the Codeberg mirror
@@ -12,6 +23,26 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+DynamicUser=yes
+StateDirectory=codeberg-mirror
 WorkingDirectory=/var/lib/codeberg-mirror/powerbrowser.git
+Environment=HOME=/var/lib/codeberg-mirror
+Environment=GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60
+TimeoutStartSec=15min
+LoadCredential=mirror-push:/etc/codeberg-mirror/mirror-push
 ExecStartPre=/run/current-system/sw/bin/git fetch --prune origin '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
-ExecStart=/run/current-system/sw/bin/git push --prune codeberg 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+ExecStartPre=/run/current-system/sw/bin/git show-ref --verify --quiet refs/heads/main
+ExecStart=/run/current-system/sw/bin/git push codeberg 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
