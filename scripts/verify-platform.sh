@@ -4782,8 +4782,11 @@ run_own_checks() {
     "workflows|node $REPO_ROOT/scripts/verify-workflows.mjs"
     # workflows-self-test plants, in memory, unpinned, short, uppercase and docker:// uses:, an
     # unadmitted foo/bar, an unused admission, an empty patterns_allowed, a duplicate on:, zero
-    # workflows, and each GH-12 fault over a good release.yml fixture; each red naming file and
-    # job. It writes nothing.
+    # workflows, each GH-12 fault over a good release.yml fixture, and the TRAIN-08 dry-run-gate
+    # forms (an inverted or always()-wrapped gate, git push and commit including git -c, gh api
+    # write methods and implicit POST, gh release, curl -X, an action outside the read-only list),
+    # and the bot-job-gate rule (an environment-bound job with no negated job-level dry-run gate);
+    # each red naming file and job. It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
     # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ at its default persona,
     # green only on exit 0. Honestly --quick, offline audit; the zizmor binary comes from the
@@ -4794,6 +4797,30 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
+    # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
+    # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
+    # FIREFOX_ESR-driven 175 steer, an empty listing, a Node pin newer than the newest v24 line, an
+    # open bump PR that holds the candidate or the Node line) must go red naming its drift; a control
+    # shows an open PR on another branch holds nothing. Honestly
+    # --quick: fixtures only; the live tag listing runs in the release-train detect job. It writes
+    # nothing.
+    "detect-upstreams-self-test|node $REPO_ROOT/scripts/detect-upstreams.mjs --self-test"
+    # NEW (Phase 43, TRAIN-02, TRAIN-03, TRAIN-09 and AUTO-07): the five Phase-A states as a frozen
+    # table, with derive, next and render checked against fixtures that carry their expected action
+    # as a literal, and states, fixtures and actions compared as set equality. Plants that go red
+    # naming their drift: a sixth state, fixture or action, a state with no action, a merged PR with
+    # an unchanged pin, a 175.x ESR under the 153 guard, a conflict line with no patch number, and a
+    # conflict decision that writes under the patch directory. The would-write view (--would-write,
+    # called by the release-train report job) runs the same derive, next, render and conflict rules,
+    # with a green control and a refusal plant. The publish plan (--publish-plan, called by
+    # scripts/publish-bump-branch.sh) plants a remote branch with an owner commit and an unlistable
+    # compare, and controls for create, skip and bot-only force-with-lease pinned to the observed tip. UNWIRED (no workflow caller, so no plant):
+    # findExactlyOne (live tracking writer, BLOCKED.md item 3), admitWakeRun (workflow_run held out,
+    # BLOCKED.md item 1) and classifyRelease (live Release list, Phase 50). A green row over those is
+    # not production coverage. Honestly --quick: pure functions over in-memory fixtures; no network,
+    # no gh, no build. It writes nothing.
+    "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
