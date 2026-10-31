@@ -53,8 +53,8 @@
 // The fork-server access log is not demanded (Pages and R2 produce none). An absent or unknown served
 // value fails naming the key; nothing defaults.
 //
-// Honestly --quick (self-test only): node:crypto plus text files in mkdtemp, and a fake gh for the
-// attestation branch. No build, no browser, no display, no network.
+// Honestly --quick (self-test only): node:crypto plus text files in mkdtemp, and a fake gh, signmar and
+// certutil that drive the real attestation, signature and channel wiring. No build, no browser, no display, no network.
 //
 // Usage:
 //   node scripts/verify-mar-update-hop.mjs
@@ -69,7 +69,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 // transcript's ready string is derived from.
 const CLIENT_UPDATE_LOG = 'client-update.log';
 const READY_EVENT_RE = /\[update-observer\] appUpdate status=ready version=(\S+)/g;
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isIP } from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -970,6 +970,11 @@ function selfTest() {
             writeFileSync(join(dir, MANIFEST_REL), readFileSync(join(REPO_ROOT, MANIFEST_REL)));
             mkdirSync(join(dir, 'powerbrowser', 'packaging'), { recursive: true });
             writeFileSync(join(dir, MOZCONFIG_REL), readFileSync(join(REPO_ROOT, MOZCONFIG_REL)));
+            // The real-wiring plants run realDeps against this tree: the node:crypto verifier is a stub here.
+            mkdirSync(join(dir, 'powerbrowser', 'packaging', 'mar'), { recursive: true });
+            writeFileSync(join(dir, PRIMARY_DER_REL), 'fixture-der');
+            mkdirSync(join(dir, 'scripts'), { recursive: true });
+            writeFileSync(join(dir, 'scripts', 'verify-mar-signature.mjs'), "if (process.env.FAKE_NODE_SIG_BAD === '1') { console.error('signature does not verify'); process.exit(1); }\n");
             const marBytes = randomBytes(65536);
             writeFileSync(join(evDir, 'nplus1.mar'), marBytes);
             writeFileSync(join(evDir, 'update.xml'), buildUpdateXml({
@@ -1052,7 +1057,7 @@ function selfTest() {
         chmodSync(fakeGh, 0o755);
         const ghDeps = { ...fakeDeps, attest: realDeps(dir, { gh: fakeGh }).attest };
         const expectedRepo = releaseExpectations(REPO_ROOT).repo;
-        const ENV_KEYS = ['PATH', 'FAKE_GH_REPO', 'FAKE_GH_LOGGED_IN', 'FAKE_GH_BUNDLE'];
+        const ENV_KEYS = ['PATH', 'FAKE_GH_REPO', 'FAKE_GH_LOGGED_IN', 'FAKE_GH_BUNDLE', 'FAKE_SIGNMAR_CHANNEL', 'FAKE_SIGNMAR_BAD', 'FAKE_CERTUTIL_FAIL', 'FAKE_NODE_SIG_BAD'];
         const savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]));
         const setEnv = (vars) => {
             for (const [k, v] of Object.entries(vars)) {
@@ -1101,6 +1106,72 @@ function selfTest() {
         ]) {
             withEnv({ FAKE_GH_REPO: expectedRepo, FAKE_GH_LOGGED_IN: '1', FAKE_GH_BUNDLE: '0' }, () => {
                 expectReleaseRed(`release: attestation verified without the ${label} pin`, () => {}, 'nplus1.mar', needle, { ...fakeDeps, attest: realDeps(dir, { gh: fakeGh, pins }).attest });
+            });
+        }
+
+        // The real signmar and certutil wiring (WR-03). A fake signmar prints a Product Information Block and
+        // checks the NSS database certutil prepared; a fake certutil records -N then -A. The signature, the
+        // channel parse and the SIGNMAR-unset branch of realDeps run for real. verify-mar-signature.mjs is
+        // stubbed in the scratch tree (it is the node:crypto half, proven by its own row).
+        const fakeSignmar = join(ghDir, 'signmar');
+        writeFileSync(fakeSignmar, [
+            '#!/usr/bin/env node',
+            "const fs = require('node:fs');",
+            "const path = require('node:path');",
+            'const a = process.argv.slice(2);',
+            "if (a[0] === '-T') {",
+            "    console.log('Product Information Block:');",
+            "    if (process.env.FAKE_SIGNMAR_CHANNEL) console.log(`  MAR channel name: ${process.env.FAKE_SIGNMAR_CHANNEL}`);",
+            "    console.log('  Product version: 153.1.1');",
+            '    process.exit(0);',
+            '}',
+            "if (a.includes('-v')) {",
+            "    const db = a[a.indexOf('-d') + 1];",
+            "    if (a[a.indexOf('-n') + 1] !== 'powerbrowser-mar') { console.error('signmar: unknown certificate nickname'); process.exit(1); }",
+            "    for (const m of ['nss-init', 'cert-added']) if (!fs.existsSync(path.join(db, m))) { console.error(`signmar: no trusted certificate in ${db}`); process.exit(1); }",
+            "    if (process.env.FAKE_SIGNMAR_BAD === '1') { console.error('signmar: signature verification failed'); process.exit(1); }",
+            '    process.exit(0);',
+            '}',
+            "console.error('signmar: unexpected arguments ' + a.join(' '));",
+            'process.exit(1);',
+            '',
+        ].join('\n'));
+        const fakeCertutil = join(ghDir, 'certutil');
+        writeFileSync(fakeCertutil, [
+            '#!/usr/bin/env node',
+            "const fs = require('node:fs');",
+            "const path = require('node:path');",
+            'const a = process.argv.slice(2);',
+            "const db = a[a.indexOf('-d') + 1].replace(/^sql:/, '');",
+            "if (process.env.FAKE_CERTUTIL_FAIL === '1') { console.error('certutil: failed'); process.exit(1); }",
+            "if (a.includes('-N') && a.includes('--empty-password')) { fs.writeFileSync(path.join(db, 'nss-init'), ''); process.exit(0); }",
+            "if (a.includes('-A') && fs.existsSync(path.join(db, 'nss-init')) && a[a.indexOf('-n') + 1] === 'powerbrowser-mar' && a[a.indexOf('-t') + 1] === ',,' && fs.existsSync(a[a.indexOf('-i') + 1])) { fs.writeFileSync(path.join(db, 'cert-added'), ''); process.exit(0); }",
+            "console.error('certutil: unexpected arguments ' + a.join(' '));",
+            'process.exit(1);',
+            '',
+        ].join('\n'));
+        chmodSync(fakeSignmar, 0o755);
+        chmodSync(fakeCertutil, 0o755);
+        const wired = realDeps(dir, { gh: fakeGh, signer: fakeSignmar });
+        const wiredEnv = { FAKE_GH_REPO: expectedRepo, FAKE_GH_LOGGED_IN: '1', FAKE_GH_BUNDLE: '0', FAKE_SIGNMAR_CHANNEL: 'powerbrowser-default', FAKE_SIGNMAR_BAD: undefined, FAKE_CERTUTIL_FAIL: undefined, FAKE_NODE_SIG_BAD: undefined, PATH: `${ghDir}${delimiter}${savedEnv.PATH}` };
+        withEnv(wiredEnv, () => {
+            mirrorRelease();
+            const real = runChecks(dir, wired);
+            console.log(real.failures.length === 0
+                ? `${NAME}: --self-test -- the real signmar -v, signmar -T and certutil wiring is GREEN (fake tools)`
+                : `${NAME}: --self-test FAIL -- the real-wiring control went red: ${real.failures.join(' | ')}`);
+            if (real.failures.length !== 0) ok = false;
+        });
+        for (const [label, over, needle, deps] of [
+            ['SIGNMAR unset', {}, 'SIGNMAR', realDeps(dir, { gh: fakeGh, signer: '' })],
+            ['signmar -T printing no channel line', { FAKE_SIGNMAR_CHANNEL: undefined }, 'no product-info channel line', wired],
+            ['signmar -T printing a foreign channel', { FAKE_SIGNMAR_CHANNEL: 'powerbrowser-nightly' }, 'powerbrowser-nightly', wired],
+            ['signmar -v rejecting the MAR', { FAKE_SIGNMAR_BAD: '1' }, 'signmar -v', wired],
+            ['certutil unable to prepare the NSS database', { FAKE_CERTUTIL_FAIL: '1' }, 'NSS database', wired],
+            ['the node:crypto signature check rejecting the MAR', { FAKE_NODE_SIG_BAD: '1' }, 'node:crypto', wired],
+        ]) {
+            withEnv({ ...wiredEnv, ...over }, () => {
+                expectReleaseRed(`release: ${label} (real wiring)`, () => {}, 'nplus1.mar', needle, deps);
             });
         }
         rmSync(ghDir, { recursive: true, force: true });
