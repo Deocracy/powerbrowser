@@ -4785,6 +4785,17 @@ run_own_checks() {
     # workflows, and each GH-12 fault over a good release.yml fixture; each red naming file and
     # job. It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
+    # NEW (Phase 49, DIST-02): the release.yml shape the workflows row does not cover. Dispatch
+    # only with a required sha input; build-linux on the release runner label with no environment
+    # and no secret; the SHA-ancestor and key>tag gates before the first build step; retention-days
+    # 1 on every upload; no cache. Honestly --quick: YAML parsing (js-yaml from theia/) and file
+    # reads only; no build, browser, display or network.
+    "release-shape|node $REPO_ROOT/scripts/verify-release-shape.mjs"
+    # release-shape-self-test plants nine faults in memory over the real release.yml text (a
+    # pull_request trigger, a tag push trigger, a sha input not required, environment: and a
+    # secrets. reference on build-linux, retention-days 5, an actions/cache step, a missing key>tag
+    # gate, a missing SHA-ancestor gate); each goes red naming the file and the fault. It writes nothing.
+    "release-shape-self-test|node $REPO_ROOT/scripts/verify-release-shape.mjs --self-test"
     # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ at its default persona,
     # green only on exit 0. Honestly --quick, offline audit; the zizmor binary comes from the
     # theia shell or is self-provided through nix develop on first use, and absent tooling fails
