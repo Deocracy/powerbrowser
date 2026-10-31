@@ -4824,6 +4824,40 @@ run_own_checks() {
     # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
     # the file, the rule and the fault.
     "release-shape-self-test|node $REPO_ROOT/scripts/verify-release-shape.mjs --self-test"
+    # NEW (Phase 49, SEC-10): the tracked pre-job hook on legion. It runs under bash with only the three
+    # runner variables set; the release triple must exit 0, and a foreign-branch workflow ref, a push
+    # event, a wrong repo and an empty triple must exit non-zero naming the expected value. The expected
+    # repo derives from configuration.toml [urls] release_notes. Every legion job must start with the
+    # main-and-dispatch refusal and carry the full-SHA check second, before the checkout. Honestly --quick:
+    # bash on stdin plus file and YAML reads; no network, no gh, no write.
+    "hook-refusal|node $REPO_ROOT/scripts/verify-hook-refusal.mjs"
+    # hook-refusal-self-test plants a foreign-branch GITHUB_WORKFLOW_REF, a push event, a wrong repo in the
+    # hook text, and a legion job without the SHA step, each in memory; each goes red naming the file, the
+    # variable or job, and the value. It writes nothing.
+    "hook-refusal-self-test|node $REPO_ROOT/scripts/verify-hook-refusal.mjs --self-test"
+    # NEW (Phase 50, TRAIN-10): the release SHA gate. The bash step text that release.yml carries
+    # in build-linux and sign-publish is read with js-yaml and executed, unchanged, against scratch
+    # git repositories with a local bare origin: the tip of main and a configuration.toml ancestor
+    # with main's workflows are green; the two job texts must be identical. Honestly --quick: local
+    # git in mkdtemp; no network, build, browser or display.
+    "release-sha-gate|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs"
+    # NEW (Phase 50, TRAIN-10): the plants for the same gate, each run against the shipped text and
+    # required to go red naming the drift: a side commit not on main (its SHA), an ancestor that does
+    # not change configuration.toml, an ancestor whose .github/workflows/ diverges from the tip, and a
+    # checked-out HEAD that is not the requested SHA. Each refusal names its next step. Honestly
+    # --quick, as the row above.
+    "release-sha-gate-self-test|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs --self-test"
+    # NEW (Phase 50 review CR-01, WR-01): the dispatch-release correlation. The merged, existing, dispatch
+    # and run steps of release-train.yml are executed unchanged under a fake gh that answers from fixtures
+    # through the real jq. A dispatched run's head_sha is the tip of main, not inputs.sha, so with main
+    # advanced past the merge SHA the count must be 1 (no re-dispatch) and the link must be the run
+    # titled `Release <sha>`; a cross-repository merged PR and runs from another repository, path or
+    # event are ignored. Honestly --quick: bash, jq and node in mkdtemp; no network, gh, build or display.
+    "dispatch-release|node $REPO_ROOT/scripts/verify-dispatch-release.mjs"
+    # NEW (Phase 50 review CR-01, WR-01): the plants for the same steps (a head_sha key, a missing
+    # isCrossRepository select, a missing --base main, a missing repository, path or event condition,
+    # a dispatch no longer gated on a zero count), each required to go red naming the drift.
+    "dispatch-release-self-test|node $REPO_ROOT/scripts/verify-dispatch-release.mjs --self-test"
     # NEW (Phase 49, SEC-07): the sign-publish channel gate. mar_channel_gate refuses a MAR whose
     # product-info channel is not ACCEPTED_MAR_CHANNEL_IDS, cross-checks the `--channel` value against
     # MOZ_UPDATE_CHANNEL, and never compares the MAR id with the update channel; signmar -s runs

@@ -1005,6 +1005,49 @@ the version string). All commands below run inside `nix develop
    (row `nimbus-exposure`) asserts the exposure call neither threw nor
    requested network; its `--self-test` twin runs the fixture doubles.
 
+### Clean-room drill for a published Release (served: release, UPD-16)
+
+The loop above proves the fork-server path. The release drill proves the published bytes:
+N is the installed tarball of the previous release, N+1 is the Release MAR as published, and
+the client takes the update from the live public descriptor and the write-once origin. Run it
+on `legion` (owner action; nothing in this repository runs it) inside a clean container:
+
+- Image: Debian bookworm, the same family as the PKG-17 release container. Not a Nix store
+  image, and no Nix mount of any kind (a Nix-mounted or host-resolver run proves nothing).
+- Mounts, read-only in and writable evidence out, and nothing else:
+  `-v /path/to/N.tar.xz:/in/N.tar.xz:ro`, `-v /path/to/nplus1.mar:/in/nplus1.mar:ro`,
+  `-v /path/to/evidence:/out`.
+- Network on, so the client reaches `updates.powerbrowser.org` and
+  `downloads.powerbrowser.org`. A fresh profile for each run, never the operator profile.
+- `MOZ_LOG=nsHostResolver:5` and `app.update.log=true` set for the whole check, download,
+  stage and apply cycle. The shell's stdout goes to `/out/client-update.log`.
+- The client takes the update from the public descriptor (`servedUrl`) and the MAR is served
+  from `https://downloads.powerbrowser.org/<tag>/<asset>` (`servedMarUrl`). `github.com` and
+  `release-assets.githubusercontent.com` must not appear in the resolver log.
+
+The host sets `SIGNMAR` to the signer built from the pinned source (`scripts/build-signmar.sh`),
+which the signature check (`signmar -v`) and the channel read (`signmar -T`) need.
+
+Then, on the host, write `.mozbuild/mar-hop/hop.json` with `served: "release"` and the fields
+the release assertion set reads (`n`, `nplus1`, `mar`, `descriptor`, `servedUrl`,
+`servedMarUrl`, `result`, `postHop`, and `attestation.bundle` when a bundle was fetched), copy
+the evidence into `.mozbuild/mar-hop/`, and run:
+
+```
+node scripts/verify-mar-update-hop.mjs
+scripts/verify-platform.sh --only mar-update-hop
+```
+
+Attestation is verified with `gh attestation verify <mar> --repo <owner/repo> --signer-workflow
+<owner/repo>/.github/workflows/release.yml --source-ref refs/heads/main --deny-self-hosted-runners
+--bundle <bundle>` (offline, from a bundle fetched on the host with the owner's `gh` login), or,
+when no bundle is present, the same command without `--bundle` from a logged-in `gh` on the host.
+The three pins mean the attestation must come from this repository's release workflow on main
+on a hosted runner (the attesting `sign-publish` job), not from any workflow of the repository. A MAR with neither is red, never skipped. Pitfall 7
+(Nix mounted, or the host resolver inherited) and Pitfall 8 (attestation skipped for lack of a
+login inside the container) are the two ways this drill proves nothing; the record in
+`docs/RELEASING.md` names the path taken.
+
 ### NSIS-on-Nix path (PKG-01)
 
 `nix shell nixpkgs#nsis --command makensis -VERSION` gives `3.12`. The

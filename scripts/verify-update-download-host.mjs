@@ -6,8 +6,11 @@
 // unattended request to it fails the verdict model (scripts/lib/endpoint-verdict.mjs).
 // The unattended MAR download must therefore never name a github.com
 // /releases/download/ URL as its update source. The update descriptor's
-// patchURL (and servedMarUrl) must point at release-assets.githubusercontent.com
-// or the updates host.
+// patchURL (and servedMarUrl) must point at the write-once MAR origin, the
+// mar_origin host of configuration.toml [urls], in the form <origin>/<tag>/<asset>
+// (owner ruling 2026-10-29, enforced end to end by verify-mar-update-hop.mjs, which
+// also refuses release-assets.githubusercontent.com in a release drill). This row
+// guards only the github.com half, and derives the origin it names from the manifest.
 //
 // The descriptor is emitted by a later phase (49/50), so this row guards every
 // tracked file that could carry one: descriptor templates, generator output and
@@ -22,13 +25,15 @@
 //
 // Exit 0 pass, 1 fail. --self-test plants a descriptor template, a generator
 // output and a fixture carrying the github.com form, and requires each to go
-// red naming the file; two controls (a release-assets URL and a release-notes
-// URL) must stay green.
+// red naming the file and the manifest's MAR origin; two controls (a release-assets
+// URL, which this row does not judge, and a release-notes URL) must stay green.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { marOrigin, resolveConfig } from './generate.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SELF), '..');
@@ -77,6 +82,16 @@ function readText(root, rel) {
     }
 }
 
+/** The write-once MAR origin of configuration.toml [urls] mar_origin, or null when the manifest does not resolve. */
+function manifestMarOrigin(root) {
+    try {
+        const { config } = resolveConfig(join(root, 'configuration.toml'));
+        return config === undefined ? null : marOrigin(config);
+    } catch {
+        return null;
+    }
+}
+
 /** The file:line hits of a github.com download URL in update-download context. */
 export function githubDownloadHits(files, read) {
     const hits = [];
@@ -101,7 +116,8 @@ export function runChecks(root, overrides = {}) {
     }
     const read = overrides.read ?? ((rel) => readText(root, rel));
     const hits = githubDownloadHits(files, read);
-    const failures = hits.map(h => `${h} names a github.com /releases/download/ URL as an update download. github.com is user-initiated, so the unattended update fetch would fail the verdict model. Next step: point patchURL and servedMarUrl at release-assets.githubusercontent.com or the updates host; ${CONSTRAINT}.`);
+    const origin = manifestMarOrigin(root) ?? 'named by configuration.toml [urls] mar_origin';
+    const failures = hits.map(h => `${h} names a github.com /releases/download/ URL as an update download. github.com is user-initiated, so the unattended update fetch would fail the verdict model. Next step: point patchURL and servedMarUrl at the write-once MAR origin ${origin} (configuration.toml [urls] mar_origin), in the form <origin>/<tag>/<asset>; ${CONSTRAINT}.`);
     return { failures, files: files.length };
 }
 
@@ -154,8 +170,11 @@ function selfTest() {
     ];
     for (const [name, rel] of plants) {
         const { failures } = runChecks(REPO_ROOT, planted([rel]));
-        if (failures.some(f => f.includes(rel))) {
-            console.log(`  ok  ${name} -> red naming ${rel}`);
+        // The guidance must send the reader to the manifest's MAR origin, never to the release-assets host.
+        const origin = manifestMarOrigin(REPO_ROOT);
+        const hit = failures.find(f => f.includes(rel));
+        if (hit !== undefined && origin !== null && hit.includes(origin) && !hit.includes('release-assets')) {
+            console.log(`  ok  ${name} -> red naming ${rel} and the MAR origin ${origin}`);
         } else {
             console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${rel}; got: ${failures.join(' | ') || '(no failures)'}`);
             failed += 1;
