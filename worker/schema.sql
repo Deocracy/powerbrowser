@@ -3,10 +3,12 @@
 -- (TEL-10, TEL-11). The Worker's column names are EVENT_COLUMNS and DOWNLOAD_COLUMNS in
 -- events-worker.mjs; scripts/verify-events-worker.mjs requires every one of them to appear here.
 -- Retention is enforced by the scheduled job (RETENTION_DAYS), not by the schema.
+-- Every statement is IF NOT EXISTS, so applying the file again (after a partial apply, or at a
+-- later checkpoint) is safe; it does not migrate an existing table.
 
 -- events: one row per admitted event. received_at is server time in milliseconds.
 -- synthetic is 1 for the sweep's probe rows, which the maintainer query excludes.
-CREATE TABLE events (
+CREATE TABLE IF NOT EXISTS events (
   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
   "received_at" INTEGER NOT NULL,
   "name" TEXT,
@@ -19,15 +21,15 @@ CREATE TABLE events (
   "os" TEXT,
   "synthetic" INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX events_received_at ON events ("received_at");
-CREATE INDEX events_maintainer ON events ("synthetic", "id");
+CREATE INDEX IF NOT EXISTS events_received_at ON events ("received_at");
+CREATE INDEX IF NOT EXISTS events_maintainer ON events ("synthetic", "id");
 
 -- download_counts: one row per asset and UTC day. The Worker upserts with
 --   INSERT INTO download_counts (...) VALUES (...)
 --   ON CONFLICT("asset", "day") DO UPDATE SET "tag" = excluded."tag",
 --     "download_count" = excluded."download_count", "received_at" = excluded."received_at"
 -- so a retried POST for the same asset and day replaces the count and never double-counts.
-CREATE TABLE download_counts (
+CREATE TABLE IF NOT EXISTS download_counts (
   "asset" TEXT NOT NULL,
   "tag" TEXT NOT NULL,
   "day" TEXT NOT NULL,
@@ -35,4 +37,4 @@ CREATE TABLE download_counts (
   "received_at" INTEGER NOT NULL,
   PRIMARY KEY ("asset", "day")
 );
-CREATE INDEX download_counts_received_at ON download_counts ("received_at");
+CREATE INDEX IF NOT EXISTS download_counts_received_at ON download_counts ("received_at");

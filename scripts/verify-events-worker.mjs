@@ -98,6 +98,7 @@ const RULE = Object.freeze({
     flat: 'old flat event shape',
     usage: 'usage event skipped',
     schemaColumn: 'schema declares every column',
+    schemaRerun: 'schema is re-runnable',
     noRoutes: 'no routes key',
     workersDev: 'no workers.dev URL',
     credential: 'credential-shaped assignment in worker/',
@@ -271,7 +272,7 @@ async function runStatic(root, worker) {
         failures.push(`${RULE.schemaColumn}: ${SCHEMA_REL} is absent. Next step: restore the DDL the owner applies.`);
     } else {
         for (const [table, columns] of [['events', worker.EVENT_COLUMNS], ['download_counts', worker.DOWNLOAD_COLUMNS]]) {
-            const block = new RegExp(`CREATE TABLE ${table} \\(([\\s\\S]*?)\\);`).exec(schema);
+            const block = new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(([\\s\\S]*?)\\);`).exec(schema);
             if (block === null) {
                 failures.push(`${RULE.schemaColumn}: ${SCHEMA_REL} has no CREATE TABLE ${table} statement. Next step: add the table the Worker writes.`);
                 continue;
@@ -279,6 +280,9 @@ async function runStatic(root, worker) {
             for (const column of columns) {
                 if (!block[1].includes(`"${column}"`)) failures.push(`${RULE.schemaColumn}: the ${table} table in ${SCHEMA_REL} does not declare "${column}", which the Worker writes. Next step: add the column to the DDL.`);
             }
+        }
+        for (const m of schema.matchAll(/CREATE (TABLE|INDEX)\s+(?!IF NOT EXISTS)(\S+)/g)) {
+            failures.push(`${RULE.schemaRerun}: CREATE ${m[1]} ${m[2]} in ${SCHEMA_REL} lacks IF NOT EXISTS, so applying the file twice fails. Next step: state IF NOT EXISTS on every CREATE.`);
         }
         if (!schema.includes('PRIMARY KEY ("asset", "day")')) failures.push(`${RULE.schemaColumn}: download_counts has no PRIMARY KEY ("asset", "day"), so the per-day upsert has no conflict key. Next step: restore it.`);
     }
@@ -696,6 +700,7 @@ const PLANTS = [
     { rule: RULE.workersDev, rel: WRANGLER_REL, find: 'workers_dev = false', replace: 'workers_dev = true' },
     { rule: RULE.workersDev, rel: WRANGLER_REL, find: 'preview_urls = false\n', replace: '' },
     { rule: RULE.admitted, rel: WORKER_REL, find: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);", replace: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os', 'message']);" },
+    { rule: RULE.schemaRerun, rel: SCHEMA_REL, find: 'CREATE INDEX IF NOT EXISTS events_received_at', replace: 'CREATE INDEX events_received_at' },
     { rule: RULE.schemaColumn, rel: SCHEMA_REL, find: '  "column" INTEGER,\n', replace: '' },
     { rule: RULE.noRoutes, rel: WRANGLER_REL, find: 'compatibility_date = "2026-10-31"', replace: 'compatibility_date = "2026-10-31"\nroutes = ["events.powerbrowser.org/events"]' },
     { rule: RULE.credential, rel: WORKER_REL, find: 'export const DAY_MS = 86_400_000;', replace: "export const DAY_MS = 86_400_000;\nconst DOWNLOAD_COUNT_SECRET = 'plant-value';" },
