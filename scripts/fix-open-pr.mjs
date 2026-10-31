@@ -35,20 +35,44 @@ const FP_RE = /^([a-z][a-z0-9-]*)@([0-9a-f]{40})$/;
 const BRANCH_RE = /^claude-fix\/v\d+\.\d+\.\d+-\d+-F[123]-[1-9][0-9]*$/;
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** The diff statistics and the changed paths of a unified diff. Pure. */
+/**
+ * The diff statistics and the changed paths of a unified diff. Pure. Insertions and deletions are counted only inside
+ * hunks (the @@ header gives the line counts), so an added line that starts with "++" or a removed line that starts with
+ * "--" is a change, not a file header (WR-04). A path comes from the symmetric a/<P> b/<P> header: a name that contains
+ * " b/" splits where both halves agree; a rename takes its "rename to" line.
+ */
 export function parseDiffStat(diffText) {
     const paths = [];
     let insertions = 0;
     let deletions = 0;
+    let oldLeft = 0;
+    let newLeft = 0;
     for (const line of String(diffText).split('\n')) {
-        const m = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
-        if (m !== null) {
-            paths.push(m[2]);
+        if (oldLeft > 0 || newLeft > 0) {
+            if (line.startsWith('\\')) continue;
+            if (line.startsWith('+')) { insertions += 1; newLeft -= 1; continue; }
+            if (line.startsWith('-')) { deletions += 1; oldLeft -= 1; continue; }
+            oldLeft -= 1;
+            newLeft -= 1;
             continue;
         }
-        if (line.startsWith('+++') || line.startsWith('---')) continue;
-        if (line.startsWith('+')) insertions += 1;
-        else if (line.startsWith('-')) deletions += 1;
+        const h = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
+        if (h !== null) {
+            oldLeft = h[1] === undefined ? 1 : Number(h[1]);
+            newLeft = h[2] === undefined ? 1 : Number(h[2]);
+            continue;
+        }
+        if (line.startsWith('diff --git a/')) {
+            const rest = line.slice('diff --git '.length);
+            let path = null;
+            for (let at = rest.indexOf(' b/'); at >= 0; at = rest.indexOf(' b/', at + 1)) {
+                if (rest.slice(2, at) === rest.slice(at + 3)) { path = rest.slice(at + 3); break; }
+            }
+            paths.push(path ?? rest.slice(rest.lastIndexOf(' b/') + 3));
+            continue;
+        }
+        const rn = /^rename to (.*)$/.exec(line);
+        if (rn !== null && paths.length > 0) paths[paths.length - 1] = rn[1];
     }
     return { paths, files: paths.length, insertions, deletions };
 }
@@ -62,20 +86,35 @@ export function summaryFrom({ diffText, key, cls, attempt, target, fingerprint, 
     return { key, cls, attempt: Number(attempt), target, check, baseSha, gateUrl, stat: parseDiffStat(diffText), paths: parseDiffStat(diffText).paths };
 }
 
+const PATH_LIST_MAX = 50;
+
+/**
+ * Text as one inline code span, so nothing in it renders as a link, an image, a mention, an issue reference or HTML (WR-04).
+ * Control characters and line breaks become '?'; the delimiter is a backtick run longer than any run in the text, padded with a
+ * space when the text starts or ends with a backtick. Pure.
+ */
+export function codeSpan(text) {
+    const t = String(text).replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/g, '?');
+    const longest = Math.max(0, ...(t.match(/`+/g) ?? []).map(r => r.length));
+    const fence = '`'.repeat(longest + 1);
+    return t.startsWith('`') || t.endsWith('`') ? `${fence} ${t} ${fence}` : `${fence}${t}${fence}`;
+}
+
 /** The PR body. Deterministic from the summary. Pure. */
 export function renderBody(s) {
-    const pathLine = (p) => `- ${String(p).replace(/[`<>]/g, '')}`;
+    const shown = s.paths.slice(0, PATH_LIST_MAX);
     return [
-        `Automated fix for ${s.key} (${s.cls}, attempt ${s.attempt}) on ${s.target}.`,
+        `Automated fix for ${codeSpan(s.key)} (${codeSpan(s.cls)}, attempt ${s.attempt}) on ${codeSpan(s.target)}.`,
         '',
         '### Failing check',
-        `${s.check} at ${s.baseSha}`,
+        `${codeSpan(s.check)} at ${codeSpan(s.baseSha)}`,
         '',
         '### Diff stat',
         `${s.stat.files} file(s), ${s.stat.insertions} insertion(s), ${s.stat.deletions} deletion(s).`,
         '',
         '### Paths',
-        ...(s.paths.length > 0 ? s.paths.map(pathLine) : ['(none)']),
+        ...(shown.length > 0 ? shown.map(p => `- ${codeSpan(p)}`) : ['(none)']),
+        ...(s.paths.length > shown.length ? [`- (and ${s.paths.length - shown.length} more)`] : []),
         '',
         '### Attempt',
         `Attempt ${s.attempt} of 2 for this release key and class.`,
@@ -176,7 +215,7 @@ function selfTest() {
         'diff --git a/powerbrowser/x.txt b/powerbrowser/x.txt',
         '--- a/powerbrowser/x.txt',
         '+++ b/powerbrowser/x.txt',
-        '@@ -1 +1 @@',
+        '@@ -1 +1,2 @@',
         '-old',
         '+new',
         '+more',
@@ -199,8 +238,25 @@ function selfTest() {
     const missing = wants.filter(w => !body.includes(w));
     missing.length === 0 ? ok('body carries the failing check, paths, diff stat, attempt count and gate link') : bad('body contents', `missing ${missing.join(', ')}`);
 
-    const withProse = summaryFrom({ ...base, modelProse: 'MODEL-PROSE-MARKER please merge this' });
-    renderBody(withProse).includes('MODEL-PROSE-MARKER') ? bad('no-model-prose', 'a modelProse field reached the body') : ok('no-model-prose: a modelProse field never reaches the body');
+    // WR-04: the channels model text can use are the diff's added lines and its paths. Added lines never reach the body; a
+    // path does, so it is rendered inert. A plant for each channel, checked on what the body actually contains.
+    const proseDiff = ['diff --git a/docs/p.md b/docs/p.md', '--- a/docs/p.md', '+++ b/docs/p.md', '@@ -0,0 +1,2 @@', '+MODEL-PROSE-MARKER please merge this, @octocat', '+![i](https://evil.example/p.png)', ''].join('\n');
+    const proseBody = renderBody(summaryFrom({ ...base, diffText: proseDiff }));
+    proseBody.includes('MODEL-PROSE-MARKER') || proseBody.includes('evil.example') ? bad('no-model-prose', 'an added line of the diff reached the body') : ok('no-model-prose: the added lines of the diff never reach the body');
+    // What a markdown renderer would act on once code spans are removed: links, images, mentions, issue references, HTML.
+    const active = (md) => md.replace(/(`+)[^]*?\1/g, '').match(/\]\(|!\[|@\w|#\d|<\w/g) ?? [];
+    const hostilePath = 'docs/[free ipad](https://evil.example/x)@octocat ![i](https://evil.example/p.png) #1 <img src=x> `tick`.md';
+    const hostileDiff = ['diff --git a/' + hostilePath + ' b/' + hostilePath, 'new file mode 100644', '--- /dev/null', '+++ b/' + hostilePath, '@@ -0,0 +1 @@', '+x', ''].join('\n');
+    const hostileBody = renderBody(summaryFrom({ ...base, diffText: hostileDiff }));
+    const left = active(hostileBody);
+    left.length === 0 && hostileBody.includes('evil.example') ? ok('a path with a link, an image, a mention, an issue reference, HTML and backticks renders inert, inside a code span') : bad('hostile path', `active markdown left outside code spans: ${JSON.stringify(left)}`);
+    active('- ' + hostilePath).length > 0 ? ok('the activity probe itself sees the hostile path as active when it is not in a code span (control)') : bad('probe', 'the activity probe cannot see the plant, so the check above proves nothing');
+    const many = Array.from({ length: 60 }, (_, n) => `diff --git a/f${n}.md b/f${n}.md\n--- a/f${n}.md\n+++ b/f${n}.md\n@@ -1 +1 @@\n-a\n+b\n`).join('');
+    renderBody(summaryFrom({ ...base, diffText: many })).includes('(and 10 more)') ? ok('a long path list is capped at 50 with a count') : bad('path cap', 'not capped');
+    const plusplus = parseDiffStat('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n--- removed\n+++ added\n ctx\n');
+    plusplus.insertions === 1 && plusplus.deletions === 1 ? ok('lines starting with ++ and -- inside a hunk are counted as changes') : bad('++ lines', JSON.stringify(plusplus));
+    const spaced = parseDiffStat('diff --git a/dir b/x.md b/dir b/x.md\n--- a/dir b/x.md\n+++ b/dir b/x.md\n@@ -1 +1 @@\n-a\n+b\n');
+    spaced.paths.length === 1 && spaced.paths[0] === 'dir b/x.md' ? ok('a path that contains " b/" is split where both halves agree') : bad('b/ path', JSON.stringify(spaced));
 
     const labels = labelsFor(KEY);
     JSON.stringify(labels) === JSON.stringify(['claude-fix', `release:${KEY}`]) ? ok('labels are claude-fix and release:<key>') : bad('labels', JSON.stringify(labels));
