@@ -96,6 +96,12 @@
 //                 attempts for every release key are serialized (FIX-05). The Console
 //                 workspace monthly cap is an owner setting, not an in-tree surface.
 //
+//  fixer-auth     The fixer credential path (FIX-12, workload identity federation). The fix job
+//                 holds id-token: write, and its Claude step carries with.anthropic_federation_rule_id
+//                 and with.anthropic_organization_id. fix-gate and fix-pr hold no id-token. In
+//                 release-train.yml, a reference to secrets.ANTHROPIC_API_KEY (the owner-chosen fallback)
+//                 is refused in any job whose environment is not exactly fixer. triage.yml keeps its key
+//                 in its own triage environment (Phase 53) and is outside this rule.
 // Effective permissions: job permissions, else workflow permissions, else the
 // repository default (default_workflow_permissions in
 // .github/settings/workflow-permissions.json). write-all maps every scope to
@@ -134,7 +140,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'fixer-spend', 'dry-run-gate', 'bot-job-gate'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'fixer-spend', 'fixer-auth', 'dry-run-gate', 'bot-job-gate'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -528,6 +534,26 @@ function runChecks(root, overrides = {}) {
                 }
             }
 
+            // FIX-12 (fixer-auth): the Anthropic credential path. Workload identity federation is the
+            // path: id-token write on the fix job only, with the federation rule and organization ids.
+            if (fixer && jobId === 'fix') {
+                if (eff['id-token'] !== 'write') fail(rel, jobId, 'fixer-auth', `has no effective id-token: write, so workload identity federation cannot mint the Claude credential. Next step: grant id-token: write on the fix job.`);
+                for (const s of claude) {
+                    for (const k of ['anthropic_federation_rule_id', 'anthropic_organization_id']) {
+                        if (!(s.with !== null && typeof s.with === 'object' && Object.hasOwn(s.with, k))) fail(rel, jobId, 'fixer-auth', `the Claude step has no with.${k}, so federation has no rule to exchange under. Next step: set ${k} from its repository variable.`);
+                    }
+                }
+            }
+            if (fixer && (jobId === 'fix-gate' || jobId === 'fix-pr') && eff['id-token'] === 'write') {
+                fail(rel, jobId, 'fixer-auth', `holds effective id-token: write, so a job with no model and no environment could mint a credential. Next step: remove id-token from ${jobId}; only the fix job holds it.`);
+            }
+            // The fallback key (the owner's choice at the 52-05 checkpoint) is confined to the fixer environment.
+            // Scoped to release-train.yml: triage.yml's key lives in its own triage environment (Phase 53).
+            if (file === FIXER_FILE && (/secrets\.ANTHROPIC_API_KEY\b/.test(JSON.stringify(job)) || /secrets\.ANTHROPIC_API_KEY\b/.test(JSON.stringify(wf.env ?? {})))) {
+                const envName = typeof job.environment === 'string' ? job.environment : job.environment?.name;
+                if (envName !== 'fixer') fail(rel, jobId, 'fixer-auth', `references secrets.ANTHROPIC_API_KEY in a job whose environment is ${JSON.stringify(envName ?? '(none)')}, not fixer, so the fallback key is reachable outside the fixer environment. Next step: move the reference into the fixer environment or drop it.`);
+            }
+
             // permissions
             if (eff.issues === 'write' && !((file === 'release-train.yml' && jobId === 'report') || (file === 'triage.yml' && jobId === 'apply'))) {
                 fail(rel, jobId, 'issues-write', `has effective issues write, admitted only on release-train.yml job report and on triage.yml job apply. Next step: drop issues write from the job or workflow permissions.`);
@@ -779,6 +805,8 @@ function selfTest() {
         '        with:',
         '          github_token: ${{ secrets.GITHUB_TOKEN }}',
         '          path_to_claude_code_executable: /opt/claude-pinned/claude',
+        '          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}',
+        '          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}',
         "          allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'",
         '          show_full_output: false',
         '          display_report: false',
@@ -939,6 +967,14 @@ function selfTest() {
     ];
     plants.push(...fixerPlants);
     // FIX-05 spend: the fix job's time bound and its serialized attempt group.
+    // FIX-12 fixer-auth: id-token on the fix job only, the federation ids in the Claude step, and the fallback key confined.
+    plants.push(
+        ['fix job without id-token write', fixerEdit('      id-token: write\n', ''), rel(T), 'fix', 'fixer-auth', 'id-token'],
+        ['Claude step without the federation rule id', fixerEdit('          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}\n', ''), rel(T), 'fix', 'fixer-auth', 'anthropic_federation_rule_id'],
+        ['Claude step without the organization id', fixerEdit('          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}\n', ''), rel(T), 'fix', 'fixer-auth', 'anthropic_organization_id'],
+        ['id-token write on fix-gate', fixerEdit('      contents: read\n    if: "' + GUARD + '"', '      contents: read\n      id-token: write\n    if: "' + GUARD + '"'), rel(T), 'fix-gate', 'fixer-auth', 'id-token'],
+        ['ANTHROPIC_API_KEY referenced in fix-pr (environment bot)', fixerEdit('    permissions: {}\n    steps:', '    permissions: {}\n    env:\n      FALLBACK_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n    steps:'), rel(T), 'fix-pr', 'fixer-auth', 'fixer'],
+    );
     plants.push(
         ['fix job timeout-minutes 5', fixerEdit('    timeout-minutes: 90', '    timeout-minutes: 5'), rel(T), 'fix', 'fixer-spend', 'timeout-minutes'],
         ['fix job without timeout-minutes', fixerEdit('    timeout-minutes: 90\n', ''), rel(T), 'fix', 'fixer-spend', 'timeout-minutes'],

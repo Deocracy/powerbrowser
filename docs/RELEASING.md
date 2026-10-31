@@ -405,6 +405,33 @@ the date, never where.
 - No App private key exists before Phase 43, which is the first consumer. Both Apps
   are created with no key generated.
 
+### Fixer authentication (FIX-12)
+
+Outcome: the fixer authenticates to Anthropic with GitHub OIDC workload identity
+federation. The fallback path is recorded below and stays unused unless federation
+setup is blocked.
+
+- Why WIF. The pinned `anthropics/claude-code-action` (commit
+  `db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c`, v1.0.254) returns an explicit
+  `github_token` before it runs its own App-token OIDC exchange, so passing
+  `github_token: ${{ secrets.GITHUB_TOKEN }}` keeps the action from minting a Claude
+  App token in the `fix` job. The federation exchange is a separate path, keyed by
+  `anthropic_federation_rule_id` and `anthropic_organization_id`. The finding is read
+  from the pinned action source (RESEARCH §12); re-run that check before any re-pin.
+- Shape the workflow asserts (`fixer-auth` in `scripts/verify-workflows.mjs`):
+  - `id-token: write` on the `fix` job only. `fix-gate` and `fix-pr` hold no `id-token`.
+  - The `fix` job's Claude step sets `anthropic_federation_rule_id` from the
+    repository variable `ANTHROPIC_FEDERATION_RULE_ID` and `anthropic_organization_id`
+    from `ANTHROPIC_ORGANIZATION_ID`. Both are variables, not secrets.
+- Fallback (used only if the Console federation setup is blocked): an
+  `ANTHROPIC_API_KEY` secret in the `fixer` environment only, with no `id-token` on
+  any job. `fixer-auth` refuses a reference to that secret in any
+  `release-train.yml` job whose environment is not exactly `fixer`. Its rotation row
+  is in `docs/RENEWALS.md`.
+- Credential state: pending. The Anthropic Console fixer workspace, the federation rule
+  and the two variables are owner actions at the 52-05 checkpoint. Until they exist,
+  the fixer cannot authenticate and no live fix run is possible.
+
 ### The MAR key ceremony and custody
 
 Run the ceremony once, on `legion`, at the repository root, with nobody else at the
