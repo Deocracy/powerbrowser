@@ -111,6 +111,7 @@ status: complete
 
 - **Detector CLI modes.** The detect job needs `--pin` and `--listing <file> [--firefox-esr <value>]`, which the 43-01 spec did not include. Unknown arguments still exit 2. The pure core is unchanged.
 - **Stage carrier edit.** Plan 43-02 Task 3 asked for the output block only. The `stage` output needs the FAIL line from the replay, which exists only in the step's log. The replay step therefore pipes through `tee` to `$RUNNER_TEMP/rebase.log`. Its command, its tag input and its Nix wrapping are otherwise unchanged. The `verify-upstream-pins` sweep still passes.
+- **Pipefail correction.** This edit assumed the default `run:` shell enforces `pipefail`. On Linux it does not: the default is `bash -e`, so a failed replay read through `tee` would have reported success. A concurrent session on this branch added `set -o pipefail` to the step in `da0b7a6` (author: the owner). That fix is correct and is kept.
 - **No artifact upload.** Plan 43-02 named a `{diff, apply log, stage}` artifact. It is not uploaded in this plan. The stage line carries the FAIL text the conflict path needs. The diff and log upload is left for plan 43-03, where the conflict issue body needs it.
 - **Live facts deferred.** `derive` validates inputs and runs the fixture self-tests. It does not yet read open PRs, check runs or the Release list. The plan describes this as fixture-backed now, with live facts in a later plan.
 
