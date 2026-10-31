@@ -1046,7 +1046,14 @@ still runs last. Nothing is skipped: an out-of-band release that skipped the MAR
 signature verify step would ship the exact failure mode the signing stage exists
 to close.
 
-A chemspill revision for the same ESR takes priority over a scheduled train: the revision train proceeds and the scheduled train is superseded.
+The release-train logic (`scripts/release-train.mjs`) encodes two supersede rules, both for a scheduled train (revision 1) only:
+
+- An open chemspill revision for the same ESR takes priority over a scheduled train, and the scheduled train is superseded.
+- A newer validated ESR tag on the same major supersedes an older train that is still open or waiting on approval. A tag on another major, an equal or older tag, and a `_BUILDn` tag supersede nothing.
+
+A chemspill revision train is never superseded. A published or withdrawn release is never superseded. SUPERSEDED is routine, so it never pages the owner. It stays set once the tracking issue carries the `state/SUPERSEDED` label, even after the chemspill train publishes or the newer tag is withdrawn.
+
+This is what the logic derives from facts, checked over fixtures. Nothing runs it live yet: no collector sets the supersede facts, and no executor cancels the old train's run or rejects its pending `release` approval (see the 51-03 items in the phase BLOCKED.md). Until both exist, the stale-approval guards in `sign-publish` are what stop an old approval from publishing over a newer Release: they fail the run before anything is signed.
 
 ### Schedule posture
 
