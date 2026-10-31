@@ -519,10 +519,13 @@ jobs:
           grep -E '^due=(true|false)$' "$RUNNER_TEMP/due.txt" >> "$GITHUB_OUTPUT"
 
   # The only job that enters the bot environment in the sweep. It enters only on a live sweep tick
-  # (bot-job-gate), so a dry run and a tick before 06:00 UTC never wait on an approval. Its three reads
-  # are the online runner count (App token, administration read), the start of the last watchdog run in
-  # powerbrowser-updates (App token, actions read there) and one synthetic POST to the events Worker,
-  # marked synthetic and authenticated with the bot copy of DOWNLOAD_COUNT_SECRET. It writes no issue.
+  # (bot-job-gate), so a dry run and a tick that is not the day's sweep never wait on an approval. Its two
+  # reads are the start of the last successful scheduled watchdog run in powerbrowser-updates (App token,
+  # actions read on that one repository) and one synthetic POST to the events Worker, marked synthetic and
+  # authenticated with the bot copy of DOWNLOAD_COUNT_SECRET. It writes no issue. The online runner count
+  # (Administration read on powerbrowser) is deferred to Phase 49, which registers the first runner: the row
+  # renders no-data until then, so the grant would buy nothing yet and is not requested (BLOCKED.md item 2).
+  # Every step tolerates its own failure, so one failed read marks its own row and never removes the sweep.
   maintenance-probe:
     needs: [derive, sweep-clock]
     if: ${{ !inputs.dry-run && needs.sweep-clock.outputs.due == 'true' }}
@@ -532,7 +535,6 @@ jobs:
     permissions:
       contents: read
     outputs:
-      runners-online: ${{ steps.runners.outputs.online }}
       watchdog-started-ms: ${{ steps.watchdog.outputs.started-ms }}
       synthetic-status: ${{ steps.synthetic.outputs.status }}
     steps:
@@ -542,40 +544,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Mint the bot App token for the read probes
+      # One repository, one permission: the watchdog read needs Actions read on powerbrowser-updates only.
+      # A failed mint (the App lacks the grant, BLOCKED.md item 2) leaves the token empty; the read then fails
+      # and the watchdog-age row renders red, and the sweep still runs.
+      - name: Mint the bot App token for the watchdog read
         id: app
         if: ${{ !inputs.dry-run }}
+        continue-on-error: true
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: |
-            powerbrowser
-            powerbrowser-updates
-          permission-administration: read
+          repositories: powerbrowser-updates
           permission-actions: read
 
-      - name: Count the online runners (administration read, read only)
-        id: runners
-        if: ${{ !inputs.dry-run }}
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          set -euo pipefail
-          ONLINE=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runners" --paginate --jq '[.runners[] | select(.status == "online")] | length' | awk '{ total += $1 } END { print total + 0 }')
-          echo "online=${ONLINE}" >> "$GITHUB_OUTPUT"
-
-      # A watchdog that has never run, or a read that fails, leaves the start empty; the sweep renders
-      # that as a red watchdog-age row rather than failing the probe.
-      - name: Read the start of the last watchdog run (actions read, read only)
+      # Only a successful scheduled run counts: a watchdog that fails every day, or a manual dispatch, must not
+      # keep the row green. A watchdog that has never run, or a read that fails, leaves the start empty and the
+      # sweep renders a red watchdog-age row; the read error is printed to the log, not discarded.
+      - name: Read the start of the last successful scheduled watchdog run (actions read, read only)
         id: watchdog
         if: ${{ !inputs.dry-run }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
-          STARTED=$(gh api "repos/${GITHUB_REPOSITORY_OWNER}/powerbrowser-updates/actions/workflows/watchdog.yml/runs?per_page=1" --jq '.workflow_runs[0].run_started_at // empty' 2>/dev/null || true)
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY_OWNER}/powerbrowser-updates/actions/workflows/watchdog.yml/runs?per_page=1&status=success&event=schedule" --jq '.workflow_runs[0].run_started_at // empty' || echo "release-train maintenance: the watchdog run read failed (see the error above)" >&2)
           if [ -n "$STARTED" ]; then
             echo "started-ms=$(date -u -d "$STARTED" +%s%3N)" >> "$GITHUB_OUTPUT"
           else
@@ -601,7 +596,8 @@ jobs:
   # six rows and renders the pinned body. It writes nothing; the body is handed to report base64-encoded.
   maintenance:
     needs: [derive, sweep-clock, maintenance-probe]
-    if: ${{ always() && needs.sweep-clock.outputs.due == 'true' && (needs.maintenance-probe.result == 'success' || needs.maintenance-probe.result == 'skipped') }}
+    # Runs on a failed probe too: a probe failure marks its own rows no-data and never removes the sweep.
+    if: ${{ always() && needs.sweep-clock.outputs.due == 'true' && needs.maintenance-probe.result != 'cancelled' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -655,7 +651,6 @@ jobs:
         env:
           PIN: ${{ steps.pin.outputs.pin }}
           PROBE_RESULT: ${{ needs.maintenance-probe.result }}
-          PROBE_RUNNERS: ${{ needs.maintenance-probe.outputs.runners-online }}
           PROBE_WATCHDOG_MS: ${{ needs.maintenance-probe.outputs.watchdog-started-ms }}
           PROBE_SYNTHETIC: ${{ needs.maintenance-probe.outputs.synthetic-status }}
         run: |
@@ -672,13 +667,12 @@ jobs:
             --slurpfile releases "$RUNNER_TEMP/releases.json" \
             --arg advisory "$ADVISORY" \
             --arg result "$PROBE_RESULT" \
-            --arg runners "${PROBE_RUNNERS:-}" \
             --arg watchdog "${PROBE_WATCHDOG_MS:-}" \
             --arg synthetic "${PROBE_SYNTHETIC:-}" \
             '{
               pinTag: $pin, nowMs: $now, tags: $tags, tagDates: $dates, releases: $releases[0],
               advisoryEsr: (if $advisory == "" then null else $advisory end),
-              runnersOnline: (if $result == "success" and $runners != "" then ($runners | tonumber) else null end),
+              runnersOnline: null,
               watchdogProbed: ($result == "success"),
               watchdogStartedAtMs: (if $result == "success" and $watchdog != "" then ($watchdog | tonumber) else null end),
               syntheticStatus: (if $result == "success" and $synthetic != "" then ($synthetic | tonumber) else null end),
