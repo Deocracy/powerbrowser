@@ -1,8 +1,14 @@
 {
-  "$comment": "MON-02 (Phase 53). The Upptime status targets, one per public surface the status page covers. This list is not hand-kept: scripts/verify-upptime.mjs derives the expected set from configuration.toml at check time and compares it by set equality. The events target (the telemetry POST /events route) joins when configuration.toml declares [telemetry] endpoint; until then the row names it as deferred and does not guess a host.",
+  "$comment": "MON-02 (Phase 53). The Upptime status targets, one per public surface the status page covers. What consumes this file: the quick row scripts/verify-upptime.mjs compares its target ids and source keys with configuration.toml by set equality. The live row (--live) reads the status repository's .upptimerc.yml and requires its sites to be exactly the URLs these targets derive from the manifest, so the declaration feeds the live check. The events target joins when configuration.toml declares [telemetry] endpoint; until then the row names it as deferred and does not guess a host.",
   "derivation_source": "configuration.toml",
   "targets": [
-    { "id": "updates", "source": "urls.update" },
-    { "id": "website", "source": "urls.homepage" }
+    {
+      "id": "updates",
+      "source": "urls.update"
+    },
+    {
+      "id": "website",
+      "source": "urls.homepage"
+    }
   ]
 }

@@ -13,7 +13,10 @@
 //  pointer      a declared target names a source key other than the one it derives from.
 //  no-schedule  no product-repository workflow carries a schedule key.
 //  disabled     a status workflow is not active.
-//  stale        a status workflow's last run is older than the sweep cadence allows.
+//  stale        a scheduled status workflow's last run is older than the sweep cadence allows.
+//                Event-triggered workflows are held to the enabled-state rule only.
+//  site         (live) the status repository's .upptimerc.yml watches exactly the URLs the
+//                declared targets derive from the manifest.
 //
 // The events target waits for [telemetry] endpoint in configuration.toml. Quick mode prints
 // that as a named deferral, never a silent pass. Live mode with an undeclared status slug is a
@@ -50,11 +53,12 @@ for (const a of args) {
 
 const originOf = u => new URL(u).origin;
 
-// Expected targets, derived from the manifest. Keys are target ids; values are the origin the target watches.
+// Expected targets, derived from the manifest. Keys are target ids; values are the URL the target watches.
+// The updates target is the full update descriptor URL, not the origin: /update.xml is the surface that matters.
 export function derive(manifest) {
     const urls = manifest.urls ?? {};
     const out = new Map();
-    if (urls.update) out.set('updates', `${originOf(urls.update)}/`);
+    if (urls.update) out.set('updates', new URL(urls.update).href);
     if (urls.homepage) out.set('website', `${originOf(urls.homepage)}/`);
     if (manifest.telemetry?.endpoint) out.set('events', `${originOf(manifest.telemetry.endpoint)}/events`);
     return out;
@@ -87,13 +91,18 @@ export function compareTargets(manifest, declaredDoc) {
     return { failures, deferred, expected };
 }
 
-// Sweep-report contract: workflow enabled-state and last-run age, from the gh api field names.
+// Sweep-report contract: workflow enabled-state for every status workflow, and last-run age only for
+// the workflows the Upptime template runs on a schedule. Event-triggered workflows (Setup CI, Static Site CI,
+// the Pages deployment) can sit idle for days without a fault, so the 36-hour rule does not apply to them.
+export const SCHEDULED_WORKFLOWS = new Set(['Uptime CI', 'Response Time CI', 'Graphs CI', 'Summary CI']);
+
 export function sweepVerdict(workflow, lastRunAt, nowMs = Date.now()) {
     const out = [];
     const name = workflow.name ?? workflow.path ?? 'unnamed workflow';
     if (workflow.state !== 'active') {
         out.push({ rule: 'disabled', msg: `workflow '${name}' is ${workflow.state}, not active, so its status checks do not run. Next step: enable the workflow in the status repository.` });
     }
+    if (!SCHEDULED_WORKFLOWS.has(name)) return out;
     if (!lastRunAt) {
         out.push({ rule: 'no-run', msg: `workflow '${name}' has no run on record. Next step: dispatch it once and re-check.` });
     } else {
@@ -101,6 +110,24 @@ export function sweepVerdict(workflow, lastRunAt, nowMs = Date.now()) {
         if (hours > MAX_AGE_HOURS) {
             out.push({ rule: 'stale', msg: `workflow '${name}' last ran ${Math.round(hours)} hours ago, beyond ${MAX_AGE_HOURS} hours. Next step: read the last run's log and the schedule.` });
         }
+    }
+    return out;
+}
+
+// The URLs the declared targets derive from the manifest: the declaration feeds the live compare.
+export function expectedUrlsFor(declaredDoc, manifest) {
+    const expected = derive(manifest);
+    return (Array.isArray(declaredDoc.targets) ? declaredDoc.targets : []).map(t => expected.get(t.id)).filter(Boolean);
+}
+
+// The status repository's .upptimerc.yml sites must watch exactly the expected URLs.
+export function siteFailures(expectedUrls, siteUrls) {
+    const out = [];
+    for (const u of expectedUrls) {
+        if (!siteUrls.includes(u)) out.push({ rule: 'site', msg: `the status repository's .upptimerc.yml does not watch ${u}. Next step: add a sites entry with url ${u}.` });
+    }
+    for (const u of siteUrls) {
+        if (!expectedUrls.includes(u)) out.push({ rule: 'site', msg: `the status repository's .upptimerc.yml watches ${u}, which the declared targets do not derive. Next step: remove that site, or declare its target in ${TARGETS_REL}.` });
     }
     return out;
 }
@@ -167,6 +194,19 @@ async function liveMain() {
         return 1;
     }
     const failures = [];
+    let siteUrls;
+    try {
+        const rc = JSON.parse(execFileSync('gh', ['api', `repos/${slug}/contents/.upptimerc.yml`], { encoding: 'utf8' }));
+        const yaml = createRequire(join(REPO_ROOT, 'theia', 'package.json'))('js-yaml');
+        siteUrls = ((yaml.load(Buffer.from(rc.content, 'base64').toString('utf8')) ?? {}).sites ?? []).map(x => x?.url).filter(Boolean);
+    } catch (e) {
+        failures.push(`the status repository's .upptimerc.yml could not be read (${e.message.split('\n')[0]}). Next step: add the .upptimerc.yml that declares the sites, and confirm gh access to ${slug}.`);
+    }
+    if (siteUrls) {
+        const manifest = toml.parse(readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8'));
+        const declared = JSON.parse(readFileSync(join(REPO_ROOT, TARGETS_REL), 'utf8'));
+        failures.push(...siteFailures(expectedUrlsFor(declared, manifest), siteUrls).map(f => f.msg));
+    }
     for (const wf of workflows) {
         let lastRunAt;
         try {
@@ -198,11 +238,32 @@ function selfTest(root) {
     }
     console.log('  ok  baseline -> green (declared targets equal the derivation; no schedule key)');
     const now = Date.parse('2026-10-31T12:00:00Z');
-    const active = { name: 'Status sweep', state: 'active' };
+    const active = { name: 'Uptime CI', state: 'active' };
     if (sweepVerdict(active, '2026-10-31T10:00:00Z', now).length === 0) {
         console.log('  ok  fresh active sweep -> green');
     } else {
         console.error(`${NAME}: --self-test FAIL -- a fresh active sweep went red`);
+        return 1;
+    }
+    // An event-triggered workflow idle for days is not stale: the 36-hour rule is scheduled-only.
+    if (sweepVerdict({ name: 'Setup CI', state: 'active' }, '2026-10-01T00:00:00Z', now).length === 0) {
+        console.log('  ok  idle event-triggered workflow (Setup CI) -> green, the age rule is scheduled-only');
+    } else {
+        console.error(`${NAME}: --self-test FAIL -- an idle event-triggered workflow went red on age`);
+        return 1;
+    }
+    // The updates target is the full descriptor URL, so /update.xml is what the status page watches.
+    if (derive(manifest).get('updates') === manifest.urls.update) {
+        console.log('  ok  updates target is the full update descriptor URL');
+    } else {
+        console.error(`${NAME}: --self-test FAIL -- the updates target is not the full update descriptor URL`);
+        return 1;
+    }
+    const expectedSites = expectedUrlsFor(declaredDoc, manifest);
+    if (siteFailures(expectedSites, expectedSites).length === 0) {
+        console.log('  ok  status repository watches exactly the declared targets -> green');
+    } else {
+        console.error(`${NAME}: --self-test FAIL -- a matching site set went red`);
         return 1;
     }
 
@@ -211,7 +272,9 @@ function selfTest(root) {
         ['dropped website target', compareTargets(manifest, { ...declaredDoc, targets: declaredDoc.targets.filter(t => t.id !== 'website') }).failures, 'dropped', "'website'"],
         ['added search target', compareTargets(manifest, { ...declaredDoc, targets: [...declaredDoc.targets, { id: 'search', source: 'urls.search' }] }).failures, 'added', "'search'"],
         ['events endpoint declared in the manifest but not in the targets', compareTargets({ ...manifest, telemetry: { endpoint: 'https://telemetry.example.org/v1/events' } }, declaredDoc).failures, 'dropped', "'events'"],
-        ['disabled status workflow', sweepVerdict({ name: 'Status sweep', state: 'disabled_manually' }, '2026-10-31T10:00:00Z', now), 'disabled', 'is disabled_manually'],
+        ['disabled status workflow', sweepVerdict({ name: 'Uptime CI', state: 'disabled_manually' }, '2026-10-31T10:00:00Z', now), 'disabled', 'is disabled_manually'],
+        ['status repository drops the update feed', siteFailures(expectedSites, expectedSites.filter(u => !u.endsWith('/update.xml'))), 'site', 'update.xml'],
+        ['status repository watches the origin root instead of the feed', siteFailures(expectedSites, expectedSites.map(u => u.replace(/update\.xml$/, ''))), 'site', 'update.xml'],
         ['stale last-run age', sweepVerdict(active, '2026-10-20T10:00:00Z', now), 'stale', 'hours ago'],
         ['schedule key added to a product workflow', scheduleFailures({ '.github/workflows/x.yml': 'on:\n  schedule:\n    - cron: "0 3 * * *"\n' }), 'no-schedule', '.github/workflows/x.yml'],
     ];
@@ -220,7 +283,7 @@ function selfTest(root) {
         // A finding must carry the rule and name the fragment (target, workflow or file) in its message.
         const hit = found.some(f => f.rule === rule && `${f.file ?? ''} ${f.msg}`.includes(fragment));
         if (hit) {
-            console.log(`  ok  ${name} -> red, naming '${fragment}' [${rule}]`);
+            console.log(`  ok  ${name} -> red, naming ${fragment} [${rule}]`);
         } else {
             console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${fragment} [${rule}]; got: ${found.map(f => `${f.rule}: ${f.msg}`).join(' | ') || '(no failures at all)'}`);
             failed += 1;

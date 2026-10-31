@@ -4831,8 +4831,10 @@ run_own_checks() {
     # product workflow carries a schedule key (D-77). Honestly --quick: text reads only.
     "upptime-config|node $REPO_ROOT/scripts/verify-upptime.mjs"
     # upptime-config-self-test plants a dropped target, an added target, an events endpoint the
-    # declaration omits, a disabled status workflow, a stale last-run age and a schedule key; each
-    # goes red naming the target or workflow. The fresh active sweep and the matching set stay green.
+    # declaration omits, a disabled status workflow, a stale scheduled workflow, a status site set that
+    # drops the update feed or watches the origin root, and a schedule key; each goes red naming the
+    # target, workflow or URL. The fresh scheduled sweep, an idle event-triggered workflow and the
+    # matching set stay green.
     "upptime-config-self-test|node $REPO_ROOT/scripts/verify-upptime.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
