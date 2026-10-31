@@ -4531,10 +4531,11 @@ run_own_checks() {
     "crash-submit|node $REPO_ROOT/scripts/verify-worker-submit.mjs"
     "crash-submit-self-test|node $REPO_ROOT/scripts/verify-worker-submit.mjs --self-test"
 
-    # NEW (Phase 57, TEL-12): the per-target symbols archive gate. The archive name derives from
-    # package-name.mk and Makefile.in, every target's symbols name carries its BUILD_TARGET token, no name
-    # collides with a DIST-07 name, and SHA256SUMS covers each one. release-symbols-self-test plants a missing
-    # entry, a stale entry, an asset absent from SHA256SUMS and a token-less collision, each red naming its asset.
+    # NEW (Phase 57, TEL-12): the per-target symbols archive gate. The archive suffix derives from
+    # package-name.mk and Makefile.in, every asset-table row is a token or marked pending, no name collides
+    # with the DIST-07 names (verify-release-asset-set.mjs --expected), the release workflow enumerates assets/
+    # into SHA256SUMS, the locale rename is recorded, and the runbook reads only annotations Gecko writes.
+    # release-symbols-self-test runs ten plants through runChecks, each red naming its asset or rule.
     # Honestly --quick: text reads of upstream make files, docs and configuration.toml. No build, no network.
     "release-symbols|node $REPO_ROOT/scripts/verify-release-symbols.mjs"
     "release-symbols-self-test|node $REPO_ROOT/scripts/verify-release-symbols.mjs --self-test"
