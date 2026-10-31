@@ -32,10 +32,9 @@ Run in the main clone of this branch (not an isolated worktree): every touched s
 
 WR-02 peak memory, 18 MiB body of `\r\n--abc` (413) and of `\r\n--a` (400 up front), node child process, harness RSS: 144 MiB each, of which about 100 MiB is the node baseline plus the harness's own copy of the body; the reviewer's case measured 596-736 MiB before the fix. The gate asserts at most 32 MiB over the same body refused up front.
 
-## Known limits
+## Follow-up (coordinator request after the first pass)
 
-- The empty-minidump case is rejected by an existing parser quirk (the part's trailing CRLF strip consumes the header terminator), not by the new size check; the gate names the MDMP-signature case for that mutation.
-- That same trailing-CRLF strip removes two data bytes from a part whose data ends in CRLF (pre-existing, both receivers, not in the review); not changed here.
+- PARSER-CRLF FIXED (commit recorded in git log as "fix(57): stop the multipart parser eating CRLF data bytes"): the trailing-CRLF strip is removed from both parsers. The CRLF before a delimiter belongs to the delimiter (RFC 2046) and the split already consumes it, so a part's bytes are exactly as sent. Plants: a minidump ending in CRLF is stored with an identical sha256 (Worker gate, with a mutation plant that restores the strip, and a collector self-test case), and an empty minidump part is now refused by the explicit 32-byte/MDMP rule (the Worker mutation plant for that rule names `empty minidump`). verify-ng-068 is untouched and green.
 
 ---
 

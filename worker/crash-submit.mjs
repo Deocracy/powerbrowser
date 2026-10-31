@@ -189,9 +189,8 @@ export function parseMultipart(bytes, contentType) {
         if (chunk[0] === 45 && chunk[1] === 45) continue; // closing delimiter
         if (chunk[0] === 13 && chunk[1] === 10) chunk = chunk.subarray(2);
         else if (chunk[0] === 10) chunk = chunk.subarray(1);
-        if (chunk.length >= 2 && chunk[chunk.length - 2] === 13 && chunk[chunk.length - 1] === 10) {
-            chunk = chunk.subarray(0, chunk.length - 2);
-        }
+        // Nothing is stripped from the end: the CRLF before a delimiter belongs to the delimiter (RFC 2046), which the
+        // split already consumed, so a part's bytes are exactly the bytes sent, even when they end in CRLF.
         const headerEnd = indexOfBytes(chunk.subarray(0, MAX_HEADER_BYTES + 4), CRLF_CRLF, 0);
         if (headerEnd === -1) continue;
         const name = dispositionName(latin1(chunk.subarray(0, headerEnd)));

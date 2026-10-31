@@ -34,6 +34,7 @@
 //   node scripts/verify-worker-submit.mjs --self-test
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -453,6 +454,18 @@ async function acceptProblems() {
     return problems;
 }
 
+/** A minidump whose payload ends in CRLF is stored byte for byte: the CRLF before a delimiter is the delimiter's. */
+async function trailingCrlfProblems() {
+    const sent = Buffer.concat([binaryDump(), Buffer.from('\r\n\r\n', 'latin1')]);
+    const store = memoryStore();
+    const verdict = await drive(submitRequest(buildMultipart([{ name: crashSubmit.MINIDUMP_PART_NAME, data: sent }])), store);
+    const id = /^CrashID=(.+)$/.exec(verdict.body)?.[1];
+    if (verdict.status !== 200 || !id) return [`a minidump ending in CRLF answered ${verdict.status} ${JSON.stringify(verdict.body)}, want 200 CrashID=`];
+    const stored = store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.dmp`);
+    const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+    return sha(Buffer.from(stored)) === sha(sent) ? [] : [`a minidump whose payload ends in CRLF was stored as ${stored.byteLength} bytes, sent ${sent.length}: the stored bytes' sha256 differs, so the parser ate data bytes (payload ends in CRLF)`];
+}
+
 /** The stored record carries only server-made fields, allowlisted annotation keys, and known part names. */
 function recordShapeProblems(record) {
     const problems = [];
@@ -637,6 +650,7 @@ async function workerProblems(workerPath) {
         ...(await handlerProblems()),
         ...(await acceptProblems()),
         ...(await hostileNameProblems()),
+        ...(await trailingCrlfProblems()),
         ...floodProblems(workerPath),
         ...(await declaredLengthProblems()),
         ...(await storeFaultProblems()),
@@ -687,7 +701,8 @@ async function selfTest() {
         ['boundary floor removed', 'boundary.length < MIN_BOUNDARY_LENGTH ||', '', 'one-character boundary'],
         ['header cap removed', 'chunk.subarray(0, MAX_HEADER_BYTES + 4)', 'chunk', 'very long header block'],
         ['part name cap removed', ' || name.length > MAX_PART_NAME_LENGTH', '', 'part name over the name cap'],
-        ['MDMP check removed', 'minidump.data.byteLength < MIN_MINIDUMP_BYTES || !MDMP_MAGIC.every((byte, i) => minidump.data[i] === byte)', 'false', 'without the MDMP signature'],
+        ['MDMP check removed', 'minidump.data.byteLength < MIN_MINIDUMP_BYTES || !MDMP_MAGIC.every((byte, i) => minidump.data[i] === byte)', 'false', 'empty minidump'],
+        ['trailing CRLF stripped from part data', 'const headerEnd = indexOfBytes(chunk.subarray(0, MAX_HEADER_BYTES + 4), CRLF_CRLF, 0);', 'if (chunk.length >= 2 && chunk[chunk.length - 2] === 13 && chunk[chunk.length - 1] === 10) chunk = chunk.subarray(0, chunk.length - 2);\n        const headerEnd = indexOfBytes(chunk.subarray(0, MAX_HEADER_BYTES + 4), CRLF_CRLF, 0);', 'payload ends in CRLF'],
         ['delete on record failure removed', 'await env.CRASH_STORE.delete(dumpKey);', 'void dumpKey;', 'orphaned'],
         ['record written before the minidump', 'await env.CRASH_STORE.put(dumpKey, minidump.data.slice());', 'await env.CRASH_STORE.put(recordKey, record);\n        await env.CRASH_STORE.put(dumpKey, minidump.data.slice());', 'minidump write fault'],
         ['buffer sized from Content-Length', 'new Uint8Array(READ_INITIAL_BYTES)', 'new Uint8Array(Number.isFinite(declared) && declared > 0 ? declared : READ_INITIAL_BYTES)', 'Content-Length must only refuse'],

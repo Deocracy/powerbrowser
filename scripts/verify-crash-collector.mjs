@@ -421,6 +421,26 @@ function selfTest() {
             console.log(`${NAME}: --self-test -- a hostile part name was recorded as ${OTHER_PART_NAME}, not stored`);
         }
 
+        // Plant 4f: a minidump whose payload ends in CRLF is stored byte for byte (the CRLF before a delimiter is the
+        // delimiter's, not data).
+        {
+            const storeDir = storeOf('crlf');
+            const sent = Buffer.concat([Buffer.from('MDMP-FIXTURE'), Buffer.from('\r\n\r\n', 'latin1')]);
+            const verdict = handleSubmit({
+                body: buildMultipart([{ name: MINIDUMP_PART_NAME, data: sent }]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir,
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            });
+            const stored = verdict.crashId ? readFileSync(join(storeDir, `${verdict.crashId}.dmp`)) : null;
+            if (!stored || !stored.equals(sent)) {
+                console.error(`${NAME}: --self-test FAIL -- a minidump whose payload ends in CRLF was not stored byte for byte (sent ${sent.length} bytes, stored ${stored ? stored.length : 'none'})`);
+                process.exit(1);
+            }
+            console.log(`${NAME}: --self-test -- a minidump ending in CRLF was stored byte for byte`);
+        }
+
         // Plant 5: a tripped throttle rule -- the soft-reject body on the
         // SUCCESS status. The body is well-formed (it would be accepted
         // but for the throttle), so the soft-reject proves the throttle
