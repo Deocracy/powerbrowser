@@ -4794,6 +4794,15 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 53, GH-03): the triage workflow shape. The row reads the good fixture in fixture
+    # mode (53-01) and the declared workflow in tree mode (53-02), derives the label set from
+    # labels.json, and runs the workflow's own fixed-text step against a hostile model output with
+    # a stub gh. Honestly --quick: text reads, js-yaml from theia/, and a mkdtemp shim; no network.
+    "triage-workflow|node $REPO_ROOT/scripts/verify-triage.mjs"
+    # triage-workflow-self-test plants twenty-one faults in the good fixture, each red naming the
+    # file, job and rule, and requires the hostile-output proof to go red on a removed label filter
+    # and on a raw model template id. The green control runs first. It writes nothing in the tree.
+    "triage-workflow-self-test|node $REPO_ROOT/scripts/verify-triage.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
