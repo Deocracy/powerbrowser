@@ -60,7 +60,20 @@ None.
 
 ## Threat Flags
 
-None beyond the plan's threat model. The triage job holds `issues: write` and `contents: read` only, and no step passes issue text into a shell or a prompt.
+None beyond the plan's threat model. The original single triage job held `issues: write`, and the two-job split below removes that from the model step. No step passes issue text into a shell or a prompt.
+
+## Security fix: two-job split
+
+The single `triage` job ran `claude-code-action`, which reads attacker-controlled issue text, in the same job that held `issues: write`. A prompt injection could use that token. GitHub cannot narrow a token per step, so the job is split (commit `a7d2b0f`):
+
+- **`classify`** runs the pinned model step with job permissions `contents: read` and `issues: read`. Its step output is exported as the job output `result`. Pins, prompt, `claude_args`, `show_full_output: false` and `allowed_non_write_users: "*"` are unchanged.
+- **`apply`** has `needs: classify` and job permissions `contents: read` and `issues: write`. It runs no AI step. It checks out with `persist-credentials: false`, then runs the same non-AI post step, which reads the model output only through `env:` from `needs.classify.outputs.result`.
+- The workflow-level permissions remain the ceiling `contents: read` and `issues: write`. Each job narrows it. Both jobs stay in environment `triage` on `ubuntu-latest` with `timeout-minutes: 10`, and the concurrency group is unchanged.
+- If `classify` fails, `apply` is skipped and no comment is posted. This matches the single-job behaviour, where a failed model step also skipped the post step. The post step still tolerates empty or garbage model output.
+
+`scripts/verify-triage.mjs` now requires exactly the two jobs and adds the `needs`, `ai-write` and `post-ai` rules. The `environment`, `runner`, `timeout`, `interpolation`, `event-text` and `close` rules apply to both jobs. The model-step rules apply to `classify`, and the post-step rules apply to `apply`. Its self-test has 29 planted faults, including the AI job granted `issues: write`, the AI job with no job permissions (which inherits the workflow `issues: write`), and a model step moved into `apply`. The good fixture `scripts/fixtures/triage-good.yml` is a copy of the tree workflow.
+
+`scripts/verify-workflows.mjs` admits effective `issues: write` on triage only on job `apply`, and the `issues write on triage.yml` control and a new red plant now name that job.
 
 ## Self-Check: PASSED
 
