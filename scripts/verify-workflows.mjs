@@ -643,6 +643,25 @@ function runChecks(root, overrides = {}) {
                     for (const o of ['diff-sha256', 'base-sha']) {
                         if (!/^\$\{\{\s*steps\.[\w-]+\.outputs\.[\w-]+\s*\}\}$/.test(String(job.outputs?.[o] ?? ''))) gf(`has no job output ${o} taken from a step, so the later jobs cannot bind the diff to what this job produced. Next step: export ${o} from a step that runs after or without the model.`);
                     }
+                    // WR-06 (re-review): each output comes from the step that does the work, not from any step that has an output of that
+                    // name. diff-sha256: a step that hashes work.diff and runs after the emit step; base-sha: a step that reads the prep's
+                    // base-sha and runs after the prep and before the model. A rebinding to an earlier or unrelated step passes the shape test above.
+                    const at = (re) => steps.findIndex(x => re.test(runText(x)));
+                    const claudeAt = steps.findIndex(x => typeof x.uses === 'string' && x.uses.startsWith(`${CLAUDE_ACTION}@`));
+                    const outStep = (o) => {
+                        const m = /^\$\{\{\s*steps\.([\w-]+)\.outputs\.([\w-]+)\s*\}\}$/.exec(String(job.outputs?.[o] ?? ''));
+                        return m === null ? null : { id: m[1], name: m[2], idx: steps.findIndex(x => x.id === m[1]) };
+                    };
+                    const dg = outStep('diff-sha256');
+                    const emitAt = at(/fixer-prepare\.sh\s+--emit-diff/);
+                    if (dg !== null && (dg.name !== 'diff-sha256' || dg.idx < 0 || !/sha256sum[^\n]*work\.diff/.test(runText(steps[dg.idx])) || emitAt < 0 || dg.idx <= emitAt)) {
+                        gf(`its diff-sha256 output is taken from step ${JSON.stringify(dg.id)}, which is not a step that runs sha256sum on work.diff after the emit step (fixer-prepare.sh --emit-diff), so the digest the later jobs bind to may not describe the emitted diff. Next step: export it from the step that hashes the emitted diff.`);
+                    }
+                    const bs = outStep('base-sha');
+                    const prepAt = at(/fixer-prepare\.sh\s+--tag=/);
+                    if (bs !== null && (bs.name !== 'base-sha' || bs.idx < 0 || !/fixer-state\/base-sha/.test(runText(steps[bs.idx])) || prepAt < 0 || bs.idx <= prepAt || (claudeAt >= 0 && bs.idx >= claudeAt))) {
+                        gf(`its base-sha output is taken from step ${JSON.stringify(bs.id)}, which is not a step that reads the prep's base-sha after the prep and before the model runs, so the base the gate and fix-pr check out may not be the commit the model started from. Next step: export it from the step that reads fixer-state/base-sha.`);
+                    }
                 }
                 if (jobId === 'fix-gate') {
                     if (job.environment !== undefined) gf(`has environment ${JSON.stringify(job.environment)}; the gate runs the model's code and may hold no environment or its secrets. Next step: remove the environment key.`);
@@ -690,6 +709,37 @@ function runChecks(root, overrides = {}) {
                         if (w['persist-credentials'] !== false || w.token !== undefined) gf(`a checkout step keeps or sets a credential (persist-credentials must be false, no token input). Next step: set persist-credentials: false.`);
                         if (w.path === undefined && w.ref !== 'main') gf(`its root checkout is ref ${JSON.stringify(w.ref ?? '(default)')}, not main, so scripts from the target branch run with the App token. Next step: check out main at the root and the target under a path.`);
                         if (w.path !== undefined && exprOf(w.ref) !== '${{needs.fix.outputs.base-sha}}') gf(`its target checkout is not at the gated base-sha (needs.fix.outputs.base-sha), so it could publish onto a tree nobody gated. Next step: check out that exact commit.`);
+                    }
+                    // WR-06 (re-review): the bytes verified are the bytes applied and published. One job variable names the path; the step that
+                    // hashes it, the step that re-gates it, the step that applies it and the opener all read that variable, and none of them
+                    // may swallow a failure (continue-on-error, || true, set +e), because a swallowed re-gate publishes bytes nobody verified.
+                    if (exprOf(job.env?.FIX_DIFF) !== '${{runner.temp}}/fix-diff/work.diff') gf(`job env FIX_DIFF is ${JSON.stringify(job.env?.FIX_DIFF ?? '(absent)')}, not \${{ runner.temp }}/fix-diff/work.diff, so the steps that hash, re-gate, apply and render the diff have no one path. Next step: set FIX_DIFF on the job.`);
+                    for (const d of uses('actions/download-artifact@')) {
+                        if (exprOf(d.with?.path) !== '${{runner.temp}}/fix-diff') gf(`a download-artifact step puts the gated diff at ${JSON.stringify(d.with?.path ?? '(absent)')}, not \${{ runner.temp }}/fix-diff, so FIX_DIFF is not the downloaded file. Next step: download into \${{ runner.temp }}/fix-diff.`);
+                    }
+                    const swallow = /\|\|\s*(?:true|:|exit\s+0)\b|;\s*true\s*$|\bset\s+\+e\b/m;
+                    const stepKinds = [
+                        ['re-gates the diff (verify-fix-gate.mjs --static-only)', steps.filter(x => /verify-fix-gate\.mjs\s+--static-only/.test(runText(x))), [[/sha256sum\s+"?\$FIX_DIFF"?(?![\w/.])/, 'hash "$FIX_DIFF"'], [/--static-only\s+--diff="?\$FIX_DIFF"?(?![\w/.])/, '--diff="$FIX_DIFF"']]],
+                        ['applies the diff (apply --index)', steps.filter(x => /\bapply\s+--index\b/.test(runText(x))), [[/\bapply\s+--index\s+"?\$FIX_DIFF"?(?![\w/.])/, 'apply --index "$FIX_DIFF"']]],
+                        ['renders the PR (fix-open-pr.mjs --open)', steps.filter(x => /fix-open-pr\.mjs\s+--open/.test(runText(x))), [[/--diff="?\$FIX_DIFF"?(?![\w/.])/, '--diff="$FIX_DIFF"']]],
+                    ];
+                    for (const [what, found, needs2] of stepKinds) {
+                        if (found.length !== 1) gf(`has ${found.length} step(s) that ${what}, not exactly one. Next step: restore the step.`);
+                        for (const x of found) {
+                            const t = runText(x);
+                            if (x['continue-on-error'] !== undefined && x['continue-on-error'] !== false) gf(`the step that ${what} sets continue-on-error: ${JSON.stringify(x['continue-on-error'])}, so a failure there no longer stops the job and bytes nobody verified can be published. Next step: remove it.`);
+                            if (swallow.test(t)) gf(`the step that ${what} swallows a failure (\`|| true\`, \`|| :\`, \`|| exit 0\`, \`; true\` or \`set +e\`), so a failed check no longer stops the job. Next step: let the failure fail the step.`);
+                            for (const [re, label] of needs2) {
+                                if (!re.test(t)) gf(`the step that ${what} does not use ${label}, the path the diff was hashed at, so the bytes it works on may not be the verified bytes. Next step: use "$FIX_DIFF".`);
+                            }
+                            if (/work\.diff/.test(t)) gf(`the step that ${what} names a work.diff path directly instead of "$FIX_DIFF". Next step: use the one job variable.`);
+                        }
+                    }
+                    // IN-03: the apply step's git helper reads no system or global config and no attributes file, as fixer-prepare.sh does.
+                    for (const x of steps.filter(y => /\bapply\s+--index\b/.test(runText(y)))) {
+                        for (const frag of ['GIT_CONFIG_NOSYSTEM=1', 'GIT_CONFIG_GLOBAL=/dev/null', 'core.attributesFile=/dev/null', 'core.hooksPath=/dev/null', 'core.fsmonitor=false']) {
+                            if (!runText(x).includes(frag)) gf(`the git helper of the step that applies the diff lacks ${frag}, so a system or global git config, a filter driver or a hook of the checked-out tree can change what apply and commit store. Next step: add it to the helper.`);
+                        }
                     }
                     if (!steps.some(x => /verify-fix-gate\.mjs\s+--static-only/.test(runText(x)) && /sha256sum/.test(runText(x)) && exprOf(x.env?.DIFF_SHA256) === '${{needs.fix.outputs.diff-sha256}}')) gf(`does not check the downloaded diff against needs.fix.outputs.diff-sha256 and re-run verify-fix-gate.mjs --static-only on it before publishing. Next step: add that step.`);
                 }
@@ -1027,6 +1077,11 @@ function selfTest() {
         '          NONCE=$(head -c 16 /dev/urandom | od -An -tx1)',
         '          echo "fence $NONCE"',
         '          gh run list --workflow verify.yml --commit "$BASE" --status failure',
+        '      - run: bash scripts/fixer-prepare.sh --tag="$TARGET_TAG" --state="$RUNNER_TEMP/fixer-state"',
+        '      - id: base',
+        '        run: |',
+        '          BASE=$(cat "$RUNNER_TEMP/fixer-state/base-sha")',
+        '          echo "base-sha=$BASE" >> "$GITHUB_OUTPUT"',
         `      - uses: ${FIX_PIN}`,
         '        if: ${{ !inputs.dry-run }}',
         '        with:',
@@ -1039,6 +1094,10 @@ function selfTest() {
         '          display_report: false',
         "          prompt: 'Fix release ${{ inputs.release-key }} log ${{ steps.log.outputs.nonce }}'",
         `          claude_args: '${CLAUDE_ARGS}'`,
+        '      - run: bash scripts/fixer-prepare.sh --emit-diff --state="$RUNNER_TEMP/fixer-state" --out="$RUNNER_TEMP/work.diff"',
+        '      - id: digest',
+        '        run: |',
+        `          echo "diff-sha256=$(sha256sum "$RUNNER_TEMP/work.diff" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"`,
         '  fix-gate:',
         '    needs: fix',
         '    runs-on: ubuntu-latest',
@@ -1070,6 +1129,8 @@ function selfTest() {
         '    runs-on: ubuntu-latest',
         '    environment: bot',
         '    permissions: {}',
+        '    env:',
+        '      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff',
         '    steps:',
         `      - uses: ${CHECKOUT}`,
         '        with:',
@@ -1084,13 +1145,17 @@ function selfTest() {
         '        if: ${{ !inputs.dry-run }}',
         '        with:',
         '          name: fix-diff',
-        '          path: /tmp/fix-diff',
+        '          path: ${{ runner.temp }}/fix-diff',
         '      - if: ${{ !inputs.dry-run }}',
         '        env:',
         '          DIFF_SHA256: ${{ needs.fix.outputs.diff-sha256 }}',
         '        run: |',
-        '          sha256sum /tmp/fix-diff/work.diff',
-        '          node scripts/verify-fix-gate.mjs --static-only --diff=/tmp/fix-diff/work.diff',
+        '          sha256sum "$FIX_DIFF"',
+        '          node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF"',
+        '      - if: ${{ !inputs.dry-run }}',
+        '        run: |',
+        '          T() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C target -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null "$@"; }',
+        '          T apply --index "$FIX_DIFF"',
         `      - uses: ${FIX_APP}`,
         '        id: app',
         '        if: ${{ !inputs.dry-run }}',
@@ -1100,7 +1165,7 @@ function selfTest() {
         '      - if: ${{ !inputs.dry-run }}',
         '        env:',
         '          GH_TOKEN: ${{ steps.app.outputs.token }}',
-        '        run: node scripts/fix-open-pr.mjs',
+        '        run: node scripts/fix-open-pr.mjs --open --diff="$FIX_DIFF"',
         '',
     ].join('\n');
     const fixerEdit = (from, to) => {
@@ -1293,10 +1358,26 @@ function selfTest() {
         ['fix-pr not needing the fix job', gateEdit('    needs: [fix, fix-gate]\n    if: ${{ !inputs.dry-run && github.run_attempt == 1 && needs.fix-gate.result', '    needs: fix-gate\n    if: ${{ !inputs.dry-run && github.run_attempt == 1 && needs.fix-gate.result'), rel(T), 'fix-pr', 'fixer-gate', 'does not need fix'],
         ['fix-pr root checkout of the target branch', gateEdit("          ref: main\n          persist-credentials: false\n\n      - name: Check out the target at exactly the gated base commit, under target/", "          ref: ${{ inputs.target-branch }}\n          persist-credentials: false\n\n      - name: Check out the target at exactly the gated base commit, under target/"), rel(T), 'fix-pr', 'fixer-gate', 'not main'],
         ['fix-pr target checkout at the branch name instead of the base-sha', gateEdit('          ref: ${{ needs.fix.outputs.base-sha }}\n          path: target', '          ref: ${{ inputs.target-branch }}\n          path: target'), rel(T), 'fix-pr', 'fixer-gate', 'gated base-sha'],
-        ['fix-pr App token read by a second step', gateEdit('          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          T() {', '          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n          LEAK: ${{ steps.app.outputs.token }}\n        run: |\n          set -euo pipefail\n          T() {'), rel(T), 'fix-pr', 'fixer-gate', 'read by 2 step(s)'],
+        ['fix-pr App token read by a second step', gateEdit('          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          # No system or global git config', '          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n          LEAK: ${{ steps.app.outputs.token }}\n        run: |\n          set -euo pipefail\n          # No system or global git config'), rel(T), 'fix-pr', 'fixer-gate', 'read by 2 step(s)'],
         ['fix-pr App token with workflows write as well', gateEdit('          permission-pull-requests: write\n\n      # The one step that holds the token', '          permission-pull-requests: write\n          permission-workflows: write\n\n      # The one step that holds the token'), rel(T), 'fix-pr', 'fixer-gate', 'not exactly contents and pull-requests write'],
-        ['fix-pr not re-running the pure stages on the digest-checked bytes', gateEdit('          node scripts/verify-fix-gate.mjs --static-only --diff="$DIFF"', '          true'), rel(T), 'fix-pr', 'fixer-gate', '--static-only'],
+        ['fix-pr not re-running the pure stages on the digest-checked bytes', gateEdit('          node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF"', '          true'), rel(T), 'fix-pr', 'fixer-gate', '--static-only'],
         ['a claude step inside fix-pr', gateEdit("      - name: Mint the bot App token\n        id: app\n        if: ${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}\n", `      - uses: ${FIX_PIN}\n        if: \${{ !inputs.dry-run }}\n      - name: Mint the bot App token\n        id: app\n        if: \${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}\n`), rel(T), 'fix-pr', 'fixer-gate', 'claude-code-action step'],
+        // WR-06 (re-review): the verify, apply and publish steps cannot swallow a failure, and read the one hashed path.
+        ['fix-pr verify step with continue-on-error', gateEdit('      - name: Verify the diff digest and re-run the pure gate stages on it\n        if: ${{ !inputs.dry-run }}\n', '      - name: Verify the diff digest and re-run the pure gate stages on it\n        if: ${{ !inputs.dry-run }}\n        continue-on-error: true\n'), rel(T), 'fix-pr', 'fixer-gate', 'continue-on-error'],
+        ['fix-pr static re-run followed by || true', gateEdit('node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF"', 'node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF" || true'), rel(T), 'fix-pr', 'fixer-gate', 'swallows a failure'],
+        ['fix-pr static re-run after set +e', gateEdit('          set -euo pipefail\n          GOT=$(sha256sum "$FIX_DIFF"', '          set +e\n          GOT=$(sha256sum "$FIX_DIFF"'), rel(T), 'fix-pr', 'fixer-gate', 'swallows a failure'],
+        ['fix-pr apply reading another file than the hashed one', gateEdit('T apply --index "$FIX_DIFF"', 'T apply --index "$GITHUB_WORKSPACE/other.diff"'), rel(T), 'fix-pr', 'fixer-gate', 'apply --index "$FIX_DIFF"'],
+        ['fix-pr apply step with continue-on-error', gateEdit('      - name: Apply the gated diff in target/ and commit it (skipped in dry-run)\n        id: apply\n', '      - name: Apply the gated diff in target/ and commit it (skipped in dry-run)\n        id: apply\n        continue-on-error: true\n'), rel(T), 'fix-pr', 'fixer-gate', 'continue-on-error'],
+        ['fix-pr opener rendering from another file', gateEdit('fix-open-pr.mjs --open --diff="$FIX_DIFF"', 'fix-open-pr.mjs --open --diff="$GITHUB_WORKSPACE/other.diff"'), rel(T), 'fix-pr', 'fixer-gate', '--diff="$FIX_DIFF"'],
+        ['fix-pr re-gate reading a literal path', gateEdit('--static-only --diff="$FIX_DIFF"', '--static-only --diff="$RUNNER_TEMP/fix-diff/work.diff"'), rel(T), 'fix-pr', 'fixer-gate', 'work.diff'],
+        ['fix-pr FIX_DIFF pointing at another file', gateEdit('      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff', '      FIX_DIFF: ${{ runner.temp }}/other/work.diff'), rel(T), 'fix-pr', 'fixer-gate', 'job env FIX_DIFF'],
+        ['fix job diff-sha256 rebound to the log step', gateEdit('diff-sha256: ${{ steps.digest.outputs.diff-sha256 }}', 'diff-sha256: ${{ steps.log.outputs.diff-sha256 }}'), rel(T), 'fix', 'fixer-gate', 'diff-sha256 output is taken from step "log"'],
+        ['fix job digest step without sha256sum', gateEdit('echo "diff-sha256=$(sha256sum "$RUNNER_TEMP/work.diff" | cut -d\' \' -f1)" >> "$GITHUB_OUTPUT"', 'echo "diff-sha256=0000" >> "$GITHUB_OUTPUT"'), rel(T), 'fix', 'fixer-gate', 'diff-sha256 output'],
+        ['fix job base-sha rebound to the digest step', gateEdit('base-sha: ${{ steps.base.outputs.base-sha }}', 'base-sha: ${{ steps.digest.outputs.base-sha }}'), rel(T), 'fix', 'fixer-gate', 'base-sha output is taken from step "digest"'],
+        // IN-03: the apply step's git helper reads no system or global config and no attributes file.
+        ['fix-pr git helper without GIT_CONFIG_NOSYSTEM', gateEdit('GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C target', 'GIT_CONFIG_GLOBAL=/dev/null git -C target'), rel(T), 'fix-pr', 'fixer-gate', 'GIT_CONFIG_NOSYSTEM=1'],
+        ['fix-pr git helper without GIT_CONFIG_GLOBAL', gateEdit('GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C target', 'GIT_CONFIG_NOSYSTEM=1 git -C target'), rel(T), 'fix-pr', 'fixer-gate', 'GIT_CONFIG_GLOBAL=/dev/null'],
+        ['fix-pr git helper without core.attributesFile', gateEdit(' -c core.attributesFile=/dev/null "$@"', ' "$@"'), rel(T), 'fix-pr', 'fixer-gate', 'core.attributesFile=/dev/null'],
         ['fix-pr download-artifact with another run-id', gateEdit('      - name: Download the gated diff\n        if: ${{ !inputs.dry-run }}\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n', '      - name: Download the gated diff\n        if: ${{ !inputs.dry-run }}\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          run-id: 777\n'), rel(T), 'fix-pr', 'fixer-gate', 'run-id'],
     );
     plants.push(
@@ -1313,7 +1394,7 @@ function selfTest() {
         ['Claude step without the federation rule id', fixerEdit('          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}\n', ''), rel(T), 'fix', 'fixer-auth', 'anthropic_federation_rule_id'],
         ['Claude step without the organization id', fixerEdit('          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}\n', ''), rel(T), 'fix', 'fixer-auth', 'anthropic_organization_id'],
         ['id-token write on fix-gate', fixerEdit('      contents: read\n    if: "' + GATE_IF + '"', '      contents: read\n      id-token: write\n    if: "' + GATE_IF + '"'), rel(T), 'fix-gate', 'fixer-auth', 'id-token'],
-        ['ANTHROPIC_API_KEY referenced in fix-pr (environment bot)', fixerEdit('    permissions: {}\n    steps:', '    permissions: {}\n    env:\n      FALLBACK_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n    steps:'), rel(T), 'fix-pr', 'fixer-auth', 'fixer'],
+        ['ANTHROPIC_API_KEY referenced in fix-pr (environment bot)', fixerEdit('      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff\n    steps:', '      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff\n      FALLBACK_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n    steps:'), rel(T), 'fix-pr', 'fixer-auth', 'fixer'],
     );
     plants.push(
         ['fix job timeout-minutes 5', fixerEdit('    timeout-minutes: 90', '    timeout-minutes: 5'), rel(T), 'fix', 'fixer-spend', 'timeout-minutes'],

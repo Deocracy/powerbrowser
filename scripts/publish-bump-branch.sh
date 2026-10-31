@@ -15,6 +15,11 @@
 # hold, so it exits 0. A failed read or push exits non-zero.
 set -euo pipefail
 
+# No system or global git config, and no attributes file or hooks from the tree being pushed: a filter driver or hook the
+# runner image or the target defines must not change what is stored or pushed (IN-03, as fixer-prepare.sh does).
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+GIT_SAFE=(-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null)
+
 BRANCH="${1:?usage: publish-bump-branch.sh <branch> <base-sha>}"
 BASE="${2:?usage: publish-bump-branch.sh <branch> <base-sha>}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
@@ -41,7 +46,7 @@ else
   TIP=""
 fi
 
-LOCAL_TREE=$(git rev-parse 'HEAD^{tree}')
+LOCAL_TREE=$(git "${GIT_SAFE[@]}" rev-parse 'HEAD^{tree}')
 # The plan is read from the script's own checkout, so the caller can run this with another repository as the working
 # directory (the fix-pr job publishes target/ while the trusted scripts come from main) without running that tree's code.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,11 +62,11 @@ echo "::add-mask::$AUTH"
 
 case "$ACTION" in
   create)
-    git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" push origin "HEAD:refs/heads/${BRANCH}"
+    git "${GIT_SAFE[@]}" -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" push origin "HEAD:refs/heads/${BRANCH}"
     ;;
   force-with-lease)
     # Replaces the bot-only tip that was read, and fails if the branch moved since.
-    git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" push --force-with-lease="refs/heads/${BRANCH}:${EXPECT}" origin "HEAD:refs/heads/${BRANCH}"
+    git "${GIT_SAFE[@]}" -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" push --force-with-lease="refs/heads/${BRANCH}:${EXPECT}" origin "HEAD:refs/heads/${BRANCH}"
     ;;
   skip | refuse)
     ;;
