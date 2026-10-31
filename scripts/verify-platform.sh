@@ -4871,6 +4871,13 @@ run_own_checks() {
     # windows-mozconfig-self-test plants an inverted service flag, a missing target line, a foreign MAR
     # channel and an empty emission; each must go red naming the file and the value. It writes nothing.
     "windows-mozconfig-self-test|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs --self-test"
+    # NEW (Phase 54, PKG-13): the Node pin set equals the per-target keys the packagers read (derived),
+    # each entry carries a version, a url embedding it and a 64-hex sha256. The sha256 value against
+    # SHASUMS256.txt is the Phase 43 detector's job, not this row's. Honestly --quick: JSON and text reads.
+    "node-runtime-targets|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs"
+    # node-runtime-targets-self-test plants a missing win32-x64 key, an extra key, a missing sha256, a
+    # url-version mismatch and an empty set; each must go red naming the key. It writes nothing.
+    "node-runtime-targets-self-test|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs --self-test"
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
