@@ -4864,6 +4864,13 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 54, PKG-11): the per-target Windows mozconfig. The expected lines come from the shared
+    # emitter in memory and the tracked comparand must equal them, with the maintenance service disabled.
+    # Honestly --quick: text reads and an in-memory emit only; no build, browser, display or network.
+    "windows-mozconfig|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs"
+    # windows-mozconfig-self-test plants an inverted service flag, a missing target line, a foreign MAR
+    # channel and an empty emission; each must go red naming the file and the value. It writes nothing.
+    "windows-mozconfig-self-test|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs --self-test"
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
