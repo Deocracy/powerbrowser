@@ -6393,6 +6393,13 @@ function selfTest() {
             expect: 'urls.crash_report',
         },
         {
+            // IN-01. A user name and password in the crash address would be kept verbatim in
+            // breakpad.reportURL while the submit origin dropped them; the key refuses them.
+            name: 'crash-report URL carrying a user name and password',
+            toml: `${FIXTURE_DOWNSTREAM}\ncrash_report = "https://user:secret@crash.example.org/report"\n`,
+            expect: 'urls.crash_report',
+        },
+        {
             // GEN-05 remainder's control: the stated theme rides the
             // frontend-config fragment, the stated texts and repo URL ride
             // the branding fragment with the mark SVG verbatim, and unset
