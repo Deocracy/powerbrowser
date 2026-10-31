@@ -64,10 +64,15 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.new-tab',
     'powerbrowser.chrome-bar.downloads',
     'powerbrowser.chrome-bar.focus-address',
+    // Phase 32 plan 06 (PAGE-09): the Edit items, stock labels from 32-UI-SPEC.md.
+    'powerbrowser.chrome-bar.edit-undo',
+    'powerbrowser.chrome-bar.edit-cut',
+    'powerbrowser.chrome-bar.edit-copy',
+    'powerbrowser.chrome-bar.edit-paste',
 ]);
 
-/** The contracted visible labels: four verbatim from 13-UI-SPEC.md, and Downloads from 32-UI-SPEC.md (Phase 32 plan 04). */
-const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads']);
+/** The contracted visible labels: four verbatim from 13-UI-SPEC.md, Downloads from 32-UI-SPEC.md (plan 04), and the Edit items (plan 06). */
+const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste']);
 
 function diff(actual, expected) {
     const a = new Set(actual);

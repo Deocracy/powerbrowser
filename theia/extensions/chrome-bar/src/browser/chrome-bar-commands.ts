@@ -22,6 +22,11 @@ export const CHROME_BAR_RELOAD_COMMAND_ID = 'powerbrowser.chrome-bar.reload';
 export const CHROME_BAR_NEW_TAB_COMMAND_ID = 'powerbrowser.chrome-bar.new-tab';
 export const CHROME_BAR_DOWNLOADS_COMMAND_ID = 'powerbrowser.chrome-bar.downloads';
 export const CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID = 'powerbrowser.chrome-bar.focus-address';
+// Phase 32 plan 06 (PAGE-09): the Edit items. Each sends one frozen cmd through WebTabWidget.edit; keys stay content-native.
+export const CHROME_BAR_EDIT_UNDO_COMMAND_ID = 'powerbrowser.chrome-bar.edit-undo';
+export const CHROME_BAR_EDIT_CUT_COMMAND_ID = 'powerbrowser.chrome-bar.edit-cut';
+export const CHROME_BAR_EDIT_COPY_COMMAND_ID = 'powerbrowser.chrome-bar.edit-copy';
+export const CHROME_BAR_EDIT_PASTE_COMMAND_ID = 'powerbrowser.chrome-bar.edit-paste';
 
 /**
  * D-11 (30-03): the palette category of the four visible commands ("Browser:
@@ -59,6 +64,12 @@ export const CHROME_BAR_DOWNLOADS: Command = {
     category: CHROME_BAR_COMMAND_CATEGORY,
     label: 'Downloads',
 };
+
+// Stock labels (UI-SPEC: Edit menu, page focused). Disabled-not-removed follows the page's enabled reply at execute time.
+export const CHROME_BAR_EDIT_UNDO: Command = { id: CHROME_BAR_EDIT_UNDO_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Undo' };
+export const CHROME_BAR_EDIT_CUT: Command = { id: CHROME_BAR_EDIT_CUT_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Cut' };
+export const CHROME_BAR_EDIT_COPY: Command = { id: CHROME_BAR_EDIT_COPY_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Copy' };
+export const CHROME_BAR_EDIT_PASTE: Command = { id: CHROME_BAR_EDIT_PASTE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Paste' };
 
 /** Labelless by design: reachable through Ctrl/Cmd+L, never the palette. */
 export const CHROME_BAR_FOCUS_ADDRESS: Command = {
@@ -233,6 +244,28 @@ export class ChromeBarCommandContribution implements CommandContribution {
                 }
                 focusAddressPill();
             },
+        });
+        // PAGE-09 (32-06): the Edit items run through the widget's edit(); the page's own reply reports enablement.
+        // Each execute acts on the active web tab only, and never sends the kind itself.
+        commands.registerCommand(CHROME_BAR_EDIT_UNDO, {
+            execute: () => currentWebTab()?.edit('cmd_undo'),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_EDIT_CUT, {
+            execute: () => currentWebTab()?.edit('cmd_cut'),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_EDIT_COPY, {
+            execute: () => currentWebTab()?.edit('cmd_copy'),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_EDIT_PASTE, {
+            execute: () => currentWebTab()?.edit('cmd_paste'),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
         });
         commands.registerCommand(CHROME_BAR_FOCUS_ADDRESS, {
             execute: () => focusAddressPill(),

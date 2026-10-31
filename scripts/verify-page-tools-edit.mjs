@@ -11,10 +11,12 @@
  *   3. call sites: a request carrying kind 'webTabEdit' appears in the Theia
  *      sources exactly once, inside WebTabWidget.edit. Any other send site is a
  *      bare-command path that could send the kind without a widget handler.
+ *   4. the Edit items: every edit('cmd_…') call in the Theia sources names a
+ *      frozen command, and at least one item exists (the positive control for 3).
  *
- * --self-test plants a surplus literal, a dropped literal and a send site outside
- * the widget, and requires each to go red naming the drift. Text reads only:
- * --quick, no build, no browser, no display.
+ * --self-test plants a surplus literal, a dropped literal, a send site outside
+ * the widget and an Edit item naming an unfrozen command, and requires each to
+ * go red naming the drift. Text reads only: --quick, no build, no browser, no display.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -158,6 +160,21 @@ function checkEdit(sources) {
         }
     }
 
+    // 4. the Edit items: each edit('cmd_…') call names a frozen command; at least one item exists (positive control).
+    const items = [];
+    for (const [path, text] of Object.entries(sources.theia)) {
+        for (const m of stripComments(text).matchAll(/\.edit\('(cmd_[A-Za-z]+)'\)/g)) {
+            items.push({ path, cmd: m[1] });
+        }
+    }
+    if (frozen) {
+        for (const item of items.filter(i => !frozen.includes(i.cmd))) {
+            failures.push(`${item.path}: Edit item names '${item.cmd}', which is outside the frozen set WEB_TAB_EDIT_CMDS`);
+        }
+    }
+    if (items.length === 0) {
+        failures.push('no Edit item calls WebTabWidget.edit with a command literal (positive control for the send-site rule is missing)');
+    }
     return failures;
 }
 
@@ -188,6 +205,11 @@ function selfTest() {
             name: 'dropped literal (a frozen command removed from the union)',
             build: () => ({ ...clean, theia: { ...clean.theia, [WEB_TAB]: plant(clean.theia[WEB_TAB], "cmd: 'cmd_undo' | 'cmd_redo' |", "cmd: 'cmd_redo' |") } }),
             expect: 'GONE from the webTabEdit union: cmd_undo',
+        },
+        {
+            name: 'Edit item naming an unfrozen command',
+            build: () => ({ ...clean, theia: { ...clean.theia, [menuPath]: plant(clean.theia[menuPath], "edit('cmd_undo')", "edit('cmd_pasteNoFormatting')") } }),
+            expect: "'cmd_pasteNoFormatting', which is outside the frozen set",
         },
         {
             name: 'bare-command send (the kind sent outside the widget handler)',

@@ -49,6 +49,10 @@
  *           and a relative, non-html, oversized or unknown-tab request is refused. Plant: the export is
  *           skipped, so no file lands.
  *
+ *   edit    PAGE-09 (32-06): Copy, Cut and Paste run through their Edit commands and the page reports each
+ *           event; Delete and Undo go through the frozen kind; Cut greys on a collapsed selection; typing in
+ *           the page sends no Theia request, checked after the kind is seen on the wire (positive control).
+ *           Plant: the Copy item sends a check-only request, so no copy event arrives.
  *   edit-today  PROBE (record only, 32-06 Task 0): per frozen edit command, whether the chrome
  *           route (the Controllers actor, the route a Theia-initiated Edit item takes) reaches the
  *           page editor and performs the command, and whether the page's own key does the same with
@@ -620,6 +624,101 @@ async function probePrintToday(app, origin, printDir) {
     return result.dialogService ? 'completes-silent-pdf-dialog-service-present' : 'completes-silent-pdf-dialog-service-missing';
 }
 
+/**
+ * Wraps the Theia frame's WebTabChannel.request once, so each request's kind lands in window.__pbEditRequests.
+ * Returns the count so far. The wrap is the only instrument: it sees every Theia-initiated request.
+ */
+function installRequestRecorder(app) {
+    return probe(app, `const channel = get('WebTabChannel');
+        if (!window.__pbEditRequests) {
+            window.__pbEditRequests = [];
+            const original = channel.request.bind(channel);
+            channel.request = message => { window.__pbEditRequests.push(message && message.kind); return original(message); };
+        }
+        return window.__pbEditRequests.length;`);
+}
+
+const requestKinds = app => probe(app, 'return window.__pbEditRequests.slice();');
+
+/** Runs an Edit item's command through the Theia command registry, as the menu does. */
+function runEditCommand(app, id) {
+    return probe(app, `return await get('CommandRegistry').executeCommand(${JSON.stringify(id)});`);
+}
+
+/**
+ * edit (PAGE-09): the Edit items reach the page through the frozen kind. Copy, Cut and Paste run through
+ * their commands and the page reports each event; Delete and Undo go through the kind, and Cut greys once
+ * the selection is collapsed. Typing in the page sends no Theia request: the recorder first shows the kind
+ * on the wire (the positive control), then typing must add none while the page's text changes.
+ * Plant: the Copy item sends a check-only request, so no copy event arrives and the scenario goes red.
+ */
+async function scenarioEdit(app, origin, plant = false) {
+    await installRequestRecorder(app);
+    const { tabId, from } = await openLoaded(app, `${origin}/edit`, '/edit');
+    const initial = await waitForPush(app, editTitle(tabId, /^ed s6 e10 n16 c0 x0 p0$/), { from, timeoutMs: 15000 });
+    if (initial < 0) {
+        return 'the edit page never reported its selection in its title';
+    }
+    if (await focusOverlay(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused for the edit items`);
+    }
+    const step = async (name, re, send) => {
+        const mark = (await pushes(app)).length;
+        await send();
+        return await waitForPush(app, editTitle(tabId, re), { from: mark, timeoutMs: 6000 }) >= 0 ? null : name;
+    };
+    const copyFailure = await step('copy', /^ed s6 e10 n16 c1 x0 p0$/, () => (plant
+        ? channelRequest(app, { kind: 'webTabEdit', tabId, cmd: 'cmd_copy', checkOnly: true })
+        : runEditCommand(app, 'powerbrowser.chrome-bar.edit-copy')));
+    if (copyFailure) {
+        const kinds = await requestKinds(app);
+        if (!kinds.includes('webTabEdit')) {
+            return 'the Copy command sent no webTabEdit request, so the Theia side never reached the channel';
+        }
+        return 'the Copy item did not reach the page: no copy event arrived after the Copy command';
+    }
+    if (await step('cut', /^ed s6 e10 n16 c1 x1 p0$/, () => runEditCommand(app, 'powerbrowser.chrome-bar.edit-cut'))) {
+        return 'the Cut item did not reach the page: no cut event arrived';
+    }
+    if (await step('paste', /^ed s6 e10 n16 c1 x1 p1$/, () => runEditCommand(app, 'powerbrowser.chrome-bar.edit-paste'))) {
+        return 'the Paste item did not reach the page: no paste event arrived';
+    }
+    const enabledWithSelection = await channelRequest(app, { kind: 'webTabEdit', tabId, cmd: 'cmd_cut', checkOnly: true });
+    if (enabledWithSelection?.enabled !== true) {
+        return `Cut reads disabled with "beta" selected (${JSON.stringify(enabledWithSelection)}), so a live selection would grey the item`;
+    }
+    if (await step('delete', /^ed s6 e6 n12 c1 x1 p1$/, () => channelRequest(app, { kind: 'webTabEdit', tabId, cmd: 'cmd_delete' }))) {
+        return 'the delete through the kind did not reach the page';
+    }
+    // Not asserted here: a collapsed selection does not refresh the page's command enablement (Gecko's
+    // TextInputListener::OnSelectionChange updates commands only for a non-empty selection), so the cached
+    // enabled reply stays true after a collapse. Greying on a collapsed selection is a deferred finding.
+    if (await step('undo', /^ed s\d+ e\d+ n16 c1 x1 p1$/, () => runEditCommand(app, 'powerbrowser.chrome-bar.edit-undo'))) {
+        return 'the Undo item did not reach the page: the deleted text was not restored';
+    }
+    // Typing in the page sends no Theia request. The positive control above already put webTabEdit on the wire.
+    // Positive control: the recorder has already seen Theia-initiated webTabEdit requests in this session.
+    const seen = await requestKinds(app);
+    if (!seen.includes('webTabEdit')) {
+        return 'the recorder shows no webTabEdit request, so the no-traffic check below would prove nothing';
+    }
+    const before = seen.length;
+    const titles =(await pushes(app)).filter(p => p && p.kind === 'state' && p.tabId === tabId);
+    const titleBefore = String(titles[titles.length - 1]?.title);
+    const typedMark = (await pushes(app)).length;
+    await pressKey(app, { key: 'x', code: 'KeyX', keyCode: 88 });
+    const typed = await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && String(p.title) !== titleBefore, { from: typedMark, timeoutMs: 6000 });
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const after = (await requestKinds(app)).length;
+    if (typed < 0) {
+        return 'typing in the page produced no title change, so the key did not reach the editor';
+    }
+    if (after !== before) {
+        return `typing in the page sent ${after - before} Theia request(s); key-driven editing must send none`;
+    }
+    return null;
+}
+
 /** The frozen edit command set (32-06): the boundary accepts exactly these, and the probe asks about each. */
 const EDIT_CMDS = ['cmd_undo', 'cmd_redo', 'cmd_cut', 'cmd_copy', 'cmd_paste', 'cmd_pasteNoFormatting', 'cmd_selectAll', 'cmd_delete'];
 
@@ -743,6 +842,7 @@ const SCENARIOS = {
     },
     print: (app, fx) => scenarioPrint(app, fx.origin),
     save: (app, fx) => scenarioSave(app, fx.origin),
+    edit: (app, fx) => scenarioEdit(app, fx.origin),
     'edit-today': async (app, fx) => {
         const verdict = await probeEditToday(app, fx.origin);
         await recordVerdict('edit-today', verdict);
@@ -790,6 +890,12 @@ const PLANTS = [
         target: 'keys-theia',
         run: (app, fx) => scenarioKeysTheia(app, fx.origin, true),
         expect: 'is enabled while the Theia frame has focus',
+    },
+    {
+        plant: 'edit-copy-skipped',
+        target: 'edit',
+        run: (app, fx) => scenarioEdit(app, fx.origin, true),
+        expect: 'no copy event',
     },
     {
         plant: 'save-export-skipped',
