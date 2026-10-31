@@ -37,7 +37,10 @@ jobs:
           persist-credentials: false
 
       - name: Install the pinned Claude Code executable
-        run: npm install --prefix "$RUNNER_TEMP/claude-code" --ignore-scripts @anthropic-ai/claude-code@2.1.304
+        run: |
+          mkdir -p "$RUNNER_TEMP/claude-code"
+          cp .github/triage/claude-code/package.json .github/triage/claude-code/package-lock.json "$RUNNER_TEMP/claude-code/"
+          npm ci --prefix "$RUNNER_TEMP/claude-code" --ignore-scripts
 
       - id: triage
         uses: anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c

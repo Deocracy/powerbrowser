@@ -459,6 +459,8 @@ function selfTest() {
     const plain = (perms) => ['name: Plain', 'on: workflow_dispatch', ...(perms ? [`permissions: ${perms}`] : []), 'jobs:', '  plain:', '    runs-on: ubuntu-latest', '    steps:', '      - run: echo plain', ''].join('\n');
     const issuesJob = (name, jobId) => [`name: ${name}`, 'on: workflow_dispatch', 'jobs:', `  ${jobId}:`, '    runs-on: ubuntu-latest', '    permissions:', '      issues: write', '    steps:', '      - run: echo report', ''].join('\n');
     const withClaude = { ...selected, patterns_allowed: [...selected.patterns_allowed, 'anthropics/claude-code-action@*'] };
+    // The real triage.yml admits the claude-code-action star. A control that replaces triage.yml sets that admission aside, or admission-used reds on an entry nothing uses.
+    const withoutClaude = { ...selected, patterns_allowed: selected.patterns_allowed.filter(p => !p.startsWith('anthropics/claude-code-action@')) };
     const V_PERMS = '    permissions:\n      contents: read\n';
     const V_CHECK = 'run: nix develop .#theia --command node scripts/generate.mjs --check';
 
@@ -512,7 +514,7 @@ function selfTest() {
     const controls = [
         ['good release.yml: build-linux on legion, sign-publish with the write trio', { files: base }],
         ['issues write on release-train.yml job report', with_({ 'release-train.yml': issuesJob('Release train', 'report') })],
-        ['issues write on triage.yml', with_({ 'triage.yml': issuesJob('Triage', 'label') })],
+        ['issues write on triage.yml', { ...with_({ 'triage.yml': issuesJob('Triage', 'label') }), selected: withoutClaude }],
         ['guarded workflow_run', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true) })],
         ['claude-code-action hosted with contents read', { files: { ...base, 'assist.yml': assist('read') }, selected: withClaude }],
         ['permissions: read-all over a write repository default', { files: { ...base, 'plain.yml': plain('read-all') }, defaultPermissions: 'write' }],

@@ -6,10 +6,9 @@
 // proves the planted-instruction case by running the workflow's own non-AI
 // step against a stub gh that records its calls.
 //
-// Source: plan 53-01 reads the checked-in good fixture (scripts/fixtures/
-// triage-good.yml) because .github/workflows/triage.yml is not declared yet.
-// Plan 53-02 switches SOURCE to the tree file. The fixture stays in place as
-// the self-test green control.
+// Source: tree mode reads the declared .github/workflows/triage.yml. The checked-in
+// good fixture (scripts/fixtures/triage-good.yml) stays in place as the self-test
+// green control, and the planted-instruction proof runs on whichever source is read.
 //
 // Rules (each failure names the file, the job and the rule, and ends with a
 // next step):
@@ -55,8 +54,8 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'triage-workflow';
 const SELF_REL = 'scripts/verify-triage.mjs';
-// 53-01: fixture mode. 53-02 switches this to 'tree'.
-const SOURCE = 'fixture';
+// 53-01 ran fixture mode; 53-02 declares the workflow and switches this to tree mode.
+const SOURCE = 'tree';
 const TREE_REL = '.github/workflows/triage.yml';
 const FIXTURE_REL = 'scripts/fixtures/triage-good.yml';
 const LABELS_REL = '.github/settings/labels.json';

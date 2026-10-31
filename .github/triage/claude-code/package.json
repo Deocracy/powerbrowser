@@ -1,0 +1,8 @@
+{
+  "name": "powerbrowser-triage-claude-code",
+  "private": true,
+  "description": "Pins the Claude Code executable that the triage workflow passes to claude-code-action. Installed with npm ci from the committed lockfile.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.304"
+  }
+}
