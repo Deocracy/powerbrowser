@@ -76,6 +76,11 @@
 //     half of the agreement; the header ranges and the upstream-authored
 //     transitive constraint lines inside stanzas are not asserted.
 //
+// Uptake lane (step 8, Phase 58, TRAIN-05/UPS-01): the 175 tag is not a second manifest key. It
+// is the detector's uptake candidate, and the release-train uptake-replay job must take its tag from
+// needs.detect.outputs.uptake-candidate and from nothing else. The literal sweep (step 4) covers the
+// file's text; step 8 covers the job's source.
+//
 // Honestly --quick: it reads text files and runs one git ls-files. No
 // clone, no fetch, no build, no browser, no display, no network.
 //
@@ -363,6 +368,32 @@ function lockTheiaStanzas(text) {
     return rows;
 }
 
+// --- the uptake lane's tag source (step 8, TRAIN-05) -----------------------------------------
+// The train workflow carries one uptake-replay job; its tag input must be exactly the detector's
+// uptake candidate. A line scan by indentation, the same style as the rebase workflow scan.
+const TRAIN_WF_REL = '.github/workflows/release-train.yml';
+const UPTAKE_JOB = 'uptake-replay';
+const UPTAKE_SOURCE = /^\s*tag:\s*\$\{\{\s*needs\.detect\.outputs\.uptake-candidate\s*\}\}\s*$/;
+
+/** Failures for the uptake-replay job's tag source. Pure: text in, named failures out. */
+function uptakeSourceFailures(text) {
+    const lines = text.split('\n');
+    const start = lines.findIndex(l => new RegExp(`^  ${UPTAKE_JOB}:\\s*$`).test(l));
+    if (start < 0) {
+        return [`${TRAIN_WF_REL} declares no ${UPTAKE_JOB} job, so the 175 uptake lane replays nothing. Next step: restore the ${UPTAKE_JOB} job beside bump.`];
+    }
+    let end = start + 1;
+    while (end < lines.length && (lines[end].trim() === '' || indentOf(lines[end]) > 2)) end += 1;
+    const tags = lines.slice(start + 1, end).filter(l => /^\s*tag:/.test(l));
+    if (tags.length !== 1) {
+        return [`${TRAIN_WF_REL} ${UPTAKE_JOB} carries ${tags.length} tag input(s), not one. Next step: give it exactly one tag, sourced from needs.detect.outputs.uptake-candidate.`];
+    }
+    if (!UPTAKE_SOURCE.test(tags[0])) {
+        return [`${TRAIN_WF_REL} ${UPTAKE_JOB} takes its tag from ${tags[0].trim()}, not from needs.detect.outputs.uptake-candidate. Next step: source the tag from the detect listing, never a literal, a default or the 153 candidate.`];
+    }
+    return [];
+}
+
 function runChecks(root, overrides = {}) {
     const failures = [];
     const skipped = [];
@@ -579,6 +610,19 @@ function runChecks(root, overrides = {}) {
                     }
                 }
             }
+        }
+    }
+
+    // --- 8. the uptake lane's tag comes from the train's listing (TRAIN-05, UPS-01) -----------
+    // The 175 tag is not a second manifest key (A-58-6): it is the detector's uptake candidate, passed
+    // into the uptake-replay job. The literal sweep (step 4) already refuses a tag literal in that file.
+    // This step requires the job's tag input to be sourced from that one output, and from nothing else.
+    {
+        const text = read(TRAIN_WF_REL);
+        if (text === null) {
+            failures.push(`${TRAIN_WF_REL} could not be read, so the uptake tag source proves nothing. Next step: restore it.`);
+        } else {
+            failures.push(...uptakeSourceFailures(text));
         }
     }
 
@@ -804,8 +848,35 @@ function selfTest() {
         }
     }
 
+    // Plants 5-7 (step 8, TRAIN-05): the uptake job's tag is sourced from the detector's uptake
+    // candidate and from nothing else. Each plant lands in memory on the real train workflow.
+    {
+        const trainReal = readBytes(REPO_ROOT, TRAIN_WF_REL)?.toString('utf8') ?? null;
+        const sourceLine = '      tag: ${{ needs.detect.outputs.uptake-candidate }}';
+        const plants = [
+            ['uptake tag as a literal', trainReal?.replace(sourceLine, `      tag: ${neighbor}`), 'takes its tag from'],
+            ['uptake tag from the 153 candidate', trainReal?.replace(sourceLine, '      tag: ${{ needs.detect.outputs.candidate }}'), 'takes its tag from'],
+            [`${UPTAKE_JOB} job renamed away`, trainReal?.replace(`\n  ${UPTAKE_JOB}:\n`, '\n  uptake-renamed:\n'), `declares no ${UPTAKE_JOB} job`],
+        ];
+        for (const [name, planted, marker] of plants) {
+            if (trainReal === null || typeof planted !== 'string' || planted === trainReal) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land in ${TRAIN_WF_REL}.`);
+                failed += 1;
+                continue;
+            }
+            const { failures } = runChecks(REPO_ROOT, { read: (rel) => (rel === TRAIN_WF_REL ? planted : readBytes(REPO_ROOT, rel)?.toString('utf8') ?? null) });
+            if (failures.some(f => f.includes(TRAIN_WF_REL) && f.includes(marker))) {
+                console.log(`  ok  ${name} -> red, naming '${TRAIN_WF_REL}'`);
+                if (!checkNoRoot(name, failures)) failed += 1;
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${TRAIN_WF_REL}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    }
+
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 8 planted faults went red naming the drifted file`);
+    console.log(`${NAME}: --self-test PASS -- 11 planted faults went red naming the drifted file (8 pin plants and 3 uptake-source plants)`);
     return 0;
 }
 
