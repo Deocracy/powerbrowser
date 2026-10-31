@@ -1,6 +1,7 @@
 # Release pipeline (DIST-02 skeleton; DIST-07, DIST-08, DIST-09, UPD-17 detail in later plans).
 #
-# One owner-approved dispatch runs four jobs in order:
+# One owner-approved dispatch runs these jobs (build-windows, Phase 54, runs beside build-linux
+# and shares its gates; the Linux chain below is unchanged):
 #   build-linux   self-hosted legion runner. No environment, no secret, no App token;
 #                 the default read-only GITHUB_TOKEN is the only token it sees. Its output
 #                 (tarball, MAR, manifest) is untrusted DATA: no later job executes it, and
@@ -179,6 +180,148 @@ jobs:
             objdir-release/dist/*.tar.xz
             objdir-release/dist/*.complete.mar
             objdir-release/dist/release-manifest.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # Phase 54 (PKG-10): the Windows cross build on the same legion runner. Its gates are copied
+  # byte for byte from build-linux (the build-windows-shape row compares them), in the same order:
+  # ref and event refusal, full SHA, checkout, SHA gate, key gate, then every step after the key gate
+  # carries its if:. The job holds no secret, and its only credential-shaped input is the Safe
+  # Browsing key directory (PB_KEYDIR at /keys:ro). Its output is data: sign-publish downloads only
+  # release-linux, so nothing built here reaches a job that holds a secret or a write token.
+  build-windows:
+    runs-on: [self-hosted, powerbrowser-release]
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.key_gate.outputs.build }}
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      - name: Check out the requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the release SHA (main tip, or a configuration.toml ancestor with main's workflows)
+        id: sha_gate
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          TIP="$(git rev-parse refs/remotes/origin/main)"
+          # Gate the commit actually checked out, and require it to be the one requested.
+          SHA="$(git rev-parse HEAD)"
+          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA. Next step: dispatch the SHA the run checks out; nothing is built" >&2; exit 1; }
+          if [ "$SHA" != "$TIP" ]; then
+            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main (tip $TIP). Next step: dispatch the merge SHA of a merged bump PR, or the tip of main" >&2; exit 1; }
+            git show --name-only --format= "$SHA" | grep -x 'configuration.toml' >/dev/null \
+              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main ($TIP). Next step: dispatch a SHA whose own commit changes configuration.toml" >&2; exit 1; }
+            git diff --quiet "$SHA" "$TIP" -- .github/workflows/ \
+              || { echo "::error::.github/workflows/ at $SHA differs from main (tip $TIP); the bot App cannot create a Release for that target. Next step: rebase the bump onto the tip of main" >&2; exit 1; }
+          fi
+          echo "validated $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether the release key is newer than the latest Release (exit without building when not)
+        id: key_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          KEY="$(nix develop .#theia --command node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(releaseIdentity(config).releaseKey);" | tail -n 1)"
+          LATEST="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.draft == false)][0].tag_name // "none"')"
+          echo "release key $KEY, latest published Release $LATEST"
+          RC=0
+          if [ "$LATEST" != "none" ]; then
+            nix develop .#theia --command node scripts/release-key-newer.mjs "$KEY" "$LATEST" || RC=$?
+          fi
+          case "$RC" in
+            0) echo "build=true" >> "$GITHUB_OUTPUT" ;;
+            1)
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::release key $KEY is not newer than $LATEST; this run builds nothing"
+              echo "Nothing to build: release key $KEY is not newer than the latest Release $LATEST." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *) echo "::error::the release key or the latest Release tag could not be compared (exit $RC); nothing is built" >&2; exit 1 ;;
+          esac
+
+      - name: Generate the derived build surfaces (this emits the Windows mozconfig from the shared generator)
+        if: steps.key_gate.outputs.build == 'true'
+        run: nix develop .#theia --command node scripts/generate.mjs
+
+      - name: Check the win32-x64 Node pin before any staging reads it
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          nix develop .#theia --command node -e '
+            const e = JSON.parse(require("fs").readFileSync("powerbrowser/packaging/node-runtime.json", "utf8"))["win32-x64"];
+            if (!(e && /^[0-9a-f]{64}$/.test(e.sha256) && typeof e.version === "string" && typeof e.url === "string" && e.url.includes(e.version))) process.exit(1);
+          ' || { echo "::error::the win32-x64 entry in node-runtime.json is missing or malformed; nothing is built" >&2; exit 1; }
+
+      - name: Fetch the pinned Firefox source and apply the patch stack
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-upstream.sh
+          bash scripts/apply-patches.sh
+
+      # legion is persistent: rebuild from the digest-pinned base every release, never from a cached layer.
+      - name: Build the release container image
+        if: steps.key_gate.outputs.build == 'true'
+        run: podman build --pull=always --no-cache -t pb-gecko-build -f powerbrowser/packaging/Containerfile .
+
+      # --enable-bootstrap in the generated mozconfig fetches the pinned `vs` toolchain (the Windows SDK and MSVC
+      # headers and libraries) by itself: windows-toolchain.configure:69-85 bootstraps it when WINSYSROOT is unset,
+      # and taskcluster/kinds/toolchain/misc.yml:692-709 (win64-vs2026, alias vs) names the hash-pinned
+      # build/vs/vs2026.yaml it comes from. Nothing sets WINSYSROOT or downloads a sysroot by hand.
+      - name: Cross-build the Windows release tree in the container
+        if: steps.key_gate.outputs.build == 'true'
+        env:
+          PB_KEYDIR: ${{ vars.PB_KEYDIR }}
+        run: |
+          set -euo pipefail
+          podman run --rm -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
+            pb-gecko-build bash -c 'set -euo pipefail; MOZCONFIG=/src/generated/packaging/mozconfig-windows-x86_64 ./mach build'
+
+      # package-windows.sh stages the hosted sidecar and the pinned Node runtime into the app dir, rewrites the
+      # package zip from it, and runs `mach repackage installer` and `mach repackage mar` with the arguments the
+      # pinned tree defines. It fails closed: the sidecar directory (the windows-latest artifact, fetched by the
+      # hosted sidecar job that Phase 50 adds, BLOCKED.md item 8) must exist and its SHA256SUMS must hash to the
+      # digest that job recorded outside the artifact. Without them this job stops here and uploads nothing.
+      - name: Stage the sidecar and the Node runtime, then repackage the installer and the complete MAR in the container
+        if: steps.key_gate.outputs.build == 'true'
+        env:
+          PB_WIN_SIDECAR_SUMS_SHA256: ${{ vars.PB_WIN_SIDECAR_SUMS_SHA256 }}
+        run: |
+          set -euo pipefail
+          podman run --rm -v "$PWD:/src:rw" -w /src -e PB_WIN_SIDECAR_DIR=/src/windows-sidecar -e PB_WIN_SIDECAR_SUMS_SHA256 \
+            pb-gecko-build bash powerbrowser/packaging/package-windows.sh
+
+      # Data only: nothing here is signed or executed by a later job in this revision (the Windows sign job is Phase 54-04's owner gate).
+      # The paths are the one directory package-windows.sh writes both files to.
+      - name: Upload the setup.exe and the complete MAR (untrusted data)
+        if: steps.key_gate.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows
+          path: |
+            objdir-windows-x86_64/dist/release-windows/*.installer.exe
+            objdir-windows-x86_64/dist/release-windows/*.complete.mar
           if-no-files-found: error
           retention-days: 1
           overwrite: true

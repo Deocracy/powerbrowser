@@ -124,8 +124,8 @@
     "urls.crash_report": {
       "type": "string",
       "required": false,
-      "regex": "^https://[^\\s\\x00-\\x1f\\x7f]+$",
-      "regex_help": "a web address starting with https:// and containing no spaces or control characters",
+      "regex": "^https://[^\\s\\x00-\\x1f\\x7f@/?#]+([/?#][^\\s\\x00-\\x1f\\x7f]*)?$",
+      "regex_help": "a web address starting with https:// and containing no spaces, control characters or user name and password (only its scheme, host and port become the crash submit address; the path is the report view link)",
       "regex_example": "https://example.org/crash-report"
     },
     "urls.homepage": {

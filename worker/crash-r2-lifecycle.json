@@ -1,0 +1,12 @@
+{
+  "$comment": "A RECORD OF INTENT, not a file wrangler reads: the field names (prefix, expire_days) are this repository's own, not wrangler's lifecycle schema, and no offline check here verified that schema. The owner transcribes the rule into `wrangler r2 bucket lifecycle add` (flags checked with --help at the pinned version) at the runbook step in worker/wrangler-crash.toml and records the live rule verbatim. R2 expires objects asynchronously, typically within about a day after the age. The Worker runs no deletion code. scripts/verify-worker-submit.mjs pins the prefix and the age against crash-submit.mjs exports.",
+  "bucket": "powerbrowser-crash-reports",
+  "rules": [
+    {
+      "id": "crash-reports-30-day",
+      "prefix": "crash/",
+      "enabled": true,
+      "expire_days": 30
+    }
+  ]
+}

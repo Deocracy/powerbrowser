@@ -80,13 +80,29 @@ export const ANNOTATION_ALLOWLIST = Object.freeze([
     'ProductName',
     'Version',
     'BuildID',
-    'Platform',
     'ReleaseChannel',
     'CrashTime',
     'StartupTime',
+    'OS',
+    'CPUArchitecture',
 ]);
 /** Annotation values larger than this are not stored (paths and blobs ride the minidump, never the index). */
 export const MAX_ANNOTATION_BYTES = 4096;
+/** Parser bounds (WR-01, WR-02): a delimiter shorter than this or longer than the RFC 2046 limit is not multipart. */
+export const MIN_BOUNDARY_LENGTH = 3;
+export const MAX_BOUNDARY_LENGTH = 70;
+/** A part whose header block is longer than this, or whose name is longer than MAX_PART_NAME_LENGTH, is not read. */
+export const MAX_HEADER_BYTES = 1024;
+export const MAX_PART_NAME_LENGTH = 128;
+/** The only part names a stored record carries; any other client string is stored as OTHER_PART_NAME. */
+export const MEMORY_REPORT_PART_NAME = 'memory_report';
+export const OTHER_PART_NAME = '(other)';
+export const RECORDABLE_PART_NAMES = Object.freeze([
+    MINIDUMP_PART_NAME,
+    EXTRA_PART_NAME,
+    MEMORY_REPORT_PART_NAME,
+    ...ANNOTATION_ALLOWLIST,
+]);
 /** Loopback only: the host is a constant, never a flag. */
 export const LOOPBACK_HOST = '127.0.0.1';
 export const DEFAULT_PORT = 8123;
@@ -104,8 +120,11 @@ export function buildDiscardResponse(rule) {
     return `Discarded=${rule}`;
 }
 
-/** Split a buffer on a delimiter buffer. Small helper so the parser stays binary-safe. */
-function splitBuffer(body, delimiter) {
+/**
+ * Split a buffer on a delimiter buffer. Returns null as soon as more than maxDelimiters delimiters are
+ * seen, so a body of many tiny sections allocates at most maxDelimiters + 1 slices.
+ */
+function splitBuffer(body, delimiter, maxDelimiters) {
     const out = [];
     let start = 0;
     for (;;) {
@@ -113,9 +132,36 @@ function splitBuffer(body, delimiter) {
         if (at === -1) break;
         out.push(body.slice(start, at));
         start = at + delimiter.length;
+        if (out.length > maxDelimiters) return null;
     }
     out.push(body.slice(start));
     return out;
+}
+
+/**
+ * The name parameter of a part's Content-Disposition header. Parameters are read one at a time, a quoted value
+ * is consumed whole (so filename="x; name=y" hides nothing), and name must be its own parameter: filename= is
+ * never read as name=. Returns null for a malformed parameter list, a repeated name, or no name at all.
+ * worker/crash-submit.mjs carries the same function; scripts/verify-worker-submit.mjs requires them to agree.
+ */
+export function dispositionName(headerText) {
+    const line = /^content-disposition:[ \t]*form-data[ \t]*;(.*)$/im.exec(headerText);
+    if (!line) return null;
+    const params = line[1].trim();
+    const PARAM = /\s*([A-Za-z0-9*_-]+)\s*=\s*(?:"([^"]*)"|([^\s;"]*))\s*(?:;|$)/y;
+    let name = null;
+    let at = 0;
+    while (at < params.length) {
+        PARAM.lastIndex = at;
+        const m = PARAM.exec(params);
+        if (!m) return null;
+        if (m[1].toLowerCase() === 'name') {
+            if (name !== null) return null;
+            name = m[2] ?? m[3];
+        }
+        at = PARAM.lastIndex;
+    }
+    return name;
 }
 
 /**
@@ -130,38 +176,36 @@ export function parseMultipart(body, contentType) {
     const match = /^multipart\/form-data;\s*boundary=(?:"([^"]+)"|([^\s;]+))/i.exec(contentType ?? '');
     if (!match) return { ok: false, reason: REASON_WRONG_CONTENT_TYPE };
     const boundary = match[1] ?? match[2];
+    if (boundary.length < MIN_BOUNDARY_LENGTH || boundary.length > MAX_BOUNDARY_LENGTH) return { ok: false, reason: REASON_WRONG_CONTENT_TYPE };
     if (body.length > MAX_BODY_BYTES) return { ok: false, reason: REASON_OVERSIZED };
     // Split on the CRLF-anchored delimiter the multipart grammar requires,
     // so minidump bytes that merely contain the boundary sequence cannot
     // mis-parse a valid report. Prepending the first delimiter's missing
     // CRLF lets it match the same split with no special case (chunks[0] is
     // the empty preamble, as before).
-    const chunks = splitBuffer(Buffer.concat([Buffer.from('\r\n'), body]), Buffer.from(`\r\n--${boundary}`));
-    // Cap the raw delimiter count BEFORE parsing: headerless sections that
-    // parse to no part must still count, or a body of many of them evades
-    // MAX_PARTS. Each part opens with one delimiter plus the closing one.
-    if (chunks.length - 1 > MAX_PARTS + 1) return { ok: false, reason: REASON_OVERSIZED };
+    // The delimiter count is capped WHILE scanning (MAX_PARTS parts plus the closing delimiter):
+    // headerless sections that parse to no part must still count, or a body of many of them evades
+    // MAX_PARTS, and the split itself must not allocate one slice per tiny section.
+    const chunks = splitBuffer(Buffer.concat([Buffer.from('\r\n'), body]), Buffer.from(`\r\n--${boundary}`), MAX_PARTS + 1);
+    if (chunks === null) return { ok: false, reason: REASON_OVERSIZED };
     const parts = [];
     for (let i = 1; i < chunks.length; i++) {
         let chunk = chunks[i];
         if (chunk.slice(0, 2).toString('latin1') === '--') continue; // closing delimiter
         if (chunk[0] === 0x0d && chunk[1] === 0x0a) chunk = chunk.slice(2);
         else if (chunk[0] === 0x0a) chunk = chunk.slice(1);
-        if (chunk.length >= 2 && chunk[chunk.length - 2] === 0x0d && chunk[chunk.length - 1] === 0x0a) {
-            chunk = chunk.slice(0, -2);
-        }
-        const headerEnd = chunk.indexOf('\r\n\r\n');
+        // Nothing is stripped from the end: the CRLF before a delimiter belongs to the delimiter (RFC 2046), which the
+        // split already consumed, so a part's bytes are exactly the bytes sent, even when they end in CRLF.
+        const headerEnd = chunk.slice(0, MAX_HEADER_BYTES + 4).indexOf('\r\n\r\n');
         if (headerEnd === -1) continue;
         const headerText = chunk.slice(0, headerEnd).toString('latin1');
         const data = chunk.slice(headerEnd + 4);
-        const disposition = /content-disposition:\s*form-data;\s*(.*)/i.exec(headerText);
-        if (!disposition) continue;
-        const nameMatch = /name="([^"]*)"/i.exec(disposition[1]);
-        if (!nameMatch) continue;
-        const filenameMatch = /filename="([^"]*)"/i.exec(disposition[1]);
-        const typeMatch = /content-type:\s*([^\r\n;]+)/i.exec(headerText);
+        const name = dispositionName(headerText);
+        if (name === null || name.length > MAX_PART_NAME_LENGTH) continue;
+        const filenameMatch = /filename="([^"]*)"/i.exec(headerText);
+        const typeMatch = /^content-type:\s*([^\r\n;]+)/im.exec(headerText);
         parts.push({
-            name: nameMatch[1],
+            name,
             filename: filenameMatch ? filenameMatch[1] : undefined,
             contentType: typeMatch ? typeMatch[1].trim() : undefined,
             data,
@@ -171,7 +215,8 @@ export function parseMultipart(body, contentType) {
     for (const part of parts) {
         if (part.data.length > MAX_PART_BYTES) return { ok: false, reason: REASON_OVERSIZED };
     }
-    if (!parts.some(part => part.name === MINIDUMP_PART_NAME)) {
+    // Exactly one minidump part: a second one is ambiguous about which bytes are the crash.
+    if (parts.filter(part => part.name === MINIDUMP_PART_NAME).length !== 1) {
         return { ok: false, reason: REASON_NO_MINIDUMP };
     }
     return { ok: true, parts };
@@ -300,7 +345,7 @@ export function handleSubmit({ body, contentType, storeDir, throttle, nowMs, onD
         receivedAt: new Date(at).toISOString(),
         annotations,
         minidumpBytes: minidump.data.length,
-        partNames: parsed.parts.map(part => part.name),
+        partNames: parsed.parts.map(part => (RECORDABLE_PART_NAMES.includes(part.name) ? part.name : OTHER_PART_NAME)),
     };
     try {
         mkdirSync(storeDir, { recursive: true });

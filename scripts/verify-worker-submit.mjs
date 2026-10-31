@@ -1,0 +1,779 @@
+#!/usr/bin/env node
+// scripts/verify-worker-submit.mjs
+//
+// The crash-submit contract gate (Phase 57, TEL-07). The receiver worker/crash-submit.mjs must speak the
+// collector's contract (scripts/crash-collector.mjs, docs/CRASH-POLICY.md) for every name the two share,
+// and its R2 descriptors must state the retention and the no-credential, no-throttle posture the policy
+// names. The gate needs no socket and no network: it drives synthetic Requests into the Worker's real
+// fetch handler against an in-memory R2 stub.
+//
+// WHAT IT ASSERTS. Every expectation is read from the tree at check time:
+//  1. Shared names are equal. Every export the Worker and the collector both declare is compared by value
+//     (arrays by content). The contract names the Worker must declare are listed once here, and a missing
+//     one goes red naming it.
+//  2. Parser agreement. Both parsers run over one battery of multipart bodies (well-formed with a binary
+//     minidump that contains the boundary bytes, wrong content type, no minidump, zero parts, too many
+//     parts, one oversized part, a malformed extra). Verdicts, reasons, part names and part bytes must match.
+//  3. Handler verdicts. The Worker's fetch answers the collector's status and body for each rejection,
+//     stores nothing on any rejection, stores the minidump and the allowlisted record on accept, and keeps
+//     both concurrent submits.
+//  4. Descriptors. worker/wrangler-crash.toml keeps workers_dev and preview_urls off, binds the R2 store,
+//     and schedules no job. worker/crash-r2-lifecycle.json holds exactly one rule over CRASH_PREFIX whose
+//     age is RETENTION_DAYS. The Worker source has no in-Worker throttle rule and no CORS header.
+//  5. No credential. No file in worker/ assigns a credential-shaped value.
+//
+// SELF-TEST. The unmutated tree is green first. Then each plant goes red naming its rule: a handler plant
+// makes a one-line mutation of a COPY of the Worker in a mkdtemp directory, loads that copy and runs every
+// Worker check against it; a descriptor plant rewrites a copy of the descriptor and requires the named key.
+// A plant that leaves the gate green would mean nothing, and the control proves a red is plant-caused.
+//
+// Honestly --quick: in-process Requests and an in-memory store. No build, no browser, no display, no network.
+//
+// Usage:
+//   node scripts/verify-worker-submit.mjs
+//   node scripts/verify-worker-submit.mjs --self-test
+
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import * as collector from './crash-collector.mjs';
+import * as realWorker from '../worker/crash-submit.mjs';
+
+// The Worker under test. Every handler check reads these two; a plant swaps them for a mutated copy.
+let crashSubmit = realWorker;
+let worker = realWorker.default;
+let importCounter = 0;
+async function withWorkerAt(path, fn) {
+    const mod = await import(`${pathToFileURL(path).href}?plant=${importCounter++}`);
+    const saved = [crashSubmit, worker];
+    [crashSubmit, worker] = [mod, mod.default];
+    try {
+        return await fn();
+    } finally {
+        [crashSubmit, worker] = saved;
+    }
+}
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const NAME = 'verify-worker-submit';
+const args = process.argv.slice(2);
+const SELF_TEST = args.includes('--self-test');
+const WORKER_DIR_REL = 'worker';
+const TOML_REL = 'worker/wrangler-crash.toml';
+const LIFECYCLE_REL = 'worker/crash-r2-lifecycle.json';
+const SOURCE_REL = 'worker/crash-submit.mjs';
+const SUBMIT_URL = 'https://crash.example.org/submit';
+const BOUNDARY = 'GSDCRASHSUBMITBOUNDARY';
+const CONTENT_TYPE = `multipart/form-data; boundary=${BOUNDARY}`;
+const NOW = 1720000000000;
+
+/** The contract names the Worker must declare: the wire vocabulary the policy page states. */
+const REQUIRED_CONTRACT_NAMES = Object.freeze([
+    'SUBMIT_PATH',
+    'MINIDUMP_PART_NAME',
+    'EXTRA_PART_NAME',
+    'REASON_WRONG_CONTENT_TYPE',
+    'REASON_NO_MINIDUMP',
+    'REASON_OVERSIZED',
+    'REASON_STORE_UNAVAILABLE',
+    'MAX_PARTS',
+    'MAX_PART_MIB',
+    'MAX_BODY_MIB',
+    'RETENTION_DAYS',
+    'ANNOTATION_ALLOWLIST',
+    'MAX_ANNOTATION_BYTES',
+    'MIN_BOUNDARY_LENGTH',
+    'MAX_BOUNDARY_LENGTH',
+    'MAX_HEADER_BYTES',
+    'MAX_PART_NAME_LENGTH',
+    'RECORDABLE_PART_NAMES',
+    'OTHER_PART_NAME',
+]);
+
+// --- the multipart builder (the same framing both parsers read) ----------------
+
+function buildMultipart(parts) {
+    const chunks = [];
+    for (const part of parts) {
+        chunks.push(Buffer.from(
+            `--${BOUNDARY}\r\n`
+            + `Content-Disposition: ${part.disposition ?? `form-data; name="${part.name}"${part.filename ? `; filename="${part.filename}"` : ''}`}\r\n`
+            + (part.extraHeader ? `${part.extraHeader}\r\n` : '')
+            + `Content-Type: ${part.contentType ?? 'application/octet-stream'}\r\n\r\n`,
+            'latin1',
+        ));
+        chunks.push(Buffer.isBuffer(part.data) ? part.data : Buffer.from(part.data));
+        chunks.push(Buffer.from('\r\n', 'latin1'));
+    }
+    chunks.push(Buffer.from(`--${BOUNDARY}--\r\n`, 'latin1'));
+    return Buffer.concat(chunks);
+}
+
+/**
+ * A minidump-shaped payload: binary bytes that carry the boundary text WITHOUT the CRLF anchor. A naive
+ * split on the bare boundary would mis-parse it; both parsers split only on the CRLF-anchored delimiter.
+ * (A payload that carries the full CRLF-anchored delimiter is invalid multipart and is not a fixture.)
+ */
+function binaryDump() {
+    return Buffer.concat([
+        Buffer.from([0x4d, 0x44, 0x4d, 0x50, 0x00, 0xff, 0x0d, 0x0a, 0x78]),
+        Buffer.from(`--${BOUNDARY}-not-a-delimiter\n`, 'latin1'),
+        Buffer.alloc(256, 0x7f),
+    ]);
+}
+
+const GECKO_EXTRA = JSON.stringify({
+    ProductName: 'PowerBrowser',
+    Version: '1.6.0',
+    BuildID: '20261031000000',
+    OS: 'Linux',
+    CPUArchitecture: 'amd64',
+    ReleaseChannel: 'release',
+    CrashTime: '1761900000',
+    NotAllowlisted: 'dropped',
+    Nested: { a: 1 },
+});
+
+const WELL_FORMED_PARTS = () => [
+    { name: crashSubmit.MINIDUMP_PART_NAME, filename: 'crash.dmp', data: binaryDump() },
+    { name: crashSubmit.EXTRA_PART_NAME, filename: 'extra.json', contentType: 'application/json', data: GECKO_EXTRA },
+];
+
+// --- the shared battery both parsers run over -----------------------------------
+
+function battery() {
+    return [
+        { name: 'well-formed', bytes: buildMultipart(WELL_FORMED_PARTS()), ct: CONTENT_TYPE },
+        { name: 'wrong content type', bytes: buildMultipart(WELL_FORMED_PARTS()), ct: 'text/plain' },
+        { name: 'no minidump', bytes: buildMultipart([WELL_FORMED_PARTS()[1]]), ct: CONTENT_TYPE },
+        { name: 'zero parts', bytes: Buffer.alloc(0), ct: CONTENT_TYPE },
+        {
+            name: 'too many parts',
+            bytes: buildMultipart([
+                ...Array.from({ length: crashSubmit.MAX_PARTS }, (_, i) => ({ name: `p${i}`, data: 'x' })),
+                { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+            ]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'oversized part',
+            bytes: buildMultipart([{ name: crashSubmit.MINIDUMP_PART_NAME, data: Buffer.alloc(crashSubmit.MAX_PART_BYTES + 1, 0x41) }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'malformed extra',
+            bytes: buildMultipart([
+                { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+                { name: crashSubmit.EXTRA_PART_NAME, data: '{"ProductName":"PowerBrowser",' },
+            ]),
+            ct: CONTENT_TYPE,
+        },
+        ...hostileBattery(),
+    ];
+}
+
+/** WR-01 and WR-02: inputs that smuggle a name, a long string, a second minidump, or a delimiter flood. */
+function hostileBattery() {
+    const dump = { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() };
+    return [
+        {
+            // filename= before name=: the real name is zzz, so there is no minidump part.
+            name: 'filename before name',
+            bytes: buildMultipart([{ disposition: `form-data; filename="${crashSubmit.MINIDUMP_PART_NAME}"; name="zzz"`, data: binaryDump() }, WELL_FORMED_PARTS()[1]]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            // A quoted filename that contains "; name=": the name parameter after it is the real one.
+            name: 'name inside a quoted filename',
+            bytes: buildMultipart([{ disposition: `form-data; filename="a; name=zzz"; name="${crashSubmit.MINIDUMP_PART_NAME}"`, data: binaryDump() }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'repeated name parameter',
+            bytes: buildMultipart([{ disposition: `form-data; name="${crashSubmit.MINIDUMP_PART_NAME}"; name="zzz"`, data: binaryDump() }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'x-prefixed disposition header',
+            bytes: buildMultipart([{ disposition: 'form-data; name="zzz"', extraHeader: `X-Content-Disposition: form-data; name="${crashSubmit.MINIDUMP_PART_NAME}"`, data: binaryDump() }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'very long part name',
+            bytes: buildMultipart([dump, { name: 'N'.repeat(100000), data: 'x' }, WELL_FORMED_PARTS()[1]]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'part name over the name cap but inside the header cap',
+            bytes: buildMultipart([dump, { name: 'M'.repeat(crashSubmit.MAX_PART_NAME_LENGTH + 1), data: 'x' }, WELL_FORMED_PARTS()[1]]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'very long header block',
+            bytes: buildMultipart([dump, { name: 'ProductName', extraHeader: `X-Pad: ${'a'.repeat(5000)}`, data: 'PowerBrowser' }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'two minidump parts',
+            bytes: buildMultipart([dump, { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'one-character boundary',
+            bytes: Buffer.from('\r\n--a'.repeat(100000), 'latin1'),
+            ct: 'multipart/form-data; boundary=a',
+        },
+        {
+            name: 'delimiter flood',
+            bytes: Buffer.from('\r\n--abc'.repeat(100000), 'latin1'),
+            ct: 'multipart/form-data; boundary=abc',
+        },
+        {
+            name: 'boundary over the RFC limit',
+            bytes: buildMultipart([dump]),
+            ct: `multipart/form-data; boundary=${'b'.repeat(crashSubmit.MAX_BOUNDARY_LENGTH + 1)}`,
+        },
+    ];
+}
+
+/** Parser agreement over the battery: same ok, same reason, same part names, same part bytes. */
+function parserDisagreements() {
+    const problems = [];
+    for (const item of battery()) {
+        const fromCollector = collector.parseMultipart(Buffer.from(item.bytes), item.ct);
+        const fromWorker = crashSubmit.parseMultipart(new Uint8Array(item.bytes), item.ct);
+        if (fromCollector.ok !== fromWorker.ok) {
+            problems.push(`${item.name}: collector ok=${fromCollector.ok} but Worker ok=${fromWorker.ok}`);
+            continue;
+        }
+        if (!fromCollector.ok) {
+            if (fromCollector.reason !== fromWorker.reason) {
+                problems.push(`${item.name}: collector reason ${fromCollector.reason} but Worker reason ${fromWorker.reason}`);
+            }
+            continue;
+        }
+        const names = (parts) => parts.map(part => part.name).join(',');
+        if (names(fromCollector.parts) !== names(fromWorker.parts)) {
+            problems.push(`${item.name}: part names differ (${names(fromCollector.parts)} vs ${names(fromWorker.parts)})`);
+            continue;
+        }
+        fromCollector.parts.forEach((part, i) => {
+            if (!Buffer.from(fromWorker.parts[i].data).equals(part.data)) {
+                problems.push(`${item.name}: part ${part.name} bytes differ between the parsers`);
+            }
+        });
+    }
+    return problems;
+}
+
+/** Shared names: every export both modules declare is equal by value, and every contract name is declared. */
+function sharedNameDisagreements() {
+    const problems = [];
+    for (const name of REQUIRED_CONTRACT_NAMES) {
+        if (!(name in crashSubmit)) problems.push(`the Worker does not export the contract name ${name}`);
+    }
+    for (const name of Object.keys(crashSubmit)) {
+        if (!(name in collector)) continue;
+        const a = JSON.stringify(crashSubmit[name]);
+        const b = JSON.stringify(collector[name]);
+        if (a !== b) problems.push(`${name}: the Worker has ${a} but the collector has ${b}`);
+    }
+    return problems;
+}
+
+/** Every allowlisted annotation is a Gecko annotation sent with a report (derived from CrashAnnotations.yaml, never a kept list). */
+function allowlistProblems() {
+    const yaml = readFileSync(join(REPO_ROOT, 'upstream/toolkit/crashreporter/CrashAnnotations.yaml'), 'utf8');
+    const problems = [];
+    for (const name of crashSubmit.ANNOTATION_ALLOWLIST) {
+        const block = new RegExp(`^${name}:\\s*\\n((?:[ \\t]+.*\\n|\\s*\\n)*)`, 'm').exec(yaml);
+        const scope = block && /^\s+scope:\s*(\S+)/m.exec(block[1])?.[1];
+        if (scope !== 'report' && scope !== 'ping') {
+            problems.push(`the annotation allowlist names ${name}, which is not a Gecko annotation sent with a report (CrashAnnotations.yaml scope ${JSON.stringify(scope ?? null)}); a field Gecko never writes can only be client-supplied`);
+        }
+    }
+    return problems;
+}
+
+// --- the in-memory R2 stub and the synthetic Request --------------------------------
+
+function memoryStore({ failOn = null } = {}) {
+    const objects = new Map();
+    return {
+        objects,
+        async put(key, value) {
+            if (failOn !== null && key.endsWith(failOn)) throw new Error('simulated store fault');
+            objects.set(key, value instanceof Uint8Array ? value.slice() : value);
+        },
+        async delete(key) {
+            objects.delete(key);
+        },
+    };
+}
+
+function submitRequest(bytes, { ct = CONTENT_TYPE, method = 'POST', path = '/submit' } = {}) {
+    const init = { method, headers: { 'content-type': ct } };
+    if (method !== 'GET') init.body = bytes;
+    return new Request(`https://crash.example.org${path}`, init);
+}
+
+async function drive(request, store) {
+    const response = await worker.fetch(request, { CRASH_STORE: store });
+    return { status: response.status, body: await response.text(), allow: response.headers.get('allow') };
+}
+
+// --- the handler checks ---------------------------------------------------------------
+
+/** Each entry: a name, the request, the expected verdict, and whether the store must stay empty. */
+function rejectionCases() {
+    const big = Buffer.alloc(crashSubmit.MAX_BODY_BYTES + 1, 0x41);
+    return [
+        {
+            rule: 'malformed content-type',
+            request: () => submitRequest(buildMultipart(WELL_FORMED_PARTS()), { ct: 'text/plain' }),
+            status: 400, body: `Discarded=${crashSubmit.REASON_WRONG_CONTENT_TYPE}`,
+        },
+        {
+            rule: 'missing minidump',
+            request: () => submitRequest(buildMultipart([WELL_FORMED_PARTS()[1]])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'zero parts',
+            request: () => submitRequest(Buffer.alloc(0)),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'oversized body',
+            request: () => submitRequest(big),
+            status: 413, body: `Discarded=${crashSubmit.REASON_OVERSIZED}`,
+        },
+        {
+            rule: 'oversized part',
+            request: () => submitRequest(buildMultipart([{ name: crashSubmit.MINIDUMP_PART_NAME, data: Buffer.alloc(crashSubmit.MAX_PART_BYTES + 1, 0x41) }])),
+            status: 413, body: `Discarded=${crashSubmit.REASON_OVERSIZED}`,
+        },
+        {
+            rule: 'part count',
+            request: () => submitRequest(buildMultipart([
+                ...Array.from({ length: crashSubmit.MAX_PARTS + 1 }, (_, i) => ({ name: `p${i}`, data: 'x' })),
+                { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+            ])),
+            status: 413, body: `Discarded=${crashSubmit.REASON_OVERSIZED}`,
+        },
+        {
+            rule: 'filename before name',
+            request: () => submitRequest(buildMultipart([{ disposition: `form-data; filename="${crashSubmit.MINIDUMP_PART_NAME}"; name="zzz"`, data: binaryDump() }])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'two minidump parts',
+            request: () => submitRequest(buildMultipart([
+                { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+                { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+            ])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'empty minidump',
+            request: () => submitRequest(buildMultipart([{ name: crashSubmit.MINIDUMP_PART_NAME, data: Buffer.alloc(0) }])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'minidump without the MDMP signature',
+            request: () => submitRequest(buildMultipart([{ name: crashSubmit.MINIDUMP_PART_NAME, data: Buffer.alloc(64, 0x41) }])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'one-character boundary',
+            request: () => submitRequest(Buffer.from('\r\n--a'.repeat(100000), 'latin1'), { ct: 'multipart/form-data; boundary=a' }),
+            status: 400, body: `Discarded=${crashSubmit.REASON_WRONG_CONTENT_TYPE}`,
+        },
+        {
+            rule: 'delimiter flood',
+            request: () => submitRequest(Buffer.from('\r\n--abc'.repeat(100000), 'latin1'), { ct: 'multipart/form-data; boundary=abc' }),
+            status: 413, body: `Discarded=${crashSubmit.REASON_OVERSIZED}`,
+        },
+        {
+            rule: 'wrong method',
+            request: () => submitRequest(null, { method: 'GET' }),
+            status: 405, body: '', allow: 'POST',
+        },
+    ];
+}
+
+/** Checks that a store-less accept and every rejection behave as the contract states. */
+async function handlerProblems() {
+    const problems = [];
+    for (const item of rejectionCases()) {
+        const store = memoryStore();
+        const verdict = await drive(item.request(), store);
+        if (verdict.status !== item.status || verdict.body !== item.body) {
+            problems.push(`${item.rule}: answered ${verdict.status} ${JSON.stringify(verdict.body)}, want ${item.status} ${JSON.stringify(item.body)}`);
+        }
+        if (item.allow !== undefined && verdict.allow !== item.allow) {
+            problems.push(`${item.rule}: Allow is ${JSON.stringify(verdict.allow)}, want ${JSON.stringify(item.allow)}`);
+        }
+        if (store.objects.size !== 0) problems.push(`${item.rule}: stored ${store.objects.size} object(s) on a rejection`);
+    }
+    const other = await drive(submitRequest(Buffer.alloc(0), { path: '/elsewhere' }), memoryStore());
+    if (other.status !== 404) problems.push(`a path other than /submit answered ${other.status}, want 404`);
+    return problems;
+}
+
+async function acceptProblems() {
+    const problems = [];
+    const store = memoryStore();
+    const verdict = await drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), store);
+    const match = /^CrashID=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(verdict.body);
+    if (verdict.status !== 200 || !match) {
+        problems.push(`well-formed submit answered ${verdict.status} ${JSON.stringify(verdict.body)}, want 200 CrashID=<uuid>`);
+        return problems;
+    }
+    const id = match[1];
+    if (!store.objects.has(`${crashSubmit.CRASH_PREFIX}${id}.dmp`) || !store.objects.has(`${crashSubmit.CRASH_PREFIX}${id}.json`)) {
+        problems.push(`the accept did not store both ${crashSubmit.CRASH_PREFIX}${id}.dmp and .json`);
+        return problems;
+    }
+    const record = JSON.parse(store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.json`));
+    const want = ['BuildID', 'CPUArchitecture', 'CrashTime', 'OS', 'ProductName', 'ReleaseChannel', 'Version'];
+    if (JSON.stringify(Object.keys(record.annotations).sort()) !== JSON.stringify(want)) {
+        problems.push(`the record kept annotations ${JSON.stringify(Object.keys(record.annotations).sort())}, want exactly the allowlisted scalars ${JSON.stringify(want)}`);
+    }
+    problems.push(...recordShapeProblems(record));
+    if (record.id !== id || record.minidumpBytes !== binaryDump().length) {
+        problems.push('the record id or minidump byte count does not match the accepted submit');
+    }
+    if (store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.dmp`).byteLength !== binaryDump().length) {
+        problems.push('the stored minidump is not the bytes the part carried');
+    }
+    return problems;
+}
+
+/** A minidump whose payload ends in CRLF is stored byte for byte: the CRLF before a delimiter is the delimiter's. */
+async function trailingCrlfProblems() {
+    const sent = Buffer.concat([binaryDump(), Buffer.from('\r\n\r\n', 'latin1')]);
+    const store = memoryStore();
+    const verdict = await drive(submitRequest(buildMultipart([{ name: crashSubmit.MINIDUMP_PART_NAME, data: sent }])), store);
+    const id = /^CrashID=(.+)$/.exec(verdict.body)?.[1];
+    if (verdict.status !== 200 || !id) return [`a minidump ending in CRLF answered ${verdict.status} ${JSON.stringify(verdict.body)}, want 200 CrashID=`];
+    const stored = store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.dmp`);
+    const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+    return sha(Buffer.from(stored)) === sha(sent) ? [] : [`a minidump whose payload ends in CRLF was stored as ${stored.byteLength} bytes, sent ${sent.length}: the stored bytes' sha256 differs, so the parser ate data bytes (payload ends in CRLF)`];
+}
+
+/** The stored record carries only server-made fields, allowlisted annotation keys, and known part names. */
+function recordShapeProblems(record) {
+    const problems = [];
+    const keys = Object.keys(record).sort().join(',');
+    if (keys !== 'annotations,id,minidumpBytes,partNames,receivedAt') problems.push(`the record has keys ${keys}, want only annotations,id,minidumpBytes,partNames,receivedAt`);
+    for (const key of Object.keys(record.annotations ?? {})) {
+        if (!crashSubmit.ANNOTATION_ALLOWLIST.includes(key)) problems.push(`the record annotation ${JSON.stringify(key)} is not on the allowlist`);
+    }
+    for (const name of record.partNames ?? []) {
+        if (!crashSubmit.RECORDABLE_PART_NAMES.includes(name) && name !== crashSubmit.OTHER_PART_NAME) problems.push(`the record stores the client part name ${JSON.stringify(String(name).slice(0, 40))}`);
+    }
+    return problems;
+}
+
+/** Hostile names reach the parser but never the bucket: a 100 KB part name is dropped, not stored. */
+async function hostileNameProblems() {
+    const problems = [];
+    const store = memoryStore();
+    const verdict = await drive(submitRequest(buildMultipart([
+        { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+        { name: 'N'.repeat(100), data: 'x' },
+        { name: 'Q'.repeat(100000), data: 'x' },
+    ])), store);
+    const id = /^CrashID=(.+)$/.exec(verdict.body)?.[1];
+    if (verdict.status !== 200 || !id) return [`a hostile part name changed the verdict: ${verdict.status} ${JSON.stringify(verdict.body)}, want 200 CrashID=`];
+    const text = store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.json`);
+    if (text.length > 2048) problems.push(`the record is ${text.length} bytes after hostile part names, want it bounded`);
+    problems.push(...recordShapeProblems(JSON.parse(text)));
+    return problems;
+}
+
+/**
+ * WR-02: peak memory of the Worker's own fetch handler on an 18 MiB body of 3-character delimiters, in a child
+ * process so the peak is a clean high-water mark. The control is the same body refused at the content-type check
+ * (it still reads the whole body), so the difference is what the parse itself allocates.
+ */
+const FLOOD_PROBE = `
+import { pathToFileURL } from 'node:url';
+const worker = (await import(pathToFileURL(process.argv[1]).href)).default;
+const boundary = process.argv[2];
+const delim = Buffer.from('\\r\\n--abc');
+const body = Buffer.alloc(18 * 1024 * 1024);
+for (let i = 0; i + delim.length <= body.length; i += delim.length) delim.copy(body, i);
+const store = { async put() {}, async delete() {} };
+const res = await worker.fetch(new Request('https://crash.example.org/submit', { method: 'POST', headers: { 'content-type': 'multipart/form-data; boundary=' + boundary }, body }), { CRASH_STORE: store });
+console.log(JSON.stringify({ status: res.status, maxRssMiB: Math.round(process.resourceUsage().maxRSS / 1024) }));
+`;
+export const FLOOD_BUDGET_MIB = 32;
+function floodRun(workerPath, boundary) {
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', FLOOD_PROBE, workerPath, boundary], { encoding: 'utf8' });
+    if (run.status !== 0) return { error: `the probe exited ${run.status}: ${(run.stderr || '').trim().split('\n').pop()}` };
+    return JSON.parse(run.stdout.trim().split('\n').pop());
+}
+function floodProblems(workerPath) {
+    const flood = floodRun(workerPath, 'abc');
+    const control = floodRun(workerPath, 'a');
+    if (flood.error || control.error) return [`delimiter flood memory probe failed: ${flood.error ?? control.error}`];
+    const problems = [];
+    if (flood.status !== 413) problems.push(`an 18 MiB body of 3-character delimiters answered ${flood.status}, want 413`);
+    if (flood.maxRssMiB - control.maxRssMiB > FLOOD_BUDGET_MIB) {
+        problems.push(`an 18 MiB delimiter flood grew peak memory by ${flood.maxRssMiB - control.maxRssMiB} MiB over the same body refused up front (${flood.maxRssMiB} vs ${control.maxRssMiB} MiB), want at most ${FLOOD_BUDGET_MIB} MiB: the part-count cap must apply while scanning`);
+    }
+    return problems;
+}
+
+/**
+ * A request that DECLARES the cap in Content-Length and sends a few bytes must not make the reader allocate a
+ * cap-sized buffer: many such requests would exhaust the isolate. The largest Uint8Array the reader constructs
+ * is measured with an instrumented constructor.
+ */
+async function declaredLengthProblems() {
+    const cap = crashSubmit.MAX_BODY_BYTES;
+    const request = {
+        headers: new Headers({ 'content-length': String(cap) }),
+        body: new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(100)); controller.close(); } }),
+    };
+    const Real = globalThis.Uint8Array;
+    let largest = 0;
+    globalThis.Uint8Array = new Proxy(Real, {
+        construct(target, argv, newTarget) {
+            if (typeof argv[0] === 'number') largest = Math.max(largest, argv[0]);
+            return Reflect.construct(target, argv, newTarget);
+        },
+    });
+    let bytes;
+    try {
+        bytes = await crashSubmit.readCappedBytes(request, cap);
+    } finally {
+        globalThis.Uint8Array = Real;
+    }
+    const problems = [];
+    if (largest >= cap / 4) problems.push(`a request declaring ${cap} bytes and sending 100 made the reader allocate ${largest} bytes: Content-Length must only refuse, never size a buffer`);
+    if (bytes === undefined || bytes.byteLength !== 100) problems.push('the reader did not return the 100 bytes that arrived');
+    return problems;
+}
+
+/** Store fault: a record write fault removes the dump, and a dump write fault leaves no record. Nothing is stored either way. */
+async function storeFaultProblems() {
+    const problems = [];
+    for (const [failOn, what] of [['.json', 'record'], ['.dmp', 'minidump']]) {
+        const store = memoryStore({ failOn });
+        const verdict = await drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), store);
+        if (verdict.status !== 500 || verdict.body !== `Discarded=${crashSubmit.REASON_STORE_UNAVAILABLE}`) {
+            problems.push(`a ${what} write fault answered ${verdict.status} ${JSON.stringify(verdict.body)}, want 500 store_unavailable`);
+        }
+        if (store.objects.size !== 0) problems.push(`a ${what} write fault left ${store.objects.size} orphaned object(s)`);
+    }
+    return problems;
+}
+
+/** Concurrency and the no-throttle posture: two concurrent accepts keep distinct ids, and 61 in a row all accept. */
+async function concurrencyProblems() {
+    const problems = [];
+    const store = memoryStore();
+    const [a, b] = await Promise.all([
+        drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), store),
+        drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), store),
+    ]);
+    if (a.status !== 200 || b.status !== 200 || a.body === b.body) {
+        problems.push(`two concurrent submits answered ${a.status}/${b.status} with ids ${a.body} and ${b.body}, want two distinct accepts`);
+    }
+    if (store.objects.size !== 4) problems.push(`two concurrent submits stored ${store.objects.size} object(s), want 4`);
+    const burst = memoryStore();
+    for (let i = 0; i < 61; i += 1) {
+        const verdict = await drive(submitRequest(buildMultipart(WELL_FORMED_PARTS())), burst);
+        if (verdict.status !== 200 || !verdict.body.startsWith('CrashID=')) {
+            problems.push(`submit ${i + 1} in one minute answered ${verdict.status} ${JSON.stringify(verdict.body)}; the Worker must not throttle in-process (the zone rule does)`);
+            break;
+        }
+    }
+    return problems;
+}
+
+// --- the descriptor checks (read from a root, so the self-test can plant a copy) ------
+
+function descriptorProblems(root) {
+    const problems = [];
+    const toml = readFileSync(join(root, TOML_REL), 'utf8');
+    if (!/^workers_dev\s*=\s*false\s*$/m.test(toml)) problems.push(`${TOML_REL} must state workers_dev = false (the zone rule cannot cover a workers.dev URL)`);
+    if (!/^preview_urls\s*=\s*false\s*$/m.test(toml)) problems.push(`${TOML_REL} must state preview_urls = false`);
+    if (!/binding\s*=\s*"CRASH_STORE"/.test(toml)) problems.push(`${TOML_REL} must bind the R2 store as CRASH_STORE`);
+    if (/^\s*crons\s*=/m.test(toml) || /\[triggers\]/.test(toml)) problems.push(`${TOML_REL} schedules a job; retention is the R2 lifecycle rule, not a second job (crons)`);
+    if (!/^routes\s*=\s*\[\s*\{[^}]*pattern\s*=\s*"[^"]+"[^}]*custom_domain\s*=\s*true/m.test(toml)) {
+        problems.push(`${TOML_REL} must attach the crash hostname with a routes entry carrying custom_domain = true (no route means no reachable receiver)`);
+    }
+    const step = re => toml.search(re);
+    if (step(/^#\s+\d+\.\s+Rate-limit rule/m) === -1 || step(/^#\s+\d+\.\s+Deploy:/m) === -1 || step(/^#\s+\d+\.\s+Rate-limit rule/m) > step(/^#\s+\d+\.\s+Deploy:/m)) {
+        problems.push(`${TOML_REL} runbook must create the rate-limit rule BEFORE the deploy step (order)`);
+    }
+    if (!/r2\.dev/.test(toml)) problems.push(`${TOML_REL} runbook must record the r2.dev public-access check (private bucket)`);
+    let lifecycle;
+    try {
+        lifecycle = JSON.parse(readFileSync(join(root, LIFECYCLE_REL), 'utf8'));
+    } catch (err) {
+        problems.push(`${LIFECYCLE_REL} does not parse: ${err && err.message}`);
+        return problems;
+    }
+    const rules = Array.isArray(lifecycle.rules) ? lifecycle.rules : [];
+    const rule = rules.find(r => r.prefix === crashSubmit.CRASH_PREFIX);
+    if (rules.length !== 1 || !rule) problems.push(`${LIFECYCLE_REL} must hold exactly one rule over the ${crashSubmit.CRASH_PREFIX} prefix`);
+    else if (rule.expire_days !== crashSubmit.RETENTION_DAYS || rule.enabled !== true) {
+        problems.push(`${LIFECYCLE_REL} expire_days is ${JSON.stringify(rule.expire_days)}, want ${crashSubmit.RETENTION_DAYS} (RETENTION_DAYS) and enabled`);
+    }
+    const source = readFileSync(join(root, SOURCE_REL), 'utf8');
+    if (source.includes('throttled_per_minute_cap')) problems.push(`${SOURCE_REL} names the throttle rule throttled_per_minute_cap in-process; the rate limit is the zone rule (Phase 48 WR-02)`);
+    if (/access-control-|Access-Control-/i.test(source)) problems.push(`${SOURCE_REL} sends CORS headers; the sender is native, not a browser page`);
+    for (const name of readdirSync(join(root, WORKER_DIR_REL))) {
+        const text = readFileSync(join(root, WORKER_DIR_REL, name), 'utf8');
+        if (/\b(secret|token|api[_-]?key|password|credential)\w*\s*[:=]\s*['"][^'"]+['"]/i.test(text)) {
+            problems.push(`${WORKER_DIR_REL}/${name} assigns a credential-shaped value`);
+        }
+    }
+    return problems;
+}
+
+/** Every check that reads the Worker module (the real one, or a mutated copy for a plant). */
+async function workerProblems(workerPath) {
+    return [
+        ...sharedNameDisagreements(),
+        ...allowlistProblems(),
+        ...parserDisagreements(),
+        ...(await handlerProblems()),
+        ...(await acceptProblems()),
+        ...(await hostileNameProblems()),
+        ...(await trailingCrlfProblems()),
+        ...floodProblems(workerPath),
+        ...(await declaredLengthProblems()),
+        ...(await storeFaultProblems()),
+        ...(await concurrencyProblems()),
+    ];
+}
+
+async function runChecks(root) {
+    return [...(await workerProblems(resolve(root, SOURCE_REL))), ...descriptorProblems(root)];
+}
+
+// --- main and self-test ------------------------------------------------------------------
+
+async function main() {
+    const problems = await runChecks(REPO_ROOT);
+    if (problems.length > 0) {
+        for (const p of problems) console.error(`${NAME}: FAIL -- ${p}`);
+        console.error(`${NAME}: FAIL -- ${problems.length} problem(s). Next step: make the Worker and the collector speak one contract, then re-run this check.`);
+        process.exit(1);
+    }
+    console.log(`${NAME}: PASS -- the Worker speaks the collector's contract, its verdicts and its descriptors hold`);
+    process.exit(0);
+}
+
+async function selfTest() {
+    let failed = 0;
+    const complain = (rule, why) => {
+        console.error(`${NAME}: --self-test FAIL -- '${rule}' ${why}`);
+        failed += 1;
+    };
+
+    const control = await runChecks(REPO_ROOT);
+    if (control.length > 0) {
+        complain('unmutated control', `is already red, so the plants below would mean nothing: ${control.join(' | ')}`);
+        process.exit(1);
+    }
+    console.log('  ok  unmutated control -> the Worker and the collector agree and every verdict holds');
+
+    // Handler plants: each is a one-line mutation of a COPY of the Worker, loaded and run through every
+    // Worker check. The unmutated control above is green, so a red is the mutation's, and it must name its rule.
+    const handlerPlants = [
+        ['allowlist filter removed', 'if (!ANNOTATION_ALLOWLIST.includes(key)) return;', '', 'allowlisted scalars'],
+        ['allowlist names a field Gecko never writes', "    'CPUArchitecture',\n]);", "    'CPUArchitecture',\n    'Platform',\n]);", 'not a Gecko annotation'],
+        ['client part names stored', '(RECORDABLE_PART_NAMES.includes(part.name) ? part.name : OTHER_PART_NAME)', 'part.name', 'client part name'],
+        ['name read from filename', 'const name = dispositionName(latin1(chunk.subarray(0, headerEnd)));', 'const name = /name="([^"]*)"/i.exec(latin1(chunk.subarray(0, headerEnd)))?.[1] ?? null;', 'filename before name'],
+        ['second minidump part allowed', '.length !== 1) return', '.length < 1) return', 'two minidump parts'],
+        ['delimiter cap not applied while scanning', 'if (out.length > maxDelimiters) return null;', '', 'delimiter flood'],
+        ['boundary floor removed', 'boundary.length < MIN_BOUNDARY_LENGTH ||', '', 'one-character boundary'],
+        ['header cap removed', 'chunk.subarray(0, MAX_HEADER_BYTES + 4)', 'chunk', 'very long header block'],
+        ['part name cap removed', ' || name.length > MAX_PART_NAME_LENGTH', '', 'part name over the name cap'],
+        ['MDMP check removed', 'minidump.data.byteLength < MIN_MINIDUMP_BYTES || !MDMP_MAGIC.every((byte, i) => minidump.data[i] === byte)', 'false', 'empty minidump'],
+        ['trailing CRLF stripped from part data', 'const headerEnd = indexOfBytes(chunk.subarray(0, MAX_HEADER_BYTES + 4), CRLF_CRLF, 0);', 'if (chunk.length >= 2 && chunk[chunk.length - 2] === 13 && chunk[chunk.length - 1] === 10) chunk = chunk.subarray(0, chunk.length - 2);\n        const headerEnd = indexOfBytes(chunk.subarray(0, MAX_HEADER_BYTES + 4), CRLF_CRLF, 0);', 'payload ends in CRLF'],
+        ['delete on record failure removed', 'await env.CRASH_STORE.delete(dumpKey);', 'void dumpKey;', 'orphaned'],
+        ['record written before the minidump', 'await env.CRASH_STORE.put(dumpKey, minidump.data.slice());', 'await env.CRASH_STORE.put(recordKey, record);\n        await env.CRASH_STORE.put(dumpKey, minidump.data.slice());', 'minidump write fault'],
+        ['buffer sized from Content-Length', 'new Uint8Array(READ_INITIAL_BYTES)', 'new Uint8Array(Number.isFinite(declared) && declared > 0 ? declared : READ_INITIAL_BYTES)', 'Content-Length must only refuse'],
+        ['in-Worker throttle added', "const verdict = await handleCrashSubmit({", "globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n        if (globalThis.__plantSent > 60) return toResponse({ status: 200, body: 'Discarded=throttled' });\n        const verdict = await handleCrashSubmit({", 'must not throttle in-process'],
+    ];
+    for (const [rule, find, replace, needle] of handlerPlants) {
+        const dir = mkdtempSync(join(tmpdir(), 'verify-worker-submit-selftest-'));
+        try {
+            const copy = join(dir, 'crash-submit.mjs');
+            const original = readFileSync(join(REPO_ROOT, SOURCE_REL), 'utf8');
+            if (!original.includes(find)) {
+                complain(rule, `planted no fault at all: the text to mutate was not found in ${SOURCE_REL}`);
+                continue;
+            }
+            writeFileSync(copy, original.replace(find, replace), 'utf8');
+            const problems = await withWorkerAt(copy, () => workerProblems(copy));
+            if (!problems.some(p => p.includes(needle))) complain(rule, `did not go red naming '${needle}'; got: ${problems.slice(0, 3).join(' | ') || '(no failures)'}`);
+            else console.log(`  ok  ${rule} -> red, naming '${needle}'`);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    // Descriptor plants: a copy of the tree's worker descriptors, one fault each, must go red naming its key.
+    const descriptorPlants = [
+        ['workers_dev enabled', TOML_REL, text => text.replace('workers_dev = false', 'workers_dev = true'), 'workers_dev'],
+        ['route removed', TOML_REL, text => text.replace(/^routes = .*$/m, ''), 'routes entry'],
+        ['deploy before the rate-limit rule', TOML_REL, (text) => {
+            const line = /^#\s+\d+\.\s+Deploy:.*\n/m.exec(text)[0];
+            return text.replace(line, '').replace(/^#\s+\d+\.\s+Rate-limit rule/m, m => `${line}${m}`);
+        }, 'BEFORE the deploy'],
+        ['lifecycle age drifted', LIFECYCLE_REL, text => text.replace('"expire_days": 30', '"expire_days": 90'), 'expire_days'],
+        ['second job scheduled', TOML_REL, text => `${text}\n[triggers]\ncrons = ["0 3 * * *"]\n`, 'crons'],
+        ['in-process throttle answered', SOURCE_REL, text => `${text}\nconst THROTTLE = 'throttled_per_minute_cap';\n`, 'throttled_per_minute_cap'],
+        ['credential assigned in worker/', SOURCE_REL, text => `${text}\nconst token = "abcdef0123456789";\n`, 'credential-shaped'],
+    ];
+    for (const [rule, rel, mutate, needle] of descriptorPlants) {
+        const dir = mkdtempSync(join(tmpdir(), 'verify-worker-submit-selftest-'));
+        try {
+            for (const file of [TOML_REL, LIFECYCLE_REL, SOURCE_REL]) {
+                mkdirSync(dirname(join(dir, file)), { recursive: true });
+                copyFileSync(join(REPO_ROOT, file), join(dir, file));
+            }
+            const original = readFileSync(join(dir, rel), 'utf8');
+            const mutated = mutate(original);
+            if (mutated === original) {
+                complain(rule, 'planted no fault at all: the mutation did not land');
+                continue;
+            }
+            writeFileSync(join(dir, rel), mutated, 'utf8');
+            const problems = descriptorProblems(dir);
+            if (!problems.some(p => p.includes(needle))) complain(rule, `did not go red naming '${needle}'; got: ${problems.join(' | ') || '(no failures)'}`);
+            else console.log(`  ok  ${rule} -> red, naming '${needle}'`);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    if (failed > 0) {
+        console.error(`${NAME}: --self-test FAIL -- ${failed} plant(s) did not behave as pinned`);
+        process.exit(1);
+    }
+    console.log(`${NAME}: --self-test PASS -- control green first, then every planted fault went red naming its rule`);
+    process.exit(0);
+}
+
+if (SELF_TEST) {
+    await selfTest();
+} else if (args.length === 0) {
+    await main();
+} else {
+    console.error(`${NAME}: FAIL -- unknown argument ${JSON.stringify(args[0])}. Next step: run with no argument or --self-test.`);
+    process.exit(2);
+}

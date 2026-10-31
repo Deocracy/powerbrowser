@@ -1,0 +1,106 @@
+# docs/watchdog.yml
+#
+# The watchdog (Phase 48, MON-01). The owner applies this file to powerbrowser-updates as
+# .github/workflows/watchdog.yml at plan 48-05. It is NEVER applied to the product repository: D-77 binds
+# the product repository to no schedule key. Each daily tick reads the newest run of the release-train
+# workflow in the product repository. It opens one issue in this repository when that run started 26 hours
+# or more ago, or when no run is recorded, and it opens nothing when one of ITS OWN issues is open.
+#
+# The dedupe counts only issues this workflow opened: authored by the Actions bot (WATCHDOG_AUTHOR, the
+# author of an issue created with GITHUB_TOKEN) and carrying the fixed label. A title alone is not enough:
+# both repositories are public, so any account could open an issue with the title and silence the monitor.
+# A missing WATCHDOG_AUTHOR skips the dedupe, so the monitor errs toward alerting (one issue per day), never
+# toward silence. The decision script is run by scripts/verify-watchdog.mjs under bash with a stub gh.
+#
+# Read credential. The read uses this repository's GITHUB_TOKEN (issues write only). That reads the product
+# repository's runs only if the product repository is public. A private product repository needs a read
+# credential from the owner; that is a BLOCKED.md item, and this file references no token or secret.
+#
+# The 26-hour window measures from run started_at, not conclusion: a failing run that is still running
+# counts as alive.
+name: Watchdog
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check-train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # No checkout and no contents scope: the job reads no repository file; the product repository's runs are
+    # public data, and issues write is the only grant.
+    permissions:
+      issues: write
+    steps:
+      - name: Read the newest release-train run (read only)
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "now=${NOW}" >> "$GITHUB_OUTPUT"
+          gh api "repos/${OWNER}/powerbrowser/actions/workflows/release-train.yml/runs?per_page=1" --jq '.workflow_runs[0] // empty' > "$RUNNER_TEMP/latest.json"
+          if [ -s "$RUNNER_TEMP/latest.json" ]; then
+            STARTED=$(jq -r '.run_started_at' "$RUNNER_TEMP/latest.json")
+            LINK=$(jq -r '.html_url' "$RUNNER_TEMP/latest.json")
+            AGE_S=$(( ($(date -u +%s) - $(date -u -d "$STARTED" +%s)) ))
+            echo "started=${STARTED}" >> "$GITHUB_OUTPUT"
+            echo "link=${LINK}" >> "$GITHUB_OUTPUT"
+            echo "age-seconds=${AGE_S}" >> "$GITHUB_OUTPUT"
+          else
+            echo "started=none" >> "$GITHUB_OUTPUT"
+            echo "link=none" >> "$GITHUB_OUTPUT"
+            echo "age-seconds=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 26 hours is 93600 seconds. A missing run (no age) opens the issue, naming the missing run.
+      # An open issue of this workflow's own (bot author, fixed label, same title) is the dedupe: a second
+      # one is not opened. An issue by anyone else with the title is not the dedupe.
+      - name: Decide whether the train is silent (26 hours or more, or no run)
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGE_S: ${{ steps.latest.outputs.age-seconds }}
+          WATCHDOG_AUTHOR: ${{ vars.WATCHDOG_AUTHOR || 'app/github-actions' }}
+          WATCHDOG_LABEL: release-train-watchdog
+        run: |
+          set -euo pipefail
+          OPEN=false
+          if [ -z "$AGE_S" ] || [ "$AGE_S" -ge 93600 ]; then OPEN=true; fi
+          OPEN_COUNT=0
+          if [ -n "$WATCHDOG_AUTHOR" ]; then
+            OPEN_COUNT=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --author "$WATCHDOG_AUTHOR" --label "$WATCHDOG_LABEL" --search 'in:title "release-train has not run in 26 h"' --limit 100 --json title --jq '[.[] | select(.title == "release-train has not run in 26 h")] | length')
+          else
+            echo "watchdog: WATCHDOG_AUTHOR is unset, so the dedupe cannot tell its own issue from a stranger's; it is skipped and the alert opens" >&2
+          fi
+          if [ "$OPEN_COUNT" -gt 0 ]; then OPEN=false; fi
+          echo "open=${OPEN}" >> "$GITHUB_OUTPUT"
+
+      - name: Open an issue in this repository when the train is silent
+        if: ${{ steps.decide.outputs.open == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STARTED: ${{ steps.latest.outputs.started }}
+          LINK: ${{ steps.latest.outputs.link }}
+          NOW: ${{ steps.latest.outputs.now }}
+          WATCHDOG_LABEL: release-train-watchdog
+        run: |
+          set -euo pipefail
+          BODY="$RUNNER_TEMP/watchdog-body.md"
+          if [ "$LINK" = "none" ]; then
+            printf '%s\n\n%s\n%s\n' "release-train has not run in 26 h" "No release-train run is recorded in the product repository, so the train has never run or its history is gone." "Checked at: ${NOW}" > "$BODY"
+          else
+            printf '%s\n\n%s\n%s\n%s\n' "release-train has not run in 26 h" "Latest release-train run: ${LINK}" "Run started at: ${STARTED}" "Checked at: ${NOW}" > "$BODY"
+          fi
+          gh label create "$WATCHDOG_LABEL" --repo "$GITHUB_REPOSITORY" --color B60205 --description "Opened by the release-train watchdog" --force
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "release-train has not run in 26 h" --label "$WATCHDOG_LABEL" --body-file "$BODY"

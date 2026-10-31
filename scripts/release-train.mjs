@@ -59,14 +59,26 @@
 // Honestly --quick: fixtures only. No network, no build, no browser, no display,
 // no gh. It writes nothing.
 //
+// The maintenance half (TRAIN-07, Phase 48) is pure too: deriveMaintenance over facts the sweep
+// reads, renderMaintenance for the pinned body (byte-stable), nextMaintenance for the exactly-one
+// write plan (one PATCH on a byte diff, one comment on a transition into red), and sweepDue for
+// the 06:00 UTC gate. The sweep's facts step and the report job's write step are the only callers.
+//
 // Usage:
 //   node scripts/release-train.mjs --self-test
 //   node scripts/release-train.mjs --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>
 //   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false> <replay-result> <detect-result>
 //                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
 //                                        each is success|failure|cancelled|skipped)
+//   node scripts/release-train.mjs --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>]
+//   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
+//   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state> <state-out>
+//   node scripts/release-train.mjs --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>
 
-import { dirname, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { classifyTag, tagToVersion, UPTAKE_MAJOR } from './detect-upstreams.mjs';
@@ -314,8 +326,8 @@ export function render(state, facts) {
  * The exactly-one rule over the issues a label-and-title find returned. Zero
  * creates, one updates (PATCH only when the stored bytes differ from the rendered
  * bytes), two or more fail naming every number and never PATCH. Pure.
- * UNWIRED: no workflow caller and no self-test plant until the live tracking writer
- * is approved (BLOCKED.md item 3).
+ * Wired to the maintenance writer only (nextMaintenance, called by the report job). The
+ * release-train tracking writer stays UNWIRED until BLOCKED.md item 3 is approved.
  */
 export function findExactlyOne(found, rendered) {
     if (found.length === 0) return { action: 'create', numbers: [], patch: false };
@@ -651,6 +663,643 @@ function runChecks(overrides = {}) {
     }
     return { failures: failures.sort() };
 }
+
+// ---------------------------------------------------------------------------------------------
+// The maintenance half (Phase 48, TRAIN-07). Six rows derived from facts the sweep reads and the
+// probes it runs under the bot environment. Pure: facts in, rows out; render gives the pinned body.
+// The body is output only. The one read back is the previous body's row statuses, which decide a
+// transition into red (nextMaintenance) and never decide a state.
+// ---------------------------------------------------------------------------------------------
+
+export const MAINTENANCE_TITLE = 'release-train: maintenance';
+export const MAINTENANCE_ROW_NAMES = Object.freeze(['runner-online', 'esr-pin-age', 'channel-liveness', 'watchdog-age', 'synthetic events POST', 'download-count']);
+export const SWEEP_HOUR_UTC = 6;
+const DAY_MS = 86400000;
+const HOUR_MS = 3600000;
+const STALE_TAG_MS = 3 * DAY_MS;
+const WATCHDOG_LIMIT_MS = 26 * HOUR_MS;
+const NOT_PROBED = 'not probed in this run';
+const RUNNER_PHASE = 'no data until Phase 49';
+const CHANNEL_PHASE = 'no data until Phase 49';
+const DOWNLOAD_PHASE = 'no data until Phase 50';
+const ADVISORY_RE = /^[0-9]+(\.[0-9]+){1,2}(esr)?$/;
+const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+
+const maintRow = (name, status, evidence) => ({ name, status, evidence });
+
+function compareTuple(a, b) {
+    for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] - b[i];
+    return 0;
+}
+
+function runnerRow(f) {
+    const name = 'runner-online';
+    if (typeof f.runnersOnline !== 'number') return maintRow(name, 'no-data', NOT_PROBED);
+    if (f.runnersOnline <= 0) return maintRow(name, 'no-data', RUNNER_PHASE);
+    return maintRow(name, 'green', `${f.runnersOnline} runner(s) online`);
+}
+
+function esrPinRow(f) {
+    const name = 'esr-pin-age';
+    const pin = tagToVersion(f.pinTag);
+    if (pin === null) return maintRow(name, 'red', `the pin ${JSON.stringify(f.pinTag)} is not an *esr_RELEASE tag`);
+    if (!Array.isArray(f.tags) || f.tags.length === 0) return maintRow(name, 'no-data', 'no tag listing');
+    const newer = [...new Set(f.tags)]
+        .map(t => classifyTag(t, pin.tuple[0]))
+        .filter(c => c.keep)
+        .map(c => c.version)
+        .filter(v => compareTuple(v.tuple, pin.tuple) > 0)
+        .sort((a, b) => compareTuple(a.tuple, b.tuple));
+    const releases = Array.isArray(f.releases) ? f.releases : [];
+    const matches = v => releases.filter(r => r && typeof r.tag_name === 'string' && r.tag_name.includes(v.esrVersion));
+    const stale = [];
+    const undated = [];
+    for (const v of newer) {
+        const dated = f.tagDates?.[v.tag];
+        if (typeof dated !== 'number') { undated.push(v.tag); continue; }
+        if (f.nowMs - dated <= STALE_TAG_MS) continue;
+        if (matches(v).some(r => r.draft !== true)) continue;
+        const days = Math.floor((f.nowMs - dated) / DAY_MS);
+        const draftOnly = matches(v).length > 0 ? ' (a draft Release does not count)' : '';
+        stale.push(`${v.tag} is ${days} day(s) old with no published Release${draftOnly}`);
+    }
+    // The advisory value is untrusted text that lands in the pinned body and the comment; only a version string is kept.
+    const advisory = typeof f.advisoryEsr === 'string' && ADVISORY_RE.test(f.advisoryEsr) ? `; product-details FIREFOX_ESR ${f.advisoryEsr} (advisory, not a gate)` : '';
+    if (stale.length > 0) return maintRow(name, 'red', `${stale.join('; ')}${advisory}`);
+    // A newer tag whose commit date was not read cannot be called fresh: the sweep did not observe it.
+    if (undated.length > 0) return maintRow(name, 'no-data', `commit date of ${undated.join(', ')} unavailable${advisory}`);
+    if (newer.length === 0) return maintRow(name, 'green', `pin ${f.pinTag} is the newest tag under major ${pin.tuple[0]}${advisory}`);
+    return maintRow(name, 'green', `pin ${f.pinTag}; ${newer.length} newer tag(s), none older than 3 days without a published Release${advisory}`);
+}
+
+function channelRow(f) {
+    const name = 'channel-liveness';
+    if (typeof f.channelOk !== 'boolean') return maintRow(name, 'no-data', CHANNEL_PHASE);
+    return f.channelOk
+        ? maintRow(name, 'green', 'every update.xml matches its repo copy and each MAR URL answers 200')
+        : maintRow(name, 'red', 'channel probe failed: an update.xml differs from its repo copy or a MAR URL is not 200');
+}
+
+function watchdogRow(f) {
+    const name = 'watchdog-age';
+    if (f.watchdogProbed !== true) return maintRow(name, 'no-data', NOT_PROBED);
+    if (typeof f.watchdogStartedAtMs !== 'number') return maintRow(name, 'red', 'no watchdog run recorded in powerbrowser-updates');
+    const ageMs = f.nowMs - f.watchdogStartedAtMs;
+    const text = `last watchdog run started ${Math.floor(ageMs / HOUR_MS)} h ago`;
+    return ageMs < WATCHDOG_LIMIT_MS
+        ? maintRow(name, 'green', text)
+        : maintRow(name, 'red', `${text}, at or past the 26 h limit`);
+}
+
+function syntheticRow(f) {
+    const name = 'synthetic events POST';
+    if (typeof f.syntheticStatus !== 'number') return maintRow(name, 'no-data', NOT_PROBED);
+    if (f.syntheticStatus < 200 || f.syntheticStatus >= 300) return maintRow(name, 'red', `synthetic probe answered ${f.syntheticStatus}, not 2xx`);
+    // A 2xx alone proves nothing: with a wrong or missing secret the Worker stores the probe as a real row and answers 200.
+    if (f.syntheticAcked !== true) return maintRow(name, 'red', `synthetic probe answered ${f.syntheticStatus} without the synthetic acknowledgement: the shared secret is wrong or missing, and the probe was stored as a real row`);
+    return maintRow(name, 'green', `synthetic probe answered ${f.syntheticStatus} and was acknowledged as synthetic; the row is excluded from maintainer queries`);
+}
+
+function downloadRow(f) {
+    const name = 'download-count';
+    if (typeof f.downloadRows !== 'number' || f.downloadRows <= 0) return maintRow(name, 'no-data', DOWNLOAD_PHASE);
+    return maintRow(name, 'green', `${f.downloadRows} download-count row(s) in D1`);
+}
+
+/**
+ * The six maintenance rows, in the fixed order, from facts. Pure. facts: { pinTag, nowMs, tags,
+ * tagDates, releases, advisoryEsr, runnersOnline, watchdogProbed, watchdogStartedAtMs,
+ * syntheticStatus, syntheticAcked, channelOk, downloadRows }. A value the sweep did not observe is null (or
+ * watchdogProbed false), which renders as no-data, never as green.
+ */
+export function deriveMaintenance(facts) {
+    if (typeof facts?.nowMs !== 'number' || !Number.isFinite(facts.nowMs)) {
+        throw new Error('the maintenance facts carry no nowMs; the sweep must pass the run clock');
+    }
+    return {
+        rows: [runnerRow(facts), esrPinRow(facts), channelRow(facts), watchdogRow(facts), syntheticRow(facts), downloadRow(facts)],
+    };
+}
+
+/** The pinned body: the title, the six rows in the fixed order, and the debug snapshot. Pure and byte-stable. */
+export function renderMaintenance(state) {
+    const rank = name => { const i = MAINTENANCE_ROW_NAMES.indexOf(name); return i === -1 ? MAINTENANCE_ROW_NAMES.length : i; };
+    const ordered = [...state.rows].sort((a, b) => rank(a.name) - rank(b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const snapshot = JSON.stringify(Object.fromEntries(ordered.map(r => [r.name, r.status])));
+    const body = [
+        MAINTENANCE_TITLE,
+        '',
+        '| Row | Status | Evidence |',
+        '| --- | --- | --- |',
+        ...ordered.map(r => `| ${r.name} | ${r.status} | ${String(r.evidence).replace(/[\r\n]+/g, ' ').replace(/\|/g, '/')} |`),
+        '',
+        `<!-- release-train:maintenance-v1 ${snapshot} -->`,
+        '',
+    ].join('\n');
+    return { title: MAINTENANCE_TITLE, body };
+}
+
+/** The rows a rendered body carries, as { name, status, evidence }. Pure. */
+export function parseRows(body) {
+    const out = [];
+    for (const line of String(body ?? '').split('\n')) {
+        const m = /^\| (.+?) \| (green|red|no-data) \| (.*) \|$/.exec(line);
+        if (m) out.push(maintRow(m[1], m[2], m[3]));
+    }
+    return out;
+}
+
+/**
+ * The row-list set-equality assert: the derived rows and the rendered body's rows are the same
+ * six names, and no seventh row (a Phase 51 row, say) is present. Returns the drift. Pure.
+ */
+export function maintenanceRowDrift(state, body) {
+    const failures = [];
+    const derived = state.rows.map(r => r.name);
+    for (const n of derived) if (!MAINTENANCE_ROW_NAMES.includes(n)) failures.push(`row ${n} is not one of the six maintenance rows. Next step: remove it, or add it in a later phase's plan.`);
+    for (const n of MAINTENANCE_ROW_NAMES) if (!derived.includes(n)) failures.push(`row ${n} is missing from the derived state. Next step: restore it in deriveMaintenance.`);
+    const rendered = parseRows(body).map(r => r.name);
+    const { onlyA, onlyB } = setDiff(derived, rendered);
+    for (const n of onlyA) failures.push(`row ${n} is derived but not rendered. Next step: fix renderMaintenance.`);
+    for (const n of onlyB) failures.push(`row ${n} is rendered but not derived. Next step: fix renderMaintenance.`);
+    return failures;
+}
+
+/**
+ * The sweep runs once per UTC day: on the first dispatch tick at or after SWEEP_HOUR_UTC that has no
+ * sweep of today. lastSweepMs is the creation time of the previous accepted sweep state (the same
+ * provenance as the state lookup), or null when none is known, which leaves the sweep due (a failed
+ * lookup repeats a sweep, which is idempotent, rather than skipping it). Pure.
+ */
+export function sweepDue(nowMs, lastSweepMs = null) {
+    if (new Date(nowMs).getUTCHours() < SWEEP_HOUR_UTC) return false;
+    if (typeof lastSweepMs !== 'number' || !Number.isFinite(lastSweepMs)) return true;
+    return Math.floor(lastSweepMs / DAY_MS) !== Math.floor(nowMs / DAY_MS);
+}
+
+/** The comment text for a transition into red: one comment naming every newly red row. Pure. */
+function transitionComment(newlyRed, ownerLogin) {
+    const lines = newlyRed.map(r => `- ${r.name}: ${r.evidence}`);
+    const mention = ownerLogin !== null ? `@${ownerLogin} ` : '';
+    return [
+        `${mention}release-train: maintenance turned red for ${newlyRed.length} row(s):`,
+        ...lines,
+        '',
+        'Next step: fix the cause named in each row, then the next due tick re-renders the pinned issue.',
+        '',
+    ].join('\n');
+}
+
+/**
+ * The pinned maintenance issue is the one issue whose author is the owner's login and that carries the
+ * tracking label (logins are case-insensitive on GitHub, so they compare so; an unset owner still selects nothing). A same-title issue by anyone else is not the pinned issue: its body is never read
+ * for a decision. ownerLogin '' or null selects nothing (the create path, which writes nothing). Pure.
+ */
+export function selectPinned(issues, ownerLogin) {
+    if (typeof ownerLogin !== 'string' || ownerLogin === '') return [];
+    return (Array.isArray(issues) ? issues : []).filter(i => i && i.title === MAINTENANCE_TITLE
+        && i.author !== null && typeof i.author === 'object' && typeof i.author.login === 'string' && i.author.login.toLowerCase() === ownerLogin.toLowerCase()
+        && Array.isArray(i.labels) && i.labels.some(l => l && l.name === LABELS.track));
+}
+
+const normBody = text => String(text ?? '').replace(/\r\n/g, '\n').trimEnd();
+
+export const STATE_ARTIFACT = 'release-train-maintenance-state';
+export const TRAIN_WORKFLOW_PATH = '.github/workflows/release-train.yml';
+const TRAIN_EVENTS = Object.freeze(['workflow_dispatch', 'schedule']);
+
+/**
+ * The run whose maintenance-state artifact is the previous state, or null. A run counts only when it is a run of
+ * exactly the train workflow file (path), on one of the events the train uses, that succeeded on the repository's
+ * default branch in this repository, and whose head sha is on that branch (onDefaultShas: the shas the workflow
+ * verified with the compare endpoint as identical or ahead of the default branch). The artifact must be unexpired,
+ * named for the state, uploaded from the same branch, repository id and head sha as its run. A branch name alone
+ * is not enough: a tag named like the branch is refused by the event and sha checks. Newest first; the first match
+ * wins. Any mismatch is ignored; no match is null, which the plan treats as fail-safe notify. Pure.
+ */
+export function selectStateArtifact({ runs, artifacts, repo, repoId, branch, onDefaultShas }) {
+    if (!Array.isArray(runs) || !Array.isArray(artifacts) || !Array.isArray(onDefaultShas)) return null;
+    if (typeof repo !== 'string' || repo === '' || typeof branch !== 'string' || branch === '') return null;
+    if (!Number.isSafeInteger(repoId) || repoId <= 0) return null;
+    const verified = new Set(onDefaultShas);
+    const allowed = new Map();
+    for (const r of runs) {
+        if (!r || r.path !== TRAIN_WORKFLOW_PATH || !TRAIN_EVENTS.includes(r.event)) continue;
+        if (r.status !== 'completed' || r.conclusion !== 'success') continue;
+        if (r.head_branch !== branch || !r.head_repository || r.head_repository.full_name !== repo) continue;
+        if (typeof r.head_sha !== 'string' || !verified.has(r.head_sha)) continue;
+        allowed.set(r.id, r.head_sha);
+    }
+    for (const a of artifacts) {
+        if (!a || a.name !== STATE_ARTIFACT || a.expired !== false) continue;
+        const w = a.workflow_run;
+        if (!w || w.head_branch !== branch || w.head_repository_id !== repoId) continue;
+        if (!allowed.has(w.id) || w.head_sha !== allowed.get(w.id)) continue;
+        return a;
+    }
+    return null;
+}
+
+/** The id of the run selectStateArtifact accepts, or null. Pure. */
+export function selectStateRun(input) {
+    return selectStateArtifact(input)?.workflow_run.id ?? null;
+}
+
+/** The row statuses a rendered body carries, keyed by row name. Pure. */
+export function statusesOf(body) {
+    return Object.fromEntries(parseRows(body).map(r => [r.name, r.status]));
+}
+
+/**
+ * The write plan for the pinned maintenance issue. issues: every open issue the find returned (any
+ * author); the pinned one is selected by selectPinned. rendered: renderMaintenance output. stored: the
+ * previous run's { number, statuses } from the maintenance-state artifact, or null. The exactly-one
+ * decision (create, update with a patch flag, or fail) comes from findExactlyOne over the pinned issues.
+ * A comment is posted only for a row red now that was not red in the stored previous state. The body
+ * of the issue is never the source of the previous statuses: when the stored state is missing or names
+ * another issue, every red row is newly red (fail-safe notify). A staying-red re-run posts no comment.
+ * Returns the plan and the state to store for the next run. Pure.
+ */
+export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = null } = {}) {
+    const pinned = selectPinned(issues, ownerLogin);
+    // The owner creates the issue in the web UI (CRLF), and the API may trim the final newline: compare the
+    // normalised bytes so the PATCH runs on a real difference only.
+    const decision = findExactlyOne(pinned.map(i => ({ ...i, body: normBody(i.body) })), { ...rendered, body: normBody(rendered.body) });
+    const state = { number: pinned.length === 1 ? pinned[0].number : null, statuses: statusesOf(rendered.body) };
+    if (decision.action !== 'update') return { ...decision, comment: null, newlyRed: [], state };
+    const usable = stored !== null && typeof stored === 'object' && stored.number === pinned[0].number
+        && stored.statuses !== null && typeof stored.statuses === 'object';
+    const prior = usable ? stored.statuses : null;
+    const newlyRed = parseRows(rendered.body).filter(r => r.status === 'red' && (prior === null || prior[r.name] !== 'red'));
+    if (newlyRed.length === 0) return { ...decision, comment: null, newlyRed: [], state };
+    return { ...decision, comment: transitionComment(newlyRed, ownerLogin), newlyRed: newlyRed.map(r => r.name), state };
+}
+
+function readFacts(path) {
+    return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function sweepDueCli([nowSeconds, lastSeconds]) {
+    const seconds = Number(nowSeconds);
+    if (!Number.isFinite(seconds)) {
+        console.error(`${NAME}: FAIL -- the sweep clock ${JSON.stringify(nowSeconds)} is not epoch seconds. Next step: pass date -u +%s.`);
+        return 2;
+    }
+    // An absent, empty or unreadable last-sweep time leaves the sweep due (never a skipped sweep).
+    const last = lastSeconds === undefined || lastSeconds === '' ? null : Number(lastSeconds) * 1000;
+    console.log(`due=${sweepDue(seconds * 1000, last)}`);
+    return 0;
+}
+
+function maintenanceCli([factsPath, bodyPath]) {
+    let state;
+    let rendered;
+    try {
+        state = deriveMaintenance(readFacts(factsPath));
+        rendered = renderMaintenance(state);
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- the maintenance facts did not derive (${e.message}). Next step: re-run the maintenance facts step.`);
+        return 1;
+    }
+    const drift = maintenanceRowDrift(state, rendered.body);
+    if (drift.length > 0) {
+        drift.forEach(d => console.error(`${NAME}: FAIL -- ${d}`));
+        return 1;
+    }
+    writeFileSync(bodyPath, rendered.body);
+    state.rows.forEach(r => console.log(`maintenance: ${r.name}=${r.status}`));
+    return 0;
+}
+
+/** "<run id> <artifact created_at>" on stdout, or nothing (the fail-safe path). Unreadable input is nothing, never an error. */
+function stateSelectCli([runsPath, artifactsPath, repo, repoIdText, branch, verifiedPath]) {
+    try {
+        const onDefaultShas = readFileSync(verifiedPath, 'utf8').split('\n').map(x => x.trim()).filter(x => x !== '');
+        const a = selectStateArtifact({ runs: readFacts(runsPath), artifacts: readFacts(artifactsPath), repo, repoId: Number(repoIdText), branch, onDefaultShas });
+        if (a !== null) console.log(`${a.workflow_run.id} ${typeof a.created_at === 'string' ? a.created_at : ''}`.trim());
+    } catch {
+        // No output: the workflow treats an empty run id as absent, so the notice fires.
+    }
+    return 0;
+}
+
+/** The stored previous state, or null when it is missing or unreadable (the fail-safe notify path). */
+function readStored(path) {
+    try {
+        return JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
+function maintenancePlanCli([foundPath, bodyPath, commentPath, storedPath, statePath]) {
+    let found;
+    let rendered;
+    try {
+        found = readFacts(foundPath);
+        rendered = { title: MAINTENANCE_TITLE, body: readFileSync(bodyPath, 'utf8') };
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- the pinned-issue read or the rendered body did not load (${e.message}). Next step: re-run the report job.`);
+        return 1;
+    }
+    const raw = process.env.OWNER_LOGIN ?? '';
+    const ownerLogin = OWNER_RE.test(raw) ? raw : null;
+    if (ownerLogin === null) console.log('maintenance: OWNER_LOGIN is unset or not a valid login, so no issue can be selected as the pinned issue (nothing is written)');
+    const stored = readStored(storedPath);
+    if (stored === null) console.log('maintenance: no usable previous state; every red row is treated as newly red (fail-safe notify)');
+    const decision = nextMaintenance(found, rendered, { ownerLogin, stored });
+    if (decision.action === 'fail') {
+        console.error(`${NAME}: FAIL -- ${decision.reason}`);
+        return 1;
+    }
+    if (decision.comment !== null) writeFileSync(commentPath, decision.comment);
+    writeFileSync(statePath, JSON.stringify(decision.state));
+    console.log(`action=${decision.action}`);
+    console.log(`number=${decision.numbers[0] ?? ''}`);
+    console.log(`patch=${decision.patch}`);
+    console.log(`comment=${decision.comment !== null}`);
+    return 0;
+}
+
+/** The maintenance self-test half: fixtures, controls green first, then each plant red naming its drift. */
+function maintenanceSelfTest() {
+    const NOW = Date.UTC(2026, 10, 1, 12, 0, 0);
+    const NEWER_153 = esrTag(153, 6, 0);
+    const TAG_175 = esrTag(175, 0, 0);
+    const OWNER = 'owner-login-fixture';
+    const STRANGER = 'stranger-login-fixture';
+    const REPO_FIXTURE = 'DeBIOS-Foundation/powerbrowser';
+    const facts = (over = {}) => ({
+        pinTag: BASE_PIN,
+        nowMs: NOW,
+        tags: [BASE_PIN, NEWER_153, TAG_175],
+        tagDates: { [NEWER_153]: NOW - DAY_MS, [TAG_175]: NOW - 30 * DAY_MS },
+        releases: [{ tag_name: 'v153.5.1-1', draft: false, prerelease: false }],
+        advisoryEsr: null,
+        runnersOnline: 1,
+        watchdogProbed: true,
+        watchdogStartedAtMs: NOW - 3 * HOUR_MS,
+        syntheticStatus: 200,
+        syntheticAcked: true,
+        channelOk: null,
+        downloadRows: 0,
+        ...over,
+    });
+    const stateOf = f => deriveMaintenance(f);
+    const statuses = s => Object.fromEntries(s.rows.map(r => [r.name, r.status]));
+    const reds = s => s.rows.filter(r => r.status === 'red').map(r => `${r.name} red: ${r.evidence}`);
+    const wantStatuses = (s, want) => Object.keys(want).filter(k => statuses(s)[k] !== want[k]).map(k => `${k} is ${statuses(s)[k]}, not ${want[k]}`);
+    const DEFERRED_GREEN = { 'runner-online': 'green', 'esr-pin-age': 'green', 'channel-liveness': 'no-data', 'watchdog-age': 'green', 'synthetic events POST': 'green', 'download-count': 'no-data' };
+    const priorBody = renderMaintenance(stateOf(facts())).body;
+    const issueBy = (body, login = OWNER, number = 7) => ({ number, title: MAINTENANCE_TITLE, body, author: { login }, labels: [{ name: 'release-train' }] });
+    const TWO_RED = facts({ watchdogStartedAtMs: NOW - 27 * HOUR_MS, syntheticStatus: 500 });
+    const redRendered = renderMaintenance(stateOf(TWO_RED));
+    const redBody = redRendered.body;
+    const storedOf = body => ({ number: 7, statuses: statusesOf(body) });
+    const FOREIGN_ID = 2002;
+    const stateFixtures = () => ({
+        input: {
+            repo: REPO_FIXTURE,
+            repoId: 1001,
+            branch: 'main',
+            onDefaultShas: ['sha-main-11', 'sha-main-12', 'sha-main-13'],
+            runs: [
+                { id: 11, path: '.github/workflows/release-train.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-main-11', head_repository: { full_name: REPO_FIXTURE } },
+                { id: 12, path: '.github/workflows/release-train.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'feature/x', head_sha: 'sha-main-12', head_repository: { full_name: REPO_FIXTURE } },
+                { id: 13, path: '.github/workflows/release-train.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-main-13', head_repository: { full_name: 'fork-owner/powerbrowser' } },
+                { id: 14, path: '.github/workflows/release-train.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-off-main', head_repository: { full_name: REPO_FIXTURE } },
+                { id: 15, path: '.github/workflows/verify.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-main-11', head_repository: { full_name: REPO_FIXTURE } },
+            ],
+            artifacts: [
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 14, head_branch: 'main', head_repository_id: 1001, head_sha: 'sha-off-main' } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 15, head_branch: 'main', head_repository_id: 1001, head_sha: 'sha-main-11' } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 12, head_branch: 'feature/x', head_repository_id: 1001, head_sha: 'sha-main-12' } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 13, head_branch: 'main', head_repository_id: FOREIGN_ID, head_sha: 'sha-main-13' } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 11, head_branch: 'main', head_repository_id: 1001, head_sha: 'sha-main-11' } },
+            ],
+        },
+    });
+    const EDIT_WATCHDOG_AND_SYNTH = body => body.replace('| watchdog-age | green |', '| watchdog-age | red |').replace('| synthetic events POST | green |', '| synthetic events POST | red |');
+    const baseState = () => ({
+        repo: REPO_FIXTURE,
+        repoId: 1001,
+        branch: 'main',
+        onDefaultShas: ['sha-11'],
+        runs: [{ id: 11, path: TRAIN_WORKFLOW_PATH, event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-11', head_repository: { full_name: REPO_FIXTURE } }],
+        artifacts: [{ name: STATE_ARTIFACT, expired: false, created_at: '2026-11-01T06:05:00Z', workflow_run: { id: 11, head_branch: 'main', head_repository_id: 1001, head_sha: 'sha-11' } }],
+    });
+    const withState = mutate => { const input = baseState(); mutate(input); return input; };
+    // The workflow's CLI glue, run as the workflow runs it: a child node, files in a scratch directory, the owner in the environment.
+    const cli = (cliArgs, { env = {}, files = {} } = {}) => {
+        const dir = mkdtempSync(join(tmpdir(), 'release-train-cli-'));
+        try {
+            for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+            const { OWNER_LOGIN: _unset, ...clean } = process.env;
+            const r = spawnSync(process.execPath, [join(REPO_ROOT, SELF_REL), ...cliArgs.map(a => a.replace('@DIR@', dir))], { env: { ...clean, ...env }, encoding: 'utf8' });
+            return { status: r.status, out: r.stdout, err: r.stderr };
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    const planCli = env => cli(['--maintenance-plan', '@DIR@/found.json', '@DIR@/body.md', '@DIR@/comment.md', '@DIR@/none.json', '@DIR@/state.json'], { env, files: { 'found.json': JSON.stringify([issueBy(priorBody)]), 'body.md': priorBody } });
+    const planLines = r => r.out.split('\n').filter(l => /^(action|patch|comment)=/.test(l)).join(' ');
+    const owned = planLines({ out: 'action=update\npatch=false\ncomment=false\n' });
+    const controls = [
+        { name: 'control: the all-green fixture renders the expected statuses', run: () => wantStatuses(stateOf(facts()), DEFERRED_GREEN) },
+        { name: 'control: a 175 tag five days old with no Release is ignored under the 153 guard', run: () => wantStatuses(stateOf(facts({ tagDates: { [NEWER_153]: NOW - DAY_MS, [TAG_175]: NOW - 5 * DAY_MS } })), { 'esr-pin-age': 'green' }) },
+        { name: 'control: a 153 tag five days old with a published Release stays green', run: () => wantStatuses(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [{ tag_name: 'v153.6.0-1', draft: false, prerelease: false }] })), { 'esr-pin-age': 'green' }) },
+        { name: 'control: a watchdog run 25 hours old stays green', run: () => wantStatuses(stateOf(facts({ watchdogStartedAtMs: NOW - 25 * HOUR_MS })), { 'watchdog-age': 'green' }) },
+        { name: 'control: zero online runners is no-data naming Phase 49', run: () => { const r = stateOf(facts({ runnersOnline: 0 })).rows.find(x => x.name === 'runner-online'); return r.status === 'no-data' && r.evidence.includes('Phase 49') ? [] : [`runner-online is ${r.status} with "${r.evidence}"`]; } },
+        { name: 'control: an empty facts response renders six no-data rows', run: () => { const s = stateOf(facts({ tags: [], tagDates: {}, releases: [], runnersOnline: null, watchdogProbed: false, syntheticStatus: null, channelOk: null, downloadRows: 0 })); return s.rows.length === 6 && s.rows.every(r => r.status === 'no-data') ? [] : [`empty facts gave ${JSON.stringify(statuses(s))}`]; } },
+        { name: 'control: two rows turn red together and the transition posts one comment naming both', run: () => {
+            const d = nextMaintenance([issueBy(priorBody)], redRendered, { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            const named = ['watchdog-age', 'synthetic events POST'].every(n => d.comment?.includes(n));
+            return d.action === 'update' && d.patch === true && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' && named ? [] : [`transition gave ${JSON.stringify({ action: d.action, patch: d.patch, newlyRed: d.newlyRed })}`];
+        } },
+        { name: 'control: a staying-red re-run posts zero new comments', run: () => {
+            const d = nextMaintenance([issueBy(redBody)], renderMaintenance(stateOf(TWO_RED)), { ownerLogin: OWNER, stored: storedOf(redBody) });
+            return d.comment === null && d.patch === false ? [] : [`a staying-red re-run gave comment=${d.comment !== null} patch=${d.patch}`];
+        } },
+        { name: 'control: a same-title issue by a stranger is ignored', run: () => {
+            const d = nextMaintenance([issueBy('stranger body', STRANGER, 9), issueBy(priorBody)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            return d.action === 'update' && d.numbers.join(',') === '7' ? [] : [`the stranger issue changed the selection: ${d.action} ${d.numbers.join(',')}`];
+        } },
+        { name: 'control: an edited body that marks a red row as previously red still notifies on a transition', run: () => {
+            const d = nextMaintenance([issueBy(EDIT_WATCHDOG_AND_SYNTH(priorBody))], redRendered, { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            return d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`an edited body suppressed the notice: newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
+        { name: 'control: a missing stored state treats every red row as newly red', run: () => {
+            const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: null });
+            return d.comment !== null && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`missing state gave newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
+        { name: 'control: a foreign-repo, non-main, off-main-sha or other-workflow artifact is ignored and the state run is run 11', run: () => {
+            const fx = stateFixtures();
+            const id = selectStateRun(fx.input);
+            return id === 11 ? [] : [`state selection picked ${id}, not run 11`];
+        } },
+        { name: 'control: with no admissible state the notice still fires for every red row', run: () => {
+            const fx = stateFixtures();
+            const id = selectStateRun({ ...fx.input, artifacts: fx.input.artifacts.slice(0, 2) });
+            const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: id === null ? null : storedOf(redBody) });
+            return id === null && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`no admissible state gave run ${id} and newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
+        { name: 'control: one tracking issue is patched only when its bytes differ', run: () => {
+            const same = nextMaintenance([issueBy(priorBody)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            const diff = nextMaintenance([issueBy('stale body')], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            return same.patch === false && diff.patch === true ? [] : [`same bytes patch=${same.patch}, differing bytes patch=${diff.patch}`];
+        } },
+        { name: 'control: the rendered body is byte-stable under shuffled facts order', run: () => {
+            const shuffled = facts({ tags: [TAG_175, NEWER_153, BASE_PIN], releases: [...facts().releases].reverse() });
+            return renderMaintenance(stateOf(facts())).body === renderMaintenance(stateOf(shuffled)).body ? [] : ['shuffled facts rendered different bytes'];
+        } },
+        { name: 'control: the derived rows and the rendered rows are the same six', run: () => maintenanceRowDrift(stateOf(facts()), renderMaintenance(stateOf(facts())).body) },
+        { name: 'control: the one admissible run is the previous state, and an older invalid one before it is skipped', run: () => {
+            const input = withState(i => { i.runs.unshift({ ...i.runs[0], id: 10, head_branch: 'feature/x' }); i.artifacts.unshift({ ...i.artifacts[0], workflow_run: { ...i.artifacts[0].workflow_run, id: 10 } }); });
+            const id = selectStateRun(input);
+            return id === 11 ? [] : [`state selection picked ${id}, not run 11`];
+        } },
+        { name: 'control: a different-case owner login still selects the owner issue', run: () => {
+            const picked = selectPinned([issueBy(priorBody, OWNER.toUpperCase())], OWNER);
+            return picked.length === 1 ? [] : [`a login differing only in case selected ${picked.length} issue(s)`];
+        } },
+        { name: 'control: a CRLF body with no final newline is not a byte diff', run: () => {
+            const crlf = priorBody.replace(/\n/g, '\r\n').trimEnd();
+            const d = nextMaintenance([issueBy(crlf)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            return d.patch === false ? [] : ['a CRLF body with a trimmed final newline planned a PATCH'];
+        } },
+        { name: 'control: a real body change is still a PATCH after normalisation', run: () => {
+            const d = nextMaintenance([issueBy(priorBody.replace('| runner-online | green |', '| runner-online | red |'))], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            return d.patch === true ? [] : ['a changed row planned no PATCH'];
+        } },
+        { name: 'control: a newer tag with no commit date is no-data, not green', run: () => wantStatuses(stateOf(facts({ tagDates: {} })), { 'esr-pin-age': 'no-data' }) },
+        { name: 'control: an untrusted advisory value is dropped from the evidence', run: () => {
+            const r = stateOf(facts({ advisoryEsr: '153.5.2esr\n@everyone | x' })).rows.find(x => x.name === 'esr-pin-age');
+            return r.evidence.includes('@everyone') || r.evidence.includes('\n') ? [`the advisory text reached the evidence: ${JSON.stringify(r.evidence)}`] : [];
+        } },
+        { name: 'control: a valid advisory value is shown', run: () => (stateOf(facts({ advisoryEsr: '153.5.2esr' })).rows.find(x => x.name === 'esr-pin-age').evidence.includes('FIREFOX_ESR 153.5.2esr') ? [] : ['a valid advisory value was dropped']) },
+        { name: 'control: evidence newlines never split a rendered row', run: () => {
+            const s = stateOf(facts());
+            const bad = { rows: s.rows.map((r, i) => (i === 1 ? { ...r, evidence: 'line one\nline two\r\n| x' } : r)) };
+            const body = renderMaintenance(bad).body;
+            return maintenanceRowDrift(bad, body).length === 0 && !body.includes('line one\nline two') ? [] : ['an evidence newline split a rendered row'];
+        } },
+        { name: 'control: a second tick on the same UTC day is not due, the next day is', run: () => {
+            const failures = [];
+            if (sweepDue(Date.UTC(2026, 10, 1, 7, 0), Date.UTC(2026, 10, 1, 6, 5))) failures.push('a second tick the same day is due');
+            if (!sweepDue(Date.UTC(2026, 10, 2, 6, 0), Date.UTC(2026, 10, 1, 6, 5))) failures.push('the first tick the next day is not due');
+            if (!sweepDue(Date.UTC(2026, 10, 1, 7, 0), null)) failures.push('an unknown last sweep is not due');
+            if (!sweepDue(Date.UTC(2026, 10, 1, 7, 0), Number.NaN)) failures.push('an unreadable last sweep is not due');
+            if (sweepDue(Date.UTC(2026, 10, 1, 5, 59), Date.UTC(2026, 9, 31, 6, 5))) failures.push('a tick before 06:00 is due');
+            return failures;
+        } },
+        { name: 'control: the CLI plan with the owner set selects the owner issue', run: () => {
+            const r = planCli({ OWNER_LOGIN: OWNER });
+            return planLines(r) === owned ? [] : [`the plan with the owner set gave ${JSON.stringify(planLines(r))} (${r.err.trim()})`];
+        } },
+        { name: 'control: the CLI plan with a different-case owner selects the owner issue', run: () => {
+            const r = planCli({ OWNER_LOGIN: OWNER.toUpperCase() });
+            return planLines(r) === owned ? [] : [`the plan with a different-case owner gave ${JSON.stringify(planLines(r))}`];
+        } },
+        { name: 'control: the CLI plan refuses a login that is not shaped like a login, even when an issue carries it', run: () => {
+            const odd = 'bad login!';
+            const r = cli(['--maintenance-plan', '@DIR@/found.json', '@DIR@/body.md', '@DIR@/comment.md', '@DIR@/none.json', '@DIR@/state.json'], { env: { OWNER_LOGIN: odd }, files: { 'found.json': JSON.stringify([issueBy(priorBody, odd)]), 'body.md': priorBody } });
+            return planLines(r) === 'action=create patch=false comment=false' ? [] : [`a malformed owner login gave ${JSON.stringify(planLines(r))}`];
+        } },
+        ...[['unset', {}], ['empty', { OWNER_LOGIN: '' }], ['carrying a newline', { OWNER_LOGIN: `${OWNER}\nx` }], ['another login', { OWNER_LOGIN: STRANGER }]].map(([label, env]) => ({
+            name: `control: the CLI plan with the owner ${label} writes nothing (the create path)`,
+            run: () => {
+                const r = planCli(env);
+                return planLines(r) === 'action=create patch=false comment=false' ? [] : [`the plan with the owner ${label} gave ${JSON.stringify(planLines(r))}`];
+            },
+        })),
+        { name: 'control: the CLI state selection prints the run id and the artifact time, and prints nothing on garbage', run: () => {
+            const input = baseState();
+            const files = { 'runs.json': JSON.stringify(input.runs), 'artifacts.json': JSON.stringify(input.artifacts), 'verified.txt': 'sha-11\n', 'garbage.json': 'not json' };
+            const argv = (runs, shas) => ['--state-select', `@DIR@/${runs}`, '@DIR@/artifacts.json', REPO_FIXTURE, '1001', 'main', `@DIR@/${shas}`];
+            const good = cli(argv('runs.json', 'verified.txt'), { files });
+            const bad = cli(argv('garbage.json', 'verified.txt'), { files });
+            const none = cli(argv('runs.json', 'missing.txt'), { files });
+            const failures = [];
+            if (good.out.trim() !== '11 2026-11-01T06:05:00Z') failures.push(`the selection printed ${JSON.stringify(good.out.trim())}`);
+            if (bad.out.trim() !== '' || bad.status !== 0) failures.push(`garbage input printed ${JSON.stringify(bad.out.trim())} with status ${bad.status}`);
+            if (none.out.trim() !== '') failures.push(`an unreadable verified list selected ${JSON.stringify(none.out.trim())}`);
+            return failures;
+        } },
+        { name: 'control: the CLI sweep clock honours the last sweep', run: () => {
+            const at = h => String(Date.UTC(2026, 10, 1, h, 0) / 1000);
+            const sameDay = cli(['--sweep-due', at(9), at(6)]).out.trim();
+            const none = cli(['--sweep-due', at(9), '']).out.trim();
+            const noArg = cli(['--sweep-due', at(9)]).out.trim();
+            return sameDay === 'due=false' && none === 'due=true' && noArg === 'due=true' ? [] : [`the CLI sweep clock gave ${sameDay}, ${none}, ${noArg}`];
+        } },
+        { name: 'control: the sweep is due at 06:00 UTC and not at 05:59', run: () => (sweepDue(Date.UTC(2026, 10, 1, 6, 0)) && !sweepDue(Date.UTC(2026, 10, 1, 5, 59)) ? [] : ['the 06:00 UTC gate is wrong']) },
+    ];
+    const plants = [
+        { name: 'a newer 153 tag five days old with no Release', run: () => reds(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [] }))), expect: 'with no published Release' },
+        { name: 'a draft Release as the only match for a stale tag', run: () => reds(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [{ tag_name: 'v153.6.0-1', draft: true, prerelease: false }] }))), expect: 'a draft Release does not count' },
+        { name: 'a watchdog run 27 hours old', run: () => reds(stateOf(facts({ watchdogStartedAtMs: NOW - 27 * HOUR_MS }))), expect: 'started 27 h ago' },
+        { name: 'no watchdog run recorded', run: () => reds(stateOf(facts({ watchdogStartedAtMs: null }))), expect: 'no watchdog run recorded' },
+        { name: 'a synthetic events POST answering 500', run: () => reds(stateOf(facts({ syntheticStatus: 500 }))), expect: 'answered 500' },
+        { name: 'a seventh row for a later phase', run: () => { const s = stateOf(facts()); return maintenanceRowDrift({ rows: [...s.rows, maintRow('renewals-due', 'green', 'x')] }, renderMaintenance(s).body); }, expect: 'renewals-due' },
+        { name: 'two owner-authored tracking issues share the maintenance title', run: () => { const d = nextMaintenance([issueBy(priorBody, OWNER, 7), issueBy('other', OWNER, 9)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: null }); return d.action === 'fail' ? [d.reason] : []; }, expect: 'open tracking issues' },
+        // Each state plant breaks exactly one rule of the one admissible run and calls the real selector, so deleting
+        // that rule from selectStateArtifact turns exactly that plant green and the self-test red.
+        ...[
+            ['a run of another workflow', i => { i.runs[0].path = '.github/workflows/verify.yml'; }],
+            ['a run from a pull_request event', i => { i.runs[0].event = 'pull_request'; }],
+            ['a run from a push event', i => { i.runs[0].event = 'push'; }],
+            ['a failed run', i => { i.runs[0].conclusion = 'failure'; }],
+            ['a run still in progress', i => { i.runs[0].status = 'in_progress'; }],
+            ['a run on a feature branch', i => { i.runs[0].head_branch = 'feature/x'; }],
+            ['a run from a fork head', i => { i.runs[0].head_repository = { full_name: 'fork-owner/powerbrowser' }; }],
+            ['a run whose head sha is not on the default branch', i => { i.onDefaultShas = []; }],
+            ['an artifact with another name', i => { i.artifacts[0].name = 'other-artifact'; }],
+            ['an expired artifact', i => { i.artifacts[0].expired = true; }],
+            ['an artifact uploaded from a feature branch', i => { i.artifacts[0].workflow_run.head_branch = 'feature/x'; }],
+            ['an artifact uploaded from a foreign repository id', i => { i.artifacts[0].workflow_run.head_repository_id = 2002; }],
+            ['an artifact whose head sha differs from its run', i => { i.artifacts[0].workflow_run.head_sha = 'sha-other'; }],
+            ['an artifact of a run that is not in the admitted runs', i => { i.artifacts[0].workflow_run.id = 99; delete i.artifacts[0].workflow_run.head_sha; }],
+            ['an unusable repository id', i => { i.repoId = 0; i.artifacts[0].workflow_run.head_repository_id = 0; }],
+        ].map(([label, mutate]) => ({
+            name: `${label} taken as the previous state`,
+            run: () => (selectStateRun(withState(mutate)) === null ? [`${label} was refused as the previous state`] : []),
+            expect: 'was refused as the previous state',
+        })),
+        { name: 'a stored state that names another issue', run: () => {
+            const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: { number: 99, statuses: statusesOf(redBody) } });
+            return d.newlyRed.length > 0 ? ['a stored state of another issue was ignored, so every red row is newly red'] : [];
+        }, expect: 'was ignored, so every red row is newly red' },
+        { name: 'a synthetic probe 200 without the synthetic acknowledgement', run: () => reds(stateOf(facts({ syntheticAcked: false }))), expect: 'without the synthetic acknowledgement' },
+        { name: 'a newer tag whose commit date was not read', run: () => stateOf(facts({ tagDates: {} })).rows.filter(r => r.status === 'no-data' && r.name === 'esr-pin-age').map(r => `${r.name} no-data: ${r.evidence}`), expect: 'unavailable' },
+        { name: 'a workflow_run wake from a fork head', run: () => { const a = admitWakeRun({ headRepository: 'fork-owner/powerbrowser' }, 'DeBIOS-Foundation/powerbrowser'); return a.admit ? [] : [a.reason]; }, expect: 'from fork' },
+        ...[
+            ['an owner issue without the release-train label', [{ ...issueBy(priorBody), labels: [] }], OWNER],
+            ['a same-title issue by a stranger', [issueBy(priorBody, STRANGER)], OWNER],
+            ['an owner issue with another title', [{ ...issueBy(priorBody), title: 'release-train: other' }], OWNER],
+            ['an issue with an unset owner login', [issueBy(priorBody)], null],
+            ['an issue with an empty owner login', [issueBy(priorBody)], ''],
+            ['an issue with a null author', [{ ...issueBy(priorBody), author: null }], OWNER],
+        ].map(([label, issues, login]) => ({
+            name: `${label} taken as the pinned issue`,
+            run: () => (selectPinned(issues, login).length === 0 ? [`${label} was refused as the pinned issue`] : []),
+            expect: 'was refused as the pinned issue',
+        })),
+    ];
+    let failed = 0;
+    for (const c of controls) {
+        const failures = c.run();
+        if (failures.length === 0) console.log(`  ok  ${c.name} -> green`);
+        else { console.error(`${NAME}: --self-test FAIL -- '${c.name}' went red: ${failures.join(' | ')}`); failed += 1; }
+    }
+    for (const p of plants) {
+        const failures = p.run();
+        if (failures.some(f => f.includes(REPO_ROOT))) { console.error(`${NAME}: --self-test FAIL -- '${p.name}' leaked the checkout path`); failed += 1; continue; }
+        if (failures.some(f => f.includes(p.expect))) console.log(`  ok  ${p.name} -> red, naming '${p.expect}'`);
+        else { console.error(`${NAME}: --self-test FAIL -- '${p.name}' did not go red naming '${p.expect}'; got: ${failures.join(' | ') || '(nothing)'}`); failed += 1; }
+    }
+    return { failed, total: controls.length + plants.length };
+}
+
 
 function selfTest() {
     const baseline = runChecks();
@@ -1014,12 +1663,14 @@ function selfTest() {
             failed += 1;
         }
     }
+    const maint = maintenanceSelfTest();
+    failed += maint.failed;
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
     const total = trainPlants.length + conflictPlants.length + viewPlants.length + publishPlants.length + uptakePlants.length;
-    console.log(`${NAME}: --self-test PASS -- ${Object.keys(ALL_STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length + uptakeGreens.length} controls stayed green`);
+    console.log(`${NAME}: --self-test PASS -- ${Object.keys(ALL_STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length + uptakeGreens.length} controls stayed green; maintenance half: ${maint.total} case(s) proven (six rows, no-data branches, transition comments, exactly-one, fork head, draft Release)`);
     return 0;
 }
 
@@ -1036,7 +1687,11 @@ if (isEntry) {
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
     if (args[0] === '--uptake-would-write' && args.length === 6) process.exit(uptakeWouldWriteCli(args.slice(1)));
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
+    if (args[0] === '--sweep-due' && (args.length === 2 || args.length === 3)) process.exit(sweepDueCli(args.slice(1)));
+    if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
+    if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
+    if (args[0] === '--state-select' && args.length === 7) process.exit(stateSelectCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, or node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>.`);
+    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>.`);
     process.exit(2);
 }

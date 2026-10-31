@@ -49,6 +49,7 @@ import {
     MAX_PART_BYTES,
     MAX_PART_MIB,
     MINIDUMP_PART_NAME,
+    OTHER_PART_NAME,
     REASON_NO_MINIDUMP,
     REASON_OVERSIZED,
     REASON_STORE_UNAVAILABLE,
@@ -168,7 +169,7 @@ function buildMultipart(parts) {
     for (const part of parts) {
         chunks.push(Buffer.from(
             `--${SELFTEST_BOUNDARY}\r\n`
-            + `Content-Disposition: form-data; name="${part.name}"${part.filename ? `; filename="${part.filename}"` : ''}\r\n`
+            + `Content-Disposition: ${part.disposition ?? `form-data; name="${part.name}"${part.filename ? `; filename="${part.filename}"` : ''}`}\r\n`
             + `Content-Type: ${part.contentType ?? 'application/octet-stream'}\r\n\r\n`,
             'latin1',
         ));
@@ -181,6 +182,15 @@ function buildMultipart(parts) {
 
 const SELFTEST_CONTENT_TYPE = `multipart/form-data; boundary=${SELFTEST_BOUNDARY}`;
 const NOW = 1720000000000;
+
+// TEL-07 (57-02): Gecko's extra part shape is DERIVED from the pinned client source at check time, never
+// a literal here. The same declaration ng068 reads, so the two gates cannot disagree on the wire.
+const REPORT_RS = join(REPO_ROOT, 'upstream/toolkit/crashreporter/client/app/src/net/report.rs');
+function geckoExtraShape() {
+    const m = /name:\s*"extra",[\s\S]*?filename:\s*Some\("([^"]+)"\),\s*mime_type:\s*Some\("([^"]+)"\)/.exec(readFileSync(REPORT_RS, 'utf8'));
+    if (!m) throw new Error('broken instrument: report.rs no longer declares an `extra` MimePart with filename and mime_type');
+    return { filename: m[1], mime: m[2] };
+}
 
 function wellFormedBody() {
     return buildMultipart([
@@ -333,6 +343,104 @@ function selfTest() {
             );
         }
 
+        // Plants 4b-4e (WR-01, WR-02): a name smuggled through filename=, two minidump parts, and the
+        // one-character and many-delimiter bodies. The parser must answer the named verdict for each, and
+        // the record must never carry a client-chosen part name.
+        expectVerdict(
+            'filename before name',
+            handleSubmit({
+                body: buildMultipart([{ disposition: `form-data; filename="${MINIDUMP_PART_NAME}"; name="zzz"`, data: Buffer.from('D') }]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir: storeOf('fname'),
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            }),
+            400,
+            REASON_NO_MINIDUMP,
+            storeOf('fname'),
+        );
+        expectVerdict(
+            'two minidump parts',
+            handleSubmit({
+                body: buildMultipart([
+                    { name: MINIDUMP_PART_NAME, data: Buffer.from('D') },
+                    { name: MINIDUMP_PART_NAME, data: Buffer.from('E') },
+                ]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir: storeOf('twodump'),
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            }),
+            400,
+            REASON_NO_MINIDUMP,
+            storeOf('twodump'),
+        );
+        expectVerdict(
+            'one-character boundary',
+            handleSubmit({
+                body: Buffer.from('\r\n--a'.repeat(100000), 'latin1'),
+                contentType: 'multipart/form-data; boundary=a',
+                storeDir: storeOf('onechar'),
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            }),
+            400,
+            REASON_WRONG_CONTENT_TYPE,
+            storeOf('onechar'),
+        );
+        expectVerdict(
+            'delimiter flood',
+            handleSubmit({
+                body: Buffer.from('\r\n--abc'.repeat(100000), 'latin1'),
+                contentType: 'multipart/form-data; boundary=abc',
+                storeDir: storeOf('flood'),
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            }),
+            413,
+            REASON_OVERSIZED,
+            storeOf('flood'),
+        );
+        {
+            const storeDir = storeOf('longname');
+            const verdict = handleSubmit({
+                body: buildMultipart([
+                    { name: MINIDUMP_PART_NAME, data: Buffer.from('D') },
+                    { name: 'N'.repeat(100000), data: Buffer.from('x') },
+                ]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir,
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            });
+            const record = verdict.crashId ? JSON.parse(readFileSync(join(storeDir, `${verdict.crashId}.json`), 'utf8')) : null;
+            if (!record || record.partNames.some(n => n !== MINIDUMP_PART_NAME && n !== OTHER_PART_NAME)) {
+                console.error(`${NAME}: --self-test FAIL -- a 100 KB part name reached the stored record: ${JSON.stringify(record && record.partNames).slice(0, 120)}`);
+                process.exit(1);
+            }
+            console.log(`${NAME}: --self-test -- a hostile part name was recorded as ${OTHER_PART_NAME}, not stored`);
+        }
+
+        // Plant 4f: a minidump whose payload ends in CRLF is stored byte for byte (the CRLF before a delimiter is the
+        // delimiter's, not data).
+        {
+            const storeDir = storeOf('crlf');
+            const sent = Buffer.concat([Buffer.from('MDMP-FIXTURE'), Buffer.from('\r\n\r\n', 'latin1')]);
+            const verdict = handleSubmit({
+                body: buildMultipart([{ name: MINIDUMP_PART_NAME, data: sent }]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir,
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            });
+            const stored = verdict.crashId ? readFileSync(join(storeDir, `${verdict.crashId}.dmp`)) : null;
+            if (!stored || !stored.equals(sent)) {
+                console.error(`${NAME}: --self-test FAIL -- a minidump whose payload ends in CRLF was not stored byte for byte (sent ${sent.length} bytes, stored ${stored ? stored.length : 'none'})`);
+                process.exit(1);
+            }
+            console.log(`${NAME}: --self-test -- a minidump ending in CRLF was stored byte for byte`);
+        }
+
         // Plant 5: a tripped throttle rule -- the soft-reject body on the
         // SUCCESS status. The body is well-formed (it would be accepted
         // but for the throttle), so the soft-reject proves the throttle
@@ -466,6 +574,82 @@ function selfTest() {
                 ok = false;
             } else {
                 console.log(`${NAME}: --self-test -- a deeply nested extra value was dropped and the report kept (${verdict.body})`);
+            }
+        }
+
+        // Plant 9 (TEL-07, 57-02): a Gecko-shaped extra part, its filename and MIME derived from report.rs.
+        // Allowlisted scalars are stored; a non-allowlisted key, an oversized allowlisted value and a
+        // non-scalar allowlisted value are each dropped -- one named rule per field, so a regression in
+        // any one of them goes red naming that rule.
+        {
+            const storeDir = storeOf('gecko-extra-mixed');
+            const shape = geckoExtraShape();
+            const extra = JSON.stringify({
+                ProductName: 'PowerBrowser',
+                Version: '1.6.0',
+                BuildID: '20261031000000',
+                OS: 'Linux',
+                CPUArchitecture: 'amd64',
+                ReleaseChannel: 'release',
+                CrashTime: { unix: 1761900000 },
+                NotAllowlisted: 'dropped',
+                StartupTime: 'x'.repeat(MAX_ANNOTATION_BYTES + 1),
+                Nested: { a: 1 },
+            });
+            const verdict = handleSubmit({
+                body: buildMultipart([
+                    { name: MINIDUMP_PART_NAME, filename: 'g.dmp', data: Buffer.from('D') },
+                    { name: EXTRA_PART_NAME, filename: shape.filename, contentType: shape.mime, data: Buffer.from(extra) },
+                ]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir,
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            });
+            const id = /^CrashID=(.+)$/.exec(verdict.body)?.[1];
+            const record = id ? JSON.parse(readFileSync(join(storeDir, `${id}.json`), 'utf8')) : null;
+            const stored = record ? Object.keys(record.annotations).sort() : [];
+            // Non-allowlisted (NotAllowlisted, Nested), oversized (StartupTime) and non-scalar (CrashTime) keys are dropped.
+            const wantStored = ['BuildID', 'CPUArchitecture', 'OS', 'ProductName', 'ReleaseChannel', 'Version'];
+            if (verdict.status !== 200 || !record) {
+                console.error(`${NAME}: --self-test FAIL -- a Gecko-shaped extra part (${shape.filename}, ${shape.mime}) lost the report: answered ${verdict.status}, want 200 CrashID= with a stored record`);
+                ok = false;
+            } else if (JSON.stringify(stored) !== JSON.stringify(wantStored)) {
+                console.error(`${NAME}: --self-test FAIL -- the Gecko-shaped extra stored ${JSON.stringify(stored)}, want exactly the allowlisted scalars ${JSON.stringify(wantStored)} (non-allowlisted, oversized and non-scalar keys must be dropped)`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- a Gecko-shaped extra stored the allowlisted scalars and dropped the non-allowlisted, oversized and non-scalar keys`);
+            }
+        }
+
+        // Plant 10 (TEL-07, 57-02): a malformed extra part. Its annotations are dropped with nothing stored,
+        // and the report is kept: the minidump bytes land and the record carries no annotation from the part.
+        {
+            const storeDir = storeOf('gecko-extra-malformed');
+            const shape = geckoExtraShape();
+            const verdict = handleSubmit({
+                body: buildMultipart([
+                    { name: MINIDUMP_PART_NAME, filename: 'm.dmp', data: Buffer.from('D') },
+                    { name: EXTRA_PART_NAME, filename: shape.filename, contentType: shape.mime, data: Buffer.from('{"ProductName":"PowerBrowser",') },
+                ]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir,
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            });
+            const id = /^CrashID=(.+)$/.exec(verdict.body)?.[1];
+            const record = id ? JSON.parse(readFileSync(join(storeDir, `${id}.json`), 'utf8')) : null;
+            if (verdict.status !== 200 || !record) {
+                console.error(`${NAME}: --self-test FAIL -- a malformed extra part cost the whole report: answered ${verdict.status}, want 200 CrashID= with the minidump stored`);
+                ok = false;
+            } else if (Object.keys(record.annotations).length !== 0) {
+                console.error(`${NAME}: --self-test FAIL -- a malformed extra part stored annotations ${JSON.stringify(record.annotations)}, want none`);
+                ok = false;
+            } else if (record.minidumpBytes !== 1) {
+                console.error(`${NAME}: --self-test FAIL -- the minidump was not kept beside a malformed extra part (minidumpBytes ${record.minidumpBytes}, want 1)`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- a malformed Gecko-shaped extra part stored nothing and the report was kept`);
             }
         }
     } finally {
