@@ -120,11 +120,13 @@
               pkgs.rcodesign
               # rsync: the Linux DMG branch copies the bundle tree (S7 DMG mechanics).
               pkgs.rsync
-              # cmake, openssl, zlib, gnupatch: listed by the S7 probe for the macOS configure and tool builds.
-              # Presence is proven here; whether each is exercised is proven by the Mac-side build.
+              # cmake: listed by the S7 probe for the macOS configure; exercised only by the Mac-side build.
               pkgs.cmake
+              # openssl: listed by the S7 probe as a link input for the macOS tool builds.
               pkgs.openssl
+              # zlib: listed by the S7 probe as a link input for the macOS tool builds.
               pkgs.zlib
+              # gnupatch: listed by the S7 probe; GNU patch for the patch-stack steps.
               pkgs.gnupatch
             ];
             buildInputs = [ pkgs.sccache ];
