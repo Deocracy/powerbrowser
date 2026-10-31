@@ -74,18 +74,40 @@ cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD" "$RES/theia/nod
 tar -xzf "$ARCHIVE" -C "$RES/node" --strip-components=1 "node-$NODE_VERSION-$NODE_BIN_DIR/bin/node" "node-$NODE_VERSION-$NODE_BIN_DIR/LICENSE"
 test -f "$RES/node/bin/node" || fail "the archive carries no node-$NODE_VERSION-$NODE_BIN_DIR/bin/node member"
 chmod 755 "$RES/node/bin/node"
-NODE_ARCHS="$("$LIPO" -archs "$RES/node/bin/node" 2>/dev/null || true)"
 case "$ARCH" in
     aarch64) WANT_ARCH=arm64 ;;
     x86_64)  WANT_ARCH=x86_64 ;;
 esac
-test "$NODE_ARCHS" = "$WANT_ARCH" || fail "the staged node is not a single $WANT_ARCH Mach-O (lipo reports '${NODE_ARCHS:-nothing}'); the archive does not match $NODE_KEY"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$RES/distribution/policies.json"
 
 # No payload carries a Linux name. The darwin pin and the darwin prebuild are the only natives staged.
 if find "$RES" \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit | grep -q .; then
     fail "a non-darwin native is staged under $RES: $(find "$RES" \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit)"
 fi
+
+# Every native payload must be a thin Mach-O of this architecture. The name does not decide it: a
+# Linux-built lib/ carries ELF natives under arch-free names (keytar.node, drivelist.node). Each file
+# is classified by its first four bytes. ELF fails by name; a Mach-O must report exactly $WANT_ARCH to
+# lipo (a fat file lists two arches and fails); a .node or .dylib that is neither fails.
+check_payload() {
+    local f="$1" magic archs
+    magic="$(od -An -N4 -tx1 "$f" 2>/dev/null | tr -d ' \n')"
+    case "$magic" in
+        7f454c46) fail "$f is an ELF binary, not a Mach-O of $WANT_ARCH (a non-macOS build reached the bundle)" ;;
+        cffaedfe|cefaedfe|feedfacf|feedface|cafebabe|bebafeca)
+            archs="$("$LIPO" -archs "$f" 2>/dev/null || true)"
+            test "$archs" = "$WANT_ARCH" || fail "$f is not a thin $WANT_ARCH Mach-O (lipo reports '${archs:-nothing}')" ;;
+        *)
+            case "$f" in
+                *.node|*.dylib) fail "$f is not a Mach-O of $WANT_ARCH (first bytes '${magic:-empty}')" ;;
+            esac ;;
+    esac
+}
+check_payload "$RES/node/bin/node"
+check_payload "$RES/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD"
+while IFS= read -r payload; do
+    check_payload "$payload"
+done < <(find "$RES/theia" "$RES/node" -type f \( -name '*.node' -o -name '*.dylib' -o -name '*.so' -o -perm -100 \))
 
 # esbuild's node-file: module keys name the build checkout. The runtime reads them back by exact
 # string (the modules are not loaded from those paths), so the whole key is rewritten, as
