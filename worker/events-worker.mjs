@@ -1,0 +1,249 @@
+// worker/events-worker.mjs
+//
+// The telemetry Worker (Phase 48, TEL-10 and TEL-11). POST /events validates one opt-in error
+// report batch and writes one D1 row per admitted event. POST /download-counts writes one
+// authenticated download count per asset and UTC day. A daily scheduled job deletes rows older
+// than RETENTION_DAYS from both tables.
+//
+// THE ADMITTED SET IS THE PRODUCER'S. ADMITTED_KEYS restates the seven-key set that
+// theia/extensions/telemetry/src/browser/telemetry-enrichment.ts exports; the producer is the
+// source of truth. scripts/verify-events-worker.mjs imports that module and requires equality, so
+// the two cannot drift. Every other property a client sends is dropped, never stored.
+//
+// CREDENTIALLESS BY CONSTRUCTION. This directory holds no secret, token, key or client identifier.
+// The one shared secret is read at request time from env.DOWNLOAD_COUNT_SECRET (a Worker secret the
+// owner sets), compared in constant time, and never logged or stored. The Cloudflare token that
+// deploys this Worker is never in the tree. The gate scans this directory for assigned
+// credential-shaped values.
+//
+// CAPS AND RETENTION. The privacy page states the same numbers; the gate derives both sides.
+//   body       MAX_BODY_BYTES = 65536 bytes, checked before parse; over it answers 413 oversized_body
+//   batch      MAX_EVENTS = 100 events per POST; over it answers 400 malformed_batch
+//   string     MAX_STRING_CHARS = 256 characters per stored string; a longer string is truncated
+//   retention  RETENTION_DAYS = 30 days, deleted by the scheduled job from both tables
+//
+// THROTTLE. At most THROTTLE_MAX_POSTS accepted /events POSTs per THROTTLE_WINDOW_MS. An excess
+// POST answers 200 with the discard reason and stores nothing.
+// shortcut: this budget is per Worker instance, not global; the Cloudflare rate-limiting rule in
+// wrangler.toml is the per-IP budget that holds, upgrade to a Durable Object counter if it does not.
+//
+// WIRE VOCABULARY. 200 accepted: "ok: stored <n>" (events) or "ok: <asset>" (download counts).
+// 200 discarded: "Discarded: throttled_in_worker_cap". 400: "Discarded: malformed_body" or
+// "Discarded: malformed_batch". 413: "Discarded: oversized_body". 500: "Discarded: store_unavailable".
+// 401 and 404 answer an empty body.
+//
+// ZERO-DEPENDENCY. Request, Response, URL, TextEncoder and the D1 binding only; no import, no socket
+// at import time, so the contract gate imports this file under plain node.
+
+export const EVENTS_PATH = '/events';
+export const DL_PATH = '/download-counts';
+export const RETENTION_DAYS = 30;
+export const MAX_BODY_BYTES = 65536;
+export const MAX_EVENTS = 100;
+export const MAX_STRING_CHARS = 256;
+export const REASON_MALFORMED = 'malformed_body';
+export const REASON_BATCH = 'malformed_batch';
+export const REASON_OVERSIZED = 'oversized_body';
+export const REASON_THROTTLED = 'throttled_in_worker_cap';
+export const REASON_STORE = 'store_unavailable';
+export const THROTTLE_WINDOW_MS = 60_000;
+export const THROTTLE_MAX_POSTS = 60;
+export const DAY_MS = 86_400_000;
+
+/** The producer's wire key set, in order (telemetry-enrichment.ts is the source of truth). */
+export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);
+/** Wire key to D1 column. source is stored as basename; buildID as buildid. */
+const COLUMN_FOR = Object.freeze({ type: 'type', source: 'basename', line: 'line', column: 'column', version: 'version', buildID: 'buildid', os: 'os' });
+const STRING_KEYS = Object.freeze(['type', 'source', 'version', 'buildID', 'os']);
+/** The events table, in insert order. received_at is server time; synthetic is the control flag. */
+export const EVENT_COLUMNS = Object.freeze(['received_at', 'type', 'basename', 'line', 'column', 'version', 'buildid', 'os', 'synthetic']);
+export const DOWNLOAD_COLUMNS = Object.freeze(['asset', 'tag', 'day', 'download_count', 'received_at']);
+
+const INSERT_EVENT = `INSERT INTO events (${EVENT_COLUMNS.map(c => `"${c}"`).join(', ')}) VALUES (${EVENT_COLUMNS.map(() => '?').join(', ')})`;
+const UPSERT_DOWNLOAD = 'INSERT INTO download_counts ("asset", "tag", "day", "download_count", "received_at") VALUES (?, ?, ?, ?, ?) '
+    + 'ON CONFLICT("asset", "day") DO UPDATE SET "tag" = excluded."tag", "download_count" = excluded."download_count", "received_at" = excluded."received_at"';
+const SELECT_MAINTAINER = 'SELECT * FROM events WHERE "synthetic" = 0 ORDER BY "id"';
+const DELETE_EVENTS_OLDER = 'DELETE FROM events WHERE "received_at" < ?';
+const DELETE_COUNTS_OLDER = 'DELETE FROM download_counts WHERE "received_at" < ?';
+
+const encoder = new TextEncoder();
+/** Per-instance POST window for /events. Fail-closed on a non-finite clock: see throttled(). */
+const THROTTLE = { acceptedAt: [] };
+
+function byteLength(text) {
+    return encoder.encode(text).byteLength;
+}
+
+function truncate(value) {
+    return value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value;
+}
+
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isJsonType(contentType) {
+    return typeof contentType === 'string' && contentType.toLowerCase().includes('application/json');
+}
+
+function parseJsonObject(text) {
+    try {
+        const value = JSON.parse(text);
+        return isPlainObject(value) ? value : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function discard(status, reason) {
+    return { status, body: `Discarded: ${reason}` };
+}
+
+function empty(status) {
+    return { status, body: '' };
+}
+
+/** Constant-time string equality. Length difference and every character position feed one accumulator. */
+function constantTimeEqual(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    const n = Math.max(a.length, b.length);
+    let diff = a.length ^ b.length;
+    for (let i = 0; i < n; i += 1) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+    return diff === 0;
+}
+
+/** Fail-closed: no configured secret, or no Bearer header, is unauthorized. */
+function authorized(header, env) {
+    const expected = env?.DOWNLOAD_COUNT_SECRET;
+    if (typeof expected !== 'string' || expected === '') return false;
+    if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
+    return constantTimeEqual(header.slice('Bearer '.length), expected);
+}
+
+/** True when the window already holds THROTTLE_MAX_POSTS accepted POSTs. A non-finite clock is throttled. */
+export function throttled(throttle, nowMs) {
+    if (!Number.isFinite(nowMs)) return true;
+    throttle.acceptedAt = throttle.acceptedAt.filter(t => t > nowMs - THROTTLE_WINDOW_MS);
+    return throttle.acceptedAt.length >= THROTTLE_MAX_POSTS;
+}
+
+/**
+ * Reduce one client event to the stored row. Only ADMITTED_KEYS are read; a string key that is not
+ * a string and a number key that is not finite are omitted. synthetic is a control flag read as a
+ * boolean, never stored as payload text.
+ */
+export function admitEvent(event) {
+    const row = {};
+    for (const wire of ADMITTED_KEYS) {
+        const value = event[wire];
+        if (STRING_KEYS.includes(wire)) {
+            if (typeof value === 'string') row[COLUMN_FOR[wire]] = truncate(value);
+        } else if (typeof value === 'number' && Number.isFinite(value)) {
+            row[COLUMN_FOR[wire]] = value;
+        }
+    }
+    row.synthetic = event.synthetic === true ? 1 : 0;
+    return row;
+}
+
+function eventValues(row, receivedAt) {
+    return EVENT_COLUMNS.map(column => {
+        if (column === 'received_at') return receivedAt;
+        if (column === 'synthetic') return row.synthetic;
+        return row[column] ?? null;
+    });
+}
+
+/**
+ * POST /events. Contract order: route, content type, size, parse, shape, throttle, store. Every
+ * rejection is decided before the first write, so a rejected batch stores nothing.
+ */
+export async function handleEvents(shape, env, state) {
+    if (shape.method !== 'POST' || shape.path !== EVENTS_PATH) return empty(404);
+    if (!isJsonType(shape.headers?.['content-type'])) return discard(400, REASON_MALFORMED);
+    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);
+    const top = parseJsonObject(shape.body);
+    if (top === undefined) return discard(400, REASON_MALFORMED);
+    if (!Array.isArray(top.events) || top.events.length > MAX_EVENTS) return discard(400, REASON_BATCH);
+    if (!top.events.every(isPlainObject)) return discard(400, REASON_MALFORMED);
+    if (throttled(state.throttle, state.nowMs)) return discard(200, REASON_THROTTLED);
+    const rows = top.events.map(admitEvent);
+    try {
+        for (const row of rows) {
+            await env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs)).run();
+        }
+    } catch {
+        return discard(500, REASON_STORE);
+    }
+    state.throttle.acceptedAt.push(state.nowMs);
+    return { status: 200, body: `ok: stored ${rows.length}` };
+}
+
+/**
+ * POST /download-counts. Contract order: route, Bearer secret, content type, size, parse, shape,
+ * upsert. The secret is checked before the body is sized or parsed, so an unauthenticated caller
+ * reaches no parser.
+ */
+export async function handleDownloadCounts(shape, env, state) {
+    if (shape.method !== 'POST' || shape.path !== DL_PATH) return empty(404);
+    if (!authorized(shape.headers?.authorization, env)) return empty(401);
+    if (!isJsonType(shape.headers?.['content-type'])) return discard(400, REASON_MALFORMED);
+    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);
+    const top = parseJsonObject(shape.body);
+    if (top === undefined) return discard(400, REASON_MALFORMED);
+    const asset = typeof top.asset === 'string' && top.asset !== '' ? truncate(top.asset) : undefined;
+    const tag = typeof top.tag === 'string' ? truncate(top.tag) : undefined;
+    const count = top.download_count;
+    if (asset === undefined || tag === undefined || !Number.isInteger(count) || count < 0) return discard(400, REASON_MALFORMED);
+    const day = new Date(state.nowMs).toISOString().slice(0, 10);
+    try {
+        await env.DB.prepare(UPSERT_DOWNLOAD).bind(asset, tag, day, count, state.nowMs).run();
+    } catch {
+        return discard(500, REASON_STORE);
+    }
+    return { status: 200, body: `ok: ${asset}` };
+}
+
+/** The maintainer view: every stored event except synthetic probe rows. */
+export async function listMaintainerEvents(db) {
+    const result = await db.prepare(SELECT_MAINTAINER).all();
+    return result?.results ?? [];
+}
+
+/** Delete rows received before the retention window, from both tables. */
+export async function runRetention(db, nowMs) {
+    const cutoff = nowMs - RETENTION_DAYS * DAY_MS;
+    await db.prepare(DELETE_EVENTS_OLDER).bind(cutoff).run();
+    await db.prepare(DELETE_COUNTS_OLDER).bind(cutoff).run();
+}
+
+export async function scheduled(controller, env) {
+    await runRetention(env.DB, Date.now());
+}
+
+function toResponse(verdict) {
+    return new Response(verdict.body, { status: verdict.status, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+}
+
+export default {
+    async fetch(request, env) {
+        const path = new URL(request.url).pathname;
+        if (path !== EVENTS_PATH && path !== DL_PATH) return toResponse(empty(404));
+        const shape = {
+            method: request.method,
+            path,
+            headers: {
+                'content-type': request.headers.get('content-type') ?? '',
+                authorization: request.headers.get('authorization') ?? '',
+            },
+            // shortcut: the body is read whole before the 64 KiB check; upgrade to a streamed read if abuse shows up.
+            body: request.method === 'POST' ? await request.text() : '',
+        };
+        const state = { nowMs: Date.now(), throttle: THROTTLE };
+        const verdict = path === EVENTS_PATH
+            ? await handleEvents(shape, env, state)
+            : await handleDownloadCounts(shape, env, state);
+        return toResponse(verdict);
+    },
+    scheduled,
+};

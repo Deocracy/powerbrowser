@@ -1,0 +1,32 @@
+# worker/wrangler.toml: the deploy descriptor for the telemetry Worker (Phase 48, TEL-10, TEL-11).
+#
+# No secret or token is stated here. DOWNLOAD_COUNT_SECRET is a Worker secret the owner sets at the
+# checkpoint; the code reads it from env at request time. Phase 47 attaches the events hostname to
+# the zone, so this file states no route.
+#
+# RUNBOOK (owner, once; the executor never runs these). Use the pinned wrangler from nixpkgs.
+# wrangler never enters a flake dev shell.
+#   1. Pin and record the version:   nix run nixpkgs#wrangler -- --version
+#   2. Create the D1 database:        nix run nixpkgs#wrangler -- d1 create powerbrowser-events
+#      Copy the printed database_id over the placeholder in the d1_databases block below.
+#   3. Apply the schema:              nix run nixpkgs#wrangler -- d1 execute powerbrowser-events --remote --file worker/schema.sql
+#   4. Set the shared secret:         nix run nixpkgs#wrangler -- secret put DOWNLOAD_COUNT_SECRET
+#      Put the same value in the bot environment secret; docs/RENEWALS.md has the rows.
+#   5. Deploy:                        nix run nixpkgs#wrangler -- deploy --config worker/wrangler.toml
+#   6. Rate-limit rule (dashboard):   one rule on the events route, per IP, action block. Record the
+#      threshold and the period verbatim at the plan 48-05 checkpoint.
+#   7. Synthetic POST verify:         curl -sS -X POST https://events.powerbrowser.org/events -H 'content-type: application/json' --data '{"events":[{"type":"synthetic.probe","synthetic":true}]}'
+#      Expect 200 and "ok: stored 1". That row is synthetic and the maintainer query excludes it.
+
+name = "powerbrowser-events"
+main = "events-worker.mjs"
+compatibility_date = "2026-10-31"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "powerbrowser-events"
+database_id = "REPLACE-WITH-OWNER-D1-ID"
+
+# The scheduled job deletes rows older than RETENTION_DAYS from both tables, daily at 03:00 UTC.
+[triggers]
+crons = ["0 3 * * *"]
