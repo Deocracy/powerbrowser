@@ -558,6 +558,120 @@ the date, never where.
 - No App private key exists before Phase 43, which is the first consumer. Both Apps
   are created with no key generated.
 
+### Fixer authentication (FIX-12)
+
+Outcome: the fixer authenticates to Anthropic with GitHub OIDC workload identity
+federation. The fallback path is recorded below and stays unused unless federation
+setup is blocked.
+
+- Why WIF. The pinned `anthropics/claude-code-action` (commit
+  `db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c`, v1.0.254) returns an explicit
+  `github_token` before it runs its own App-token OIDC exchange, so passing
+  `github_token: ${{ secrets.GITHUB_TOKEN }}` keeps the action from minting a Claude
+  App token in the `fix` job. The federation exchange is a separate path, keyed by
+  `anthropic_federation_rule_id` and `anthropic_organization_id`. The finding is read
+  from the pinned action source (RESEARCH §12); re-run that check before any re-pin.
+- Shape the workflow asserts (`fixer-auth` in `scripts/verify-workflows.mjs`):
+  - `id-token: write` on the `fix` job only. `fix-gate` and `fix-pr` hold no `id-token`.
+  - The `fix` job's Claude step sets `anthropic_federation_rule_id` from the
+    repository variable `ANTHROPIC_FEDERATION_RULE_ID` and `anthropic_organization_id`
+    from `ANTHROPIC_ORGANIZATION_ID`. Both are variables, not secrets.
+- Fallback (used only if the Console federation setup is blocked): an
+  `ANTHROPIC_API_KEY` secret in the `fixer` environment only, with no `id-token` on
+  any job. `fixer-auth` refuses a reference to that secret in any
+  `release-train.yml` job whose environment is not exactly `fixer`. Its rotation row
+  is in `docs/RENEWALS.md`.
+- Credential state: pending. The Anthropic Console fixer workspace, the federation rule
+  and the two variables are owner actions at the 52-05 checkpoint. Until they exist,
+  the fixer cannot authenticate and no live fix run is possible.
+
+### Fixer spend limits (FIX-05)
+
+Fixer spend is bounded at four layers. The first is an owner setting, and the
+others are in-tree and asserted by the `workflows` row (`fixer-spend`, `fixer-tools`).
+
+- A dedicated Anthropic Console workspace for the fixer, separate from triage, with
+  a monthly spend limit. The limit is pending the 52-05 owner checkpoint and is
+  recorded here, and its review date is in `docs/RENEWALS.md`.
+- `--max-turns 40` on the `fix` job's Claude step, so one attempt is bounded.
+- `timeout-minutes: 90` on the `fix` job, so one attempt is bounded in time.
+- At most two attempts per (release key, class, fingerprint), enforced live. The derive job counts the
+  earlier `release-train.yml` dispatch runs of this repository whose display title is
+  `fix <key> <class> attempt <n> <fingerprint>` (a dry run is titled `fix dry-run ...` and is not counted;
+  a run that `fix-gate` rejects still counts, and so does a dispatch that fails in the derive job after its
+  title was formed: the next dispatch is then attempt 2), admits only attempt number spent + 1, and
+  `scripts/release-train.mjs --fix-guard` refuses once the budget is spent. No fixer run is
+  re-runnable: the derive job refuses "Re-run all jobs" (`github.run_attempt` is not 1), and
+  `fix`, `fix-gate` and `fix-pr` each carry `github.run_attempt == 1` in their own `if:`,
+  because "Re-run failed jobs" keeps derive's earlier result and would otherwise start the
+  failed job again and spend model budget the count cannot see (the `fixer-gate` rule and its
+  plants hold all three terms). The owner dispatches the next attempt instead. The
+  runs are read as one query per dispatching actor (the owner and the actor of the run, because the
+  unfiltered list is capped at 1000 results); a list cut off at that cap is a refusal, never a smaller count
+  (`release-train.mjs --run-titles`). The release key must be the current key of the target tag (its ESR
+  groups are the tag's), so a dispatcher cannot reset the budget by inventing a greater key. The
+  `NEEDS_OWNER` train state that a spent budget implies is part of the train's pure state
+  table only: no job writes the tracking issue yet (see Fixer routing), so the refusal is
+  the red derive job and its log, and the owner decides.
+- The `claude-fixer` concurrency group serializes every fix run, so two attempts
+  never spend the budget at once.
+
+### Fixer routing (TRAIN-06)
+
+What is live and what is a contract that nothing runs yet:
+
+- Live. The fixer starts only by an owner's `reason=fix` dispatch, and only for F2 (a red
+  bump PR on `chore/esr-*`, `chore/node-*` or `renovate/*`) and F3 (red `main`). The derive
+  job refuses every other dispatch with the guard it failed: a bot actor, a `claude-fix/`
+  branch, an author that is neither the owner nor a permitted bot, a branch that is not in
+  this repository, a release key not above the latest Release, a spent budget, and a
+  `release` check (a failed `release.yml` run never starts the fixer; the owner reads that
+  run). F1 (a patch conflict at the new tag) is refused too: the model's only patch tool,
+  `scripts/regenerate-patches.sh`, needs the target's patch stack applied to `upstream/`,
+  and a stack in conflict does not apply, so a run would end with no diff. The owner
+  resolves patch conflicts.
+- Live. The model's Read tool is granted `work/**` and `fixer-data/**` only, and `upstream/**` is denied;
+  prep also refuses a target whose patch stack adds or changes a symlink in `upstream/` (a patch can create
+  one with `new file mode 120000`), or leaves one that resolves outside the repository. The expected set is
+  the symlinks `fetch-upstream.sh` left, read before the apply and compared after it.
+- Live. `fix` and `fix-gate` free hosted-runner disk space before the upstream fetch with the same
+  step `rebase-upstream.yml` uses (the `workflows` row requires the two texts to be equal): `upstream/` is
+  5.6 GB and the gate copies it. The gate's copies use `cp -a --reflink=auto` inside a scratch
+  directory on the trusted checkout's filesystem. Measured on the reference host (btrfs, reflink
+  supported, 2026-10-31): copying `upstream/` took 68 s and added 1.0 GiB of used space with
+  `--reflink=auto` against 48 s and 3.3 GiB with `--reflink=never`. A hosted runner's ext4 has no
+  reflink, so there the copy is full and the disk-freeing step is the mitigation; the gate logs `df -h`
+  after the copies so a full disk is read in the log.
+- Live. The fixer's own writes are one PR, opened by `fix-pr` in the bot environment after
+  the gate passed. `fix` exports the diff's sha256 and the base commit; `fix-gate` and
+  `fix-pr` check out exactly that base, check the artifact against the digest, and
+  `fix-pr` re-runs the pure gate stages on the bytes it publishes. The gate's executing
+  stages (5 to 8: `check-patch-surface`, the brand scan, `diff-theia-core`, `verify-platform
+  --quick`) run through `scripts/fixer-isolate.sh`: no network, no new privileges, no
+  capability, a scrubbed environment (no `GITHUB_*`, `ACTIONS_*`, `RUNNER_*` or credential
+  variable), the supplementary groups cleared (sudo form), every filesystem unix socket under
+  `/run`, `/var/run`, `/dev/shm` and `$XDG_RUNTIME_DIR` masked, and a mount namespace in which
+  every mount is read-only except a per-run scratch directory. The runner's file-command files
+  (`GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY`, `GITHUB_STATE`) and the
+  trusted script overlay (`scripts/`, `inventory/`, `.github/` and the baselines laid over the
+  gate's worktree) are read-only, so a hostile stage can neither steer a later step through the
+  runner nor rewrite the scripts a later stage runs. **Stages 5 to 8 are advisory against a hostile
+  diff**: code a stage runs can still lie about its own exit status, so a green dynamic stage means
+  the rows ran and reported green, not that the diff passed them. The binding check is `fix-pr`'s
+  static re-run (`verify-fix-gate.mjs --static-only`) on the hashed bytes, plus the human review
+  of the PR and CI on it. The unprivileged-user-namespace form cannot clear supplementary groups,
+  and the `sudo` form has not run on a hosted runner (its self-test reports itself untested on a
+  host without passwordless sudo; BLOCKED.md item 6). If the
+  publish plan refuses (a commit the bot did not author is on the `claude-fix/` branch)
+  `fix-pr` ends red; if the gated diff changes nothing, it ends with a warning and a job
+  summary and opens nothing.
+- Not wired. A red stage labelling its tracking issue `train:blocked`, assigning the owner
+  and linking the failing log is the pure `render` contract in `scripts/release-train.mjs`.
+  The `report` job prints the would-write view only, because the tracking-issue writer and
+  the live facts source wait for approval (BLOCKED.md item 3 of Phase 43). No issue is
+  opened or labelled by the train today, and nothing watches `release.yml`: after a red
+  run, the owner reads the run itself.
+
 ### The MAR key ceremony and custody
 
 Run the ceremony once, on `legion`, at the repository root, with nobody else at the

@@ -30,8 +30,8 @@
 //                 In memory: a changed existing patch must change its index line as a
 //                 removed/added pair with a differing hash, or be a moved file (CR-01: a
 //                 moved file is compared on +/- lines only, so a context-only change
-//                 there is a NOTE). Real run, when git's path set holds a patches/ path:
-//                 the diff's patches are replayed onto a fresh copy of upstream/ reset to
+//                 there is a NOTE). Real run, when git's path set holds a patches/ path or
+//                 a --tag was given: the target's patches (the diff applied) are replayed onto a fresh copy of upstream/ reset to
 //                 --tag (scripts/apply-patches.sh), then scripts/regenerate-patches.sh
 //                 --check runs over that replay. No upstream at --tag is a rejection.
 //  4. non-vacuity A diff that changes no file body is rejected.
@@ -48,17 +48,22 @@
 //                 run the gate inside `nix develop .#theia` (a missing yarn is a verdict).
 //  8. quick       The real run only: scripts/verify-platform.sh --quick in the worktree.
 //
-// Arguments: --diff=<file>, --ref=<ref of this repo to apply onto, default HEAD>,
-// --tag=<Gecko tag the patches replay onto; needed only when the diff touches patches/>.
-// Both are validated as plain ref names before git sees them.
+// Arguments: --diff=<file>, --ref=<ref or sha of this repo to apply onto, default HEAD>,
+// --tag=<Gecko tag the patches replay onto; needed when the diff touches patches/>,
+// --static-only (stages 1-7 in memory: no worktree, no code run; fix-pr re-runs them, CR-02).
+// Both refs are validated as plain ref names before git sees them.
 //
-// shortcut: stages 5-8 run fix-controlled code (the --quick rows import files from
+// ADVISORY: stages 5-8 run fix-controlled code (the --quick rows import files from
 // powerbrowser/ and theia/, and scripts/** is denied but not everything a row executes
-// is under scripts/). They must run only in a job with no secrets, no write token and no
-// network beyond fetch, on an ephemeral runner: the 52-04 fix-gate job. Upgrade when 52-04
-// lands: the workflows row enforces that job shape, and an unshare -n / bwrap wrapper adds
-// a second wall. The worktree holds copies (cp -a --reflink=auto) of upstream/,
-// theia/node_modules and generated/, never links into this checkout.
+// is under scripts/). They run in a job with no secrets, no write token and no network, through
+// scripts/fixer-isolate.sh, which also makes everything but a scratch directory read-only and binds
+// the trusted script overlay read-only. Code a stage runs can still lie about its own exit status, so
+// a green stage 5-8 means "the rows ran and reported green", not "the diff passed them". The BINDING
+// check is fix-pr's static re-run of stages 1-7 (--static-only) on the hashed bytes, plus the human
+// review of the PR and CI on it.
+// The worktree holds copies (cp -a --reflink=auto) of upstream/, theia/node_modules and generated/,
+// never links into this checkout; the scratch directory is on the trusted checkout's filesystem, so a
+// reflink-capable filesystem shares the extents instead of writing a second 6 GB.
 // shortcut: path matching is case-insensitive, so a path that case-folds onto a deny
 // match is rejected on any filesystem; the gate is still meant for Linux runners.
 // shortcut: stages 1-7 in memory are proxies for the real scripts. The self-test drives
@@ -110,13 +115,15 @@ const args = process.argv.slice(2);
 let diffArg = null;
 let tagArg = null;
 let refArg = null;
+let staticOnly = false;
 for (const a of args) {
     if (a === '--self-test') continue;
+    if (a === '--static-only') { staticOnly = true; continue; }
     if (a.startsWith('--diff=') && a.length > 7) { diffArg = a.slice(7); continue; }
     if (a.startsWith('--tag=') && a.length > 6) { tagArg = a.slice(6); continue; }
     if (a.startsWith('--ref=') && a.length > 6) { refArg = a.slice(6); continue; }
     console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
-    console.error(`  Next step: run: node ${SELF_REL} --diff=<fix.diff> [--ref=<ref>] [--tag=<gecko-tag>], or add --self-test to prove the gate discriminates.`);
+    console.error(`  Next step: run: node ${SELF_REL} --diff=<fix.diff> [--ref=<ref>] [--tag=<gecko-tag>] [--static-only], or add --self-test to prove the gate discriminates.`);
     process.exit(2);
 }
 for (const [flag, v] of [['--tag', tagArg], ['--ref', refArg]]) {
@@ -447,14 +454,16 @@ function runChecks(root, overrides = {}) {
 // Apply the diff in `dir` (a clean git work tree), then read what git says changed there,
 // ignored files included. `expected` is the set stage 1 took from git before the apply.
 // Returns failures; an empty list means the applied change set equals the checked one.
-function applyAndCheck(buf, dir, deny, registry, expected) {
+function applyAndCheck(buf, dir, deny, registry, expected, bound = []) {
     const tmp = mkdtempSync(join(tmpdir(), 'fix-gate-diff-'));
     try {
         const file = join(tmp, 'fix.diff');
         writeFileSync(file, buf);
         let r = git(['apply', '--whitespace=nowarn', file], dir);
         if (r.status !== 0) return [`[apply] the diff does not apply to the target tree (${tailOf(r)}). Next step: regenerate the diff against the target ref.`];
-        r = git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored'], dir);
+        // The names the isolation wrapper mounted read-only over this tree are the trusted checkout's files, not the diff's:
+        // git must not report them (a diff that names one is denied by stage 1 before it gets here).
+        r = git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored', '--', '.', ...bound.map(n => `:(exclude)${n}`)], dir);
         if (r.status !== 0) return [`[path] git status failed after the apply (${tailOf(r)}), so the applied paths are unchecked. Next step: rerun the gate in an intact checkout.`];
         const failures = [];
         const applied = new Set();
@@ -481,42 +490,118 @@ function applyAndCheck(buf, dir, deny, registry, expected) {
     }
 }
 
+// Git-ignored inputs the real stages read, derived from the tree and never hand-listed (CLAUDE.md): every path
+// git reports as ignored in `root`, minus the Gecko build outputs --quick never reads (verify.yml runs --quick without
+// them; copying a 13 GB objdir/ would be the cost), and the module folders yarn recorded in
+// theia/node_modules/.yarn-integrity: `yarn check --integrity` fails when one is missing (CR-05), and a folder that
+// holds nothing git can list (theia/applications/browser/node_modules holds only .bin) is created, not copied.
+const NOT_QUICK_INPUTS = /^(objdir[^/]*|\.mozbuild|\.planning)(\/|$)/;
+const TRUSTED_OVERLAY = ['scripts', 'inventory', '.github', 'quick-baseline.txt', 'toolchain-baseline.txt', 'flake.lock'];
+export function ignoredInputs(root) {
+    const copy = [];
+    const r = git(['status', '--porcelain=v1', '-z', '--ignored=traditional'], root);
+    if (r.status === 0) {
+        const toks = splitNul(r.stdout);
+        for (let i = 0; i < toks.length; i++) {
+            const xy = toks[i].subarray(0, 2).toString();
+            if (xy[0] === 'R' || xy[0] === 'C') { i += 1; continue; }
+            if (xy !== '!!') continue;
+            const p = toks[i].subarray(3).toString().replace(/\/$/, '');
+            if (!NOT_QUICK_INPUTS.test(p)) copy.push(p);
+        }
+    }
+    copy.sort();
+    const top = copy.filter((p, i) => !copy.slice(0, i).some(q => p.startsWith(`${q}/`)));
+    let folders = [];
+    try { folders = JSON.parse(readFileSync(join(root, 'theia/node_modules/.yarn-integrity'), 'utf8')).modulesFolders ?? []; } catch { /* no install: the stage reports it */ }
+    const ensure = folders.filter(f => typeof f === 'string' && f !== 'node_modules' && !f.split('/').includes('..') && !f.startsWith('/')).map(f => `theia/${f}`);
+    return { copy: top, ensure: [...new Set(ensure)] };
+}
+
+// The names the isolation wrapper (scripts/fixer-isolate.sh) has already bound read-only into $FIXER_SCRATCH/tree, from
+// the trusted checkout. Empty when the gate runs without the wrapper (then the overlay is copied in, as before).
+export function boundOverlay(env = process.env) {
+    if (env.FIXER_ISOLATED !== '1' || !env.FIXER_SCRATCH) return [];
+    return String(env.FIXER_ISOLATE_OVERLAY ?? '').split(' ').filter(n => TRUSTED_OVERLAY.includes(n) && existsSync(join(REPO_ROOT, n)));
+}
+
+// Inside the isolation the gate cannot write the trusted checkout's .git (the whole filesystem is read-only but the
+// scratch directory), so the tree is a fresh repository there whose objects are the trusted checkout's, read through
+// git's alternates. The bound overlay names are excluded from the checkout: they already hold the trusted bytes.
+function makeScratchTree(wt, sha, bound, root = REPO_ROOT) {
+    let r = git(['init', '-q', wt], root);
+    if (r.status !== 0) return r;
+    const common = git(['rev-parse', '--path-format=absolute', '--git-common-dir'], root);
+    if (common.status !== 0) return common;
+    writeFileSync(join(wt, '.git', 'objects', 'info', 'alternates'), `${common.stdout.toString().trim()}/objects\n`);
+    for (const kv of [['core.sparseCheckout', 'true'], ['core.sparseCheckoutCone', 'false']]) {
+        r = git(['config', kv[0], kv[1]], wt);
+        if (r.status !== 0) return r;
+    }
+    mkdirSync(join(wt, '.git', 'info'), { recursive: true });
+    writeFileSync(join(wt, '.git', 'info', 'sparse-checkout'), ['/*', ...bound.map(n => `!/${n}${lstatSync(join(wt, n)).isDirectory() ? '/' : ''}`)].join('\n') + '\n');
+    return git(['checkout', '-q', '--detach', sha], wt);
+}
+
 // The real stages: a throwaway worktree at --ref, the diff applied and re-checked, then the
 // real scripts. Stage 8 (--quick) runs here and nowhere else. Stages 5-8 execute code from the
 // patched tree: see the shortcut in the header.
 function runRealStages(buf, ref, tag, paths, deny, registry) {
     const failures = [];
-    const dir = mkdtempSync(join(tmpdir(), 'fix-gate-'));
-    const wt = join(dir, 'tree');
+    const bound = boundOverlay();
+    const inScratch = bound.length > 0;
+    const dir = inScratch ? null : mkdtempSync(join(tmpdir(), 'fix-gate-'));
+    const wt = inScratch ? join(process.env.FIXER_SCRATCH, 'tree') : join(dir, 'tree');
     const run = (cmd, argv, cwd, timeout = 600000) =>
         spawnSync(cmd, argv, { cwd, encoding: 'utf8', timeout, maxBuffer: 256 * 1024 * 1024 });
     try {
-        let r = git(['worktree', 'add', '--detach', wt, ref], REPO_ROOT);
+        let r;
+        if (inScratch) {
+            const sha = git(['rev-parse', '--verify', '-q', `${ref}^{commit}`], REPO_ROOT);
+            r = sha.status === 0 ? makeScratchTree(wt, sha.stdout.toString().trim(), bound) : sha;
+        } else {
+            r = git(['worktree', 'add', '--detach', wt, ref], REPO_ROOT);
+        }
         if (r.status !== 0) {
             failures.push(`[apply] could not check out '${ref}' into a throwaway worktree (${tailOf(r)}). Next step: fetch the ref, or pass --ref=<ref of this repo>.`);
             return failures;
         }
-        failures.push(...applyAndCheck(buf, wt, deny, registry, new Set(paths)));
+        failures.push(...applyAndCheck(buf, wt, deny, registry, new Set(paths), bound));
         if (failures.length > 0) return failures;
 
         // Git-ignored, machine-local inputs the real stages read, copied (never linked) after the
         // apply and the status check above, so the diff cannot have written into them (WR-02).
-        const bring = (rel) => {
+        const { copy, ensure } = ignoredInputs(REPO_ROOT);
+        for (const rel of copy) {
+            if (bound.some(n => rel === n || rel.startsWith(`${n}/`))) continue; // the read-only mount already carries it
             const src = join(REPO_ROOT, rel);
             const dst = join(wt, rel);
-            if (!existsSync(src)) return null;
-            if (lstatSync(dst, { throwIfNoEntry: false }) !== undefined) return `[apply] ${rel} already exists in the worktree after the diff applied, so the gate's own copy cannot be placed. Next step: drop the change under ${rel}.`;
+            if (lstatSync(dst, { throwIfNoEntry: false }) !== undefined) { failures.push(`[apply] ${rel} already exists in the worktree after the diff applied, so the gate's own copy cannot be placed. Next step: drop the change under ${rel}.`); return failures; }
+            mkdirSync(dirname(dst), { recursive: true });
             const c = run('cp', ['-a', '--reflink=auto', src, dst]);
-            return c.status === 0 ? null : `[apply] could not copy ${rel} into the worktree (${tailOf(c)}). Next step: check free space, then rerun.`;
-        };
-        for (const rel of ['generated', 'upstream', 'theia/node_modules']) {
-            const bad = bring(rel);
-            if (bad !== null) { failures.push(bad); return failures; }
+            if (c.status !== 0) { failures.push(`[apply] could not copy ${rel} into the worktree (${tailOf(c)}). Next step: check free space, then rerun.`); return failures; }
+        }
+        // A module folder yarn recorded but that holds no file does not exist in the source either: create it.
+        for (const rel of ensure) mkdirSync(join(wt, rel), { recursive: true });
+        // WR-07: name the disk after the copies, so a full disk is read in the log and not guessed from a failed cp.
+        const df = run('df', ['-h', wt], wt, 30000);
+        if (df.status === 0) console.log(`  note  disk after the worktree copies:\n${String(df.stdout).trim().split('\n').map(l => `        ${l}`).join('\n')}`);
+
+        // The gate's own logic and the scripts it runs come from this (trusted) checkout, never from the
+        // target: a base whose verify-platform.sh or check-patch-surface.sh was weakened must not weaken the verdict (CR-03).
+        for (const rel of TRUSTED_OVERLAY) {
+            if (!existsSync(join(REPO_ROOT, rel))) continue;
+            if (bound.includes(rel)) continue; // bound read-only by the isolation wrapper, so no stage can rewrite it (WR-05)
+            rmSync(join(wt, rel), { recursive: true, force: true });
+            const c = run('cp', ['-a', join(REPO_ROOT, rel), join(wt, rel)]);
+            if (c.status !== 0) { failures.push(`[apply] could not lay the trusted ${rel} over the worktree (${tailOf(c)}). Next step: rerun the gate in an intact checkout.`); return failures; }
         }
 
         // 3 (real). A diff that touches patches/ (per git's set) is replayed onto a fresh upstream
         // at the Gecko tag, then regenerate-patches.sh --check compares the patches to the replay.
-        if (touchesPatches(paths)) {
+        // Stage 8 and the compiled-surface rows read upstream/ with the target's patches applied, so with a --tag the
+        // replay runs for every diff, not only one that touches patches/ (CI has an unpatched upstream/ at the tag).
+        if (touchesPatches(paths) || (tag !== null && existsSync(join(wt, PATCH_PREFIX)))) {
             const up = join(wt, 'upstream');
             const stage = '[regenerate-patches --check]';
             if (tag === null) {
@@ -551,12 +636,17 @@ function runRealStages(buf, ref, tag, paths, deny, registry) {
                 }
             }
             const rr = run(cmd, argv, wt, timeout);
-            if (rr.status !== 0) failures.push(`[${label}] \`${cmd} ${argv.join(' ')}\` exited ${rr.status ?? 'without a status'} in the patched worktree (${tailOf(rr)}). Next step: run that command in a checkout of '${ref}' with the fix applied and fix the named cause.`);
+            // verify-platform prints one `  <label>: FAIL` summary line per red row: name them, since the last two lines never do.
+            const redRows = (label === 'verify-platform --quick' ? String(rr.stdout ?? '').split('\n').filter(l => /^\s+[\w.-]+: FAIL\b/.test(l)).map(l => l.trim().split(':')[0]) : []);
+            if (rr.status !== 0) failures.push(`[${label}] \`${cmd} ${argv.join(' ')}\` exited ${rr.status ?? 'without a status'} in the patched worktree (${tailOf(rr)}${redRows.length > 0 ? `; red rows: ${redRows.join(', ')}` : ''}). Next step: run that command in a checkout of '${ref}' with the fix applied and fix the named cause.`);
         }
     } finally {
-        git(['worktree', 'remove', '--force', wt], REPO_ROOT);
-        git(['worktree', 'prune'], REPO_ROOT);
-        rmSync(dir, { recursive: true, force: true });
+        // Inside the isolation the wrapper removes the scratch directory (the overlay mounts are still busy here).
+        if (!inScratch) {
+            git(['worktree', 'remove', '--force', wt], REPO_ROOT);
+            git(['worktree', 'prune'], REPO_ROOT);
+            rmSync(dir, { recursive: true, force: true });
+        }
     }
     return failures;
 }
@@ -578,6 +668,17 @@ function main() {
     }
     const mem = runChecks(REPO_ROOT, { diff });
     let failures = mem.failures;
+    if (staticOnly) {
+        // The pure stages 1-7 only: no worktree, no script and no code from the diff runs. fix-pr re-runs them on the exact bytes it publishes (CR-02).
+        for (const n of mem.notes) console.log(`  note  ${n}`);
+        if (failures.length > 0) {
+            console.error(`${NAME}: FAIL -- verdict: reject (static stages); ${failures.length} problem(s) with the fix diff.`);
+            failures.forEach(f => console.error(`  ${f}`));
+            return 1;
+        }
+        console.log(`${NAME}: PASS -- verdict: pass (static stages only: path, apply, regenerate-patches, non-vacuity, patch surface, brand residue, Theia core; no code was run); ${mem.touched.length} path(s), ${mem.changed} file body(ies) changed`);
+        return 0;
+    }
     if (failures.length === 0) {
         const { deny, registry } = loadPolicy((rel) => readText(REPO_ROOT, rel));
         failures = runRealStages(diff, refArg ?? 'HEAD', tagArg, mem.touched, deny, registry);
@@ -705,6 +806,80 @@ function selfTest() {
         else bad(`the patches/ guard did not see the quoted non-ASCII patch name in git's path set.`);
         for (const v of ['-x', '--upload-pack=x', 'a..b', 'a b', '', 'x.lock']) if (validRef(v)) bad(`validRef accepted ${JSON.stringify(v)}.`);
         for (const v of ['HEAD', 'main', 'release_1', 'refs/tags/v1']) if (!validRef(v)) bad(`validRef refused ${JSON.stringify(v)}.`);
+
+        // CR-02: --static-only is the mode fix-pr re-runs on the bytes it publishes. A denied path is red in it; a docs-only change is green.
+        {
+            const tmp = mkdtempSync(join(tmpdir(), 'fix-gate-static-'));
+            try {
+                const cli = (diff) => { const f = join(tmp, 'd.diff'); writeFileSync(f, diff); return spawnSync(process.execPath, [join(REPO_ROOT, SELF_REL), '--static-only', `--diff=${f}`], { encoding: 'utf8' }); };
+                const red = cli(diffOf('CLAUDE.md', ['+planted line']));
+                const green = cli(diffOf('docs/fix-gate-control.md', ['+one control line'], { created: true }));
+                if (red.status === 1 && red.stderr.includes('CLAUDE.md') && red.stderr.includes('static stages')) console.log(`  ok  --static-only: a denied path is red in the pure re-run fix-pr performs`);
+                else bad(`--static-only did not reject a denied path (status ${red.status}, ${red.stderr.trim().split('\n').slice(-1)[0]}).`);
+                if (green.status === 0 && green.stdout.includes('static stages only')) console.log(`  ok  --static-only: a docs-only change is green and runs no code`);
+                else bad(`--static-only did not pass the docs-only control (status ${green.status}, ${(green.stderr || green.stdout).trim().split('\n').slice(-1)[0]}).`);
+            } finally { rmSync(tmp, { recursive: true, force: true }); }
+        }
+
+        // CR-05: the ignored inputs are derived from the tree. A planted ignored build output nobody listed is
+        // brought; a Gecko build output is not; a yarn module folder with only .bin in it is ensured, not copied.
+        {
+            // Tracked placeholders make git list ignored paths inside tracked directories, as in the real tree.
+            const sc = scratchRepo();
+            const put = (rel, text = 'x\n') => { mkdirSync(dirname(join(sc, rel)), { recursive: true }); writeFileSync(join(sc, rel), text); };
+            for (const t of ['theia/applications/browser/package.json', 'theia/extensions/planted-ext/package.json', 'powerbrowser/keep.txt']) put(t);
+            git(['add', 'theia', 'powerbrowser'], sc);
+            git(['-c', 'user.name=fix-gate', '-c', 'user.email=fix-gate@invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'tracked'], sc);
+            put('theia/node_modules/.yarn-integrity', JSON.stringify({ modulesFolders: ['applications/browser/node_modules', 'node_modules', 'node_modules'] }));
+            put('theia/applications/browser/node_modules/.bin/x');
+            put('theia/extensions/planted-ext/lib/index.js');
+            put('powerbrowser/branding-generated/planted.txt');
+            put('objdir/big.o');
+            put('.mozbuild/tool');
+            const got = ignoredInputs(sc);
+            const want = ['theia/node_modules', 'theia/applications/browser/node_modules', 'theia/extensions/planted-ext/lib', 'powerbrowser/branding-generated'];
+            const missing2 = want.filter(w => !got.copy.includes(w));
+            const unwanted = got.copy.filter(c => NOT_QUICK_INPUTS.test(c));
+            if (missing2.length > 0) bad(`ignoredInputs did not derive ${JSON.stringify(missing2)} from git's ignored set (got ${JSON.stringify(got.copy)}).`);
+            else if (unwanted.length > 0) bad(`ignoredInputs brought Gecko build output ${JSON.stringify(unwanted)}.`);
+            else if (!got.ensure.includes('theia/applications/browser/node_modules') || got.ensure.includes('theia/node_modules')) bad(`ignoredInputs did not read the module folders from .yarn-integrity (got ${JSON.stringify(got.ensure)}).`);
+            else console.log(`  ok  ignored inputs: ${got.copy.length} derived from git (a planted extension build output and branding-generated included; objdir/ and .mozbuild/ excluded), module folders read from .yarn-integrity`);
+            rmSync(sc, { recursive: true, force: true });
+        }
+
+        // WR-05: the overlay the wrapper binds read-only is the overlay the gate would otherwise copy (derived from the wrapper
+        // at check time, compared as sets), and a tree built around pre-bound names keeps the trusted bytes and reports no path
+        // of theirs to the apply check.
+        {
+            const wrapper = spawnSync('bash', [join(REPO_ROOT, 'scripts/fixer-isolate.sh'), '--print-overlay'], { encoding: 'utf8' });
+            const theirs = wrapper.status === 0 ? wrapper.stdout.split('\n').filter(Boolean).sort() : null;
+            const mine = [...TRUSTED_OVERLAY].sort();
+            if (theirs === null) bad(`scripts/fixer-isolate.sh --print-overlay failed (${wrapper.stderr.trim()}), so the overlay lists cannot be compared.`);
+            else if (JSON.stringify(theirs) !== JSON.stringify(mine)) bad(`the wrapper binds ${JSON.stringify(theirs)} read-only but the gate lays ${JSON.stringify(mine)} over its worktree; the two lists must be equal.`);
+            else console.log(`  ok  the wrapper's read-only overlay equals the gate's trusted overlay (${mine.length} names)`);
+            const sc = scratchRepo();
+            const wt = mkdtempSync(join(tmpdir(), 'fix-gate-tree-'));
+            try {
+                mkdirSync(join(sc, 'scripts'));
+                writeFileSync(join(sc, 'scripts', 'a.sh'), 'base\n');
+                git(['add', 'scripts/a.sh'], sc);
+                git(['-c', 'user.name=fix-gate', '-c', 'user.email=fix-gate@invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'scripts'], sc);
+                mkdirSync(join(wt, 'scripts'));
+                writeFileSync(join(wt, 'scripts', 'a.sh'), 'trusted\n');
+                writeFileSync(join(wt, 'scripts', 'untracked.txt'), 'x\n');
+                const sha = git(['rev-parse', 'HEAD'], sc).stdout.toString().trim();
+                const made = makeScratchTree(wt, sha, ['scripts'], sc);
+                const keeps = existsSync(join(wt, 'docs', 'seed.md')) && readFileSync(join(wt, 'scripts', 'a.sh'), 'utf8') === 'trusted\n';
+                const diff = Buffer.from(diffOf('docs/seed.md', ['-seed', '+seed two']));
+                const withBound = applyAndCheck(diff, wt, deny, registry, new Set(['docs/seed.md']), ['scripts']);
+                git(['checkout', '-q', '--', 'docs/seed.md'], wt);
+                const withoutBound = applyAndCheck(diff, wt, deny, registry, new Set(['docs/seed.md']), []);
+                if (made.status !== 0 || !keeps) bad(`a tree built around a pre-bound scripts/ lost the trusted bytes or the rest of the checkout (git said: ${tailOf(made)}).`);
+                else if (withBound.length > 0) bad(`a tree with scripts/ bound read-only reported a path of the bound directory to the apply check: ${withBound.join(' | ')}`);
+                else if (!withoutBound.some(f => f.includes('scripts/'))) bad(`without the bound-name exclusion the apply check did not report the bound directory's files, so the exclusion proves nothing.`);
+                else console.log(`  ok  a tree built around a bound scripts/ keeps the trusted bytes; the apply check ignores the bound names, and goes red naming scripts/ when it does not`);
+            } finally { rmSync(wt, { recursive: true, force: true }); rmSync(sc, { recursive: true, force: true }); }
+        }
 
         const controls = [
             ['hand edit with a removed/added pair of index lines', diffOf('patches/024-planted.patch', ['-+old payload', '++new payload', '-index 1111111111..2222222222 100644', '+index 1111111111..abcdef0123 100644']), (r) => r.failures.length === 0],

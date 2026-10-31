@@ -5116,6 +5116,16 @@ run_own_checks() {
     # Honestly --quick: in-memory diffs through the gate's own stages; no build, browser, display
     # or network, and it writes nothing. The real gate (--diff) runs the full chain in a worktree.
     "fix-gate-self-test|node $REPO_ROOT/scripts/verify-fix-gate.mjs --self-test"
+    # NEW (Phase 52, CR-01 trust boundary): fixer-prepare-self-test plants a changed work/.git/config
+    # (core.fsmonitor, diff.external), a hook and a .gitattributes change, and proves the emit refuses each
+    # before any command from them runs.
+    "fixer-prepare-self-test|bash $REPO_ROOT/scripts/fixer-prepare.sh --self-test"
+    # NEW (Phase 52, CR-02): fixer-isolate-self-test proves the wrapper the fix-gate job runs the model's diff
+    # under: no network interface but a down loopback, a failed connect to a public address, no_new_privs, no
+    # effective capability, no GITHUB_*/ACTIONS_*/credential variable, no surviving background process, and the
+    # exit status passing through. It fails when the host offers neither an unprivileged user namespace nor
+    # passwordless sudo (the gate never runs unisolated). Honestly --quick: local namespaces only; no network.
+    "fixer-isolate-self-test|bash $REPO_ROOT/scripts/fixer-isolate.sh --self-test"
     # NEW (Phase 55, PKG-24): the macOS entitlement gate. Derives the signing inputs from the
     # hardened-sign-config block, compares the files on disk with set equality both ways, and fails
     # on any 43AQ936H96, org.mozilla or restricted key outside the known-open hits of .planning/
