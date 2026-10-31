@@ -20,6 +20,8 @@
 # Pins (FIX-08, carried): claude-code-action by commit
 # db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c, not the c335fd6d tag object. Claude Code
 # is installed at exact version 2.1.304 and passed by path_to_claude_code_executable.
+# npm ci runs with --ignore-scripts, so the package's install.cjs is run explicitly and
+# the binary is smoke-tested with --version; a stub binary fails classify there.
 # show_full_output is false, no step sets ACTIONS_STEP_DEBUG, and no bare Bash is
 # allowed. The model is set in claude_args because the action has no model input.
 # The Anthropic key branch is declared (anthropic_api_key from the triage
@@ -58,6 +60,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/claude-code"
           cp .github/triage/claude-code/package.json .github/triage/claude-code/package-lock.json "$RUNNER_TEMP/claude-code/"
           npm ci --prefix "$RUNNER_TEMP/claude-code" --ignore-scripts
+          node "$RUNNER_TEMP/claude-code/node_modules/@anthropic-ai/claude-code/install.cjs"
+          "$RUNNER_TEMP/claude-code/node_modules/.bin/claude" --version
 
       - id: triage
         uses: anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c
