@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
  * GEN-04's byte-identity gate: what the generator emits from
- * configuration.toml is byte-for-byte the thirty-three build surfaces Phase 1
- * wrote by hand -- plus three declared exceptions: the identity carrier
+ * configuration.toml is byte-for-byte its tracked comparands: the thirty-three
+ * build surfaces Phase 1 wrote by hand, the surfaces later phases added (the
+ * live total is printed on every run; 39 at Phase 55), and three declared
+ * exceptions: the identity carrier
  * (MIG-05) and the two release-identity version files (REL-01) never had a
  * hand-written original, so their comparands are frozen copies of the
  * emission rather than independent originals.
@@ -41,9 +43,9 @@
  * The freshness of `generated/` itself is a DIFFERENT question with a different
  * answer, and it has its own instrument: `node scripts/generate.mjs --check`.
  *
- * Honestly --quick: it reads the manifest and thirty-six tracked files --
- * ten of them PNG rasters -- and writes into the OS temp directory. No
- * build, no browser, no display, no network.
+ * Honestly --quick: it reads the manifest and every tracked comparand (39 at
+ * Phase 55, ten of them PNG rasters; the run prints the live count) and writes
+ * into the OS temp directory. No build, no browser, no display, no network.
  *
  * Usage:
  *   node scripts/verify-generated-identity.mjs
@@ -141,6 +143,14 @@ const EXPECTED = Object.freeze([
     // it from TARGETS would compare the generator with itself, so a dropped or
     // renamed release target would never go red.
     'powerbrowser/packaging/mozconfig.release',
+    // NEW (Phase 55, PKG-14): the aarch64 macOS mozconfig. A deliberate contract
+    // change, so it lands here in the same commit as its TARGETS row. Frozen copy
+    // of the shared builder's output plus the Darwin tail, authored once from the
+    // emitter; on a red, the emitter is what changes.
+    'powerbrowser/packaging/mozconfig-macos-aarch64',
+    // NEW (Phase 55, PKG-14): the x86_64 macOS mozconfig, the second target through
+    // the same shared builder. Same contract as the aarch64 entry above.
+    'powerbrowser/packaging/mozconfig-macos-x86_64',
 ]);
 
 /** Set difference reported by name, so a failure says WHICH path drifted. */

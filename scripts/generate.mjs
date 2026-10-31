@@ -1506,7 +1506,7 @@ function emitMozconfig(config, variant) {
  * rows, so a foreign-channel MAR still fails with updater error 22.
  */
 const SB_KEYFILE_MOUNT = '/keys/sb-gapi.data';
-function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile }) {
+function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) {
     // NG-065: one MAR channel for every build of this manifest, <app_basename>-<update channel>.
     // It is baked into MAR_CHANNEL_ID and into update-settings.ini's ACCEPTED_MAR_CHANNEL_IDS,
     // so a MAR made for another product or channel is refused (updater error
@@ -1540,8 +1540,40 @@ function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile }) {
         'ac_add_options --with-ccache=sccache',
         'ac_add_options --with-branding=${POWERBROWSER_BRANDING:-' + brandingDefault + '}',
         `mk_add_options "export MOZ_APP_REMOTINGNAME=${assertEmittable('identity.remoting_name', config.identity.remoting_name)}"`,
+        // Per-target tail (Phase 55, PKG-14). Empty for every existing row, so
+        // their bytes do not move.
+        ...tail,
     ];
     return lines.join('\n') + '\n';
+}
+
+/**
+ * Phase 55 (PKG-14): the per-target macOS mozconfig. ONE shared builder
+ * (emitMozconfigFor) carries every line the Linux dev row carries, with its
+ * own objdir suffix; each target appends only the Darwin lines below. The
+ * generic-certs switch (it widens privileged-update trust, Pitfall 2) and the
+ * arm64 spelling (the canonical CPU name is aarch64, Pitfall 4,
+ * init.configure:565-577) appear in no line below. Nothing checks that at
+ * generation time: the generated-byte-identity row compares these bytes with
+ * the tracked comparands, so a change that adds either spelling must also
+ * change a tracked mozconfig, and that change is then reviewed as such.
+ */
+const MACOS_TARGETS = Object.freeze({
+    aarch64: Object.freeze({ triple: 'aarch64-apple-darwin', objdir: 'objdir-macos-aarch64' }),
+    x86_64: Object.freeze({ triple: 'x86_64-apple-darwin', objdir: 'objdir-macos-x86_64' }),
+});
+function emitMozconfigMacos(config, variant, cpu) {
+    const target = MACOS_TARGETS[cpu];
+    const tail = [
+        `ac_add_options --target=${target.triple}`,
+        // The bootstrap SDK floor is 26.5 (toolchain.configure mac_sdk_min_version).
+        'mk_add_options "export MACOS_SDK_DIR=$MOZ_FETCHES_DIR/MacOSX26.5.sdk"',
+        // The DMG tools for the Linux branch of dmg.py (upstream cross-mozconfig.common).
+        'mk_add_options "export MKFSHFS=$MOZ_FETCHES_DIR/hfsplus/newfs_hfs"',
+        'mk_add_options "export DMG_TOOL=$MOZ_FETCHES_DIR/dmg/dmg"',
+        'mk_add_options "export HFS_TOOL=$MOZ_FETCHES_DIR/dmg/hfsplus"',
+    ];
+    return emitMozconfigFor(config, { ...variant, objdir: target.objdir }, { bootstrap: false, sbKeyfile: null, tail });
 }
 
 /**
@@ -3425,6 +3457,47 @@ function emitFirefoxIcnsFile(config, variant) {
 }
 
 /**
+ * Phase 55 (PKG-14): the five cocoa and DMG branding inputs. Each is emitted into
+ * generated/ with no tracked comparand and no brand directory input, so a brand
+ * change never adds a file to the tree. The two upstream consumers name them:
+ * upstream/browser/app/Makefile.in copies firefox.icns, document.icns and
+ * Assets.car into the bundle, and upstream/toolkit/moz.configure passes dsstore,
+ * background.png and disk.icns to the DMG step.
+ *
+ * Honest placeholders. These are not designed artwork:
+ *  - document.icns and disk.icns are the application icon's own raster set through
+ *    the same icns writer (emitFirefoxIcnsFile).
+ *  - background.png is the 128-pixel application raster, used as a backdrop.
+ *  - dsstore is an empty file. The DMG extra-file copy finds a file, and Finder
+ *    falls back to its default window layout.
+ *  - Assets.car is an empty file. The unconditional Makefile copy succeeds without
+ *    copying third-party artwork.
+ * RISK, stated plainly: Info.plist declares both CFBundleIconFile firefox.icns and
+ * CFBundleIconName AppIcon. macOS prefers the name, which it resolves out of
+ * Assets.car, so an empty Assets.car is expected to degrade the Dock and Finder
+ * icon to a generic one. Upgrade path: build a real asset catalog with actool
+ * (xcrun actool) on a Mac, then replace this emitter's output. The Mac session in
+ * plan 55-04 observes the icon and records it.
+ */
+function emitDmgBackgroundPng(config, variant) {
+    void config;
+    void variant;
+    return iconPngBytes(128);
+}
+
+function emitDmgDsStorePlaceholder(config, variant) {
+    void config;
+    void variant;
+    return Buffer.alloc(0);
+}
+
+function emitAssetsCarPlaceholder(config, variant) {
+    void config;
+    void variant;
+    return Buffer.alloc(0);
+}
+
+/**
  * The installer support address both NSIS URL defines carry.
  *
  * installer.support_url first; product.homepage as the fallback, so a
@@ -3618,6 +3691,25 @@ export const TARGETS = Object.freeze([
         tracked: '.mozconfig',
         variant: 'dev',
         emit: emitMozconfig,
+    }),
+    // NEW (Phase 55, PKG-14): the aarch64 macOS mozconfig through the shared
+    // builder. The variant is 'dev' because the macOS row carries no variant
+    // of its own: the objdir suffix and the Darwin tail come from the emitter.
+    // A frozen copy authored once from the emitter; never edited to go green.
+    Object.freeze({
+        generated: 'packaging/mozconfig-macos-aarch64',
+        tracked: 'powerbrowser/packaging/mozconfig-macos-aarch64',
+        variant: 'dev',
+        emit: (config, variant) => emitMozconfigMacos(config, variant, 'aarch64'),
+    }),
+    // NEW (Phase 55, PKG-14): the x86_64 macOS mozconfig through the same shared
+    // builder as the aarch64 row above. Only the Darwin tail and the objdir suffix
+    // differ; the shared lines are identical by construction.
+    Object.freeze({
+        generated: 'packaging/mozconfig-macos-x86_64',
+        tracked: 'powerbrowser/packaging/mozconfig-macos-x86_64',
+        variant: 'dev',
+        emit: (config, variant) => emitMozconfigMacos(config, variant, 'x86_64'),
     }),
     // NEW (Phase 45, PKG-17): the release .mozconfig variant. A frozen copy
     // of the release emission, authored once from the emitter and committed,
@@ -3973,6 +4065,19 @@ export const TARGETS = Object.freeze([
         variant: 'release',
         emit: emitFirefoxIcnsFile,
     }),
+    // NEW (Phase 55, PKG-14): the five cocoa and DMG branding inputs, per variant.
+    // No tracked comparand: see emitDmgBackgroundPng for the placeholder labels and the
+    // Assets.car risk. Each row is a literal path; no brand value reaches a write path.
+    Object.freeze({ generated: 'branding/dev/document.icns', variant: 'dev', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/dev/disk.icns', variant: 'dev', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/dev/background.png', variant: 'dev', emit: emitDmgBackgroundPng }),
+    Object.freeze({ generated: 'branding/dev/dsstore', variant: 'dev', emit: emitDmgDsStorePlaceholder }),
+    Object.freeze({ generated: 'branding/dev/Assets.car', variant: 'dev', emit: emitAssetsCarPlaceholder }),
+    Object.freeze({ generated: 'branding/release/document.icns', variant: 'release', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/release/disk.icns', variant: 'release', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/release/background.png', variant: 'release', emit: emitDmgBackgroundPng }),
+    Object.freeze({ generated: 'branding/release/dsstore', variant: 'release', emit: emitDmgDsStorePlaceholder }),
+    Object.freeze({ generated: 'branding/release/Assets.car', variant: 'release', emit: emitAssetsCarPlaceholder }),
     // NEW (03-03): GEN-03's installer branding fields. Two NSIS/tile files
     // per variant under branding/ plus two XML field fragments per variant
     // under installer/. No tracked comparand: no hand-written originals
