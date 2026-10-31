@@ -1078,21 +1078,20 @@ runs `./mach package` and adds these to the staged application directory:
 The Node download happens at build time and is deliberately not in the
 runtime allowlist: that file governs browser/sidecar egress only (R15).
 
-The pin's provenance is the release-key step the owner performs, not this
-script: the sha256 in `powerbrowser/packaging/node-runtime.json` comes from
-nodejs.org's `SHASUMS256.txt` after `gpg --verify SHASUMS256.txt` against the
-Node release signing keys (RELEASING.md "Node provenance" names the step and
-the key origin). The script cannot perform that check -- it has no keyring
-here -- so it enforces the pin: a download that does not hash to it is deleted
-and the run fails naming it, and an unverified archive is never unpacked into
-the package. Bump Node by rerunning the pin step in the non-GUI wave E plan,
-Task 10 Step 2, including the signature check.
+The pin's provenance is established by the release train's detect job, not by
+this script. For each Node 24 bump that job fetches nodejs.org's
+`SHASUMS256.txt` and its `.sig`, verifies the signature with `gpgv` against the
+nodejs/release-keys keyring, and asserts that the tarball's sha256 equals the
+signed entry before it opens `chore/node-v24.x` (RELEASING.md "Node provenance"
+records the chain). This script has no keyring, so it enforces the committed
+pin: a download that does not hash to it is deleted and the run fails naming
+it, and an unverified archive is never unpacked into the package.
 
 It then refreshes `precomplete` and rewrites
 `objdir/dist/<app>-<Version>.en-US.linux-x86_64.tar.xz`. A packaged install runs
 its own staged backend and Node unless a user pref names another path (NG-063).
-`objdir/dist/bin` is untouched, so dev runs keep the dev tree. Bump Node by
-rerunning the pin step in the non-GUI wave E plan, Task 10 Step 2.
+`objdir/dist/bin` is untouched, so dev runs keep the dev tree. Node bumps arrive as `chore/node-v24.x` pull requests from the release train;
+there is no manual pin step.
 The Gecko binaries are built in the Nix shell, so the package runs where those
 store paths exist.
 

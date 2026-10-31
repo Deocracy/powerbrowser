@@ -196,7 +196,7 @@ here owns.
 | `mar-signing-and-update-integrity` | Confirm `gh auth status` shows the owner and the `release` environment exists | Account |
 | `mar-signing-and-update-integrity` | The MAR key ceremony (below) | Private key custody |
 | `mar-signing-and-update-integrity` | The MAR key ceremony (key store lives on `legion` at `~/.config/powerbrowser-release/mar-key/`; optional `.p12` backup to the offline medium) and one MAR signed with that store's key for the loopback proof | Private key custody |
-| `packaged-product-correctness-linux` | Node provenance: read the version from `nix develop .#theia --command node --version`, fetch `SHASUMS256.txt` with its `SHASUMS256.txt.sig` from the same `nodejs.org/dist/<version>/` directory, import and confirm the Node.js release signing keys (origin: the nodejs/release-keys repository, verified out of band against the keys the installer already trusts), `gpg --verify SHASUMS256.txt`, take the `linux-x64` sha256, pin it, and write the shipped-licences and provenance section of `docs/BUILD.md` | Key trust decision |
+| `packaged-product-correctness-linux` | Node provenance: the release train's detect job selects the newest Node 24 line, fetches `SHASUMS256.txt` with its `.sig` from `nodejs.org/dist/<version>/`, verifies the signature with `gpgv` against the nodejs/release-keys keyring, and asserts the tarball sha256 equals the signed entry before it opens `chore/node-v24.x`; the owner reviews that PR, and the shipped-licences and provenance section of `docs/BUILD.md` is written from it | Key trust decision |
 | `linux-release-pipeline-and-update-channel` | Create a fine-grained PAT limited to `Deocracy/powerbrowser` with self-hosted-runner read/write only; write it root-owned mode 0600 to `/var/lib/secrets/github-runner-pat` | Secret custody plus `pkexec` |
 | `linux-release-pipeline-and-update-channel` | Add the `services.github-runners` block to `/etc/nixos/configuration.nix` and apply it | Root on `legion` |
 | `linux-release-pipeline-and-update-channel` | Set fork pull request workflows from outside collaborators to **Require approval for all external contributors**; read back `fork-pr-approval.json` rather than re-applying | Repository settings UI |
@@ -838,7 +838,7 @@ deliberate re-pin, never an incidental bump, and it must not become an edit to T
 core (`scripts/diff-theia-core.sh` is the check). The Node runtime shipped inside
 the package is pinned by version and sha256 per target in
 `powerbrowser/packaging/node-runtime.json`; changing it is a re-release, not an edit,
-and the new sha256 comes from a GPG-verified `SHASUMS256.txt`. Flake input moves are
+and the new sha256 comes from a `gpgv`-verified `SHASUMS256.txt` checked in the release train's detect job. Flake input moves are
 covered under **Toolchain pins** above.
 
 Listing state lives in the Listings table that stage `listings-and-cadence` adds, and
