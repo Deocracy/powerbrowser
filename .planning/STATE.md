@@ -5,11 +5,11 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 32
 current_phase_name: Page Tools
 status: executing
-stopped_at: "32-01 partial: find, zoom and mute arms landed and gated; live find and zoom pass, mute round trip passes; soundPlaying push unproven; print-today and edit-today verdicts missing"
+stopped_at: "32-04 partial: Downloads view, row actions and panel shipped; live cancel and retry pass; Open, Show in folder and on-screen panel not verified"
 last_updated: "2026-10-31T18:52:14.582Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 32 execution started
-state_head: 54d1e44723a44e19aab8f122249af0814a97998d
+state_head: 74e904705f009a2286a29807fa648705cfce58d0
 progress:
   total_phases: 13
   completed_phases: 1
