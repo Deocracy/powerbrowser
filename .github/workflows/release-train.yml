@@ -445,9 +445,17 @@ jobs:
           EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
           if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head chore/node-v24.x --title "$TITLE" --body "$BODY"; fi
 
-  # The sweep clock. No environment and no secret: it decides only whether this dispatch tick is a sweep
-  # tick (at or past 06:00 UTC). A tick before that ends the sweep here, so the bot environment and the
-  # pinned issue are not touched.
+  # The sweep clock. No environment and no secret: it decides only whether this dispatch tick is the day's sweep
+  # tick (at or past 06:00 UTC, and no accepted sweep of today). A tick that is not due ends the sweep here, so the
+  # bot environment and the pinned issue are not touched.
+  #
+  # The previous sweep is the maintenance-state artifact of a successful run of this workflow on the repository's
+  # default branch, in this repository, of the train file, on an event the train uses, with its head sha on the
+  # default branch. The repository, default branch and id are read from the API, and the selection is the pure
+  # selectStateArtifact: a run or artifact from a fork, a feature branch, a tag, another workflow or another
+  # repository is never the previous sweep. The one lookup serves two decisions: today's sweep (this job) and the
+  # previous row statuses (report). Any error or absence leaves the outputs empty, which is the fail-safe path: the
+  # sweep is due and every red row is treated as newly red. A read, so no dry-run gate.
   sweep-clock:
     needs: derive
     if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -455,20 +463,58 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read
     outputs:
       due: ${{ steps.due.outputs.due }}
+      prev-run-id: ${{ steps.prev.outputs.run-id }}
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      # A decision only, so it runs in a dry run too: the dry run renders the sweep and prints it.
-      - name: Decide whether this tick is a sweep tick
+      - name: Look up the previous maintenance sweep (read)
+        id: prev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/maint-lookup"
+          mkdir -p "$OUT"
+          gh api "repos/${GITHUB_REPOSITORY}" --jq '{branch: .default_branch, repo_id: .id}' > "$OUT/repo.json" 2>/dev/null || echo '{}' > "$OUT/repo.json"
+          BRANCH=$(jq -r '.branch // ""' "$OUT/repo.json")
+          REPO_ID=$(jq -r '.repo_id // 0' "$OUT/repo.json")
+          # 100 is the API maximum: hourly ticks leave up to 24 successful runs between two sweeps.
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-train.yml/runs?branch=${BRANCH:-none}&event=workflow_dispatch&status=success&per_page=100" --jq '.workflow_runs' > "$OUT/runs.json" 2>/dev/null || echo '[]' > "$OUT/runs.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=release-train-maintenance-state&per_page=100" --jq '.artifacts' > "$OUT/artifacts.json" 2>/dev/null || echo '[]' > "$OUT/artifacts.json"
+          # A run's head sha counts only when the default branch is identical to it or ahead of it (the
+          # sha is an ancestor of the default branch). Any error leaves the sha out: the fail-safe.
+          jq -r '.[].head_sha // empty' "$OUT/runs.json" | sort -u > "$OUT/shas.txt" || true
+          : > "$OUT/verified.txt"
+          while read -r SHA; do
+            [ -n "$SHA" ] || continue
+            STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${SHA}...${BRANCH:-none}" --jq '.status' 2>/dev/null || echo error)
+            if [ "$STATUS" = "identical" ] || [ "$STATUS" = "ahead" ]; then echo "$SHA" >> "$OUT/verified.txt"; fi
+          done < "$OUT/shas.txt"
+          SELECTED=$(node scripts/release-train.mjs --state-select "$OUT/runs.json" "$OUT/artifacts.json" "$GITHUB_REPOSITORY" "$REPO_ID" "$BRANCH" "$OUT/verified.txt" || true)
+          RUN_ID="${SELECTED%% *}"
+          CREATED=""
+          case "$SELECTED" in *" "*) CREATED="${SELECTED#* }" ;; esac
+          echo "run-id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "created-at=${CREATED}" >> "$GITHUB_OUTPUT"
+
+      # A decision only, so it runs in a dry run too: the dry run renders the sweep and prints it. A dry run
+      # ignores the "swept today" half, so it can be repeated after the live sweep; a live run honours it.
+      - name: Decide whether this tick is the day's sweep tick
         id: due
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+          PREV_CREATED: ${{ steps.prev.outputs.created-at }}
         run: |
           set -eu
-          node scripts/release-train.mjs --sweep-due "$(date -u +%s)" > "$RUNNER_TEMP/due.txt"
+          LAST=""
+          if [ "$DRY_RUN" != "true" ] && [ -n "$PREV_CREATED" ]; then LAST=$(date -u -d "$PREV_CREATED" +%s 2>/dev/null || true); fi
+          node scripts/release-train.mjs --sweep-due "$(date -u +%s)" "$LAST" > "$RUNNER_TEMP/due.txt"
           cat "$RUNNER_TEMP/due.txt"
           grep -E '^due=(true|false)$' "$RUNNER_TEMP/due.txt" >> "$GITHUB_OUTPUT"
 
@@ -712,47 +758,15 @@ jobs:
           set -euo pipefail
           gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --search 'in:title "release-train: maintenance"' --json number,title,body,author,labels > "$RUNNER_TEMP/maint-found.json"
 
-      # The previous row statuses come from the maintenance-state artifact of a successful run of this workflow
-      # on the repository's default branch, in this repository, of the train file, on an event the train uses, with
-      # its head sha on the default branch. The repository, default branch and id are read from the API, and the
-      # selection is the pure selectStateRun: a run or artifact from a fork, a feature branch, a tag, another
-      # workflow or another repository is never the previous state. Any error or absence leaves the
-      # run id empty, which is the fail-safe path: every red row is treated as newly red. A read, so no gate.
-      - name: Look up the previous maintenance state run (read)
-        id: maint-prev
-        if: ${{ needs.maintenance.result == 'success' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          OUT="$RUNNER_TEMP/maint-lookup"
-          mkdir -p "$OUT"
-          gh api "repos/${GITHUB_REPOSITORY}" --jq '{branch: .default_branch, repo_id: .id}' > "$OUT/repo.json" 2>/dev/null || echo '{}' > "$OUT/repo.json"
-          BRANCH=$(jq -r '.branch // ""' "$OUT/repo.json")
-          REPO_ID=$(jq -r '.repo_id // 0' "$OUT/repo.json")
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-train.yml/runs?branch=${BRANCH:-none}&event=workflow_dispatch&status=success&per_page=10" --jq '.workflow_runs' > "$OUT/runs.json" 2>/dev/null || echo '[]' > "$OUT/runs.json"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=release-train-maintenance-state&per_page=30" --jq '.artifacts' > "$OUT/artifacts.json" 2>/dev/null || echo '[]' > "$OUT/artifacts.json"
-          # A run's head sha counts only when the default branch is identical to it or ahead of it (the
-          # sha is an ancestor of the default branch). Any error leaves the sha out: the fail-safe.
-          jq -r '.[].head_sha // empty' "$OUT/runs.json" | sort -u > "$OUT/shas.txt" || true
-          : > "$OUT/verified.txt"
-          while read -r SHA; do
-            [ -n "$SHA" ] || continue
-            STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${SHA}...${BRANCH:-none}" --jq '.status' 2>/dev/null || echo error)
-            if [ "$STATUS" = "identical" ] || [ "$STATUS" = "ahead" ]; then echo "$SHA" >> "$OUT/verified.txt"; fi
-          done < "$OUT/shas.txt"
-          RUN_ID=$(node scripts/release-train.mjs --state-select "$OUT/runs.json" "$OUT/artifacts.json" "$GITHUB_REPOSITORY" "$REPO_ID" "$BRANCH" "$OUT/verified.txt" || true)
-          echo "run-id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-
       - name: Download the previous maintenance state (read; absent is fail-safe)
         id: maint-restore
-        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-prev.outputs.run-id != '' }}
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && needs.sweep-clock.outputs.prev-run-id != '' }}
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-train-maintenance-state
           path: ${{ runner.temp }}/maint-state
-          run-id: ${{ steps.maint-prev.outputs.run-id }}
+          run-id: ${{ needs.sweep-clock.outputs.prev-run-id }}
           github-token: ${{ github.token }}
 
       - name: Plan the write for the pinned maintenance issue (read)
@@ -779,7 +793,7 @@ jobs:
           PATCH: ${{ steps.maint-plan.outputs.patch }}
           COMMENT: ${{ steps.maint-plan.outputs.comment }}
         run: |
-          if [ "$SWEEP_DUE" != "true" ]; then echo "dry-run: no maintenance sweep tick (before 06:00 UTC); nothing is written"; exit 0; fi
+          if [ "$SWEEP_DUE" != "true" ]; then echo "dry-run: no maintenance sweep tick (before 06:00 UTC, or today's sweep already ran); nothing is written"; exit 0; fi
           if [ "$MAINT_RESULT" != "success" ]; then echo "dry-run: the maintenance render did not succeed (${MAINT_RESULT}); nothing is written"; exit 0; fi
           echo "dry-run: maintenance action=${ACTION} number=${NUMBER:-none} would-patch=${PATCH} would-comment=${COMMENT}; nothing is written"
 
