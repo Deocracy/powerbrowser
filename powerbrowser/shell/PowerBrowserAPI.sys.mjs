@@ -6196,8 +6196,8 @@ function pickNextSelection(host, index) {
 // as tabbrowser does. The forwarder is held on the host record, because the web
 // progress holds its listeners weakly. busy follows the top-level network state,
 // and label follows the page title.
-// The locations an overlay may hold (D-05): the same allow-list as the shell walls, plus the empty page.
-const OVERLAY_LOCATION = /^(?:https?:\/\/|about:blank$)/i;
+// The overlay locations (D-05, amended 32-08: about:reader?url=http(s) and view-source:http(s)); moz-extension: stays refused.
+const OVERLAY_LOCATION = /^(?:https?:\/\/|about:blank$|about:reader\?url=https?%3A|view-source:https?:\/\/)/i;
 // The icon URLs a tab may take from the shell (tabbrowser.js:1368-1372); a remote icon is refused.
 const LOCAL_ICON_PROTOCOLS = ["chrome:", "about:", "resource:", "data:"];
 
