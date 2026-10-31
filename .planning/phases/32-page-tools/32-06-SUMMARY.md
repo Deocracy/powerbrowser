@@ -245,3 +245,7 @@ The probe page and the live `edit` page cancel the `copy`, `cut` and `paste` eve
 ---
 *Phase: 32-page-tools*
 *Completed: 2026-10-31*
+
+## Orchestrator ruling (2026-10-31)
+
+PAGE-09 is held open, not complete: its text says "from the Edit menu", and two must-haves are unbuilt work rather than deferred checks: the Edit menu surface, and greying from the page's enabled state (needs a child-side enablement query; Gecko's TextInputListener::OnSelectionChange leaves the cached flag true after a collapse). Both go to Phase 33, which builds the full menu. Phase 33 planning/execution must pick them up; the 32-06 arm, frozen set and commands are the foundation.
