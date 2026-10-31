@@ -93,7 +93,8 @@ credential, and it is the single recorded exception to "legion holds no secret".
 The build-provenance attestation names the hosted `sign-publish` job, not the legion
 build that produced the bytes. A re-run of one job conflicts with the artifacts of
 the failed run only when upload-artifact cannot overwrite them; after a late failure
-start a fresh dispatch. Until plan 49-05 adds the R2 copy, `sign-publish` ends in a
+start a fresh dispatch. The legion pre-job hook refuses any run attempt other than 1, so a
+re-run of a release run fails at set-up: a release re-run is always a fresh dispatch. Until plan 49-05 adds the R2 copy, `sign-publish` ends in a
 deliberate failure before the bot token is minted: a dispatch leaves a verified draft
 and publishes nothing.
 

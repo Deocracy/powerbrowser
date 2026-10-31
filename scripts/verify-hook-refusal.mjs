@@ -10,7 +10,7 @@
 //  2. Refusal table. The tracked hook text runs under bash with an empty environment plus only the
 //     planted variables (the equivalent of env -i), fed on stdin, so nothing is written. The release
 //     triple must exit 0. Each refusal row must exit non-zero and name the expected value on stderr:
-//     a foreign-branch GITHUB_WORKFLOW_REF, a push event, a wrong GITHUB_REPOSITORY, an empty triple,
+//     a foreign-branch GITHUB_WORKFLOW_REF, a push event, a wrong GITHUB_REPOSITORY, a run attempt other than 1 (a re-run replays an older workflow file), an empty triple,
 //     and a hostile environment (BASH_ENV, ENV, an exported function shadowing [, exit, echo or builtin).
 //     The near-miss rows are derived from the expected triple: another workflow file on main, a branch
 //     name with a suffix, a tag called main, an upper-case ref, a trailing space, an empty and a missing
@@ -101,7 +101,7 @@ function runHook(hookText, vars) {
 }
 
 function refusalTable(expected) {
-    const release = { GITHUB_REPOSITORY: expected.repo, GITHUB_WORKFLOW_REF: expected.ref, GITHUB_EVENT_NAME: 'workflow_dispatch' };
+    const release = { GITHUB_REPOSITORY: expected.repo, GITHUB_WORKFLOW_REF: expected.ref, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ATTEMPT: '1' };
     const foreign = { GITHUB_REPOSITORY: WRONG_REPO, GITHUB_WORKFLOW_REF: `${WRONG_REPO}/${WORKFLOW_REL}@refs/heads/feature-branch`, GITHUB_EVENT_NAME: 'push' };
     const foreignRef = `${expected.repo}/${WORKFLOW_REL}@refs/heads/feature-branch`;
     const [owner, repoName] = expected.repo.split('/');
@@ -128,6 +128,8 @@ function refusalTable(expected) {
             { name: `${e} event`, triple: { ...release, GITHUB_EVENT_NAME: e }, expect: 'workflow_dispatch' })),
         ...[owner.toUpperCase(), owner.toLowerCase()].filter(o => o !== owner).map(o => (
             { name: `repo owner as ${o}`, triple: { ...release, GITHUB_REPOSITORY: `${o}/${repoName}` }, expect: expected.repo })),
+        ...['2', '10', '01', '0'].map(n => (
+            { name: `run attempt ${n}`, triple: { ...release, GITHUB_RUN_ATTEMPT: n }, expect: "GITHUB_RUN_ATTEMPT must be '1'" })),
         { name: 'BASH_ENV set with the release triple', triple: { ...release, BASH_ENV: '/dev/null' }, expect: 'BASH_ENV' },
         { name: 'empty BASH_ENV with the release triple', triple: { ...release, BASH_ENV: '' }, expect: 'BASH_ENV' },
         { name: 'ENV set with the release triple', triple: { ...release, ENV: '/dev/null' }, expect: 'ENV' },
@@ -148,7 +150,7 @@ function checkRows(hookText, expected, failures) {
         }
         if (row.accept) {
             if (r.status !== 0) {
-                failures.push(`${HOOK_REL}: refused the ${row.name} (exit ${r.status}; ${describeTriple(row.triple)}; stderr: ${r.stderr.trim() || 'none'}). Next step: restore the release triple in ${HOOK_REL}: GITHUB_REPOSITORY '${expected.repo}', GITHUB_WORKFLOW_REF '${expected.ref}', GITHUB_EVENT_NAME 'workflow_dispatch'.`);
+                failures.push(`${HOOK_REL}: refused the ${row.name} (exit ${r.status}; ${describeTriple(row.triple)}; stderr: ${r.stderr.trim() || 'none'}). Next step: restore the release triple in ${HOOK_REL}: GITHUB_REPOSITORY '${expected.repo}', GITHUB_WORKFLOW_REF '${expected.ref}', GITHUB_EVENT_NAME 'workflow_dispatch', GITHUB_RUN_ATTEMPT '1'.`);
             }
             continue;
         }
@@ -237,7 +239,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${HOOK_REL} accepts only the release triple for ${expected.repo} and refuses a foreign branch ref, a push event, a wrong repo, an empty triple and a hostile environment (BASH_ENV, ENV, an exported function shadowing [, exit, echo or builtin), naming the expected value; ${legionCount} ${LEGION_LABEL} job(s) start with the main-and-dispatch refusal and carry the full-SHA check second, before any checkout.`);
+    console.log(`${NAME}: PASS -- ${HOOK_REL} accepts only the release triple for ${expected.repo} and refuses a foreign branch ref, a push event, a wrong repo, a re-run attempt, an empty triple and a hostile environment (BASH_ENV, ENV, an exported function shadowing [, exit, echo or builtin), naming the expected value; ${legionCount} ${LEGION_LABEL} job(s) start with the main-and-dispatch refusal and carry the full-SHA check second, before any checkout.`);
     return 0;
 }
 
@@ -303,6 +305,7 @@ function selfTest() {
         ['event test case-folded', { read: loosen('event', l => l.replace('"$event"', '"${event,,}"')) }, HOOK_REL, 'accepted the Workflow_Dispatch event'],
         ['event test trimming a trailing space', { read: loosen('event', l => l.replace('"$event"', '"${event% }"')) }, HOOK_REL, 'accepted the GITHUB_EVENT_NAME with a trailing space'],
         ['repo test case-folded', { read: loosen('repo', l => l.replace('"$repo"', '"${repo,,}"').replace(`'${repo}'`, `'${repo.toLowerCase()}'`)) }, HOOK_REL, `accepted the repo owner as ${owner.toUpperCase()}`],
+        ['re-run attempt accepted', { read: withoutLine('"$attempt" == ') }, HOOK_REL, 'accepted the run attempt 2'],
         ['exported-function guard dropped', { read: withoutLine('export -f)') }, HOOK_REL, 'accepted the exported function [ with the release triple'],
         ['BASH_ENV guard dropped', { read: withoutLine('[[ ! -v BASH_ENV') }, HOOK_REL, 'accepted the BASH_ENV set with the release triple'],
         ['posix mode dropped', { read: withoutPosixMode }, HOOK_REL, 'accepted the exported function exit shadowing the refusal'],
