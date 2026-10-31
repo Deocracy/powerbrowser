@@ -28,6 +28,7 @@ Reading the columns: an ISO date in Expiry is an expiry or a deadline. A bare ye
 | Anthropic key, triage | unknown | 2026-10-29 | Rotate the key in its own Anthropic Console workspace, then replace the triage environment secret. | GH-03, GH-16 |
 | Anthropic Console workspace, triage (monthly spend limit) | unknown | 2026-10-31 | Confirm the triage workspace and its monthly spend limit at the 53-04 checkpoint, then record the limit and the OIDC-or-key outcome in docs/RELEASING.md. | GH-16, FIX-12 |
 | winget submission credential | unknown | 2026-10-29 | Decide the credential holder in Phase J, then enter its expiry in the Expiry cell and rotate it on that date. | DIST-04, DIST-12 |
+| binary-cache token (Cachix primary, R2 fallback) | unknown | 2026-10-31 | Rotate the cache token in the Cachix dashboard and in the R2 bucket settings, then replace the environment secret that holds it. Holder: the owner account. | INF-05 |
 | MAR signing certificate | 2046 | 2026-10-29 | Confirm the expiry at the Phase B secondary-key ceremony, then replace this year with the ISO date. | SEC-09, DOC-04 |
 | Node 24 end of life | 2028-04-30 | 2026-10-29 | Decide the successor Node line before this date. | UPS-02 |
 | ESR 153 final point release 153.27 | 2027-09-07 | 2026-10-29 | Ship PowerBrowser 175.x before this date. | UPS-01 |

@@ -4914,6 +4914,15 @@ run_own_checks() {
     # policies-update-split-self-test plants the key in the tarball, the key missing from either repack, and a
     # sibling key drifting in either repack; each goes red naming the file, the key or the sibling.
     "policies-update-split-self-test|node $REPO_ROOT/scripts/verify-policies-update-split.mjs --self-test"
+    # NEW (Phase 56, INF-05): the binary cache. nix/cache.json declares Cachix first and the R2 bucket as the
+    # committed fallback behind one interface; the substituters and the trusted keys derive from the two
+    # backend blocks and must equal the interface. The cache-token row is present in docs/RENEWALS.md. The
+    # Flatpak tarball template is cross-checked against the same release key. Honestly --quick: JSON and text
+    # reads; no network, no cache. The live substitute proof is owner-checkpoint evidence, not a quick row.
+    "binary-cache|node $REPO_ROOT/scripts/verify-binary-cache.mjs"
+    # binary-cache-self-test plants a substituter and a trusted key disagreeing with their backends, a removed R2
+    # block, an empty R2 endpoint, a removed RENEWALS row, and a Flatpak template naming another host.
+    "binary-cache-self-test|node $REPO_ROOT/scripts/verify-binary-cache.mjs --self-test"
     # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
     # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
     # own pinned group, one regex customManager captures the live configuration.toml theia_release,
