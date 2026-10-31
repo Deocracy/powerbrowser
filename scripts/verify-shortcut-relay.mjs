@@ -21,7 +21,8 @@
  * reserved="true" or sits in RESERVED_EXCEPTIONS with its reason, and an
  * exception that is not a reserved row is stale; (5) a row's `firefox` id
  * names an upstream key with the same key or keycode and modifiers; (6) no
- * row binds F11, Ctrl+P or Ctrl+K (KEY-04 names them); (7) the row-creation
+ * row binds F11, Ctrl+P or Ctrl+K (KEY-04 names them), except that Ctrl+P is
+ * allowed on the one page-scoped printOpen row (Phase 32 plan 02); (7) the row-creation
  * loop skips `via: "replyListener"` rows and writes disabled="true"
  * unconditionally on every row it creates; (8) a `via: "replyListener"` row is
  * never reserved and names no Firefox key, and the reply listener reads its
@@ -479,10 +480,15 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
             }
         }
     }
+    // Phase 32 plan 02: Ctrl+P is allowed on the one page-scoped printOpen row. Its <key> is created
+    // disabled and fires only while an overlay page has focus (rule 7), so Theia's Go to File keeps
+    // Ctrl+P everywhere else. Any other row that binds Ctrl+P still fails.
+    const PAGE_SCOPED_CTRL_P = new Set(['printOpen']);
     for (const [rows, rel] of [[chrome, CHROME_REL], [frontend, FRONTEND_REL]]) {
         for (const row of rows) {
             const letter = String(row.key ?? '').toUpperCase();
-            if (row.keycode === 'VK_F11' || (mods(row).has('accel') && (letter === 'P' || letter === 'K'))) {
+            const ctrlP = letter === 'P' && !PAGE_SCOPED_CTRL_P.has(row.id);
+            if (row.keycode === 'VK_F11' || (mods(row).has('accel') && (ctrlP || letter === 'K'))) {
                 failures.push(`${row.id}: binds ${describe(row)} in ${rel}, a key KEY-04 leaves to Theia (F11, Ctrl+P, Ctrl+K)`);
             }
         }
@@ -631,7 +637,7 @@ function main() {
         }
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+P/Ctrl+K row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved; ${counts.literalIds} literal relayed ids are table ids; ${counts.buttons} nav buttons name table rows with derived aria and tooltips of at most 26 characters; Ctrl+Q is the one chrome-reserved quit row (Firefox's key_quitApplication), with no Theia binding`);
+    console.log(`${NAME}: PASS -- ${counts.rows} rows agree across chrome, frontend and ${counts.actions} relay actions; labels match the formatters; ${counts.reserved} reserved rows are Firefox's own or reasoned exceptions; Firefox ids match ${SETS_REL} (Linux, ${counts.upstream} keys); no F11/Ctrl+K row and Ctrl+P only on the page-scoped printOpen row; every <key> row created disabled; ${counts.reply} reply-listener rows unreserved; ${counts.literalIds} literal relayed ids are table ids; ${counts.buttons} nav buttons name table rows with derived aria and tooltips of at most 26 characters; Ctrl+Q is the one chrome-reserved quit row (Firefox's key_quitApplication), with no Theia binding`);
     return 0;
 }
 

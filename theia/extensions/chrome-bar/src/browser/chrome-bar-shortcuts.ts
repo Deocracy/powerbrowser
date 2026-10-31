@@ -18,7 +18,7 @@ import { CommandRegistry } from '@theia/core/lib/common/command';
 import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
-import { CHROME_BAR_NEW_TAB_COMMAND_ID, focusAddressPill } from './chrome-bar-commands';
+import { CHROME_BAR_NEW_TAB_COMMAND_ID, focusAddressPill, openFindBarFor } from './chrome-bar-commands';
 import { AddressBar } from './address-bar/address-bar';
 import { TabStripWidget } from './tab-strip-widget';
 
@@ -61,6 +61,18 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'selectLastTab', key: '9', modifiers: 'alt', label: 'Alt+9', macLabel: '⌥9' },
     { id: 'focusAddressF6', keycode: 'VK_F6', modifiers: '', label: 'F6', macLabel: 'F6' },
     { id: 'focusAddressShiftF6', keycode: 'VK_F6', modifiers: 'shift', label: 'Shift+F6', macLabel: '⇧F6' },
+    // Phase 32 plan 02 (PAGE-01, PAGE-02, PAGE-05): page-focus only. Ids are camelCase: the chrome side
+    // refuses any relay id outside [A-Za-z0-9]{1,32} (PowerBrowserAPI relayShortcut).
+    { id: 'findOpen', key: 'F', modifiers: 'accel', label: 'Ctrl+F', macLabel: '⌘F' },
+    { id: 'findNext', keycode: 'VK_F3', modifiers: '', label: 'F3', macLabel: 'F3' },
+    { id: 'findPrevious', keycode: 'VK_F3', modifiers: 'shift', label: 'Shift+F3', macLabel: '⇧F3' },
+    { id: 'zoomIn', key: '=', modifiers: 'accel', label: 'Ctrl+=', macLabel: '⌘=' },
+    { id: 'zoomInPlus', key: '+', modifiers: 'accel', label: 'Ctrl++', macLabel: '⌘+' },
+    { id: 'zoomOut', key: '-', modifiers: 'accel', label: 'Ctrl+-', macLabel: '⌘-' },
+    { id: 'zoomReset', key: '0', modifiers: 'accel', label: 'Ctrl+0', macLabel: '⌘0' },
+    { id: 'muteToggle', key: 'M', modifiers: 'accel', label: 'Ctrl+M', macLabel: '⌘M' },
+    { id: 'printOpen', key: 'P', modifiers: 'accel', label: 'Ctrl+P', macLabel: '⌘P' },
+    { id: 'saveOpen', key: 'S', modifiers: 'accel', label: 'Ctrl+S', macLabel: '⌘S' },
 ];
 
 export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
@@ -152,6 +164,19 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
             const order = this.strip.switchOrder(tab);
             return this.switchTo(order[order.length - 1], tab);
         }],
+        // Phase 32 plan 02: each action is a widget method on the pushed tab, never a bare command id (T-32-06b).
+        ['findOpen', tab => openFindBarFor(tab)],
+        ['findNext', tab => tab.findNext(false)],
+        ['findPrevious', tab => tab.findNext(true)],
+        ['zoomIn', tab => tab.zoomIn()],
+        ['zoomInPlus', tab => tab.zoomIn()],
+        ['zoomOut', tab => tab.zoomOut()],
+        ['zoomReset', tab => tab.zoomReset()],
+        ['muteToggle', tab => tab.setMuted(!tab.audioMuted)],
+        // Stub until plan 32-03 (print): it upgrades this row to call print(). Focus the page so the key is not lost.
+        ['printOpen', tab => tab.focusPage()],
+        // Stub until plan 32-05 (save): it upgrades this row to call savePage(). Focus the page so the key is not lost.
+        ['saveOpen', tab => tab.focusPage()],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */

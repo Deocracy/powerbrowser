@@ -411,6 +411,17 @@ document.addEventListener(
       { id: "selectTab7", key: "7", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab7" },
       { id: "selectTab8", key: "8", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectTab8" },
       { id: "selectLastTab", key: "9", modifiers: "alt", reserved: false, landsInTheia: true, firefox: "key_selectLastTab" },
+      // Phase 32 plan 02 (PAGE-01, PAGE-02, PAGE-05): page-focus only; mirror PAGE_SHORTCUTS row for row.
+      { id: "findOpen", key: "F", modifiers: "accel", reserved: false, landsInTheia: false, firefox: "key_find" },
+      { id: "findNext", keycode: "VK_F3", modifiers: "", reserved: false, landsInTheia: false },
+      { id: "findPrevious", keycode: "VK_F3", modifiers: "shift", reserved: false, landsInTheia: false },
+      { id: "zoomIn", key: "=", modifiers: "accel", reserved: false, landsInTheia: false },
+      { id: "zoomInPlus", key: "+", modifiers: "accel", reserved: false, landsInTheia: false },
+      { id: "zoomOut", key: "-", modifiers: "accel", reserved: false, landsInTheia: false },
+      { id: "zoomReset", key: "0", modifiers: "accel", reserved: false, landsInTheia: false },
+      { id: "muteToggle", key: "M", modifiers: "accel", reserved: false, landsInTheia: false },
+      { id: "printOpen", key: "P", modifiers: "accel", reserved: false, landsInTheia: false, firefox: "printKb" },
+      { id: "saveOpen", key: "S", modifiers: "accel", reserved: false, landsInTheia: false, firefox: "key_savePage" },
       // No upstream <key>: content's document navigation consumes F6, so these ride the reply listener below.
       { id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false, landsInTheia: true, via: "replyListener" },
       { id: "focusAddressShiftF6", keycode: "VK_F6", modifiers: "shift", reserved: false, landsInTheia: true, via: "replyListener" },

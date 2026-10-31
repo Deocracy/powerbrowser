@@ -7,18 +7,23 @@
  * `<scenario>: FAIL -- <reason>`. A thrown error is `harness: <message>` (the
  * check could not drive the product, so it is not a product verdict).
  *
- * The scenarios drive the chrome arms through the Theia frame's WebTabChannel,
- * which is the same path the find bar and the zoom chip use. Keys are not
- * relayed in this plan (the page-focus shortcut rows land in plan 32-02), so
- * no scenario here depends on a key.
+ * The arms are first driven through the Theia frame's WebTabChannel, the same
+ * path the find bar and the zoom chip use. Plan 32-02 then adds the key path:
+ * a key pressed from a focused page reaches the page relay, and the scenario
+ * waits for the relay's `shortcut` push and the state push that follows.
  *
  * Scenarios:
  *   find    webTabFind of "needle" on a page that holds three, reports
  *           findTotal 3 with a current index in a state push; FindNext moves
- *           the index; FindClose resets the counts to 0 and status to null.
- *   zoom    ZoomIn raises the pushed zoom above 1; ZoomReset returns it to 1.
+ *           the index; F3 from the page steps it through the relay; Ctrl+F
+ *           opens the Theia find bar; FindClose resets the counts to 0.
+ *   zoom    ZoomIn raises the pushed zoom above 1; ZoomReset returns it to 1;
+ *           Ctrl+= and Ctrl+0 from the page do the same through the relay.
  *   audio   A tone that plays from a served page reports soundPlaying; Mute
- *           reports audioMuted true, Unmute reports it false.
+ *           reports audioMuted true, Unmute reports it false; Ctrl+M from the
+ *           page toggles the mute through the relay.
+ *   keys-theia  A page-scoped row is disabled while the Theia frame has focus
+ *           (the positive control reads it enabled with the page focused).
  *   downloads  Phase 32 plan 04 (PAGE-06): a page-started slow download becomes a
  *           row with bytes in a downloadsChanged push; Cancel stops it; Retry
  *           finishes it.
@@ -45,7 +50,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT, probe } from './lib/pb-relaunch.mjs';
-import { loadedAt, openWebTab, pushes, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import {
+    BROKEN, focusOverlay, focusTheiaFrame, inChrome, loadedAt, openWebTab, pageKeyDisabled, pressKey, pushes, waitForPush, withProbeShell,
+} from './lib/pb-live-probe.mjs';
 
 const NAME = 'page-tools-live';
 const VERDICTS = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'pb-probe-verdicts.json');
@@ -161,7 +168,37 @@ async function openLoaded(app, url, path) {
 
 const stateOf = (tabId, pred) => p => p && p.kind === 'state' && p.tabId === tabId && pred(p);
 
-/** find: a count, FindNext, then a reset on close. Returns a failure reason, or null. */
+/**
+ * Focuses the overlay of `tabId`, presses `spec` at the parent, and returns the
+ * index of the relay's `shortcut` push for row `id` (-1 when none arrives). A
+ * focus failure is a broken instrument, not a product verdict.
+ */
+async function pressPageKey(app, tabId, id, spec) {
+    if (await focusOverlay(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused to press ${id}`);
+    }
+    const mark = (await pushes(app)).length;
+    await pressKey(app, spec);
+    return waitForPush(app, p => p && p.kind === 'shortcut' && p.id === id && p.tabId === tabId, { from: mark, timeoutMs: 5000 });
+}
+
+/** Polls `read` until `pred` holds or about 3 s pass; returns the last value read. */
+async function settleValue(read, pred) {
+    let value;
+    for (let i = 0; i < 30; i++) {
+        value = await read();
+        if (pred(value)) {
+            return value;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return value;
+}
+
+/**
+ * find: a count, FindNext (channel, then F3 from a focused page), Ctrl+F opens
+ * the Theia find bar, and a reset on close. Returns a failure reason, or null.
+ */
 async function scenarioFind(app, origin, kind = 'webTabFind') {
     const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
     await channelRequest(app, { kind, tabId, query: 'needle' });
@@ -170,16 +207,36 @@ async function scenarioFind(app, origin, kind = 'webTabFind') {
         return 'no findMatches push: a find of "needle" never reported three matches with a current index in a state push';
     }
     await channelRequest(app, { kind: 'webTabFindNext', tabId });
-    const next = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findStatus !== null), { from: hit, timeoutMs: 10000 });
+    // from: hit + 1. The hit push already matches this predicate, and `from` is inclusive, so `hit` could never fail.
+    const next = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findStatus !== null), { from: hit + 1, timeoutMs: 10000 });
     if (next < 0) {
         return 'FindNext produced no state push carrying a find status';
     }
+    const f3 = await pressPageKey(app, tabId, 'findNext', { key: 'F3', code: 'F3', keyCode: 114 });
+    if (f3 < 0) {
+        return 'F3 in a focused page produced no shortcut push: the findNext row did not relay';
+    }
+    const stepped = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findStatus !== null), { from: f3 + 1, timeoutMs: 10000 });
+    if (stepped < 0) {
+        return 'F3 relayed, but no state push carried a find status after the step';
+    }
+    const ctrlF = await pressPageKey(app, tabId, 'findOpen', { key: 'f', code: 'KeyF', keyCode: 70, modifiers: ['accel'] });
+    if (ctrlF < 0) {
+        return 'Ctrl+F in a focused page produced no shortcut push: the findOpen row did not relay';
+    }
+    const bar = await settleValue(() => probe(app, "return !!document.getElementById('pb-chrome-bar-find-input');"), v => v === true);
+    if (bar !== true) {
+        return 'Ctrl+F relayed, but the Theia find bar did not open (no #pb-chrome-bar-find-input in the Theia frame)';
+    }
     await channelRequest(app, { kind: 'webTabFindClose', tabId });
-    const closed = await waitForPush(app, stateOf(tabId, p => p.findTotal === 0 && p.findStatus === null), { from: next, timeoutMs: 10000 });
+    const closed = await waitForPush(app, stateOf(tabId, p => p.findTotal === 0 && p.findStatus === null), { from: stepped, timeoutMs: 10000 });
     return closed < 0 ? 'FindClose did not reset the counts and status in a state push' : null;
 }
 
-/** zoom: ZoomIn above 100 %, ZoomReset back to 100 %, both in pushes. */
+/**
+ * zoom: ZoomIn above 100 %, ZoomReset back to 100 %, both in pushes; then
+ * Ctrl+= and Ctrl+0 from a focused page make the same two steps through the relay.
+ */
 async function scenarioZoom(app, origin) {
     const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
     await channelRequest(app, { kind: 'webTabZoomIn', tabId });
@@ -189,7 +246,23 @@ async function scenarioZoom(app, origin) {
     }
     await channelRequest(app, { kind: 'webTabZoomReset', tabId });
     const reset = await waitForPush(app, stateOf(tabId, p => p.zoom === 1), { from: zoomed, timeoutMs: 10000 });
-    return reset < 0 ? 'ZoomReset did not return the pushed zoom to 100%' : null;
+    if (reset < 0) {
+        return 'ZoomReset did not return the pushed zoom to 100%';
+    }
+    const zin = await pressPageKey(app, tabId, 'zoomIn', { key: '=', code: 'Equal', keyCode: 187, modifiers: ['accel'] });
+    if (zin < 0) {
+        return 'Ctrl+= in a focused page produced no shortcut push: the zoomIn row did not relay';
+    }
+    const keyZoomed = await waitForPush(app, stateOf(tabId, p => p.zoom > 1), { from: zin, timeoutMs: 15000 });
+    if (keyZoomed < 0) {
+        return 'Ctrl+= relayed, but no state push carried a zoom above 100%';
+    }
+    const z0 = await pressPageKey(app, tabId, 'zoomReset', { key: '0', code: 'Digit0', keyCode: 48, modifiers: ['accel'] });
+    if (z0 < 0) {
+        return 'Ctrl+0 in a focused page produced no shortcut push: the zoomReset row did not relay';
+    }
+    const keyReset = await waitForPush(app, stateOf(tabId, p => p.zoom === 1), { from: z0, timeoutMs: 10000 });
+    return keyReset < 0 ? 'Ctrl+0 relayed, but no state push returned the zoom to 100%' : null;
 }
 
 /**
@@ -213,9 +286,44 @@ async function scenarioAudio(app, origin, page = '/media') {
         return 'no audioMuted false push after the unmute request';
     }
     const playing = await waitForPush(app, stateOf(tabId, p => p.soundPlaying === true), { from: unmuted, timeoutMs: 20000 });
-    return playing < 0
-        ? 'mute round trip passed, but no soundPlaying push: no DOMAudioPlaybackStarted reached the overlay element within 20 s (MOZ_LOG=cubeb:5 shows "libpulse not found" when the binary cannot open an audio stream)'
-        : null;
+    if (playing < 0) {
+        return 'mute round trip passed, but no soundPlaying push: no DOMAudioPlaybackStarted reached the overlay element within 20 s (MOZ_LOG=cubeb:5 shows "libpulse not found" when the binary cannot open an audio stream)';
+    }
+    // Ctrl+M from a focused page toggles the mute through the relay; the unmute above left the tab unmuted, so this mutes it.
+    const toggled = await pressPageKey(app, tabId, 'muteToggle', { key: 'm', code: 'KeyM', keyCode: 77, modifiers: ['accel'] });
+    if (toggled < 0) {
+        return 'Ctrl+M in a focused page produced no shortcut push: the muteToggle row did not relay';
+    }
+    const keyMuted = await waitForPush(app, stateOf(tabId, p => p.audioMuted === true), { from: toggled, timeoutMs: 10000 });
+    return keyMuted < 0 ? 'Ctrl+M relayed, but no audioMuted push followed' : null;
+}
+
+/**
+ * keys-theia: a page-scoped row is enabled only while an overlay has focus.
+ * The positive control reads the zoomIn row enabled with the page focused;
+ * the check then reads it disabled with the Theia frame focused, so a key
+ * there never reaches the page relay. `plant` enables the row while the Theia
+ * frame has focus, which must go red.
+ */
+async function scenarioKeysTheia(app, origin, plant = false) {
+    const { tabId } = await openLoaded(app, `${origin}/find`, '/find');
+    if (await focusOverlay(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused`);
+    }
+    const onPage = await settleValue(() => pageKeyDisabled(app, 'zoomIn'), v => v === false);
+    if (onPage !== false) {
+        return `the zoomIn row did not enable while the page had focus (disabled=${onPage})`;
+    }
+    if (await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} the Theia frame could not be focused`);
+    }
+    if (plant) {
+        await inChrome(app, "document.getElementById('powerbrowser-page-key-zoomIn').removeAttribute('disabled'); return true;");
+    }
+    const onTheia = await settleValue(() => pageKeyDisabled(app, 'zoomIn'), v => v === true);
+    return onTheia === true
+        ? null
+        : 'the zoomIn row is enabled while the Theia frame has focus, so a key there would take the page meaning';
 }
 
 /**
@@ -323,6 +431,7 @@ const SCENARIOS = {
     find: (app, fx) => scenarioFind(app, fx.origin),
     zoom: (app, fx) => scenarioZoom(app, fx.origin),
     audio: (app, fx) => scenarioAudio(app, fx.origin),
+    'keys-theia': (app, fx) => scenarioKeysTheia(app, fx.origin),
     downloads: (app, fx) => scenarioDownloads(app, fx),
     'downloads-today': async (app, fx, downloadDir) => {
         const verdict = await probeDownloadsToday(app, fx.origin, fx.requests, downloadDir);
@@ -348,6 +457,12 @@ const PLANTS = [
         target: 'audio',
         run: (app, fx) => scenarioAudio(app, fx.origin, '/find'),
         expect: 'no soundPlaying push',
+    },
+    {
+        plant: 'row-enabled-while-theia-focused',
+        target: 'keys-theia',
+        run: (app, fx) => scenarioKeysTheia(app, fx.origin, true),
+        expect: 'is enabled while the Theia frame has focus',
     },
 ];
 
