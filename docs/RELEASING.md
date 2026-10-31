@@ -1046,6 +1046,8 @@ still runs last. Nothing is skipped: an out-of-band release that skipped the MAR
 signature verify step would ship the exact failure mode the signing stage exists
 to close.
 
+A chemspill revision for the same ESR takes priority over a scheduled train: the revision train proceeds and the scheduled train is superseded.
+
 ### Schedule posture
 
 D-77 is kept. No workflow carries a `schedule` key. The update-channel liveness
