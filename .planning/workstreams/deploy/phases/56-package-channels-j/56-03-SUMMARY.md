@@ -120,7 +120,7 @@ coverage:
 
 - **`ruby -c`:** the plan's verify runs `ruby -c` directly, and ruby is not installed on this host. It runs through `nix shell --inputs-from . nixpkgs#ruby`, which prints `Syntax OK`. BLOCKED.md item 5 is closed with this command.
 - **Shape-check placement:** the wingetcreate and stanza shape assertions live in the two rows' main check, not in a separate self-test-only step. The plants that prove them are in each row's self-test.
-- **No `brew audit`:** the owner runs `brew audit --new --cask` once the tap exists (BLOCKED item 8).
+- **No `brew audit`:** the owner runs `brew audit --new --cask` once the tap exists (BLOCKED item 10).
 
 ## Known Stubs
 
@@ -136,8 +136,8 @@ None. The row reads the custody row by name and holds no credential. The rendere
 
 ## Unverified offline
 
-- The winget `InstallerType: nullsoft` and the `/S` silent switch against the Phase 54 installer. The owner runs `wingetcreate` dry-run and a Windows install at Phase 54 (BLOCKED item 9).
-- The cask `depends_on macos: ">= :big_sur"` minimum, the `uninstall delete:` path and the `zap trash:` path. The owner confirms them in Phase 55 (BLOCKED item 10).
+- The winget `InstallerType: nullsoft` and the `/S` silent switch against the Phase 54 installer. The owner runs `wingetcreate` dry-run and a Windows install at Phase 54 (BLOCKED item 11).
+- The cask `depends_on macos: ">= :big_sur"` minimum, the `uninstall delete:` path and the `zap trash:` path. The owner confirms them in Phase 55 (BLOCKED item 12).
 - The bundle identifier of the macOS app is not in the cask; `uninstall` uses the application path, which the owner confirms in Phase 55.
 
 ## Self-Check

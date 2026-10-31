@@ -1,91 +1,135 @@
 # Phase 56 BLOCKED items (owner and live-account steps)
 
-Executed by the autonomous run of plans 56-01 to 56-04. Nothing below was run: no push, no PR,
-no account change, no store submission, no cache push, no secret was created or read. Each
-item names what is blocked, the owner command or click, and what the tree already holds.
-Plan 56-05 (the owner checkpoint) is not executed by this run.
+Executed by the autonomous run of plans 56-01 to 56-04. Nothing below was run: no push, no pull request,
+no account change, no store submission, no cache push, no secret was created or read. Each item names what
+is blocked, the owner command or click, and what the tree already holds. Plan 56-05 (the owner checkpoint)
+is not executed by this run and is listed at the end.
 
 ## 1. Release hash record (blocks the flake package and the Flatpak submission)
 
-- **Blocked:** `nix/pkg/release-hash.json` holds the sentinel `PLACEHOLDER-DIST12-BOT-PR-FILLME`
-  for `v153.5.1-1`. No release has been published, so no real digest exists.
-- **Owner step:** after the first Release for the key is published and its tarball is attached,
-  run the DIST-12 bot PR (`channel-manifests.yml`, job `flake-hash-pr`) or, by hand:
-  `nix store prefetch-file --hash-type sha256 --json https://github.com/<repo>/releases/download/<key>/<tarball>`
-  then write the `hash` value into `sha256` in `nix/pkg/release-hash.json`, and run
+- **Blocked:** `nix/pkg/release-hash.json` holds the sentinel `PLACEHOLDER-DIST12-BOT-PR-FILLME` for
+  `v153.5.1-1`. No Release is published, so no real digest exists.
+- **Owner step:** after the first Release for the key is published with its tarball attached, run the
+  DIST-12 bot PR (`channel-manifests.yml`, job `flake-hash-pr`), or by hand:
+  `nix store prefetch-file --hash-type sha256 --json https://github.com/<repo>/releases/download/<key>/<tarball>`,
+  write its `hash` into `sha256` in `nix/pkg/release-hash.json` with `releaseKey` set to the key, then run
   `node scripts/verify-flake-repack.mjs --release`. The row refuses the sentinel until this is done.
 - **Tree state:** the derivation, the Flatpak tokens and the download copy all read this one record.
 
-## 2. Flake build and cache substitution (blocks the clean-machine proof, INF-05)
+## 2. Clean-machine substitute proof and the deferred nixConfig wiring (INF-05)
 
-- **Blocked:** `nix build .#powerbrowser` has not run against a real tarball. It needs item 1.
-- **Owner step:** after item 1, run `nix build .#powerbrowser` on a clean machine with the live
-  cache, paste the substitute log into the 56-05 evidence.
-- **Deferred wiring:** `flake.nix` carries no `nixConfig` for the substituters yet. A placeholder
-  trusted key there would make every consumer's nix reject the config. After items 6 and 7 create the
-  real public keys, add `nixConfig` from `nix/cache.json` `interface` (extra-substituters and
-  extra-trusted-public-keys) in the same commit as the values.
+- **Blocked:** `nix build .#powerbrowser` has not run against a real tarball (it needs item 1), and
+  `flake.nix` carries no `nixConfig` for the substituters yet. A placeholder trusted key there would make every
+  consumer's nix reject the config.
+- **Owner step:** after items 1, 6 and 7 create the real public keys, add `nixConfig` from `nix/cache.json`
+  `interface` (extra-substituters and extra-trusted-public-keys) in the same commit as the values. Then run
+  `nix build .#powerbrowser` on a clean machine with the live cache and paste the substitute log into the
+  56-05 evidence.
 
 ## 3. Flatpak runtime and checker schema (offline-unverified)
 
-- **Blocked:** the `org.mozilla.firefox.BaseApp` runtime-version `stable` pairing with
-  `org.freedesktop.Sdk`, and the external-data-checker `json` type with `url-template`, cannot
-  be verified without network reads of Flathub.
-- **Owner step:** run `flatpak-builder --show-manifest` on a rendered copy of
-  `flatpak/org.debios.PowerBrowser.json` (tokens rendered), and an external-data-checker dry run,
-  before the Flathub submission.
+- **Blocked:** the `org.mozilla.firefox.BaseApp` runtime-version `stable` pairing with `org.freedesktop.Sdk`, and
+  the external-data-checker `json` type with `url-template`, cannot be verified without network reads of Flathub.
+- **Owner step:** run `flatpak-builder --show-manifest` on a rendered copy of `flatpak/org.debios.PowerBrowser.json`
+  (see item 8 for the render command), and an external-data-checker dry run, before the Flathub submission.
 
 ## 4. Nix /download copy (site outside this tree, Phase 47)
 
-- **Blocked:** `docs/download-nix.md` carries `@RELEASE_REPO@`, which the owner renders with the
-  release home before pasting into the Phase 47 site.
-- **Owner step:** render `@RELEASE_REPO@` as `<owner>/<repo>` from `configuration.toml`
-  `[urls] release_notes`, then paste the rendered copy. The rendered text is not committed.
+- **Blocked:** `docs/download-nix.md` and `docs/download-flatpak.md` carry `@RELEASE_REPO@`, which the owner renders
+  with the release home before pasting into the Phase 47 site.
+- **Owner step:** render `@RELEASE_REPO@` as `<owner>/<repo>` from `configuration.toml` `[urls] release_notes`,
+  then paste the rendered copy. The rendered text is not committed.
 
-## 5. Ruby syntax check for the cask (plan 56-03)
+## 5. Ruby syntax check (closed)
 
-- **Blocked:** `ruby -c homebrew-tap/Casks/powerbrowser.rb` cannot run on this host (no ruby).
-- **Owner step:** run `ruby -c homebrew-tap/Casks/powerbrowser.rb` (or `brew audit --new --cask`
-  once the tap exists) before the tap commit.
+- **Closed:** `ruby -c homebrew-tap/Casks/powerbrowser.rb` prints `Syntax OK` through the locked nixpkgs:
+  `nix --extra-experimental-features 'nix-command flakes' shell --inputs-from . nixpkgs#ruby --command ruby -c homebrew-tap/Casks/powerbrowser.rb`.
+  This reads from the binary cache and writes nothing. No owner step remains for this item.
 
 ## 6. Cachix cache and licence reply (INF-05, owner account)
 
-- **Blocked:** the `powerbrowser` Cachix cache does not exist, and Cachix's free open-source plan
-  has no published licence allow-list for PolyForm Noncommercial. The eligibility is unknown.
-- **Owner steps:** send the licence request text in `docs/cache-flathub-checkpoint.md` (owner-steps
-  section, "Cachix licence request"), record the reply verbatim in that file with the date, then
-  create the cache, copy its public key into `nix/cache.json` `cachix.publicKey` and
-  `interface.trustedKeys`, and run `node scripts/verify-binary-cache.mjs --release`.
-- **Tree state:** the substituter and the placeholder key are in `nix/cache.json`; the RENEWALS
-  cache-token row exists.
+- **Blocked:** the `powerbrowser` Cachix cache does not exist, and Cachix's free open-source plan has no published
+  licence allow-list for PolyForm Noncommercial, so the eligibility is unknown.
+- **Owner steps:** send the licence request in `docs/cache-flathub-checkpoint.md` (owner-steps section, "Cachix licence
+  request"), record the reply verbatim there with the date, then create the cache, write its public key into
+  `nix/cache.json` `cachix.publicKey` and `interface.trustedKeys`, and run `node scripts/verify-binary-cache.mjs --release`.
+- **Tree state:** the substituter and the placeholder key are in `nix/cache.json`; the RENEWALS cache-token row exists.
 
 ## 7. R2 fallback bucket, key pair and token (INF-05, Cloudflare account)
 
-- **Blocked:** the R2 bucket `powerbrowser-nix-cache`, its public read host and its signing key
-  pair do not exist. R2 may need a payment method on file.
-- **Owner steps:** follow "R2 fallback enablement" in `docs/cache-flathub-checkpoint.md`. Generate the key
-  pair with `nix-store --generate-binary-cache-key` outside the tree, write only the public key and the host
-  into `nix/cache.json`, create the object-write token in the release environment, then run the
-  binary-cache row with `--release`.
+- **Blocked:** the R2 bucket `powerbrowser-nix-cache`, its public read host and its signing key pair do not exist.
+  R2 may need a payment method on file.
+- **Owner steps:** follow "R2 fallback enablement" in `docs/cache-flathub-checkpoint.md`. Generate the key pair with
+  `nix-store --generate-binary-cache-key` outside the tree, write only the public key and the host into
+  `nix/cache.json`, create the object-write token in the release environment, then run the binary-cache row with `--release`.
 
-## 8. Flathub exception request and submission (PKG-20, owner identity)
+## 8. Flathub exception request, render and submission (PKG-20, owner identity)
 
-- **Blocked:** the written build-from-source exception (a prebuilt-tarball linter exception) and the
-  submission pull request must come from the owner's Flathub account. The manifest stays on
-  `pending-owner-reply` until the written reply is recorded.
-- **Owner steps:** send the exception request in `docs/cache-flathub-checkpoint.md`, record the
-  reply, and only then render the manifest with
-  `node scripts/verify-flathub-manifest.mjs --render <scratch-dir>/org.debios.PowerBrowser.json` (after
-  item 1) and open the submission under the owner's identity. If the exception is refused, the named
-  follow-up is a from-source manifest, which this phase does not build.
-- **Ruby, flatpak-builder, external-data-checker:** run `flatpak-builder --show-manifest` on the rendered
-  copy and an external-data-checker dry run before the submission (BLOCKED.md item 3).
+- **Blocked:** the written prebuilt-tarball linter exception and the submission pull request must come from the
+  owner's Flathub account. The manifest stays on `pending-owner-reply` until the written reply is recorded.
+- **Owner steps:** send the exception request in `docs/cache-flathub-checkpoint.md` and record the reply. Once item 1
+  holds the real digest, render the manifest with
+  `node scripts/verify-flathub-manifest.mjs --render <scratch-dir>/org.debios.PowerBrowser.json` (a scratch directory
+  outside the checkout), run item 3, and open the submission under the owner's identity. If the exception is refused,
+  the named follow-up is a from-source manifest, which this phase does not build.
 
-## 9. DNS TXT verification value (PKG-20, Cloudflare DNS for powerbrowser.org)
+## 9. DNS TXT verification value (PKG-20, DNS for powerbrowser.org, Phase 47)
 
-- **Blocked:** the `_flathub.powerbrowser.org` TXT record does not exist. Flathub shows the value only
-  in its verification step.
-- **Owner steps:** after the Flathub verification step shows the value, create the TXT record
-  `_flathub.powerbrowser.org` with that value in the DNS zone (Phase 47 owner step), write the value into
-  `x-flathub-verification.token` in the manifest, and run `node scripts/verify-flathub-manifest.mjs --release`.
+- **Blocked:** the `_flathub.powerbrowser.org` TXT record does not exist. Flathub shows the value only in its verification step.
+- **Owner steps:** after the Flathub verification step shows the value, create the TXT record `_flathub.powerbrowser.org`
+  with that value in the DNS zone, write the value into `x-flathub-verification.token` in the manifest, and run
+  `node scripts/verify-flathub-manifest.mjs --release`.
 
+## 10. Homebrew tap repository and the cask audit (DIST-11, Phase 41)
+
+- **Blocked:** the tap repository `homebrew-powerbrowser` does not exist, and the bot App is not installed on it (Phase 41).
+- **Owner steps:** create the tap repository, install the bot App with contents write on it, then run
+  `brew audit --new --cask` on the rendered cask once the tap exists (render with the dry run in
+  `docs/winget-tap-checkpoint.md`). The cask makes no notarization claim; its deferral marker stays until item 12.
+
+## 11. Windows asset, winget install and the winget submission (DIST-04, Phase 54 and the owner)
+
+- **Blocked:** no Windows asset is named in `docs/RELEASING.md` (assumption A2), so the winget set carries the fixture.
+  The silent switch `/S` and `InstallerType: nullsoft` are not run against an installer. The WINGET_TOKEN classic PAT
+  (public_repo, on the account that owns the winget-pkgs fork) is not created, and the `release` environment does not hold it.
+- **Owner steps:** name the Phase 54 asset in the asset table, then run a `wingetcreate update ... --out` dry run and a
+  Windows silent install, and correct the three files if the switch or the type differs. Create the classic PAT, store it as
+  the environment secret `WINGET_TOKEN` in `release`, record its holder (already in `docs/RENEWALS.md`), then submit the
+  winget set (`docs/winget-tap-checkpoint.md`) and record the pull request link there.
+
+## 12. Cask shape decisions and the darwin enablement (DIST-11, Phase 55 and A3)
+
+- **Blocked:** the cask's `depends_on macos: ">= :big_sur"` minimum, the `uninstall delete:` path, and the `zap trash:` path
+  are not confirmed against the notarized app; the macOS asset name is the fixture (A3). The darwin deferral marker stays
+  until Phase 55 evidence exists.
+- **Owner steps:** confirm the minimum macOS version and the application's bundle paths in Phase 55; name the Phase 55
+  disk image in the asset table; after the notarized evidence exists, remove the deferral marker and add the arm64
+  stanza in the same commit, then run `node scripts/verify-homebrew-cask.mjs --release`.
+
+## 13. Environments, secrets and the tap App (DIST-12, repository owner)
+
+- **Blocked:** the channel legs need the `bot` environment (`BOT_APP_PRIVATE_KEY` secret, `BOT_APP_ID` variable, the App
+  with contents and pull-requests write and no Workflows permission) and the `release` environment with `WINGET_TOKEN`.
+  The tap repository needs the bot App installed on it.
+- **Owner steps:** confirm the bot environment already holds the App key (Phase 43), add `WINGET_TOKEN` to the `release`
+  environment (item 11), and confirm the App installation covers `homebrew-powerbrowser`.
+
+## 14. Train wiring: assumption A6 (DIST-12, Phases 43 and 49)
+
+- **Blocked:** `channel-manifests.yml` is a reusable workflow with four inputs (`release_key`, `tarball_sha256`,
+  `dmg_sha256`, `winget_asset`). The train does not yet call it.
+- **Owner or next-plan step:** the train's stage table calls `uses: ./.github/workflows/channel-manifests.yml` with those
+  inputs after a publish. If the Phase 49 table differs in shape, remap the inputs (`docs/channel-train-mapping.md`), keep
+  the leg semantics, and record the delta against A6 in the Phase 56 SUMMARY.
+
+## 15. Live dry run and the first live legs (plan 56-05, owner checkpoint)
+
+- **Blocked:** no channel leg has run live. The dry run needs a published key: start `channel-manifests.yml` with
+  `workflow_dispatch` and the key, then paste the rendered payload list.
+- **Owner steps:** after items 1, 9, 10, 11 and 13, the train calls the stage. Paste the pull request URL (flake leg), the tap
+  commit URL, the winget pull request URL and the checker result into the 56-05 evidence.
+
+## 16. Plan 56-05: the owner checkpoint (not executed by this run)
+
+- **Not executed:** plan 56-05 is the owner checkpoint. It lists every live action above in order and collects the pasted
+  evidence. This run stopped after plan 56-04 by instruction.
