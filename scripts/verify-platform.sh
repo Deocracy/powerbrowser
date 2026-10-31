@@ -4531,6 +4531,14 @@ run_own_checks() {
     "crash-submit|node $REPO_ROOT/scripts/verify-worker-submit.mjs"
     "crash-submit-self-test|node $REPO_ROOT/scripts/verify-worker-submit.mjs --self-test"
 
+    # NEW (Phase 57, TEL-12): the per-target symbols archive gate. The archive name derives from
+    # package-name.mk and Makefile.in, every target's symbols name carries its BUILD_TARGET token, no name
+    # collides with a DIST-07 name, and SHA256SUMS covers each one. release-symbols-self-test plants a missing
+    # entry, a stale entry, an asset absent from SHA256SUMS and a token-less collision, each red naming its asset.
+    # Honestly --quick: text reads of upstream make files, docs and configuration.toml. No build, no network.
+    "release-symbols|node $REPO_ROOT/scripts/verify-release-symbols.mjs"
+    "release-symbols-self-test|node $REPO_ROOT/scripts/verify-release-symbols.mjs --self-test"
+
     # NEW (Phase 48, TEL-10/TEL-11): the telemetry Worker's contract gate. It imports the Worker
     # and drives every rule against a stub D1: method, path, content type, parse, shape, the body
     # and batch caps, the string cap, no cross-caller throttle, the authenticated download-count

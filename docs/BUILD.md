@@ -1317,6 +1317,16 @@ follow-up needs the package (nixpkgs `desktop-file-utils`) added to a dev
 shell before it can be run; neither `.desktop` file has been installed here
 yet, so this has not blocked anything so far.
 
+## Crash symbols per target (TEL-12, Phase 57)
+
+`mach buildsymbols` writes `objdir/dist/<PKG_BASENAME>.crashreporter-symbols.zip` for each BUILD_TARGET (the archive name derives from `upstream/toolkit/mozapps/installer/package-name.mk`, and `scripts/verify-release-symbols.mjs` gates it). The target is a no-op while the reporter is compiled out (`--disable-crashreporter`), so the command runs only on a reporter-enabled build, which the TEL-13 flip produces.
+
+Owner command, once per target after a reporter-enabled build (not run in the agent shell; a tier-3 build):
+
+    nix develop .#firefox --command ./mach buildsymbols
+
+Record the zip's SHA256 and its name in the operator record beside the Release asset set. The minidump-stackwalk runbook in `docs/CRASH-POLICY.md` names the symbol path.
+
 ## Toolchain baseline
 
 Phase 3's rebase procedure (BUILD-03) starts by diffing the toolchain the
