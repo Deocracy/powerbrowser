@@ -67,7 +67,15 @@ or a live dispatch. Nothing here was run, and no live write was made.
   `yarn install`, the drivelist rebuild, `yarn build`), are written from `verify.yml` and the review's guidance but have not run
   on a GitHub-hosted runner.
 - **Owner step.** On the first live dispatch, read the fix-gate log: the gate must reach stage 8, and the
-  `fixer-isolate-self-test` row inside stage 8 must pass by checking the ambient state (it cannot make a second namespace there). If the runner offers neither namespace form the gate fails closed and says so.
+  `fixer-isolate-self-test` row inside stage 8 must pass through its nested branch (it cannot make a second namespace there, and now
+  takes that branch only when the wrapper set `FIXER_ISOLATED=1`; it checks the wrapper's effects, not ambient state). If the runner
+  offers neither namespace form the gate fails closed and says so. Also read the wrapper's `NOTE -- node:` and `yarn:` lines, which show
+  the toolchain the sudo form kept (it passes `PATH` through `env`, but its secure_path behaviour is unproven on a runner), and the
+  `df -h` lines after the worktree copies.
+- **Also new since the second review.** The wrapper makes every mount but a scratch directory read-only, which a hosted runner may
+  refuse for a mount it cannot remount (the wrapper then fails closed naming the mount). `makensis` is built in the gate job before the
+  isolation (`nix build nixpkgs#nsis`) because the isolated gate has no network; that step, the free-disk step and the run listing per
+  actor (`release-train.mjs --run-titles`) have not run on a hosted runner.
 - **Also unverified live.** The derive job's run listing (`gh api .../actions/workflows/release-train.yml/runs`) and the
   author lookup for the guard, the `gh run list --workflow <check>.yml --commit` log selection, and `npm ci` plus
   `install.cjs` for the pinned Claude Code CLI. Each was checked against the reviewer's reproduction or by shape only.
