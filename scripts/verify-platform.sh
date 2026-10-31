@@ -4801,11 +4801,13 @@ run_own_checks() {
     # --quick: fixtures only; the live tag listing runs in the release-train detect job. It writes
     # nothing.
     "detect-upstreams-self-test|node $REPO_ROOT/scripts/detect-upstreams.mjs --self-test"
-    # NEW (Phase 43, TRAIN-03 and TRAIN-09): the five Phase-A states as a frozen table, with derive,
-    # next and render over fixture facts. The state list is compared as set equality against the
-    # fixture list, and a merged PR with an unchanged pin must go red naming the pin. Honestly
-    # --quick: pure functions over in-memory fixtures; no network, no gh, no build. It writes
-    # nothing.
+    # NEW (Phase 43, TRAIN-02, TRAIN-03, TRAIN-09 and AUTO-07): the five Phase-A states as a frozen
+    # table with derive, next and render over fixture facts, compared as set equality against the
+    # fixture list. The planted TRAIN-09 faults (a merged PR with an unchanged pin, a draft Release,
+    # a fork-head workflow_run, a duplicate tracking issue, a 175.x ESR under the 153 guard) and the
+    # conflict-issue faults must each go red naming their drift; the exactly-one and dry-run-safe
+    # controls stay green. Honestly --quick: pure functions over in-memory fixtures; no network, no
+    # gh, no build. It writes nothing.
     "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and

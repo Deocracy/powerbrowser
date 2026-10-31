@@ -1,41 +1,49 @@
 #!/usr/bin/env node
 // scripts/release-train.mjs
 //
-// The release train's pure core (Phase 43, TRAIN-03 and TRAIN-09). The
-// reconciler in .github/workflows/release-train.yml wakes, re-derives the state
-// of each release from GitHub facts, makes at most one transition per release
-// per run, re-renders the tracking issue, and exits. Nothing here touches the
-// network, the filesystem or gh: facts in, state / action / issue body out.
-// Every gh call stays in the workflow YAML.
+// The release train's pure core (Phase 43, TRAIN-02, TRAIN-03, TRAIN-09 and
+// AUTO-07). The reconciler in .github/workflows/release-train.yml wakes,
+// re-derives the state of each release from GitHub facts, makes at most one
+// transition per release per run, re-renders the tracking issue, and exits.
+// Nothing here touches the network, the filesystem or gh: facts in, state /
+// action / issue decision out. Every gh call stays in the workflow YAML.
 //
 // The five Phase-A states (the release-stage states BUILDING onward land with
 // Phase 50 and are absent here by design):
-//   DETECTED      a newer *esr_RELEASE tag exists and no bump PR is open.
-//   BUMPING       a bump PR chore/esr-<tag> is open and not yet green.
-//   CONFLICT      the replay stage FAILed in apply-patches (a patch did not apply).
-//   BUMP_RED      any other replay FAIL, a red bump check, or a merged PR that
-//                 left the pin unchanged.
-//   BUMP_PR_GREEN the bump PR is open, the pin moved, and the required verify
-//                 check succeeded. This is the run's end: the owner merge gate.
+//   DETECTED       a newer *esr_RELEASE tag exists and no bump PR is open.
+//   BUMPING        a bump PR chore/esr-<tag> is open and not yet green.
+//   CONFLICT       the replay stage FAILed in apply-patches: a patch did not apply.
+//   BUMP_RED       any other replay FAIL, a red bump check, or a merged PR that
+//                  left the pin unchanged.
+//   BUMP_PR_GREEN  the bump PR is open, the pin moved, and the required verify
+//                  check succeeded. This is the run's end: the owner merge gate.
 //
-// Facts shape (every field is a plain value the workflow reads from GitHub):
+// Facts shape (plain values the workflow reads from GitHub):
 //   { candidateTag, pinTag, revision, openPr, bumpConclusion, stage,
-//     verifyCheck, merged, pinUnchanged }
+//     verifyCheck, merged, pinUnchanged, evidenceUrl?, ownerLogin? }
 //   candidateTag  a newer *esr_RELEASE tag under the pinned major, or null
 //   openPr        { head, number } for chore/esr-<tag>, or null
-//   stage         the FAIL line the replay stage artifact carries, or null
+//   stage         the first FAIL line the replay printed (the stage output of
+//                 rebase-upstream.yml), or null
 //   verifyCheck   'success' | 'failure' | 'pending' | null on the bump PR
+//   ownerLogin    the owner's login, passed in by the workflow; never a literal here
 //
-// Pure trio contract: derive(facts) -> state name or null; next(state) -> action;
-// render(state, facts) -> { title, body }. The snapshot comment in the body is
-// debugging output only; it is never read as input.
+// Pure contract: derive(facts) -> state name or null; next(state) -> action;
+// render(state, facts) -> { title, body, labels, mention, assign, lock, close, writes };
+// findExactlyOne(found, rendered) -> the create, update or fail decision and whether
+// to PATCH; renderConflict(...) -> the conflict issue decision.
 //
-// Tracking-issue labels release-train and state/<STATE> are declared by Phase 42
-// in .github/settings/labels.json. This module names them verbatim and creates
-// no second label source; if Phase 42 renames one, the constant below moves.
+// The tracking issue is a view, never an input. The snapshot comment in the body
+// is debugging output only; no run reads it back.
 //
-// At most one transition per release per run is a workflow property that this
-// trio enables: next() names one action per state, and the workflow runs it once.
+// Labels. release-train is declared in .github/settings/labels.json (Phase 42).
+// state/<STATE> is not declared there yet, so the workflow applies only the
+// declared label until Phase 42 declares the state labels. The constants below
+// move with any rename.
+//
+// This module never writes under the patch directory: the conflict path opens an
+// issue, and regenerate-patches.sh is the only patch writer. The self-test asserts
+// that no conflict decision carries such a write.
 //
 // Honestly --quick: fixtures only. No network, no build, no browser, no display,
 // no gh. It writes nothing.
@@ -46,14 +54,17 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { tagToVersion } from './detect-upstreams.mjs';
+import { classifyTag, tagToVersion } from './detect-upstreams.mjs';
 
 const NAME = 'release-train-logic';
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SELF_REL = 'scripts/release-train.mjs';
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LABELS = Object.freeze({ track: 'release-train', state: (s) => `state/${s}` });
-const APPLY_FAIL = /FAIL -- apply-patches\.sh/;
+const PATCH_DIR = 'patches';
+const APPLY_FAIL = /FAIL -- (apply-patches\.sh|\S+\.patch did not apply)/;
 const ANY_FAIL = /FAIL --/;
+const PATCH_NUMBER = /FAIL -- (\d+)-\S*\.patch did not apply/;
+const EXCERPT_MAX = 2000;
 
 export const STATES = Object.freeze({
     DETECTED: Object.freeze({ desc: 'a newer *esr_RELEASE tag exists and no bump PR is open' }),
@@ -93,12 +104,25 @@ export function next(state) {
     return ACTIONS[state];
 }
 
-/** The tracking-issue title and body for a state, rendered from facts. Pure. */
+/** The patch number named by a conflict stage line, or null when the line names none. Pure. */
+export function conflictPatchNumber(stage) {
+    const m = typeof stage === 'string' ? PATCH_NUMBER.exec(stage) : null;
+    return m === null ? null : m[1];
+}
+
+/** The release key for a candidate or the pin. Pure. */
+function releaseKey(facts) {
+    const version = tagToVersion(facts.candidateTag ?? facts.pinTag);
+    return `v${version.esrVersion}-${facts.revision}`;
+}
+
+/**
+ * The tracking-issue view for a state, rendered from facts. Mention and
+ * assignment happen only on entering BUMP_PR_GREEN, the Phase-A gate; every
+ * other state renders with neither. Pure.
+ */
 export function render(state, facts) {
-    const ref = facts.candidateTag ?? facts.pinTag;
-    const version = tagToVersion(ref);
-    const key = `v${version.esrVersion}-${facts.revision}`;
-    const title = `release-train: ${key}`;
+    const title = `release-train: ${releaseKey(facts)}`;
     const evidence = facts.evidenceUrl ?? 'pending';
     const snapshot = JSON.stringify({ state, pin: facts.pinTag, candidate: facts.candidateTag ?? null });
     const body = [
@@ -111,7 +135,92 @@ export function render(state, facts) {
         `<!-- release-train:v1 ${snapshot} -->`,
         '',
     ].join('\n');
-    return { title, body, labels: [LABELS.track, LABELS.state(state)] };
+    const gate = state === 'BUMP_PR_GREEN' && typeof facts.ownerLogin === 'string' && facts.ownerLogin !== '';
+    return {
+        title,
+        body,
+        labels: [LABELS.track, LABELS.state(state)],
+        mention: gate ? facts.ownerLogin : null,
+        assign: gate ? [facts.ownerLogin] : [],
+        lock: true,
+        close: false,
+        writes: [],
+    };
+}
+
+/**
+ * The exactly-one rule over the issues a label-and-title find returned. Zero
+ * creates, one updates (PATCH only when the stored bytes differ from the rendered
+ * bytes), two or more fail naming every number and never PATCH. Pure.
+ */
+export function findExactlyOne(found, rendered) {
+    if (found.length === 0) return { action: 'create', numbers: [], patch: false };
+    if (found.length === 1) {
+        const differs = rendered !== undefined && found[0].body !== rendered.body;
+        return { action: 'update', numbers: [found[0].number], patch: differs };
+    }
+    const numbers = found.map(i => i.number).sort((a, b) => a - b);
+    return {
+        action: 'fail',
+        numbers,
+        patch: false,
+        reason: `${found.length} open tracking issues (#${numbers.join(', #')}) match one release key; the exactly-one rule is violated. Next step: close all but one and re-run.`,
+    };
+}
+
+function excerpt(text) {
+    const s = String(text ?? '');
+    if (s.length <= EXCERPT_MAX) return s;
+    return `${s.slice(0, EXCERPT_MAX)}\n[truncated ${s.length - EXCERPT_MAX} characters]`;
+}
+
+/**
+ * The conflict issue for one failed patch: titled with the tag and the patch
+ * number, carrying the apply log and the upstream diff, assigned to the owner.
+ * It writes no patch: regenerate-patches.sh is the only patch writer. Pure.
+ */
+export function renderConflict(tag, nnn, logExcerpt, diffExcerpt) {
+    const title = `ESR ${tag}: patch ${nnn} did not apply`;
+    const body = [
+        title,
+        '',
+        'The replay stopped at this patch. Automation does not edit patches.',
+        '',
+        '### Apply log',
+        '```',
+        excerpt(logExcerpt),
+        '```',
+        '',
+        '### Upstream diff',
+        '```diff',
+        excerpt(diffExcerpt),
+        '```',
+        '',
+        'Next step: regenerate the patch from a patched tree with regenerate-patches.sh, then re-run the train.',
+        '',
+    ].join('\n');
+    return { title, body, assignOwner: true, writes: [] };
+}
+
+/** A workflow_run wake is admitted only from a same-repository source. Pure. */
+export function admitWakeRun(run, repository) {
+    if (run.headRepository !== repository) {
+        return { admit: false, reason: `workflow_run from fork ${run.headRepository} is ignored; only ${repository} may wake the train` };
+    }
+    return { admit: true, reason: null };
+}
+
+/** A release is published only when it is neither a draft nor a prerelease. Pure. */
+export function classifyRelease(release) {
+    if (release.draft === true) return { published: false, reason: `draft Release ${release.tag} is not published, so it never moves the train` };
+    if (release.prerelease === true) return { published: false, reason: `prerelease ${release.tag} is not published` };
+    return { published: true, reason: null };
+}
+
+/** A conflict stage line must name its patch number, or the train refuses to guess one. Pure. */
+export function conflictStageReason(stage) {
+    if (conflictPatchNumber(stage) !== null) return null;
+    return `the conflict stage line ${JSON.stringify(stage)} names no patch number, so no issue can be titled. Next step: read the apply log and name the patch.`;
 }
 
 function setDiff(a, b) {
@@ -123,7 +232,8 @@ function setDiff(a, b) {
     };
 }
 
-// Fixture tags are built from parts at run time (see detect-upstreams.mjs for why).
+// Fixture tags are built from parts at run time: a tag literal in source would trip the
+// pin-carrier sweep (verify-upstream-pins), which allows the manifest alone to carry one.
 const esrTag = (major, minor, patch, kind = 'RELEASE') => `FIREFOX_${major}_${minor}_${patch}esr_${kind}`;
 const BASE_PIN = esrTag(153, 5, 1);
 const NEWER = esrTag(153, 23, 0);
@@ -131,7 +241,7 @@ const BASE = Object.freeze({ pinTag: BASE_PIN, revision: 1, candidateTag: null, 
 const FIXTURES = Object.freeze({
     DETECTED: { ...BASE, candidateTag: NEWER },
     BUMPING: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 41 }, bumpConclusion: null },
-    CONFLICT: { ...BASE, candidateTag: NEWER, stage: `FAIL -- apply-patches.sh failed replaying patches/*.patch onto ${NEWER}` },
+    CONFLICT: { ...BASE, candidateTag: NEWER, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply (real conflict, not silent)' },
     BUMP_RED: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 42 }, verifyCheck: 'failure' },
     BUMP_PR_GREEN: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 43 }, verifyCheck: 'success', pinUnchanged: false },
 });
@@ -165,15 +275,16 @@ function selfTest() {
     }
     console.log(`  ok  baseline -> five states, five fixtures, set-equal; derive, next and render agree`);
 
-    const plants = [
+    const OWNER = 'owner-login-fixture';
+    const trainPlants = [
         {
             name: 'a sixth state with no fixture',
-            run: () => runChecks({ states: [...Object.keys(STATES), 'BUILDING'] }),
+            run: () => runChecks({ states: [...Object.keys(STATES), 'BUILDING'] }).failures,
             expect: 'BUILDING',
         },
         {
             name: 'a sixth fixture with no state',
-            run: () => runChecks({ fixtures: { ...FIXTURES, BUILT: { ...BASE, candidateTag: NEWER } } }),
+            run: () => runChecks({ fixtures: { ...FIXTURES, BUILT: { ...BASE, candidateTag: NEWER } } }).failures,
             expect: 'fixture BUILT names no state',
         },
         {
@@ -181,16 +292,101 @@ function selfTest() {
             run: () => {
                 const facts = { ...FIXTURES.BUMP_PR_GREEN, openPr: null, merged: true, pinUnchanged: true };
                 const got = derive(facts);
-                if (got === 'BUMP_RED') return { failures: [`BUMP_RED: merged PR left the pin at ${facts.pinTag} unchanged`] };
-                return { failures: [`merged PR derives ${got} with the pin unchanged, never a green state`] };
+                if (got === 'BUMP_RED') return [`BUMP_RED: merged PR left the pin at ${facts.pinTag} unchanged`];
+                return [`merged PR derives ${got} with the pin unchanged, never a green state`];
             },
             expect: `left the pin at ${BASE_PIN} unchanged`,
+        },
+        {
+            name: 'a draft Release',
+            run: () => {
+                const verdict = classifyRelease({ tag: NEWER, draft: true });
+                return verdict.published ? [`draft Release ${NEWER} counted as published`] : [verdict.reason];
+            },
+            expect: 'draft Release',
+        },
+        {
+            name: 'a fork-head workflow_run',
+            run: () => {
+                const verdict = admitWakeRun({ headRepository: 'someone/fork' }, 'owner/powerbrowser');
+                return verdict.admit ? ['fork-head run admitted to wake the train'] : [verdict.reason];
+            },
+            expect: 'from fork someone/fork is ignored',
+        },
+        {
+            name: 'a duplicate tracking issue',
+            run: () => {
+                const decision = findExactlyOne([{ number: 11, body: 'a' }, { number: 12, body: 'b' }], render('DETECTED', BASE));
+                return decision.patch ? ['duplicate tracking issues would PATCH'] : [decision.reason];
+            },
+            expect: '#11, #12',
+        },
+        {
+            name: 'a 175.x ESR under the 153 guard',
+            run: () => {
+                const verdict = classifyTag(esrTag(175, 0, 0), 153);
+                return verdict.keep ? ['175.x tag kept under the 153 guard'] : [verdict.reason];
+            },
+            expect: 'major 175 is not the pinned major 153',
+        },
+    ];
+
+    const conflictPlants = [
+        {
+            name: 'a conflict stage line naming no patch number',
+            run: () => {
+                const reason = conflictStageReason('apply-patches: FAIL -- the patch did not apply');
+                return reason === null ? [] : [reason];
+            },
+            expect: 'names no patch number',
+        },
+        {
+            name: 'a conflict decision that writes under the patch directory',
+            run: () => {
+                const planted = { ...renderConflict(NEWER, '020', 'log', 'diff'), writes: [`${PATCH_DIR}/020-powerbrowser-shell.patch`] };
+                return planted.writes.filter(w => w.startsWith(`${PATCH_DIR}/`)).map(w => `conflict path writes ${w} under the patch directory`);
+            },
+            expect: 'writes',
+        },
+    ];
+
+    const greens = [
+        {
+            name: 'control: the owner is mentioned only on the gate state',
+            run: () => {
+                const facts = { ...FIXTURES.BUMP_PR_GREEN, ownerLogin: OWNER };
+                const gate = render('BUMP_PR_GREEN', facts);
+                const bumping = render('BUMPING', { ...FIXTURES.BUMPING, ownerLogin: OWNER });
+                return gate.mention === OWNER && bumping.mention === null ? [] : ['owner mention drifted from the gate'];
+            },
+        },
+        {
+            name: 'control: a second conflict for the same tag updates, never a second create',
+            run: () => {
+                const first = renderConflict(NEWER, '020', 'log', 'diff');
+                const decision = findExactlyOne([{ number: 7, body: first.body }], first);
+                return decision.action === 'update' && decision.numbers[0] === 7 ? [] : [`conflict decided ${decision.action}, not an update of #7`];
+            },
+        },
+        {
+            name: 'control: identical stored bytes issue no PATCH',
+            run: () => {
+                const rendered = render('DETECTED', BASE);
+                return findExactlyOne([{ number: 5, body: rendered.body }], rendered).patch ? ['identical bytes would PATCH'] : [];
+            },
+        },
+        {
+            name: 'control: differing stored bytes issue a PATCH',
+            run: () => {
+                const rendered = render('DETECTED', BASE);
+                return findExactlyOne([{ number: 5, body: 'stale' }], rendered).patch ? [] : ['differing bytes would not PATCH'];
+            },
         },
     ];
 
     let failed = 0;
-    for (const p of plants) {
-        const { failures } = p.run();
+    for (const p of [...trainPlants, ...conflictPlants]) {
+        const failures = p.run();
         const named = failures.find(f => f.includes(p.expect));
         if (failures.some(f => f.includes(REPO_ROOT))) {
             console.error(`${NAME}: --self-test FAIL -- '${p.name}' leaked the checkout path into its output`);
@@ -202,11 +398,21 @@ function selfTest() {
             failed += 1;
         }
     }
+    for (const g of greens) {
+        const failures = g.run();
+        if (failures.length === 0) {
+            console.log(`  ok  ${g.name} -> green`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- '${g.name}' went red: ${failures.join(' | ')}`);
+            failed += 1;
+        }
+    }
     if (failed > 0) {
-        console.error(`${NAME}: --self-test FAIL -- ${failed} plant(s) did not go red`);
+        console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    console.log(`${NAME}: --self-test PASS -- ${Object.keys(STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, and ${plants.length} planted faults went red naming their drift`);
+    const total = trainPlants.length + conflictPlants.length;
+    console.log(`${NAME}: --self-test PASS -- ${Object.keys(STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length} controls stayed green`);
     return 0;
 }
 
