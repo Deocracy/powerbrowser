@@ -19,9 +19,12 @@
 //                            token that is the placeholder until the owner sets the TXT value (release refuses it);
 //  8. exception branch       x-source-exception is pending-owner-reply on the written-exception path, and the
 //                            manifest carries one module: the from-source path is named, never half-built;
-//  9. download copy          docs/download-flatpak.md names PowerBrowser, the Flatpak install line with the app id
+//  9. build executed         the manifest's build-commands are run on a fixture tarball packed with the layout the
+//                            derivation unpacks (one top-level directory), unpacked with the archive source's own
+//                            strip-components, so a copy that lands the launcher at the wrong path goes red (CR-03);
+// 10. download copy          docs/download-flatpak.md names PowerBrowser, the Flatpak install line with the app id
 //                            and no version literal, and no internal identifier;
-// 10. cache interface        nix/cache.json lists the Cachix substituter the test build would use.
+// 11. cache interface        nix/cache.json lists the Cachix substituter the test build would use.
 //
 // The URL and hash equality with the flake package is the flake-repack row's section, not repeated here.
 //
@@ -39,6 +42,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { RELEASE_HASH_REL, SENTINEL_SRI, deriveChannel, diskReader, sriToHex } from './lib/channel-identity.mjs';
+import { isRegularFile, nixTarballTop, readText, resolvesTo, simulateFlatpakBuild } from './lib/channel-exec.mjs';
 import { resolveConfig } from './generate.mjs';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -51,6 +55,8 @@ const PNG_REL = 'flatpak/org.debios.PowerBrowser.png';
 const TRACKED_DESKTOP_REL = 'powerbrowser/powerbrowser-release.desktop';
 const TRACKED_PNG_REL = 'powerbrowser/branding/release/default128.png';
 const CACHE_REL = 'nix/cache.json';
+const NIX_REL = 'nix/pkg/powerbrowser-bin.nix';
+const POLICIES_REL = 'powerbrowser/distribution/policies.json';
 const COPY_REL = 'docs/download-flatpak.md';
 const BASEAPP_REF = 'org.mozilla.firefox.BaseApp';
 const VERIFY_PLACEHOLDER = '@FLATHUB_VERIFICATION_TOKEN@';
@@ -167,6 +173,43 @@ export function runChecks(root, overrides = {}) {
         }
     }
 
+    // --- 9. the build commands, executed on a fixture tarball (CR-03) -------------
+    if (manifest !== null && overrides.exec !== false) {
+        const top = nixTarballTop(read(NIX_REL));
+        const policies = read(POLICIES_REL);
+        if (top === null || policies === null) {
+            fail(NIX_REL, 'names no test -d $out/lib/<top> line, or the tracked policies file is missing, so the tarball layout cannot be derived', 'restore the derivation and the policies file from git.');
+        } else {
+            const sim = simulateFlatpakBuild({
+                manifest,
+                top,
+                tarballFiles: { [top]: '#!/bin/sh\n', 'distribution/policies.json': policies, 'browser/omni.ja': 'fixture\n' },
+                fileSources: { [`${appId}.desktop`]: read(DESKTOP_REL) ?? '', [`${appId}.png`]: 'png' },
+            });
+            try {
+                if (!sim.ok) {
+                    fail(MANIFEST_REL, `the build commands fail on a tarball that unpacks to ${top}/ (${sim.error}); the archive source strips components by default, so strip-components must keep the top-level directory`, `set "strip-components": 0 on the archive source so cp -a ${top} finds the directory.`);
+                } else {
+                    const lib = join(sim.app, 'lib', top);
+                    if (!isRegularFile(join(lib, top))) fail(MANIFEST_REL, `the build leaves no launcher at lib/${top}/${top}`, 'fix the copy so the unpacked directory lands at /app/lib/powerbrowser.');
+                    if (!resolvesTo(join(sim.app, 'bin', top), join(lib, top))) fail(MANIFEST_REL, `the build leaves bin/${top} unlinked to the launcher`, 'link /app/bin/powerbrowser to the launcher.');
+                    let merged = null;
+                    try {
+                        merged = JSON.parse(readText(join(lib, 'distribution', 'policies.json')));
+                    } catch {
+                        merged = null;
+                    }
+                    if (merged?.policies?.DisableAppUpdate !== true) fail(MANIFEST_REL, 'the staged policies.json does not carry DisableAppUpdate = true after the build', 'fix the policies merge command.');
+                    if (!isRegularFile(join(sim.app, 'share', 'applications', `${appId}.desktop`)) || !isRegularFile(join(sim.app, 'share', 'icons', 'hicolor', '128x128', 'apps', `${appId}.png`))) {
+                        fail(MANIFEST_REL, 'the build leaves no desktop entry or icon under the app id', 'install both files under the app id.');
+                    }
+                }
+            } finally {
+                sim.cleanup();
+            }
+        }
+    }
+
     // --- 2. the desktop entry and the icon ------------------------------------
     const tracked = read(TRACKED_DESKTOP_REL);
     const desktop = read(DESKTOP_REL);
@@ -187,7 +230,7 @@ export function runChecks(root, overrides = {}) {
         fail(PNG_REL, 'is not byte-identical to the tracked 128-pixel branding PNG', 'copy powerbrowser/branding/release/default128.png over it.');
     }
 
-    // --- 9. the download copy --------------------------------------------------
+    // --- 10. the download copy --------------------------------------------------
     const copy = read(COPY_REL);
     if (copy === null) {
         fail(COPY_REL, 'is missing, so the /download Flatpak row has no paste-ready copy.', 'restore docs/download-flatpak.md from git.');
@@ -200,7 +243,7 @@ export function runChecks(root, overrides = {}) {
         if (v) fail(COPY_REL, `carries the version literal ${JSON.stringify(v[0])}`, 'remove it; the install and update lines name no version.');
     }
 
-    // --- 10. the cache interface lists the substituter the test build would use ---
+    // --- 11. the cache interface lists the substituter the test build would use ---
     const cacheText = read(CACHE_REL);
     let cache = null;
     try {
@@ -272,6 +315,18 @@ function selfTest() {
         {
             name: 'runtime off the Firefox BaseApp', expect: BASEAPP_REF,
             overrides: withManifest(d => { d.runtime = 'org.freedesktop.Platform'; }),
+        },
+        {
+            name: 'archive strip-components left at the default (the launcher copy breaks)', expect: 'strip-components',
+            overrides: withManifest(d => { delete d.modules[0].sources[0]['strip-components']; }),
+        },
+        {
+            name: 'archive strip-components set to 2', expect: 'strip-components',
+            overrides: withManifest(d => { d.modules[0].sources[0]['strip-components'] = 2; }),
+        },
+        {
+            name: 'copy source names a directory the tarball does not hold', expect: 'build commands fail',
+            overrides: withManifest(d => { d.modules[0]['build-commands'][1] = 'cp -a browser /app/lib/powerbrowser'; }),
         },
         {
             name: '--persist removed from finish-args', expect: '--persist=',
