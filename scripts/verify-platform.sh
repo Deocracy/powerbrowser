@@ -4898,6 +4898,17 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
+    # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
+    # own pinned group, one regex customManager captures the live configuration.toml theia_release,
+    # automerge is off, the nix manager is off (flake.lock not moved, BLOCKED.md item 5), the post-upgrade
+    # hook is the licensing pair, the branch prefix
+    # is chore/theia-, and no clock key exists. Honestly --quick: JSON5 and JSON text reads; no
+    # renovate binary, no network, no gh.
+    "renovate-config|node $REPO_ROOT/scripts/verify-renovate-config.mjs"
+    # renovate-config-self-test plants one fault per rule in memory, after the unmodified tree and a
+    # clean fixture stay green; each plant must go red naming its rule. It writes nothing in the tree.
+    "renovate-config-self-test|node $REPO_ROOT/scripts/verify-renovate-config.mjs --self-test"
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
