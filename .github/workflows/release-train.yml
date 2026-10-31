@@ -525,9 +525,13 @@ jobs:
 
       # The uptake lane's view (TRAIN-05). Only a success is a green replay (replayed=true). The job
       # result is passed too: any other result is red, whatever stage line the job printed, and the
-      # view names its patch when the stage is a conflict. Nothing is written.
+      # view names its patch when the stage is a conflict. The detect result is passed so a failed
+      # detect reads as detection failed, never as idle (IN-03). always() keeps an earlier failing
+      # step in this job from suppressing the view. Nothing is written.
       - name: Print the would-write view of the uptake tracking issue (175 lane, writer not wired)
+        if: ${{ always() }}
         env:
+          DETECT_RESULT: ${{ needs.detect.result }}
           UPTAKE_TAG: ${{ needs.detect.outputs.uptake-candidate }}
           UPTAKE_RESULT: ${{ needs.uptake-replay.result }}
           UPTAKE_STAGE: ${{ needs.uptake-replay.outputs.stage }}
@@ -535,4 +539,4 @@ jobs:
           set -eu
           REPLAYED=false
           if [ "$UPTAKE_RESULT" = "success" ]; then REPLAYED=true; fi
-          node scripts/release-train.mjs --uptake-would-write "$UPTAKE_TAG" "$UPTAKE_STAGE" "$REPLAYED" "$UPTAKE_RESULT"
+          node scripts/release-train.mjs --uptake-would-write "$UPTAKE_TAG" "$UPTAKE_STAGE" "$REPLAYED" "$UPTAKE_RESULT" "$DETECT_RESULT"

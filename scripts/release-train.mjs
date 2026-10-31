@@ -59,8 +59,9 @@
 // Usage:
 //   node scripts/release-train.mjs --self-test
 //   node scripts/release-train.mjs --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>
-//   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false> <replay-result>
-//                                       (replay-result: the uptake-replay job result, success|failure|cancelled|skipped)
+//   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false> <replay-result> <detect-result>
+//                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
+//                                        each is success|failure|cancelled|skipped)
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -316,9 +317,17 @@ export function wouldWrite({ pinTag, tag, openPrNumber, stage }) {
  * nothing. The tracking writer is unwired (BLOCKED.md item 3 of Phase 43), so the view prints the
  * rendered body and does not PATCH. replayResult is the uptake-replay job result: a candidate needs
  * success, and an empty candidate needs skipped. Any other result is red whatever stage line the job
- * printed, because a late step can fail after the stage already reads replayed. Pure.
+ * printed, because a late step can fail after the stage already reads replayed. detectResult is the
+ * detect job result: when detection did not succeed, no candidate is known, so the view reports the
+ * failure and never reads the empty candidate as idle (IN-03). Pure.
  */
-export function uptakeWouldWrite({ tag, stage, replayed, replayResult }) {
+export function uptakeWouldWrite({ tag, stage, replayed, replayResult, detectResult }) {
+    if (detectResult !== 'success') {
+        return {
+            lines: [`release-train: would-write: uptake detection failed (the detect job ended ${detectResult}), so the uptake lane was not judged`],
+            failures: [`the detect job ended ${detectResult}, so the uptake candidate is unknown and the lane was not judged. Next step: fix the detect job, then re-run.`],
+        };
+    }
     const expected = tag === '' ? 'skipped' : 'success';
     const resultFailures = replayResult === expected ? [] : [`the uptake replay job ended ${replayResult} (expected ${expected}) after stage ${stage || 'none'}. Next step: read the uptake replay log, fix the step it names, and re-run.`];
     if (tag === '') return { lines: ['release-train: would-write: uptake idle; no uptake-major tag is listed, so nothing is replayed'], failures: resultFailures };
@@ -349,8 +358,8 @@ export function uptakeWouldWrite({ tag, stage, replayed, replayResult }) {
     };
 }
 
-function uptakeWouldWriteCli([tag, stage, replayed, replayResult]) {
-    const view = uptakeWouldWrite({ tag, stage, replayed: replayed === 'true', replayResult });
+function uptakeWouldWriteCli([tag, stage, replayed, replayResult, detectResult]) {
+    const view = uptakeWouldWrite({ tag, stage, replayed: replayed === 'true', replayResult, detectResult });
     view.lines.forEach(l => console.log(l));
     if (view.failures.length > 0) {
         view.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
@@ -646,28 +655,34 @@ function selfTest() {
         },
         {
             name: 'a 153.x tag offered as the uptake replay candidate',
-            run: () => uptakeWouldWrite({ tag: NEWER, stage: '', replayed: false, replayResult: 'success' }).failures,
+            run: () => uptakeWouldWrite({ tag: NEWER, stage: '', replayed: false, replayResult: 'success', detectResult: 'success' }).failures,
             expect: `not the uptake major ${UPTAKE_MAJOR}`,
         },
         {
             name: 'a uptake conflict stage line naming no patch number',
-            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'FAIL -- apply-patches.sh failed replaying', replayed: false, replayResult: 'failure' }).lines.filter(l => l.includes('refused')),
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'FAIL -- apply-patches.sh failed replaying', replayed: false, replayResult: 'failure', detectResult: 'success' }).lines.filter(l => l.includes('refused')),
             expect: 'names no patch number',
         },
         {
             // The review's reproduction (WR-02): the replay printed stage replayed, then a later step failed.
             name: 'a uptake replay that printed stage replayed and then ended failure is red, not replay due',
-            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'replayed', replayed: false, replayResult: 'failure' }).failures,
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'replayed', replayed: false, replayResult: 'failure', detectResult: 'success' }).failures,
             expect: 'the uptake replay job ended failure',
         },
         {
             name: 'a uptake replay cancelled at its timeout with no stage line is red',
-            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: false, replayResult: 'cancelled' }).failures,
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: false, replayResult: 'cancelled', detectResult: 'success' }).failures,
             expect: 'the uptake replay job ended cancelled',
         },
         {
+            // IN-03: a failed detect leaves the candidate empty, which must not read as idle.
+            name: 'a failed detect job with an empty uptake candidate reads as detection failed, not idle',
+            run: () => uptakeWouldWrite({ tag: '', stage: '', replayed: false, replayResult: 'skipped', detectResult: 'failure' }).failures,
+            expect: 'the detect job ended failure',
+        },
+        {
             name: 'a 175 candidate whose replay job was skipped is red, never idle',
-            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: false, replayResult: 'skipped' }).failures,
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: false, replayResult: 'skipped', detectResult: 'success' }).failures,
             expect: 'the uptake replay job ended skipped',
         },
         {
@@ -703,7 +718,7 @@ function selfTest() {
         {
             name: 'control: a 175 replay PASS derives UPTAKE_REPLAYED with the note action and no failure',
             run: () => {
-                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: true, replayResult: 'success' });
+                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: true, replayResult: 'success', detectResult: 'success' });
                 const ok = view.lines[0].includes('state=UPTAKE_REPLAYED action=note') && view.failures.length === 0;
                 return ok ? [] : [`uptake PASS view said ${view.lines[0]} with ${view.failures.length} failure(s)`];
             },
@@ -713,7 +728,7 @@ function selfTest() {
             // the patch directory. Its only failure is the replay's red result, which the view must still report.
             name: 'control: the real uptake conflict view writes nothing under the patch directory',
             run: () => {
-                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'apply-patches: FAIL -- 030-powerbrowser-mar-certificates.patch did not apply (real conflict, not silent)', replayed: false, replayResult: 'failure' });
+                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'apply-patches: FAIL -- 030-powerbrowser-mar-certificates.patch did not apply (real conflict, not silent)', replayed: false, replayResult: 'failure', detectResult: 'success' });
                 const writes = view.failures.filter(f => f.includes(`${PATCH_DIR}/`));
                 const onlyResult = view.failures.length === 1 && view.failures[0].includes('the uptake replay job ended failure');
                 const conflict = view.lines.some(l => l.includes('state=UPTAKE_CONFLICT'));
@@ -723,7 +738,7 @@ function selfTest() {
         {
             name: 'control: a candidate-less uptake run is idle and green when its job was skipped',
             run: () => {
-                const view = uptakeWouldWrite({ tag: '', stage: '', replayed: false, replayResult: 'skipped' });
+                const view = uptakeWouldWrite({ tag: '', stage: '', replayed: false, replayResult: 'skipped', detectResult: 'success' });
                 return view.lines[0].includes('idle') && view.failures.length === 0 ? [] : [`idle view said ${view.lines[0]}`];
             },
         },
@@ -765,7 +780,7 @@ if (isEntry) {
     }
     if (args.length === 1 && args[0] === '--self-test') process.exit(selfTest());
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
-    if (args[0] === '--uptake-would-write' && args.length === 5) process.exit(uptakeWouldWriteCli(args.slice(1)));
+    if (args[0] === '--uptake-would-write' && args.length === 6) process.exit(uptakeWouldWriteCli(args.slice(1)));
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
     console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, or node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>.`);
