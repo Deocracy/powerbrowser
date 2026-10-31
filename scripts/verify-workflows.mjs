@@ -502,6 +502,7 @@ function runChecks(root, overrides = {}) {
                         const granted = new Set();
                         for (const e of entries) {
                             if (/^Bash(\(\s*:?\*+\s*\)|\(\s*\))?$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${e}, an unscoped shell. Next step: scope it, for example Bash(git -C work diff:*).`);
+                            if (/^Bash\(.*\*/.test(e) && !/^Bash\(\s*:?\*+\s*\)$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${e}, a wildcard shell grant; a git wildcard lets the model rewrite work/.git and run git with free arguments. Next step: name one exact command with no free arguments.`);
                             if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(e)) {
                                 fail(rel, jobId, 'fixer-tools', `--allowedTools grants bare ${e}, which reaches patches/ and every other path. Next step: scope it, for example ${e}(work/**).`);
                                 continue;
@@ -516,6 +517,9 @@ function runChecks(root, overrides = {}) {
                         if (granted.has('Edit') || granted.has('Write')) { granted.add('Edit'); granted.add('Write'); }
                         for (const t of granted) {
                             if (!denied.includes(`${t}(work/**/patches/**)`)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${t}(work/**), which reaches patches/, and --disallowedTools does not deny ${t}(work/**/patches/**). Next step: add that deny entry.`);
+                            for (const guarded of ['work/.git/**', 'work/**/.gitattributes']) {
+                                if (!denied.includes(`${t}(${guarded})`)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${t}(work/**), which reaches ${guarded}: a planted git config or attributes file runs or changes git on the next command, and --disallowedTools does not deny ${t}(${guarded}). Next step: add that deny entry.`);
+                            }
                         }
                     }
                     for (const t of ['WebFetch', 'WebSearch']) {
@@ -776,7 +780,7 @@ function selfTest() {
     const T = FIXER_FILE;
     const FIXER = FIX_PIN.split('@')[1];
     const FIX_APP = 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510';
-    const CLAUDE_ARGS = '--max-turns 40 --allowedTools "Bash(git -C work diff:*),Bash(scripts/regenerate-patches.sh:*),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read" --disallowedTools "WebFetch,WebSearch,Edit(work/**/patches/**),Write(work/**/patches/**)"';
+    const CLAUDE_ARGS = '--max-turns 40 --allowedTools "Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read" --disallowedTools "WebFetch,WebSearch,Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"';
     const FIX_IF = "github.event.workflow_run.head_repository.full_name == github.repository && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]'";
     const GOOD_TRAIN = [
         'name: Release train',
@@ -919,11 +923,11 @@ function selfTest() {
         ['display_report true', fixerEdit('          display_report: false', '          display_report: true'), rel(T), 'fix', 'fixer-pin', 'display_report'],
         ['ACTIONS_STEP_DEBUG set on fix', fixerEdit('    concurrency: claude-fixer', "    concurrency: claude-fixer\n    env:\n      ACTIONS_STEP_DEBUG: '1'"), rel(T), 'fix', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
         ['bare Bash in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash'), rel(T), 'fix', 'fixer-tools', 'Bash'],
-        ['--allowedTools missing', fixerEdit(' --allowedTools "Bash(git -C work diff:*),Bash(scripts/regenerate-patches.sh:*),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read"', ''), rel(T), 'fix', 'fixer-tools', '--allowedTools'],
+        ['--allowedTools missing', fixerEdit(' --allowedTools "Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read"', ''), rel(T), 'fix', 'fixer-tools', '--allowedTools'],
         ['--max-turns missing', fixerEdit('--max-turns 40 ', ''), rel(T), 'fix', 'fixer-tools', '--max-turns'],
         ['Edit(patches) granted in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**/patches/**),Read'), rel(T), 'fix', 'fixer-tools', 'Edit(work/**/patches/**)'],
         ['Write(patches) granted in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),Write(work/**/patches/**),Read'), rel(T), 'fix', 'fixer-tools', 'Write(work/**/patches/**)'],
-        ['Edit(work/**) granted with no patches deny', fixerEdit(',Edit(work/**/patches/**),Write(work/**/patches/**)"', '"'), rel(T), 'fix', 'fixer-tools', 'Edit(work/**/patches/**)'],
+        ['Edit(work/**) granted with no patches deny', fixerEdit(',Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"', '"'), rel(T), 'fix', 'fixer-tools', 'Edit(work/**/patches/**)'],
         ['WebFetch not denied', fixerEdit('"WebFetch,WebSearch,', '"WebSearch,'), rel(T), 'fix', 'fixer-prompt', 'WebFetch'],
         ['if: without the claude-fix/ head exclusion', fixerEdit(" && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/')", ''), rel(T), 'fix', 'fixer-prompt', 'claude-fix/'],
         ['if: without the bot-actor exclusion', fixerEdit(" && github.actor != 'powerbrowser-bot[bot]'", ''), rel(T), 'fix', 'fixer-prompt', 'powerbrowser-bot[bot]'],
@@ -952,7 +956,7 @@ function selfTest() {
         ['MultiEdit(work/**) without its patches deny', fixerEdit('Edit(work/**),Read', 'Edit(work/**),MultiEdit(work/**),Read'), rel(T), 'fix', 'fixer-tools', 'MultiEdit(work/**/patches/**)'],
         ['Bash(*) in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(*)'), rel(T), 'fix', 'fixer-tools', 'Bash(*)'],
         ['Bash(:*) in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(:*)'), rel(T), 'fix', 'fixer-tools', 'Bash(:*)'],
-        ['space-separated --allowedTools Read Bash', fixerEdit(' --allowedTools "Bash(git -C work diff:*),Bash(scripts/regenerate-patches.sh:*),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read"', ' --allowedTools Read Bash'), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
+        ['space-separated --allowedTools Read Bash', fixerEdit(' --allowedTools "Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read"', ' --allowedTools Read Bash'), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
         ['bare Bash through the --allowed-tools alias', fixerEdit('--max-turns 40 ', '--max-turns 40 --allowed-tools Bash '), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
         ['--dangerously-skip-permissions', fixerEdit('--max-turns 40 ', '--max-turns 40 --dangerously-skip-permissions '), rel(T), 'fix', 'fixer-tools', '--dangerously-skip-permissions'],
         ['--permission-mode bypassPermissions', fixerEdit('--max-turns 40 ', '--max-turns 40 --permission-mode bypassPermissions '), rel(T), 'fix', 'fixer-tools', 'bypassPermissions'],
@@ -967,6 +971,15 @@ function selfTest() {
     ];
     plants.push(...fixerPlants);
     // FIX-05 spend: the fix job's time bound and its serialized attempt group.
+    // CR-01 trust boundary: no wildcard shell grant, and Edit/Write on the git directory and attributes files denied.
+    plants.push(
+        ['wildcard git grant (Bash(git -C work diff:*))', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(git -C work diff:*)'), rel(T), 'fix', 'fixer-tools', 'Bash(git -C work diff:*)'],
+        ['wildcard regenerate grant', fixerEdit('Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches)', 'Bash(scripts/regenerate-patches.sh:*)'), rel(T), 'fix', 'fixer-tools', 'Bash(scripts/regenerate-patches.sh:*)'],
+        ['Edit(work/.git/**) not denied', fixerEdit(',Edit(work/.git/**)', ''), rel(T), 'fix', 'fixer-tools', 'Edit(work/.git/**)'],
+        ['Write(work/.git/**) not denied', fixerEdit(',Write(work/.git/**)', ''), rel(T), 'fix', 'fixer-tools', 'Write(work/.git/**)'],
+        ['Edit(.gitattributes) not denied', fixerEdit(',Edit(work/**/.gitattributes)', ''), rel(T), 'fix', 'fixer-tools', 'Edit(work/**/.gitattributes)'],
+        ['Write(.gitattributes) not denied', fixerEdit(',Write(work/**/.gitattributes)', ''), rel(T), 'fix', 'fixer-tools', 'Write(work/**/.gitattributes)'],
+    );
     // FIX-12 fixer-auth: id-token on the fix job only, the federation ids in the Claude step, and the fallback key confined.
     plants.push(
         ['fix job without id-token write', fixerEdit('      id-token: write\n', ''), rel(T), 'fix', 'fixer-auth', 'id-token'],
