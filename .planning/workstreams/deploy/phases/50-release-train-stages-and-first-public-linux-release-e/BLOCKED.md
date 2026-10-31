@@ -54,9 +54,13 @@ Not run by instruction. These need the owner, GitHub, Cloudflare or legion:
 - the immutable-release probe (REL-02) and the withdraw path in `powerbrowser-updates` (plan
   50-03, not executed).
 
-## 5. Stale guidance in the update-download-host guard (out of these plans' files)
+## 5. Stale guidance in the update-download-host guard (resolved by the Phase 50 review fix, WR-04)
 
-`scripts/verify-update-download-host.mjs` names `release-assets.githubusercontent.com` as an
-allowed update host in its failure text. The owner ruling of 2026-10-29 moved the primary MAR origin
-to `downloads.powerbrowser.org`. The guard's rule still holds. Owner step: confirm the guidance
-text can be updated in a later plan.
+`scripts/verify-update-download-host.mjs` named `release-assets.githubusercontent.com` as an
+allowed update host in its failure text, which the owner ruling of 2026-10-29 superseded. The
+failure text and the guard's header now send the reader to the write-once MAR origin (the
+`mar_origin` host of `configuration.toml [urls]`, derived from the manifest in the message), and
+the two `endpoint-allowlist.json` reasons carry the same correction. No owner step remains. The
+`control/release-assets-patch.xml` fixture stays green on purpose: this row guards the github.com
+half only, and the release drill (`verify-mar-update-hop.mjs`, served release) refuses the
+release-assets host in the resolver log.
