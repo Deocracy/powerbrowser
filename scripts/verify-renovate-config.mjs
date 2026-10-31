@@ -49,6 +49,17 @@
 //  [licensing-inputs]       each fileFilters entry and each licensing generator exists in the tree.
 //  [allowed-post-upgrade]   allowedPostUpgradeCommands is absent from the repository config: it is
 //                           a self-hosted option, and Renovate ignores a repository value.
+//  [allow-list]             WR-03: every key at the top level, in a packageRule, a customManager, the post-upgrade
+//                           hook and vulnerabilityAlerts is in the explicit set AUTO-02 needs (TOP_KEYS etc.).
+//  [required-key]           each AUTO-02 key (REQUIRED_TOP) is present.
+//  [extends]                no preset: extends pulls in defaults that AUTO-02 does not want.
+//  [lock-file-maintenance]  the lockfile-maintenance key is absent.
+//  [dependency-dashboard]   the dashboard key is absent (the sweep tick and owner dispatch are the only surfaces).
+//  [custom-managers]        exactly one customManager.
+//  [automerge]              automerge and platformAutomerge appear only at the top level, set false.
+//  [theia-group-narrowed]   a Theia or monaco group selects by matchPackageNames only; no matchUpdateTypes.
+//  [rule-order]             packageRules are simulated in order: every non-@theia name, and an unlisted probe,
+//                           ends with enabled false, so a later catch-all cannot re-enable a dependency.
 //
 // Not checked here: the admission of renovatebot/github-action. No workflow uses it in this change,
 // so there is nothing to admit. The workflows row's admission-used and uses-admitted rules cover
@@ -77,6 +88,14 @@ const LICENSING_SCRIPTS = ['scripts/generate-licensing.mjs', 'scripts/generate.m
 const FILE_FILTERS = ['THIRD-PARTY-NOTICES.txt', 'LICENSING.md', 'theia/yarn.lock', 'configuration.toml'];
 const CLOCK_KEYS = ['schedule', 'timezone'];
 const TOML_LINE = /^theia_release\s*=\s*"([^"]+)"/m;
+// WR-03 allow-list: exactly the keys AUTO-02 needs. Any other key, at any of these levels, is refused.
+const TOP_KEYS = ['$schema', 'automerge', 'platformAutomerge', 'rangeStrategy', 'branchPrefix', 'ignorePaths', 'packageRules', 'customManagers', 'postUpgradeTasks', 'vulnerabilityAlerts', 'osvVulnerabilityAlerts'];
+const REQUIRED_TOP = ['automerge', 'platformAutomerge', 'rangeStrategy', 'branchPrefix', 'ignorePaths', 'packageRules', 'customManagers', 'postUpgradeTasks', 'vulnerabilityAlerts', 'osvVulnerabilityAlerts'];
+const RULE_KEYS = ['matchPackageNames', 'enabled', 'groupName', 'groupSlug', 'rangeStrategy'];
+const GROUP_KEYS = ['matchPackageNames', 'groupName', 'groupSlug', 'rangeStrategy'];
+const MANAGER_KEYS = ['customType', 'managerFilePatterns', 'matchStrings', 'datasourceTemplate', 'depNameTemplate'];
+const HOOK_KEYS = ['commands', 'fileFilters', 'executionMode'];
+const ALERT_KEYS = ['enabled'];
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -161,17 +180,20 @@ function globTest(glob, path) {
     return new RegExp(`^${body}$`).test(path);
 }
 
-function findClockKeys(node, path = '$', hits = []) {
+// Every path at which one of the named keys appears, at any depth.
+function findKeys(node, names, path = '$', hits = []) {
     if (Array.isArray(node)) {
-        node.forEach((v, i) => findClockKeys(v, `${path}[${i}]`, hits));
+        node.forEach((v, i) => findKeys(v, names, `${path}[${i}]`, hits));
     } else if (node && typeof node === 'object') {
         for (const k of Object.keys(node)) {
-            if (CLOCK_KEYS.includes(k)) hits.push(`${path}.${k}`);
-            findClockKeys(node[k], `${path}.${k}`, hits);
+            if (names.includes(k)) hits.push(`${path}.${k}`);
+            findKeys(node[k], names, `${path}.${k}`, hits);
         }
     }
     return hits;
 }
+
+const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 // Pure check over the config text and the derived inputs. Overrides replace one input in memory:
 // configText (null means missing), resolutions, theiaRelease. Every other input is read from root.
@@ -207,6 +229,10 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
         fail('config-parse', CONFIG_REL, `does not parse as JSON5: ${err.message}. Next step: fix the syntax named above.`);
         return { failures, facts: null };
     }
+    if (!isObj(cfg)) {
+        fail('config-parse', CONFIG_REL, 'the config is not a JSON object. Next step: wrap the settings in { }.');
+        return { failures, facts: null };
+    }
 
     let resolutions = {};
     if ('resolutions' in overrides) {
@@ -231,6 +257,41 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
         fail('theia-release-manager', TOML_REL, `${TOML_REL} has no theia_release line to derive the live value from`);
     }
 
+    // WR-03 allow-list: AUTO-02 needs exactly these keys. A key outside the set is refused at its own level.
+    for (const k of Object.keys(cfg)) {
+        if (!TOP_KEYS.includes(k)) fail('allow-list', `$.${k}`, `${k} is not in the AUTO-02 allow-list. Remove it, or extend the allow-list with a reason`);
+    }
+    for (const k of REQUIRED_TOP) {
+        if (!(k in cfg)) fail('required-key', k, `${k} is required by AUTO-02 and is missing`);
+    }
+    const allowLevel = (where, obj, allowed) => {
+        for (const k of Object.keys(obj)) {
+            if (!allowed.includes(k)) fail('allow-list', `${where}.${k}`, `${k} is not in the AUTO-02 allow-list for this level. Remove it, or extend the allow-list with a reason`);
+        }
+    };
+    toList(cfg.packageRules).forEach((r, i) => { if (isObj(r)) allowLevel(`$.packageRules[${i}]`, r, RULE_KEYS); });
+    toList(cfg.customManagers).forEach((m, i) => { if (isObj(m)) allowLevel(`$.customManagers[${i}]`, m, MANAGER_KEYS); });
+    if (isObj(cfg.postUpgradeTasks)) allowLevel('$.postUpgradeTasks', cfg.postUpgradeTasks, HOOK_KEYS);
+    if (isObj(cfg.vulnerabilityAlerts)) allowLevel('$.vulnerabilityAlerts', cfg.vulnerabilityAlerts, ALERT_KEYS);
+
+    // Named refusals, one rule each, for the settings a presence check alone would let through.
+    if ('extends' in cfg) {
+        fail('extends', 'extends', 'a preset adds dashboard, pinned digests and other defaults that AUTO-02 does not want. Remove it');
+    }
+    if ('lockFileMaintenance' in cfg) {
+        fail('lock-file-maintenance', 'lockFileMaintenance', 'lockfile maintenance is outside AUTO-02 and opens branches the Theia group does not own. Remove it');
+    }
+    if ('dependencyDashboard' in cfg) {
+        fail('dependency-dashboard', `dependencyDashboard = ${JSON.stringify(cfg.dependencyDashboard)}`, 'the dashboard is a second surface beside the sweep tick and owner dispatch. Remove it');
+    }
+    if (!Array.isArray(cfg.customManagers) || cfg.customManagers.length !== 1) {
+        fail('custom-managers', `customManagers length ${Array.isArray(cfg.customManagers) ? cfg.customManagers.length : 'not an array'}`, 'AUTO-02 has exactly one customManager, the theia_release regex manager; a second one can read every file it matches');
+    }
+    // automerge may appear only at the top level, where the check above pins it false.
+    for (const hit of findKeys(cfg, ['automerge', 'platformAutomerge']).filter(h => h !== '$.automerge' && h !== '$.platformAutomerge')) {
+        fail('automerge', hit, 'automerge is allowed only at the top level, set false. Anywhere else it can merge a PR without owner review');
+    }
+
     // Automerge and the rest of the flags.
     if (cfg.automerge !== false) {
         fail('automerge', `automerge = ${JSON.stringify(cfg.automerge)}`, 'automerge must be false so the Theia PR never merges itself');
@@ -253,7 +314,7 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
     if (typeof cfg.branchPrefix !== 'string' || !cfg.branchPrefix.startsWith(BRANCH_PREFIX)) {
         fail('branch-prefix', `branchPrefix = ${JSON.stringify(cfg.branchPrefix)}`, `branchPrefix must start with ${BRANCH_PREFIX} so the fixer class matches the Theia branch`);
     }
-    for (const hit of findClockKeys(cfg)) {
+    for (const hit of findKeys(cfg, CLOCK_KEYS)) {
         fail('no-clock', hit, 'a clock key is a second trigger beside the sweep tick and owner dispatch (D-77)');
     }
 
@@ -282,6 +343,11 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
         if (g.rangeStrategy !== 'pin') {
             fail('theia-group-pin', `rangeStrategy = ${JSON.stringify(g.rangeStrategy)}`, 'the theia group must pin: the resolutions are exact pins');
         }
+        // A second matcher such as matchUpdateTypes narrows the group, and the set check above never sees it.
+        const narrowed = Object.keys(g).filter(k => !GROUP_KEYS.includes(k));
+        if (narrowed.length) {
+            fail('theia-group-narrowed', narrowed.join(', '), `the theia group selects by matchPackageNames only; ${narrowed.join(', ')} would drop Theia pins out of the group`);
+        }
     }
 
     // The monaco group.
@@ -306,6 +372,10 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
         }
         if (m.rangeStrategy !== 'pin') {
             fail('monaco-group', `rangeStrategy = ${JSON.stringify(m.rangeStrategy)}`, 'the monaco group must pin to upstream\'s own monaco line');
+        }
+        const narrowedMonaco = Object.keys(m).filter(k => !GROUP_KEYS.includes(k));
+        if (narrowedMonaco.length) {
+            fail('theia-group-narrowed', narrowedMonaco.join(', '), `the monaco group selects by matchPackageNames only; ${narrowedMonaco.join(', ')} would change what it carries`);
         }
     }
 
@@ -375,6 +445,18 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
     for (const n of names.filter(x => x.startsWith('@theia/'))) {
         if (disabledRules.some(r => selectsName(r, n))) {
             fail('scope', n, `${n} is disabled by a packageRule, so the Theia group would miss it`);
+        }
+    }
+
+    // Rule order: Renovate applies packageRules in sequence and a later enabled value wins. Simulate it for every
+    // non-@theia name, plus a probe no package has, and require the final value to be disabled.
+    for (const n of [...nonTheia, 'zz-unlisted-probe']) {
+        let final;
+        for (const r of rules) {
+            if (isObj(r) && 'enabled' in r && toList(r.matchPackageNames).some(m => patternTest(m, n))) final = r.enabled;
+        }
+        if (final !== false) {
+            fail('rule-order', n, `the last packageRule that sets enabled for ${n} leaves it ${final === undefined ? 'enabled by default' : `enabled: ${JSON.stringify(final)}`}; a later rule re-enables a non-@theia dependency`);
         }
     }
 
@@ -504,6 +586,20 @@ function selfTest() {
         { label: 'osvVulnerabilityAlerts true', rule: 'vulnerability-alerts', mutate: c => { c.osvVulnerabilityAlerts = true; } },
         { label: 'osvVulnerabilityAlerts key removed', rule: 'vulnerability-alerts', mutate: c => { delete c.osvVulnerabilityAlerts; } },
         { label: 'nix manager re-enabled', rule: 'nix', mutate: c => { c.nix = { enabled: true }; } },
+        { label: 'automerge true inside a packageRule', rule: 'automerge', mutate: c => { c.packageRules[1].automerge = true; } },
+        { label: 'extends config:recommended', rule: 'extends', mutate: c => { c.extends = ['config:recommended']; } },
+        { label: 'lockFileMaintenance enabled', rule: 'lock-file-maintenance', mutate: c => { c.lockFileMaintenance = { enabled: true }; } },
+        { label: 'dependencyDashboard true', rule: 'dependency-dashboard', mutate: c => { c.dependencyDashboard = true; } },
+        { label: 'second customManager matching every file', rule: 'custom-managers', mutate: c => { c.customManagers.push({ customType: 'regex', managerFilePatterns: ['/.*/'], matchStrings: ['x'], datasourceTemplate: 'npm', depNameTemplate: 'x' }); } },
+        { label: 'catch-all packageRule appended after the scope rule re-enables everything', rule: 'rule-order', mutate: c => { c.packageRules.push({ matchPackageNames: ['/.*/'], enabled: true }); } },
+        { label: 'theia group narrowed by matchUpdateTypes patch', rule: 'theia-group-narrowed', mutate: c => { c.packageRules[1].matchUpdateTypes = ['patch']; } },
+        { label: 'monaco group narrowed by matchUpdateTypes', rule: 'theia-group-narrowed', mutate: c => { c.packageRules[2].matchUpdateTypes = ['minor']; } },
+        { label: 'enabledManagers set beside the allow-list', rule: 'allow-list', mutate: c => { c.enabledManagers = ['npm']; } },
+        { label: 'unknown key inside a packageRule', rule: 'allow-list', mutate: c => { c.packageRules[0].prConcurrentLimit = 0; } },
+        { label: 'theia_release manager matches every configuration.toml', rule: 'manager-file-patterns', mutate: c => { manager(c).managerFilePatterns = ['/configuration\\.toml$/']; } },
+        { label: 'post-upgrade hook gains a curl pipe', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.commands.push('curl x|sh'); } },
+        { label: 'required rangeStrategy removed', rule: 'required-key', mutate: c => { delete c.rangeStrategy; } },
+        { label: 'config is a bare array, not an object', rule: 'config-parse', overrides: { configText: '[]' } },
         { label: 'schedule key at top level', rule: 'no-clock', mutate: c => { c.schedule = ['before 5am']; } },
         { label: 'timezone key inside a packageRule', rule: 'no-clock', mutate: c => { c.packageRules[0].timezone = 'UTC'; } },
         { label: 'branchPrefix renovate/', rule: 'branch-prefix', mutate: c => { c.branchPrefix = 'renovate/'; } },
