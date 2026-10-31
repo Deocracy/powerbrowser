@@ -91,6 +91,10 @@
 //                 guard, the claude-fix/ head exclusion and the bot-actor exclusion are
 //                 each a top-level && term. Its --disallowedTools denies WebFetch and
 //                 WebSearch, and its allowed_bots is exactly renovate[bot],powerbrowser-bot[bot].
+//  fixer-spend    The fix job (release-train.yml) carries timeout-minutes: 90 and the
+//                 claude-fixer concurrency group, so one attempt is time-bounded and the
+//                 attempts for every release key are serialized (FIX-05). The Console
+//                 workspace monthly cap is an owner setting, not an in-tree surface.
 //
 // Effective permissions: job permissions, else workflow permissions, else the
 // repository default (default_workflow_permissions in
@@ -130,7 +134,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'fixer-spend', 'dry-run-gate', 'bot-job-gate'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -513,6 +517,10 @@ function runChecks(root, overrides = {}) {
                     }
                     if (w.allowed_bots !== FIX_BOTS) fail(rel, jobId, 'fixer-prompt', `allowed_bots is '${w.allowed_bots ?? '(absent)'}', not the explicit list '${FIX_BOTS}'. A wildcard lets any bot steer the model. Next step: set allowed_bots to that list.`);
                 }
+                // FIX-05: one attempt is time-bounded, and attempts for every release key share one serialized group.
+                if (job['timeout-minutes'] !== 90) fail(rel, jobId, 'fixer-spend', `timeout-minutes is ${JSON.stringify(job['timeout-minutes']) ?? '(absent)'}, not 90, so one attempt is not time-bounded. Next step: set timeout-minutes: 90 on the fix job.`);
+                const concurrency = job.concurrency !== null && typeof job.concurrency === 'object' ? job.concurrency.group : job.concurrency;
+                if (concurrency !== 'claude-fixer') fail(rel, jobId, 'fixer-spend', `concurrency is ${JSON.stringify(concurrency) ?? '(absent)'}, not the claude-fixer group, so fixer attempts are not serialized. Next step: set concurrency: claude-fixer on the fix job.`);
                 const cond = ifTerms(job);
                 if (cond.or) fail(rel, jobId, 'fixer-prompt', `if: has a top-level ||, so the fixer can start with a guard false (for example always() || (...)). Next step: join the guards with && only.`);
                 for (const [kw, lit] of FIX_GUARDS) {
@@ -930,6 +938,13 @@ function selfTest() {
         ['admitted claude-code-action used by no workflow', { files: Object.fromEntries(Object.entries(base).filter(([k]) => !k.endsWith('triage.yml'))), selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
     ];
     plants.push(...fixerPlants);
+    // FIX-05 spend: the fix job's time bound and its serialized attempt group.
+    plants.push(
+        ['fix job timeout-minutes 5', fixerEdit('    timeout-minutes: 90', '    timeout-minutes: 5'), rel(T), 'fix', 'fixer-spend', 'timeout-minutes'],
+        ['fix job without timeout-minutes', fixerEdit('    timeout-minutes: 90\n', ''), rel(T), 'fix', 'fixer-spend', 'timeout-minutes'],
+        ['fix job on the release-train concurrency group', fixerEdit('    concurrency: claude-fixer', '    concurrency: release-train'), rel(T), 'fix', 'fixer-spend', 'claude-fixer'],
+        ['fix job without a concurrency group', fixerEdit('    concurrency: claude-fixer\n', ''), rel(T), 'fix', 'fixer-spend', 'claude-fixer'],
+    );
 
     // Green controls: the good release.yml (every plant's base), the two
     // admitted issues-write jobs, a guarded workflow_run, a hosted read-only
