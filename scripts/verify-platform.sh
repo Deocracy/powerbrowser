@@ -4824,6 +4824,17 @@ run_own_checks() {
     # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
     # the file, the rule and the fault.
     "release-shape-self-test|node $REPO_ROOT/scripts/verify-release-shape.mjs --self-test"
+    # NEW (Phase 49, SEC-10): the tracked pre-job hook on legion. It runs under bash with only the three
+    # runner variables set; the release triple must exit 0, and a foreign-branch workflow ref, a push
+    # event, a wrong repo and an empty triple must exit non-zero naming the expected value. The expected
+    # repo derives from configuration.toml [urls] release_notes. Every legion job must start with the
+    # main-and-dispatch refusal and carry the full-SHA check second, before the checkout. Honestly --quick:
+    # bash on stdin plus file and YAML reads; no network, no gh, no write.
+    "hook-refusal|node $REPO_ROOT/scripts/verify-hook-refusal.mjs"
+    # hook-refusal-self-test plants a foreign-branch GITHUB_WORKFLOW_REF, a push event, a wrong repo in the
+    # hook text, and a legion job without the SHA step, each in memory; each goes red naming the file, the
+    # variable or job, and the value. It writes nothing.
+    "hook-refusal-self-test|node $REPO_ROOT/scripts/verify-hook-refusal.mjs --self-test"
     # NEW (Phase 49, SEC-07): the sign-publish channel gate. mar_channel_gate refuses a MAR whose
     # product-info channel is not ACCEPTED_MAR_CHANNEL_IDS, cross-checks the `--channel` value against
     # MOZ_UPDATE_CHANNEL, and never compares the MAR id with the update channel; signmar -s runs
