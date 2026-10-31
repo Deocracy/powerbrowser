@@ -209,6 +209,7 @@ export function runChecks(root, overrides = {}) {
         if (!copy.includes(REPO_TOKEN)) fail(NIX_COPY_REL, `does not carry ${REPO_TOKEN}, so the install line would name no release home`, `use ${REPO_TOKEN}; the owner renders it from the release home at paste time.`);
         const leak = /app\.update|DisableAppUpdate|sha256|pref\s/i.exec(copy);
         if (leak) fail(NIX_COPY_REL, `carries the internal identifier ${JSON.stringify(leak[0])}`, 'remove it; the copy is for readers, not for the policy or the hash.');
+        if (!copy.includes('--accept-flake-config')) fail(NIX_COPY_REL, 'does not tell the reader to accept the flake configuration (--accept-flake-config), without which a flake nixConfig never applies and nobody uses the cache (IN-03)', 'add the one sentence naming --accept-flake-config.');
         const v = /\b\d{2,}\.\d+\.\d+/.exec(copy);
         if (v) fail(NIX_COPY_REL, `carries the version literal ${JSON.stringify(v[0])}`, 'remove it; the install and upgrade lines name no version.');
     }
@@ -293,6 +294,10 @@ function selfTest() {
         {
             name: '/download Nix copy carries an internal identifier', expect: NIX_COPY_REL,
             overrides: withPlant(NIX_COPY_REL, t => `${t}\nSet pref DisableAppUpdate for the package.\n`),
+        },
+        {
+            name: '/download Nix copy drops the accept-flake-config sentence (IN-03)', expect: '--accept-flake-config',
+            overrides: withPlant(NIX_COPY_REL, t => t.replaceAll('--accept-flake-config', '--help')),
         },
         {
             name: '/download Nix copy carries a version literal', expect: 'version literal',

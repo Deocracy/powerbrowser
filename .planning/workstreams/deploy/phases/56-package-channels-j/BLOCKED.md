@@ -22,7 +22,7 @@ is not executed by this run and is listed at the end.
   `flake.nix` carries no `nixConfig` for the substituters yet. A placeholder trusted key there would make every
   consumer's nix reject the config.
 - **Owner step:** after items 1, 6 and 7 create the real public keys, add `nixConfig` from `nix/cache.json`
-  `interface` (extra-substituters and extra-trusted-public-keys) in the same commit as the values. Then run
+  `interface` (extra-substituters and extra-trusted-public-keys) in the same commit as the values. The /download copy already tells readers to accept the flake configuration (IN-03). Then run
   `nix build .#powerbrowser` on a clean machine with the live cache and paste the substitute log into the
   56-05 evidence.
 
