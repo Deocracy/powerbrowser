@@ -37,7 +37,8 @@
 // 6), which is why workers_dev is off. Upgrade to the Rate Limiting binding if a per-client budget
 // is ever needed inside the Worker.
 //
-// WIRE VOCABULARY. 200 accepted: "ok: stored <n>" (events) or "ok: <asset>" (download counts).
+// WIRE VOCABULARY. 200 accepted: "ok: stored <n>" (events; "ok: stored <n> synthetic <m>" when m of them were
+// honoured as synthetic, which only a request that proves the shared secret can get) or "ok: <asset>" (download counts).
 // 400: "Discarded: malformed_body",
 // "Discarded: malformed_batch" or "Discarded: malformed_event". 413: "Discarded: oversized_body". 500: "Discarded: store_unavailable".
 // 401, 404 and 405 answer an empty body (404 for any other path, 405 for a method other than POST
@@ -238,7 +239,10 @@ export async function handleEvents(shape, env, state) {
     } catch {
         return discard(500, REASON_STORE);
     }
-    return { status: 200, body: `ok: stored ${rows.length}` };
+    // An authenticated synthetic event is acknowledged by name: a probe with a wrong or missing secret is stored as a
+    // real row and answers the plain 200, so the probe can tell the two apart.
+    const synthetic = rows.filter(row => row.synthetic === 1).length;
+    return { status: 200, body: `ok: stored ${rows.length}${synthetic > 0 ? ` synthetic ${synthetic}` : ''}` };
 }
 
 /**
