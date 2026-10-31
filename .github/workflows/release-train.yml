@@ -948,34 +948,32 @@ jobs:
           echo "base-sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           exit "$STATUS"
 
-  # The only App-token minter in the fixer. It applies the gated diff to a fresh target checkout, publishes the
-  # claude-fix branch through the same publish plan as the bump, and opens the PR from the templated body.
+  # The only App-token minter in the fixer. The root checkout is main (the trusted scripts: the publish plan, the opener and
+  # the gate's pure stages); the target lives only under target/, at exactly the gated base commit, and no script from it
+  # runs (CR-03). The gated diff is applied and committed in target/ with no token present. The token exists in one step:
+  # the one that pushes the claude-fix branch and opens the PR from the trusted scripts.
   fix-pr:
     needs: [fix, fix-gate]
     if: ${{ !inputs.dry-run && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256 && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: bot
-    permissions: {}
+    permissions:
+      contents: read
     steps:
-      - name: Mint the bot App token
-        id: app
+      - name: Check out the trusted root at main
         if: ${{ !inputs.dry-run }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          app-id: ${{ vars.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: powerbrowser
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
+          ref: main
+          persist-credentials: false
 
-      - name: Check out the target at exactly the gated base commit
+      - name: Check out the target at exactly the gated base commit, under target/
         if: ${{ !inputs.dry-run }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.fix.outputs.base-sha }}
+          path: target
           fetch-depth: 0
           persist-credentials: false
 
@@ -1000,37 +998,52 @@ jobs:
           if [ "$GOT" != "$DIFF_SHA256" ]; then echo "release-train: FAIL -- the downloaded diff has sha256 ${GOT}, not the ${DIFF_SHA256} the fix job recorded. Next step: do not publish; re-dispatch the fixer." >&2; exit 1; fi
           node scripts/verify-fix-gate.mjs --static-only --diff="$DIFF"
 
-      - name: Apply the gated diff and publish the claude-fix branch (skipped in dry-run)
-        id: publish
+      # No token here. git runs in target/ with hooks and fsmonitor off; nothing from target/ is executed.
+      - name: Apply the gated diff in target/ and commit it (skipped in dry-run)
+        id: apply
         if: ${{ !inputs.dry-run }}
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
           BRANCH: claude-fix/${{ inputs.release-key }}-${{ inputs.class }}-${{ inputs.attempt }}
           KEY: ${{ inputs.release-key }}
           CLASS: ${{ inputs.class }}
           ATTEMPT: ${{ inputs.attempt }}
+          BASE_SHA: ${{ needs.fix.outputs.base-sha }}
         run: |
           set -euo pipefail
-          BASE=$(git rev-parse HEAD)
-          git config user.name "release-train"
-          git config user.email "$BOT_EMAIL"
-          git switch -C "$BRANCH" "$BASE"
-          git apply --index "$RUNNER_TEMP/fix-diff/work.diff"
-          if git diff --cached --quiet; then
-            echo "release-train: NOTE -- the gated diff changed nothing"
-            echo "action=none" >> "$GITHUB_OUTPUT"
+          T() { git -C target -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+          if [ "$(T rev-parse HEAD)" != "$BASE_SHA" ]; then echo "release-train: FAIL -- target/ is not at the gated base ${BASE_SHA}. Next step: re-run the fix-pr job." >&2; exit 1; fi
+          T config user.name "release-train"
+          T config user.email "$BOT_EMAIL"
+          T switch -C "$BRANCH" "$BASE_SHA"
+          T apply --index "$RUNNER_TEMP/fix-diff/work.diff"
+          if T diff --cached --quiet; then
+            echo "::warning::fix-pr: the gated diff changed nothing in the base tree, so there is nothing to publish."
+            { echo "### fix-pr: nothing to publish"; echo; echo "The gated diff for ${KEY} ${CLASS} attempt ${ATTEMPT} applied to no change at base ${BASE_SHA}. No branch was pushed and no PR was opened. Next step: the owner checks whether the fix already landed."; } >> "$GITHUB_STEP_SUMMARY"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git commit -m "fix(${KEY}): ${CLASS} attempt ${ATTEMPT}" -m "Gated by fix-gate and applied by fix-pr."
-          bash scripts/publish-bump-branch.sh "$BRANCH" "$BASE" > "$RUNNER_TEMP/publish.txt"
-          cat "$RUNNER_TEMP/publish.txt"
-          echo "action=$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")" >> "$GITHUB_OUTPUT"
+          T commit -m "fix(${KEY}): ${CLASS} attempt ${ATTEMPT}" -m "Gated by fix-gate and applied by fix-pr."
+          echo "committed=true" >> "$GITHUB_OUTPUT"
 
-      # The body is rendered from the structured fields only. The opener has no path for model prose.
-      - name: Open or edit the fix PR (labels claude-fix and release:<key>, owner assigned)
-        if: ${{ !inputs.dry-run && steps.publish.outputs.action != 'none' && steps.publish.outputs.action != 'refuse' && steps.publish.outputs.action != '' }}
+      - name: Mint the bot App token
+        id: app
+        if: ${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+          permission-pull-requests: write
+
+      # The one step that holds the token. publish-bump-branch.sh and fix-open-pr.mjs run from the trusted root: the
+      # publish script runs with target/ as its working directory so it pushes that tree, and finds the publish plan next to itself.
+      - name: Publish the claude-fix branch and open the PR (skipped in dry-run)
+        if: ${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_REPO: ${{ github.repository }}
           BRANCH: claude-fix/${{ inputs.release-key }}-${{ inputs.class }}-${{ inputs.attempt }}
           KEY: ${{ inputs.release-key }}
           CLASS: ${{ inputs.class }}
@@ -1038,5 +1051,20 @@ jobs:
           TARGET: ${{ inputs.target-branch }}
           FINGERPRINT: ${{ inputs.fingerprint }}
           OWNER: ${{ github.repository_owner }}
+          BASE_SHA: ${{ needs.fix.outputs.base-sha }}
           GATE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node scripts/fix-open-pr.mjs --open --diff="$RUNNER_TEMP/fix-diff/work.diff" --key="$KEY" --class="$CLASS" --attempt="$ATTEMPT" --target="$TARGET" --branch="$BRANCH" --fingerprint="$FINGERPRINT" --owner="$OWNER" --gate-url="$GATE_URL"
+        run: |
+          set -euo pipefail
+          (cd target && bash "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE_SHA") > "$RUNNER_TEMP/publish.txt"
+          cat "$RUNNER_TEMP/publish.txt"
+          ACTION=$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")
+          case "$ACTION" in
+            create | skip | force-with-lease) ;;
+            refuse)
+              echo "::error::fix-pr: ${BRANCH} already carries a commit the bot did not author, so it was not overwritten and no PR was opened. Next step: the owner inspects ${BRANCH}."
+              { echo "### fix-pr: publish refused"; echo; echo "${BRANCH} holds a commit the bot App did not author. Nothing was pushed and no PR was opened."; } >> "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
+            *) echo "release-train: FAIL -- the publish plan said '${ACTION}'. Next step: read the publish log above." >&2; exit 1 ;;
+          esac
+          # The body is rendered from the structured fields only. The opener has no path for model prose.
+          node scripts/fix-open-pr.mjs --open --diff="$RUNNER_TEMP/fix-diff/work.diff" --key="$KEY" --class="$CLASS" --attempt="$ATTEMPT" --target="$TARGET" --branch="$BRANCH" --fingerprint="$FINGERPRINT" --owner="$OWNER" --gate-url="$GATE_URL"

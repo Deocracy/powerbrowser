@@ -42,7 +42,10 @@ else
 fi
 
 LOCAL_TREE=$(git rev-parse 'HEAD^{tree}')
-PLAN=$(node scripts/release-train.mjs --publish-plan "$LOCAL_TREE" "$TIP" "$TREE" "$CMP" "$BOT_EMAIL")
+# The plan is read from the script's own checkout, so the caller can run this with another repository as the working
+# directory (the fix-pr job publishes target/ while the trusted scripts come from main) without running that tree's code.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLAN=$(node "$HERE/release-train.mjs" --publish-plan "$LOCAL_TREE" "$TIP" "$TREE" "$CMP" "$BOT_EMAIL")
 ACTION=$(sed -n 's/^publish=//p' <<<"$PLAN")
 EXPECT=$(sed -n 's/^expect=//p' <<<"$PLAN")
 
