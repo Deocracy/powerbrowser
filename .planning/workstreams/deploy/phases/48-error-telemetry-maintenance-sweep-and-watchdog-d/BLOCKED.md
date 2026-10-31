@@ -63,7 +63,7 @@ live; the plans built and gated every piece locally.
   none of which run in this session.
 - **Owner steps:** from the phase clone, run `node scripts/verify-telemetry-live-delivery.mjs` inside the repo's nix
   environment. Expect one POST carrying both events after the preflight, zero requests at level off in the same run,
-  `theia/applications/browser/package.json` byte-identical afterwards, and zero marker hits in the rebuilt bundle.
+  `theia/applications/browser/package.json` byte-identical afterwards, and zero marker hits in the rebuilt bundle. The drill refuses to start on a dirty tracked tree, asserts the rebuilt bundle carries the loopback marker before it drives the page (a stale bundle would post to production), and restores `package.json` on any failure, exit, SIGINT or SIGTERM; after an interrupt, rebuild the frontend before using it.
 
 ## 6. Synthetic probe secret (owner confirmation)
 
