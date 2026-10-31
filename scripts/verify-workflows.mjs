@@ -101,6 +101,12 @@
 //                 model once the workflow_run trigger is re-added) are each a top-level && term.
 //                 Its --disallowedTools denies WebFetch and
 //                 WebSearch, and its allowed_bots is exactly renovate[bot],powerbrowser-bot[bot].
+//  app-token-inputs  Every permission-* input of an actions/create-github-app-token step is declared by
+//                 that exact pinned commit's action.yml, as recorded in .github/app-token-inputs.json (names
+//                 only, with the fetch command; one entry per pin). The action does not validate input names,
+//                 so permission-dependabot-alerts (the real name is permission-vulnerability-alerts) would mint
+//                 a token that silently lacks the permission. A pin with no record entry that requests a
+//                 permission is red too: re-fetch the list when the pin moves.
 //  dependabot     .github/dependabot.yml (Phase 51, AUTO-03): the ecosystems are exactly github-actions and
 //                 npm; no registries and no insecure-external-code-execution; no auto-merge key anywhere;
 //                 the npm entry has open-pull-requests-limit 0 (security updates only, Renovate owns the
@@ -130,6 +136,7 @@ const WF_DIR = '.github/workflows';
 const SELECTED_REL = '.github/settings/actions-selected.json';
 const PERMS_REL = '.github/settings/workflow-permissions.json';
 const DEPENDABOT_REL = '.github/dependabot.yml';
+const APP_INPUTS_REL = '.github/app-token-inputs.json';
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -148,7 +155,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate', 'app-token-inputs'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -621,6 +628,33 @@ function runChecks(root, overrides = {}) {
         if (!used.has(repo)) fail(SELECTED_REL, WF_LEVEL, 'admission-used', `patterns_allowed admits '${repo}@*', which no workflow uses. Next step: remove it from ${SELECTED_REL} and re-apply.`);
     }
 
+    // actions/create-github-app-token permission-* inputs (CR-02): the action does not validate input names.
+    {
+        let rec = overrides.appTokenInputs;
+        if (rec === undefined) {
+            try { rec = readJson(root, APP_INPUTS_REL); } catch (e) { fail(APP_INPUTS_REL, WF_LEVEL, 'app-token-inputs', `could not be read or parsed (${e.message}), so no permission-* input can be checked. Next step: restore the file.`); rec = { pins: {} }; }
+        }
+        for (const file of Object.keys(docs)) {
+            for (const [jobId, job] of Object.entries(docs[file].jobs)) {
+                for (const s of job?.steps ?? []) {
+                    const uses = String(s?.uses ?? '');
+                    if (!uses.startsWith(APP_TOKEN)) continue;
+                    const sha = uses.slice(APP_TOKEN.length).split(/\s/)[0];
+                    const requested = Object.keys(s.with ?? {}).filter(k => k.startsWith('permission-'));
+                    if (requested.length === 0) continue;
+                    const declared = rec?.pins?.[sha]?.permissionInputs;
+                    if (!Array.isArray(declared)) {
+                        fail(`${WF_DIR}/${file}`, jobId, 'app-token-inputs', `requests ${requested.join(', ')} from ${APP_TOKEN}${sha}, and ${APP_INPUTS_REL} has no entry for that commit. Next step: fetch the action.yml of that commit read-only and record its permission-* input names.`);
+                        continue;
+                    }
+                    for (const k of requested.filter(k => !declared.includes(k))) {
+                        fail(`${WF_DIR}/${file}`, jobId, 'app-token-inputs', `passes ${k}, which the pinned create-github-app-token action does not declare, so the token would be minted without that permission. Next step: use a declared name (Dependabot alerts is permission-vulnerability-alerts).`);
+                    }
+                }
+            }
+        }
+    }
+
     // dependabot.yml (AUTO-03): read as data, never parsed by the workflow rules above.
     {
         const fail1 = msg => fail(DEPENDABOT_REL, WF_LEVEL, 'dependabot', msg);
@@ -1026,6 +1060,17 @@ function selfTest() {
         ['admitted claude-code-action used by no workflow', { files: Object.fromEntries(Object.entries(base).filter(([k]) => !k.endsWith('triage.yml'))), selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
     ];
     plants.push(...fixerPlants);
+
+    // CR-02: a permission-* name the pinned create-github-app-token action does not declare.
+    const TRAIN_TEXT = files['release-train.yml'];
+    const trainEdit = (from, to) => {
+        if (!TRAIN_TEXT.includes(from)) throw new Error(`self-test anchor '${from}' is absent from ${WF_DIR}/release-train.yml`);
+        return { files: { ...files, 'release-train.yml': TRAIN_TEXT.replace(from, to) } };
+    };
+    plants.push(
+        ['an undeclared permission-dependabot-alerts input', trainEdit('permission-vulnerability-alerts: read', 'permission-dependabot-alerts: read'), rel('release-train.yml'), 'maintenance-probe', 'app-token-inputs', 'permission-dependabot-alerts'],
+        ['a permission input on a pin with no record entry', { appTokenInputs: { pins: {} } }, rel('release-train.yml'), 'maintenance-probe', 'app-token-inputs', 'has no entry for that commit'],
+    );
 
     // dependabot.yml (AUTO-03, BL-02, WR-04, WR-05, WR-06): each plant edits the real file text in memory.
     const DEP = readFileSync(join(REPO_ROOT, DEPENDABOT_REL), 'utf8');

@@ -103,6 +103,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { classifyTag, tagToVersion, UPTAKE_MAJOR } from './detect-upstreams.mjs';
+import { expiryStartMs, runChecks as renewalsStructureChecks } from './verify-renewals.mjs';
 
 const NAME = 'release-train-logic';
 const SELF_REL = 'scripts/release-train.mjs';
@@ -825,14 +826,29 @@ function runChecks(overrides = {}) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The maintenance half (Phase 48, TRAIN-07). Six rows derived from facts the sweep reads and the
+// The maintenance half (Phase 48, TRAIN-07; Phase 51, TRAIN-11). Thirteen rows derived from facts the sweep reads and the
 // probes it runs under the bot environment. Pure: facts in, rows out; render gives the pinned body.
 // The body is output only. The one read back is the previous body's row statuses, which decide a
 // transition into red (nextMaintenance) and never decide a state.
 // ---------------------------------------------------------------------------------------------
 
 export const MAINTENANCE_TITLE = 'release-train: maintenance';
-export const MAINTENANCE_ROW_NAMES = Object.freeze(['runner-online', 'esr-pin-age', 'channel-liveness', 'watchdog-age', 'synthetic events POST', 'download-count']);
+export const MAINTENANCE_ROW_NAMES = Object.freeze(['runner-online', 'esr-pin-age', 'channel-liveness', 'watchdog-age', 'synthetic events POST', 'download-count',
+    'renewals-due', 'repo-controls', 'dependabot-prs', 'dependabot-alerts', 'codeql-alerts', 'codeql-push-age', 'codeberg-mirror']);
+// Phase 51 (TRAIN-11): the owner-decided sweep thresholds live in .github/sweep-thresholds.json exactly once. The
+// sweep reads that file (the workflow passes it as facts.thresholds); docs/RELEASING.md only quotes it, and
+// sweepThresholdDocDrift fails the self-test when the quotation and the file differ. No number is kept in this script.
+export const SWEEP_THRESHOLDS_REL = '.github/sweep-thresholds.json';
+export const SWEEP_THRESHOLD_LEAD = 'Sweep red thresholds';
+const THRESHOLD_KEYS = Object.freeze(['dependabotPrMax', 'securityPrDays', 'alertMax', 'pushAgeDays']);
+const RENEWALS_WINDOW_DAYS = 30;
+const RENEWALS_NAME = 'docs/RENEWALS.md';
+// repo-controls has no live read yet. This is a named deferral, not an omission: the workflow's repoControls fact is null with the
+// marker `deferred: repo-controls-live-read` (scripts/verify-sweep-reads.mjs asserts the pair), and the row says so every day.
+const REPO_CONTROLS_DEFERRED = 'the daily live read-back is deferred: it needs the bot App to hold Administration read (owner grant) and a follow-up plan that runs scripts/verify-repo-controls.mjs in the probe; no-data until then';
+const THRESHOLDS_NOT_READ = `${SWEEP_THRESHOLDS_REL} was not read in this run`;
+const THRESHOLD_UNREADABLE = `the sweep thresholds are not readable in ${SWEEP_THRESHOLDS_REL}. Next step: keep its ${THRESHOLD_KEYS.length} keys (${THRESHOLD_KEYS.join(', ')}) as non-negative integers.`;
+const SHA_RE = /^[0-9a-f]{40}$/;
 export const SWEEP_HOUR_UTC = 6;
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -926,19 +942,215 @@ function downloadRow(f) {
     return maintRow(name, 'green', `${f.downloadRows} download-count row(s) in D1`);
 }
 
+// --- Phase 51 (TRAIN-11) rows -----------------------------------------------------------------
+
+const cellsOf = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+
 /**
- * The six maintenance rows, in the fixed order, from facts. Pure. facts: { pinTag, nowMs, tags,
+ * The Expiry column of docs/RENEWALS.md, read with the grammar scripts/verify-renewals.mjs defines (the one grammar for
+ * both checks): a whole ISO date, a bare year, or Month YYYY. A year or a month is dated at the START of that period, the
+ * earlier and fail-safe reading, so such a deadline turns the row red sooner and never later than the real one. A blank cell
+ * (does not expire) and `unknown` (not recorded) are documented absences: they are counted, not dated, not red. Any other
+ * cell is a bad line. Returns null when the Expiry column is absent (fail closed). Pure.
+ */
+export function parseRenewals(text) {
+    const lines = String(text ?? '').split('\n');
+    const header = lines.findIndex(l => l.trim().startsWith('|') && cellsOf(l).includes('Expiry'));
+    if (header === -1) return null;
+    const expiry = cellsOf(lines[header]).indexOf('Expiry');
+    const dated = [];
+    const bad = [];
+    let unknown = 0;
+    let blank = 0;
+    // header + 1 is the separator row; the data rows follow it.
+    for (let i = header + 2; i < lines.length; i += 1) {
+        if (!lines[i].trim().startsWith('|')) continue;
+        const cells = cellsOf(lines[i]);
+        const item = cells[0] ?? '';
+        const cell = cells[expiry] ?? '';
+        if (cell === '') { blank += 1; continue; }
+        if (cell === 'unknown') { unknown += 1; continue; }
+        const ms = expiryStartMs(cell);
+        if (ms === null) bad.push({ line: i + 1, item, cell });
+        else dated.push({ line: i + 1, item, cell, ms, period: !/^\d{4}-\d{2}-\d{2}$/.test(cell) });
+    }
+    return { dated, bad, unknown, blank };
+}
+
+/**
+ * The docs/RELEASING.md quotation of the thresholds against the data file: the failures, empty when they agree.
+ * Exactly one paragraph begins with SWEEP_THRESHOLD_LEAD (a second paragraph quoting the phrase cannot win by position),
+ * it cites the data file, and each of the four numbers it quotes equals the file's. Pure.
+ */
+export function sweepThresholdDocDrift(docText, data) {
+    const paras = String(docText ?? '').split(/\n\s*\n/).filter(p => p.startsWith(SWEEP_THRESHOLD_LEAD));
+    if (paras.length !== 1) return [`docs/RELEASING.md has ${paras.length} paragraphs beginning "${SWEEP_THRESHOLD_LEAD}", not exactly one. Next step: keep one paragraph that quotes ${SWEEP_THRESHOLDS_REL}.`];
+    const para = paras[0];
+    const failures = [];
+    if (!para.includes(SWEEP_THRESHOLDS_REL)) failures.push(`docs/RELEASING.md's threshold paragraph does not cite ${SWEEP_THRESHOLDS_REL}. Next step: name the file that holds the numbers.`);
+    const pick = re => { const m = re.exec(para); return m === null ? null : Number(m[1]); };
+    const quoted = {
+        dependabotPrMax: pick(/`dependabot-prs` is red when more than (\d+) Dependabot PRs/),
+        securityPrDays: pick(/any security PR is older than (\d+) days/),
+        alertMax: pick(/`dependabot-alerts` and `codeql-alerts` are red when more than (\d+) are open/),
+        pushAgeDays: pick(/`codeql-push-age` warns when the last push to the default branch is older than (\d+) days/),
+    };
+    for (const k of THRESHOLD_KEYS) {
+        if (quoted[k] === null) failures.push(`docs/RELEASING.md's threshold paragraph quotes no number for ${k}. Next step: restore the sentence for it.`);
+        else if (quoted[k] !== data?.[k]) failures.push(`docs/RELEASING.md quotes ${k} ${quoted[k]}, but ${SWEEP_THRESHOLDS_REL} holds ${JSON.stringify(data?.[k] ?? null)}. Next step: make the paragraph quote the file (the file is the one place the number lives).`);
+    }
+    return failures;
+}
+
+/** undefined when the thresholds fact was not read, null when it is not four non-negative integers, else the thresholds. */
+function thresholdsOf(f) {
+    const t = f.thresholds;
+    if (t === undefined || t === null) return undefined;
+    return typeof t === 'object' && THRESHOLD_KEYS.every(k => Number.isInteger(t[k]) && t[k] >= 0) ? t : null;
+}
+
+function renewalsRow(f) {
+    const name = 'renewals-due';
+    if (typeof f.renewalsText !== 'string') return maintRow(name, 'no-data', `${RENEWALS_NAME} was not read in this run`);
+    const parsed = parseRenewals(f.renewalsText);
+    if (parsed === null) return maintRow(name, 'red', `${RENEWALS_NAME} has no Expiry column, so the ${RENEWALS_WINDOW_DAYS}-day check cannot read it. Next step: restore the Expiry column.`);
+    const today = Math.floor(f.nowMs / DAY_MS) * DAY_MS;
+    const reds = [
+        ...parsed.bad.map(b => `${RENEWALS_NAME} line ${b.line}: ${b.item} expiry ${JSON.stringify(b.cell)} is not a date the register accepts (YYYY-MM-DD, a bare year, Month YYYY, blank or unknown)`),
+        ...parsed.dated.flatMap(d => {
+            const days = Math.round((d.ms - today) / DAY_MS);
+            if (days > RENEWALS_WINDOW_DAYS) return [];
+            return [`${RENEWALS_NAME} line ${d.line}: ${d.item} ${d.cell} ${days < 0 ? `is ${-days} day(s) overdue` : `is ${days} day(s) away`}${d.period ? ' (a year or month is dated at its start)' : ''}`];
+        }),
+    ];
+    if (reds.length > 0) return maintRow(name, 'red', reds.join('; '));
+    const periods = parsed.dated.filter(d => d.period).length;
+    return maintRow(name, 'green', `${parsed.dated.length} dated item(s) (${periods} known to a year or month only, dated at its start), none within ${RENEWALS_WINDOW_DAYS} days or overdue; ${parsed.unknown} unknown (not date-checked); ${parsed.blank} with no expiry`);
+}
+
+function repoControlsRow(f) {
+    const name = 'repo-controls';
+    const r = f.repoControls;
+    if (r === null || typeof r !== 'object') return maintRow(name, 'no-data', REPO_CONTROLS_DEFERRED);
+    if (r.ok === true) return maintRow(name, 'green', 'the full read-back matches every declared control');
+    const drift = Array.isArray(r.drift) ? r.drift.map(String) : [];
+    return maintRow(name, 'red', drift.length > 0 ? `read-back drift: ${drift.join('; ')}` : 'the full read-back failed without naming a control');
+}
+
+function dependabotPrsRow(f) {
+    const name = 'dependabot-prs';
+    if (!Array.isArray(f.dependabotPrs)) return maintRow(name, 'no-data', NOT_PROBED);
+    const t = thresholdsOf(f);
+    if (t === undefined) return maintRow(name, 'no-data', THRESHOLDS_NOT_READ);
+    if (t === null) return maintRow(name, 'red', THRESHOLD_UNREADABLE);
+    if (f.dependabotPrs.some(p => !p || typeof p.createdMs !== 'number' || typeof p.security !== 'boolean')) {
+        return maintRow(name, 'no-data', 'a Dependabot PR was read without its open date or security flag');
+    }
+    const open = f.dependabotPrs.length;
+    const stale = f.dependabotPrs.filter(p => p.security && f.nowMs - p.createdMs > t.securityPrDays * DAY_MS).length;
+    if (open > t.dependabotPrMax || stale > 0) {
+        return maintRow(name, 'red', `${open} open Dependabot PR(s) against a limit of ${t.dependabotPrMax}; ${stale} security PR(s) older than ${t.securityPrDays} days`);
+    }
+    return maintRow(name, 'green', `${open} open Dependabot PR(s); no security PR older than ${t.securityPrDays} days`);
+}
+
+function alertCountRow(name, label, count, f) {
+    if (typeof count !== 'number') return maintRow(name, 'no-data', NOT_PROBED);
+    const t = thresholdsOf(f);
+    if (t === undefined) return maintRow(name, 'no-data', THRESHOLDS_NOT_READ);
+    if (t === null) return maintRow(name, 'red', THRESHOLD_UNREADABLE);
+    return count > t.alertMax
+        ? maintRow(name, 'red', `${count} open ${label} alert(s) against a limit of ${t.alertMax}`)
+        : maintRow(name, 'green', `${count} open ${label} alert(s)`);
+}
+
+function codeqlPushAgeRow(f) {
+    const name = 'codeql-push-age';
+    if (typeof f.codeqlLastPushMs !== 'number') return maintRow(name, 'no-data', NOT_PROBED);
+    const t = thresholdsOf(f);
+    if (t === undefined) return maintRow(name, 'no-data', THRESHOLDS_NOT_READ);
+    if (t === null) return maintRow(name, 'red', THRESHOLD_UNREADABLE);
+    const days = Math.floor((f.nowMs - f.codeqlLastPushMs) / DAY_MS);
+    return f.nowMs - f.codeqlLastPushMs > t.pushAgeDays * DAY_MS
+        ? maintRow(name, 'red', `the last push to the default branch is ${days} day(s) old, past the ${t.pushAgeDays}-day warning before the CodeQL default-setup auto-disable`)
+        : maintRow(name, 'green', `the last push to the default branch is ${days} day(s) old`);
+}
+
+/**
+ * Codeberg main against GitHub's default branch. The probe writes nothing when no mirror is declared (the
+ * vars.CODEBERG_MIRROR slug is unset): that is no-data naming the Phase 53 mirror. When a mirror is declared it
+ * always writes { configured: true, codeberg, github }, each side a full 40-hex lowercase SHA or null for a side
+ * that could not be read. A declared mirror that did not answer with a SHA is red (a deleted or renamed mirror
+ * must not hide forever); a GitHub side that could not be read is no-data (not the mirror's fault). Pure.
+ */
+function codebergRow(f) {
+    const name = 'codeberg-mirror';
+    const c = f.codeberg;
+    if (c === null || typeof c !== 'object' || c.configured !== true) {
+        return maintRow(name, 'no-data', 'no Codeberg mirror is declared (vars.CODEBERG_MIRROR is unset); the row renders no-data until the Phase 53 mirror exists');
+    }
+    if (!SHA_RE.test(c.github ?? '')) return maintRow(name, 'no-data', 'a Codeberg mirror is declared, but GitHub main could not be read as a full SHA this run');
+    if (!SHA_RE.test(c.codeberg ?? '')) return maintRow(name, 'red', 'a Codeberg mirror is declared, but it did not answer with a full main SHA (unreachable, renamed or deleted)');
+    return c.codeberg === c.github
+        ? maintRow(name, 'green', `Codeberg main ${c.codeberg.slice(0, 12)} matches GitHub main`)
+        : maintRow(name, 'red', `Codeberg main ${c.codeberg.slice(0, 12)} differs from GitHub main ${c.github.slice(0, 12)}`);
+}
+
+/**
+ * The thirteen maintenance rows, in the fixed order, from facts. Pure. facts: { pinTag, nowMs, tags,
  * tagDates, releases, advisoryEsr, runnersOnline, watchdogProbed, watchdogStartedAtMs,
- * syntheticStatus, syntheticAcked, channelOk, downloadRows }. A value the sweep did not observe is null (or
- * watchdogProbed false), which renders as no-data, never as green.
+ * syntheticStatus, syntheticAcked, channelOk, downloadRows } for the Phase 48 six, and { renewalsText,
+ * thresholds, repoControls, dependabotPrs, dependabotAlerts, codeqlAlerts, codeqlLastPushMs, codeberg } for
+ * the Phase 51 seven. A value the sweep did not observe is null (or undefined, or watchdogProbed false), which
+ * renders as no-data, never as green.
  */
 export function deriveMaintenance(facts) {
     if (typeof facts?.nowMs !== 'number' || !Number.isFinite(facts.nowMs)) {
         throw new Error('the maintenance facts carry no nowMs; the sweep must pass the run clock');
     }
     return {
-        rows: [runnerRow(facts), esrPinRow(facts), channelRow(facts), watchdogRow(facts), syntheticRow(facts), downloadRow(facts)],
+        rows: [
+            runnerRow(facts), esrPinRow(facts), channelRow(facts), watchdogRow(facts), syntheticRow(facts), downloadRow(facts),
+            renewalsRow(facts), repoControlsRow(facts), dependabotPrsRow(facts),
+            alertCountRow('dependabot-alerts', 'Dependabot', facts.dependabotAlerts, facts),
+            alertCountRow('codeql-alerts', 'CodeQL', facts.codeqlAlerts, facts),
+            codeqlPushAgeRow(facts), codebergRow(facts),
+        ],
     };
+}
+
+/**
+ * The fact keys the workflow's "Build the facts" step produces, derived by running its jq object literal with every
+ * variable null (jq itself decides the keys, so no list is kept). Returns null when the literal cannot be found or jq fails.
+ */
+export function workflowFactKeys(workflowText) {
+    const end = String(workflowText).indexOf('}\' > "$RUNNER_TEMP/maintenance-facts.json"');
+    const start = end === -1 ? -1 : workflowText.lastIndexOf("'{", end);
+    if (start === -1) return null;
+    const program = workflowText.slice(start + 1, end + 1);
+    const vars = [...new Set([...program.matchAll(/\$([A-Za-z_]\w*)/g)].map(m => m[1]))];
+    const r = spawnSync('jq', ['-n', '-c', ...vars.flatMap(v => ['--argjson', v, 'null']), program], { encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    try { return Object.keys(JSON.parse(r.stdout)).sort(); } catch { return null; }
+}
+
+/** The fact keys deriveMaintenance reads over the given fact sets, recorded by a Proxy (the union, since a row may stop early). */
+export function factKeysRead(factSets) {
+    const seen = new Set();
+    for (const f of factSets) {
+        deriveMaintenance(new Proxy(f, { get(t, k) { if (typeof k === 'string') seen.add(k); return t[k]; } }));
+    }
+    return [...seen].sort();
+}
+
+/** Set equality of the fact keys the workflow builds and the keys the rows read: the drift, empty when they agree. Pure. */
+export function factKeyDrift(workflowKeys, readKeys) {
+    if (workflowKeys === null) return ['the workflow facts step has no readable jq object literal. Next step: restore the "Build the facts" step.'];
+    const { onlyA, onlyB } = setDiff(workflowKeys, readKeys);
+    return [
+        ...onlyA.map(k => `the workflow builds fact ${k}, which deriveMaintenance never reads. Next step: remove it or fix the key it was meant to be.`),
+        ...onlyB.map(k => `deriveMaintenance reads fact ${k}, which the workflow never builds, so its row renders no-data forever. Next step: build it in the facts step.`),
+    ];
 }
 
 /** The pinned body: the title, the six rows in the fixed order, and the debug snapshot. Pure and byte-stable. */
@@ -976,7 +1188,7 @@ export function parseRows(body) {
 export function maintenanceRowDrift(state, body) {
     const failures = [];
     const derived = state.rows.map(r => r.name);
-    for (const n of derived) if (!MAINTENANCE_ROW_NAMES.includes(n)) failures.push(`row ${n} is not one of the six maintenance rows. Next step: remove it, or add it in a later phase's plan.`);
+    for (const n of derived) if (!MAINTENANCE_ROW_NAMES.includes(n)) failures.push(`row ${n} is not one of the thirteen maintenance rows. Next step: remove it, or add it in a later phase's plan.`);
     for (const n of MAINTENANCE_ROW_NAMES) if (!derived.includes(n)) failures.push(`row ${n} is missing from the derived state. Next step: restore it in deriveMaintenance.`);
     const rendered = parseRows(body).map(r => r.name);
     const { onlyA, onlyB } = setDiff(derived, rendered);
@@ -1085,7 +1297,8 @@ export function statusesOf(body) {
  * decision (create, update with a patch flag, or fail) comes from findExactlyOne over the pinned issues.
  * A comment is posted only for a row red now that was not red in the stored previous state. The body
  * of the issue is never the source of the previous statuses: when the stored state is missing or names
- * another issue, every red row is newly red (fail-safe notify). A staying-red re-run posts no comment.
+ * another issue, every red row is newly red (fail-safe notify). A staying-red re-run posts no comment, and neither
+ * does a red that returns after a no-data day (the stored state carries the red through no-data).
  * Returns the plan and the state to store for the next run. Pure.
  */
 export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = null } = {}) {
@@ -1093,11 +1306,14 @@ export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = 
     // The owner creates the issue in the web UI (CRLF), and the API may trim the final newline: compare the
     // normalised bytes so the PATCH runs on a real difference only.
     const decision = findExactlyOne(pinned.map(i => ({ ...i, body: normBody(i.body) })), { ...rendered, body: normBody(rendered.body) });
-    const state = { number: pinned.length === 1 ? pinned[0].number : null, statuses: statusesOf(rendered.body) };
-    if (decision.action !== 'update') return { ...decision, comment: null, newlyRed: [], state };
-    const usable = stored !== null && typeof stored === 'object' && stored.number === pinned[0].number
+    const usable = pinned.length === 1 && stored !== null && typeof stored === 'object' && stored.number === pinned[0].number
         && stored.statuses !== null && typeof stored.statuses === 'object';
     const prior = usable ? stored.statuses : null;
+    // A row that reads no-data between two reds is the same unresolved condition, not a recovery: the stored state keeps the
+    // last red through a no-data day, so red, no-data, red posts one comment. Only a green day (an observed recovery) resets it.
+    const carried = Object.fromEntries(Object.entries(statusesOf(rendered.body)).map(([n, st]) => [n, st === 'no-data' && prior?.[n] === 'red' ? 'red' : st]));
+    const state = { number: pinned.length === 1 ? pinned[0].number : null, statuses: carried };
+    if (decision.action !== 'update') return { ...decision, comment: null, newlyRed: [], state };
     const newlyRed = parseRows(rendered.body).filter(r => r.status === 'red' && (prior === null || prior[r.name] !== 'red'));
     if (newlyRed.length === 0) return { ...decision, comment: null, newlyRed: [], state };
     return { ...decision, comment: transitionComment(newlyRed, ownerLogin), newlyRed: newlyRed.map(r => r.name), state };
@@ -1197,6 +1413,16 @@ function maintenanceSelfTest() {
     const OWNER = 'owner-login-fixture';
     const STRANGER = 'stranger-login-fixture';
     const REPO_FIXTURE = 'DeBIOS-Foundation/powerbrowser';
+    // Phase 51 fixtures: a RENEWALS table with the given Expiry cells (line 3 is the first data row), the RELEASING
+    // threshold paragraph as the owner wrote it, and the day of an instant as the strict ISO text the table holds.
+    const isoOf = ms => new Date(ms).toISOString().slice(0, 10);
+    const renewalsOf = (...expiries) => ['| Item | Expiry | Last checked | Owner action | Source |', '| --- | --- | --- | --- | --- |',
+        ...expiries.map((e, i) => `| Item ${i} | ${e} | 2026-10-29 | act | X |`)].join('\n');
+    // The thresholds the rows run on are the tracked file's: every boundary below is derived from it, never hand-kept.
+    const T = JSON.parse(readFileSync(join(REPO_ROOT, SWEEP_THRESHOLDS_REL), 'utf8'));
+    const RELEASING_TEXT = readFileSync(join(REPO_ROOT, 'docs', 'RELEASING.md'), 'utf8');
+    const WORKFLOW_TEXT = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'release-train.yml'), 'utf8');
+    const prs = (n, over = {}) => Array.from({ length: n }, () => ({ createdMs: NOW - DAY_MS, security: false, ...over }));
     const facts = (over = {}) => ({
         pinTag: BASE_PIN,
         nowMs: NOW,
@@ -1211,13 +1437,29 @@ function maintenanceSelfTest() {
         syntheticAcked: true,
         channelOk: null,
         downloadRows: 0,
+        renewalsText: renewalsOf(isoOf(NOW + 400 * DAY_MS), '', 'unknown'),
+        thresholds: T,
+        repoControls: null,
+        dependabotPrs: [],
+        dependabotAlerts: 0,
+        codeqlAlerts: 0,
+        codeqlLastPushMs: NOW - 10 * DAY_MS,
+        codeberg: null,
         ...over,
     });
     const stateOf = f => deriveMaintenance(f);
     const statuses = s => Object.fromEntries(s.rows.map(r => [r.name, r.status]));
     const reds = s => s.rows.filter(r => r.status === 'red').map(r => `${r.name} red: ${r.evidence}`);
     const wantStatuses = (s, want) => Object.keys(want).filter(k => statuses(s)[k] !== want[k]).map(k => `${k} is ${statuses(s)[k]}, not ${want[k]}`);
-    const DEFERRED_GREEN = { 'runner-online': 'green', 'esr-pin-age': 'green', 'channel-liveness': 'no-data', 'watchdog-age': 'green', 'synthetic events POST': 'green', 'download-count': 'no-data' };
+    const DEFERRED_GREEN = { 'runner-online': 'green', 'esr-pin-age': 'green', 'channel-liveness': 'no-data', 'watchdog-age': 'green', 'synthetic events POST': 'green', 'download-count': 'no-data',
+        'renewals-due': 'green', 'repo-controls': 'no-data', 'dependabot-prs': 'green', 'dependabot-alerts': 'green', 'codeql-alerts': 'green', 'codeql-push-age': 'green', 'codeberg-mirror': 'no-data' };
+    // The Phase 51 rows of one fixture, read by the boundary controls and plants below.
+    const rowOf = (s, name) => s.rows.find(r => r.name === name);
+    const NO_PHASE51 = { renewalsText: null, thresholds: null, repoControls: null, dependabotPrs: null, dependabotAlerts: null, codeqlAlerts: null, codeqlLastPushMs: null, codeberg: null };
+    const SHA_A = 'a'.repeat(40);
+    const SHA_B = 'b'.repeat(40);
+    const REN_ROW = (...e) => renewalsOf(...e);
+    const day = n => isoOf(NOW + n * DAY_MS);
     const priorBody = renderMaintenance(stateOf(facts())).body;
     const issueBy = (body, login = OWNER, number = 7) => ({ number, title: MAINTENANCE_TITLE, body, author: { login }, labels: [{ name: 'release-train' }] });
     const TWO_RED = facts({ watchdogStartedAtMs: NOW - 27 * HOUR_MS, syntheticStatus: 500 });
@@ -1278,7 +1520,90 @@ function maintenanceSelfTest() {
         { name: 'control: a 153 tag five days old with a published Release stays green', run: () => wantStatuses(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [{ tag_name: 'v153.6.0-1', draft: false, prerelease: false }] })), { 'esr-pin-age': 'green' }) },
         { name: 'control: a watchdog run 25 hours old stays green', run: () => wantStatuses(stateOf(facts({ watchdogStartedAtMs: NOW - 25 * HOUR_MS })), { 'watchdog-age': 'green' }) },
         { name: 'control: zero online runners is no-data naming Phase 49', run: () => { const r = stateOf(facts({ runnersOnline: 0 })).rows.find(x => x.name === 'runner-online'); return r.status === 'no-data' && r.evidence.includes('Phase 49') ? [] : [`runner-online is ${r.status} with "${r.evidence}"`]; } },
-        { name: 'control: an empty facts response renders six no-data rows', run: () => { const s = stateOf(facts({ tags: [], tagDates: {}, releases: [], runnersOnline: null, watchdogProbed: false, syntheticStatus: null, channelOk: null, downloadRows: 0 })); return s.rows.length === 6 && s.rows.every(r => r.status === 'no-data') ? [] : [`empty facts gave ${JSON.stringify(statuses(s))}`]; } },
+        { name: 'control: an empty facts response renders thirteen no-data rows', run: () => { const s = stateOf(facts({ tags: [], tagDates: {}, releases: [], runnersOnline: null, watchdogProbed: false, syntheticStatus: null, channelOk: null, downloadRows: 0, ...NO_PHASE51 })); return s.rows.length === 13 && s.rows.every(r => r.status === 'no-data') ? [] : [`empty facts gave ${JSON.stringify(statuses(s))}`]; } },
+        // TRAIN-11 boundaries. renewals-due is red for 0 <= days-until <= 30 (exactly 30 red, 31 green), overdue red, unparseable red naming the line.
+        { name: 'control: a renewals date 31 days away stays green', run: () => (rowOf(stateOf(facts({ renewalsText: REN_ROW(day(31)) })), 'renewals-due').status === 'green' ? [] : ['a date 31 days away is not green']) },
+        { name: 'control: blank and unknown expiry cells are documented absences, not red', run: () => (rowOf(stateOf(facts({ renewalsText: REN_ROW('', 'unknown') })), 'renewals-due').status === 'green' ? [] : ['a blank or unknown expiry turned renewals-due red']) },
+        { name: 'control: the tracked RENEWALS.md has no bad cell, agrees with the register check, and its Node 24 row is 2028-04-30', run: () => {
+            const text = readFileSync(join(REPO_ROOT, 'docs', 'RENEWALS.md'), 'utf8');
+            const parsed = parseRenewals(text);
+            if (parsed === null) return ['docs/RENEWALS.md has no Expiry column'];
+            const failures = parsed.bad.map(b => `docs/RENEWALS.md line ${b.line}: ${b.item} expiry ${JSON.stringify(b.cell)} is bad for the sweep`);
+            // The commit gate and the sweep must call the same cells valid: the register check finds no Expiry problem either.
+            failures.push(...renewalsStructureChecks(REPO_ROOT, { text }).failures.filter(f => f.includes('Expiry cell')));
+            if (!parsed.dated.some(d => d.item === 'Node 24 end of life' && d.cell === '2028-04-30')) failures.push('the Node 24 row is not a dated 2028-04-30 item');
+            return failures;
+        } },
+        { name: 'control: a bare year and Month YYYY are dated at the start of the period, and the evidence counts unknown and blank items', run: () => {
+            const r = rowOf(stateOf(facts({ renewalsText: REN_ROW('2046', 'April 2030', 'unknown', 'unknown', '') })), 'renewals-due');
+            return r.status === 'green' && r.evidence.includes('2 dated item(s) (2 known to a year or month only') && r.evidence.includes('2 unknown (not date-checked)') && r.evidence.includes('1 with no expiry') ? [] : [`renewals-due gave ${r.status}: ${r.evidence}`];
+        } },
+        // The thresholds are read from the data file; the RELEASING paragraph only quotes it, and the quotation is compared to the file.
+        { name: 'control: the tracked thresholds file is valid and the RELEASING.md paragraph quotes exactly its numbers', run: () => {
+            const failures = [];
+            if (!THRESHOLD_KEYS.every(k => Number.isInteger(T[k]) && T[k] >= 0) || Object.keys(T).length !== THRESHOLD_KEYS.length) failures.push(`${SWEEP_THRESHOLDS_REL} is not exactly ${THRESHOLD_KEYS.join(', ')} as non-negative integers: ${JSON.stringify(T)}`);
+            return [...failures, ...sweepThresholdDocDrift(RELEASING_TEXT, T)];
+        } },
+        { name: 'control: the facts the workflow builds are exactly the facts deriveMaintenance reads', run: () => factKeyDrift(workflowFactKeys(WORKFLOW_TEXT), factKeysRead([facts(), facts({ tags: [], tagDates: {}, releases: [], ...NO_PHASE51 }), { nowMs: NOW }])) },
+        { name: 'control: the workflow render step reads the thresholds file the rows run on', run: () => (WORKFLOW_TEXT.includes(SWEEP_THRESHOLDS_REL) ? [] : [`.github/workflows/release-train.yml never reads ${SWEEP_THRESHOLDS_REL}, so the sweep would run on no thresholds`]) },
+        { name: 'control: the file thresholds are what the rows judge by', run: () => {
+            const f = { dependabotPrs: prs(T.dependabotPrMax), dependabotAlerts: T.alertMax, codeqlAlerts: T.alertMax };
+            const s = stateOf(facts(f));
+            return wantStatuses(s, { 'dependabot-prs': 'green', 'dependabot-alerts': 'green', 'codeql-alerts': 'green' });
+        } },
+        { name: 'control: a security Dependabot PR exactly at the file day limit is not red', run: () => (rowOf(stateOf(facts({ dependabotPrs: [{ createdMs: NOW - T.securityPrDays * DAY_MS, security: true }] })), 'dependabot-prs').status === 'green' ? [] : ['a security PR at the day limit is not green']) },
+        { name: 'control: a non-security Dependabot PR far older than the security limit stays green', run: () => (rowOf(stateOf(facts({ dependabotPrs: [{ createdMs: NOW - (T.securityPrDays + 30) * DAY_MS, security: false }] })), 'dependabot-prs').status === 'green' ? [] : ['an old non-security PR turned the row red']) },
+        { name: 'control: PR and alert facts with the thresholds not read are no-data naming the file, not not-probed', run: () => {
+            const s = stateOf(facts({ thresholds: null }));
+            const names = ['dependabot-prs', 'dependabot-alerts', 'codeql-alerts', 'codeql-push-age'];
+            const bad = names.filter(n => { const r = rowOf(s, n); return r.status !== 'no-data' || !r.evidence.includes(SWEEP_THRESHOLDS_REL); });
+            return bad.length === 0 ? [] : [`${bad.join(', ')} did not render no-data naming ${SWEEP_THRESHOLDS_REL}`];
+        } },
+        { name: 'control: the file push-age limit exactly is not red', run: () => (rowOf(stateOf(facts({ codeqlLastPushMs: NOW - T.pushAgeDays * DAY_MS })), 'codeql-push-age').status === 'green' ? [] : ['a push at the age limit is not green']) },
+        { name: 'control: the repo-controls no-data row names its deferral and the workflow carries the marker', run: () => {
+            const r = rowOf(stateOf(facts({ repoControls: null })), 'repo-controls');
+            const marked = /^\s*repoControls:\s*null\s*,/m.test(WORKFLOW_TEXT) === WORKFLOW_TEXT.includes('deferred: repo-controls-live-read');
+            return r.status === 'no-data' && r.evidence.includes('deferred') && marked ? [] : [`repo-controls gave ${r.status}: ${r.evidence}; marker consistent: ${marked}`];
+        } },
+        { name: 'control: a Codeberg no-data row is green-with-note and writes no comment', run: () => {
+            const s = stateOf(facts({ codeberg: null }));
+            const d = nextMaintenance([issueBy(renderMaintenance(s).body)], renderMaintenance(s), { ownerLogin: OWNER, stored: null });
+            const r = rowOf(s, 'codeberg-mirror');
+            return r.status === 'no-data' && r.evidence.includes('Phase 53') && d.comment === null && s.rows.every(x => x.status !== 'red') ? [] : [`codeberg no-data gave ${r.status} and a comment=${d.comment !== null}`];
+        } },
+        { name: 'control: a planted red row produces exactly one comment naming it', run: () => {
+            const prior = renderMaintenance(stateOf(facts())).body;
+            const d = nextMaintenance([issueBy(prior)], renderMaintenance(stateOf(facts({ renewalsText: REN_ROW(day(5)) }))), { ownerLogin: OWNER, stored: storedOf(prior) });
+            const lines = (d.comment ?? '').split('\n').filter(l => l.startsWith('- '));
+            return d.newlyRed.join(',') === 'renewals-due' && lines.length === 1 && lines[0].startsWith('- renewals-due:') ? [] : [`the planted red row gave ${JSON.stringify(d.newlyRed)} with ${lines.length} comment line(s)`];
+        } },
+        { name: 'control: two identical full SHAs render green, an unset mirror and an unreadable GitHub side are no-data', run: () => {
+            const row = c => rowOf(stateOf(facts({ codeberg: c })), 'codeberg-mirror').status;
+            const got = [row({ configured: true, codeberg: SHA_A, github: SHA_A }), row(null), row({ configured: true, codeberg: SHA_A, github: null }), row({ codeberg: SHA_A, github: SHA_A })];
+            return got.join(',') === 'green,no-data,no-data,no-data' ? [] : [`equal SHAs, an unset mirror, an unreadable GitHub side and an undeclared pair gave ${got.join(',')}`];
+        } },
+        { name: 'control: two sweep renders over unchanged facts print byte-identical bodies', run: () => {
+            const f = () => facts({ renewalsText: REN_ROW(day(12)), dependabotAlerts: 2, codeberg: { configured: true, codeberg: SHA_A, github: SHA_B } });
+            const one = renderMaintenance(stateOf(f())).body;
+            const two = renderMaintenance(stateOf(f())).body;
+            return one === two ? [] : ['two renders over the same facts differ'];
+        } },
+        { name: 'control: red, no-data, red posts exactly one comment, and red, green, red posts two', run: () => {
+            const redNow = renderMaintenance(stateOf(facts({ dependabotAlerts: T.alertMax + 1 })));
+            const noData = renderMaintenance(stateOf(facts({ dependabotAlerts: null })));
+            const green = renderMaintenance(stateOf(facts()));
+            const step = (prevState, rendered) => nextMaintenance([issueBy(rendered.body)], rendered, { ownerLogin: OWNER, stored: prevState });
+            const first = step(storedOf(priorBody), redNow);
+            const mid = step(first.state, noData);
+            const again = step(mid.state, redNow);
+            const afterGreen = step(step(first.state, green).state, redNow);
+            const failures = [];
+            if (first.comment === null) failures.push('the first red posted no comment');
+            if (mid.state.statuses['dependabot-alerts'] !== 'red') failures.push(`the no-data day stored ${mid.state.statuses['dependabot-alerts']}, not the carried red`);
+            if (again.comment !== null) failures.push('a red after one no-data day posted a second comment for one unresolved condition');
+            if (afterGreen.comment === null) failures.push('a red after an observed green posted no comment');
+            return failures;
+        } },
         { name: 'control: two rows turn red together and the transition posts one comment naming both', run: () => {
             const d = nextMaintenance([issueBy(priorBody)], redRendered, { ownerLogin: OWNER, stored: storedOf(priorBody) });
             const named = ['watchdog-age', 'synthetic events POST'].every(n => d.comment?.includes(n));
@@ -1408,7 +1733,32 @@ function maintenanceSelfTest() {
         { name: 'a watchdog run 27 hours old', run: () => reds(stateOf(facts({ watchdogStartedAtMs: NOW - 27 * HOUR_MS }))), expect: 'started 27 h ago' },
         { name: 'no watchdog run recorded', run: () => reds(stateOf(facts({ watchdogStartedAtMs: null }))), expect: 'no watchdog run recorded' },
         { name: 'a synthetic events POST answering 500', run: () => reds(stateOf(facts({ syntheticStatus: 500 }))), expect: 'answered 500' },
-        { name: 'a seventh row for a later phase', run: () => { const s = stateOf(facts()); return maintenanceRowDrift({ rows: [...s.rows, maintRow('renewals-due', 'green', 'x')] }, renderMaintenance(s).body); }, expect: 'renewals-due' },
+        { name: 'a fourteenth row outside the thirteen', run: () => { const s = stateOf(facts()); return maintenanceRowDrift({ rows: [...s.rows, maintRow('future-row', 'green', 'x')] }, renderMaintenance(s).body); }, expect: 'future-row' },
+        // TRAIN-11 red plants: each boundary and threshold must go red naming its drift.
+        { name: 'a renewals date exactly 30 days away', run: () => reds(stateOf(facts({ renewalsText: REN_ROW(day(30)) }))), expect: 'is 30 day(s) away' },
+        { name: 'a renewals date overdue', run: () => reds(stateOf(facts({ renewalsText: REN_ROW(day(-3)) }))), expect: 'is 3 day(s) overdue' },
+        { name: 'an unparseable renewals date names its line', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2027/01/05') }))), expect: 'docs/RENEWALS.md line 3: Item 0 expiry "2027/01/05" is not a date the register accepts' },
+        { name: 'an impossible renewals date (2027-02-30) is refused', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2027-02-30') }))), expect: 'is not a date the register accepts' },
+        { name: 'a bare year already begun is dated at its start and overdue', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2026') }))), expect: 'Item 0 2026 is 304 day(s) overdue (a year or month is dated at its start)' },
+        { name: 'a Month YYYY exactly 30 days away', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('December 2026') }))), expect: 'December 2026 is 30 day(s) away' },
+        { name: 'a RENEWALS.md without an Expiry column', run: () => reds(stateOf(facts({ renewalsText: '| Item | Due |\n| --- | --- |\n| x | 2027-01-01 |' }))), expect: 'has no Expiry column' },
+        { name: 'a fact key mistyped in the workflow facts step', run: () => factKeyDrift(workflowFactKeys(WORKFLOW_TEXT.replace('codeqlLastPushMs:', 'codeqlLastPushMS:')), factKeysRead([facts(), { nowMs: NOW }])), expect: 'deriveMaintenance reads fact codeqlLastPushMs, which the workflow never builds' },
+        { name: 'a dead fact the workflow builds and no row reads', run: () => factKeyDrift(workflowFactKeys(WORKFLOW_TEXT.replace('codeberg: $cb', 'codeberg: $cb, deadFact: 1')), factKeysRead([facts(), { nowMs: NOW }])), expect: 'builds fact deadFact, which deriveMaintenance never reads' },
+        { name: 'a workflow whose facts literal is gone', run: () => factKeyDrift(workflowFactKeys('no facts here'), []), expect: 'no readable jq object literal' },
+        { name: 'a thresholds fact with a missing number', run: () => reds(stateOf(facts({ thresholds: { ...T, pushAgeDays: undefined } }))), expect: `are not readable in ${SWEEP_THRESHOLDS_REL}` },
+        { name: 'a thresholds fact with a negative number', run: () => reds(stateOf(facts({ thresholds: { ...T, alertMax: -1 } }))), expect: `are not readable in ${SWEEP_THRESHOLDS_REL}` },
+        { name: 'one more Dependabot PR open than the file limit', run: () => reds(stateOf(facts({ dependabotPrs: prs(T.dependabotPrMax + 1) }))), expect: `${T.dependabotPrMax + 1} open Dependabot PR(s) against a limit of ${T.dependabotPrMax}` },
+        { name: 'a security Dependabot PR one day past the file limit', run: () => reds(stateOf(facts({ dependabotPrs: [{ createdMs: NOW - (T.securityPrDays + 1) * DAY_MS, security: true }] }))), expect: `1 security PR(s) older than ${T.securityPrDays} days` },
+        { name: 'one more Dependabot alert than the file limit', run: () => reds(stateOf(facts({ dependabotAlerts: T.alertMax + 1 }))), expect: `${T.alertMax + 1} open Dependabot alert(s) against a limit of ${T.alertMax}` },
+        { name: 'one more CodeQL alert than the file limit', run: () => reds(stateOf(facts({ codeqlAlerts: T.alertMax + 1 }))), expect: `${T.alertMax + 1} open CodeQL alert(s) against a limit of ${T.alertMax}` },
+        { name: 'a last push one day past the file age limit', run: () => reds(stateOf(facts({ codeqlLastPushMs: NOW - (T.pushAgeDays + 1) * DAY_MS }))), expect: `past the ${T.pushAgeDays}-day warning` },
+        { name: 'a RELEASING.md paragraph quoting a different number than the file', run: () => sweepThresholdDocDrift(RELEASING_TEXT.replace(`more than ${T.dependabotPrMax} Dependabot PRs`, `more than ${T.dependabotPrMax + 45} Dependabot PRs`), T), expect: `quotes dependabotPrMax ${T.dependabotPrMax + 45}, but ${SWEEP_THRESHOLDS_REL} holds ${T.dependabotPrMax}` },
+        { name: 'a RELEASING.md paragraph that no longer cites the file', run: () => sweepThresholdDocDrift(RELEASING_TEXT.replace(SWEEP_THRESHOLDS_REL, 'a file'), T), expect: 'does not cite' },
+        { name: 'a RELEASING.md second paragraph quoting the lead phrase', run: () => sweepThresholdDocDrift(`${SWEEP_THRESHOLD_LEAD}: an earlier paragraph.\n\n${RELEASING_TEXT}`, T), expect: 'not exactly one' },
+        { name: 'a RELEASING.md threshold sentence deleted', run: () => sweepThresholdDocDrift(RELEASING_TEXT.replace(/`codeql-push-age` warns when[^\n]*older than \d+ days/, '`codeql-push-age` is not described'), T), expect: 'quotes no number for pushAgeDays' },
+        { name: 'Codeberg main lagging GitHub main by full SHA', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: SHA_A, github: SHA_B } }))), expect: 'differs from GitHub main' },
+        { name: 'a declared Codeberg mirror that did not answer', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: null, github: SHA_B } }))), expect: 'did not answer with a full main SHA' },
+        { name: 'a declared Codeberg mirror that answered a short SHA', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: 'abc1234', github: SHA_B } }))), expect: 'did not answer with a full main SHA' },
         { name: 'two owner-authored tracking issues share the maintenance title', run: () => { const d = nextMaintenance([issueBy(priorBody, OWNER, 7), issueBy('other', OWNER, 9)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: null }); return d.action === 'fail' ? [d.reason] : []; }, expect: 'open tracking issues' },
         // Each state plant breaks exactly one rule of the one admissible run and calls the real selector, so deleting
         // that rule from selectStateArtifact turns exactly that plant green and the self-test red.
@@ -1433,6 +1783,12 @@ function maintenanceSelfTest() {
             run: () => (selectStateRun(withState(mutate)) === null ? [`${label} was refused as the previous state`] : []),
             expect: 'was refused as the previous state',
         })),
+        { name: 'a stored state that recorded no-data over a red (the carry lost)', run: () => {
+            const redNow = renderMaintenance(stateOf(facts({ dependabotAlerts: T.alertMax + 1 })));
+            const stored = { number: 7, statuses: { ...statusesOf(redNow.body), 'dependabot-alerts': 'no-data' } };
+            const d = nextMaintenance([issueBy(redNow.body)], redNow, { ownerLogin: OWNER, stored });
+            return d.comment === null ? [] : ['a red after a no-data day was re-commented for one unresolved condition'];
+        }, expect: 'was re-commented for one unresolved condition' },
         { name: 'a stored state that names another issue', run: () => {
             const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: { number: 99, statuses: statusesOf(redBody) } });
             return d.newlyRed.length > 0 ? ['a stored state of another issue was ignored, so every red row is newly red'] : [];
@@ -2104,7 +2460,7 @@ function selfTest() {
         return 1;
     }
     const total = trainPlants.length + conflictPlants.length + viewPlants.length + publishPlants.length + uptakePlants.length;
-    console.log(`${NAME}: --self-test PASS -- ${Object.keys(ALL_STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length + uptakeGreens.length} controls stayed green; maintenance half: ${maint.total} case(s) proven (six rows, no-data branches, transition comments, exactly-one, fork head, draft Release)`);
+    console.log(`${NAME}: --self-test PASS -- ${Object.keys(ALL_STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length + uptakeGreens.length} controls stayed green; maintenance half: ${maint.total} case(s) proven (thirteen rows, no-data branches, transition comments, exactly-one, fork head, draft Release)`);
     return 0;
 }
 

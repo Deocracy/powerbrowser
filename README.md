@@ -44,7 +44,7 @@ Firefox ESR + Eclipse Theia     upstream — consumed, never modified
   reachable. No custom browser chrome is authored.
 
 Keeping the patch stack small is what keeps upstream updates cheap: ESR rebases
-roughly every four weeks, Theia upgrades by changing a version number.
+roughly every two weeks, Theia upgrades by changing a version number.
 
 ## Rebranding
 

@@ -1036,8 +1036,8 @@ alongside the asset hosts -- not a new row here.
 
 ### Cadence
 
-One release per ESR point release, roughly every four weeks, plus out-of-cycle
-security releases. Each costs one rebase drill through `scripts/rebase-upstream.sh`
+One release per ESR point release, roughly every two weeks, plus out-of-cycle security releases.
+Each costs one rebase drill through `scripts/rebase-upstream.sh`
 plus one build per target on `legion`. The wall times are the attributed rows from
 `docs/BUILD.md`'s packaging-timings table and are not re-measured here: a fresh
 release build is 54m40s, an N-plus-1 fresh build in a separate objdir is 54m, an
@@ -1052,6 +1052,12 @@ baseline) are owned by `docs/BUILD.md`'s rebase procedure section and are not
 restated here. After a rebase, run the full gate rather than only `--quick`: the
 patch stack, the byte-identity comparands and the installer schema all read the
 rebased tree.
+
+The dates are the ESR rows of `docs/RENEWALS.md`, each checked against the Mozilla ESR calendar before its train opens; the sweep's `renewals-due` row turns red 30 days before the nearest one. An out-of-band release for the same ESR goes out by bumping `revision` in `configuration.toml` (`v<ESR>-<revision>`), not by advancing the ESR pin.
+
+When an npm advisory affects `theia/yarn.lock`, Dependabot opens a security-only PR; the owner merges security PRs within 7 days of opening, and a fix that cannot wait for the next ESR train ships as an out-of-band `revision` bump.
+
+Sweep red thresholds (the sweep reads them from `.github/sweep-thresholds.json`, the one place the numbers live; this paragraph quotes that file and the release-train self-test fails if the two differ): `dependabot-prs` is red when more than 5 Dependabot PRs are open or any security PR is older than 7 days; `dependabot-alerts` and `codeql-alerts` are red when more than 0 are open; `codeql-push-age` warns when the last push to the default branch is older than 150 days, well before the ~6-month default-setup auto-disable.
 
 ### Out-of-band security path
 

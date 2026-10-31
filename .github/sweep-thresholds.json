@@ -1,0 +1,6 @@
+{
+  "dependabotPrMax": 5,
+  "securityPrDays": 7,
+  "alertMax": 0,
+  "pushAgeDays": 150
+}

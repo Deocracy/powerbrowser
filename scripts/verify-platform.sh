@@ -5080,13 +5080,15 @@ run_own_checks() {
     # no gh, no build. It writes nothing.
     "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
     # NEW (Phase 48, TRAIN-07): the maintenance half of the release-train core. The same --self-test
-    # run carries the six maintenance rows (runner-online, esr-pin-age, channel-liveness, watchdog-age,
-    # synthetic events POST, download-count) with their no-data branches, the byte-stable render, the
+    # run carries the thirteen maintenance rows (the Phase 48 six: runner-online, esr-pin-age, channel-liveness,
+    # watchdog-age, synthetic events POST, download-count; and the Phase 51 seven: renewals-due, repo-controls,
+    # dependabot-prs, dependabot-alerts, codeql-alerts, codeql-push-age, codeberg-mirror) with their no-data
+    # branches, the 30-day and 3-day boundaries, the threshold paragraph read from docs/RELEASING.md, the byte-stable render, the
     # exactly-one write plan, one comment per transition into red and zero on a staying-red re-run, the
     # once-per-day 06:00 UTC sweep gate, the workflow's CLI glue run as a child node (owner unset, empty,
     # malformed, another case), and the planted faults: a stale tag with no published Release, a draft
     # Release as the only match, a 27-hour watchdog, a missing watchdog run, a synthetic POST answering
-    # 500 or 200 without the acknowledgement, a newer tag with no commit date, a seventh row, two tracking
+    # 500 or 200 without the acknowledgement, a newer tag with no commit date, a fourteenth row, two tracking
     # issues, a workflow_run wake from a fork head, one plant per rule of the previous-state selection
     # (event, path, conclusion, branch, repository, head sha, artifact name, expiry, run link) and per rule
     # of the pinned-issue selection (label, author, title, unset owner). Each plant calls the real function
@@ -5094,6 +5096,19 @@ run_own_checks() {
     # only; no network, no gh, no build. It writes nothing. The live sweep and the pinned issue are the
     # plan 48-05 owner checkpoint.
     "release-train-maintenance-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
+    # NEW (Phase 51 review CR-01, WR-04, WR-06, IN-01 to IN-03): the live reads behind the Phase 51 sweep rows. The repo-facts,
+    # security-reads and codeberg steps of the maintenance-probe job are read with js-yaml and executed unchanged under bash -e
+    # with a stub gh and a stub curl on PATH. A count is written only from a successful, well-shaped read: empty output, a 403 JSON
+    # error body, a 5xx page, a gh failure that still prints an empty list, an error object with exit 0 and a page of non-objects
+    # write nothing (the row then renders no-data, never 0 and never red); a zero-length list from a successful read is a real 0.
+    # The default branch is read (a rename moves the requests), an unset Codeberg mirror writes nothing and a declared one always
+    # writes the pair. The repoControls deferral marker and every probe output name are checked from the workflow text.
+    # Honestly --quick: bash, jq and node in mkdtemp; no network, gh, build or display.
+    "sweep-reads|node $REPO_ROOT/scripts/verify-sweep-reads.mjs"
+    # sweep-reads-self-test plants the exit status ignored, the page shape unchecked or too loose, --slurp dropped, the branch
+    # hard-coded to main in the activity and Codeberg reads, an unset mirror reported as declared, a renamed probe output, an
+    # undeclared render env and a removed deferral marker, each over the real step text; each goes red naming its drift.
+    "sweep-reads-self-test|node $REPO_ROOT/scripts/verify-sweep-reads.mjs --self-test"
     # NEW (Phase 52, FIX-07/FIX-11): fix-gate-self-test serves a green control diff, then one
     # planted diff per .github/fix-gate-deny.json entry (the plant list read from the deny file
     # itself), a registry-named file, a hand-edited patch hunk, a vacuous diff, a compiled-file

@@ -564,6 +564,11 @@ jobs:
       watchdog-started-ms: ${{ steps.watchdog.outputs.started-ms }}
       synthetic-status: ${{ steps.synthetic.outputs.status }}
       synthetic-acked: ${{ steps.synthetic.outputs.acked }}
+      dependabot-prs: ${{ steps.security-reads.outputs.dependabot-prs }}
+      dependabot-alerts: ${{ steps.security-reads.outputs.dependabot-alerts }}
+      codeql-alerts: ${{ steps.security-reads.outputs.codeql-alerts }}
+      codeql-push-ms: ${{ steps.repo-facts.outputs.codeql-push-ms }}
+      codeberg: ${{ steps.codeberg.outputs.codeberg }}
     steps:
       - name: Check out repo
         if: ${{ !inputs.dry-run }}
@@ -636,6 +641,129 @@ jobs:
           echo "status=${STATUS:-000}" >> "$GITHUB_OUTPUT"
           echo "acked=${ACKED}" >> "$GITHUB_OUTPUT"
 
+      # Phase 51 (TRAIN-11). The rule for every read below: a value is written to the job outputs only when gh exited 0
+      # AND the body has the exact expected shape. An empty body, a 4xx or 5xx, and an API error object all write nothing,
+      # and the facts carry a missing output as null, which the rows render as no-data. A failed read is never 0 and never
+      # red. scripts/verify-sweep-reads.mjs runs these steps under bash against a stub gh to prove it. Nothing here writes.
+      - name: Name the repository for the security reads (read only)
+        id: repo-name
+        if: ${{ !inputs.dry-run }}
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "name=${REPO#*/}" >> "$GITHUB_OUTPUT"
+
+      # The default branch is read, not assumed, so a rename cannot make the push-age and Codeberg rows no-data forever.
+      # "Last push" is the newest push, force push, PR merge or merge-queue merge the repository Activity API records for that
+      # branch (not the head commit's committer date, which a fast-forward of old commits leaves old). This read and the
+      # Codeberg read use the job's own github.token (contents: read): no App grant is spent on them.
+      - name: Read the default branch and its last push (read only)
+        id: repo-facts
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          BRANCH=$(gh api "repos/${REPO}" --jq '.default_branch // empty' 2>/dev/null) || BRANCH=""
+          [[ $BRANCH =~ ^[A-Za-z0-9._/-]+$ ]] || BRANCH=""
+          if [ -n "$BRANCH" ]; then
+            echo "default-branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+            ACT="$RUNNER_TEMP/push-activity.json"
+            if gh api "repos/${REPO}/activity?ref=refs/heads/${BRANCH}&per_page=30" > "$ACT" 2>/dev/null \
+              && jq -e 'type == "array" and all(.[]; type == "object")' "$ACT" > /dev/null 2>&1; then
+              PUSHED=$(jq -r '[.[] | select(.activity_type | IN("push", "force_push", "pr_merge", "merge_queue_merge")) | .timestamp | select(type == "string")][0] // empty' "$ACT" 2>/dev/null) || PUSHED=""
+              PUSH_MS=""
+              if [ -n "$PUSHED" ]; then PUSH_MS=$(date -u -d "$PUSHED" +%s%3N 2>/dev/null) || PUSH_MS=""; fi
+              if [[ $PUSH_MS =~ ^[0-9]+$ ]]; then echo "codeql-push-ms=${PUSH_MS}" >> "$GITHUB_OUTPUT"; fi
+            fi
+          fi
+          exit 0
+
+      # Scopes, one line each (the input names are checked against the pinned action's action.yml by the workflows row,
+      # rule app-token-inputs). This mint is for this one repository, read only, and requests exactly:
+      #   pull-requests: read      list the open Dependabot pull requests (dependabot-prs)
+      #   vulnerability-alerts: read   the open Dependabot alerts (dependabot-alerts); the App settings UI calls it "Dependabot alerts"
+      #   security-events: read    the open code-scanning alerts (codeql-alerts); the App settings UI calls it "Code scanning alerts"
+      # contents is not requested: the default branch, the last push and the Codeberg comparison read through github.token.
+      # A grant the bot App does not hold fails the mint; the reads then answer 401 or 403, write nothing, and the rows render
+      # no-data (BLOCKED.md item 13).
+      - name: Mint the bot App token for the security reads (read only, this repository)
+        id: security-app
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo-name.outputs.name }}
+          permission-pull-requests: read
+          permission-vulnerability-alerts: read
+          permission-security-events: read
+
+      # pages <endpoint> succeeds only when gh exited 0 and the slurped body is an array of pages, each page an array of objects.
+      # A zero-length list is [[]] (a successful read), which is a real 0; empty output, an error object and a failed gh are not.
+      - name: Read the Dependabot PRs and the alert counts (read only)
+        id: security-reads
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.security-app.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          PAGES="$RUNNER_TEMP/security-pages.json"
+          pages() {
+            gh api "$1" --paginate --slurp > "$PAGES" 2>/dev/null || return 1
+            jq -e 'type == "array" and all(.[]; type == "array" and all(.[]; type == "object"))' "$PAGES" > /dev/null 2>&1
+          }
+          if pages "repos/${REPO}/pulls?state=open&per_page=100"; then
+            PRS=$(jq -c '[.[][] | select(.user.login == "dependabot[bot]") | {createdMs: ((.created_at | fromdateiso8601) * 1000), security: ([.labels[]?.name] | index("security") != null)}]' "$PAGES" 2>/dev/null) || PRS=""
+            if [[ $PRS == \[* ]]; then echo "dependabot-prs=${PRS}" >> "$GITHUB_OUTPUT"; fi
+          fi
+          if pages "repos/${REPO}/dependabot/alerts?state=open&per_page=100"; then
+            N=$(jq 'map(length) | add // 0' "$PAGES" 2>/dev/null) || N=""
+            if [[ $N =~ ^[0-9]+$ ]]; then echo "dependabot-alerts=${N}" >> "$GITHUB_OUTPUT"; fi
+          fi
+          if pages "repos/${REPO}/code-scanning/alerts?state=open&per_page=100"; then
+            N=$(jq 'map(length) | add // 0' "$PAGES" 2>/dev/null) || N=""
+            if [[ $N =~ ^[0-9]+$ ]]; then echo "codeql-alerts=${N}" >> "$GITHUB_OUTPUT"; fi
+          fi
+          exit 0
+
+      # The Codeberg main SHA (public API, no token) against GitHub's default branch. vars.CODEBERG_MIRROR is the owner/repo slug.
+      # Unset: nothing is written and the row renders no-data (no mirror declared). Set: the pair is always written, with a null
+      # for a side that could not be read as a full 40-hex SHA, so a declared mirror that stops answering renders red, not silence.
+      - name: Read the Codeberg main SHA against GitHub main (read only)
+        id: codeberg
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          CODEBERG_SLUG: ${{ vars.CODEBERG_MIRROR }}
+          BRANCH: ${{ steps.repo-facts.outputs.default-branch }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          OUT=""
+          if [ -n "$CODEBERG_SLUG" ]; then
+            CB=""
+            GH_SHA=""
+            if [[ $BRANCH =~ ^[A-Za-z0-9._/-]+$ ]]; then
+              GH_SHA=$(gh api "repos/${REPO}/git/ref/heads/${BRANCH}" --jq '.object.sha // empty' 2>/dev/null) || GH_SHA=""
+              if [[ $CODEBERG_SLUG =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+                CB=$(curl -fsS --max-time 20 --proto '=https' "https://codeberg.org/api/v1/repos/${CODEBERG_SLUG}/branches/${BRANCH}" 2>/dev/null | jq -r '.commit.id // empty' 2>/dev/null) || CB=""
+              fi
+            fi
+            [[ $CB =~ ^[0-9a-f]{40}$ ]] || CB=""
+            [[ $GH_SHA =~ ^[0-9a-f]{40}$ ]] || GH_SHA=""
+            OUT=$(jq -cn --arg c "$CB" --arg g "$GH_SHA" '{configured: true, codeberg: (if $c == "" then null else $c end), github: (if $g == "" then null else $g end)}')
+          fi
+          echo "codeberg=${OUT}" >> "$GITHUB_OUTPUT"
+
   # The sweep's render. It reads the tag listing, the commit date of each tag under the pinned major, the
   # Release list and the advisory product-details value (all reads), takes the probe outputs, derives the
   # six rows and renders the pinned body. It writes nothing; the body is handed to report base64-encoded.
@@ -700,12 +828,20 @@ jobs:
           PROBE_WATCHDOG_MS: ${{ needs.maintenance-probe.outputs.watchdog-started-ms }}
           PROBE_SYNTHETIC: ${{ needs.maintenance-probe.outputs.synthetic-status }}
           PROBE_ACKED: ${{ needs.maintenance-probe.outputs.synthetic-acked }}
+          PROBE_DPRS: ${{ needs.maintenance-probe.outputs.dependabot-prs }}
+          PROBE_DALERTS: ${{ needs.maintenance-probe.outputs.dependabot-alerts }}
+          PROBE_CALERTS: ${{ needs.maintenance-probe.outputs.codeql-alerts }}
+          PROBE_PUSH_MS: ${{ needs.maintenance-probe.outputs.codeql-push-ms }}
+          PROBE_CODEBERG: ${{ needs.maintenance-probe.outputs.codeberg }}
         run: |
           set -euo pipefail
           NOW_MS=$(date -u +%s%3N)
           TAGS_JSON=$(jq -R -s 'split("\n") | map(select(. != ""))' "$RUNNER_TEMP/tags.txt")
           DATES_JSON=$(jq -R -s 'split("\n") | map(select(. != "") | split("\t") | {(.[0]): ((.[1] | fromdateiso8601) * 1000)}) | add // {}' "$RUNNER_TEMP/tag-dates.tsv")
           ADVISORY=$(cat "$RUNNER_TEMP/advisory.txt")
+          # A missing or unreadable document is null (its rows render no-data), never a failed render that removes the sweep.
+          RENEWALS_JSON=$(jq -Rs . docs/RENEWALS.md 2>/dev/null || echo null)
+          THRESHOLDS_JSON=$(jq -c . .github/sweep-thresholds.json 2>/dev/null || echo null)
           jq -n \
             --arg pin "$PIN" \
             --argjson now "$NOW_MS" \
@@ -717,6 +853,13 @@ jobs:
             --arg watchdog "${PROBE_WATCHDOG_MS:-}" \
             --arg synthetic "${PROBE_SYNTHETIC:-}" \
             --arg acked "${PROBE_ACKED:-}" \
+            --argjson renewals "$RENEWALS_JSON" \
+            --argjson thresholds "$THRESHOLDS_JSON" \
+            --argjson dprs "${PROBE_DPRS:-null}" \
+            --argjson dalerts "${PROBE_DALERTS:-null}" \
+            --argjson calerts "${PROBE_CALERTS:-null}" \
+            --argjson pushms "${PROBE_PUSH_MS:-null}" \
+            --argjson cb "${PROBE_CODEBERG:-null}" \
             '{
               pinTag: $pin, nowMs: $now, tags: $tags, tagDates: $dates, releases: $releases[0],
               advisoryEsr: (if $advisory == "" then null else $advisory end),
@@ -727,7 +870,18 @@ jobs:
               syntheticStatus: (if $result == "success" and $synthetic != "" then ($synthetic | tonumber) else null end),
               syntheticAcked: ($acked == "true"),
               channelOk: null,
-              downloadRows: 0
+              downloadRows: 0,
+              # Phase 51 (TRAIN-11). thresholds is .github/sweep-thresholds.json, the one place the owner numbers live.
+              # deferred: repo-controls-live-read (BLOCKED.md item 13). The row stays no-data until the owner grants the bot App
+              # Administration read and a follow-up plan runs scripts/verify-repo-controls.mjs in the probe.
+              renewalsText: $renewals,
+              thresholds: $thresholds,
+              repoControls: null,
+              dependabotPrs: $dprs,
+              dependabotAlerts: $dalerts,
+              codeqlAlerts: $calerts,
+              codeqlLastPushMs: $pushms,
+              codeberg: $cb
             }' > "$RUNNER_TEMP/maintenance-facts.json"
           node scripts/release-train.mjs --maintenance "$RUNNER_TEMP/maintenance-facts.json" "$RUNNER_TEMP/maintenance.md"
           echo "body-b64=$(base64 -w0 "$RUNNER_TEMP/maintenance.md")" >> "$GITHUB_OUTPUT"
