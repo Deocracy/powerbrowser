@@ -1,10 +1,20 @@
 # GH-03 triage workflow (Phase 53). Declared in the repository on the phase branch;
 # it reaches main only when the owner lands it at the 53-04 checkpoint, so until then
 # no issue is triaged. Runs once per opened issue in the triage environment, which
-# admits main only. Trust split (PITFALLS Pitfall 1): the model
-# step reads the issue and returns structured output only, a label list and a
-# template id. The non-AI step after it applies labels from
-# .github/settings/labels.json and posts one fixed comment chosen by template id.
+# admits main only.
+#
+# Two-job trust split (PITFALLS Pitfall 1, and the 53 security fix). GitHub cannot
+# narrow a token per step, so the step that reads issue text and the step that holds
+# a write token are in different jobs:
+#   classify  runs the model step. Its job token is contents: read and issues: read,
+#             so an instruction hidden in issue text cannot write to the repository.
+#             The model reads the issue and returns structured output only, a label
+#             list and a template id, exported as the job output result.
+#   apply     runs no AI step. Its job token is contents: read and issues: write. It
+#             needs classify, reads result through env:, applies labels from
+#             .github/settings/labels.json, and posts one fixed comment chosen by
+#             template id. If classify fails, apply is skipped and no comment is posted.
+# The workflow-level permissions are the ceiling (issues: write); each job narrows it.
 # Nothing here closes an issue, and no run body interpolates issue text.
 #
 # Pins (FIX-08, carried): claude-code-action by commit
@@ -29,10 +39,15 @@ concurrency:
   group: triage
 
 jobs:
-  triage:
+  classify:
     runs-on: ubuntu-latest
     environment: triage
     timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      result: ${{ steps.triage.outputs.structured_output }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -65,12 +80,25 @@ jobs:
             --tools ""
             --json-schema '{"type":"object","required":["labels","template_id"],"properties":{"labels":{"type":"array","maxItems":4,"items":{"type":"string"}},"template_id":{"type":"string","enum":["bug-report","feature-request","other"]}}}'
 
+  apply:
+    needs: classify
+    runs-on: ubuntu-latest
+    environment: triage
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
       - name: Apply labels and post the fixed template comment
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           LABELS_FILE: .github/settings/labels.json
-          TRIAGE_OUTPUT: ${{ steps.triage.outputs.structured_output }}
+          TRIAGE_OUTPUT: ${{ needs.classify.outputs.result }}
         run: |
           node <<'JS'
           const { execFileSync } = require('node:child_process');
