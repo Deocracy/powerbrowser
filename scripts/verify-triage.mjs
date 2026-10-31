@@ -482,9 +482,23 @@ function runChecks(root, overrides = {}) {
 
 const fmt = f => `${f.file} job ${f.job} [${f.rule}]: ${f.msg}`;
 
+// The self-test green control must be the tree workflow byte for byte. A drifted fixture would let
+// the planted faults prove shapes the real file does not have. A missing fixture is drift too.
+function fixtureDrift(treeText, fixtureText) {
+    if (fixtureText === null || treeText !== fixtureText) {
+        return [{ file: FIXTURE_REL, job: WF, rule: 'fixture', msg: `differs from ${TREE_REL} or is missing, so the self-test would prove a shape the workflow does not have. Next step: copy ${TREE_REL} over ${FIXTURE_REL}.` }];
+    }
+    return [];
+}
+
+function readOrNull(rel) {
+    try { return readFileSync(join(REPO_ROOT, rel), 'utf8'); } catch { return null; }
+}
+
 function main() {
     if (args.includes('--self-test')) return selfTest();
-    const { failures, rel } = runChecks(REPO_ROOT);
+    const { failures: shapeFailures, rel } = runChecks(REPO_ROOT);
+    const failures = sortFailures([...shapeFailures, ...fixtureDrift(readOrNull(TREE_REL), readOrNull(FIXTURE_REL))]);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s) in the triage workflow.`);
         failures.forEach(f => console.error(`  ${fmt(f)}`));
@@ -571,6 +585,20 @@ function selfTest() {
             console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${sourceRel} job ${job} [${rule}] '${fragment}'; got: ${failures.map(fmt).join(' | ') || '(no failures at all)'}`);
             failed += 1;
         }
+    }
+    const tree = readOrNull(TREE_REL);
+    if (fixtureDrift(tree, good).length === 0) {
+        console.log(`  ok  fixture equals ${TREE_REL} byte for byte`);
+    } else {
+        console.error(`${NAME}: --self-test FAIL -- ${FIXTURE_REL} does not equal ${TREE_REL} byte for byte`);
+        failed += 1;
+    }
+    const drifted = fixtureDrift(tree, `${good}# drift\n`);
+    if (drifted.some(f => f.file === FIXTURE_REL && f.rule === 'fixture' && f.msg.includes('differs from'))) {
+        console.log(`  ok  fixture drifted by one comment -> red, naming ${FIXTURE_REL} [fixture]`);
+    } else {
+        console.error(`${NAME}: --self-test FAIL -- a one-comment drift of the fixture did not go red naming ${FIXTURE_REL} [fixture]`);
+        failed += 1;
     }
     const { failures: proofFailures } = { failures: plantedInstruction(good, sourceRel, labelsText) };
     if (proofFailures.length === 0) {
