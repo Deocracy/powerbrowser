@@ -257,7 +257,10 @@ export type WebTabMessage =
     // Phase 32 plan 01 (PAGE-05): mute is an explicit flag, never a toggle.
     | { kind: 'webTabMute'; tabId: string; muted: boolean }
     // Phase 32 plan 03 (PAGE-03): the system-dialog print of this tab's page; the options are booleans only.
-    | { kind: 'webTabPrint'; tabId: string; selectionOnly?: boolean };
+    | { kind: 'webTabPrint'; tabId: string; selectionOnly?: boolean }
+    // Phase 32 plan 05 (PAGE-08): picker-split save. Pick proposes a file name and writes nothing; export copies the minted page to the picked path.
+    | { kind: 'webTabSavePick'; tabId: string }
+    | { kind: 'webTabSaveExport'; tabId: string; path: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -291,6 +294,8 @@ export interface WebTabReply {
     index?: number;
     /** `webTabHistory`: at most 15 entries around the current one, ascending. */
     entries?: WebTabHistoryEntry[];
+    /** `webTabSavePick`: the proposed file name (a page title, bounded, with an .html suffix). */
+    suggestedName?: string;
 }
 
 /** Phase 31 plan 02: one managed permission on this tab's principal, in table order. */

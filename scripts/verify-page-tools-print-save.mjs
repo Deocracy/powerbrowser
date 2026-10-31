@@ -1,21 +1,29 @@
 #!/usr/bin/env node
 /**
- * Phase 32 plan 03 (PAGE-03), the print half: the webTabPrint family's contract,
- * derived from the tree and compared as set equality, so a dropped arm, a stale
- * union member, a tab-modal call or a browserDOMWindow shim each go red by name.
+ * Phase 32 plans 03 (PAGE-03) and 05 (PAGE-08): the print and save families'
+ * contract, derived from the tree and compared as set equality, so a dropped arm,
+ * a stale union member, a tab-modal call, a browserDOMWindow shim, a refused
+ * guard removed from the save path or a Theia-side page writer each go red by name.
  *
- *   1. routing: the webTabPrint kind in WEB_TAB_ACTION_KINDS == the case arm of
- *      handleWebTabAction == the WebTabMessage union member.
+ *   1. routing: the webTabPrint and webTabSave kinds in WEB_TAB_ACTION_KINDS ==
+ *      the case arms of handleWebTabAction == the WebTabMessage union members.
  *   2. system path only: webTabPrintReply drives the print-dialog service and
  *      BrowsingContext.print; the arm refuses a non-boolean selectionOnly.
+ *   2b. save path: the export mints its copy through savePageCopy (the one page-byte
+ *      writer), keeps savePageCopy's refusals and minted-directory check, refuses a
+ *      private or non-http(s) tab, and only accepts an absolute .html destination.
  *   3. no tab-modal path (D-08) and no browserDOMWindow shim (D-09a): the forbidden
  *      literals are absent from every chrome source once comments are stripped.
  *   4. probe gate: scripts/lib/pb-probe-verdicts.json records print-today, and the
  *      verdict is a completing one. A missing key or a failing verdict is a
  *      blocker the executor reports, never an assumed pass (D-08a).
+ *   5. no Theia-side writer: no browser-side source of tab-uris or chrome-bar names a
+ *      file-write call. The chrome side is the only writer of page bytes (Pitfall 11).
  *
  * --self-test plants a dropped arm, a stale union member, a tab-modal call, a
- * browserDOMWindow shim and a failing verdict; each must go red naming the drift.
+ * browserDOMWindow shim, a failing verdict, a dropped save arm, a removed save
+ * guard, a removed minted-directory check and a Theia-side writer; each must go red
+ * naming the drift.
  * Text reads only: --quick, no build, no browser, no display.
  */
 import { readFileSync, readdirSync } from 'node:fs';
@@ -28,7 +36,10 @@ const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const VERDICTS = 'scripts/lib/pb-probe-verdicts.json';
 const SHELL_DIR = 'powerbrowser/shell';
-const PRINT_FAMILY = /^webTabPrint/;
+const PRINT_FAMILY = /^webTab(Print|Save)/;
+// The browser-side sources of the two Theia extensions that carry the page-tool kinds (Pitfall 11: no writer here).
+const THEIA_BROWSER_DIRS = ['theia/extensions/tab-uris/src/browser', 'theia/extensions/chrome-bar/src/browser'];
+const FILE_WRITERS = /\b(writeFile|writeFileSync|createWriteStream|appendFile|appendFileSync|writeSync|copyFile|copyFileSync)\b/;
 // Names the tab-modal preview and the browserDOMWindow shim use. Absent from every chrome source, comments excluded.
 const FORBIDDEN = ['getTabDialogBox', '_openTabModalPrint', 'print.html', 'PrintPreview', 'browserDOMWindow', 'OPEN_PRINT_BROWSER', 'nsIBrowserDOMWindow', 'printUtils.js'];
 
@@ -81,6 +92,13 @@ function readSources() {
             sources[`${SHELL_DIR}/${name}`] = readFileSync(join(REPO_ROOT, SHELL_DIR, name), 'utf8');
         }
     }
+    for (const dir of THEIA_BROWSER_DIRS) {
+        for (const rel of readdirSync(join(REPO_ROOT, dir), { recursive: true })) {
+            if (/\.tsx?$/.test(rel)) {
+                sources[`${dir}/${rel}`] = readFileSync(join(REPO_ROOT, dir, rel), 'utf8');
+            }
+        }
+    }
     return sources;
 }
 
@@ -126,6 +144,33 @@ function checkPrint(sources) {
         failures.push('system path: the webTabPrint arm does not refuse a non-boolean selectionOnly (print options are booleans only)');
     }
 
+    // 2b. the save path (32-05): the export mints through savePageCopy, and its guards stay in place.
+    const exportBody = functionBody(api, 'webTabSaveExportReply');
+    if (!exportBody.includes('await savePageCopy(entry.uri)')) {
+        failures.push('save path: webTabSaveExportReply does not mint its copy through savePageCopy (the one page-byte writer)');
+    }
+    if (!exportBody.includes('findTabBrowserForUri(entry.uri)?.browser !== entry.browser')) {
+        failures.push('save path: webTabSaveExportReply does not check that its uri names this tab (a second tab on the same uri would be saved)');
+    }
+    if (!functionBody(api, 'webTabSaveRefusal').includes('isBrowserPrivate(browser)')) {
+        failures.push('save path: webTabSaveRefusal no longer checks private tabs (both save kinds must refuse them)');
+    }
+    if (!functionBody(api, 'webTabSaveRefusal').includes('^https?:\\/\\/')) {
+        failures.push('save path: webTabSaveRefusal no longer requires http or https (both save kinds must refuse other schemes)');
+    }
+    if (!functionBody(api, 'webTabSaveDestinationIsValid').includes('PathUtils.isAbsolute(path)')) {
+        failures.push('save path: webTabSaveDestinationIsValid no longer requires an absolute destination');
+    }
+    const copyBody = functionBody(api, 'savePageCopy');
+    for (const guard of ['refusing a missing or oversized uri', 'refusing a private tab', 'refusing a page that is not http or https', 'isMintedSavedPageDir(previous, root)']) {
+        if (!copyBody.includes(guard)) {
+            failures.push(`save path: savePageCopy lost its guard '${guard}' (the byte path must keep its refusals and its minted-directory check)`);
+        }
+    }
+    if (!functionBody(api, 'writePersistedDocument').includes('PERSIST_FLAGS_FROM_CACHE')) {
+        failures.push('save path: writePersistedDocument no longer honours the cookie jar (PERSIST_FLAGS_FROM_CACHE, Pitfall 6)');
+    }
+
     // 3. no tab-modal path and no shim, in any chrome source (comments excluded).
     for (const key of Object.keys(sources).filter(k => k.startsWith(`${SHELL_DIR}/`) || k === API)) {
         const code = stripComments(sources[key]);
@@ -147,6 +192,14 @@ function checkPrint(sources) {
         failures.push(`probe: ${VERDICTS} has no print-today verdict (the print build is blocked until the probe is recorded, D-08a)`);
     } else if (!verdict.startsWith('completes')) {
         failures.push(`probe: print-today verdict is '${verdict}', not a completing verdict (D-08a: a print-today failure is a blocker, no stock-window fallback is built)`);
+    }
+
+    // 5. no Theia-side writer: the browser-side sources of the page-tool extensions never name a file-write call.
+    for (const key of Object.keys(sources).filter(k => THEIA_BROWSER_DIRS.some(dir => k.startsWith(`${dir}/`)))) {
+        const writer = FILE_WRITERS.exec(stripComments(sources[key]));
+        if (writer) {
+            failures.push(`writer: ${key} names '${writer[1]}' (the Theia side never writes page bytes; the chrome side is the only writer, Pitfall 11)`);
+        }
     }
 
     return failures;
@@ -176,7 +229,7 @@ function selfTest() {
         },
         {
             name: 'stale union member (no arm)',
-            sources: { [WEB_TAB]: plant(clean[WEB_TAB], "    | { kind: 'webTabPrint'; tabId: string; selectionOnly?: boolean };", "    | { kind: 'webTabPrintStale'; tabId: string };\n    | { kind: 'webTabPrint'; tabId: string; selectionOnly?: boolean };") },
+            sources: { [WEB_TAB]: plant(clean[WEB_TAB], "    | { kind: 'webTabPrint'; tabId: string; selectionOnly?: boolean }", "    | { kind: 'webTabPrintStale'; tabId: string }\n    | { kind: 'webTabPrint'; tabId: string; selectionOnly?: boolean }") },
             expect: 'webTabPrintStale',
         },
         {
@@ -198,6 +251,31 @@ function selfTest() {
             name: 'print-today verdict not recorded',
             sources: { [VERDICTS]: JSON.stringify({ 'downloads-today': 'saved-to-download-dir-without-prompt' }) },
             expect: 'has no print-today verdict',
+        },
+        {
+            name: 'dropped save kind (the export arm renamed away)',
+            sources: { [API]: plant(clean[API], 'case "webTabSaveExport": {', 'case "webTabSaveExportDropped": {') },
+            expect: 'webTabSaveExport',
+        },
+        {
+            name: 'save guard removed (savePageCopy no longer refuses a private tab)',
+            sources: { [API]: plant(clean[API], 'throw new Error("savePageCopy: refusing a private tab");', 'void 0;') },
+            expect: 'refusing a private tab',
+        },
+        {
+            name: 'minted-directory check removed from the save path',
+            sources: { [API]: plant(clean[API], 'isMintedSavedPageDir(previous, root)) {', 'true) {') },
+            expect: 'isMintedSavedPageDir(previous, root)',
+        },
+        {
+            name: 'save refusal removed (both save kinds accept a private tab)',
+            sources: { [API]: plant(clean[API], 'if (lazy.PrivateBrowsingUtils.isBrowserPrivate(browser)) {\n    return "private";', 'if (false) {\n    return "private";') },
+            expect: 'no longer checks private tabs',
+        },
+        {
+            name: 'Theia-side writer added to the browser sources',
+            sources: { [WEB_TAB]: `${clean[WEB_TAB]}\nexport const leakPage = (path: string, html: string) => require('fs').writeFileSync(path, html);\n` },
+            expect: "names 'writeFileSync'",
         },
     ];
     let failed = 0;

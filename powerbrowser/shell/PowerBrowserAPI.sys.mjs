@@ -4498,7 +4498,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4954,6 +4954,23 @@ async function handleWebTabAction(data, actorRef) {
       }
       return webTabPrintReply(kind, data.tabId, data.selectionOnly === true);
     }
+    // Page save (32-05, PAGE-08): picker-split. Pick proposes a file name and writes nothing; export mints the copy
+    // through savePageCopy and copies it to the destination the Theia dialog picked.
+    case "webTabSavePick": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      return webTabSavePickReply(kind, data.tabId);
+    }
+    case "webTabSaveExport": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      if (!webTabSaveDestinationIsValid(data.path)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a destination that is not an absolute .html or .htm path of at most 4096 characters" };
+      }
+      return webTabSaveExportReply(kind, data.tabId, data.path);
+    }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
   }
@@ -5267,6 +5284,79 @@ async function webTabPrintHasSelection(browsingContext) {
     return await browsingContext.currentWindowGlobal.getActor("PrintingSelection").sendQuery("PrintingSelection:HasSelection", {});
   } catch {
     return false;
+  }
+}
+
+// Page save (32-05, PAGE-08). savePageCopy stays the only writer of page bytes (into saved-pages/<stamp>-<rand>/);
+// the export copies that minted page.html and page_files to the picked path. Both kinds re-check the tab, the scheme
+// and privacy, because the pick and the export are separate messages. The path is data: it is validated and written
+// to, never executed.
+const WEB_TAB_SAVE_PATH_MAX = 4096;
+
+// The refusals both save kinds share: a private tab, and a page that is not http or https.
+function webTabSaveRefusal(browser) {
+  if (lazy.PrivateBrowsingUtils.isBrowserPrivate(browser)) {
+    return "private";
+  }
+  const url = browser.currentURI ? browser.currentURI.spec : "";
+  return /^https?:\/\//.test(url) ? null : "scheme";
+}
+
+// The proposed file name: the page title without path or control characters, bounded, and never empty.
+function webTabSaveSuggestedName(title) {
+  const stem = String(title || "").replace(/[\\/:*?"<>|]|[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  return `${stem || "page"}.html`;
+}
+
+// An absolute, bounded path with no NUL and an .html or .htm name: the only destinations an export writes.
+function webTabSaveDestinationIsValid(path) {
+  return typeof path === "string" && path.length > 0 && path.length <= WEB_TAB_SAVE_PATH_MAX
+    && !path.includes("\u0000") && PathUtils.isAbsolute(path) && /\.html?$/i.test(path);
+}
+
+function webTabSavePickReply(kind, tabId) {
+  const entry = webTabs.get(tabId);
+  if (!entry) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  if (webTabSaveRefusal(entry.browser)) {
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: this page cannot be saved (private, or not http or https)" };
+  }
+  return { ok: true, kind, where: "ready", suggestedName: webTabSaveSuggestedName(entry.browser.contentTitle) };
+}
+
+async function webTabSaveExportReply(kind, tabId, path) {
+  const entry = webTabs.get(tabId);
+  if (!entry) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  if (webTabSaveRefusal(entry.browser)) {
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: this page cannot be saved (private, or not http or https)" };
+  }
+  // savePageCopy copies the first browser that carries this uri; a second tab on the same uri must refuse, not save the wrong page.
+  if (PowerBrowserAPI.findTabBrowserForUri(entry.uri)?.browser !== entry.browser) {
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: another tab shares this page's address, so it cannot be saved safely" };
+  }
+  try {
+    const { dir, bytes } = await savePageCopy(entry.uri);
+    await webTabSaveCopyOut(dir, path);
+    return { ok: true, kind, where: "exported", bytes };
+  } catch {
+    PowerBrowserAPI.log("error", "[save] the page copy failed");
+    return { ok: false, reason: "write-failed", message: "handleWebTabAction: the page save failed" };
+  }
+}
+
+// The minted page links its files as page_files/, so the copy names its files folder after the picked stem and
+// rewrites the links to match. shortcut: page.html is read and written as UTF-8, so a page persisted in another
+// charset fails the export instead of being mangled; a byte-level rewrite lifts that limit.
+async function webTabSaveCopyOut(dir, path) {
+  const filesName = `${PathUtils.filename(path).replace(/\.html?$/i, "")}_files`;
+  const html = await IOUtils.readUTF8(PathUtils.join(dir, "page.html"));
+  await IOUtils.writeUTF8(path, html.replace(/(["'(=\s])page_files\//g, (_match, lead) => `${lead}${filesName}/`));
+  const sourceFiles = PathUtils.join(dir, "page_files");
+  if (await IOUtils.exists(sourceFiles)) {
+    await IOUtils.copy(sourceFiles, PathUtils.join(PathUtils.parent(path), filesName), { recursive: true });
   }
 }
 

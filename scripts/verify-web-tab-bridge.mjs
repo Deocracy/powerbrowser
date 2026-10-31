@@ -99,6 +99,9 @@ const KIND_CLASSES = new Map([
     // Phase 32 plan 03 (PAGE-03): the print reads the tab's page and changes no tab, pref or site state; it
     // sits with navigation as the one tab-scoped page action that opens a system dialog.
     ['webTabPrint', 'tab-navigation'],
+    // Phase 32 plan 05 (PAGE-08): save pick and export sit with navigation, as CONTEXT's class log records.
+    ['webTabSavePick', 'tab-navigation'],
+    ['webTabSaveExport', 'tab-navigation'],
 ]);
 
 /**
