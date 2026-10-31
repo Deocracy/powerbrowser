@@ -74,7 +74,9 @@ const WHOLE_YEAR = /^(?:19|20)\d{2}$/;
 const WHOLE_MONTH_YEAR = new RegExp(`^(?:${MONTHS}) (?:19|20)\\d{2}$`);
 
 const args = process.argv.slice(2);
-for (const a of args) {
+// Only the entry point rejects arguments: release-train.mjs imports the Expiry grammar below and has its own argv.
+const isEntry = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+for (const a of isEntry ? args : []) {
     if (a !== '--self-test') {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the structure check discriminates.`);
@@ -96,10 +98,27 @@ function isRealIso(cell) {
     return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
 }
 // Null when the Expiry cell is acceptable, else the reason it is not.
-function expiryProblem(cell) {
+export function expiryProblem(cell) {
     if (cell === '' || cell === 'unknown' || WHOLE_YEAR.test(cell) || WHOLE_MONTH_YEAR.test(cell)) return null;
     if (WHOLE_ISO.test(cell)) return isRealIso(cell) ? null : 'is not a real calendar date';
     return 'holds no whole date, bare year or Month YYYY, and is neither blank nor unknown';
+}
+/**
+ * The day an accepted Expiry cell is first due, as UTC midnight milliseconds, or null for a blank, unknown or
+ * unacceptable cell. One grammar for both checks: this row accepts exactly the cells this function dates, so the
+ * maintenance sweep's renewals-due row can never call a cell malformed that this row calls valid. A cell known only to a
+ * year or a month is dated at the START of that period, the earlier and fail-safe reading: it turns the sweep red
+ * sooner, never later than the real deadline.
+ */
+export function expiryStartMs(cell) {
+    if (expiryProblem(cell) !== null || cell === '' || cell === 'unknown') return null;
+    if (WHOLE_ISO.test(cell)) {
+        const [y, mo, d] = cell.split('-').map(Number);
+        return Date.UTC(y, mo - 1, d);
+    }
+    if (WHOLE_YEAR.test(cell)) return Date.UTC(Number(cell), 0, 1);
+    const [month, year] = cell.split(' ');
+    return Date.UTC(Number(year), MONTHS.split('|').indexOf(month), 1);
 }
 function checkedProblem(cell) {
     if (WHOLE_ISO.test(cell)) return isRealIso(cell) ? null : 'is not a real calendar date';

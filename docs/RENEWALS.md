@@ -4,7 +4,7 @@ Every renewable item the release machinery depends on, with its expiry and the o
 
 The quick row `renewals` checks this file's structure only: every row has an Expiry cell that is a date, a bare year, Month YYYY, blank or `unknown`; a Last checked ISO date; an owner action; and no item is named twice. The red-within-30-days check is the maintenance sweep's `renewals-due` row (Phase 48).
 
-Reading the columns: an ISO date in Expiry is an expiry or a deadline. A bare year, or Month YYYY, is a deadline known only to that precision. A blank Expiry means the item does not expire and is rotated on compromise. `unknown` means the tree does not record the expiry; the owner replaces it with the provider's expiry when entering it. Last checked is the ISO date this register last checked the item.
+Reading the columns: an ISO date in Expiry is an expiry or a deadline. A bare year, or Month YYYY, is a deadline known only to that precision. The sweep's `renewals-due` row dates it at the start of that year or month, the earlier reading, so it turns red no later than the real deadline. A blank Expiry means the item does not expire and is rotated on compromise. `unknown` means the tree does not record the expiry; the owner replaces it with the provider's expiry when entering it. Last checked is the ISO date this register last checked the item.
 
 | Item | Expiry | Last checked | Owner action | Source |
 | --- | --- | --- | --- | --- |

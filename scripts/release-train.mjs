@@ -103,6 +103,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { classifyTag, tagToVersion, UPTAKE_MAJOR } from './detect-upstreams.mjs';
+import { expiryStartMs, runChecks as renewalsStructureChecks } from './verify-renewals.mjs';
 
 const NAME = 'release-train-logic';
 const SELF_REL = 'scripts/release-train.mjs';
@@ -842,7 +843,6 @@ const RENEWALS_NAME = 'docs/RENEWALS.md';
 const RELEASING_NOT_READ = 'docs/RELEASING.md was not read in this run';
 const THRESHOLD_UNREADABLE = 'the sweep thresholds are not readable in docs/RELEASING.md. Next step: keep the "Sweep red thresholds" paragraph with its four numbers.';
 const SHA_RE = /^[0-9a-f]{40}$/;
-const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const SWEEP_HOUR_UTC = 6;
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -940,18 +940,12 @@ function downloadRow(f) {
 
 const cellsOf = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
 
-function isoDayMs(text) {
-    if (!ISO_DAY_RE.test(text)) return null;
-    const [y, m, d] = text.split('-').map(Number);
-    const ms = Date.UTC(y, m - 1, d);
-    const at = new Date(ms);
-    return at.getUTCFullYear() === y && at.getUTCMonth() === m - 1 && at.getUTCDate() === d ? ms : null;
-}
-
 /**
- * The Expiry column of docs/RENEWALS.md, read as strict YYYY-MM-DD at UTC day granularity. A blank cell (does not
- * expire) and `unknown` (not recorded) are documented absences, not dates. Any other cell is a bad line: a second
- * format is refused, never parsed. Returns null when the Expiry column is absent (fail closed). Pure.
+ * The Expiry column of docs/RENEWALS.md, read with the grammar scripts/verify-renewals.mjs defines (the one grammar for
+ * both checks): a whole ISO date, a bare year, or Month YYYY. A year or a month is dated at the START of that period, the
+ * earlier and fail-safe reading, so such a deadline turns the row red sooner and never later than the real one. A blank cell
+ * (does not expire) and `unknown` (not recorded) are documented absences: they are counted, not dated, not red. Any other
+ * cell is a bad line. Returns null when the Expiry column is absent (fail closed). Pure.
  */
 export function parseRenewals(text) {
     const lines = String(text ?? '').split('\n');
@@ -960,18 +954,21 @@ export function parseRenewals(text) {
     const expiry = cellsOf(lines[header]).indexOf('Expiry');
     const dated = [];
     const bad = [];
+    let unknown = 0;
+    let blank = 0;
     // header + 1 is the separator row; the data rows follow it.
     for (let i = header + 2; i < lines.length; i += 1) {
         if (!lines[i].trim().startsWith('|')) continue;
         const cells = cellsOf(lines[i]);
         const item = cells[0] ?? '';
         const cell = cells[expiry] ?? '';
-        if (cell === '' || cell === 'unknown') continue;
-        const ms = isoDayMs(cell);
+        if (cell === '') { blank += 1; continue; }
+        if (cell === 'unknown') { unknown += 1; continue; }
+        const ms = expiryStartMs(cell);
         if (ms === null) bad.push({ line: i + 1, item, cell });
-        else dated.push({ line: i + 1, item, cell, ms });
+        else dated.push({ line: i + 1, item, cell, ms, period: !/^\d{4}-\d{2}-\d{2}$/.test(cell) });
     }
-    return { dated, bad };
+    return { dated, bad, unknown, blank };
 }
 
 /** The four owner thresholds from the RELEASING.md paragraph: undefined when the text was not read, null when unparseable. Pure. */
@@ -999,15 +996,16 @@ function renewalsRow(f) {
     if (parsed === null) return maintRow(name, 'red', `${RENEWALS_NAME} has no Expiry column, so the ${RENEWALS_WINDOW_DAYS}-day check cannot read it. Next step: restore the Expiry column.`);
     const today = Math.floor(f.nowMs / DAY_MS) * DAY_MS;
     const reds = [
-        ...parsed.bad.map(b => `${RENEWALS_NAME} line ${b.line}: ${b.item} expiry ${JSON.stringify(b.cell)} is not YYYY-MM-DD`),
+        ...parsed.bad.map(b => `${RENEWALS_NAME} line ${b.line}: ${b.item} expiry ${JSON.stringify(b.cell)} is not a date the register accepts (YYYY-MM-DD, a bare year, Month YYYY, blank or unknown)`),
         ...parsed.dated.flatMap(d => {
             const days = Math.round((d.ms - today) / DAY_MS);
             if (days > RENEWALS_WINDOW_DAYS) return [];
-            return [`${RENEWALS_NAME} line ${d.line}: ${d.item} ${d.cell} ${days < 0 ? `is ${-days} day(s) overdue` : `is ${days} day(s) away`}`];
+            return [`${RENEWALS_NAME} line ${d.line}: ${d.item} ${d.cell} ${days < 0 ? `is ${-days} day(s) overdue` : `is ${days} day(s) away`}${d.period ? ' (a year or month is dated at its start)' : ''}`];
         }),
     ];
     if (reds.length > 0) return maintRow(name, 'red', reds.join('; '));
-    return maintRow(name, 'green', `${parsed.dated.length} dated item(s); none within ${RENEWALS_WINDOW_DAYS} days or overdue`);
+    const periods = parsed.dated.filter(d => d.period).length;
+    return maintRow(name, 'green', `${parsed.dated.length} dated item(s) (${periods} known to a year or month only, dated at its start), none within ${RENEWALS_WINDOW_DAYS} days or overdue; ${parsed.unknown} unknown (not date-checked); ${parsed.blank} with no expiry`);
 }
 
 function repoControlsRow(f) {
@@ -1464,10 +1462,19 @@ function maintenanceSelfTest() {
         // TRAIN-11 boundaries. renewals-due is red for 0 <= days-until <= 30 (exactly 30 red, 31 green), overdue red, unparseable red naming the line.
         { name: 'control: a renewals date 31 days away stays green', run: () => (rowOf(stateOf(facts({ renewalsText: REN_ROW(day(31)) })), 'renewals-due').status === 'green' ? [] : ['a date 31 days away is not green']) },
         { name: 'control: blank and unknown expiry cells are documented absences, not red', run: () => (rowOf(stateOf(facts({ renewalsText: REN_ROW('', 'unknown') })), 'renewals-due').status === 'green' ? [] : ['a blank or unknown expiry turned renewals-due red']) },
-        { name: 'control: the tracked RENEWALS.md parses, and its Node 24 row is 2028-04-30', run: () => {
-            const parsed = parseRenewals(readFileSync(join(REPO_ROOT, 'docs', 'RENEWALS.md'), 'utf8'));
+        { name: 'control: the tracked RENEWALS.md has no bad cell, agrees with the register check, and its Node 24 row is 2028-04-30', run: () => {
+            const text = readFileSync(join(REPO_ROOT, 'docs', 'RENEWALS.md'), 'utf8');
+            const parsed = parseRenewals(text);
             if (parsed === null) return ['docs/RENEWALS.md has no Expiry column'];
-            return parsed.dated.some(d => d.item === 'Node 24 end of life' && d.cell === '2028-04-30') ? [] : ['the Node 24 row is not a dated 2028-04-30 item'];
+            const failures = parsed.bad.map(b => `docs/RENEWALS.md line ${b.line}: ${b.item} expiry ${JSON.stringify(b.cell)} is bad for the sweep`);
+            // The commit gate and the sweep must call the same cells valid: the register check finds no Expiry problem either.
+            failures.push(...renewalsStructureChecks(REPO_ROOT, { text }).failures.filter(f => f.includes('Expiry cell')));
+            if (!parsed.dated.some(d => d.item === 'Node 24 end of life' && d.cell === '2028-04-30')) failures.push('the Node 24 row is not a dated 2028-04-30 item');
+            return failures;
+        } },
+        { name: 'control: a bare year and Month YYYY are dated at the start of the period, and the evidence counts unknown and blank items', run: () => {
+            const r = rowOf(stateOf(facts({ renewalsText: REN_ROW('2046', 'April 2030', 'unknown', 'unknown', '') })), 'renewals-due');
+            return r.status === 'green' && r.evidence.includes('2 dated item(s) (2 known to a year or month only') && r.evidence.includes('2 unknown (not date-checked)') && r.evidence.includes('1 with no expiry') ? [] : [`renewals-due gave ${r.status}: ${r.evidence}`];
         } },
         // The four owner thresholds are read from the RELEASING paragraph; the tracked file must carry exactly the owner's numbers.
         { name: 'control: the tracked RELEASING.md threshold paragraph reads 5, 7, 0 and 150', run: () => {
@@ -1633,8 +1640,10 @@ function maintenanceSelfTest() {
         // TRAIN-11 red plants: each boundary and threshold must go red naming its drift.
         { name: 'a renewals date exactly 30 days away', run: () => reds(stateOf(facts({ renewalsText: REN_ROW(day(30)) }))), expect: 'is 30 day(s) away' },
         { name: 'a renewals date overdue', run: () => reds(stateOf(facts({ renewalsText: REN_ROW(day(-3)) }))), expect: 'is 3 day(s) overdue' },
-        { name: 'an unparseable renewals date names its line', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2027/01/05') }))), expect: 'docs/RENEWALS.md line 3: Item 0 expiry "2027/01/05" is not YYYY-MM-DD' },
-        { name: 'an impossible renewals date (2027-02-30) is refused', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2027-02-30') }))), expect: 'is not YYYY-MM-DD' },
+        { name: 'an unparseable renewals date names its line', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2027/01/05') }))), expect: 'docs/RENEWALS.md line 3: Item 0 expiry "2027/01/05" is not a date the register accepts' },
+        { name: 'an impossible renewals date (2027-02-30) is refused', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2027-02-30') }))), expect: 'is not a date the register accepts' },
+        { name: 'a bare year already begun is dated at its start and overdue', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2026') }))), expect: 'Item 0 2026 is 304 day(s) overdue (a year or month is dated at its start)' },
+        { name: 'a Month YYYY exactly 30 days away', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('December 2026') }))), expect: 'December 2026 is 30 day(s) away' },
         { name: 'a RENEWALS.md without an Expiry column', run: () => reds(stateOf(facts({ renewalsText: '| Item | Due |\n| --- | --- |\n| x | 2027-01-01 |' }))), expect: 'has no Expiry column' },
         { name: 'a sweep threshold paragraph with a missing number', run: () => reds(stateOf(facts({ releasingText: RELEASING_FIXTURE.replace('more than 5 Dependabot', 'more than many Dependabot') }))), expect: 'are not readable in docs/RELEASING.md' },
         { name: 'six Dependabot PRs open', run: () => reds(stateOf(facts({ dependabotPrs: Array.from({ length: 6 }, () => ({ createdMs: NOW - DAY_MS, security: false })) }))), expect: '6 open Dependabot PR(s) against a limit of 5' },
