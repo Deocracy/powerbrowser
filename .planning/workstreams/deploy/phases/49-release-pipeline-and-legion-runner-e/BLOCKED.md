@@ -88,3 +88,64 @@ needed before a real `release.yml` dispatch can complete.
 - Plan 49-02 (legion runner, pre-job hook, owner registration), plan 49-04 (descriptor and
   channel-live), plan 49-05 (R2 origin, allowlist, R2 copy) remain. The `descriptor` and
   `channel-live` placeholders in release.yml stay fail-closed until 49-04 lands.
+
+## 49-02 Task 3 (owner-pending): legion runner registration and NixOS change
+
+Plan 49-02 Tasks 1 and 2 are done: the hook and its row (commit 37a9b29), and the non-ephemeral
+runner shape in docs/RELEASING.md (commit 77a3209). Task 3 is a `checkpoint:human-action` and was
+not performed. No runner is registered, no registration token is minted, nothing is written to
+`/etc/nixos`, and `nrs` was not run. Plan 49-02 stays partial until the owner replies with the
+result of step 10 and the live `repo-controls` line is recorded in 49-02-SUMMARY.md.
+
+Owner steps, in order:
+
+1. Confirm the precondition (read-only). `scripts/verify-platform.sh --only repo-controls` is green
+   against the live org and repo (SEC-11 fork approval, GH-07 environment branch policies). The
+   pre-job hook (SEC-10) is tracked and `hook-refusal` is green. The GH-11 runner-group probe
+   outcome is not recorded in docs/RELEASING.md yet: record it there with its date, then decide
+   nothing else from it (it only decides whether a runner-group restriction sentence is claimed).
+2. Use the release home `https://github.com/Deocracy/powerbrowser`. This is the owner ruling of
+   2026-10-29 recorded in `inventory/brand-tokens.json`. The `DeBIOS-Foundation` URL in
+   49-RESEARCH.md's NixOS block is superseded; do not use it.
+3. Install the hook as a byte-identical copy in the NixOS config tree, then compare hashes:
+   `pkexec install -D -m 0644 <clone>/scripts/legion-pre-job-hook.sh /etc/nixos/pb-runner/legion-pre-job-hook.sh`
+   `sha256sum <clone>/scripts/legion-pre-job-hook.sh /etc/nixos/pb-runner/legion-pre-job-hook.sh`
+   The two hashes must match. `environment.etc` sets the 0555 mode on the deployed path.
+4. Add the block from docs/RELEASING.md, section "Runner registration through the `/etc/nixos` flow",
+   to `/etc/nixos/configuration.nix`: the `services.github-runners.powerbrowser-release` unit (user
+   `pb-runner`, work directory `/var/lib/pb-runner`, label `powerbrowser-release`, no `ephemeral` key),
+   `users.users.pb-runner` with `autoSubUidGidRange`, `environment.etc."pb-runner/legion-pre-job-hook.sh"`,
+   and `systemd.services.github-runner-powerbrowser-release.environment.ACTIONS_RUNNER_HOOK_JOB_STARTED`
+   pointing at `/etc/pb-runner/legion-pre-job-hook.sh`. The option names were NOT verified in this run:
+   no nixpkgs source was on NIX_PATH and the nixos MCP was not reachable from the executor. Check every
+   option name against the nixos MCP or the pinned `github-runner/options.nix` before writing it, and
+   add a token-type option only if the pinned module has one. Do not create a `configuration.nix.pre-*`
+   backup; git history is the backup.
+5. Dry-build before applying: `pkexec nixos-rebuild dry-build` must succeed.
+6. Mint the one-time registration token immediately before the rebuild that registers the runner:
+   `gh api -H 'X-GitHub-Api-Version: 2022-11-28' -X POST repos/Deocracy/powerbrowser/actions/runners/registration-token --jq .token`
+   Write it once: `pkexec bash -c 'install -d -m 0700 /var/lib/secrets; printf %s "<token>" > /var/lib/secrets/github-runner-registration; chmod 0600 /var/lib/secrets/github-runner-registration'`.
+   The token expires after one hour. No PAT and no App key go to legion.
+7. Apply: `pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nrs "feat: legion non-ephemeral github runner for powerbrowser release builds (SEC-08, SEC-10)"'`.
+   `nrs` commits, rebuilds, and pushes in one step. Bare `nrs` fails under Claude's sudo; the pkexec form is the only one.
+8. Check the runner user boundary while the registration file still exists:
+   `sudo -u pb-runner test -r /home/chris/.config/powerbrowser-release/mar-key && echo READABLE` and
+   `sudo -u pb-runner test -r /var/lib/secrets/github-runner-registration && echo READABLE`. Both must
+   print nothing. If either prints READABLE, stop and fix the ownership or the home-directory mode first.
+9. Confirm the runner and remove the token file. `gh api repos/Deocracy/powerbrowser/actions/runners --jq '.runners[] | {name, status, labels: [.labels[].name]}'`
+   shows one runner named `legion`, online, with the label `powerbrowser-release`. Then
+   `pkexec rm -f /var/lib/secrets/github-runner-registration`. If the unit fails on a later restart
+   because the module wants the token file again, mint a new one-time token; never restore a PAT.
+10. Refusal drill. Local, no GitHub write: `env -i GITHUB_REPOSITORY=Deocracy/powerbrowser GITHUB_WORKFLOW_REF='Deocracy/powerbrowser/.github/workflows/release.yml@refs/heads/feature' GITHUB_EVENT_NAME=workflow_dispatch /etc/pb-runner/legion-pre-job-hook.sh`
+    must exit 1 and name `refs/heads/main`. Live drill (optional, the owner's choice): push a throwaway branch with a
+    `powerbrowser-release` job, confirm the job fails at set-up before any step, then delete the branch. Not run here.
+11. Reply with: the runner id and labels; the github-runner version the unit runs, next to the upstream version
+    (Open Question 3; the lock-versus-upstream note in docs/RELEASING.md records 2.333.1 against 2.336.0 at the
+    time of writing); the GH-11 probe outcome; the drill result; then the word "resume". The executor then runs
+    `scripts/verify-platform.sh --only repo-controls` live, records that line and the version pair in
+    49-02-SUMMARY.md, and only then marks criterion 1 locally met.
+
+Items this record adds for the owner:
+- Repo slug drift: the research and fixtures use `DeBIOS-Foundation/powerbrowser`; the owner ruling and
+  `configuration.toml` use `Deocracy/powerbrowser`. The hook and the docs follow the ruling. The public
+  `DeBIOS-Foundation/powerbrowser` repository also exists; confirm which is the release home before step 6.
