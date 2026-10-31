@@ -24,6 +24,18 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_DIR="$REPO_ROOT/upstream"
 PATCHES_DIR="$REPO_ROOT/patches"
 
+# --upstream <dir> and --patches <dir> replay the stack onto a scratch tree (the replay-only control,
+# plan 58-02, mirroring regenerate-patches.sh). The defaults are upstream/ and patches/, so
+# rebase-upstream.sh and --self-test are unchanged. --self-test is left for the mode check below.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --upstream) UPSTREAM_DIR="${2:?apply-patches: --upstream needs a directory}"; shift 2 ;;
+    --patches) PATCHES_DIR="${2:?apply-patches: --patches needs a directory}"; shift 2 ;;
+    --self-test) break ;;
+    *) echo "apply-patches: FAIL -- unrecognized argument: $1 (usage: apply-patches.sh [--upstream <dir>] [--patches <dir>] | --self-test)" >&2; exit 2 ;;
+  esac
+done
+
 # Applies a single patch file against the git repo rooted at the current
 # working directory, asserting non-vacuity via before/after blob-hash
 # comparison on every path the patch's own '+++ b/' headers name. Returns 0
