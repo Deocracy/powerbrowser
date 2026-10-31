@@ -57,19 +57,21 @@ function truncated(body) {
 
 const NEXT_AUTH = 'Next step: run gh auth status; the row needs scopes repo and read:org.';
 
-export function ghGet(path) {
+// A read that failed carries what a control may map: status 404 for an HTTP 404, empty true for a 2xx with no body
+// (a 204). Both stay unreadable unless the control opts in with liveFrom (dependabot-alerts, whose answer is the status).
+export function ghGet(path, exec = execFileSync) {
     let out;
     try {
-        out = execFileSync('gh', ['api', '-H', API_VERSION_HEADER, path],
+        out = exec('gh', ['api', '-H', API_VERSION_HEADER, path],
             { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 });
     } catch (e) {
         const first = String(e.stderr || e.message).trim().split('\n')[0];
-        return { ok: false, why: `GET ${path} could not be read (${first}). ${NEXT_AUTH}` };
+        return { ok: false, status: /\(HTTP 404\)/.test(first) ? 404 : null, why: `GET ${path} could not be read (${first}). ${NEXT_AUTH}` };
     }
     try {
         return { ok: true, body: JSON.parse(out) };
     } catch {
-        return { ok: false, why: `GET ${path} could not be read (the response is not JSON). ${NEXT_AUTH}` };
+        return { ok: false, empty: String(out).trim() === '', why: `GET ${path} could not be read (the response is not JSON). ${NEXT_AUTH}` };
     }
 }
 
@@ -153,6 +155,26 @@ function projection(c, declared, live) {
         .filter(k => !same(declared[k], live[k]))
         .map(k => `${where(c)}: ${k} is ${show(live[k])} live but ${show(declared[k])} declared. Next step: ${APPLY}.`);
 }
+
+// CodeQL default setup (AUTO-03). Default setup is repository-wide per language and has no path filter, so "covers
+// theia/extensions (TypeScript) and scripts/ (JavaScript)" is the language javascript-typescript. state and query_suite
+// must be equal; every declared language must be among the live ones (a superset passes: GitHub also lists legacy
+// language names, and what it lists once configured is unverified until the owner applies this body).
+function compareDefaultSetup(c, declared, live) {
+    if (!isObj(live)) return [`${where(c)}: the live response is ${show(live)}, not an object. Next step: check the endpoint in ${SELF_REL}.`];
+    const f = projection(c, { state: declared.state, query_suite: declared.query_suite }, live);
+    const have = Array.isArray(live.languages) ? live.languages : [];
+    const missing = (declared.languages ?? []).filter(l => !have.includes(l));
+    if (missing.length > 0) f.push(`${where(c)}: language(s) ${missing.join(', ')} not among the live languages ${show(live.languages)}. Next step: ${APPLY}.`);
+    return f;
+}
+
+// Dependabot alerts answer by status: 204 when on, 404 when off, so the status is the body.
+const alertsFromStatus = (r) => {
+    if (!r.ok && r.empty === true) return { ok: true, body: { enabled: true } };
+    if (!r.ok && r.status === 404) return { ok: true, body: { enabled: false } };
+    return r;
+};
 
 // --- the table --------------------------------------------------------------
 
@@ -693,6 +715,22 @@ export const CONTROLS = Object.freeze([
         compare: projection,
     },
     {
+        id: 'dependabot-alerts',
+        file: 'dependabot-alerts.json',
+        write: { method: 'PUT', path: 'repos/{owner}/{repo}/vulnerability-alerts' },
+        bodiless: true,
+        read: 'repos/{owner}/{repo}/vulnerability-alerts',
+        liveFrom: alertsFromStatus,
+        compare: projection,
+    },
+    {
+        id: 'code-scanning-default-setup',
+        file: 'code-scanning-default-setup.json',
+        write: { method: 'PATCH', path: 'repos/{owner}/{repo}/code-scanning/default-setup' },
+        read: 'repos/{owner}/{repo}/code-scanning/default-setup',
+        compare: compareDefaultSetup,
+    },
+    {
         id: 'repo',
         file: 'repo.json',
         write: { method: 'PATCH', path: 'repos/{owner}/{repo}' },
@@ -811,7 +849,7 @@ export function runChecks(root, overrides = {}) {
             failures.push(gated);
             continue;
         }
-        const r = ctx.get(ctx.fill(c.read));
+        const r = c.liveFrom ? c.liveFrom(ctx.get(ctx.fill(c.read))) : ctx.get(ctx.fill(c.read));
         if (!r.ok) {
             failures.push(`${c.id}: ${r.why}`);
             continue;
@@ -894,6 +932,12 @@ function fakeState(ctx) {
         [p('repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval')]: { ...b['fork-pr-approval.json'] },
         [p('repos/{owner}/{repo}/immutable-releases')]: { ...b['immutable-releases.json'], enforced_by_owner: false },
         [p('repos/{owner}/{repo}/private-vulnerability-reporting')]: { ...b['private-vulnerability-reporting.json'] },
+        [p('repos/{owner}/{repo}/vulnerability-alerts')]: NO_CONTENT,
+        [p('repos/{owner}/{repo}/code-scanning/default-setup')]: {
+            ...b['code-scanning-default-setup.json'],
+            languages: [...b['code-scanning-default-setup.json'].languages, 'python'],
+            threat_model: 'remote', updated_at: '2026-10-31T00:00:00Z', schedule: 'weekly', runner_type: 'standard', runner_label: null,
+        },
         [p('repos/{owner}/{repo}')]: {
             id: 1, node_id: 'R_fixture', name: repo, full_name: `${owner}/${repo}`, private: false,
             visibility: 'public', default_branch: 'main', has_issues: true, allow_squash_merge: true,
@@ -988,9 +1032,13 @@ function fakeRulesets(ctx) {
     return state;
 }
 
-const getterOf = (state) => (path) => (Object.hasOwn(state, path)
-    ? { ok: true, body: clone(state[path]) }
-    : { ok: false, why: `GET ${path} could not be read (HTTP 404 in the self-test fixture). ${NEXT_AUTH}` });
+// A fixture value standing for a 204 answer (no body), as ghGet reports it.
+const NO_CONTENT = '__no-content__';
+const getterOf = (state) => (path) => {
+    if (!Object.hasOwn(state, path)) return { ok: false, status: 404, why: `GET ${path} could not be read (HTTP 404 in the self-test fixture). ${NEXT_AUTH}` };
+    if (state[path] === NO_CONTENT) return { ok: false, empty: true, why: `GET ${path} could not be read (the response is not JSON). ${NEXT_AUTH}` };
+    return { ok: true, body: clone(state[path]) };
+};
 
 function selfTest() {
     const setupFailures = [];
@@ -1092,6 +1140,13 @@ function selfTest() {
         ['allow_auto_merge false', set('repos/{owner}/{repo}', 'allow_auto_merge', false), ['repo (', 'allow_auto_merge']],
         ['immutable releases disabled', set('repos/{owner}/{repo}/immutable-releases', 'enabled', false), ['immutable-releases', 'enabled']],
         ['private vulnerability reporting disabled', set('repos/{owner}/{repo}/private-vulnerability-reporting', 'enabled', false), ['private-vulnerability-reporting', 'enabled']],
+        ['dependabot alerts off (404)', mutated((s, p) => { delete s[p('repos/{owner}/{repo}/vulnerability-alerts')]; }), ['dependabot-alerts', 'enabled is false live', '.github/settings/dependabot-alerts.json']],
+        ['a dependabot alerts read that fails with a 500', { get: (path) => (path.endsWith('/vulnerability-alerts') ? { ok: false, status: null, why: `GET ${path} could not be read (planted: HTTP 500). ${NEXT_AUTH}` } : getterOf(base)(path)) }, ['dependabot-alerts', 'planted: HTTP 500']],
+        ['a 204 answer on a control that did not opt in', mutated((s, p) => { s[p('repos/{owner}/{repo}/private-vulnerability-reporting')] = NO_CONTENT; }), ['private-vulnerability-reporting', 'could not be read']],
+        ['code scanning default setup not configured', set('repos/{owner}/{repo}/code-scanning/default-setup', 'state', 'not-configured'), ['code-scanning-default-setup', 'state is "not-configured" live', '.github/settings/code-scanning-default-setup.json']],
+        ['code scanning default setup without javascript-typescript', set('repos/{owner}/{repo}/code-scanning/default-setup', 'languages', ['actions', 'python']), ['code-scanning-default-setup', 'javascript-typescript']],
+        ['code scanning default setup with another query suite', set('repos/{owner}/{repo}/code-scanning/default-setup', 'query_suite', 'extended'), ['code-scanning-default-setup', 'query_suite']],
+        ['an unreadable code scanning default setup', mutated((s, p) => { delete s[p('repos/{owner}/{repo}/code-scanning/default-setup')]; }), ['code-scanning-default-setup', 'could not be read']],
         ['main-review missing from the live list', mutated((s, p) => { s[p(RULESETS_PATH)] = s[p(RULESETS_PATH)].filter(r => r.name !== 'main-review'); }), ['main-review', 'missing']],
         ['an approving-review count of 2', ruleMut('main-review', (r) => { pr(r).required_approving_review_count = 2; }), ['main-review', 'required_approving_review_count is 2']],
         ['an approving-review count of 0', ruleMut('main-review', (r) => { pr(r).required_approving_review_count = 0; }), ['main-review', 'required_approving_review_count is 0']],
@@ -1151,6 +1206,37 @@ function selfTest() {
             console.log(`  ok  control: ${name} -> green`);
         } else {
             console.error(`${NAME}: --self-test FAIL -- the control '${name}' went red: ${failures.join(' | ')}`);
+            failed += 1;
+        }
+    }
+
+    // ghGet and the alerts mapping, through the real code with an injected exec (no gh, no network): 204 is on, a 404 is off,
+    // and every other failure (a 403, a 500, text that is not JSON) stays unreadable, never "off" and never green.
+    {
+        const alertsPath = 'repos/o/r/vulnerability-alerts';
+        const refuses = (stderr) => () => { throw Object.assign(new Error('gh exited 1'), { stderr }); };
+        const mapped = (exec) => alertsFromStatus(ghGet(alertsPath, exec));
+        const cases = [
+            ['an empty 204 body', () => '', (r) => r.ok && r.body.enabled === true],
+            ['an HTTP 404', refuses('gh: Not Found (HTTP 404)\n'), (r) => r.ok && r.body.enabled === false],
+            ['an HTTP 403', refuses('gh: Dependabot alerts are disabled (HTTP 403)\n'), (r) => !r.ok && /HTTP 403/.test(r.why)],
+            ['an HTTP 500', refuses('gh: Server Error (HTTP 500)\n'), (r) => !r.ok && /HTTP 500/.test(r.why)],
+            ['a body that is not JSON', () => 'oops', (r) => !r.ok && /not JSON/.test(r.why)],
+            ['a JSON body', () => '{"enabled":true}', (r) => r.ok && r.body.enabled === true],
+        ];
+        for (const [name, exec, accepts] of cases) {
+            const r = mapped(exec);
+            if (accepts(r)) {
+                console.log(`  ok  ghGet over ${name} -> ${r.ok ? `enabled ${r.body.enabled}` : 'unreadable'}`);
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- ghGet over ${name} gave ${JSON.stringify(r)}`);
+                failed += 1;
+            }
+        }
+        // An empty body or a 404 on a control that did not opt in stays unreadable.
+        const plain = ghGet('repos/o/r/other', () => '');
+        if (plain.ok) {
+            console.error(`${NAME}: --self-test FAIL -- ghGet read an empty body as a success without liveFrom`);
             failed += 1;
         }
     }
