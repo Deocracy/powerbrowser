@@ -225,8 +225,9 @@ function selfTest() {
         const dir = mkdtempSync(join(tmpdir(), 'theia-endpoints-selftest-'));
         try {
             copyInto(dir, ALLOWLIST_REL);
+            // The manifest states the events endpoint at level off (TEL-06), so the plant swaps that host.
             const manifestText = readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8')
-                .replace('level = "off"', 'level = "all"\nendpoint = "https://absent.example.org/v1/events"');
+                .replace('endpoint = "https://events.powerbrowser.org/events"', 'endpoint = "https://absent.example.org/v1/events"');
             if (manifestText === readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8')) {
                 complain('absent endpoint host', 'planted no fault at all: the manifest edit did not land');
             } else {

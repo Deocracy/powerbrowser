@@ -2111,7 +2111,9 @@ export function emitWebExtensionSettings(config, variant) {
 /**
  * The telemetry fragment (04-03, TEL-01/TEL-02): the level the sender
  * enforces and the downstream's own endpoint it delivers to, as
- * `{level, endpoint}`.
+ * `{level, endpoint}`, plus the version and buildID TEL-06 stamps on each
+ * error report (both from releaseIdentity, so they never drift from the
+ * manifest).
  *
  * FRAGMENT, NOT THE WHOLE PACKAGE (04-01's rule carried over). The tracked
  * theia/applications/browser/package.json is yarn-managed, so whole-file
@@ -2158,10 +2160,16 @@ export function emitTheiaTelemetry(config, variant) {
     const endpoint = isUnset(rawEndpoint) ? null : rawEndpoint;
     assertEmittable('telemetry.level', level);
     if (endpoint !== null) assertEmittable('telemetry.endpoint', endpoint);
+    // TEL-06: version is the ESR version and buildID the release key (v<ESR>-<revision>),
+    // both from releaseIdentity so the error reports carry the build that produced them.
+    // buildID is not MOZ_BUILDID: that one names the Gecko build in MAR descriptors.
+    const identity = releaseIdentity(config);
     const lines = [
         '{',
         `  "level": ${JSON.stringify(level)},`,
-        `  "endpoint": ${JSON.stringify(endpoint)}`,
+        `  "endpoint": ${JSON.stringify(endpoint)},`,
+        `  "version": ${JSON.stringify(assertEmittable('product.version', identity.esrVersion))},`,
+        `  "buildID": ${JSON.stringify(assertEmittable('product.buildID', identity.releaseKey))}`,
         '}',
     ];
     return lines.join('\n') + '\n';
@@ -4310,6 +4318,26 @@ export function resolveConfig(defaultsPath = MANIFEST_PATH, downstreamPath) {
                     );
                 }
             }
+            // TEL-06: the platform states its events endpoint in the defaults layer, so a downstream that
+            // enables a telemetry level without stating its own would send its users' error reports to the
+            // platform's host. Same rule as urls.update above: an enabled level must name its own endpoint.
+            // (Level off is left alone: nothing is sent until the user raises the preference.)
+            const endpoint = config?.telemetry?.endpoint;
+            const platformEndpoint = platform.telemetry?.endpoint;
+            let sameEndpointHost = false;
+            try {
+                sameEndpointHost = !isUnset(endpoint) && !isUnset(platformEndpoint)
+                    && new URL(endpoint).host === new URL(platformEndpoint).host;
+            } catch {
+                sameEndpointHost = false;
+            }
+            if (config?.telemetry?.level !== 'off' && sameEndpointHost) {
+                failures.push(
+                    `telemetry.endpoint is ${JSON.stringify(endpoint)}, the platform's own events endpoint, while telemetry.level is ${JSON.stringify(config?.telemetry?.level)}, `
+                    + `so the error reports of a build under your name would be sent to the platform. `
+                    + `Write your own https address as [telemetry] endpoint in ${MANIFEST_NAME}, or keep [telemetry] level = "off", then run: ${RERUN}`,
+                );
+            }
         }
     }
 
@@ -5331,12 +5359,15 @@ function selfTest() {
                 }
                 return [];
             };
+            // An omitted [telemetry] section inherits the default manifest's level and endpoint through the
+            // default-echo (TEL-06 states the endpoint at level off), so the expectation is derived from it.
+            const inheritedEndpoint = resolveConfig(MANIFEST_PATH, undefined).config.telemetry?.endpoint ?? null;
             return [
                 ...checkOne(
                     `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "error"\nendpoint = "https://example.org/telemetry/v1/events"\n`,
                     'error', 'https://example.org/telemetry/v1/events',
                 ),
-                ...checkOne(`${FIXTURE_DOWNSTREAM}`, 'off', null),
+                ...checkOne(`${FIXTURE_DOWNSTREAM}`, 'off', inheritedEndpoint),
             ];
         } finally {
             rmSync(fixtureDir, { recursive: true, force: true });
@@ -6051,11 +6082,19 @@ function selfTest() {
             resolved: c => Array.isArray(c.extensions) && c.extensions.length === 0,
         },
         {
-            // TEL-01. An enabled level with no endpoint must fail NAMING
-            // the missing key -- a sender that can never deliver must
-            // never build.
+            // TEL-01 / TEL-06. An enabled level with no endpoint of its own must fail NAMING the key.
+            // The default manifest states the platform's endpoint, so an omitted key inherits it and the
+            // downstream would send its users' error reports to the platform: the refusal is the
+            // R11-style rule in resolveConfig, the same as for urls.update.
             name: 'telemetry level enabled without an endpoint',
             toml: `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "all"\n`,
+            expect: 'telemetry.endpoint',
+        },
+        {
+            // TEL-01. The explicit form: the endpoint is cleared, so a sender that can never deliver
+            // must never build.
+            name: 'telemetry level enabled with the endpoint cleared',
+            toml: `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "all"\nendpoint = ""\n`,
             expect: 'telemetry.endpoint',
         },
         {
@@ -6082,7 +6121,7 @@ function selfTest() {
             // value rather than on the plant.
             name: 'telemetry fragment carries the stated pair and defaults an unset section to off',
             probe: () => telemetryControl,
-            holds: 'the stated level and endpoint verbatim, and off/null when unset',
+            holds: 'the stated level and endpoint verbatim, and off with the inherited default endpoint when unset',
             resolved: () => telemetryControl.length === 0,
         },
         {

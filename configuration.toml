@@ -104,11 +104,14 @@ mar_origin = "https://downloads.powerbrowser.org"
 # D-08 default-echo, so a downstream omitting it inherits off rather than
 # a live sender. endpoint is the downstream's own https URL; an enabled
 # level with no endpoint fails the generate naming telemetry.endpoint, so
-# a sender that can never deliver never builds. endpoint is deliberately
-# UNSET here: with level off there is nowhere to send and nothing ever
-# leaves the application.
+# a sender that can never deliver never builds. The endpoint is stated while
+# level stays off (TEL-06, A48-2): raising the preference is the opt-in, and at
+# level off the Gecko server pref is blanked, so nothing leaves the application.
+# The events hostname follows the Phase 47 zone; it is assumed here until the
+# Phase 47 record names it.
 [telemetry]
 level = "off"
+endpoint = "https://events.powerbrowser.org/events"
 
 # Declared sidecar extensions. Each [[extensions]] entry names an Open VSX
 # id at an exact version pin, or a direct https URL, plus the sha256 of the

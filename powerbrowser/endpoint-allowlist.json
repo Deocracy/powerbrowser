@@ -87,6 +87,12 @@
       "reason": "The Theia sidecar loopback -- architecture, not a concession. The phase-04 shell (powerbrowser/shell/TheiaService.sys.mjs) supervises a bundled Node + Theia browser-target backend on localhost and presents it full-window as the only GUI; a build that could not reach loopback would have no GUI at all. A literal loopback address, so no name resolution leaves the machine. Exact-string match only (allowlist_host_allowed, scripts/verify-endpoints.sh:340-352 -- suffix matching requires a leading literal dot in the allowlist entry), so this entry admits the one literal address 127.0.0.1 and nothing else."
     },
     {
+      "host": "events.powerbrowser.org",
+      "disposition": "allow",
+      "manifest": "telemetry.endpoint",
+      "reason": "TEL-06 (Phase 48): the error-report endpoint [telemetry] endpoint states in configuration.toml. Error reports at level error fire with no per-event click, so the disposition is allow (unattended), not user-initiated, the same category as the sidecar loopback. At the shipped level off nothing is contacted: toolkit.telemetry.server is blank and the sender drops before queueing. Raising the telemetry preference is the opt-in. A48-2: the hostname follows the Phase 47 zone and is assumed until that record names it."
+    },
+    {
       "host": "powerbrowser.org",
       "disposition": "user-initiated",
       "reason": "UPD-33: click destinations only. The welcome widget's link (theia/extensions/branding/src/browser/powerbrowser-welcome-widget.tsx POWERBROWSER_REPO_URL), the About dialog's manual-update link (app.update.url.manual from configuration.toml [urls] homepage, UPD-13) and the installer support URL ([installer] support_url) all name this host, and each is reached only by an explicit click. Gecko speculatively DNS-prefetches link targets (network.dns.disablePrefetch defaults false, modules/libpref/init/StaticPrefList.yaml:15308; network.dns.disablePrefetchFromHTTPS also defaults false, :15161); that unattended path is closed by network.dns.disablePrefetch = true, not by removing the links. An unattended resolution of this host is a failure exactly as for a `deny` entry; previously dispositioned `deny`, re-dispositioned when the About-dialog links became real pages."

@@ -4,7 +4,8 @@
 //
 // WHAT IS SENT. The event name, the thrown value's type (its constructor name, e.g.
 // TypeError, or typeof for a value that is not an Error), the script's base name, and the
-// line and column. Never the message and never a stack: Theia's file service puts full
+// line and column, then the version, buildID and OS bucket that telemetry-enrichment.ts
+// derives. Never the message and never a stack: Theia's file service puts full
 // home-directory paths into error messages, page errors carry URLs, and stacks carry both.
 //
 // WHAT IS SKIPPED. A repeat of an (event, type, source, line) key already admitted this
@@ -15,6 +16,9 @@
 // Every read of the event is guarded: a throwing getter, a null-prototype value or a
 // non-string name gives 'unknown' or an omitted field, never a throw out of the listener.
 
+import type { EnrichmentContext } from './telemetry-enrichment.ts';
+import { ADMITTED_SHAPES, withEnrichment } from './telemetry-enrichment.ts';
+
 export const UNCAUGHT_ERROR_EVENT = 'frontend.uncaught-error';
 export const UNHANDLED_REJECTION_EVENT = 'frontend.unhandled-rejection';
 
@@ -24,18 +28,22 @@ export interface ErrorReportLogger {
 }
 
 // A type alias, not an interface, so it is assignable to the logger's Record parameter.
+// version, buildID and os are filled by withEnrichment, never by the event handlers.
 export type ErrorReport = {
     type: string;
     source?: string;
     line?: number;
     column?: number;
+    version?: string;
+    buildID?: string;
+    os?: string;
 };
 
 // A runtime-assigned constructor name could carry any text; an identifier cannot carry a path.
-const IDENTIFIER = /^[A-Za-z_$][\w$]{0,63}$/;
+const IDENTIFIER = ADMITTED_SHAPES.type;
 // Only a script loaded from a URL has a file name; a data: or eval source's last segment is code.
 const SCRIPT_URL = /^(https?|file):\/\//i;
-const FILE_NAME = /^[\w.-]{1,100}$/;
+const FILE_NAME = ADMITTED_SHAPES.source;
 
 function read(target: unknown, key: string): unknown {
     try {
@@ -68,11 +76,13 @@ function position(value: unknown): number | undefined {
 
 export class ErrorReporter {
     protected readonly logger: ErrorReportLogger;
+    protected readonly context: EnrichmentContext;
     // ponytail: unbounded per session; distinct error sites are few. Cap it if a source mints keys.
     protected readonly admitted = new Set<string>();
 
-    constructor(logger: ErrorReportLogger) {
+    constructor(logger: ErrorReportLogger, context: EnrichmentContext = {}) {
         this.logger = logger;
+        this.context = context;
     }
 
     readonly onError = (event: unknown): void => {
@@ -90,10 +100,11 @@ export class ErrorReporter {
 
     protected report(eventName: string, data: ErrorReport): void {
         try {
-            const key = [eventName, data.type, data.source, data.line].join('|');
+            const enriched = withEnrichment(data, this.context);
+            const key = [eventName, enriched.type, enriched.source, enriched.line].join('|');
             if (this.admitted.has(key)) return;
             if (this.logger.sender.admits('error')) this.admitted.add(key);
-            this.logger.logError(eventName, data);
+            this.logger.logError(eventName, enriched);
         } catch {
             // Never a throw out of an error listener.
         }
