@@ -40,7 +40,8 @@
 // WIRE VOCABULARY. 200 accepted: "ok: stored <n>" (events) or "ok: <asset>" (download counts).
 // 400: "Discarded: malformed_body",
 // "Discarded: malformed_batch" or "Discarded: malformed_event". 413: "Discarded: oversized_body". 500: "Discarded: store_unavailable".
-// 401 and 404 answer an empty body.
+// 401, 404 and 405 answer an empty body (404 for any other path, 405 for a method other than POST
+// on a known path; an empty events array answers 400 malformed_batch).
 //
 // CORS. The sender posts application/json from the Theia page, whose origin is the loopback
 // sidecar (http://127.0.0.1:<port>, the host TheiaService.sys.mjs starts it on; the port changes per
@@ -132,8 +133,10 @@ function byteLength(text) {
     return encoder.encode(text).byteLength;
 }
 
+/** Cut to MAX_STRING_CHARS code points (never inside a surrogate pair) and drop any lone surrogate, which D1 may reject. */
 function truncate(value) {
-    return value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value;
+    const wellFormed = value.toWellFormed();
+    return wellFormed.length > MAX_STRING_CHARS ? Array.from(wellFormed).slice(0, MAX_STRING_CHARS).join('') : wellFormed;
 }
 
 function isPlainObject(value) {
@@ -216,12 +219,13 @@ function eventValues(row, receivedAt) {
  * one D1 batch, so a storage fault stores nothing either.
  */
 export async function handleEvents(shape, env, state) {
-    if (shape.method !== 'POST' || shape.path !== EVENTS_PATH) return empty(404);
+    if (shape.path !== EVENTS_PATH) return empty(404);
+    if (shape.method !== 'POST') return empty(405);
     if (!isJsonType(shape.headers?.['content-type'])) return discard(400, REASON_MALFORMED);
     if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);
     const top = parseJsonObject(shape.body);
     if (top === undefined) return discard(400, REASON_MALFORMED);
-    if (!Array.isArray(top.events) || top.events.length > MAX_EVENTS) return discard(400, REASON_BATCH);
+    if (!Array.isArray(top.events) || top.events.length === 0 || top.events.length > MAX_EVENTS) return discard(400, REASON_BATCH);
     if (!top.events.every(isPlainObject)) return discard(400, REASON_MALFORMED);
     const trusted = authorized(shape.headers?.authorization, env);
     const admitted = top.events.map(event => admitEvent(event, trusted));
@@ -243,7 +247,8 @@ export async function handleEvents(shape, env, state) {
  * reaches no parser.
  */
 export async function handleDownloadCounts(shape, env, state) {
-    if (shape.method !== 'POST' || shape.path !== DL_PATH) return empty(404);
+    if (shape.path !== DL_PATH) return empty(404);
+    if (shape.method !== 'POST') return empty(405);
     if (!authorized(shape.headers?.authorization, env)) return empty(401);
     if (!isJsonType(shape.headers?.['content-type'])) return discard(400, REASON_MALFORMED);
     if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);
@@ -252,7 +257,7 @@ export async function handleDownloadCounts(shape, env, state) {
     const asset = typeof top.asset === 'string' && top.asset !== '' ? truncate(top.asset) : undefined;
     const tag = typeof top.tag === 'string' ? truncate(top.tag) : undefined;
     const count = top.download_count;
-    if (asset === undefined || tag === undefined || !Number.isInteger(count) || count < 0) return discard(400, REASON_MALFORMED);
+    if (asset === undefined || tag === undefined || !Number.isSafeInteger(count) || count < 0) return discard(400, REASON_MALFORMED);
     const day = new Date(state.nowMs).toISOString().slice(0, 10);
     try {
         await env.DB.prepare(UPSERT_DOWNLOAD).bind(asset, tag, day, count, state.nowMs).run();
@@ -338,7 +343,7 @@ export default {
         const verdict = early ?? (path === EVENTS_PATH
             ? await handleEvents(shape, env, state)
             : await handleDownloadCounts(shape, env, state));
-        return toResponse(verdict, cors);
+        return toResponse(verdict, verdict.status === 405 ? { ...cors, allow: path === EVENTS_PATH ? 'POST, OPTIONS' : 'POST' } : cors);
     },
     scheduled,
 };

@@ -100,6 +100,9 @@ const RULE = Object.freeze({
     schemaColumn: 'schema declares every column',
     schemaRerun: 'schema is re-runnable',
     noRoutes: 'no routes key',
+    compat: 'fixed compatibility date',
+    emptyBatch: 'empty batch',
+    surrogate: 'surrogate-safe truncation',
     workersDev: 'no workers.dev URL',
     credential: 'credential-shaped assignment in worker/',
 });
@@ -301,6 +304,8 @@ async function runStatic(root, worker) {
         ]) {
             if (!wrangler.includes(literal)) failures.push(`${WRANGLER_REL} does not state ${label} (${literal}). Next step: restore it in the descriptor.`);
         }
+        const compat = /^compatibility_date\s*=\s*"(\d{4}-\d{2}-\d{2})"\s*$/m.exec(wrangler)?.[1];
+        if (compat === undefined || !(compat < new Date(Date.now() - 86_400_000).toISOString().slice(0, 10))) failures.push(`${RULE.compat}: ${WRANGLER_REL} states compatibility_date ${JSON.stringify(compat)}, which is not a fixed date before today. Next step: pin a past date; a date the owner's pinned runtime has not reached falls back with a warning.`);
         for (const key of ['workers_dev', 'preview_urls']) {
             if (!new RegExp(`^${key}\\s*=\\s*false\\s*$`, 'm').test(wrangler)) failures.push(`${RULE.workersDev}: ${WRANGLER_REL} does not state ${key} = false, so a workers.dev URL would bypass the zone rate-limit rule. Next step: state ${key} = false at the top level.`);
         }
@@ -365,7 +370,9 @@ async function runBehaviour(root, worker, secret) {
     }
 
     const good = JSON.stringify(GOOD_EVENTS);
-    await expectRejected(RULE.method, { ...post(worker.EVENTS_PATH, good), method: 'GET' }, { status: 404, body: '' });
+    await expectRejected(RULE.method, { ...post(worker.EVENTS_PATH, good), method: 'GET' }, { status: 405, body: '' });
+    await expectRejected(RULE.method, { ...post(worker.DL_PATH, { asset: 'a', tag: 't', download_count: 1 }, { authorization: `Bearer ${secret}` }), method: 'GET' }, { status: 405, body: '' }, { download: true });
+    await expectRejected(RULE.emptyBatch, post(worker.EVENTS_PATH, { events: [] }), { status: 400, body: 'Discarded: malformed_batch' });
     await expectRejected(RULE.path, post('/events/extra', good), { status: 404, body: '' });
     await expectRejected(RULE.contentType, post(worker.EVENTS_PATH, good, { 'content-type': 'text/plain' }), { status: 400, body: 'Discarded: malformed_body' });
     await expectRejected(RULE.unparseable, post(worker.EVENTS_PATH, '{not json'), { status: 400, body: 'Discarded: malformed_body' });
@@ -399,15 +406,17 @@ async function runBehaviour(root, worker, secret) {
         if (stored.length > 0) failures.push(`${RULE.extraProp}: the stored row carries ${JSON.stringify(stored)}. Next step: write only the admitted columns.`);
     }
 
-    // Over-length string: a stored free string (a download-count asset) is truncated to MAX_STRING_CHARS.
+    // Over-length string: a stored free string (a download-count asset) is truncated to MAX_STRING_CHARS
+    // without cutting a surrogate pair, and a lone surrogate is stored well-formed (D1 may reject it).
     {
         const stub = makeStub();
         const authedLong = { authorization: `Bearer ${secret}` };
-        const long = 'x'.repeat(300);
-        const verdict = await worker.handleDownloadCounts(post(worker.DL_PATH, { asset: long, tag: 't'.repeat(300), download_count: 1 }, authedLong), { DB: stub, DOWNLOAD_COUNT_SECRET: secret }, freshState());
+        const long = `${'x'.repeat(worker.MAX_STRING_CHARS - 1)}\u{1F600}tail`;
+        const verdict = await worker.handleDownloadCounts(post(worker.DL_PATH, { asset: long, tag: `\ud800${'t'.repeat(300)}`, download_count: 1 }, authedLong), { DB: stub, DOWNLOAD_COUNT_SECRET: secret }, freshState());
         const row = [...stub.counts.values()][0];
         if (verdict.status !== 200 || row === undefined) failures.push(`${RULE.overLength}: a 300-character asset answered ${verdict.status}, not 200 with truncation. Next step: truncate, do not reject.`);
         else {
+            if (!row.asset.isWellFormed() || !row.tag.isWellFormed()) failures.push(`${RULE.surrogate}: a stored string is not well-formed (a surrogate pair was split or a lone surrogate was kept), which D1 may reject. Next step: truncate on code points and normalise with toWellFormed.`);
             if (Array.from(row.asset).length > worker.MAX_STRING_CHARS) failures.push(`${RULE.overLength}: the stored asset is ${Array.from(row.asset).length} characters, over ${worker.MAX_STRING_CHARS}. Next step: truncate every stored free string to MAX_STRING_CHARS.`);
         }
     }
@@ -477,6 +486,8 @@ async function runBehaviour(root, worker, secret) {
         const dl = new Request(`https://events.example.invalid${worker.DL_PATH}`, { method: 'POST', headers: { origin, 'content-type': 'application/json', authorization: `Bearer ${secret}` }, body: JSON.stringify({ asset: 'a.exe', tag: 'v1.2-1', download_count: 1 }) });
         const dlResponse = await worker.default.fetch(dl, e);
         if (dlResponse.status !== 200 || dlResponse.headers.get('access-control-allow-origin') !== null) failures.push(`${RULE.cors}: POST ${worker.DL_PATH} answered ${dlResponse.status} with allow-origin ${JSON.stringify(dlResponse.headers.get('access-control-allow-origin'))}. Next step: never send CORS headers on the download-counts route.`);
+        const wrongMethod = await worker.default.fetch(new Request(url, { method: 'GET', headers: { origin } }), e);
+        if (wrongMethod.status !== 405 || wrongMethod.headers.get('allow') === null) failures.push(`${RULE.method}: GET ${worker.EVENTS_PATH} answered ${wrongMethod.status} with allow ${JSON.stringify(wrongMethod.headers.get('allow'))}, not 405 with an Allow header. Next step: answer a wrong method on a known path with 405.`);
         const dlPre = await worker.default.fetch(new Request(`https://events.example.invalid${worker.DL_PATH}`, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'POST' } }), e);
         if (dlPre.headers.get('access-control-allow-origin') !== null) failures.push(`${RULE.cors}: OPTIONS ${worker.DL_PATH} was granted allow-origin. Next step: never send CORS headers on the download-counts route.`);
     }
@@ -662,15 +673,18 @@ function stage(dir) {
 
 // Each plant mutates one line of the Worker or one document, and must go red naming its rule.
 const PLANTS = [
-    { rule: RULE.method, rel: WORKER_REL, find: "if (shape.method !== 'POST' || shape.path !== EVENTS_PATH) return empty(404);", replace: "if (shape.path !== EVENTS_PATH) return empty(404);" },
-    { rule: RULE.path, rel: WORKER_REL, find: "if (shape.method !== 'POST' || shape.path !== EVENTS_PATH) return empty(404);", replace: "if (shape.method !== 'POST') return empty(404);" },
+    { rule: RULE.method, rel: WORKER_REL, find: "    if (shape.method !== 'POST') return empty(405);\n", replace: '' },
+    { rule: RULE.path, rel: WORKER_REL, find: "    if (shape.path !== EVENTS_PATH) return empty(404);\n", replace: '' },
+    { rule: RULE.emptyBatch, rel: WORKER_REL, find: ' || top.events.length === 0', replace: '' },
+    { rule: RULE.surrogate, rel: WORKER_REL, find: "wellFormed.length > MAX_STRING_CHARS ? Array.from(wellFormed).slice(0, MAX_STRING_CHARS).join('') : wellFormed", replace: 'value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value' },
+    { rule: RULE.compat, rel: WRANGLER_REL, find: 'compatibility_date = "2025-01-01"', replace: 'compatibility_date = "2999-01-01"' },
     { rule: RULE.contentType, rel: WORKER_REL, find: "    if (!isJsonType(shape.headers?.['content-type'])) return discard(400, REASON_MALFORMED);\n    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);\n    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)", replace: "    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);\n    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)" },
     { rule: RULE.unparseable, rel: WORKER_REL, find: "    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)", replace: "    if (!Array.isArray(top.events)" },
     { rule: RULE.nonObjectTop, rel: WORKER_REL, find: 'return isPlainObject(value) ? value : undefined;', replace: 'return value;' },
     { rule: RULE.overCapBody, rel: WORKER_REL, find: '    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);\n    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)', replace: '    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)' },
     { rule: RULE.overCapBatch, rel: WORKER_REL, find: ' || top.events.length > MAX_EVENTS', replace: '' },
     { rule: RULE.extraProp, rel: WORKER_REL, find: '    row.synthetic = mayMarkSynthetic && event.synthetic === true ? 1 : 0;', replace: '    row.synthetic = mayMarkSynthetic && event.synthetic === true ? 1 : 0;\n    row.message = event.message;' },
-    { rule: RULE.overLength, rel: WORKER_REL, find: '    return value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value;', replace: '    return value;' },
+    { rule: RULE.overLength, rel: WORKER_REL, find: "wellFormed.length > MAX_STRING_CHARS ? Array.from(wellFormed).slice(0, MAX_STRING_CHARS).join('') : wellFormed", replace: 'wellFormed' },
     { rule: RULE.streamCap, rel: WORKER_REL, find: '    if (Number.isFinite(declared) && declared > cap) return undefined;\n', replace: '' },
     { rule: RULE.streamCap, rel: WORKER_REL, find: '        if (total > cap) { await reader.cancel(); return undefined; }\n', replace: '' },
     { rule: RULE.authFirst, rel: WORKER_REL, find: 'if (path === DL_PATH && !authorized(', replace: 'if (false && !authorized(' },
@@ -682,7 +696,7 @@ const PLANTS = [
     { rule: RULE.noSecret, rel: WORKER_REL, find: "if (typeof expected !== 'string' || expected === '') return false;", replace: "if (expected === undefined) return true;" },
     { rule: RULE.scheme, rel: WORKER_REL, find: " || !header.startsWith('Bearer ')) return false;", replace: ') return false;' },
     { rule: RULE.wrongSecret, rel: WORKER_REL, find: "    return constantTimeEqual(header.slice('Bearer '.length), expected);", replace: "    return header.startsWith('Bearer ');" },
-    { rule: RULE.malformedAuthed, rel: WORKER_REL, find: ' || !Number.isInteger(count) || count < 0', replace: '' },
+    { rule: RULE.malformedAuthed, rel: WORKER_REL, find: ' || !Number.isSafeInteger(count) || count < 0', replace: '' },
     { rule: RULE.duplicateAssetDay, rel: WORKER_REL, find: '"download_count" = excluded."download_count"', replace: '"download_count" = "download_count"' },
     { rule: RULE.synthetic, rel: WORKER_REL, find: `const SELECT_MAINTAINER = 'SELECT * FROM events WHERE "synthetic" = 0 ORDER BY "id"';`, replace: `const SELECT_MAINTAINER = 'SELECT * FROM events ORDER BY "id"';` },
     { rule: RULE.retention, rel: WORKER_REL, find: 'export const RETENTION_DAYS = 30;', replace: 'export const RETENTION_DAYS = 3650;' },
@@ -702,7 +716,7 @@ const PLANTS = [
     { rule: RULE.admitted, rel: WORKER_REL, find: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);", replace: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os', 'message']);" },
     { rule: RULE.schemaRerun, rel: SCHEMA_REL, find: 'CREATE INDEX IF NOT EXISTS events_received_at', replace: 'CREATE INDEX events_received_at' },
     { rule: RULE.schemaColumn, rel: SCHEMA_REL, find: '  "column" INTEGER,\n', replace: '' },
-    { rule: RULE.noRoutes, rel: WRANGLER_REL, find: 'compatibility_date = "2026-10-31"', replace: 'compatibility_date = "2026-10-31"\nroutes = ["events.powerbrowser.org/events"]' },
+    { rule: RULE.noRoutes, rel: WRANGLER_REL, find: 'compatibility_date = "2025-01-01"', replace: 'compatibility_date = "2025-01-01"\nroutes = ["events.powerbrowser.org/events"]' },
     { rule: RULE.credential, rel: WORKER_REL, find: 'export const DAY_MS = 86_400_000;', replace: "export const DAY_MS = 86_400_000;\nconst DOWNLOAD_COUNT_SECRET = 'plant-value';" },
 ];
 
