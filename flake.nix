@@ -20,6 +20,13 @@
       # Override so yarn itself, and every compile it drives, runs on the pinned Node.
       nodejs = pkgs.nodejs_24;
       yarn = pkgs.yarn.override { inherit nodejs; };
+
+      # PKG-19: the repacked browser is PolyForm Noncommercial, which nixpkgs counts as unfree. Only
+      # this package name is allowed here; the devShells keep the plain pkgs above.
+      pkgsPowerBrowser = import nixpkgs {
+        inherit system;
+        config.allowUnfreePredicate = pkg: builtins.elem (nixpkgs.lib.getName pkg) [ "powerbrowser" ];
+      };
     in
     {
       devShells.${system} = {
@@ -138,6 +145,17 @@
               echo "PowerBrowser firefox-macos shell ready. Cross-build with MOZCONFIG=powerbrowser/packaging/mozconfig-macos-<arch> from the repo root; signing and notarization are owner actions." >&2
             '';
           };
+      };
+
+      # PKG-19: the repacked Release tarball. The sidecar takes the same nodejs_24 binding as the shells.
+      packages.${system} = {
+        powerbrowser = pkgsPowerBrowser.callPackage ./nix/pkg/powerbrowser-bin.nix { inherit nodejs; };
+        default = self.packages.${system}.powerbrowser;
+      };
+
+      # A consumer's own nixpkgs must allow the unfree name powerbrowser before it evaluates this overlay.
+      overlays.default = final: _prev: {
+        powerbrowser = final.callPackage ./nix/pkg/powerbrowser-bin.nix { inherit nodejs; };
       };
     };
 }

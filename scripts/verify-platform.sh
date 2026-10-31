@@ -4898,6 +4898,14 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 56, PKG-19): the flake package repacks the Release tarball. The tarball name and URL derive
+    # from the release key and the asset table; the hash comes from nix/pkg/release-hash.json, and the sentinel
+    # placeholder is green here and red under --release. The sidecar takes the nodejs_24 binding; no darwin
+    # literal (A3). Honestly --quick: text reads and the generator's pure functions; no nix, no network.
+    "flake-repack|node $REPO_ROOT/scripts/verify-flake-repack.mjs"
+    # flake-repack-self-test plants a stale hash record, a non-SRI hash, a nodejs_22 literal, a darwin literal,
+    # a typed version, a missing DisableAppUpdate merge and a missing overlay, each red naming its file.
+    "flake-repack-self-test|node $REPO_ROOT/scripts/verify-flake-repack.mjs --self-test"
     # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
     # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
     # own pinned group, one regex customManager captures the live configuration.toml theia_release,
