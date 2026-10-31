@@ -1,0 +1,70 @@
+{
+  "app-id": "org.debios.PowerBrowser",
+  "runtime": "org.freedesktop.Platform",
+  "runtime-version": "26.08",
+  "sdk": "org.freedesktop.Sdk",
+  "base": "org.mozilla.firefox.BaseApp",
+  "base-version": "26.08",
+  "command": "powerbrowser",
+  "finish-args": [
+    "--share=ipc",
+    "--socket=fallback-x11",
+    "--socket=wayland",
+    "--socket=pulseaudio",
+    "--share=network",
+    "--device=dri",
+    "--persist=.debios"
+  ],
+  "modules": [
+    {
+      "name": "powerbrowser",
+      "buildsystem": "simple",
+      "only-arches": [
+        "x86_64"
+      ],
+      "build-commands": [
+        "mkdir -p /app/lib /app/bin /app/share/applications /app/share/icons/hicolor/128x128/apps",
+        "cp -a powerbrowser /app/lib/powerbrowser",
+        "python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d[\"policies\"][\"DisableAppUpdate\"]=True; open(p,\"w\").write(json.dumps(d,indent=2)+chr(10))' /app/lib/powerbrowser/distribution/policies.json",
+        "ln -s /app/lib/powerbrowser/powerbrowser /app/bin/powerbrowser",
+        "install -Dm644 org.debios.PowerBrowser.desktop /app/share/applications/org.debios.PowerBrowser.desktop",
+        "install -Dm644 org.debios.PowerBrowser.png /app/share/icons/hicolor/128x128/apps/org.debios.PowerBrowser.png"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "strip-components": 0,
+          "url": "@RELEASE_URL@",
+          "sha256": "@RELEASE_SHA256@",
+          "x-checker-data": {
+            "type": "json",
+            "url": "https://api.github.com/repos/@RELEASE_REPO@/releases/latest",
+            "version-query": ".tag_name | ltrimstr(\"v\")",
+            "url-template": "@RELEASE_URL_TEMPLATE@",
+            "is-main-source": true
+          }
+        },
+        {
+          "type": "file",
+          "path": "org.debios.PowerBrowser.desktop"
+        },
+        {
+          "type": "file",
+          "path": "org.debios.PowerBrowser.png"
+        }
+      ]
+    }
+  ],
+  "x-flathub-verification": {
+    "method": "dns-txt",
+    "record": "_flathub.debios.org",
+    "token": "@FLATHUB_VERIFICATION_TOKEN@",
+    "note": "Flathub verifies the domain of the app id. The owner copies the token from the Flathub Developer Portal into this TXT record (or serves it at https://debios.org/.well-known/org.flathub.VerifiedApps.txt) after the app is published; the release refuses the placeholder (scripts/verify-flathub-manifest.mjs --release)."
+  },
+  "x-source-exception": {
+    "status": "pending-owner-reply",
+    "branch": "written-exception",
+    "named-alternative": "from-source manifest: a named follow-up, not built in this phase",
+    "request": "Linter-exception request and reviewer discretion for a prebuilt tarball repack; the owner records the written reply in docs/cache-flathub-checkpoint.md before the submission PR"
+  }
+}

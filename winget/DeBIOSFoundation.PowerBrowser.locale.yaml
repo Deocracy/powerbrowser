@@ -1,0 +1,16 @@
+# winget default-locale manifest for PowerBrowser (DIST-04). The publisher, licence and homepage values are
+# derived from configuration.toml by scripts/verify-winget-manifest.mjs; the release notes link is the Release
+# page of the tree's release_notes URL for the release key.
+PackageIdentifier: "DeBIOSFoundation.PowerBrowser"
+PackageVersion: "@RELEASE_VERSION@"
+PackageLocale: "en-US"
+Publisher: "@PUBLISHER@"
+PublisherUrl: "https://powerbrowser.org"
+PackageName: "PowerBrowser"
+PackageUrl: "https://powerbrowser.org"
+License: "PolyForm Noncommercial 1.0.0"
+LicenseUrl: "https://polyformproject.org/licenses/noncommercial/1.0.0/"
+ShortDescription: "A browser platform: a Gecko shell with a Theia sidecar as its default interface."
+ReleaseNotesUrl: "https://github.com/@RELEASE_REPO@/releases/tag/@RELEASE_KEY@"
+ManifestType: "defaultLocale"
+ManifestVersion: "1.6.0"

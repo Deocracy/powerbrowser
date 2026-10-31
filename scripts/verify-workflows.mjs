@@ -74,6 +74,10 @@
 //                 == false). An inverted gate or one that merely mentions the input
 //                 is red. A dry run then prints the write instead of making it.
 //                 Read steps are exempt.
+//  call-event-gate  In a workflow that has a workflow_call event, no job-level or step-level `if` reads
+//                 github.event_name. Inside a called workflow the github context is the caller's, so the
+//                 gate is decided by the caller's event, not by the stage, and a stage meant to run from the
+//                 train silently skips its live jobs (Phase 56 CR-01). Gate on a boolean input instead.
 //  fixer-pin      In every workflow (release-train.yml and triage.yml included, FIX-08)
 //                 every anthropics/claude-code-action step is exactly the pinned commit
 //                 db77d4d3c98f... (v1.0.254; the tag object is refused), has
@@ -144,7 +148,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -421,6 +425,16 @@ function runChecks(root, overrides = {}) {
         if (file === 'release.yml' || file === 'release-train.yml') {
             for (const t of ['pull_request', 'pull_request_target']) {
                 if (ev.has(t)) fail(rel, WF_LEVEL, 'no-pr-trigger', `is triggered by ${t}; a release path must never run on a pull request. Next step: remove the ${t} trigger.`);
+            }
+        }
+        if (ev.has('workflow_call')) {
+            for (const [jobId, job] of Object.entries(wf.jobs)) {
+                const gates = [['job', job?.if], ...(Array.isArray(job?.steps) ? job.steps.map((st, i) => [`step ${i}`, st?.if]) : [])];
+                for (const [where, expr] of gates) {
+                    if (typeof expr === 'string' && /github\.event_name/.test(expr)) {
+                        fail(rel, jobId, 'call-event-gate', `has an if on its ${where} that reads github.event_name, but this workflow is called, so the context is the caller's event. Next step: gate on a boolean workflow_call input such as inputs.live.`);
+                    }
+                }
             }
         }
         const runOn = wf.on?.workflow_run?.workflows;
@@ -915,6 +929,8 @@ function selfTest() {
         ['issues write on triage.yml model job classify', { ...with_({ 'triage.yml': issuesJob('Triage', 'classify') }), selected: withoutClaude }, rel('triage.yml'), 'classify', 'issues-write', 'issues write'],
         ['write trio in job publish (not sign-publish)', append(R, job('publish', ['runs-on: ubuntu-latest', 'permissions:', '  contents: write', '  id-token: write', '  attestations: write', 'steps:', '  - run: echo x'])), rel(R), 'publish', 'write-trio', 'sign-publish'],
         ['pull_request on release.yml', edit(R, 'on:\n  workflow_dispatch:', 'on:\n  pull_request:\n  workflow_dispatch:'), rel(R), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
+        ['github.event_name gate on a job of the called channel stage', edit('channel-manifests.yml', "if: ${{ !inputs.live || inputs.dry_run }}", "if: ${{ github.event_name == 'workflow_dispatch' }}"), rel('channel-manifests.yml'), 'dry-run', 'call-event-gate', 'github.event_name'],
+        ['github.event_name gate on a step of the called channel stage', edit('channel-manifests.yml', '      - name: Check that the x-checker-data template resolves for the release key\n', "      - name: Check that the x-checker-data template resolves for the release key\n        if: ${{ github.event_name == 'workflow_call' }}\n"), rel('channel-manifests.yml'), 'checker-freshness', 'call-event-gate', 'step '],
         ['pull_request_target on release-train.yml', with_({ 'release-train.yml': plain(null).replace('on: workflow_dispatch', 'on: [workflow_dispatch, pull_request_target]') }), rel('release-train.yml'), WF_LEVEL, 'no-pr-trigger', 'pull_request_target'],
         ['actions/cache in release.yml', edit(R, '      - run: echo build\n', `      - uses: actions/cache@${H40}\n      - run: echo build\n`), rel(R), 'build-linux', 'no-cache', 'actions/cache'],
         ['setup-node with cache: in release.yml', edit(R, '      - run: echo build\n', `      - uses: actions/setup-node@${H40}\n        with:\n          cache: yarn\n      - run: echo build\n`), rel(R), 'build-linux', 'no-cache', 'cache input'],

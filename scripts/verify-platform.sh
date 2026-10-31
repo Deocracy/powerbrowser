@@ -4941,6 +4941,70 @@ run_own_checks() {
     # must exit 0; a dependabot.yml with no cooldown must exit non-zero naming dependabot-cooldown, one
     # with default-days 7 must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 56, PKG-19): the flake package repacks the Release tarball. The tarball name and URL derive
+    # from the release key and the asset table; the hash comes from nix/pkg/release-hash.json, and the sentinel
+    # placeholder is green here and red under --release. The sidecar takes the nodejs_24 binding; no darwin
+    # literal (A3). Honestly --quick: text reads and the generator's pure functions; no nix, no network.
+    "flake-repack|node $REPO_ROOT/scripts/verify-flake-repack.mjs"
+    # flake-repack-self-test plants a stale hash record, a non-SRI hash, a nodejs_22 literal, a darwin literal,
+    # a typed version, a missing DisableAppUpdate merge and a missing overlay, each red naming its file.
+    "flake-repack-self-test|node $REPO_ROOT/scripts/verify-flake-repack.mjs --self-test"
+    # NEW (Phase 56, PKG-19/PKG-20): the update-disable split. The release tarball's policies.json carries no
+    # DisableAppUpdate; the Nix repack and the Flatpak staging copy each add exactly that key and keep every
+    # sibling value. Derived from the derivation and the manifest merges, compared as set and value. Honestly
+    # --quick: text reads and JSON parses; no build, no network.
+    "policies-update-split|node $REPO_ROOT/scripts/verify-policies-update-split.mjs"
+    # policies-update-split-self-test plants the key in the tarball, the key missing from either repack, and a
+    # sibling key drifting in either repack; each goes red naming the file, the key or the sibling.
+    "policies-update-split-self-test|node $REPO_ROOT/scripts/verify-policies-update-split.mjs --self-test"
+    # NEW (Phase 56, INF-05): the binary cache. nix/cache.json declares Cachix first and the R2 bucket as the
+    # committed fallback behind one interface; the substituters and the trusted keys derive from the two
+    # backend blocks and must equal the interface. The cache-token row is present in docs/RENEWALS.md. The
+    # Flatpak tarball template is cross-checked against the same release key. Honestly --quick: JSON and text
+    # reads; no network, no cache. The live substitute proof is owner-checkpoint evidence, not a quick row.
+    "binary-cache|node $REPO_ROOT/scripts/verify-binary-cache.mjs"
+    # binary-cache-self-test plants a substituter and a trusted key disagreeing with their backends, a removed R2
+    # block, an empty R2 endpoint, a removed RENEWALS row, and a Flatpak template naming another host.
+    "binary-cache-self-test|node $REPO_ROOT/scripts/verify-binary-cache.mjs --self-test"
+    # NEW (Phase 56, PKG-20): the Flathub manifest, submission-shaped and static. The app id, the persist path,
+    # the TXT record name and the desktop and icon agreement derive from the tracked identity and branding;
+    # the runtime is org.freedesktop.Platform with the Firefox BaseApp as base; the Flatpak-only DisableAppUpdate merge and the checker data are
+    # present; the exception stays pending-owner-reply on the written-exception path, with one repack module.
+    # Honestly --quick: JSON, text and the tracked PNG bytes; no flatpak-builder, no network, no account.
+    "flathub-manifest|node $REPO_ROOT/scripts/verify-flathub-manifest.mjs"
+    # flathub-manifest-self-test plants a wrong runtime, a missing persist, a missing disable merge, missing checker
+    # data, a TXT record name off the homepage host, an approved exception, a second from-source module, a desktop
+    # Icon off the app id, a download copy leak and a cache interface missing the Cachix substituter.
+    "flathub-manifest-self-test|node $REPO_ROOT/scripts/verify-flathub-manifest.mjs --self-test"
+    # NEW (Phase 56, DIST-04): the winget set, a template rendered per release. PackageIdentifier, PackageVersion,
+    # the installer URL under the release key, the locale publisher, licence and release notes derive from the tree;
+    # InstallerSha256 renders the fixture bytes this row carries while the Windows asset is pending (A2); the
+    # WINGET_TOKEN custody row is present by structure. Honestly --quick: YAML parse (js-yaml from theia/) and text
+    # reads; no wingetcreate, no network, no credential.
+    "winget-manifest|node $REPO_ROOT/scripts/verify-winget-manifest.mjs"
+    # winget-manifest-self-test plants a neighbouring PackageVersion, an installer URL off the release-key shape, a
+    # SHA-256 literal, a removed fixture marker, a fixture under --release, a removed custody row, an arch node
+    # missing its Architecture, and a publisher drift; each goes red naming the file or value.
+    "winget-manifest-self-test|node $REPO_ROOT/scripts/verify-winget-manifest.mjs --self-test"
+    # NEW (Phase 56, DIST-11): the own-tap Homebrew cask, a template rendered per release. The version, url and sha256
+    # derive from the release key and the disk-image fixture (A3); verified: names the release host and owner path;
+    # auto_updates true; a livecheck block; the cask block and its stanzas; the darwin deferral marker naming A3 and
+    # Phase 55; and no signing claim. Honestly --quick: text reads and an in-memory fixture digest; ruby -c is an
+    # owner-checkpoint step through the locked nixpkgs.
+    "homebrew-cask|node $REPO_ROOT/scripts/verify-homebrew-cask.mjs"
+    # homebrew-cask-self-test plants auto_updates false, a verified host drift, a neighbouring version, an arm64
+    # enablement, a removed deferral marker, a signing claim, a removed zap stanza and a cask block header removed.
+    "homebrew-cask-self-test|node $REPO_ROOT/scripts/verify-homebrew-cask.mjs --self-test"
+    # NEW (Phase 56, DIST-12): the channel-manifests stage, read as YAML. Four legs per release: a flake-hash pull
+    # request (never a push to main), a tap commit, a gated winget submission with WINGET_TOKEN by name, and the
+    # Flatpak checker-template check; a dry run renders the payloads and submits nothing. No schedule, no
+    # pull_request trigger, no credential literal; every non-GitHub-owned action is admitted. Honestly --quick:
+    # YAML parse (js-yaml from theia/) and text reads; no network, no gh, no wingetcreate.
+    "channel-release-jobs|node $REPO_ROOT/scripts/verify-channel-release-jobs.mjs"
+    # channel-release-jobs-self-test plants a hash not prefetched from the asset, a push to main, a removed tap leg, a
+    # removed winget leg, a stale checker template, a submit step in the dry run, a pull_request trigger, a schedule
+    # key and a credential literal; each goes red naming the job or the value.
+    "channel-release-jobs-self-test|node $REPO_ROOT/scripts/verify-channel-release-jobs.mjs --self-test"
     # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
     # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
     # own pinned group, one regex customManager captures the live configuration.toml theia_release,
