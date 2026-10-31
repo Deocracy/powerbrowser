@@ -149,3 +149,10 @@ Items this record adds for the owner:
 - Repo slug drift: the research and fixtures use `DeBIOS-Foundation/powerbrowser`; the owner ruling and
   `configuration.toml` use `Deocracy/powerbrowser`. The hook and the docs follow the ruling. The public
   `DeBIOS-Foundation/powerbrowser` repository also exists; confirm which is the release home before step 6.
+
+### 49-02 Task 3: option names verified (2026-10-31, nixos MCP, channel unstable)
+
+All exist: `services.github-runners.<name>.{enable, url, name, user, workDir, extraLabels, noDefaultLabels, tokenFile, tokenType, ephemeral, replace, runnerGroup, extraEnvironment, nodeRuntimes}` and `users.users.<name>.autoSubUidGidRange`. Two corrections to the steps above:
+
+1. Prefer `services.github-runners.powerbrowser-release.extraEnvironment.ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";` over a separate `systemd.services.github-runner-powerbrowser-release.environment` entry; it is the module's own option. Set `tokenType = "registration";` explicitly rather than relying on auto-detection.
+2. Per the `tokenFile` option text, a registration token is valid for one hour, and changing the file's content or any registration-triggering option (url, name, workDir, extraLabels, ephemeral, runnerGroup) re-registers. Do not delete the token file while the option points at it: leave the (expired, harmless) file in place after the first successful registration, and mint a fresh one-time token only before a deliberate re-registration. Keep `ephemeral = false`; the docs say ephemeral with a registration token fails on restart.
