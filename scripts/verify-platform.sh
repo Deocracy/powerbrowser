@@ -4532,6 +4532,23 @@ run_own_checks() {
     "crash-collector|node $REPO_ROOT/scripts/verify-crash-collector.mjs"
     "crash-collector-self-test|node $REPO_ROOT/scripts/verify-crash-collector.mjs --self-test"
 
+    # NEW (Phase 57, TEL-07): the crash-submit Worker's contract gate. The receiver must speak the collector's
+    # contract for every shared name, its verdicts hold through the real fetch against an in-memory R2 stub,
+    # and its descriptors keep workers_dev off, the 30-day lifecycle over crash/, and no in-Worker throttle or
+    # credential. crash-submit-self-test plants each fault and requires it red naming its rule.
+    # Honestly --quick: synthetic Requests and a mkdtemp fixture only. No build, no network, no deploy.
+    "crash-submit|node $REPO_ROOT/scripts/verify-worker-submit.mjs"
+    "crash-submit-self-test|node $REPO_ROOT/scripts/verify-worker-submit.mjs --self-test"
+
+    # NEW (Phase 57, TEL-12): the per-target symbols archive gate. The archive suffix derives from
+    # package-name.mk and Makefile.in, every asset-table row is a token or marked pending, no name collides
+    # with the DIST-07 names (verify-release-asset-set.mjs --expected), the release workflow enumerates assets/
+    # into SHA256SUMS, the locale rename is recorded, and the runbook reads only annotations Gecko writes.
+    # release-symbols-self-test runs ten plants through runChecks, each red naming its asset or rule.
+    # Honestly --quick: text reads of upstream make files, docs and configuration.toml. No build, no network.
+    "release-symbols|node $REPO_ROOT/scripts/verify-release-symbols.mjs"
+    "release-symbols-self-test|node $REPO_ROOT/scripts/verify-release-symbols.mjs --self-test"
+
     # NEW (Phase 48, TEL-10/TEL-11): the telemetry Worker's contract gate. It imports the Worker
     # and drives every rule against a stub D1: method, path, content type, parse, shape, the body
     # and batch caps, the string cap, no cross-caller throttle, the authenticated download-count

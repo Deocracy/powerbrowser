@@ -1317,6 +1317,18 @@ follow-up needs the package (nixpkgs `desktop-file-utils`) added to a dev
 shell before it can be run; neither `.desktop` file has been installed here
 yet, so this has not blocked anything so far.
 
+## Crash symbols per target (TEL-12, Phase 57)
+
+`mach buildsymbols` writes `objdir/dist/<PKG_BASENAME>.crashreporter-symbols.zip` for each BUILD_TARGET (the suffix derives from `upstream/toolkit/mozapps/installer/package-name.mk`, and `scripts/verify-release-symbols.mjs` gates it). The target is a no-op while the reporter is compiled out (`--disable-crashreporter`), so the command runs only on a reporter-enabled build, which the TEL-13 flip produces.
+
+The on-disk name is not the release asset name. `PKG_BASENAME` in `package-name.mk` is `<MOZ_PKG_APPNAME>-<MOZ_PKG_VERSION>.<AB_CD>.<MOZ_PKG_PLATFORM>`: the Gecko version (`MOZ_APP_VERSION`, for example 153.1.0), the locale (`en-US`) and the platform string. The release asset is `<app>-<tag version>.<target-token>.crashreporter-symbols.zip` plus the stable `<app>-<target-token>.crashreporter-symbols.zip` (tag version = the tag minus its `v`; see `docs/RELEASING.md`, Release asset names). The release workflow must therefore rename each zip when it assembles `assets/`: drop the locale, replace the Gecko version by the tag version and the platform string by the target token. That rename step lands with the symbols in the asset set at the TEL-13 flip, and until then the rename is a recorded requirement that the gate cannot see in the workflow. Whether the tarball and MAR keep the locale token is the same open question recorded in `docs/RELEASING.md`.
+
+Owner command, once per target after a reporter-enabled build (not run in the agent shell; a tier-3 build):
+
+    nix develop .#firefox --command ./mach buildsymbols
+
+Record the zip's SHA256 and its name in the operator record beside the Release asset set. The minidump-stackwalk runbook in `docs/CRASH-POLICY.md` names the symbol path.
+
 ## Toolchain baseline
 
 Phase 3's rebase procedure (BUILD-03) starts by diffing the toolchain the
