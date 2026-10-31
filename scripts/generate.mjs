@@ -2082,7 +2082,9 @@ export function emitWebExtensionSettings(config, variant) {
 /**
  * The telemetry fragment (04-03, TEL-01/TEL-02): the level the sender
  * enforces and the downstream's own endpoint it delivers to, as
- * `{level, endpoint}`.
+ * `{level, endpoint}`, plus the version and buildID TEL-06 stamps on each
+ * error report (both from releaseIdentity, so they never drift from the
+ * manifest).
  *
  * FRAGMENT, NOT THE WHOLE PACKAGE (04-01's rule carried over). The tracked
  * theia/applications/browser/package.json is yarn-managed, so whole-file
@@ -2129,10 +2131,16 @@ export function emitTheiaTelemetry(config, variant) {
     const endpoint = isUnset(rawEndpoint) ? null : rawEndpoint;
     assertEmittable('telemetry.level', level);
     if (endpoint !== null) assertEmittable('telemetry.endpoint', endpoint);
+    // TEL-06: version is the ESR version and buildID the release key (v<ESR>-<revision>),
+    // both from releaseIdentity so the error reports carry the build that produced them.
+    // buildID is not MOZ_BUILDID: that one names the Gecko build in MAR descriptors.
+    const identity = releaseIdentity(config);
     const lines = [
         '{',
         `  "level": ${JSON.stringify(level)},`,
-        `  "endpoint": ${JSON.stringify(endpoint)}`,
+        `  "endpoint": ${JSON.stringify(endpoint)},`,
+        `  "version": ${JSON.stringify(assertEmittable('product.version', identity.esrVersion))},`,
+        `  "buildID": ${JSON.stringify(assertEmittable('product.buildID', identity.releaseKey))}`,
         '}',
     ];
     return lines.join('\n') + '\n';
@@ -5299,12 +5307,15 @@ function selfTest() {
                 }
                 return [];
             };
+            // An omitted [telemetry] section inherits the default manifest's level and endpoint through the
+            // default-echo (TEL-06 states the endpoint at level off), so the expectation is derived from it.
+            const inheritedEndpoint = resolveConfig(MANIFEST_PATH, undefined).config.telemetry?.endpoint ?? null;
             return [
                 ...checkOne(
                     `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "error"\nendpoint = "https://example.org/telemetry/v1/events"\n`,
                     'error', 'https://example.org/telemetry/v1/events',
                 ),
-                ...checkOne(`${FIXTURE_DOWNSTREAM}`, 'off', null),
+                ...checkOne(`${FIXTURE_DOWNSTREAM}`, 'off', inheritedEndpoint),
             ];
         } finally {
             rmSync(fixtureDir, { recursive: true, force: true });
@@ -6021,9 +6032,10 @@ function selfTest() {
         {
             // TEL-01. An enabled level with no endpoint must fail NAMING
             // the missing key -- a sender that can never deliver must
-            // never build.
-            name: 'telemetry level enabled without an endpoint',
-            toml: `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "all"\n`,
+            // never build. TEL-06 states the endpoint in the default manifest, so an
+            // omitted key inherits it; a downstream clears it explicitly to reach this refusal.
+            name: 'telemetry level enabled with the endpoint cleared',
+            toml: `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "all"\nendpoint = ""\n`,
             expect: 'telemetry.endpoint',
         },
         {
@@ -6050,7 +6062,7 @@ function selfTest() {
             // value rather than on the plant.
             name: 'telemetry fragment carries the stated pair and defaults an unset section to off',
             probe: () => telemetryControl,
-            holds: 'the stated level and endpoint verbatim, and off/null when unset',
+            holds: 'the stated level and endpoint verbatim, and off with the inherited default endpoint when unset',
             resolved: () => telemetryControl.length === 0,
         },
         {

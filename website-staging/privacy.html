@@ -49,7 +49,7 @@
     <li><code>line</code> and <code>column</code>: the position of the error in that file.</li>
     <li><code>version</code>: the PowerBrowser version.</li>
     <li><code>buildID</code>: the build identifier of this installation.</li>
-    <li><code>OS</code>: the operating system name and version.</li>
+    <li><code>OS</code>: the operating system family, one of windows, macos, linux or unknown.</li>
   </ul>
   <p>A report never includes the error message or the stack trace.</p>
 
@@ -67,6 +67,7 @@
     <li><code data-unattended-host="updates.powerbrowser.org">updates.powerbrowser.org</code>: checks for PowerBrowser updates.</li>
     <li><code data-unattended-host="release-assets.githubusercontent.com">release-assets.githubusercontent.com</code>: downloads update files.</li>
     <li><code data-unattended-host="update.googleapis.com">update.googleapis.com</code>, <code data-unattended-host="www.google.com">www.google.com</code>, <code data-unattended-host="dl.google.com">dl.google.com</code>, <code data-unattended-host="edgedl.me.gvt1.com">edgedl.me.gvt1.com</code>: the Widevine content decryption module, which is checked for updates and downloaded when needed for protected media.</li>
+    <li><code data-unattended-host="events.powerbrowser.org">events.powerbrowser.org</code>: receives error reports, and only while you have error reporting turned on. Each report carries only the fields listed above.</li>
   </ul>
   <h2>Hosts contacted only after you use a feature</h2>
   <p>These hosts are contacted only when you use the feature that needs them:</p>
