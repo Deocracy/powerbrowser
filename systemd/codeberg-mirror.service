@@ -1,0 +1,17 @@
+# GH-04 (Phase 53): pushes the default branch and the tags of the GitHub repository to the
+# Codeberg mirror. Runs on legion as a oneshot, started daily by codeberg-mirror.timer.
+#
+# The push credential lives on legion only, outside this repository. The owner configures the
+# credential helper of the legion-local mirror repository at apply time, so this unit names no
+# credential, token value or token path. The owner applies this file through /etc/nixos with nrs.
+
+[Unit]
+Description=Push git heads and tags to the Codeberg mirror
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/var/lib/codeberg-mirror/powerbrowser.git
+ExecStartPre=/run/current-system/sw/bin/git fetch --prune origin '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+ExecStart=/run/current-system/sw/bin/git push --prune codeberg 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'

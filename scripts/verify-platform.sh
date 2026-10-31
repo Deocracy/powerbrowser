@@ -4812,6 +4812,15 @@ run_own_checks() {
     # mismatch, an extra prefill id outside bug.yml, an absent bug form, a respelled opener id and
     # a widened github.com disposition; each goes red naming the drift. It writes nothing.
     "bug-report-affordance-self-test|node $REPO_ROOT/scripts/verify-bug-report.mjs --self-test"
+    # NEW (Phase 53, GH-04): the legion mirror timer and service. Quick mode reads the two tracked
+    # unit files and the tracked workflow and settings files, checks the timer and service keys and
+    # the absence of token material, and proves the SHA-compare on in-memory pairs. Honestly --quick:
+    # file reads only; no network, gh or build. The live compare is the full-tier codeberg-mirror-live row.
+    "codeberg-mirror|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs"
+    # codeberg-mirror-self-test plants a lagged SHA pair, a token literal and a token path in the
+    # service, and a weekly timer, a dropped Persistent, and --mirror in the service; each goes red
+    # naming the drift. The matching pair stays green. It writes nothing.
+    "codeberg-mirror-self-test|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
@@ -5284,6 +5293,13 @@ run_own_checks() {
       # owner fills them, so this row stays red until then. It must be green before the website
       # push (docs/RELEASING.md, the website section).
       "website-publish-ready|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs"
+
+      # NEW (Phase 53, GH-04): the live Codeberg mirror SHA compared with GitHub main. Full tier:
+      # one unauthenticated GET to the Codeberg API and one read-only gh api call. Red until the owner
+      # creates the mirror and applies the timer at the 53-04 checkpoint; an undeclared mirror slug is
+      # a FAIL, never a SKIP. Never called by a quick path.
+      "codeberg-mirror-live|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --live"
+
     )
   fi
 

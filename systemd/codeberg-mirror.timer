@@ -1,0 +1,14 @@
+# GH-04 (Phase 53): runs codeberg-mirror.service once a day. Persistent=true runs a missed
+# start after legion was off. A lagging mirror is caught by the maintenance sweep's Codeberg row,
+# which compares the Codeberg main SHA with the GitHub main SHA.
+
+[Unit]
+Description=Daily push to the Codeberg mirror
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
