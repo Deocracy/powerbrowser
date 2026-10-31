@@ -104,6 +104,10 @@ const KIND_CLASSES = new Map([
     ['webTabSaveExport', 'tab-navigation'],
     // Phase 32 plan 06 (PAGE-09): the frozen edit commands sit with navigation, per CONTEXT's class log.
     ['webTabEdit', 'tab-navigation'],
+    // Phase 32 plan 07 (PAGE-10): reader, view source and DevTools change the overlay's own page, so they are tab-navigation.
+    ['webTabReader', 'tab-navigation'],
+    ['webTabViewSource', 'tab-navigation'],
+    ['webTabDevtools', 'tab-navigation'],
 ]);
 
 /**

@@ -3506,6 +3506,10 @@ export const PowerBrowserAPI = Object.freeze({
           findStatus: pageFields.findStatus,
           audioMuted: pageFields.audioMuted,
           soundPlaying: pageFields.soundPlaying,
+          // Phase 32 plan 07 (PAGE-04/10/11): favicon (bounded data: icon), crash state and reader state; primitives or bounded data only.
+          favicon: pageFields.favicon,
+          crashed: pageFields.crashed,
+          isReaderMode: pageFields.isReaderMode,
         });
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] state push for ${tabId} failed: ${err && err.message ? err.message : err}`);
@@ -4498,7 +4502,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4985,6 +4989,30 @@ async function handleWebTabAction(data, actorRef) {
       }
       return webTabEditReply(kind, data.tabId, data.cmd, data.checkOnly === true);
     }
+    case "webTabReader": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      if (typeof data.enter !== "boolean") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a reader flag that is not a boolean" };
+      }
+      return webTabReaderReply(kind, data.tabId, data.enter);
+    }
+    case "webTabViewSource": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      if (data.inNewTab !== undefined && typeof data.inNewTab !== "boolean") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a new-tab flag that is not a boolean" };
+      }
+      return webTabViewSourceReply(kind, data.tabId, data.inNewTab === true);
+    }
+    case "webTabDevtools": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      return webTabDevtoolsReply(kind, data.tabId);
+    }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
   }
@@ -5078,7 +5106,7 @@ const webTabPageState = new WeakMap();
 function webTabPageStateOf(browser) {
   let state = webTabPageState.get(browser);
   if (!state) {
-    state = { frame: null, tabId: null, findListener: null, findOn: null, findQuery: null, findCurrent: 0, findTotal: 0, findStatus: null };
+    state = { frame: null, tabId: null, findListener: null, findOn: null, findQuery: null, findCurrent: 0, findTotal: 0, findStatus: null, crashed: false };
     webTabPageState.set(browser, state);
   }
   return state;
@@ -5131,6 +5159,13 @@ function attachWebTabPageListeners(frame, tabId, browser) {
   };
   browser.addEventListener("DOMAudioPlaybackStarted", state.audioStarted);
   browser.addEventListener("DOMAudioPlaybackStopped", state.audioStopped);
+  // Phase 32 plan 07 (PAGE-11): one listener per overlay. It fires on the element itself, so no gBrowser is needed. docShell is
+  // never read here: it is null on a crashed remote overlay. The contracted crash UI is Theia's (plan 32-08).
+  state.crashedListener = () => {
+    state.crashed = true;
+    webTabPagePush(browser);
+  };
+  browser.addEventListener("oop-browser-crashed", state.crashedListener);
 }
 
 function detachWebTabPageListeners(browser) {
@@ -5145,6 +5180,7 @@ function detachWebTabPageListeners(browser) {
   }
   browser.removeEventListener("DOMAudioPlaybackStarted", state.audioStarted);
   browser.removeEventListener("DOMAudioPlaybackStopped", state.audioStopped);
+  browser.removeEventListener("oop-browser-crashed", state.crashedListener);
   state.frame = null;
   state.findOn = null;
 }
@@ -5183,6 +5219,9 @@ function webTabPageFields(browser) {
     findStatus: state.findStatus,
     audioMuted: browser.audioMuted === true,
     soundPlaying: state.soundPlaying,
+    favicon: webTabFaviconOf(browser),
+    crashed: state.crashed === true,
+    isReaderMode: webTabIsReaderUrl(browser),
   };
 }
 
@@ -5192,6 +5231,7 @@ function resetWebTabPage(browser) {
   const state = webTabPageState.get(browser);
   if (state) {
     state.soundPlaying = false;
+    state.crashed = false;
     tabHostSetSoundPlaying(browser, false);
   }
 }
@@ -6564,4 +6604,90 @@ async function webTabDownloadAction(id, action) {
     return "failed";
   }
   return "done";
+}
+
+// ---------------------------------------------------------------------------
+// Phase 32 plan 07 (PAGE-04, PAGE-10, PAGE-11): reader, view source, DevTools, the crash flag and the favicon.
+// Chrome mints every privileged-scheme load (about:reader, view-source:) itself; the frame sends a tab id, never a
+// URL. The inner page of a view-source load is the overlay's own page, validated here.
+// ---------------------------------------------------------------------------
+
+/** The bounded favicon: a data:image/ icon of at most 64 KiB, never fetched over the network (D-28 forbids a stand-in). */
+const WEB_TAB_FAVICON_MAX = 65536;
+
+/** The tab host's icon for the overlay, or null unless it is a bounded data:image/ URL. */
+function webTabFaviconOf(browser) {
+  const icon = tabHostNodeOf(browser)?.image;
+  return typeof icon === "string" && icon.startsWith("data:image/") && icon.length <= WEB_TAB_FAVICON_MAX ? icon : null;
+}
+
+/** True while the overlay shows the reader (its URI is about:reader). Chrome reads the URI; no page text leaves. */
+function webTabIsReaderUrl(browser) {
+  const spec = browser.currentURI ? browser.currentURI.spec : "";
+  return spec.startsWith("about:reader?");
+}
+
+// Reader (PAGE-10): enter moves this overlay to about:reader for its own page, a history entry Back leaves by; leave
+// returns to the page the reader URL names. The reader's readability signal is not built here: the check needs a
+// content-side actor (AboutReaderChild), so the toggle has no enablement source yet.
+function webTabReaderReply(kind, tabId, enter) {
+  const entry = webTabs.get(tabId);
+  if (!entry) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  const browser = entry.browser;
+  const current = browser.currentURI ? browser.currentURI.spec : "";
+  const inReader = current.startsWith("about:reader?");
+  if (enter) {
+    if (inReader) {
+      return { ok: true, kind, where: "already-reader" };
+    }
+    if (!/^https?:\/\//i.test(current)) {
+      return { ok: false, reason: "validation", message: "handleWebTabAction: reader needs a web page" };
+    }
+    entry.firstLoad = null;
+    const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
+    browser.fixupAndLoadURIString(`about:reader?url=${encodeURIComponent(current)}`, { triggeringPrincipal });
+    return { ok: true, kind, where: "entered" };
+  }
+  if (!inReader) {
+    return { ok: true, kind, where: "not-reader" };
+  }
+  const original = new URL(current).searchParams.get("url") ?? "";
+  if (!/^https?:\/\//i.test(original)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: the reader page names no web page" };
+  }
+  entry.firstLoad = null;
+  browser.fixupAndLoadURIString(original, { triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}) });
+  return { ok: true, kind, where: "left" };
+}
+
+// View source (PAGE-10): the inner URL is this overlay's own page, validated chrome-side. The view-source: load is minted
+// here through the overlay's navigation, the webTabNavigate shape. The ViewSource actor is child-only and is never messaged.
+// A new overlay for the source is not built (inNewTab is refused).
+function webTabViewSourceReply(kind, tabId, inNewTab) {
+  const entry = webTabs.get(tabId);
+  if (!entry) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  if (inNewTab) {
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: a view-source overlay is not built; use the same tab" };
+  }
+  const inner = entry.browser.currentURI ? entry.browser.currentURI.spec : "";
+  if (!/^(https?|file):/i.test(inner)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: view source needs a web or file page" };
+  }
+  entry.firstLoad = null;
+  const triggeringPrincipal = Services.scriptSecurityManager.createNullPrincipal({});
+  entry.browser.fixupAndLoadURIString(`view-source:${inner}`, { triggeringPrincipal });
+  return { ok: true, kind, where: "applied" };
+}
+
+// DevTools (PAGE-10, D-23): the route is Phase 31's openStockPage. Its enum has no devtools page, and a DevTools window
+// needs a real XUL tab for this overlay, so the route is missing. Refused: no toolbox window and no custom inspector.
+function webTabDevtoolsReply(kind, tabId) {
+  if (!webTabs.get(tabId)) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  return { ok: false, reason: "unavailable", message: "handleWebTabAction: the DevTools route is not built; openStockPage has no devtools page" };
 }

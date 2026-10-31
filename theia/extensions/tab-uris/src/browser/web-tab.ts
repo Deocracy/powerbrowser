@@ -188,6 +188,12 @@ export interface WebTabState {
     audioMuted: boolean;
     /** Phase 32 plan 01 (PAGE-05): audible playback from the overlay, event-driven; false while the page is silent. */
     soundPlaying: boolean;
+    /** Phase 32 plan 07 (PAGE-04): the tab's icon, a data:image/ URL of at most 64 KiB; null when there is none. Never fetched. */
+    favicon: string | null;
+    /** Phase 32 plan 07 (PAGE-11): true after the overlay's content process crashed; false again on the next page. */
+    crashed: boolean;
+    /** Phase 32 plan 07 (PAGE-10): true while the overlay shows the reader (its URI is about:reader). */
+    isReaderMode: boolean;
 }
 
 /** Phase 32 plan 04 (PAGE-06): a row action, the frozen set the chrome arm accepts. */
@@ -263,7 +269,12 @@ export type WebTabMessage =
     | { kind: 'webTabSaveExport'; tabId: string; path: string }
     // Phase 32 plan 06 (PAGE-09): the chrome-help edit set the edit-today probe recorded. Keys never send this kind;
     // only a Theia-initiated Edit item does. checkOnly reads enablement and runs nothing.
-    | { kind: 'webTabEdit'; tabId: string; cmd: 'cmd_undo' | 'cmd_redo' | 'cmd_cut' | 'cmd_copy' | 'cmd_paste' | 'cmd_selectAll' | 'cmd_delete'; checkOnly?: boolean };
+    | { kind: 'webTabEdit'; tabId: string; cmd: 'cmd_undo' | 'cmd_redo' | 'cmd_cut' | 'cmd_copy' | 'cmd_paste' | 'cmd_selectAll' | 'cmd_delete'; checkOnly?: boolean }
+    // Phase 32 plan 07 (PAGE-10): reader enter/leave (same overlay), view source (the inner page is the overlay's own; the
+    // source URL is minted chrome-side, never sent by the frame) and DevTools (refused until openStockPage has a devtools page).
+    | { kind: 'webTabReader'; tabId: string; enter: boolean }
+    | { kind: 'webTabViewSource'; tabId: string; inNewTab?: boolean }
+    | { kind: 'webTabDevtools'; tabId: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -397,6 +408,10 @@ export class WebTabChannel {
                     : detail.findStatus === null ? null : widget.findStatus,
                 audioMuted: typeof detail.audioMuted === 'boolean' ? detail.audioMuted : widget.audioMuted,
                 soundPlaying: typeof detail.soundPlaying === 'boolean' ? detail.soundPlaying : widget.soundPlaying,
+                // Phase 32 plan 07: favicon, crash and reader state ride the same push; primitives or a bounded data: icon only.
+                favicon: typeof detail.favicon === 'string' || detail.favicon === null ? detail.favicon as string | null : widget.favicon,
+                crashed: typeof detail.crashed === 'boolean' ? detail.crashed : widget.crashed,
+                isReaderMode: typeof detail.isReaderMode === 'boolean' ? detail.isReaderMode : widget.isReaderMode,
             });
         });
         // Phase 32 plan 04 (PAGE-06): the Downloads rows arrive whole in each push; the bar reads them through onDidChangeDownloads.
@@ -537,6 +552,12 @@ export class WebTabWidget extends BaseWidget {
     audioMuted = false;
     /** Phase 32 plan 01 (PAGE-05): the last pushed audible-playback flag. */
     soundPlaying = false;
+    /** Phase 32 plan 07 (PAGE-04): the last pushed tab icon (a bounded data: URL), or null. */
+    favicon: string | null = null;
+    /** Phase 32 plan 07 (PAGE-11): the last pushed crash flag. */
+    crashed = false;
+    /** Phase 32 plan 07 (PAGE-10): the last pushed reader flag. */
+    isReaderMode = false;
     /** Phase 31 plan 02 (SITE-06): the non-default permission ids, table order; the identity box's icons. */
     permissionIcons: string[] = [];
     /** Phase 31 plan 02: the labels of permissionIcons, same order; the icons' tooltip. */
@@ -1050,6 +1071,9 @@ export class WebTabWidget extends BaseWidget {
         this.findStatus = state.findStatus;
         this.audioMuted = state.audioMuted;
         this.soundPlaying = state.soundPlaying;
+        this.favicon = state.favicon;
+        this.crashed = state.crashed;
+        this.isReaderMode = state.isReaderMode;
         if (state.permissionIcons !== undefined) {
             this.permissionIcons = state.permissionIcons;
         }
