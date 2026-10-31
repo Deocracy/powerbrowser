@@ -2,7 +2,7 @@
 phase: 48-error-telemetry-maintenance-sweep-and-watchdog-d
 plan: 03
 subsystem: release-train
-tags: [train-07, maintenance-sweep, release-train, pinned-issue, workflow-trust, dry-run]
+tags: [train-07, maintenance-sweep, release-train, pinned-issue, workflow-trust, dry-run, owner-selection]
 
 # Dependency graph
 requires:
@@ -122,6 +122,18 @@ Each change is forced by the reviewed Phase 43 code or by a 48-01/48-02 decision
 7. **Owner mention through an optional variable.** The comment mentions `vars.OWNER_LOGIN` when it is set and a valid login. The repository holds no owner login, so the mention is an owner setting.
 8. **The maintenance self-test row runs `--self-test`.** The plan asks for a separate half, but the plan also forbids new flags. The row therefore runs the same `--self-test` as `release-train-logic-self-test`, which now includes the maintenance half. The two rows overlap by design.
 9. **tagDates come from the commit date of each tag under the pinned major.** The sweep reads it with `gh api` on `mozilla-firefox/firefox`, one call per tag. A tag with no date is not aged, and the evidence says nothing about it.
+
+## Security fix (coordinator, commit 905e6f38)
+
+The first version selected the pinned issue by title alone and took the previous row statuses from its editable body, so any writer could make a row look already red and suppress the notice, or open a same-title issue. The fix:
+
+- **Selection.** `selectPinned` keeps only the issue whose author login is the owner (`vars.OWNER_LOGIN`, validated by shape) and that carries the `release-train` label. The find step requests `author` and `labels`. The bot never creates the pinned issue, so bot authorship is not accepted: the owner is the only author accepted. If the owner pins without the label, the find selects nothing and the run takes the create path, which writes nothing.
+- **Previous state.** The previous statuses are a per-run `release-train-maintenance-state` artifact. The report job looks up the latest unexpired artifact through the artifacts API and downloads it with the pinned `download-artifact` (read only), then saves a new one with the pinned `upload-artifact` after a live plan succeeds. The body is not a source of the previous statuses.
+- **Fail-safe.** A missing, unreadable or mismatched stored state (a different issue number) treats every red row as newly red, so the owner is notified rather than silenced.
+- **Dry-run and pipefail.** The lookup, download and save steps carry the negated dry-run gate; every run step keeps `set -euo pipefail`.
+- **Self-test.** New controls: a same-title issue by a stranger is ignored, an edited body that marks red rows as previously red still notifies, and a missing stored state notifies every red row. New plants: a title-only selection that would take a stranger's issue, and a body-as-previous-state rule that suppresses the notice. Both go red naming their drift.
+
+Verified: `release-train.mjs --self-test` PASS (25 maintenance cases), `verify-workflows` PASS, zizmor PASS, brand scan PASS, `--quick` exit 0. The stored-state artifact is an owner-visible change: the first live sweep after the pin finds no artifact and notifies every red row once.
 
 ## Decisions Made
 
