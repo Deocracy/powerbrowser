@@ -250,7 +250,9 @@ two writes need the direct commands below until that is cleared.
 npm "security-only" in `dependabot.yml` is `open-pull-requests-limit: 0` (version updates off; the schema describes the
 key as the limit for version updates). Security updates still need the repository's Dependabot security updates switch,
 which was `enabled` at plan time (`GET repos/Deocracy/powerbrowser/automated-security-fixes`: `{"enabled":true,"paused":false}`).
-No CONTROLS entry reads that switch back, so turning it off would go unnoticed, and nothing guards `dependabot.yml` itself
-against someone raising the npm limit above 0 (T-51-10 rests on review). **Options:** (a) add an `automated-security-fixes`
-control (same shape as `immutable-releases`: `{enabled}` JSON, PUT bodiless) and a `dependabot.yml` rule in `verify-workflows`;
-(b) leave both to review. Not done: the plan scopes this work to two controls and names no `dependabot.yml` verifier.
+No CONTROLS entry reads that switch back, so turning it off would go unnoticed. The `dependabot.yml` half is now
+guarded (51-02/03 review fix): the `workflows` row, rule `dependabot`, requires the npm `open-pull-requests-limit: 0`, a
+cooldown, no auto-merge key, the exact ecosystem set, the `anthropics/claude-code-action` ignore and group update-types without
+major, each with a plant, and the `zizmor` row audits the file. **Still open (owner decision):** an `automated-security-fixes`
+control (same shape as `immutable-releases`: `{enabled}` JSON, PUT bodiless, read `repos/{owner}/{repo}/automated-security-fixes`)
+needs a live read to prove its shape and is not added; until then the switch can be turned off unnoticed.

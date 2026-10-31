@@ -95,6 +95,13 @@
 //                 guard, the claude-fix/ head exclusion and the bot-actor exclusion are
 //                 each a top-level && term. Its --disallowedTools denies WebFetch and
 //                 WebSearch, and its allowed_bots is exactly renovate[bot],powerbrowser-bot[bot].
+//  dependabot     .github/dependabot.yml (Phase 51, AUTO-03): the ecosystems are exactly github-actions and
+//                 npm; no registries and no insecure-external-code-execution; no auto-merge key anywhere;
+//                 the npm entry has open-pull-requests-limit 0 (security updates only, Renovate owns the
+//                 Theia line); every entry has a cooldown of at least 7 days (the github-actions entry also a
+//                 semver-major-days no lower than its default-days); the github-actions entry ignores the
+//                 pinned claude-code-action (derived from the fixer pin, re-pinned by hand with the two
+//                 verifiers) and its groups list update-types without major.
 //
 // Effective permissions: job permissions, else workflow permissions, else the
 // repository default (default_workflow_permissions in
@@ -116,6 +123,7 @@ const SELF_REL = 'scripts/verify-workflows.mjs';
 const WF_DIR = '.github/workflows';
 const SELECTED_REL = '.github/settings/actions-selected.json';
 const PERMS_REL = '.github/settings/workflow-permissions.json';
+const DEPENDABOT_REL = '.github/dependabot.yml';
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -134,12 +142,13 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
 const FIXER_JOBS = ['fix', 'fix-gate', 'fix-pr'];
 const FIX_PIN = 'anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c';
+const CLAUDE_ACTION = FIX_PIN.split('@')[0];
 const FIX_BOTS = 'renovate[bot],powerbrowser-bot[bot]';
 const FIX_GUARDS = [
     ['head_repository', 'github.event.workflow_run.head_repository.full_name == github.repository'],
@@ -595,6 +604,53 @@ function runChecks(root, overrides = {}) {
         if (!used.has(repo)) fail(SELECTED_REL, WF_LEVEL, 'admission-used', `patterns_allowed admits '${repo}@*', which no workflow uses. Next step: remove it from ${SELECTED_REL} and re-apply.`);
     }
 
+    // dependabot.yml (AUTO-03): read as data, never parsed by the workflow rules above.
+    {
+        const fail1 = msg => fail(DEPENDABOT_REL, WF_LEVEL, 'dependabot', msg);
+        let text = overrides.dependabot;
+        if (text === undefined) {
+            try { text = readFileSync(join(root, DEPENDABOT_REL), 'utf8'); } catch (e) { fail1(`could not be read (${e.message}). Next step: restore the file.`); }
+        }
+        let dep = null;
+        if (typeof text === 'string') {
+            try { dep = yaml.load(text); } catch (e) { fail1(`does not parse as YAML 1.2 (${e.message.split('\n')[0]}). Next step: fix the file.`); }
+        }
+        if (dep !== null && (typeof dep !== 'object' || !Array.isArray(dep.updates))) { fail1('carries no updates list. Next step: fix the file.'); dep = null; }
+        if (dep !== null) {
+            const ecosystems = dep.updates.map(u => u?.['package-ecosystem']).sort();
+            if (JSON.stringify(ecosystems) !== JSON.stringify(['github-actions', 'npm'])) fail1(`updates the ecosystems [${ecosystems.join(', ')}], not exactly github-actions and npm. Next step: restore the two entries; another ecosystem is a scope decision.`);
+            if (dep.registries !== undefined) fail1('declares registries, which hand Dependabot credentials. Next step: remove the registries key.');
+            const autoKeys = [];
+            const walk = (v, path) => {
+                if (v === null || typeof v !== 'object') return;
+                for (const [k, c] of Object.entries(v)) {
+                    if (/auto[-_]?merge/i.test(k)) autoKeys.push(`${path}${k}`);
+                    walk(c, `${path}${k}.`);
+                }
+            };
+            walk(dep, '');
+            if (autoKeys.length > 0) fail1(`carries an auto-merge key (${autoKeys.join(', ')}). Next step: remove it; every Dependabot pull request merges by owner hand.`);
+            for (const u of dep.updates) {
+                const eco = u?.['package-ecosystem'];
+                if (u?.['insecure-external-code-execution'] !== undefined) fail1(`${eco} sets insecure-external-code-execution. Next step: remove the key.`);
+                const cd = u?.cooldown?.['default-days'];
+                if (!Number.isInteger(cd) || cd < 7) fail1(`${eco} has no cooldown with default-days of at least 7 (got ${JSON.stringify(cd ?? null)}), so a release is adopted minutes after it is published. Next step: add cooldown: default-days: 7.`);
+                if (eco === 'npm' && u['open-pull-requests-limit'] !== 0) fail1(`npm has open-pull-requests-limit ${JSON.stringify(u['open-pull-requests-limit'] ?? null)}, not 0, so version-update pull requests would fight Renovate's Theia group. Next step: set open-pull-requests-limit: 0 (security updates only).`);
+                if (eco === 'github-actions') {
+                    const ignored = (u.ignore ?? []).map(i => i?.['dependency-name']);
+                    if (!ignored.includes(CLAUDE_ACTION)) fail1(`github-actions does not ignore ${CLAUDE_ACTION}, whose pin is exact in the fixer-pin and triage rules, so a Dependabot bump cannot merge. Next step: add it to ignore; it is re-pinned by hand with the two verifiers.`);
+                    const smd = u.cooldown?.['semver-major-days'];
+                    if (!Number.isInteger(smd) || smd < (Number.isInteger(cd) ? cd : 7)) fail1(`github-actions has semver-major-days ${JSON.stringify(smd ?? null)}, not at least its default-days. Next step: set cooldown semver-major-days no lower than default-days.`);
+                    if (u.groups === undefined || typeof u.groups !== 'object' || Object.keys(u.groups).length === 0) fail1('github-actions has no group, so its updates are not one weekly pull request. Next step: restore the actions group.');
+                }
+                for (const [gName, g] of Object.entries(u?.groups ?? {})) {
+                    const types = g?.['update-types'];
+                    if (!Array.isArray(types) || types.length === 0 || types.some(t => t !== 'minor' && t !== 'patch')) fail1(`${eco} group ${gName} has update-types ${JSON.stringify(types ?? null)}, not a subset of minor and patch, so a major update lands in the grouped pull request. Next step: set update-types: [minor, patch]; majors arrive as separate pull requests.`);
+                }
+            }
+        }
+    }
+
     const key = f => [f.file, f.job, f.rule, f.msg];
     failures.sort((a, b) => {
         const ka = key(a), kb = key(b);
@@ -950,6 +1006,30 @@ function selfTest() {
         ['admitted claude-code-action used by no workflow', { files: Object.fromEntries(Object.entries(base).filter(([k]) => !k.endsWith('triage.yml'))), selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
     ];
     plants.push(...fixerPlants);
+
+    // dependabot.yml (AUTO-03, BL-02, WR-04, WR-05, WR-06): each plant edits the real file text in memory.
+    const DEP = readFileSync(join(REPO_ROOT, DEPENDABOT_REL), 'utf8');
+    const depEdit = (from, to, all = false) => {
+        if (!DEP.includes(from)) throw new Error(`self-test anchor '${from}' is absent from ${DEPENDABOT_REL}`);
+        return { dependabot: all ? DEP.replaceAll(from, to) : DEP.replace(from, to) };
+    };
+    const D = [DEPENDABOT_REL, WF_LEVEL, 'dependabot'];
+    plants.push(
+        ['dependabot: claude-code-action no longer ignored', depEdit('      - dependency-name: "anthropics/claude-code-action"\n', ''), ...D, CLAUDE_ACTION],
+        ['dependabot: the ignore names another dependency', depEdit('"anthropics/claude-code-action"', '"actions/checkout"'), ...D, CLAUDE_ACTION],
+        ['dependabot: no cooldown on either entry', depEdit('    cooldown:\n      default-days: 7\n      semver-major-days: 14\n', '', true), ...D, 'no cooldown'],
+        ['dependabot: cooldown default-days 3', depEdit('default-days: 7', 'default-days: 3', true), ...D, 'default-days of at least 7'],
+        ['dependabot: github-actions semver-major-days below default-days', depEdit('semver-major-days: 14', 'semver-major-days: 2'), ...D, 'semver-major-days'],
+        ['dependabot: an auto-merge key', depEdit('    open-pull-requests-limit: 5\n', '    open-pull-requests-limit: 5\n    automerge: true\n'), ...D, 'auto-merge key'],
+        ['dependabot: npm open-pull-requests-limit 5', depEdit('    open-pull-requests-limit: 0\n', '    open-pull-requests-limit: 5\n'), ...D, 'not 0'],
+        ['dependabot: npm open-pull-requests-limit removed', depEdit('    open-pull-requests-limit: 0\n', ''), ...D, 'not 0'],
+        ['dependabot: group update-types include major', depEdit('          - "patch"\n', '          - "patch"\n          - "major"\n'), ...D, 'not a subset of minor and patch'],
+        ['dependabot: group without update-types', depEdit('        update-types:\n          - "minor"\n          - "patch"\n', ''), ...D, 'not a subset of minor and patch'],
+        ['dependabot: a third ecosystem', { dependabot: `${DEP}  - package-ecosystem: "pip"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n    cooldown:\n      default-days: 7\n` }, ...D, 'not exactly github-actions and npm'],
+        ['dependabot: registries declared', { dependabot: `${DEP}registries:\n  r:\n    type: npm-registry\n    url: https://example.invalid\n` }, ...D, 'registries'],
+        ['dependabot: the file does not parse', { dependabot: 'updates: [\n' }, ...D, 'does not parse'],
+        ['dependabot: no updates list', { dependabot: 'version: 2\n' }, ...D, 'no updates list'],
+    );
 
     // Green controls: the good release.yml (every plant's base), the two
     // admitted issues-write jobs, a guarded workflow_run, a hosted read-only

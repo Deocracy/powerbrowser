@@ -4814,7 +4814,9 @@ run_own_checks() {
     # forms (an inverted or always()-wrapped gate, git push and commit including git -c, gh api
     # write methods and implicit POST, gh release, curl -X, an action outside the read-only list),
     # and the bot-job-gate rule (an environment-bound job with no negated job-level dry-run gate);
-    # each red naming file and job. It writes nothing.
+    # each red naming file and job; and the dependabot rule (.github/dependabot.yml: the claude-code-action
+    # ignore, cooldown, no auto-merge key, npm limit 0, group update-types without major, ecosystem set,
+    # registries). It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
     # NEW (Phase 48, MON-01): the watchdog source. The decision is the workflow's own shell: the run: bodies
     # of docs/watchdog.yml are extracted and run under bash with a stub gh (a 25-hour silence opens nothing, a
@@ -4912,14 +4914,15 @@ run_own_checks() {
     # of the signer. Its self-test builds signed MARs in memory and plants a flipped data byte, a flipped
     # signature byte, another key, a changed algorithm id, zero signatures, truncation and bad magic.
     "mar-signature-self-test|node $REPO_ROOT/scripts/verify-mar-signature.mjs --self-test"
-    # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ at its default persona,
+    # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ and .github/dependabot.yml at its default persona,
     # green only on exit 0. Honestly --quick, offline audit; the zizmor binary comes from the
     # theia shell or is self-provided through nix develop on first use, and absent tooling fails
     # naming the shell, never skips.
     "zizmor|node $REPO_ROOT/scripts/verify-zizmor.mjs"
     # zizmor-self-test audits the mkdtemp bad and clean fixtures: bad (event text in run:,
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
-    # must exit 0. It writes nothing in the tree.
+    # must exit 0; a dependabot.yml with no cooldown must exit non-zero naming dependabot-cooldown, one
+    # with default-days 7 must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
     # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
     # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its

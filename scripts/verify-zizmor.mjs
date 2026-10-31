@@ -2,8 +2,8 @@
 // scripts/verify-zizmor.mjs
 //
 // The zizmor row (Phase 41, AUTO-09). zizmor --offline audits every workflow
-// under .github/workflows/ at its default (regular) persona, and the row passes
-// only on exit 0. It covers template injection and unpinned uses more broadly
+// under .github/workflows/ and .github/dependabot.yml (dependabot-cooldown, Phase 51)
+// at its default (regular) persona, and the row passes only on exit 0. It covers template injection and unpinned uses more broadly
 // than the workflows row's GH-12 rules; the two are complementary.
 //
 // The binary is zizmor 1.29.0 from the theia dev shell (pkgs.zizmor in
@@ -13,7 +13,8 @@
 //
 // --self-test writes a bad and a clean fixture into separate mkdtemp
 // directories under the OS temp dir and requires the bad one to exit non-zero
-// naming template-injection and unpinned-uses, and the clean one to exit 0.
+// naming template-injection and unpinned-uses, and the clean one to exit 0. A bad dependabot.yml
+// (no cooldown) must exit non-zero naming dependabot-cooldown, and a clean one with a cooldown exit 0.
 // It writes nothing in the repository.
 
 import { spawnSync } from 'node:child_process';
@@ -26,6 +27,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'zizmor';
 const SELF_REL = 'scripts/verify-zizmor.mjs';
 const WF_DIR = '.github/workflows';
+const DEP_REL = '.github/dependabot.yml';
 const NO_TOOL = `zizmor is not on PATH and could not be run through nix develop .#theia. Next step: run nix develop .#theia, or install nix`;
 
 const args = process.argv.slice(2);
@@ -48,8 +50,8 @@ function resolveZizmor() {
     return bin?.startsWith('/') ? bin : null;
 }
 
-function runZizmor(bin, dir) {
-    const r = spawnSync(bin, ['--offline', dir], { encoding: 'utf8' });
+function runZizmor(bin, ...paths) {
+    const r = spawnSync(bin, ['--offline', ...paths], { encoding: 'utf8' });
     return { status: r.error ? null : r.status, stdout: r.stdout ?? '', out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
@@ -65,16 +67,16 @@ function main() {
         return 1;
     }
     if (args.includes('--self-test')) return selfTest(bin);
-    const { status, stdout, out } = runZizmor(bin, join(REPO_ROOT, WF_DIR));
+    const { status, stdout, out } = runZizmor(bin, join(REPO_ROOT, WF_DIR), join(REPO_ROOT, DEP_REL));
     // The finding summary is the last stdout line; progress lines go to stderr.
     const summary = stdout.trim().split('\n').pop();
     if (status !== 0) {
         console.error(out.trimEnd());
-        console.error(`${NAME}: FAIL -- ${version(bin)} --offline over ${WF_DIR}/ exited ${status}.`);
-        console.error(`  Next step: fix the finding in the workflow; never suppress it to make the row green.`);
+        console.error(`${NAME}: FAIL -- ${version(bin)} --offline over ${WF_DIR}/ and ${DEP_REL} exited ${status}.`);
+        console.error(`  Next step: fix the finding in the workflow or dependabot.yml; never suppress it to make the row green.`);
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${version(bin)} --offline over ${WF_DIR}/: ${summary}`);
+    console.log(`${NAME}: PASS -- ${version(bin)} --offline over ${WF_DIR}/ and ${DEP_REL}: ${summary}`);
     return 0;
 }
 
@@ -116,6 +118,21 @@ function auditFixture(bin, name, text) {
     }
 }
 
+const DEP_BAD = 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n';
+const DEP_CLEAN = `${DEP_BAD}    cooldown:\n      default-days: 7\n`;
+
+// A dependabot.yml is found by its fixed name under <mkdtemp>/.github/.
+function auditDependabot(bin, text) {
+    const root = mkdtempSync(join(tmpdir(), 'verify-zizmor-'));
+    try {
+        mkdirSync(join(root, '.github'), { recursive: true });
+        writeFileSync(join(root, DEP_REL), text);
+        return runZizmor(bin, join(root, DEP_REL));
+    } finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+}
+
 function selfTest(bin) {
     let failed = 0;
     const bad = auditFixture(bin, 'bad.yml', BAD);
@@ -133,8 +150,22 @@ function selfTest(bin) {
         console.error(`${NAME}: --self-test FAIL -- clean.yml exited ${clean.status}; got: ${clean.out.trim() || '(no output)'}`);
         failed += 1;
     }
+    const depBad = auditDependabot(bin, DEP_BAD);
+    if (depBad.status !== null && depBad.status !== 0 && depBad.out.includes('dependabot-cooldown')) {
+        console.log(`  ok  dependabot.yml without a cooldown -> exit ${depBad.status}, naming dependabot-cooldown`);
+    } else {
+        console.error(`${NAME}: --self-test FAIL -- a dependabot.yml without a cooldown exited ${depBad.status} without naming dependabot-cooldown; got: ${depBad.out.trim() || '(no output)'}`);
+        failed += 1;
+    }
+    const depClean = auditDependabot(bin, DEP_CLEAN);
+    if (depClean.status === 0) {
+        console.log(`  ok  dependabot.yml with default-days 7 -> exit 0`);
+    } else {
+        console.error(`${NAME}: --self-test FAIL -- a dependabot.yml with a cooldown exited ${depClean.status}; got: ${depClean.out.trim() || '(no output)'}`);
+        failed += 1;
+    }
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- ${version(bin)}: the bad fixture went red naming both audits, the clean fixture stayed green`);
+    console.log(`${NAME}: --self-test PASS -- ${version(bin)}: the bad fixtures went red naming their audits, the clean fixtures stayed green`);
     return 0;
 }
 
