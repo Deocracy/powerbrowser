@@ -2,18 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 31.1
+current_phase: 32
+current_phase_name: Page Tools
 status: executing
-stopped_at: Phase 31 verified human_needed (deferred); starting 31.1
-last_updated: "2026-10-23T03:39:40.462Z"
-last_activity: 2026-10-29
-last_activity_desc: Phase 31 verified and secured; Phase 31.1 next
-state_head: b9a95c7c1f5354bdbcda155797d9a56e5084be26
+stopped_at: "32-01 partial: find, zoom and mute arms landed and gated; live find and zoom pass, mute round trip passes; soundPlaying push unproven; print-today and edit-today verdicts missing"
+last_updated: "2026-10-31T18:52:14.582Z"
+last_activity: 2026-10-31
+last_activity_desc: Phase 32 execution started
+state_head: 54d1e44723a44e19aab8f122249af0814a97998d
 progress:
   total_phases: 13
   completed_phases: 1
-  total_plans: 65
-  completed_plans: 24
+  total_plans: 71
+  completed_plans: 34
   percent: 8
 ---
 
@@ -24,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 31.1
+**Current focus:** Phase 32 — Page Tools
 
 ## Current Position
 
-Phase: 31 — EXECUTING
-Plan: 1 of ?
-Status: Executing Phase 31
-Last activity: 2026-10-22 — Phase 31 execution started
+Phase: 32 (Page Tools) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 32
+Last activity: 2026-10-31 — Phase 32 execution started
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -445,6 +446,7 @@ Recent decisions affecting current work:
 - [Phase 30]: 30-05: @alias needs the leading @ and matches case-insensitively; aliases come only from Gecko engine.aliases
 - [Phase 30]: SMODE-06: a dotted host with a port is ambiguous (A3); every Go-to commit is visit-only (A4); New Tab ends in Address mode (A2)
 - [Phase 30]: SMODE-06: focusAddressPill reaches AddressBar.focusAddress through setAddressFocus; Alt+D shares Ctrl+L's editor/terminal scope
+- [Phase 32]: 32-01: page-tools helpers live at module level after the frozen API object; find, zoom and audio state ride the flat state push as primitives; live scenarios drive arms via WebTabChannel until the 32-02 key relay exists
 
 ### Pending Todos
 
@@ -463,6 +465,8 @@ Recent decisions affecting current work:
 - [v1.5] Waiting on Chris: the EXT-04 route sign-off (Phase 28, gates planning of Phase 38); the Browsing and Organising address-bar default modes, chosen from UI-spec mockups (Phase 30); PROMPT-03 only if the dialog probe shows the stock dialog blocks the IDE and a tab-scoped relay is not feasible (Phase 37). Research at planning: 30, 32 (probes), 34, 36, 37, 38; Phase 28 is a /gsd-spike. Phases run strictly in order: most edit PowerBrowserAPI.sys.mjs.
 - [v1.5, before Phase 38 ships extension install] Owner decisions from 31.1-SECURITY.md: UF-31.1-02 (high, pre-existing) a webRequest `<all_urls>` extension sees Theia's requests including the POWERBROWSER_TOKEN cookie header; UF-31.1-01 (medium) `windows.remove(<shell id>)` closes the shell and exits past quitApplication() and the WR-04 quit veto. Phase 38 planning must take both.
 - WINDOWS.md 18's named residual: no registered check drives a rejection out of either long-lived supervisor loop, so those two terminal handlers rest on the source-derived coverage rule rather than on a runtime red
+- 32-01: soundPlaying never pushed live; DOMAudioPlaybackStarted does not reach the overlay element in 20 s while the tone plays in content (investigate AudioPlaybackChild / audio-playback for the overlay context)
+- 32-01: print-today and edit-today probe verdicts are not recorded; plans 32-04 and 32-06 must report a blocker until scripts/lib/pb-probe-verdicts.json holds those keys
 
 ### Roadmap Evolution
 
@@ -552,9 +556,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-22T22:38:58.836Z
-Stopped at: Completed 30-06-PLAN.md
-Resume file: None
+Last session: 2026-10-31T18:52:12.514Z
+Stopped at: 32-01 partial: find, zoom and mute arms landed and gated; live find and zoom pass, mute round trip passes; soundPlaying push unproven; print-today and edit-today verdicts missing
+Resume file: .planning/phases/32-page-tools/32-01-PLAN.md
 
 ## Operator Next Steps
 
