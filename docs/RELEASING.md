@@ -622,6 +622,14 @@ What is live and what is a contract that nothing runs yet:
   `scripts/regenerate-patches.sh`, needs the target's patch stack applied to `upstream/`,
   and a stack in conflict does not apply, so a run would end with no diff. The owner
   resolves patch conflicts.
+- Live. `fix` and `fix-gate` free hosted-runner disk space before the upstream fetch with the same
+  step `rebase-upstream.yml` uses (the `workflows` row requires the two texts to be equal): `upstream/` is
+  5.6 GB and the gate copies it. The gate's copies use `cp -a --reflink=auto` inside a scratch
+  directory on the trusted checkout's filesystem. Measured on the reference host (btrfs, reflink
+  supported, 2026-10-31): copying `upstream/` took 68 s and added 1.0 GiB of used space with
+  `--reflink=auto` against 48 s and 3.3 GiB with `--reflink=never`. A hosted runner's ext4 has no
+  reflink, so there the copy is full and the disk-freeing step is the mitigation; the gate logs `df -h`
+  after the copies so a full disk is read in the log.
 - Live. The fixer's own writes are one PR, opened by `fix-pr` in the bot environment after
   the gate passed. `fix` exports the diff's sha256 and the base commit; `fix-gate` and
   `fix-pr` check out exactly that base, check the artifact against the digest, and

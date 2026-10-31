@@ -1132,6 +1132,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The same disk-freeing step rebase-upstream.yml runs before the same fetch: upstream/ is 5.6 GB, and this job copies it, so
+      # the hosted runner's disk is the known limit (WR-07). The workflows row requires this step to equal that one.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          df -h
+
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
@@ -1197,7 +1204,9 @@ jobs:
       - name: Regenerate-only prep (fetch upstream at the target tag)
         env:
           TARGET_TAG: ${{ inputs.target-tag }}
-        run: nix develop .#theia --command bash scripts/fixer-prepare.sh --tag="$TARGET_TAG" --state="$RUNNER_TEMP/fixer-state"
+        run: |
+          nix develop .#theia --command bash scripts/fixer-prepare.sh --tag="$TARGET_TAG" --state="$RUNNER_TEMP/fixer-state"
+          df -h
 
       # The pristine copy was taken at the commit work/ was checked out at, before the model ran. The fingerprint names
       # the commit the failure was recorded on; a moved branch tip is a different tree than the one that failed.
@@ -1278,6 +1287,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The same disk-freeing step rebase-upstream.yml runs before the same fetch: upstream/ is 5.6 GB, and this job copies it, so
+      # the hosted runner's disk is the known limit (WR-07). The workflows row requires this step to equal that one.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          df -h
+
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
@@ -1304,6 +1320,7 @@ jobs:
             yarn install --ignore-scripts --frozen-lockfile
             (cd node_modules/drivelist && node-gyp rebuild)
             yarn build'
+          df -h
 
       - name: Run the fix gate (verdict only)
         id: gate

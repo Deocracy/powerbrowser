@@ -583,6 +583,9 @@ function runRealStages(buf, ref, tag, paths, deny, registry) {
         }
         // A module folder yarn recorded but that holds no file does not exist in the source either: create it.
         for (const rel of ensure) mkdirSync(join(wt, rel), { recursive: true });
+        // WR-07: name the disk after the copies, so a full disk is read in the log and not guessed from a failed cp.
+        const df = run('df', ['-h', wt], wt, 30000);
+        if (df.status === 0) console.log(`  note  disk after the worktree copies:\n${String(df.stdout).trim().split('\n').map(l => `        ${l}`).join('\n')}`);
 
         // The gate's own logic and the scripts it runs come from this (trusted) checkout, never from the
         // target: a base whose verify-platform.sh or check-patch-surface.sh was weakened must not weaken the verdict (CR-03).

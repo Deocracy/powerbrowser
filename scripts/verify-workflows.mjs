@@ -621,6 +621,19 @@ function runChecks(root, overrides = {}) {
                     if (w['run-id'] !== undefined && exprOf(w['run-id']) !== '${{github.run_id}}') gf(`a download-artifact step names run-id ${JSON.stringify(w['run-id'])}, not this run (\${{ github.run_id }}), so it could take another run's artifact. Next step: remove run-id.`);
                 }
                 const runText = (x) => (typeof x.run === 'string' ? x.run : '');
+                // WR-07 (re-review): fix and fix-gate hold a 5.6 GB upstream tree plus its copies on a hosted runner, so each frees the same disk
+                // space rebase-upstream.yml frees, before the step that fetches upstream. The expected text is read from that workflow, not kept here.
+                if (jobId === 'fix' || jobId === 'fix-gate') {
+                    const refStep = Object.values(docs['rebase-upstream.yml']?.jobs ?? {}).flatMap(j => j?.steps ?? []).find(x => x?.name === 'Free disk space');
+                    const refRun = typeof refStep?.run === 'string' ? refStep.run.trim() : null;
+                    if (refRun === null) gf(`rebase-upstream.yml has no 'Free disk space' step to compare against, so the fixer's disk step cannot be checked. Next step: restore it.`);
+                    else {
+                        const freeAt = steps.findIndex(x => typeof x.run === 'string' && x.run.trim() === refRun);
+                        const fetchAt = steps.findIndex(x => /fetch-upstream\.sh|fixer-prepare\.sh\s+--tag=/.test(runText(x)));
+                        if (freeAt < 0) gf(`has no step that frees disk space exactly as rebase-upstream.yml's 'Free disk space' step does, so the fetch of the 5.6 GB upstream tree can fill a hosted runner's disk. Next step: add that step before the fetch.`);
+                        else if (fetchAt >= 0 && freeAt > fetchAt) gf(`frees disk space only after the step that fetches upstream, which is too late to help it. Next step: move the 'Free disk space' step before the fetch.`);
+                    }
+                }
                 // WR-01 (re-review): "Re-run failed jobs" re-runs the failed fixer job with github.run_attempt 2 but keeps the derive job's
                 // result, so the derive job's own run_attempt refusal never sees it and each click would buy another model run the attempt
                 // count does not see. Every fixer job therefore refuses a run_attempt other than 1 itself.
@@ -1046,6 +1059,8 @@ function selfTest() {
     const FIX_IF = "github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.reason == 'fix' && !startsWith(inputs.target-branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]' && github.actor != 'dependabot[bot]'";
     const GATE_IF = "!inputs.dry-run && github.run_attempt == 1 && needs.fix.result == 'success'";
     const PR_IF = "!inputs.dry-run && github.run_attempt == 1 && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256 && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha";
+    const FREE_RUN = String(Object.values(yaml.load(files['rebase-upstream.yml']).jobs).flatMap(j => j.steps ?? []).find(x => x.name === 'Free disk space')?.run ?? '').trim();
+    const FREE_STEP = ['      - name: Free disk space', '        run: |', ...FREE_RUN.split('\n').map(l => `          ${l}`)];
     const GOOD_TRAIN = [
         'name: Release train',
         'on:',
@@ -1072,6 +1087,7 @@ function selfTest() {
         `      - uses: ${CHECKOUT}`,
         '        with:',
         '          persist-credentials: false',
+        ...FREE_STEP,
         '      - id: log',
         '        run: |',
         '          NONCE=$(head -c 16 /dev/urandom | od -An -tx1)',
@@ -1109,6 +1125,7 @@ function selfTest() {
         `      - uses: ${CHECKOUT}`,
         '        with:',
         '          persist-credentials: false',
+        ...FREE_STEP,
         `      - uses: actions/download-artifact@${H40}`,
         '        if: ${{ !inputs.dry-run }}',
         '        with:',
@@ -1339,7 +1356,7 @@ function selfTest() {
         ['fix-gate with actions read as well', gateEdit('    timeout-minutes: 60\n    permissions:\n      contents: read\n', '    timeout-minutes: 60\n    permissions:\n      contents: read\n      actions: read\n'), rel(T), 'fix-gate', 'fixer-gate', 'exactly contents: read'],
         ['an App-token step inside fix-gate', gateEdit(DL_GATE, `      - uses: ${FIX_APP}\n        if: \${{ !inputs.dry-run }}\n        with:\n          permission-contents: write\n${DL_GATE}`), rel(T), 'fix-gate', 'fixer-gate', 'mints an App token'],
         ['fix-gate yarn install without --ignore-scripts', gateEdit('            yarn install --ignore-scripts --frozen-lockfile', '            yarn install --frozen-lockfile'), rel(T), 'fix-gate', 'fixer-gate', '--ignore-scripts'],
-        ['fix-gate checkout without persist-credentials false', gateEdit("          ref: main\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # This run's artifact only", "          ref: main\n          fetch-depth: 0\n\n      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # This run's artifact only"), rel(T), 'fix-gate', 'fixer-gate', 'persist-credentials'],
+        ['fix-gate checkout without persist-credentials false', gateEdit("          ref: main\n          fetch-depth: 0\n          persist-credentials: false\n", "          ref: main\n          fetch-depth: 0\n"), rel(T), 'fix-gate', 'fixer-gate', 'persist-credentials'],
         ['fix-gate download-artifact with another run-id', gateEdit(DL_GATE, `${DL_GATE}          run-id: 12345\n`), rel(T), 'fix-gate', 'fixer-gate', 'run-id'],
         ['fix-gate download-artifact with a github-token', gateEdit(DL_GATE, `${DL_GATE}          github-token: \${{ secrets.GITHUB_TOKEN }}\n`), rel(T), 'fix-gate', 'fixer-gate', 'github-token'],
         ['fix-gate running the gate outside fixer-isolate.sh', gateEdit('bash scripts/fixer-isolate.sh -- node scripts/verify-fix-gate.mjs', 'node scripts/verify-fix-gate.mjs'), rel(T), 'fix-gate', 'fixer-gate', 'fixer-isolate.sh'],
@@ -1362,6 +1379,10 @@ function selfTest() {
         ['fix-pr App token with workflows write as well', gateEdit('          permission-pull-requests: write\n\n      # The one step that holds the token', '          permission-pull-requests: write\n          permission-workflows: write\n\n      # The one step that holds the token'), rel(T), 'fix-pr', 'fixer-gate', 'not exactly contents and pull-requests write'],
         ['fix-pr not re-running the pure stages on the digest-checked bytes', gateEdit('          node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF"', '          true'), rel(T), 'fix-pr', 'fixer-gate', '--static-only'],
         ['a claude step inside fix-pr', gateEdit("      - name: Mint the bot App token\n        id: app\n        if: ${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}\n", `      - uses: ${FIX_PIN}\n        if: \${{ !inputs.dry-run }}\n      - name: Mint the bot App token\n        id: app\n        if: \${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}\n`), rel(T), 'fix-pr', 'fixer-gate', 'claude-code-action step'],
+        // WR-07 (re-review): the fix and fix-gate jobs free disk space as rebase-upstream.yml does, before the upstream fetch.
+        ['fix job without the Free disk space step', gateEdit('      - name: Free disk space\n        run: |\n          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache\n          df -h\n\n      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # The pinned Claude Code CLI', '      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # The pinned Claude Code CLI'), rel(T), 'fix', 'fixer-gate', 'frees disk space'],
+        ['fix-gate without the Free disk space step', gateEdit("      - name: Free disk space\n        run: |\n          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache\n          df -h\n\n      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # This run's artifact only", "      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # This run's artifact only"), rel(T), 'fix-gate', 'fixer-gate', 'frees disk space'],
+        ['fix job freeing less than rebase-upstream.yml does', gateEdit('sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache', 'sudo rm -rf /usr/share/dotnet'), rel(T), 'fix', 'fixer-gate', 'frees disk space'],
         // WR-06 (re-review): the verify, apply and publish steps cannot swallow a failure, and read the one hashed path.
         ['fix-pr verify step with continue-on-error', gateEdit('      - name: Verify the diff digest and re-run the pure gate stages on it\n        if: ${{ !inputs.dry-run }}\n', '      - name: Verify the diff digest and re-run the pure gate stages on it\n        if: ${{ !inputs.dry-run }}\n        continue-on-error: true\n'), rel(T), 'fix-pr', 'fixer-gate', 'continue-on-error'],
         ['fix-pr static re-run followed by || true', gateEdit('node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF"', 'node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF" || true'), rel(T), 'fix-pr', 'fixer-gate', 'swallows a failure'],
