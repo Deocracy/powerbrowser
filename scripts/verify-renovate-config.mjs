@@ -27,6 +27,7 @@
 //  [nix]                    nix.enabled is true, so flake.lock is a managed file.
 //  [branch-prefix]          branchPrefix starts with chore/theia-.
 //  [no-clock]               no schedule or timezone key at any depth (D-77).
+//  [vulnerability-alerts]   vulnerabilityAlerts is { enabled: false } and osvVulnerabilityAlerts is false (WR-02).
 //  [theia-group]            one packageRule with groupName theia selects exactly the @theia/*
 //                           resolutions minus monaco-editor-core.
 //  [theia-group-slug]       that rule's groupSlug is theia.
@@ -237,6 +238,13 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
     if (cfg.platformAutomerge !== false) {
         fail('platform-automerge', `platformAutomerge = ${JSON.stringify(cfg.platformAutomerge)}`, 'platformAutomerge must be false so the platform never merges the Theia PR');
     }
+    // WR-02: remediation PRs are force-enabled by Renovate and bypass the scope rule, so both alert sources are off.
+    if (cfg.vulnerabilityAlerts?.enabled !== false) {
+        fail('vulnerability-alerts', `vulnerabilityAlerts = ${JSON.stringify(cfg.vulnerabilityAlerts)}`, 'vulnerabilityAlerts must be { "enabled": false }, or Renovate opens chore/theia-*-vulnerability PRs outside the Theia group');
+    }
+    if (cfg.osvVulnerabilityAlerts !== false) {
+        fail('vulnerability-alerts', `osvVulnerabilityAlerts = ${JSON.stringify(cfg.osvVulnerabilityAlerts)}`, 'osvVulnerabilityAlerts must be false, or OSV remediation PRs bypass the scope rule');
+    }
     if (cfg.nix?.enabled !== true) {
         fail('nix', `nix.enabled = ${JSON.stringify(cfg.nix?.enabled)}`, 'the nix manager must be enabled so flake.lock is a managed file');
     }
@@ -433,6 +441,8 @@ function selfTest() {
         rangeStrategy: 'pin',
         branchPrefix: BRANCH_PREFIX,
         ignorePaths: ['.planning/**'],
+        vulnerabilityAlerts: { enabled: false },
+        osvVulnerabilityAlerts: false,
         nix: { enabled: true },
         packageRules: [
             { matchPackageNames: ['/^(?!@theia\\/)/'], enabled: false },
@@ -487,6 +497,10 @@ function selfTest() {
         { label: 'theia_release manager anchored to monaco', rule: 'theia-release-manager', mutate: c => { manager(c).depNameTemplate = MONACO; } },
         { label: 'theia_release matchStrings no longer captures the line', rule: 'theia-release-manager', mutate: c => { manager(c).matchStrings = ['theia_pin\\s*=\\s*"(?<currentValue>[^"]+)"']; } },
         { label: 'theia_release drifted from the live value', rule: 'theia-release-manager', overrides: { theiaRelease: '1.77.0' } },
+        { label: 'vulnerabilityAlerts enabled', rule: 'vulnerability-alerts', mutate: c => { c.vulnerabilityAlerts = { enabled: true }; } },
+        { label: 'vulnerabilityAlerts key removed', rule: 'vulnerability-alerts', mutate: c => { delete c.vulnerabilityAlerts; } },
+        { label: 'osvVulnerabilityAlerts true', rule: 'vulnerability-alerts', mutate: c => { c.osvVulnerabilityAlerts = true; } },
+        { label: 'osvVulnerabilityAlerts key removed', rule: 'vulnerability-alerts', mutate: c => { delete c.osvVulnerabilityAlerts; } },
         { label: 'nix manager disabled', rule: 'nix', mutate: c => { c.nix.enabled = false; } },
         { label: 'schedule key at top level', rule: 'no-clock', mutate: c => { c.schedule = ['before 5am']; } },
         { label: 'timezone key inside a packageRule', rule: 'no-clock', mutate: c => { c.packageRules[0].timezone = 'UTC'; } },
