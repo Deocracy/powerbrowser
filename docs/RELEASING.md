@@ -973,7 +973,11 @@ scripts/verify-platform.sh --quick
 ```
 
 Every step must exit 0. `apply-patches.sh` takes `--upstream` and `--patches` for the scratch
-tree; with no argument it replays onto the live `upstream/`, as `rebase-upstream.sh` does.
+tree; with no argument it replays onto the live `upstream/`, as `rebase-upstream.sh` does. Both
+values are resolved to absolute paths before anything changes directory, and a relative value is
+accepted. The script refuses with exit 2 and a named cause when a path is not a directory, when a
+value starts with `-`, when `--upstream` is not the top of its own git repository or is this
+checkout, and when `--patches` holds no `*.patch` file.
 
 **Drift-risk order and the invariant each patch must keep.** Replay and check the patches in
 this order, highest drift first. After each replay, confirm the invariant line is still in
