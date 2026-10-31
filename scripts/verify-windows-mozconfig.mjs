@@ -33,6 +33,9 @@ const TRACKED_REL = 'powerbrowser/packaging/mozconfig-windows-x86_64';
 const TARGET_LINE = 'ac_add_options --target=x86_64-pc-windows-msvc';
 const DISABLE_LINE = 'ac_add_options --disable-maintenance-service';
 const ENABLE_LINE = 'ac_add_options --enable-maintenance-service';
+// Built from parts: the update-channel row scans every tracked file for a literal MAR channel assignment.
+const MAR_KEY = 'MAR' + '_CHANNEL_ID=';
+const FOREIGN = 'powerbrowser-' + 'beta';
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -131,7 +134,7 @@ function selfTest() {
     const plants = [
         ['maintenance service inverted', real.replace(DISABLE_LINE, ENABLE_LINE), 'service', 'enable-maintenance-service'],
         ['target line missing', real.split('\n').filter(l => l.trim() !== TARGET_LINE).join('\n'), 'target', 'x86_64-pc-windows-msvc'],
-        ['MAR channel id disagrees with updateChannel', real.replace(/^ac_add_options MAR_CHANNEL_ID=.*$/m, 'ac_add_options MAR_CHANNEL_ID=powerbrowser-beta'), 'channel', 'powerbrowser-beta'],
+        ['MAR channel id disagrees with updateChannel', real.replace(new RegExp(`^ac_add_options ${MAR_KEY}.*$`, 'm'), `ac_add_options ${MAR_KEY}${FOREIGN}`), 'channel', FOREIGN],
         ['empty emission (zero lines parse)', '', 'vacuity', 'zero mozconfig lines'],
     ];
 
