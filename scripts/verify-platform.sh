@@ -3824,6 +3824,16 @@ run_own_checks() {
     "gui02-web-tab-bridge|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs"
     "gui02-web-tab-bridge-self-test|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs --self-test"
 
+    # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the
+    # WebTabMessage union, the routed set and the state fields agree (derive and
+    # compare, set equality). The find gate also pins the Finder listener and the
+    # never-load rule; the zoom gate pins the live ladder and the no-pref-write rule.
+    # Honestly --quick: text reads only. The live proof is page-tools-live.
+    "page-tools-find|node $REPO_ROOT/scripts/verify-page-tools-find.mjs"
+    "page-tools-find-self-test|node $REPO_ROOT/scripts/verify-page-tools-find.mjs --self-test"
+    "page-tools-zoom-mute|node $REPO_ROOT/scripts/verify-page-tools-zoom-mute.mjs"
+    "page-tools-zoom-mute-self-test|node $REPO_ROOT/scripts/verify-page-tools-zoom-mute.mjs --self-test"
+
     # NEW (Phase 29, BAR-02; REQUIREMENTS technical ruling 2026-10-20): the
     # Theia token cookie never reaches a server on another loopback port. Pins
     # the strip's cookie name to the token gate's, its topic to

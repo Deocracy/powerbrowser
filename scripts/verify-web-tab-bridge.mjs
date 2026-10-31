@@ -83,6 +83,14 @@ const KIND_CLASSES = new Map([
     ['webTabClearSiteData', 'privileged'],
     // Phase 31 plan 03 (SITE-08, D-31-06): the per-site shield exception is a site-state write, so privileged.
     ['webTabShieldToggle', 'privileged'],
+    // Phase 32 plan 01 (PAGE-01/02): find and zoom change only the tab's own page view (its find state and
+    // its fullZoom), so they are tab-navigation. No pref, file or site state is written by either.
+    ['webTabFind', 'tab-navigation'],
+    ['webTabFindNext', 'tab-navigation'],
+    ['webTabFindClose', 'tab-navigation'],
+    ['webTabZoomIn', 'tab-navigation'],
+    ['webTabZoomOut', 'tab-navigation'],
+    ['webTabZoomReset', 'tab-navigation'],
 ]);
 
 /**

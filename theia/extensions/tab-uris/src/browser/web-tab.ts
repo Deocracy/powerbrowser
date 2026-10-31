@@ -176,6 +176,14 @@ export interface WebTabState {
     permissionLabels?: string[];
     /** Phase 31 plan 03 (SITE-08): whether the site has a tracking-protection exception; the identity box's shield. */
     shieldExcepted?: boolean;
+    /** Phase 32 plan 01 (PAGE-02): the overlay's zoom factor, 1 = 100%, pushed with url. */
+    zoom: number;
+    /** Phase 32 plan 01 (PAGE-01): the Finder's current match index; 0 when no find is running. */
+    findCurrent: number;
+    /** Phase 32 plan 01 (PAGE-01): the Finder's match total for the running find. */
+    findTotal: number;
+    /** Phase 32 plan 01 (PAGE-01): the last find result; null when no find is running. */
+    findStatus: 'found' | 'notFound' | 'wrapped' | null;
 }
 
 /**
@@ -199,7 +207,14 @@ export type WebTabMessage =
     | { kind: 'webTabSiteInfo'; tabId: string }
     | { kind: 'webTabSetPermission'; tabId: string; id: string; state: string; origin: string }
     | { kind: 'webTabClearSiteData'; tabId: string; origin: string }
-    | { kind: 'webTabShieldToggle'; tabId: string; origin: string; except: boolean };
+    | { kind: 'webTabShieldToggle'; tabId: string; origin: string; except: boolean }
+    // Phase 32 plan 01 (PAGE-01/02): find and zoom. Counts and status return in the state push, not in these replies.
+    | { kind: 'webTabFind'; tabId: string; query: string; caseSensitive?: boolean; entireWord?: boolean; highlightAll?: boolean }
+    | { kind: 'webTabFindNext'; tabId: string; backwards?: boolean }
+    | { kind: 'webTabFindClose'; tabId: string }
+    | { kind: 'webTabZoomIn'; tabId: string }
+    | { kind: 'webTabZoomOut'; tabId: string }
+    | { kind: 'webTabZoomReset'; tabId: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -322,6 +337,13 @@ export class WebTabChannel {
                 permissionLabels: Array.isArray(detail.permissionLabels) ? detail.permissionLabels.filter((label): label is string => typeof label === 'string') : widget.permissionLabels,
                 // CR-02 / O-31-A: chrome pushes this on every state push, so a navigation resets it with the page.
                 shieldExcepted: typeof detail.shieldExcepted === 'boolean' ? detail.shieldExcepted : widget.shieldExcepted,
+                // Phase 32 plan 01: zoom and find counts ride the push of url; primitives only.
+                zoom: typeof detail.zoom === 'number' ? detail.zoom : widget.zoom,
+                findCurrent: typeof detail.findCurrent === 'number' ? detail.findCurrent : widget.findCurrent,
+                findTotal: typeof detail.findTotal === 'number' ? detail.findTotal : widget.findTotal,
+                findStatus: detail.findStatus === 'found' || detail.findStatus === 'notFound' || detail.findStatus === 'wrapped'
+                    ? detail.findStatus
+                    : detail.findStatus === null ? null : widget.findStatus,
             });
         });
     }
@@ -435,6 +457,14 @@ export class WebTabWidget extends BaseWidget {
     baseDomain: string | null | undefined;
     /** Phase 31 (D-31-02): the last pushed blocked-tracker count. */
     blockedTrackers = 0;
+    /** Phase 32 plan 01 (PAGE-02): the last pushed zoom factor, 1 = 100%. */
+    zoom = 1;
+    /** Phase 32 plan 01 (PAGE-01): the last pushed find match index. */
+    findCurrent = 0;
+    /** Phase 32 plan 01 (PAGE-01): the last pushed find match total. */
+    findTotal = 0;
+    /** Phase 32 plan 01 (PAGE-01): the last pushed find result, null when no find is running. */
+    findStatus: WebTabState['findStatus'] = null;
     /** Phase 31 plan 02 (SITE-06): the non-default permission ids, table order; the identity box's icons. */
     permissionIcons: string[] = [];
     /** Phase 31 plan 02: the labels of permissionIcons, same order; the icons' tooltip. */
@@ -846,6 +876,10 @@ export class WebTabWidget extends BaseWidget {
         if (state.blockedTrackers !== undefined) {
             this.blockedTrackers = state.blockedTrackers;
         }
+        this.zoom = state.zoom;
+        this.findCurrent = state.findCurrent;
+        this.findTotal = state.findTotal;
+        this.findStatus = state.findStatus;
         if (state.permissionIcons !== undefined) {
             this.permissionIcons = state.permissionIcons;
         }

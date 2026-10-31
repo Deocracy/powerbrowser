@@ -3342,6 +3342,8 @@ export const PowerBrowserAPI = Object.freeze({
         if (!sameDocument) {
           entry.blockedTrackers = 0;
         }
+        // Page tools (32-01): a new page starts with no find state; the same navigation's push carries the reset.
+        if (!sameDocument) resetWebTabFind(browser);
         if (!sameDocument && /^https?:\/\//i.test(locationSpec)) {
           // NG-002: a navigation updates this tab's row in place -- group, x/y,
           // ord and thumbnail stay.
@@ -3406,6 +3408,8 @@ export const PowerBrowserAPI = Object.freeze({
       scheduleWebTabState(theiaBrowser, tabId, browser, browser.webProgress.isLoadingDocument);
     };
     browser.addEventListener("pagetitlechanged", entry.titleListener);
+    // Page tools (32-01, PAGE-01): the overlay's Finder results reach the bar through one listener, attached beside the title listener.
+    attachWebTabPageListeners(theiaBrowser, tabId, browser);
     // A browsing-context switch leaves a placeholder until the new page's location change (scheduleWebTabState).
     browser.addEventListener("DidChangeBrowserRemoteness", () => switchingOverlays.add(browser));
     webTabs.set(tabId, entry);
@@ -3476,6 +3480,7 @@ export const PowerBrowserAPI = Object.freeze({
       const identity = PowerBrowserAPI.webTabIdentity(browser, pageSpec);
       // Phase 31 plan 02 (SITE-06): the non-default permissions, table order, in the same push.
       const shown = webTabPermissionRows(browser).filter(row => row.stored !== "default");
+      const pageFields = webTabPageFields(browser);
       theiaBrowser.browsingContext.currentWindowGlobal
         .getActor(GROUP_ACTOR_NAME)
         .sendAsyncMessage("PowerBrowserWebTabState", {
@@ -3494,6 +3499,11 @@ export const PowerBrowserAPI = Object.freeze({
           shieldExcepted: webTabShieldExcepted(browser),
           permissionIcons: shown.map(row => row.id),
           permissionLabels: shown.map(row => row.label ?? ""),
+          // Page tools (32-01): zoom and find counts ride the push of this url; primitives only.
+          zoom: pageFields.zoom,
+          findCurrent: pageFields.findCurrent,
+          findTotal: pageFields.findTotal,
+          findStatus: pageFields.findStatus,
         });
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] state push for ${tabId} failed: ${err && err.message ? err.message : err}`);
@@ -3842,6 +3852,7 @@ export const PowerBrowserAPI = Object.freeze({
     } catch {
       // best-effort
     }
+    detachWebTabPageListeners(browser);
     if (entry.uri) {
       PowerBrowserAPI.removeTabRow(entry.uri).catch(err => {
         PowerBrowserAPI.log("error", `[web-tab] removeTabRow failed for ${entry.uri}: ${err && err.message ? err.message : err}`);
@@ -4485,7 +4496,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4801,6 +4812,88 @@ async function handleWebTabAction(data, actorRef) {
       entry.browser.reload();
       return { ok: true, kind, where: "applied", excepted: webTabShieldExcepted(entry.browser) };
     }
+    // Page tools (32-01, PAGE-01): find runs the overlay's own Finder. The query is a
+    // string of at most 1024 characters and is never echoed in a refusal or a log line.
+    // Counts and status arrive in the state push, not in this reply.
+    case "webTabFind": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      if (typeof data.query !== "string" || data.query.length === 0 || data.query.length > WEB_TAB_FIND_QUERY_MAX) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a find query that is empty or longer than 1024 characters" };
+      }
+      const finder = ensureWebTabFinderListener(entry.browser);
+      if (!finder) {
+        return { ok: false, reason: "unavailable", message: "handleWebTabAction: the page has no find engine yet" };
+      }
+      webTabPageStateOf(entry.browser).findQuery = data.query;
+      finder.caseSensitive = data.caseSensitive === true;
+      finder.entireWord = data.entireWord === true;
+      finder.onFindbarOpen();
+      finder.fastFind(data.query, false, false);
+      if (data.highlightAll === true) {
+        finder.highlight(true, data.query, false);
+      }
+      return { ok: true, kind, where: "done" };
+    }
+    case "webTabFindNext": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      const finder = ensureWebTabFinderListener(entry.browser);
+      const query = webTabPageStateOf(entry.browser).findQuery;
+      if (!finder || query === null) {
+        return { ok: true, kind, where: "no-query" };
+      }
+      finder.findAgain(query, data.backwards === true, false, false);
+      return { ok: true, kind, where: "done" };
+    }
+    case "webTabFindClose": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      const finder = entry.browser.finder;
+      if (finder) {
+        finder.removeSelection(false);
+        finder.onFindbarClose();
+      }
+      resetWebTabFind(entry.browser);
+      webTabPagePush(entry.browser);
+      return { ok: true, kind, where: "done" };
+    }
+    // Page tools (32-01, PAGE-02): zoom steps the overlay's fullZoom along the live
+    // toolkit.zoomManager.zoomValues ladder; Reset sets 1. No pref is written and no
+    // browser-fullZoom script is loaded (D-07): the step is chrome-side arithmetic.
+    case "webTabZoomIn": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      return webTabZoomReply(kind, data.tabId, 1);
+    }
+    case "webTabZoomOut": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      return webTabZoomReply(kind, data.tabId, -1);
+    }
+    case "webTabZoomReset": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      return webTabZoomReply(kind, data.tabId, 0);
+    }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
   }
@@ -4877,6 +4970,150 @@ function scheduleWebTabState(frame, tabId, browser, loading, settled = false) {
     });
   }
   pending.set(tabId, { theiaBrowser: frame, browser, loading });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 32 page tools (32-01): the find and zoom state of one overlay, and
+// the Finder listener that feeds it. Module-level, not on the frozen API
+// object: the object cannot take members after it is frozen. Per-overlay
+// values live in a WeakMap keyed by the <browser>, so they go with it. Nothing
+// here logs a query, a URL or a title; the query is kept in memory only.
+// ---------------------------------------------------------------------------
+
+const WEB_TAB_FIND_QUERY_MAX = 1024;
+const WEB_TAB_ZOOM_PREF = "toolkit.zoomManager.zoomValues";
+const webTabPageState = new WeakMap();
+
+function webTabPageStateOf(browser) {
+  let state = webTabPageState.get(browser);
+  if (!state) {
+    state = { frame: null, tabId: null, findListener: null, findOn: null, findQuery: null, findCurrent: 0, findTotal: 0, findStatus: null };
+    webTabPageState.set(browser, state);
+  }
+  return state;
+}
+
+// The Finder listener goes on the overlay's current finder. A remote browser's
+// finder is created on first read and a remoteness switch can replace it, so
+// the attachment is checked again on every find rather than trusted from
+// creation. Returns the finder, or null while the overlay has none.
+function ensureWebTabFinderListener(browser) {
+  const finder = browser.finder ?? null;
+  const state = webTabPageStateOf(browser);
+  if (!finder || state.findOn === finder) {
+    return finder;
+  }
+  if (!state.findListener) {
+    state.findListener = {
+      onFindResult(response) {
+        state.findStatus = webTabFindStatusOf(response.result);
+        webTabPagePush(browser);
+      },
+      onMatchesCountResult(response) {
+        state.findCurrent = response.current;
+        state.findTotal = response.total;
+        webTabPagePush(browser);
+      },
+    };
+  }
+  finder.addResultListener(state.findListener);
+  state.findOn = finder;
+  return finder;
+}
+
+function attachWebTabPageListeners(frame, tabId, browser) {
+  const state = webTabPageStateOf(browser);
+  state.frame = frame;
+  state.tabId = tabId;
+  ensureWebTabFinderListener(browser);
+}
+
+function detachWebTabPageListeners(browser) {
+  const state = webTabPageState.get(browser);
+  if (!state) {
+    return;
+  }
+  try {
+    state.findOn?.removeResultListener(state.findListener);
+  } catch {
+    // best-effort: the overlay is closing and its finder goes with it
+  }
+  state.frame = null;
+  state.findOn = null;
+}
+
+// The nsITypeAheadFind result codes are the ones upstream's FinderParent compares against (FinderParent.sys.mjs:340-402).
+function webTabFindStatusOf(result) {
+  if (result === Ci.nsITypeAheadFind.FIND_NOTFOUND) {
+    return "notFound";
+  }
+  return result === Ci.nsITypeAheadFind.FIND_WRAPPED ? "wrapped" : "found";
+}
+
+function resetWebTabFind(browser) {
+  const state = webTabPageState.get(browser);
+  if (state) {
+    state.findCurrent = 0;
+    state.findTotal = 0;
+    state.findStatus = null;
+    state.findQuery = null;
+  }
+}
+
+// The overlay's page-tools fields for the state push, primitives only.
+function webTabPageFields(browser) {
+  const state = webTabPageStateOf(browser);
+  let zoom = 1;
+  try {
+    zoom = browser.fullZoom;
+  } catch {
+    zoom = 1;
+  }
+  return { zoom, findCurrent: state.findCurrent, findTotal: state.findTotal, findStatus: state.findStatus };
+}
+
+// A state push for an overlay whose page-tools fields just changed; the
+// coalescer sends it on the next frame, like every other state push.
+function webTabPagePush(browser) {
+  const state = webTabPageState.get(browser);
+  if (state?.frame) {
+    scheduleWebTabState(state.frame, state.tabId, browser, browser.webProgress.isLoadingDocument);
+  }
+}
+
+// The step ladder is the upstream zoom list, read live. Ascending, positive values only.
+function webTabZoomLadder() {
+  return PowerBrowserAPI.getStringPref(WEB_TAB_ZOOM_PREF, "")
+    .split(",")
+    .map(parseFloat)
+    .filter(value => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+}
+
+// step: +1 zooms in one rung, -1 out one rung (the rung nearest the current zoom, clamped to the ladder), 0 resets to 1.
+function webTabZoomReply(kind, tabId, step) {
+  const entry = webTabs.get(tabId);
+  if (!entry) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  const browser = entry.browser;
+  if (step === 0) {
+    browser.fullZoom = 1;
+  } else {
+    const ladder = webTabZoomLadder();
+    if (ladder.length > 0) {
+      const current = browser.fullZoom;
+      let nearest = 0;
+      ladder.forEach((value, i) => {
+        if (Math.abs(value - current) < Math.abs(ladder[nearest] - current)) {
+          nearest = i;
+        }
+      });
+      browser.fullZoom = ladder[Math.min(ladder.length - 1, Math.max(0, nearest + step))];
+    }
+  }
+  webTabPagePush(browser);
+  return { ok: true, kind, where: "applied", zoom: browser.fullZoom };
 }
 
 export const PowerBrowserWebTabs = Object.freeze({
