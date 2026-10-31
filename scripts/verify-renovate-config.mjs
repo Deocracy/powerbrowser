@@ -36,6 +36,10 @@
 //  [theia-release-manager]  a regex customManager covers configuration.toml through
 //                           managerFilePatterns (no deprecated fileMatch), its matchStrings
 //                           capture the live theia_release, and it uses npm and @theia/core.
+//  [manager-file-patterns]  every regex customManager's managerFilePatterns match exactly the root
+//                           configuration.toml among the git-tracked copies (git ls-files), and no other.
+//  [ignore-paths]           ignorePaths skips every tracked configuration.toml copy other than the root,
+//                           so Renovate never rewrites a frozen fixture (BL-01).
 //  [scope]                  every non-@theia/* dependency (devDependencies, dependencies, engines, and
 //                           the flake root inputs) is disabled by a packageRule, and no @theia/*
 //                           resolution is. Without it Renovate opens chore/theia- branches for them.
@@ -53,6 +57,7 @@
 //        node scripts/verify-renovate-config.mjs --self-test  one planted fault per rule, in memory
 // It reads files and writes nothing. No network, no gh, no renovate binary.
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -148,6 +153,13 @@ function captureOf(pattern, text) {
     try { return new RegExp(pattern, 'm').exec(text)?.groups?.currentValue ?? null; } catch { return null; }
 }
 
+// Renovate's ignorePaths glob, reduced to the forms this config uses: ** spans directories, * does not.
+// shortcut: no [] classes or ? wildcards, so a config that needs them fails closed here; upgrade to minimatch if it does.
+function globTest(glob, path) {
+    const body = glob.split('**').map(part => part.replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*/g, '[^/]*')).join('.*');
+    return new RegExp(`^${body}$`).test(path);
+}
+
 function findClockKeys(node, path = '$', hits = []) {
     if (Array.isArray(node)) {
         node.forEach((v, i) => findClockKeys(v, `${path}[${i}]`, hits));
@@ -169,6 +181,18 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
         const p = join(root, rel);
         return existsSync(p) ? readFileSync(p, 'utf8') : null;
     };
+    // Renovate sees only git-tracked files, so the copies it could match are derived from git ls-files.
+    let tracked = [];
+    if ('trackedFiles' in overrides) {
+        tracked = overrides.trackedFiles;
+    } else {
+        try {
+            tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter(Boolean);
+        } catch (err) {
+            fail('manager-file-patterns', 'git ls-files', `cannot list the tracked files (${err.message.split('\n')[0]}), so the configuration.toml copies cannot be derived`);
+        }
+    }
+    const tomlCopies = tracked.filter(p => p === TOML_REL || p.endsWith(`/${TOML_REL}`));
 
     const configText = 'configText' in overrides ? overrides.configText : read(CONFIG_REL);
     if (configText === null) {
@@ -283,6 +307,23 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
         }
     }
     const covering = managers.filter(m => m?.customType === 'regex' && toList(m.managerFilePatterns).some(p => patternTest(p, TOML_REL)));
+    if (!tomlCopies.includes(TOML_REL)) {
+        fail('theia-release-manager', TOML_REL, `${TOML_REL} is not git-tracked, so Renovate never sees the live theia_release`);
+    }
+    // Exact match: the regex manager must select the root file among the tracked copies, and no other copy.
+    for (const m of managers.filter(x => x?.customType === 'regex')) {
+        const hit = tomlCopies.filter(p => toList(m.managerFilePatterns).some(pat => patternTest(pat, p)));
+        if (!sameSet(hit, [TOML_REL])) {
+            fail('manager-file-patterns', `managerFilePatterns matches [${hit.join(', ')}]`, `a regex manager must match exactly ${TOML_REL} among the tracked copies; extra [${diff(hit, [TOML_REL]).join(', ')}]. Anchor it: "/^configuration\\.toml$/"`);
+        }
+    }
+    // Every other tracked copy must be skipped by ignorePaths, with Renovate's own substring-or-glob test.
+    const ignored = toList(cfg.ignorePaths).filter(g => typeof g === 'string');
+    for (const f of tomlCopies.filter(p => p !== TOML_REL)) {
+        if (!ignored.some(g => f.includes(g) || globTest(g, f))) {
+            fail('ignore-paths', f, `${f} is a tracked configuration.toml copy that ignorePaths does not skip, so Renovate could rewrite it. Add its directory to ignorePaths`);
+        }
+    }
     if (liveRelease !== null) {
         if (covering.length === 0) {
             fail('theia-release-manager', 'managerFilePatterns', `no regex customManager covers ${TOML_REL}; add managerFilePatterns "/(^|/)configuration\\.toml$/"`);
@@ -391,6 +432,7 @@ function selfTest() {
         platformAutomerge: false,
         rangeStrategy: 'pin',
         branchPrefix: BRANCH_PREFIX,
+        ignorePaths: ['.planning/**'],
         nix: { enabled: true },
         packageRules: [
             { matchPackageNames: ['/^(?!@theia\\/)/'], enabled: false },
@@ -399,7 +441,7 @@ function selfTest() {
         ],
         customManagers: [{
             customType: 'regex',
-            managerFilePatterns: ['/(^|/)configuration\\.toml$/'],
+            managerFilePatterns: ['/^configuration\\.toml$/'],
             matchStrings: ['theia_release\\s*=\\s*"(?<currentValue>[^"]+)"'],
             datasourceTemplate: 'npm',
             depNameTemplate: '@theia/core',
@@ -435,6 +477,11 @@ function selfTest() {
         { label: 'monaco group also selects @theia/core', rule: 'monaco-group', mutate: c => { mon(c).matchPackageNames = [MONACO, '@theia/core']; } },
         { label: 'theia_release customManager removed', rule: 'theia-release-manager', mutate: c => { c.customManagers = []; } },
         { label: 'theia_release manager managerFilePatterns moved to package.json', rule: 'theia-release-manager', mutate: c => { manager(c).managerFilePatterns = ['/(^|/)package\\.json$/']; } },
+        { label: 'theia_release manager unanchored, so it also matches the fixture copies', rule: 'manager-file-patterns', mutate: c => { manager(c).managerFilePatterns = ['/(^|/)configuration\\.toml$/']; } },
+        { label: 'theia_release manager matches one fixture copy by a second pattern', rule: 'manager-file-patterns', mutate: c => { manager(c).managerFilePatterns = ['/^configuration\\.toml$/', '/^\\.planning\\/milestones\\/.*\\/configuration\\.toml$/']; } },
+        { label: 'ignorePaths removed, so the fixture copies are no longer skipped', rule: 'ignore-paths', mutate: c => { delete c.ignorePaths; } },
+        { label: 'ignorePaths narrowed to one fixture directory', rule: 'ignore-paths', mutate: c => { c.ignorePaths = ['.planning/milestones/v1.0-phases/**']; } },
+        { label: 'root configuration.toml not in the tracked set', rule: 'theia-release-manager', overrides: { trackedFiles: ['.planning/milestones/v1.1-phases/09-extensions-crash-pipeline/fixtures/npm-kind/configuration.toml'] } },
         { label: 'deprecated fileMatch kept beside managerFilePatterns', rule: 'theia-release-manager', mutate: c => { manager(c).fileMatch = ['(^|/)configuration\\.toml$']; } },
         { label: 'theia_release manager on github-releases', rule: 'theia-release-manager', mutate: c => { manager(c).datasourceTemplate = 'github-releases'; } },
         { label: 'theia_release manager anchored to monaco', rule: 'theia-release-manager', mutate: c => { manager(c).depNameTemplate = MONACO; } },

@@ -10,9 +10,13 @@
 //  - @theia/monaco-editor-core has its own group, `theia-monaco-editor-core`. It keeps upstream's
 //    own monaco line (1.108.201), which differs from the 1.76.0 Theia line.
 //  - rangeStrategy pin on both groups: the resolutions are exact pins today.
-//  - One regex customManager reads theia_release from configuration.toml, the single source for
-//    the Theia release this project composes. The version anchor is @theia/core, because every
-//    @theia/* moves in lockstep per Theia release. One mismatch report from a real run would
+//  - One regex customManager reads theia_release from the root configuration.toml only. Its
+//    managerFilePatterns is anchored (^configuration\.toml$), and ignorePaths skips the frozen
+//    configuration.toml fixture copies under .planning/. Without both, Renovate matched nine archived
+//    copies and opened a Theia PR that rewrote them (BL-01). The verifier derives the tracked copies
+//    with git ls-files and fails if the pattern matches any copy other than the root file.
+//    configuration.toml is the single source for the Theia release this project composes. The version
+//    anchor is @theia/core, because every @theia/* moves in lockstep per Theia release. One mismatch report from a real run would
 //    disprove that anchor; until then it is an assumption, not a proof.
 //  - nix manager enabled, but the scope rule turns the nixpkgs flake input off. Movement of nixpkgs
 //    is an owner follow-up (research decision 19, toolchain-baseline), and a nixpkgs branch would
@@ -63,6 +67,7 @@
   "platformAutomerge": false,
   "rangeStrategy": "pin",
   "branchPrefix": "chore/theia-",
+  "ignorePaths": [".planning/**"],
   "nix": { "enabled": true },
   "packageRules": [
     {
@@ -88,7 +93,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": ["/(^|/)configuration\\.toml$/"],
+      "managerFilePatterns": ["/^configuration\\.toml$/"],
       "matchStrings": ["theia_release\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
       "datasourceTemplate": "npm",
       "depNameTemplate": "@theia/core"
