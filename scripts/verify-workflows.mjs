@@ -48,12 +48,28 @@
 //                 release.yml job sign-publish.
 //  no-pr-trigger  release.yml and release-train.yml have no pull_request or
 //                 pull_request_target event.
-//  no-cache       release.yml has no actions/cache step and no step with a
+//  no-cache       release.yml, and the release-train.yml fixer jobs fix, fix-gate
+//                 and fix-pr, have no actions/cache step and no step with a
 //                 `cache` input.
 //  event-text     No step run: or with.prompt: string holds a ${{ }}
 //                 expression reading github.event.(issue|comment|
 //                 pull_request|head_commit|review), nested fields and
 //                 review_comment included.
+//  fixer-pin      In release-train.yml every anthropics/claude-code-action step is
+//                 exactly the pinned commit db77d4d3c98f... (v1.0.254; the tag
+//                 object is refused), has with.path_to_claude_code_executable, and
+//                 has no with.show_full_output or with.display_report set true.
+//  fixer-debug    No ACTIONS_STEP_DEBUG in the workflow, job or step env of a
+//                 fixer job (release-train.yml fix, fix-gate, fix-pr) or of a job
+//                 that runs claude-code-action.
+//  fixer-tools    The fix job's claude_args has --max-turns and an explicit
+//                 --allowedTools list with no bare Bash and no Edit or Write on
+//                 patches/. Granting Edit(work/**) or Write(work/**) also needs
+//                 --disallowedTools to deny both on work/**/patches/**.
+//  fixer-prompt   The fix job's if: holds the head_repository guard, the claude-fix/
+//                 head exclusion and the bot-actor exclusion. Its --disallowedTools
+//                 denies WebFetch and WebSearch, and its allowed_bots is exactly
+//                 renovate[bot],powerbrowser-bot[bot].
 //
 // Effective permissions: job permissions, else workflow permissions, else the
 // repository default (default_workflow_permissions in
@@ -93,7 +109,18 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt'];
+// The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
+// v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
+const FIXER_FILE = 'release-train.yml';
+const FIXER_JOBS = ['fix', 'fix-gate', 'fix-pr'];
+const FIX_PIN = 'anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c';
+const FIX_BOTS = 'renovate[bot],powerbrowser-bot[bot]';
+const FIX_GUARDS = [
+    ['head_repository', 'github.event.workflow_run.head_repository.full_name == github.repository'],
+    ['claude-fix/', "!startsWith(github.event.workflow_run.head_branch, 'claude-fix/')"],
+    ['powerbrowser-bot[bot]', "github.actor != 'powerbrowser-bot[bot]'"],
+];
 const SCOPES = ['actions', 'attestations', 'checks', 'contents', 'deployments', 'discussions', 'id-token', 'issues', 'models', 'packages', 'pages', 'pull-requests', 'repository-projects', 'security-events', 'statuses'];
 const HOSTED = /^(ubuntu|windows|macos)-[\w.-]+$/;
 const GUARD = 'github.event.workflow_run.head_repository.full_name == github.repository';
@@ -142,6 +169,17 @@ function readWorkflows(root) {
         out[f] = readFileSync(join(root, WF_DIR, f), 'utf8');
     }
     return out;
+}
+
+// A flag's value in claude_args: double-quoted, single-quoted, or one bare token.
+function flagValue(text, flag) {
+    const m = text.match(new RegExp(`${flag}(?:=|\\s+)(?:"([^"]*)"|'([^']*)'|(\\S+))`));
+    return m ? (m[1] ?? m[2] ?? m[3]) : null;
+}
+
+// Entries of a comma-separated tool list; a comma inside parentheses does not split.
+function toolEntries(value) {
+    return value.split(/,(?![^(]*\))/).map(s => s.trim()).filter(Boolean);
 }
 
 function runChecks(root, overrides = {}) {
@@ -296,6 +334,56 @@ function runChecks(root, overrides = {}) {
                 if (eff.contents === 'write') fail(rel, jobId, 'claude-code-action', `uses claude-code-action with effective contents write. Next step: give the job contents read.`);
             }
 
+            // FIX-08 / FIX-09 / FIX-04: the fixer's trust boundary. Only release-train.yml runs it.
+            const fixer = file === FIXER_FILE && FIXER_JOBS.includes(jobId);
+            const claude = steps.filter(s => typeof s.uses === 'string' && s.uses.startsWith('anthropics/claude-code-action@'));
+            if (file === FIXER_FILE) {
+                for (const s of claude) {
+                    const w = s.with ?? {};
+                    if (s.uses !== FIX_PIN) fail(rel, jobId, 'fixer-pin', `uses '${s.uses}', which is not the pinned commit ${FIX_PIN} (v1.0.254; the tag object is a different hash). Next step: pin the step to ${FIX_PIN}.`);
+                    if (typeof w.path_to_claude_code_executable !== 'string' || w.path_to_claude_code_executable.trim() === '') fail(rel, jobId, 'fixer-pin', `with has no path_to_claude_code_executable, so the Claude Code binary is not pinned. Next step: set it to the pinned binary path.`);
+                    for (const k of ['show_full_output', 'display_report']) {
+                        if (w[k] === true || w[k] === 'true') fail(rel, jobId, 'fixer-pin', `with.${k} is true, which echoes model output into the log. Next step: set it to false.`);
+                    }
+                }
+            }
+            if (fixer || claude.length > 0) {
+                const envs = [['workflow env', wf.env], ['job env', job.env], ...steps.map((s, i) => [`step ${i} env`, s.env])];
+                for (const [where, env] of envs) {
+                    if (env && typeof env === 'object' && Object.hasOwn(env, 'ACTIONS_STEP_DEBUG')) fail(rel, jobId, 'fixer-debug', `${where} sets ACTIONS_STEP_DEBUG, and debug logging can echo the model's input. Next step: remove the key from the fixer job.`);
+                }
+            }
+            if (fixer && jobId === 'fix') {
+                const w = claude[0]?.with ?? {};
+                const args = String(w.claude_args ?? '');
+                if (!/--max-turns\s+\d+/.test(args)) fail(rel, jobId, 'fixer-tools', `claude_args has no --max-turns, so the run is unbounded. Next step: add --max-turns 40.`);
+                const allowed = flagValue(args, '--allowedTools');
+                const denied = toolEntries(flagValue(args, '--disallowedTools') ?? '');
+                if (allowed === null) {
+                    fail(rel, jobId, 'fixer-tools', `claude_args has no --allowedTools list, so every tool is open. Next step: list the scoped tools explicitly.`);
+                } else {
+                    const entries = toolEntries(allowed);
+                    for (const e of entries) {
+                        if (e === 'Bash' || /^Bash\(\s*\)$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants bare ${e}, an unscoped shell. Next step: scope it, for example Bash(git -C work diff:*).`);
+                        const g = e.match(/^(Edit|Write)\((.*)\)$/);
+                        if (g && g[2].includes('patches')) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${g[1]}(${g[2]}), which reaches patches/. Next step: drop it; patches change only through scripts/regenerate-patches.sh.`);
+                    }
+                    if (entries.some(e => /^(Edit|Write)\(work\/\*\*\)$/.test(e))) {
+                        for (const t of ['Edit', 'Write']) {
+                            if (!denied.includes(`${t}(work/**/patches/**)`)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${t}(work/**), which reaches patches/, and --disallowedTools does not deny ${t}(work/**/patches/**). Next step: add that deny entry.`);
+                        }
+                    }
+                }
+                for (const t of ['WebFetch', 'WebSearch']) {
+                    if (!denied.includes(t)) fail(rel, jobId, 'fixer-prompt', `--disallowedTools does not deny ${t}, so the model can reach the open web with repository text. Next step: add ${t} to --disallowedTools.`);
+                }
+                const cond = String(job.if ?? '').replace(/\$\{\{|\}\}/g, ' ').replace(/\s+/g, ' ').trim();
+                for (const [kw, lit] of FIX_GUARDS) {
+                    if (!cond.includes(lit)) fail(rel, jobId, 'fixer-prompt', `if: lacks the ${kw} guard (${lit}), so a fork, a fixer head or the bot actor could start the fixer. Next step: add it to the job's if:.`);
+                }
+                if (w.allowed_bots !== FIX_BOTS) fail(rel, jobId, 'fixer-prompt', `allowed_bots is '${w.allowed_bots ?? '(absent)'}', not the explicit list '${FIX_BOTS}'. A wildcard lets any bot steer the model. Next step: set allowed_bots to that list.`);
+            }
+
             // permissions
             if (eff.issues === 'write' && !((file === 'release-train.yml' && jobId === 'report') || file === 'triage.yml')) {
                 fail(rel, jobId, 'issues-write', `has effective issues write, admitted only on release-train.yml job report and in triage.yml. Next step: drop issues write from the job or workflow permissions.`);
@@ -310,8 +398,8 @@ function runChecks(root, overrides = {}) {
                 if (!cond.includes(GUARD)) fail(rel, jobId, 'workflow-run-guard', `runs on workflow_run without the guard '${GUARD}' in its if:, so a fork's run can trigger it. Next step: add the guard to the job's if:.`);
             }
 
-            // no cache in the release path
-            if (file === 'release.yml') {
+            // no cache in the release path or the fixer path (RESEARCH pitfall 5)
+            if (file === 'release.yml' || (file === FIXER_FILE && FIXER_JOBS.includes(jobId))) {
                 steps.forEach((s, i) => {
                     if (stepUses[i].startsWith('actions/cache')) fail(rel, jobId, 'no-cache', `step ${i} uses ${stepUses[i]}; a cache restored into release bytes can be poisoned. Next step: remove the actions/cache step.`);
                     if (s.with !== null && typeof s.with === 'object' && Object.hasOwn(s.with, 'cache')) fail(rel, jobId, 'no-cache', `step ${i} (${stepUses[i] || 'run'}) sets a cache input; a cache restored into release bytes can be poisoned. Next step: remove the cache input.`);
@@ -462,6 +550,72 @@ function selfTest() {
     const V_PERMS = '    permissions:\n      contents: read\n';
     const V_CHECK = 'run: nix develop .#theia --command node scripts/generate.mjs --check';
 
+    // The good fixer triple in release-train.yml: fix (Claude, read-only), fix-gate (no
+    // secrets, no environment), fix-pr (the one App-token minter). Every fixer rule is
+    // edited from here, so a plant changes one fact and the rest stays green.
+    const T = FIXER_FILE;
+    const FIXER = FIX_PIN.split('@')[1];
+    const FIX_APP = 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510';
+    const CLAUDE_ARGS = '--max-turns 40 --allowedTools "Bash(git -C work diff:*),Bash(scripts/regenerate-patches.sh:*),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read" --disallowedTools "WebFetch,WebSearch,Edit(work/**/patches/**),Write(work/**/patches/**)"';
+    const FIX_IF = "github.event.workflow_run.head_repository.full_name == github.repository && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]'";
+    const GOOD_TRAIN = [
+        'name: Release train',
+        'on:',
+        '  workflow_run:',
+        '    workflows: [Verify static layers]',
+        '    types: [completed]',
+        'permissions: {}',
+        'jobs:',
+        '  fix:',
+        '    runs-on: ubuntu-latest',
+        '    environment: fixer',
+        '    concurrency: claude-fixer',
+        '    timeout-minutes: 90',
+        '    permissions:',
+        '      contents: read',
+        '      actions: read',
+        '      id-token: write',
+        `    if: "${FIX_IF}"`,
+        '    steps:',
+        `      - uses: ${CHECKOUT}`,
+        '        with:',
+        '          persist-credentials: false',
+        `      - uses: ${FIX_PIN}`,
+        '        with:',
+        '          github_token: ${{ secrets.GITHUB_TOKEN }}',
+        '          path_to_claude_code_executable: /opt/claude-pinned/claude',
+        "          allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'",
+        '          show_full_output: false',
+        '          display_report: false',
+        '          prompt: ${{ inputs.trusted-prompt }}',
+        `          claude_args: '${CLAUDE_ARGS}'`,
+        '  fix-gate:',
+        '    needs: fix',
+        '    runs-on: ubuntu-latest',
+        '    permissions:',
+        '      contents: read',
+        `    if: "${GUARD}"`,
+        '    steps:',
+        '      - run: echo gate',
+        '  fix-pr:',
+        '    needs: fix-gate',
+        `    if: "needs.fix-gate.outputs.verdict == 'pass' && ${GUARD}"`,
+        '    runs-on: ubuntu-latest',
+        '    environment: bot',
+        '    permissions: {}',
+        '    steps:',
+        `      - uses: ${FIX_APP}`,
+        '        with:',
+        '          permission-contents: write',
+        '          permission-pull-requests: write',
+        '      - run: node scripts/fix-open-pr.mjs',
+        '',
+    ].join('\n');
+    const fixerEdit = (from, to) => {
+        if (!GOOD_TRAIN.includes(from)) throw new Error(`self-test anchor '${from}' is absent from the fixer fixture`);
+        return { files: { ...base, [T]: GOOD_TRAIN.replace(from, to) }, selected: withClaude };
+    };
+
     // [name, overrides, file, job, rule, value]
     const plants = [
         // GH-08: pinning, admission and set equality
@@ -506,6 +660,35 @@ function selfTest() {
         ['claude-code-action with contents write', { files: { ...base, 'assist.yml': assist('write') }, selected: withClaude }, rel('assist.yml'), 'assist', 'claude-code-action', 'contents write'],
     ];
 
+    // Fixer plants (FIX-08 pin and flags, FIX-09 tools and prompt, FIX-04 hosted-only,
+    // no-cache in the fixer). Each edits one fact of the good triple.
+    const fixerPlants = [
+        ['claude-code-action tag object instead of the commit pin', fixerEdit(`uses: ${FIX_PIN}`, 'uses: anthropics/claude-code-action@c335fd6d' + '0'.repeat(32)), rel(T), 'fix', 'fixer-pin', 'db77d4d3'],
+        ['claude-code-action commit with one hex digit changed', fixerEdit(`uses: ${FIX_PIN}`, `uses: ${FIX_PIN.slice(0, -1)}d`), rel(T), 'fix', 'fixer-pin', 'db77d4d3'],
+        ['missing path_to_claude_code_executable', fixerEdit('          path_to_claude_code_executable: /opt/claude-pinned/claude\n', ''), rel(T), 'fix', 'fixer-pin', 'path_to_claude_code_executable'],
+        ['show_full_output true', fixerEdit('          show_full_output: false', '          show_full_output: true'), rel(T), 'fix', 'fixer-pin', 'show_full_output'],
+        ['display_report true', fixerEdit('          display_report: false', '          display_report: true'), rel(T), 'fix', 'fixer-pin', 'display_report'],
+        ['ACTIONS_STEP_DEBUG set on fix', fixerEdit('    concurrency: claude-fixer', "    concurrency: claude-fixer\n    env:\n      ACTIONS_STEP_DEBUG: '1'"), rel(T), 'fix', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
+        ['bare Bash in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash'), rel(T), 'fix', 'fixer-tools', 'Bash'],
+        ['--allowedTools missing', fixerEdit(' --allowedTools "Bash(git -C work diff:*),Bash(scripts/regenerate-patches.sh:*),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read"', ''), rel(T), 'fix', 'fixer-tools', '--allowedTools'],
+        ['--max-turns missing', fixerEdit('--max-turns 40 ', ''), rel(T), 'fix', 'fixer-tools', '--max-turns'],
+        ['Edit(patches) granted in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**/patches/**),Read'), rel(T), 'fix', 'fixer-tools', 'Edit(work/**/patches/**)'],
+        ['Write(patches) granted in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),Write(work/**/patches/**),Read'), rel(T), 'fix', 'fixer-tools', 'Write(work/**/patches/**)'],
+        ['Edit(work/**) granted with no patches deny', fixerEdit(',Edit(work/**/patches/**),Write(work/**/patches/**)"', '"'), rel(T), 'fix', 'fixer-tools', 'Edit(work/**/patches/**)'],
+        ['WebFetch not denied', fixerEdit('"WebFetch,WebSearch,', '"WebSearch,'), rel(T), 'fix', 'fixer-prompt', 'WebFetch'],
+        ['if: without the claude-fix/ head exclusion', fixerEdit(" && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/')", ''), rel(T), 'fix', 'fixer-prompt', 'claude-fix/'],
+        ['if: without the bot-actor exclusion', fixerEdit(" && github.actor != 'powerbrowser-bot[bot]'", ''), rel(T), 'fix', 'fixer-prompt', 'powerbrowser-bot[bot]'],
+        ['allowed_bots star', fixerEdit("allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'", "allowed_bots: '*'"), rel(T), 'fix', 'fixer-prompt', 'allowed_bots'],
+        ['event text in the fixer prompt', fixerEdit('prompt: ${{ inputs.trusted-prompt }}', 'prompt: ${{ github.event.pull_request.body }}'), rel(T), 'fix', 'event-text', 'with.prompt'],
+        ['legion runner on fix', fixerEdit('    runs-on: ubuntu-latest\n    environment: fixer', '    runs-on: [self-hosted, legion]\n    environment: fixer'), rel(T), 'fix', 'legion', 'build-* or matrix-*'],
+        ['bare self-hosted runner on fix', fixerEdit('    runs-on: ubuntu-latest\n    environment: fixer', '    runs-on: self-hosted\n    environment: fixer'), rel(T), 'fix', 'runner', '"self-hosted"'],
+        ['actions/create-github-app-token beside Claude in fix', fixerEdit(`      - uses: ${FIX_PIN}`, `      - uses: ${FIX_APP}\n      - uses: ${FIX_PIN}`), rel(T), 'fix', 'claude-code-action', 'create-github-app-token'],
+        ['actions/cache in fix', fixerEdit(`      - uses: ${FIX_PIN}`, `      - uses: actions/cache@${H40}\n      - uses: ${FIX_PIN}`), rel(T), 'fix', 'no-cache', 'actions/cache'],
+        ['setup-node with cache: in fix-gate', fixerEdit('    steps:\n      - run: echo gate', `    steps:\n      - uses: actions/setup-node@${H40}\n        with:\n          cache: yarn\n      - run: echo gate`), rel(T), 'fix-gate', 'no-cache', 'cache input'],
+        ['admitted claude-code-action used by no workflow', { files: base, selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
+    ];
+    plants.push(...fixerPlants);
+
     // Green controls: the good release.yml (every plant's base), the two
     // admitted issues-write jobs, a guarded workflow_run, a hosted read-only
     // claude-code-action, and read-all over a write repository default.
@@ -516,6 +699,7 @@ function selfTest() {
         ['guarded workflow_run', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true) })],
         ['claude-code-action hosted with contents read', { files: { ...base, 'assist.yml': assist('read') }, selected: withClaude }],
         ['permissions: read-all over a write repository default', { files: { ...base, 'plain.yml': plain('read-all') }, defaultPermissions: 'write' }],
+        ['good fixer triple: fix, fix-gate and fix-pr', { files: { ...base, [T]: GOOD_TRAIN }, selected: withClaude }],
     ];
 
     let failed = 0;
