@@ -82,7 +82,17 @@ self_test() {
   probe() { GITHUB_OUTPUT=/nonexistent/out ACTIONS_RUNTIME_TOKEN=tok FIXER_PLANTED_SECRET=s bash "$here" -- "$@"; }
 
   if [ "$(strategy)" = none ]; then
-    bad "no isolation strategy is available on this host (unshare -rn and sudo -n unshare --net both fail)"
+    # The gate's stage 8 runs every --quick row, this one included, inside the isolation: a second unshare is impossible there
+    # (no capability, no_new_privs). That is the one case where the ambient state is the thing to check.
+    if [ -z "$(tail -n +3 /proc/self/net/dev | cut -d: -f1 | tr -d ' ' | grep -vx lo || true)" ] \
+      && [ "$(grep -E '^NoNewPrivs:' /proc/self/status | tr -d '[:space:]')" = "NoNewPrivs:1" ] \
+      && [ "$(grep -E '^CapEff:' /proc/self/status | awk '{print $2}')" = "0000000000000000" ] \
+      && [ -z "$(env | grep -E '^(GITHUB_|ACTIONS_|RUNNER_)' || true)" ]; then
+      ok "already inside the isolation: no network interface but a loopback, no_new_privs, no capability, no GITHUB_*/ACTIONS_*/RUNNER_* variable"
+      echo "$NAME: --self-test PASS -- ran inside the isolation (no new namespace is possible there): the ambient state holds every property"
+      return 0
+    fi
+    bad "no isolation strategy is available on this host (unshare -rn and sudo -n unshare --net both fail) and this process is not already isolated"
     return 1
   fi
 
