@@ -35,7 +35,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { withProbeShell, openWebTab, makeCurrent, focusOverlay, focusTheiaFrame } from './lib/pb-live-probe.mjs';
+import { withProbeShell, openWebTab, makeCurrent, focusOverlay, focusTheiaFrame, installPushRecorder, pushes, waitForPush } from './lib/pb-live-probe.mjs';
 import { REPO_ROOT, probe, stockTabOn } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-ext-tab-host-live';
@@ -72,9 +72,9 @@ const PAGE = '<!doctype html><title>PB probe extension page</title><body>extensi
 const BACKGROUND = `
 const ORIGIN = __ORIGIN__;
 const post = rec => { fetch(ORIGIN + '/log', { method: 'POST', body: JSON.stringify(rec) }).catch(() => {}); };
-const brief = t => t && { id: t.id, url: t.url, windowId: t.windowId, active: t.active, title: t.title, favIconUrl: t.favIconUrl, status: t.status };
+const brief = t => t && { id: t.id, url: t.url, windowId: t.windowId, active: t.active, title: t.title, favIconUrl: t.favIconUrl, status: t.status, mutedInfo: t.mutedInfo };
 post({ kind: 'started' });
-browser.tabs.onZoomChange.addListener(z => post({ kind: 'zoom', tabId: z && z.tabId }));
+browser.tabs.onZoomChange.addListener(z => post({ kind: 'zoom', tabId: z && z.tabId, oldZoomFactor: z && z.oldZoomFactor, newZoomFactor: z && z.newZoomFactor, zoomSettings: z && z.zoomSettings }));
 browser.browserAction.onClicked.addListener(tab => post({ kind: 'clicked', tabId: tab.id, url: tab.url, windowId: tab.windowId }));
 browser.tabs.onCreated.addListener(t => post({ kind: 'created', tab: brief(t) }));
 browser.tabs.onActivated.addListener(i => post({ kind: 'activated', tabId: i.tabId, windowId: i.windowId, previousTabId: i.previousTabId }));
@@ -100,6 +100,9 @@ async function run(cmd) {
     else if (cmd.op === 'updateExtPage') result = brief(await browser.tabs.update(cmd.tabId, { url: browser.runtime.getURL('page.html') }));
     else if (cmd.op === 'updateExtPagePinned') result = brief(await browser.tabs.update(cmd.tabId, { url: browser.runtime.getURL('page.html'), pinned: true }));
     else if (cmd.op === 'pageShown') result = await browser.pageAction.isShown({ tabId: cmd.tabId });
+    else if (cmd.op === 'getZoom') result = await browser.tabs.getZoom(cmd.tabId);
+    else if (cmd.op === 'getZoomSettings') result = await browser.tabs.getZoomSettings(cmd.tabId);
+    else if (cmd.op === 'capture') { const data = await browser.tabs.captureTab(cmd.tabId); result = { prefix: String(data).slice(0, 22), length: String(data).length }; }
     else if (cmd.op === 'windows') {
       const w = await browser.windows[cmd.method](cmd.info || {});
       result = Array.isArray(w) ? w.map(x => ({ id: x.id, type: x.type, focused: x.focused })) : { id: w.id, type: w.type };
@@ -1023,8 +1026,10 @@ async function scenarioSchemeWall({ app, plant }) {
   const seen = await command('get', { tabId: A.extId });
   const overlay = await chromeJson(app, `const o = [...document.querySelectorAll('browser')].find(x => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(x) === ${JSON.stringify(A.webTabId)});
     return { spec: o ? o.currentURI.spec : null };`);
-  if (String(seen.url).startsWith('moz-extension:') || String(overlay.spec).startsWith('moz-extension:')) {
-    return verdict(false, null, `web tab navigated to an extension page: tabs.get ${seen.url}, overlay ${overlay.spec}`);
+  // The T-31.1-20 guard replaces an extension-page load with about:blank, so the commit is read from webNavigation as well.
+  const committedExt = session.logs.some(r => r.kind === 'committed' && r.tabId === A.extId && String(r.url).startsWith('moz-extension:'));
+  if (committedExt || String(seen.url).startsWith('moz-extension:') || String(overlay.spec).startsWith('moz-extension:')) {
+    return verdict(false, null, `web tab navigated to an extension page: tabs.get ${seen.url}, overlay ${overlay.spec}, committed to a moz-extension URL ${committedExt}`);
   }
   if (!String(seen.url).endsWith('/a') || !String(overlay.spec).endsWith('/a')) {
     return verdict(false, null, `web tab /a changed after the refused update: tabs.get ${seen.url}, overlay ${overlay.spec}`);
@@ -1235,6 +1240,154 @@ async function scenarioFaviconClear({ app, plant }) {
   return verdict(true, `the favicon of /b reached tabs.get; a top-level navigation to /plain (no icon link) cleared it; the favicon of /c arrived after the clear`, null);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 32 plan 09 (PAGE-05, PAGE-02): mute and zoom as an extension sees them.
+// ---------------------------------------------------------------------------
+
+// Theia's WebTabChannel request: the route the page-tools harness drives the arms through.
+const channelRequest = (app, message) =>
+  probe(app, `const channel = get('WebTabChannel'); return await channel.request(${JSON.stringify(message)});`);
+
+// The chrome-scope view of one overlay, read from its own <browser>.
+const overlayState = (app, tabId) =>
+  chromeJson(
+    app,
+    `const W = ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs;
+     const o = [...document.querySelectorAll('browser')].find(x => W.tabIdOfBrowser(x) === ${JSON.stringify(tabId)});
+     if (!o) return { found: false };
+     return { found: true, audioMuted: o.audioMuted === true, fullZoom: o.fullZoom };`
+  );
+
+// Audio playback is not asserted: soundPlaying is the open 32-01 defect, so the mute is judged on muted state only.
+async function scenarioExtMute({ app, plant }) {
+  const A = await openAndCommit(app, '/a');
+  if (!(await tryWait(r => r.kind === 'updated' && r.tabId === A.extId && r.change && r.change.status === 'complete', 30000))) {
+    return verdict(false, null, 'positive control: onUpdated did not report status complete for tab A');
+  }
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late(A));
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant mute-unsynced did not land');
+  }
+  await installPushRecorder(app);
+  const from = (await pushes(app)).length;
+  await command('update', { tabId: A.extId, props: { muted: true } });
+  const overlay = await overlayState(app, A.webTabId);
+  if (!overlay.found || !overlay.audioMuted) {
+    return verdict(false, null, `tabs.update muted:true did not mute the overlay (${JSON.stringify(overlay)})`);
+  }
+  const extMuted = await command('get', { tabId: A.extId });
+  const info = extMuted.mutedInfo || {};
+  if (info.muted !== true || info.reason !== 'extension' || info.extensionId !== EXT_ID) {
+    return verdict(false, null, `mutedInfo did not follow the overlay: the overlay is muted, tabs.get reports ${JSON.stringify(extMuted.mutedInfo)}`);
+  }
+  if (!(await tryWait(r => r.kind === 'updated' && r.tabId === A.extId && r.change && r.change.mutedInfo && r.change.mutedInfo.muted === true, 15000))) {
+    return verdict(false, null, 'onUpdated mutedInfo did not fire for the extension mute of tab A');
+  }
+  if ((await waitForPush(app, p => p && p.kind === 'state' && p.tabId === A.webTabId && p.audioMuted === true, { from, timeoutMs: 10000 })) < 0) {
+    return verdict(false, null, 'Theia state push carried no audioMuted true for tab A after the extension mute');
+  }
+  const reply = await channelRequest(app, { kind: 'webTabMute', tabId: A.webTabId, muted: false });
+  if (reply?.audioMuted !== false) {
+    return verdict(false, null, `the Theia unmute reply did not read audioMuted false (${JSON.stringify(reply)})`);
+  }
+  const after = await command('get', { tabId: A.extId });
+  if (!after.mutedInfo || after.mutedInfo.muted !== false || after.mutedInfo.reason !== 'user') {
+    return verdict(false, null, `the Theia unmute did not report mutedInfo {muted:false, reason:user} (tabs.get ${JSON.stringify(after.mutedInfo)})`);
+  }
+  if (!(await tryWait(r => r.kind === 'updated' && r.tabId === A.extId && r.change && r.change.mutedInfo && r.change.mutedInfo.muted === false, 15000))) {
+    return verdict(false, null, 'onUpdated mutedInfo did not fire for the Theia unmute of tab A');
+  }
+  return verdict(true, `tabs.update muted:true muted the overlay; tabs.get mutedInfo was {muted:true, reason:extension, extensionId:${EXT_ID}}; onUpdated reported it; the Theia state push carried audioMuted true; the Theia unmute reported {muted:false, reason:user} and one more onUpdated`, null);
+}
+
+// PAGE-02: tabs.getZoom reports the overlay zoom that the webTabZoomIn arm moves, and the reset returns it to 1.
+async function scenarioExtZoomGet({ app, plant }) {
+  const A = await openAndCommit(app, '/a');
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late(A));
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant zoom-shim-missing did not land');
+  }
+  const getZoom = () => command('getZoom', { tabId: A.extId });
+  let initial;
+  try {
+    initial = await getZoom();
+  } catch (error) {
+    return verdict(false, null, `tabs.getZoom failed: ${error.message}`);
+  }
+  if (initial !== 1) {
+    return verdict(false, null, `tabs.getZoom of a new tab is ${initial}, not 1`);
+  }
+  await channelRequest(app, { kind: 'webTabZoomIn', tabId: A.webTabId });
+  const zoomed = await overlayState(app, A.webTabId);
+  const reported = await getZoom();
+  const rounded = Math.round(zoomed.fullZoom * 100) / 100;
+  if (!zoomed.found || !(zoomed.fullZoom > 1) || reported !== rounded) {
+    return verdict(false, null, `tabs.getZoom ${reported} does not report the overlay zoom ${zoomed.fullZoom} (rounded ${rounded})`);
+  }
+  await channelRequest(app, { kind: 'webTabZoomReset', tabId: A.webTabId });
+  const back = await getZoom();
+  if (back !== 1) {
+    return verdict(false, null, `tabs.getZoom after the reset is ${back}, not 1`);
+  }
+  return verdict(true, `tabs.getZoom of a new tab is 1; after ZoomIn the overlay is at ${zoomed.fullZoom} and tabs.getZoom reports ${reported}; after the reset it is 1`, null);
+}
+
+// PAGE-02: tabs.onZoomChange fires once per web-tab zoom change with the shell's zoom settings. The probe registered
+// the listener before any tab existed, so the registration loop walked the shell with zero web tabs.
+async function scenarioExtZoomChange({ app }) {
+  const A = await openAndCommit(app, '/a');
+  const zoomsFor = (from, tabId) => session.logs.slice(from).filter(r => r.kind === 'zoom' && r.tabId === tabId);
+  const up0 = session.logs.length;
+  await channelRequest(app, { kind: 'webTabZoomIn', tabId: A.webTabId });
+  await waitSince(up0, r => r.kind === 'zoom' && r.tabId === A.extId, 15000);
+  await sleep(1000);
+  const ins = zoomsFor(up0, A.extId);
+  if (ins.length === 0) {
+    return verdict(false, null, 'onZoomChange did not fire for tab A after ZoomIn');
+  }
+  if (ins.length !== 1) {
+    return verdict(false, null, `onZoomChange fired ${ins.length} times for one zoom change of tab A`);
+  }
+  const overlay = await overlayState(app, A.webTabId);
+  const [z] = ins;
+  const settings = z.zoomSettings || {};
+  if (z.oldZoomFactor !== 1 || !(z.newZoomFactor > 1) || z.newZoomFactor !== Math.round(overlay.fullZoom * 100) / 100) {
+    return verdict(false, null, `onZoomChange factors ${z.oldZoomFactor} -> ${z.newZoomFactor} do not match the overlay zoom ${overlay.fullZoom}`);
+  }
+  if (settings.mode !== 'automatic' || settings.scope !== 'per-tab' || settings.defaultZoomFactor !== 1) {
+    return verdict(false, null, `onZoomChange zoomSettings are ${JSON.stringify(settings)}, not automatic/per-tab/1`);
+  }
+  const down0 = session.logs.length;
+  await channelRequest(app, { kind: 'webTabZoomReset', tabId: A.webTabId });
+  await waitSince(down0, r => r.kind === 'zoom' && r.tabId === A.extId, 15000);
+  await sleep(1000);
+  const outs = zoomsFor(down0, A.extId);
+  if (outs.length !== 1 || outs[0].newZoomFactor !== 1) {
+    return verdict(false, null, `the reset fired ${outs.length} onZoomChange record(s), not one back to 1`);
+  }
+  const errs = await recordedErrors(app);
+  if (errs.length) {
+    return verdict(false, null, `the chrome-error recorder captured ${errs.length} error(s): ${describeErrors(errs)}`);
+  }
+  return verdict(true, `onZoomChange fired once for ZoomIn (${z.oldZoomFactor} -> ${z.newZoomFactor}, zoomSettings ${JSON.stringify(settings)}) and once for the reset back to 1; the chrome-error recorder captured nothing`, null);
+}
+
+// PAGE-02 (32-09 Pitfall 2): tabs.captureTab reads window.ZoomManager (ext-tabs.js:1034) through the shim and must resolve
+// with an image of the tab. Not compared pixel for pixel with the overlay: that comparison is an end-of-milestone check.
+async function scenarioExtCapture({ app }) {
+  const A = await openAndCommit(app, '/a');
+  let cap;
+  try {
+    cap = await command('capture', { tabId: A.extId });
+  } catch (error) {
+    return verdict(false, null, `tabs.captureTab failed: ${error.message}`);
+  }
+  if (!String(cap.prefix).startsWith('data:image/png;base64,') || !(cap.length > 1000)) {
+    return verdict(false, null, `tabs.captureTab of tab A did not resolve with a PNG data URL (prefix ${cap.prefix}, length ${cap.length})`);
+  }
+  return verdict(true, `tabs.captureTab of tab A resolved with a PNG data URL of ${cap.length} characters; the ZoomManager read in captureTab no longer throws`, null);
+}
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
@@ -1253,6 +1406,10 @@ const SCENARIOS = {
   'extension-redirect': scenarioExtensionRedirect,
   'favicon-clear': scenarioFaviconClear,
   'theia-never': scenarioTheiaNever,
+  'ext-mute': scenarioExtMute,
+  'ext-zoom-get': scenarioExtZoomGet,
+  'ext-zoom-change': scenarioExtZoomChange,
+  'ext-capture': scenarioExtCapture,
 };
 
 // Each plant names its scenario, the expected red text, and the chrome-scope mutation.
@@ -1271,6 +1428,30 @@ const PLANT_FAVICON_STALE = tabId => `
   const keep = node.image;
   Object.defineProperty(node, 'image', { configurable: true, get: () => keep, set: () => {} });
   return { landed: true };`;
+
+// Mute and zoom plants (32-09). Each names its scenario and the red text the scenario must print.
+const PLANT_MUTE_UNSYNCED = tabId => `
+  const node = [...window.gBrowser.tabs].find(t => ChromeUtils.importESModule(${JSON.stringify(API_URL)}).PowerBrowserWebTabs.tabIdOfBrowser(t.linkedBrowser) === ${JSON.stringify(tabId)});
+  if (!node) return { landed: false };
+  Object.defineProperty(node, 'muted', { configurable: true, get: () => false, set: () => {} });
+  return { landed: true };`;
+
+// A window capture listener stops the TabAttrModified 'muted' event before any tracker hears it.
+const PLANT_MUTE_EVENT_DROPPED = `
+  window.addEventListener('TabAttrModified', e => {
+    if (e.detail && Array.isArray(e.detail.changed) && e.detail.changed.includes('muted')) e.stopImmediatePropagation();
+  }, true);
+  return { landed: true };`;
+
+const PLANT_ZOOM_SHIM_MISSING = `
+  const had = 'ZoomManager' in window;
+  delete window.ZoomManager;
+  return { landed: had && !('ZoomManager' in window) };`;
+
+const PLANT_ZOOM_SETTINGS_MISSING = `
+  const had = typeof window.FullZoom === 'object';
+  delete window.FullZoom;
+  return { landed: had && typeof window.FullZoom === 'undefined' };`;
 
 const PLANTS = {
   'theia-in-tabs': { scenario: 'query', expect: 'Theia frame visible to extensions', body: PLANT_THEIA_IN_TABS },
@@ -1292,6 +1473,10 @@ const PLANTS = {
   'redirect-guard-off': { scenario: 'extension-redirect', expect: 'web tab navigated to an extension page', late: A => PLANT_REDIRECT_GUARD_OFF(A.webTabId) },
   'favicon-stale': { scenario: 'favicon-clear', expect: 'favicon survived a top-level navigation', late: A => PLANT_FAVICON_STALE(A.webTabId) },
   'theia-in-tabs-late': { scenario: 'theia-never', expect: 'Theia frame visible to extensions', late: () => PLANT_THEIA_IN_TABS },
+  'mute-unsynced': { scenario: 'ext-mute', expect: 'mutedInfo did not follow the overlay', late: A => PLANT_MUTE_UNSYNCED(A.webTabId) },
+  'mute-event-dropped': { scenario: 'ext-mute', expect: 'onUpdated mutedInfo did not fire', body: PLANT_MUTE_EVENT_DROPPED },
+  'zoom-shim-missing': { scenario: 'ext-zoom-get', expect: 'tabs.getZoom failed', late: () => PLANT_ZOOM_SHIM_MISSING },
+  'zoom-settings-missing': { scenario: 'ext-zoom-change', expect: 'onZoomChange did not fire', body: PLANT_ZOOM_SETTINGS_MISSING },
 };
 
 // ---------------------------------------------------------------------------

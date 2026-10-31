@@ -217,7 +217,7 @@ index ec06766887..ed2be4a747 100644
    }
  
 diff --git a/browser/components/extensions/parent/ext-tabs.js b/browser/components/extensions/parent/ext-tabs.js
-index f342748d4b..c11b68a6d2 100644
+index f342748d4b..8cfe59ad40 100644
 --- a/browser/components/extensions/parent/ext-tabs.js
 +++ b/browser/components/extensions/parent/ext-tabs.js
 @@ -872,8 +872,31 @@ this.tabs = class extends ExtensionAPIPersistent {
@@ -225,16 +225,16 @@ index f342748d4b..c11b68a6d2 100644
            let tabbrowser = nativeTab.documentGlobal.gBrowser;
  
 +          // WR-07: a tab host window refuses the writes it cannot make before any write runs, so a refusal applies
-+          // nothing. The checks follow upstream order: navigation, then active, highlighted, muted and pinned.
++          // nothing. The checks follow upstream order: navigation, then active, highlighted and pinned. Muted is not
++          // refused: a tab host node carries toggleMuteAudio (Phase 32 plan 09).
 +          if (windowTracker.isTabHostWindow(nativeTab.documentGlobal)) {
 +            if (
 +              updateProperties.pinned !== null ||
 +              updateProperties.highlighted !== null ||
-+              updateProperties.muted !== null ||
 +              (updateProperties.active && tabbrowser.selectedTab !== nativeTab)
 +            ) {
 +              return Promise.reject({
-+                message: "Changing the pinned, highlighted, muted or active state of this tab is not supported yet.",
++                message: "Changing the pinned, highlighted or active state of this tab is not supported yet.",
 +              });
 +            }
 +          }
@@ -252,27 +252,6 @@ index f342748d4b..c11b68a6d2 100644
  
              let options = {
                flags: updateProperties.loadReplace
-@@ -1328,6 +1351,9 @@ this.tabs = class extends ExtensionAPIPersistent {
- 
-             // Store the zoom level for all existing tabs.
-             for (let window of windowTracker.browserWindows()) {
-+              if (windowTracker.isTabHostWindow(window)) {
-+                continue;
-+              }
-               if (!context.canAccessWindow(window)) {
-                 continue;
-               }
-@@ -1338,6 +1364,10 @@ this.tabs = class extends ExtensionAPIPersistent {
-             }
- 
-             let tabCreated = (eventName, event) => {
-+              // A tab host window has no zoom manager until its embedder supplies one.
-+              if (windowTracker.isTabHostWindow(event.nativeTab.documentGlobal)) {
-+                return;
-+              }
-               let browser = event.nativeTab.linkedBrowser;
-               if (!event.isPrivate || context.privateBrowsingAllowed) {
-                 zoomLevels.set(browser, getZoomLevel(browser));
 diff --git a/remote/shared/TabManager.sys.mjs b/remote/shared/TabManager.sys.mjs
 index b3b7693c45..f00125a0cb 100644
 --- a/remote/shared/TabManager.sys.mjs

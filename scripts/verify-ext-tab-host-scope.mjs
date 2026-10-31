@@ -41,7 +41,7 @@ import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { deriveImplemented } from './verify-shell-gbrowser-standin.mjs';
+import { deriveImplemented, deriveZoomShimImplemented } from './verify-shell-gbrowser-standin.mjs';
 
 const NAME = 'verify-ext-tab-host-scope';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -80,6 +80,7 @@ const REASONED = [
   { key: 'ExtensionShortcuts.sys.mjs:unregister', why: 'design: removes this extension keysets; the shell keyset is removed like any window, and keysets otherwise stay in the shell as Phase 38 plan 38-05 expects', claims: ['admits'] },
   { key: 'ext-browser.js:init', why: 'open listener reaches _handleWindowOpen, which guards a zero-tab window (G4)', claims: ['guard:G4@_handleWindowOpen'] },
   { key: 'ext-tabGroups.js:queryGroups', why: 'tabGroups is a member of the shell literal', claims: ['host:tabGroups'] },
+  { key: 'ext-tabs.js:register', why: 'the onZoomChange registration loop reads getZoomLevel, which the shell answers through its ZoomManager shim (Phase 32 plan 09)', claims: ['host:ZoomManager'] },
   { key: 'ext-tabs-base.js:addListener#3', why: 'progress listener registration is a shell member', claims: ['host:addTabsProgressListener'] },
   { key: 'ext-tabs-base.js:removeListener', why: 'progress listener removal is a shell member', claims: ['host:removeTabsProgressListener'] },
   { key: 'ext-tabs-base.js:addOpenListener', why: 'design: the tracker own deferred admission of incomplete windows', claims: ['admits'] },
@@ -346,6 +347,22 @@ function admitsHolds(lines, idx) {
   return null;
 }
 
+// Phase 32 plan 09: a name that is not a window.gBrowser member resolves to its win.<Name> = { shim literal in the boundary file.
+// The claim holds when that shim implements every member the site's file reads on the name (ZoomManager for ext-tabs.js).
+function shimHolds(ctx, lines, name) {
+  const shim = ctx.shimLiteral(name);
+  if (!shim.members) return `${name} is not implemented on the shell literal, and no win.${name} = { shim literal parsed (${shim.reason})`;
+  const read = new Set();
+  const re = new RegExp(`(?<![\\w$])${name}\\s*\\??\\.\\s*([A-Za-z_$][\\w$]*)`, 'g');
+  for (const line of lines) {
+    if (isCommentLine(line.trim())) continue;
+    for (const m of line.matchAll(re)) read.add(m[1]);
+  }
+  if (read.size === 0) return `${name} is not implemented on the shell literal, and the site's file reads no member of it`;
+  const missing = [...read].filter(x => !shim.members.has(x));
+  return missing.length ? `win.${name} = { does not implement ${missing.join(', ')}, which the site's file reads` : null;
+}
+
 function claimError(ctx, file, claim, lines, idx) {
   if (claim === 'admits') return admitsHolds(lines, idx);
   let m;
@@ -354,7 +371,7 @@ function claimError(ctx, file, claim, lines, idx) {
   if ((m = /^host:([\w$]+)$/.exec(claim))) {
     const r = ctx.implemented();
     if (!r.members) return `the shell literal did not parse (${r.reason})`;
-    return r.members.has(m[1]) ? null : `${m[1]} is not implemented on the shell literal`;
+    return r.members.has(m[1]) ? null : shimHolds(ctx, lines, m[1]);
   }
   return `unknown claim form ${claim}`;
 }
@@ -387,12 +404,24 @@ function makeCtx(opts) {
     }
     return impl;
   };
+  // Phase 32 plan 09: a win.<Name> = { shim literal in the boundary file, parsed by the stand-in gate's literal parser.
+  const shimLiteral = name => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-tab-host-scope-shim-'));
+    const f = join(dir, 'PowerBrowserAPI.sys.mjs');
+    try {
+      writeFileSync(f, text(API_REL));
+      return deriveZoomShimImplemented(f, name);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
   return {
     patchText,
     pristine,
     postOf,
     text,
     implemented,
+    shimLiteral,
     scope: () => opts.scopeFiles ?? scopeFiles(),
     reasons: () => opts.reasons ?? REASONED,
   };
@@ -904,6 +933,14 @@ function selfTest() {
     if (landed('messagemanagergroup set from powerbrowser.js', text !== jsRaw)) {
       const res = checkAll({ texts: new Map([[js, text]]) });
       expect('messagemanagergroup set from powerbrowser.js', has(res, f => f.family === 'messagemanagergroup' && f.kind === 'WRITE SITE' && f.text.includes('powerbrowser.js')), 1, 'WRITE SITE naming powerbrowser.js');
+    }
+  }
+  // Phase 32 plan 09: a win.ZoomManager literal without getZoomForBrowser fails the host:ZoomManager claim.
+  {
+    const text = apiRaw.replace('getZoomForBrowser(browser) {', 'zzzNoGetZoomForBrowser(browser) {');
+    if (landed('ZoomManager literal without getZoomForBrowser', text !== apiRaw)) {
+      const res = checkAll({ texts: new Map([[API_REL, text]]) });
+      expect('ZoomManager literal without getZoomForBrowser', has(res, f => f.family === 'consumers' && f.kind === 'CLAIM FAILED' && f.text.includes('host:ZoomManager')), 1, 'CLAIM FAILED naming host:ZoomManager');
     }
   }
   // selection hooks (WR-03): each caller removed on its own goes red.
