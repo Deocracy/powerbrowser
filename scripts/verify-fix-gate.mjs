@@ -171,6 +171,18 @@ function parseDiff(text) {
     return { files, touched: [...touched].sort(), errors };
 }
 
+// Stage 1 over a path set: the deny globs, then the registry-named files.
+function pathFailures(paths, deny, registry) {
+    const out = [];
+    const denyRes = deny.map(g => [g, globToRe(g)]);
+    for (const p of paths) {
+        const hit = denyRes.find(([, re]) => re.test(p));
+        if (hit) out.push(`[path] ${p} matches the deny entry '${hit[0]}' in ${DENY_REL}, which the fixer may not change. Next step: drop that change from the fix; deny entries change only by a human owner.`);
+        else if (registry.has(p)) out.push(`[path] ${p} is named by a scripts/verify-platform.sh registry row, which the fixer may not change. Next step: drop that change from the fix; gate and row files change only by a human owner.`);
+    }
+    return out;
+}
+
 // The in-memory stages. Real stages run only in the CLI path, after these pass.
 function runChecks(root, overrides = {}) {
     const failures = [];
@@ -201,12 +213,7 @@ function runChecks(root, overrides = {}) {
     const touched = parsed.touched;
 
     // 1. path
-    const denyRes = deny.map(g => [g, globToRe(g)]);
-    for (const p of touched) {
-        const hit = denyRes.find(([, re]) => re.test(p));
-        if (hit) fail('path', `${p} matches the deny entry '${hit[0]}' in ${DENY_REL}, which the fixer may not change. Next step: drop that change from the fix; deny entries change only by a human owner.`);
-        else if (registry.has(p)) fail('path', `${p} is named by a scripts/verify-platform.sh registry row, which the fixer may not change. Next step: drop that change from the fix; gate and row files change only by a human owner.`);
-    }
+    failures.push(...pathFailures(touched, deny, registry));
     if (failures.length > 0) return done({ touched });
 
     // 2. apply (structural, in memory)
@@ -299,6 +306,19 @@ function runRealStages(diffText, tag, touched) {
             return failures;
         }
         run('git', ['add', '-A'], wt);
+        // Stage 1 again over the paths git itself changed: the header parser above is a
+        // fast proxy, and a header it misreads (quoted, odd spacing) must not slip past the deny list.
+        r = run('git', ['diff', '--cached', '--name-only', '-z', '--no-renames', 'HEAD'], wt);
+        const applied = r.status === 0 ? r.stdout.split('\0').filter(Boolean) : null;
+        let deny = null;
+        try { deny = JSON.parse(readText(REPO_ROOT, DENY_REL)).paths; } catch { /* named below */ }
+        const registry = registryFiles(readText(REPO_ROOT, PLATFORM_REL));
+        if (applied === null || !Array.isArray(deny) || registry === null) {
+            failures.push(`[path] the applied change set, ${DENY_REL} or the registry could not be read, so the applied paths are unchecked. Next step: rerun the gate in an intact checkout.`);
+            return failures;
+        }
+        failures.push(...pathFailures(applied, deny, registry));
+        if (failures.length > 0) return failures;
         // Git-ignored, machine-local inputs the real stages read. Linked after the
         // staging above, since a link to a directory would not match the ignore rules.
         // generated/ is copied, because its generator writes into it and a link would
@@ -411,8 +431,9 @@ function selfTest() {
         }
         plants.push([`deny entry '${g}'`, { diff: diffOf(p, ['+planted line']) }, [p]]);
     }
+    // With scripts/** denied every registry-named file is already a deny hit; the registry plant runs only if one is not.
     const regPath = [...registry].find(p => !deny.some(g => globToRe(g).test(p)));
-    plants.push(['registry-row-named file', { diff: diffOf(regPath, ['+planted line']) }, [regPath, 'registry row']]);
+    if (regPath !== undefined) plants.push(['registry-row-named file', { diff: diffOf(regPath, ['+planted line']) }, [regPath, 'registry row']]);
     plants.push(['hand-edited patch hunk', { diff: diffOf('patches/020-planted.patch', ['-+old payload', '++new payload']) }, ['patches/020-planted.patch', 'regenerate-patches --check']]);
     plants.push(['vacuous diff (no file body changes)', { diff: diffOf('docs/fix-gate-vacuous.md', [], { vacuous: true }) }, ['[non-vacuity]']]);
     plants.push(['patch adds a compiled-file target', { diff: diffOf('patches/021-planted.patch', ['+index 1234567890..abcdef0123', '++++ b/powerbrowser/planted.cpp']) }, ['[check-patch-surface]', 'powerbrowser/planted.cpp']]);

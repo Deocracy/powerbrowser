@@ -5,6 +5,7 @@
     ".claude/**",
     "CLAUDE.md",
     "scripts/verify-platform.sh",
+    "scripts/**",
     "patches/030-*",
     "powerbrowser/packaging/mar/**",
     "brand/mar-*.der",
@@ -15,5 +16,5 @@
     "toolchain-baseline.txt",
     "flake.lock"
   ],
-  "notes": "Plus every file a verify-platform.sh registry row names, derived by parsing the registry at gate time (never hand-kept). Entries are path globs matched against the unified diff's ---/+++ paths."
+  "notes": "Plus every file a verify-platform.sh registry row names, derived by parsing the registry at gate time (never hand-kept). scripts/** goes beyond the FIX-11 list: the real gate runs the checks from the patched worktree, so any helper a check imports or sources is gate code. Entries are path globs matched against the diff's paths and, in the real run, against the paths git reports the applied diff changed."
 }
