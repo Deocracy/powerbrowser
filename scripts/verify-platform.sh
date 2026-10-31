@@ -4821,6 +4821,13 @@ run_own_checks() {
     # not production coverage. Honestly --quick: pure functions over in-memory fixtures; no network,
     # no gh, no build. It writes nothing.
     "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
+    # NEW (Phase 52, FIX-07/FIX-11): fix-gate-self-test serves a green control diff, then one
+    # planted diff per .github/fix-gate-deny.json entry (the plant list read from the deny file
+    # itself), a registry-named file, a hand-edited patch hunk, a vacuous diff, a compiled-file
+    # patch target, a brand token and a Theia core path; each rejected naming its stage and path.
+    # Honestly --quick: in-memory diffs through the gate's own stages; no build, browser, display
+    # or network, and it writes nothing. The real gate (--diff) runs the full chain in a worktree.
+    "fix-gate-self-test|node $REPO_ROOT/scripts/verify-fix-gate.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
