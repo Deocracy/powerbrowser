@@ -56,6 +56,8 @@ const SCHEMA_REL = 'worker/schema.sql';
 const WRANGLER_REL = 'worker/wrangler.toml';
 const PRIVACY_REL = 'website-staging/privacy.html';
 const ENRICH_REL = 'theia/extensions/telemetry/src/browser/telemetry-enrichment.ts';
+const REPORT_REL = 'theia/extensions/telemetry/src/browser/telemetry-error-report.ts';
+const SENDER_REL = 'theia/extensions/telemetry/src/browser/telemetry-sender.ts';
 const WORKER_DIR_REL = 'worker';
 const PLACEHOLDER = 'REPLACE-WITH-OWNER-D1-ID';
 const FIXED_NOW = Date.UTC(2026, 9, 31, 12, 0, 0);
@@ -82,6 +84,9 @@ const RULE = Object.freeze({
     synthetic: 'synthetic-marked event in the maintainer query',
     retention: 'retention window',
     admitted: 'admitted set equals the producer',
+    contract: 'producer-to-Worker contract',
+    flat: 'old flat event shape',
+    usage: 'usage event skipped',
     schemaColumn: 'schema declares every column',
     noRoutes: 'no routes key',
     credential: 'credential-shaped assignment in worker/',
@@ -174,11 +179,16 @@ function freshState(nowMs = FIXED_NOW) {
     return { nowMs, throttle: { acceptedAt: [] } };
 }
 
+/** One event in the sender's envelope: {kind, name, data, at}. */
+function errorEvent(data, extra = {}) {
+    return { kind: 'error', name: 'frontend.uncaught-error', data, at: 1, ...extra };
+}
+
 const GOOD_EVENTS = {
     events: [
-        { type: 'TypeError', source: 'bundle.js', line: 12, column: 34, version: '153.5.1', buildID: 'v153.5.1-1', os: 'linux' },
-        { type: 'RangeError', source: 'other.js', line: 3, column: 4, version: '153.5.1', buildID: 'v153.5.1-1', os: 'windows' },
-        { type: 'TypeError', source: 'probe.js', line: 1, column: 1, version: '153.5.1', buildID: 'v153.5.1-1', os: 'unknown', synthetic: true },
+        errorEvent({ type: 'TypeError', source: 'bundle.js', line: 12, column: 34, version: '153.5.1', buildID: 'v153.5.1-1', os: 'linux' }),
+        errorEvent({ type: 'RangeError', source: 'other.js', line: 3, column: 4, version: '153.5.1', buildID: 'v153.5.1-1', os: 'windows' }, { name: 'frontend.unhandled-rejection' }),
+        errorEvent({ type: 'TypeError', source: 'probe.js', line: 1, column: 1, version: '153.5.1', buildID: 'v153.5.1-1', os: 'unknown' }, { synthetic: true }),
     ],
 };
 
@@ -292,17 +302,30 @@ async function runBehaviour(root, worker, secret) {
     await expectRejected(RULE.contentType, post(worker.EVENTS_PATH, good, { 'content-type': 'text/plain' }), { status: 400, body: 'Discarded: malformed_body' });
     await expectRejected(RULE.unparseable, post(worker.EVENTS_PATH, '{not json'), { status: 400, body: 'Discarded: malformed_body' });
     await expectRejected(RULE.nonObjectTop, post(worker.EVENTS_PATH, '[1,2]'), { status: 400, body: 'Discarded: malformed_body' });
-    await expectRejected(RULE.overCapBody, post(worker.EVENTS_PATH, { events: [{ type: 'x'.repeat(worker.MAX_BODY_BYTES) }] }), { status: 413, body: 'Discarded: oversized_body' });
-    await expectRejected(RULE.overCapBatch, post(worker.EVENTS_PATH, { events: Array.from({ length: worker.MAX_EVENTS + 1 }, () => ({ type: 'T' })) }), { status: 400, body: 'Discarded: malformed_batch' });
+    await expectRejected(RULE.overCapBody, post(worker.EVENTS_PATH, { events: [errorEvent({ type: 'x'.repeat(worker.MAX_BODY_BYTES) })] }), { status: 413, body: 'Discarded: oversized_body' });
+    await expectRejected(RULE.overCapBatch, post(worker.EVENTS_PATH, { events: Array.from({ length: worker.MAX_EVENTS + 1 }, () => errorEvent({ type: 'T' })) }), { status: 400, body: 'Discarded: malformed_batch' });
     await expectRejected(RULE.nonObjectEvent, post(worker.EVENTS_PATH, { events: ['not an object'] }), { status: 400, body: 'Discarded: malformed_body' });
+
+    // The old flat shape (no envelope) is rejected whole, and a usage event is skipped, not stored.
+    await expectRejected(RULE.flat, post(worker.EVENTS_PATH, { events: [{ type: 'TypeError', source: 'a.js', line: 1 }] }), { status: 400, body: 'Discarded: malformed_event' });
+    await expectRejected(RULE.flat, post(worker.EVENTS_PATH, { events: [errorEvent({ type: 'T' }, { kind: 'other' })] }), { status: 400, body: 'Discarded: malformed_event' });
+    await expectRejected(RULE.flat, post(worker.EVENTS_PATH, { events: [errorEvent('not an object')] }), { status: 400, body: 'Discarded: malformed_event' });
+    {
+        const stub = makeStub();
+        const mixed = { events: [{ kind: 'usage', name: 'ui.opened', data: { path: '/home/alice/x' }, at: 1 }, errorEvent({ type: 'T' })] };
+        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, mixed), env(stub), freshState());
+        if (verdict.status !== 200 || verdict.body !== 'ok: stored 1' || stub.events.length !== 1 || stub.events[0].name !== 'frontend.uncaught-error') {
+            failures.push(`${RULE.usage}: a batch of one usage and one error event answered ${verdict.status} ${JSON.stringify(verdict.body)} and stored ${JSON.stringify(stub.events.map(r => r.name))}, want 200 "ok: stored 1" with only the error event. Next step: skip kind usage, store kind error.`);
+        }
+    }
 
     // Extra property: accepted, and no property outside the admitted set reaches the row.
     {
-        const event = { type: 'T', source: 's.js', line: 1, column: 2, version: 'v', buildID: 'b', os: 'linux', message: 'page text', stack: 'at f', url: 'https://x.invalid/' };
+        const event = errorEvent({ type: 'T', source: 's.js', line: 1, column: 2, version: '1.2', buildID: 'v1.2-1', os: 'linux', message: 'page text', stack: 'at f', url: 'https://x.invalid/' }, { message: 'page text', url: 'https://x.invalid/' });
         const stub = makeStub();
         const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, { events: [event] }), env(stub), freshState());
         if (verdict.status !== 200) failures.push(`${RULE.extraProp}: an event with extra properties answered ${verdict.status}, not 200. Next step: drop unadmitted properties instead of rejecting the batch.`);
-        const leaked = Object.keys(worker.admitEvent(event)).filter(k => !worker.EVENT_COLUMNS.includes(k));
+        const leaked = Object.keys(worker.admitEvent(event) ?? {}).filter(k => !worker.EVENT_COLUMNS.includes(k));
         if (leaked.length > 0) failures.push(`${RULE.extraProp}: the admitted row carries ${JSON.stringify(leaked)}, outside the stored columns. Next step: build the row from ADMITTED_KEYS only.`);
         const stored = Object.keys(stub.events[0] ?? {}).filter(k => k !== 'id' && !worker.EVENT_COLUMNS.includes(k));
         if (stored.length > 0) failures.push(`${RULE.extraProp}: the stored row carries ${JSON.stringify(stored)}. Next step: write only the admitted columns.`);
@@ -311,9 +334,9 @@ async function runBehaviour(root, worker, secret) {
     // Over-length string: stored truncated to MAX_STRING_CHARS.
     {
         const stub = makeStub();
-        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, { events: [{ type: 'x'.repeat(300) }] }), env(stub), freshState());
-        if (verdict.status !== 200) failures.push(`${RULE.overLength}: a 300-character type answered ${verdict.status}, not 200 with truncation. Next step: truncate, do not reject.`);
-        else if (stub.events[0].type.length !== worker.MAX_STRING_CHARS) failures.push(`${RULE.overLength}: the stored type is ${stub.events[0].type.length} characters, not ${worker.MAX_STRING_CHARS}. Next step: truncate every stored string to MAX_STRING_CHARS.`);
+        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, { events: [errorEvent({}, { name: 'x'.repeat(300) })] }), env(stub), freshState());
+        if (verdict.status !== 200) failures.push(`${RULE.overLength}: a 300-character name answered ${verdict.status}, not 200 with truncation. Next step: truncate, do not reject.`);
+        else if (stub.events[0].name.length !== worker.MAX_STRING_CHARS) failures.push(`${RULE.overLength}: the stored name is ${stub.events[0].name.length} characters, not ${worker.MAX_STRING_CHARS}. Next step: truncate every stored string to MAX_STRING_CHARS.`);
     }
 
     // Over-rate sequence: MAX POSTs accepted, the next answers the discard and stores nothing.
@@ -322,7 +345,7 @@ async function runBehaviour(root, worker, secret) {
     } else {
         const stub = makeStub();
         const state = freshState();
-        const one = post(worker.EVENTS_PATH, { events: [{ type: 'T' }] });
+        const one = post(worker.EVENTS_PATH, { events: [errorEvent({ type: 'T' })] });
         for (let i = 0; i < worker.THROTTLE_MAX_POSTS; i += 1) {
             const verdict = await worker.handleEvents(one, env(stub), state);
             if (verdict.status !== 200) {
@@ -354,11 +377,11 @@ async function runBehaviour(root, worker, secret) {
     // Retention: rows older than RETENTION_DAYS are deleted from both tables, newer rows kept.
     {
         const stub = makeStub();
-        await worker.handleEvents(post(worker.EVENTS_PATH, { events: [{ type: 'old' }] }), env(stub), freshState(FIXED_NOW - (worker.RETENTION_DAYS + 1) * DAY));
-        await worker.handleEvents(post(worker.EVENTS_PATH, { events: [{ type: 'new' }] }), env(stub), freshState(FIXED_NOW - DAY));
+        await worker.handleEvents(post(worker.EVENTS_PATH, { events: [errorEvent({}, { name: 'old' })] }), env(stub), freshState(FIXED_NOW - (worker.RETENTION_DAYS + 1) * DAY));
+        await worker.handleEvents(post(worker.EVENTS_PATH, { events: [errorEvent({}, { name: 'new' })] }), env(stub), freshState(FIXED_NOW - DAY));
         await worker.handleDownloadCounts(post(worker.DL_PATH, dlBody, authed), env(stub), freshState(FIXED_NOW - (worker.RETENTION_DAYS + 1) * DAY));
         await worker.runRetention(stub, FIXED_NOW);
-        const kept = stub.events.map(r => r.type);
+        const kept = stub.events.map(r => r.name);
         if (JSON.stringify(kept) !== JSON.stringify(['new'])) failures.push(`${RULE.retention}: after the scheduled delete the events are ${JSON.stringify(kept)}, want ["new"]. Next step: delete rows older than RETENTION_DAYS from events.`);
         if (stub.counts.size !== 0) failures.push(`${RULE.retention}: a download count older than RETENTION_DAYS survived the scheduled delete. Next step: delete from download_counts too.`);
     }
@@ -366,10 +389,65 @@ async function runBehaviour(root, worker, secret) {
     return failures;
 }
 
+// The producer's real output, driven into the Worker. The reporter and the sender are imported from
+// `root` (never hand-written), a window error and an unhandled rejection go through them, and each
+// POST body the sender would send is fed to handleEvents against a stub D1. Every stored row must be
+// fully populated: a producer and a Worker that disagree on the envelope store all-null rows, which
+// a hand-written fixture in the Worker's own shape can never show.
+const CONTRACT_CONTEXT = Object.freeze({ version: '153.5.1', buildID: 'v153.5.1-1' });
+
+async function runContract(root, worker, secret) {
+    const failures = [];
+    let reporterModule;
+    let senderModule;
+    try {
+        reporterModule = await loadModule(root, REPORT_REL);
+        senderModule = await loadModule(root, SENDER_REL);
+    } catch (err) {
+        return [`${RULE.contract}: the producer modules do not load under plain node (${err.message}). Next step: keep ${REPORT_REL} and ${SENDER_REL} importable, then re-run this check.`];
+    }
+    const bodies = [];
+    const sender = new senderModule.PowerBrowserTelemetrySender({
+        endpoint: 'https://contract.invalid/events',
+        getLevel: () => 'error',
+        fetchFn: (url, init) => { bodies.push(init.body); return Promise.resolve({ ok: true }); },
+        flushIntervalMs: 0,
+    });
+    const reporter = new reporterModule.ErrorReporter({ sender, logError: (name, data) => sender.sendErrorData(name, data) }, CONTRACT_CONTEXT);
+    reporter.onError({ error: new TypeError('x'), filename: 'http://127.0.0.1:3000/lib/frontend/bundle.js', lineno: 12, colno: 34 });
+    reporter.onRejection({ reason: new RangeError('y') });
+    await sender.flush();
+    sender.dispose();
+    if (bodies.length === 0) return [`${RULE.contract}: the sender posted nothing for two reports at level error. Next step: restore the sender's flush path.`];
+    const stub = makeStub();
+    for (const body of bodies) {
+        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, body), { DB: stub, DOWNLOAD_COUNT_SECRET: secret }, freshState());
+        if (verdict.status !== 200) failures.push(`${RULE.contract}: the real sender's body answered ${verdict.status} ${JSON.stringify(verdict.body)}, not 200. Next step: make ${WORKER_REL} accept the envelope ${SENDER_REL} sends.`);
+    }
+    const byName = new Map(stub.events.map(r => [r.name, r]));
+    const want = [
+        ['frontend.uncaught-error', { type: 'TypeError', basename: 'bundle.js', line: 12, column: 34, version: CONTRACT_CONTEXT.version, buildid: CONTRACT_CONTEXT.buildID }],
+        ['frontend.unhandled-rejection', { type: 'RangeError', version: CONTRACT_CONTEXT.version, buildid: CONTRACT_CONTEXT.buildID }],
+    ];
+    for (const [name, fields] of want) {
+        const row = byName.get(name);
+        if (row === undefined) {
+            failures.push(`${RULE.contract}: no stored row has name ${JSON.stringify(name)} (stored names: ${JSON.stringify([...byName.keys()])}). Next step: store the event name from the envelope.`);
+            continue;
+        }
+        for (const [column, value] of Object.entries(fields)) {
+            if (row[column] !== value) failures.push(`${RULE.contract}: the stored ${name} row has ${column} = ${JSON.stringify(row[column])}, but the producer sent ${JSON.stringify(value)}. Next step: read the sender's {kind, name, data, at} envelope in ${WORKER_REL}.`);
+        }
+        if (!['windows', 'macos', 'linux', 'unknown'].includes(row.os)) failures.push(`${RULE.contract}: the stored ${name} row has os = ${JSON.stringify(row.os)}, not one of the four buckets. Next step: store data.os.`);
+    }
+    return failures;
+}
+
 async function runAll(root, secret) {
     const worker = await loadModule(root, WORKER_REL);
     const failures = await runStatic(root, worker);
     failures.push(...await runBehaviour(root, worker, secret));
+    failures.push(...await runContract(root, worker, secret));
     return failures;
 }
 
@@ -396,7 +474,7 @@ async function main() {
 
 // Stages a copy of every file the gate reads, so a plant mutates one copy and leaves the rest as written.
 function stage(dir) {
-    for (const rel of [WORKER_REL, SCHEMA_REL, WRANGLER_REL, PRIVACY_REL, ENRICH_REL]) {
+    for (const rel of [WORKER_REL, SCHEMA_REL, WRANGLER_REL, PRIVACY_REL, ENRICH_REL, REPORT_REL, SENDER_REL]) {
         mkdirSync(dirname(join(dir, rel)), { recursive: true });
         copyFileSync(join(REPO_ROOT, rel), join(dir, rel));
     }
@@ -420,6 +498,11 @@ const PLANTS = [
     { rule: RULE.duplicateAssetDay, rel: WORKER_REL, find: '"download_count" = excluded."download_count"', replace: '"download_count" = "download_count"' },
     { rule: RULE.synthetic, rel: WORKER_REL, find: `const SELECT_MAINTAINER = 'SELECT * FROM events WHERE "synthetic" = 0 ORDER BY "id"';`, replace: `const SELECT_MAINTAINER = 'SELECT * FROM events ORDER BY "id"';` },
     { rule: RULE.retention, rel: WORKER_REL, find: 'export const RETENTION_DAYS = 30;', replace: 'export const RETENTION_DAYS = 3650;' },
+    { rule: RULE.contract, rel: WORKER_REL, find: '    const data = event.data ?? {};', replace: '    const data = event;' },
+    { rule: RULE.flat, rel: WORKER_REL, find: "    if (event.kind !== 'error') return event.kind === 'usage' ? null : undefined;\n", replace: '' },
+    { rule: RULE.usage, rel: WORKER_REL, find: "    if (event.kind !== 'error') return event.kind === 'usage' ? null : undefined;\n", replace: '' },
+    { rule: RULE.contract, rel: SENDER_REL, find: 'this.queue.push({ kind, name, data, at: this.nowFn() });', replace: 'this.queue.push({ kind, name, ...data, at: this.nowFn() });' },
+    { rule: RULE.contract, rel: SENDER_REL, find: 'this.queue.push({ kind, name, data, at: this.nowFn() });', replace: 'this.queue.push({ kind, name, payload: data, at: this.nowFn() });' },
     { rule: RULE.admitted, rel: WORKER_REL, find: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);", replace: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os', 'message']);" },
     { rule: RULE.schemaColumn, rel: SCHEMA_REL, find: '  "column" INTEGER,\n', replace: '' },
     { rule: RULE.noRoutes, rel: WRANGLER_REL, find: 'compatibility_date = "2026-10-31"', replace: 'compatibility_date = "2026-10-31"\nroutes = ["events.powerbrowser.org/events"]' },

@@ -9,6 +9,7 @@
 CREATE TABLE events (
   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
   "received_at" INTEGER NOT NULL,
+  "name" TEXT,
   "type" TEXT,
   "basename" TEXT,
   "line" INTEGER,

@@ -10,6 +10,12 @@
 // source of truth. scripts/verify-events-worker.mjs imports that module and requires equality, so
 // the two cannot drift. Every other property a client sends is dropped, never stored.
 //
+// THE WIRE ENVELOPE IS THE SENDER'S. Each event is {kind, name, data: {<admitted keys>}, at}
+// (telemetry-sender.ts). The Worker reads name and data from that envelope; kind must be 'error'
+// (a 'usage' event is not collected and is skipped), and an error event whose envelope does not
+// match answers 400 malformed_event for the whole batch. The gate drives the real reporter and
+// sender into handleEvents, so a change to either side of the envelope goes red.
+//
 // CREDENTIALLESS BY CONSTRUCTION. This directory holds no secret, token, key or client identifier.
 // The one shared secret is read at request time from env.DOWNLOAD_COUNT_SECRET (a Worker secret the
 // owner sets), compared in constant time, and never logged or stored. The Cloudflare token that
@@ -28,8 +34,8 @@
 // wrangler.toml is the per-IP budget that holds, upgrade to a Durable Object counter if it does not.
 //
 // WIRE VOCABULARY. 200 accepted: "ok: stored <n>" (events) or "ok: <asset>" (download counts).
-// 200 discarded: "Discarded: throttled_in_worker_cap". 400: "Discarded: malformed_body" or
-// "Discarded: malformed_batch". 413: "Discarded: oversized_body". 500: "Discarded: store_unavailable".
+// 200 discarded: "Discarded: throttled_in_worker_cap". 400: "Discarded: malformed_body",
+// "Discarded: malformed_batch" or "Discarded: malformed_event". 413: "Discarded: oversized_body". 500: "Discarded: store_unavailable".
 // 401 and 404 answer an empty body.
 //
 // ZERO-DEPENDENCY. Request, Response, URL, TextEncoder and the D1 binding only; no import, no socket
@@ -43,6 +49,7 @@ export const MAX_EVENTS = 100;
 export const MAX_STRING_CHARS = 256;
 export const REASON_MALFORMED = 'malformed_body';
 export const REASON_BATCH = 'malformed_batch';
+export const REASON_EVENT = 'malformed_event';
 export const REASON_OVERSIZED = 'oversized_body';
 export const REASON_THROTTLED = 'throttled_in_worker_cap';
 export const REASON_STORE = 'store_unavailable';
@@ -56,7 +63,7 @@ export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 
 const COLUMN_FOR = Object.freeze({ type: 'type', source: 'basename', line: 'line', column: 'column', version: 'version', buildID: 'buildid', os: 'os' });
 const STRING_KEYS = Object.freeze(['type', 'source', 'version', 'buildID', 'os']);
 /** The events table, in insert order. received_at is server time; synthetic is the control flag. */
-export const EVENT_COLUMNS = Object.freeze(['received_at', 'type', 'basename', 'line', 'column', 'version', 'buildid', 'os', 'synthetic']);
+export const EVENT_COLUMNS = Object.freeze(['received_at', 'name', 'type', 'basename', 'line', 'column', 'version', 'buildid', 'os', 'synthetic']);
 export const DOWNLOAD_COLUMNS = Object.freeze(['asset', 'tag', 'day', 'download_count', 'received_at']);
 
 const INSERT_EVENT = `INSERT INTO events (${EVENT_COLUMNS.map(c => `"${c}"`).join(', ')}) VALUES (${EVENT_COLUMNS.map(() => '?').join(', ')})`;
@@ -128,14 +135,20 @@ export function throttled(throttle, nowMs) {
 }
 
 /**
- * Reduce one client event to the stored row. Only ADMITTED_KEYS are read; a string key that is not
- * a string and a number key that is not finite are omitted. synthetic is a control flag read as a
- * boolean, never stored as payload text.
+ * Reduce one client event, in the sender's envelope {kind, name, data, at}, to the stored row. Only
+ * name and the ADMITTED_KEYS of data are read; a string key that is not a string and a number key
+ * that is not finite are omitted. synthetic is a control flag read as a boolean, never stored as
+ * payload text. Returns null for an event that is not an error report (skipped, not stored) and
+ * undefined for an error event whose envelope does not match (the batch is rejected).
  */
 export function admitEvent(event) {
-    const row = {};
+    if (event.kind !== 'error') return event.kind === 'usage' ? null : undefined;
+    if (typeof event.name !== 'string' || event.name === '') return undefined;
+    if (event.data !== undefined && !isPlainObject(event.data)) return undefined;
+    const data = event.data ?? {};
+    const row = { name: truncate(event.name) };
     for (const wire of ADMITTED_KEYS) {
-        const value = event[wire];
+        const value = data[wire];
         if (STRING_KEYS.includes(wire)) {
             if (typeof value === 'string') row[COLUMN_FOR[wire]] = truncate(value);
         } else if (typeof value === 'number' && Number.isFinite(value)) {
@@ -167,7 +180,9 @@ export async function handleEvents(shape, env, state) {
     if (!Array.isArray(top.events) || top.events.length > MAX_EVENTS) return discard(400, REASON_BATCH);
     if (!top.events.every(isPlainObject)) return discard(400, REASON_MALFORMED);
     if (throttled(state.throttle, state.nowMs)) return discard(200, REASON_THROTTLED);
-    const rows = top.events.map(admitEvent);
+    const admitted = top.events.map(admitEvent);
+    if (admitted.includes(undefined)) return discard(400, REASON_EVENT);
+    const rows = admitted.filter(row => row !== null);
     try {
         for (const row of rows) {
             await env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs)).run();
