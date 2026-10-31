@@ -746,14 +746,18 @@ jobs:
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
       # The pinned Claude Code CLI: the committed lockfile fixes the version and its integrity hashes, and npm ci
-      # installs exactly that tree. The banner is checked before the action runs the binary.
+      # installs exactly that tree with every package script off. The package's own install.cjs is then run by name,
+      # because it is what replaces the bin/claude.exe stub with the platform binary (CR-01: without it the CLI prints
+      # "native binary not installed"). Running one named script keeps scripts off for every other package. The --version
+      # smoke check below fails the job when the binary is a stub or the wrong version.
       - name: Install the pinned Claude Code CLI
         env:
           CLAUDE_CODE_VERSION: "2.1.314"
         run: |
           set -euo pipefail
-          (cd "$GITHUB_WORKSPACE/.github/fixer/claude-cli" && npm ci --ignore-scripts --no-audit --no-fund)
-          BANNER=$("$GITHUB_WORKSPACE/.github/fixer/claude-cli/node_modules/.bin/claude" --version)
+          CLI="$GITHUB_WORKSPACE/.github/fixer/claude-cli"
+          (cd "$CLI" && npm ci --ignore-scripts --no-audit --no-fund && node node_modules/@anthropic-ai/claude-code/install.cjs)
+          BANNER=$("$CLI/node_modules/.bin/claude" --version 2>&1) || { echo "release-train: FAIL -- the installed Claude Code did not run (--version exited non-zero: ${BANNER}). Next step: do not run the fixer; check the pinned install." >&2; exit 1; }
           case "$BANNER" in
             *"$CLAUDE_CODE_VERSION"*) echo "release-train: NOTE -- Claude Code $CLAUDE_CODE_VERSION is installed" ;;
             *) echo "release-train: FAIL -- the installed Claude Code reports '$BANNER', not $CLAUDE_CODE_VERSION. Next step: do not run the fixer; re-pin the version." >&2; exit 1 ;;
