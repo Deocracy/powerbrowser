@@ -114,3 +114,77 @@ the drift, so a failing check leaves the PR for the owner.
 **AUTO-02 is complete only after one real PR shows the `licensing` row green.** Until then the hook is
 unverified. A follow-up must add a `workflows`-row assertion for `RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS`
 when the job lands, so the variable cannot be dropped silently.
+
+## 51-03 items (TRAIN-04 supersede, chemspill ordering, sign guard)
+
+Written by the 51-03 executor. The pure supersede logic, the SUPERSEDED render, the chemspill
+ordering and the sign-guard fixtures are built and committed in `scripts/release-train.mjs`
+(44f59803). The items below need the owner or a live collector that does not exist, and were not
+done. Nothing was dispatched, cancelled, merged, pushed or applied.
+
+## 7. Sign-publish stale-approval exit: keep fail-closed, or change to exit 0 with a note (owner)
+
+**Blocked piece:** the plan's first step of `sign-publish` that exits 0 with a note when a newer
+Release exists, with every later step gated on its output.
+
+**Why not done:** `release.yml` already has two fail-closed stale-approval guards in `sign-publish`:
+`newer_guard` ("Refuse a stale approval", before the MAR channel gate) and `newer_guard_final` (directly
+before the bot token mint). Both call `scripts/release-key-newer.mjs`, the one comparator, and exit 1
+when the key is not newer than the latest published Release. Nothing is signed or published. The
+plan's premise "no newer-Release guard yet" was therefore false at execution. A new first step that
+exits 0 would not end the job in GitHub Actions: the later steps run unless each carries an `if:` on
+the new output, so an exit-0 step alone is a no-op. Changing the existing red outcome to a green note
+is a policy choice (red pages a run, green hides a stale approval), so it goes to the owner.
+
+**Options (owner picks one):**
+
+- (a) Keep fail-closed (recommended, the status quo): the two existing guards stand, and the
+  stale-approval race is closed by them plus supersede cancellation (item 8). Nothing is changed.
+- (b) Exit 0 with a note: add a first step that writes `proceed=false` and the step summary (both tags
+  named), and gate each of the 20 later `sign-publish` steps (21 steps in the job today) on `steps.<id>.outputs.proceed`,
+  including the `if: always()` scratch-database step. `verify-release-asset-set` (`newer_guard_final`
+  directly before the mint) and the `workflows` row must stay green under the new `if:` lines. Plan
+  wording says "strictly greater"; the existing guards refuse equal keys too, which is the correct
+  behaviour, so option (b) must keep the `>=` refusal.
+
+## 8. Pending-release cancel on SUPERSEDED: executor unwired (owner, and the Phase 43 live collector)
+
+**Blocked piece:** the `cancel-pending-and-link` action (`next(SUPERSEDED)`). `release-train.mjs` maps the
+state to the action name only. No workflow step executes a release-stage action, because the release-stage
+states have no live collector (`release-train.yml` header, "Not here yet"; Phase 43 BLOCKED item 3).
+
+**Why not done:** a live cancel is a write to a `release` environment deployment, and the plan forbids
+live cancels. It also needs the endpoint shape, which the plan asks the executor to probe with read-only
+`gh api` GETs at execution time. That probe is not run here because no collector can supply the old
+train's run ID and pending-deployment ID yet.
+
+**Owner steps when the collector is approved:**
+
+1. Probe the pending-deployment endpoints with read-only GETs against the real repository, then choose
+   between rejecting the pending `release` deployment and cancelling its run. Cancel only the old train's
+   run, never the new train's and never a `descriptor` deployment.
+2. Confirm the token scopes. The plan says the existing dispatch-release and maintenance scopes suffice
+   with no new token. Not verified against GitHub's current App permission map.
+3. Wire the executor in `release-train.yml` behind the existing dry-run gates, then add its row to the
+   `workflows` row check.
+
+## 9. Fixture gaps inherited from 43's WR-07: duplicate issue and fork-head wake (no plant)
+
+**Blocked pieces:** the plan's `supersede-duplicate-tracking-issue` and `supersede-fork-head-workflow-run`
+fixtures, and the inherited TRAIN-09 plants for a draft Release and a fork-head `workflow_run`.
+
+**Why not done:** `findExactlyOne` (duplicate tracking issue), `admitWakeRun` (fork-head wake) and
+`classifyRelease` (draft Release) are each marked UNWIRED, with no live caller. The Phase 43 review fix
+(WR-07) dropped their plants for that reason, and this plan follows it. The `workflow_run` trigger is held
+out in `release-train.yml` (Phase 43 BLOCKED item 1), so there is no fork-head wake to test. The
+fork-head guards in the YAML stay in place for when the owner re-adds the trigger.
+
+**Owner step:** when the tracking-issue writer and the `workflow_run` trigger are decided (Phase 43 BLOCKED
+items 1 and 3), wire these helpers and add their plants in the same change.
+
+## 10. Supersede facts collector: not built
+
+`derive()` now reads two new facts, `newerTag` (a newer validated ESR tag on the same major) and
+`chemspillOpen` (an open same-ESR revision train). No collector in `release-train.yml` sets them, because
+the facts source is the Phase 43 live collector (Phase 43 BLOCKED item 3). Until it exists, a live supersede cannot
+fire. The self-test covers the logic over fixtures only.
