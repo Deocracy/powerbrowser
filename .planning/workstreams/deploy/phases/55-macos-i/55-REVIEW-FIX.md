@@ -36,7 +36,7 @@ status: partial
 ## Verification
 
 - `bash -n powerbrowser/packaging/package-macos.sh`: pass.
-- `shellcheck`: see the final report line (not installed on the host; fetched through the locked nixpkgs when available).
+- `shellcheck` 0.11.0 (from the nixpkgs store; not installed on the host): no findings on `package-macos.sh`.
 - Scratch end-to-end runs of `package-macos.sh` with a stub `mach`, a stub `llvm-lipo`, fake Theia output and a fake pinned Node archive (the harness is in the session scratchpad, outside the repository):
   - CR-01: the HEAD script leaves `precomplete` at the bundle root and a stub in `Contents/Resources`. The fixed script lists 7 staged `theia/` entries in `Contents/Resources/precomplete` and leaves only `Contents` at the root.
   - CR-02: the node-file keys are rewritten to `<buildhost>`. A checkout path in an unrelated file still fails the run and names the file.
