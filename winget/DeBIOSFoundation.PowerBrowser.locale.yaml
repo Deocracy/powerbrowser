@@ -4,7 +4,7 @@
 PackageIdentifier: "DeBIOSFoundation.PowerBrowser"
 PackageVersion: "@RELEASE_VERSION@"
 PackageLocale: "en-US"
-Publisher: "DeBIOS Foundation"
+Publisher: "@PUBLISHER@"
 PublisherUrl: "https://powerbrowser.org"
 PackageName: "PowerBrowser"
 PackageUrl: "https://powerbrowser.org"

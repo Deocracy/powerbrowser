@@ -104,6 +104,7 @@ export function runChecks(root, overrides = {}) {
         '@RELEASE_REPO@': facts.repo,
         '@WINDOWS_INSTALLER_ASSET@': fixtureAsset,
         '@WINDOWS_INSTALLER_SHA256@': FIXTURE_HEX,
+        '@PUBLISHER@': config.product.vendor_display,
     };
     const pending = windowsPending(read(DOCS_REL));
 
@@ -175,6 +176,7 @@ export function runChecks(root, overrides = {}) {
     // --- the locale values derive from the manifest and the release home --------
     const locale = files[LOCALE_REL];
     if (locale.doc !== null) {
+        locale.doc = loadYaml().load(render(locale.text, values));
         const want = {
             Publisher: config.product.vendor_display,
             PublisherUrl: config.urls.homepage,
@@ -246,7 +248,7 @@ function selfTest() {
         },
         {
             name: 'locale publisher drifted from configuration.toml', expect: LOCALE_REL,
-            overrides: withText(LOCALE_REL, t => t.replace('Publisher: "DeBIOS Foundation"', 'Publisher: "DeBIOS Other"')),
+            overrides: withText(LOCALE_REL, t => t.replace('Publisher: "@PUBLISHER@"', 'Publisher: "DeBIOS Other"')),
         },
         {
             name: 'control: unmodified tree stays green', expect: null,
