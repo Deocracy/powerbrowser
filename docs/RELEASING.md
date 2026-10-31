@@ -808,6 +808,27 @@ exactly what the client treats as an upgrade.
 
 Hold the announcement and any package-manager submission until this drill is green.
 
+**Hop record (served: release).** The drill is the clean-room run in `docs/BUILD.md`
+("Clean-room drill for a published Release"). The owner pastes these fields back, and each
+one is what the release assertion set reads or what a reviewer audits:
+
+- `served`: `release`. The fork-server (`loopback`) record is a different proof.
+- `servedUrl` (the public descriptor, under `updates.powerbrowser.org`) and `servedMarUrl`
+  (`https://downloads.powerbrowser.org/<tag>/<asset>`, write-once). Any `github.com`,
+  `release-assets` or latest-download form is refused.
+- Resolver host lines: the `Resolving host [...]` set from `client-resolver.log`. It must name
+  both the update and the download host, and must name neither `github.com` nor
+  `release-assets.githubusercontent.com`, nor any `*.mozilla.org` or `*.mozilla.net` host.
+- `signmar -v` and `signmar -T` output, and the node:crypto check of
+  `scripts/verify-mar-signature.mjs` against `powerbrowser/packaging/mar/mar-primary.der`.
+- Attestation path taken: `bundle` (an offline `gh attestation verify --bundle`) or `host`
+  (a logged-in `gh attestation verify` on the host). Never a skip.
+- Version pair: N and N+1 with their buildIDs. Same appVersion with a distinct buildID is the
+  ratified scheme, not a relaxation: `updateIsAtLeastAsOldAs` (the client's check) refuses an
+  offer only when the versions compare equal **and** the buildIDs match, so a distinct buildID
+  is an upgrade to the client.
+- Evidence path: `.mozbuild/mar-hop/`, with `hop.json` at `served: "release"`.
+
 ## Release asset names
 
 The generation rule, stated once: the versioned form is
