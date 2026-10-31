@@ -473,8 +473,10 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
     if (pu.executionMode !== 'branch') {
         fail('licensing-hook', `executionMode = ${JSON.stringify(pu.executionMode)}`, 'executionMode must be branch: update runs the generator once per package, not once per branch');
     }
+    // absent (an override) names inputs to treat as missing, so a plant needs no scratch copy on disk.
+    const absent = overrides.absent ?? [];
     for (const f of [...FILE_FILTERS, ...LICENSING_SCRIPTS]) {
-        if (!existsSync(join(root, f))) {
+        if (absent.includes(f) || !existsSync(join(root, f))) {
             fail('licensing-inputs', f, `${f} is named by the licensing hook but is not in the tree`);
         }
     }
@@ -608,6 +610,9 @@ function selfTest() {
         { label: 'workflow path added to fileFilters', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.fileFilters.push('.github/workflows/verify.yml'); } },
         { label: 'hook executionMode update', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.executionMode = 'update'; } },
         { label: 'allowedPostUpgradeCommands set in the repository config', rule: 'allowed-post-upgrade', mutate: c => { c.allowedPostUpgradeCommands = ['^node scripts/generate\\.mjs --check$']; } },
+        { label: 'licensing notices file missing from the tree', rule: 'licensing-inputs', overrides: { absent: ['THIRD-PARTY-NOTICES.txt'] } },
+        { label: 'licensing generator missing from the tree', rule: 'licensing-inputs', overrides: { absent: ['scripts/generate-licensing.mjs'] } },
+        { label: 'generate check missing from the tree', rule: 'licensing-inputs', overrides: { absent: ['scripts/generate.mjs'] } },
         { label: 'config file missing', rule: 'config-file', overrides: { configText: null } },
         { label: 'config file unparsable', rule: 'config-parse', overrides: { configText: '{"automerge": false' } },
     ];
