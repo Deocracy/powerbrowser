@@ -40,6 +40,15 @@
       <source file="/var/lib/libvirt/images/pkg-win11.qcow2"/>
       <target dev="sda" bus="sata"/>
     </disk>
+    <!-- The read-only inputs ISO (setup.exe, the complete MAR, win-matrix-guest.ps1, win-matrix-schema.json; volume
+         label PBMATRIX). win-matrix-run.sh swaps the ISO in with virsh change-media after the snapshot revert, so the
+         path below is only the initial placeholder. The guest writes its own files under C:\pbmatrix on the disk above. -->
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="/var/lib/libvirt/images/pb-matrix-inputs.iso"/>
+      <target dev="sdb" bus="sata"/>
+      <readonly/>
+    </disk>
     <interface type="network">
       <source network="default"/>
       <model type="e1000e"/>

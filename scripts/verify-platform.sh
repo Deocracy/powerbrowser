@@ -5469,7 +5469,9 @@ run_own_checks() {
       # guest run writes, so it is red until the 54-04 checkpoint runs the matrix. An absent record is FAIL naming
       # that step, never a skip. Never called by a quick path.
       "win-matrix-record|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs"
-      # win-matrix-record-self-test runs the good fixture and each planted fault over mkdtemp fixtures only; hermetic.
+      # win-matrix-record-self-test builds its fixture with the real writer (scripts/matrix/win-matrix-record.py) from
+      # synthetic guest output and plants each fault (all-FAIL, a missing observation, a namespace mismatch, a drifted
+      # guest script) over mkdtemp fixtures only; hermetic.
       "win-matrix-record-self-test|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs --self-test"
     )
   fi
