@@ -40,6 +40,7 @@ jobs:
       contents: read
     outputs:
       build: ${{ steps.key_gate.outputs.build }}
+      sha: ${{ steps.sha_gate.outputs.sha }}
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
@@ -73,6 +74,7 @@ jobs:
               || { echo "::error::.github/workflows/ at $SHA differs from main; the bot App cannot create a Release for that target" >&2; exit 1; }
           fi
           echo "validated $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Decide whether the release key is newer than the latest Release (exit without building when not)
         id: key_gate
@@ -131,6 +133,19 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # The container-built signmar and its NSS libraries travel as their own artifact, so
+      # sign-publish runs the same signing tool the release container built, never Nix.
+      - name: Upload the container-built signmar and its libraries
+        if: steps.key_gate.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signing-tools
+          path: |
+            objdir-release/dist/bin/signmar
+            objdir-release/dist/bin/*.so*
+          if-no-files-found: error
+          retention-days: 1
+
   sign-publish:
     needs: build-linux
     if: needs.build-linux.outputs.build == 'true'
@@ -141,6 +156,9 @@ jobs:
       contents: write
       id-token: write
       attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: ${{ needs.build-linux.outputs.sha }}
     steps:
       - name: Download the release artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -148,10 +166,149 @@ jobs:
           name: release-linux
           path: release
 
-      - name: Fail closed until the signing steps are wired
+      - name: Download the container-built signmar
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signing-tools
+          path: signing-tools
+
+      - name: Check out the release commit (tracked DER and the mozconfig emission)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.build-linux.outputs.sha }}
+          persist-credentials: false
+
+      - name: Install the NSS tools (certutil, pk12util)
         run: |
-          echo "::error::sign-publish carries no signing steps in this revision; nothing is signed or published." >&2
-          exit 1
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends libnss3-tools
+          chmod +x signing-tools/signmar
+
+      - name: Refuse a stale approval (a Release at or above this key already exists)
+        id: newer_guard
+        run: |
+          set -euo pipefail
+          KEY="$(jq -r .release_key release/release-manifest.json)"
+          LATEST="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.draft == false)][0].tag_name // "none"')"
+          echo "release key $KEY, latest published Release $LATEST"
+          if [ "$LATEST" != "none" ] && ! node -e '
+            const t = s => s.replace(/^v/, "").split(/[.-]/).map(Number);
+            const [a, b] = [t(process.argv[1]), t(process.argv[2])];
+            for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) process.exit(a[i] > b[i] ? 0 : 1);
+            process.exit(1);
+          ' "$KEY" "$LATEST"; then
+            echo "::error::the latest published Release $LATEST is not older than $KEY; this approval is stale and nothing is signed" >&2
+            exit 1
+          fi
+
+      - name: MAR channel gate (refuse a foreign MAR channel before any signing)
+        id: mar_channel_gate
+        run: |
+          set -euo pipefail
+          MAR="$(ls release/*.complete.mar)"
+          ACCEPTED="$(sed -n 's/^ac_add_options ACCEPTED_MAR_CHANNEL_IDS=//p' powerbrowser/packaging/mozconfig.release | tr -d '[:space:]')"
+          UPDATE_CHANNEL_MOZCONFIG="$(sed -n 's/^ac_add_options --enable-update-channel=//p' powerbrowser/packaging/mozconfig.release | tr -d '[:space:]')"
+          UPDATE_CHANNEL_MANIFEST="$(jq -r .update_channel release/release-manifest.json)"
+          if [ "$UPDATE_CHANNEL_MANIFEST" != "$UPDATE_CHANNEL_MOZCONFIG" ]; then
+            echo "::error::--channel $UPDATE_CHANNEL_MANIFEST disagrees with MOZ_UPDATE_CHANNEL $UPDATE_CHANNEL_MOZCONFIG; nothing is signed" >&2
+            exit 1
+          fi
+          MAR_CHANNEL="$(LD_LIBRARY_PATH="$PWD/signing-tools" signing-tools/signmar -T "$MAR" | sed -n 's/.*[Cc]hannel[^:]*: *//p' | head -n 1 | tr -d '[:space:]')"
+          if [ -z "$ACCEPTED" ] || [ "$MAR_CHANNEL" != "$ACCEPTED" ]; then
+            echo "::error::MAR product-info channel '$MAR_CHANNEL' is not ACCEPTED_MAR_CHANNEL_IDS '$ACCEPTED' (MAR_CHANNEL_MISMATCH_ERROR); nothing is signed" >&2
+            exit 1
+          fi
+          echo "MAR channel $MAR_CHANNEL accepted"
+
+      - name: Sign the complete MAR (the key material is read only here, from the release environment)
+        id: sign_mar
+        env:
+          MAR_SIGNING_P12_B64: ${{ secrets.MAR_SIGNING_P12_B64 }}
+          MAR_SIGNING_P12_PASSWORD: ${{ secrets.MAR_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          MAR="$(ls release/*.complete.mar)"
+          WORK="$RUNNER_TEMP/mar-sign"
+          mkdir -p "$WORK/db" release/signed
+          printf '%s' "$MAR_SIGNING_P12_B64" | base64 -d > "$WORK/mar.p12"
+          printf '%s' "$MAR_SIGNING_P12_PASSWORD" > "$WORK/pw"
+          certutil -N -d "sql:$WORK/db" --empty-password
+          pk12util -i "$WORK/mar.p12" -d "sql:$WORK/db" -k "$WORK/pw" -w "$WORK/pw"
+          LD_LIBRARY_PATH="$PWD/signing-tools" signing-tools/signmar -d "$WORK/db" -n powerbrowser-mar -s "$MAR" "release/signed/$(basename "$MAR")"
+
+      - name: Verify the signed MAR with signmar -v against the tracked DER, before any upload
+        id: verify_mar
+        run: |
+          set -euo pipefail
+          SIGNED="$(ls release/signed/*.complete.mar)"
+          V="$RUNNER_TEMP/mar-verify"
+          mkdir -p "$V"
+          certutil -N -d "sql:$V" --empty-password
+          certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i powerbrowser/packaging/mar/mar-primary.der
+          LD_LIBRARY_PATH="$PWD/signing-tools" signing-tools/signmar -d "$V" -n powerbrowser-mar -v "$SIGNED"
+
+      - name: Remove the signing scratch databases
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/mar-sign" "$RUNNER_TEMP/mar-verify"
+
+      - name: Assemble the asset set (manifest-derived names, SHA256SUMS, the source tarball and the notices)
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          node scripts/verify-release-asset-set.mjs --expected --manifest release/release-manifest.json > "$RUNNER_TEMP/expected.tsv"
+          TARBALL="$(ls release/*.tar.xz)"
+          MAR="$(ls release/signed/*.complete.mar)"
+          while IFS=$'\t' read -r KIND NAME; do
+            case "$KIND" in
+              versioned-tarball|stable-tarball) cp "$TARBALL" "assets/$NAME" ;;
+              versioned-mar|stable-mar) cp "$MAR" "assets/$NAME" ;;
+              notice) cp "$NAME" "assets/$NAME" ;;
+              source) git archive --format=tar.gz --prefix="${NAME%.tar.gz}/" -o "assets/$NAME" "$RELEASE_SHA" ;;
+            esac
+          done < "$RUNNER_TEMP/expected.tsv"
+          (cd assets && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS)
+
+      - name: Attest the build provenance of the release assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'assets/*'
+
+      - name: Create the draft Release with every asset in one call (no tag exists until the single publish)
+        id: draft_release
+        run: |
+          set -euo pipefail
+          TAG="$(jq -r .release_key release/release-manifest.json)"
+          ESR="$(node --input-type=module -e "import { resolveConfig } from './scripts/generate.mjs'; console.log(resolveConfig('./configuration.toml').config.upstreams.firefox_esr_tag);")"
+          printf 'PowerBrowser %s, built from main at %s on the Gecko ESR base %s.\n' "$TAG" "$RELEASE_SHA" "$ESR" > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --draft --target "$RELEASE_SHA" --title "PowerBrowser $TAG" --notes-file "$RUNNER_TEMP/notes.md" --repo "$GITHUB_REPOSITORY" assets/*
+
+      - name: Compare the draft asset set with the manifest-derived set (before the single publish)
+        id: asset_set
+        run: |
+          set -euo pipefail
+          TAG="$(jq -r .release_key release/release-manifest.json)"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name]' > "$RUNNER_TEMP/draft.json"
+          node scripts/verify-release-asset-set.mjs --manifest release/release-manifest.json --draft "$RUNNER_TEMP/draft.json"
+
+      - name: Mint the bot App token immediately before the publish (it expires within an hour and is revoked at job end)
+        id: bot
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          repositories: ${{ github.event.repository.name }}
+
+      # The DIST-08 R2 copy of each signed MAR is placed here by plan 49-05, before the single publish.
+      - name: Publish the Release once (the bot App creates the tag v<ESR>-<revision> here)
+        id: publish
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: |
+          set -euo pipefail
+          TAG="$(jq -r .release_key release/release-manifest.json)"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
   descriptor:
     needs: sign-publish

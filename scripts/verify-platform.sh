@@ -4796,6 +4796,27 @@ run_own_checks() {
     # secrets. reference on build-linux, retention-days 5, an actions/cache step, a missing key>tag
     # gate, a missing SHA-ancestor gate); each goes red naming the file and the fault. It writes nothing.
     "release-shape-self-test|node $REPO_ROOT/scripts/verify-release-shape.mjs --self-test"
+    # NEW (Phase 49, SEC-07): the sign-publish channel gate. mar_channel_gate refuses a MAR whose
+    # product-info channel is not ACCEPTED_MAR_CHANNEL_IDS, cross-checks the `--channel` value against
+    # MOZ_UPDATE_CHANNEL, and never compares the MAR id with the update channel; signmar -s runs
+    # before signmar -v, and the verification uses the tracked DER. The comparands derive from
+    # generate.mjs updateChannel(). Honestly --quick: file reads and YAML parsing only.
+    "mar-channel-gate|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs"
+    # mar-channel-gate-self-test plants four faults in memory over the real release.yml text: a
+    # foreign-channel MAR accepted, the gate comparing the MAR id with --channel, a verification
+    # against a non-tracked DER, and a sign-before-verify swap. Each goes red naming the file and
+    # the fault. It writes nothing.
+    "mar-channel-gate-self-test|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs --self-test"
+    # NEW (Phase 49, DIST-07): the draft asset set equals the manifest-derived set (versioned and
+    # stable tarball and MAR, SHA256SUMS, the notices and the source tarball) as set equality, and
+    # the equality runs before the single publish, the bot App token is minted immediately before
+    # the publish, and no --generate-notes appears. Honestly --quick: file reads and YAML parsing;
+    # the live draft list is compared by the release job, never here.
+    "release-asset-set|node $REPO_ROOT/scripts/verify-release-asset-set.mjs"
+    # release-asset-set-self-test plants a dropped asset, an extra asset, a stable-name drift, a
+    # versioned-name drift and a publish-before-equality order, each red naming the asset or the
+    # step. It writes nothing.
+    "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
     # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ at its default persona,
     # green only on exit 0. Honestly --quick, offline audit; the zizmor binary comes from the
     # theia shell or is self-provided through nix develop on first use, and absent tooling fails
