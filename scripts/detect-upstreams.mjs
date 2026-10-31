@@ -16,6 +16,15 @@
 //  - product-details (FIREFOX_ESR) is advisory. crossCheckEsr returns a note
 //    only and never changes the candidate.
 //
+// Two majors (TRAIN-05, UPS-01):
+//  - The pinned major keeps the bump path above. classifyTag(tag, pinned) refuses
+//    every other major, so a 175 tag can never become a 153 candidate.
+//  - The uptake major (UPTAKE_MAJOR, 175) is a replay-only lane. decideUptake
+//    names the newest *esr_RELEASE tag under 175 and nothing else. It opens no
+//    branch and no PR; the workflow replays the tag and writes nothing. A 153 tag
+//    is refused by the same guard, with the role 'uptake' in its reason.
+//  - Both lanes read one tag listing. FIREFOX_ESR is advisory for both lanes.
+//
 // Node rules (AUTO-04):
 //  - selectNode24 picks the newest v24 entry of index.json whose files list
 //    includes linux-x64.
@@ -38,6 +47,7 @@
 //   node scripts/detect-upstreams.mjs --listing <tags> [--firefox-esr <value>]
 //   node scripts/detect-upstreams.mjs --node-select <index.json> <node-runtime.json>
 //   node scripts/detect-upstreams.mjs --node-shasum <SHASUMS256.txt> <filename>
+//   node scripts/detect-upstreams.mjs --uptake-major
 
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -57,6 +67,9 @@ const ESR_SHAPED = /esr_(RELEASE|BUILD\d+)$/;
 const NODE_VERSION = /^v(\d+)\.(\d+)\.(\d+)$/;
 const SHASUM_LINE = /^([0-9a-f]{64})\s+\*?(\S+)$/;
 const NODE_PLATFORM = 'linux-x64';
+// The second major, the uptake lane (TRAIN-05). Replay-only: no branch, no PR, no dispatch.
+// A number, not a tag literal: the tag is always derived from the listing (verify-upstream-pins).
+export const UPTAKE_MAJOR = 175;
 // The bump branches the release train publishes. A branch with an open PR is a PR-open state, not a new candidate.
 export const NODE_BRANCH = 'chore/node-v24.x';
 export const esrBranch = tag => `chore/esr-${tag}`;
@@ -72,6 +85,7 @@ export function parseArgs(argv) {
     if (argv.length === 0) return { mode: 'skip' };
     if (argv.length === 1 && argv[0] === '--self-test') return { mode: 'self-test' };
     if (argv.length === 1 && argv[0] === '--pin') return { mode: 'pin' };
+    if (argv.length === 1 && argv[0] === '--uptake-major') return { mode: 'uptake-major' };
     const [mode, ...rest] = argv;
     const opts = {};
     const pos = [];
@@ -129,14 +143,32 @@ function compareTuples(a, b) {
     return 0;
 }
 
-/** Keep or refuse one tag under the pinned major, with the reason a refusal names. */
-export function classifyTag(tag, major) {
+/** Keep or refuse one tag under the guarded major, with the reason a refusal names. role labels the lane in that reason. */
+export function classifyTag(tag, major, role = 'pinned') {
     if (tag.endsWith('^{}')) return { keep: false, version: null, reason: `${tag}: peeled annotated-tag line, dropped` };
     if (BUILD_TAG.test(tag)) return { keep: false, version: null, reason: `${tag}: _BUILDn candidate refused, only an *esr_RELEASE tag may be a candidate` };
     const version = tagToVersion(tag);
     if (version === null) return { keep: false, version: null, reason: `${tag}: not an *esr_RELEASE tag` };
-    if (version.tuple[0] !== major) return { keep: false, version: null, reason: `${tag}: major ${version.tuple[0]} is not the pinned major ${major}` };
+    if (version.tuple[0] !== major) return { keep: false, version: null, reason: `${tag}: major ${version.tuple[0]} is not the ${role} major ${major}` };
     return { keep: true, version, reason: null };
+}
+
+/**
+ * The uptake lane (TRAIN-05): the newest *esr_RELEASE tag under the uptake major, or null.
+ * It has no pin of its own, so every 175 tag is a candidate; the replay runs against the
+ * newest. decision is replay-only or none, and nothing else: the lane never opens a branch
+ * or a PR. refused lists every ESR-shaped tag the 175 guard drops, with its reason (data only:
+ * the pinned-major notes already cover the 175 tags on the 153 line). Pure.
+ */
+export function decideUptake(tags, uptakeMajor = UPTAKE_MAJOR) {
+    const refused = [];
+    for (const t of tags) {
+        if (!ESR_SHAPED.test(t) || t.endsWith('^{}')) continue;
+        const c = classifyTag(t, uptakeMajor, 'uptake');
+        if (!c.keep) refused.push(c.reason);
+    }
+    const candidate = pickLatest(tags, uptakeMajor);
+    return { major: uptakeMajor, candidate, decision: candidate === null ? 'none' : 'replay-only', refused };
 }
 
 /** The maximum numeric candidate under the pinned major, or null when none survives. */
@@ -252,7 +284,10 @@ export function decide({ pin, tags, firefoxEsr, nodePin, indexJson, shasumsText,
             if (sha256 === null) notes.push(`SHASUMS256.txt carries no entry for ${filename}, so the Node bump cannot be verified`);
         }
     }
-    return { esr, node, notes };
+    // The uptake lane (TRAIN-05) reads the same listing. It is replay-only: a note, never a branch.
+    const uptake = decideUptake(tags);
+    if (uptake.candidate !== null) notes.push(`${uptake.candidate.tag} (uptake major ${uptake.major}) is replay-only: the workflow replays it and writes nothing, and the 153 line is unaffected`);
+    return { esr, node, notes, uptake };
 }
 
 /** The pin from the manifest, or the injected pin. Failures name the manifest. */
@@ -308,11 +343,17 @@ export function runChecks(root, overrides = {}) {
 function summarize(result) {
     const e = result.decision.esr;
     const candidate = e.candidate === null ? 'no newer candidate' : `candidate ${e.candidate.tag} (${e.candidate.esrVersion}) -> ${e.decision}`;
-    return `pin ${e.pin}; ${candidate}`;
+    const u = result.decision.uptake;
+    const uptake = u.candidate === null ? `no uptake ${u.major} candidate` : `uptake ${u.candidate.tag} -> ${u.decision}`;
+    return `pin ${e.pin}; ${candidate}; ${uptake}`;
 }
 
 function main(parsed) {
     if (parsed.mode === 'self-test') return selfTest();
+    if (parsed.mode === 'uptake-major') {
+        console.log(String(UPTAKE_MAJOR));
+        return 0;
+    }
     if (parsed.mode === 'pin') {
         const derived = derivePin(REPO_ROOT, {});
         if (derived.failures.length > 0) {
@@ -391,6 +432,8 @@ function main(parsed) {
         console.log(`candidate=${esr.decision === 'bump' ? esr.candidate.tag : ''}`);
         console.log(`pr-open-tag=${esr.decision === 'pr-open' ? esr.candidate.tag : ''}`);
         console.log(`pr-open-number=${esr.openPr?.number ?? ''}`);
+        // The uptake lane's replay target. The workflow replays it and never opens a PR for it.
+        console.log(`uptake-candidate=${result.decision.uptake.candidate?.tag ?? ''}`);
         return 0;
     }
     // Default run: the live listing is the detect job's, so this run SKIPs it.
@@ -411,7 +454,8 @@ function selfTest() {
     const tag = (major, minor, patch, kind = 'RELEASE') => `FIREFOX_${major}_${minor}_${patch}esr_${kind}`;
     const PIN = tag(153, 5, 1);
     const GOOD = tag(153, 23, 0);
-    const FIXTURE_TAGS = [PIN, GOOD, tag(153, 5, 1, 'BUILD1'), tag(175, 0, 0), `${GOOD}^{}`];
+    const FIXTURE_TAGS = [PIN, GOOD, tag(153, 5, 1, 'BUILD1'), tag(UPTAKE_MAJOR, 0, 0), `${GOOD}^{}`];
+    const UPTAKE_FIX = tag(UPTAKE_MAJOR, 0, 0);
     const failures = [];
 
     // The tag shape must still be the one generate.mjs carries (copied, not imported for the shape).
@@ -525,6 +569,17 @@ function selfTest() {
             overrides: { pin: PIN, tags: [PIN, GOOD], openPrs: [{ number: 9, head: 'feature/unrelated' }] },
             ok: r => r.decision.esr.decision === 'bump',
         },
+        {
+            name: 'control: the 153 pin with a 175 tag is a replay-only 175 uptake and no 153 bump (the mirror)',
+            overrides: { pin: PIN, tags: [PIN, UPTAKE_FIX] },
+            ok: r => r.decision.esr.candidate === null && r.decision.esr.decision === 'none'
+                && r.decision.uptake.decision === 'replay-only' && r.decision.uptake.candidate?.tag === UPTAKE_FIX,
+        },
+        {
+            name: 'control: a 153-only listing has no uptake candidate',
+            overrides: { pin: PIN, tags: [PIN, GOOD] },
+            ok: r => r.decision.uptake.decision === 'none' && r.decision.uptake.candidate === null,
+        },
     ];
 
     let failed = 0;
@@ -551,11 +606,40 @@ function selfTest() {
             failed += 1;
         }
     }
+    // The uptake lane's own faults: each guard refuses its foreign major and names it, so a 153 tag can
+    // never reach the 175 replay, and a _BUILDn tag can never be the replay target.
+    const uptakePlants = [
+        {
+            name: 'a 153.x tag offered to the 175 uptake lane',
+            lines: () => decideUptake([PIN, GOOD]).refused,
+            held: () => decideUptake([PIN, GOOD]).candidate === null,
+            expect: `major 153 is not the uptake major ${UPTAKE_MAJOR}`,
+        },
+        {
+            name: 'a _BUILDn 175 tag offered as the only uptake candidate',
+            lines: () => decideUptake([tag(UPTAKE_MAJOR, 0, 0, 'BUILD1')]).refused,
+            held: () => decideUptake([tag(UPTAKE_MAJOR, 0, 0, 'BUILD1')]).candidate === null,
+            expect: '_BUILDn candidate refused',
+        },
+    ];
+    for (const p of uptakePlants) {
+        const lines = p.lines();
+        const named = lines.find(l => l.includes(p.expect));
+        if (lines.some(l => l.includes(REPO_ROOT))) {
+            console.error(`${NAME}: --self-test FAIL -- '${p.name}' leaked the checkout path into its output`);
+            failed += 1;
+        } else if (named !== undefined && p.held()) {
+            console.log(`  ok  ${p.name} -> red, naming '${p.expect}'`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- '${p.name}' did not go red naming '${p.expect}'; got: ${lines.join(' | ') || '(nothing)'}`);
+            failed += 1;
+        }
+    }
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} plant(s) did not go red`);
         return 1;
     }
-    console.log(`${NAME}: --self-test PASS -- the 175.0esr fixture yields ${GOOD} as a bump, ${plants.length} planted faults went red naming their drift, and ${controls.length} controls stayed green`);
+    console.log(`${NAME}: --self-test PASS -- the 175.0esr fixture yields ${GOOD} as a bump, ${plants.length + uptakePlants.length} planted faults went red naming their drift, and ${controls.length} controls stayed green (the 153 line and the ${UPTAKE_MAJOR} uptake lane each guard the other)`);
     return 0;
 }
 
