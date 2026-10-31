@@ -564,6 +564,11 @@ jobs:
       watchdog-started-ms: ${{ steps.watchdog.outputs.started-ms }}
       synthetic-status: ${{ steps.synthetic.outputs.status }}
       synthetic-acked: ${{ steps.synthetic.outputs.acked }}
+      dependabot-prs: ${{ steps.security-reads.outputs.dependabot-prs }}
+      dependabot-alerts: ${{ steps.security-reads.outputs.dependabot-alerts }}
+      codeql-alerts: ${{ steps.security-reads.outputs.codeql-alerts }}
+      codeql-push-ms: ${{ steps.security-reads.outputs.codeql-push-ms }}
+      codeberg: ${{ steps.codeberg.outputs.codeberg }}
     steps:
       - name: Check out repo
         if: ${{ !inputs.dry-run }}
@@ -636,6 +641,75 @@ jobs:
           echo "status=${STATUS:-000}" >> "$GITHUB_OUTPUT"
           echo "acked=${ACKED}" >> "$GITHUB_OUTPUT"
 
+      # Phase 51 (TRAIN-11). The Dependabot, code-scanning and push reads take a token minted for this one repository with
+      # read scopes only. A grant the bot App does not hold (BLOCKED.md) fails the mint, the reads then leave their outputs
+      # empty, and the rows render no-data. Nothing here writes.
+      - name: Name the repository for the security reads (read only)
+        id: repo-name
+        if: ${{ !inputs.dry-run }}
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "name=${REPO#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint the bot App token for the security reads (read only, this repository)
+        id: security-app
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo-name.outputs.name }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-dependabot-alerts: read
+          permission-security-events: read
+
+      # Each read is its own fallback: a failed read leaves its output empty, which the facts carry as null (no-data).
+      - name: Read the Dependabot PRs, the alert counts and the last push to main (read only)
+        id: security-reads
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.security-app.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          PRS=$(gh api "repos/${REPO}/pulls?state=open&per_page=100" --paginate 2>/dev/null | jq -sc 'add // [] | [.[] | select(.user.login == "dependabot[bot]") | {createdMs: ((.created_at | fromdateiso8601) * 1000), security: ([.labels[]?.name] | index("security") != null)}]' 2>/dev/null || true)
+          DALERTS=$(gh api "repos/${REPO}/dependabot/alerts?state=open&per_page=100" --paginate 2>/dev/null | jq -s 'add // [] | length' 2>/dev/null || true)
+          CALERTS=$(gh api "repos/${REPO}/code-scanning/alerts?state=open&per_page=100" --paginate 2>/dev/null | jq -s 'add // [] | length' 2>/dev/null || true)
+          PUSHED=$(gh api "repos/${REPO}/commits/main" --jq '.commit.committer.date' 2>/dev/null || true)
+          PUSH_MS=""
+          if [ -n "$PUSHED" ]; then PUSH_MS=$(date -u -d "$PUSHED" +%s%3N 2>/dev/null || true); fi
+          [[ $PRS == \[* ]] && echo "dependabot-prs=${PRS}" >> "$GITHUB_OUTPUT"
+          [[ $DALERTS =~ ^[0-9]+$ ]] && echo "dependabot-alerts=${DALERTS}" >> "$GITHUB_OUTPUT"
+          [[ $CALERTS =~ ^[0-9]+$ ]] && echo "codeql-alerts=${CALERTS}" >> "$GITHUB_OUTPUT"
+          [[ $PUSH_MS =~ ^[0-9]+$ ]] && echo "codeql-push-ms=${PUSH_MS}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # The Codeberg main SHA (public API, no token) against GitHub main. No mirror slug declared (the vars.CODEBERG_MIRROR
+      # repository variable, unset until Phase 53) renders no-data. Both SHAs must be full 40-hex, or the pair is dropped.
+      - name: Read the Codeberg main SHA against GitHub main (read only)
+        id: codeberg
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        env:
+          CODEBERG_SLUG: ${{ vars.CODEBERG_MIRROR }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          OUT=""
+          if [[ $CODEBERG_SLUG =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            CB=$(curl -fsS --max-time 20 --proto '=https' "https://codeberg.org/api/v1/repos/${CODEBERG_SLUG}/branches/main" 2>/dev/null | jq -r '.commit.id // empty' 2>/dev/null || true)
+            GH=$(gh api "repos/${REPO}/git/ref/heads/main" --jq '.object.sha' 2>/dev/null || true)
+            if [[ $CB =~ ^[0-9a-f]{40}$ && $GH =~ ^[0-9a-f]{40}$ ]]; then OUT=$(jq -cn --arg c "$CB" --arg g "$GH" '{codeberg: $c, github: $g}'); fi
+          fi
+          echo "codeberg=${OUT}" >> "$GITHUB_OUTPUT"
+
   # The sweep's render. It reads the tag listing, the commit date of each tag under the pinned major, the
   # Release list and the advisory product-details value (all reads), takes the probe outputs, derives the
   # six rows and renders the pinned body. It writes nothing; the body is handed to report base64-encoded.
@@ -700,6 +774,11 @@ jobs:
           PROBE_WATCHDOG_MS: ${{ needs.maintenance-probe.outputs.watchdog-started-ms }}
           PROBE_SYNTHETIC: ${{ needs.maintenance-probe.outputs.synthetic-status }}
           PROBE_ACKED: ${{ needs.maintenance-probe.outputs.synthetic-acked }}
+          PROBE_DPRS: ${{ needs.maintenance-probe.outputs.dependabot-prs }}
+          PROBE_DALERTS: ${{ needs.maintenance-probe.outputs.dependabot-alerts }}
+          PROBE_CALERTS: ${{ needs.maintenance-probe.outputs.codeql-alerts }}
+          PROBE_PUSH_MS: ${{ needs.maintenance-probe.outputs.codeql-push-ms }}
+          PROBE_CODEBERG: ${{ needs.maintenance-probe.outputs.codeberg }}
         run: |
           set -euo pipefail
           NOW_MS=$(date -u +%s%3N)
@@ -717,6 +796,13 @@ jobs:
             --arg watchdog "${PROBE_WATCHDOG_MS:-}" \
             --arg synthetic "${PROBE_SYNTHETIC:-}" \
             --arg acked "${PROBE_ACKED:-}" \
+            --rawfile renewals docs/RENEWALS.md \
+            --rawfile releasing docs/RELEASING.md \
+            --argjson dprs "${PROBE_DPRS:-null}" \
+            --argjson dalerts "${PROBE_DALERTS:-null}" \
+            --argjson calerts "${PROBE_CALERTS:-null}" \
+            --argjson pushms "${PROBE_PUSH_MS:-null}" \
+            --argjson cb "${PROBE_CODEBERG:-null}" \
             '{
               pinTag: $pin, nowMs: $now, tags: $tags, tagDates: $dates, releases: $releases[0],
               advisoryEsr: (if $advisory == "" then null else $advisory end),
@@ -727,7 +813,16 @@ jobs:
               syntheticStatus: (if $result == "success" and $synthetic != "" then ($synthetic | tonumber) else null end),
               syntheticAcked: ($acked == "true"),
               channelOk: null,
-              downloadRows: 0
+              downloadRows: 0,
+              # Phase 51 (TRAIN-11). repoControls stays null until the bot App is granted the read (BLOCKED.md).
+              renewalsText: $renewals,
+              releasingText: $releasing,
+              repoControls: null,
+              dependabotPrs: $dprs,
+              dependabotAlerts: $dalerts,
+              codeqlAlerts: $calerts,
+              codeqlLastPushMs: $pushms,
+              codeberg: $cb
             }' > "$RUNNER_TEMP/maintenance-facts.json"
           node scripts/release-train.mjs --maintenance "$RUNNER_TEMP/maintenance-facts.json" "$RUNNER_TEMP/maintenance.md"
           echo "body-b64=$(base64 -w0 "$RUNNER_TEMP/maintenance.md")" >> "$GITHUB_OUTPUT"
