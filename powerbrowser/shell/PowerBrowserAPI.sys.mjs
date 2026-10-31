@@ -691,6 +691,17 @@ export const PowerBrowserAPI = Object.freeze({
   },
 
   /**
+   * UPD-30 (Phase 54): registers `fn` as the AsyncShutdown blocker that quit and restart both await.
+   * restartToUpdate quits with eRestart, which also raises quit-application-granted, so one
+   * registration covers both paths and the sidecar is reaped before the updater rename can run.
+   * AsyncShutdown rejects a second blocker under the same name, so the caller registers once per process.
+   */
+  addSidecarReapBlocker(fn) {
+    const { AsyncShutdown } = ChromeUtils.importESModule("resource://gre/modules/AsyncShutdown.sys.mjs");
+    AsyncShutdown.quitApplicationGranted.addBlocker("PowerBrowser: reap sidecar", fn);
+  },
+
+  /**
    * NG-037: quits the whole application the way upstream's quit paths do:
    * announce quit-application-requested so any observer may cancel (a page's
    * leave prompt; the shell's own flush, NG-032/NG-033), then an attempted

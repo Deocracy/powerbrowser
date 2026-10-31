@@ -260,6 +260,19 @@ export const TheiaService = {
       this._pushLog(`Quit flush not registered: ${err && err.message ? err.message : err}`);
     }
 
+    // UPD-30 (Phase 54): the reap blocker quit and restart both await, registered once per process.
+    if (!this._reapBlockerAdded) {
+      this._reapBlockerAdded = true;
+      try {
+        // Bound to a local, not passed inline: the start-path-recovery row derives its one
+        // quit-observer registration from an inline arrow callback, and this blocker is a second one.
+        const reapBlocker = () => this.stopAndReap();
+        PowerBrowserAPI.addSidecarReapBlocker(reapBlocker);
+      } catch (err) {
+        this._pushLog(`Reap blocker not registered: ${err && err.message ? err.message : err}`);
+      }
+    }
+
     // 01-10: this was one of three unguarded throw sites in the start path --
     // a rejection here left `start()` altogether and, before the terminal
     // handler existed, vanished as an unhandled promise rejection. Guarded now,
@@ -449,6 +462,29 @@ export const TheiaService = {
     if (this._quitObserverOff) {
       this._quitObserverOff();
       this._quitObserverOff = null;
+    }
+  },
+
+  /**
+   * UPD-30 (Phase 54): the reap the quit and restart blocker awaits. stop() is idempotent and already
+   * signals the sidecar; this polls the recorded pid every 100 ms until it is gone, bounded by
+   * powerbrowser.sidecar.killGraceMs (default 5000 ms). On timeout it logs the live pid loudly and
+   * resolves, so an unkillable child can never hold shutdown open.
+   */
+  async stopAndReap() {
+    const pid = this._pid;
+    this.stop();
+    if (pid == null) {
+      return;
+    }
+    const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.killGraceMs", 5000);
+    const deadline = Date.now() + graceMs;
+    while (PowerBrowserAPI.signalBarePid(pid, 0)) {
+      if (Date.now() >= deadline) {
+        PowerBrowserAPI.log("error", `Sidecar pid ${pid} is still alive ${graceMs} ms after the reap; shutdown continues without it.`);
+        return;
+      }
+      await PowerBrowserAPI.sleep(100);
     }
   },
 

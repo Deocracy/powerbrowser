@@ -4887,6 +4887,13 @@ run_own_checks() {
     # uses, missing repackage calls, a removed key gate, a drifted sha gate, a dropped pipefail, a raised
     # retention and an image build missing --no-cache; each must go red naming job and cause.
     "build-windows-shape-self-test|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs --self-test"
+    # NEW (Phase 54, UPD-30): the sidecar reap blocker. Quit and restart both await the bounded reap, so the
+    # updater rename never meets a live node.exe. Derived from the tree and the catalogue; honestly --quick
+    # (text reads only; the live version flip is the matrix update cell).
+    "sidecar-reap-blocker|node $REPO_ROOT/scripts/verify-sidecar-reap-blocker.mjs"
+    # sidecar-reap-blocker-self-test plants a missing registration, an unbounded wait and a missing catalogue row;
+    # each must go red naming the rule and the value. It writes nothing.
+    "sidecar-reap-blocker-self-test|node $REPO_ROOT/scripts/verify-sidecar-reap-blocker.mjs --self-test"
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
@@ -5455,6 +5462,7 @@ run_own_checks() {
       # its workflows and their last runs; red until the owner creates the repository and its status
       # CNAME. An undeclared status slug is a FAIL, never a SKIP. Never called by a quick path.
       "upptime-sweep-live|node $REPO_ROOT/scripts/verify-upptime.mjs --live"
+
     )
   fi
 
