@@ -37,7 +37,11 @@
 //  issue-data    classify captures the title and body into step outputs (random delimiter,
 //                before the model step) and the prompt quotes the body output inside <issue_data>.
 //  model         claude_args selects claude-haiku-5-5 (the action has no model input).
-//  tools         claude_args names no bare Bash.
+//  tools         claude_args sets --tools "" and names no bare Bash, --allowedTools,
+//                --allowed-tools or --mcp-config (flags read as shell words, not substrings).
+//  schema        --json-schema parses and requires labels and template_id, with the
+//                template_id enum equal to the three template ids.
+//  turns         --max-turns is an integer from 1 to 5.
 //  executable    path_to_claude_code_executable is set.
 //  verbose       show_full_output is the boolean false.
 //  non-write     allowed_non_write_users is the star.
@@ -107,6 +111,11 @@ try {
 
 function isObject(v) {
     return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// claude_args as shell words: single-quoted, double-quoted (possibly empty) and bare words.
+function claudeWords(text) {
+    return [...String(text).matchAll(/'([^']*)'|"([^"]*)"|(\S+)/g)].map(m => m[1] ?? m[2] ?? m[3]);
 }
 
 function labelsFrom(labelsText) {
@@ -256,6 +265,30 @@ function check(text, rel, labels) {
         }
         if (BARE_BASH.test(claudeArgs)) {
             fail(AI_JOB, 'tools', 'claude_args names a bare Bash tool, which turns issue text into shell execution. Next step: remove Bash from claude_args.');
+        }
+        // Flags are compared as shell-word values, never as substrings.
+        const words = claudeWords(claudeArgs);
+        const flagOf = flag => (words.includes(flag) ? { present: true, value: words[words.indexOf(flag) + 1] } : { present: false });
+        const tools = flagOf('--tools');
+        if (!tools.present || tools.value !== '') {
+            fail(AI_JOB, 'tools', `claude_args must set --tools "" so the model has no tools; found ${tools.present ? JSON.stringify(tools.value ?? null) : 'no --tools flag'}. Next step: set --tools "" in claude_args.`);
+        }
+        for (const forbidden of ['--allowedTools', '--allowed-tools', '--mcp-config']) {
+            if (words.includes(forbidden)) fail(AI_JOB, 'tools', `claude_args passes ${forbidden}, which gives the model tools or servers beyond --tools "". Next step: remove ${forbidden} from claude_args.`);
+        }
+        const schema = flagOf('--json-schema');
+        let doc;
+        try { doc = JSON.parse(schema.value ?? 'null'); } catch { doc = undefined; }
+        const enumIds = Array.isArray(doc?.properties?.template_id?.enum) ? doc.properties.template_id.enum : [];
+        const required = Array.isArray(doc?.required) ? doc.required : [];
+        const schemaOk = isObject(doc) && ['labels', 'template_id'].every(k => required.includes(k))
+            && JSON.stringify([...enumIds].sort()) === JSON.stringify([...TEMPLATE_IDS].sort());
+        if (!schema.present || !schemaOk) {
+            fail(AI_JOB, 'schema', `--json-schema must be a JSON object that requires labels and template_id, with template_id enum ${JSON.stringify(TEMPLATE_IDS)}; ${schema.present ? 'the schema differs' : 'no --json-schema flag is set'}. Next step: restore the schema in claude_args, because structured_output depends on it.`);
+        }
+        const turns = flagOf('--max-turns');
+        if (!turns.present || !/^[1-5]$/.test(turns.value ?? '')) {
+            fail(AI_JOB, 'turns', `--max-turns is ${turns.present ? JSON.stringify(turns.value ?? null) : 'absent'}, not an integer from 1 to 5. Next step: set --max-turns 2 in claude_args.`);
         }
         if (typeof w.path_to_claude_code_executable !== 'string' || w.path_to_claude_code_executable.trim() === '') {
             fail(AI_JOB, 'executable', 'has no path_to_claude_code_executable, so the action installs an unpinned Claude Code at run time. Next step: install the pinned version and pass its path.');
@@ -478,6 +511,12 @@ function selfTest() {
         ['issue data fence removed from the prompt', mutate('            </issue_data>\n', ''), AI_JOB, 'issue-data', 'issue_data'],
         ['issue capture under a fixed delimiter', mutate('/dev/urandom', '/dev/zero'), AI_JOB, 'issue-data', '/dev/urandom'],
         ['issue body echoed in a classify run body', mutate('      - id: triage\n', '      - name: Echo\n        run: echo "${{ github.event.issue.body }}"\n      - id: triage\n'), AI_JOB, 'interpolation', 'interpolates'],
+        ['--tools widened to Edit and Write', mutate('--tools ""', '--tools "Edit,Write"'), AI_JOB, 'tools', '--tools ""'],
+        ['--tools flag removed', mutate('            --tools ""\n', ''), AI_JOB, 'tools', '--tools ""'],
+        ['--mcp-config added beside --tools', mutate('--tools ""', '--tools "" --mcp-config mcp.json'), AI_JOB, 'tools', '--mcp-config'],
+        ['json-schema enum widened', mutate('"enum":["bug-report","feature-request","other"]', '"enum":["bug-report","feature-request","other","close"]'), AI_JOB, 'schema', 'template_id'],
+        ['json-schema flag removed', good.replace(/--json-schema '[^']*'/, ''), AI_JOB, 'schema', '--json-schema'],
+        ['max-turns raised to 50', mutate('--max-turns 2', '--max-turns 50'), AI_JOB, 'turns', '--max-turns'],
         ['non-Haiku model', mutate('--model claude-haiku-5-5', '--model claude-opus-5'), AI_JOB, 'model', MODEL],
         ['allowed_non_write_users missing', mutate('          allowed_non_write_users: "*"\n', ''), AI_JOB, 'non-write', '"*"'],
         ['contents widened to write', mutate('permissions:\n  contents: read\n  issues: write', 'permissions:\n  contents: write\n  issues: write'), WF, 'permissions', 'contents'],
