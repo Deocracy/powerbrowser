@@ -4800,8 +4800,9 @@ run_own_checks() {
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
-    # FIREFOX_ESR-driven 175 steer, an empty listing, a Node pin newer than the newest v24 line)
-    # must go red naming its drift. Honestly
+    # FIREFOX_ESR-driven 175 steer, an empty listing, a Node pin newer than the newest v24 line, an
+    # open bump PR that holds the candidate or the Node line) must go red naming its drift; a control
+    # shows an open PR on another branch holds nothing. Honestly
     # --quick: fixtures only; the live tag listing runs in the release-train detect job. It writes
     # nothing.
     "detect-upstreams-self-test|node $REPO_ROOT/scripts/detect-upstreams.mjs --self-test"
@@ -4812,7 +4813,9 @@ run_own_checks() {
     # an unchanged pin, a 175.x ESR under the 153 guard, a conflict line with no patch number, and a
     # conflict decision that writes under the patch directory. The would-write view (--would-write,
     # called by the release-train report job) runs the same derive, next, render and conflict rules,
-    # with a green control and a refusal plant. UNWIRED (no workflow caller, so no plant):
+    # with a green control and a refusal plant. The publish plan (--publish-plan, called by
+    # scripts/publish-bump-branch.sh) plants a remote branch with an owner commit and an unlistable
+    # compare, and controls for create, skip and bot-only force-with-lease pinned to the observed tip. UNWIRED (no workflow caller, so no plant):
     # findExactlyOne (live tracking writer, BLOCKED.md item 3), admitWakeRun (workflow_run held out,
     # BLOCKED.md item 1) and classifyRelease (live Release list, Phase 50). A green row over those is
     # not production coverage. Honestly --quick: pure functions over in-memory fixtures; no network,

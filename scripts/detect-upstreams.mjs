@@ -57,21 +57,52 @@ const ESR_SHAPED = /esr_(RELEASE|BUILD\d+)$/;
 const NODE_VERSION = /^v(\d+)\.(\d+)\.(\d+)$/;
 const SHASUM_LINE = /^([0-9a-f]{64})\s+\*?(\S+)$/;
 const NODE_PLATFORM = 'linux-x64';
+// The bump branches the release train publishes. A branch with an open PR is a PR-open state, not a new candidate.
+export const NODE_BRANCH = 'chore/node-v24.x';
+export const esrBranch = tag => `chore/esr-${tag}`;
 
 const args = process.argv.slice(2);
 
-/** The CLI modes: --self-test, --pin, and --listing <file> [--firefox-esr <value>]. Anything else is null. */
+/**
+ * The CLI modes. --self-test and --pin stand alone. --listing <file>, --node-select <index> <runtime>
+ * and --node-shasum <file> <filename> take positional values. --firefox-esr and --open-prs <file>
+ * are optional and may follow any mode. Anything else is null.
+ */
 export function parseArgs(argv) {
     if (argv.length === 0) return { mode: 'skip' };
     if (argv.length === 1 && argv[0] === '--self-test') return { mode: 'self-test' };
     if (argv.length === 1 && argv[0] === '--pin') return { mode: 'pin' };
-    if (argv[0] === '--node-select' && argv.length === 3 && argv[1] !== '' && argv[2] !== '') return { mode: 'node-select', path: argv[1], runtimePath: argv[2] };
-    if (argv[0] === '--node-shasum' && argv.length === 3 && argv[1] !== '' && argv[2] !== '') return { mode: 'node-shasum', path: argv[1], filename: argv[2] };
-    if (argv[0] === '--listing' && argv.length >= 2 && argv[1] !== '') {
-        if (argv.length === 2) return { mode: 'listing', path: argv[1], firefoxEsr: undefined };
-        if (argv.length === 4 && argv[2] === '--firefox-esr' && argv[3] !== '') return { mode: 'listing', path: argv[1], firefoxEsr: argv[3] };
+    const [mode, ...rest] = argv;
+    const opts = {};
+    const pos = [];
+    for (let i = 0; i < rest.length; i += 1) {
+        if (rest[i] === '--firefox-esr' || rest[i] === '--open-prs') {
+            if (i + 1 >= rest.length || rest[i + 1] === '') return null;
+            opts[rest[i]] = rest[i + 1];
+            i += 1;
+        } else {
+            pos.push(rest[i]);
+        }
     }
+    if (pos.some(p => p === '')) return null;
+    if (mode === '--node-select' && pos.length === 2) return { mode: 'node-select', path: pos[0], runtimePath: pos[1], openPrsPath: opts['--open-prs'] };
+    if (mode === '--node-shasum' && pos.length === 2 && opts['--firefox-esr'] === undefined && opts['--open-prs'] === undefined) return { mode: 'node-shasum', path: pos[0], filename: pos[1] };
+    if (mode === '--listing' && pos.length === 1) return { mode: 'listing', path: pos[0], firefoxEsr: opts['--firefox-esr'], openPrsPath: opts['--open-prs'] };
     return null;
+}
+
+/** The open PR whose head branch is `head`, or null. Pure. */
+export function openPrFor(openPrs, head) {
+    return (openPrs ?? []).find(p => p.head === head) ?? null;
+}
+
+/** Parse a `gh pr list` listing, one `<number> <head>` pair per line. A malformed line throws. */
+export function parseOpenPrs(text) {
+    return String(text).split('\n').map(l => l.trim()).filter(l => l !== '').map(l => {
+        const m = /^(\d+) (\S+)$/.exec(l);
+        if (m === null) throw new Error(`open PR line ${JSON.stringify(l)} is not '<number> <head>'`);
+        return { number: Number(m[1]), head: m[2] };
+    });
 }
 
 /** The ESR version and numeric tuple of an *esr_RELEASE tag, or null. */
@@ -165,6 +196,11 @@ export function readNodePin(path) {
     return typeof v === 'string' ? v : null;
 }
 
+/** The open PRs from a listing file, or none when no file is given. Throws on a malformed listing. */
+export function readOpenPrs(path) {
+    return path === undefined ? [] : parseOpenPrs(readFileSync(path, 'utf8'));
+}
+
 /** The sha256 for one exact filename in a SHASUMS256.txt body, or null. */
 export function shasumsEntry(text, filename) {
     for (const line of String(text).split('\n')) {
@@ -178,7 +214,7 @@ export function shasumsEntry(text, filename) {
  * The orchestrator. Returns the ESR decision, the Node decision, and notes.
  * Inputs that are undefined skip their half. A malformed pin throws (pinnedMajor).
  */
-export function decide({ pin, tags, firefoxEsr, nodePin, indexJson, shasumsText }) {
+export function decide({ pin, tags, firefoxEsr, nodePin, indexJson, shasumsText, openPrs }) {
     const major = pinnedMajor(pin);
     const pinVersion = tagToVersion(pin);
     const notes = [];
@@ -193,7 +229,10 @@ export function decide({ pin, tags, firefoxEsr, nodePin, indexJson, shasumsText 
         if (!c.keep) refused.push(c.reason);
     }
     notes.push(...refused);
-    const esr = { pin, candidate, decision: candidate === null ? 'none' : 'bump' };
+    // A candidate whose bump branch already has an open PR is PR-open: the PR is the state, and no replay runs.
+    const heldPr = candidate === null ? null : openPrFor(openPrs, esrBranch(candidate.tag));
+    const esr = { pin, candidate, decision: candidate === null ? 'none' : heldPr === null ? 'bump' : 'pr-open', openPr: heldPr };
+    if (heldPr !== null) notes.push(`${esrBranch(candidate.tag)} PR #${heldPr.number} is open; the candidate ${candidate.tag} is held until that PR merges or closes, so no bump is replayed`);
     if (firefoxEsr !== undefined) notes.push(crossCheckEsr(candidate, firefoxEsr));
 
     let node = null;
@@ -206,8 +245,10 @@ export function decide({ pin, tags, firefoxEsr, nodePin, indexJson, shasumsText 
             const sha256 = shasumsText === undefined ? null : shasumsEntry(shasumsText, filename);
             const pinned = nodePin ?? null;
             const decision = nodeDecision(selected, pinned?.version ?? null);
-            node = { version: selected.version, date: selected.date, filename, sha256, decision };
+            const heldNode = decision === 'bump' ? openPrFor(openPrs, NODE_BRANCH) : null;
+            node = { version: selected.version, date: selected.date, filename, sha256, decision: heldNode === null ? decision : 'pr-open' };
             if (decision === 'none') notes.push(`the Node pin ${pinned.version} is not older than ${selected.version}, so no Node bump`);
+            if (heldNode !== null) notes.push(`${NODE_BRANCH} PR #${heldNode.number} is open; the Node line ${selected.version} is held until that PR merges or closes`);
             if (sha256 === null) notes.push(`SHASUMS256.txt carries no entry for ${filename}, so the Node bump cannot be verified`);
         }
     }
@@ -254,6 +295,7 @@ export function runChecks(root, overrides = {}) {
             nodePin: overrides.nodePin,
             indexJson: overrides.indexJson,
             shasumsText: overrides.shasumsText,
+            openPrs: overrides.openPrs,
         });
     } catch (e) {
         failures.push(`${e.message}. Next step: set [upstreams] firefox_esr_tag in ${MANIFEST_REL} to an *esr_RELEASE tag.`);
@@ -292,9 +334,11 @@ function main(parsed) {
             // A hold is not a failure: the empty values are the answer, and the reason goes to stderr.
             let index;
             let pinVersion;
+            let openPrs;
             try {
                 index = JSON.parse(text);
                 pinVersion = readNodePin(parsed.runtimePath);
+                openPrs = readOpenPrs(parsed.openPrsPath);
             } catch (e) {
                 console.error(`${NAME}: FAIL -- the Node index or the pin manifest could not be read (${e.message}). Next step: check the detect job's download and the pin manifest, then re-run.`);
                 return 1;
@@ -306,6 +350,8 @@ function main(parsed) {
                 console.error(`${NAME}: NOTE -- no Node 24 entry in the index ships ${NODE_PLATFORM}; the Node half holds`);
             } else if (nodeDecision(selected, pinVersion) === 'none') {
                 console.error(`${NAME}: NOTE -- the newest Node 24 line ${selected.version} is not newer than the pin ${pinVersion}; the Node half holds`);
+            } else if (openPrFor(openPrs, NODE_BRANCH) !== null) {
+                console.error(`${NAME}: NOTE -- ${NODE_BRANCH} PR #${openPrFor(openPrs, NODE_BRANCH).number} is open; the Node line ${selected.version} is held until it merges or closes`);
             } else {
                 version = selected.version;
                 file = `node-${selected.version}-${NODE_PLATFORM}.tar.xz`;
@@ -327,12 +373,24 @@ function main(parsed) {
             return 1;
         }
         const tags = text.split('\n').map(t => t.trim()).filter(t => t !== '');
-        const result = runChecks(REPO_ROOT, { tags, firefoxEsr: parsed.firefoxEsr });
+        let openPrs;
+        try {
+            openPrs = readOpenPrs(parsed.openPrsPath);
+        } catch (e) {
+            console.error(`${NAME}: FAIL -- ${e.message}. Next step: check the detect job's open-PR listing, then re-run.`);
+            return 1;
+        }
+        const result = runChecks(REPO_ROOT, { tags, firefoxEsr: parsed.firefoxEsr, openPrs });
         result.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
         if (result.failures.length > 0) return 1;
         result.notes.forEach(n => console.log(`${NAME}: NOTE -- ${n}`));
         console.log(`${NAME}: PASS -- ${summarize(result)}`);
-        console.log(`candidate=${result.decision.esr.candidate?.tag ?? ''}`);
+        // Only a bump is a candidate. A PR-open candidate is reported on its own lines, so the
+        // workflow never replays a candidate whose PR is already open.
+        const esr = result.decision.esr;
+        console.log(`candidate=${esr.decision === 'bump' ? esr.candidate.tag : ''}`);
+        console.log(`pr-open-tag=${esr.decision === 'pr-open' ? esr.candidate.tag : ''}`);
+        console.log(`pr-open-number=${esr.openPr?.number ?? ''}`);
         return 0;
     }
     // Default run: the live listing is the detect job's, so this run SKIPs it.
@@ -400,6 +458,18 @@ function selfTest() {
 
     const plants = [
         {
+            name: 'an open bump PR for the candidate branch: the candidate is held, not replayed',
+            overrides: { pin: PIN, tags: [PIN, GOOD], openPrs: [{ number: 41, head: esrBranch(GOOD) }] },
+            expect: 'PR #41 is open',
+            held: r => r.decision.esr.decision === 'pr-open' && r.decision.esr.candidate?.tag === GOOD,
+        },
+        {
+            name: 'an open Node bump PR for the Node line: the line is held, not published',
+            overrides: { pin: PIN, tags: [PIN], nodePin: { version: 'v24.19.0' }, indexJson: NODE_INDEX, shasumsText: SHASUMS, openPrs: [{ number: 42, head: NODE_BRANCH }] },
+            expect: `${NODE_BRANCH} PR #42 is open`,
+            held: r => r.decision.node?.decision === 'pr-open',
+        },
+        {
             name: 'a Node pin newer than the newest linux-x64 v24 line (a downgrade)',
             overrides: { pin: PIN, tags: [PIN], nodePin: { version: 'v24.30.0' }, indexJson: NODE_INDEX, shasumsText: SHASUMS },
             expect: `is not older than ${NODE_NEW}, so no Node bump`,
@@ -443,7 +513,30 @@ function selfTest() {
         },
     ];
 
+    // Controls: an open PR that does not match the candidate or the Node line must not hold anything.
+    const controls = [
+        {
+            name: 'control: an open PR for the pinned tag does not hold a newer candidate',
+            overrides: { pin: PIN, tags: [PIN, GOOD], openPrs: [{ number: 40, head: esrBranch(PIN) }] },
+            ok: r => r.decision.esr.decision === 'bump' && r.decision.esr.candidate?.tag === GOOD,
+        },
+        {
+            name: 'control: an open PR on an unrelated branch holds nothing',
+            overrides: { pin: PIN, tags: [PIN, GOOD], openPrs: [{ number: 9, head: 'feature/unrelated' }] },
+            ok: r => r.decision.esr.decision === 'bump',
+        },
+    ];
+
     let failed = 0;
+    for (const c of controls) {
+        const r = runChecks(REPO_ROOT, c.overrides);
+        if (r.failures.length === 0 && c.ok(r)) {
+            console.log(`  ok  ${c.name} -> green`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- '${c.name}' went red: ${[...r.failures, ...r.notes].join(' | ') || '(no decision)'}`);
+            failed += 1;
+        }
+    }
     for (const p of plants) {
         const r = runChecks(REPO_ROOT, p.overrides);
         const lines = [...r.failures, ...r.notes];
@@ -462,7 +555,7 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- ${failed} plant(s) did not go red`);
         return 1;
     }
-    console.log(`${NAME}: --self-test PASS -- the 175.0esr fixture yields ${GOOD} as a bump, and ${plants.length} planted faults went red naming their drift`);
+    console.log(`${NAME}: --self-test PASS -- the 175.0esr fixture yields ${GOOD} as a bump, ${plants.length} planted faults went red naming their drift, and ${controls.length} controls stayed green`);
     return 0;
 }
 

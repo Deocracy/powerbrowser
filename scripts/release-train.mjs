@@ -274,6 +274,54 @@ function wouldWriteCli([pinTag, tag, openPrNumber, stage]) {
     return 0;
 }
 
+/**
+ * What a publish of a bump branch may do, given the remote branch as the GitHub API reports it.
+ *   create            the remote branch is absent: a plain push creates it.
+ *   skip              the remote already carries this tree: nothing to push (the PR step still runs).
+ *   force-with-lease  the remote holds only bot-authored commits and a different tree: replace them,
+ *                     pinned to the tip that was read, so a concurrent change makes the push fail.
+ *   refuse            the remote holds a commit the bot App did not author, or its history cannot be
+ *                     listed in full: never overwrite it; the owner is working on the branch.
+ * remote: { tip, tree, compare: { total, emails } } or null when the branch is absent. Pure.
+ */
+export function publishPlan({ localTree, remote, botEmail }) {
+    if (remote === null) return { action: 'create', expect: null, reason: null };
+    if (remote.tree === localTree) return { action: 'skip', expect: null, reason: `the remote branch already carries tree ${localTree}` };
+    if (remote.compare === null || remote.compare.total > remote.compare.emails.length) {
+        return { action: 'refuse', expect: null, reason: 'the remote branch history cannot be listed in full, so no commit can be proven bot-authored. Next step: inspect the branch by hand.' };
+    }
+    const foreign = remote.compare.emails.filter(e => e !== botEmail);
+    if (foreign.length > 0) {
+        return { action: 'refuse', expect: null, reason: `${foreign.length} commit(s) on the remote branch are not authored by the bot App, so someone is working on it; not pushing. Next step: merge or close that work, or delete the branch.` };
+    }
+    return { action: 'force-with-lease', expect: remote.tip, reason: null };
+}
+
+/** The remote facts as the CLI receives them: empty strings mean absent. Throws on malformed JSON. */
+function remoteFromArgs(tip, tree, compareJson) {
+    if (tip === '') return null;
+    return { tip, tree, compare: compareJson === '' ? null : JSON.parse(compareJson) };
+}
+
+function publishPlanCli([localTree, tip, tree, compareJson, botEmail]) {
+    if (localTree === '' || botEmail === '') {
+        console.error(`${NAME}: FAIL -- the publish plan needs the local tree and the bot author email. Next step: pass both.`);
+        return 2;
+    }
+    let remote;
+    try {
+        remote = remoteFromArgs(tip, tree, compareJson);
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- the remote compare is not JSON (${e.message}). Next step: re-read the branch; the publish script passes the API output.`);
+        return 1;
+    }
+    const plan = publishPlan({ localTree, remote, botEmail });
+    if (plan.reason !== null) console.error(`${NAME}: NOTE -- ${plan.reason}`);
+    console.log(`publish=${plan.action}`);
+    console.log(`expect=${plan.expect ?? ''}`);
+    return 0;
+}
+
 function setDiff(a, b) {
     const sa = new Set(a);
     const sb = new Set(b);
@@ -286,6 +334,9 @@ function setDiff(a, b) {
 // Fixture tags are built from parts at run time: a tag literal in source would trip the
 // pin-carrier sweep (verify-upstream-pins), which allows the manifest alone to carry one.
 const esrTag = (major, minor, patch, kind = 'RELEASE') => `FIREFOX_${major}_${minor}_${patch}esr_${kind}`;
+// Fixture author emails. The bot's address is passed in by the workflow, never a literal here.
+const BOT_EMAIL_FIXTURE = 'bot-fixture@example.invalid';
+const OWNER_EMAIL = 'owner-fixture@example.invalid';
 const BASE_PIN = esrTag(153, 5, 1);
 const NEWER = esrTag(153, 23, 0);
 const BASE = Object.freeze({ pinTag: BASE_PIN, revision: 1, candidateTag: null, openPr: null, bumpConclusion: null, stage: null, verifyCheck: null, merged: false, pinUnchanged: false });
@@ -398,6 +449,26 @@ function selfTest() {
         },
     ];
 
+    // The publish plan: a remote branch with a commit the bot did not author is never overwritten.
+    const publishPlants = [
+        {
+            name: 'a remote bump branch carrying a commit the bot App did not author',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 2, emails: [OWNER_EMAIL, BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
+                return plan.action === 'refuse' ? [plan.reason] : [`owner-authored remote branch planned as ${plan.action}`];
+            },
+            expect: 'not authored by the bot App',
+        },
+        {
+            name: 'a remote compare too long to list in full',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 300, emails: Array(250).fill(BOT_EMAIL_FIXTURE) } }, botEmail: BOT_EMAIL_FIXTURE });
+                return plan.action === 'refuse' ? [plan.reason] : [`an unlisted history planned as ${plan.action}`];
+            },
+            expect: 'cannot be listed in full',
+        },
+    ];
+
     const viewPlants = [
         {
             name: 'a conflict stage line naming no patch number is refused by the would-write view',
@@ -405,7 +476,26 @@ function selfTest() {
             expect: 'names no patch number',
         },
     ];
+    const publishGreens = [
+        {
+            name: 'control: an absent remote branch is created',
+            run: () => (publishPlan({ localTree: 'T-LOCAL', remote: null, botEmail: BOT_EMAIL_FIXTURE }).action === 'create' ? [] : ['absent branch not created']),
+        },
+        {
+            name: 'control: a remote branch already carrying the tree is skipped, even with owner commits',
+            run: () => (publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R', tree: 'T-LOCAL', compare: { total: 1, emails: [OWNER_EMAIL] } }, botEmail: BOT_EMAIL_FIXTURE }).action === 'skip' ? [] : ['same-tree remote not skipped']),
+        },
+        {
+            name: 'control: bot-only divergent history is replaced, pinned to the observed tip',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
+                return plan.action === 'force-with-lease' && plan.expect === 'R-TIP' ? [] : [`bot-only branch planned as ${plan.action} expect ${plan.expect}`];
+            },
+        },
+    ];
+
     const greens = [
+        ...publishGreens,
         {
             name: 'control: a fresh candidate is would-written as a bump and carries the tracking title',
             run: () => {
@@ -432,7 +522,7 @@ function selfTest() {
     ];
 
     let failed = 0;
-    for (const p of [...trainPlants, ...conflictPlants, ...viewPlants]) {
+    for (const p of [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants]) {
         const failures = p.run();
         const named = failures.find(f => f.includes(p.expect));
         if (failures.some(f => f.includes(REPO_ROOT))) {
@@ -458,7 +548,7 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    const total = trainPlants.length + conflictPlants.length;
+    const total = trainPlants.length + conflictPlants.length + viewPlants.length + publishPlants.length;
     console.log(`${NAME}: --self-test PASS -- ${Object.keys(STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length} controls stayed green`);
     return 0;
 }
@@ -474,7 +564,8 @@ if (isEntry) {
     }
     if (args.length === 1 && args[0] === '--self-test') process.exit(selfTest());
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
+    if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} --self-test, or node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>.`);
+    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, or node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>.`);
     process.exit(2);
 }

@@ -60,6 +60,11 @@ defaults:
   run:
     shell: bash
 
+# The author address of the commits the bot publishes. publish-bump-branch.sh treats a remote
+# commit by any other author as owner work and refuses to overwrite it.
+env:
+  BOT_EMAIL: release-train@users.noreply.github.com
+
 concurrency:
   group: release-train
 
@@ -107,9 +112,12 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       pin: ${{ steps.pin.outputs.pin }}
       candidate: ${{ steps.decide.outputs.candidate }}
+      pr-open-tag: ${{ steps.decide.outputs.pr-open-tag }}
+      pr-open-number: ${{ steps.decide.outputs.pr-open-number }}
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -137,6 +145,15 @@ jobs:
           # grep exits 1 when no tag matches; that empty listing is a FAIL in detect-upstreams, not here.
           grep -E "^FIREFOX_${MAJOR}_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" "$RUNNER_TEMP/names.txt" > "$RUNNER_TEMP/tags.txt" || [ $? -eq 1 ]
 
+      # Read-only: the open PRs tell the decision whether a candidate's bump PR already exists.
+      # A candidate with an open PR is PR-open, so no replay runs and no branch is re-pushed.
+      - name: List the open PR heads (read)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
+
       # product-details is advisory. An outage leaves the value empty, a NOTE is printed, and
       # the decision does not read it, so the advisory never blocks a bump.
       - name: Read the product-details advisory value
@@ -157,12 +174,12 @@ jobs:
         run: |
           set -eu
           if [ -n "$ADVISORY" ]; then
-            node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --firefox-esr "$ADVISORY" > "$RUNNER_TEMP/decide.txt"
+            node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --firefox-esr "$ADVISORY" --open-prs "$RUNNER_TEMP/open-prs.txt" > "$RUNNER_TEMP/decide.txt"
           else
-            node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" > "$RUNNER_TEMP/decide.txt"
+            node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --open-prs "$RUNNER_TEMP/open-prs.txt" > "$RUNNER_TEMP/decide.txt"
           fi
           cat "$RUNNER_TEMP/decide.txt"
-          grep '^candidate=' "$RUNNER_TEMP/decide.txt" >> "$GITHUB_OUTPUT"
+          grep -E '^(candidate|pr-open-tag|pr-open-number)=' "$RUNNER_TEMP/decide.txt" >> "$GITHUB_OUTPUT"
 
   # The Node half is its own detector job. A Node failure (index, release-keys, signature,
   # tarball) fails this job and no other: the ESR detector and the ESR bump do not need it.
@@ -173,6 +190,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       node-version: ${{ steps.node-index.outputs.node-version }}
       node-file: ${{ steps.node-index.outputs.node-file }}
@@ -184,15 +202,23 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: List the open PR heads (read)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
+
       # The Node 24 line: the newest v24 entry of the release index that ships linux-x64 and is
-      # strictly newer than the pin in node-runtime.json. No such line is a hold, and the outputs stay empty.
+      # strictly newer than the pin in node-runtime.json. No such line, and an open chore/node-v24.x
+      # PR, are holds, and the outputs stay empty.
       - name: Select the newest Node 24 line
         id: node-index
         run: |
           set -eu
           curl -fsSL https://nodejs.org/dist/index.json -o "$RUNNER_TEMP/node-index.json"
           # The pin is passed in, so a line that is not newer than the pin holds here, before any download.
-          node scripts/detect-upstreams.mjs --node-select "$RUNNER_TEMP/node-index.json" powerbrowser/packaging/node-runtime.json > "$RUNNER_TEMP/node-select.txt"
+          node scripts/detect-upstreams.mjs --node-select "$RUNNER_TEMP/node-index.json" powerbrowser/packaging/node-runtime.json --open-prs "$RUNNER_TEMP/open-prs.txt" > "$RUNNER_TEMP/node-select.txt"
           cat "$RUNNER_TEMP/node-select.txt" >> "$GITHUB_OUTPUT"
 
       # Provenance happens here, in the job, on every bump: the SHASUMS file and its
@@ -287,7 +313,7 @@ jobs:
           TAG_RE='^[A-Za-z]+_[0-9]+_[0-9]+(_[0-9]+)?esr_RELEASE$'
           [[ $TAG =~ $TAG_RE ]] || { echo "release-train: FAIL -- candidate '$TAG' is not an *esr_RELEASE tag. Next step: do not bump." >&2; exit 1; }
           git config user.name "release-train"
-          git config user.email "release-train@users.noreply.github.com"
+          git config user.email "$BOT_EMAIL"
           git switch -C "chore/esr-${TAG}" "$BASE"
           nix develop .#theia --command bash scripts/rebase-upstream.sh --tag "$TAG"
           cp configuration.toml "$RUNNER_TEMP/configuration.before.toml"
@@ -331,16 +357,19 @@ jobs:
         env:
           BASE: ${{ github.sha }}
           TAG: ${{ needs.detect.outputs.candidate }}
-          TOKEN: ${{ steps.app.outputs.token }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          set -eu
+          set -euo pipefail
           BRANCH="chore/esr-${TAG}"
           # The replay made no commit when HEAD is still the base: nothing to publish.
           if [ "$(git rev-parse HEAD)" = "$BASE" ]; then echo "release-train: NOTE -- no commit to publish for ${TAG}"; exit 0; fi
-          AUTH=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
-          # chore/esr-* is this job's own branch, recomputed from the base on every run.
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" push --force origin "HEAD:refs/heads/${BRANCH}"
+          # The script reads the remote branch, asks the plan, and pushes only when the plan allows it.
+          bash scripts/publish-bump-branch.sh "$BRANCH" "$BASE" > "$RUNNER_TEMP/publish.txt"
+          cat "$RUNNER_TEMP/publish.txt"
+          if [ "$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then
+            echo "release-train: NOTE -- ${BRANCH} is held by the refusal above; its PR is not edited this tick"
+            exit 0
+          fi
           TITLE="chore(esr): move the Firefox ESR pin to ${TAG}"
           BODY="Bump to ${TAG}, replayed through rebase-upstream.yml and regenerated from configuration.toml. verify.yml runs on this PR; the owner merges."
           EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
@@ -385,7 +414,6 @@ jobs:
           NODE_VERSION: ${{ needs.detect-node.outputs.node-version }}
           NODE_URL: ${{ needs.detect-node.outputs.node-url }}
           NODE_SHA: ${{ needs.detect-node.outputs.node-sha256 }}
-          TOKEN: ${{ steps.app.outputs.token }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -eu
@@ -394,16 +422,19 @@ jobs:
           [[ $NODE_VERSION =~ $NODE_RE ]] || { echo "release-train: FAIL -- Node line '$NODE_VERSION' is not on major 24. Next step: a major move is a separate decision." >&2; exit 1; }
           [[ $NODE_SHA =~ $SHA_RE ]] || { echo "release-train: FAIL -- the Node sha256 is not a 64-hex digest. Next step: do not bump." >&2; exit 1; }
           git config user.name "release-train"
-          git config user.email "release-train@users.noreply.github.com"
+          git config user.email "$BOT_EMAIL"
           git switch -C chore/node-v24.x "$BASE"
           node -e 'const fs = require("fs"); const p = "powerbrowser/packaging/node-runtime.json"; const j = JSON.parse(fs.readFileSync(p, "utf8")); j["linux-x64"] = { version: process.env.NODE_VERSION, url: process.env.NODE_URL, sha256: process.env.NODE_SHA }; fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");'
           node scripts/verify-node-major-agreement.mjs
           git add -- powerbrowser/packaging/node-runtime.json
           if git diff --cached --quiet; then echo "release-train: NOTE -- the Node pin already names $NODE_VERSION; no PR"; exit 0; fi
           git commit -m "chore(node): move the Node 24 runtime pin to ${NODE_VERSION}" -m "Version, URL and sha256 verified against the signed SHASUMS256.txt in the release train's detect-node job."
-          AUTH=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
-          # chore/node-v24.x is this job's own branch, recomputed from the base on every run.
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" push --force origin "HEAD:refs/heads/chore/node-v24.x"
+          bash scripts/publish-bump-branch.sh chore/node-v24.x "$BASE" > "$RUNNER_TEMP/publish.txt"
+          cat "$RUNNER_TEMP/publish.txt"
+          if [ "$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then
+            echo "release-train: NOTE -- chore/node-v24.x is held by the refusal above; its PR is not edited this tick"
+            exit 0
+          fi
           TITLE="chore(node): move the Node 24 runtime pin to ${NODE_VERSION}"
           BODY="Node 24 bump to ${NODE_VERSION}. The SHASUMS256.txt signature was checked with gpgv in the release train's detect-node job, and the tarball sha256 equals the signed entry. verify.yml runs on this PR."
           EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number --jq '.[0].number // empty')
@@ -455,10 +486,14 @@ jobs:
         env:
           PIN: ${{ needs.detect.outputs.pin }}
           CANDIDATE: ${{ needs.detect.outputs.candidate }}
+          PR_TAG: ${{ needs.detect.outputs.pr-open-tag }}
+          PR_NUMBER: ${{ needs.detect.outputs.pr-open-number }}
           BUMP: ${{ needs.bump.result }}
           STAGE_OUT: ${{ needs.bump.outputs.stage }}
         run: |
           set -eu
           STAGE="$STAGE_OUT"
           if [ "$BUMP" = "failure" ] && [ -z "$STAGE" ]; then STAGE="FAIL -- the replay job ended failure with no stage line"; fi
-          node scripts/release-train.mjs --would-write "$PIN" "$CANDIDATE" "" "$STAGE"
+          # A candidate whose PR is already open is the PR-open tag; the view reads it as BUMPING.
+          TAG="${CANDIDATE:-$PR_TAG}"
+          node scripts/release-train.mjs --would-write "$PIN" "$TAG" "$PR_NUMBER" "$STAGE"
