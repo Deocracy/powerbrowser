@@ -58,6 +58,7 @@
 //   node scripts/release-train.mjs --sweep-due <epoch-seconds>
 //   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
 //   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state> <state-out>
+//   node scripts/release-train.mjs --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch>
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -580,6 +581,32 @@ export function selectPinned(issues, ownerLogin) {
         && Array.isArray(i.labels) && i.labels.some(l => l && l.name === LABELS.track));
 }
 
+export const STATE_ARTIFACT = 'release-train-maintenance-state';
+
+/**
+ * The run whose maintenance-state artifact is the previous state, or null. Only artifacts of runs of this
+ * workflow that succeeded on the repository's default branch in this repository count: the artifact must be
+ * unexpired, named for the state, uploaded from the same branch and the same repository id, and its run must be
+ * one of those runs. Newest first, so the first match wins. Any mismatch is ignored; no match is null, which the
+ * plan treats as fail-safe notify. Pure.
+ */
+export function selectStateRun({ runs, artifacts, repo, repoId, branch }) {
+    if (!Array.isArray(runs) || !Array.isArray(artifacts)) return null;
+    if (typeof repo !== 'string' || repo === '' || typeof branch !== 'string' || branch === '') return null;
+    if (!Number.isSafeInteger(repoId) || repoId <= 0) return null;
+    const allowed = new Set(runs
+        .filter(r => r && r.event === 'workflow_dispatch' && r.status === 'completed' && r.conclusion === 'success'
+            && r.head_branch === branch && r.head_repository && r.head_repository.full_name === repo)
+        .map(r => r.id));
+    for (const a of artifacts) {
+        if (!a || a.name !== STATE_ARTIFACT || a.expired !== false) continue;
+        const w = a.workflow_run;
+        if (!w || w.head_branch !== branch || w.head_repository_id !== repoId) continue;
+        if (allowed.has(w.id)) return w.id;
+    }
+    return null;
+}
+
 /** The row statuses a rendered body carries, keyed by row name. Pure. */
 export function statusesOf(body) {
     return Object.fromEntries(parseRows(body).map(r => [r.name, r.status]));
@@ -642,6 +669,17 @@ function maintenanceCli([factsPath, bodyPath]) {
     return 0;
 }
 
+/** The state run id on stdout, or nothing (the fail-safe path). Unreadable input is nothing, never an error. */
+function stateSelectCli([runsPath, artifactsPath, repo, repoIdText, branch]) {
+    try {
+        const id = selectStateRun({ runs: readFacts(runsPath), artifacts: readFacts(artifactsPath), repo, repoId: Number(repoIdText), branch });
+        if (id !== null) console.log(String(id));
+    } catch {
+        // No output: the workflow treats an empty run id as absent, so the notice fires.
+    }
+    return 0;
+}
+
 /** The stored previous state, or null when it is missing or unreadable (the fail-safe notify path). */
 function readStored(path) {
     try {
@@ -686,6 +724,7 @@ function maintenanceSelfTest() {
     const TAG_175 = esrTag(175, 0, 0);
     const OWNER = 'owner-login-fixture';
     const STRANGER = 'stranger-login-fixture';
+    const REPO_FIXTURE = 'DeBIOS-Foundation/powerbrowser';
     const facts = (over = {}) => ({
         pinTag: BASE_PIN,
         nowMs: NOW,
@@ -712,6 +751,24 @@ function maintenanceSelfTest() {
     const redRendered = renderMaintenance(stateOf(TWO_RED));
     const redBody = redRendered.body;
     const storedOf = body => ({ number: 7, statuses: statusesOf(body) });
+    const FOREIGN_ID = 2002;
+    const stateFixtures = () => ({
+        input: {
+            repo: REPO_FIXTURE,
+            repoId: 1001,
+            branch: 'main',
+            runs: [
+                { id: 11, event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_repository: { full_name: REPO_FIXTURE } },
+                { id: 12, event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'feature/x', head_repository: { full_name: REPO_FIXTURE } },
+                { id: 13, event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_repository: { full_name: 'fork-owner/powerbrowser' } },
+            ],
+            artifacts: [
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 12, head_branch: 'feature/x', head_repository_id: 1001 } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 13, head_branch: 'main', head_repository_id: FOREIGN_ID } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 11, head_branch: 'main', head_repository_id: 1001 } },
+            ],
+        },
+    });
     const EDIT_WATCHDOG_AND_SYNTH = body => body.replace('| watchdog-age | green |', '| watchdog-age | red |').replace('| synthetic events POST | green |', '| synthetic events POST | red |');
     const controls = [
         { name: 'control: the all-green fixture renders the expected statuses', run: () => wantStatuses(stateOf(facts()), DEFERRED_GREEN) },
@@ -741,6 +798,17 @@ function maintenanceSelfTest() {
             const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: null });
             return d.comment !== null && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`missing state gave newlyRed ${JSON.stringify(d.newlyRed)}`];
         } },
+        { name: 'control: a foreign-repo or non-main artifact is ignored and the state run is the owner-branch run', run: () => {
+            const fx = stateFixtures();
+            const id = selectStateRun(fx.input);
+            return id === 11 ? [] : [`state selection picked ${id}, not run 11`];
+        } },
+        { name: 'control: with no admissible state the notice still fires for every red row', run: () => {
+            const fx = stateFixtures();
+            const id = selectStateRun({ ...fx.input, artifacts: fx.input.artifacts.slice(0, 2) });
+            const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: id === null ? null : storedOf(redBody) });
+            return id === null && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`no admissible state gave run ${id} and newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
         { name: 'control: one tracking issue is patched only when its bytes differ', run: () => {
             const same = nextMaintenance([issueBy(priorBody)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
             const diff = nextMaintenance([issueBy('stale body')], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
@@ -761,6 +829,18 @@ function maintenanceSelfTest() {
         { name: 'a synthetic events POST answering 500', run: () => reds(stateOf(facts({ syntheticStatus: 500 }))), expect: 'answered 500' },
         { name: 'a seventh row for a later phase', run: () => { const s = stateOf(facts()); return maintenanceRowDrift({ rows: [...s.rows, maintRow('renewals-due', 'green', 'x')] }, renderMaintenance(s).body); }, expect: 'renewals-due' },
         { name: 'two owner-authored tracking issues share the maintenance title', run: () => { const d = nextMaintenance([issueBy(priorBody, OWNER, 7), issueBy('other', OWNER, 9)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: null }); return d.action === 'fail' ? [d.reason] : []; }, expect: 'open tracking issues' },
+        { name: 'a foreign-repo artifact taken as the previous state (no run or branch filter)', run: () => {
+            const fx = stateFixtures();
+            const naive = fx.input.artifacts.find(a => a.workflow_run.head_repository_id === FOREIGN_ID);
+            const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: { number: 7, statuses: statusesOf(redBody) } });
+            return d.newlyRed.length === 0 ? [`the artifact of run ${naive.workflow_run.id} from repository ${naive.workflow_run.head_repository_id} suppressed the newly-red notice`] : [];
+        }, expect: 'suppressed the newly-red notice' },
+        { name: 'a feature-branch artifact taken as the previous state (no branch filter)', run: () => {
+            const fx = stateFixtures();
+            const naive = fx.input.artifacts.find(a => a.workflow_run.head_branch !== 'main');
+            const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: { number: 7, statuses: statusesOf(redBody) } });
+            return d.newlyRed.length === 0 ? [`the artifact of run ${naive.workflow_run.id} on ${naive.workflow_run.head_branch} suppressed the newly-red notice`] : [];
+        }, expect: 'suppressed the newly-red notice' },
         { name: 'a workflow_run wake from a fork head', run: () => { const a = admitWakeRun({ headRepository: 'fork-owner/powerbrowser' }, 'DeBIOS-Foundation/powerbrowser'); return a.admit ? [] : [a.reason]; }, expect: 'from fork' },
         { name: 'a stranger same-title issue taken as the pinned issue (title-only selection)', run: () => {
             const titleOnly = [issueBy('stranger body', STRANGER, 9)].filter(i => i.title === MAINTENANCE_TITLE);
@@ -982,7 +1062,8 @@ if (isEntry) {
     if (args[0] === '--sweep-due' && args.length === 2) process.exit(sweepDueCli(args.slice(1)));
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
     if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
+    if (args[0] === '--state-select' && args.length === 6) process.exit(stateSelectCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds>, node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>.`);
+    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds>, node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch>.`);
     process.exit(2);
 }

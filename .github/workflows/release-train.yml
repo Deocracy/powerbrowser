@@ -712,18 +712,26 @@ jobs:
           set -euo pipefail
           gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --search 'in:title "release-train: maintenance"' --json number,title,body,author,labels > "$RUNNER_TEMP/maint-found.json"
 
-      # The previous row statuses come from the maintenance-state artifact of the latest unexpired run that
-      # saved one (read only). They are the only source of the transition comment: the issue body is
-      # editable by anyone with write access, so it never supplies the previous statuses. No artifact, or
-      # one that cannot be read, is the fail-safe path: every red row is treated as newly red.
-      - name: Look up the latest maintenance-state artifact (read)
+      # The previous row statuses come from the maintenance-state artifact of a successful run of this workflow
+      # on the repository's default branch, in this repository. The repository, its default branch and its id
+      # are read from the API, and the selection is the pure selectStateRun: a run or artifact from a fork, a
+      # feature branch or another repository is never the previous state. Any error or absence leaves the
+      # run id empty, which is the fail-safe path: every red row is treated as newly red. A read, so no gate.
+      - name: Look up the previous maintenance state run (read)
         id: maint-prev
-        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' }}
+        if: ${{ needs.maintenance.result == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          RUN_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=release-train-maintenance-state&per_page=10" --jq '[.artifacts[] | select(.expired == false)][0].workflow_run.id // empty' || true)
+          OUT="$RUNNER_TEMP/maint-lookup"
+          mkdir -p "$OUT"
+          gh api "repos/${GITHUB_REPOSITORY}" --jq '{branch: .default_branch, repo_id: .id}' > "$OUT/repo.json" 2>/dev/null || echo '{}' > "$OUT/repo.json"
+          BRANCH=$(jq -r '.branch // ""' "$OUT/repo.json")
+          REPO_ID=$(jq -r '.repo_id // 0' "$OUT/repo.json")
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-train.yml/runs?branch=${BRANCH:-none}&event=workflow_dispatch&status=success&per_page=10" --jq '.workflow_runs' > "$OUT/runs.json" 2>/dev/null || echo '[]' > "$OUT/runs.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=release-train-maintenance-state&per_page=30" --jq '.artifacts' > "$OUT/artifacts.json" 2>/dev/null || echo '[]' > "$OUT/artifacts.json"
+          RUN_ID=$(node scripts/release-train.mjs --state-select "$OUT/runs.json" "$OUT/artifacts.json" "$GITHUB_REPOSITORY" "$REPO_ID" "$BRANCH" || true)
           echo "run-id=${RUN_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Download the previous maintenance state (read; absent is fail-safe)
