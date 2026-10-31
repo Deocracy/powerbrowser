@@ -37,16 +37,46 @@ needed before a real `release.yml` dispatch can complete.
    `sidecar-no-symlinks`, `package-target-natives` and `packaged-identity` exist, but
    `install-matrix` is not registered, and the packaged rows need the built tree. None is
    invoked yet.
-8. **signmar output format and runtime.** The channel gate parses `signmar -T` with a
-   `channel:` label. The label and the jessie-built `signmar` on ubuntu-latest are both
-   unmeasured. The gate fails closed on an unparsed label, so the first sign-publish run
-   records the real output and the real `signmar` behaviour.
+8. **signmar source, output format and runtime (review BL-01, resolved by design, owner to confirm).**
+   `sign-publish` no longer runs a legion-built `signmar`. `scripts/build-signmar.sh` builds it on the
+   hosted runner from the pinned Firefox source: the pin is
+   `powerbrowser/packaging/signmar/SOURCES.sha256` (ESR tag, the 40-hex commit the tag names
+   `6cd88e7d45fe7a5b0b87b984fb32a8779151860e`, and the sha256 of 15 libmar and CityHash files), fetched
+   by exact commit from raw.githubusercontent.com and refused on any mismatch. Measured on this host
+   under Nix (NSS 3.112): the pinned source compiles with `cc -DMAR_NSS` against the system NSS, signs
+   and `-v` verifies a MAR, and `scripts/verify-mar-signature.mjs` verifies the same MAR; `-T` prints
+   `MAR channel name: <id>`, which the gate's sed matches. Not measured: the build against ubuntu-latest's
+   `libnss3-dev` (Ubuntu 24.04 ships an older NSS than 3.112), and the Nix-built tools are not the apt
+   ones. Owner action: confirm the pin (the commit and hashes were computed from the tracked `upstream/`
+   checkout at the pinned tag and re-fetched from GitHub by commit) and that building a signer from
+   source on the hosted runner is acceptable in place of the "container-built signmar" wording of SEC-07;
+   `REQUIREMENTS.md` SEC-07 and `49-RESEARCH.md` still say container-built and were not edited here.
+   An ESR move needs the pin re-recorded in the same reviewed commit (the `release-shape` row goes red
+   until the pin's tag line equals `configuration.toml`).
 9. **Post-publish artifact deletion.** The artifact cap mitigation (`retention-days: 1`
    plus deletion after publish) is only the retention half. Deletion is not wired.
 
+10. **build-linux now fetches upstream, applies patches and builds Theia (review WR-07).**
+    The three steps (`fetch-upstream.sh` plus `apply-patches.sh`, then `yarn install --ignore-scripts
+    --frozen-lockfile`, the drivelist `node-gyp rebuild`, `yarn build` in the Nix theia shell) are
+    authored from `docs/BUILD.md` and `verify.yml` and never run on legion. Open: the Theia build
+    downloads plugins over the network during `yarn build`; whether the legion unit allows that is
+    unmeasured. Items 6 and 7 stand.
+11. **R2 copy and the deliberate failure (review WR-06).** `sign-publish` carries a step `r2_gate`
+    that fails every run after the draft is verified and before the bot token is minted, so nothing
+    can publish without the DIST-08 copy. Plan 49-05 replaces it with an `r2_copy` step in the same
+    commit; the `release-asset-set` row accepts either and goes red if neither is there.
+12. **Runner group and ref control (review WR-11).** The first-step ref refusal is defence in depth
+    only. Plan 49-02 must register the runner in a group restricted to
+    `release.yml@refs/heads/main`; the `release` and `descriptor` environments already carry the
+    main-only branch policy (`.github/settings/environment-*.json`, checked by `repo-controls`).
+13. **Fresh dispatch after a late failure (review IN-04).** `release-linux` is uploaded with
+    `overwrite: true`, so a re-run of `build-linux` replaces it; a stale draft for the same tag is
+    deleted by `sign-publish`. Start a fresh dispatch after a late failure all the same.
+
 ## Broken-windows register (owner)
 
-10. `.planning/WINDOWS.md` is refused by the append tool: its rendered table disagrees with
+14. `.planning/WINDOWS.md` is refused by the append tool: its rendered table disagrees with
     its fenced JSON for rows 10, 11 and 19 (pre-existing; not created by this run). Regenerate
     the file (the tool's own instruction), then append these stub entries:
     - `stub`: release.yml descriptor placeholder (until plan 49-04)
