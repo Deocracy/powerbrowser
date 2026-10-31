@@ -307,8 +307,8 @@ export const TheiaService = {
     // 01-10: guarded, and DELIBERATELY NON-FATAL -- the asymmetry with the
     // settings-folder step above is the decision, not an oversight. That step
     // is a precondition of this launch; this one is best-effort cleanup of a
-    // PREVIOUS launch's process (`PowerBrowserAPI.signalBarePid` opens libc
-    // outside its own try, so it can throw). Failing this launch because a
+    // PREVIOUS launch's process (`PowerBrowserAPI.signalBarePid` never throws,
+    // but the guard stays as a second line of defence). Failing this launch because a
     // stale pid could not be signalled would turn a cosmetic cleanup miss into
     // the dead screen this whole guard exists to prevent. Nothing is lost:
     // `_reapLog` writes the outcome on the same dual channel every other reap
@@ -467,24 +467,28 @@ export const TheiaService = {
 
   /**
    * UPD-30 (Phase 54): the reap the quit and restart blocker awaits. stop() is idempotent and already
-   * signals the sidecar; this polls the recorded pid every 100 ms until it is gone, bounded by
-   * powerbrowser.sidecar.killGraceMs (default 5000 ms). On timeout it logs the live pid loudly and
-   * resolves, so an unkillable child can never hold shutdown open.
+   * signals the sidecar; this waits on the Subprocess handle stop() signals (the same on every
+   * platform, no pid probe), bounded by powerbrowser.sidecar.killGraceMs (the same default as stop())
+   * plus 500 ms. A handle that was never live is not waited on, so a stale pid is never touched. On
+   * timeout it logs the live pid loudly and resolves, and any failure resolves too, so an unkillable
+   * child can never hold shutdown open or reject the blocker.
    */
   async stopAndReap() {
+    const proc = this._proc && this._proc.exitCode == null ? this._proc : null;
     const pid = this._pid;
-    this.stop();
-    if (pid == null) {
-      return;
-    }
-    const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.killGraceMs", 5000);
-    const deadline = Date.now() + graceMs;
-    while (PowerBrowserAPI.signalBarePid(pid, 0)) {
-      if (Date.now() >= deadline) {
-        PowerBrowserAPI.log("error", `Sidecar pid ${pid} is still alive ${graceMs} ms after the reap; shutdown continues without it.`);
+    const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.killGraceMs", 3000);
+    try {
+      this.stop();
+      if (proc === null) {
         return;
       }
-      await PowerBrowserAPI.sleep(100);
+      if (await PowerBrowserAPI.waitForExit(proc, graceMs + 500)) {
+        this._pid = null;
+      } else {
+        PowerBrowserAPI.log("error", `Sidecar pid ${pid} is still alive ${graceMs} ms after the reap; shutdown continues without it.`);
+      }
+    } catch (err) {
+      PowerBrowserAPI.log("error", `Sidecar reap failed (${err && err.name ? err.name : "error"}); shutdown continues without it.`);
     }
   },
 
