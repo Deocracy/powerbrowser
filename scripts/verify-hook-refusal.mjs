@@ -12,6 +12,9 @@
 //     triple must exit 0. Each refusal row must exit non-zero and name the expected value on stderr:
 //     a foreign-branch GITHUB_WORKFLOW_REF, a push event, a wrong GITHUB_REPOSITORY, an empty triple,
 //     and a hostile environment (BASH_ENV, ENV, an exported function shadowing [, exit, echo or builtin).
+//     The near-miss rows are derived from the expected triple: another workflow file on main, a branch
+//     name with a suffix, a tag called main, an upper-case ref, a trailing space, an empty and a missing
+//     variable per variable, the other event names, and the owner in another case.
 //  3. Placement. Every job on the powerbrowser-release label starts with the main-and-dispatch refusal
 //     (step 1) and carries the full-SHA check as step 2, before any checkout. A legion job missing
 //     either is red, naming the job.
@@ -101,14 +104,30 @@ function refusalTable(expected) {
     const release = { GITHUB_REPOSITORY: expected.repo, GITHUB_WORKFLOW_REF: expected.ref, GITHUB_EVENT_NAME: 'workflow_dispatch' };
     const foreign = { GITHUB_REPOSITORY: WRONG_REPO, GITHUB_WORKFLOW_REF: `${WRONG_REPO}/${WORKFLOW_REL}@refs/heads/feature-branch`, GITHUB_EVENT_NAME: 'push' };
     const foreignRef = `${expected.repo}/${WORKFLOW_REL}@refs/heads/feature-branch`;
+    const [owner, repoName] = expected.repo.split('/');
     // A function exported into the environment is how a hostile job would replace a test or an exit.
-    const fn = (name, body) => ({ [`BASH_FUNC_${name}%%`]: `() { ${body}; }` });
+    const fn = (fname, body) => ({ [`BASH_FUNC_${fname}%%`]: `() { ${body}; }` });
     return [
         { name: 'release triple', triple: release, accept: true },
         { name: 'foreign-branch workflow ref', triple: { ...release, GITHUB_WORKFLOW_REF: foreignRef }, expect: expected.ref },
         { name: 'push event', triple: { ...release, GITHUB_EVENT_NAME: 'push' }, expect: 'workflow_dispatch' },
         { name: 'wrong repo', triple: { ...release, GITHUB_REPOSITORY: WRONG_REPO }, expect: expected.repo },
         { name: 'empty triple', triple: {}, expect: expected.repo },
+        // Rows derived from the expected triple, so a loosened test (a glob, a prefix, a case-fold, a trim)
+        // accepts one of them and goes red. Nothing here is a hand-kept list of literals.
+        { name: 'other workflow file on main', triple: { ...release, GITHUB_WORKFLOW_REF: expected.ref.replace(/[^/]+@/, 'ci.yml@') }, expect: expected.ref },
+        { name: 'ref with a suffix on the main branch name', triple: { ...release, GITHUB_WORKFLOW_REF: `${expected.ref}-x` }, expect: expected.ref },
+        { name: 'ref naming a tag called main', triple: { ...release, GITHUB_WORKFLOW_REF: expected.ref.replace('refs/heads/', 'refs/tags/') }, expect: expected.ref },
+        { name: 'ref in upper case', triple: { ...release, GITHUB_WORKFLOW_REF: expected.ref.toUpperCase() }, expect: expected.ref },
+        ...Object.entries(release).flatMap(([k, v]) => [
+            { name: `${k} with a trailing space`, triple: { ...release, [k]: `${v} ` }, expect: v },
+            { name: `${k} empty`, triple: { ...release, [k]: '' }, expect: v },
+            { name: `${k} missing`, triple: Object.fromEntries(Object.entries(release).filter(([n]) => n !== k)), expect: v },
+        ]),
+        ...['pull_request', 'workflow_call', 'schedule', 'Workflow_Dispatch', 'workflow_dispatch_x'].map(e => (
+            { name: `${e} event`, triple: { ...release, GITHUB_EVENT_NAME: e }, expect: 'workflow_dispatch' })),
+        ...[owner.toUpperCase(), owner.toLowerCase()].filter(o => o !== owner).map(o => (
+            { name: `repo owner as ${o}`, triple: { ...release, GITHUB_REPOSITORY: `${o}/${repoName}` }, expect: expected.repo })),
         { name: 'BASH_ENV set with the release triple', triple: { ...release, BASH_ENV: '/dev/null' }, expect: 'BASH_ENV' },
         { name: 'empty BASH_ENV with the release triple', triple: { ...release, BASH_ENV: '' }, expect: 'BASH_ENV' },
         { name: 'ENV set with the release triple', triple: { ...release, ENV: '/dev/null' }, expect: 'ENV' },
@@ -244,8 +263,13 @@ function selfTest() {
         const lines = realRead(HOOK_REL).split('\n');
         const hits = lines.filter(test);
         if (hits.length !== 1) throw new Error(`self-test anchor ${test} matches ${hits.length} line(s) in ${HOOK_REL}`);
-        return lines.map(l => (test(l) ? edit(l) : l)).filter(l => l !== null).join('\n');
+        const out = lines.map(l => (test(l) ? edit(l) : l));
+        if (out.some((l, i) => l === lines[i] && test(lines[i]))) throw new Error(`self-test edit of ${test} changed nothing in ${HOOK_REL}`);
+        return out.filter(l => l !== null).join('\n');
     };
+    // A loosening keeps the test but weakens it: edit rewrites the variable's operand or pattern.
+    const loosen = (variable, edit) => hookEdit(l => l.startsWith(`[[ "$${variable}" == `), edit);
+    const [owner] = repo.split('/');
     const withoutLine = (marker) => hookEdit(l => l.includes(marker), () => null);
     const withoutPosixMode = hookEdit(l => l === 'POSIXLY_CORRECT=1', () => null);
     // The first hook of this plan: single-bracket tests and no exported-function guard.
@@ -272,6 +296,13 @@ function selfTest() {
         ['foreign-branch GITHUB_WORKFLOW_REF accepted', { read: withoutLine('"$ref" == ') }, HOOK_REL, 'GITHUB_WORKFLOW_REF', `${repo}/${WORKFLOW_REL}@refs/heads/feature-branch`],
         ['push event accepted', { read: withoutLine('"$event" == ') }, HOOK_REL, 'GITHUB_EVENT_NAME', "GITHUB_EVENT_NAME='push'"],
         ['wrong repo accepted', { read: withoutLine('"$repo" == ') }, HOOK_REL, 'GITHUB_REPOSITORY', WRONG_REPO],
+        ['ref test loosened to a suffix glob', { read: loosen('ref', () => '[[ "$ref" == *@refs/heads/main ]] || exit 1') }, HOOK_REL, 'accepted the other workflow file on main'],
+        ['ref test loosened to a prefix glob', { read: loosen('ref', l => l.replace("' ]]", "'* ]]")) }, HOOK_REL, 'accepted the ref with a suffix on the main branch name'],
+        ['ref test loosened to match a tag called main', { read: loosen('ref', l => l.replace('refs/heads/main', "refs/'*'/main")) }, HOOK_REL, 'accepted the ref naming a tag called main'],
+        ['event test loosened to a glob', { read: loosen('event', l => l.replace("'workflow_dispatch'", 'workflow_*')) }, HOOK_REL, 'accepted the workflow_call event'],
+        ['event test case-folded', { read: loosen('event', l => l.replace('"$event"', '"${event,,}"')) }, HOOK_REL, 'accepted the Workflow_Dispatch event'],
+        ['event test trimming a trailing space', { read: loosen('event', l => l.replace('"$event"', '"${event% }"')) }, HOOK_REL, 'accepted the GITHUB_EVENT_NAME with a trailing space'],
+        ['repo test case-folded', { read: loosen('repo', l => l.replace('"$repo"', '"${repo,,}"').replace(`'${repo}'`, `'${repo.toLowerCase()}'`)) }, HOOK_REL, `accepted the repo owner as ${owner.toUpperCase()}`],
         ['exported-function guard dropped', { read: withoutLine('export -f)') }, HOOK_REL, 'accepted the exported function [ with the release triple'],
         ['BASH_ENV guard dropped', { read: withoutLine('[[ ! -v BASH_ENV') }, HOOK_REL, 'accepted the BASH_ENV set with the release triple'],
         ['posix mode dropped', { read: withoutPosixMode }, HOOK_REL, 'accepted the exported function exit shadowing the refusal'],
