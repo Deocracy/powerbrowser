@@ -4794,6 +4794,13 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
+    # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
+    # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
+    # FIREFOX_ESR-driven 175 steer, an empty listing) must go red naming its drift. Honestly
+    # --quick: fixtures only; the live tag listing runs in the release-train detect job. It writes
+    # nothing.
+    "detect-upstreams-self-test|node $REPO_ROOT/scripts/detect-upstreams.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
