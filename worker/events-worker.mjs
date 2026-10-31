@@ -39,6 +39,14 @@
 // "Discarded: malformed_batch" or "Discarded: malformed_event". 413: "Discarded: oversized_body". 500: "Discarded: store_unavailable".
 // 401 and 404 answer an empty body.
 //
+// CORS. The sender posts application/json from the Theia page, whose origin is the loopback
+// sidecar (http://127.0.0.1:<port>, the host TheiaService.sys.mjs starts it on; the port changes per
+// launch), so the browser sends an OPTIONS preflight first. /events answers it with 204 and allows
+// POST and the content-type header for that origin only. Access-Control-Allow-Origin is echoed only
+// when the request origin matches CORS_ORIGIN (one origin cannot be a list and the port is dynamic,
+// so the pattern is the narrowest correct value), and it is never sent for /download-counts, which
+// is a server-to-server route.
+//
 // ZERO-DEPENDENCY. Request, Response, URL, TextEncoder and the D1 binding only; no import, no socket
 // at import time, so the contract gate imports this file under plain node.
 
@@ -96,6 +104,27 @@ const UPSERT_DOWNLOAD = 'INSERT INTO download_counts ("asset", "tag", "day", "do
 const SELECT_MAINTAINER = 'SELECT * FROM events WHERE "synthetic" = 0 ORDER BY "id"';
 const DELETE_EVENTS_OLDER = 'DELETE FROM events WHERE "received_at" < ?';
 const DELETE_COUNTS_OLDER = 'DELETE FROM download_counts WHERE "received_at" < ?';
+
+/** The only origin a browser page may post /events from: the loopback sidecar, any port. */
+export const CORS_ORIGIN = /^http:\/\/127\.0\.0\.1:\d{1,5}$/;
+export const CORS_MAX_AGE_SECONDS = 86400;
+
+/**
+ * The CORS response headers for /events. Nothing but Vary for an origin that is not the sidecar's
+ * own, so the browser blocks the cross-origin read and the POST. The preflight adds the allowed
+ * method, header and cache lifetime.
+ */
+export function corsHeaders(origin, preflight) {
+    const headers = { vary: 'origin' };
+    if (typeof origin !== 'string' || !CORS_ORIGIN.test(origin)) return headers;
+    headers['access-control-allow-origin'] = origin;
+    if (preflight) {
+        headers['access-control-allow-methods'] = 'POST';
+        headers['access-control-allow-headers'] = 'content-type';
+        headers['access-control-max-age'] = String(CORS_MAX_AGE_SECONDS);
+    }
+    return headers;
+}
 
 const encoder = new TextEncoder();
 /** Per-instance POST window for /events. Fail-closed on a non-finite clock: see throttled(). */
@@ -258,14 +287,17 @@ export async function scheduled(controller, env) {
     await runRetention(env.DB, Date.now());
 }
 
-function toResponse(verdict) {
-    return new Response(verdict.body, { status: verdict.status, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+function toResponse(verdict, extraHeaders = {}) {
+    return new Response(verdict.body, { status: verdict.status, headers: { 'content-type': 'text/plain; charset=utf-8', ...extraHeaders } });
 }
 
 export default {
     async fetch(request, env) {
         const path = new URL(request.url).pathname;
         if (path !== EVENTS_PATH && path !== DL_PATH) return toResponse(empty(404));
+        const origin = request.headers.get('origin');
+        if (path === EVENTS_PATH && request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(origin, true) });
+        const cors = path === EVENTS_PATH ? corsHeaders(origin, false) : {};
         const shape = {
             method: request.method,
             path,
@@ -280,7 +312,7 @@ export default {
         const verdict = path === EVENTS_PATH
             ? await handleEvents(shape, env, state)
             : await handleDownloadCounts(shape, env, state);
-        return toResponse(verdict);
+        return toResponse(verdict, cors);
     },
     scheduled,
 };

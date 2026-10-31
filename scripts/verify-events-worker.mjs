@@ -59,6 +59,7 @@ const ENRICH_REL = 'theia/extensions/telemetry/src/browser/telemetry-enrichment.
 const REPORT_REL = 'theia/extensions/telemetry/src/browser/telemetry-error-report.ts';
 const SENDER_REL = 'theia/extensions/telemetry/src/browser/telemetry-sender.ts';
 const WORKER_DIR_REL = 'worker';
+const THEIA_SERVICE_REL = 'powerbrowser/shell/TheiaService.sys.mjs';
 const PLACEHOLDER = 'REPLACE-WITH-OWNER-D1-ID';
 const FIXED_NOW = Date.UTC(2026, 9, 31, 12, 0, 0);
 const DAY = 86_400_000;
@@ -85,6 +86,7 @@ const RULE = Object.freeze({
     retention: 'retention window',
     admitted: 'admitted set equals the producer',
     contract: 'producer-to-Worker contract',
+    cors: 'CORS preflight and origin',
     shapes: 'admitted shapes equal the producer',
     content: 'content in an admitted key',
     flat: 'old flat event shape',
@@ -221,6 +223,15 @@ async function runStatic(root, worker) {
         for (const [what, want, got] of pairs) {
             if (want !== got) failures.push(`${RULE.shapes}: the producer's ${what} is ${want} but the Worker restates ${got}. Next step: make ${WORKER_REL} restate the producer's shape exactly.`);
         }
+    }
+
+    // 1a''. the CORS origin admits the sidecar's own origin, derived from the host TheiaService starts it on.
+    const service = readText(root, THEIA_SERVICE_REL);
+    const host = service === null ? null : /"--hostname",\s*"([^"]+)"/.exec(service)?.[1];
+    if (host === null || host === undefined) {
+        failures.push(`${RULE.cors}: ${THEIA_SERVICE_REL} states no --hostname, so the sidecar origin the Worker must allow cannot be derived. Next step: restore the sidecar start arguments or update this check.`);
+    } else if (!worker.CORS_ORIGIN?.test(`http://${host}:41234`) || worker.CORS_ORIGIN.test('http://localhost:41234') || worker.CORS_ORIGIN.test('https://example.org')) {
+        failures.push(`${RULE.cors}: CORS_ORIGIN does not match exactly the sidecar origin http://${host}:<port> that ${THEIA_SERVICE_REL} starts. Next step: allow that origin and no other in ${WORKER_REL}.`);
     }
 
     // 1b. the privacy page states the Worker's retention.
@@ -398,6 +409,30 @@ async function runBehaviour(root, worker, secret) {
         if (stub.events.length !== worker.THROTTLE_MAX_POSTS) failures.push(`${RULE.overRate}: the store holds ${stub.events.length} row(s) after the discard, not ${worker.THROTTLE_MAX_POSTS}. Next step: a throttled POST stores nothing.`);
     }
 
+    // CORS: the preflight and the origin allowance, driven through the real fetch handler.
+    {
+        const origin = 'http://127.0.0.1:41234';
+        const stub = makeStub();
+        const e = { DB: stub, DOWNLOAD_COUNT_SECRET: secret };
+        const url = `https://events.example.invalid${worker.EVENTS_PATH}`;
+        const pre = await worker.default.fetch(new Request(url, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' } }), e);
+        const h = name => pre.headers.get(name);
+        if (pre.status !== 204 || h('access-control-allow-origin') !== origin || h('access-control-allow-methods') !== 'POST' || h('access-control-allow-headers') !== 'content-type') {
+            failures.push(`${RULE.cors}: OPTIONS ${worker.EVENTS_PATH} from the sidecar origin answered ${pre.status} with allow-origin ${JSON.stringify(h('access-control-allow-origin'))}, methods ${JSON.stringify(h('access-control-allow-methods'))}, headers ${JSON.stringify(h('access-control-allow-headers'))}; want 204, ${origin}, POST, content-type. Next step: answer the preflight in ${WORKER_REL}.`);
+        }
+        const foreign = await worker.default.fetch(new Request(url, { method: 'OPTIONS', headers: { origin: 'https://example.org', 'access-control-request-method': 'POST' } }), e);
+        if (foreign.headers.get('access-control-allow-origin') !== null) failures.push(`${RULE.cors}: a preflight from https://example.org was granted allow-origin. Next step: allow only the sidecar origin.`);
+        const posted = await worker.default.fetch(new Request(url, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify(GOOD_EVENTS) }), e);
+        if (posted.status !== 200 || posted.headers.get('access-control-allow-origin') !== origin) failures.push(`${RULE.cors}: POST ${worker.EVENTS_PATH} from the sidecar origin answered ${posted.status} with allow-origin ${JSON.stringify(posted.headers.get('access-control-allow-origin'))}, so the browser would hide the response. Next step: add allow-origin to the /events responses.`);
+        const rejected = await worker.default.fetch(new Request(url, { method: 'POST', headers: { origin, 'content-type': 'text/plain' }, body: 'x' }), e);
+        if (rejected.status !== 400 || rejected.headers.get('access-control-allow-origin') !== origin) failures.push(`${RULE.cors}: a rejected POST ${worker.EVENTS_PATH} answered ${rejected.status} without allow-origin. Next step: add allow-origin to every /events response.`);
+        const dl = new Request(`https://events.example.invalid${worker.DL_PATH}`, { method: 'POST', headers: { origin, 'content-type': 'application/json', authorization: `Bearer ${secret}` }, body: JSON.stringify({ asset: 'a.exe', tag: 'v1.2-1', download_count: 1 }) });
+        const dlResponse = await worker.default.fetch(dl, e);
+        if (dlResponse.status !== 200 || dlResponse.headers.get('access-control-allow-origin') !== null) failures.push(`${RULE.cors}: POST ${worker.DL_PATH} answered ${dlResponse.status} with allow-origin ${JSON.stringify(dlResponse.headers.get('access-control-allow-origin'))}. Next step: never send CORS headers on the download-counts route.`);
+        const dlPre = await worker.default.fetch(new Request(`https://events.example.invalid${worker.DL_PATH}`, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'POST' } }), e);
+        if (dlPre.headers.get('access-control-allow-origin') !== null) failures.push(`${RULE.cors}: OPTIONS ${worker.DL_PATH} was granted allow-origin. Next step: never send CORS headers on the download-counts route.`);
+    }
+
     // Download counts: authentication first, then the shape, then the upsert.
     const dlBody = { asset: 'PowerBrowser-153.5.1.exe', tag: 'v153.5.1-1', download_count: 10 };
     const authed = { authorization: `Bearer ${secret}` };
@@ -514,7 +549,7 @@ async function main() {
 
 // Stages a copy of every file the gate reads, so a plant mutates one copy and leaves the rest as written.
 function stage(dir) {
-    for (const rel of [WORKER_REL, SCHEMA_REL, WRANGLER_REL, PRIVACY_REL, ENRICH_REL, REPORT_REL, SENDER_REL]) {
+    for (const rel of [WORKER_REL, SCHEMA_REL, WRANGLER_REL, PRIVACY_REL, ENRICH_REL, REPORT_REL, SENDER_REL, THEIA_SERVICE_REL]) {
         mkdirSync(dirname(join(dir, rel)), { recursive: true });
         copyFileSync(join(REPO_ROOT, rel), join(dir, rel));
     }
@@ -545,6 +580,10 @@ const PLANTS = [
     { rule: RULE.contract, rel: SENDER_REL, find: 'this.queue.push({ kind, name, data, at: this.nowFn() });', replace: 'this.queue.push({ kind, name, payload: data, at: this.nowFn() });' },
     { rule: RULE.content, rel: WORKER_REL, find: '        if (!valueOk(wire, value)) return undefined;\n', replace: '' },
     { rule: RULE.shapes, rel: WORKER_REL, find: "    source: /^[\\w.-]{1,100}$/,", replace: '    source: /^.{1,100}$/,' },
+    { rule: RULE.cors, rel: WORKER_REL, find: "        if (path === EVENTS_PATH && request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(origin, true) });\n", replace: '' },
+    { rule: RULE.cors, rel: WORKER_REL, find: "        const cors = path === EVENTS_PATH ? corsHeaders(origin, false) : {};", replace: '        const cors = corsHeaders(origin, false);' },
+    { rule: RULE.cors, rel: WORKER_REL, find: "        const cors = path === EVENTS_PATH ? corsHeaders(origin, false) : {};", replace: '        const cors = {};' },
+    { rule: RULE.cors, rel: WORKER_REL, find: 'export const CORS_ORIGIN = /^http:\\/\\/127\\.0\\.0\\.1:\\d{1,5}$/;', replace: 'export const CORS_ORIGIN = /^http:\\/\\/localhost:\\d{1,5}$/;' },
     { rule: RULE.admitted, rel: WORKER_REL, find: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);", replace: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os', 'message']);" },
     { rule: RULE.schemaColumn, rel: SCHEMA_REL, find: '  "column" INTEGER,\n', replace: '' },
     { rule: RULE.noRoutes, rel: WRANGLER_REL, find: 'compatibility_date = "2026-10-31"', replace: 'compatibility_date = "2026-10-31"\nroutes = ["events.powerbrowser.org/events"]' },
