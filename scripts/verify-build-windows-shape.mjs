@@ -17,20 +17,31 @@
 //  6. fail-open  no step carries continue-on-error, `|| true`, `set +e`, or a multi-line script
 //                without set -euo pipefail; every piped run: step uses pipefail.
 //  7. image      the podman build step carries --no-cache and --pull=always.
-//  8. steps      the cross-build step repackages the installer and the complete MAR.
+//  8. steps      the job runs `./mach build`, then powerbrowser/packaging/package-windows.sh (the sidecar and
+//                Node staging, the zip rewrite and the repackage calls) before it uploads; no step calls
+//                get_vs.py or sets WINSYSROOT (--enable-bootstrap fetches the pinned vs toolchain).
+//  8b. repackage package-windows.sh passes every REQUIRED argument of `mach repackage installer` and
+//                `mach repackage mar`, derived at check time from the pinned tree's mach_commands.py
+//                (required=True); the upload paths sit under the directory it writes to and end in the
+//                suffixes of the files it names.
 //  9. retention  every upload-artifact step sets retention-days 1 and fails on no files; the file
 //                carries at least one, so the rule is not vacuous.
 // 10. no-cache   no actions/cache step, no cache input.
 // 11. independent build-windows has no needs: key, so it cannot start from a runner output.
+// 12. node pin    the `run:` text of the Node-pin step is EXECUTED (with a nix shim, in a temp directory)
+//                against the real node-runtime.json, which it must accept, and against fixtures with a wrong
+//                version, a missing win32-x64 key and a bad digest, which it must each refuse.
 //
 // Instrument: js-yaml from theia/ through scripts/lib/release-workflow.mjs. A missing js-yaml,
 // an unreadable file and a parse error are FAILs; zero jobs is a FAIL, never a pass.
 //
-// Honestly --quick: it reads the workflow text and parses YAML. The self-test plants each fault
-// in memory through runChecks' overrides and writes nothing. It does not build, open a browser or
-// display, or reach the network. The live run on legion is the owner's (54-04 checkpoint).
+// Honestly --quick: it reads the workflow text and parses YAML, and rule 12 runs the Node-pin step's
+// shell text in a mkdtemp directory it removes. The self-test plants each fault in memory through
+// runChecks' overrides. It does not build, open a browser or display, or reach the network. The live run on legion is the owner's (54-04 checkpoint).
 
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,6 +58,10 @@ const KEY_IF = "steps.key_gate.outputs.build == 'true'";
 const UPLOAD = /^actions\/upload-artifact@/;
 const CACHE = /^actions\/cache@/;
 const PINNED = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[0-9a-f]{40}$/;
+const PACKAGE_REL = 'powerbrowser/packaging/package-windows.sh';
+const MACH_REL = 'upstream/python/mozbuild/mozbuild/mach_commands.py';
+const PIN_REL = 'powerbrowser/packaging/node-runtime.json';
+const PIN_KEY = 'win32-x64';
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -78,6 +93,47 @@ function labelsOf(job) {
     if (Array.isArray(r)) return r.map(String);
     if (r !== null && typeof r === 'object') return [].concat(r.labels ?? []).map(String);
     return r === undefined ? [] : [String(r)];
+}
+
+// The required long flags (and their short aliases) of `mach repackage <sub>`, parsed from the pinned tree.
+function requiredFlags(machText, sub) {
+    const start = machText.search(new RegExp(`@SubCommand\\(\\s*"repackage",\\s*"${sub}"`));
+    if (start < 0) return null;
+    const end = machText.indexOf('\ndef ', start);
+    const block = machText.slice(start, end < 0 ? undefined : end);
+    const out = [];
+    for (const m of block.matchAll(/@CommandArgument\(([^\n]*)\)$|@CommandArgument\(\n([\s\S]*?)\n\)/gm)) {
+        const body = m[1] ?? m[2];
+        if (!/required\s*=\s*True/.test(body)) continue;
+        const names = [...body.matchAll(/"(-{1,2}[A-Za-z_-]+)"/g)].map(x => x[1]);
+        const long = names.find(n => n.startsWith('--'));
+        if (long) out.push({ long, aliases: names });
+    }
+    return out;
+}
+
+// The `mach repackage <sub>` command in a shell script, continuation lines joined, as its tokens.
+function commandTokens(script, sub) {
+    const joined = script.replace(/\\\n/g, ' ');
+    const line = joined.split('\n').find(l => new RegExp(`mach repackage ${sub}\\b`).test(l) && !l.trim().startsWith('#'));
+    return line === undefined ? null : line.split(/\s+/);
+}
+
+// Runs the Node-pin step's text against a node-runtime.json in a temp dir; nix is a shim that execs the command.
+function runPinStep(runText, pinText) {
+    const dir = mkdtempSync(join(tmpdir(), 'build-windows-shape-pin-'));
+    try {
+        mkdirSync(join(dir, 'powerbrowser', 'packaging'), { recursive: true });
+        mkdirSync(join(dir, 'bin'));
+        writeFileSync(join(dir, PIN_REL), pinText);
+        const shim = join(dir, 'bin', 'nix');
+        writeFileSync(shim, '#!/bin/sh\n[ "$1" = develop ] && [ "$2" = .#theia ] && [ "$3" = --command ] || exit 97\nshift 3\nexec "$@"\n');
+        chmodSync(shim, 0o755);
+        const r = spawnSync('bash', ['-c', runText], { cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}` } });
+        return { status: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
 }
 
 function runChecks(root, overrides = {}) {
@@ -192,9 +248,71 @@ function runChecks(root, overrides = {}) {
         fail('(job)', 'image', `the podman build step lacks --no-cache or --pull=always, so a cached layer on the persistent runner could reach the release. Next step: build uncached from the digest-pinned base.`);
     }
 
-    // 8. repackage
-    if (!steps.some(st => /mach repackage installer/.test(String(st.run ?? '')) && /mach repackage mar/.test(String(st.run ?? '')))) {
-        fail('(job)', 'steps', `no step runs both mach repackage installer and mach repackage mar, so no setup.exe or complete MAR is produced. Next step: add the repackage calls to the cross-build step.`);
+    // 8. the build, then package-windows.sh, before the upload; no hand-fetched sysroot
+    const runOf = st => String(st.run ?? '');
+    const machAt = steps.findIndex(st => /\.\/mach build\b/.test(runOf(st)));
+    const packAt = steps.findIndex(st => /powerbrowser\/packaging\/package-windows\.sh/.test(runOf(st)) && !runOf(st).trim().startsWith('#'));
+    const uploadAt = steps.findIndex(st => UPLOAD.test(String(st.uses ?? '')));
+    if (machAt < 0) fail('(job)', 'steps', 'no step runs ./mach build, so nothing is built. Next step: restore the cross-build step.');
+    if (packAt < 0) fail('(job)', 'steps', `no step runs ${PACKAGE_REL}, so the sidecar, the Node runtime, the installer and the complete MAR are never produced from the staged tree. Next step: add the staging step between ./mach build and the upload.`);
+    else if (!(machAt >= 0 && machAt < packAt && (uploadAt < 0 || packAt < uploadAt))) fail('(job)', 'steps', `runs ${PACKAGE_REL} out of order; it must follow ./mach build and precede the upload. Next step: reorder the steps.`);
+    for (const st of steps) {
+        const m = /get_vs\.py|WINSYSROOT/.exec(runOf(st) + JSON.stringify(st.env ?? {}));
+        if (m) fail(st.name ?? '(step)', 'steps', `step '${st.name}' uses ${m[0]}. --enable-bootstrap fetches the pinned vs toolchain; a hand-fetched sysroot is unpinned. Next step: remove it.`);
+    }
+
+    // 8b. package-windows.sh passes every required repackage argument (derived from the pinned tree); the upload matches its outputs
+    const script = overrides.script !== undefined ? overrides.script : readText(root, PACKAGE_REL);
+    const mach = overrides.mach !== undefined ? overrides.mach : readText(root, MACH_REL);
+    if (script === null) fail(PACKAGE_REL, 'repackage', `could not be read. Next step: restore ${PACKAGE_REL}.`);
+    else if (mach === null) fail(MACH_REL, 'repackage', `could not be read, so the required repackage arguments cannot be derived. Next step: run scripts/fetch-upstream.sh.`);
+    else {
+        for (const sub of ['installer', 'mar']) {
+            const need = requiredFlags(mach, sub);
+            const tokens = commandTokens(script, sub);
+            if (need === null || need.length === 0) fail(MACH_REL, 'repackage', `defines no required argument for mach repackage ${sub}; the derivation found nothing. Next step: fix the row's parser.`);
+            else if (tokens === null) fail(PACKAGE_REL, 'repackage', `has no mach repackage ${sub} command. Next step: add it with its required arguments.`);
+            else {
+                for (const f of need) {
+                    if (!f.aliases.some(a => tokens.includes(a))) fail(PACKAGE_REL, 'repackage', `mach repackage ${sub} lacks the required ${f.long} (${MACH_REL}). Next step: pass it.`);
+                }
+            }
+        }
+        const outDir = /^OBJ="\$ROOT\/([^"]+)"/m.exec(script)?.[1];
+        const outSub = /^OUT="\$OBJ\/([^"]+)"/m.exec(script)?.[1];
+        const suffixes = [...script.matchAll(/--output "\$OUT\/\$BASE(\.[A-Za-z.]+)"/g)].map(m => m[1]);
+        const uploads = steps.filter(st => UPLOAD.test(String(st.uses ?? ''))).flatMap(st => String(st.with?.path ?? '').split('\n').map(x => x.trim()).filter(Boolean));
+        if (!outDir || !outSub || suffixes.length < 2) fail(PACKAGE_REL, 'repackage', 'does not name its output directory (OBJ=, OUT=) and the two output suffixes the row compares the upload with. Next step: restore them.');
+        else {
+            const dir = `${outDir}/${outSub}`;
+            for (const u of uploads) {
+                if (!u.startsWith(`${dir}/`)) fail('(upload)', 'repackage', `upload path '${u}' is not under ${dir}/, the directory ${PACKAGE_REL} writes to, so it would match nothing. Next step: upload from there.`);
+            }
+            for (const suf of suffixes) {
+                if (!uploads.some(u => u.endsWith(`*${suf}`))) fail('(upload)', 'repackage', `no upload path ends in *${suf}, a file ${PACKAGE_REL} writes. Next step: add the glob.`);
+            }
+        }
+    }
+
+    // 12. the Node-pin step is executed against the real pin and against fixtures
+    const pinStep = steps.find(st => runOf(st).includes(PIN_REL));
+    const pinReal = readText(root, PIN_REL);
+    if (pinStep === undefined) fail('(job)', 'node-pin', `has no step that checks ${PIN_REL}. Next step: restore the Node-pin step.`);
+    else if (pinReal === null) fail(PIN_REL, 'node-pin', `could not be read. Next step: restore ${PIN_REL}.`);
+    else {
+        const real = JSON.parse(pinReal);
+        const entry = real[PIN_KEY];
+        const variants = [
+            ['the real pin', pinReal, 0],
+            ['a url naming another version', JSON.stringify({ ...real, [PIN_KEY]: { ...entry, version: 'v0.0.1' } }), 1],
+            ['a missing win32-x64 key', JSON.stringify(Object.fromEntries(Object.entries(real).filter(([k]) => k !== PIN_KEY))), 1],
+            ['a malformed digest', JSON.stringify({ ...real, [PIN_KEY]: { ...entry, sha256: 'xyz' } }), 1],
+        ];
+        for (const [what, text, wantStatus] of variants) {
+            const r = runPinStep(runOf(pinStep), text);
+            const ok = wantStatus === 0 ? r.status === 0 : r.status !== null && r.status !== 0;
+            if (!ok) fail(pinStep.name ?? '(step)', 'node-pin', `the Node-pin step's own text exits ${r.status} for ${what}, expected ${wantStatus === 0 ? '0' : 'non-zero'}: ${r.out.trim().slice(0, 160)}. Next step: fix the filter in release.yml.`);
+        }
     }
 
     // 9. retention, 10. no cache, over the job
@@ -256,13 +374,40 @@ function selfTest() {
         ['write permission added', sliceEdit('    permissions:\n      contents: read\n', '    permissions:\n      contents: write\n'), 'permissions', 'not exactly {contents: read}'],
         ['schedule trigger added', real.replace('on:\n  workflow_dispatch:', 'on:\n  schedule:\n    - cron: "0 3 * * *"\n  workflow_dispatch:'), 'schedule', 'schedule'],
         ['checkout unpinned', sliceEdit('actions/checkout@11d5960a326750d5838078e36cf38b85af677262', 'actions/checkout@v4'), 'uses', 'actions/checkout@v4'],
-        ['repackage calls removed', sliceEdit('./mach repackage installer && ./mach repackage mar', './mach package'), 'steps', 'repackage'],
+        ['package-windows.sh call removed', sliceEdit('bash powerbrowser/packaging/package-windows.sh', 'true'), 'steps', 'package-windows.sh'],
+        ['mach build removed', sliceEdit("MOZCONFIG=/src/generated/packaging/mozconfig-windows-x86_64 ./mach build'", "MOZCONFIG=/src/generated/packaging/mozconfig-windows-x86_64 true'"), 'steps', './mach build'],
+        ['get_vs.py reintroduced', sliceEdit("bash -c 'set -euo pipefail; MOZCONFIG=", "bash -c 'set -euo pipefail; python3 /src/upstream/build/vs/get_vs.py /opt/winsysroot; MOZCONFIG="), 'steps', 'get_vs.py'],
+        ['WINSYSROOT exported', sliceEdit("bash -c 'set -euo pipefail; MOZCONFIG=", "bash -c 'set -euo pipefail; export WINSYSROOT=/opt/winsysroot; MOZCONFIG="), 'steps', 'WINSYSROOT'],
+        ['upload globs match nothing', sliceEdit('objdir-windows-x86_64/dist/release-windows/*.installer.exe', 'objdir-windows-x86_64/dist/*.exe'), 'repackage', 'release-windows'],
+        ['upload no longer carries the MAR', sliceEdit('            objdir-windows-x86_64/dist/release-windows/*.complete.mar\n', ''), 'repackage', '.complete.mar'],
+        ['Node-pin filter reads a property of the url string', sliceEdit('e.url.includes(e.version)', 'e.url.includes(e.url.version.x)'), 'node-pin', 'the real pin'],
+        ['Node-pin filter accepts every entry', sliceEdit('process.exit(1);', 'process.exit(0);'), 'node-pin', 'malformed digest'],
         ['key gate if removed from the Firefox fetch', sliceEdit("      - name: Fetch the pinned Firefox source and apply the patch stack\n        if: steps.key_gate.outputs.build == 'true'\n", '      - name: Fetch the pinned Firefox source and apply the patch stack\n'), 'gates', 'Fetch the pinned Firefox'],
         ['sha gate body drifts from build-linux', sliceEdit('echo "validated $SHA"', 'echo "validated $SHA again"'), 'gates', 'sha_gate'],
         ['pipefail removed from the cross-build step', sliceEdit('          set -euo pipefail\n          podman run --rm', '          podman run --rm'), 'gates', 'pipefail'],
         ['upload retention raised', sliceEdit('          retention-days: 1\n          overwrite: true', '          retention-days: 5\n          overwrite: true'), 'retention', 'retention-days 5'],
         ['image build without --no-cache', sliceEdit('--pull=always --no-cache -t pb-gecko-build', '--pull=always -t pb-gecko-build'), 'image', '--no-cache'],
     ];
+
+    // Plants on package-windows.sh's text: each required `mach repackage` argument, removed in turn.
+    const script = readText(REPO_ROOT, PACKAGE_REL);
+    const scriptPlants = [];
+    if (script === null) {
+        console.error(`${NAME}: --self-test FAIL -- ${PACKAGE_REL} could not be read. Next step: restore it.`);
+        return 1;
+    }
+    for (const [label, from, value] of [
+        ['installer without --sfx-stub', '    --sfx-stub other-licenses/7zstub/firefox/7zSD.Win32.sfx \\\n', '--sfx-stub'],
+        ['installer without --setupexe', ' --setupexe "$SETUPEXE" \\\n', '--setupexe'],
+        ['installer without --tag', '    --tag browser/installer/windows/app.tag', '--tag'],
+        ['mar without --arch', ' --arch x86_64', '--arch'],
+        ['mar without --mar', ' --mar "$MARBIN"', '--mar'],
+    ]) {
+        if (!script.includes(from)) throw new Error(`self-test anchor for '${label}' is absent from ${PACKAGE_REL}`);
+        scriptPlants.push([label, { script: script.replace(from, from.endsWith('\\\n') ? '\\\n' : ''), text: real }, 'repackage', value]);
+    }
+    const outDirBroken = script.replace('OUT="$OBJ/dist/release-windows"', 'OUT="$OBJ/dist/elsewhere"');
+    scriptPlants.push(['package-windows.sh writes somewhere else than the upload reads', { script: outDirBroken, text: real }, 'repackage', 'elsewhere']);
 
     let failed = 0;
     for (const [name, text, rule, value] of plants) {
@@ -275,8 +420,14 @@ function selfTest() {
             failed += 1;
         }
     }
+    for (const [name, o, rule, value] of scriptPlants) {
+        const { failures } = runChecks(REPO_ROOT, o);
+        const hit = failures.some(f => f.rule === rule && (f.msg.includes(value) || f.step.includes(value)));
+        if (hit) console.log(`  ok  ${name} -> red, naming ${PACKAGE_REL} [${rule}] and '${value}'`);
+        else { console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming [${rule}] and '${value}'; got: ${failures.map(fmt).join(' | ') || '(no failures at all)'}`); failed += 1; }
+    }
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- the unmodified ${JOB} job is green and ${plants.length} planted faults each went red naming the file, the job and the cause. It writes nothing.`);
+    console.log(`${NAME}: --self-test PASS -- the unmodified ${JOB} job is green and ${plants.length + scriptPlants.length} planted faults each went red naming the file, the job and the cause. It writes only mkdtemp directories, removed at once.`);
     return 0;
 }
 
@@ -288,7 +439,7 @@ function main() {
         failures.forEach(f => console.error(`  ${fmt(f)}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${RELEASE_REL} ${JOB} runs on [${LEGION_LABELS.join(', ')}] with exactly contents: read and no secret or environment; no schedule anywhere; every uses: is a SHA-pinned GitHub-owned action; the ref and event refusal, full-SHA step, sha_gate and key_gate (identical to ${REF_JOB}) precede the build and every later step is gated on the key; no step fails open; the cross-build repackages the installer and the complete MAR; uploads keep retention-days 1 (${steps} step(s) checked).`);
+    console.log(`${NAME}: PASS -- ${RELEASE_REL} ${JOB} runs on [${LEGION_LABELS.join(', ')}] with exactly contents: read and no secret or environment; no schedule anywhere; every uses: is a SHA-pinned GitHub-owned action; the ref and event refusal, full-SHA step, sha_gate and key_gate (identical to ${REF_JOB}) precede the build and every later step is gated on the key; no step fails open; the job builds, then runs package-windows.sh, which passes every required mach repackage argument derived from the pinned tree; the upload paths match its outputs; the Node-pin step's own text was executed against the real pin and three bad fixtures; uploads keep retention-days 1 (${steps} step(s) checked).`);
     return 0;
 }
 

@@ -263,8 +263,10 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: |
           set -euo pipefail
-          jq -e '.["win32-x64"] | (.sha256 | test("^[0-9a-f]{64}$")) and (.url | contains(.version))' powerbrowser/packaging/node-runtime.json >/dev/null \
-            || { echo "::error::the win32-x64 entry in node-runtime.json is missing or malformed; nothing is built" >&2; exit 1; }
+          nix develop .#theia --command node -e '
+            const e = JSON.parse(require("fs").readFileSync("powerbrowser/packaging/node-runtime.json", "utf8"))["win32-x64"];
+            if (!(e && /^[0-9a-f]{64}$/.test(e.sha256) && typeof e.version === "string" && typeof e.url === "string" && e.url.includes(e.version))) process.exit(1);
+          ' || { echo "::error::the win32-x64 entry in node-runtime.json is missing or malformed; nothing is built" >&2; exit 1; }
 
       - name: Fetch the pinned Firefox source and apply the patch stack
         if: steps.key_gate.outputs.build == 'true'
@@ -278,27 +280,43 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: podman build --pull=always --no-cache -t pb-gecko-build -f powerbrowser/packaging/Containerfile .
 
-      # WINSYSROOT is populated inside the container (/opt/winsysroot), so no host directory is mounted
-      # beyond the workspace and the key directory. The sysroot tool is named as docs/RELEASING.md names it;
-      # the owner confirms that path against the pinned tree before the first live run (BLOCKED.md).
-      - name: Cross-build the Windows release tree, then repackage the installer and the complete MAR in the container
+      # --enable-bootstrap in the generated mozconfig fetches the pinned `vs` toolchain (the Windows SDK and MSVC
+      # headers and libraries) by itself: windows-toolchain.configure:69-85 bootstraps it when WINSYSROOT is unset,
+      # and taskcluster/kinds/toolchain/misc.yml:692-709 (win64-vs2026, alias vs) names the hash-pinned
+      # build/vs/vs2026.yaml it comes from. Nothing sets WINSYSROOT or downloads a sysroot by hand.
+      - name: Cross-build the Windows release tree in the container
         if: steps.key_gate.outputs.build == 'true'
         env:
           PB_KEYDIR: ${{ vars.PB_KEYDIR }}
         run: |
           set -euo pipefail
           podman run --rm -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
-            pb-gecko-build bash -c 'set -euo pipefail; export WINSYSROOT=/opt/winsysroot; python3 /src/upstream/build/vs/get_vs.py "$WINSYSROOT"; MOZCONFIG=/src/generated/packaging/mozconfig-windows-x86_64 ./mach build && ./mach package && ./mach repackage installer && ./mach repackage mar'
+            pb-gecko-build bash -c 'set -euo pipefail; MOZCONFIG=/src/generated/packaging/mozconfig-windows-x86_64 ./mach build'
+
+      # package-windows.sh stages the hosted sidecar and the pinned Node runtime into the app dir, rewrites the
+      # package zip from it, and runs `mach repackage installer` and `mach repackage mar` with the arguments the
+      # pinned tree defines. It fails closed: the sidecar directory (the windows-latest artifact, fetched by the
+      # hosted sidecar job that Phase 50 adds, BLOCKED.md item 8) must exist and its SHA256SUMS must hash to the
+      # digest that job recorded outside the artifact. Without them this job stops here and uploads nothing.
+      - name: Stage the sidecar and the Node runtime, then repackage the installer and the complete MAR in the container
+        if: steps.key_gate.outputs.build == 'true'
+        env:
+          PB_WIN_SIDECAR_SUMS_SHA256: ${{ vars.PB_WIN_SIDECAR_SUMS_SHA256 }}
+        run: |
+          set -euo pipefail
+          podman run --rm -v "$PWD:/src:rw" -w /src -e PB_WIN_SIDECAR_DIR=/src/windows-sidecar -e PB_WIN_SIDECAR_SUMS_SHA256 \
+            pb-gecko-build bash powerbrowser/packaging/package-windows.sh
 
       # Data only: nothing here is signed or executed by a later job in this revision (the Windows sign job is Phase 54-04's owner gate).
+      # The paths are the one directory package-windows.sh writes both files to.
       - name: Upload the setup.exe and the complete MAR (untrusted data)
         if: steps.key_gate.outputs.build == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows
           path: |
-            objdir-windows-x86_64/dist/*.exe
-            objdir-windows-x86_64/dist/*.complete.mar
+            objdir-windows-x86_64/dist/release-windows/*.installer.exe
+            objdir-windows-x86_64/dist/release-windows/*.complete.mar
           if-no-files-found: error
           retention-days: 1
           overwrite: true

@@ -4884,9 +4884,16 @@ run_own_checks() {
     # the live cross-build on legion is the owner's at the 54-04 checkpoint, never a quick path.
     "build-windows-shape|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs"
     # build-windows-shape-self-test plants a moved runner, a secret, a write grant, a schedule, an unpinned
-    # uses, missing repackage calls, a removed key gate, a drifted sha gate, a dropped pipefail, a raised
-    # retention and an image build missing --no-cache; each must go red naming job and cause.
+    # uses, a missing package-windows.sh call or mach build, a reintroduced get_vs.py or WINSYSROOT, each removed
+    # required repackage argument, upload globs that match nothing, a broken or all-accepting Node-pin filter, a
+    # removed key gate, a drifted sha gate, a dropped pipefail, a raised retention and an image build missing
+    # --no-cache; each must go red naming job and cause.
     "build-windows-shape-self-test|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs --self-test"
+    # NEW (Phase 54 review fix, PKG-13): the admission and purge gates for the hosted Windows sidecar artifact.
+    # Honestly --quick: mktemp fixtures only, no network. It plants an unlisted file, an absent listed file, a
+    # tampered manifest, a symlink, a '..' and an absolute manifest path, a nested SHA256SUMS, a wrong or unset
+    # out-of-band digest, an empty build root, each slash form of the hosted root, and an unreadable stage.
+    "win-sidecar-check-self-test|bash $REPO_ROOT/powerbrowser/packaging/check-win-sidecar.sh --self-test"
     # NEW (Phase 54, UPD-30): the sidecar reap blocker. Quit and restart both await the bounded reap, so the
     # updater rename never meets a live node.exe. Derived from the tree and the catalogue; honestly --quick
     # (it parses the shell files and evaluates the reap methods against stubs; the live version flip is the
