@@ -59,6 +59,9 @@
  *           the page focused. The page reports selection, length and the copy, cut and paste events
  *           through its title and cancels those events, so the probe reads no page text and writes
  *           no clipboard data. Verdict written to scripts/lib/pb-probe-verdicts.json.
+ *   remoteness-repro (32-07 Task 1, D-25a/D-25f): the shared-process blank reload, record-only. Eight
+ *           sessions (reload and activation, four each), five same-origin tabs per session. Writes the
+ *           verdict key only when named on the command line; the default run and --self-test never do.
  *
  * Preflight: the binary must carry the current patch 050. The sha256 of
  * patches/050-extension-tab-host.patch must equal the stamp in
@@ -75,7 +78,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT, probe } from './lib/pb-relaunch.mjs';
 import {
-    BROKEN, focusOverlay, focusTheiaFrame, inChrome, loadedAt, openWebTab, pageKeyDisabled, pressKey, pushes, waitForPush, withProbeShell,
+    BROKEN, focusOverlay, focusTheiaFrame, inChrome, loadedAt, makeCurrent, openWebTab, pageKeyDisabled, pressKey, pushes, serveNavPages,
+    waitForPush, withProbeShell,
 } from './lib/pb-live-probe.mjs';
 
 const NAME = 'page-tools-live';
@@ -828,7 +832,262 @@ async function runSession(name, body, extraPrefs = {}) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// remoteness-repro (32-07 Task 1): the shared-process blank reload, reproduced on the tree as it is.
+// Record-only: it prints PASS when every run ran with its observers proven, whatever the verdict. Each
+// run is its own session, because five same-site tabs share a content process on purpose
+// (dom.ipc.processCount.webIsolated=4). The parent's ProcessIsolation log is written under TMPDIR only.
+// ---------------------------------------------------------------------------
+const REPRO_RUNS = 4;
+const REPRO_TRIGGERS = ['reload', 'activate'];
+
+/** The five same-origin pages; each carries its own title, which the positive control waits for. */
+function reproPages() {
+    const pages = {};
+    for (let n = 1; n <= 5; n += 1) {
+        pages[`/rr${n}`] = { title: `RR ${n}`, body: `<p>repro page ${n}</p>` };
+    }
+    return pages;
+}
+
+/** A loaded state push for `tabId` at `path` that carries the served `title`. */
+const sameTitled = (tabId, path, title) => p => p && p.kind === 'state' && p.tabId === tabId && p.loading === false
+    && String(p.url).endsWith(path) && p.title === title;
+
+/**
+ * The overlay's state as primitives: URL classes, a remote-type prefix, counters and flags. Never a URL, title,
+ * port or origin. `didChange` counts DidChangeBrowserRemoteness on the overlay (armReproOverlay).
+ */
+async function readReproState(app, tabId) {
+    // The evaluate result is serialised in chrome: an object returned as-is loses its keys in the BiDi round trip.
+    const text = await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)});
+        if (!o) return 'null';
+        const bc = o.browsingContext;
+        const cls = s => (s.startsWith('http://') || s.startsWith('https://')) ? 'http' : (s === 'about:blank' ? 'about:blank' : 'other');
+        const hist = bc ? bc.sessionHistory : null;
+        const entries = [];
+        for (let i = 0; hist && i < hist.count; i += 1) entries.push(cls(hist.getEntryAtIndex(i).URI.spec));
+        return JSON.stringify({
+            url: cls(o.currentURI ? o.currentURI.spec : ''),
+            remoteType: String(o.remoteType || '').split('=')[0],
+            bcId: bc ? bc.id : -1,
+            childId: o.frameLoader ? o.frameLoader.childID : -1,
+            active: o.docShellIsActive === true ? 1 : 0,
+            renderLayers: o.renderLayers === true ? 1 : 0,
+            visible: o.style.visibility === 'visible' ? 1 : 0,
+            history: entries.join(',') + '@' + (hist ? hist.index : -1),
+            didChange: o.__pbRemoteChanges || 0,
+        });`);
+    return text === 'null' ? null : JSON.parse(text);
+}
+
+/** Counts DidChangeBrowserRemoteness on the overlay with the scenario's own listener, armed once. */
+function armReproOverlay(app, tabId) {
+    return inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)});
+        if (!o) return false;
+        if (o.__pbRemoteChanges === undefined) {
+            o.__pbRemoteChanges = 0;
+            o.addEventListener('DidChangeBrowserRemoteness', () => { o.__pbRemoteChanges += 1; });
+        }
+        return true;`);
+}
+
+/** The parent process's ProcessIsolation log. MOZ_LOG_FILE carries %PID, so the parent's name has '-main.'. */
+async function parentLogOf(dir) {
+    const name = (await readdir(dir)).find(file => file.includes('-main.'));
+    return name ? join(dir, name) : null;
+}
+
+async function logBytes(path) {
+    if (!path) {
+        return 0;
+    }
+    try {
+        return (await stat(path)).size;
+    } catch {
+        return 0;
+    }
+}
+
+/**
+ * The last CheckIsolationForNavigation line after `offset`, reduced to remote-type prefixes and the replace flag,
+ * plus `compatible=1` when the switch was aborted as compatible. Null when the trigger logged no navigation.
+ */
+async function isolationSince(path, offset) {
+    if (!path) {
+        return null;
+    }
+    const lines = (await readFile(path)).subarray(offset).toString('utf8').split('\n');
+    let last = -1;
+    lines.forEach((line, i) => {
+        if (line.includes('CheckIsolationForNavigation ->')) {
+            last = i;
+        }
+    });
+    if (last < 0) {
+        return null;
+    }
+    const m = /current:\(([^=)]*)[^)]*\) remoteType:\(([^=)]*)[^)]*\) replace:(\d)/.exec(lines[last]);
+    if (!m) {
+        return 'unparsed';
+    }
+    const compatible = lines.slice(last + 1, last + 4).some(line => line.includes('is compatible'));
+    return `current=${m[1]},target=${m[2]},replace=${m[3]}${compatible ? ' compatible=1' : ''}`;
+}
+
+/** The session body: positive controls first, then the trigger, then the reads. Returns { notScored } or { run, logOffset }. */
+async function reproBody(app, pages, trigger, blind, dir) {
+    // The blind plant disconnects the request log, so the observer behind getSeen and the initial-GET control cannot see anything.
+    const observed = () => (blind ? [] : pages.requests);
+    const tabs = [];
+    for (let n = 1; n <= 4; n += 1) {
+        const tabId = await openWebTab(app, pages.url(`/rr${n}`));
+        if (await waitForPush(app, sameTitled(tabId, `/rr${n}`, `RR ${n}`), { timeoutMs: 30000 }) < 0) {
+            throw new Error(`${BROKEN} page /rr${n} never reached a loaded push with its title`);
+        }
+        tabs.push(tabId);
+        if (trigger === 'activate') {
+            await makeCurrent(app, tabId);
+        }
+    }
+    const fifth = await openWebTab(app, pages.url('/rr5'));
+    if (!await armReproOverlay(app, fifth)) {
+        throw new Error(`${BROKEN} the fifth overlay is missing before the trigger`);
+    }
+    const loaded = await waitForPush(app, sameTitled(fifth, '/rr5', 'RR 5'), { timeoutMs: 30000 });
+    if (!observed().some(r => r.path === '/rr5')) {
+        return { notScored: 'no initial GET for the fifth tab' };
+    }
+    if (loaded < 0) {
+        return { notScored: 'the fifth tab never loaded its served title' };
+    }
+    if (trigger === 'activate') {
+        // The fifth overlay opened behind another widget: making tab 1 current hides it.
+        await makeCurrent(app, tabs[0]);
+    }
+    const pre = await readReproState(app, fifth);
+    if (!pre) {
+        throw new Error(`${BROKEN} the fifth overlay is missing before the trigger`);
+    }
+    const path = await parentLogOf(dir);
+    const logOffset = await logBytes(path);
+    const mark = (await pushes(app)).length;
+    const start = Date.now();
+    if (trigger === 'reload') {
+        // The message verify-nav-keys-live.mjs sends for Reload.
+        await channelRequest(app, { kind: 'webTabReload', tabId: fifth });
+    } else {
+        await makeCurrent(app, fifth);
+    }
+    await waitForPush(app, stateOf(fifth, p => p.loading === false), { from: mark, timeoutMs: 10000 });
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const post = await readReproState(app, fifth);
+    if (!post) {
+        throw new Error(`${BROKEN} the fifth overlay is missing after the trigger`);
+    }
+    return { run: { trigger, pre, post, getSeen: observed().some(r => r.path === '/rr5' && r.at >= start) }, logOffset };
+}
+
+/** True when a page's history holds an about:blank entry after an http entry (a page replaced by about:blank). */
+function blankAfterPage(history) {
+    const entries = history.split('@')[0].split(',');
+    return entries.some((entry, i) => entry === 'about:blank' && entries.slice(0, i).includes('http'));
+}
+
+/** One run's verdict record: blank, and the field list the verdict string quotes. */
+function reproRecord({ trigger, pre, post, getSeen }, isolation) {
+    const historyGained = blankAfterPage(post.history) && !blankAfterPage(pre.history);
+    const blank = post.url === 'about:blank' || historyGained || (trigger === 'reload' && !getSeen);
+    const pairs = [
+        ['url', post.url],
+        ['remoteType', post.remoteType],
+        ['bcSame', pre.bcId === post.bcId ? 1 : 0],
+        ['childSame', pre.childId === post.childId ? 1 : 0],
+        ['active', post.active],
+        ['renderLayers', post.renderLayers],
+        ['visible', post.visible],
+        ['history', post.history],
+    ];
+    if (trigger === 'reload') {
+        pairs.push(['getSeen', getSeen ? 1 : 0]);
+    }
+    pairs.push(['didChange', post.didChange - pre.didChange], ['isolation', isolation ?? 'none']);
+    return { trigger, blank, fields: pairs.map(([key, value]) => `${key}=${value}`).join(' ') };
+}
+
+/**
+ * One record-only run in its own session. Returns { notScored } when the observers did not prove themselves
+ * (a harness fault, never a verdict), else { run } with the primitives the verdict is built from.
+ */
+async function reproSession(trigger, blind) {
+    const dir = await mkdtemp(join(tmpdir(), 'pb-32-07-iso-'));
+    const previous = { log: process.env.MOZ_LOG, file: process.env.MOZ_LOG_FILE };
+    process.env.MOZ_LOG = 'ProcessIsolation:5';
+    process.env.MOZ_LOG_FILE = join(dir, 'iso-%PID.moz_log');
+    const pages = await serveNavPages(reproPages());
+    try {
+        const outcome = await withProbeShell(app => reproBody(app, pages, trigger, blind, dir));
+        if (outcome.notScored) {
+            return { notScored: outcome.notScored };
+        }
+        // The browser has exited, so the parent log is complete.
+        const isolation = await isolationSince(await parentLogOf(dir), outcome.logOffset);
+        return { run: reproRecord(outcome.run, isolation) };
+    } finally {
+        if (previous.log === undefined) {
+            delete process.env.MOZ_LOG;
+        } else {
+            process.env.MOZ_LOG = previous.log;
+        }
+        if (previous.file === undefined) {
+            delete process.env.MOZ_LOG_FILE;
+        } else {
+            process.env.MOZ_LOG_FILE = previous.file;
+        }
+        await pages.close();
+        await rm(dir, { recursive: true, force: true });
+    }
+}
+
+/** The verdict: reproduced when any run was blank, then the counts, then the first blank run of each trigger. */
+function reproVerdict(runs) {
+    const blanks = list => list.filter(run => run.blank).length;
+    const r = blanks(runs.reload);
+    const a = blanks(runs.activate);
+    const first = (label, list) => {
+        const hit = list.find(run => run.blank);
+        return hit ? `, ${label}: ${hit.fields}` : '';
+    };
+    return `${r + a > 0 ? 'reproduced' : 'not-reproduced'} R ${r}/${REPRO_RUNS} A ${a}/${REPRO_RUNS}`
+        + first('R', runs.reload) + first('A', runs.activate);
+}
+
+/** Eight sessions, four per trigger. Writes the verdict key; a run that cannot score is a NOT SCORED failure, no verdict. */
+async function scenarioRemotenessRepro() {
+    const runs = { reload: [], activate: [] };
+    for (const trigger of REPRO_TRIGGERS) {
+        for (let i = 0; i < REPRO_RUNS; i += 1) {
+            const outcome = await reproSession(trigger, false);
+            if (outcome.notScored) {
+                console.log(`harness: ${outcome.notScored}`);
+                return `NOT SCORED: ${outcome.notScored}`;
+            }
+            runs[trigger].push(outcome.run);
+            // Every run's fields, blank or clean: a clean verdict must show what the observers read, not only that nothing matched.
+            console.log(`  run ${trigger} ${i + 1}/${REPRO_RUNS}: blank=${outcome.run.blank ? 1 : 0} ${outcome.run.fields}`);
+        }
+    }
+    const verdict = reproVerdict(runs);
+    await recordVerdict('remoteness-repro', verdict);
+    console.log(`  verdict remoteness-repro: ${verdict}`);
+    return null;
+}
+
+/** Scenarios that open their own sessions, so main runs them without the shared runSession wrapper. */
+const SELF_SESSIONED = new Set(['remoteness-repro']);
+
 const SCENARIOS = {
+    'remoteness-repro': () => scenarioRemotenessRepro(),
     find: (app, fx) => scenarioFind(app, fx.origin),
     zoom: (app, fx) => scenarioZoom(app, fx.origin),
     audio: (app, fx) => scenarioAudio(app, fx.origin),
@@ -903,6 +1162,14 @@ const PLANTS = [
         run: (app, fx) => scenarioSave(app, fx.origin, true),
         expect: 'was not written',
     },
+    {
+        // Record-only scenario with its own sessions: the clean control is one green run (observers proven), no verdict.
+        plant: 'repro-observer-blind',
+        target: 'remoteness-repro',
+        control: async () => (await reproSession('reload', false)).notScored ?? null,
+        session: async () => (await reproSession('reload', true)).notScored ?? null,
+        expect: 'no initial GET for the fifth tab',
+    },
 ];
 
 async function selfTest() {
@@ -914,7 +1181,8 @@ async function selfTest() {
     let failed = 0;
     // One clean control per target scenario: a planted fault is only meaningful against its own green run.
     for (const target of new Set(PLANTS.map(planted => planted.target))) {
-        const control = await runSession(`${target}-control`, (app, fx) => SCENARIOS[target](app, fx));
+        const own = PLANTS.find(planted => planted.target === target && planted.control);
+        const control = own ? await own.control() : await runSession(`${target}-control`, (app, fx) => SCENARIOS[target](app, fx));
         if (control !== null) {
             console.error(`${NAME} --self-test: FAIL -- the clean control for ${target} is red: ${control}`);
             return 1;
@@ -922,7 +1190,7 @@ async function selfTest() {
         console.log(`  ok  clean control for ${target} -> green`);
     }
     for (const planted of PLANTS) {
-        const got = await runSession(planted.plant, planted.run);
+        const got = planted.session ? await planted.session() : await runSession(planted.plant, planted.run);
         if (!got || !got.includes(planted.expect)) {
             console.error(`${NAME} --self-test: FAIL -- '${planted.plant}' did not go red naming '${planted.expect}'; got: ${got ?? '(green)'}`);
             failed++;
@@ -951,7 +1219,8 @@ async function main() {
         return 1;
     }
     const flag = process.argv.indexOf('--scenario');
-    const selected = flag === -1 ? Object.keys(SCENARIOS) : process.argv[flag + 1].split(',');
+    // The default run excludes the self-sessioned record-only repro: only a named run may write its verdict key.
+    const selected = flag === -1 ? Object.keys(SCENARIOS).filter(name => !SELF_SESSIONED.has(name)) : process.argv[flag + 1].split(',');
     const unknown = selected.filter(name => !(name in SCENARIOS));
     if (unknown.length) {
         console.error(`${NAME}: unknown scenario(s): ${unknown.join(', ')}`);
@@ -960,7 +1229,9 @@ async function main() {
     let failed = 0;
     for (const name of selected) {
         try {
-            const reason = await runSession(name, (app, fx, downloadDir) => SCENARIOS[name](app, fx, downloadDir));
+            const reason = SELF_SESSIONED.has(name)
+                ? await SCENARIOS[name]()
+                : await runSession(name, (app, fx, downloadDir) => SCENARIOS[name](app, fx, downloadDir));
             if (reason) {
                 failed++;
                 console.log(`${name}: FAIL -- ${reason}`);
