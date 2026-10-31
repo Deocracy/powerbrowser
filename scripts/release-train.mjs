@@ -476,6 +476,10 @@ export function fixerInputsCheck(i) {
     const out = [];
     const bad = (guard, msg) => out.push({ guard, msg });
     if (!KEY_RE.test(i.releaseKey ?? '')) bad('release-key', `release key ${JSON.stringify(i.releaseKey)} is not v<ESR>-<revision>`);
+    // WR-08: F1 (a patch that does not apply at the new tag) is not served. The model's only patch tool is regenerate-patches.sh,
+    // which needs an applied upstream/; the prep applies the target's patch stack, and a stack in conflict does not apply, so the
+    // route would burn a run and end with no diff. The owner resolves F1; F2 and F3 are served.
+    if (i.cls === 'F1') bad('class-f1', 'class F1 (a patch conflict at the new tag) is not served by the fixer: scripts/regenerate-patches.sh needs an applied upstream/ and a conflicting patch stack does not apply, so the model has no working patch tool. The owner resolves patch conflicts');
     if (!Object.hasOwn(CLASS_BRANCH, i.cls)) bad('class', `class ${JSON.stringify(i.cls)} is not F1, F2 or F3`);
     else if (!plainBranch(i.branch) || !CLASS_BRANCH[i.cls].test(i.branch)) bad('target-branch', `branch ${JSON.stringify(i.branch)} is not a plain ref name that matches ${i.cls}'s branch rule`);
     if (typeof i.branch === 'string' && i.branch.startsWith('claude-fix/')) bad('claude-fix/', 'a claude-fix/ branch is never fixed');
@@ -1142,8 +1146,9 @@ function selfTest(mode = 'all') {
         { name: 'a release key equal to the latest Release starts the fixer', run: () => refused({ latestTag: FIX_KEY }), expect: 'key-not-greater' },
         { name: 'a renovate branch on the F1 conflict class starts the fixer', run: () => refused({ branch: 'renovate/theia-monorepo' }), expect: 'target-branch' },
         { name: 'a third dispatch after two fix runs is planned', run: () => { const r = fixerDispatch({ ...FIX_BASE, fixAttempts: 2 }); return r.dispatch === null && r.route === 'NEEDS_OWNER' ? [r.reason] : ['a dispatch was planned past the budget']; }, expect: 'budget' },
-        { name: 'a dispatch input check that accepts a claude-fix/ branch', run: () => fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F1', branch: `claude-fix/${FIX_KEY}-F1-1`, targetTag: FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', latestTag: FIX_OLD_KEY }).map(x => x.msg), expect: 'claude-fix/' },
-        { name: 'a dispatch input check that accepts a non-hex fingerprint', run: () => fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F1', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: 'verify@short', attempt: '1', latestTag: FIX_OLD_KEY }).map(x => x.msg), expect: 'fingerprint' },
+        { name: 'a dispatch input check that accepts a claude-fix/ branch', run: () => fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F2', branch: `claude-fix/${FIX_KEY}-F1-1`, targetTag: FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', latestTag: FIX_OLD_KEY }).map(x => x.msg), expect: 'claude-fix/' },
+        { name: 'a dispatch input check that accepts a non-hex fingerprint', run: () => fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F2', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: 'verify@short', attempt: '1', latestTag: FIX_OLD_KEY }).map(x => x.msg), expect: 'fingerprint' },
+        { name: 'a dispatch input check that accepts class F1', run: () => fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F1', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', latestTag: FIX_OLD_KEY }).map(x => x.msg), expect: 'not served by the fixer' },
         // WR-03: whole-value grammars. Each value below passed the old prefix and first-two-segments checks.
         ...[
             ['a branch with a newline and a shell fragment', { branch: `chore/esr-${FIX_TAG}\n;rm -rf x` }, 'plain ref name'],
@@ -1156,7 +1161,7 @@ function selfTest(mode = 'all') {
             ['attempt 7', { attempt: '7' }, 'integer from 1 to'],
             ['attempt 0', { attempt: '0' }, 'integer from 1 to'],
             ['attempt FIX_BUDGET + 1', { attempt: String(FIX_BUDGET + 1) }, 'integer from 1 to'],
-        ].map(([name, over, expect]) => ({ name: `a dispatch input check that accepts ${name}`, run: () => fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F1', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', latestTag: FIX_OLD_KEY, ...over }).map(x => x.msg), expect })),
+        ].map(([name, over, expect]) => ({ name: `a dispatch input check that accepts ${name}`, run: () => fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F2', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', latestTag: FIX_OLD_KEY, ...over }).map(x => x.msg), expect })),
     ];
     const dispatchGreens = [
         ...Object.entries(DISPATCH_FIXTURES).map(([name, fx]) => ({
@@ -1170,8 +1175,8 @@ function selfTest(mode = 'all') {
             },
         })),
         {
-            name: 'control: the input check accepts the F1 dispatch inputs',
-            run: () => (fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F1', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', latestTag: FIX_OLD_KEY }).length === 0 ? [] : ['the F1 inputs were refused']),
+            name: 'control: the input check accepts the F2 dispatch inputs',
+            run: () => (fixerInputsCheck({ releaseKey: FIX_KEY, cls: 'F2', branch: `chore/esr-${FIX_TAG}`, targetTag: FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', latestTag: FIX_OLD_KEY }).length === 0 ? [] : ['the F1 inputs were refused']),
         },
         {
             name: 'control: the input check accepts the F2 renovate and node branches, F3 main, and the last attempt',

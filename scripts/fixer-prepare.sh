@@ -8,13 +8,18 @@
 #   - runs git with no system or global config, no fsmonitor, no hooks, no attributes file, and
 #     with --no-ext-diff and --no-textconv on every diff;
 #   - never runs git inside work/, and never executes a file from work/;
-#   - refuses (fail closed, before any git call) a work/.git that differs from the pristine copy,
-#     and a diff that touches .gitattributes.
+#   - refuses (fail closed, before any git call) a work/.git that differs from the pristine copy, and any
+#     .gitattributes file that is new, changed or missing against the copies prep took before the model ran
+#     (IN-01: git reads those files while it stages the tree, so they are compared as plain files first);
+#   - refuses at prep a work/ that already holds a symlink (IN-04): an edit through a link would land outside work/.
 #
 # Modes (run from the trusted root checkout):
-#   --tag=<gecko-tag> --state=<dir>            prep, before Claude. Fetches upstream/ at the tag, takes the
-#                                              pristine copy of work/.git, reports conflict markers and the
-#                                              baseline regenerate-patches --check.
+#   --tag=<gecko-tag> --state=<dir>            prep, before Claude. Refuses symlinks in work/, fetches upstream/ at
+#                                              the tag, applies the target's patch stack to it (so regenerate-patches
+#                                              has an applied upstream/ to regenerate from; a stack that does not
+#                                              apply fails the prep, WR-08), takes the pristine copy of work/.git and
+#                                              of every .gitattributes, reports conflict markers and the baseline
+#                                              regenerate-patches --check.
 #   --emit-diff --state=<dir> --out=<file>     emit, after Claude. Writes the diff the gate will read.
 #   --self-test                                plants a changed .git/config, hook and .gitattributes in a
 #                                              fixture and proves emit refuses each one without running it.
@@ -46,6 +51,24 @@ clean_git() {
   )
 }
 
+# IN-04: a symlink already in work/ would let an Edit(work/**) land outside work/, in the trusted checkout that the emit and
+# the gate scripts run from. Plain find: no git, no config. .git is the pristine copy's business, not this check's.
+refuse_symlinks() {
+  local dir=$1 links
+  links=$(find "$dir" -path "$dir/.git" -prune -o -type l -print | head -n 5)
+  if [ -n "$links" ]; then
+    echo "$NAME: FAIL -- [symlink] work/ already holds a symlink:" >&2
+    printf '%s\n' "$links" >&2
+    echo "  Next step: the fixer does not edit a tree with symlinks in it; the owner fixes this branch." >&2
+    return 1
+  fi
+}
+
+# IN-01: the .gitattributes files of a tree as a NUL-separated sorted list, with no git call.
+attr_list() {
+  (cd "$1" && find . -path ./.git -prune -o -name .gitattributes -print0 | sort -z)
+}
+
 MODE=""
 TAG=""
 STATE=""
@@ -71,11 +94,27 @@ prep() {
   [ ! -e "$STATE/base.git" ] || fail "state $STATE already holds a base.git" "use a fresh state directory for each fix run."
   mkdir -p "$STATE"
 
+  refuse_symlinks "$WORK" || exit 1
+
   # The one fetch: upstream/ at the tag. An explicit TAG export overrides the pin fragment.
   TAG="$TAG" bash "$REPO_ROOT/scripts/fetch-upstream.sh"
 
+  # WR-08: fetch leaves upstream/ pristine, and regenerate-patches.sh needs the patches applied (it re-derives each patch from
+  # the applied tree). Apply the target's own stack; a stack that does not apply means the model has no working patch tool.
+  if [ -d "$WORK/patches" ]; then
+    if ! bash "$REPO_ROOT/scripts/apply-patches.sh" --upstream "$REPO_ROOT/upstream" --patches "$WORK/patches" > "$STATE/apply.log" 2>&1; then
+      tail -n 5 "$STATE/apply.log" >&2
+      fail "the target's patch stack does not apply to upstream/ at $TAG, so scripts/regenerate-patches.sh has no applied tree to regenerate from" "leave a patch conflict to the owner; the fixer serves red bump PRs and red main, not a conflicting stack."
+    fi
+    echo "$NAME: NOTE -- the target's patch stack is applied to upstream/ at $TAG"
+  fi
+
   # The pristine copy, taken before the model runs. Every later git call reads this copy only.
   cp -a "$WORK/.git" "$STATE/base.git"
+  # Every .gitattributes as it is now, as plain files (IN-01).
+  attr_list "$WORK" > "$STATE/attrs.list"
+  mkdir -p "$STATE/attrs"
+  while IFS= read -r -d '' f; do mkdir -p "$STATE/attrs/$(dirname "$f")"; cp -p -- "$WORK/$f" "$STATE/attrs/$f"; done < "$STATE/attrs.list"
   clean_git "$STATE" "$STATE/prep.index" "$WORK" rev-parse --verify HEAD > "$STATE/base-sha"
   echo "$NAME: base $(cat "$STATE/base-sha") recorded; pristine .git copied to $STATE/base.git"
 
@@ -127,6 +166,24 @@ emit() {
   mkdir "$copy/tree"
   tar -C "$wk" --exclude=./.git --exclude=./upstream -cf - . | tar -C "$copy/tree" -xf -
 
+  # 2b. .gitattributes (IN-01): git reads these while it stages the tree, so they are compared as plain files, before any
+  # git call, with the copies prep took. A new, changed, removed or non-regular one is refused.
+  attr_list "$copy/tree" > "$copy/attrs.list"
+  if ! cmp -s "$copy/attrs.list" "$st/attrs.list"; then
+    echo "$NAME: FAIL -- [.gitattributes] the set of .gitattributes files changed (one was added, removed or renamed), and git would read it while staging" >&2
+    echo "  Next step: revert the .gitattributes change; the gate also refuses it." >&2
+    rm -rf "$copy"
+    return 1
+  fi
+  while IFS= read -r -d '' f; do
+    if [ -L "$copy/tree/$f" ] || ! cmp -s "$copy/tree/$f" "$st/attrs/$f"; then
+      echo "$NAME: FAIL -- [.gitattributes] $f differs from the copy taken before the fixer ran, and git would read it while staging" >&2
+      echo "  Next step: revert the .gitattributes change; the gate also refuses it." >&2
+      rm -rf "$copy"
+      return 1
+    fi
+  done < "$st/attrs.list"
+
   # 3. Stage the copy against the base commit in a throwaway index, forcing ignored paths in so the gate sees them.
   clean_git "$st" "$copy/index" "$copy/tree" read-tree "$(cat "$st/base-sha")"
   clean_git "$st" "$copy/index" "$copy/tree" add -A -f -- .
@@ -172,11 +229,18 @@ if [ "$MODE" = self-test ]; then
     git -C "$d/work" config user.email fixture@example.invalid
     git -C "$d/work" config user.name fixture
     printf 'alpha\n' > "$d/work/doc.md"
+    printf '*.md text\n' > "$d/work/.gitattributes"
+    mkdir -p "$d/work/sub"
+    printf 'sub.md text\n' > "$d/work/sub/.gitattributes"
     git -C "$d/work" add -A
     git -C "$d/work" commit -qm base
     mkdir -p "$d/state"
     cp -a "$d/work/.git" "$d/state/base.git"
     git -C "$d/work" rev-parse --verify HEAD > "$d/state/base-sha"
+    # What prep takes: every .gitattributes as a plain file.
+    attr_list "$d/work" > "$d/state/attrs.list"
+    mkdir -p "$d/state/attrs"
+    while IFS= read -r -d '' f; do mkdir -p "$d/state/attrs/$(dirname "$f")"; cp -p -- "$d/work/$f" "$d/state/attrs/$f"; done < "$d/state/attrs.list"
   }
 
   # A. control: a model edit and nothing else is emitted.
@@ -208,11 +272,39 @@ if [ "$MODE" = self-test ]; then
   printf '*.md diff=planted\n' > "$T/d/work/.gitattributes"
   if emit "$T/d/state" "$T/d/work" "$T/d/out.diff" > "$T/d/log" 2>&1; then bad ".gitattributes change was not refused"; else grep -q '\[.gitattributes\]' "$T/d/log" && ok "a .gitattributes change is refused, naming [.gitattributes]" || bad ".gitattributes refusal did not name the rule"; fi
 
+  # D2. IN-01: a changed, added or removed .gitattributes is refused as a plain-file comparison, before any git call. A git
+  # shim first on PATH records any call; none may happen before the refusal.
+  for variant in change nested remove; do
+    mkfixture "$T/d-$variant"
+    printf 'alpha\nbeta\n' > "$T/d-$variant/work/doc.md"
+    case "$variant" in
+      change) printf '*.md diff=planted\n' > "$T/d-$variant/work/.gitattributes" ;;
+      nested) mkdir -p "$T/d-$variant/work/deep" && printf '* filter=planted\n' > "$T/d-$variant/work/deep/.gitattributes" ;;
+      remove) rm "$T/d-$variant/work/sub/.gitattributes" ;;
+    esac
+    mkdir -p "$T/d-$variant/shim"
+    printf '#!/bin/sh\ntouch "%s/GIT-RAN"\nexit 1\n' "$T/d-$variant" > "$T/d-$variant/shim/git"
+    chmod +x "$T/d-$variant/shim/git"
+    if PATH="$T/d-$variant/shim:$PATH" emit "$T/d-$variant/state" "$T/d-$variant/work" "$T/d-$variant/out.diff" > "$T/d-$variant/log" 2>&1; then bad "a $variant of a .gitattributes file was not refused"; else
+      if [ -e "$T/d-$variant/GIT-RAN" ]; then bad "git ran before the $variant of a .gitattributes file was refused"; else grep -q '\[.gitattributes\]' "$T/d-$variant/log" && ok "a .gitattributes $variant is refused as a file comparison, before any git call" || bad "the $variant refusal did not name [.gitattributes]"; fi
+    fi
+  done
+  # D3. control: an unchanged .gitattributes set, with an ordinary edit, is emitted.
+  mkfixture "$T/d-same"
+  printf 'alpha\nbeta\n' > "$T/d-same/work/doc.md"
+  if emit "$T/d-same/state" "$T/d-same/work" "$T/d-same/out.diff" > "$T/d-same/log" 2>&1 && grep -q '^+beta' "$T/d-same/out.diff"; then ok "control: unchanged .gitattributes files do not block a plain edit"; else bad "control: unchanged .gitattributes files blocked a plain edit"; cat "$T/d-same/log" >&2; fi
+
+  # F. IN-04: a symlink already in work/ is refused at prep; a clean tree passes.
+  mkfixture "$T/f"
+  if (refuse_symlinks "$T/f/work") > "$T/f/log" 2>&1; then ok "control: a tree with no symlink passes the prep check"; else bad "control: a clean tree was refused"; fi
+  ln -s ../scripts "$T/f/work/escape"
+  if (refuse_symlinks "$T/f/work") > "$T/f/log" 2>&1; then bad "a symlink in work/ was not refused"; else grep -q '\[symlink\]' "$T/f/log" && ok "a symlink already in work/ is refused at prep, naming [symlink]" || bad "the symlink refusal did not name [symlink]"; fi
+
   # E. a relative --out is refused before any work.
   if (cd "$T" && bash "$REPO_ROOT/scripts/fixer-prepare.sh" --emit-diff --state="$T/a/state" --out=rel.diff) > /dev/null 2>&1; then bad "a relative --out was accepted"; else ok "a relative --out is refused"; fi
 
   if [ "$EXIT" -eq 0 ]; then
-    echo "$NAME: --self-test PASS -- a plain edit is emitted; a planted work/.git/config, a planted hook and a .gitattributes change are each refused before any command from them runs"
+    echo "$NAME: --self-test PASS -- a plain edit is emitted; a planted work/.git/config, a planted hook and a changed, added or removed .gitattributes are each refused before any command from them runs (the .gitattributes ones before any git call), and a symlink in work/ is refused at prep"
   else
     echo "$NAME: --self-test FAIL -- see the lines above" >&2
   fi
