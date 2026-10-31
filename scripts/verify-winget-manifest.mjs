@@ -18,6 +18,8 @@
 //  7. the custody record           docs/RENEWALS.md has a WINGET_TOKEN row by structure: an item beginning
 //                                  WINGET_TOKEN, an owner action that begins with an imperative verb and names
 //                                  its holder. The credential's value is never read, written or compared here;
+//  7b. custody environment         the row names the winget environment and not the release environment, which
+//                                  holds the signing key (WR-06);
 //  8. no credential literal        no token-shaped value appears in the three files.
 //
 // Honestly --quick: YAML parse (js-yaml from theia/), text reads and an in-memory fixture digest. No network,
@@ -26,8 +28,13 @@
 // Usage:
 //   node scripts/verify-winget-manifest.mjs
 //   node scripts/verify-winget-manifest.mjs --release     (refuses the fixture while A2 is open)
+//   node scripts/verify-winget-manifest.mjs --release --rendered <dir>
+//       also checks the three files the winget leg is about to submit, against ASSET_NAME and ASSET_SHA from
+//       the environment: no @TOKEN@ left over, the version, the installer URL naming the asset, and the
+//       InstallerSha256 equal to the verified digest (WR-07: the rows guard what is submitted)
 //   node scripts/verify-winget-manifest.mjs --self-test
 
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -50,10 +57,20 @@ const TOKENS = ['@RELEASE_VERSION@', '@RELEASE_KEY@', '@RELEASE_REPO@', '@WINDOW
 const CREDENTIAL_SHAPES = [new RegExp(`${'gh'}p_[A-Za-z0-9]{20,}`), new RegExp(`${'github'}_pat_[A-Za-z0-9_]{20,}`)];
 
 const args = process.argv.slice(2);
-for (const a of args) {
+const renderedAt = args.indexOf('--rendered');
+for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--rendered') {
+        if (args[i + 1] === undefined || args[i + 1].startsWith('--')) {
+            console.error(`${NAME}: FAIL -- --rendered needs the directory of the rendered set`);
+            process.exit(2);
+        }
+        i += 1;
+        continue;
+    }
     if (a !== '--self-test' && a !== '--release') {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
-        console.error(`  Next step: run: node ${SELF_REL}, or add --release or --self-test.`);
+        console.error(`  Next step: run: node ${SELF_REL}, or add --release, --rendered <dir> or --self-test.`);
         process.exit(2);
     }
 }
@@ -72,7 +89,7 @@ export function wingetTokenRow(text) {
         const cells = line.split('|').slice(1, -1).map(c => c.trim());
         if (cells.length !== 5 || !/WINGET_TOKEN/.test(cells[0])) continue;
         const verb = (cells[3].match(/^[A-Za-z-]+/) ?? [''])[0].toLowerCase();
-        return { item: cells[0], verbOk: VERBS.includes(verb), holderOk: /holder:/i.test(cells[3]) };
+        return { item: cells[0], verbOk: VERBS.includes(verb), holderOk: /holder:/i.test(cells[3]), envOk: /winget environment/i.test(`${cells[0]} ${cells[3]}`) && !/release environment/i.test(`${cells[0]} ${cells[3]}`) };
     }
     return null;
 }
@@ -188,9 +205,45 @@ export function runChecks(root, overrides = {}) {
     } else {
         if (!row.verbOk) fail(RENEWALS_REL, 'the WINGET_TOKEN row owner action does not begin with an imperative verb', 'start the owner action with rotate, renew or confirm.');
         if (!row.holderOk) fail(RENEWALS_REL, 'the WINGET_TOKEN row owner action names no holder', 'add "Holder: <who holds it>" to the owner action.');
+        if (!row.envOk) fail(RENEWALS_REL, 'the WINGET_TOKEN row does not name the winget environment (or still names the release environment, which holds the signing key)', 'name the winget environment in the row; the release environment never holds WINGET_TOKEN.');
     }
 
     return { failures };
+}
+
+// The three files the leg submits, as { file name: text }: no token, and version, URL and digest as verified.
+export function renderedFaults(files, facts, asset, sha) {
+    const out = [];
+    for (const [file, text] of Object.entries(files)) {
+        const left = /@[A-Z][A-Z0-9_]*@/.exec(text);
+        if (left) out.push(`${file}: still holds the token ${left[0]}. Next step: render it from the tracked template with every value supplied.`);
+    }
+    const installerName = Object.keys(files).find(f => f.endsWith('.installer.yaml'));
+    if (installerName === undefined) {
+        out.push('the rendered set has no installer manifest. Next step: render the three tracked files.');
+        return out;
+    }
+    for (const [file, text] of Object.entries(files)) {
+        let doc = null;
+        try {
+            doc = loadYaml().load(text);
+        } catch {
+            out.push(`${file}: does not parse as YAML. Next step: restore the tracked template.`);
+            continue;
+        }
+        if (doc?.PackageVersion !== facts.version) out.push(`${file}: PackageVersion is ${JSON.stringify(doc?.PackageVersion ?? null)}, not ${facts.version}. Next step: render again for this release key.`);
+    }
+    let node = null;
+    try {
+        node = loadYaml().load(files[installerName])?.Installers?.[0] ?? null;
+    } catch {
+        node = null;
+    }
+    const wantUrl = `https://github.com/${facts.repo}/releases/download/${facts.releaseKey}/${asset}`;
+    if (node?.InstallerUrl !== wantUrl) out.push(`${installerName}: InstallerUrl is ${JSON.stringify(node?.InstallerUrl ?? null)}, not ${wantUrl}. Next step: pass the real asset name.`);
+    if (node?.InstallerSha256 !== sha) out.push(`${installerName}: InstallerSha256 is ${JSON.stringify(node?.InstallerSha256 ?? null)}, not the verified digest ${sha}. Next step: render with the digest the verify-assets job printed.`);
+    if (node?.InstallerSha256 === FIXTURE_HEX) out.push(`${installerName}: InstallerSha256 is the fixture digest. Next step: name the Phase 54 Windows asset first (assumption A2).`);
+    return out;
 }
 
 function selfTest() {
@@ -238,9 +291,27 @@ function selfTest() {
             overrides: withText(LOCALE_REL, t => t.replace('Publisher: "@PUBLISHER@"', 'Publisher: "DeBIOS Other"')),
         },
         {
+            name: 'WINGET_TOKEN row back in the release environment (WR-06)', expect: 'winget environment',
+            overrides: withText(RENEWALS_REL, t => t.replace(/(\| WINGET_TOKEN[^|]*?)winget environment/, '$1release environment').replace(/(WINGET_TOKEN[^\n]*)winget environment secret/, '$1release environment secret')),
+        },
+        {
             name: 'control: unmodified tree stays green', expect: null,
             overrides: {},
         },
+    ];
+
+    // The rendered-set faults (WR-07): a leftover token, a wrong digest, the fixture asset, a wrong version.
+    const realAsset = `${facts.app}-${facts.version}.windows-x64.exe`;
+    const verified = 'c'.repeat(64);
+    const goodSet = Object.fromEntries([VERSION_REL, INSTALLER_REL, LOCALE_REL].map(rel => [rel.split('/').pop(), render(base(rel), { ...channelTokenValues(facts), '@WINDOWS_INSTALLER_ASSET@': realAsset, '@WINDOWS_INSTALLER_SHA256@': verified }).replace(/^#.*\n/gm, '')]));
+    const withFile = (name, transform) => ({ ...goodSet, [name]: transform(goodSet[name]) });
+    const installerFile = 'DeBIOSFoundation.PowerBrowser.installer.yaml';
+    const renderedCases = [
+        ['rendered installer with a token left over', withFile(installerFile, t => t.replace(verified, '@WINDOWS_INSTALLER_SHA256@')), 'still holds the token'],
+        ['rendered installer with a digest other than the verified one', withFile(installerFile, t => t.replace(verified, 'd'.repeat(64))), 'not the verified digest'],
+        ['rendered installer naming the fixture asset', withFile(installerFile, t => t.replace(realAsset, channelTokenValues(facts)['@WINDOWS_INSTALLER_ASSET@'])), 'InstallerUrl'],
+        ['rendered installer with the fixture digest', withFile(installerFile, t => t.replace(verified, FIXTURE_HEX)), 'fixture digest'],
+        ['rendered version file for a neighbouring version', withFile('DeBIOSFoundation.PowerBrowser.yaml', t => t.replace(facts.version, neighbour)), 'PackageVersion'],
     ];
 
     let failed = 0;
@@ -278,6 +349,24 @@ function selfTest() {
             console.log(`  ${c.name}: red -- ${hit}`);
         }
     }
+    const controlSet = renderedFaults(goodSet, facts, realAsset, verified);
+    if (controlSet.length > 0) {
+        console.error(`${NAME}: --self-test FAIL -- the good rendered set went red: ${controlSet.join(' | ')}`);
+        failed += 1;
+    } else {
+        greens += 1;
+        console.log('  control: a set rendered with a real asset name and the verified digest: green');
+    }
+    for (const [name, set, expect] of renderedCases) {
+        const hit = renderedFaults(set, facts, realAsset, verified).find(f => f.includes(expect));
+        if (hit) {
+            reds += 1;
+            console.log(`  ${name}: red -- ${hit}`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${expect}`);
+            failed += 1;
+        }
+    }
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
@@ -289,6 +378,16 @@ function selfTest() {
 function main() {
     if (args.includes('--self-test')) return selfTest();
     const { failures } = runChecks(REPO_ROOT);
+    if (renderedAt >= 0) {
+        const dir = resolve(args[renderedAt + 1]);
+        const { facts } = deriveChannel(REPO_ROOT, diskReader(REPO_ROOT));
+        try {
+            const files = Object.fromEntries(readdirSync(dir).map(f => [f, readFileSync(join(dir, f), 'utf8')]));
+            if (facts !== null) failures.push(...renderedFaults(files, facts, process.env.ASSET_NAME ?? '', process.env.ASSET_SHA ?? '').map(f => `${args[renderedAt + 1]}/${f}`));
+        } catch {
+            failures.push(`${args[renderedAt + 1]}: cannot be read. Next step: render the winget set first.`);
+        }
+    }
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s) with the winget set.`);
         failures.forEach(f => console.error(`  ${f}`));

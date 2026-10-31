@@ -103,11 +103,21 @@ is not executed by this run and is listed at the end.
 
 - **Blocked:** no Windows asset is named in `docs/RELEASING.md` (assumption A2), so the winget set carries the fixture.
   The silent switch `/S` and `InstallerType: nullsoft` are not run against an installer. The WINGET_TOKEN classic PAT
-  (public_repo, on the account that owns the winget-pkgs fork) is not created, and the `release` environment does not hold it.
+  (public_repo) is not created, and the `winget` environment does not exist or hold it yet.
 - **Owner steps:** name the Phase 54 asset in the asset table, then run a `wingetcreate update ... --out` dry run and a
   Windows silent install, and correct the three files if the switch or the type differs. Create the classic PAT, store it as
-  the environment secret `WINGET_TOKEN` in `release`, record its holder (already in `docs/RENEWALS.md`), then submit the
-  winget set (`docs/winget-tap-checkpoint.md`) and record the pull request link there.
+  the environment secret `WINGET_TOKEN` in the `winget` environment (not `release`, which holds the MAR signing key),
+  record its holder (already in `docs/RENEWALS.md`), then submit the winget set (`docs/winget-tap-checkpoint.md`) and
+  record the pull request link there.
+- **Token scope (review fix WR-06):** wingetcreate does not support fine-grained personal access tokens (its
+  `doc/token.md`, read 2026-10-31, says "Fine-grained tokens are not supported", microsoft/winget-create issue 595), so
+  `public_repo` on a classic PAT is the minimum. Use a dedicated bot account whose only write access is its winget-pkgs
+  fork, so the account, not the token, bounds the reach. The token reaches wingetcreate through the
+  `WINGET_CREATE_GITHUB_TOKEN` environment variable, never `--token`. Owner-verify that the variable name still holds in the
+  pinned wingetcreate 1.12.13.0.
+- **First submission (review fix WR-07):** the first version is submitted from the tracked `winget/` set (rendered, then
+  `wingetcreate submit`); `wingetcreate update` runs only when `manifests/d/DeBIOSFoundation/PowerBrowser` already exists in
+  microsoft/winget-pkgs. Owner-verify that `submit` accepts the rendered directory and that the manifest validates.
 
 ## 12. Cask shape decisions and the darwin enablement (DIST-11, Phase 55 and A3)
 
@@ -121,15 +131,17 @@ is not executed by this run and is listed at the end.
 ## 13. Environments, secrets and the tap App (DIST-12, repository owner)
 
 - **Blocked:** the channel legs need the `bot` environment (`BOT_APP_PRIVATE_KEY` secret, `BOT_APP_ID` variable, the App
-  with contents and pull-requests write and no Workflows permission) and the `release` environment with `WINGET_TOKEN`.
+  with contents and pull-requests write and no Workflows permission) and the `winget` environment with `WINGET_TOKEN`
+  (declared in `.github/settings/environment-winget.json`; run `node scripts/apply-repo-controls.mjs` to create it).
   The tap repository needs the bot App installed on it.
-- **Owner steps:** confirm the bot environment already holds the App key (Phase 43), add `WINGET_TOKEN` to the `release`
+- **Owner steps:** confirm the bot environment already holds the App key (Phase 43), add `WINGET_TOKEN` to the `winget`
   environment (item 11), and confirm the App installation covers `homebrew-powerbrowser`.
 
 ## 14. Train wiring: assumption A6 (DIST-12, Phases 43 and 49)
 
-- **Blocked:** `channel-manifests.yml` is a reusable workflow with four inputs (`release_key`, `tarball_sha256`,
-  `dmg_sha256`, `winget_asset`). The train does not yet call it.
+- **Blocked:** `channel-manifests.yml` is a reusable workflow with the inputs `release_key`, `live`, `dry_run`,
+  `tarball_sha256`, `dmg_asset`, `dmg_sha256`, `winget_asset` and `winget_sha256` (review fixes CR-01 and CR-02: live or dry is an
+  input, never `github.event_name`). The train does not yet call it, and the call must pass `live: true` and `dry_run`.
 - **Owner or next-plan step:** the train's stage table calls `uses: ./.github/workflows/channel-manifests.yml` with those
   inputs after a publish. If the Phase 49 table differs in shape, remap the inputs (`docs/channel-train-mapping.md`), keep
   the leg semantics, and record the delta against A6 in the Phase 56 SUMMARY.

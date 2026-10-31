@@ -27,8 +27,8 @@ inside a called workflow the `github` context is the caller's, so an event gate 
 payloads and writes nothing. The stage holds `concurrency: channel-manifests-<release_key>`, so two calls for one
 key never race on `chore/channel-<key>` or on the tap.
 
-No secrets are passed in. Each leg names its GitHub environment (`bot` for the flake and tap legs, `release`
-for the winget leg), and the environment holds the secret, which the leg reads by name.
+No secrets are passed in. Each leg names its GitHub environment (`bot` for the flake and tap legs, `winget`
+for the winget leg, which holds `WINGET_TOKEN` alone), and the environment holds the secret, which the leg reads by name.
 
 ## Input table
 
@@ -51,7 +51,7 @@ is never placed in a sed or shell program, only in an environment variable. The 
 | --- | --- | --- |
 | flake-hash-pr | `nix/pkg/release-hash.json` | A pull request to main on `chore/channel-<key>`. Never a push to main (GH-05). |
 | tap-commit | `Casks/powerbrowser.rb` in the tap repository | A direct push to the tap's default branch with the bot App token, only after `verify-homebrew-cask.mjs --release --rendered` passes on the rendered file. The plan mandates the direct push for the own tap; the release check, not a reviewer, is the gate. |
-| winget-submit | the winget set, written with `wingetcreate update --out`, then submitted | A winget pull request under the owner's fork, with WINGET_TOKEN from the release environment. |
+| winget-submit | the tracked `winget/` set rendered with the verified installer digest (first version), or the `wingetcreate update --out` set (later versions), then submitted | A winget pull request from the bot account's fork, with WINGET_TOKEN from the winget environment, read in the submit step only. wingetcreate is pinned by version and SHA-256. |
 | checker-freshness | none | Checks that the Flatpak `x-checker-data` template resolves to the tarball URL. No network. |
 
 ## Dry run

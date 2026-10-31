@@ -329,41 +329,72 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "HEAD:refs/heads/main"
 
   winget-submit:
-    name: winget set and submission (WINGET_TOKEN by name)
+    name: winget set and submission (WINGET_TOKEN by name, winget environment)
     if: ${{ inputs.live && !inputs.dry_run && inputs.winget_asset != '' }}
-    needs: [derive]
+    needs: [derive, verify-assets]
     runs-on: windows-latest
     timeout-minutes: 45
-    environment: release
+    # The winget environment holds WINGET_TOKEN alone. The release environment holds the signing key and is never
+    # entered from this file.
+    environment: winget
     permissions: {}
+    env:
+      # wingetcreate is pinned by version and by the SHA-256 of the release asset (read from the GitHub release of
+      # microsoft/winget-create, 2026-10-31, and recomputed on download). Bump both together.
+      WINGETCREATE_VERSION: 1.12.13.0
+      WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
     steps:
       - name: Check out the repository without persisting the token
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - name: Install wingetcreate
-        shell: pwsh
-        run: winget install --id Microsoft.WingetCreate --exact --silent --accept-package-agreements --accept-source-agreements
+      - name: Download the pinned wingetcreate and check its SHA-256 (no token in this step)
+        run: |
+          set -euo pipefail
+          URL="https://github.com/microsoft/winget-create/releases/download/v${WINGETCREATE_VERSION}/wingetcreate.exe"
+          curl -fsSL -o "$RUNNER_TEMP/wingetcreate.exe" "$URL"
+          GOT="$(sha256sum "$RUNNER_TEMP/wingetcreate.exe" | cut -d' ' -f1)"
+          [ "$GOT" = "$WINGETCREATE_SHA256" ] || { echo "winget-submit: FAIL -- wingetcreate.exe hashes to $GOT, not the pinned $WINGETCREATE_SHA256" >&2; exit 1; }
 
-      - name: Write the winget set for the release (local output, no submission yet)
-        shell: pwsh
+      - name: Render the tracked winget set with the verified installer digest and check what will be submitted
         env:
+          ASSET_NAME: ${{ inputs.winget_asset }}
+          ASSET_SHA: ${{ needs.verify-assets.outputs.winget }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-channel-release-jobs.mjs --render-live winget "$RUNNER_TEMP/winget"
+          node scripts/verify-winget-manifest.mjs --release --rendered "$RUNNER_TEMP/winget"
+
+      - name: Choose the set to submit (the rendered set for the first version, an updated set for later versions)
+        env:
+          GH_TOKEN: ${{ github.token }}
           KEY: ${{ needs.derive.outputs.key }}
-          WINGET_ASSET: ${{ inputs.winget_asset }}
+          ASSET_NAME: ${{ inputs.winget_asset }}
+          ASSET_SHA: ${{ needs.verify-assets.outputs.winget }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $version = $env:KEY.TrimStart('v')
-          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:KEY/$env:WINGET_ASSET"
-          wingetcreate update DeBIOSFoundation.PowerBrowser --version $version --urls $url --out "$env:RUNNER_TEMP\winget"
+          set -euo pipefail
+          VERSION="${KEY#v}"
+          SUBMIT="$RUNNER_TEMP/winget-submit"
+          rm -rf "$SUBMIT"
+          if gh api repos/microsoft/winget-pkgs/contents/manifests/d/DeBIOSFoundation/PowerBrowser --silent 2>/dev/null; then
+            # A later version: wingetcreate update starts from the published manifest and recomputes the hash itself.
+            URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$KEY/$ASSET_NAME"
+            "$RUNNER_TEMP/wingetcreate.exe" update DeBIOSFoundation.PowerBrowser --version "$VERSION" --urls "$URL" --out "$SUBMIT"
+            grep -qi "InstallerSha256: *\"\?$ASSET_SHA" "$SUBMIT"/*.installer.yaml || { echo "winget-submit: FAIL -- the updated set does not carry the verified digest" >&2; exit 1; }
+          else
+            # The first version: the tracked winget/ set, rendered above, is what is submitted.
+            cp -r "$RUNNER_TEMP/winget" "$SUBMIT"
+          fi
+          ls "$SUBMIT"
 
-      - name: Submit the winget set with WINGET_TOKEN from the release environment
-        shell: pwsh
+      - name: Submit the set with WINGET_TOKEN from the winget environment (token in the environment, never on a command line)
         env:
-          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          KEY: ${{ needs.derive.outputs.key }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          wingetcreate submit "$env:RUNNER_TEMP\winget" --token $env:WINGET_TOKEN
+          set -euo pipefail
+          "$RUNNER_TEMP/wingetcreate.exe" submit --prtitle "DeBIOSFoundation.PowerBrowser version ${KEY#v}" --no-open "$RUNNER_TEMP/winget-submit"
 
   checker-freshness:
     name: Flatpak checker data resolves for the key (static)

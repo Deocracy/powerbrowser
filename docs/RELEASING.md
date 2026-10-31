@@ -268,7 +268,7 @@ here owns.
 | `crash-reporting-k` (TEL-07) | From outside the Cloudflare account post one well-formed multipart submit (200 with `CrashID=`), one over-cap body (413 `oversized_body`) and one burst past the rate limit (blocked); paste all three responses verbatim into the operator record. No token or secret is created in this repository | An external vantage point |
 | `reports-bug-error-crash` | Record both TEL-06 deferrals as named rows, and decide the crash-reporter gate in writing as `RETIRED` or `HELD` | Owner decision; under `RETIRED` the milestone owner amends the exclusion row, not this plan set |
 | `listings-and-cadence` | Under an ADMIT verdict, regenerate and rename the four Flathub files, substitute the five `@RELEASE_*@` tokens, optionally validate locally, and open the Flathub submission PR from the owner's account | The submission is made under a person's identity |
-| `listings-and-cadence` | Under an ADMIT verdict, fork the winget catalogue, create the manifest set, accept the contribution agreement, open the PR, and store a fork-scoped fine-grained PAT as `WINGET_TOKEN` in the `release` environment | Identity plus secret custody |
+| `listings-and-cadence` | Under an ADMIT verdict, fork the winget catalogue, create the manifest set, accept the contribution agreement, open the PR, and store the `WINGET_TOKEN` classic PAT (a bot account scoped to its fork; wingetcreate does not support fine-grained tokens) in the `winget` environment | Identity plus secret custody |
 | `listings-and-cadence` | Take no Homebrew action; confirm the deferral row names the stage slug that resumes it | Deliberate inaction, recorded |
 
 **Budget, not an operator gate.** Two stages need tier-3 wall time scheduled on
@@ -713,6 +713,7 @@ or `user/`, in apply order.
 | Environment `fixer` | `environment-fixer.json` | `PUT environments/fixer` | `environments` |
 | Environment `release` | `environment-release.json` | `PUT environments/release` | `environments` |
 | Environment `triage` | `environment-triage.json` | `PUT environments/triage` | `environments` |
+| Environment `winget` | `environment-winget.json` | `PUT environments/winget` | `environments` |
 | Branch policy `main`, per environment | `environment-branch-policy-main.json` | `POST environments/<name>/deployment-branch-policies`, only when `main` is absent | `environments/<name>/deployment-branch-policies` |
 | `main-integrity` ruleset | `ruleset-main-integrity.json` | `PUT rulesets/<id>`, or `POST rulesets` when absent by name | `rulesets`, `rulesets/<id>` |
 | `main-review` ruleset | `ruleset-main-review.json` | as above | as above |
@@ -755,7 +756,7 @@ that is not admitted.
 | `release` environment | `MAR_SIGNING_P12_B64` | `mar-signing-and-update-integrity` | GitHub, gated on the required reviewer |
 | `release` environment | `MAR_SIGNING_P12_PASSWORD` | `mar-signing-and-update-integrity` | as above |
 | `release` environment | descriptor-repository PAT (Contents write on `powerbrowser-updates` only) | `linux-release-pipeline-and-update-channel` | as above |
-| `release` environment | `WINGET_TOKEN`, fork-scoped, only under an ADMIT verdict | `listings-and-cadence` | as above |
+| `winget` environment | `WINGET_TOKEN`: a classic PAT with `public_repo` on a dedicated bot account whose only write access is its winget-pkgs fork (wingetcreate does not support fine-grained tokens), branch-restricted to `main`; it shares no environment with the signing key | `listings-and-cadence`, `package-channels` | the bot account holder, recorded in `docs/RENEWALS.md` |
 | Host filesystem on `legion` | `/var/lib/secrets/github-runner-registration`, root-owned mode 0600, present from minting; the token inside it expires after one hour and is harmless afterwards, and the file stays because the unit reads it on every start; the hook copy `/etc/pb-runner/legion-pre-job-hook.sh`, root-owned mode 0555 | `linux-release-pipeline-and-update-channel` | the operator; not readable by the runner user `pb-runner` |
 | Offline medium | `powerbrowser-mar.p12` (from the ceremony block's optional `pk12util` line, protected with the key store's password from `password.txt`) and the key-store password | `mar-signing-and-update-integrity` | the operator, in a safe |
 

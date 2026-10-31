@@ -659,7 +659,7 @@ export const CONTROLS = Object.freeze([
     },
     {
         id: 'environments',
-        files: [...['bot', 'descriptor', 'fixer', 'release', 'triage'].map(envFile), BRANCH_POLICY_FILE],
+        files: [...['bot', 'descriptor', 'fixer', 'release', 'triage', 'winget'].map(envFile), BRANCH_POLICY_FILE],
         write: { method: 'PUT', path: ENVIRONMENT_PATH },
         plan: planEnvironments,
         read: ENVIRONMENTS_PATH,
@@ -1255,7 +1255,7 @@ function selfTest() {
         l.environments = l.environments.filter(e => e.name !== 'bot');
         l.total_count = l.environments.length;
         const env = plan(s).writes.filter(w => w.id === 'environments').map(w => `${w.method} ${w.path.replace(/^.*\/environments\//, '')}`);
-        const want = ['PUT bot', 'POST bot/deployment-branch-policies', 'PUT descriptor', 'PUT fixer', 'PUT release', 'PUT triage'];
+        const want = ['PUT bot', 'POST bot/deployment-branch-policies', 'PUT descriptor', 'PUT fixer', 'PUT release', 'PUT triage', 'PUT winget'];
         if (env.join('|') === want.join('|')) {
             console.log(`  ok  planWrites with bot absent and main present elsewhere -> ${env.join(', ')}`);
         } else {

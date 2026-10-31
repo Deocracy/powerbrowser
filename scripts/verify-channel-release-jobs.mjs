@@ -332,12 +332,12 @@ export function runChecks(root, overrides = {}) {
     // 5. winget-submit
     const winget = jobs['winget-submit'];
     if (winget) {
-        if (winget.environment !== 'release') fail(`${WF_REL} job winget-submit`, `uses environment ${JSON.stringify(winget.environment ?? null)}, not the release environment that holds WINGET_TOKEN`, 'set environment: release.');
+        if (winget.environment !== 'winget') fail(`${WF_REL} job winget-submit`, `uses environment ${JSON.stringify(winget.environment ?? null)}, not the winget environment that holds WINGET_TOKEN alone`, 'set environment: winget.');
         if (!/^windows-/.test(String(winget['runs-on'] ?? ''))) fail(`${WF_REL} job winget-submit`, `runs on ${JSON.stringify(winget['runs-on'] ?? null)}, but wingetcreate is a Windows tool`, 'run on windows-latest.');
         const blob = JSON.stringify(winget);
         if (!/secrets\.WINGET_TOKEN/.test(blob)) fail(`${WF_REL} job winget-submit`, 'does not reference WINGET_TOKEN by name', 'reference ${{ secrets.WINGET_TOKEN }} in the env of the submit step.');
         if (!/inputs\.winget_asset/.test(String(winget.if ?? ''))) fail(`${WF_REL} job winget-submit`, 'is not gated on the Windows asset the train names (A2), so it could submit the fixture', 'gate the job on inputs.winget_asset.');
-        if (!/wingetcreate update/.test(blob)) fail(`${WF_REL} job winget-submit`, 'has no wingetcreate update step that writes the set locally first', 'add the update --out step before the submit.');
+        if (!/wingetcreate\.exe\\?"? update/.test(blob)) fail(`${WF_REL} job winget-submit`, 'has no wingetcreate update step for later versions', 'add the update --out step before the submit.');
     }
 
     // 6. checker-freshness
@@ -438,7 +438,7 @@ function selfTest() {
         },
         {
             name: 'token value written into the winget leg', expect: 'credential-shaped',
-            overrides: withWorkflow(t => t.replace('WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}', `WINGET_TOKEN: ${'gh'}${'p_'}${'A'.repeat(36)}`)),
+            overrides: withWorkflow(t => t.replace('WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}', `WINGET_CREATE_GITHUB_TOKEN: ${'gh'}${'p_'}${'A'.repeat(36)}`)),
         },
         {
             name: 'control: unmodified stage stays green', expect: null,

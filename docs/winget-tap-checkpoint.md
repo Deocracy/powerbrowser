@@ -31,16 +31,21 @@ scratch directory outside the checkout. The live steps are owner steps, under th
 1. Fork microsoft/winget-pkgs on the owner account. That account is the holder recorded in
    `docs/RENEWALS.md` for WINGET_TOKEN.
 2. Put the classic personal access token (public_repo scope) in the shell environment from the owner's
-   store. Never paste it into a command, a file or a log. wingetcreate can echo a token passed on the
-   command line, so use the environment form.
+   store, as `WINGET_CREATE_GITHUB_TOKEN`. Never paste it into a command, a file or a log. wingetcreate
+   can echo a token passed with `--token`, so use the environment form only. wingetcreate does not support
+   fine-grained tokens (its token documentation, read 2026-10-31), so the token's reach is bounded by the
+   account: use a dedicated bot account whose only write access is its winget-pkgs fork.
 3. Submit the rendered set from the scratch directory. Subcommand `submit`, token from the environment:
 
-       wingetcreate submit <scratch-dir>/winget --token "$WINGET_TOKEN"
+       wingetcreate submit <scratch-dir>/winget
 
 4. Record the pull request link here, with the date: ____
 
-The release environment stores the same token as the environment secret WINGET_TOKEN. The DIST-12
-leg reads it there by name. No App token can open this pull request, which is the recorded Apps-only
+The winget environment (not the release environment, which holds the signing key) stores the same token as the
+environment secret WINGET_TOKEN. The DIST-12 leg reads it there by name, in the one step that submits, and passes
+it to wingetcreate through `WINGET_CREATE_GITHUB_TOKEN`. The first version is the tracked `winget/` set, rendered with
+the verified installer digest; later versions use `wingetcreate update`, whose output digest is checked against the
+verified one before the submission. No App token can open this pull request, which is the recorded Apps-only
 exception.
 
 ### Homebrew tap commit (DIST-12, bot App, no pull request)
