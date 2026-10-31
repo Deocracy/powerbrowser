@@ -4782,8 +4782,10 @@ run_own_checks() {
     "workflows|node $REPO_ROOT/scripts/verify-workflows.mjs"
     # workflows-self-test plants, in memory, unpinned, short, uppercase and docker:// uses:, an
     # unadmitted foo/bar, an unused admission, an empty patterns_allowed, a duplicate on:, zero
-    # workflows, and each GH-12 fault over a good release.yml fixture; each red naming file and
-    # job. It writes nothing.
+    # workflows, each GH-12 fault over a good release.yml fixture, and the TRAIN-08 dry-run-gate
+    # forms (an inverted or always()-wrapped gate, git push and commit including git -c, gh api
+    # write methods and implicit POST, gh release, curl -X, an action outside the read-only list);
+    # each red naming file and job. It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
     # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ at its default persona,
     # green only on exit 0. Honestly --quick, offline audit; the zizmor binary comes from the

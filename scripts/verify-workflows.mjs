@@ -55,9 +55,13 @@
 //                 pull_request|head_commit|review), nested fields and
 //                 review_comment included.
 //  dry-run-gate   In release-train.yml only (Phase 43, TRAIN-08), every step that
-//                 commits, pushes, opens, comments, edits, dispatches or mints an
-//                 App token carries inputs.dry-run in its if:. A dry run then
-//                 prints the write instead of making it. Read steps are exempt.
+//                 commits, pushes, opens, comments, edits, dispatches, releases,
+//                 labels, calls a write method of the API, or uses an action outside
+//                 the read-only list (checkout, install-nix) carries a NEGATED
+//                 inputs.dry-run gate in its if: (!inputs.dry-run, != true or
+//                 == false). An inverted gate or one that merely mentions the input
+//                 is red. A dry run then prints the write instead of making it.
+//                 Read steps are exempt.
 //
 // Effective permissions: job permissions, else workflow permissions, else the
 // repository default (default_workflow_permissions in
@@ -108,8 +112,14 @@ const PATTERN = /^([^/@]+\/[^/@]+)@\*$/;
 const WF_LEVEL = '(workflow)';
 const DRY_RUN_FILE = 'release-train.yml';
 const DRY_RUN_GATE = 'inputs.dry-run';
-// A run: body that commits, pushes, opens, comments, edits, dispatches or closes on GitHub.
-const WRITE_RUN = /gh api -X (POST|PATCH|PUT|DELETE)|gh pr (create|merge|comment|edit)|gh issue (create|comment|edit|close|lock|reopen)|gh workflow run|git push|dispatches/;
+// A run: body that commits, pushes, opens, comments, edits, dispatches, releases or labels on
+// GitHub, or writes through the API by method or implicit POST (-f, -F, --field, --input).
+// The git form is any git line naming push or commit, so `git -c "..." push` is caught.
+const WRITE_RUN = /\bgit\b[^\n]*\b(push|commit)\b|\bgh\s+api\b[^\n]*(\s-X\s*\S|\s--method\b|\s-[fF]\b|\s--field\b|\s--raw-field\b|\s--input\b)|\bgh\s+(pr|issue|release|label|workflow)\s+(create|edit|close|merge|comment|ready|review|run|reopen|lock|delete|upload)\b|\bcurl\b[^\n]*-X\s*(POST|PUT|PATCH|DELETE)\b|dispatches/;
+// Actions a release-train step may use without a gate: they read the repository or install a toolchain.
+const READ_USES = ['actions/checkout', 'cachix/install-nix-action'];
+// A gate is a negation of the dry-run input: !inputs.dry-run, inputs.dry-run != true, inputs.dry-run == false.
+const DRY_RUN_NEGATED = /!\s*inputs\.dry-run\b|inputs\.dry-run\s*(!=\s*true|==\s*false)/;
 const APP_TOKEN = 'actions/create-github-app-token@';
 
 function events(wf) {
@@ -330,10 +340,11 @@ function runChecks(root, overrides = {}) {
             // dry-run gate: every write step in release-train.yml names the gate in its if:.
             if (file === DRY_RUN_FILE) {
                 steps.forEach((s, i) => {
-                    const writes = (typeof s.run === 'string' && WRITE_RUN.test(s.run)) || stepUses[i].startsWith(APP_TOKEN);
+                    const unreadUse = stepUses[i] !== '' && !READ_USES.includes(stepUses[i].split('@')[0]);
+                    const writes = (typeof s.run === 'string' && WRITE_RUN.test(s.run)) || unreadUse;
                     if (!writes) return;
                     const cond = s.if === undefined ? '' : String(s.if);
-                    if (!cond.includes(DRY_RUN_GATE)) fail(rel, jobId, 'dry-run-gate', `step ${i} (${stepUses[i] || 'run'}) writes to GitHub or the repository with no ${DRY_RUN_GATE} gate in its if:. Next step: add if: \${{ !${DRY_RUN_GATE} }} and print the write as a dry-run line instead.`);
+                    if (!DRY_RUN_NEGATED.test(cond)) fail(rel, jobId, 'dry-run-gate', `step ${i} (${stepUses[i] || 'run'}) writes to GitHub or the repository, or uses an action outside the read-only list, with no negated ${DRY_RUN_GATE} gate in its if:. Next step: add if: \${{ !${DRY_RUN_GATE} }} and print the write as a dry-run line instead.`);
                 });
             }
 
@@ -531,9 +542,21 @@ function selfTest() {
         ['claude-code-action on legion', edit(R, '      - run: echo build\n', `      - uses: anthropics/claude-code-action@${H40}\n      - run: echo build\n`), rel(R), 'build-linux', 'claude-code-action', 'not GitHub-hosted'],
         ['claude-code-action with contents write', { files: { ...base, 'assist.yml': assist('write') }, selected: withClaude }, rel('assist.yml'), 'assist', 'claude-code-action', 'contents write'],
         // TRAIN-08 and the release-train trust shape, planted on the real release-train.yml
-        ['ungated git push in bump-pr', withRt(d => d.jobs['bump-pr'].steps.push({ run: 'git push origin HEAD:refs/heads/x' })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', `no ${DRY_RUN_GATE} gate`],
-        ['ungated gh issue comment in report', withRt(d => d.jobs.report.steps.push({ run: 'gh issue comment 1 --body x' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', `no ${DRY_RUN_GATE} gate`],
-        ['ungated App-token mint in bump-pr', withRt(d => d.jobs['bump-pr'].steps.push({ uses: `${APP_TOKEN}${H40}` })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', `no ${DRY_RUN_GATE} gate`],
+        ['ungated git push in bump-pr', withRt(d => d.jobs['bump-pr'].steps.push({ run: 'git push origin HEAD:refs/heads/x' })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated gh issue comment in report', withRt(d => d.jobs.report.steps.push({ run: 'gh issue comment 1 --body x' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated App-token mint in bump-pr', withRt(d => d.jobs['bump-pr'].steps.push({ uses: `${APP_TOKEN}${H40}` })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        // TRAIN-08, the forms the first rule missed: an inverted or always()-wrapped gate, the git -c
+        // extraheader push, a commit, a write method or implicit POST on gh api, gh release, curl -X,
+        // and an action outside the read-only list. Each plant is one step on the real release-train.yml.
+        ['inverted dry-run gate on a git push', withRt(d => d.jobs['bump-pr'].steps.push({ if: `\${{ ${DRY_RUN_GATE} }}`, run: 'git push origin HEAD:refs/heads/x' })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['always() || gate on a git push', withRt(d => d.jobs['bump-pr'].steps.push({ if: `\${{ always() || ${DRY_RUN_GATE} }}`, run: 'git push origin HEAD:refs/heads/x' })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated git -c extraheader push', withRt(d => d.jobs['bump-pr'].steps.push({ run: 'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic x" push --force origin HEAD:refs/heads/x' })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated git commit', withRt(d => d.jobs['bump-pr'].steps.push({ run: 'git commit -m "x"' })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated gh api -X POST', withRt(d => d.jobs.report.steps.push({ run: 'gh api -X POST repos/o/r/issues' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated gh api with an implicit POST field', withRt(d => d.jobs.report.steps.push({ run: 'gh api repos/o/r/issues -f title=x' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated gh release create', withRt(d => d.jobs.report.steps.push({ run: 'gh release create v1 --notes x' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated curl -X POST', withRt(d => d.jobs.report.steps.push({ run: 'curl -X POST https://api.github.com/x' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
+        ['ungated actions/github-script', withRt(d => d.jobs.report.steps.push({ uses: `actions/github-script@${H40}` })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', 'no negated inputs.dry-run gate'],
         ['schedule key on release-train.yml', withRt(d => { d.on.schedule = [{ cron: '0 3 * * *' }]; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-schedule', 'schedule'],
         ['pull_request trigger on release-train.yml', withRt(d => { d.on.pull_request = null; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
         ['unguarded workflow_run job in release-train.yml', withRt(d => { d.on.workflow_run = { workflows: ['Verify static layers'], types: ['completed'] }; d.jobs.derive.if = 'true'; }), rel(DRY_RUN_FILE), 'derive', 'workflow-run-guard', 'head_repository'],
@@ -551,6 +574,8 @@ function selfTest() {
         ['claude-code-action hosted with contents read', { files: { ...base, 'assist.yml': assist('read') }, selected: withClaude }],
         ['permissions: read-all over a write repository default', { files: { ...base, 'plain.yml': plain('read-all') }, defaultPermissions: 'write' }],
         ['release-train.yml with its write steps gated by inputs.dry-run', withRt(d => d.jobs['bump-pr'].steps.push({ if: `\${{ !${DRY_RUN_GATE} }}`, run: 'git push origin HEAD:refs/heads/x' }))],
+        ['a negated == false gate on a git commit', withRt(d => d.jobs['bump-pr'].steps.push({ if: `\${{ ${DRY_RUN_GATE} == false }}`, run: 'git commit -m "x"' }))],
+        ['a read gh api GET stays ungated', withRt(d => d.jobs.report.steps.push({ run: 'gh api repos/o/r/branches/x --jq .commit.sha' }))],
         ['the unmodified release-train.yml under the new rule', { files }],
     ];
 
