@@ -28,11 +28,12 @@
 //   node scripts/verify-winget-manifest.mjs --release     (refuses the fixture while A2 is open)
 //   node scripts/verify-winget-manifest.mjs --self-test
 
-import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DOCS_REL, deriveChannel, diskReader } from './lib/channel-identity.mjs';
+import {
+    DOCS_REL, WINDOWS_FIXTURE_HEX, channelTokenValues, deriveChannel, diskReader, renderTemplate,
+} from './lib/channel-identity.mjs';
 import { loadYaml } from './lib/release-workflow.mjs';
 import { resolveConfig } from './generate.mjs';
 
@@ -43,10 +44,7 @@ const VERSION_REL = 'winget/DeBIOSFoundation.PowerBrowser.yaml';
 const INSTALLER_REL = 'winget/DeBIOSFoundation.PowerBrowser.installer.yaml';
 const LOCALE_REL = 'winget/DeBIOSFoundation.PowerBrowser.locale.yaml';
 const RENEWALS_REL = 'docs/RENEWALS.md';
-const FIXTURE_TEXT = 'PowerBrowser winget fixture installer, replaced by the Phase 54 asset (assumption A2)\n';
-const FIXTURE_BYTES = Buffer.from(FIXTURE_TEXT, 'utf8');
-const FIXTURE_HEX = createHash('sha256').update(FIXTURE_BYTES).digest('hex');
-const WINDOWS_TOKEN = 'windows-x86_64';
+const FIXTURE_HEX = WINDOWS_FIXTURE_HEX;
 const VERBS = ['rotate', 'renew', 're-verify', 'replace', 'confirm', 'decide', 'record', 'check', 'review'];
 const TOKENS = ['@RELEASE_VERSION@', '@RELEASE_KEY@', '@RELEASE_REPO@', '@WINDOWS_INSTALLER_ASSET@', '@WINDOWS_INSTALLER_SHA256@'];
 const CREDENTIAL_SHAPES = [new RegExp(`${'gh'}p_[A-Za-z0-9]{20,}`), new RegExp(`${'github'}_pat_[A-Za-z0-9_]{20,}`)];
@@ -79,11 +77,7 @@ export function wingetTokenRow(text) {
     return null;
 }
 
-function render(text, values) {
-    let out = text;
-    for (const [token, value] of Object.entries(values)) out = out.split(token).join(value);
-    return out;
-}
+const render = renderTemplate;
 
 export function runChecks(root, overrides = {}) {
     const read = overrides.read ?? diskReader(root);
@@ -97,15 +91,8 @@ export function runChecks(root, overrides = {}) {
     }
     const { config } = resolveConfig(join(root, 'configuration.toml'));
     const identifier = `${config.product.vendor_display.replace(/\s+/g, '')}.${config.identity.display_name.replace(/\s+/g, '')}`;
-    const fixtureAsset = `${facts.app}-${facts.version}.${WINDOWS_TOKEN}.exe`;
-    const values = {
-        '@RELEASE_VERSION@': facts.version,
-        '@RELEASE_KEY@': facts.releaseKey,
-        '@RELEASE_REPO@': facts.repo,
-        '@WINDOWS_INSTALLER_ASSET@': fixtureAsset,
-        '@WINDOWS_INSTALLER_SHA256@': FIXTURE_HEX,
-        '@PUBLISHER@': config.product.vendor_display,
-    };
+    const values = channelTokenValues(facts);
+    const fixtureAsset = values['@WINDOWS_INSTALLER_ASSET@'];
     const pending = windowsPending(read(DOCS_REL));
 
     const load = rel => {

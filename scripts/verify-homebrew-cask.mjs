@@ -27,19 +27,18 @@
 //   node scripts/verify-homebrew-cask.mjs --release     (refuses the fixture while A3 is open)
 //   node scripts/verify-homebrew-cask.mjs --self-test
 
-import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DOCS_REL, deriveChannel, diskReader } from './lib/channel-identity.mjs';
+import {
+    DOCS_REL, MACOS_FIXTURE_HEX, channelTokenValues, deriveChannel, diskReader, renderTemplate,
+} from './lib/channel-identity.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'homebrew-cask';
 const SELF_REL = 'scripts/verify-homebrew-cask.mjs';
 const CASK_REL = 'homebrew-tap/Casks/powerbrowser.rb';
-const FIXTURE_TEXT = 'PowerBrowser macOS fixture disk image, replaced by the Phase 55 asset (assumption A3)\n';
-const FIXTURE_HEX = createHash('sha256').update(Buffer.from(FIXTURE_TEXT, 'utf8')).digest('hex');
-const DMG_TOKEN = 'macos-universal';
+const FIXTURE_HEX = MACOS_FIXTURE_HEX;
 const CLAIMS = new RegExp([
     `notari${'z'}`, `stap${'le'}`, `Developer ${'ID'}`, `Gatekeeper ${'passed'}`,
 ].join('|'), 'i');
@@ -55,11 +54,7 @@ for (const a of args) {
     }
 }
 
-function render(text, values) {
-    let out = text;
-    for (const [token, value] of Object.entries(values)) out = out.split(token).join(value);
-    return out;
-}
+const render = renderTemplate;
 
 export function runChecks(root, overrides = {}) {
     const read = overrides.read ?? diskReader(root);
@@ -71,14 +66,8 @@ export function runChecks(root, overrides = {}) {
     if (facts === null) {
         return { failures: cfgFailures.map(f => `${f} Next step: fix configuration.toml, then re-run this check.`) };
     }
-    const dmgAsset = `${facts.app}-${facts.version}.${DMG_TOKEN}.dmg`;
-    const values = {
-        '@RELEASE_VERSION@': facts.version,
-        '@RELEASE_KEY@': facts.releaseKey,
-        '@RELEASE_REPO@': facts.repo,
-        '@MACOS_DMG_ASSET@': dmgAsset,
-        '@MACOS_DMG_SHA256@': FIXTURE_HEX,
-    };
+    const values = channelTokenValues(facts);
+    const dmgAsset = values['@MACOS_DMG_ASSET@'];
 
     const text = read(CASK_REL);
     if (text === null) {

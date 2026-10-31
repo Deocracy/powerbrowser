@@ -1,0 +1,279 @@
+# The channel-manifests stage (Phase 56, DIST-12). One release produces four channel legs, each behind the
+# release-train interface as a workflow_call from the train (Phases 43 and 49; assumption A6):
+#
+#   flake-hash-pr      the bot opens a pull request to main carrying the flake hash of the published tarball.
+#                      It never pushes to main (GH-05): the branch is chore/channel-<key> and the change is reviewed.
+#   tap-commit         the bot App commits the rendered cask to the own tap repository, a direct push to the tap.
+#   winget-submit      wingetcreate writes the winget set and submits it with WINGET_TOKEN from the release
+#                      environment, by name. It runs only when the train names the Windows asset (A2).
+#   checker-freshness  the Flatpak x-checker-data template resolves for the release key. Static, no network.
+#
+# A workflow_dispatch runs the dry-run job only: it renders the four payloads into the runner's temp directory
+# and lists them. It writes nothing to any repository and submits nothing.
+#
+# Every live leg reads the release key from the derive job, which checks it against the key the tree derives
+# (scripts/verify-channel-release-jobs.mjs --check-key). Each leg's payload derives from the tree at run time
+# (--facts), never from a typed value. The row scripts/verify-channel-release-jobs.mjs checks this file.
+#
+# No schedule key (D-77): the Cloudflare Worker clock owns timing. No pull_request trigger. Credentials are
+# referenced by name only, and no job holds write scope on contents at the workflow level (write-trio).
+
+name: Channel manifests
+
+on:
+  workflow_call:
+    inputs:
+      release_key:
+        description: "The release key v<ESR>-<revision> the train published"
+        required: true
+        type: string
+      tarball_sha256:
+        description: "The SHA-256 of the published Linux tarball, cross-checked by the flake-hash leg"
+        required: false
+        type: string
+        default: ""
+      dmg_sha256:
+        description: "The SHA-256 of the published macOS disk image; empty until Phase 55 (A3), which skips the tap leg"
+        required: false
+        type: string
+        default: ""
+      winget_asset:
+        description: "The Windows installer asset name; empty until Phase 54 (A2), which skips the winget leg"
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      release_key:
+        description: "The release key to render the four payloads for (dry run, nothing is written to a repository)"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  derive:
+    name: Derive and check the release key
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      key: ${{ steps.check.outputs.key }}
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check the key against the tree
+        id: check
+        env:
+          KEY: ${{ inputs.release_key }}
+        run: |
+          set -eu
+          node scripts/verify-channel-release-jobs.mjs --check-key "$KEY"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+  dry-run:
+    name: Render the four payloads (dry run)
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: [derive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Render the payloads into the runner temp directory (writes nothing to a repository)
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+        run: |
+          set -eu
+          node scripts/verify-channel-release-jobs.mjs --render "$RUNNER_TEMP/payloads" --key "$KEY"
+          find "$RUNNER_TEMP/payloads" -type f | sort
+
+  flake-hash-pr:
+    name: Flake hash bot pull request
+    if: ${{ github.event_name == 'workflow_call' }}
+    needs: [derive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The bot environment holds the App key. The installation token is minted below and passed to git and gh only.
+    environment: bot
+    permissions: {}
+    steps:
+      - name: Mint the bot App token for the release repository
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      - name: Prefetch the published tarball and write the hash record
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          TARBALL_SHA: ${{ inputs.tarball_sha256 }}
+        run: |
+          set -eu
+          node scripts/verify-channel-release-jobs.mjs --facts > "$RUNNER_TEMP/facts.json"
+          URL="$(jq -r '."@RELEASE_URL@"' "$RUNNER_TEMP/facts.json")"
+          PREFETCH="$(nix store prefetch-file --hash-type sha256 --json "$URL")"
+          SRI="$(jq -r '.hash' <<<"$PREFETCH")"
+          if [ -n "$TARBALL_SHA" ]; then
+            WANT="$(nix hash convert --hash-algo sha256 --to sri "$TARBALL_SHA")"
+            [ "$WANT" = "$SRI" ] || { echo "flake-hash-pr: FAIL -- the published tarball hashes to $SRI but the train named $WANT" >&2; exit 1; }
+          fi
+          jq -n --arg k "$KEY" --arg h "$SRI" '{releaseKey: $k, sha256: $h}' > nix/pkg/release-hash.json
+          node scripts/verify-flake-repack.mjs --release
+
+      - name: Open the bot pull request (never a push to main)
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -eu
+          BRANCH="chore/channel-$KEY"
+          git config user.name "release-train"
+          git config user.email "release-train@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add nix/pkg/release-hash.json
+          git commit -m "chore(nix): flake hash for $KEY"
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "HEAD:refs/heads/$BRANCH"
+          gh pr create --base main --head "$BRANCH" --title "chore(nix): flake hash for $KEY" \
+            --body "The DIST-12 channel stage recomputed the flake hash of the published $KEY tarball. Review, then merge."
+
+  tap-commit:
+    name: Homebrew tap commit (bot App, direct to the tap)
+    if: ${{ github.event_name == 'workflow_call' && inputs.dmg_sha256 != '' }}
+    needs: [derive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: bot
+    permissions: {}
+    steps:
+      - name: Mint the bot App token for the tap repository
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-powerbrowser
+          permission-contents: write
+
+      - name: Check out the release repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check out the tap repository with the bot token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-powerbrowser
+          token: ${{ steps.app.outputs.token }}
+          path: tap
+          persist-credentials: false
+
+      - name: Render the cask from the tree's derived values and the published disk image
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          DMG_SHA: ${{ inputs.dmg_sha256 }}
+        run: |
+          set -eu
+          node scripts/verify-channel-release-jobs.mjs --facts > "$RUNNER_TEMP/facts.json"
+          jq --arg s "$DMG_SHA" '."@MACOS_DMG_SHA256@" = $s' "$RUNNER_TEMP/facts.json" \
+            | jq -r 'to_entries[] | "s|\(.key)|\(.value)|g"' > "$RUNNER_TEMP/render.sed"
+          mkdir -p tap/Casks
+          sed -f "$RUNNER_TEMP/render.sed" homebrew-tap/Casks/powerbrowser.rb > tap/Casks/powerbrowser.rb
+          grep -q "$KEY" tap/Casks/powerbrowser.rb || { echo "tap-commit: FAIL -- the rendered cask does not name $KEY" >&2; exit 1; }
+
+      - name: Commit and push the cask to the tap default branch
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -eu
+          cd tap
+          git config user.name "release-train"
+          git config user.email "release-train@users.noreply.github.com"
+          git add Casks/powerbrowser.rb
+          if git diff --cached --quiet; then echo "tap-commit: the cask already names $KEY; nothing to commit"; exit 0; fi
+          git commit -m "powerbrowser $KEY"
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "HEAD:refs/heads/main"
+
+  winget-submit:
+    name: winget set and submission (WINGET_TOKEN by name)
+    if: ${{ github.event_name == 'workflow_call' && inputs.winget_asset != '' }}
+    needs: [derive]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: release
+    permissions: {}
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install wingetcreate
+        shell: pwsh
+        run: winget install --id Microsoft.WingetCreate --exact --silent --accept-package-agreements --accept-source-agreements
+
+      - name: Write the winget set for the release (local output, no submission yet)
+        shell: pwsh
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          WINGET_ASSET: ${{ inputs.winget_asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:KEY.TrimStart('v')
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:KEY/$env:WINGET_ASSET"
+          wingetcreate update DeBIOSFoundation.PowerBrowser --version $version --urls $url --out "$env:RUNNER_TEMP\winget"
+
+      - name: Submit the winget set with WINGET_TOKEN from the release environment
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          wingetcreate submit "$env:RUNNER_TEMP\winget" --token $env:WINGET_TOKEN
+
+  checker-freshness:
+    name: Flatpak checker data resolves for the key (static)
+    if: ${{ github.event_name == 'workflow_call' }}
+    needs: [derive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check that the x-checker-data template resolves for the release key
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+        run: |
+          set -eu
+          node scripts/verify-channel-release-jobs.mjs --check-checker "$KEY"

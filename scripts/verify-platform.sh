@@ -4952,6 +4952,16 @@ run_own_checks() {
     # homebrew-cask-self-test plants auto_updates false, a verified host drift, a neighbouring version, an arm64
     # enablement, a removed deferral marker, a signing claim, a removed zap stanza and a cask block header removed.
     "homebrew-cask-self-test|node $REPO_ROOT/scripts/verify-homebrew-cask.mjs --self-test"
+    # NEW (Phase 56, DIST-12): the channel-manifests stage, read as YAML. Four legs per release: a flake-hash pull
+    # request (never a push to main), a tap commit, a gated winget submission with WINGET_TOKEN by name, and the
+    # Flatpak checker-template check; a dry run renders the payloads and submits nothing. No schedule, no
+    # pull_request trigger, no credential literal; every non-GitHub-owned action is admitted. Honestly --quick:
+    # YAML parse (js-yaml from theia/) and text reads; no network, no gh, no wingetcreate.
+    "channel-release-jobs|node $REPO_ROOT/scripts/verify-channel-release-jobs.mjs"
+    # channel-release-jobs-self-test plants a hash not prefetched from the asset, a push to main, a removed tap leg, a
+    # removed winget leg, a stale checker template, a submit step in the dry run, a pull_request trigger, a schedule
+    # key and a credential literal; each goes red naming the job or the value.
+    "channel-release-jobs-self-test|node $REPO_ROOT/scripts/verify-channel-release-jobs.mjs --self-test"
     # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
     # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
     # own pinned group, one regex customManager captures the live configuration.toml theia_release,

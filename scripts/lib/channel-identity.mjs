@@ -16,6 +16,7 @@
 // Reads go through an injectable read(rel) so each row's --self-test plants faults in memory.
 // Honestly --quick: text reads and the generator's own pure functions. No network, no gh.
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -35,6 +36,37 @@ export const SENTINEL_SRI = `sha256-${SENTINEL_BYTES.toString('base64')}`;
 export const SENTINEL_HEX = SENTINEL_BYTES.toString('hex');
 export const SRI_RE = /^sha256-[A-Za-z0-9+/]{43}=$/;
 export const HEX_RE = /^[0-9a-f]{64}$/;
+
+// The two fixtures: the Windows installer (A2, Phase 54) and the macOS disk image (A3, Phase 55). The quick tier
+// cannot download a published asset, so each digest is computed here from fixture bytes, and the rendered payloads
+// carry the fixture until the owner names the real asset. Each row and the render share these constants.
+export const WINDOWS_TOKEN = 'windows-x86_64';
+export const MACOS_TOKEN = 'macos-universal';
+export const WINDOWS_FIXTURE_TEXT = 'PowerBrowser winget fixture installer, replaced by the Phase 54 asset (assumption A2)\n';
+export const MACOS_FIXTURE_TEXT = 'PowerBrowser macOS fixture disk image, replaced by the Phase 55 asset (assumption A3)\n';
+const sha256Hex = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
+export const WINDOWS_FIXTURE_HEX = sha256Hex(WINDOWS_FIXTURE_TEXT);
+export const MACOS_FIXTURE_HEX = sha256Hex(MACOS_FIXTURE_TEXT);
+
+// Every token a channel payload carries, with the value the tree derives for it.
+export function channelTokenValues(facts) {
+    return {
+        '@RELEASE_VERSION@': facts.version,
+        '@RELEASE_KEY@': facts.releaseKey,
+        '@RELEASE_REPO@': facts.repo,
+        '@PUBLISHER@': facts.publisher,
+        '@WINDOWS_INSTALLER_ASSET@': `${facts.app}-${facts.version}.${WINDOWS_TOKEN}.exe`,
+        '@WINDOWS_INSTALLER_SHA256@': WINDOWS_FIXTURE_HEX,
+        '@MACOS_DMG_ASSET@': `${facts.app}-${facts.version}.${MACOS_TOKEN}.dmg`,
+        '@MACOS_DMG_SHA256@': MACOS_FIXTURE_HEX,
+    };
+}
+
+export function renderTemplate(text, values) {
+    let out = text;
+    for (const [token, value] of Object.entries(values)) out = out.split(token).join(value);
+    return out;
+}
 
 export function diskReader(root) {
     return rel => {
@@ -93,6 +125,7 @@ export function deriveChannel(root, read = diskReader(root)) {
         version,
         repo,
         homeHost: new URL(config.urls.homepage).hostname,
+        publisher: config.product.vendor_display,
         token,
         tarballName,
         tarballUrl: `${releaseBase}${tarballName}`,
