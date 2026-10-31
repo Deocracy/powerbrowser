@@ -839,6 +839,9 @@ jobs:
           TAGS_JSON=$(jq -R -s 'split("\n") | map(select(. != ""))' "$RUNNER_TEMP/tags.txt")
           DATES_JSON=$(jq -R -s 'split("\n") | map(select(. != "") | split("\t") | {(.[0]): ((.[1] | fromdateiso8601) * 1000)}) | add // {}' "$RUNNER_TEMP/tag-dates.tsv")
           ADVISORY=$(cat "$RUNNER_TEMP/advisory.txt")
+          # A missing or unreadable document is null (its rows render no-data), never a failed render that removes the sweep.
+          RENEWALS_JSON=$(jq -Rs . docs/RENEWALS.md 2>/dev/null || echo null)
+          THRESHOLDS_JSON=$(jq -c . .github/sweep-thresholds.json 2>/dev/null || echo null)
           jq -n \
             --arg pin "$PIN" \
             --argjson now "$NOW_MS" \
@@ -850,8 +853,8 @@ jobs:
             --arg watchdog "${PROBE_WATCHDOG_MS:-}" \
             --arg synthetic "${PROBE_SYNTHETIC:-}" \
             --arg acked "${PROBE_ACKED:-}" \
-            --rawfile renewals docs/RENEWALS.md \
-            --rawfile releasing docs/RELEASING.md \
+            --argjson renewals "$RENEWALS_JSON" \
+            --argjson thresholds "$THRESHOLDS_JSON" \
             --argjson dprs "${PROBE_DPRS:-null}" \
             --argjson dalerts "${PROBE_DALERTS:-null}" \
             --argjson calerts "${PROBE_CALERTS:-null}" \
@@ -868,11 +871,11 @@ jobs:
               syntheticAcked: ($acked == "true"),
               channelOk: null,
               downloadRows: 0,
-              # Phase 51 (TRAIN-11). repoControls stays null: deferred: repo-controls-live-read (BLOCKED.md item 13). The row
-              # stays no-data until the owner grants the bot App Administration read and a follow-up plan runs
-              # scripts/verify-repo-controls.mjs in the probe.
+              # Phase 51 (TRAIN-11). thresholds is .github/sweep-thresholds.json, the one place the owner numbers live.
+              # deferred: repo-controls-live-read (BLOCKED.md item 13). The row stays no-data until the owner grants the bot App
+              # Administration read and a follow-up plan runs scripts/verify-repo-controls.mjs in the probe.
               renewalsText: $renewals,
-              releasingText: $releasing,
+              thresholds: $thresholds,
               repoControls: null,
               dependabotPrs: $dprs,
               dependabotAlerts: $dalerts,

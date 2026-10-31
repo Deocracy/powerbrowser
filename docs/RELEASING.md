@@ -1036,7 +1036,7 @@ One release per ESR point release, roughly every two weeks, plus out-of-cycle se
 
 When an npm advisory affects `theia/yarn.lock`, Dependabot opens a security-only PR; the owner merges security PRs within 7 days of opening, and a fix that cannot wait for the next ESR train ships as an out-of-band `revision` bump.
 
-Sweep red thresholds: `dependabot-prs` is red when more than 5 Dependabot PRs are open or any security PR is older than 7 days; `dependabot-alerts` and `codeql-alerts` are red when more than 0 are open; `codeql-push-age` warns when the last push to `main` is older than 150 days, well before the ~6-month default-setup auto-disable.
+Sweep red thresholds (the sweep reads them from `.github/sweep-thresholds.json`, the one place the numbers live; this paragraph quotes that file and the release-train self-test fails if the two differ): `dependabot-prs` is red when more than 5 Dependabot PRs are open or any security PR is older than 7 days; `dependabot-alerts` and `codeql-alerts` are red when more than 0 are open; `codeql-push-age` warns when the last push to the default branch is older than 150 days, well before the ~6-month default-setup auto-disable.
 
 Each costs one rebase drill through `scripts/rebase-upstream.sh`
 plus one build per target on `legion`. The wall times are the attributed rows from

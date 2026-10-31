@@ -835,13 +835,16 @@ function runChecks(overrides = {}) {
 export const MAINTENANCE_TITLE = 'release-train: maintenance';
 export const MAINTENANCE_ROW_NAMES = Object.freeze(['runner-online', 'esr-pin-age', 'channel-liveness', 'watchdog-age', 'synthetic events POST', 'download-count',
     'renewals-due', 'repo-controls', 'dependabot-prs', 'dependabot-alerts', 'codeql-alerts', 'codeql-push-age', 'codeberg-mirror']);
-// Phase 51 (TRAIN-11): the owner-decided sweep thresholds live in docs/RELEASING.md exactly once. The rows read
-// them from that paragraph (parseSweepThresholds); no copy of a number is kept here.
-export const SWEEP_THRESHOLD_LEAD = 'Sweep red thresholds:';
+// Phase 51 (TRAIN-11): the owner-decided sweep thresholds live in .github/sweep-thresholds.json exactly once. The
+// sweep reads that file (the workflow passes it as facts.thresholds); docs/RELEASING.md only quotes it, and
+// sweepThresholdDocDrift fails the self-test when the quotation and the file differ. No number is kept in this script.
+export const SWEEP_THRESHOLDS_REL = '.github/sweep-thresholds.json';
+export const SWEEP_THRESHOLD_LEAD = 'Sweep red thresholds';
+const THRESHOLD_KEYS = Object.freeze(['dependabotPrMax', 'securityPrDays', 'alertMax', 'pushAgeDays']);
 const RENEWALS_WINDOW_DAYS = 30;
 const RENEWALS_NAME = 'docs/RENEWALS.md';
-const RELEASING_NOT_READ = 'docs/RELEASING.md was not read in this run';
-const THRESHOLD_UNREADABLE = 'the sweep thresholds are not readable in docs/RELEASING.md. Next step: keep the "Sweep red thresholds" paragraph with its four numbers.';
+const THRESHOLDS_NOT_READ = `${SWEEP_THRESHOLDS_REL} was not read in this run`;
+const THRESHOLD_UNREADABLE = `the sweep thresholds are not readable in ${SWEEP_THRESHOLDS_REL}. Next step: keep its ${THRESHOLD_KEYS.length} keys (${THRESHOLD_KEYS.join(', ')}) as non-negative integers.`;
 const SHA_RE = /^[0-9a-f]{40}$/;
 export const SWEEP_HOUR_UTC = 6;
 const DAY_MS = 86400000;
@@ -971,22 +974,36 @@ export function parseRenewals(text) {
     return { dated, bad, unknown, blank };
 }
 
-/** The four owner thresholds from the RELEASING.md paragraph: undefined when the text was not read, null when unparseable. Pure. */
-export function parseSweepThresholds(text) {
-    const para = String(text ?? '').split(/\n\s*\n/).find(p => p.includes(SWEEP_THRESHOLD_LEAD));
-    if (para === undefined) return null;
+/**
+ * The docs/RELEASING.md quotation of the thresholds against the data file: the failures, empty when they agree.
+ * Exactly one paragraph begins with SWEEP_THRESHOLD_LEAD (a second paragraph quoting the phrase cannot win by position),
+ * it cites the data file, and each of the four numbers it quotes equals the file's. Pure.
+ */
+export function sweepThresholdDocDrift(docText, data) {
+    const paras = String(docText ?? '').split(/\n\s*\n/).filter(p => p.startsWith(SWEEP_THRESHOLD_LEAD));
+    if (paras.length !== 1) return [`docs/RELEASING.md has ${paras.length} paragraphs beginning "${SWEEP_THRESHOLD_LEAD}", not exactly one. Next step: keep one paragraph that quotes ${SWEEP_THRESHOLDS_REL}.`];
+    const para = paras[0];
+    const failures = [];
+    if (!para.includes(SWEEP_THRESHOLDS_REL)) failures.push(`docs/RELEASING.md's threshold paragraph does not cite ${SWEEP_THRESHOLDS_REL}. Next step: name the file that holds the numbers.`);
     const pick = re => { const m = re.exec(para); return m === null ? null : Number(m[1]); };
-    const t = {
-        prMax: pick(/`dependabot-prs` is red when more than (\d+) Dependabot PRs/),
+    const quoted = {
+        dependabotPrMax: pick(/`dependabot-prs` is red when more than (\d+) Dependabot PRs/),
         securityPrDays: pick(/any security PR is older than (\d+) days/),
         alertMax: pick(/`dependabot-alerts` and `codeql-alerts` are red when more than (\d+) are open/),
-        pushAgeDays: pick(/`codeql-push-age` warns when the last push to `main` is older than (\d+) days/),
+        pushAgeDays: pick(/`codeql-push-age` warns when the last push to the default branch is older than (\d+) days/),
     };
-    return Object.values(t).every(Number.isInteger) ? t : null;
+    for (const k of THRESHOLD_KEYS) {
+        if (quoted[k] === null) failures.push(`docs/RELEASING.md's threshold paragraph quotes no number for ${k}. Next step: restore the sentence for it.`);
+        else if (quoted[k] !== data?.[k]) failures.push(`docs/RELEASING.md quotes ${k} ${quoted[k]}, but ${SWEEP_THRESHOLDS_REL} holds ${JSON.stringify(data?.[k] ?? null)}. Next step: make the paragraph quote the file (the file is the one place the number lives).`);
+    }
+    return failures;
 }
 
+/** undefined when the thresholds fact was not read, null when it is not four non-negative integers, else the thresholds. */
 function thresholdsOf(f) {
-    return typeof f.releasingText === 'string' ? parseSweepThresholds(f.releasingText) : undefined;
+    const t = f.thresholds;
+    if (t === undefined || t === null) return undefined;
+    return typeof t === 'object' && THRESHOLD_KEYS.every(k => Number.isInteger(t[k]) && t[k] >= 0) ? t : null;
 }
 
 function renewalsRow(f) {
@@ -1021,15 +1038,15 @@ function dependabotPrsRow(f) {
     const name = 'dependabot-prs';
     if (!Array.isArray(f.dependabotPrs)) return maintRow(name, 'no-data', NOT_PROBED);
     const t = thresholdsOf(f);
-    if (t === undefined) return maintRow(name, 'no-data', RELEASING_NOT_READ);
+    if (t === undefined) return maintRow(name, 'no-data', THRESHOLDS_NOT_READ);
     if (t === null) return maintRow(name, 'red', THRESHOLD_UNREADABLE);
     if (f.dependabotPrs.some(p => !p || typeof p.createdMs !== 'number' || typeof p.security !== 'boolean')) {
         return maintRow(name, 'no-data', 'a Dependabot PR was read without its open date or security flag');
     }
     const open = f.dependabotPrs.length;
     const stale = f.dependabotPrs.filter(p => p.security && f.nowMs - p.createdMs > t.securityPrDays * DAY_MS).length;
-    if (open > t.prMax || stale > 0) {
-        return maintRow(name, 'red', `${open} open Dependabot PR(s) against a limit of ${t.prMax}; ${stale} security PR(s) older than ${t.securityPrDays} days`);
+    if (open > t.dependabotPrMax || stale > 0) {
+        return maintRow(name, 'red', `${open} open Dependabot PR(s) against a limit of ${t.dependabotPrMax}; ${stale} security PR(s) older than ${t.securityPrDays} days`);
     }
     return maintRow(name, 'green', `${open} open Dependabot PR(s); no security PR older than ${t.securityPrDays} days`);
 }
@@ -1037,7 +1054,7 @@ function dependabotPrsRow(f) {
 function alertCountRow(name, label, count, f) {
     if (typeof count !== 'number') return maintRow(name, 'no-data', NOT_PROBED);
     const t = thresholdsOf(f);
-    if (t === undefined) return maintRow(name, 'no-data', RELEASING_NOT_READ);
+    if (t === undefined) return maintRow(name, 'no-data', THRESHOLDS_NOT_READ);
     if (t === null) return maintRow(name, 'red', THRESHOLD_UNREADABLE);
     return count > t.alertMax
         ? maintRow(name, 'red', `${count} open ${label} alert(s) against a limit of ${t.alertMax}`)
@@ -1048,7 +1065,7 @@ function codeqlPushAgeRow(f) {
     const name = 'codeql-push-age';
     if (typeof f.codeqlLastPushMs !== 'number') return maintRow(name, 'no-data', NOT_PROBED);
     const t = thresholdsOf(f);
-    if (t === undefined) return maintRow(name, 'no-data', RELEASING_NOT_READ);
+    if (t === undefined) return maintRow(name, 'no-data', THRESHOLDS_NOT_READ);
     if (t === null) return maintRow(name, 'red', THRESHOLD_UNREADABLE);
     const days = Math.floor((f.nowMs - f.codeqlLastPushMs) / DAY_MS);
     return f.nowMs - f.codeqlLastPushMs > t.pushAgeDays * DAY_MS
@@ -1080,7 +1097,7 @@ function codebergRow(f) {
  * The thirteen maintenance rows, in the fixed order, from facts. Pure. facts: { pinTag, nowMs, tags,
  * tagDates, releases, advisoryEsr, runnersOnline, watchdogProbed, watchdogStartedAtMs,
  * syntheticStatus, syntheticAcked, channelOk, downloadRows } for the Phase 48 six, and { renewalsText,
- * releasingText, repoControls, dependabotPrs, dependabotAlerts, codeqlAlerts, codeqlLastPushMs, codeberg } for
+ * thresholds, repoControls, dependabotPrs, dependabotAlerts, codeqlAlerts, codeqlLastPushMs, codeberg } for
  * the Phase 51 seven. A value the sweep did not observe is null (or undefined, or watchdogProbed false), which
  * renders as no-data, never as green.
  */
@@ -1360,7 +1377,11 @@ function maintenanceSelfTest() {
     const isoOf = ms => new Date(ms).toISOString().slice(0, 10);
     const renewalsOf = (...expiries) => ['| Item | Expiry | Last checked | Owner action | Source |', '| --- | --- | --- | --- | --- |',
         ...expiries.map((e, i) => `| Item ${i} | ${e} | 2026-10-29 | act | X |`)].join('\n');
-    const RELEASING_FIXTURE = 'Prose before the paragraph.\n\nSweep red thresholds: `dependabot-prs` is red when more than 5 Dependabot PRs are open or any security PR is older than 7 days; `dependabot-alerts` and `codeql-alerts` are red when more than 0 are open; `codeql-push-age` warns when the last push to `main` is older than 150 days, well before the ~6-month default-setup auto-disable.\n\nProse after.\n';
+    // The thresholds the rows run on are the tracked file's: every boundary below is derived from it, never hand-kept.
+    const T = JSON.parse(readFileSync(join(REPO_ROOT, SWEEP_THRESHOLDS_REL), 'utf8'));
+    const RELEASING_TEXT = readFileSync(join(REPO_ROOT, 'docs', 'RELEASING.md'), 'utf8');
+    const WORKFLOW_TEXT = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'release-train.yml'), 'utf8');
+    const prs = (n, over = {}) => Array.from({ length: n }, () => ({ createdMs: NOW - DAY_MS, security: false, ...over }));
     const facts = (over = {}) => ({
         pinTag: BASE_PIN,
         nowMs: NOW,
@@ -1376,7 +1397,7 @@ function maintenanceSelfTest() {
         channelOk: null,
         downloadRows: 0,
         renewalsText: renewalsOf(isoOf(NOW + 400 * DAY_MS), '', 'unknown'),
-        releasingText: RELEASING_FIXTURE,
+        thresholds: T,
         repoControls: null,
         dependabotPrs: [],
         dependabotAlerts: 0,
@@ -1393,7 +1414,7 @@ function maintenanceSelfTest() {
         'renewals-due': 'green', 'repo-controls': 'no-data', 'dependabot-prs': 'green', 'dependabot-alerts': 'green', 'codeql-alerts': 'green', 'codeql-push-age': 'green', 'codeberg-mirror': 'no-data' };
     // The Phase 51 rows of one fixture, read by the boundary controls and plants below.
     const rowOf = (s, name) => s.rows.find(r => r.name === name);
-    const NO_PHASE51 = { renewalsText: null, releasingText: null, repoControls: null, dependabotPrs: null, dependabotAlerts: null, codeqlAlerts: null, codeqlLastPushMs: null, codeberg: null };
+    const NO_PHASE51 = { renewalsText: null, thresholds: null, repoControls: null, dependabotPrs: null, dependabotAlerts: null, codeqlAlerts: null, codeqlLastPushMs: null, codeberg: null };
     const SHA_A = 'a'.repeat(40);
     const SHA_B = 'b'.repeat(40);
     const REN_ROW = (...e) => renewalsOf(...e);
@@ -1476,14 +1497,27 @@ function maintenanceSelfTest() {
             const r = rowOf(stateOf(facts({ renewalsText: REN_ROW('2046', 'April 2030', 'unknown', 'unknown', '') })), 'renewals-due');
             return r.status === 'green' && r.evidence.includes('2 dated item(s) (2 known to a year or month only') && r.evidence.includes('2 unknown (not date-checked)') && r.evidence.includes('1 with no expiry') ? [] : [`renewals-due gave ${r.status}: ${r.evidence}`];
         } },
-        // The four owner thresholds are read from the RELEASING paragraph; the tracked file must carry exactly the owner's numbers.
-        { name: 'control: the tracked RELEASING.md threshold paragraph reads 5, 7, 0 and 150', run: () => {
-            const t = parseSweepThresholds(readFileSync(join(REPO_ROOT, 'docs', 'RELEASING.md'), 'utf8'));
-            return t !== null && t.prMax === 5 && t.securityPrDays === 7 && t.alertMax === 0 && t.pushAgeDays === 150 ? [] : [`the tracked thresholds are ${JSON.stringify(t)}`];
+        // The thresholds are read from the data file; the RELEASING paragraph only quotes it, and the quotation is compared to the file.
+        { name: 'control: the tracked thresholds file is valid and the RELEASING.md paragraph quotes exactly its numbers', run: () => {
+            const failures = [];
+            if (!THRESHOLD_KEYS.every(k => Number.isInteger(T[k]) && T[k] >= 0) || Object.keys(T).length !== THRESHOLD_KEYS.length) failures.push(`${SWEEP_THRESHOLDS_REL} is not exactly ${THRESHOLD_KEYS.join(', ')} as non-negative integers: ${JSON.stringify(T)}`);
+            return [...failures, ...sweepThresholdDocDrift(RELEASING_TEXT, T)];
         } },
-        { name: 'control: a security Dependabot PR exactly 7 days old is not red', run: () => (rowOf(stateOf(facts({ dependabotPrs: [{ createdMs: NOW - 7 * DAY_MS, security: true }] })), 'dependabot-prs').status === 'green' ? [] : ['a 7-day-old security PR is not green']) },
-        { name: 'control: five open Dependabot PRs without a security PR stay green', run: () => (rowOf(stateOf(facts({ dependabotPrs: Array.from({ length: 5 }, () => ({ createdMs: NOW - DAY_MS, security: false })) })), 'dependabot-prs').status === 'green' ? [] : ['five open PRs are not green']) },
-        { name: 'control: a codeql push exactly 150 days old is not red', run: () => (rowOf(stateOf(facts({ codeqlLastPushMs: NOW - 150 * DAY_MS })), 'codeql-push-age').status === 'green' ? [] : ['a 150-day-old push is not green']) },
+        { name: 'control: the workflow render step reads the thresholds file the rows run on', run: () => (WORKFLOW_TEXT.includes(SWEEP_THRESHOLDS_REL) ? [] : [`.github/workflows/release-train.yml never reads ${SWEEP_THRESHOLDS_REL}, so the sweep would run on no thresholds`]) },
+        { name: 'control: the file thresholds are what the rows judge by', run: () => {
+            const f = { dependabotPrs: prs(T.dependabotPrMax), dependabotAlerts: T.alertMax, codeqlAlerts: T.alertMax };
+            const s = stateOf(facts(f));
+            return wantStatuses(s, { 'dependabot-prs': 'green', 'dependabot-alerts': 'green', 'codeql-alerts': 'green' });
+        } },
+        { name: 'control: a security Dependabot PR exactly at the file day limit is not red', run: () => (rowOf(stateOf(facts({ dependabotPrs: [{ createdMs: NOW - T.securityPrDays * DAY_MS, security: true }] })), 'dependabot-prs').status === 'green' ? [] : ['a security PR at the day limit is not green']) },
+        { name: 'control: a non-security Dependabot PR far older than the security limit stays green', run: () => (rowOf(stateOf(facts({ dependabotPrs: [{ createdMs: NOW - (T.securityPrDays + 30) * DAY_MS, security: false }] })), 'dependabot-prs').status === 'green' ? [] : ['an old non-security PR turned the row red']) },
+        { name: 'control: PR and alert facts with the thresholds not read are no-data naming the file, not not-probed', run: () => {
+            const s = stateOf(facts({ thresholds: null }));
+            const names = ['dependabot-prs', 'dependabot-alerts', 'codeql-alerts', 'codeql-push-age'];
+            const bad = names.filter(n => { const r = rowOf(s, n); return r.status !== 'no-data' || !r.evidence.includes(SWEEP_THRESHOLDS_REL); });
+            return bad.length === 0 ? [] : [`${bad.join(', ')} did not render no-data naming ${SWEEP_THRESHOLDS_REL}`];
+        } },
+        { name: 'control: the file push-age limit exactly is not red', run: () => (rowOf(stateOf(facts({ codeqlLastPushMs: NOW - T.pushAgeDays * DAY_MS })), 'codeql-push-age').status === 'green' ? [] : ['a push at the age limit is not green']) },
         { name: 'control: a Codeberg no-data row is green-with-note and writes no comment', run: () => {
             const s = stateOf(facts({ codeberg: null }));
             const d = nextMaintenance([issueBy(renderMaintenance(s).body)], renderMaintenance(s), { ownerLogin: OWNER, stored: null });
@@ -1645,12 +1679,17 @@ function maintenanceSelfTest() {
         { name: 'a bare year already begun is dated at its start and overdue', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2026') }))), expect: 'Item 0 2026 is 304 day(s) overdue (a year or month is dated at its start)' },
         { name: 'a Month YYYY exactly 30 days away', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('December 2026') }))), expect: 'December 2026 is 30 day(s) away' },
         { name: 'a RENEWALS.md without an Expiry column', run: () => reds(stateOf(facts({ renewalsText: '| Item | Due |\n| --- | --- |\n| x | 2027-01-01 |' }))), expect: 'has no Expiry column' },
-        { name: 'a sweep threshold paragraph with a missing number', run: () => reds(stateOf(facts({ releasingText: RELEASING_FIXTURE.replace('more than 5 Dependabot', 'more than many Dependabot') }))), expect: 'are not readable in docs/RELEASING.md' },
-        { name: 'six Dependabot PRs open', run: () => reds(stateOf(facts({ dependabotPrs: Array.from({ length: 6 }, () => ({ createdMs: NOW - DAY_MS, security: false })) }))), expect: '6 open Dependabot PR(s) against a limit of 5' },
-        { name: 'a security Dependabot PR eight days old', run: () => reds(stateOf(facts({ dependabotPrs: [{ createdMs: NOW - 8 * DAY_MS, security: true }] }))), expect: '1 security PR(s) older than 7 days' },
-        { name: 'one open Dependabot alert', run: () => reds(stateOf(facts({ dependabotAlerts: 1 }))), expect: '1 open Dependabot alert(s) against a limit of 0' },
-        { name: 'one open CodeQL alert', run: () => reds(stateOf(facts({ codeqlAlerts: 1 }))), expect: '1 open CodeQL alert(s) against a limit of 0' },
-        { name: 'a last push to main 151 days old', run: () => reds(stateOf(facts({ codeqlLastPushMs: NOW - 151 * DAY_MS }))), expect: 'past the 150-day warning' },
+        { name: 'a thresholds fact with a missing number', run: () => reds(stateOf(facts({ thresholds: { ...T, pushAgeDays: undefined } }))), expect: `are not readable in ${SWEEP_THRESHOLDS_REL}` },
+        { name: 'a thresholds fact with a negative number', run: () => reds(stateOf(facts({ thresholds: { ...T, alertMax: -1 } }))), expect: `are not readable in ${SWEEP_THRESHOLDS_REL}` },
+        { name: 'one more Dependabot PR open than the file limit', run: () => reds(stateOf(facts({ dependabotPrs: prs(T.dependabotPrMax + 1) }))), expect: `${T.dependabotPrMax + 1} open Dependabot PR(s) against a limit of ${T.dependabotPrMax}` },
+        { name: 'a security Dependabot PR one day past the file limit', run: () => reds(stateOf(facts({ dependabotPrs: [{ createdMs: NOW - (T.securityPrDays + 1) * DAY_MS, security: true }] }))), expect: `1 security PR(s) older than ${T.securityPrDays} days` },
+        { name: 'one more Dependabot alert than the file limit', run: () => reds(stateOf(facts({ dependabotAlerts: T.alertMax + 1 }))), expect: `${T.alertMax + 1} open Dependabot alert(s) against a limit of ${T.alertMax}` },
+        { name: 'one more CodeQL alert than the file limit', run: () => reds(stateOf(facts({ codeqlAlerts: T.alertMax + 1 }))), expect: `${T.alertMax + 1} open CodeQL alert(s) against a limit of ${T.alertMax}` },
+        { name: 'a last push one day past the file age limit', run: () => reds(stateOf(facts({ codeqlLastPushMs: NOW - (T.pushAgeDays + 1) * DAY_MS }))), expect: `past the ${T.pushAgeDays}-day warning` },
+        { name: 'a RELEASING.md paragraph quoting a different number than the file', run: () => sweepThresholdDocDrift(RELEASING_TEXT.replace(`more than ${T.dependabotPrMax} Dependabot PRs`, `more than ${T.dependabotPrMax + 45} Dependabot PRs`), T), expect: `quotes dependabotPrMax ${T.dependabotPrMax + 45}, but ${SWEEP_THRESHOLDS_REL} holds ${T.dependabotPrMax}` },
+        { name: 'a RELEASING.md paragraph that no longer cites the file', run: () => sweepThresholdDocDrift(RELEASING_TEXT.replace(SWEEP_THRESHOLDS_REL, 'a file'), T), expect: 'does not cite' },
+        { name: 'a RELEASING.md second paragraph quoting the lead phrase', run: () => sweepThresholdDocDrift(`${SWEEP_THRESHOLD_LEAD}: an earlier paragraph.\n\n${RELEASING_TEXT}`, T), expect: 'not exactly one' },
+        { name: 'a RELEASING.md threshold sentence deleted', run: () => sweepThresholdDocDrift(RELEASING_TEXT.replace(/`codeql-push-age` warns when[^\n]*older than \d+ days/, '`codeql-push-age` is not described'), T), expect: 'quotes no number for pushAgeDays' },
         { name: 'Codeberg main lagging GitHub main by full SHA', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: SHA_A, github: SHA_B } }))), expect: 'differs from GitHub main' },
         { name: 'a declared Codeberg mirror that did not answer', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: null, github: SHA_B } }))), expect: 'did not answer with a full main SHA' },
         { name: 'a declared Codeberg mirror that answered a short SHA', run: () => reds(stateOf(facts({ codeberg: { configured: true, codeberg: 'abc1234', github: SHA_B } }))), expect: 'did not answer with a full main SHA' },
