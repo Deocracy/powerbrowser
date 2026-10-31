@@ -48,9 +48,10 @@
 //                 run the gate inside `nix develop .#theia` (a missing yarn is a verdict).
 //  8. quick       The real run only: scripts/verify-platform.sh --quick in the worktree.
 //
-// Arguments: --diff=<file>, --ref=<ref of this repo to apply onto, default HEAD>,
-// --tag=<Gecko tag the patches replay onto; needed only when the diff touches patches/>.
-// Both are validated as plain ref names before git sees them.
+// Arguments: --diff=<file>, --ref=<ref or sha of this repo to apply onto, default HEAD>,
+// --tag=<Gecko tag the patches replay onto; needed when the diff touches patches/>,
+// --static-only (stages 1-7 in memory: no worktree, no code run; fix-pr re-runs them, CR-02).
+// Both refs are validated as plain ref names before git sees them.
 //
 // shortcut: stages 5-8 run fix-controlled code (the --quick rows import files from
 // powerbrowser/ and theia/, and scripts/** is denied but not everything a row executes
@@ -110,13 +111,15 @@ const args = process.argv.slice(2);
 let diffArg = null;
 let tagArg = null;
 let refArg = null;
+let staticOnly = false;
 for (const a of args) {
     if (a === '--self-test') continue;
+    if (a === '--static-only') { staticOnly = true; continue; }
     if (a.startsWith('--diff=') && a.length > 7) { diffArg = a.slice(7); continue; }
     if (a.startsWith('--tag=') && a.length > 6) { tagArg = a.slice(6); continue; }
     if (a.startsWith('--ref=') && a.length > 6) { refArg = a.slice(6); continue; }
     console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
-    console.error(`  Next step: run: node ${SELF_REL} --diff=<fix.diff> [--ref=<ref>] [--tag=<gecko-tag>], or add --self-test to prove the gate discriminates.`);
+    console.error(`  Next step: run: node ${SELF_REL} --diff=<fix.diff> [--ref=<ref>] [--tag=<gecko-tag>] [--static-only], or add --self-test to prove the gate discriminates.`);
     process.exit(2);
 }
 for (const [flag, v] of [['--tag', tagArg], ['--ref', refArg]]) {
@@ -616,6 +619,17 @@ function main() {
     }
     const mem = runChecks(REPO_ROOT, { diff });
     let failures = mem.failures;
+    if (staticOnly) {
+        // The pure stages 1-7 only: no worktree, no script and no code from the diff runs. fix-pr re-runs them on the exact bytes it publishes (CR-02).
+        for (const n of mem.notes) console.log(`  note  ${n}`);
+        if (failures.length > 0) {
+            console.error(`${NAME}: FAIL -- verdict: reject (static stages); ${failures.length} problem(s) with the fix diff.`);
+            failures.forEach(f => console.error(`  ${f}`));
+            return 1;
+        }
+        console.log(`${NAME}: PASS -- verdict: pass (static stages only: path, apply, regenerate-patches, non-vacuity, patch surface, brand residue, Theia core; no code was run); ${mem.touched.length} path(s), ${mem.changed} file body(ies) changed`);
+        return 0;
+    }
     if (failures.length === 0) {
         const { deny, registry } = loadPolicy((rel) => readText(REPO_ROOT, rel));
         failures = runRealStages(diff, refArg ?? 'HEAD', tagArg, mem.touched, deny, registry);
@@ -743,6 +757,20 @@ function selfTest() {
         else bad(`the patches/ guard did not see the quoted non-ASCII patch name in git's path set.`);
         for (const v of ['-x', '--upload-pack=x', 'a..b', 'a b', '', 'x.lock']) if (validRef(v)) bad(`validRef accepted ${JSON.stringify(v)}.`);
         for (const v of ['HEAD', 'main', 'release_1', 'refs/tags/v1']) if (!validRef(v)) bad(`validRef refused ${JSON.stringify(v)}.`);
+
+        // CR-02: --static-only is the mode fix-pr re-runs on the bytes it publishes. A denied path is red in it; a docs-only change is green.
+        {
+            const tmp = mkdtempSync(join(tmpdir(), 'fix-gate-static-'));
+            try {
+                const cli = (diff) => { const f = join(tmp, 'd.diff'); writeFileSync(f, diff); return spawnSync(process.execPath, [join(REPO_ROOT, SELF_REL), '--static-only', `--diff=${f}`], { encoding: 'utf8' }); };
+                const red = cli(diffOf('CLAUDE.md', ['+planted line']));
+                const green = cli(diffOf('docs/fix-gate-control.md', ['+one control line'], { created: true }));
+                if (red.status === 1 && red.stderr.includes('CLAUDE.md') && red.stderr.includes('static stages')) console.log(`  ok  --static-only: a denied path is red in the pure re-run fix-pr performs`);
+                else bad(`--static-only did not reject a denied path (status ${red.status}, ${red.stderr.trim().split('\n').slice(-1)[0]}).`);
+                if (green.status === 0 && green.stdout.includes('static stages only')) console.log(`  ok  --static-only: a docs-only change is green and runs no code`);
+                else bad(`--static-only did not pass the docs-only control (status ${green.status}, ${(green.stderr || green.stdout).trim().split('\n').slice(-1)[0]}).`);
+            } finally { rmSync(tmp, { recursive: true, force: true }); }
+        }
 
         // CR-05: the ignored inputs are derived from the tree. A planted ignored build output nobody listed is
         // brought; a Gecko build output is not; a yarn module folder with only .bin in it is ensured, not copied.
