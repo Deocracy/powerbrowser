@@ -34,6 +34,9 @@ upstream/
 objdir/
 objdir-release/
 objdir-nplus1/
+# Phase 55 macOS per-target objdirs (package-macos.sh, mozconfig-macos-<arch>)
+objdir-macos-aarch64/
+objdir-macos-x86_64/
 .mozbuild/
 
 # Generator output (GEN-04, D-16)
