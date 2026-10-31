@@ -410,6 +410,57 @@ The unit is `github-runner-powerbrowser-release.service`, and `count` defaults t
 keeps its registration and its work directory between jobs. A stuck job is cleared by restarting
 the unit, not by cleaning the work directory while the unit runs.
 
+**Runner acceptance drill (mandatory).** The local `env -i` run of the hook tests the script, not
+the runner. It cannot show whether job-controlled environment or a container set-up reaches the hook
+or precedes it. Run the live drill below once the runner is online and **before the runner is
+trusted**: before the first release dispatch and before plan 49-02's first criterion is marked met.
+Push a throwaway branch, never `main`, named `drill/hook`, holding `.github/workflows/hook-drill.yml`
+(a `push` trigger on `drill/**`, so the workflow file need not exist on `main`):
+
+```yaml
+name: hook-drill
+on:
+  push:
+    branches: ['drill/**']
+permissions: {}
+jobs:
+  env-triple:
+    runs-on: [self-hosted, powerbrowser-release]
+    env:
+      GITHUB_REPOSITORY: Deocracy/powerbrowser
+      GITHUB_EVENT_NAME: workflow_dispatch
+    steps:
+      - run: echo DRILL-STEP-REACHED env-triple
+  bash-env:
+    runs-on: [self-hosted, powerbrowser-release]
+    env:
+      BASH_ENV: /dev/null
+    steps:
+      - run: echo DRILL-STEP-REACHED bash-env
+  container:
+    runs-on: [self-hosted, powerbrowser-release]
+    container:
+      image: alpine:3
+    steps:
+      - run: echo DRILL-STEP-REACHED container
+```
+
+Each of the three jobs must be refused at set-up, before any step runs: the job fails, its log
+contains no `DRILL-STEP-REACHED` line, and the `container` job pulls and creates no container
+(check `sudo -u pb-runner podman ps -a` and `podman images` before and after, and the job log has no
+"Initialize containers" step). Record, per job: the conclusion, whether any step ran, the hook's
+refusal line as it appears in the job log (this is the only measurement of "the hook's stderr appears
+in the job log"; until it is recorded the claim is not made), and whether a container was created.
+Record the same for the interpreter question above. Then delete the branch and the workflow.
+
+If any job reaches a step, or a container is created before the hook, the runner **must not be
+used**: stop `github-runner-powerbrowser-release.service`, remove the runner registration, and
+redesign the control (for example read the runner's `GITHUB_EVENT_PATH` JSON instead of trusting
+environment). The first real `workflow_dispatch` of `release.yml` from `main` is the positive
+control: the hook must accept it, which also proves the runner sets `GITHUB_WORKFLOW_REF` and
+`GITHUB_RUN_ATTEMPT` in the hook's environment. If it refuses, the hook names the variable, and the
+runner stays fail-closed.
+
 **Probe outcome rule (GH-11).** The recorded runner-group probe result decides only whether this
 document claims a runner-group restriction. The pre-job hook and the branch policies are built and
 asserted whatever that result is.
@@ -1115,7 +1166,8 @@ gh api repos/Deocracy/powerbrowser/actions/runners --jq '.runners[] | {name, sta
 
 The runner is non-ephemeral, so it stays registered between jobs, and a persistent absence is
 not normal. Check the unit first. Then check the hook: a job the hook refuses fails at set-up,
-before any step, and the hook's stderr appears in the job log. A registration token expires after
+before any step. The hook's refusal line is expected in the job log; the acceptance drill records
+whether it is. A registration token expires after
 one hour and the file is left in place after registration, so an expired token in it is normal. Mint a
 new one, write it through `pkexec` to `/var/lib/secrets/github-runner-registration` only for a
 deliberate re-registration, and restart the unit. A personal access token is never the fix.

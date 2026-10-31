@@ -140,12 +140,22 @@ Owner steps, in order:
    token inside it is harmless. Mint a fresh one-time token only for a deliberate re-registration
    (changing the file's content, or `url`, `name`, `workDir`, `extraLabels`, `ephemeral` or `runnerGroup`,
    re-registers). Never restore a PAT.
-10. Refusal drill. Local, no GitHub write: `env -i GITHUB_REPOSITORY=Deocracy/powerbrowser GITHUB_WORKFLOW_REF='Deocracy/powerbrowser/.github/workflows/release.yml@refs/heads/feature' GITHUB_EVENT_NAME=workflow_dispatch /etc/pb-runner/legion-pre-job-hook.sh`
-    must exit 1 and name `refs/heads/main`. Live drill (optional, the owner's choice): push a throwaway branch with a
-    `powerbrowser-release` job, confirm the job fails at set-up before any step, then delete the branch. Not run here.
+10. Refusal drills. Both are mandatory before the runner is trusted and before criterion 1 is marked met.
+    - Local, no GitHub write: `env -i GITHUB_REPOSITORY=Deocracy/powerbrowser GITHUB_WORKFLOW_REF='Deocracy/powerbrowser/.github/workflows/release.yml@refs/heads/feature' GITHUB_EVENT_NAME=workflow_dispatch GITHUB_RUN_ATTEMPT=1 /run/current-system/sw/bin/bash --noprofile --norc /etc/pb-runner/legion-pre-job-hook.sh`
+      must exit 1 and name `refs/heads/main`.
+    - Live (mandatory, WR-02): the "Runner acceptance drill" in docs/RELEASING.md. Push a throwaway branch
+      `drill/hook` (not `main`) holding the three-job `hook-drill.yml` it gives, on the powerbrowser-release
+      label: (a) job-level `env:` setting the release triple, (b) `BASH_ENV` set, (c) a `container:` job.
+      Each job must be refused at set-up before any step runs and before any container is pulled. Record,
+      per job, the conclusion, whether a step ran, the hook's refusal line as it appears in the job log, and
+      whether a container was created (`sudo -u pb-runner podman ps -a` before and after). If any job reaches a
+      step, the runner must not be used: stop the unit, remove the registration and redesign the control.
+      Then delete the branch. Also record whether the runner allows the hook interpreter to be chosen (step 4).
+    - Hook drift (IN-03): `sha256sum <clone>/scripts/legion-pre-job-hook.sh /etc/pb-runner/legion-pre-job-hook.sh`
+      must print one hash twice; repeat after any later edit of the tracked hook.
 11. Reply with: the runner id and labels; the github-runner version the unit runs, next to the upstream version
     (Open Question 3; the lock-versus-upstream note in docs/RELEASING.md records 2.333.1 against 2.336.0 at the
-    time of writing); the GH-11 probe outcome; the drill result; then the word "resume". The executor then runs
+    time of writing); the GH-11 probe outcome; the result of both drills in step 10 (per job: refused or step reached, the log line, container created or not); then the word "resume". The executor then runs
     `scripts/verify-platform.sh --only repo-controls` live, records that line and the version pair in
     49-02-SUMMARY.md, and only then marks criterion 1 locally met.
 
