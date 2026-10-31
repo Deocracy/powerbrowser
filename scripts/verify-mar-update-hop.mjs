@@ -305,6 +305,7 @@ function releaseExpectations(root) {
     const accepted = existsSync(mozconfigPath) ? acceptedMarChannels(readFileSync(mozconfigPath, 'utf8')) : null;
     if (accepted === null) return { error: `${MOZCONFIG_REL} carries no ACCEPTED_MAR_CHANNEL_IDS line, so no MAR channel can be accepted. Next step: restore the line` };
     return {
+        descriptorUrl: update.url,
         descriptorHost: hostOf(update.url),
         marHost: hostOf(origin),
         channelId: updateChannel(config).marChannelId,
@@ -334,6 +335,7 @@ function runReleaseChecks(root, evDir, hop, deps, r) {
 
     // Hosts and URLs. The descriptor comes from the update host; the MAR only from the write-once origin.
     r.eq('served descriptor host', hostOf(hop.servedUrl), expect.descriptorHost, 'hop.json servedUrl');
+    r.eq('served descriptor URL', hop.servedUrl, expect.descriptorUrl, `hop.json servedUrl vs ${URL_KEY} (scheme and path, not only the host)`);
     const marUrl = hop.servedMarUrl;
     const marUrlParts = typeof marUrl === 'string' ? marUrl.split('/').filter(Boolean) : [];
     const writeOnce = typeof marUrl === 'string' && hostOf(marUrl) === expect.marHost
@@ -1025,6 +1027,7 @@ function selfTest() {
         expectReleaseRed('release: resolver log missing the MAR host', () => { editFile('client-resolver.log', t => t.replace('Resolving host [downloads.powerbrowser.org]\n', '')); }, 'client-resolver.log', 'downloads.powerbrowser.org');
         expectReleaseRed('release: same-buildID hop (N equals N+1 buildID)', () => { editHop(h => { h.nplus1.buildID = h.n.buildID; }); }, 'hop.json', 'share buildID 20260904000000');
         expectReleaseRed('release: Mozilla host in the resolver log', () => { appendResolver('Resolving host [aus5.mozilla.org]'); }, 'client-resolver.log', 'aus5.mozilla.org');
+        expectReleaseRed('release: servedUrl on http or another path of the update host', () => { editHop(h => { h.servedUrl = 'http://updates.powerbrowser.org/other.xml'; }); }, 'hop.json', 'http://updates.powerbrowser.org/other.xml');
         expectReleaseRed('release: attestation failure', () => { fakes.attest = () => ({ ok: false, reason: 'the MAR digest does not match the attested subject' }); }, 'nplus1.mar', 'attestation');
         // Built from parts: a github.com download literal in source would trip the update-download-host sweep (fixture strings are built at run time, as in release-train.mjs).
         const GH_DOWNLOAD_PATH = ['github.com', 'example/r/releases', 'download/v1/nplus1.mar'].join('/');
