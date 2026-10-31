@@ -4803,6 +4803,15 @@ run_own_checks() {
     # file, job and rule, and requires the hostile-output proof to go red on a removed label filter
     # and on a raw model template id. The green control runs first. It writes nothing in the tree.
     "triage-workflow-self-test|node $REPO_ROOT/scripts/verify-triage.mjs --self-test"
+    # NEW (Phase 53, TEL-05): the Report-a-Bug affordance. Derives the prefill keys from the
+    # contribution source and compares them with the Phase 42 bug form's field ids, the target
+    # origin and path with urls.release_notes, the opener id with the GUI-01 export, and the
+    # github.com allowlist row. Honestly --quick: text reads and js-yaml from theia/.
+    "bug-report-affordance|node $REPO_ROOT/scripts/verify-bug-report.mjs"
+    # bug-report-affordance-self-test plants in memory a diagnostics-bearing query key, an origin
+    # mismatch, an extra prefill id outside bug.yml, an absent bug form, a respelled opener id and
+    # a widened github.com disposition; each goes red naming the drift. It writes nothing.
+    "bug-report-affordance-self-test|node $REPO_ROOT/scripts/verify-bug-report.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
