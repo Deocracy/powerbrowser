@@ -14,28 +14,31 @@
   makeWrapper,
   copyDesktopItems,
   jq,
-  # The flake's Node binding, passed in by flake.nix. The sidecar never takes a second Node.
+  # The flake's Node binding, passed in by flake.nix. It is the sidecar's PATH fallback only (see the wrapper below).
   nodejs,
-  # The Gecko runtime set, as nixpkgs' firefox wrapper lists it for x86_64-linux.
+  # The libraries the binaries link against (DT_NEEDED), which autoPatchelfHook resolves from buildInputs.
   gtk3,
-  alsa-lib,
-  libpulseaudio,
   libx11,
   libxext,
+  libdbusmenu-gtk3,
+  adwaita-icon-theme,
+  xdg-utils,
+  # The libraries Gecko loads with dlopen, as nixpkgs' firefox wrapper lists them for x86_64-linux.
+  alsa-lib,
+  libpulseaudio,
   libxscrnsaver,
   libva,
   libgbm,
   cups,
   udev,
   libnotify,
-  ffmpeg_7,
+  ffmpeg_8,
   pciutils,
   vulkan-loader,
   libglvnd,
-  libdbusmenu-gtk3,
   speechd-minimal,
-  adwaita-icon-theme,
-  xdg-utils,
+  pipewire,
+  libkrb5,
 }:
 
 let
@@ -56,27 +59,40 @@ let
       hashRecord.sha256
     else
       throw "release-hash.json is for ${hashRecord.releaseKey} but the release is ${releaseKey}: the DIST-12 bot PR (channel-manifests.yml flake-hash-pr) must write the hash for this key first";
-  runtimeLibs = [
-    gtk3
-    alsa-lib
-    libpulseaudio
-    libx11
-    libxext
-    libxscrnsaver
+  # Gecko loads these with dlopen, so their store paths are on no ELF search path unless the wrapper adds them. The list
+  # mirrors `libs` in pkgs/applications/networking/browsers/firefox/wrapper.nix of the locked nixpkgs (flake.lock rev
+  # ffb3c9b700e759be2ef13237c9d8f953b32a1e46): udev, libva, libgbm, libnotify, libxscrnsaver, cups, pciutils,
+  # vulkan-loader, speechd-minimal; pipewire (webrtc), the ffmpeg major that wrapper picks for Firefox 146 and later
+  # (ffmpeg_8, because Firefox dlopens libavcodec by its soname), libkrb5 (gssSupport), libglvnd, libpulseaudio and alsa-lib.
+  dlopenLibs = [
+    udev
     libva
     libgbm
-    cups
-    udev
     libnotify
-    ffmpeg_7
+    libxscrnsaver
+    cups
     pciutils
     vulkan-loader
-    libglvnd
-    libdbusmenu-gtk3
     speechd-minimal
+    pipewire
+    ffmpeg_8
+    libkrb5
+    libglvnd
+    libpulseaudio
+    alsa-lib
+  ];
+  # stdenv.cc.cc.lib is libstdc++, which the Gecko binaries and the staged Node link against.
+  runtimeLibs = [
+    gtk3
+    libx11
+    libxext
+    libdbusmenu-gtk3
     adwaita-icon-theme
     xdg-utils
-  ];
+    stdenv.cc.cc.lib
+  ] ++ dlopenLibs;
+  # The same two-directory form the nixpkgs wrapper uses (lib and lib64 of each output).
+  dlopenPath = lib.makeLibraryPath dlopenLibs + ":" + lib.makeSearchPathOutput "lib" "lib64" dlopenLibs;
 in
 stdenv.mkDerivation {
   pname = "powerbrowser";
@@ -98,7 +114,7 @@ stdenv.mkDerivation {
     copyDesktopItems
     jq
   ];
-  buildInputs = runtimeLibs ++ [ nodejs ];
+  buildInputs = runtimeLibs;
 
   installPhase = ''
     runHook preInstall
@@ -112,8 +128,12 @@ stdenv.mkDerivation {
     jq '.policies.DisableAppUpdate = true' "$policies" > "$policies.tmp"
     mv "$policies.tmp" "$policies"
 
+    # The sidecar runs on the tarball's own staged node/bin/node, which autoPatchelfHook patches with the rest of the ELF
+    # files; TheiaService falls back to the first node on PATH only when that file is absent, and nodejs (the flake
+    # Node binding) is what the wrapper puts there. LD_LIBRARY_PATH carries the dlopen'd libraries.
     makeWrapper $out/lib/powerbrowser/powerbrowser $out/bin/powerbrowser \
-      --prefix PATH : ${lib.makeBinPath [ nodejs ]}
+      --prefix PATH : ${lib.makeBinPath [ nodejs ]} \
+      --prefix LD_LIBRARY_PATH : ${dlopenPath}
 
     # The tracked release desktop entry, with its checkout-root placeholders rewritten to the store paths.
     desktop=$out/share/applications/powerbrowser.desktop

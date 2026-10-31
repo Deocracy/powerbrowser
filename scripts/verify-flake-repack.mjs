@@ -92,6 +92,8 @@ export function runChecks(root, overrides = {}) {
             [/\.policies\.DisableAppUpdate\s*=\s*true/, 'the repack-only DisableAppUpdate merge'],
             [/releases\/download\/\$\{releaseKey\}\/\$\{tarball\}/, 'the tarball URL built from the release key and the derived tarball name'],
             [/makeBinPath \[ nodejs \]/, 'the sidecar PATH takes the flake nodejs binding'],
+            [/--prefix LD_LIBRARY_PATH : \$\{dlopenPath\}/, 'the wrapper puts the dlopen libraries on LD_LIBRARY_PATH, as the nixpkgs firefox wrapper does (WR-08)'],
+            [/stdenv\.cc\.cc\.lib/, 'libstdc++ (stdenv.cc.cc.lib) in the runtime libraries'],
             [/platforms\s*=\s*\[\s*"x86_64-linux"\s*\]/, 'platforms is x86_64-linux only'],
             [/release-hash\.json/, 'the hash comes from the tracked hash record'],
             [/release\.txt/, 'the release key is read from the generator output'],
@@ -150,6 +152,7 @@ export function runChecks(root, overrides = {}) {
             [/\bdefault\s*=\s*self\.packages\.\$\{system\}\.powerbrowser/, 'packages.${system}.default'],
             [/nodejs\s*=\s*pkgs\.nodejs_24\s*;/, 'the flake nodejs_24 binding the sidecar shares'],
             [/overlays\.default\s*=/, 'overlays.default'],
+            [/overlays\.default[\s\S]*?nodejs\s*=\s*final\.nodejs_24\s*;/, 'the overlay binding the consumer nodejs_24 (final.nodejs_24, not the flake own)'],
             [/nix\/pkg\/powerbrowser-bin\.nix/, 'the derivation file the packages call'],
             [/devShells\.\$\{system\}\s*=/, 'the existing devShells'],
         ];
@@ -258,6 +261,18 @@ function selfTest() {
         {
             name: 'DisableAppUpdate merge missing from the repack', expect: 'DisableAppUpdate',
             overrides: withPlant(DERIV_REL, t => t.replace('.policies.DisableAppUpdate = true', '.policies.DisableTelemetry = true')),
+        },
+        {
+            name: 'wrapper without the dlopen LD_LIBRARY_PATH prefix (WR-08)', expect: 'LD_LIBRARY_PATH',
+            overrides: withPlant(DERIV_REL, t => t.replace(' \\\n      --prefix LD_LIBRARY_PATH : ${dlopenPath}', '')),
+        },
+        {
+            name: 'libstdc++ dropped from the runtime libraries', expect: 'stdenv.cc.cc.lib',
+            overrides: withPlant(DERIV_REL, t => t.replaceAll('stdenv.cc.cc.lib', 'xdg-utils')),
+        },
+        {
+            name: 'overlay binds the flake own nodejs again (IN-02)', expect: 'consumer nodejs_24',
+            overrides: withPlant(FLAKE_REL, t => t.replace('{ nodejs = final.nodejs_24; }', '{ inherit nodejs; }')),
         },
         {
             name: 'overlays.default missing from the flake', expect: 'overlays.default',

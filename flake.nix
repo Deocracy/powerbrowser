@@ -155,7 +155,7 @@
 
       # A consumer's own nixpkgs must allow the unfree name powerbrowser before it evaluates this overlay.
       overlays.default = final: _prev: {
-        powerbrowser = final.callPackage ./nix/pkg/powerbrowser-bin.nix { inherit nodejs; };
+        powerbrowser = final.callPackage ./nix/pkg/powerbrowser-bin.nix { nodejs = final.nodejs_24; };
       };
     };
 }
