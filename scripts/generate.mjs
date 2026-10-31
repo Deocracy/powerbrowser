@@ -2884,6 +2884,9 @@ export function emitVersionTxt(config, variant) {
 }
 export function emitReleaseTxt(config, variant) {
     void variant;
+    // The release path reads mar_origin only after a 50-minute build (package-linux.sh); refuse a bad
+    // value here, in generate and generate --check, before any build (review WR-04).
+    marOrigin(config);
     return `${releaseIdentity(config).releaseKey}\n`;
 }
 
