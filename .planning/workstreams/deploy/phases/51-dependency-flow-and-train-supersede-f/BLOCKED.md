@@ -264,7 +264,7 @@ needs a live read to prove its shape and is not added; until then the switch can
 **Blocked piece:** the `repo-controls` row. The row, its no-data branch and its red branch are built and self-tested
 (`scripts/release-train.mjs`), and the facts field `repoControls` is wired as null. The sweep does not yet run
 `scripts/verify-repo-controls.mjs` in the probe, because the read needs Administration read on `powerbrowser`, and
-BLOCKED.md item 2 records that grant as declined for the runner count.
+BLOCKED.md item 2 records that the same grant was not requested for the runner count.
 
 **Owner steps:** decide whether the bot App gets Administration read (plus the Dependabot alerts, security events and pull
 request reads that the 51-04 security-reads step already requests). If yes, grant them in the App settings. Then a
