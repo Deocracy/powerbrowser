@@ -650,8 +650,9 @@ jobs:
           while read -r TAG; do
             # An annotated tag names its tag object on the plain line; the commit is on the peeled ^{} line.
             SHA=$(awk -v t="refs/tags/${TAG}" '$2 == (t "^{}") { p = $1 } $2 == t { q = $1 } END { print (p != "" ? p : q) }' "$RUNNER_TEMP/refs.txt")
-            DATE=$(gh api "repos/mozilla-firefox/firefox/commits/${SHA}" --jq '.commit.committer.date' 2>/dev/null || true)
-            [ -n "$DATE" ] && printf '%s\t%s\n' "$TAG" "$DATE" >> "$RUNNER_TEMP/tag-dates.tsv"
+            # A failed read leaves the tag undated; the esr-pin-age row then renders no-data for a newer tag, never green.
+            DATE=$(gh api "repos/mozilla-firefox/firefox/commits/${SHA}" --jq '.commit.committer.date' || echo "release-train maintenance: the commit date of ${TAG} could not be read" >&2)
+            if [ -n "$DATE" ]; then printf '%s\t%s\n' "$TAG" "$DATE" >> "$RUNNER_TEMP/tag-dates.tsv"; fi
           done < "$RUNNER_TEMP/tags.txt"
 
       - name: Read the Release list and the advisory product-details value (read)
