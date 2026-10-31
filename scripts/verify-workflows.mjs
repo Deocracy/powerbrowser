@@ -533,6 +533,15 @@ function runChecks(root, overrides = {}) {
                         for (const e of entries) {
                             if (/^Bash(\(\s*:?\*+\s*\)|\(\s*\))?$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${e}, an unscoped shell. Next step: scope it, for example Bash(git -C work diff:*).`);
                             if (/^Bash\(.*\*/.test(e) && !/^Bash\(\s*:?\*+\s*\)$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${e}, a wildcard shell grant; a git wildcard lets the model rewrite work/.git and run git with free arguments. Next step: name one exact command with no free arguments.`);
+                            // WR-02: Read reaches /proc/self/environ (the job's id-token request token), ~/.claude* and the checkout's
+                            // .git/config. Every grant is confined to the three trees the model needs.
+                            const rd = e.match(/^Read(?:\((.*)\))?$/);
+                            if (rd) {
+                                const g = (rd[1] ?? '').trim();
+                                if (g === '') fail(rel, jobId, 'fixer-tools', `--allowedTools grants bare ${e}, which reaches the whole filesystem (/proc/self/environ, the home directory, .git/config). Next step: scope it, for example Read(work/**).`);
+                                else if (!['work/', 'fixer-data/', 'upstream/'].some(pre => g.startsWith(pre)) || g.includes('..')) fail(rel, jobId, 'fixer-tools', `--allowedTools grants Read(${g}), which is not confined to work/, fixer-data/ or upstream/. Next step: scope it to one of those.`);
+                                continue;
+                            }
                             if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(e)) {
                                 fail(rel, jobId, 'fixer-tools', `--allowedTools grants bare ${e}, which reaches patches/ and every other path. Next step: scope it, for example ${e}(work/**).`);
                                 continue;
@@ -551,6 +560,9 @@ function runChecks(root, overrides = {}) {
                                 if (!denied.includes(`${t}(${guarded})`)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${t}(work/**), which reaches ${guarded}: a planted git config or attributes file runs or changes git on the next command, and --disallowedTools does not deny ${t}(${guarded}). Next step: add that deny entry.`);
                             }
                         }
+                    }
+                    for (const d of ['Read(//proc/**)', 'Read(~/**)', 'Read(.git/**)']) {
+                        if (!denied.includes(d)) fail(rel, jobId, 'fixer-tools', `--disallowedTools does not deny ${d}, so the model can read the process environment, the home directory or the checkout's git config. Next step: add ${d} to --disallowedTools.`);
                     }
                     for (const t of ['WebFetch', 'WebSearch']) {
                         if (!denied.includes(t)) fail(rel, jobId, 'fixer-prompt', `--disallowedTools does not deny ${t}, so the model can reach the open web with repository text. Next step: add ${t} to --disallowedTools.`);
@@ -596,6 +608,10 @@ function runChecks(root, overrides = {}) {
                 }
                 const runText = (x) => (typeof x.run === 'string' ? x.run : '');
                 if (jobId === 'fix') {
+                    // WR-02: no credential on disk for the model to read: every checkout drops the token from .git/config.
+                    for (const c of uses('actions/checkout@')) {
+                        if ((c.with ?? {})['persist-credentials'] !== false) gf(`a checkout step does not set persist-credentials: false, so the job token stays in .git/config where the model's Read could reach it. Next step: set it.`);
+                    }
                     for (const o of ['diff-sha256', 'base-sha']) {
                         if (!/^\$\{\{\s*steps\.[\w-]+\.outputs\.[\w-]+\s*\}\}$/.test(String(job.outputs?.[o] ?? ''))) gf(`has no job output ${o} taken from a step, so the later jobs cannot bind the diff to what this job produced. Next step: export ${o} from a step that runs after or without the model.`);
                     }
@@ -899,7 +915,9 @@ function selfTest() {
     const T = FIXER_FILE;
     const FIXER = FIX_PIN.split('@')[1];
     const FIX_APP = 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510';
-    const CLAUDE_ARGS = '--max-turns 40 --allowedTools "Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read" --disallowedTools "WebFetch,WebSearch,Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"';
+    const ALLOWED = 'Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read(work/**),Read(fixer-data/**),Read(upstream/**)';
+    const DENIED = 'WebFetch,WebSearch,Read(//proc/**),Read(~/**),Read(.git/**),Read(work/.git/**),Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"';
+    const CLAUDE_ARGS = `--max-turns 40 --allowedTools "${ALLOWED}" --disallowedTools "${DENIED}"`;
     const FIX_IF = "github.event_name == 'workflow_dispatch' && inputs.reason == 'fix' && !startsWith(inputs.target-branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]'";
     const GATE_IF = "!inputs.dry-run && needs.fix.result == 'success'";
     const PR_IF = "!inputs.dry-run && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256 && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha";
@@ -1094,7 +1112,7 @@ function selfTest() {
         ['display_report true', fixerEdit('          display_report: false', '          display_report: true'), rel(T), 'fix', 'fixer-pin', 'display_report'],
         ['ACTIONS_STEP_DEBUG set on fix', fixerEdit('    concurrency: claude-fixer', "    concurrency: claude-fixer\n    env:\n      ACTIONS_STEP_DEBUG: '1'"), rel(T), 'fix', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
         ['bare Bash in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash'), rel(T), 'fix', 'fixer-tools', 'Bash'],
-        ['--allowedTools missing', fixerEdit(' --allowedTools "Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read"', ''), rel(T), 'fix', 'fixer-tools', '--allowedTools'],
+        ['--allowedTools missing', fixerEdit(` --allowedTools "${ALLOWED}"`, ''), rel(T), 'fix', 'fixer-tools', '--allowedTools'],
         ['--max-turns missing', fixerEdit('--max-turns 40 ', ''), rel(T), 'fix', 'fixer-tools', '--max-turns'],
         ['Edit(patches) granted in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**/patches/**),Read'), rel(T), 'fix', 'fixer-tools', 'Edit(work/**/patches/**)'],
         ['Write(patches) granted in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),Write(work/**/patches/**),Read'), rel(T), 'fix', 'fixer-tools', 'Write(work/**/patches/**)'],
@@ -1118,6 +1136,13 @@ function selfTest() {
         ['ACTIONS_STEP_DEBUG as an env expression string', fixerEdit('    concurrency: claude-fixer', "    concurrency: claude-fixer\n    env: ${{ fromJSON('{\"ACTIONS_STEP_DEBUG\":\"1\"}') }}"), rel(T), 'fix', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
         ['ACTIONS_STEP_DEBUG written to GITHUB_ENV by a step', fixerEdit('    steps:\n      - run: echo gate', '    steps:\n      - run: echo ACTIONS_STEP_DEBUG=true >> "$GITHUB_ENV"\n      - run: echo gate'), rel(T), 'fix-gate', 'fixer-debug', 'ACTIONS_STEP_DEBUG'],
         // WR-06: grants and flags that open the shell, reach patches/ or make the allowlist moot.
+        ['bare Read in --allowedTools', fixerEdit('Read(work/**),Read(fixer-data/**)', 'Read,Read(fixer-data/**)'), rel(T), 'fix', 'fixer-tools', 'bare Read'],
+        ['Read(**) in --allowedTools', fixerEdit('Read(work/**),Read(fixer-data/**)', 'Read(**),Read(fixer-data/**)'), rel(T), 'fix', 'fixer-tools', 'Read(**)'],
+        ['Read(//proc/**) granted', fixerEdit('Read(work/**),Read(fixer-data/**)', 'Read(//proc/**),Read(fixer-data/**)'), rel(T), 'fix', 'fixer-tools', 'Read(//proc/**)'],
+        ['Read climbing out of work/ with ..', fixerEdit('Read(work/**),Read(fixer-data/**)', 'Read(work/../.git/**),Read(fixer-data/**)'), rel(T), 'fix', 'fixer-tools', 'Read(work/../.git/**)'],
+        ['Read(//proc/**) not denied', fixerEdit('Read(//proc/**),', ''), rel(T), 'fix', 'fixer-tools', 'Read(//proc/**)'],
+        ['Read(~/**) not denied', fixerEdit('Read(~/**),', ''), rel(T), 'fix', 'fixer-tools', 'Read(~/**)'],
+        ['Read(.git/**) not denied', fixerEdit('Read(.git/**),', ''), rel(T), 'fix', 'fixer-tools', 'Read(.git/**)'],
         ['bare Edit in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit,Read'), rel(T), 'fix', 'fixer-tools', 'bare Edit'],
         ['bare Write in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),Write,Read'), rel(T), 'fix', 'fixer-tools', 'bare Write'],
         ['bare MultiEdit in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit(work/**),MultiEdit,Read'), rel(T), 'fix', 'fixer-tools', 'bare MultiEdit'],
@@ -1127,7 +1152,7 @@ function selfTest() {
         ['MultiEdit(work/**) without its patches deny', fixerEdit('Edit(work/**),Read', 'Edit(work/**),MultiEdit(work/**),Read'), rel(T), 'fix', 'fixer-tools', 'MultiEdit(work/**/patches/**)'],
         ['Bash(*) in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(*)'), rel(T), 'fix', 'fixer-tools', 'Bash(*)'],
         ['Bash(:*) in --allowedTools', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(:*)'), rel(T), 'fix', 'fixer-tools', 'Bash(:*)'],
-        ['space-separated --allowedTools Read Bash', fixerEdit(' --allowedTools "Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read"', ' --allowedTools Read Bash'), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
+        ['space-separated --allowedTools Read Bash', fixerEdit(` --allowedTools "${ALLOWED}"`, ' --allowedTools Read Bash'), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
         ['bare Bash through the --allowed-tools alias', fixerEdit('--max-turns 40 ', '--max-turns 40 --allowed-tools Bash '), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
         ['--dangerously-skip-permissions', fixerEdit('--max-turns 40 ', '--max-turns 40 --dangerously-skip-permissions '), rel(T), 'fix', 'fixer-tools', '--dangerously-skip-permissions'],
         ['--permission-mode bypassPermissions', fixerEdit('--max-turns 40 ', '--max-turns 40 --permission-mode bypassPermissions '), rel(T), 'fix', 'fixer-tools', 'bypassPermissions'],
@@ -1171,6 +1196,7 @@ function selfTest() {
         ['fix-gate running the gate outside fixer-isolate.sh', gateEdit('bash scripts/fixer-isolate.sh -- node scripts/verify-fix-gate.mjs', 'node scripts/verify-fix-gate.mjs'), rel(T), 'fix-gate', 'fixer-gate', 'fixer-isolate.sh'],
         ['fix-gate gating HEAD instead of the fix job base-sha', gateEdit('--ref="$BASE_SHA"', '--ref=HEAD'), rel(T), 'fix-gate', 'fixer-gate', 'base-sha'],
         ['fix-gate not checking the artifact digest', gateEdit('          DIFF_SHA256: ${{ needs.fix.outputs.diff-sha256 }}\n          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          DIFF=', '          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          DIFF='), rel(T), 'fix-gate', 'fixer-gate', 'sha256'],
+        ['fix job checkout of work/ without persist-credentials false', gateEdit("          path: work\n          fetch-depth: 0\n          persist-credentials: false\n", "          path: work\n          fetch-depth: 0\n"), rel(T), 'fix', 'fixer-gate', 'persist-credentials'],
         ['fix job without the diff-sha256 output', gateEdit('      diff-sha256: ${{ steps.digest.outputs.diff-sha256 }}\n', ''), rel(T), 'fix', 'fixer-gate', 'diff-sha256'],
         ['fix job without the base-sha output', gateEdit('      base-sha: ${{ steps.base.outputs.base-sha }}\n    steps:', '    steps:'), rel(T), 'fix', 'fixer-gate', 'base-sha'],
         ['fix-pr if: without the verdict term', gateEdit(" && needs.fix-gate.outputs.verdict == 'pass'", ''), rel(T), 'fix-pr', 'fixer-gate', "verdict == 'pass'"],
