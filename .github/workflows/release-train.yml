@@ -746,7 +746,10 @@ jobs:
           TAG="${CANDIDATE:-$PR_TAG}"
           node scripts/release-train.mjs --would-write "$PIN" "$TAG" "$PR_NUMBER" "$STAGE"
 
-      # The pinned maintenance issue (TRAIN-07). Found by title, read only; the write plan decides the
+      # The pinned maintenance issue (TRAIN-07). Found read only, by author and label on the server (a title
+      # search alone returns the newest matches of any author, so strangers could push the owner's issue out of
+      # the window); the JS selection is the second check. An unset or malformed OWNER_LOGIN selects nothing.
+      # The write plan decides the
       # one PATCH (on a byte diff) and the one comment (on a transition into red) for this run. A tick
       # with no sweep, or a sweep that did not render, skips this block and writes nothing.
       - name: Find the pinned maintenance issue (read)
@@ -754,9 +757,16 @@ jobs:
         if: ${{ needs.maintenance.result == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          OWNER_LOGIN: ${{ vars.OWNER_LOGIN }}
         run: |
           set -euo pipefail
-          gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --search 'in:title "release-train: maintenance"' --json number,title,body,author,labels > "$RUNNER_TEMP/maint-found.json"
+          LOGIN_RE='^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$'
+          if [[ $OWNER_LOGIN =~ $LOGIN_RE ]]; then
+            gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --author "$OWNER_LOGIN" --label release-train --search 'in:title "release-train: maintenance"' --json number,title,body,author,labels > "$RUNNER_TEMP/maint-found.json"
+          else
+            echo "release-train maintenance: the repository variable OWNER_LOGIN is unset or not a login; no issue is searched or selected"
+            echo '[]' > "$RUNNER_TEMP/maint-found.json"
+          fi
 
       - name: Download the previous maintenance state (read; absent is fail-safe)
         id: maint-restore
@@ -800,7 +810,7 @@ jobs:
       - name: Report that no pinned maintenance issue exists yet (live)
         if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-plan.outputs.action == 'create' }}
         run: |
-          echo "release-train maintenance: no pinned maintenance issue is open; the owner pins it at plan 48-05. Nothing is created here."
+          echo "release-train maintenance: no pinned maintenance issue was selected. Either the owner has not pinned it yet (plan 48-05), or the repository variable OWNER_LOGIN is unset or names another account, or the issue lacks the release-train label. Nothing is created here."
 
       - name: Patch the pinned maintenance issue on a byte diff (live only)
         if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-plan.outputs.patch == 'true' && steps.maint-plan.outputs.number != '' }}
