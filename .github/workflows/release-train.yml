@@ -123,22 +123,15 @@ jobs:
           PIN=$(node scripts/detect-upstreams.mjs --pin)
           echo "pin=$PIN" >> "$GITHUB_OUTPUT"
 
-      # The listing is a live fetch of the upstream's tags. A dry run prints the
-      # fetch it would make and lists nothing; the decision below then sees no
-      # candidate and the bump is skipped, so a dry run never replays a live tag.
-      - name: List the ESR release tags under the pinned major (skipped in dry-run)
+      # The listing is a read, so it runs in a dry run too. A dry run decides against the live
+      # listing, and the would-write lines in report name the real candidate.
+      - name: List the ESR release tags under the pinned major
         env:
-          DRY_RUN: ${{ inputs.dry-run }}
           PIN: ${{ steps.pin.outputs.pin }}
           REMOTE: https://github.com/mozilla-firefox/firefox.git
         run: |
-          set -eu
+          set -euo pipefail
           MAJOR=$(printf '%s\n' "$PIN" | sed -n 's/^[A-Za-z]*_\([0-9]*\)_.*/\1/p')
-          : > "$RUNNER_TEMP/tags.txt"
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "dry-run: would run git ls-remote --tags --refs against the upstream and keep refs/tags/FIREFOX_${MAJOR}_*esr_RELEASE, deciding against pin $PIN"
-            exit 0
-          fi
           git ls-remote --tags --refs "$REMOTE" > "$RUNNER_TEMP/refs.txt"
           sed -n 's#.*refs/tags/##p' "$RUNNER_TEMP/refs.txt" > "$RUNNER_TEMP/names.txt"
           # grep exits 1 when no tag matches; that empty listing is a FAIL in detect-upstreams, not here.
@@ -146,16 +139,10 @@ jobs:
 
       # product-details is advisory. An outage leaves the value empty, a NOTE is printed, and
       # the decision does not read it, so the advisory never blocks a bump.
-      - name: Read the product-details advisory value (skipped in dry-run)
+      - name: Read the product-details advisory value
         id: advisory
-        env:
-          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -eu
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "dry-run: would read FIREFOX_ESR from product-details (advisory only)"
-            exit 0
-          fi
           if VALUE=$(curl -fsSL https://product-details.mozilla.org/1.0/firefox_versions.json \
             | node -e 'let s = ""; process.stdin.on("data", d => s += d).on("end", () => console.log(JSON.parse(s).FIREFOX_ESR))'); then
             echo "esr=$VALUE" >> "$GITHUB_OUTPUT"
@@ -166,15 +153,9 @@ jobs:
       - name: Decide the bump
         id: decide
         env:
-          DRY_RUN: ${{ inputs.dry-run }}
           ADVISORY: ${{ steps.advisory.outputs.esr }}
         run: |
           set -eu
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "dry-run: would decide the bump from the listing; no candidate is carried into the replay"
-            echo "candidate=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           if [ -n "$ADVISORY" ]; then
             node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --firefox-esr "$ADVISORY" > "$RUNNER_TEMP/decide.txt"
           else
@@ -205,16 +186,10 @@ jobs:
 
       # The Node 24 line: the newest v24 entry of the release index that ships linux-x64 and is
       # strictly newer than the pin in node-runtime.json. No such line is a hold, and the outputs stay empty.
-      - name: Select the newest Node 24 line (skipped in dry-run)
+      - name: Select the newest Node 24 line
         id: node-index
-        env:
-          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -eu
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "dry-run: would select the newest v24 entry of https://nodejs.org/dist/index.json that ships linux-x64"
-            exit 0
-          fi
           curl -fsSL https://nodejs.org/dist/index.json -o "$RUNNER_TEMP/node-index.json"
           # The pin is passed in, so a line that is not newer than the pin holds here, before any download.
           node scripts/detect-upstreams.mjs --node-select "$RUNNER_TEMP/node-index.json" powerbrowser/packaging/node-runtime.json > "$RUNNER_TEMP/node-select.txt"
@@ -224,9 +199,9 @@ jobs:
       # signature come from nodejs.org, the signature is checked with gpgv against the
       # nodejs release-keys keyring, and the tarball sha must equal the signed entry.
       # Nothing is opened from a value this step did not verify.
-      - name: Verify the Node release against its signed SHASUMS and the tarball (skipped in dry-run)
+      - name: Verify the Node release against its signed SHASUMS and the tarball
         id: node-verify
-        if: ${{ inputs.dry-run != true && steps.node-index.outputs.node-version != '' }}
+        if: ${{ steps.node-index.outputs.node-version != '' }}
         env:
           NODE_VERSION: ${{ steps.node-index.outputs.node-version }}
           NODE_FILE: ${{ steps.node-index.outputs.node-file }}
@@ -452,6 +427,17 @@ jobs:
           BUMP_PR_NODE: ${{ needs.bump-pr-node.result }}
         run: |
           echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} node=${NODE_VERSION:-none} bump=${BUMP} bump-pr=${BUMP_PR} bump-pr-node=${BUMP_PR_NODE}"
+
+      # A dry run prints the branches a live run would publish, with the values this run decided.
+      - name: Print the branches this run would open (dry-run)
+        if: ${{ inputs.dry-run }}
+        env:
+          CANDIDATE: ${{ needs.detect.outputs.candidate }}
+          BUMP: ${{ needs.bump.result }}
+          NODE_VERSION: ${{ needs.detect-node.outputs.node-version }}
+        run: |
+          if [ -n "$CANDIDATE" ]; then echo "dry-run: would open or update chore/esr-${CANDIDATE} (replay result: ${BUMP})"; else echo "dry-run: no ESR bump to open"; fi
+          if [ -n "$NODE_VERSION" ]; then echo "dry-run: would open or update chore/node-v24.x at ${NODE_VERSION}"; else echo "dry-run: no Node bump to open"; fi
 
       - name: Print the tracking issue this run would write (dry-run)
         if: ${{ inputs.dry-run }}
