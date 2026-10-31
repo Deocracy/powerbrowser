@@ -496,9 +496,10 @@ checkpoint (plan 47-04).
 
 `pkg-win11` is a **new** libvirt domain on a new disk. A shut-off domain named
 `win11` with a 200704-byte stub qcow2 already exists on `legion`; leave it and its
-disk alone. `docs/BUILD.md`'s packaging capability record still states that
-`virsh list --all` shows zero defined domains; that line is stale, and stage
-`windows-unsigned` corrects it along with the read-access claim beside it. The guest is a test target, never a build host: the Windows build is a
+disk alone. The packaging capability record in `docs/BUILD.md` that says
+`virsh list --all` shows zero defined domains is stale: `win11` is defined and shut
+off on `legion`. Runner-user libvirt access is an owner action in `/etc/nixos`, taken at
+the 54-04 checkpoint. The guest is a test target, never a build host: the Windows build is a
 Linux cross-compile. Give the nvram `format='qcow2'` rather than raw, because
 libvirt refuses an internal snapshot for a pflash domain whose nvram is not qcow2,
 and the `clean-baseline` snapshot every matrix cell reverts to depends on it. Install
@@ -959,6 +960,19 @@ session.
 `--disable-maintenance-service` is in the emitted Windows mozconfig. If the built
 `config.status` shows the service enabled, the mozconfig emitter regressed. Do not
 work around it in the installer.
+
+**A Windows update fails with a locked file.** The updater renames files a live
+sidecar `node.exe` may hold. Quit and restart both register the AsyncShutdown blocker
+`PowerBrowser: reap sidecar` (`addSidecarReapBlocker` in `powerbrowser/shell/PowerBrowserAPI.sys.mjs`),
+which awaits `TheiaService.stopAndReap`. The reap is bounded by `powerbrowser.sidecar.killGraceMs`
+(default 5000 ms, polled every 100 ms). On timeout the log names the live pid and shutdown continues.
+A pid that survives the timeout is a defect to report, not a case to retry by hand.
+
+**The background update task (UPD-31) is verified or deferred, never silently enabled.** The
+`windows-unsigned` matrix records it per install: verified (task entry, `backgroundupdate.moz_log`, and a
+staged apply while the app is closed) or deferred with the exact BackgroundUpdate REASON value
+(`APPBASEDIR_NOT_WRITABLE`, `SERVICE_REGISTRY_KEY_MISSING`, or `NO_APP_UPDATE_BACKGROUND_ENABLED`) and the
+scheduler error. A deferral never enables the maintenance service.
 
 **A client resolves `aus5.mozilla.org`.** The baked `[AppUpdate]` host came from
 upstream's default rather than from `MOZ_APPUPDATE_HOST`. Check

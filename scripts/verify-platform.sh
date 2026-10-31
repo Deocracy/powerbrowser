@@ -5463,6 +5463,12 @@ run_own_checks() {
       # CNAME. An undeclared status slug is a FAIL, never a SKIP. Never called by a quick path.
       "upptime-sweep-live|node $REPO_ROOT/scripts/verify-upptime.mjs --live"
 
+      # NEW (Phase 54, MTX-01 and UPD-31): the pkg-win11 matrix record. Full tier: it reads the record the owner's
+      # guest run writes, so it is red until the 54-04 checkpoint runs the matrix. An absent record is FAIL naming
+      # that step, never a skip. Never called by a quick path.
+      "win-matrix-record|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs"
+      # win-matrix-record-self-test runs the good fixture and each planted fault over mkdtemp fixtures only; hermetic.
+      "win-matrix-record-self-test|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs --self-test"
     )
   fi
 
