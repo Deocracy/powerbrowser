@@ -25,6 +25,7 @@ MOZCONFIG_TRACKED="$ROOT/powerbrowser/packaging/mozconfig-macos-$ARCH"
 APP="$ROOT/theia/applications/browser"
 LIPO="${LIPO:-llvm-lipo}"
 fail() { echo "package-macos: FAIL -- $*" >&2; exit 1; }
+command -v "$LIPO" >/dev/null || fail "$LIPO not found; enter nix develop .#firefox-macos (llvm supplies llvm-lipo), or set LIPO to a lipo that supports -archs"
 test -f "$APP/lib/backend/main.js" || fail "$APP/lib/backend/main.js is absent; run yarn build in theia/ first"
 
 # The target mozconfig expands $MOZ_FETCHES_DIR into the SDK and DMG tool paths when mach loads it.
@@ -39,11 +40,13 @@ done
 # node-runtime.json comes from nodejs.org's SHASUMS256.txt. The owner runs the gpg check on that file
 # (RELEASING.md "Node provenance"); this script enforces the pin, not the key trust. An archive that
 # does not hash to the pin is deleted and the run fails naming it.
-read -r NODE_VERSION NODE_URL NODE_SHA < <(python3 -c 'import json,sys; p=json.load(open(sys.argv[1]))[sys.argv[2]]; print(p["version"], p["url"], p["sha256"])' "$ROOT/powerbrowser/packaging/node-runtime.json" "$NODE_KEY")
+PIN="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1]))[sys.argv[2]]; print(p["version"], p["url"], p["sha256"])' "$ROOT/powerbrowser/packaging/node-runtime.json" "$NODE_KEY")" \
+    || fail "no usable $NODE_KEY pin in powerbrowser/packaging/node-runtime.json"
+read -r NODE_VERSION NODE_URL NODE_SHA <<< "$PIN" || true
+test -n "${NODE_SHA:-}" || fail "no usable $NODE_KEY pin in powerbrowser/packaging/node-runtime.json"
 CACHE="$ROOT/.mozbuild/node-dist"; mkdir -p "$CACHE"
 ARCHIVE="$CACHE/$(basename "$NODE_URL")"
-TMP_OUT=""
-trap 'rm -f "$ARCHIVE.part" ${TMP_OUT:+"$TMP_OUT"}' ERR
+trap 'rm -f "$ARCHIVE.part"' ERR
 if [ ! -f "$ARCHIVE" ]; then
     curl -fsSL -o "$ARCHIVE.part" "$NODE_URL" \
         || { rm -f "$ARCHIVE.part"; fail "downloading $NODE_URL failed"; }
