@@ -239,6 +239,9 @@ export function conflictStageReason(stage) {
  */
 export function wouldWrite({ pinTag, tag, openPrNumber, stage }) {
     const candidateTag = tag === '' ? null : tag;
+    if (openPrNumber !== '' && candidateTag === null) {
+        return { lines: [], failures: [`an open PR (#${openPrNumber}) names no candidate tag, so its bump branch cannot be named. Next step: pass the tag the PR was opened for.`] };
+    }
     const openPr = openPrNumber === '' ? null : { head: `chore/esr-${candidateTag}`, number: Number(openPrNumber) };
     const facts = { pinTag, candidateTag, revision: 1, openPr, stage: stage === '' ? null : stage, verifyCheck: null, merged: false, pinUnchanged: false };
     const state = derive(facts);
@@ -470,6 +473,11 @@ function selfTest() {
     ];
 
     const viewPlants = [
+        {
+            name: 'an open PR number with no candidate tag is refused, not named chore/esr-null',
+            run: () => wouldWrite({ pinTag: BASE_PIN, tag: '', openPrNumber: '41', stage: '' }).failures,
+            expect: 'names no candidate tag',
+        },
         {
             name: 'a conflict stage line naming no patch number is refused by the would-write view',
             run: () => wouldWrite({ pinTag: BASE_PIN, tag: NEWER, openPrNumber: '', stage: 'FAIL -- apply-patches.sh failed replaying' }).lines.filter(l => l.includes('refused')),
