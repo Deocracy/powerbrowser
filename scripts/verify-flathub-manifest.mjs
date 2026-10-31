@@ -38,8 +38,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { deriveChannel, diskReader } from './lib/channel-identity.mjs';
+import { RELEASE_HASH_REL, SENTINEL_SRI, deriveChannel, diskReader, sriToHex } from './lib/channel-identity.mjs';
 import { resolveConfig } from './generate.mjs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'flathub-manifest';
@@ -55,10 +56,21 @@ const BASEAPP_REF = 'org.mozilla.firefox.BaseApp';
 const VERIFY_PLACEHOLDER = '@FLATHUB_VERIFICATION_TOKEN@';
 
 const args = process.argv.slice(2);
-for (const a of args) {
+const renderAt = args.indexOf('--render');
+for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--render') {
+        if (args[i + 1] === undefined || args[i + 1].startsWith('--')) {
+            console.error(`${NAME}: FAIL -- --render needs an output path outside the tree`);
+            console.error(`  Next step: run: node ${SELF_REL} --render <scratch-dir>/org.debios.PowerBrowser.json`);
+            process.exit(2);
+        }
+        i += 1;
+        continue;
+    }
     if (a !== '--self-test' && a !== '--release') {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
-        console.error(`  Next step: run: node ${SELF_REL}, or add --release or --self-test.`);
+        console.error(`  Next step: run: node ${SELF_REL}, or add --release, --render <path> or --self-test.`);
         process.exit(2);
     }
 }
@@ -206,6 +218,41 @@ export function runChecks(root, overrides = {}) {
     return { failures };
 }
 
+// The submission copy: every release token rendered from the tree, written outside the repository. It refuses
+// the placeholder hash, so a copy never names an unhashed tarball, and it never writes inside the tree.
+function render(outPath) {
+    const base = diskReader(REPO_ROOT);
+    const { failures, facts } = deriveChannel(REPO_ROOT, base);
+    if (facts === null) {
+        console.error(`${NAME}: FAIL -- the release identity does not derive: ${failures.join('; ')}`);
+        return 1;
+    }
+    const absOut = resolve(outPath);
+    if (absOut === REPO_ROOT || absOut.startsWith(REPO_ROOT + '/')) {
+        console.error(`${NAME}: FAIL -- ${outPath} is inside the repository; a rendered copy never lives in the tree.`);
+        console.error(`  Next step: render into a scratch directory outside the checkout.`);
+        return 2;
+    }
+    const record = JSON.parse(base(RELEASE_HASH_REL));
+    if (record.sha256 === SENTINEL_SRI) {
+        console.error(`${NAME}: FAIL -- ${RELEASE_HASH_REL} still holds the placeholder, so a rendered manifest would name no real tarball hash.`);
+        console.error(`  Next step: the DIST-12 bot PR writes the hash for ${facts.releaseKey} first, then re-run this render.`);
+        return 1;
+    }
+    const values = {
+        '@RELEASE_URL@': facts.tarballUrl,
+        '@RELEASE_SHA256@': sriToHex(record.sha256),
+        '@RELEASE_REPO@': facts.repo,
+        '@RELEASE_URL_TEMPLATE@': facts.checkerUrlTemplate,
+    };
+    let text = base(MANIFEST_REL);
+    for (const [token, value] of Object.entries(values)) text = text.split(token).join(value);
+    mkdirSync(dirname(absOut), { recursive: true });
+    writeFileSync(absOut, text, 'utf8');
+    console.log(`${NAME}: PASS -- rendered the release tokens for ${facts.releaseKey} to ${absOut}; the verification token is still ${VERIFY_PLACEHOLDER} until the owner sets it`);
+    return 0;
+}
+
 function selfTest() {
     const base = diskReader(REPO_ROOT);
     const withText = (rel, transform) => {
@@ -263,7 +310,7 @@ function selfTest() {
             overrides: withText(COPY_REL, t => `${t}\nThe x-checker-data block updates this.\n`),
         },
         {
-            name: 'cache interface drops the Cachix substituter', expect: CACHE_REL,
+            name: 'cache interface drops the Cachix substituter (shared-substituter tripwire)', expect: CACHE_REL,
             overrides: (() => {
                 const doc = JSON.parse(base(CACHE_REL));
                 doc.interface.substituters = doc.interface.substituters.filter(u => u !== doc.cachix.substituter);
@@ -321,6 +368,7 @@ function selfTest() {
 
 function main() {
     if (args.includes('--self-test')) return selfTest();
+    if (renderAt >= 0) return render(args[renderAt + 1]);
     const { failures } = runChecks(REPO_ROOT);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s) with the Flathub manifest.`);
