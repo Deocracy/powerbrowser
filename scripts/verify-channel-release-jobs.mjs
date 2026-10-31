@@ -2,22 +2,13 @@
 // scripts/verify-channel-release-jobs.mjs
 //
 // The channel-release-jobs row (Phase 56, DIST-12). The channel-manifests stage (.github/workflows/channel-manifests.yml)
-// runs four live legs per release, and this row proves their shape offline:
-//
-//  1. the triggers           workflow_call (the train) and workflow_dispatch (the dry run); no schedule (D-77);
-//                            no pull_request or pull_request_target;
-//  2. the four legs          flake-hash-pr, tap-commit, winget-submit and checker-freshness are present;
-//  3. flake-hash-pr          prefetches the published tarball, writes nix/pkg/release-hash.json, opens a pull
-//                            request on a chore/channel- branch with gh pr create --base main, and never pushes to main;
-//  4. tap-commit             renders the derived cask from --facts and pushes the tap repository (never this repository's main);
-//  5. winget-submit          runs on a windows runner, takes WINGET_TOKEN from the release environment by name, and
-//                            is gated on the Windows asset the train names (A2);
-//  6. checker-freshness      the Flatpak x-checker-data template resolves to the tarball URL for the release key, read
-//                            from the manifest, with no network;
-//  7. dry-run                renders the payloads and submits, pushes and opens nothing; it holds no secret;
-//  8. credentials            no job carries a token-shaped literal; every secret is referenced by name;
-//  9. admission and pins     every uses: is SHA-pinned, and every non-GitHub-owned action is admitted in
-//                            .github/settings/actions-selected.json.
+// runs a derive job, a verify-assets job, four live legs and a dry run per release. The row parses the workflow as
+// YAML and checks its structure (scripts/lib/channel-workflow-rules.mjs lists every rule, and each rule has a plant
+// in --self-test): the triggers and boolean live and dry_run inputs; the job gates (never github.event_name); the exact
+// permission map and environment of each job (bot, bot, winget; never release); the order of the --release steps
+// against the push or the submission; the App token repositories and permission-* keys; the attestation pins; the
+// wingetcreate pin and the single step that holds WINGET_TOKEN; quoted git push forms parsed after stripping -c
+// options; no sed and no expression inside a run script; SHA pins and the admission list.
 //
 // The live legs run only with the train, the Apps and the stores (plan 56-05): this row proves the shape.
 //
@@ -44,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 
 import { RELEASE_KEY_RE, channelTokenValues, deriveChannel, diskReader, renderTemplate } from './lib/channel-identity.mjs';
 import { assetNameFault, checkAsset, digestFault, inputFaults, renderLive } from './lib/channel-render.mjs';
+import { workflowFaults } from './lib/channel-workflow-rules.mjs';
 import { loadYaml } from './lib/release-workflow.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -262,121 +254,16 @@ export function runChecks(root, overrides = {}) {
         fail(WF_REL, `does not parse as YAML 1.2 (${e.message.split('\n')[0]}).`, 'fix the YAML.');
         return { failures };
     }
-    const jobs = wf?.jobs ?? {};
-
-    // 1. triggers
-    const on = wf?.on ?? {};
-    if (!('workflow_call' in on)) fail(WF_REL, 'has no workflow_call trigger, so the train cannot call the stage', 'add the workflow_call trigger.');
-    if (!('workflow_dispatch' in on)) fail(WF_REL, 'has no workflow_dispatch trigger, so the dry run cannot be started', 'add the workflow_dispatch trigger for the dry run.');
-    if ('schedule' in (wf ?? {}) || 'schedule' in on) fail(WF_REL, 'has a schedule key, so the stage would run on a clock of its own (D-77)', 'delete the schedule; the Worker clock owns timing.');
-    if ('pull_request' in on || 'pull_request_target' in on) fail(WF_REL, 'has a pull_request trigger, so untrusted branches would reach the bot App', 'remove the pull_request trigger.');
-
-    // 2. the four legs
-    for (const leg of LEGS) {
-        if (!jobs[leg]) fail(`${WF_REL} job ${leg}`, 'is missing, so one release leg would not run', `restore the ${leg} job.`);
-    }
-    for (const job of JOBS) {
-        if (!jobs[job]) continue;
-        const blob = JSON.stringify(jobs[job]);
-        // 8. credentials: no token-shaped literal in any job; the only secret names are the two the stage uses.
-        for (const shape of CREDENTIAL_SHAPES) {
-            const hit = shape.exec(blob);
-            if (hit) fail(`${WF_REL} job ${job}`, `carries a credential-shaped literal (${JSON.stringify(hit[0].slice(0, 6))}...)`, 'remove it; reference the secret by name only.');
-        }
-        for (const m of blob.matchAll(/secrets\.([A-Za-z0-9_]+)/g)) {
-            const name = m[1];
-            if (!['BOT_APP_PRIVATE_KEY', 'WINGET_TOKEN'].includes(name)) fail(`${WF_REL} job ${job}`, `references the secret ${name}, which the channel stage does not use`, 'reference only BOT_APP_PRIVATE_KEY or WINGET_TOKEN, by name.');
-        }
-        // 9. SHA-pinned uses
-        for (const step of [...(jobs[job].steps ?? []), jobs[job].uses ? { uses: jobs[job].uses } : null].filter(Boolean)) {
-            if (step.uses && !SHA_PIN.test(step.uses)) fail(`${WF_REL} job ${job}`, `uses ${step.uses} without a 40-hex SHA pin`, 'pin the action to a full commit SHA.');
-        }
-    }
-
-    // 3. flake-hash-pr: a pull request, never a push to main
-    const flake = jobs['flake-hash-pr'];
-    if (flake) {
-        const runs = (flake.steps ?? []).map(s => String(s.run ?? '')).join('\n');
-        for (const [needle, what] of [
-            ['nix store prefetch-file', 'a prefetch of the published tarball, which is where the hash comes from'],
-            ['nix/pkg/release-hash.json', 'the hash record the flake reads'],
-            ['chore/channel-', 'the chore/channel- branch the pull request is opened from'],
-            ['gh pr create', 'a pull request opened on the release repository'],
-            ['--base main', 'main as the base of that pull request'],
-        ]) {
-            if (!runs.includes(needle)) fail(`${WF_REL} job flake-hash-pr`, `lacks ${what} (${needle})`, `add the ${needle} step; the flake hash must come from the published asset.`);
-        }
-        const toMain = /git\s+(?:-c\s+\S+\s+)*push[^\n]*(?:\bmain\b|HEAD:refs\/heads\/main|HEAD:main)/.exec(runs);
-        if (toMain) fail(`${WF_REL} job flake-hash-pr`, `pushes to main (${JSON.stringify(toMain[0].slice(0, 80))}), bypassing review (GH-05)`, 'push the chore/channel- branch and open a pull request; never push to main.');
-        if (/--force(?!-with-lease)\b|\s-f\s/.test(runs)) fail(`${WF_REL} job flake-hash-pr`, 'force-pushes', 'remove --force.');
-        if (!/\bderive\b/.test(JSON.stringify(flake.needs ?? []))) fail(`${WF_REL} job flake-hash-pr`, 'does not wait on the derive job, so it would run on an unchecked key', 'add derive to needs.');
-    }
-
-    // 4. tap-commit
-    const tap = jobs['tap-commit'];
-    if (tap) {
-        const blob = JSON.stringify(tap);
-        for (const [needle, what] of [
-            ['Casks/powerbrowser.rb', 'a cask path in the tap'],
-            ['homebrew-powerbrowser', 'the tap repository checkout'],
-            ['--render-live tap', 'the cask rendered from the tracked template by literal replacement'],
-            ['verify-homebrew-cask.mjs --release --rendered', 'the release check on the rendered cask'],
-            ['inputs.dmg_asset', 'the published disk-image asset name input'],
-            ['needs.verify-assets.outputs.dmg', 'the recomputed, attested disk-image digest'],
-        ]) {
-            if (!blob.includes(needle)) fail(`${WF_REL} job tap-commit`, `lacks ${what} (${needle})`, `add ${needle}.`);
-        }
-        if (/wingetcreate/.test(blob)) fail(`${WF_REL} job tap-commit`, 'runs wingetcreate, which belongs to the winget leg', 'move it to winget-submit.');
-    }
-
-    // 5. winget-submit
-    const winget = jobs['winget-submit'];
-    if (winget) {
-        if (winget.environment !== 'winget') fail(`${WF_REL} job winget-submit`, `uses environment ${JSON.stringify(winget.environment ?? null)}, not the winget environment that holds WINGET_TOKEN alone`, 'set environment: winget.');
-        if (!/^windows-/.test(String(winget['runs-on'] ?? ''))) fail(`${WF_REL} job winget-submit`, `runs on ${JSON.stringify(winget['runs-on'] ?? null)}, but wingetcreate is a Windows tool`, 'run on windows-latest.');
-        const blob = JSON.stringify(winget);
-        if (!/secrets\.WINGET_TOKEN/.test(blob)) fail(`${WF_REL} job winget-submit`, 'does not reference WINGET_TOKEN by name', 'reference ${{ secrets.WINGET_TOKEN }} in the env of the submit step.');
-        if (!/inputs\.winget_asset/.test(String(winget.if ?? ''))) fail(`${WF_REL} job winget-submit`, 'is not gated on the Windows asset the train names (A2), so it could submit the fixture', 'gate the job on inputs.winget_asset.');
-        if (!/wingetcreate\.exe\\?"? update/.test(blob)) fail(`${WF_REL} job winget-submit`, 'has no wingetcreate update step for later versions', 'add the update --out step before the submit.');
-    }
-
-    // 6. checker-freshness
-    const checker = jobs['checker-freshness'];
-    if (checker && !/--check-checker/.test(JSON.stringify(checker))) {
-        fail(`${WF_REL} job checker-freshness`, 'does not check the x-checker-data template for the key', 'run --check-checker on the release key.');
-    }
-    for (const f of checkerFaults(read, facts)) {
-        fail(`${WF_REL} job checker-freshness`, `the Flatpak checker data is stale for ${facts.releaseKey} (${f})`, 'regenerate x-checker-data from the derived checker URL.');
-    }
-
-    // 7. dry-run: renders, submits nothing
-    const dry = jobs['dry-run'];
-    if (dry) {
-        const blob = JSON.stringify(dry);
-        if (!/--render/.test(blob)) fail(`${WF_REL} job dry-run`, 'does not render the payloads', 'run --render into the runner temp directory.');
-        for (const [re, what] of [
-            [/git\s+(?:-c\s+\S+\s+)*push/, 'a git push'],
-            [/gh\s+pr\s/, 'a pull request'],
-            [/wingetcreate\s+submit/, 'a winget submission'],
-            [/--submit\b/, 'the --submit flag'],
-            [/secrets\./, 'a secret reference'],
-        ]) {
-            if (re.test(blob)) fail(`${WF_REL} job dry-run`, `contains ${what}, but the dry run submits and pushes nothing and holds no secret`, 'delete it; the dry run renders payloads only.');
-        }
-    }
-
-    // 1 (continued) and 2: the derive job checks the key
-    const derive = jobs.derive;
-    if (derive && !/--check-key/.test(JSON.stringify(derive))) fail(`${WF_REL} job derive`, 'does not check the release key against the tree', 'run --check-key before any leg.');
-
-    // 9. admission: every non-GitHub-owned action is admitted
+    // The structural rules (WR-09): parsed YAML, not substrings. See scripts/lib/channel-workflow-rules.mjs.
     const admission = JSON.parse(read(ADMISSION_REL) ?? '{"patterns_allowed":[]}');
     const admitted = new Set(admission.patterns_allowed ?? []);
-    for (const job of JOBS) {
-        for (const step of jobs[job]?.steps ?? []) {
-            const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)@/.exec(step.uses ?? '');
-            if (!m || m[1].startsWith('actions/') || m[1].startsWith('github/')) continue;
-            if (!admitted.has(`${m[1]}@*`)) fail(`${WF_REL} job ${job}`, `uses ${m[1]}, which ${ADMISSION_REL} does not admit`, `admit ${m[1]}@* in patterns_allowed in the same commit.`);
+    for (const f of workflowFaults(wf, { admitted })) fail(`${WF_REL} ${f.where}`, f.msg + '.', f.next.replace(/\.$/, '') + '.');
+    const jobs = wf?.jobs ?? {};
+
+    // The Flatpak checker template resolves to the tarball URL for the key (the Flatpak side of the checker leg).
+    if (jobs['checker-freshness']) {
+        for (const f of checkerFaults(read, facts)) {
+            fail(`${WF_REL} job checker-freshness`, `the Flatpak checker data is stale for ${facts.releaseKey} (${f})`, 'regenerate x-checker-data from the derived checker URL.');
         }
     }
 
@@ -387,63 +274,101 @@ function selfTest() {
     const base = diskReader(REPO_ROOT);
     const { facts } = deriveChannel(REPO_ROOT, base);
     void facts;
-    const wf = () => base(WF_REL);
-    const withWorkflow = (transform) => {
-        const original = wf();
-        const planted = transform(original);
-        if (planted === original) throw new Error(`plant on ${WF_REL} did not apply: the anchor text moved`);
-        return { read: r => (r === WF_REL ? planted : base(r)) };
+    // A plant is a structural edit of the parsed workflow, dumped back to YAML (never a text patch that could miss
+    // its anchor). mutate(doc) edits the document; the helper functions find a step by a word in its run text.
+    const yaml = loadYaml();
+    const withDoc = (mutate) => {
+        const doc = yaml.load(base(WF_REL));
+        mutate(doc);
+        return { read: r => (r === WF_REL ? yaml.dump(doc, { lineWidth: -1 }) : base(r)) };
     };
+    const stepWith = (doc, job, re) => {
+        const step = doc.jobs[job].steps.find(x => re.test(String(x.run ?? x.name ?? '')));
+        if (!step) throw new Error(`plant anchor ${re} is absent from job ${job}`);
+        return step;
+    };
+    const appStep = (doc, job) => doc.jobs[job].steps.find(x => /^actions\/create-github-app-token@/.test(x.uses ?? ''));
+    const dropStep = (job, re) => withDoc(d => { d.jobs[job].steps = d.jobs[job].steps.filter(x => !re.test(String(x.run ?? ''))); });
+    const editRun = (job, re, from, to) => withDoc(d => {
+        const st = stepWith(d, job, re);
+        if (!st.run.includes(from)) throw new Error(`plant anchor ${from} is absent from job ${job}`);
+        st.run = st.run.replace(from, to);
+    });
     const withFlatpak = (transform) => {
         const original = base(FLATPAK_REL);
         const planted = transform(original);
         if (planted === original) throw new Error(`plant on ${FLATPAK_REL} did not apply`);
         return { read: r => (r === FLATPAK_REL ? planted : base(r)) };
     };
-    const dropJob = name => withWorkflow(t => t.replace(new RegExp(`\\n  ${name}:\\n[\\s\\S]*?(?=\\n  [a-z-]+:\\n|\\n*$)`), '\n'));
-    const addStep = (job, run) => withWorkflow(t => t.replace(`  ${job}:\n`, `  ${job}:\n`).replace(new RegExp(`(\\n  ${job}:[\\s\\S]*?steps:\\n)`), `$1      - name: planted\n        run: ${run}\n`));
+    const dropJob = name => withDoc(d => { delete d.jobs[name]; });
+    const PLANT_PUSH = 'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "HEAD:refs/heads/main"';
 
     const cases = [
-        {
-            name: 'hash literal not derived from the published asset', expect: 'nix store prefetch-file',
-            overrides: withWorkflow(t => t.replace(/nix store prefetch-file --hash-type sha256 --json "\$URL"/, 'echo \'{"hash":"sha256-AAAA"}\'')),
-        },
-        {
-            name: 'direct push to main from the flake-hash leg', expect: 'pushes to main',
-            overrides: addStep('flake-hash-pr', 'git push origin HEAD:refs/heads/main'),
-        },
-        {
-            name: 'tap leg removed', expect: 'job tap-commit',
-            overrides: dropJob('tap-commit'),
-        },
-        {
-            name: 'winget leg removed', expect: 'job winget-submit',
-            overrides: dropJob('winget-submit'),
-        },
-        {
-            name: 'stale Flatpak checker template', expect: 'checker-freshness',
-            overrides: withFlatpak(t => t.replace(/"url-template": "[^"]*"/, '"url-template": "https://github.com/example.invalid/releases/download/v$version/x-$version.tar.xz"')),
-        },
-        {
-            name: 'submit step planted into the dry run', expect: 'job dry-run',
-            overrides: addStep('dry-run', 'wingetcreate submit ./out'),
-        },
-        {
-            name: 'pull_request trigger added', expect: 'pull_request',
-            overrides: withWorkflow(t => t.replace('on:\n  workflow_call:', 'on:\n  pull_request:\n  workflow_call:')),
-        },
-        {
-            name: 'schedule key added', expect: 'schedule',
-            overrides: withWorkflow(t => t.replace('on:\n  workflow_call:', 'on:\n  schedule:\n    - cron: "0 * * * *"\n  workflow_call:')),
-        },
-        {
-            name: 'token value written into the winget leg', expect: 'credential-shaped',
-            overrides: withWorkflow(t => t.replace('WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}', `WINGET_CREATE_GITHUB_TOKEN: ${'gh'}${'p_'}${'A'.repeat(36)}`)),
-        },
-        {
-            name: 'control: unmodified stage stays green', expect: null,
-            overrides: {},
-        },
+        // A. the workflow
+        { name: 'pull_request trigger added', expect: 'pull_request', overrides: withDoc(d => { d.on.pull_request = null; }) },
+        { name: 'schedule key added', expect: 'schedule', overrides: withDoc(d => { d.on.schedule = [{ cron: '0 * * * *' }]; }) },
+        { name: 'live input removed', expect: 'input live', overrides: withDoc(d => { delete d.on.workflow_call.inputs.live; }) },
+        { name: 'digest input typed as a boolean', expect: 'input tarball_sha256', overrides: withDoc(d => { d.on.workflow_call.inputs.tarball_sha256.type = 'boolean'; }) },
+        { name: 'concurrency removed', expect: 'concurrency', overrides: withDoc(d => { delete d.concurrency; }) },
+        { name: 'cancel-in-progress true', expect: 'concurrency', overrides: withDoc(d => { d.concurrency['cancel-in-progress'] = true; }) },
+        { name: 'bash default shell removed (no pipefail)', expect: 'pipefail', overrides: withDoc(d => { delete d.defaults; }) },
+        { name: 'workflow-level write permission', expect: 'workflow-level permissions', overrides: withDoc(d => { d.permissions = { contents: 'write' }; }) },
+        // B. every job: gate, permissions, environment, needs, pins
+        { name: 'github.event_name gate on a live leg (CR-01)', expect: 'github.event_name', overrides: withDoc(d => { d.jobs['flake-hash-pr'].if = "${{ github.event_name == 'workflow_call' }}"; }) },
+        { name: 'live leg without the live input', expect: 'not gated on inputs.live', overrides: withDoc(d => { d.jobs['flake-hash-pr'].if = '${{ !inputs.dry_run }}'; }) },
+        { name: 'live leg without the dry_run negation', expect: 'not gated on !inputs.dry_run', overrides: withDoc(d => { d.jobs['tap-commit'].if = "${{ inputs.live && inputs.dmg_asset != '' }}"; }) },
+        { name: 'dry-run job gated live-only', expect: 'not gated on !inputs.live || inputs.dry_run', overrides: withDoc(d => { d.jobs['dry-run'].if = '${{ inputs.live }}'; }) },
+        { name: 'tap leg not gated on the macOS asset', expect: 'macOS asset', overrides: withDoc(d => { d.jobs['tap-commit'].if = '${{ inputs.live && !inputs.dry_run }}'; }) },
+        { name: 'winget leg not gated on the Windows asset', expect: 'Windows asset', overrides: withDoc(d => { d.jobs['winget-submit'].if = '${{ inputs.live && !inputs.dry_run }}'; }) },
+        { name: 'contents write on the derive job', expect: 'job derive: holds permissions', overrides: withDoc(d => { d.jobs.derive.permissions.contents = 'write'; }) },
+        { name: 'id-token write on the winget leg', expect: 'job winget-submit: holds permissions', overrides: withDoc(d => { d.jobs['winget-submit'].permissions = { 'id-token': 'write' }; }) },
+        { name: 'winget leg back in the release environment', expect: 'release environment holds the signing key', overrides: withDoc(d => { d.jobs['winget-submit'].environment = 'release'; }) },
+        { name: 'flake leg without the bot environment', expect: 'job flake-hash-pr: uses environment null', overrides: withDoc(d => { delete d.jobs['flake-hash-pr'].environment; }) },
+        { name: 'needs derive removed from the tap leg', expect: 'does not wait on the derive job', overrides: withDoc(d => { d.jobs['tap-commit'].needs = ['verify-assets']; }) },
+        { name: 'needs verify-assets removed from the winget leg', expect: 'does not wait on verify-assets', overrides: withDoc(d => { d.jobs['winget-submit'].needs = ['derive']; }) },
+        { name: 'winget leg on a Linux runner', expect: 'wingetcreate is a Windows tool', overrides: withDoc(d => { d.jobs['winget-submit']['runs-on'] = 'ubuntu-latest'; }) },
+        { name: 'checkout that persists the token', expect: 'persist-credentials', overrides: withDoc(d => { delete d.jobs.derive.steps[0].with['persist-credentials']; }) },
+        { name: 'action without a SHA pin', expect: '40-hex SHA pin', overrides: withDoc(d => { d.jobs.derive.steps[0].uses = 'actions/checkout@v4'; }) },
+        { name: 'third-party action the admission does not list', expect: 'does not admit', overrides: withDoc(d => { d.jobs.derive.steps.push({ uses: `foo/bar@${'a'.repeat(40)}` }); }) },
+        { name: 'sed used on a caller value', expect: 'runs sed', overrides: withDoc(d => { d.jobs['tap-commit'].steps.push({ run: 'sed -f "$RUNNER_TEMP/render.sed" a > b' }); }) },
+        { name: 'expression placed inside a run script', expect: 'expression inside a run', overrides: withDoc(d => { d.jobs.derive.steps.push({ run: 'echo ${{ inputs.winget_asset }}' }); }) },
+        { name: 'credential-shaped literal in the winget leg', expect: 'credential-shaped', overrides: withDoc(d => { stepWith(d, 'winget-submit', /submit --prtitle/).env.WINGET_CREATE_GITHUB_TOKEN = `${'gh'}${'p_'}${'A'.repeat(36)}`; }) },
+        { name: 'secret the stage does not use', expect: 'DOCKER_PASSWORD', overrides: withDoc(d => { d.jobs.derive.steps[1].env.X = '${{ secrets.DOCKER_PASSWORD }}'; }) },
+        { name: 'BOT_APP_PRIVATE_KEY read outside the App-token step', expect: 'outside its one place', overrides: withDoc(d => { d.jobs['tap-commit'].steps.push({ run: 'true', env: { K: '${{ secrets.BOT_APP_PRIVATE_KEY }}' } }); }) },
+        { name: 'leg removed: tap', expect: 'job tap-commit: is missing', overrides: dropJob('tap-commit') },
+        { name: 'leg removed: winget', expect: 'job winget-submit: is missing', overrides: dropJob('winget-submit') },
+        // derive and verify-assets
+        { name: 'input validation removed from derive', expect: 'does not validate the inputs', overrides: editRun('derive', /check-inputs/, 'node scripts/verify-channel-release-jobs.mjs --check-inputs\n', '') },
+        { name: 'attestation signer pin dropped', expect: '--signer-workflow', overrides: editRun('verify-assets', /attestation verify/, '--signer-workflow "$SIGNER"', '') },
+        { name: 'attestation source ref dropped', expect: '--source-ref refs/heads/main', overrides: editRun('verify-assets', /attestation verify/, '--source-ref refs/heads/main', '') },
+        { name: 'digest recompute removed from verify-assets', expect: 'recompute the Linux tarball digest', overrides: editRun('verify-assets', /attestation verify/, 'echo "tarball=$(check tarball "$TARBALL" "$TARBALL_SHA")" >> "$GITHUB_OUTPUT"\n', '') },
+        // D. flake-hash-pr
+        { name: 'hash not derived from the published asset (prefetch removed)', expect: 'nix store prefetch-file', overrides: editRun('flake-hash-pr', /prefetch-file/, 'nix store prefetch-file --hash-type sha256 --json "$URL"', "echo '{\"hash\":\"sha256-AAAA\"}'") },
+        { name: 'optional digest guard reintroduced', expect: 'optional guard', overrides: editRun('flake-hash-pr', /prefetch-file/, 'WANT=', 'if [ -n "$TARBALL_SHA" ]; then :; fi; WANT=') },
+        { name: 'verify-flake-repack --release deleted', expect: 'verify-flake-repack.mjs --release', overrides: editRun('flake-hash-pr', /prefetch-file/, '          node scripts/verify-flake-repack.mjs --release\n'.trim(), 'true') },
+        { name: 'direct push to main, the quoted extraheader form', expect: 'pushes to main', overrides: withDoc(d => { d.jobs['flake-hash-pr'].steps.push({ run: PLANT_PUSH }); }) },
+        { name: 'direct push to main, the bare form', expect: 'pushes to main', overrides: withDoc(d => { d.jobs['flake-hash-pr'].steps.push({ run: 'git push origin HEAD:main' }); }) },
+        { name: 'force push in the flake leg', expect: 'force-pushes', overrides: withDoc(d => { d.jobs['flake-hash-pr'].steps.push({ run: 'git push --force origin HEAD:refs/heads/chore/channel-x' }); }) },
+        { name: 'idempotency checks removed from the flake leg', expect: 'not idempotent', overrides: editRun('flake-hash-pr', /gh pr create/, 'gh pr list', 'gh pr view') },
+        { name: 'flake App token widened with workflows write', expect: 'permission-workflows', overrides: withDoc(d => { appStep(d, 'flake-hash-pr').with['permission-workflows'] = 'write'; }) },
+        { name: 'tap App token minted for the release repository', expect: 'repositories "powerbrowser"', overrides: withDoc(d => { appStep(d, 'tap-commit').with.repositories = 'powerbrowser'; }) },
+        // E. tap-commit
+        { name: 'cask release check deleted', expect: 'verify-homebrew-cask.mjs --release --rendered', overrides: dropStep('tap-commit', /verify-homebrew-cask/) },
+        { name: 'cask pushed before the release check', expect: 'runs the release check out of order', overrides: withDoc(d => { const s = d.jobs['tap-commit'].steps; const i = s.findIndex(x => /verify-homebrew-cask/.test(x.run ?? '')); s.push(s.splice(i, 1)[0]); }) },
+        { name: 'cask rendered without --render-live', expect: '--render-live tap', overrides: dropStep('tap-commit', /--render-live tap/) },
+        // F. winget-submit
+        { name: 'wingetcreate left unpinned', expect: 'does not pin wingetcreate', overrides: withDoc(d => { d.jobs['winget-submit'].env.WINGETCREATE_VERSION = 'latest'; }) },
+        { name: 'wingetcreate installed with winget install', expect: 'winget install', overrides: withDoc(d => { d.jobs['winget-submit'].steps.push({ run: 'winget install --id Microsoft.WingetCreate' }); }) },
+        { name: 'token passed with --token', expect: '--token', overrides: editRun('winget-submit', /submit --prtitle/, '--no-open', '--no-open --token "$WINGET_CREATE_GITHUB_TOKEN"') },
+        { name: 'WINGET_TOKEN in the install step env', expect: 'outside its one place', overrides: withDoc(d => { stepWith(d, 'winget-submit', /wingetcreate\.exe"/).env = { WINGET_CREATE_GITHUB_TOKEN: '${{ secrets.WINGET_TOKEN }}' }; }) },
+        { name: 'winget set not rendered from the tracked files', expect: '--render-live winget', overrides: dropStep('winget-submit', /--render-live winget/) },
+        { name: 'rendered winget set not checked', expect: 'verify-winget-manifest.mjs --release --rendered', overrides: editRun('winget-submit', /--render-live winget/, 'node scripts/verify-winget-manifest.mjs --release --rendered "$RUNNER_TEMP/winget"', 'true') },
+        // G. dry-run and H. checker
+        { name: 'submit step planted into the dry run', expect: 'winget submission', overrides: withDoc(d => { d.jobs['dry-run'].steps.push({ run: 'wingetcreate submit ./out' }); }) },
+        { name: 'git push planted into the dry run', expect: 'job dry-run: runs a git push', overrides: withDoc(d => { d.jobs['dry-run'].steps.push({ run: 'git push origin HEAD:refs/heads/x' }); }) },
+        { name: 'checker leg without --check-checker', expect: '--check-checker', overrides: editRun('checker-freshness', /check-checker/, '--check-checker', '--check-key') },
+        { name: 'stale Flatpak checker template', expect: 'checker-freshness', overrides: withFlatpak(t => t.replace(/"url-template": "[^"]*"/, '"url-template": "https://github.com/example.invalid/releases/download/v$version/x-$version.tar.xz"')) },
+        { name: 'control: unmodified stage stays green', expect: null, overrides: {} },
     ];
 
     let failed = 0;
