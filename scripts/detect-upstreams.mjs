@@ -61,6 +61,8 @@ export function parseArgs(argv) {
     if (argv.length === 0) return { mode: 'skip' };
     if (argv.length === 1 && argv[0] === '--self-test') return { mode: 'self-test' };
     if (argv.length === 1 && argv[0] === '--pin') return { mode: 'pin' };
+    if (argv[0] === '--node-select' && argv.length === 2 && argv[1] !== '') return { mode: 'node-select', path: argv[1] };
+    if (argv[0] === '--node-shasum' && argv.length === 3 && argv[1] !== '' && argv[2] !== '') return { mode: 'node-shasum', path: argv[1], filename: argv[2] };
     if (argv[0] === '--listing' && argv.length >= 2 && argv[1] !== '') {
         if (argv.length === 2) return { mode: 'listing', path: argv[1], firefoxEsr: undefined };
         if (argv.length === 4 && argv[2] === '--firefox-esr' && argv[3] !== '') return { mode: 'listing', path: argv[1], firefoxEsr: argv[3] };
@@ -254,6 +256,25 @@ function main(parsed) {
         console.log(derived.pin);
         return 0;
     }
+    if (parsed.mode === 'node-select' || parsed.mode === 'node-shasum') {
+        let text;
+        try {
+            text = readFileSync(parsed.path, 'utf8');
+        } catch (e) {
+            console.error(`${NAME}: FAIL -- the Node file ${parsed.path} could not be read (${e.code ?? e.message}). Next step: check the detect job's download step, then re-run.`);
+            return 1;
+        }
+        if (parsed.mode === 'node-select') {
+            // No Node 24 line is a hold, not a failure: the empty value is the answer.
+            const selected = selectNode24(JSON.parse(text));
+            console.log(`node-version=${selected?.version ?? ''}`);
+            console.log(`node-file=${selected ? `node-${selected.version}-${NODE_PLATFORM}.tar.xz` : ''}`);
+            return 0;
+        }
+        const sha = shasumsEntry(text, parsed.filename);
+        console.log(`node-sha256=${sha ?? ''}`);
+        return sha === null ? 1 : 0;
+    }
     if (parsed.mode === 'listing') {
         let text;
         try {
@@ -311,6 +332,29 @@ function selfTest() {
     }
     console.log(`  ok  baseline -> ${GOOD} is a bump over ${PIN}; FIREFOX_ESR 175.0esr stays advisory`);
 
+    // Node half (AUTO-04): index and SHASUMS fixtures, built at run time, never fetched.
+    const NODE_NEW = 'v24.22.1';
+    const NODE_FILE = `node-${NODE_NEW}-${NODE_PLATFORM}.tar.xz`;
+    const NODE_INDEX = [
+        { version: 'v24.19.0', date: '2026-09-01', files: ['linux-x64', 'osx-arm64-tar'] },
+        { version: NODE_NEW, date: '2026-10-20', files: ['linux-x64', 'osx-arm64-tar'] },
+        { version: 'v23.11.0', date: '2026-08-01', files: ['linux-x64'] },
+        { version: 'v24.23.0', date: '2026-10-30', files: ['osx-arm64-tar'] },
+    ];
+    const SHA_NEW = 'a'.repeat(64);
+    const SHA_OTHER = 'b'.repeat(64);
+    const SHASUMS = [`${SHA_OTHER}  node-v24.19.0-linux-x64.tar.xz`, `${SHA_NEW}  ${NODE_FILE}`, 'not-a-sha-line', ''].join('\n');
+    const nodeBaseline = decide({ pin: PIN, tags: FIXTURE_TAGS, firefoxEsr: '175.0esr', nodePin: { version: 'v24.19.0' }, indexJson: NODE_INDEX, shasumsText: SHASUMS });
+    const nodeOk = selectNode24(NODE_INDEX)?.version === NODE_NEW
+        && shasumsEntry(SHASUMS, NODE_FILE) === SHA_NEW
+        && shasumsEntry(SHASUMS, 'node-v24.99.0-linux-x64.tar.xz') === null
+        && nodeBaseline.node?.decision === 'bump' && nodeBaseline.node.sha256 === SHA_NEW;
+    if (!nodeOk) {
+        console.error(`${NAME}: --self-test FAIL -- the Node fixtures are already red: selection, exact-filename lookup or the Node decision drifted`);
+        return 1;
+    }
+    console.log(`  ok  node baseline -> ${NODE_NEW} selected (linux-x64 only, v24 only); ${NODE_FILE} sha matched exactly; decision bump`);
+
     const plants = [
         {
             name: '_BUILDn offered as the only newer tag',
@@ -329,6 +373,18 @@ function selfTest() {
             overrides: { pin: PIN, tags: [PIN], firefoxEsr: '175.0esr' },
             expect: 'FIREFOX_ESR 175.0esr is advisory only',
             held: r => r.decision.esr.candidate === null && r.decision.esr.decision === 'none',
+        },
+        {
+            name: 'a Node index with no v24 line that ships linux-x64',
+            overrides: { pin: PIN, tags: [PIN], indexJson: [{ version: 'v23.11.0', files: ['linux-x64'] }] },
+            expect: 'no Node 24 entry',
+            held: r => r.decision.node === null,
+        },
+        {
+            name: 'a SHASUMS body missing the selected filename',
+            overrides: { pin: PIN, tags: [PIN], nodePin: { version: 'v24.19.0' }, indexJson: NODE_INDEX, shasumsText: `${SHA_OTHER}  node-v24.19.0-linux-x64.tar.xz` },
+            expect: `carries no entry for ${NODE_FILE}`,
+            held: r => r.decision.node?.sha256 === null,
         },
         {
             name: 'an empty tag listing',
