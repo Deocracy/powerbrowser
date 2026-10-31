@@ -256,3 +256,59 @@ cooldown, no auto-merge key, the exact ecosystem set, the `anthropics/claude-cod
 major, each with a plant, and the `zizmor` row audits the file. **Still open (owner decision):** an `automated-security-fixes`
 control (same shape as `immutable-releases`: `{enabled}` JSON, PUT bodiless, read `repos/{owner}/{repo}/automated-security-fixes`)
 needs a live read to prove its shape and is not added; until then the switch can be turned off unnoticed.
+
+## 51-04 items (TRAIN-11 sweep rows, DIST-05 cadence, UPS-02 row)
+
+## 13. Owner grant: the bot App read for repo-controls and the sweep's first live tick (owner)
+
+**Blocked piece:** the `repo-controls` row. The row, its no-data branch and its red branch are built and self-tested
+(`scripts/release-train.mjs`), and the facts field `repoControls` is wired as null. The sweep does not yet run
+`scripts/verify-repo-controls.mjs` in the probe, because the read needs Administration read on `powerbrowser`, and
+BLOCKED.md item 2 records that grant as declined for the runner count.
+
+**Owner steps:** decide whether the bot App gets Administration read (plus the Dependabot alerts, security events and pull
+request reads that the 51-04 security-reads step already requests). If yes, grant them in the App settings. Then a
+follow-up plan adds a step that runs `node scripts/verify-repo-controls.mjs` with that token and sets
+`repoControls` to `{ok, drift}` from its FAIL lines. Until then the row is no-data every day.
+
+**Also owner-visible, not a blocker:** the security-reads mint requests `dependabot-alerts: read`, `security-events: read`,
+`pull-requests: read` and `contents: read` on this one repository. If the App lacks a grant, its mint fails, the reads
+leave their outputs empty, and dependabot-prs, dependabot-alerts and codeql-alerts render no-data. Nothing turns red
+silently.
+
+## 14. The first live sweep turns renewals-due red on the MAR certificate cell (owner decision)
+
+**Finding:** `docs/RENEWALS.md` line 31 (MAR signing certificate) has the Expiry cell `2046`, a bare year. The
+renewals-due row reads strict `YYYY-MM-DD` only, and a second format is a red line, not a second parser. The row
+therefore renders red on the first live tick: `docs/RENEWALS.md line 31: MAR signing certificate expiry "2046" is not
+YYYY-MM-DD`. The plan's expectation that the seven new rows are green or no-data after the first tick does not hold for
+this cell.
+
+**Options (the executor did not change the file: the plan forbids hand-edited RENEWALS dates):**
+(a) Recommended and in place: keep fail-closed. Confirm the MAR certificate expiry at the Phase B secondary-key ceremony
+and enter the ISO date in the Expiry cell. The sweep then reads it and the row returns to green.
+(b) Accept precision forms (bare year, Month YYYY) as deadlines evaluated at their last possible day. This is a second
+parser and needs an owner ruling on the RENEWALS format.
+The 2046 cell is the only non-ISO cell today. `unknown` and blank cells are treated as documented absences, not red.
+
+## 15. docs/RELEASING.md ESR-calendar pointer targets a planning file (owner)
+
+**Finding:** the DIST-05 sentence "The ESR calendar in External Gates is authoritative for dates." was added exactly as the
+plan states. The heading "External Gates" exists only in the workstream `REQUIREMENTS.md`, which is a planning file and is
+not shipped with the operator manual. An operator reading `docs/RELEASING.md` cannot reach it.
+
+**Owner step:** decide where the ESR calendar lives for operators (a `docs/` section, or a dated table in RELEASING.md),
+then rename the pointer to that section. The executor did not move the calendar.
+
+## 16. Codeberg mirror slug (Phase 53)
+
+**Blocked piece:** the `codeberg-mirror` row reads `vars.CODEBERG_MIRROR` (the `owner/repo` slug on Codeberg). The
+repository variable is unset, so the row renders no-data with the Phase 53 note. Set the variable when the Phase 53 mirror
+exists; the compare is full 40-hex SHAs only, and a lagged pair goes red and comments once.
+
+## 17. Owner rulings recorded by 51-04, not decided by it
+
+- TRAIN-07 says the sweep comments on a red row. It does not assign. The sweep keeps the comment with the owner @-mention and
+  adds no assignment, so the maintenance issue does not depend on the TRAIN-02 release-key assignment rule.
+- Renewal and threshold numbers stay where the owner set them. The thresholds (5 PRs, 7 days, 0 alerts, 150 days) are read
+  from the one paragraph in `docs/RELEASING.md`, and changing a number there changes the sweep.
