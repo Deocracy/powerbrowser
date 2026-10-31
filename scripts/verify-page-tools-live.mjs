@@ -197,8 +197,8 @@ async function scenarioZoom(app, origin) {
  * (PAGE-05's arm), then the tone must report soundPlaying in a push. The
  * round trip is checked first because it does not depend on playback.
  */
-async function scenarioAudio(app, origin) {
-    const { tabId, from } = await openLoaded(app, `${origin}/media`, '/media');
+async function scenarioAudio(app, origin, page = '/media') {
+    const { tabId, from } = await openLoaded(app, `${origin}${page}`, page);
     const muteReply = await channelRequest(app, { kind: 'webTabMute', tabId, muted: true });
     if (muteReply?.audioMuted !== true) {
         return `the mute reply did not read audioMuted back as true (${JSON.stringify(muteReply)})`;
@@ -214,7 +214,7 @@ async function scenarioAudio(app, origin) {
     }
     const playing = await waitForPush(app, stateOf(tabId, p => p.soundPlaying === true), { from: unmuted, timeoutMs: 20000 });
     return playing < 0
-        ? 'mute round trip passed, but no soundPlaying push: no DOMAudioPlaybackStarted reached the overlay element within 20 s, though the tone plays in content (play() resolves)'
+        ? 'mute round trip passed, but no soundPlaying push: no DOMAudioPlaybackStarted reached the overlay element within 20 s (MOZ_LOG=cubeb:5 shows "libpulse not found" when the binary cannot open an audio stream)'
         : null;
 }
 
@@ -342,6 +342,12 @@ const PLANTS = [
         target: 'find',
         run: (app, fx) => scenarioFind(app, fx.origin, 'webTabFindDropped'),
         expect: 'no findMatches push',
+    },
+    {
+        plant: 'audio-page-silent',
+        target: 'audio',
+        run: (app, fx) => scenarioAudio(app, fx.origin, '/find'),
+        expect: 'no soundPlaying push',
     },
 ];
 

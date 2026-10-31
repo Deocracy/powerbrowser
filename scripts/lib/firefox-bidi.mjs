@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { existsSync, createWriteStream } from 'node:fs';
+import { existsSync, createWriteStream, readFileSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
@@ -42,6 +42,22 @@ const REPO_ROOT = join(__dirname, '..', '..');
 // profile's user.js). Chrome-side .sys.mjs changes still load from the main
 // checkout, because objdir/dist/bin symlinks into it.
 export const FIREFOX_BIN = process.env.PB_FIREFOX_BIN || join(REPO_ROOT, 'objdir', 'dist', 'bin', 'powerbrowser');
+
+/**
+ * The libpulse directory the build linked against, read from the objdir's config.status next to the
+ * binary. Gecko dlopens libpulse by bare name and libxul's RUNPATH does not list it, so a binary run
+ * outside a Nix wrapper logs "libpulse not found" in the audio server, and every media element dies
+ * with a media-sink error (32-01): no sound plays, and no audio event ever fires. Undefined when the
+ * binary has no config.status beside it (a release install), in which case the launch is unchanged.
+ */
+function pulseLibDir(binPath) {
+    try {
+        const status = readFileSync(join(dirname(binPath), '..', '..', 'config.status'), 'utf8');
+        return /'MOZ_PULSEAUDIO_LIBS':\s*\[\s*'-L([^']+)'/.exec(status)?.[1];
+    } catch {
+        return undefined;
+    }
+}
 
 async function applyProfileOverrides(profileDir) {
     if (!process.env.PB_BACKEND_MAIN) return;
@@ -337,6 +353,10 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
     // `cmdLine.preventDefault`, and takes the URI branch regardless. So every
     // caller passing a url gets two top-level browsing contexts, and a caller
     // that needs to assert the shell opened ALONE must pass none.
+    const pulse = pulseLibDir(binPath);
+    const env = pulse
+        ? { ...process.env, LD_LIBRARY_PATH: [pulse, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') }
+        : process.env;
     const child = spawn(binPath, [
         '--headless',
         '--profile', profileDir,
@@ -344,7 +364,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         '--remote-allow-hosts', '127.0.0.1',
         '--remote-allow-system-access',
         ...(url ? [url] : []),
-    ], { stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', 'pipe'] });
+    ], { env, stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', 'pipe'] });
     if (stdoutSink) {
         child.stdout.pipe(stdoutSink);
     }
