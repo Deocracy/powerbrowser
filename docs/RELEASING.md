@@ -664,6 +664,22 @@ the bump merge, the `release` approval, the `descriptor` approval. LIVE_RED is s
 a fresh green `channel-live`. A bad release is withdrawn by the mark and fixed by a new
 revision with a new tag; a Release is never deleted and no tag is reused.
 
+**Dispatch after the merge (`dispatch-release`).** On each tick the train reads the newest
+merged PR for the pinned bump branch `chore/esr-<pin>`, takes its merge commit SHA, counts
+the `release.yml` runs already at that SHA, and dispatches `release.yml` with
+`inputs.sha` set to that SHA only when the count is zero. The run is then resolved by
+`head_sha` equality, never by recency, and linked in the job summary.
+
+Token decision: `GITHUB_TOKEN` with `actions: write` granted on the `dispatch-release` job
+alone. The bot App token cannot dispatch (it holds no Actions scope, so the call returns
+403), and a clock App would add a second credential for one call. The job holds no
+environment, no App key and no contents write, so its only write is the dispatch. The
+dispatched input is named `sha`, the input `release.yml` already declares and the
+`release-shape` row pins, not `merge_sha`.
+
+Dry run: the reads run and the would-dispatch line is printed; the POST and the run poll do
+not run.
+
 ---
 
 ## Per-release procedure
