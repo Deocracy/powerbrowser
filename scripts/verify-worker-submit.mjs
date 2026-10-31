@@ -33,6 +33,7 @@
 //   node scripts/verify-worker-submit.mjs
 //   node scripts/verify-worker-submit.mjs --self-test
 
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -69,6 +70,12 @@ const REQUIRED_CONTRACT_NAMES = Object.freeze([
     'RETENTION_DAYS',
     'ANNOTATION_ALLOWLIST',
     'MAX_ANNOTATION_BYTES',
+    'MIN_BOUNDARY_LENGTH',
+    'MAX_BOUNDARY_LENGTH',
+    'MAX_HEADER_BYTES',
+    'MAX_PART_NAME_LENGTH',
+    'RECORDABLE_PART_NAMES',
+    'OTHER_PART_NAME',
 ]);
 
 // --- the multipart builder (the same framing both parsers read) ----------------
@@ -78,7 +85,8 @@ function buildMultipart(parts) {
     for (const part of parts) {
         chunks.push(Buffer.from(
             `--${BOUNDARY}\r\n`
-            + `Content-Disposition: form-data; name="${part.name}"${part.filename ? `; filename="${part.filename}"` : ''}\r\n`
+            + `Content-Disposition: ${part.disposition ?? `form-data; name="${part.name}"${part.filename ? `; filename="${part.filename}"` : ''}`}\r\n`
+            + (part.extraHeader ? `${part.extraHeader}\r\n` : '')
             + `Content-Type: ${part.contentType ?? 'application/octet-stream'}\r\n\r\n`,
             'latin1',
         ));
@@ -146,6 +154,66 @@ function battery() {
                 { name: crashSubmit.EXTRA_PART_NAME, data: '{"ProductName":"PowerBrowser",' },
             ]),
             ct: CONTENT_TYPE,
+        },
+        ...hostileBattery(),
+    ];
+}
+
+/** WR-01 and WR-02: inputs that smuggle a name, a long string, a second minidump, or a delimiter flood. */
+function hostileBattery() {
+    const dump = { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() };
+    return [
+        {
+            // filename= before name=: the real name is zzz, so there is no minidump part.
+            name: 'filename before name',
+            bytes: buildMultipart([{ disposition: `form-data; filename="${crashSubmit.MINIDUMP_PART_NAME}"; name="zzz"`, data: binaryDump() }, WELL_FORMED_PARTS()[1]]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            // A quoted filename that contains "; name=": the name parameter after it is the real one.
+            name: 'name inside a quoted filename',
+            bytes: buildMultipart([{ disposition: `form-data; filename="a; name=zzz"; name="${crashSubmit.MINIDUMP_PART_NAME}"`, data: binaryDump() }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'repeated name parameter',
+            bytes: buildMultipart([{ disposition: `form-data; name="${crashSubmit.MINIDUMP_PART_NAME}"; name="zzz"`, data: binaryDump() }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'x-prefixed disposition header',
+            bytes: buildMultipart([{ disposition: 'form-data; name="zzz"', extraHeader: `X-Content-Disposition: form-data; name="${crashSubmit.MINIDUMP_PART_NAME}"`, data: binaryDump() }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'very long part name',
+            bytes: buildMultipart([dump, { name: 'N'.repeat(100000), data: 'x' }, WELL_FORMED_PARTS()[1]]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'very long header block',
+            bytes: buildMultipart([dump, { name: 'ProductName', extraHeader: `X-Pad: ${'a'.repeat(5000)}`, data: 'PowerBrowser' }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'two minidump parts',
+            bytes: buildMultipart([dump, { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() }]),
+            ct: CONTENT_TYPE,
+        },
+        {
+            name: 'one-character boundary',
+            bytes: Buffer.from('\r\n--a'.repeat(100000), 'latin1'),
+            ct: 'multipart/form-data; boundary=a',
+        },
+        {
+            name: 'delimiter flood',
+            bytes: Buffer.from('\r\n--abc'.repeat(100000), 'latin1'),
+            ct: 'multipart/form-data; boundary=abc',
+        },
+        {
+            name: 'boundary over the RFC limit',
+            bytes: buildMultipart([dump]),
+            ct: `multipart/form-data; boundary=${'b'.repeat(crashSubmit.MAX_BOUNDARY_LENGTH + 1)}`,
         },
     ];
 }
@@ -262,6 +330,29 @@ function rejectionCases() {
             status: 413, body: `Discarded=${crashSubmit.REASON_OVERSIZED}`,
         },
         {
+            rule: 'filename before name',
+            request: () => submitRequest(buildMultipart([{ disposition: `form-data; filename="${crashSubmit.MINIDUMP_PART_NAME}"; name="zzz"`, data: binaryDump() }])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'two minidump parts',
+            request: () => submitRequest(buildMultipart([
+                { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+                { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+            ])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'one-character boundary',
+            request: () => submitRequest(Buffer.from('\r\n--a'.repeat(100000), 'latin1'), { ct: 'multipart/form-data; boundary=a' }),
+            status: 400, body: `Discarded=${crashSubmit.REASON_WRONG_CONTENT_TYPE}`,
+        },
+        {
+            rule: 'delimiter flood',
+            request: () => submitRequest(Buffer.from('\r\n--abc'.repeat(100000), 'latin1'), { ct: 'multipart/form-data; boundary=abc' }),
+            status: 413, body: `Discarded=${crashSubmit.REASON_OVERSIZED}`,
+        },
+        {
             rule: 'wrong method',
             request: () => submitRequest(null, { method: 'GET' }),
             status: 405, body: '', allow: 'POST',
@@ -307,11 +398,77 @@ async function acceptProblems() {
     if (JSON.stringify(Object.keys(record.annotations).sort()) !== JSON.stringify(want)) {
         problems.push(`the record kept annotations ${JSON.stringify(Object.keys(record.annotations).sort())}, want exactly the allowlisted scalars ${JSON.stringify(want)}`);
     }
+    problems.push(...recordShapeProblems(record));
     if (record.id !== id || record.minidumpBytes !== binaryDump().length) {
         problems.push('the record id or minidump byte count does not match the accepted submit');
     }
     if (store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.dmp`).byteLength !== binaryDump().length) {
         problems.push('the stored minidump is not the bytes the part carried');
+    }
+    return problems;
+}
+
+/** The stored record carries only server-made fields, allowlisted annotation keys, and known part names. */
+function recordShapeProblems(record) {
+    const problems = [];
+    const keys = Object.keys(record).sort().join(',');
+    if (keys !== 'annotations,id,minidumpBytes,partNames,receivedAt') problems.push(`the record has keys ${keys}, want only annotations,id,minidumpBytes,partNames,receivedAt`);
+    for (const key of Object.keys(record.annotations ?? {})) {
+        if (!crashSubmit.ANNOTATION_ALLOWLIST.includes(key)) problems.push(`the record annotation ${JSON.stringify(key)} is not on the allowlist`);
+    }
+    for (const name of record.partNames ?? []) {
+        if (!crashSubmit.RECORDABLE_PART_NAMES.includes(name) && name !== crashSubmit.OTHER_PART_NAME) problems.push(`the record stores the client part name ${JSON.stringify(String(name).slice(0, 40))}`);
+    }
+    return problems;
+}
+
+/** Hostile names reach the parser but never the bucket: a 100 KB part name is dropped, not stored. */
+async function hostileNameProblems() {
+    const problems = [];
+    const store = memoryStore();
+    const verdict = await drive(submitRequest(buildMultipart([
+        { name: crashSubmit.MINIDUMP_PART_NAME, data: binaryDump() },
+        { name: 'N'.repeat(100), data: 'x' },
+        { name: 'Q'.repeat(100000), data: 'x' },
+    ])), store);
+    const id = /^CrashID=(.+)$/.exec(verdict.body)?.[1];
+    if (verdict.status !== 200 || !id) return [`a hostile part name changed the verdict: ${verdict.status} ${JSON.stringify(verdict.body)}, want 200 CrashID=`];
+    const text = store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.json`);
+    if (text.length > 2048) problems.push(`the record is ${text.length} bytes after hostile part names, want it bounded`);
+    problems.push(...recordShapeProblems(JSON.parse(text)));
+    return problems;
+}
+
+/**
+ * WR-02: peak memory of the Worker's own fetch handler on an 18 MiB body of 3-character delimiters, in a child
+ * process so the peak is a clean high-water mark. The control is the same body refused at the content-type check
+ * (it still reads the whole body), so the difference is what the parse itself allocates.
+ */
+const FLOOD_PROBE = `
+import { pathToFileURL } from 'node:url';
+const worker = (await import(pathToFileURL(process.argv[1]).href)).default;
+const boundary = process.argv[2];
+const delim = Buffer.from('\\r\\n--abc');
+const body = Buffer.alloc(18 * 1024 * 1024);
+for (let i = 0; i + delim.length <= body.length; i += delim.length) delim.copy(body, i);
+const store = { async put() {}, async delete() {} };
+const res = await worker.fetch(new Request('https://crash.example.org/submit', { method: 'POST', headers: { 'content-type': 'multipart/form-data; boundary=' + boundary }, body }), { CRASH_STORE: store });
+console.log(JSON.stringify({ status: res.status, maxRssMiB: Math.round(process.resourceUsage().maxRSS / 1024) }));
+`;
+export const FLOOD_BUDGET_MIB = 32;
+function floodRun(workerPath, boundary) {
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', FLOOD_PROBE, workerPath, boundary], { encoding: 'utf8' });
+    if (run.status !== 0) return { error: `the probe exited ${run.status}: ${(run.stderr || '').trim().split('\n').pop()}` };
+    return JSON.parse(run.stdout.trim().split('\n').pop());
+}
+function floodProblems(workerPath) {
+    const flood = floodRun(workerPath, 'abc');
+    const control = floodRun(workerPath, 'a');
+    if (flood.error || control.error) return [`delimiter flood memory probe failed: ${flood.error ?? control.error}`];
+    const problems = [];
+    if (flood.status !== 413) problems.push(`an 18 MiB body of 3-character delimiters answered ${flood.status}, want 413`);
+    if (flood.maxRssMiB - control.maxRssMiB > FLOOD_BUDGET_MIB) {
+        problems.push(`an 18 MiB delimiter flood grew peak memory by ${flood.maxRssMiB - control.maxRssMiB} MiB over the same body refused up front (${flood.maxRssMiB} vs ${control.maxRssMiB} MiB), want at most ${FLOOD_BUDGET_MIB} MiB: the part-count cap must apply while scanning`);
     }
     return problems;
 }
@@ -391,6 +548,8 @@ async function runChecks(root) {
         ...parserDisagreements(),
         ...(await handlerProblems()),
         ...(await acceptProblems()),
+        ...(await hostileNameProblems()),
+        ...floodProblems(resolve(root, SOURCE_REL)),
         ...(await storeFaultProblems()),
         ...(await concurrencyProblems()),
         ...descriptorProblems(root),

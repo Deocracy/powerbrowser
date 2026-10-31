@@ -49,7 +49,7 @@ Two paths, two destinations, never mixed:
 
 Each accepted submit writes exactly two objects. The minidump bytes go to
 `<uuid>.dmp`, and the index record goes to `<uuid>.json` (id, received time,
-annotation values, minidump size, part names). The collector writes them to
+annotation values, minidump size, and part names). The collector writes them to
 its store directory. The receiver writes them under the `crash/` prefix of
 its R2 bucket, and it writes the record last, so a record exists only when
 its minidump does.
@@ -69,6 +69,10 @@ Gecko sends its annotations as one JSON part named `extra`. Only the
 allowlisted scalar values from that part are kept, each stored as text. A
 malformed `extra` part costs its annotations and keeps the report: the
 minidump is stored and no annotation from the part is.
+
+The record's part names are limited to the names Gecko sends and the
+allowlisted annotation names; any other part name is stored as `(other)`, so
+no client-chosen text is stored outside the allowlisted annotation values.
 
 No client-supplied identifier is stored. The record id and the object names
 are server-assigned random UUIDs, and the record carries the server's receipt
@@ -109,13 +113,18 @@ rule does not cover.
 | Input | Status | Body |
 |---|---|---|
 | Well-formed submit | 200 | `CrashID=<uuid>` |
-| Not multipart, or no boundary | 400 | `Discarded=malformed_wrong_content_type` |
-| No part named `upload_file_minidump` | 400 | `Discarded=malformed_no_minidump` |
+| Not multipart, no boundary, or a boundary under 3 or over 70 characters | 400 | `Discarded=malformed_wrong_content_type` |
+| No part named `upload_file_minidump`, or more than one | 400 | `Discarded=malformed_no_minidump` |
 | Over part-count, part-size, or total-body cap | 413 | `Discarded=oversized_body` |
 | Past the collector's throttle cap | 200 | `Discarded=throttled_per_minute_cap` |
 | Store unwritable or unreachable | 500 | `Discarded=store_unavailable` |
 
-Caps: 16 parts per submit, 8 MiB per part, 20 MiB per whole body.
+Caps: 16 parts per submit, 8 MiB per part, 20 MiB per whole body. The count of
+part delimiters is capped while the body is scanned, so a body of many tiny
+sections is refused (413) before they are split. A part whose header block
+exceeds 1024 bytes, or whose name exceeds 128 characters, is not read. The part
+name is the `name` parameter of the part's `Content-Disposition` header and
+nothing else: `filename` is never read as a name.
 
 A request to any path other than `/submit` answers 404. A wrong method on
 `/submit` answers 405 with `Allow: POST` (the receiver) or 404 (the collector).

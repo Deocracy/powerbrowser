@@ -49,6 +49,7 @@ import {
     MAX_PART_BYTES,
     MAX_PART_MIB,
     MINIDUMP_PART_NAME,
+    OTHER_PART_NAME,
     REASON_NO_MINIDUMP,
     REASON_OVERSIZED,
     REASON_STORE_UNAVAILABLE,
@@ -168,7 +169,7 @@ function buildMultipart(parts) {
     for (const part of parts) {
         chunks.push(Buffer.from(
             `--${SELFTEST_BOUNDARY}\r\n`
-            + `Content-Disposition: form-data; name="${part.name}"${part.filename ? `; filename="${part.filename}"` : ''}\r\n`
+            + `Content-Disposition: ${part.disposition ?? `form-data; name="${part.name}"${part.filename ? `; filename="${part.filename}"` : ''}`}\r\n`
             + `Content-Type: ${part.contentType ?? 'application/octet-stream'}\r\n\r\n`,
             'latin1',
         ));
@@ -340,6 +341,84 @@ function selfTest() {
                 REASON_OVERSIZED,
                 storeOf('count'),
             );
+        }
+
+        // Plants 4b-4e (WR-01, WR-02): a name smuggled through filename=, two minidump parts, and the
+        // one-character and many-delimiter bodies. The parser must answer the named verdict for each, and
+        // the record must never carry a client-chosen part name.
+        expectVerdict(
+            'filename before name',
+            handleSubmit({
+                body: buildMultipart([{ disposition: `form-data; filename="${MINIDUMP_PART_NAME}"; name="zzz"`, data: Buffer.from('D') }]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir: storeOf('fname'),
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            }),
+            400,
+            REASON_NO_MINIDUMP,
+            storeOf('fname'),
+        );
+        expectVerdict(
+            'two minidump parts',
+            handleSubmit({
+                body: buildMultipart([
+                    { name: MINIDUMP_PART_NAME, data: Buffer.from('D') },
+                    { name: MINIDUMP_PART_NAME, data: Buffer.from('E') },
+                ]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir: storeOf('twodump'),
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            }),
+            400,
+            REASON_NO_MINIDUMP,
+            storeOf('twodump'),
+        );
+        expectVerdict(
+            'one-character boundary',
+            handleSubmit({
+                body: Buffer.from('\r\n--a'.repeat(100000), 'latin1'),
+                contentType: 'multipart/form-data; boundary=a',
+                storeDir: storeOf('onechar'),
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            }),
+            400,
+            REASON_WRONG_CONTENT_TYPE,
+            storeOf('onechar'),
+        );
+        expectVerdict(
+            'delimiter flood',
+            handleSubmit({
+                body: Buffer.from('\r\n--abc'.repeat(100000), 'latin1'),
+                contentType: 'multipart/form-data; boundary=abc',
+                storeDir: storeOf('flood'),
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            }),
+            413,
+            REASON_OVERSIZED,
+            storeOf('flood'),
+        );
+        {
+            const storeDir = storeOf('longname');
+            const verdict = handleSubmit({
+                body: buildMultipart([
+                    { name: MINIDUMP_PART_NAME, data: Buffer.from('D') },
+                    { name: 'N'.repeat(100000), data: Buffer.from('x') },
+                ]),
+                contentType: SELFTEST_CONTENT_TYPE,
+                storeDir,
+                throttle: createThrottleState(),
+                nowMs: NOW,
+            });
+            const record = verdict.crashId ? JSON.parse(readFileSync(join(storeDir, `${verdict.crashId}.json`), 'utf8')) : null;
+            if (!record || record.partNames.some(n => n !== MINIDUMP_PART_NAME && n !== OTHER_PART_NAME)) {
+                console.error(`${NAME}: --self-test FAIL -- a 100 KB part name reached the stored record: ${JSON.stringify(record && record.partNames).slice(0, 120)}`);
+                process.exit(1);
+            }
+            console.log(`${NAME}: --self-test -- a hostile part name was recorded as ${OTHER_PART_NAME}, not stored`);
         }
 
         // Plant 5: a tripped throttle rule -- the soft-reject body on the

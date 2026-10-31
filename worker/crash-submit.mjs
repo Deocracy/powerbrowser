@@ -55,8 +55,29 @@ export const ANNOTATION_ALLOWLIST = Object.freeze([
     'StartupTime',
 ]);
 export const MAX_ANNOTATION_BYTES = 4096;
+/** Parser bounds (WR-01, WR-02): a delimiter shorter than this or longer than the RFC 2046 limit is not multipart. */
+export const MIN_BOUNDARY_LENGTH = 3;
+export const MAX_BOUNDARY_LENGTH = 70;
+/** A part whose header block is longer than this, or whose name is longer than MAX_PART_NAME_LENGTH, is not read. */
+export const MAX_HEADER_BYTES = 1024;
+export const MAX_PART_NAME_LENGTH = 128;
+/**
+ * The only part names the stored record ever carries. Any other client string is stored as OTHER_PART_NAME,
+ * so the bucket never holds client-chosen text outside the allowlisted annotation values.
+ * memory_report is the part Gecko sends beside the minidump (upstream/toolkit/crashreporter/client/app/src/net/report.rs);
+ * the receiver reads and drops it.
+ */
+export const MEMORY_REPORT_PART_NAME = 'memory_report';
+export const OTHER_PART_NAME = '(other)';
 /** R2 key prefix for every object this Worker writes. The lifecycle rule expires this prefix. */
 export const CRASH_PREFIX = 'crash/';
+
+export const RECORDABLE_PART_NAMES = Object.freeze([
+    MINIDUMP_PART_NAME,
+    EXTRA_PART_NAME,
+    MEMORY_REPORT_PART_NAME,
+    ...ANNOTATION_ALLOWLIST,
+]);
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8');
@@ -82,10 +103,21 @@ function indexOfBytes(hay, needle, from) {
     return -1;
 }
 
-function splitBytes(body, delimiter) {
+/**
+ * Split on the CRLF-anchored delimiter without copying the body. The first delimiter has no CRLF before it, so a
+ * body that opens with the delimiter minus its CRLF is split at offset 0. Returns null as soon as more than
+ * maxDelimiters delimiters are seen, so a body of many tiny sections allocates at most maxDelimiters + 1 views.
+ */
+function splitBytes(body, delimiter, maxDelimiters) {
     const out = [];
+    const open = delimiter.subarray(2);
     let start = 0;
+    if (indexOfBytes(body.subarray(0, open.length), open, 0) === 0) {
+        out.push(body.subarray(0, 0));
+        start = open.length;
+    }
     for (;;) {
+        if (out.length > maxDelimiters) return null;
         const at = indexOfBytes(body, delimiter, start);
         if (at === -1) break;
         out.push(body.subarray(start, at));
@@ -93,6 +125,31 @@ function splitBytes(body, delimiter) {
     }
     out.push(body.subarray(start));
     return out;
+}
+
+/**
+ * The name parameter of a part's Content-Disposition header. Parameters are read one at a time, a quoted value
+ * is consumed whole (so filename="x; name=y" hides nothing), and name must be its own parameter: filename= is
+ * never read as name=. Returns null for a malformed parameter list, a repeated name, or no name at all.
+ */
+export function dispositionName(headerText) {
+    const line = /^content-disposition:[ \t]*form-data[ \t]*;(.*)$/im.exec(headerText);
+    if (!line) return null;
+    const params = line[1].trim();
+    const PARAM = /\s*([A-Za-z0-9*_-]+)\s*=\s*(?:"([^"]*)"|([^\s;"]*))\s*(?:;|$)/y;
+    let name = null;
+    let at = 0;
+    while (at < params.length) {
+        PARAM.lastIndex = at;
+        const m = PARAM.exec(params);
+        if (!m) return null;
+        if (m[1].toLowerCase() === 'name') {
+            if (name !== null) return null;
+            name = m[2] ?? m[3];
+        }
+        at = PARAM.lastIndex;
+    }
+    return name;
 }
 
 /** Latin-1 text of header bytes (the header block is ASCII in practice; this keeps every byte). */
@@ -114,13 +171,12 @@ export function parseMultipart(bytes, contentType) {
     const match = /^multipart\/form-data;\s*boundary=(?:"([^"]+)"|([^\s;]+))/i.exec(contentType ?? '');
     if (!match) return { ok: false, reason: REASON_WRONG_CONTENT_TYPE };
     const boundary = match[1] ?? match[2];
+    if (boundary.length < MIN_BOUNDARY_LENGTH || boundary.length > MAX_BOUNDARY_LENGTH) return { ok: false, reason: REASON_WRONG_CONTENT_TYPE };
     if (bytes.byteLength > MAX_BODY_BYTES) return { ok: false, reason: REASON_OVERSIZED };
-    // Prepend the CRLF the first delimiter lacks, so one CRLF-anchored split covers every part.
-    const framed = new Uint8Array(bytes.byteLength + 2);
-    framed.set([13, 10], 0);
-    framed.set(bytes, 2);
-    const chunks = splitBytes(framed, encoder.encode(`\r\n--${boundary}`));
-    if (chunks.length - 1 > MAX_PARTS + 1) return { ok: false, reason: REASON_OVERSIZED };
+    // The delimiter count is capped while scanning (MAX_PARTS parts plus the closing delimiter), before any
+    // per-section work, so the body size is not the bound on what the split allocates.
+    const chunks = splitBytes(bytes, encoder.encode(`\r\n--${boundary}`), MAX_PARTS + 1);
+    if (chunks === null) return { ok: false, reason: REASON_OVERSIZED };
     const parts = [];
     for (let i = 1; i < chunks.length; i += 1) {
         let chunk = chunks[i];
@@ -130,21 +186,18 @@ export function parseMultipart(bytes, contentType) {
         if (chunk.length >= 2 && chunk[chunk.length - 2] === 13 && chunk[chunk.length - 1] === 10) {
             chunk = chunk.subarray(0, chunk.length - 2);
         }
-        const headerEnd = indexOfBytes(chunk, CRLF_CRLF, 0);
+        const headerEnd = indexOfBytes(chunk.subarray(0, MAX_HEADER_BYTES + 4), CRLF_CRLF, 0);
         if (headerEnd === -1) continue;
-        const headerText = latin1(chunk.subarray(0, headerEnd));
-        const data = chunk.subarray(headerEnd + 4);
-        const disposition = /content-disposition:\s*form-data;\s*(.*)/i.exec(headerText);
-        if (!disposition) continue;
-        const nameMatch = /name="([^"]*)"/i.exec(disposition[1]);
-        if (!nameMatch) continue;
-        parts.push({ name: nameMatch[1], data });
+        const name = dispositionName(latin1(chunk.subarray(0, headerEnd)));
+        if (name === null || name.length > MAX_PART_NAME_LENGTH) continue;
+        parts.push({ name, data: chunk.subarray(headerEnd + 4) });
     }
     if (parts.length > MAX_PARTS) return { ok: false, reason: REASON_OVERSIZED };
     for (const part of parts) {
         if (part.data.byteLength > MAX_PART_BYTES) return { ok: false, reason: REASON_OVERSIZED };
     }
-    if (!parts.some(part => part.name === MINIDUMP_PART_NAME)) return { ok: false, reason: REASON_NO_MINIDUMP };
+    // Exactly one minidump part: a second one is ambiguous about which bytes are the crash.
+    if (parts.filter(part => part.name === MINIDUMP_PART_NAME).length !== 1) return { ok: false, reason: REASON_NO_MINIDUMP };
     return { ok: true, parts };
 }
 
@@ -194,7 +247,7 @@ export async function handleCrashSubmit(shape, env, nowMs) {
         receivedAt: new Date(nowMs).toISOString(),
         annotations: takeAnnotations(parsed.parts),
         minidumpBytes: minidump.data.byteLength,
-        partNames: parsed.parts.map(part => part.name),
+        partNames: parsed.parts.map(part => (RECORDABLE_PART_NAMES.includes(part.name) ? part.name : OTHER_PART_NAME)),
     }, null, 2)}\n`;
     const dumpKey = `${CRASH_PREFIX}${crashId}.dmp`;
     const recordKey = `${CRASH_PREFIX}${crashId}.json`;
@@ -216,31 +269,34 @@ export async function handleCrashSubmit(shape, env, nowMs) {
     return { status: 200, body: `CrashID=${crashId}` };
 }
 
-/** Read the request body as bytes, refusing more than cap. A declared Content-Length over the cap is refused before the body is touched. */
+/**
+ * Read the request body as bytes, refusing more than cap. A declared Content-Length over the cap is refused
+ * before the body is touched. A declared length that fits is preallocated once and filled in place, so the
+ * body is held once, not as a chunk list plus a copy; a body with no (or a wrong) length is grown to the cap.
+ */
 export async function readCappedBytes(request, cap) {
     const declared = Number(request.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > cap) return undefined;
     if (request.body === null) return new Uint8Array(0);
     const reader = request.body.getReader();
-    const chunks = [];
+    let buffer = new Uint8Array(Number.isFinite(declared) && declared > 0 ? declared : 65536);
     let total = 0;
     for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        total += value.byteLength;
-        if (total > cap) {
+        if (total + value.byteLength > cap) {
             await reader.cancel();
             return undefined;
         }
-        chunks.push(value);
+        if (total + value.byteLength > buffer.byteLength) {
+            const grown = new Uint8Array(Math.min(cap, Math.max(buffer.byteLength * 2, total + value.byteLength)));
+            grown.set(buffer.subarray(0, total));
+            buffer = grown;
+        }
+        buffer.set(value, total);
+        total += value.byteLength;
     }
-    const out = new Uint8Array(total);
-    let at = 0;
-    for (const chunk of chunks) {
-        out.set(chunk, at);
-        at += chunk.byteLength;
-    }
-    return out;
+    return buffer.subarray(0, total);
 }
 
 function toResponse(verdict) {
