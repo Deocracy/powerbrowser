@@ -27,6 +27,8 @@ export const CHROME_BAR_EDIT_UNDO_COMMAND_ID = 'powerbrowser.chrome-bar.edit-und
 export const CHROME_BAR_EDIT_CUT_COMMAND_ID = 'powerbrowser.chrome-bar.edit-cut';
 export const CHROME_BAR_EDIT_COPY_COMMAND_ID = 'powerbrowser.chrome-bar.edit-copy';
 export const CHROME_BAR_EDIT_PASTE_COMMAND_ID = 'powerbrowser.chrome-bar.edit-paste';
+export const CHROME_BAR_VIEW_SOURCE_COMMAND_ID = 'powerbrowser.chrome-bar.view-source';
+export const CHROME_BAR_READER_TOGGLE_COMMAND_ID = 'powerbrowser.chrome-bar.reader-toggle';
 
 /**
  * D-11 (30-03): the palette category of the four visible commands ("Browser:
@@ -70,6 +72,11 @@ export const CHROME_BAR_EDIT_UNDO: Command = { id: CHROME_BAR_EDIT_UNDO_COMMAND_
 export const CHROME_BAR_EDIT_CUT: Command = { id: CHROME_BAR_EDIT_CUT_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Cut' };
 export const CHROME_BAR_EDIT_COPY: Command = { id: CHROME_BAR_EDIT_COPY_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Copy' };
 export const CHROME_BAR_EDIT_PASTE: Command = { id: CHROME_BAR_EDIT_PASTE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Paste' };
+
+// PAGE-10 (32-08): labelless and categorised by neither, like Focus Address; Phase 33 owns the palette and menu rows.
+// Each one acts on the active web tab.
+export const CHROME_BAR_VIEW_SOURCE: Command = { id: CHROME_BAR_VIEW_SOURCE_COMMAND_ID };
+export const CHROME_BAR_READER_TOGGLE: Command = { id: CHROME_BAR_READER_TOGGLE_COMMAND_ID };
 
 /** Labelless by design: reachable through Ctrl/Cmd+L, never the palette. */
 export const CHROME_BAR_FOCUS_ADDRESS: Command = {
@@ -269,6 +276,21 @@ export class ChromeBarCommandContribution implements CommandContribution {
         });
         commands.registerCommand(CHROME_BAR_FOCUS_ADDRESS, {
             execute: () => focusAddressPill(),
+        });
+        // PAGE-10 (32-08): each execute is the widget method on the active tab, never a kind sent from here.
+        commands.registerCommand(CHROME_BAR_VIEW_SOURCE, {
+            execute: () => currentWebTab()?.viewSource(),
+            isEnabled: () => !!currentWebTab()?.hasPage,
+        });
+        commands.registerCommand(CHROME_BAR_READER_TOGGLE, {
+            execute: () => {
+                const tab = currentWebTab();
+                return tab?.setReader(!tab.isReaderMode);
+            },
+            isEnabled: () => {
+                const tab = currentWebTab();
+                return !!tab && (tab.isReaderMode || tab.canToggleReader);
+            },
         });
     }
 }

@@ -62,6 +62,16 @@
  *   remoteness-repro (32-07 Task 1, D-25a/D-25f): the shared-process blank reload, record-only. Eight
  *           sessions (reload and activation, four each), five same-origin tabs per session. Writes the
  *           verdict key only when named on the command line; the default run and --self-test never do.
+ *   favicon  PAGE-04 (32-08): the page's data: icon reaches a state push, and a strip row draws it as an <img> with that URL.
+ *   reader   PAGE-10 (32-08), non-article half: the reader toggle is in the bar, disabled, with the contracted tooltip.
+ *            The readability signal is not built, so no page enables it (a 32-07 open item).
+ *   source   PAGE-10 (32-08): Ctrl+U loads the page's source in the same overlay (chrome-side positive control); Theia
+ *            holds no view-source URL and no push carries one.
+ *   crash    PAGE-11 (32-08): about:crashcontent in the scratch tab; the contracted crash copy and Reload tab button show,
+ *            the overlay hides, Reload tab brings the page back with its history.
+ *   remoteness-regression  (32-08, D-25a): five same-site tabs, the fifth reloaded and then activated; each must end on its
+ *            page with docShellIsActive. Self-sessioned; writes no verdict.
+ *   Not scenarios: F12 DevTools (its route is not built) and the readability signal (not built). Neither has a row.
  *
  * Preflight: the binary must carry the current patch 050. The sha256 of
  * patches/050-extension-tab-host.patch must equal the stamp in
@@ -76,14 +86,30 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { REPO_ROOT, probe } from './lib/pb-relaunch.mjs';
+import { REPO_ROOT, probe, sourceConst } from './lib/pb-relaunch.mjs';
 import {
-    BROKEN, focusOverlay, focusTheiaFrame, inChrome, loadedAt, makeCurrent, openWebTab, pageKeyDisabled, pressKey, pushes, serveNavPages,
-    waitForPush, withProbeShell,
+    BROKEN, focusOverlay, focusTheiaFrame, inChrome, loadedAt, makeCurrent, openWebTab, overlayVisibility, pageKeyDisabled, pressKey, pushes,
+    serveNavPages, waitForPush, withProbeShell,
 } from './lib/pb-live-probe.mjs';
 
 const NAME = 'page-tools-live';
 const VERDICTS = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'pb-probe-verdicts.json');
+const WEB_TAB_REL = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
+const CHROME_BAR_COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
+
+/** The crash copy and its button label, read from the source that declares them (D-25c). */
+const CRASHED_COPY = sourceConst(WEB_TAB_REL, 'CRASHED_COPY');
+const CRASHED_RELOAD_LABEL = sourceConst(WEB_TAB_REL, 'CRASHED_RELOAD_LABEL');
+
+/** A `key: "<value>"` string of CHROME_BAR_COPY, read from the copy module (the reader tooltip is pinned there). */
+function copyOf(rel, key) {
+    const match = new RegExp(`${key}: (['"])((?:(?!\\1).)*)\\1`).exec(readFileSync(join(REPO_ROOT, rel), 'utf8'));
+    if (!match) {
+        throw new Error(`${BROKEN} ${key} is no longer a string in ${rel}`);
+    }
+    return match[2];
+}
+const READER_UNAVAILABLE = copyOf(CHROME_BAR_COPY_REL, 'readerUnavailable');
 
 /** A ~2 s 440 Hz tone, 8 kHz 16-bit mono, as a WAV (the audio fixture's source). */
 function toneWav() {
@@ -129,7 +155,10 @@ setInterval(() => {
 }, 50);
 </script></body></html>`;
 
-/** The fixture origin: /find, /media, /tone.wav, /edit and an attachment at /download. Every GET is recorded. */
+/** A 1x1 PNG, carried as the /icon page's data: icon link. */
+const ICON_DATA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+/** The fixture origin: /find, /media, /tone.wav, /edit, /icon and an attachment at /download. Every GET is recorded. */
 async function serveFixtures(downloadBody) {
     const requests = [];
     const wav = toneWav();
@@ -157,6 +186,10 @@ async function serveFixtures(downloadBody) {
             // edit-today: the page reports its selection, length and the copy/cut/paste events through its title.
             response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             response.end(EDIT_PAGE);
+        } else if (path === '/icon') {
+            // favicon: the page's own icon as a data: URL, so no icon is fetched over the network.
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(`<!doctype html><html><head><title>Icon fixture</title><link rel="icon" href="${ICON_DATA}"></head><body><p>icon page</p></body></html>`);
         } else if (path === '/download') {
             response.writeHead(200, {
                 'content-type': 'application/octet-stream',
@@ -382,6 +415,91 @@ async function scenarioKeysTheia(app, origin, plant = false) {
     return onTheia === true
         ? null
         : 'the zoomIn row is enabled while the Theia frame has focus, so a key there would take the page meaning';
+}
+
+/**
+ * favicon (PAGE-04, 32-08): the page's data: icon reaches a state push, and a strip row renders it as an <img> with
+ * that exact URL. Showing it fetches nothing: the icon is the page's own data: URL. `plant` rewrites the rendered
+ * img to an http URL, which the row must never show, so the check goes red.
+ */
+async function scenarioFavicon(app, origin, plant = false) {
+    const { tabId, from } = await openLoaded(app, `${origin}/icon`, '/icon');
+    const at = await waitForPush(app, stateOf(tabId, p => typeof p.favicon === 'string' && p.favicon.startsWith('data:image/')), { from, timeoutMs: 20000 });
+    if (at < 0) {
+        return 'no favicon push: the page icon never reached a state push as a data:image/ URL';
+    }
+    const favicon = (await pushes(app))[at].favicon;
+    const rowSources = () => probe(app, "return [...document.querySelectorAll('img.pb-tab-favicon')].map(img => img.getAttribute('src'));");
+    const drawn = await settleValue(rowSources, v => Array.isArray(v) && v.includes(favicon));
+    if (!drawn.includes(favicon)) {
+        return 'no strip row renders the pushed favicon as an img (the tab shows the globe instead)';
+    }
+    if (plant) {
+        await probe(app, "document.querySelectorAll('img.pb-tab-favicon').forEach(img => img.setAttribute('src', 'http://127.0.0.1/planted.png')); return true;");
+    }
+    const after = await settleValue(rowSources, v => Array.isArray(v) && v.includes(favicon));
+    return Array.isArray(after) && after.includes(favicon) ? null : 'no strip row carries the pushed favicon as its img src (a non-data URL is shown in its place)';
+}
+
+/**
+ * reader (PAGE-10, 32-08, the non-article half): the reader toggle is in the bar, disabled, with the contracted
+ * non-article tooltip. The readability signal is not built, so no page is an article and the toggle stays disabled.
+ * `plant` enables the toggle on the non-article page, which must go red.
+ */
+async function scenarioReader(app, origin, plant = false) {
+    const { tabId } = await openLoaded(app, `${origin}/find`, '/find');
+    await makeCurrent(app, tabId);
+    const read = () => probe(app, "const b = document.querySelector('.pb-chrome-bar-reader'); return b ? { disabled: b.disabled === true, title: b.getAttribute('title') } : null;");
+    const shown = await settleValue(read, v => v !== null);
+    if (shown === null) {
+        return 'no reader toggle in the chrome bar (the control is removed, not disabled)';
+    }
+    if (plant) {
+        await probe(app, "document.querySelector('.pb-chrome-bar-reader').removeAttribute('disabled'); return true;");
+    }
+    const state = await settleValue(read, v => v !== null && v.disabled === true);
+    if (state === null || state.disabled !== true) {
+        return `the reader toggle is enabled on a non-article page (disabled=${state && state.disabled})`;
+    }
+    return state.title === READER_UNAVAILABLE ? null : `the reader toggle's tooltip is not the contracted non-article copy (${JSON.stringify(state.title)})`;
+}
+
+/**
+ * source (PAGE-10, 32-08): Ctrl+U in a focused page loads its source in the same overlay, minted chrome-side. The
+ * positive control is chrome's own read of the overlay's URL (`view-source:`), so the Theia-side reads mean something.
+ * Theia must hold no view-source URL: no push since the key carries one, and the widget's url is the page's own.
+ * `plant` makes the widget hold the view-source URL, which must go red.
+ */
+async function scenarioSource(app, origin, plant = false) {
+    const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
+    if (await focusOverlay(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused`);
+    }
+    const browsersBefore = await inChrome(app, "return document.querySelectorAll('browser').length;");
+    const pressed = await pressPageKey(app, tabId, 'viewSource', { key: 'u', code: 'KeyU', keyCode: 85, modifiers: ['accel'] });
+    if (pressed < 0) {
+        return 'Ctrl+U in a focused page produced no shortcut push: the viewSource row did not relay';
+    }
+    const minted = await settleValue(
+        () => inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o && o.currentURI ? o.currentURI.spec : '';`),
+        v => typeof v === 'string' && v.startsWith('view-source:'),
+    );
+    if (typeof minted !== 'string' || !minted.startsWith('view-source:')) {
+        return 'Ctrl+U relayed, but the overlay never loaded a view-source: page (chrome-side read)';
+    }
+    const browsersAfter = await inChrome(app, "return document.querySelectorAll('browser').length;");
+    if (browsersAfter !== browsersBefore) {
+        return `Ctrl+U opened another browser element (${browsersBefore} to ${browsersAfter}): the source did not stay in the tab`;
+    }
+    if (plant) {
+        await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).url = 'view-source:' + ${JSON.stringify(origin)} + '/find'; return true;`);
+    }
+    const held = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); return w ? w.url : null;`);
+    if (typeof held === 'string' && held.includes('view-source:')) {
+        return 'Theia holds a view-source: URL (its widget url names the source, not the page)';
+    }
+    const pushed = (await pushes(app)).slice(from).filter(p => JSON.stringify(p).includes('view-source:'));
+    return pushed.length === 0 ? null : `${pushed.length} push(es) carried a view-source: string into Theia`;
 }
 
 /**
@@ -936,7 +1054,7 @@ async function isolationSince(path, offset) {
 }
 
 /** The session body: positive controls first, then the trigger, then the reads. Returns { notScored } or { run, logOffset }. */
-async function reproBody(app, pages, trigger, blind, dir) {
+async function reproBody(app, pages, trigger, blind, dir, plantBlank = false) {
     // The blind plant disconnects the request log, so the observer behind getSeen and the initial-GET control cannot see anything.
     const observed = () => (blind ? [] : pages.requests);
     const tabs = [];
@@ -979,6 +1097,10 @@ async function reproBody(app, pages, trigger, blind, dir) {
     } else {
         await makeCurrent(app, fifth);
     }
+    if (plantBlank) {
+        // The blank-reload plant: the fifth overlay ends on about:blank, the defect's own symptom.
+        await inChrome(app, "overlayOf(" + JSON.stringify(fifth) + ").fixupAndLoadURIString('about:blank', { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() }); return true;");
+    }
     await waitForPush(app, stateOf(fifth, p => p.loading === false), { from: mark, timeoutMs: 10000 });
     await new Promise(resolve => setTimeout(resolve, 1000));
     const post = await readReproState(app, fifth);
@@ -1012,21 +1134,21 @@ function reproRecord({ trigger, pre, post, getSeen }, isolation) {
         pairs.push(['getSeen', getSeen ? 1 : 0]);
     }
     pairs.push(['didChange', post.didChange - pre.didChange], ['isolation', isolation ?? 'none']);
-    return { trigger, blank, fields: pairs.map(([key, value]) => `${key}=${value}`).join(' ') };
+    return { trigger, blank, active: post.active, fields: pairs.map(([key, value]) => `${key}=${value}`).join(' ') };
 }
 
 /**
  * One record-only run in its own session. Returns { notScored } when the observers did not prove themselves
  * (a harness fault, never a verdict), else { run } with the primitives the verdict is built from.
  */
-async function reproSession(trigger, blind) {
+async function reproSession(trigger, blind, plantBlank = false) {
     const dir = await mkdtemp(join(tmpdir(), 'pb-32-07-iso-'));
     const previous = { log: process.env.MOZ_LOG, file: process.env.MOZ_LOG_FILE };
     process.env.MOZ_LOG = 'ProcessIsolation:5';
     process.env.MOZ_LOG_FILE = join(dir, 'iso-%PID.moz_log');
     const pages = await serveNavPages(reproPages());
     try {
-        const outcome = await withProbeShell(app => reproBody(app, pages, trigger, blind, dir));
+        const outcome = await withProbeShell(app => reproBody(app, pages, trigger, blind, dir, plantBlank));
         if (outcome.notScored) {
             return { notScored: outcome.notScored };
         }
@@ -1083,15 +1205,118 @@ async function scenarioRemotenessRepro() {
     return null;
 }
 
+/**
+ * crash (PAGE-11, 32-08): about:crashcontent loaded into the session's one scratch tab crashes its content process
+ * (the tab is the only web tab of the session, so no other overlay shares the process). The crashed push arrives; the
+ * placeholder shows the contracted copy and the Reload tab button; the strip marks the tab; the overlay is hidden.
+ * Reload tab runs the reload path: the page comes back at crashed false, with its history entries kept.
+ * `plant` removes the crash copy from the placeholder, so no crash UI is shown, which must go red.
+ */
+async function scenarioCrash(app, origin, plant = false) {
+    const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
+    const moved = await channelRequest(app, { kind: 'webTabNavigate', tabId, url: `${origin}/edit` });
+    if (moved?.ok !== true) {
+        return `the navigation to /edit was refused (${JSON.stringify(moved)})`;
+    }
+    if (await waitForPush(app, loadedAt(tabId, '/edit'), { from, timeoutMs: 30000 }) < 0) {
+        return 'the second page never loaded, so the history has no entry to keep';
+    }
+    const historyOf = async () => {
+        const reply = await channelRequest(app, { kind: 'webTabHistory', tabId });
+        return Array.isArray(reply?.entries) ? reply.entries.length : -1;
+    };
+    const entriesBefore = await historyOf();
+    const mark = (await pushes(app)).length;
+    await inChrome(app, `overlayOf(${JSON.stringify(tabId)}).fixupAndLoadURIString('about:crashcontent', { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() }); return true;`);
+    if (await waitForPush(app, stateOf(tabId, p => p.crashed === true), { from: mark, timeoutMs: 30000 }) < 0) {
+        return 'no crashed push: about:crashcontent did not crash the scratch tab';
+    }
+    if (plant) {
+        await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).node.querySelector('.pb-web-tab-state').replaceChildren(); return true;`);
+    }
+    const crashUi = () => probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+        if (!w) return null;
+        const state = w.node.querySelector('.pb-web-tab-state');
+        const copy = state ? state.querySelector('.pb-web-tab-crash-copy') : null;
+        const button = state ? state.querySelector('button.pb-web-tab-reload') : null;
+        return { copy: copy ? copy.textContent : '', button: button ? button.textContent : '', mark: document.querySelector('.pb-tab-crashed') !== null };`);
+    const ui = await settleValue(crashUi, v => v !== null && v.copy === CRASHED_COPY && v.button === CRASHED_RELOAD_LABEL);
+    if (!ui || ui.copy !== CRASHED_COPY || ui.button !== CRASHED_RELOAD_LABEL) {
+        return `the crashed tab shows no contracted crash copy and Reload button (copy=${JSON.stringify(ui && ui.copy)}, button=${JSON.stringify(ui && ui.button)})`;
+    }
+    if (!ui.mark) {
+        return 'the strip shows no crashed mark on the crashed tab';
+    }
+    if (await settleValue(() => overlayVisibility(app, tabId), v => v !== 'visible') === 'visible') {
+        return 'the crashed overlay is still visible over the crash UI';
+    }
+    const clickMark = (await pushes(app)).length;
+    const clicked = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); const b = w.node.querySelector('button.pb-web-tab-reload'); if (!b) return false; b.click(); return true;`);
+    if (clicked !== true) {
+        return 'the crashed tab has no Reload tab button to click';
+    }
+    // A crashed overlay has no remote tab, so Reload recreates it at the same URL (the Theia side closes and reopens it).
+    // The page must come back loaded with crashed cleared, and the history must still hold both entries.
+    if (await waitForPush(app, stateOf(tabId, p => p.crashed === false && p.loading === false && String(p.url).endsWith('/edit')), { from: clickMark, timeoutMs: 30000 }) < 0) {
+        return 'Reload tab did not bring the page back (no loaded push with crashed false)';
+    }
+    const entriesAfter = await historyOf();
+    if (entriesAfter < entriesBefore) {
+        return `history lost across Reload tab (${entriesBefore} entries before, ${entriesAfter} after)`;
+    }
+    // gotoIndex to the first entry proves the recovered history is live.
+    const reply = await channelRequest(app, { kind: 'webTabHistory', tabId });
+    const first = Array.isArray(reply?.entries) ? reply.entries.find(entry => String(entry.url).endsWith('/find')) : undefined;
+    if (!first) {
+        return 'the recovered history has no /find entry to return to';
+    }
+    const backMark = (await pushes(app)).length;
+    const back = await channelRequest(app, { kind: 'webTabGotoIndex', tabId, index: first.index });
+    if (back?.ok !== true) {
+        return `gotoIndex after Reload tab was refused (${JSON.stringify(back)})`;
+    }
+    return await waitForPush(app, loadedAt(tabId, '/find'), { from: backMark, timeoutMs: 30000 }) < 0
+        ? 'gotoIndex after Reload tab did not load /find'
+        : null;
+}
+
+/**
+ * remoteness-regression (32-08, the D-25a regression row): one session per trigger, five same-site tabs, the fifth
+ * reloaded or activated. It passes when the fifth tab is on its page with its docShell active. The plant replaces the
+ * fifth tab's page with about:blank after the trigger, which must go red. Record-only apart from its verdict: no key.
+ */
+async function scenarioRemotenessRegression(plant = false) {
+    for (const trigger of REPRO_TRIGGERS) {
+        const outcome = await reproSession(trigger, false, plant);
+        if (outcome.notScored) {
+            console.log(`harness: ${outcome.notScored}`);
+            return `NOT SCORED: ${outcome.notScored}`;
+        }
+        if (outcome.run.blank) {
+            return `the fifth tab was left blank by ${trigger}: ${outcome.run.fields}`;
+        }
+        if (outcome.run.active !== 1) {
+            return `the fifth tab's docShell is inactive after ${trigger}: ${outcome.run.fields}`;
+        }
+        console.log(`  ${trigger}: the fifth tab is on its page with its docShell active (${outcome.run.fields})`);
+    }
+    return null;
+}
+
 /** Scenarios that open their own sessions, so main runs them without the shared runSession wrapper. */
-const SELF_SESSIONED = new Set(['remoteness-repro']);
+const SELF_SESSIONED = new Set(['remoteness-repro', 'remoteness-regression']);
 
 const SCENARIOS = {
     'remoteness-repro': () => scenarioRemotenessRepro(),
+    'remoteness-regression': () => scenarioRemotenessRegression(false),
     find: (app, fx) => scenarioFind(app, fx.origin),
     zoom: (app, fx) => scenarioZoom(app, fx.origin),
     audio: (app, fx) => scenarioAudio(app, fx.origin),
     'keys-theia': (app, fx) => scenarioKeysTheia(app, fx.origin),
+    favicon: (app, fx) => scenarioFavicon(app, fx.origin),
+    reader: (app, fx) => scenarioReader(app, fx.origin),
+    source: (app, fx) => scenarioSource(app, fx.origin),
+    crash: (app, fx) => scenarioCrash(app, fx.origin),
     downloads: (app, fx) => scenarioDownloads(app, fx),
     'downloads-today': async (app, fx, downloadDir) => {
         const verdict = await probeDownloadsToday(app, fx.origin, fx.requests, downloadDir);
@@ -1163,6 +1388,38 @@ const PLANTS = [
         expect: 'was not written',
     },
     {
+        plant: 'favicon-http-src',
+        target: 'favicon',
+        run: (app, fx) => scenarioFavicon(app, fx.origin, true),
+        expect: 'no strip row carries the pushed favicon',
+    },
+    {
+        plant: 'reader-enabled-non-article',
+        target: 'reader',
+        run: (app, fx) => scenarioReader(app, fx.origin, true),
+        expect: 'enabled on a non-article page',
+    },
+    {
+        plant: 'source-url-in-theia',
+        target: 'source',
+        run: (app, fx) => scenarioSource(app, fx.origin, true),
+        expect: 'Theia holds a view-source: URL',
+    },
+    {
+        plant: 'crash-ui-absent',
+        target: 'crash',
+        run: (app, fx) => scenarioCrash(app, fx.origin, true),
+        expect: 'shows no contracted crash copy',
+    },
+    {
+        // Self-sessioned regression row: its clean control is the two-session pass, its plant puts the fifth tab on about:blank.
+        plant: 'blank-reload',
+        target: 'remoteness-regression',
+        control: () => scenarioRemotenessRegression(false),
+        session: () => scenarioRemotenessRegression(true),
+        expect: 'left blank by',
+    },
+    {
         // Record-only scenario with its own sessions: the clean control is one green run (observers proven), no verdict.
         plant: 'repro-observer-blind',
         target: 'remoteness-repro',
@@ -1179,9 +1436,12 @@ async function selfTest() {
         return 1;
     }
     let failed = 0;
+    // `--only a,b` runs the plants of those target scenarios alone (a diagnostic subset; the full self-test runs every plant).
+    const only = process.argv.indexOf('--only');
+    const selected = only === -1 ? PLANTS : PLANTS.filter(planted => process.argv[only + 1].split(',').includes(planted.target));
     // One clean control per target scenario: a planted fault is only meaningful against its own green run.
-    for (const target of new Set(PLANTS.map(planted => planted.target))) {
-        const own = PLANTS.find(planted => planted.target === target && planted.control);
+    for (const target of new Set(selected.map(planted => planted.target))) {
+        const own = selected.find(planted => planted.target === target && planted.control);
         const control = own ? await own.control() : await runSession(`${target}-control`, (app, fx) => SCENARIOS[target](app, fx));
         if (control !== null) {
             console.error(`${NAME} --self-test: FAIL -- the clean control for ${target} is red: ${control}`);
@@ -1189,7 +1449,7 @@ async function selfTest() {
         }
         console.log(`  ok  clean control for ${target} -> green`);
     }
-    for (const planted of PLANTS) {
+    for (const planted of selected) {
         const got = planted.session ? await planted.session() : await runSession(planted.plant, planted.run);
         if (!got || !got.includes(planted.expect)) {
             console.error(`${NAME} --self-test: FAIL -- '${planted.plant}' did not go red naming '${planted.expect}'; got: ${got ?? '(green)'}`);
@@ -1201,7 +1461,7 @@ async function selfTest() {
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- clean control green, ${PLANTS.length} planted fault(s) went red`);
+    console.log(`${NAME} --self-test: PASS -- clean control green, ${selected.length} planted fault(s) went red`);
     return 0;
 }
 

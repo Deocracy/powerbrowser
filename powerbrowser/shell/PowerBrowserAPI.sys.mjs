@@ -3486,8 +3486,8 @@ export const PowerBrowserAPI = Object.freeze({
         .sendAsyncMessage("PowerBrowserWebTabState", {
           kind: "state",
           tabId,
-          url: pageSpec,
-          title: browser.contentTitle,
+          url: webTabPushedSpec(pageSpec),
+          title: webTabPushedSpec(browser.contentTitle),
           loading: !!loading,
           canGoBack: browser.canGoBack,
           canGoForward: browser.canGoForward,
@@ -4660,7 +4660,7 @@ async function handleWebTabAction(data, actorRef) {
       const entries = [];
       for (let i = start; i < end; i++) {
         const e = sh.getEntryAtIndex(i);
-        entries.push({ index: i, title: String(e.title || ""), url: String(e.URI?.spec || "") });
+        entries.push({ index: i, title: String(e.title || ""), url: webTabPushedSpec(String(e.URI?.spec || "")) });
       }
       return { ok: true, kind, where: "done", index, entries };
     }
@@ -6678,7 +6678,7 @@ function webTabViewSourceReply(kind, tabId, inNewTab) {
     return { ok: false, reason: "validation", message: "handleWebTabAction: view source needs a web or file page" };
   }
   entry.firstLoad = null;
-  const triggeringPrincipal = Services.scriptSecurityManager.createNullPrincipal({});
+  const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal(); // as upstream view-source loads; a null principal starts none (32-08)
   entry.browser.fixupAndLoadURIString(`view-source:${inner}`, { triggeringPrincipal });
   return { ok: true, kind, where: "applied" };
 }
@@ -6690,4 +6690,10 @@ function webTabDevtoolsReply(kind, tabId) {
     return { ok: true, kind, where: "unknown-tab" };
   }
   return { ok: false, reason: "unavailable", message: "handleWebTabAction: the DevTools route is not built; openStockPage has no devtools page" };
+}
+
+// Phase 32 plan 08 (PAGE-10): a view-source overlay's URL and title are its own source string. Theia gets the page's
+// spec instead, so no view-source: string crosses the scheme wall in a push (the "view-source:" literal stays out of Theia).
+function webTabPushedSpec(spec) {
+  return typeof spec === "string" && spec.startsWith("view-source:") ? spec.slice("view-source:".length) : spec;
 }

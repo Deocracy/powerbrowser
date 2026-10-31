@@ -69,6 +69,9 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.edit-cut',
     'powerbrowser.chrome-bar.edit-copy',
     'powerbrowser.chrome-bar.edit-paste',
+    // Phase 32 plan 08 (PAGE-10): labelless and uncategorised; the palette rows are Phase 33's.
+    'powerbrowser.chrome-bar.view-source',
+    'powerbrowser.chrome-bar.reader-toggle',
 ]);
 
 /** The contracted visible labels: four verbatim from 13-UI-SPEC.md, Downloads from 32-UI-SPEC.md (plan 04), and the Edit items (plan 06). */

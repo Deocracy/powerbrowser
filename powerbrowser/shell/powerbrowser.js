@@ -422,6 +422,8 @@ document.addEventListener(
       { id: "muteToggle", key: "M", modifiers: "accel", reserved: false, landsInTheia: false },
       { id: "printOpen", key: "P", modifiers: "accel", reserved: false, landsInTheia: false, firefox: "printKb" },
       { id: "saveOpen", key: "S", modifiers: "accel", reserved: false, landsInTheia: false, firefox: "key_savePage" },
+      // Phase 32 plan 08 (PAGE-10): view source, page-focus only. F12 (DevTools) has no row: its route is not built.
+      { id: "viewSource", key: "U", modifiers: "accel", reserved: false, landsInTheia: false },
       // No upstream <key>: content's document navigation consumes F6, so these ride the reply listener below.
       { id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false, landsInTheia: true, via: "replyListener" },
       { id: "focusAddressShiftF6", keycode: "VK_F6", modifiers: "shift", reserved: false, landsInTheia: true, via: "replyListener" },

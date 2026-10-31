@@ -73,6 +73,8 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'muteToggle', key: 'M', modifiers: 'accel', label: 'Ctrl+M', macLabel: '⌘M' },
     { id: 'printOpen', key: 'P', modifiers: 'accel', label: 'Ctrl+P', macLabel: '⌘P' },
     { id: 'saveOpen', key: 'S', modifiers: 'accel', label: 'Ctrl+S', macLabel: '⌘S' },
+    // Phase 32 plan 08 (PAGE-10): view source in the same tab; chrome mints the source load, Theia never holds its URL.
+    { id: 'viewSource', key: 'U', modifiers: 'accel', label: 'Ctrl+U', macLabel: '⌘U' },
 ];
 
 export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
@@ -176,6 +178,8 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['printOpen', tab => tab.print()],
         // PAGE-08 (32-05): the 32-02 focus stub is upgraded; the Theia save dialog picks the destination, chrome writes the copy.
         ['saveOpen', tab => tab.savePage(chooseSaveDestination)],
+        // PAGE-10 (32-08): the widget method, never a kind; the reader toggle has no key (the button and command only).
+        ['viewSource', tab => tab.viewSource()],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */
