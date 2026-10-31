@@ -4836,6 +4836,17 @@ run_own_checks() {
     # checked-out HEAD that is not the requested SHA. Each refusal names its next step. Honestly
     # --quick, as the row above.
     "release-sha-gate-self-test|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs --self-test"
+    # NEW (Phase 50 review CR-01, WR-01): the dispatch-release correlation. The merged, existing, dispatch
+    # and run steps of release-train.yml are executed unchanged under a fake gh that answers from fixtures
+    # through the real jq. A dispatched run's head_sha is the tip of main, not inputs.sha, so with main
+    # advanced past the merge SHA the count must be 1 (no re-dispatch) and the link must be the run
+    # titled `Release <sha>`; a cross-repository merged PR and runs from another repository, path or
+    # event are ignored. Honestly --quick: bash, jq and node in mkdtemp; no network, gh, build or display.
+    "dispatch-release|node $REPO_ROOT/scripts/verify-dispatch-release.mjs"
+    # NEW (Phase 50 review CR-01, WR-01): the plants for the same steps (a head_sha key, a missing
+    # isCrossRepository select, a missing --base main, a missing repository, path or event condition,
+    # a dispatch no longer gated on a zero count), each required to go red naming the drift.
+    "dispatch-release-self-test|node $REPO_ROOT/scripts/verify-dispatch-release.mjs --self-test"
     # NEW (Phase 49, SEC-07): the sign-publish channel gate. mar_channel_gate refuses a MAR whose
     # product-info channel is not ACCEPTED_MAR_CHANNEL_IDS, cross-checks the `--channel` value against
     # MOZ_UPDATE_CHANNEL, and never compares the MAR id with the update channel; signmar -s runs

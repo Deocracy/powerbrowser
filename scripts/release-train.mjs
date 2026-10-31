@@ -106,7 +106,10 @@ const ACTIONS = Object.freeze({
 // responses. A withdrawal mark in the Release notes is the marker shape; the flag shape is
 // prerelease true. The marker is an HTML comment, so it is never rendered on the Release page.
 export const WITHDRAWAL_MARK = '<!-- release-withdrawn -->';
-const RUN_IN_FLIGHT = Object.freeze(['queued', 'in_progress']);
+const RUN_IN_FLIGHT = Object.freeze(['queued', 'in_progress', 'requested', 'pending']);
+export const RELEASE_WORKFLOW_PATH = '.github/workflows/release.yml';
+/** The display title release.yml gives its run (run-name), the key that finds the run for a SHA. Pure. */
+export const releaseRunTitle = sha => `Release ${sha}`;
 const NEEDS_OWNER = Object.freeze(['BUMP_PR_GREEN', 'AWAITING_APPROVAL', 'DESCRIPTOR_WAIT', 'LIVE_RED']);
 
 const assetsEqual = (assets, expected) => {
@@ -118,6 +121,14 @@ const assetsEqual = (assets, expected) => {
 const withdrawn = rel => rel.published !== null && (rel.published.prerelease === true || rel.published.body.includes(WITHDRAWAL_MARK));
 const waitingDescriptor = rel => rel.pending.includes('descriptor') || rel.descriptorJob === 'waiting';
 
+/** Whether a workflow run is the release.yml dispatch for live.mergeSHA. Pure. */
+function runIsReleaseFor(r, live) {
+    return r.event === 'workflow_dispatch'
+        && r.display_title === releaseRunTitle(live.mergeSHA)
+        && String(r.path ?? '').split('@')[0] === RELEASE_WORKFLOW_PATH
+        && r.head_repository?.full_name === live.repository;
+}
+
 /** The channel-live subcheck that is red, or byte-equal for a drifted descriptor. Pure. */
 export function redSubcheck(rel) {
     if (rel.channelLive !== null && rel.channelLive.green === false) return rel.channelLive.subcheck ?? 'channel-live';
@@ -126,13 +137,17 @@ export function redSubcheck(rel) {
 
 /**
  * Normalise one release's live GitHub responses into the release facts. The input is the
- * live response shape: runs objects (head_sha, event, status, conclusion, html_url, created_at),
+ * live response shape: runs objects (display_title, path, head_repository, event, status, conclusion,
+ * html_url, created_at),
  * pending_deployments entries, the jobs of the run, the Release by tag, the descriptor contents
  * (base64), the channel-live job conclusion and the tracking issue state. The run is the newest
- * run whose head_sha EQUALS the merge SHA; never the latest run of any SHA. Pure.
+ * workflow_dispatch run of release.yml in this repository whose display title is `Release <mergeSHA>`;
+ * never the latest run of any SHA, and never keyed on head_sha: a dispatched run's head_sha is the tip
+ * of the dispatched ref (main), not the sha input. live.repository is this repository's full name.
+ * The matcher is injectable for the self-test's planted head_sha matcher only. Pure.
  */
-export function releaseFactsFromLive(live) {
-    const matching = live.runs.filter(r => r.head_sha === live.mergeSHA && r.event === 'workflow_dispatch');
+export function releaseFactsFromLive(live, { matches = runIsReleaseFor } = {}) {
+    const matching = live.runs.filter(r => matches(r, live));
     const newest = [...matching].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))[0] ?? null;
     const job = (live.jobs ?? []).find(j => j.name === 'descriptor') ?? null;
     const bytes = live.contents ? Buffer.from(live.contents.content, 'base64').toString('utf8') : null;
@@ -219,7 +234,7 @@ export function render(state, facts) {
     const evidence = facts.evidenceUrl ?? runUrl ?? 'pending';
     const snapshot = JSON.stringify({ state, pin: facts.pinTag, candidate: facts.candidateTag ?? null });
     const stateLines = [];
-    // The exact run for this merge SHA, linked by head_sha equality (never recency across SHAs).
+    // The exact run for this merge SHA, linked by its display title (never recency across SHAs).
     if (runUrl !== null) stateLines.push(`Release run (${runUrl}) SHA ${rel.mergeSHA}`);
     if (state === 'LIVE_RED') stateLines.push(`channel-live red on ${redSubcheck(rel)}. Next step: read the failing log linked from the run.`);
     if (state === 'WITHDRAWN') stateLines.push('Withdrawn. The fix is a new revision with a new tag; a Release is never deleted and no tag is reused.');
@@ -449,16 +464,24 @@ const BASE = Object.freeze({ pinTag: BASE_PIN, revision: 1, candidateTag: null, 
 // normaliser is exercised by the same rows as derive. The SHA and URL literals are fixture-only.
 const MERGE_SHA = '1'.repeat(40);
 const OTHER_SHA = '2'.repeat(40);
+// The tip of main when the run was dispatched. It is never the merge SHA: main advanced past the bump
+// merge, which is the normal shape (release.yml accepts a configuration.toml ancestor of the tip).
+const TIP_SHA = '3'.repeat(40);
+const REPO_FIXTURE = 'owner-fixture/repo-fixture';
 const RELEASE_KEY = 'v153.23.0-1';
 const SERVED_BYTES = 'served-public-descriptor-bytes';
 const NO_UPDATE_BYTES = 'no-update-descriptor-bytes';
 const EXPECTED_ASSETS = Object.freeze(['powerbrowser-153.23.0.tar.xz', 'powerbrowser-153.23.0.complete.mar', 'SHA256SUMS']);
 const b64 = s => Buffer.from(s, 'utf8').toString('base64');
 const runUrl = id => `https://example.invalid/actions/runs/${id}`;
-const liveRun = (id, headSha, status, conclusion, createdAt) => ({ id, head_sha: headSha, event: 'workflow_dispatch', status, conclusion, created_at: createdAt, html_url: runUrl(id) });
+// A dispatched run carries head_sha = the tip of main and display_title = `Release <inputs.sha>` (run-name).
+const liveRun = (id, forSha, status, conclusion, createdAt, over = {}) => ({
+    id, head_sha: TIP_SHA, display_title: releaseRunTitle(forSha), path: RELEASE_WORKFLOW_PATH, head_repository: { full_name: REPO_FIXTURE },
+    event: 'workflow_dispatch', status, conclusion, created_at: createdAt, html_url: runUrl(id), ...over,
+});
 const liveRelease = (over = {}) => ({ draft: false, prerelease: false, assets: EXPECTED_ASSETS.map(name => ({ name })), body: 'PowerBrowser release notes', ...over });
 const liveBase = (over = {}) => ({
-    key: RELEASE_KEY, mergeSHA: MERGE_SHA, expectedAssets: EXPECTED_ASSETS, servedBytes: SERVED_BYTES, noUpdateBytes: NO_UPDATE_BYTES,
+    key: RELEASE_KEY, mergeSHA: MERGE_SHA, repository: REPO_FIXTURE, expectedAssets: EXPECTED_ASSETS, servedBytes: SERVED_BYTES, noUpdateBytes: NO_UPDATE_BYTES,
     runs: [], pending: [], jobs: [], release: null, contents: null, channelLive: null, issue: { state: 'open' }, ...over,
 });
 const LIVE_DONE_RUN = [liveRun(103, MERGE_SHA, 'completed', 'success', '2026-10-31T11:00:00Z')];
@@ -470,7 +493,7 @@ const FIXTURES = Object.freeze({
     CONFLICT: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply (real conflict, not silent)' }, action: 'conflict-issue' }),
     BUMP_RED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 42 }, verifyCheck: 'failure' }, action: 'wait-owner' }),
     BUMP_PR_GREEN: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 43 }, verifyCheck: 'success', pinUnchanged: false }, action: 'gate' }),
-    // The other SHA's run is the newest and must not be linked: the link is by head_sha equality.
+    // Main has advanced past the merge SHA (every run's head_sha is TIP_SHA). The other SHA's run is the newest and must not be linked: the link is by display title.
     BUILDING: Object.freeze({ live: liveBase({ runs: [liveRun(100, OTHER_SHA, 'completed', 'success', '2026-10-31T12:00:00Z'), liveRun(101, MERGE_SHA, 'in_progress', null, '2026-10-31T10:00:00Z')] }), action: 'wait' }),
     AWAITING_APPROVAL: Object.freeze({ live: liveBase({ runs: [liveRun(102, MERGE_SHA, 'waiting', null, '2026-10-31T10:00:00Z')], pending: [{ environment: { name: 'release' } }], release: liveRelease({ draft: true, assets: [], body: '' }) }), action: 'notify-owner' }),
     PUBLISHED: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease() }), action: 'trigger-gh15' }),
@@ -557,6 +580,19 @@ function selfTest() {
                 return got === 'LIVE_RED' ? [`LIVE_RED: channel-live red on ${redSubcheck(facts.release)}`] : [`drifted descriptor derived ${got}`];
             },
             expect: 'channel-live red on byte-equal',
+        },
+        {
+            name: 'a run matcher keyed on head_sha, with main advanced past the merge SHA',
+            // The pre-fix key. A dispatched run carries head_sha = the tip of main, so this matcher finds no run,
+            // BUILDING and AWAITING_APPROVAL never derive, and the train would dispatch again every tick.
+            run: () => {
+                const byHeadSha = (r, live) => r.head_sha === live.mergeSHA && r.event === 'workflow_dispatch';
+                return ['BUILDING', 'AWAITING_APPROVAL'].flatMap(name => {
+                    const got = derive({ ...BASE, release: releaseFactsFromLive(FIXTURES[name].live, { matches: byHeadSha }) });
+                    return got === name ? [] : [`fixture ${name} derives ${got} instead of ${name} with a head_sha matcher`];
+                });
+            },
+            expect: 'derives null instead of BUILDING',
         },
         {
             name: 'a state with no action',
@@ -674,12 +710,42 @@ function selfTest() {
             },
         },
         {
-            name: 'control: BUILDING links the run whose head_sha equals the merge SHA, never a newer run of another SHA',
+            name: 'control: with main advanced past the merge SHA, BUILDING and AWAITING_APPROVAL derive and link the run titled for the merge SHA, never a newer run for another SHA',
             run: () => {
+                const live = FIXTURES.BUILDING.live;
+                if (live.runs.some(r => r.head_sha === MERGE_SHA)) return ['the BUILDING fixture does not model main having advanced (a run carries head_sha = the merge SHA)'];
                 const body = render('BUILDING', { ...factsOf(FIXTURES.BUILDING), ownerLogin: OWNER }).body;
-                const exact = runUrl(101);
-                return body.includes(`Release run (${exact}) SHA ${MERGE_SHA}`) && !body.includes(runUrl(100)) ? [] : ['BUILDING body did not link the equal-SHA run'];
+                const approval = render('AWAITING_APPROVAL', factsOf(FIXTURES.AWAITING_APPROVAL)).body;
+                const linked = body.includes(`Release run (${runUrl(101)}) SHA ${MERGE_SHA}`) && !body.includes(runUrl(100)) && approval.includes(runUrl(102));
+                return linked ? [] : ['the run titled for the merge SHA was not linked'];
             },
+        },
+        {
+            name: 'control: a dispatch at the tip of main (head_sha equals the merge SHA) still derives BUILDING',
+            run: () => {
+                const live = liveBase({ runs: [liveRun(104, MERGE_SHA, 'in_progress', null, '2026-10-31T10:00:00Z', { head_sha: MERGE_SHA })] });
+                return derive(factsOf({ live })) === 'BUILDING' ? [] : ['a tip-of-main dispatch did not derive BUILDING'];
+            },
+        },
+        {
+            name: 'control: a run from another repository, another workflow path, another event or another title is never linked',
+            run: () => {
+                const at = '2026-10-31T10:00:00Z';
+                const foreign = [
+                    liveRun(110, MERGE_SHA, 'in_progress', null, at, { head_repository: { full_name: 'fork-fixture/repo-fixture' } }),
+                    liveRun(111, MERGE_SHA, 'in_progress', null, at, { path: '.github/workflows/verify.yml' }),
+                    liveRun(112, MERGE_SHA, 'in_progress', null, at, { event: 'push' }),
+                    liveRun(113, MERGE_SHA, 'in_progress', null, at, { display_title: 'Release' }),
+                    liveRun(114, OTHER_SHA, 'in_progress', null, at, { head_sha: MERGE_SHA }),
+                ];
+                const rel = releaseFactsFromLive(liveBase({ runs: foreign }));
+                const ref = releaseFactsFromLive(liveBase({ runs: [liveRun(115, MERGE_SHA, 'in_progress', null, at, { path: `${RELEASE_WORKFLOW_PATH}@refs/heads/main` })] }));
+                return rel.run === null && ref.run !== null ? [] : ['a foreign run was linked, or a path with a ref suffix was refused'];
+            },
+        },
+        {
+            name: 'control: requested and pending release runs derive BUILDING',
+            run: () => ['requested', 'pending'].flatMap(status => (derive(factsOf({ live: liveBase({ runs: [liveRun(120, MERGE_SHA, status, null, '2026-10-31T10:00:00Z')] }) })) === 'BUILDING' ? [] : [`a ${status} run did not derive BUILDING`])),
         },
         {
             name: 'control: the notes marker alone derives WITHDRAWN, as does the prerelease flag',

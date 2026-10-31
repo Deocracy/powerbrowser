@@ -87,6 +87,18 @@ commit not on main, an ancestor that does not change configuration.toml, an ance
 `.github/workflows/` diverges from the tip, and a HEAD that is not the requested SHA. Each
 must go red naming its drift and a next step. Rows: `release-sha-gate`, `release-sha-gate-self-test`.
 
+## Correction after code review (CR-01, run correlation)
+
+The run correlation recorded above ("exact run by `head_sha` equality") was wrong for a
+`workflow_dispatch` run: its `head_sha` is the tip of the dispatched ref (main), not `inputs.sha`,
+so the train would have re-dispatched every tick and never linked its run once main advanced past
+the merge SHA. The plan's key link (`collectFacts polls runs?head_sha={mergeSHA}`) was carried
+through unchallenged. Fixed before plan 50-04: `release.yml` sets `run-name: Release ${{ inputs.sha }}`
+(pinned by the `release-shape` row), and both the workflow steps and `releaseFactsFromLive` identify
+the run by that display title plus the `workflow_dispatch` event, the `release.yml` path and this
+repository as head repository. The `dispatch-release` rows execute the shipped steps with main
+advanced past the merge SHA; the release-train fixtures now carry `head_sha` = main's tip.
+
 ## Landed-skeleton deltas (plan assumed unlanded; code as it is now)
 
 - **Input name.** The plan's `merge_sha` input does not exist. release.yml declares `sha`, the

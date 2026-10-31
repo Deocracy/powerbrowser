@@ -646,7 +646,7 @@ rule holds for the Gecko toolchain: `scripts/toolchain-baseline.sh` regenerates
 The release train (`scripts/release-train.mjs`, `.github/workflows/release-train.yml`)
 carries a release from a merged bump PR to a live descriptor. Every state is derived
 from GitHub facts only, never from a stored train state: the `release.yml` run at the
-merge SHA (`head_sha` equality), its pending deployments (`release`, `descriptor`), the
+merge SHA (matched by the run display title `Release <sha>`), its pending deployments (`release`, `descriptor`), the
 Release at the release key (draft, prerelease, assets, notes marker), the
 `powerbrowser-updates` descriptor bytes, the `channel-live` conclusion and the tracking
 issue state.
@@ -666,9 +666,15 @@ revision with a new tag; a Release is never deleted and no tag is reused.
 
 **Dispatch after the merge (`dispatch-release`).** On each tick the train reads the newest
 merged PR for the pinned bump branch `chore/esr-<pin>`, takes its merge commit SHA, counts
-the `release.yml` runs already at that SHA, and dispatches `release.yml` with
-`inputs.sha` set to that SHA only when the count is zero. The run is then resolved by
-`head_sha` equality, never by recency, and linked in the job summary.
+the `release.yml` runs already dispatched for that SHA, and dispatches `release.yml` with
+`inputs.sha` set to that SHA only when the count is zero. A dispatched run's `head_sha` is
+the tip of main, never `inputs.sha`, so `release.yml` sets `run-name: Release ${{ inputs.sha }}`
+(pinned by the `release-shape` row) and the train identifies the run by that exact display
+title together with the `workflow_dispatch` event, the `release.yml` path and this
+repository as head repository. The run is resolved that way, never by `head_sha` or by
+recency, and linked in the job summary. The merged-PR lookup considers only same-repository
+PRs merged into `main`. The `dispatch-release` rows execute these steps against a fixture
+where main has advanced past the merge SHA.
 
 Token decision: `GITHUB_TOKEN` with `actions: write` granted on the `dispatch-release` job
 alone. The bot App token cannot dispatch (it holds no Actions scope, so the call returns
