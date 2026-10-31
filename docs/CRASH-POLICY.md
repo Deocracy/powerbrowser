@@ -9,26 +9,45 @@ exactly what this page states, and each has its own gate:
   `scripts/verify-worker-submit.mjs --self-test`.
 
 If the code and this page ever disagree, this page wins and the code is the
-bug.
+bug. A statement in the "Requirements before TEL-13" list below is a
+requirement, not a description of code that exists.
 
 ## State: compiled out until TEL-13
 
 The native crash reporter stays compiled out (`--disable-crashreporter`) in
 every committed build, so Power Browser itself sends no crash anywhere today.
-The reporter is enabled only at the TEL-13 flip, which is gated on three
-things: the consent gate on the crash ping (TEL-09), this receiver deployed
-and probed (TEL-07), and the symbols attached to each Release (TEL-12). The
-flip also waits for the first Windows release.
+No reporter-enabled build is shipped. The reporter is enabled only at the
+TEL-13 flip, which is gated on three things: the consent gate on the crash ping
+(TEL-09), this receiver deployed and probed (TEL-07), and the symbols attached
+to each Release (TEL-12). The flip also waits for the first Windows release.
 
-When the reporter is enabled, these statements hold:
+The consent behaviour is not implemented yet. The crash-ping consent read
+currently fails open in a reporter-enabled build: it treats a missing profile
+directory, a missing prefs file, a missing value and an unreadable file as
+consent. The fix needs a patch to Rust source that the patch-surface guard does
+not yet allow, and it waits on an owner decision (`BLOCKED.md`, item B1). Until
+that lands, TEL-13 does not flip.
+
+### Requirements before TEL-13
+
+These must hold, each backed by a gate, before a reporter-enabled build ships:
 
 - **Consent first.** The crash ping sends nothing before the user's consent.
   The consent read fails closed on a missing profile directory, a missing
-  prefs file, a missing value and an unreadable file.
-- **The stock dialog is the consent surface.** A minidump is submitted only
-  after the user chooses to send the report in the stock per-crash dialog.
+  prefs file, a missing value and an unreadable file (TEL-09, not yet
+  implemented).
+- **The stock dialog is the only send path.** A minidump is submitted only after
+  the user chooses to send the report in the stock per-crash dialog. The stock
+  client has other send paths that must be closed first, and none is locked in
+  the tree today: the `MOZ_CRASHREPORTER_AUTO_SUBMIT` environment variable
+  (`config.rs`, honoured in `logic.rs` and `main.rs`, skips the dialog), and the
+  `browser.crashReports.unsubmittedCheck.autoSubmit2` preference with the
+  backlog notification (`firefox.js`). Both are recorded as TEL-13
+  prerequisites in `BLOCKED.md` (item B6).
 - **One receiver URL.** The submit target is the origin of `[urls].crash_report`
   in `configuration.toml`, and the about:crashes view link uses the same key.
+  The generator refuses a configuration that would enable the reporter without
+  that key.
 
 The collector covers downstream operators who want their own endpoint. It is
 never the Power Browser default.
@@ -62,8 +81,8 @@ stored are:
 
 Any other field is dropped before the write, and any allowlisted value
 larger than 4096 bytes is dropped with it. Allowlisted values are scalars: a
-nested value is dropped. File paths, URLs and form data have no allowlisted
-field to arrive in.
+nested value is dropped. This describes the annotation record only. The
+minidump object is different: see "Sensitivity and access".
 
 Gecko sends its annotations as one JSON part named `extra`. Only the
 allowlisted scalar values from that part are kept, each stored as text. A
@@ -77,6 +96,27 @@ no client-chosen text is stored outside the allowlisted annotation values.
 No client-supplied identifier is stored. The record id and the object names
 are server-assigned random UUIDs, and the record carries the server's receipt
 time only.
+
+## Sensitivity and access
+
+A minidump is a capture of process memory: stacks and parts of the heap. It can
+contain page URLs, form data, page text and credentials that were in memory when
+the browser crashed. The allowlist above protects the annotation record, not the
+minidump. Treat every `.dmp` object as sensitive.
+
+- **Dropped on receipt.** Gecko also sends a `memory_report` part (a gzipped
+  JSON memory report that names the open pages). The receiver reads it and
+  drops it; it is never stored.
+- **Private bucket.** The R2 bucket has no public access: the r2.dev public URL
+  is disabled and no custom domain is attached to the bucket. The deploy
+  runbook (`worker/wrangler-crash.toml`) makes the owner check and record this.
+- **Who can read.** Only the owner's Cloudflare account. Any API token that can
+  read the bucket is scoped to that one bucket, read only, and named in the
+  operator record.
+- **Encryption at rest.** Cloudflare R2 encrypts stored objects at rest by
+  default. This repository does not configure or verify that.
+- **Deletion on request.** A report is deleted by its object name, the
+  `<uuid>` of the `CrashID` the user was shown.
 
 ## Retention
 

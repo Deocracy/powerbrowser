@@ -76,3 +76,18 @@ with a reason that states TEL-07. The gate's stale-marked check forbids adding t
 ## B5. Plan 57-04 (TEL-13 flip) and its gates (NOT RUN, by instruction)
 
 Stays gated behind B1 and B3 and the first Windows release (Phase 54). The flip is a `checkpoint:human-action`.
+
+## B6. TEL-13 prerequisites: the other send paths of the stock reporter (OPEN, found by the 57 review, WR-05)
+
+The stock crash reporter has send paths that skip the per-crash dialog. None is locked in the tree, and no gate
+covers them. Close both before 57-04 and before `docs/CRASH-POLICY.md` may claim dialog-only consent.
+
+- `MOZ_CRASHREPORTER_AUTO_SUBMIT` (`upstream/toolkit/crashreporter/client/app/src/config.rs:177`): when set, the
+  client skips the dialog (`logic.rs:115,531`, `main.rs:125,227`). Needs the launcher/startup environment to clear it
+  (or a patch-free equivalent) and a gate that fails if it is not cleared.
+- `browser.crashReports.unsubmittedCheck.autoSubmit2` (`upstream/browser/app/profile/firefox.js:2823`, default false)
+  and the unsubmitted-reports backlog notification. Needs the pref locked false in the generated prefs/policies and
+  a gate over `generate --check`.
+
+Why not locked now: a locked pref changes the generated branding prefs bytes that the Phase 1 comparands pin, and
+the environment variable is not a pref. Both belong with the TEL-13 flip, where the generated output may change.
