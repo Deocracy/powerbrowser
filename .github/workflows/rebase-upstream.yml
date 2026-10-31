@@ -4,6 +4,9 @@
 # bump edits configuration.toml alone and never this file; this file carries
 # no tag at all, and scripts/verify-upstream-pins.mjs asserts both facts.
 #
+# The stage output (Phase 43, AUTO-07) names the first FAIL line the replay printed,
+# so the release train can tell a patch conflict from a red gate. It carries no tag.
+#
 # D-77: there is deliberately no `schedule:` key. A red scheduled job with
 # nobody watching is the failure mode PITFALLS #8 warns about; the release
 # train is the caller that runs this on a cadence.
@@ -32,10 +35,16 @@ on:
         description: "Upstream Firefox-ESR tag to rebase onto"
         required: true
         type: string
+    outputs:
+      stage:
+        description: "The first FAIL line the replay printed, or replayed when it succeeded"
+        value: ${{ jobs.rebase.outputs.stage }}
 
 jobs:
   rebase:
     runs-on: ubuntu-latest
+    outputs:
+      stage: ${{ steps.stage.outputs.stage }}
     # WR-09 (plan 01-18). This job clones 1.1 GB from a third-party remote and
     # then runs this repo's scripts over the result; it reads and verifies, and
     # pushes nothing. With no `permissions:` block it would inherit the
@@ -126,9 +135,25 @@ jobs:
         run: nix develop .#theia --command node scripts/verify-generated-identity.mjs
 
       - name: Rebase onto requested tag
+        id: rebase
         env:
           REBASE_TAG: ${{ inputs.tag }}
-        run: nix develop .#theia --command bash scripts/rebase-upstream.sh --tag "$REBASE_TAG"
+        run: nix develop .#theia --command bash scripts/rebase-upstream.sh --tag "$REBASE_TAG" 2>&1 | tee "$RUNNER_TEMP/rebase.log"
+
+      # Names the stage for the release train. The first FAIL line in the replay log
+      # is the stage; a replay that succeeded reports replayed. Runs even on failure.
+      - name: Name the stage the replay ended at
+        id: stage
+        if: ${{ always() }}
+        env:
+          OUTCOME: ${{ steps.rebase.outcome }}
+        run: |
+          if [ "$OUTCOME" = "success" ]; then
+            echo "stage=replayed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LINE=$(grep -m1 'FAIL -- ' "$RUNNER_TEMP/rebase.log" 2>/dev/null || true)
+          echo "stage=${LINE:-FAIL -- rebase-upstream.sh did not complete the replay}" >> "$GITHUB_OUTPUT"
 
       # THE POST-REPLAY OBSERVATION. The three generator steps above run before
       # the rebase and so report on the pre-replay tree; this is the one that
