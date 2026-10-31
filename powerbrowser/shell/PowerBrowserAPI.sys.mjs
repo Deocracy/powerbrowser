@@ -4498,7 +4498,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4970,6 +4970,20 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a destination that is not an absolute .html or .htm path of at most 4096 characters" };
       }
       return webTabSaveExportReply(kind, data.tabId, data.path);
+    }
+    // Page tools (32-06, PAGE-09): the frozen edit set. Keys stay content-native and never reach this arm;
+    // only a Theia-initiated Edit item sends it. checkOnly reads enablement and runs nothing.
+    case "webTabEdit": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      if (!WEB_TAB_EDIT_CMDS.includes(data.cmd)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an edit command outside the frozen set" };
+      }
+      if (data.checkOnly !== undefined && typeof data.checkOnly !== "boolean") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a check flag that is not a boolean" };
+      }
+      return webTabEditReply(kind, data.tabId, data.cmd, data.checkOnly === true);
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -6384,6 +6398,32 @@ export const PowerBrowserTabHost = Object.freeze({
     });
   },
 });
+
+// ---------------------------------------------------------------------------
+// Phase 32 plan 06 (PAGE-09): probe-gated edit commands. The set is the chrome-help subset the edit-today
+// probe recorded (scripts/lib/pb-probe-verdicts.json). cmd_pasteNoFormatting had no chrome effect there, so
+// it has no kind. Frozen: the union, the Edit items and verify-page-tools-edit.mjs derive from this list.
+const WEB_TAB_EDIT_CMDS = Object.freeze(["cmd_undo", "cmd_redo", "cmd_cut", "cmd_copy", "cmd_paste", "cmd_selectAll", "cmd_delete"]);
+
+// The chrome route is the Controllers actor (ControllersParent.sys.mjs). A remote overlay has no parent-side
+// docShell, so `docShell.doCommand` is not reachable. The child (ControllersChild) runs its own docShell
+// isCommandEnabled guard before the command, so an unavailable command is a no-op, not an edit.
+async function webTabEditReply(kind, tabId, cmd, checkOnly) {
+  const entry = webTabs.get(tabId);
+  if (!entry) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  const controller = entry.browser.browsingContext?.currentWindowGlobal?.getActor("Controllers");
+  if (!controller) {
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: the page's command route is not available" };
+  }
+  const enabled = controller.isCommandEnabled(cmd) === true;
+  if (checkOnly) {
+    return { ok: true, kind, where: "checked", enabled };
+  }
+  controller.doCommand(cmd);
+  return { ok: true, kind, where: "applied", enabled };
+}
 
 // ---------------------------------------------------------------------------
 // Phase 32 plan 04 (PAGE-06): the Downloads view. One chrome-side view on the

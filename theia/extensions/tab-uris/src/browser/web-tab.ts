@@ -260,7 +260,10 @@ export type WebTabMessage =
     | { kind: 'webTabPrint'; tabId: string; selectionOnly?: boolean }
     // Phase 32 plan 05 (PAGE-08): picker-split save. Pick proposes a file name and writes nothing; export copies the minted page to the picked path.
     | { kind: 'webTabSavePick'; tabId: string }
-    | { kind: 'webTabSaveExport'; tabId: string; path: string };
+    | { kind: 'webTabSaveExport'; tabId: string; path: string }
+    // Phase 32 plan 06 (PAGE-09): the chrome-help edit set the edit-today probe recorded. Keys never send this kind;
+    // only a Theia-initiated Edit item does. checkOnly reads enablement and runs nothing.
+    | { kind: 'webTabEdit'; tabId: string; cmd: 'cmd_undo' | 'cmd_redo' | 'cmd_cut' | 'cmd_copy' | 'cmd_paste' | 'cmd_selectAll' | 'cmd_delete'; checkOnly?: boolean };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -922,6 +925,11 @@ export class WebTabWidget extends BaseWidget {
             this.renderState();
         }
         return reply;
+    }
+
+    /** PAGE-09: a Theia-initiated Edit item runs `cmd` on this tab's page; checkOnly reads enablement and runs nothing. */
+    async edit(cmd: Extract<WebTabMessage, { kind: 'webTabEdit' }>['cmd'], checkOnly = false): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabEdit', tabId: this.tabId, cmd, ...(checkOnly ? { checkOnly } : {}) }));
     }
 
     /**

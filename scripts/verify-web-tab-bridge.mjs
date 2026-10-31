@@ -102,6 +102,8 @@ const KIND_CLASSES = new Map([
     // Phase 32 plan 05 (PAGE-08): save pick and export sit with navigation, as CONTEXT's class log records.
     ['webTabSavePick', 'tab-navigation'],
     ['webTabSaveExport', 'tab-navigation'],
+    // Phase 32 plan 06 (PAGE-09): the frozen edit commands sit with navigation, per CONTEXT's class log.
+    ['webTabEdit', 'tab-navigation'],
 ]);
 
 /**
