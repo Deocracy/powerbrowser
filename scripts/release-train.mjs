@@ -1119,6 +1119,40 @@ export function deriveMaintenance(facts) {
     };
 }
 
+/**
+ * The fact keys the workflow's "Build the facts" step produces, derived by running its jq object literal with every
+ * variable null (jq itself decides the keys, so no list is kept). Returns null when the literal cannot be found or jq fails.
+ */
+export function workflowFactKeys(workflowText) {
+    const end = String(workflowText).indexOf('}\' > "$RUNNER_TEMP/maintenance-facts.json"');
+    const start = end === -1 ? -1 : workflowText.lastIndexOf("'{", end);
+    if (start === -1) return null;
+    const program = workflowText.slice(start + 1, end + 1);
+    const vars = [...new Set([...program.matchAll(/\$([A-Za-z_]\w*)/g)].map(m => m[1]))];
+    const r = spawnSync('jq', ['-n', '-c', ...vars.flatMap(v => ['--argjson', v, 'null']), program], { encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    try { return Object.keys(JSON.parse(r.stdout)).sort(); } catch { return null; }
+}
+
+/** The fact keys deriveMaintenance reads over the given fact sets, recorded by a Proxy (the union, since a row may stop early). */
+export function factKeysRead(factSets) {
+    const seen = new Set();
+    for (const f of factSets) {
+        deriveMaintenance(new Proxy(f, { get(t, k) { if (typeof k === 'string') seen.add(k); return t[k]; } }));
+    }
+    return [...seen].sort();
+}
+
+/** Set equality of the fact keys the workflow builds and the keys the rows read: the drift, empty when they agree. Pure. */
+export function factKeyDrift(workflowKeys, readKeys) {
+    if (workflowKeys === null) return ['the workflow facts step has no readable jq object literal. Next step: restore the "Build the facts" step.'];
+    const { onlyA, onlyB } = setDiff(workflowKeys, readKeys);
+    return [
+        ...onlyA.map(k => `the workflow builds fact ${k}, which deriveMaintenance never reads. Next step: remove it or fix the key it was meant to be.`),
+        ...onlyB.map(k => `deriveMaintenance reads fact ${k}, which the workflow never builds, so its row renders no-data forever. Next step: build it in the facts step.`),
+    ];
+}
+
 /** The pinned body: the title, the six rows in the fixed order, and the debug snapshot. Pure and byte-stable. */
 export function renderMaintenance(state) {
     const rank = name => { const i = MAINTENANCE_ROW_NAMES.indexOf(name); return i === -1 ? MAINTENANCE_ROW_NAMES.length : i; };
@@ -1510,6 +1544,7 @@ function maintenanceSelfTest() {
             if (!THRESHOLD_KEYS.every(k => Number.isInteger(T[k]) && T[k] >= 0) || Object.keys(T).length !== THRESHOLD_KEYS.length) failures.push(`${SWEEP_THRESHOLDS_REL} is not exactly ${THRESHOLD_KEYS.join(', ')} as non-negative integers: ${JSON.stringify(T)}`);
             return [...failures, ...sweepThresholdDocDrift(RELEASING_TEXT, T)];
         } },
+        { name: 'control: the facts the workflow builds are exactly the facts deriveMaintenance reads', run: () => factKeyDrift(workflowFactKeys(WORKFLOW_TEXT), factKeysRead([facts(), facts({ tags: [], tagDates: {}, releases: [], ...NO_PHASE51 }), { nowMs: NOW }])) },
         { name: 'control: the workflow render step reads the thresholds file the rows run on', run: () => (WORKFLOW_TEXT.includes(SWEEP_THRESHOLDS_REL) ? [] : [`.github/workflows/release-train.yml never reads ${SWEEP_THRESHOLDS_REL}, so the sweep would run on no thresholds`]) },
         { name: 'control: the file thresholds are what the rows judge by', run: () => {
             const f = { dependabotPrs: prs(T.dependabotPrMax), dependabotAlerts: T.alertMax, codeqlAlerts: T.alertMax };
@@ -1707,6 +1742,9 @@ function maintenanceSelfTest() {
         { name: 'a bare year already begun is dated at its start and overdue', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('2026') }))), expect: 'Item 0 2026 is 304 day(s) overdue (a year or month is dated at its start)' },
         { name: 'a Month YYYY exactly 30 days away', run: () => reds(stateOf(facts({ renewalsText: REN_ROW('December 2026') }))), expect: 'December 2026 is 30 day(s) away' },
         { name: 'a RENEWALS.md without an Expiry column', run: () => reds(stateOf(facts({ renewalsText: '| Item | Due |\n| --- | --- |\n| x | 2027-01-01 |' }))), expect: 'has no Expiry column' },
+        { name: 'a fact key mistyped in the workflow facts step', run: () => factKeyDrift(workflowFactKeys(WORKFLOW_TEXT.replace('codeqlLastPushMs:', 'codeqlLastPushMS:')), factKeysRead([facts(), { nowMs: NOW }])), expect: 'deriveMaintenance reads fact codeqlLastPushMs, which the workflow never builds' },
+        { name: 'a dead fact the workflow builds and no row reads', run: () => factKeyDrift(workflowFactKeys(WORKFLOW_TEXT.replace('codeberg: $cb', 'codeberg: $cb, deadFact: 1')), factKeysRead([facts(), { nowMs: NOW }])), expect: 'builds fact deadFact, which deriveMaintenance never reads' },
+        { name: 'a workflow whose facts literal is gone', run: () => factKeyDrift(workflowFactKeys('no facts here'), []), expect: 'no readable jq object literal' },
         { name: 'a thresholds fact with a missing number', run: () => reds(stateOf(facts({ thresholds: { ...T, pushAgeDays: undefined } }))), expect: `are not readable in ${SWEEP_THRESHOLDS_REL}` },
         { name: 'a thresholds fact with a negative number', run: () => reds(stateOf(facts({ thresholds: { ...T, alertMax: -1 } }))), expect: `are not readable in ${SWEEP_THRESHOLDS_REL}` },
         { name: 'one more Dependabot PR open than the file limit', run: () => reds(stateOf(facts({ dependabotPrs: prs(T.dependabotPrMax + 1) }))), expect: `${T.dependabotPrMax + 1} open Dependabot PR(s) against a limit of ${T.dependabotPrMax}` },
