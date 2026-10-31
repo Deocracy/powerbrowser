@@ -58,6 +58,13 @@ on:
 
 permissions: {}
 
+# shell: bash runs every step as `bash -eo pipefail`. The default on Linux, `bash -e`, takes
+# the status of the last command in a pipe, so a node failure piped into tee, sed or grep
+# read as success. Every run: below inherits this.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: release-train
 
@@ -133,7 +140,9 @@ jobs:
       - name: Read the pin from configuration.toml
         id: pin
         run: |
-          echo "pin=$(node scripts/detect-upstreams.mjs --pin)" >> "$GITHUB_OUTPUT"
+          set -eu
+          PIN=$(node scripts/detect-upstreams.mjs --pin)
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
 
       # The listing is a live fetch of the upstream's tags. A dry run prints the
       # fetch it would make and lists nothing; the decision below then sees no
@@ -151,9 +160,10 @@ jobs:
             echo "dry-run: would run git ls-remote --tags --refs against the upstream and keep refs/tags/FIREFOX_${MAJOR}_*esr_RELEASE, deciding against pin $PIN"
             exit 0
           fi
-          git ls-remote --tags --refs "$REMOTE" \
-            | sed -n 's#.*refs/tags/##p' \
-            | grep -E "^FIREFOX_${MAJOR}_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" > "$RUNNER_TEMP/tags.txt" || true
+          git ls-remote --tags --refs "$REMOTE" > "$RUNNER_TEMP/refs.txt"
+          sed -n 's#.*refs/tags/##p' "$RUNNER_TEMP/refs.txt" > "$RUNNER_TEMP/names.txt"
+          # grep exits 1 when no tag matches; that empty listing is a FAIL in detect-upstreams, not here.
+          grep -E "^FIREFOX_${MAJOR}_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" "$RUNNER_TEMP/names.txt" > "$RUNNER_TEMP/tags.txt" || [ $? -eq 1 ]
 
       - name: Read the product-details advisory value (skipped in dry-run)
         id: advisory
@@ -182,12 +192,12 @@ jobs:
             exit 0
           fi
           if [ -n "$ADVISORY" ]; then
-            OUT=$(node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --firefox-esr "$ADVISORY")
+            node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --firefox-esr "$ADVISORY" > "$RUNNER_TEMP/decide.txt"
           else
-            OUT=$(node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt")
+            node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" > "$RUNNER_TEMP/decide.txt"
           fi
-          printf '%s\n' "$OUT"
-          printf '%s\n' "$OUT" | grep '^candidate=' >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/decide.txt"
+          grep '^candidate=' "$RUNNER_TEMP/decide.txt" >> "$GITHUB_OUTPUT"
 
       # The Node 24 line: the newest v24 entry of the release index that ships
       # linux-x64. No such line is a hold, and the outputs stay empty.
@@ -202,7 +212,9 @@ jobs:
             exit 0
           fi
           curl -fsSL https://nodejs.org/dist/index.json -o "$RUNNER_TEMP/node-index.json"
-          node scripts/detect-upstreams.mjs --node-select "$RUNNER_TEMP/node-index.json" | tee -a "$GITHUB_OUTPUT"
+          # The node output goes to a file first, so a node failure stops this step.
+          node scripts/detect-upstreams.mjs --node-select "$RUNNER_TEMP/node-index.json" > "$RUNNER_TEMP/node-select.txt"
+          cat "$RUNNER_TEMP/node-select.txt" >> "$GITHUB_OUTPUT"
 
       # Provenance happens here, in the job, on every bump: the SHASUMS file and its
       # signature come from nodejs.org, the signature is checked with gpgv against the
@@ -225,11 +237,11 @@ jobs:
           curl -fsSL "$BASE_URL/SHASUMS256.txt" -o "$RUNNER_TEMP/SHASUMS256.txt"
           curl -fsSL "$BASE_URL/SHASUMS256.txt.sig" -o "$RUNNER_TEMP/SHASUMS256.txt.sig"
           gpgv --keyring "$RUNNER_TEMP/keyring.gpg" "$RUNNER_TEMP/SHASUMS256.txt.sig" "$RUNNER_TEMP/SHASUMS256.txt"
-          EXPECTED=$(node scripts/detect-upstreams.mjs --node-shasum "$RUNNER_TEMP/SHASUMS256.txt" "$NODE_FILE" | sed -n 's/^node-sha256=//p')
-          if [ -z "$EXPECTED" ]; then
-            echo "release-train: FAIL -- the signed SHASUMS256.txt carries no entry for $NODE_FILE. Next step: do not bump; check the release on nodejs.org." >&2
+          if ! node scripts/detect-upstreams.mjs --node-shasum "$RUNNER_TEMP/SHASUMS256.txt" "$NODE_FILE" > "$RUNNER_TEMP/shasum.txt"; then
+            echo "release-train: FAIL -- the signed SHASUMS256.txt has no usable entry for $NODE_FILE. Next step: do not bump; check the release on nodejs.org." >&2
             exit 1
           fi
+          EXPECTED=$(sed -n 's/^node-sha256=//p' "$RUNNER_TEMP/shasum.txt")
           curl -fsSL "$BASE_URL/$NODE_FILE" -o "$RUNNER_TEMP/$NODE_FILE"
           ACTUAL=$(sha256sum "$RUNNER_TEMP/$NODE_FILE" | cut -d' ' -f1)
           if [ "$ACTUAL" != "$EXPECTED" ]; then
@@ -347,7 +359,8 @@ jobs:
           # Only the manifest, the generated tracked surfaces, the version files and the
           # patch stack may be staged. The App cannot push a commit that touches workflows.
           git add -u -- configuration.toml powerbrowser patches
-          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+          # A pathspec query, not a pipe into grep -q: under pipefail an early grep exit would read as a failed git.
+          if [ -n "$(git diff --cached --name-only -- .github/workflows)" ]; then
             echo "release-train: FAIL -- the bump would touch a workflow file, which the bot App may not push. Next step: remove that change from the bump." >&2
             exit 1
           fi
