@@ -16,11 +16,17 @@
  *   4. no pref write: nothing in the boundary sets the zoom pref (D-07). Zoom
  *      is a per-tab fullZoom, never a stored preference.
  *
+ * 5. mute (PAGE-05): the webTabMute arm and union and routed set agree; the arm
+ *    refuses a non-boolean flag and drives mute()/unmute(); WebTabState carries
+ *    audioMuted and soundPlaying and webTabPush pushes them; the pill sources
+ *    carry no mute literal.
+ *
  * --self-test plants a dropped arm, a stale union member, a dropped state field
- * and a pref write, and requires each to go red naming the drift.
+ * and a pref write for each family, and a mute literal in the pill; each must go
+ * red naming the drift.
  * Text reads only: --quick, no build, no browser, no display.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,7 +34,10 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-page-tools-zoom-mute';
 const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
+// The address bar (the pill) is the one chrome surface that must never carry a mute control (PAGE-05).
+const PILL_DIR = 'theia/extensions/chrome-bar/src/browser/address-bar';
 const FAMILY = /^webTabZoom/;
+const MUTE_FAMILY = /^webTabMute/;
 
 function stripComments(text) {
     return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
@@ -90,10 +99,84 @@ function interfaceBlock(text, name) {
 }
 
 function readSources() {
-    return {
+    const sources = {
         [API]: readFileSync(join(REPO_ROOT, API), 'utf8'),
         [WEB_TAB]: readFileSync(join(REPO_ROOT, WEB_TAB), 'utf8'),
     };
+    for (const name of readdirSync(join(REPO_ROOT, PILL_DIR))) {
+        if (/\.tsx?$/.test(name)) {
+            sources[`${PILL_DIR}/${name}`] = readFileSync(join(REPO_ROOT, PILL_DIR, name), 'utf8');
+        }
+    }
+    return sources;
+}
+
+/**
+ * The mute family (PAGE-05): the arm, the union, the routed set, the audio
+ * state fields and the pill's silence. Mute is an explicit boolean; the arm
+ * calls the overlay's own mute()/unmute(), never a toggle.
+ * @returns {string[]} failure messages; empty means the mute contract holds.
+ */
+function checkMute(sources) {
+    const failures = [];
+    const api = stripComments(sources[API]);
+    const tab = stripComments(sources[WEB_TAB]);
+
+    const setLiteral = /const WEB_TAB_ACTION_KINDS = new Set\(\[([^\]]*)\]\)/.exec(api);
+    const routed = setLiteral ? derive(setLiteral[1], /"(webTab[A-Za-z]+)"/g).filter(k => MUTE_FAMILY.test(k)) : [];
+    const arms = derive(functionBody(api, 'handleWebTabAction'), /case "(webTab[A-Za-z]+)"/g).filter(k => MUTE_FAMILY.test(k));
+    const union = derive(unionBlock(tab), /kind: '(webTab[A-Za-z]+)'/g).filter(k => MUTE_FAMILY.test(k));
+    if (routed.length === 0 || arms.length === 0 || union.length === 0) {
+        failures.push(`mute routing: derived ZERO mute kinds (routed ${routed.length}, arms ${arms.length}, union ${union.length}) -- the parse found nothing, so the comparison proves nothing (broken instrument, never a clean pass)`);
+    } else {
+        const armsVsUnion = diff(arms, union);
+        if (armsVsUnion.missing.length) {
+            failures.push(`mute routing: mute union members with no case arm (dropped kind): ${armsVsUnion.missing.join(', ')}`);
+        }
+        if (armsVsUnion.surplus.length) {
+            failures.push(`mute routing: mute case arms with no union member: ${armsVsUnion.surplus.join(', ')}`);
+        }
+        const routedVsArms = diff(routed, arms);
+        if (routedVsArms.surplus.length) {
+            failures.push(`mute routing: WEB_TAB_ACTION_KINDS routes mute kinds with no case arm: ${routedVsArms.surplus.join(', ')}`);
+        }
+        if (routedVsArms.missing.length) {
+            failures.push(`mute routing: mute case arms not routed by WEB_TAB_ACTION_KINDS: ${routedVsArms.missing.join(', ')}`);
+        }
+    }
+
+    const state = interfaceBlock(tab, 'WebTabState');
+    for (const field of ['audioMuted', 'soundPlaying']) {
+        if (!new RegExp(`^\\s+${field}\\??:`, 'm').test(state)) {
+            failures.push(`mute state: WebTabState has no ${field} field (the bar would never show the sound state)`);
+        }
+    }
+    const pushBody = apiMethodBody(api, 'webTabPush');
+    for (const field of ['audioMuted', 'soundPlaying']) {
+        if (!new RegExp(`^\\s+${field}: pageFields\\.${field},`, 'm').test(pushBody)) {
+            failures.push(`mute state: webTabPush does not push ${field} in the state push`);
+        }
+    }
+
+    const handler = functionBody(api, 'handleWebTabAction');
+    if (!handler.includes('typeof data.muted !== "boolean"')) {
+        failures.push('mute: the webTabMute arm does not refuse a non-boolean flag (the flag is explicit, never a toggle)');
+    }
+    if (!handler.includes('entry.browser.mute()') || !handler.includes('entry.browser.unmute()')) {
+        failures.push('mute: the webTabMute arm does not drive the overlay mute()/unmute() pair');
+    }
+
+    for (const key of Object.keys(sources).filter(k => k.startsWith(`${PILL_DIR}/`))) {
+        if (/webTabMute|audioMuted|soundPlaying/.test(stripComments(sources[key]))) {
+            failures.push(`mute: the pill source ${key} carries a mute literal (mute lives on the tab, never in the pill)`);
+        }
+    }
+    return failures;
+}
+
+/** Every check this gate runs: the zoom family, then the mute family. */
+function checkAll(sources) {
+    return [...checkZoom(sources), ...checkMute(sources)];
 }
 
 /** @returns {string[]} failure messages; empty means the zoom contract holds. */
@@ -165,7 +248,7 @@ function plant(text, from, to) {
 
 function selfTest() {
     const clean = readSources();
-    const cleanFailures = checkZoom(clean);
+    const cleanFailures = checkAll(clean);
     if (cleanFailures.length) {
         console.error(`${NAME} --self-test: FAIL -- the unmodified tree is already red, so the planted-fault results below would be meaningless:`);
         cleanFailures.forEach(f => console.error(`  ${f}`));
@@ -192,6 +275,26 @@ function selfTest() {
             sources: { [API]: plant(clean[API], '  return PowerBrowserAPI.getStringPref(WEB_TAB_ZOOM_PREF, "")', '  Services.prefs.setStringPref(WEB_TAB_ZOOM_PREF, "1");\n  return PowerBrowserAPI.getStringPref(WEB_TAB_ZOOM_PREF, "")') },
             expect: 'writes the zoom pref',
         },
+        {
+            name: 'dropped mute kind (the mute arm renamed away)',
+            sources: { [API]: plant(clean[API], 'case "webTabMute": {', 'case "webTabMuteDropped": {') },
+            expect: 'webTabMute',
+        },
+        {
+            name: 'stale mute union member (no arm)',
+            sources: { [WEB_TAB]: plant(clean[WEB_TAB], "    | { kind: 'webTabMute'; tabId: string; muted: boolean };", "    | { kind: 'webTabMuteStale'; tabId: string };\n    | { kind: 'webTabMute'; tabId: string; muted: boolean };") },
+            expect: 'webTabMuteStale',
+        },
+        {
+            name: 'dropped audio state field (audioMuted)',
+            sources: { [WEB_TAB]: plant(clean[WEB_TAB], '    audioMuted: boolean;', '') },
+            expect: 'WebTabState has no audioMuted field',
+        },
+        {
+            name: 'mute literal in the pill (the address bar carries a mute control)',
+            sources: { [`${PILL_DIR}/address-bar-rows.ts`]: clean[`${PILL_DIR}/address-bar-rows.ts`] + "\nexport const pillMute = 'webTabMute';\n" },
+            expect: 'carries a mute literal',
+        },
     ];
     let failed = 0;
     for (const testCase of cases) {
@@ -200,7 +303,7 @@ function selfTest() {
             failed++;
             continue;
         }
-        const failures = checkZoom({ ...clean, ...testCase.sources });
+        const failures = checkAll({ ...clean, ...testCase.sources });
         if (!failures.some(f => f.includes(testCase.expect))) {
             console.error(`${NAME} --self-test: FAIL -- '${testCase.name}' did not go red naming '${testCase.expect}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
             failed++;
@@ -224,13 +327,13 @@ function main() {
     if (process.argv.includes('--self-test')) {
         return selfTest();
     }
-    const failures = checkZoom(readSources());
+    const failures = checkAll(readSources());
     if (failures.length) {
-        console.error(`${NAME}: FAIL -- the zoom family no longer agrees across the boundary, the union and the state push.`);
+        console.error(`${NAME}: FAIL -- the zoom or mute family no longer agrees across the boundary, the union, the state push or the pill.`);
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- the zoom arms, the union, the routed set, the zoom state field and the live ladder agree`);
+    console.log(`${NAME}: PASS -- the zoom and mute arms, the union, the routed sets, the state fields, the live ladder and the silent pill agree`);
     return 0;
 }
 

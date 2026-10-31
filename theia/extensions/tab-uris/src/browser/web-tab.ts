@@ -184,6 +184,10 @@ export interface WebTabState {
     findTotal: number;
     /** Phase 32 plan 01 (PAGE-01): the last find result; null when no find is running. */
     findStatus: 'found' | 'notFound' | 'wrapped' | null;
+    /** Phase 32 plan 01 (PAGE-05): the overlay's mute flag, pushed with url. */
+    audioMuted: boolean;
+    /** Phase 32 plan 01 (PAGE-05): audible playback from the overlay, event-driven; false while the page is silent. */
+    soundPlaying: boolean;
 }
 
 /**
@@ -214,7 +218,9 @@ export type WebTabMessage =
     | { kind: 'webTabFindClose'; tabId: string }
     | { kind: 'webTabZoomIn'; tabId: string }
     | { kind: 'webTabZoomOut'; tabId: string }
-    | { kind: 'webTabZoomReset'; tabId: string };
+    | { kind: 'webTabZoomReset'; tabId: string }
+    // Phase 32 plan 01 (PAGE-05): mute is an explicit flag, never a toggle.
+    | { kind: 'webTabMute'; tabId: string; muted: boolean };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -344,6 +350,8 @@ export class WebTabChannel {
                 findStatus: detail.findStatus === 'found' || detail.findStatus === 'notFound' || detail.findStatus === 'wrapped'
                     ? detail.findStatus
                     : detail.findStatus === null ? null : widget.findStatus,
+                audioMuted: typeof detail.audioMuted === 'boolean' ? detail.audioMuted : widget.audioMuted,
+                soundPlaying: typeof detail.soundPlaying === 'boolean' ? detail.soundPlaying : widget.soundPlaying,
             });
         });
     }
@@ -465,6 +473,10 @@ export class WebTabWidget extends BaseWidget {
     findTotal = 0;
     /** Phase 32 plan 01 (PAGE-01): the last pushed find result, null when no find is running. */
     findStatus: WebTabState['findStatus'] = null;
+    /** Phase 32 plan 01 (PAGE-05): the last pushed mute flag. */
+    audioMuted = false;
+    /** Phase 32 plan 01 (PAGE-05): the last pushed audible-playback flag. */
+    soundPlaying = false;
     /** Phase 31 plan 02 (SITE-06): the non-default permission ids, table order; the identity box's icons. */
     permissionIcons: string[] = [];
     /** Phase 31 plan 02: the labels of permissionIcons, same order; the icons' tooltip. */
@@ -880,6 +892,8 @@ export class WebTabWidget extends BaseWidget {
         this.findCurrent = state.findCurrent;
         this.findTotal = state.findTotal;
         this.findStatus = state.findStatus;
+        this.audioMuted = state.audioMuted;
+        this.soundPlaying = state.soundPlaying;
         if (state.permissionIcons !== undefined) {
             this.permissionIcons = state.permissionIcons;
         }

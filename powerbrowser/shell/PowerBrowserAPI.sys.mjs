@@ -3343,7 +3343,7 @@ export const PowerBrowserAPI = Object.freeze({
           entry.blockedTrackers = 0;
         }
         // Page tools (32-01): a new page starts with no find state; the same navigation's push carries the reset.
-        if (!sameDocument) resetWebTabFind(browser);
+        if (!sameDocument) resetWebTabPage(browser);
         if (!sameDocument && /^https?:\/\//i.test(locationSpec)) {
           // NG-002: a navigation updates this tab's row in place -- group, x/y,
           // ord and thumbnail stay.
@@ -3504,6 +3504,8 @@ export const PowerBrowserAPI = Object.freeze({
           findCurrent: pageFields.findCurrent,
           findTotal: pageFields.findTotal,
           findStatus: pageFields.findStatus,
+          audioMuted: pageFields.audioMuted,
+          soundPlaying: pageFields.soundPlaying,
         });
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] state push for ${tabId} failed: ${err && err.message ? err.message : err}`);
@@ -4496,7 +4498,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4835,6 +4837,8 @@ async function handleWebTabAction(data, actorRef) {
       finder.entireWord = data.entireWord === true;
       finder.onFindbarOpen();
       finder.fastFind(data.query, false, false);
+      // A remote finder (FinderParent) counts matches only when asked; the findbar asks, and so does this arm.
+      finder.requestMatchesCount(data.query, { linksOnly: false });
       if (data.highlightAll === true) {
         finder.highlight(true, data.query, false);
       }
@@ -4854,6 +4858,7 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: true, kind, where: "no-query" };
       }
       finder.findAgain(query, data.backwards === true, false, false);
+      finder.requestMatchesCount(query, { linksOnly: false });
       return { ok: true, kind, where: "done" };
     }
     case "webTabFindClose": {
@@ -4893,6 +4898,32 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
       return webTabZoomReply(kind, data.tabId, 0);
+    }
+    // Page tools (32-01, PAGE-05): mute is an explicit boolean, never a toggle. The overlay's own
+    // mute()/unmute() notify the media context; the reply reads audioMuted back.
+    case "webTabMute": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      if (typeof data.muted !== "boolean") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a mute flag that is not a boolean" };
+      }
+      const entry = webTabs.get(data.tabId);
+      if (!entry) {
+        return { ok: true, kind, where: "unknown-tab" };
+      }
+      try {
+        if (data.muted) {
+          entry.browser.mute();
+        } else {
+          entry.browser.unmute();
+        }
+      } catch {
+        PowerBrowserAPI.log("error", "[web-tab] mute change failed");
+        return { ok: false, reason: "write-failed", message: "handleWebTabAction: the mute change failed" };
+      }
+      webTabPagePush(entry.browser);
+      return { ok: true, kind, where: "applied", audioMuted: entry.browser.audioMuted === true };
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -5026,6 +5057,18 @@ function attachWebTabPageListeners(frame, tabId, browser) {
   state.frame = frame;
   state.tabId = tabId;
   ensureWebTabFinderListener(browser);
+  // PAGE-05: upstream's audioPlaybackStarted() returns while the overlay is muted, so a muted tab never
+  // reports sound playing; Stopped always fires. soundPlaying is therefore event-driven, as stock tabs' is.
+  state.audioStarted = () => {
+    state.soundPlaying = true;
+    webTabPagePush(browser);
+  };
+  state.audioStopped = () => {
+    state.soundPlaying = false;
+    webTabPagePush(browser);
+  };
+  browser.addEventListener("DOMAudioPlaybackStarted", state.audioStarted);
+  browser.addEventListener("DOMAudioPlaybackStopped", state.audioStopped);
 }
 
 function detachWebTabPageListeners(browser) {
@@ -5038,6 +5081,8 @@ function detachWebTabPageListeners(browser) {
   } catch {
     // best-effort: the overlay is closing and its finder goes with it
   }
+  browser.removeEventListener("DOMAudioPlaybackStarted", state.audioStarted);
+  browser.removeEventListener("DOMAudioPlaybackStopped", state.audioStopped);
   state.frame = null;
   state.findOn = null;
 }
@@ -5069,7 +5114,23 @@ function webTabPageFields(browser) {
   } catch {
     zoom = 1;
   }
-  return { zoom, findCurrent: state.findCurrent, findTotal: state.findTotal, findStatus: state.findStatus };
+  return {
+    zoom,
+    findCurrent: state.findCurrent,
+    findTotal: state.findTotal,
+    findStatus: state.findStatus,
+    audioMuted: browser.audioMuted === true,
+    soundPlaying: state.soundPlaying,
+  };
+}
+
+// A new page starts with no find state and no sound: the previous page's media went with it.
+function resetWebTabPage(browser) {
+  resetWebTabFind(browser);
+  const state = webTabPageState.get(browser);
+  if (state) {
+    state.soundPlaying = false;
+  }
 }
 
 // A state push for an overlay whose page-tools fields just changed; the

@@ -5090,6 +5090,17 @@ run_own_checks() {
       "address-bar-live|node $REPO_ROOT/scripts/verify-address-bar-live.mjs"
       "address-bar-live-self-test|node $REPO_ROOT/scripts/verify-address-bar-live.mjs --self-test"
 
+      # NEW (Phase 32 plan 01, PAGE-01/02/05): the find, zoom and audio arms driven through the
+      # Theia frame's WebTabChannel in the built shell, with the startup cache purged
+      # (MOZ_PURGE_CACHES=1), plus the downloads-today probe (record only; it writes its verdict
+      # to scripts/lib/pb-probe-verdicts.json and never passes or fails). The print-today and
+      # edit-today probes are not in this script (plans 32-02 and later own their command routes).
+      # Needs the built binary (objdir/.pb-050-build.sha256 must match patch 050) and the last
+      # Theia app build, so never --quick. The self-test runs a clean find control and the planted
+      # dropped find kind, which must go red naming "no findMatches push".
+      "page-tools-live|node $REPO_ROOT/scripts/verify-page-tools-live.mjs"
+      "page-tools-live-self-test|node $REPO_ROOT/scripts/verify-page-tools-live.mjs --self-test"
+
       # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
       # and identity-local (31-01), site-panel (31-02: certificate, six tri-state
       # rows, icons, the origin race), and clear-data and shield (31-03: the
