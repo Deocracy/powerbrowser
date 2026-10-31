@@ -576,7 +576,7 @@ function selfTest() {
         { label: 'theia_release manager unanchored, so it also matches the fixture copies', rule: 'manager-file-patterns', mutate: c => { manager(c).managerFilePatterns = ['/(^|/)configuration\\.toml$/']; } },
         { label: 'theia_release manager matches one fixture copy by a second pattern', rule: 'manager-file-patterns', mutate: c => { manager(c).managerFilePatterns = ['/^configuration\\.toml$/', '/^\\.planning\\/milestones\\/.*\\/configuration\\.toml$/']; } },
         { label: 'ignorePaths removed, so the fixture copies are no longer skipped', rule: 'ignore-paths', mutate: c => { delete c.ignorePaths; } },
-        { label: 'ignorePaths narrowed to one fixture directory', rule: 'ignore-paths', mutate: c => { c.ignorePaths = ['.planning/milestones/v1.0-phases/**']; } },
+        { label: 'ignorePaths narrowed to one fixture directory', rule: 'ignore-paths', mutate: c => { c.ignorePaths = ['.planning/milestones/v1.1-phases/09-extensions-crash-pipeline/fixtures/npm-kind']; } },
         { label: 'root configuration.toml not in the tracked set', rule: 'theia-release-manager', overrides: { trackedFiles: ['.planning/milestones/v1.1-phases/09-extensions-crash-pipeline/fixtures/npm-kind/configuration.toml'] } },
         { label: 'deprecated fileMatch kept beside managerFilePatterns', rule: 'theia-release-manager', mutate: c => { manager(c).fileMatch = ['(^|/)configuration\\.toml$']; } },
         { label: 'theia_release manager on github-releases', rule: 'theia-release-manager', mutate: c => { manager(c).datasourceTemplate = 'github-releases'; } },
