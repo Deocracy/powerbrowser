@@ -86,6 +86,7 @@ const RULE = Object.freeze({
     duplicateAssetDay: 'duplicate asset-day POST',
     atomic: 'all-or-nothing batch write',
     synthetic: 'synthetic-marked event in the maintainer query',
+    syntheticAck: 'synthetic acknowledgement for an authenticated probe',
     syntheticAnon: 'anonymous synthetic flag',
     retention: 'retention window',
     admitted: 'admitted set equals the producer',
@@ -353,8 +354,8 @@ async function runBehaviour(root, worker, secret) {
     {
         const stub = makeStub();
         const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS, { authorization: `Bearer ${secret}` }), env(stub), freshState());
-        if (verdict.status !== 200 || verdict.body !== 'ok: stored 3') failures.push(`${RULE.control}: a well-formed batch answered ${verdict.status} ${JSON.stringify(verdict.body)}, not 200 "ok: stored 3". Next step: restore the accept path.`);
-        if (stub.events.length !== 3) failures.push(`${RULE.control}: the batch wrote ${stub.events.length} row(s), not 3. Next step: write one row per admitted event.`);
+        if (verdict.status !== 200 || verdict.body !== 'ok: stored 3 synthetic 1') failures.push(`${RULE.syntheticAck}: an authenticated batch with one synthetic event answered ${verdict.status} ${JSON.stringify(verdict.body)}, not 200 "ok: stored 3 synthetic 1". Next step: acknowledge honoured synthetic events so the maintenance probe can tell a wrong secret from a right one.`);
+        if (verdict.status === 200 && stub.events.length !== 3) failures.push(`${RULE.control}: the batch wrote ${stub.events.length} row(s), not 3. Next step: write one row per admitted event.`);
         const maintainer = await worker.listMaintainerEvents(stub);
         if (maintainer.length !== 2) failures.push(`${RULE.synthetic}: the maintainer query returned ${maintainer.length} row(s) for two real events and one synthetic probe; want 2. Next step: keep synthetic rows out of listMaintainerEvents.`);
         if (maintainer.some(r => r.synthetic !== 0)) failures.push(`${RULE.synthetic}: the maintainer query returned a synthetic row. Next step: filter synthetic = 0 in SQL.`);
@@ -364,7 +365,8 @@ async function runBehaviour(root, worker, secret) {
     {
         const stub = makeStub();
         for (const authorization of ['', 'Bearer wrong']) {
-            await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS, { authorization }), env(stub), freshState());
+            const anon = await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS, { authorization }), env(stub), freshState());
+            if (anon.body !== 'ok: stored 3') failures.push(`${RULE.syntheticAck}: a caller without the shared secret (${JSON.stringify(authorization)}) answered ${JSON.stringify(anon.body)}, not "ok: stored 3"; it must never be acknowledged as synthetic. Next step: acknowledge only rows honoured as synthetic.`);
         }
         if (stub.events.some(r => r.synthetic !== 0)) failures.push(`${RULE.syntheticAnon}: an event marked synthetic by a caller without the shared secret was stored as synthetic, so an anonymous client can hide rows from the maintainer view. Next step: honour the flag only for a request that proves the secret.`);
     }
@@ -688,6 +690,8 @@ const PLANTS = [
     { rule: RULE.streamCap, rel: WORKER_REL, find: '    if (Number.isFinite(declared) && declared > cap) return undefined;\n', replace: '' },
     { rule: RULE.streamCap, rel: WORKER_REL, find: '        if (total > cap) { await reader.cancel(); return undefined; }\n', replace: '' },
     { rule: RULE.authFirst, rel: WORKER_REL, find: 'if (path === DL_PATH && !authorized(', replace: 'if (false && !authorized(' },
+    { rule: RULE.syntheticAck, rel: WORKER_REL, find: "${synthetic > 0 ? ` synthetic ${synthetic}` : ''}", replace: '' },
+    { rule: RULE.syntheticAck, rel: WORKER_REL, find: "const synthetic = rows.filter(row => row.synthetic === 1).length;", replace: 'const synthetic = rows.filter(row => row.synthetic !== 2).length;' },
     { rule: RULE.syntheticAnon, rel: WORKER_REL, find: "const trusted = authorized(shape.headers?.authorization, env);", replace: 'const trusted = true;' },
     { rule: RULE.atomic, rel: WORKER_REL, find: 'if (rows.length > 0) await env.DB.batch(rows.map(row => env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs))));', replace: 'for (const row of rows) await env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs)).run();' },
     { rule: RULE.noSuppress, rel: WORKER_REL, find: '    const trusted = authorized(shape.headers?.authorization, env);', replace: "    globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n    if (globalThis.__plantSent > 60) return discard(200, 'throttled_in_worker_cap');\n    const trusted = authorized(shape.headers?.authorization, env);" },
