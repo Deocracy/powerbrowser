@@ -537,6 +537,7 @@ jobs:
     outputs:
       watchdog-started-ms: ${{ steps.watchdog.outputs.started-ms }}
       synthetic-status: ${{ steps.synthetic.outputs.status }}
+      synthetic-acked: ${{ steps.synthetic.outputs.acked }}
     steps:
       - name: Check out repo
         if: ${{ !inputs.dry-run }}
@@ -578,18 +579,36 @@ jobs:
           fi
 
       # The bot copy of the shared secret marks this one POST synthetic, so the maintainer view excludes
-      # it. The endpoint is the one configuration.toml states under [telemetry]. The status is the only
-      # value kept; the response body and the secret are never printed.
+      # it. The endpoint is the one configuration.toml states under [telemetry]; it must be https and the request
+      # is bounded to 20 seconds. The secret goes to curl through a header file (printf is a builtin, so it is
+      # never on an argv), and the response body is read only for the Worker's synthetic acknowledgement: a
+      # wrong or missing secret still answers 200 (the probe is stored as a real row), so the row is green only
+      # when the body is exactly "ok: stored 1 synthetic 1". The secret is never printed.
       - name: Send the synthetic events probe (bot copy of the shared secret, marked synthetic)
         id: synthetic
         if: ${{ !inputs.dry-run }}
+        continue-on-error: true
         env:
           SHARED_SECRET: ${{ secrets.DOWNLOAD_COUNT_SECRET }}
         run: |
           set -euo pipefail
           ENDPOINT=$(awk '/^\[telemetry\]/ { in_block = 1; next } /^\[/ { in_block = 0 } in_block && /^endpoint = / { gsub(/"/, "", $3); print $3 }' configuration.toml)
-          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT" -H 'content-type: application/json' -H "authorization: Bearer ${SHARED_SECRET}" --data '{"events":[{"kind":"error","name":"release-train.maintenance-probe","data":{"type":"MaintenanceProbe","os":"unknown"},"synthetic":true,"at":0}]}' || true)
+          STATUS=000
+          ACKED=false
+          if [ -z "$SHARED_SECRET" ]; then
+            echo "release-train maintenance: DOWNLOAD_COUNT_SECRET is empty in the bot environment; the probe is not sent" >&2
+          elif [[ $ENDPOINT != https://* ]]; then
+            echo "release-train maintenance: the telemetry endpoint in configuration.toml is not https; the probe is not sent" >&2
+          else
+            HEADERS="$RUNNER_TEMP/probe-headers"
+            BODY="$RUNNER_TEMP/probe-body.txt"
+            (umask 077; printf 'authorization: Bearer %s\n' "$SHARED_SECRET" > "$HEADERS")
+            STATUS=$(curl -sS --max-time 20 --proto '=https' -o "$BODY" -w '%{http_code}' -X POST "$ENDPOINT" -H 'content-type: application/json' -H "@${HEADERS}" --data '{"events":[{"kind":"error","name":"release-train.maintenance-probe","data":{"type":"MaintenanceProbe","os":"unknown"},"synthetic":true,"at":0}]}' || true)
+            rm -f "$HEADERS"
+            if [ -f "$BODY" ] && [ "$(cat "$BODY")" = "ok: stored 1 synthetic 1" ]; then ACKED=true; fi
+          fi
           echo "status=${STATUS:-000}" >> "$GITHUB_OUTPUT"
+          echo "acked=${ACKED}" >> "$GITHUB_OUTPUT"
 
   # The sweep's render. It reads the tag listing, the commit date of each tag under the pinned major, the
   # Release list and the advisory product-details value (all reads), takes the probe outputs, derives the
@@ -653,6 +672,7 @@ jobs:
           PROBE_RESULT: ${{ needs.maintenance-probe.result }}
           PROBE_WATCHDOG_MS: ${{ needs.maintenance-probe.outputs.watchdog-started-ms }}
           PROBE_SYNTHETIC: ${{ needs.maintenance-probe.outputs.synthetic-status }}
+          PROBE_ACKED: ${{ needs.maintenance-probe.outputs.synthetic-acked }}
         run: |
           set -euo pipefail
           NOW_MS=$(date -u +%s%3N)
@@ -669,6 +689,7 @@ jobs:
             --arg result "$PROBE_RESULT" \
             --arg watchdog "${PROBE_WATCHDOG_MS:-}" \
             --arg synthetic "${PROBE_SYNTHETIC:-}" \
+            --arg acked "${PROBE_ACKED:-}" \
             '{
               pinTag: $pin, nowMs: $now, tags: $tags, tagDates: $dates, releases: $releases[0],
               advisoryEsr: (if $advisory == "" then null else $advisory end),
@@ -676,6 +697,7 @@ jobs:
               watchdogProbed: ($result == "success"),
               watchdogStartedAtMs: (if $result == "success" and $watchdog != "" then ($watchdog | tonumber) else null end),
               syntheticStatus: (if $result == "success" and $synthetic != "" then ($synthetic | tonumber) else null end),
+              syntheticAcked: ($acked == "true"),
               channelOk: null,
               downloadRows: 0
             }' > "$RUNNER_TEMP/maintenance-facts.json"
