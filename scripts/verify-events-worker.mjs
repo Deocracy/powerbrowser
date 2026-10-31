@@ -82,6 +82,7 @@ const RULE = Object.freeze({
     wrongSecret: 'wrong-secret download-count POST',
     malformedAuthed: 'malformed authenticated body',
     duplicateAssetDay: 'duplicate asset-day POST',
+    atomic: 'all-or-nothing batch write',
     synthetic: 'synthetic-marked event in the maintainer query',
     retention: 'retention window',
     admitted: 'admitted set equals the producer',
@@ -102,16 +103,30 @@ const RULE = Object.freeze({
 // Models exactly the statement shapes the Worker issues. An unknown statement throws, so a new
 // statement shape fails the gate loudly instead of passing silently. The upsert keeps a stored
 // column unless the SQL names it as excluded.<column>, which is how the real conflict clause works.
-function makeStub() {
-    const stub = { events: [], counts: new Map(), nextId: 1 };
+function makeStub(options = {}) {
+    const stub = { events: [], counts: new Map(), nextId: 1, inserts: 0, failOnInsert: options.failOnInsert };
     stub.prepare = sql => ({
         bind: (...values) => ({
+            sql,
+            values,
             run: async () => execute(stub, sql, values),
             all: async () => execute(stub, sql, values),
         }),
         run: async () => execute(stub, sql, []),
         all: async () => execute(stub, sql, []),
     });
+    // D1's batch() runs its statements in one transaction: any failure rolls every one of them back.
+    stub.batch = async statements => {
+        const before = { events: stub.events.slice(), counts: new Map(stub.counts), nextId: stub.nextId };
+        try {
+            const results = [];
+            for (const statement of statements) results.push(await statement.run());
+            return results;
+        } catch (err) {
+            Object.assign(stub, before);
+            throw err;
+        }
+    };
     return stub;
 }
 
@@ -122,6 +137,8 @@ function execute(stub, sql, values) {
         const row = {};
         columns.forEach((c, i) => { row[c] = values[i]; });
         if (insert[1] === 'events') {
+            stub.inserts += 1;
+            if (stub.inserts === stub.failOnInsert) throw new Error('stub D1: planted storage fault');
             row.id = stub.nextId;
             stub.nextId += 1;
             stub.events.push(row);
@@ -395,6 +412,15 @@ async function runBehaviour(root, worker, secret) {
     }
     await expectRejected(RULE.content, post(worker.EVENTS_PATH, { events: [errorEvent({ type: 'T' }, { name: 'plugin failed: /home/alice/x' })] }), { status: 400, body: 'Discarded: malformed_event' });
 
+    // All-or-nothing: the stub fails the second insert of a three-event batch. The Worker must answer
+    // store_unavailable and leave no row behind, or the sender's retry would store the first row again.
+    {
+        const stub = makeStub({ failOnInsert: 2 });
+        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS), env(stub), freshState());
+        if (verdict.status !== 500 || verdict.body !== 'Discarded: store_unavailable') failures.push(`${RULE.atomic}: a storage fault on the second insert answered ${verdict.status} ${JSON.stringify(verdict.body)}, not 500 "Discarded: store_unavailable". Next step: answer a failed write with store_unavailable.`);
+        if (stub.events.length !== 0) failures.push(`${RULE.atomic}: a storage fault on the second insert left ${stub.events.length} row(s) stored, so a retry of the batch would store them again. Next step: write the batch with one env.DB.batch call.`);
+    }
+
     // One client cannot suppress another: the Worker keeps no cross-caller counter, so a flood of POSTs
     // (well past the 60 per minute the old in-Worker window allowed) never makes it discard a later
     // caller's report. Driven through the real fetch handler, which holds the module-level state.
@@ -569,6 +595,7 @@ const PLANTS = [
     { rule: RULE.overCapBatch, rel: WORKER_REL, find: ' || top.events.length > MAX_EVENTS', replace: '' },
     { rule: RULE.extraProp, rel: WORKER_REL, find: '    row.synthetic = event.synthetic === true ? 1 : 0;', replace: '    row.synthetic = event.synthetic === true ? 1 : 0;\n    row.message = event.message;' },
     { rule: RULE.overLength, rel: WORKER_REL, find: '    return value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value;', replace: '    return value;' },
+    { rule: RULE.atomic, rel: WORKER_REL, find: 'if (rows.length > 0) await env.DB.batch(rows.map(row => env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs))));', replace: 'for (const row of rows) await env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs)).run();' },
     { rule: RULE.noSuppress, rel: WORKER_REL, find: '    const admitted = top.events.map(admitEvent);', replace: "    globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n    if (globalThis.__plantSent > 60) return discard(200, 'throttled_in_worker_cap');\n    const admitted = top.events.map(admitEvent);" },
     { rule: RULE.unauthDownload, rel: WORKER_REL, find: '    if (!authorized(shape.headers?.authorization, env)) return empty(401);', replace: '' },
     { rule: RULE.wrongSecret, rel: WORKER_REL, find: "    return constantTimeEqual(header.slice('Bearer '.length), expected);", replace: "    return header.startsWith('Bearer ');" },

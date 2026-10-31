@@ -210,7 +210,8 @@ function eventValues(row, receivedAt) {
 
 /**
  * POST /events. Contract order: route, content type, size, parse, shape, store. Every
- * rejection is decided before the first write, so a rejected batch stores nothing.
+ * rejection is decided before the first write, so a rejected batch stores nothing, and the write is
+ * one D1 batch, so a storage fault stores nothing either.
  */
 export async function handleEvents(shape, env, state) {
     if (shape.method !== 'POST' || shape.path !== EVENTS_PATH) return empty(404);
@@ -224,9 +225,9 @@ export async function handleEvents(shape, env, state) {
     if (admitted.includes(undefined)) return discard(400, REASON_EVENT);
     const rows = admitted.filter(row => row !== null);
     try {
-        for (const row of rows) {
-            await env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs)).run();
-        }
+        // One batch is one transaction in D1: a failed insert stores none of them, so the sender's retry of
+        // the whole batch cannot duplicate rows that did land.
+        if (rows.length > 0) await env.DB.batch(rows.map(row => env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs))));
     } catch {
         return discard(500, REASON_STORE);
     }
