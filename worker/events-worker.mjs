@@ -23,7 +23,8 @@
 // credential-shaped values.
 //
 // CAPS AND RETENTION. The privacy page states the same numbers; the gate derives both sides.
-//   body       MAX_BODY_BYTES = 65536 bytes, checked before parse; over it answers 413 oversized_body
+//   body       MAX_BODY_BYTES = 65536 bytes, enforced from Content-Length before the body is read and
+//              again while it streams in (readCappedText); over it answers 413 oversized_body
 //   batch      MAX_EVENTS = 100 events per POST; over it answers 400 malformed_batch
 //   string     MAX_STRING_CHARS = 256 characters per stored free string (a download-count asset or tag);
 //              a longer string is truncated. Event values are shape-checked, never truncated.
@@ -282,6 +283,28 @@ function toResponse(verdict, extraHeaders = {}) {
     return new Response(verdict.body, { status: verdict.status, headers: { 'content-type': 'text/plain; charset=utf-8', ...extraHeaders } });
 }
 
+/**
+ * Read the request body as text, refusing more than `cap` bytes. A declared Content-Length over the cap
+ * is refused before the body is touched; otherwise the body is read in chunks and abandoned as soon as
+ * the running total passes the cap, so an oversized upload never fills memory. Returns undefined over the cap.
+ */
+export async function readCappedText(request, cap) {
+    const declared = Number(request.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > cap) return undefined;
+    if (request.body === null) return '';
+    const reader = request.body.getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > cap) { await reader.cancel(); return undefined; }
+        chunks.push(value);
+    }
+    return new Blob(chunks).text();
+}
+
 export default {
     async fetch(request, env) {
         const path = new URL(request.url).pathname;
@@ -289,6 +312,19 @@ export default {
         const origin = request.headers.get('origin');
         if (path === EVENTS_PATH && request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(origin, true) });
         const cors = path === EVENTS_PATH ? corsHeaders(origin, false) : {};
+        let early;
+        let body = '';
+        if (request.method === 'POST') {
+            // Refuse what needs no body before spending memory on it: an unauthenticated download-count
+            // caller reaches no body read, and an oversized body is cut off at the cap.
+            if (path === DL_PATH && !authorized(request.headers.get('authorization'), env)) {
+                early = empty(401);
+            } else {
+                const text = await readCappedText(request, MAX_BODY_BYTES);
+                if (text === undefined) early = discard(413, REASON_OVERSIZED);
+                else body = text;
+            }
+        }
         const shape = {
             method: request.method,
             path,
@@ -296,13 +332,12 @@ export default {
                 'content-type': request.headers.get('content-type') ?? '',
                 authorization: request.headers.get('authorization') ?? '',
             },
-            // shortcut: the body is read whole before the 64 KiB check; upgrade to a streamed read if abuse shows up.
-            body: request.method === 'POST' ? await request.text() : '',
+            body,
         };
         const state = { nowMs: Date.now() };
-        const verdict = path === EVENTS_PATH
+        const verdict = early ?? (path === EVENTS_PATH
             ? await handleEvents(shape, env, state)
-            : await handleDownloadCounts(shape, env, state);
+            : await handleDownloadCounts(shape, env, state));
         return toResponse(verdict, cors);
     },
     scheduled,

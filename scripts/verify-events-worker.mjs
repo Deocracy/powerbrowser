@@ -91,6 +91,8 @@ const RULE = Object.freeze({
     admitted: 'admitted set equals the producer',
     contract: 'producer-to-Worker contract',
     cors: 'CORS preflight and origin',
+    streamCap: 'size cap before the body is read',
+    authFirst: 'secret checked before the body is read',
     shapes: 'admitted shapes equal the producer',
     content: 'content in an admitted key',
     flat: 'old flat event shape',
@@ -475,6 +477,43 @@ async function runBehaviour(root, worker, secret) {
         if (dlPre.headers.get('access-control-allow-origin') !== null) failures.push(`${RULE.cors}: OPTIONS ${worker.DL_PATH} was granted allow-origin. Next step: never send CORS headers on the download-counts route.`);
     }
 
+    // The size cap and the secret are enforced before the body is spent. A tracked stream shows how
+    // much of the body the fetch handler pulled: nothing for a declared oversize or a missing secret,
+    // and no more than the cap plus one chunk for an undeclared oversize.
+    {
+        const tracked = (chunkBytes, chunks) => {
+            const t = { pulls: 0 };
+            let i = 0;
+            const stream = new ReadableStream({
+                pull(controller) {
+                    if (i < chunks) { i += 1; t.pulls += 1; controller.enqueue(new Uint8Array(chunkBytes).fill(0x20)); } else controller.close();
+                },
+            }, { highWaterMark: 0 });
+            return { stream, t };
+        };
+        const streamed = (path, headers, chunkBytes, chunks) => {
+            const { stream, t } = tracked(chunkBytes, chunks);
+            const request = new Request(`https://events.example.invalid${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: stream, duplex: 'half' });
+            return { request, t };
+        };
+        const e = { DB: makeStub(), DOWNLOAD_COUNT_SECRET: secret };
+        const chunk = 8192;
+        const many = Math.ceil(worker.MAX_BODY_BYTES / chunk) * 4;
+        const declared = streamed(worker.EVENTS_PATH, { 'content-length': String(worker.MAX_BODY_BYTES + 1) }, chunk, many);
+        const r1 = await worker.default.fetch(declared.request, e);
+        if (r1.status !== 413 || declared.t.pulls !== 0) failures.push(`${RULE.streamCap}: a body declaring ${worker.MAX_BODY_BYTES + 1} bytes answered ${r1.status} after the handler pulled ${declared.t.pulls} chunk(s); want 413 with none read. Next step: refuse from Content-Length before reading.`);
+        const undeclared = streamed(worker.EVENTS_PATH, {}, chunk, many);
+        const r2 = await worker.default.fetch(undeclared.request, e);
+        const allowed = Math.ceil(worker.MAX_BODY_BYTES / chunk) + 1;
+        if (r2.status !== 413 || undeclared.t.pulls > allowed) failures.push(`${RULE.streamCap}: an undeclared oversize body answered ${r2.status} after the handler pulled ${undeclared.t.pulls} of ${many} chunk(s); want 413 after at most ${allowed}. Next step: stop reading as soon as the running total passes the cap.`);
+        const unauth = streamed(worker.DL_PATH, {}, chunk, many);
+        const r3 = await worker.default.fetch(unauth.request, e);
+        if (r3.status !== 401 || unauth.t.pulls !== 0) failures.push(`${RULE.authFirst}: an unauthenticated download-count POST answered ${r3.status} after the handler pulled ${unauth.t.pulls} chunk(s); want 401 with none read. Next step: check the Authorization header before reading the body.`);
+        const body = JSON.stringify(GOOD_EVENTS);
+        const ok = await worker.default.fetch(new Request(`https://events.example.invalid${worker.EVENTS_PATH}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }), e);
+        if (ok.status !== 200) failures.push(`${RULE.streamCap}: a well-formed body within the cap answered ${ok.status}, not 200. Next step: read bodies up to the cap in full.`);
+    }
+
     // Download counts: authentication first, then the shape, then the upsert.
     const dlBody = { asset: 'PowerBrowser-153.5.1.exe', tag: 'v153.5.1-1', download_count: 10 };
     const authed = { authorization: `Bearer ${secret}` };
@@ -628,6 +667,9 @@ const PLANTS = [
     { rule: RULE.overCapBatch, rel: WORKER_REL, find: ' || top.events.length > MAX_EVENTS', replace: '' },
     { rule: RULE.extraProp, rel: WORKER_REL, find: '    row.synthetic = mayMarkSynthetic && event.synthetic === true ? 1 : 0;', replace: '    row.synthetic = mayMarkSynthetic && event.synthetic === true ? 1 : 0;\n    row.message = event.message;' },
     { rule: RULE.overLength, rel: WORKER_REL, find: '    return value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value;', replace: '    return value;' },
+    { rule: RULE.streamCap, rel: WORKER_REL, find: '    if (Number.isFinite(declared) && declared > cap) return undefined;\n', replace: '' },
+    { rule: RULE.streamCap, rel: WORKER_REL, find: '        if (total > cap) { await reader.cancel(); return undefined; }\n', replace: '' },
+    { rule: RULE.authFirst, rel: WORKER_REL, find: 'if (path === DL_PATH && !authorized(', replace: 'if (false && !authorized(' },
     { rule: RULE.syntheticAnon, rel: WORKER_REL, find: "const trusted = authorized(shape.headers?.authorization, env);", replace: 'const trusted = true;' },
     { rule: RULE.atomic, rel: WORKER_REL, find: 'if (rows.length > 0) await env.DB.batch(rows.map(row => env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs))));', replace: 'for (const row of rows) await env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs)).run();' },
     { rule: RULE.noSuppress, rel: WORKER_REL, find: '    const trusted = authorized(shape.headers?.authorization, env);', replace: "    globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n    if (globalThis.__plantSent > 60) return discard(200, 'throttled_in_worker_cap');\n    const trusted = authorized(shape.headers?.authorization, env);" },
