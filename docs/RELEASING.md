@@ -518,10 +518,13 @@ phase is archived. Bypass applies per ruleset, to every rule in it, which is why
   deletion and non-fast-forward on the release tag pattern. The `powerbrowser-bot`
   App is its only bypass actor; the owner's `current_user_can_bypass` is `never`.
   There is no required-signatures rule: release tags are not signed by a human.
-- Five environments, each restricted by a custom branch policy to `main` only
+- Six environments, each restricted by a custom branch policy to `main` only
   (`environment-branch-policy-main.json`):
   - `release` (`environment-release.json`): the owner as required reviewer, admin
     bypass disabled (`can_admins_bypass` false).
+  - `winget` (`environment-winget.json`): holds `WINGET_TOKEN` alone, with the same protection as `release`:
+    the owner as required reviewer, admin bypass disabled. `repo-controls` requires a reviewer and
+    `can_admins_bypass` false on `release` and on every environment whose job reads `WINGET_TOKEN`.
   - `descriptor` (`environment-descriptor.json`): the owner as required reviewer
     plus a 1440-minute wait timer, with admin bypass enabled so the owner can skip
     the timer after the own-install hop (Owner Decision 18).

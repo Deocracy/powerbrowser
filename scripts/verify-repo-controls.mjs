@@ -33,6 +33,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { releaseIdentity, resolveConfig } from './generate.mjs';
+import { loadYaml } from './lib/release-workflow.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'repo-controls';
@@ -514,6 +515,41 @@ const LABEL_DESCRIPTION_MAX = 100;
 // The declared set itself, checked against the real tree on every run: non-empty,
 // every entry shaped, within GitHub's length limits, and unique case-insensitively
 // (a form matches a label by name).
+// Every environment that holds a secret the channel stage uses beyond the bot App key needs an owner approval
+// and no admin bypass: the release environment (signing key) and the environment of any job that reads
+// WINGET_TOKEN, derived from .github/workflows/channel-manifests.yml. The bot environment holds the App
+// key and is automation by design (Phase 43), so it is not in this set. Offline: declared bodies only.
+export function gatedEnvFailures(ctx, workflowText = null) {
+    const f = [];
+    let text = workflowText;
+    if (text === null) {
+        try {
+            text = readFileSync(join(ctx.root, '.github/workflows/channel-manifests.yml'), 'utf8');
+        } catch {
+            return [`environments: .github/workflows/channel-manifests.yml cannot be read, so the environments holding WINGET_TOKEN cannot be derived. Next step: restore it from git.`];
+        }
+    }
+    const names = new Set(['release']);
+    try {
+        for (const job of Object.values(loadYaml().load(text)?.jobs ?? {})) {
+            if (/secrets\.WINGET_TOKEN/.test(JSON.stringify(job)) && typeof job.environment === 'string') names.add(job.environment);
+        }
+    } catch {
+        return ['environments: .github/workflows/channel-manifests.yml does not parse, so the environments holding WINGET_TOKEN cannot be derived. Next step: fix the YAML.'];
+    }
+    for (const name of names) {
+        const body = ctx.bodies[envFile(name)];
+        if (body === undefined) continue; // missing or unreadable: already red
+        if (!Array.isArray(body.reviewers) || body.reviewers.length === 0) {
+            f.push(`environments (${SETTINGS_REL}/${envFile(name)}): environment ${name} holds a secret the release path uses but declares no required reviewer, so nothing gates its secret on an owner approval. Next step: declare at least one reviewer, as environment-release.json does.`);
+        }
+        if (body.can_admins_bypass !== false) {
+            f.push(`environments (${SETTINGS_REL}/${envFile(name)}): environment ${name} holds a secret the release path uses but can_admins_bypass is ${JSON.stringify(body.can_admins_bypass ?? null)}, so an admin can skip its approval. Next step: set can_admins_bypass to false.`);
+        }
+    }
+    return f;
+}
+
 function labelSetFailures(ctx) {
     const c = CONTROLS.find(x => x.id === 'labels');
     const body = ctx.bodies[c.file];
@@ -803,6 +839,7 @@ export function runChecks(root, overrides = {}) {
     if (ctx.slug === null) return { failures, compared, slug: null };
     failures.push(...tagPatternFailures(ctx, overrides.tags !== undefined ? overrides.tags : gitTags(root)));
     failures.push(...labelSetFailures(ctx));
+    failures.push(...gatedEnvFailures(ctx));
     for (const c of CONTROLS) {
         const declared = declaredOf(c, ctx.bodies);
         if (declared === undefined) continue; // already red: missing or unparseable
@@ -1057,6 +1094,9 @@ function selfTest() {
             l.total_count = l.environments.length;
         }), ['environment fixer', 'missing']],
         ['descriptor wait_timer 0', envMut('descriptor', (e) => { e.protection_rules.find(x => x.type === 'wait_timer').wait_timer = 0; }), ['environment descriptor', 'wait_timer is 0']],
+        ['winget environment with no required reviewer', { readBody: (f) => { const b = readBody(f); if (f === 'environment-winget.json') b.reviewers = []; return b; } }, ['environment winget', 'no required reviewer']],
+        ['winget environment with admin bypass on', { readBody: (f) => { const b = readBody(f); if (f === 'environment-winget.json') b.can_admins_bypass = true; return b; } }, ['environment winget', 'can_admins_bypass']],
+        ['release environment with no required reviewer', { readBody: (f) => { const b = readBody(f); if (f === 'environment-release.json') b.reviewers = []; return b; } }, ['environment release', 'no required reviewer']],
         ['release can_admins_bypass true', envMut('release', (e) => { e.can_admins_bypass = true; }), ['environment release', 'can_admins_bypass is true']],
         ['release reviewer id changed', envMut('release', (e) => { e.protection_rules.find(x => x.type === 'required_reviewers').reviewers[0].reviewer.id = 1; }), ['environment release', 'reviewers']],
         ['triage holding an extra release/* policy', policiesMut('triage', (l) => { l.branch_policies.push({ id: 3999, name: 'release/*', type: 'branch' }); l.total_count = 2; }), ['environment triage', 'release/*']],

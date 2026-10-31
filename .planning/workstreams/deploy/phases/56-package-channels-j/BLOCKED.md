@@ -132,7 +132,7 @@ is not executed by this run and is listed at the end.
 
 - **Blocked:** the channel legs need the `bot` environment (`BOT_APP_PRIVATE_KEY` secret, `BOT_APP_ID` variable, the App
   with contents and pull-requests write and no Workflows permission) and the `winget` environment with `WINGET_TOKEN`
-  (declared in `.github/settings/environment-winget.json`; run `node scripts/apply-repo-controls.mjs` to create it).
+  (declared in `.github/settings/environment-winget.json` with the owner as required reviewer and admin bypass off, as `release`; each winget-submit run therefore waits for an owner approval; run `node scripts/apply-repo-controls.mjs` to create it).
   The tap repository needs the bot App installed on it.
 - **Owner steps:** confirm the bot environment already holds the App key (Phase 43), add `WINGET_TOKEN` to the `winget`
   environment (item 11), and confirm the App installation covers `homebrew-powerbrowser`.
