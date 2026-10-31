@@ -137,6 +137,11 @@ Azure Artifact Signing subscription. What the user sees:
   unsigned would be worse than shipping without it.
 - No `CERTIFICATE_NAME` or `CERTIFICATE_ISSUER` NSIS defines exist anywhere on the
   installer surface.
+- The `build-windows` job stages the sidecar from a `windows-latest` artifact in `windows-sidecar/` and the
+  digest of that artifact's `SHA256SUMS`, recorded by the producing job outside the artifact, in the
+  `PB_WIN_SIDECAR_SUMS_SHA256` repository variable (the hosted sidecar job is Phase 50 work, `BLOCKED.md`
+  item 8). `powerbrowser/packaging/package-windows.sh` fails closed when either is missing, and
+  `powerbrowser/packaging/check-win-sidecar.sh` refuses unlisted files, symlinks and unsafe manifest paths.
 - MSIX is out of scope: `upstream/python/mozbuild/mozbuild/repackaging/msix.py`
   raises without `makeappx.exe` and `signtool.exe` from a real Windows SDK, and the
   only reason to add it is a Microsoft Store listing.
@@ -279,7 +284,7 @@ for the `objdir-release` rebuild. Both builds are auto tasks in their plans.
 | `mar-signing-and-update-integrity` | Carried out by non-GUI wave E Task 8 (NG-065): `patches/030-powerbrowser-mar-certificates.patch`; drop `--enable-unverified-updates`; tier-3 rebuild of N and N+1; fork-key signing per wave E plan Task 8 Produces, descriptor emission, updater-driven four-outcome proof (`ng065-mar-signature-enforced`) |
 | `packaged-product-correctness-linux` | Staging and packaging probe; `scripts/stage-sidecar.sh` and `patches/050-powerbrowser-package.patch`; application-directory resolution, profile-scoped Theia state, URL argument handling; variant-free legal notice; shell-side update-ready layer; four registry row pairs and `scripts/run-install-matrix.sh` |
 | `linux-release-pipeline-and-update-channel` | Derive the update-origin facts and write the procedure half of this document; `.github/workflows/release.yml` plus its static gate; the live channel gate; the release-mode hop drill and the observed allowlist rows |
-| `windows-unsigned` | Five routing verdicts; `.#firefox-win64` shell and the Windows mozconfig; the one-time `WINSYSROOT` cache population with `get_vs.py`, run from `upstream/` and written outside the repository; generated installer artwork and fork registry defines; `patches/050-powerbrowser-installer.patch` and the deny-host grep; the Windows build, sidecar staging, installer and MAR; the matrix gate, the copy gate, the WINNT descriptor row and the `build-windows` job |
+| `windows-unsigned` | Five routing verdicts; the release-container cross build and the generated Windows mozconfig (`powerbrowser/packaging/mozconfig-windows-x86_64`, `--disable-maintenance-service`); the Windows SDK and MSVC toolchain, fetched by the mozconfig's `--enable-bootstrap` as the hash-pinned `vs` toolchain (nothing sets `WINSYSROOT` and no sysroot is downloaded by hand); `patches/040-powerbrowser-nsis.patch` (as landed: the uninstall ping is removed; the fork registry namespace, the installer artwork and the LEG-01 surface extension are open, see `BLOCKED.md` items 2 to 5 in the phase directory) and the deny-host grep. Lineage: the installer patch this row used to call `050` is the tree's `040`; there is one installer patch file, not a second; the Windows build, sidecar staging, installer and MAR; the matrix gate, the copy gate, the WINNT descriptor row and the `build-windows` job |
 | `macos-adhoc-signed` | Toolchain probe; `.#firefox-macos` shell and two macOS mozconfigs; the five missing branding inputs; universal build, DMG, ad-hoc signature, one universal MAR and two Darwin descriptors; darwin Theia builds and the staged Node binary; five gates plus five self-tests |
 | `reports-bug-error-crash` | Substrate probe; the issue-tracker manifest key, issue form, Report a Bug command and prefill gate; diagnostics Copy button and shell copy scope; the events Worker and its contract gate; frontend error hooks with bounded enrichment; the live loopback delivery drill |
 | `listings-and-cadence` | Listing-admission probe; generator-emitted Flathub sources with tracked comparands; the winget submission step on the verdict branch and the listings gate; this document's maintenance section and its derived doc-to-automation gate |
@@ -639,12 +644,16 @@ checkpoint (plan 47-04).
 
 `pkg-win11` is a **new** libvirt domain on a new disk. A shut-off domain named
 `win11` with a 200704-byte stub qcow2 already exists on `legion`; leave it and its
-disk alone. `docs/BUILD.md`'s packaging capability record still states that
-`virsh list --all` shows zero defined domains; that line is stale, and stage
-`windows-unsigned` corrects it along with the read-access claim beside it. The guest is a test target, never a build host: the Windows build is a
+disk alone. The packaging capability record in `docs/BUILD.md` that says
+`virsh list --all` shows zero defined domains is stale: `win11` is defined and shut
+off on `legion`. Runner-user libvirt access is an owner action in `/etc/nixos`, taken at
+the 54-04 checkpoint. The guest is a test target, never a build host: the Windows build is a
 Linux cross-compile. Give the nvram `format='qcow2'` rather than raw, because
 libvirt refuses an internal snapshot for a pflash domain whose nvram is not qcow2,
-and the `clean-baseline` snapshot every matrix cell reverts to depends on it. Install
+and the `clean-baseline` snapshot the matrix reverts to depends on it. The matrix reverts **once** and runs the
+five cells as a chain in that one guest session (launch, update and uninstall need the install, and the
+no-residue cell diffs the registry snapshot that install took); the inputs reach the guest on a read-only ISO
+(`PB_MATRIX_ISO`, volume label from `scripts/matrix/win-matrix-schema.json`) on the domain's CD-ROM device. Install
 the QEMU guest agent and stock Firefox (the coexistence cell's other party).
 
 ### The Mac session
@@ -1085,8 +1094,9 @@ work directory is removed only while the unit is stopped. Keep disk headroom for
 release build needs: `objdir/` peaks around 14 GB on top of the roughly 5.6 GB
 `upstream/` checkout, and a Windows or macOS target adds its own objdir. `sccache`
 is already configured in `.mozconfig` and in the `.#firefox` shell; stages
-`windows-unsigned` and `macos-adhoc-signed` add `.#firefox-win64` and
-`.#firefox-macos`, which inherit the same export. The `.#theia` shell carries none
+`windows-unsigned` runs its cross build in the release container, which carries the
+same export, and `macos-adhoc-signed` adds `.#firefox-macos`, which inherits it.
+`flake.nix` defines no `.#firefox-win64` shell. The `.#theia` shell carries none
 and needs none. No second cache backend is added.
 
 ### Cloudflare upkeep
@@ -1270,7 +1280,7 @@ on the absence of a log line.
 | `update-channel-live` | 5 | The live channel agrees with the published Release, all derived from the build's manifest | A wrong `hashValue`; a missing target descriptor; a 404 MAR URL; a size mismatch; a latest-download patch URL |
 | `installer-schema` (widened) | 6 | The staged NSIS sources carry fork defines and no Mozilla literal | Existing self-test widened |
 | `installer-build-proof` (widened) | 6 | The staged preprocessed `.nsi` sources contain no Mozilla telemetry host and no survey host, and still compile | Planted deny host in the staged tree |
-| `win-matrix-record` | 6 | Five Windows cells each carry a verdict and verbatim evidence; the BUILD_TARGET parses; the registry diff names the fork root and leaves `Software\Mozilla` untouched | A missing cell; a bare RED with no cause; an empty BUILD_TARGET; a registry diff that touched `Software\Mozilla`; an absent SmartScreen block |
+| `win-matrix-record` | 6 | Every schema cell (`scripts/matrix/win-matrix-schema.json`, shared with the writer) is PASS with verbatim evidence, or carries an explicit owner-approved deferral; the BUILD_TARGET parses from the installed `application.ini`; the registry diff names the expected namespace root (derived from patch 040) and nothing survives the uninstall; the SmartScreen text was observed on the guest; the version changed; the maintenance service was observed disabled | An all-FAIL record; a missing cell; a bare RED with no cause; an empty BUILD_TARGET; the wrong registry root; a SmartScreen text the guest never observed |
 | `win-download-copy` | 6 | The verbatim SmartScreen block is identical across the matrix record, the tracked document and the live download page | A reworded label |
 | `macos-toolchain-verdict` | 7 | The probe record's routing verdicts exist and are current | Record self-test |
 | `macos-branding-inputs` | 7 | Every branding file the cocoa package path consumes exists in both variants, derived from **both** upstream consumers | A deleted `document.icns`, `Assets.car`, `dsstore` or `disk.icns`; a corrupted icns length field; an added copy line in a mirrored `Makefile.in`; an added join filename in a mirrored `moz.configure` |
@@ -1316,6 +1326,21 @@ session.
 `--disable-maintenance-service` is in the emitted Windows mozconfig. If the built
 `config.status` shows the service enabled, the mozconfig emitter regressed. Do not
 work around it in the installer.
+
+**A Windows update fails with a locked file.** The updater renames files a live
+sidecar `node.exe` may hold. Quit and restart both register the AsyncShutdown blocker
+`PowerBrowser: reap sidecar` (`addSidecarReapBlocker` in `powerbrowser/shell/PowerBrowserAPI.sys.mjs`),
+which awaits `TheiaService.stopAndReap`. The reap waits on the sidecar's Subprocess handle
+(`PowerBrowserAPI.waitForExit`, the same on every platform) for `powerbrowser.sidecar.killGraceMs`
+(default 3000 ms, the same default `stop()` uses) plus 500 ms. On timeout the log names the live pid and shutdown continues.
+A leftover sidecar from a crashed Windows launch is not reaped at the next start (`signalBarePid` is Linux-only; `BLOCKED.md` item 9).
+A pid that survives the timeout is a defect to report, not a case to retry by hand.
+
+**The background update task (UPD-31) is verified or deferred, never silently enabled.** The
+`windows-unsigned` matrix records it per install: verified (task entry, `backgroundupdate.moz_log`, and a
+staged apply while the app is closed) or deferred with the exact BackgroundUpdate REASON value
+(`APPBASEDIR_NOT_WRITABLE`, `SERVICE_REGISTRY_KEY_MISSING`, or `NO_APP_UPDATE_BACKGROUND_ENABLED`) and the
+scheduler error. A deferral never enables the maintenance service.
 
 **A client resolves `aus5.mozilla.org`.** The baked `[AppUpdate]` host came from
 upstream's default rather than from `MOZ_APPUPDATE_HOST`. Check

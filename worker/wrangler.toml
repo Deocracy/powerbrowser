@@ -22,7 +22,8 @@
 #      checkpoint. With workers_dev off and no route in this file, the Worker is unreachable until
 #      the Phase 47 hostname is attached; wrangler may warn about that on deploy.
 #   7. Synthetic POST verify:         curl -sS -X POST https://events.powerbrowser.org/events -H 'content-type: application/json' -H "authorization: Bearer $DOWNLOAD_COUNT_SECRET" --data '{"events":[{"kind":"error","name":"synthetic.probe","data":{"type":"SyntheticProbe"},"synthetic":true,"at":0}]}'
-#      Expect 200 and "ok: stored 1". The synthetic flag is honoured only with the shared secret (the
+#      Expect 200 and "ok: stored 1 synthetic 1" (the acknowledgement appears only when the secret was
+#      accepted; a plain "ok: stored 1" means the flag was ignored and the row stored as a real one). The synthetic flag is honoured only with the shared secret (the
 #      same value as step 4, held in your shell); without the header the row is stored as a real one.
 #      The synthetic row is excluded by the maintainer query.
 

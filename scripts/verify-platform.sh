@@ -4371,6 +4371,15 @@ run_own_checks() {
     # browser, no display, no network.
     "telemetry|node $REPO_ROOT/scripts/verify-telemetry.mjs"
     "telemetry-self-test|node $REPO_ROOT/scripts/verify-telemetry.mjs --self-test"
+    # NEW (Phase 48, TEL-06): the analyzer half of the live-delivery row. The pure analyzeCapture over
+    # captured requests: the control is one preflight and one POST carrying both corrected events; every rule
+    # has a plant (no POST, no preflight, a wrong content type, a non-JSON or non-events body, a top-level or
+    # per-event extra key, a stack or message field, an unadmitted key, a full path, a non-number position, a
+    # position on a rejection, a missing required key, a missing uncaught or rejection event, a usage event,
+    # the drill's own message text, a body the Worker's handleEvents rejects, an empty capture, a request at
+    # level off) and must go red naming its drift. Honestly --quick: in-memory fixtures only; no build, no
+    # browser, no display, no network.
+    "tel06-error-delivery-live-self-test|node $REPO_ROOT/scripts/verify-telemetry-live-delivery.mjs --self-test"
 
     # NEW (04-04): GEN-05 remainder's branding gate -- the manifest's
     # [theia]/[installer] display values plus brand/mark.svg reach the
@@ -4807,6 +4816,20 @@ run_own_checks() {
     # and the bot-job-gate rule (an environment-bound job with no negated job-level dry-run gate);
     # each red naming file and job. It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
+    # NEW (Phase 48, MON-01): the watchdog source. The decision is the workflow's own shell: the run: bodies
+    # of docs/watchdog.yml are extracted and run under bash with a stub gh (a 25-hour silence opens nothing, a
+    # 27-hour silence opens one issue with the run link and the fixed label, a missing run opens one naming it,
+    # the bot-and-label dedupe suppresses a second while a stranger's same-title issue does not), and the source
+    # checks over the YAML (schedule-only triggers, one 06:17 UTC cron, issues write only, no secret, pinned
+    # uses, no event text in run) plus the product repository's parsed no-schedule rule.
+    "watchdog|node $REPO_ROOT/scripts/verify-watchdog.mjs"
+    # watchdog-self-test plants an unguarded workflow_run wake, event text in a run step, a secret
+    # reference, a drifted cron, a 25-hour threshold, a contents write scope, a dropped label, three
+    # product-repository schedule forms, and fourteen faults in the watchdog's own shell (inverted or removed
+    # dedupe, any-author dedupe, missing label or state filter, a skipped dedupe on an unset author, the
+    # missing-run branch, OPEN turned off, a reversed age, an inverted open gate, a wrong runs path, an
+    # unlabeled issue, a label never created); each must go red naming its drift, with the control green first.
+    "watchdog-self-test|node $REPO_ROOT/scripts/verify-watchdog.mjs --self-test"
     # NEW (Phase 49, DIST-02): the release.yml shape the workflows row does not cover. Dispatch
     # only with a required sha input; build-linux on the release runner label with no environment
     # and no secret; the SHA-ancestor and key>tag gates before the first build step; retention-days
@@ -4909,6 +4932,45 @@ run_own_checks() {
     # renovate-config-self-test plants one fault per rule in memory, after the unmodified tree and a
     # clean fixture stay green; each plant must go red naming its rule. It writes nothing in the tree.
     "renovate-config-self-test|node $REPO_ROOT/scripts/verify-renovate-config.mjs --self-test"
+    # NEW (Phase 54, PKG-11): the per-target Windows mozconfig. The expected lines come from the shared
+    # emitter in memory and the tracked comparand must equal them, with the maintenance service disabled.
+    # Honestly --quick: text reads and an in-memory emit only; no build, browser, display or network.
+    "windows-mozconfig|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs"
+    # windows-mozconfig-self-test plants an inverted service flag, a missing target line, a foreign MAR
+    # channel and an empty emission; each must go red naming the file and the value. It writes nothing.
+    "windows-mozconfig-self-test|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs --self-test"
+    # NEW (Phase 54, PKG-13): the Node pin set equals the per-target keys the packagers read (derived),
+    # each entry carries a version, a url embedding it and a 64-hex sha256. The sha256 value against
+    # SHASUMS256.txt is the Phase 43 detector's job, not this row's. Honestly --quick: JSON and text reads.
+    "node-runtime-targets|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs"
+    # node-runtime-targets-self-test plants a missing win32-x64 key, an extra key, a missing sha256, a
+    # url-version mismatch and an empty set; each must go red naming the key. It writes nothing.
+    "node-runtime-targets-self-test|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs --self-test"
+    # NEW (Phase 54, PKG-10 static half): the build-windows job of release.yml. Legion label set only,
+    # contents: read, no secret, environment or schedule, SHA-pinned uses, gates identical to build-linux,
+    # no fail-open step, repackage calls present, retention 1. Honestly --quick: YAML parse and text reads;
+    # the live cross-build on legion is the owner's at the 54-04 checkpoint, never a quick path.
+    "build-windows-shape|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs"
+    # build-windows-shape-self-test plants a moved runner, a secret, a write grant, a schedule, an unpinned
+    # uses, a missing package-windows.sh call or mach build, a reintroduced get_vs.py or WINSYSROOT, each removed
+    # required repackage argument, upload globs that match nothing, a broken or all-accepting Node-pin filter, a
+    # removed key gate, a drifted sha gate, a dropped pipefail, a raised retention and an image build missing
+    # --no-cache; each must go red naming job and cause.
+    "build-windows-shape-self-test|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs --self-test"
+    # NEW (Phase 54 review fix, PKG-13): the admission and purge gates for the hosted Windows sidecar artifact.
+    # Honestly --quick: mktemp fixtures only, no network. It plants an unlisted file, an absent listed file, a
+    # tampered manifest, a symlink, a '..' and an absolute manifest path, a nested SHA256SUMS, a wrong or unset
+    # out-of-band digest, an empty build root, each slash form of the hosted root, and an unreadable stage.
+    "win-sidecar-check-self-test|bash $REPO_ROOT/powerbrowser/packaging/check-win-sidecar.sh --self-test"
+    # NEW (Phase 54, UPD-30): the sidecar reap blocker. Quit and restart both await the bounded reap, so the
+    # updater rename never meets a live node.exe. Derived from the tree and the catalogue; honestly --quick
+    # (it parses the shell files and evaluates the reap methods against stubs; the live version flip is the
+    # matrix update cell).
+    "sidecar-reap-blocker|node $REPO_ROOT/scripts/verify-sidecar-reap-blocker.mjs"
+    # sidecar-reap-blocker-self-test plants a missing or comment-only registration, a pid poll, a stale handle, a
+    # rejecting wait, a grace mismatch, an ungated ctypes open and a wrong catalogue row; each must go red naming
+    # the rule and the value. It writes nothing.
+    "sidecar-reap-blocker-self-test|node $REPO_ROOT/scripts/verify-sidecar-reap-blocker.mjs --self-test"
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
@@ -4933,6 +4995,21 @@ run_own_checks() {
     # not production coverage. Honestly --quick: pure functions over in-memory fixtures; no network,
     # no gh, no build. It writes nothing.
     "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
+    # NEW (Phase 48, TRAIN-07): the maintenance half of the release-train core. The same --self-test
+    # run carries the six maintenance rows (runner-online, esr-pin-age, channel-liveness, watchdog-age,
+    # synthetic events POST, download-count) with their no-data branches, the byte-stable render, the
+    # exactly-one write plan, one comment per transition into red and zero on a staying-red re-run, the
+    # once-per-day 06:00 UTC sweep gate, the workflow's CLI glue run as a child node (owner unset, empty,
+    # malformed, another case), and the planted faults: a stale tag with no published Release, a draft
+    # Release as the only match, a 27-hour watchdog, a missing watchdog run, a synthetic POST answering
+    # 500 or 200 without the acknowledgement, a newer tag with no commit date, a seventh row, two tracking
+    # issues, a workflow_run wake from a fork head, one plant per rule of the previous-state selection
+    # (event, path, conclusion, branch, repository, head sha, artifact name, expiry, run link) and per rule
+    # of the pinned-issue selection (label, author, title, unset owner). Each plant calls the real function
+    # and goes red naming its drift with the unmutated control green first. Honestly --quick: in-memory fixtures
+    # only; no network, no gh, no build. It writes nothing. The live sweep and the pinned issue are the
+    # plan 48-05 owner checkpoint.
+    "release-train-maintenance-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
     # NEW (Phase 52, FIX-07/FIX-11): fix-gate-self-test serves a green control diff, then one
     # planted diff per .github/fix-gate-deny.json entry (the plant list read from the deny file
     # itself), a registry-named file, a hand-edited patch hunk, a vacuous diff, a compiled-file
@@ -5070,6 +5147,14 @@ run_own_checks() {
 
   if [ "$QUICK" -eq 0 ]; then
     CHECKS+=(
+      # NEW (Phase 48, TEL-06): the live loopback delivery drill. Full tier: it needs the nix theia shell
+      # (a frontend rebuild), the built binary through the BiDi harness, and a free loopback port. It binds
+      # 127.0.0.1, rewrites only the tracked powerbrowserTelemetry endpoint to the loopback URL, drives an
+      # uncaught error and an unhandled rejection at level error (flushed by batch size), asserts one POST
+      # with both corrected events after the CORS preflight, then sets level off and asserts zero requests in
+      # the same run. It restores package.json byte-identical, rebuilds, and greps the bundle for the marker.
+      # The live run is the plan 48-05 owner checkpoint; this row is the registry entry for it.
+      "tel06-error-delivery-live|node $REPO_ROOT/scripts/verify-telemetry-live-delivery.mjs"
       # NEW (01-07): the Theia half's smoke gate. It was the ONLY member of
       # 01-VALIDATION.md's full-suite command with no row in this registry --
       # a real superset gap, found by reconciling the two at the phase gate
@@ -5477,6 +5562,15 @@ run_own_checks() {
       # its workflows and their last runs; red until the owner creates the repository and its status
       # CNAME. An undeclared status slug is a FAIL, never a SKIP. Never called by a quick path.
       "upptime-sweep-live|node $REPO_ROOT/scripts/verify-upptime.mjs --live"
+
+      # NEW (Phase 54, MTX-01 and UPD-31): the pkg-win11 matrix record. Full tier: it reads the record the owner's
+      # guest run writes, so it is red until the 54-04 checkpoint runs the matrix. An absent record is FAIL naming
+      # that step, never a skip. Never called by a quick path.
+      "win-matrix-record|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs"
+      # win-matrix-record-self-test builds its fixture with the real writer (scripts/matrix/win-matrix-record.py) from
+      # synthetic guest output and plants each fault (all-FAIL, a missing observation, a namespace mismatch, a drifted
+      # guest script) over mkdtemp fixtures only; hermetic.
+      "win-matrix-record-self-test|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs --self-test"
     )
   fi
 

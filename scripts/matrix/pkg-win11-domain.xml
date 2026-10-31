@@ -1,0 +1,66 @@
+<!--
+  scripts/matrix/pkg-win11-domain.xml  (Phase 54, MTX-01)
+
+  The pkg-win11 libvirt domain the Windows matrix runs in. It is a NEW domain: the shut-off win11 stub
+  domain and its 200704-byte stub disk are left untouched. Defined by the owner at the 54-04 checkpoint
+  (virsh define), never by an agent. The disk and the NVRAM are qcow2 so libvirt internal snapshots exist;
+  the clean-baseline snapshot is the revert target before every matrix cell.
+
+  Guest: Windows 11, QEMU guest agent (the exec transport win-matrix-run.sh prefers), and a stock browser
+  install for the coexistence cell. Network: the NAT network below. The licence and the Windows update
+  handling are the owner's (see BLOCKED.md); this file carries no product key.
+-->
+<domain type="kvm">
+  <name>pkg-win11</name>
+  <memory unit="GiB">8</memory>
+  <vcpu placement="static">4</vcpu>
+  <os firmware="efi">
+    <type arch="x86_64" machine="q35">hvm</type>
+    <nvram template="/usr/share/OVMF/OVMF_VARS.ms.fd" format="qcow2">/var/lib/libvirt/qemu/nvram/pkg-win11_VARS.qcow2</nvram>
+    <loader readonly="yes" type="pflash">/usr/share/OVMF/OVMF_CODE.ms.fd</loader>
+    <boot dev="hd"/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+    <hyperv mode="custom">
+      <relaxed state="on"/>
+      <vapic state="on"/>
+      <spinlocks state="on" retries="8191"/>
+    </hyperv>
+    <vmport state="off"/>
+  </features>
+  <cpu mode="host-passthrough" check="none"/>
+  <clock offset="localtime">
+    <timer name="hypervclock" present="yes"/>
+  </clock>
+  <devices>
+    <disk type="file" device="disk">
+      <driver name="qemu" type="qcow2" discard="unmap"/>
+      <source file="/var/lib/libvirt/images/pkg-win11.qcow2"/>
+      <target dev="sda" bus="sata"/>
+    </disk>
+    <!-- The read-only inputs ISO (setup.exe, the complete MAR, win-matrix-guest.ps1, win-matrix-schema.json; volume
+         label PBMATRIX). win-matrix-run.sh swaps the ISO in with virsh change-media after the snapshot revert, so the
+         path below is only the initial placeholder. The guest writes its own files under C:\pbmatrix on the disk above. -->
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="/var/lib/libvirt/images/pb-matrix-inputs.iso"/>
+      <target dev="sdb" bus="sata"/>
+      <readonly/>
+    </disk>
+    <interface type="network">
+      <source network="default"/>
+      <model type="e1000e"/>
+    </interface>
+    <channel type="unix">
+      <target type="virtio" name="org.qemu.guest_agent.0"/>
+    </channel>
+    <graphics type="spice" autoport="yes">
+      <listen type="none"/>
+    </graphics>
+    <video>
+      <model type="qxl"/>
+    </video>
+  </devices>
+</domain>

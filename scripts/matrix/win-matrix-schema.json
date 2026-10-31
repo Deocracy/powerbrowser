@@ -1,0 +1,25 @@
+{
+  "_comment": "The single source of the pkg-win11 matrix record shape. scripts/matrix/win-matrix-record.py (the writer), scripts/verify-win-matrix-record.mjs (the verifier) and the static cross-check against scripts/matrix/win-matrix-guest.ps1 all read this file; none of them keeps its own copy of a cell name, a key or a marker.",
+  "cells": ["install", "launch", "update", "uninstall", "no-residue"],
+  "ownerCells": ["background"],
+  "verdicts": ["PASS", "FAIL"],
+  "recordKeys": ["build_target", "application_ini", "maintenance_service_enabled", "cells"],
+  "cellKeys": ["verdict", "evidence", "transport"],
+  "extraCellKeys": {
+    "launch": ["smartscreen"],
+    "update": ["version_before", "version_after"],
+    "no-residue": ["registry_diff", "registry_residue"]
+  },
+  "markers": {
+    "ini": { "prefix": "INI:", "cell": "install" },
+    "maintenanceService": { "prefix": "MAINTENANCE_SERVICE:", "cell": "install" },
+    "smartscreen": { "prefix": "SMARTSCREEN:", "cell": "launch" },
+    "versionBefore": { "prefix": "VERSION_BEFORE:", "cell": "update" },
+    "versionAfter": { "prefix": "VERSION_AFTER:", "cell": "update" },
+    "regDiff": { "prefix": "REGDIFF:", "cell": "no-residue" },
+    "regResidue": { "prefix": "REGRESIDUE:", "cell": "no-residue" }
+  },
+  "evidenceCapChars": 60000,
+  "truncationMarker": "[truncated by win-matrix-record.py]",
+  "inputsVolumeLabel": "PBMATRIX"
+}
