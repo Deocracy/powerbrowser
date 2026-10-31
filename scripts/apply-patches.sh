@@ -24,6 +24,45 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_DIR="$REPO_ROOT/upstream"
 PATCHES_DIR="$REPO_ROOT/patches"
 
+# A refusal names its cause and exits 2, before anything changes directory (WR-07).
+refuse() { echo "apply-patches: FAIL -- $1. Next step: $2" >&2; exit 2; }
+REPO_ROOT_P="$(cd -- "$REPO_ROOT" && pwd -P)"
+
+# --upstream <dir> and --patches <dir> replay the stack onto a scratch tree (the replay-only control,
+# plan 58-02, mirroring regenerate-patches.sh). The defaults are upstream/ and patches/, so
+# rebase-upstream.sh and --self-test are unchanged. --self-test is left for the mode check below.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --upstream|--patches)
+      [ "$#" -ge 2 ] || refuse "$1 needs a directory" "give the directory path after $1"
+      case "$2" in -*) refuse "$1 value '$2' starts with '-', so it is a flag, not a directory" "pass a directory path" ;; esac
+      if [ "$1" = "--upstream" ]; then UPSTREAM_DIR="$2"; else PATCHES_DIR="$2"; fi
+      shift 2 ;;
+    --self-test) break ;;
+    *) echo "apply-patches: FAIL -- unrecognized argument: $1 (usage: apply-patches.sh [--upstream <dir>] [--patches <dir>] | --self-test)" >&2; exit 2 ;;
+  esac
+done
+
+# WR-07: resolve both directories to absolute paths and check them before the real run's cd. A relative
+# --patches used to resolve against upstream/ after that cd, so the run failed with the wrong cause. The
+# defaults pass the same checks. Each check names its cause.
+UPSTREAM_ABS="$(cd -- "$UPSTREAM_DIR" 2>/dev/null && pwd -P)" || refuse "upstream directory '$UPSTREAM_DIR' is not a directory" "fetch it with scripts/fetch-upstream.sh, or pass --upstream <dir> for a scratch clone"
+PATCHES_ABS="$(cd -- "$PATCHES_DIR" 2>/dev/null && pwd -P)" || refuse "patch directory '$PATCHES_DIR' is not a directory" "pass the directory that holds the patch stack, such as patches/"
+if [ "$(git -C "$UPSTREAM_ABS" rev-parse --show-toplevel 2>/dev/null)" != "$UPSTREAM_ABS" ]; then
+  refuse "upstream directory '$UPSTREAM_ABS' is not the top of its own git repository" "pass the top-level directory of a clone, not a folder inside one"
+fi
+if [ "$UPSTREAM_ABS" = "$REPO_ROOT_P" ]; then
+  refuse "upstream directory is this checkout" "pass a scratch clone, never this repository"
+fi
+shopt -s nullglob
+resolved_patches=("$PATCHES_ABS"/*.patch)
+shopt -u nullglob
+if [ "${#resolved_patches[@]}" -eq 0 ]; then
+  refuse "patch directory '$PATCHES_ABS' contains no *.patch files" "pass the directory that holds the patch stack"
+fi
+UPSTREAM_DIR="$UPSTREAM_ABS"
+PATCHES_DIR="$PATCHES_ABS"
+
 # Applies a single patch file against the git repo rooted at the current
 # working directory, asserting non-vacuity via before/after blob-hash
 # comparison on every path the patch's own '+++ b/' headers name. Returns 0
@@ -167,8 +206,66 @@ run_self_test() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# --self-test argument plants (WR-07)
+# ---------------------------------------------------------------------------
+# Each bad --upstream or --patches value is refused with exit 2 and its named cause. The control proves
+# a relative --patches resolves before the cd: the run reaches the patch and names it, instead of failing
+# as an empty patch directory. Hermetic: throwaway repositories under a mktemp directory.
+run_arg_plants() {
+  local tmp self out rc plant_failed=0
+  tmp="$(mktemp -d)"
+  trap 'find "$tmp" -delete' RETURN
+  self="$REPO_ROOT/scripts/apply-patches.sh"
+  mkdir -p "$tmp/up/sub" "$tmp/empty" "$tmp/pp" "$tmp/work/pp"
+  git -C "$tmp/up" init -q
+
+  refusal_plant() {
+    local name="$1" expect="$2"
+    shift 2
+    out="$(bash "$self" "$@" 2>&1)" && rc=0 || rc=$?
+    case "$out" in
+      *"$expect"*)
+        if [ "$rc" -eq 2 ]; then
+          echo "  ok  $name -> refused with exit 2, naming '$expect'"
+          return 0
+        fi ;;
+    esac
+    echo "apply-patches: --self-test FAIL -- '$name' was not refused with exit 2 naming '$expect' (exit $rc): $out" >&2
+    plant_failed=1
+  }
+
+  refusal_plant "a missing --upstream directory" "is not a directory" --upstream "$tmp/no-such" --patches "$tmp/pp"
+  refusal_plant "a flag-shaped --upstream value" "starts with '-'" --upstream --patches "$tmp/pp"
+  refusal_plant "an --upstream inside a repository, not its top" "is not the top of its own git repository" --upstream "$tmp/up/sub" --patches "$tmp/pp"
+  refusal_plant "a --patches directory with no *.patch files" "contains no *.patch files" --upstream "$tmp/up" --patches "$tmp/empty"
+  refusal_plant "--upstream naming this checkout" "is this checkout" --upstream "$REPO_ROOT" --patches "$tmp/pp"
+  refusal_plant "--patches given no value" "--patches needs a directory" --upstream "$tmp/up" --patches
+
+  # Control: a relative --patches is resolved before the cd, so the run reaches the patch and names it.
+  printf 'diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -1 +1 @@\n-a\n+b\n' > "$tmp/work/pp/001-scratch.patch"
+  out="$(cd "$tmp/work" && bash "$self" --upstream "$tmp/up" --patches pp 2>&1)" && rc=0 || rc=$?
+  case "$out" in
+    *"001-scratch.patch did not apply"*)
+      if [ "$rc" -eq 1 ]; then
+        echo "  ok  control: a relative --patches resolves before the cd, so the patch is reached and named"
+      else
+        echo "apply-patches: --self-test FAIL -- the relative --patches control exited $rc, not 1" >&2
+        plant_failed=1
+      fi ;;
+    *)
+      echo "apply-patches: --self-test FAIL -- the relative --patches control did not reach and name its patch: $out" >&2
+      plant_failed=1 ;;
+  esac
+
+  if [ "$plant_failed" -ne 0 ]; then return 1; fi
+  echo "apply-patches: --self-test PASS -- every bad --upstream or --patches value was refused with exit 2 and its cause, and the relative --patches control reached its patch"
+  return 0
+}
+
 if [ "${1:-}" = "--self-test" ]; then
-  run_self_test
+  run_self_test || exit 1
+  run_arg_plants
   exit $?
 fi
 

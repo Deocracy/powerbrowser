@@ -76,6 +76,12 @@
 //     half of the agreement; the header ranges and the upstream-authored
 //     transitive constraint lines inside stanzas are not asserted.
 //
+// Uptake lane (step 8, Phase 58, TRAIN-05/UPS-01): the 175 tag is not a second manifest key. It
+// is the detector's uptake candidate, and the release-train uptake-replay job must take its tag from
+// needs.detect.outputs.uptake-candidate and from nothing else. The literal sweep (step 4) covers the
+// file's text; step 8 covers the job's source and the chain that carries the candidate there (the
+// detector's uptake-candidate= line, the Decide allowlist and the detect job's output mapping, WR-04).
+//
 // Honestly --quick: it reads text files and runs one git ls-files. No
 // clone, no fetch, no build, no browser, no display, no network.
 //
@@ -363,6 +369,71 @@ function lockTheiaStanzas(text) {
     return rows;
 }
 
+// --- the uptake lane's tag source (step 8, TRAIN-05) -----------------------------------------
+// The train workflow carries one uptake-replay job; its tag input must be exactly the detector's
+// uptake candidate. A line scan by indentation, the same style as the rebase workflow scan.
+const TRAIN_WF_REL = '.github/workflows/release-train.yml';
+const UPTAKE_JOB = 'uptake-replay';
+const UPTAKE_SOURCE = /^\s*tag:\s*\$\{\{\s*needs\.detect\.outputs\.uptake-candidate\s*\}\}\s*$/;
+
+/** Failures for the uptake-replay job's tag source. Pure: text in, named failures out. */
+function uptakeSourceFailures(text) {
+    const lines = text.split('\n');
+    const start = lines.findIndex(l => new RegExp(`^  ${UPTAKE_JOB}:\\s*$`).test(l));
+    if (start < 0) {
+        return [`${TRAIN_WF_REL} declares no ${UPTAKE_JOB} job, so the 175 uptake lane replays nothing. Next step: restore the ${UPTAKE_JOB} job beside bump.`];
+    }
+    let end = start + 1;
+    while (end < lines.length && (lines[end].trim() === '' || indentOf(lines[end]) > 2)) end += 1;
+    const tags = lines.slice(start + 1, end).filter(l => /^\s*tag:/.test(l));
+    if (tags.length !== 1) {
+        return [`${TRAIN_WF_REL} ${UPTAKE_JOB} carries ${tags.length} tag input(s), not one. Next step: give it exactly one tag, sourced from needs.detect.outputs.uptake-candidate.`];
+    }
+    if (!UPTAKE_SOURCE.test(tags[0])) {
+        return [`${TRAIN_WF_REL} ${UPTAKE_JOB} takes its tag from ${tags[0].trim()}, not from needs.detect.outputs.uptake-candidate. Next step: source the tag from the detect listing, never a literal, a default or the 153 candidate.`];
+    }
+    return [];
+}
+
+// The uptake-candidate chain (WR-04): the detector prints it, the detect job's Decide step allowlists
+// it, and the detect job maps it to its output. Each link is required. Removing one leaves the lane
+// silently off: the candidate is empty, uptake-replay is skipped and the report says idle.
+const DETECTOR_REL = 'scripts/detect-upstreams.mjs';
+const DETECT_JOB = 'detect';
+const UPTAKE_PRINT = /console\.log\(`uptake-candidate=\$\{/;
+const UPTAKE_OUTPUT = /^\s*uptake-candidate:\s*\$\{\{\s*steps\.decide\.outputs\.uptake-candidate\s*\}\}\s*$/;
+const DECIDE_ALLOWLIST = /grep -E '\^\(([^)]*)\)=' /;
+
+/** The lines of one top-level job, by indentation, or null when the job is absent. */
+function jobLines(text, jobId) {
+    const lines = text.split('\n');
+    const start = lines.findIndex(l => new RegExp(`^  ${jobId}:\\s*$`).test(l));
+    if (start < 0) return null;
+    let end = start + 1;
+    while (end < lines.length && (lines[end].trim() === '' || indentOf(lines[end]) > 2)) end += 1;
+    return lines.slice(start + 1, end);
+}
+
+/** Failures for the uptake-candidate links. Pure: texts in, named failures out. */
+function uptakeLinkFailures(workflowText, detectorText) {
+    const failures = [];
+    if (!UPTAKE_PRINT.test(detectorText)) {
+        failures.push(`${DETECTOR_REL} no longer prints uptake-candidate=, so the detect job has no uptake candidate to pass on. Next step: restore the uptake-candidate= line in ${DETECTOR_REL}.`);
+    }
+    const block = jobLines(workflowText, DETECT_JOB);
+    if (block === null) {
+        return [...failures, `${TRAIN_WF_REL} declares no ${DETECT_JOB} job, so the uptake candidate has no source. Next step: restore the detect job.`];
+    }
+    const allow = DECIDE_ALLOWLIST.exec(block.join('\n'));
+    if (allow === null || !allow[1].split('|').includes('uptake-candidate')) {
+        failures.push(`${TRAIN_WF_REL} ${DETECT_JOB} job's Decide step has no uptake-candidate in its grep allowlist, so the candidate never reaches the job outputs. Next step: add uptake-candidate to that allowlist.`);
+    }
+    if (!block.some(l => UPTAKE_OUTPUT.test(l))) {
+        failures.push(`${TRAIN_WF_REL} ${DETECT_JOB} job does not map the uptake-candidate output from steps.decide, so uptake-replay reads an empty tag. Next step: restore that output in the detect job.`);
+    }
+    return failures;
+}
+
 function runChecks(root, overrides = {}) {
     const failures = [];
     const skipped = [];
@@ -579,6 +650,22 @@ function runChecks(root, overrides = {}) {
                     }
                 }
             }
+        }
+    }
+
+    // --- 8. the uptake lane's tag comes from the train's listing (TRAIN-05, UPS-01) -----------
+    // The 175 tag is not a second manifest key (A-58-6): it is the detector's uptake candidate, passed
+    // into the uptake-replay job. The literal sweep (step 4) already refuses a tag literal in that file.
+    // This step requires the job's tag input to be sourced from that one output, and from nothing else.
+    {
+        const text = read(TRAIN_WF_REL);
+        if (text === null) {
+            failures.push(`${TRAIN_WF_REL} could not be read, so the uptake tag source proves nothing. Next step: restore it.`);
+        } else {
+            failures.push(...uptakeSourceFailures(text));
+            const detectorText = read(DETECTOR_REL);
+            if (detectorText === null) failures.push(`${DETECTOR_REL} could not be read, so the uptake candidate chain proves nothing. Next step: restore it.`);
+            else failures.push(...uptakeLinkFailures(text, detectorText));
         }
     }
 
@@ -804,8 +891,63 @@ function selfTest() {
         }
     }
 
+    // Plants 5-7 (step 8, TRAIN-05): the uptake job's tag is sourced from the detector's uptake
+    // candidate and from nothing else. Each plant lands in memory on the real train workflow.
+    {
+        const trainReal = readBytes(REPO_ROOT, TRAIN_WF_REL)?.toString('utf8') ?? null;
+        const sourceLine = '      tag: ${{ needs.detect.outputs.uptake-candidate }}';
+        const plants = [
+            ['uptake tag as a literal', trainReal?.replace(sourceLine, `      tag: ${neighbor}`), 'takes its tag from'],
+            ['uptake tag from the 153 candidate', trainReal?.replace(sourceLine, '      tag: ${{ needs.detect.outputs.candidate }}'), 'takes its tag from'],
+            [`${UPTAKE_JOB} job renamed away`, trainReal?.replace(`\n  ${UPTAKE_JOB}:\n`, '\n  uptake-renamed:\n'), `declares no ${UPTAKE_JOB} job`],
+        ];
+        for (const [name, planted, marker] of plants) {
+            if (trainReal === null || typeof planted !== 'string' || planted === trainReal) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land in ${TRAIN_WF_REL}.`);
+                failed += 1;
+                continue;
+            }
+            const { failures } = runChecks(REPO_ROOT, { read: (rel) => (rel === TRAIN_WF_REL ? planted : readBytes(REPO_ROOT, rel)?.toString('utf8') ?? null) });
+            if (failures.some(f => f.includes(TRAIN_WF_REL) && f.includes(marker))) {
+                console.log(`  ok  ${name} -> red, naming '${TRAIN_WF_REL}'`);
+                if (!checkNoRoot(name, failures)) failed += 1;
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${TRAIN_WF_REL}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    }
+
+    // Plants 8-10 (WR-04): each link of the uptake-candidate chain is required. Removing the detector's
+    // print, the Decide allowlist entry or the detect job's output mapping must each go red naming its file.
+    {
+        const workflowReal = readBytes(REPO_ROOT, TRAIN_WF_REL)?.toString('utf8') ?? null;
+        const detectorReal = readBytes(REPO_ROOT, DETECTOR_REL)?.toString('utf8') ?? null;
+        const plants = [
+            ['detector stops printing uptake-candidate=', detectorReal?.replace(/^.*console\.log\(`uptake-candidate=.*\n/m, ''), DETECTOR_REL, 'no longer prints uptake-candidate='],
+            ['Decide allowlist drops uptake-candidate', workflowReal?.replace('|uptake-candidate)=', ')='), TRAIN_WF_REL, 'grep allowlist'],
+            ['detect job drops the uptake-candidate output', workflowReal?.replace(/^ *uptake-candidate: \$\{\{ steps\.decide\.outputs\.uptake-candidate \}\}\n/m, ''), TRAIN_WF_REL, 'does not map the uptake-candidate output'],
+        ];
+        for (const [name, planted, file, marker] of plants) {
+            const real = file === TRAIN_WF_REL ? workflowReal : detectorReal;
+            if (typeof planted !== 'string' || planted === real) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land in ${file}.`);
+                failed += 1;
+                continue;
+            }
+            const { failures } = runChecks(REPO_ROOT, { read: (rel) => (rel === file ? planted : readBytes(REPO_ROOT, rel)?.toString('utf8') ?? null) });
+            if (failures.some(f => f.includes(file) && f.includes(marker))) {
+                console.log(`  ok  ${name} -> red, naming '${file}'`);
+                if (!checkNoRoot(name, failures)) failed += 1;
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${file}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    }
+
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 8 planted faults went red naming the drifted file`);
+    console.log(`${NAME}: --self-test PASS -- 14 planted faults went red naming the drifted file (8 pin plants, 3 uptake-source plants and 3 uptake-link plants)`);
     return 0;
 }
 

@@ -21,6 +21,13 @@
 # exact run by its display title (Release <sha>, set by release.yml's run-name; a dispatched
 # run's head_sha is the tip of main, never the dispatched sha). report owns the only issues write in this file.
 #
+# The uptake lane (TRAIN-05, UPS-01). detect also lists the uptake major's tags (175,
+# from detect-upstreams.mjs --uptake-major) and names the newest one. uptake-replay
+# replays that tag through the same rebase-upstream.yml, read-only, and is never a
+# bump: no bump job, no branch, no PR, no App token, no environment, no dispatch.
+# report prints its would-write view. A conflict is one issue, written by the report
+# writer once that writer is approved (BLOCKED.md item 3 of Phase 43).
+#
 # Not here yet: the live GitHub facts behind derive (check runs, the Release list) are
 # fixture-backed, and the release-stage states of release-train.mjs have no live collector
 # until the facts source and the tracking-issue writer are approved (BLOCKED.md item 3).
@@ -121,6 +128,7 @@ jobs:
       candidate: ${{ steps.decide.outputs.candidate }}
       pr-open-tag: ${{ steps.decide.outputs.pr-open-tag }}
       pr-open-number: ${{ steps.decide.outputs.pr-open-number }}
+      uptake-candidate: ${{ steps.decide.outputs.uptake-candidate }}
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -136,17 +144,19 @@ jobs:
 
       # The listing is a read, so it runs in a dry run too. A dry run decides against the live
       # listing, and the would-write lines in report name the real candidate.
-      - name: List the ESR release tags under the pinned major
+      - name: List the ESR release tags under the pinned major and the uptake major
         env:
           PIN: ${{ steps.pin.outputs.pin }}
           REMOTE: https://github.com/mozilla-firefox/firefox.git
         run: |
           set -euo pipefail
           MAJOR=$(printf '%s\n' "$PIN" | sed -n 's/^[A-Za-z]*_\([0-9]*\)_.*/\1/p')
+          # The uptake major comes from the detector, so the number lives in one place (TRAIN-05).
+          UPTAKE=$(node scripts/detect-upstreams.mjs --uptake-major)
           git ls-remote --tags --refs "$REMOTE" > "$RUNNER_TEMP/refs.txt"
           sed -n 's#.*refs/tags/##p' "$RUNNER_TEMP/refs.txt" > "$RUNNER_TEMP/names.txt"
           # grep exits 1 when no tag matches; that empty listing is a FAIL in detect-upstreams, not here.
-          grep -E "^FIREFOX_${MAJOR}_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" "$RUNNER_TEMP/names.txt" > "$RUNNER_TEMP/tags.txt" || [ $? -eq 1 ]
+          grep -E "^FIREFOX_(${MAJOR}|${UPTAKE})_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" "$RUNNER_TEMP/names.txt" > "$RUNNER_TEMP/tags.txt" || [ $? -eq 1 ]
 
       # Read-only: the open PRs tell the decision whether a candidate's bump PR already exists.
       # A candidate with an open PR is PR-open, so no replay runs and no branch is re-pushed.
@@ -182,7 +192,7 @@ jobs:
             node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --open-prs "$RUNNER_TEMP/open-prs.txt" > "$RUNNER_TEMP/decide.txt"
           fi
           cat "$RUNNER_TEMP/decide.txt"
-          grep -E '^(candidate|pr-open-tag|pr-open-number)=' "$RUNNER_TEMP/decide.txt" >> "$GITHUB_OUTPUT"
+          grep -E '^(candidate|pr-open-tag|pr-open-number|uptake-candidate)=' "$RUNNER_TEMP/decide.txt" >> "$GITHUB_OUTPUT"
 
   # The Node half is its own detector job. A Node failure (index, release-keys, signature,
   # tarball) fails this job and no other: the ESR detector and the ESR bump do not need it.
@@ -267,6 +277,19 @@ jobs:
     uses: ./.github/workflows/rebase-upstream.yml
     with:
       tag: ${{ needs.detect.outputs.candidate }}
+    permissions:
+      contents: read
+
+  # The uptake lane (TRAIN-05, UPS-01): the newest uptake-major tag is replayed through the one
+  # replay definition and nothing is published from it. Like bump, the job reads the tree and a
+  # runner-local upstream, so it runs in a dry run too. It has no environment, no App token, no
+  # bump-pr step and no dispatch: a 175 replay can end only in its stage line, which report prints.
+  uptake-replay:
+    needs: [derive, detect]
+    if: ${{ (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) && needs.detect.outputs.uptake-candidate != '' }}
+    uses: ./.github/workflows/rebase-upstream.yml
+    with:
+      tag: ${{ needs.detect.outputs.uptake-candidate }}
     permissions:
       contents: read
 
@@ -550,7 +573,7 @@ jobs:
           fi
 
   report:
-    needs: [derive, detect, detect-node, bump, bump-pr, bump-pr-node, dispatch-release]
+    needs: [derive, detect, detect-node, bump, uptake-replay, bump-pr, bump-pr-node, dispatch-release]
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -571,11 +594,13 @@ jobs:
           BUMP: ${{ needs.bump.result }}
           BUMP_PR: ${{ needs.bump-pr.result }}
           BUMP_PR_NODE: ${{ needs.bump-pr-node.result }}
+          UPTAKE_TAG: ${{ needs.detect.outputs.uptake-candidate }}
+          UPTAKE_REPLAY: ${{ needs.uptake-replay.result }}
           RELEASE_SHA: ${{ needs.dispatch-release.outputs.merge-sha }}
           RELEASE_RUN: ${{ needs.dispatch-release.outputs.run-url }}
           DISPATCH: ${{ needs.dispatch-release.result }}
         run: |
-          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} node=${NODE_VERSION:-none} bump=${BUMP} bump-pr=${BUMP_PR} bump-pr-node=${BUMP_PR_NODE} dispatch-release=${DISPATCH} release-sha=${RELEASE_SHA:-none} release-run=${RELEASE_RUN:-none}"
+          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} node=${NODE_VERSION:-none} bump=${BUMP} bump-pr=${BUMP_PR} bump-pr-node=${BUMP_PR_NODE} uptake=${UPTAKE_TAG:-none} uptake-replay=${UPTAKE_REPLAY} dispatch-release=${DISPATCH} release-sha=${RELEASE_SHA:-none} release-run=${RELEASE_RUN:-none}"
 
       # A dry run prints the branches a live run would publish, with the values this run decided.
       - name: Print the branches this run would open (dry-run)
@@ -609,3 +634,21 @@ jobs:
           # A candidate whose PR is already open is the PR-open tag; the view reads it as BUMPING.
           TAG="${CANDIDATE:-$PR_TAG}"
           node scripts/release-train.mjs --would-write "$PIN" "$TAG" "$PR_NUMBER" "$STAGE"
+
+      # The uptake lane's view (TRAIN-05). Only a success is a green replay (replayed=true). The job
+      # result is passed too: any other result is red, whatever stage line the job printed, and the
+      # view names its patch when the stage is a conflict. The detect result is passed so a failed
+      # detect reads as detection failed, never as idle (IN-03). always() keeps an earlier failing
+      # step in this job from suppressing the view. Nothing is written.
+      - name: Print the would-write view of the uptake tracking issue (175 lane, writer not wired)
+        if: ${{ always() }}
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          UPTAKE_TAG: ${{ needs.detect.outputs.uptake-candidate }}
+          UPTAKE_RESULT: ${{ needs.uptake-replay.result }}
+          UPTAKE_STAGE: ${{ needs.uptake-replay.outputs.stage }}
+        run: |
+          set -eu
+          REPLAYED=false
+          if [ "$UPTAKE_RESULT" = "success" ]; then REPLAYED=true; fi
+          node scripts/release-train.mjs --uptake-would-write "$UPTAKE_TAG" "$UPTAKE_STAGE" "$REPLAYED" "$UPTAKE_RESULT" "$DETECT_RESULT"
