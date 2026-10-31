@@ -34,6 +34,8 @@
 //  pin           the claude-code-action step (classify) carries the FIX-08 commit, not a tag object.
 //  install       classify runs install.cjs (npm ci --ignore-scripts skips it) and then the
 //                .bin/claude --version smoke, both before the model step, so a stub fails the job.
+//  issue-data    classify captures the title and body into step outputs (random delimiter,
+//                before the model step) and the prompt quotes the body output inside <issue_data>.
 //  model         claude_args selects claude-haiku-5-5 (the action has no model input).
 //  tools         claude_args names no bare Bash.
 //  executable    path_to_claude_code_executable is set.
@@ -285,6 +287,22 @@ function check(text, rel, labels) {
         fail(AI_JOB, 'install', 'has no install step that runs install.cjs and then the .bin/claude --version smoke before the model step. npm ci --ignore-scripts skips the package install script, so the binary stays a stub. Next step: run node .../install.cjs after npm ci, then "$CLAUDE" --version, before the model step.');
     }
 
+    // issue-data: classify captures the title and body into step outputs (a run step that writes
+    // GITHUB_OUTPUT with a random delimiter, before the model step) and the prompt quotes the body
+    // output between the issue_data fence, after the instructions. The event text itself never
+    // appears in run: or prompt:; the event-text rule above enforces that.
+    const capture = aiSteps.find(s => typeof s.run === 'string' && s.run.includes('GITHUB_OUTPUT') && typeof s.id === 'string');
+    const captureIdx = capture ? aiSteps.indexOf(capture) : -1;
+    const promptText = String(ai?.with?.prompt ?? '');
+    const bodyRef = capture ? `\${{ steps.${capture.id}.outputs.body }}` : null;
+    const fenceOpen = promptText.indexOf('<issue_data>');
+    const fenceClose = promptText.indexOf('</issue_data>');
+    const bodyAt = bodyRef ? promptText.indexOf(bodyRef) : -1;
+    const fenced = fenceOpen >= 0 && fenceClose > fenceOpen && bodyAt > fenceOpen && bodyAt < fenceClose;
+    if (!capture || !capture.run.includes('/dev/urandom') || !fenced || (aiIdx >= 0 && captureIdx > aiIdx)) {
+        fail(AI_JOB, 'issue-data', 'does not quote the issue title and body as untrusted data: classify needs a step that writes them to GITHUB_OUTPUT under a random delimiter (/dev/urandom) before the model step, and the prompt must carry the body output between <issue_data> and </issue_data>. Next step: restore the capture step and the fenced prompt block.');
+    }
+
     // post: the write job's non-AI step reads the model result only through env:.
     const post = postStep(postSteps);
     if (!post) {
@@ -457,6 +475,9 @@ function selfTest() {
         ['environment release instead of triage in apply', mutate(APPLY, APPLY.replace('environment: triage', 'environment: release')), POST_JOB, 'environment', 'release'],
         ['install.cjs step removed (stub binary left in place)', mutate('          node "$RUNNER_TEMP/claude-code/node_modules/@anthropic-ai/claude-code/install.cjs"\n', ''), AI_JOB, 'install', 'install.cjs'],
         ['--version smoke removed', mutate('          "$RUNNER_TEMP/claude-code/node_modules/.bin/claude" --version\n', ''), AI_JOB, 'install', '--version'],
+        ['issue data fence removed from the prompt', mutate('            </issue_data>\n', ''), AI_JOB, 'issue-data', 'issue_data'],
+        ['issue capture under a fixed delimiter', mutate('/dev/urandom', '/dev/zero'), AI_JOB, 'issue-data', '/dev/urandom'],
+        ['issue body echoed in a classify run body', mutate('      - id: triage\n', '      - name: Echo\n        run: echo "${{ github.event.issue.body }}"\n      - id: triage\n'), AI_JOB, 'interpolation', 'interpolates'],
         ['non-Haiku model', mutate('--model claude-haiku-5-5', '--model claude-opus-5'), AI_JOB, 'model', MODEL],
         ['allowed_non_write_users missing', mutate('          allowed_non_write_users: "*"\n', ''), AI_JOB, 'non-write', '"*"'],
         ['contents widened to write', mutate('permissions:\n  contents: read\n  issues: write', 'permissions:\n  contents: write\n  issues: write'), WF, 'permissions', 'contents'],

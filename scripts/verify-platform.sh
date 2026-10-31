@@ -4799,7 +4799,7 @@ run_own_checks() {
     # labels.json, and runs the workflow's own fixed-text step against a hostile model output with
     # a stub gh. Honestly --quick: text reads, js-yaml from theia/, and a mkdtemp shim; no network.
     "triage-workflow|node $REPO_ROOT/scripts/verify-triage.mjs"
-    # triage-workflow-self-test plants thirty-one faults in the good fixture (the two-job shape:
+    # triage-workflow-self-test plants thirty-four faults in the good fixture (the two-job shape:
     # classify holds the model with no write scope, apply holds issues write and no model), each
     # red naming the file, job and rule, and requires the hostile-output proof to go red on a removed label filter
     # and on a raw model template id. The green control runs first. It writes nothing in the tree.
