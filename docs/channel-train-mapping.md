@@ -9,12 +9,21 @@ The train calls the stage as a reusable workflow once a release is published:
 
     jobs:
       channel:
+        if: ${{ needs.publish.result == 'success' }}
         uses: ./.github/workflows/channel-manifests.yml
         with:
           release_key: <v<ESR>-<revision> the train published>
+          live: true
+          dry_run: ${{ inputs.dry-run }}
           tarball_sha256: <SHA-256 of the published Linux tarball, from the release>
           dmg_sha256: <SHA-256 of the published macOS disk image; empty until Phase 55 (A3)>
           winget_asset: <Windows installer asset name; empty until Phase 54 (A2)>
+
+The live legs run only when `live` is true and `dry_run` is false. The stage never reads `github.event_name`:
+inside a called workflow the `github` context is the caller's, so an event gate is wrong there (the
+`workflows` row refuses it). The train passes `dry_run: ${{ inputs.dry-run }}` so a train dry run renders the
+payloads and writes nothing. The stage holds `concurrency: channel-manifests-<release_key>`, so two calls for one
+key never race on `chore/channel-<key>` or on the tap.
 
 No secrets are passed in. Each leg names its GitHub environment (`bot` for the flake and tap legs, `release`
 for the winget leg), and the environment holds the secret, which the leg reads by name.
@@ -23,6 +32,8 @@ for the winget leg), and the environment holds the secret, which the leg reads b
 
 | Input | Consumed by | What the leg does with it |
 | --- | --- | --- |
+| `live` | every live job's `if` | True only for a published release. False (the default) runs the `dry-run` job alone. |
+| `dry_run` | every job's `if` | True forces the dry run even when `live` is true. |
 | `release_key` | derive, every live leg | The derive job checks it against the key the tree derives (`--check-key`); every leg derives its payload from it. |
 | `tarball_sha256` | flake-hash-pr | Cross-checks the hash the flake leg prefetches from the published asset; a difference fails the leg. |
 | `dmg_sha256` | tap-commit (and its gate) | The cask's sha256. An empty value skips the tap leg, so no cask names an unpublished disk image. |
@@ -39,7 +50,7 @@ for the winget leg), and the environment holds the secret, which the leg reads b
 
 ## Dry run
 
-`workflow_dispatch` runs the `dry-run` job alone. It renders the payloads into the runner's temporary
+A direct `workflow_dispatch`, or a call with `live: false` or `dry_run: true`, runs the `dry-run` job alone. It renders the payloads into the runner's temporary
 directory (`node scripts/verify-channel-release-jobs.mjs --render <dir> --key <key>`) and lists them:
 the flake-hash plan, the tap cask, the three winget manifests and the checker URL. It pushes nothing, opens
 nothing, submits nothing and holds no secret.

@@ -8,8 +8,11 @@
 #                      environment, by name. It runs only when the train names the Windows asset (A2).
 #   checker-freshness  the Flatpak x-checker-data template resolves for the release key. Static, no network.
 #
-# A workflow_dispatch runs the dry-run job only: it renders the four payloads into the runner's temp directory
-# and lists them. It writes nothing to any repository and submits nothing.
+# Live or dry is decided by inputs, never by github.event_name: inside a called workflow the github context is
+# the caller's, so an event_name gate is true or false for the wrong reason (CR-01). The caller passes live: true for
+# a published release and dry_run: true to render without writing. workflow_dispatch has no live input, so a direct
+# dispatch runs the dry-run job alone: it renders the four payloads into the runner's temp directory and lists
+# them. It writes nothing to any repository and submits nothing.
 #
 # Every live leg reads the release key from the derive job, which checks it against the key the tree derives
 # (scripts/verify-channel-release-jobs.mjs --check-key). Each leg's payload derives from the tree at run time
@@ -27,6 +30,16 @@ on:
         description: "The release key v<ESR>-<revision> the train published"
         required: true
         type: string
+      live:
+        description: "True only for a published release; false renders the dry run and writes nothing"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "True forces the dry run even when live is true (the train dry-run switch)"
+        required: false
+        type: boolean
+        default: false
       tarball_sha256:
         description: "The SHA-256 of the published Linux tarball, cross-checked by the flake-hash leg"
         required: false
@@ -50,6 +63,16 @@ on:
         type: string
 
 permissions: {}
+
+# bash on every runner, so run steps are bash -eo pipefail rather than bash -e (WR-04).
+defaults:
+  run:
+    shell: bash
+
+# One run per release key at a time: two calls would race on chore/channel-<key> and on the tap (WR-03).
+concurrency:
+  group: channel-manifests-${{ inputs.release_key }}
+  cancel-in-progress: false
 
 jobs:
   derive:
@@ -77,7 +100,7 @@ jobs:
 
   dry-run:
     name: Render the four payloads (dry run)
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ !inputs.live || inputs.dry_run }}
     needs: [derive]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -99,7 +122,7 @@ jobs:
 
   flake-hash-pr:
     name: Flake hash bot pull request
-    if: ${{ github.event_name == 'workflow_call' }}
+    if: ${{ inputs.live && !inputs.dry_run }}
     needs: [derive]
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -162,7 +185,7 @@ jobs:
 
   tap-commit:
     name: Homebrew tap commit (bot App, direct to the tap)
-    if: ${{ github.event_name == 'workflow_call' && inputs.dmg_sha256 != '' }}
+    if: ${{ inputs.live && !inputs.dry_run && inputs.dmg_sha256 != '' }}
     needs: [derive]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -222,7 +245,7 @@ jobs:
 
   winget-submit:
     name: winget set and submission (WINGET_TOKEN by name)
-    if: ${{ github.event_name == 'workflow_call' && inputs.winget_asset != '' }}
+    if: ${{ inputs.live && !inputs.dry_run && inputs.winget_asset != '' }}
     needs: [derive]
     runs-on: windows-latest
     timeout-minutes: 45
@@ -259,7 +282,7 @@ jobs:
 
   checker-freshness:
     name: Flatpak checker data resolves for the key (static)
-    if: ${{ github.event_name == 'workflow_call' }}
+    if: ${{ inputs.live && !inputs.dry_run }}
     needs: [derive]
     runs-on: ubuntu-latest
     timeout-minutes: 10
