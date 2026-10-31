@@ -60,7 +60,8 @@
 //                 review_comment included.
 //  uptake-lane    In release-train.yml only (Phase 58, TRAIN-05, UPS-01), the uptake-replay
 //                 job is read-only: no write scope in its effective permissions, no
-//                 environment, and a call to rebase-upstream.yml, the one replay definition.
+//                 environment, no secrets key (secrets: inherit would hand it every
+//                 repository secret), and a call to rebase-upstream.yml, the one replay definition.
 //  bot-job-gate   In release-train.yml only (Phase 43, TRAIN-08), a job that enters an
 //                 environment (the bot environment holds the App key and may wait on an
 //                 approval) carries a negated inputs.dry-run in its job-level if:, so a
@@ -558,6 +559,7 @@ function runChecks(root, overrides = {}) {
                 if (writeScopes.length > 0) fail(rel, jobId, 'uptake-lane', `holds write scope on ${writeScopes.join(', ')}; the uptake replay is read-only and publishes nothing. Next step: set its permissions to contents: read.`);
                 if (job.environment !== undefined) fail(rel, jobId, 'uptake-lane', `enters environment ${JSON.stringify(job.environment)}; the uptake replay holds no environment. Next step: remove the environment key.`);
                 if (job.uses !== './.github/workflows/rebase-upstream.yml') fail(rel, jobId, 'uptake-lane', `calls ${JSON.stringify(job.uses ?? null)}, not the one replay definition rebase-upstream.yml. Next step: call rebase-upstream.yml, the only replay.`);
+                if (job.secrets !== undefined) fail(rel, jobId, 'uptake-lane', `passes secrets (${JSON.stringify(job.secrets)}) to the replay; the uptake replay holds no secret, and secrets: inherit would hand it every repository secret. Next step: remove the secrets key.`);
             }
 
             // dry-run gate: every write step in release-train.yml names the gate in its if:.
@@ -884,6 +886,7 @@ function selfTest() {
         ['uptake-replay granted pull-requests write', withRt(d => { d.jobs['uptake-replay'].permissions = { contents: 'read', 'pull-requests': 'write' }; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'holds write scope on pull-requests'],
         ['uptake-replay entering the bot environment', withRt(d => { d.jobs['uptake-replay'].environment = 'bot'; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'holds no environment'],
         ['uptake-replay calling a publishing workflow', withRt(d => { d.jobs['uptake-replay'].uses = './.github/workflows/release.yml'; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'not the one replay definition'],
+        ['uptake-replay passing secrets: inherit to the replay', withRt(d => { d.jobs['uptake-replay'].secrets = 'inherit'; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'holds no secret'],
         ['schedule key on release-train.yml', withRt(d => { d.on.schedule = [{ cron: '0 3 * * *' }]; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-schedule', 'schedule'],
         ['pull_request trigger on release-train.yml', withRt(d => { d.on.pull_request = null; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
         ['unguarded workflow_run job in release-train.yml', withRt(d => { d.on.workflow_run = { workflows: ['Verify static layers'], types: ['completed'] }; d.jobs.derive.if = 'true'; }), rel(DRY_RUN_FILE), 'derive', 'workflow-run-guard', 'head_repository'],
