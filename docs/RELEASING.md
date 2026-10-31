@@ -349,6 +349,20 @@ path. The `hook-refusal` row proves the refusal table on the tracked text, inclu
 environment: an exported shell function, `BASH_ENV` and `ENV` are refused, and a run attempt other
 than 1 is refused.
 
+**Deployed-hook drift check (manual).** The control that runs is the deployed copy, and
+`hook-refusal` tests only the tracked file. After installing the hook, after any later edit of the
+tracked hook, and before each release dispatch, run this from the clone and require one hash printed
+twice:
+
+```
+sha256sum scripts/legion-pre-job-hook.sh /etc/pb-runner/legion-pre-job-hook.sh
+```
+
+Two different hashes mean the deployed copy is stale: copy the tracked file into `/etc/nixos/pb-runner/`
+and apply the `/etc/nixos` flow again. A stale copy fails closed on a changed slug and stays too
+narrow if the tracked hook is ever widened. There is deliberately no automated check of the deployed
+path.
+
 The hook cannot undo a `BASH_ENV` file, which bash runs before the hook's first line. Where the
 runner allows the hook's interpreter to be chosen, invoke it as
 `/run/current-system/sw/bin/bash -p --noprofile --norc /etc/pb-runner/legion-pre-job-hook.sh`
@@ -451,7 +465,8 @@ contains no `DRILL-STEP-REACHED` line, and the `container` job pulls and creates
 "Initialize containers" step). Record, per job: the conclusion, whether any step ran, the hook's
 refusal line as it appears in the job log (this is the only measurement of "the hook's stderr appears
 in the job log"; until it is recorded the claim is not made), and whether a container was created.
-Record the same for the interpreter question above. Then delete the branch and the workflow.
+Record the same for the interpreter question above, and run the `sha256sum` comparison from the
+drift check above so the drill exercises the deployed copy. Then delete the branch and the workflow.
 
 If any job reaches a step, or a container is created before the hook, the runner **must not be
 used**: stop `github-runner-powerbrowser-release.service`, remove the runner registration, and
