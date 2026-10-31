@@ -26,12 +26,18 @@ is not executed by this run and is listed at the end.
   `nix build .#powerbrowser` on a clean machine with the live cache and paste the substitute log into the
   56-05 evidence.
 
-## 3. Flatpak runtime and checker schema (offline-unverified)
+## 3. Flatpak runtime, base and checker schema (owner-verify)
 
-- **Blocked:** the `org.mozilla.firefox.BaseApp` runtime-version `stable` pairing with `org.freedesktop.Sdk`, and
-  the external-data-checker `json` type with `url-template`, cannot be verified without network reads of Flathub.
-- **Owner step:** run `flatpak-builder --show-manifest` on a rendered copy of `flatpak/org.debios.PowerBrowser.json`
-  (see item 8 for the render command), and an external-data-checker dry run, before the Flathub submission.
+- **Changed by the review fix CR-04:** the manifest no longer names the BaseApp as the runtime. It now pairs
+  `org.freedesktop.Platform` / `org.freedesktop.Sdk` at `26.08` with `base: org.mozilla.firefox.BaseApp` at
+  `base-version: 26.08`. Sources read on 2026-10-31 (read-only): the `flathub/org.mozilla.firefox.BaseApp`
+  repository has a `branch/26.08` whose manifest declares `runtime: org.freedesktop.Platform`,
+  `runtime-version: 26.08`, `sdk: org.freedesktop.Sdk`, and `https://dl.flathub.org/repo/refs/heads/runtime/org.freedesktop.Platform/x86_64/26.08`
+  and `.../app/org.mozilla.firefox.BaseApp/x86_64/26.08` both answer 200. The Firefox application manifest itself was not
+  readable, so the pairing is derived from the BaseApp manifest and the published refs, not from a Firefox build.
+- **Still owner-verify:** the external-data-checker `json` type with `url-template`, and the `base` key behaviour of the
+  pinned flatpak-builder (a `--show-manifest` and a local `--force-clean` build). Run both before the Flathub
+  submission, not after (item 8 gives the render command).
 
 ## 4. Nix /download copy (site outside this tree, Phase 47)
 

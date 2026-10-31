@@ -70,7 +70,8 @@ Subject: Linter exception request for org.debios.PowerBrowser
 
     I maintain org.debios.PowerBrowser, a browser built upstream by Mozilla's Firefox ESR
     release process and distributed as a prebuilt tarball. The Flatpak repacks that tarball on
-    the org.mozilla.firefox.BaseApp runtime and does not rebuild the browser from source.
+    the org.freedesktop.Platform runtime with the org.mozilla.firefox.BaseApp base and does not
+    rebuild the browser from source.
 
     I request a written exception for the prebuilt-tarball linter rule for this application,
     with the reason above. The tarball, its hash and its source revision are published on the

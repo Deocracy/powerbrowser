@@ -1,8 +1,10 @@
 {
   "app-id": "org.debios.PowerBrowser",
-  "runtime": "org.mozilla.firefox.BaseApp",
-  "runtime-version": "stable",
+  "runtime": "org.freedesktop.Platform",
+  "runtime-version": "26.08",
   "sdk": "org.freedesktop.Sdk",
+  "base": "org.mozilla.firefox.BaseApp",
+  "base-version": "26.08",
   "command": "powerbrowser",
   "finish-args": [
     "--share=ipc",

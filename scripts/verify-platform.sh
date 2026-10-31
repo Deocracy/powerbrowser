@@ -4965,7 +4965,7 @@ run_own_checks() {
     "binary-cache-self-test|node $REPO_ROOT/scripts/verify-binary-cache.mjs --self-test"
     # NEW (Phase 56, PKG-20): the Flathub manifest, submission-shaped and static. The app id, the persist path,
     # the TXT record name and the desktop and icon agreement derive from the tracked identity and branding;
-    # the runtime is the Firefox BaseApp ref; the Flatpak-only DisableAppUpdate merge and the checker data are
+    # the runtime is org.freedesktop.Platform with the Firefox BaseApp as base; the Flatpak-only DisableAppUpdate merge and the checker data are
     # present; the exception stays pending-owner-reply on the written-exception path, with one repack module.
     # Honestly --quick: JSON, text and the tracked PNG bytes; no flatpak-builder, no network, no account.
     "flathub-manifest|node $REPO_ROOT/scripts/verify-flathub-manifest.mjs"

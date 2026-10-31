@@ -8,8 +8,10 @@
 //  2. desktop and icon       flatpak/org.debios.PowerBrowser.desktop equals the tracked release desktop entry
 //                            with its Exec rewritten to the bare launcher and its Icon set to the app id; the
 //                            icon is byte-identical to the tracked 128-pixel branding PNG;
-//  3. runtime                the Firefox BaseApp ref, org.mozilla.firefox.BaseApp (the Flathub base, not a
-//                            literal of this project);
+//  3. runtime and base       org.freedesktop.Platform / org.freedesktop.Sdk on a yy.mm branch, with the Firefox
+//                            BaseApp, org.mozilla.firefox.BaseApp, as `base` on the same branch. The BaseApp is a
+//                            base application, never the runtime (CR-04; Flathub's org.mozilla.firefox.BaseApp
+//                            manifest builds on org.freedesktop.Platform at the branch it is published for);
 //  4. persist                --persist=.<vendor_machine, lowercased> in finish-args (.debios);
 //  5. Flatpak-only disable   the build commands merge DisableAppUpdate into the staged policies copy;
 //                            the policies-update-split row compares the values;
@@ -59,6 +61,9 @@ const NIX_REL = 'nix/pkg/powerbrowser-bin.nix';
 const POLICIES_REL = 'powerbrowser/distribution/policies.json';
 const COPY_REL = 'docs/download-flatpak.md';
 const BASEAPP_REF = 'org.mozilla.firefox.BaseApp';
+const RUNTIME_REF = 'org.freedesktop.Platform';
+const SDK_REF = 'org.freedesktop.Sdk';
+const BRANCH_RE = /^\d{2}\.\d{2}$/;
 const VERIFY_PLACEHOLDER = '@FLATHUB_VERIFICATION_TOKEN@';
 
 const args = process.argv.slice(2);
@@ -123,9 +128,21 @@ export function runChecks(root, overrides = {}) {
         if (manifest['app-id'] !== appId) {
             fail(MANIFEST_REL, `names app-id ${JSON.stringify(manifest['app-id'] ?? null)} but the tracked identity derives ${appId}`, 'set app-id to the derived value.');
         }
-        // 3. runtime
-        if (manifest.runtime !== BASEAPP_REF) {
-            fail(MANIFEST_REL, `names runtime ${JSON.stringify(manifest.runtime ?? null)} but the repack runs on ${BASEAPP_REF}`, `set runtime to ${BASEAPP_REF}.`);
+        // 3. runtime and base
+        if (manifest.runtime !== RUNTIME_REF) {
+            fail(MANIFEST_REL, `names runtime ${JSON.stringify(manifest.runtime ?? null)} but a runtime is ${RUNTIME_REF}; the Firefox BaseApp is a base, not a runtime`, `set runtime to ${RUNTIME_REF}.`);
+        }
+        if (manifest.sdk !== SDK_REF) {
+            fail(MANIFEST_REL, `names sdk ${JSON.stringify(manifest.sdk ?? null)} but the runtime ${RUNTIME_REF} pairs with ${SDK_REF}`, `set sdk to ${SDK_REF}.`);
+        }
+        if (manifest.base !== BASEAPP_REF) {
+            fail(MANIFEST_REL, `names base ${JSON.stringify(manifest.base ?? null)} but the Firefox repack builds on the ${BASEAPP_REF} base`, `set base to ${BASEAPP_REF}.`);
+        }
+        if (!BRANCH_RE.test(manifest['runtime-version'] ?? '')) {
+            fail(MANIFEST_REL, `names runtime-version ${JSON.stringify(manifest['runtime-version'] ?? null)}, not a pinned yy.mm branch; stable is not a runtime branch`, 'pin the runtime-version to a published yy.mm branch.');
+        }
+        if (manifest['base-version'] !== manifest['runtime-version']) {
+            fail(MANIFEST_REL, `names base-version ${JSON.stringify(manifest['base-version'] ?? null)} but runtime-version ${JSON.stringify(manifest['runtime-version'] ?? null)}; the BaseApp branch must match the runtime branch`, 'set base-version equal to runtime-version.');
         }
         // 4. persist
         if (!(manifest['finish-args'] ?? []).includes(persist)) {
@@ -313,8 +330,24 @@ function selfTest() {
 
     const cases = [
         {
-            name: 'runtime off the Firefox BaseApp', expect: BASEAPP_REF,
-            overrides: withManifest(d => { d.runtime = 'org.freedesktop.Platform'; }),
+            name: 'runtime set to the Firefox BaseApp (CR-04, the old value)', expect: `a runtime is ${RUNTIME_REF}`,
+            overrides: withManifest(d => { d.runtime = BASEAPP_REF; }),
+        },
+        {
+            name: 'base missing', expect: 'names base',
+            overrides: withManifest(d => { delete d.base; }),
+        },
+        {
+            name: 'base-version off the runtime branch', expect: 'base-version',
+            overrides: withManifest(d => { d['base-version'] = '24.08'; }),
+        },
+        {
+            name: 'runtime-version left at stable', expect: 'not a pinned yy.mm branch',
+            overrides: withManifest(d => { d['runtime-version'] = 'stable'; d['base-version'] = 'stable'; }),
+        },
+        {
+            name: 'sdk off the freedesktop pairing', expect: 'names sdk',
+            overrides: withManifest(d => { d.sdk = 'org.gnome.Sdk'; }),
         },
         {
             name: 'archive strip-components left at the default (the launcher copy breaks)', expect: 'strip-components',
