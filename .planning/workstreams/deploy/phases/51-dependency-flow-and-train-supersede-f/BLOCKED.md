@@ -84,3 +84,33 @@ reasoning holds, but it does not meet the requirement text.
 
 **Until one option is chosen:** AUTO-02 is partial. Nothing in this plan claims that flake.lock is
 updated.
+
+## 6. Dispatch-job requirements for the post-upgrade hook (WR-05)
+
+The Theia PR runs `postUpgradeTasks` (executionMode `branch`) on its branch. That hook runs
+`node scripts/generate-licensing.mjs` and `node scripts/generate.mjs --check`, and it commits back only the
+`fileFilters` files. The hook does not run until the dispatch job of item 1 exists. The job must provide:
+
+1. **Allow-list in the job environment.** Renovate's executor only warns on a post-upgrade command that is
+   not on the allow-list, and then skips it (`execute-post-upgrade-commands.js:123`). Set
+   `RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS` to `["^node scripts/generate-licensing\\.mjs$", "^node scripts/generate\\.mjs --check$"]`.
+   A repository file cannot carry this option (verifier rule `allowed-post-upgrade`). Without it the PR
+   opens with `theia/yarn.lock`, the pins and `theia_release` changed, and `THIRD-PARTY-NOTICES.txt` stale,
+   and the `licensing` row goes red on the first PR.
+2. **`theia/node_modules` present before Renovate runs.** The generator fails on an absent `node_modules`
+   (`scripts/generate-licensing.mjs`, hard Fail). Run `yarn install --ignore-scripts --frozen-lockfile` in
+   `theia/` inside `nix develop .#theia`, then confirm `git status` is clean. Not verified: whether Renovate's
+   own yarn run leaves `node_modules` behind. Renovate runs yarn with `--ignore-platform`, which may change the
+   optional-dependency set the generator walks. The cold-install figures in the summary come from a scratch
+   tree, not a fresh runner.
+3. **`python3` on the runner `PATH`.**
+4. **The Node archive** at `.mozbuild/node-dist` (31.6 MB). A fresh runner downloads it once; that cost is
+   not in the summary's figures.
+5. **A git checkout, not an export.** The generator calls `git rev-parse --git-common-dir`.
+
+`generate.mjs --check` writes nothing. On drift it fails and the job reports an error. It does not repair
+the drift, so a failing check leaves the PR for the owner.
+
+**AUTO-02 is complete only after one real PR shows the `licensing` row green.** Until then the hook is
+unverified. A follow-up must add a `workflows`-row assertion for `RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS`
+when the job lands, so the variable cannot be dropped silently.
