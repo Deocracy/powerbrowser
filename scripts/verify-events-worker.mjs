@@ -80,6 +80,8 @@ const RULE = Object.freeze({
     noSuppress: 'one client cannot suppress another',
     unauthDownload: 'unauthenticated download-count POST',
     wrongSecret: 'wrong-secret download-count POST',
+    noSecret: 'unset or empty secret',
+    scheme: 'non-Bearer authorization scheme',
     malformedAuthed: 'malformed authenticated body',
     duplicateAssetDay: 'duplicate asset-day POST',
     atomic: 'all-or-nothing batch write',
@@ -322,9 +324,10 @@ async function runBehaviour(root, worker, secret) {
         const stub = makeStub();
         let verdict;
         try {
+            const e = opts.env === undefined ? env(stub) : opts.env(stub);
             verdict = opts.download
-                ? await worker.handleDownloadCounts(shape, env(stub), freshState())
-                : await worker.handleEvents(shape, env(stub), freshState());
+                ? await worker.handleDownloadCounts(shape, e, freshState())
+                : await worker.handleEvents(shape, e, freshState());
         } catch (err) {
             failures.push(`${rule}: the Worker threw instead of answering: ${err.message}. Next step: answer every rejection with its contract status.`);
             return;
@@ -477,6 +480,26 @@ async function runBehaviour(root, worker, secret) {
     const authed = { authorization: `Bearer ${secret}` };
     await expectRejected(RULE.unauthDownload, post(worker.DL_PATH, dlBody), { status: 401, body: '' }, { download: true });
     await expectRejected(RULE.wrongSecret, post(worker.DL_PATH, dlBody, { authorization: `Bearer ${secret}-x` }), { status: 401, body: '' }, { download: true });
+    // authorized() fails closed: an unset or empty secret authorizes nothing (not even an empty Bearer
+    // token), and a header in another scheme is refused whatever follows it. `Digest ` is as long as
+    // `Bearer `, so a missing scheme check would compare the secret itself and accept.
+    for (const [label, makeEnv] of [
+        ['unset secret', stub => ({ DB: stub })],
+        ['empty secret', stub => ({ DB: stub, DOWNLOAD_COUNT_SECRET: '' })],
+    ]) {
+        for (const authorization of ['Bearer ', 'Bearer x', `Bearer ${secret}`]) {
+            await expectRejected(`${RULE.noSecret} (${label}, header ${JSON.stringify(authorization === `Bearer ${secret}` ? 'Bearer <secret>' : authorization)})`, post(worker.DL_PATH, dlBody, { authorization }), { status: 401, body: '' }, { download: true, env: makeEnv });
+        }
+    }
+    await expectRejected(RULE.scheme, post(worker.DL_PATH, dlBody, { authorization: `Digest ${secret}` }), { status: 401, body: '' }, { download: true });
+    await expectRejected(RULE.scheme, post(worker.DL_PATH, dlBody, { authorization: secret }), { status: 401, body: '' }, { download: true });
+    {
+        // The same fail-closed check guards the synthetic flag on /events.
+        const stub = makeStub();
+        await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS, { authorization: 'Bearer ' }), { DB: stub }, freshState());
+        await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS, { authorization: 'Bearer ' }), { DB: stub, DOWNLOAD_COUNT_SECRET: '' }, freshState());
+        if (stub.events.some(r => r.synthetic !== 0)) failures.push(`${RULE.noSecret}: an unset or empty secret honoured the synthetic flag for an empty Bearer token. Next step: authorized() must refuse when no secret is configured.`);
+    }
     await expectRejected(RULE.malformedAuthed, post(worker.DL_PATH, { ...dlBody, download_count: -1 }, authed), { status: 400, body: 'Discarded: malformed_body' }, { download: true });
     {
         const stub = makeStub();
@@ -609,6 +632,9 @@ const PLANTS = [
     { rule: RULE.atomic, rel: WORKER_REL, find: 'if (rows.length > 0) await env.DB.batch(rows.map(row => env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs))));', replace: 'for (const row of rows) await env.DB.prepare(INSERT_EVENT).bind(...eventValues(row, state.nowMs)).run();' },
     { rule: RULE.noSuppress, rel: WORKER_REL, find: '    const trusted = authorized(shape.headers?.authorization, env);', replace: "    globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n    if (globalThis.__plantSent > 60) return discard(200, 'throttled_in_worker_cap');\n    const trusted = authorized(shape.headers?.authorization, env);" },
     { rule: RULE.unauthDownload, rel: WORKER_REL, find: '    if (!authorized(shape.headers?.authorization, env)) return empty(401);', replace: '' },
+    { rule: RULE.noSecret, rel: WORKER_REL, find: "if (typeof expected !== 'string' || expected === '') return false;", replace: "if (typeof expected !== 'string') return false;" },
+    { rule: RULE.noSecret, rel: WORKER_REL, find: "if (typeof expected !== 'string' || expected === '') return false;", replace: "if (expected === undefined) return true;" },
+    { rule: RULE.scheme, rel: WORKER_REL, find: " || !header.startsWith('Bearer ')) return false;", replace: ') return false;' },
     { rule: RULE.wrongSecret, rel: WORKER_REL, find: "    return constantTimeEqual(header.slice('Bearer '.length), expected);", replace: "    return header.startsWith('Bearer ');" },
     { rule: RULE.malformedAuthed, rel: WORKER_REL, find: ' || !Number.isInteger(count) || count < 0', replace: '' },
     { rule: RULE.duplicateAssetDay, rel: WORKER_REL, find: '"download_count" = excluded."download_count"', replace: '"download_count" = "download_count"' },
