@@ -31,6 +31,12 @@
 //   verifyCheck   'success' | 'failure' | 'pending' | null on the bump PR
 //   ownerLogin    the owner's login, passed in by the workflow; never a literal here
 //
+// The supersede rule (TRAIN-04) adds one terminal state, SUPERSEDED. An open train with a
+// newer validated ESR tag (facts.newerTag) or an open same-ESR chemspill revision
+// (facts.chemspillOpen) is superseded: routine, no owner page. derive() tries those two
+// arms after the release-stage check and before the Phase 43 ladder, so a chemspill
+// revision proceeds and preempts a scheduled train.
+//
 // The uptake lane (TRAIN-05, UPS-01) keeps its own keys and states beside the five
 // above. A 175 candidate derives UPTAKE_* states: UPTAKE_DETECTED (replay due),
 // UPTAKE_CONFLICT (a patch did not apply), UPTAKE_RED (another replay FAIL) and
@@ -66,6 +72,7 @@
 //                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
 //                                        each is success|failure|cancelled|skipped)
 
+import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -95,6 +102,7 @@ export const STATES = Object.freeze({
     LIVE_RED: Object.freeze({ desc: 'a release descriptor is present and channel-live is red, or its bytes drifted' }),
     WITHDRAWN: Object.freeze({ desc: 'the Release carries the withdrawal mark (prerelease flag or notes marker); authoritative' }),
     DONE: Object.freeze({ desc: 'DESCRIPTOR_LIVE facts with the tracking issue already closed (bookkeeping only)' }),
+    SUPERSEDED: Object.freeze({ desc: 'an open older train with a newer validated ESR tag, or with an open same-ESR chemspill revision: terminal, routine, no owner page (TRAIN-04)' }),
 });
 
 // The uptake lane (TRAIN-05). Replay-only: no state here opens a branch, a PR or a dispatch.
@@ -123,6 +131,9 @@ const ACTIONS = Object.freeze({
     DESCRIPTOR_LIVE: 'close-issue',
     LIVE_RED: 'block-and-link',
     WITHDRAWN: 'reopen-and-instruct',
+    // UNWIRED: the cancel of the superseded train's pending release deployment has no executor yet.
+    // The release-stage actions have no live collector until the facts source is approved (BLOCKED.md).
+    SUPERSEDED: 'cancel-pending-and-link',
     DONE: 'noop',
 });
 
@@ -212,10 +223,31 @@ function deriveRelease(rel) {
     return null;
 }
 
-/** The state a release is in, from facts, or null with nothing to do. Pure. */
+// TRAIN-04 helpers. esrAfter compares the numeric ESR tuples of two *esr_RELEASE tags.
+const esrAfter = (a, b) => {
+    const [x, y] = [tagToVersion(a), tagToVersion(b)];
+    if (x === null || y === null) return false;
+    const i = x.tuple.findIndex((n, k) => n !== y.tuple[k]);
+    return i !== -1 && x.tuple[i] > y.tuple[i];
+};
+// A newer tag supersedes an older train only when it is a valid tag under the same major.
+const newerOnSameLine = (newer, old) => {
+    const o = tagToVersion(old);
+    return o !== null && classifyTag(newer, o.tuple[0]).keep && esrAfter(newer, old);
+};
+
+/**
+ * The state a release is in, from facts, or null with nothing to do. Pure.
+ * The TRAIN-04 arms run after the release-stage check, so a published release is never superseded:
+ * (1) an open same-ESR chemspill revision preempts this scheduled train (chemspillOpen);
+ * (2) a newer validated ESR tag preempts this open older train (newerTag). A chemspill revision
+ *     train carries neither flag, so it falls through to the Phase 43 ladder and proceeds.
+ */
 export function derive(facts) {
     const f = facts;
     if (f.release) return deriveRelease(f.release);
+    if (f.openPr && f.chemspillOpen === true) return 'SUPERSEDED';
+    if (f.openPr && typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, f.candidateTag)) return 'SUPERSEDED';
     if (f.merged === true && f.pinUnchanged === true) return 'BUMP_RED';
     if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'CONFLICT';
     if (typeof f.stage === 'string' && ANY_FAIL.test(f.stage)) return 'BUMP_RED';
@@ -286,6 +318,12 @@ export function render(state, facts) {
     if (runUrl !== null) stateLines.push(`Release run (${runUrl}) SHA ${rel.mergeSHA}`);
     if (state === 'LIVE_RED') stateLines.push(`channel-live red on ${redSubcheck(rel)}. Next step: read the failing log linked from the run.`);
     if (state === 'WITHDRAWN') stateLines.push('Withdrawn. The fix is a new revision with a new tag; a Release is never deleted and no tag is reused.');
+    if (state === 'SUPERSEDED') {
+        // Routine and informational: no assign or mention below (SUPERSEDED is not in NEEDS_OWNER).
+        const newer = typeof facts.newerTag === 'string' ? tagToVersion(facts.newerTag) : null;
+        const by = facts.newerKey ?? (newer !== null ? `v${newer.esrVersion}-1` : 'the open chemspill revision');
+        stateLines.push(`superseded by ${by}${facts.newerIssueUrl ? ` (${facts.newerIssueUrl})` : ''}. Routine: no owner action is needed on this issue.`);
+    }
     const body = [
         title,
         '',
@@ -561,6 +599,7 @@ const BOT_EMAIL_FIXTURE = 'bot-fixture@example.invalid';
 const OWNER_EMAIL = 'owner-fixture@example.invalid';
 const BASE_PIN = esrTag(153, 5, 1);
 const NEWER = esrTag(153, 23, 0);
+const OLDER = esrTag(153, 6, 0);
 const BASE = Object.freeze({ pinTag: BASE_PIN, revision: 1, candidateTag: null, openPr: null, bumpConclusion: null, stage: null, verifyCheck: null, merged: false, pinUnchanged: false });
 // Each fixture carries its expected action as a literal. next() is checked against that
 // literal, never against ACTIONS, so a wrong entry in ACTIONS cannot agree with itself.
@@ -598,6 +637,8 @@ const FIXTURES_153 = Object.freeze({
     CONFLICT: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply (real conflict, not silent)' }, action: 'conflict-issue' }),
     BUMP_RED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 42 }, verifyCheck: 'failure' }, action: 'wait-owner' }),
     BUMP_PR_GREEN: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 43 }, verifyCheck: 'success', pinUnchanged: false }, action: 'gate' }),
+    // An open older train (OLDER) with a newer validated ESR tag (NEWER) on the same major: superseded.
+    SUPERSEDED: Object.freeze({ facts: { ...BASE, candidateTag: OLDER, openPr: { head: `chore/esr-${OLDER}`, number: 40 }, newerTag: NEWER }, action: 'cancel-pending-and-link' }),
     // Main has advanced past the merge SHA (every run's head_sha is TIP_SHA). The other SHA's run is the newest and must not be linked: the link is by display title.
     BUILDING: Object.freeze({ live: liveBase({ runs: [liveRun(100, OTHER_SHA, 'completed', 'success', '2026-10-31T12:00:00Z'), liveRun(101, MERGE_SHA, 'in_progress', null, '2026-10-31T10:00:00Z')] }), action: 'wait' }),
     AWAITING_APPROVAL: Object.freeze({ live: liveBase({ runs: [liveRun(102, MERGE_SHA, 'waiting', null, '2026-10-31T10:00:00Z')], pending: [{ environment: { name: 'release' } }], release: liveRelease({ draft: true, assets: [], body: '' }) }), action: 'notify-owner' }),
@@ -618,6 +659,10 @@ const UPTAKE_FIXTURES = Object.freeze({
     UPTAKE_REPLAYED: Object.freeze({ facts: { ...UPTAKE_BASE, replayed: true }, action: 'note' }),
 });
 const FIXTURES = Object.freeze({ ...FIXTURES_153, ...UPTAKE_FIXTURES });
+
+// The sign-publish stale-approval predicate: the same comparator release.yml calls (exit 0 = the key is
+// newer than the latest Release and may sign). Run as a child process, so the predicate is the shipped one.
+const signGuardExit = (key, latest) => spawnSync(process.execPath, [resolve(REPO_ROOT, 'scripts/release-key-newer.mjs'), key, latest], { encoding: 'utf8' });
 
 /** Failures for a conflict decision that writes anything under the patch directory. Pure. */
 export function conflictWriteFailures(decision) {
@@ -659,7 +704,7 @@ function selfTest() {
         baseline.failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`  ok  baseline -> ${Object.keys(ALL_STATES).length} states (${Object.keys(STATES).length} bump-lane: 5 Phase-A and 8 release-stage; ${Object.keys(UPTAKE_STATES).length} uptake-lane), each with a fixture and an action, set-equal; derive, next and render agree`);
+    console.log(`  ok  baseline -> ${Object.keys(ALL_STATES).length} states (${Object.keys(STATES).length} bump-lane: 5 Phase-A, 8 release-stage and SUPERSEDED; ${Object.keys(UPTAKE_STATES).length} uptake-lane), each with a fixture and an action, set-equal; derive, next and render agree`);
 
     const OWNER = 'owner-login-fixture';
     const trainPlants = [
@@ -724,6 +769,44 @@ function selfTest() {
                 return [`merged PR derives ${got} with the pin unchanged, never a green state`];
             },
             expect: `left the pin at ${BASE_PIN} unchanged`,
+        },
+        {
+            name: 'supersede-newer-esr-while-open: an open older train with a newer ESR tag',
+            // A correct derive names SUPERSEDED, and the rendered view names the new key. Any other state drifts.
+            run: () => {
+                const f = FIXTURES.SUPERSEDED.facts;
+                const got = derive(f);
+                if (got !== 'SUPERSEDED') return [`an open older train with a newer ESR tag derives ${got}, not SUPERSEDED`];
+                return [render('SUPERSEDED', f).body.split('\n').find(l => l.includes('superseded by')) ?? 'SUPERSEDED view lacks the new key'];
+            },
+            expect: 'superseded by v153.23.0-1',
+        },
+        {
+            name: 'chemspill-beats-scheduled: a scheduled train with an open same-ESR chemspill revision',
+            // The revision preempts the scheduled train: its derive must be SUPERSEDED, whatever order the trains were seen in.
+            run: () => {
+                const got = derive({ ...FIXTURES.BUMPING.facts, chemspillOpen: true });
+                if (got !== 'SUPERSEDED') return [`a scheduled train with an open chemspill derives ${got}, not SUPERSEDED`];
+                return ['scheduled train superseded by the open chemspill revision'];
+            },
+            expect: 'superseded by the open chemspill revision',
+        },
+        {
+            name: 'sign-job-newer-release-exit: a stale approval whose key is not newer than the latest published Release',
+            // release.yml's newer_guard and newer_guard_final call the same comparator; a refusal must not be a proceed.
+            run: () => {
+                const r = signGuardExit('v153.23.0-1', 'v153.23.0-2');
+                return r.status === 0 ? ['sign guard proceeds for v153.23.0-1 under latest v153.23.0-2'] : ['the latest published Release v153.23.0-2 is not older than v153.23.0-1 (comparator exit ' + r.status + '); nothing is signed'];
+            },
+            expect: 'is not older than v153.23.0-1',
+        },
+        {
+            name: 'sign-job-malformed-latest: a latest tag that is not a release key is never a proceed',
+            run: () => {
+                const r = signGuardExit('v153.23.0-2', 'latest');
+                return r.status === 0 ? ['a malformed latest tag proceeded'] : [`the release key or the latest Release tag could not be compared (exit ${r.status}); nothing is signed`];
+            },
+            expect: 'could not be compared',
         },
         {
             name: 'a 175.x ESR under the 153 guard',
@@ -802,7 +885,50 @@ function selfTest() {
         },
     ];
 
+    // TRAIN-04 controls: the supersede arms are narrow, a published release is never superseded, and the render is routine.
+    const supersedeGreens = [
+        {
+            name: 'control: a chemspill revision train proceeds on the Phase 43 ladder, not superseded by its scheduled sibling',
+            run: () => {
+                const revision = { ...BASE, candidateTag: BASE_PIN, revision: 2, openPr: { head: `chore/esr-${BASE_PIN}`, number: 44 }, verifyCheck: null };
+                const got = derive(revision);
+                return got === 'BUMPING' ? [] : [`the chemspill revision train derives ${got}, not BUMPING`];
+            },
+        },
+        {
+            name: 'control: a 175 tag never supersedes a 153 train (the newer tag must be on the same major)',
+            run: () => {
+                const got = derive({ ...FIXTURES.SUPERSEDED.facts, newerTag: UPTAKE_TAG });
+                return got === 'BUMPING' ? [] : [`a 175 tag superseded a 153 train (derived ${got})`];
+            },
+        },
+        {
+            name: 'control: a published release is never superseded, even with an open PR, a newer tag and a chemspill',
+            run: () => {
+                const got = derive({ ...factsOf(FIXTURES.PUBLISHED), openPr: { head: `chore/esr-${OLDER}`, number: 45 }, newerTag: NEWER, chemspillOpen: true });
+                return got === 'PUBLISHED' ? [] : [`a published release derived ${got} under supersede facts`];
+            },
+        },
+        {
+            name: 'control: the SUPERSEDED render names the new key and link, and neither assigns nor mentions the owner',
+            run: () => {
+                const view = render('SUPERSEDED', { ...FIXTURES.SUPERSEDED.facts, ownerLogin: OWNER, newerIssueUrl: 'https://example.invalid/issues/9' });
+                const ok = view.body.includes('superseded by v153.23.0-1') && view.body.includes('https://example.invalid/issues/9') && view.mention === null && view.assign.length === 0 && view.lock === true;
+                return ok ? [] : [`SUPERSEDED view had mention ${view.mention}, assign ${view.assign.join(',')}, or lacked the key or link`];
+            },
+        },
+        {
+            name: 'control: the sign guard proceeds on the newest key and refuses an equal key',
+            run: () => {
+                const proceeds = signGuardExit('v153.23.0-2', 'v153.23.0-1').status === 0;
+                const refusesEqual = signGuardExit('v153.23.0-1', 'v153.23.0-1').status !== 0;
+                return proceeds && refusesEqual ? [] : ['the sign guard did not proceed on the newest key, or proceeded on an equal key'];
+            },
+        },
+    ];
+
     const greens = [
+        ...supersedeGreens,
         ...publishGreens,
         {
             name: 'control: a fresh candidate is would-written as a bump and carries the tracking title',
