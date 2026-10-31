@@ -503,6 +503,37 @@ function floodProblems(workerPath) {
     return problems;
 }
 
+/**
+ * A request that DECLARES the cap in Content-Length and sends a few bytes must not make the reader allocate a
+ * cap-sized buffer: many such requests would exhaust the isolate. The largest Uint8Array the reader constructs
+ * is measured with an instrumented constructor.
+ */
+async function declaredLengthProblems() {
+    const cap = crashSubmit.MAX_BODY_BYTES;
+    const request = {
+        headers: new Headers({ 'content-length': String(cap) }),
+        body: new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(100)); controller.close(); } }),
+    };
+    const Real = globalThis.Uint8Array;
+    let largest = 0;
+    globalThis.Uint8Array = new Proxy(Real, {
+        construct(target, argv, newTarget) {
+            if (typeof argv[0] === 'number') largest = Math.max(largest, argv[0]);
+            return Reflect.construct(target, argv, newTarget);
+        },
+    });
+    let bytes;
+    try {
+        bytes = await crashSubmit.readCappedBytes(request, cap);
+    } finally {
+        globalThis.Uint8Array = Real;
+    }
+    const problems = [];
+    if (largest >= cap / 4) problems.push(`a request declaring ${cap} bytes and sending 100 made the reader allocate ${largest} bytes: Content-Length must only refuse, never size a buffer`);
+    if (bytes === undefined || bytes.byteLength !== 100) problems.push('the reader did not return the 100 bytes that arrived');
+    return problems;
+}
+
 /** Store fault: a record write fault removes the dump, and a dump write fault leaves no record. Nothing is stored either way. */
 async function storeFaultProblems() {
     const problems = [];
@@ -583,6 +614,7 @@ async function workerProblems(workerPath) {
         ...(await acceptProblems()),
         ...(await hostileNameProblems()),
         ...floodProblems(workerPath),
+        ...(await declaredLengthProblems()),
         ...(await storeFaultProblems()),
         ...(await concurrencyProblems()),
     ];
@@ -633,6 +665,7 @@ async function selfTest() {
         ['MDMP check removed', 'minidump.data.byteLength < MIN_MINIDUMP_BYTES || !MDMP_MAGIC.every((byte, i) => minidump.data[i] === byte)', 'false', 'without the MDMP signature'],
         ['delete on record failure removed', 'await env.CRASH_STORE.delete(dumpKey);', 'void dumpKey;', 'orphaned'],
         ['record written before the minidump', 'await env.CRASH_STORE.put(dumpKey, minidump.data.slice());', 'await env.CRASH_STORE.put(recordKey, record);\n        await env.CRASH_STORE.put(dumpKey, minidump.data.slice());', 'minidump write fault'],
+        ['buffer sized from Content-Length', 'new Uint8Array(READ_INITIAL_BYTES)', 'new Uint8Array(Number.isFinite(declared) && declared > 0 ? declared : READ_INITIAL_BYTES)', 'Content-Length must only refuse'],
         ['in-Worker throttle added', "const verdict = await handleCrashSubmit({", "globalThis.__plantSent = (globalThis.__plantSent ?? 0) + 1;\n        if (globalThis.__plantSent > 60) return toResponse({ status: 200, body: 'Discarded=throttled' });\n        const verdict = await handleCrashSubmit({", 'must not throttle in-process'],
     ];
     for (const [rule, find, replace, needle] of handlerPlants) {

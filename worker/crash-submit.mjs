@@ -280,16 +280,21 @@ export async function handleCrashSubmit(shape, env, nowMs) {
 }
 
 /**
- * Read the request body as bytes, refusing more than cap. A declared Content-Length over the cap is refused
- * before the body is touched. A declared length that fits is preallocated once and filled in place, so the
- * body is held once, not as a chunk list plus a copy; a body with no (or a wrong) length is grown to the cap.
+ * Read the request body as bytes, refusing more than cap. A declared Content-Length is used only to refuse a
+ * declared size over the cap before the body is touched; it is never trusted for an allocation, because a
+ * caller can claim the cap and send a few bytes. The buffer starts at READ_INITIAL_BYTES and grows
+ * geometrically as bytes actually arrive, never beyond the cap, and the read stops the moment the received
+ * bytes exceed the cap.
  */
+/** First read buffer size, whatever Content-Length claims. */
+export const READ_INITIAL_BYTES = 64 * 1024;
+
 export async function readCappedBytes(request, cap) {
     const declared = Number(request.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > cap) return undefined;
     if (request.body === null) return new Uint8Array(0);
     const reader = request.body.getReader();
-    let buffer = new Uint8Array(Number.isFinite(declared) && declared > 0 ? declared : 65536);
+    let buffer = new Uint8Array(READ_INITIAL_BYTES);
     let total = 0;
     for (;;) {
         const { done, value } = await reader.read();
