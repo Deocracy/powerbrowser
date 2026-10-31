@@ -1076,6 +1076,13 @@ decision per RESEARCH open question 1 and is NOT procured in this phase.
   stages one architecture's bundle, its Node pinned by `node-runtime.json`
   (`darwin-arm64`, `darwin-x64`), and the Theia sidecar. The universal unify
   and the DMG are plan 55-03.
+- Before `package-macos.sh`, set `MOZ_FETCHES_DIR` to the directory holding
+  `MacOSX26.5.sdk/`, `hfsplus/newfs_hfs` and `dmg/dmg`, `dmg/hfsplus`. The
+  mozconfig expands it into `MACOS_SDK_DIR`, `MKFSHFS`, `DMG_TOOL` and
+  `HFS_TOOL`. The script stops before the Node download and the Gecko build when
+  any of them is missing. Its staging also requires every native payload of the
+  Theia build to be a Mach-O of the target arch: a Linux `yarn build` leaves ELF
+  natives, and the script fails on them by name.
 - The five DMG branding inputs (`document.icns`, `disk.icns`, `background.png`,
   `dsstore`, `Assets.car`) are generated into `generated/branding/<variant>/`
   with no tracked comparand and no brand input. Their placeholder meanings and

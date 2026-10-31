@@ -27,6 +27,14 @@ LIPO="${LIPO:-llvm-lipo}"
 fail() { echo "package-macos: FAIL -- $*" >&2; exit 1; }
 test -f "$APP/lib/backend/main.js" || fail "$APP/lib/backend/main.js is absent; run yarn build in theia/ first"
 
+# The target mozconfig expands $MOZ_FETCHES_DIR into the SDK and DMG tool paths when mach loads it.
+# Unset, those paths become /MacOSX26.5.sdk and /hfsplus/newfs_hfs, and configure fails later and less
+# clearly. Check the inputs here, before the Node download and before the Gecko build.
+test -n "${MOZ_FETCHES_DIR:-}" || fail "MOZ_FETCHES_DIR is unset; set it to the directory that holds MacOSX26.5.sdk, hfsplus/ and dmg/ (docs/BUILD.md, macOS section)"
+for input in "$MOZ_FETCHES_DIR/MacOSX26.5.sdk" "$MOZ_FETCHES_DIR/hfsplus/newfs_hfs" "$MOZ_FETCHES_DIR/dmg/dmg" "$MOZ_FETCHES_DIR/dmg/hfsplus"; do
+    test -e "$input" || fail "$input is absent; MOZ_FETCHES_DIR must hold MacOSX26.5.sdk, hfsplus/newfs_hfs, dmg/dmg and dmg/hfsplus"
+done
+
 # The pinned official Node release for this architecture (PKG-15). The sha256 pin in
 # node-runtime.json comes from nodejs.org's SHASUMS256.txt. The owner runs the gpg check on that file
 # (RELEASING.md "Node provenance"); this script enforces the pin, not the key trust. An archive that
