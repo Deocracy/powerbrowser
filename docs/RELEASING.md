@@ -1057,6 +1057,27 @@ still runs last. Nothing is skipped: an out-of-band release that skipped the MAR
 signature verify step would ship the exact failure mode the signing stage exists
 to close.
 
+The release-train logic (`scripts/release-train.mjs`) encodes two supersede rules, both for a scheduled train (revision 1) only:
+
+- An open chemspill revision for the same ESR takes priority over a scheduled train, and the scheduled train is superseded.
+- A newer validated ESR tag on the same major supersedes an older train that is still open or waiting on approval. A tag on another major, an equal or older tag, and a `_BUILDn` tag supersede nothing.
+
+A chemspill revision train is never superseded, and neither is a train with a malformed key, no revision or no train at all, whatever the flags or the mark say. A published or withdrawn release is never superseded. SUPERSEDED is routine, so it never pages the owner.
+
+The `state/SUPERSEDED` label on the tracking issue can keep a train superseded after the chemspill flag or the newer tag is gone, but only while all of this holds: the issue is the only one for the key authored by the owner or the bot with the tracking label; the label was applied by the owner or the bot; and the superseding train (the chemspill revision or the newer ESR key) is still open or published and is a valid, strictly newer key on the same major. The mark never outranks a red check or a patch conflict: those still page the owner. The mark clears when the owner removes the label, when the superseding train is closed without publishing, or when its key is no longer a verified newer key. When the superseding release is published, the old train's issue is closed with a note naming the superseder, and its `chore/esr-<tag>` pull request is left for the owner to close.
+
+This is what the logic derives from facts, checked over fixtures. Nothing runs it live yet: no collector sets the supersede facts, and no executor rejects a pending `release` approval (see the 51-03 items in the phase BLOCKED.md). The only cancel target is a train waiting on the `release` approval: a running build is never cancelled by run id, because it may be past the approval and mid-publish, and a published Release is immutable. Until the executor exists, the stale-approval guards in `sign-publish` are what stop an old approval or a running build from publishing over a newer Release: they fail the run before anything is signed.
+
+### Dependabot
+
+`.github/dependabot.yml` opens one weekly pull request for the minor and patch updates of every workflow's actions, waits 7 days
+(14 for a major) before adopting a new release, and offers npm security updates only (Renovate owns the Theia line). A major
+action update arrives as its own pull request. `anthropics/claude-code-action` is ignored by Dependabot: its pin is exact in the
+fixer-pin and triage pin rules, so the owner moves it by hand together with `scripts/verify-workflows.mjs` and
+`scripts/verify-triage.mjs` and re-reviews its tool allowlist. Most of the bumped actions run only in the dispatch-only release
+workflows, which no pull-request check exercises, so a merged actions bump is exercised by the next release, not by its own pull
+request. The `workflows` row (rule `dependabot`) and the `zizmor` row keep this shape.
+
 ### Schedule posture
 
 D-77 is kept. No workflow carries a `schedule` key. The update-channel liveness

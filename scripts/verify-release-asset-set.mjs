@@ -250,12 +250,18 @@ function runChecks(root, overrides = {}) {
         fail(RELEASE_REL, 'order', `the bot step is not actions/create-github-app-token. Next step: mint the bot App token with that action.`);
     }
 
+    // The stale-approval guard runs before the MAR channel gate and before any signing step reads the key.
+    const guardAt = at('newer_guard');
+    const signAts = ['mar_channel_gate', 'sign_mar'].map(at).filter(i => i >= 0);
+    if (guardAt < 0 || signAts.some(i => guardAt > i)) {
+        fail(RELEASE_REL, 'order', `the stale-approval guard (newer_guard) is missing or runs after the MAR channel gate or the signing step, so the signing key could be read for a stale approval. Next step: refuse a Release at or above this key before the MAR channel gate.`);
+    }
     // The publish chain fails closed: no step may swallow a failure, and none may be conditional.
     const finalAt = at('newer_guard_final');
     if (finalAt < 0 || finalAt !== botAt - 1) {
         fail(RELEASE_REL, 'order', `the stale-approval re-check (newer_guard_final) is not the step directly before the bot token mint. Next step: re-check for a newer Release immediately before minting.`);
     }
-    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['newer_guard_final', finalAt], ['publish', publishAt]]) {
+    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['newer_guard', guardAt], ['newer_guard_final', finalAt], ['publish', publishAt]]) {
         if (i < 0) continue;
         for (const f of failOpenFaults(steps[i])) fail(RELEASE_REL, 'fail-open', `${id} step ${f}, so the draft, the equality check or the publish can pass without doing its work. Next step: remove it.`);
     }
@@ -271,7 +277,7 @@ function runChecks(root, overrides = {}) {
         }
     }
     // The tag and the manifest-free names: every gh call uses the tree-derived tag.
-    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['publish', publishAt], ['newer_guard_final', finalAt]]) {
+    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['publish', publishAt], ['newer_guard', guardAt], ['newer_guard_final', finalAt]]) {
         if (i >= 0 && steps[i].env?.TAG !== '${{ steps.derive_key.outputs.tag }}') {
             fail(RELEASE_REL, 'order', `${id} step takes its tag from ${JSON.stringify(steps[i].env?.TAG ?? null)}, not steps.derive_key.outputs.tag, so the runner-written manifest could choose the public tag. Next step: use the tree-derived tag.`);
         }
@@ -402,6 +408,9 @@ function selfTest() {
         ['R2 gate no longer fails', { text: edit('          exit 1\n\n      - name: Re-check that no newer', '          true\n\n      - name: Re-check that no newer') }, 'exit 1 unconditionally'],
         ['publish takes the tag from the manifest', { text: edit('        id: publish\n        env:\n          GH_TOKEN: ${{ steps.bot.outputs.token }}\n          TAG: ${{ steps.derive_key.outputs.tag }}', '        id: publish\n        env:\n          GH_TOKEN: ${{ steps.bot.outputs.token }}\n          TAG: ${{ fromJSON(needs.build-linux.outputs.tag) }}') }, 'tree-derived tag'],
         ['stale-approval re-check removed', { text: edit('        id: newer_guard_final\n', '        id: newer_guard_final_x\n') }, 'newer_guard_final'],
+        ['stale-approval guard removed from before the signing steps', { text: edit('        id: newer_guard\n', '        id: newer_guard_x\n') }, 'the stale-approval guard (newer_guard) is missing or runs after'],
+        ['stale-approval guard moved after the signing step', { text: swapStepBlocks('newer_guard', 'sign_mar') }, 'runs after the MAR channel gate or the signing step'],
+        ['continue-on-error on the stale-approval guard', { text: edit('        id: newer_guard\n', '        id: newer_guard\n        continue-on-error: true\n') }, 'newer_guard step'],
         ['release key with a path separator', { releaseKey: 'v153.5.1-1/../../x' }, 'is not v<esr>-<revision>'],
         ['release key with a newline', { releaseKey: 'v153.5.1-1\nsource\tx' }, 'is not v<esr>-<revision>'],
         ['release key with a pre-release suffix', { releaseKey: 'v153.5.1-rc1' }, 'is not v<esr>-<revision>'],
