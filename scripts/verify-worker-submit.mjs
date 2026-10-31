@@ -580,6 +580,14 @@ function descriptorProblems(root) {
     if (!/^preview_urls\s*=\s*false\s*$/m.test(toml)) problems.push(`${TOML_REL} must state preview_urls = false`);
     if (!/binding\s*=\s*"CRASH_STORE"/.test(toml)) problems.push(`${TOML_REL} must bind the R2 store as CRASH_STORE`);
     if (/^\s*crons\s*=/m.test(toml) || /\[triggers\]/.test(toml)) problems.push(`${TOML_REL} schedules a job; retention is the R2 lifecycle rule, not a second job (crons)`);
+    if (!/^routes\s*=\s*\[\s*\{[^}]*pattern\s*=\s*"[^"]+"[^}]*custom_domain\s*=\s*true/m.test(toml)) {
+        problems.push(`${TOML_REL} must attach the crash hostname with a routes entry carrying custom_domain = true (no route means no reachable receiver)`);
+    }
+    const step = re => toml.search(re);
+    if (step(/^#\s+\d+\.\s+Rate-limit rule/m) === -1 || step(/^#\s+\d+\.\s+Deploy:/m) === -1 || step(/^#\s+\d+\.\s+Rate-limit rule/m) > step(/^#\s+\d+\.\s+Deploy:/m)) {
+        problems.push(`${TOML_REL} runbook must create the rate-limit rule BEFORE the deploy step (order)`);
+    }
+    if (!/r2\.dev/.test(toml)) problems.push(`${TOML_REL} runbook must record the r2.dev public-access check (private bucket)`);
     let lifecycle;
     try {
         lifecycle = JSON.parse(readFileSync(join(root, LIFECYCLE_REL), 'utf8'));
@@ -689,6 +697,11 @@ async function selfTest() {
     // Descriptor plants: a copy of the tree's worker descriptors, one fault each, must go red naming its key.
     const descriptorPlants = [
         ['workers_dev enabled', TOML_REL, text => text.replace('workers_dev = false', 'workers_dev = true'), 'workers_dev'],
+        ['route removed', TOML_REL, text => text.replace(/^routes = .*$/m, ''), 'routes entry'],
+        ['deploy before the rate-limit rule', TOML_REL, (text) => {
+            const line = /^#\s+\d+\.\s+Deploy:.*\n/m.exec(text)[0];
+            return text.replace(line, '').replace(/^#\s+\d+\.\s+Rate-limit rule/m, m => `${line}${m}`);
+        }, 'BEFORE the deploy'],
         ['lifecycle age drifted', LIFECYCLE_REL, text => text.replace('"expire_days": 30', '"expire_days": 90'), 'expire_days'],
         ['second job scheduled', TOML_REL, text => `${text}\n[triggers]\ncrons = ["0 3 * * *"]\n`, 'crons'],
         ['in-process throttle answered', SOURCE_REL, text => `${text}\nconst THROTTLE = 'throttled_per_minute_cap';\n`, 'throttled_per_minute_cap'],
