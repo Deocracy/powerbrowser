@@ -237,6 +237,21 @@ const newerOnSameLine = (newer, old) => {
 };
 
 /**
+ * Why a train is superseded (TRAIN-04): 'chemspill' (an open same-ESR revision), 'newer-esr' (a newer
+ * validated tag on the same major), or null. Chemspill is tried first. derive and render both read this
+ * one function, so the rendered view names the arm that fired. Both arms apply to a scheduled train
+ * only (revision exactly 1): a chemspill revision train is never preempted, whatever flags the
+ * collector sets. Fail-safe: a missing or odd revision counts as a revision, so nothing irreversible
+ * follows from it. Pure.
+ */
+export function supersedeCause(f) {
+    if (!f.openPr || f.revision !== 1) return null;
+    if (f.chemspillOpen === true) return 'chemspill';
+    if (typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, f.candidateTag)) return 'newer-esr';
+    return null;
+}
+
+/**
  * The state a release is in, from facts, or null with nothing to do. Pure.
  * The TRAIN-04 arms run after the release-stage check, so a published release is never superseded:
  * (1) an open same-ESR chemspill revision preempts this scheduled train (chemspillOpen);
@@ -247,11 +262,7 @@ const newerOnSameLine = (newer, old) => {
 export function derive(facts) {
     const f = facts;
     if (f.release) return deriveRelease(f.release);
-    // A revision (chemspill) train is never preempted: only a scheduled train (revision exactly 1) is superseded.
-    // Fail-safe: a missing or odd revision is treated as a revision, so nothing irreversible follows from it.
-    const scheduled = f.revision === 1;
-    if (f.openPr && scheduled && f.chemspillOpen === true) return 'SUPERSEDED';
-    if (f.openPr && scheduled && typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, f.candidateTag)) return 'SUPERSEDED';
+    if (supersedeCause(f) !== null) return 'SUPERSEDED';
     if (f.merged === true && f.pinUnchanged === true) return 'BUMP_RED';
     if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'CONFLICT';
     if (typeof f.stage === 'string' && ANY_FAIL.test(f.stage)) return 'BUMP_RED';
@@ -324,8 +335,10 @@ export function render(state, facts) {
     if (state === 'WITHDRAWN') stateLines.push('Withdrawn. The fix is a new revision with a new tag; a Release is never deleted and no tag is reused.');
     if (state === 'SUPERSEDED') {
         // Routine and informational: no assign or mention below (SUPERSEDED is not in NEEDS_OWNER).
-        const newer = typeof facts.newerTag === 'string' ? tagToVersion(facts.newerTag) : null;
-        const by = facts.newerKey ?? (newer !== null ? `v${newer.esrVersion}-1` : 'the open chemspill revision');
+        // The cause is the arm derive() fired; a SUPERSEDED view without one is a caller bug, not a view to guess.
+        const cause = supersedeCause(facts);
+        if (cause === null) throw new Error('render(SUPERSEDED) over facts that supersede nothing. Next step: render the state derive() returned for these facts.');
+        const by = facts.newerKey ?? (cause === 'chemspill' ? 'the open chemspill revision' : `v${tagToVersion(facts.newerTag).esrVersion}-1`);
         stateLines.push(`superseded by ${by}${facts.newerIssueUrl ? ` (${facts.newerIssueUrl})` : ''}. Routine: no owner action is needed on this issue.`);
     }
     const body = [
@@ -789,9 +802,10 @@ function selfTest() {
             name: 'chemspill-beats-scheduled: a scheduled train with an open same-ESR chemspill revision',
             // The revision preempts the scheduled train: its derive must be SUPERSEDED, whatever order the trains were seen in.
             run: () => {
-                const got = derive({ ...FIXTURES.BUMPING.facts, chemspillOpen: true });
+                const f = { ...FIXTURES.BUMPING.facts, chemspillOpen: true };
+                const got = derive(f);
                 if (got !== 'SUPERSEDED') return [`a scheduled train with an open chemspill derives ${got}, not SUPERSEDED`];
-                return ['scheduled train superseded by the open chemspill revision'];
+                return [render(got, f).body.split('\n').find(l => l.includes('superseded by')) ?? 'SUPERSEDED view lacks the chemspill revision'];
             },
             expect: 'superseded by the open chemspill revision',
         },
@@ -928,6 +942,25 @@ function selfTest() {
                 const view = render('SUPERSEDED', { ...FIXTURES.SUPERSEDED.facts, ownerLogin: OWNER, newerIssueUrl: 'https://example.invalid/issues/9' });
                 const ok = view.body.includes('superseded by v153.23.0-1') && view.body.includes('https://example.invalid/issues/9') && view.mention === null && view.assign.length === 0 && view.lock === true;
                 return ok ? [] : [`SUPERSEDED view had mention ${view.mention}, assign ${view.assign.join(',')}, or lacked the key or link`];
+            },
+        },
+        {
+            name: 'control: with a chemspill and a newer ESR tag both present, the view names the chemspill arm that fired, not the ESR key',
+            run: () => {
+                const f = { ...FIXTURES.SUPERSEDED.facts, chemspillOpen: true };
+                const line = render(derive(f), f).body.split('\n').find(l => l.includes('superseded by')) ?? '';
+                return line.includes('superseded by the open chemspill revision') && !line.includes('v153.23.0-1') ? [] : [`the view said: ${line}`];
+            },
+        },
+        {
+            name: 'control: rendering SUPERSEDED over facts that supersede nothing is refused, not guessed',
+            run: () => {
+                try {
+                    render('SUPERSEDED', FIXTURES.BUMPING.facts);
+                    return ['a SUPERSEDED view rendered over facts with no supersede cause'];
+                } catch (e) {
+                    return /supersede nothing/.test(e.message) ? [] : [`unexpected error: ${e.message}`];
+                }
             },
         },
         {
