@@ -11,6 +11,12 @@
 //  3. the Flatpak staging copy     the merge the manifest applies (flatpak/org.debios.PowerBrowser.json,
 //                                  the python assignments in build-commands) is applied the same way.
 //
+// The text reads above only locate the merges. Each merge is then EXECUTED on the tarball's policies.json (the
+// jq program from the derivation, and the Flatpak build-commands run on a fixture tarball) and the result is
+// compared with {tarball, policies: {...tarball.policies, DisableAppUpdate: true}} by deep equality, so a merge
+// that deletes or rewrites a sibling is red even when no assignment names it (WR-11). jq, python3, tar and bash
+// must be on PATH; a missing tool is a failure.
+//
 // Each repack copy must then equal the tarball's copy plus exactly one new key, DisableAppUpdate = true.
 // Every sibling key keeps the tarball's value (the generator's ExtensionSettings fragment rule: set one
 // key, leave siblings byte-identical). Red names the file that drifted, the key, and both values.
@@ -22,10 +28,12 @@
 //   node scripts/verify-policies-update-split.mjs
 //   node scripts/verify-policies-update-split.mjs --self-test
 
-import { dirname, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { diskReader } from './lib/channel-identity.mjs';
+import { nixJqProgram, nixTarballTop, readText, runJq, simulateFlatpakBuild } from './lib/channel-exec.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'policies-update-split';
@@ -121,6 +129,59 @@ export function runChecks(root, overrides = {}) {
             }
         }
     }
+
+    // 4. execute both merges and compare the results with the expected document.
+    if (overrides.exec !== false) {
+        const full = JSON.parse(tarballText);
+        const expected = { ...full, policies: { ...full.policies, [KEY]: true } };
+        const nixText = read(NIX_REL);
+        const program = nixText === null ? null : nixJqProgram(nixText);
+        if (program === null) {
+            fail(NIX_REL, 'has no jq \'<program>\' "$policies" line, so the Nix merge cannot be executed', 'restore the policies merge in the derivation.');
+        } else {
+            const ran = runJq(program, tarballText);
+            if (!ran.ok) {
+                fail(NIX_REL, `the jq merge fails on the tracked policies file (${ran.error})`, 'fix the jq program.');
+            } else if (!isDeepStrictEqual(ran.value, expected)) {
+                fail(NIX_REL, `the jq merge yields ${JSON.stringify(ran.value)} but the tarball copy plus ${KEY} = true is ${JSON.stringify(expected)}; a sibling was replaced or deleted`, `make the program set only .policies.${KEY}.`);
+            }
+        }
+        const flatpakText = read(FLATPAK_REL);
+        const top = nixText === null ? null : nixTarballTop(nixText);
+        let manifest = null;
+        try {
+            manifest = JSON.parse(flatpakText ?? 'null');
+        } catch {
+            manifest = null;
+        }
+        if (manifest === null || top === null) {
+            fail(FLATPAK_REL, 'or the derivation names no tarball layout, so the Flatpak merge cannot be executed', `restore ${FLATPAK_REL} and ${NIX_REL} from git.`);
+        } else {
+            const sim = simulateFlatpakBuild({
+                manifest,
+                top,
+                tarballFiles: { [top]: '#!/bin/sh\n', 'distribution/policies.json': tarballText },
+                fileSources: Object.fromEntries((manifest.modules?.[0]?.sources ?? []).filter(x => x.type === 'file').map(x => [x.path, 'fixture'])),
+            });
+            try {
+                if (!sim.ok) {
+                    fail(FLATPAK_REL, `the build commands fail on the fixture tarball (${sim.error})`, 'fix the build commands; the cross-check on the layout is in the flathub-manifest row.');
+                } else {
+                    let staged = null;
+                    try {
+                        staged = JSON.parse(readText(join(sim.app, 'lib', top, 'distribution', 'policies.json')));
+                    } catch {
+                        staged = null;
+                    }
+                    if (!isDeepStrictEqual(staged, expected)) {
+                        fail(FLATPAK_REL, `the staged policies.json is ${JSON.stringify(staged)} but the tarball copy plus ${KEY} = true is ${JSON.stringify(expected)}; a sibling was replaced or deleted`, `make the python merge set only policies.${KEY}.`);
+                    }
+                }
+            } finally {
+                sim.cleanup();
+            }
+        }
+    }
     return { failures };
 }
 
@@ -158,6 +219,18 @@ function selfTest() {
         {
             name: 'sibling key drifted in the Flatpak staging copy', expect: 'DisableFirefoxStudies',
             overrides: withPlant(FLATPAK_REL, t => t.replace('d[\\"policies\\"][\\"DisableAppUpdate\\"]=True;', 'd[\\"policies\\"][\\"DisableAppUpdate\\"]=True; d[\\"policies\\"][\\"DisableFirefoxStudies\\"]=False;')),
+        },
+        {
+            name: 'Nix jq merge deletes a sibling the assignments never name', expect: 'a sibling was replaced or deleted',
+            overrides: withPlant(NIX_REL, t => t.replace(`jq '.policies.DisableAppUpdate = true'`, `jq 'del(.policies.ExtensionSettings) | .policies.DisableAppUpdate = true'`)),
+        },
+        {
+            name: 'Flatpak python merge drops a sibling the assignments never name', expect: 'a sibling was replaced or deleted',
+            overrides: withPlant(FLATPAK_REL, t => t.replace('d=json.load(open(p));', 'd=json.load(open(p)); d[\\"policies\\"].pop(\\"ExtensionSettings\\");')),
+        },
+        {
+            name: 'Flatpak python merge rewrites the whole object', expect: 'a sibling was replaced or deleted',
+            overrides: withPlant(FLATPAK_REL, t => t.replace('d=json.load(open(p));', 'd=json.load(open(p)); d[\\"policies\\"]={};')),
         },
         {
             name: 'control: unmodified tree stays green', expect: null,
