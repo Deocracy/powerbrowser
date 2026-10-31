@@ -291,6 +291,9 @@ no-data: never 0 (green) and never a false red. `scripts/verify-sweep-reads.mjs`
 
 ## 14. The first live sweep turns renewals-due red on the MAR certificate cell (owner decision)
 
+**Superseded by the 51-04 review fix (WR-01):** the sweep now accepts a bare year and Month YYYY (dated at the start of the period), so
+the 2046 cell no longer turns the row red. The text below is the original finding, kept for the record.
+
 **Finding:** `docs/RENEWALS.md` line 31 (MAR signing certificate) has the Expiry cell `2046`, a bare year. The
 renewals-due row reads strict `YYYY-MM-DD` only, and a second format is a red line, not a second parser. The row
 therefore renders red on the first live tick: `docs/RENEWALS.md line 31: MAR signing certificate expiry "2046" is not
@@ -304,14 +307,20 @@ and enter the ISO date in the Expiry cell. The sweep then reads it and the row r
 parser and needs an owner ruling on the RENEWALS format.
 The 2046 cell is the only non-ISO cell today. `unknown` and blank cells are treated as documented absences, not red.
 
-## 15. docs/RELEASING.md ESR-calendar pointer targets a planning file (owner)
+## 15. docs/RELEASING.md ESR-calendar pointer: placed on a reachable location, owner to confirm (owner)
 
-**Finding:** the DIST-05 sentence "The ESR calendar in External Gates is authoritative for dates." was added exactly as the
-plan states. The heading "External Gates" exists only in the workstream `REQUIREMENTS.md`, which is a planning file and is
-not shipped with the operator manual. An operator reading `docs/RELEASING.md` cannot reach it.
+**Finding:** the DIST-05 sentence "The ESR calendar in External Gates is authoritative for dates." named a heading that exists
+only in the workstream `REQUIREMENTS.md`, a planning file the operator manual cannot reach. The 51-04 review fix removed the
+unreachable pointer. The Cadence section now ends its first two paragraphs with this text, which points at a file that ships in
+`docs/` and that the sweep already checks:
 
-**Owner step:** decide where the ESR calendar lives for operators (a `docs/` section, or a dated table in RELEASING.md),
-then rename the pointer to that section. The executor did not move the calendar.
+> The dates are the ESR rows of `docs/RENEWALS.md`, each checked against the Mozilla ESR calendar before its train opens; the
+> sweep's `renewals-due` row turns red 30 days before the nearest one.
+
+**Owner step (only if wanted):** if the operator manual should carry a dated ESR calendar table of its own (rather than the
+four ESR rows in `docs/RENEWALS.md`), place it in `docs/RELEASING.md` and change the sentence above to name that section. The
+original plan text ("The ESR calendar in External Gates is authoritative for dates.") must not return unless an "External
+Gates" section exists in `docs/`.
 
 ## 16. Codeberg mirror slug (Phase 53)
 
@@ -324,4 +333,10 @@ exists; the compare is full 40-hex SHAs only, and a lagged pair goes red and com
 - TRAIN-07 says the sweep comments on a red row. It does not assign. The sweep keeps the comment with the owner @-mention and
   adds no assignment, so the maintenance issue does not depend on the TRAIN-02 release-key assignment rule.
 - Renewal and threshold numbers stay where the owner set them. The thresholds (5 PRs, 7 days, 0 alerts, 150 days) are read
-  from the one paragraph in `docs/RELEASING.md`, and changing a number there changes the sweep.
+  from `.github/sweep-thresholds.json`; `docs/RELEASING.md` quotes the file and the release-train self-test fails if the quotation
+  and the file differ, so a documentation edit alone no longer changes the sweep (changing a number means editing both).
+- A bare year or Month YYYY in `docs/RENEWALS.md` is accepted by the register check and dated by the sweep at the start of the
+  year or month (the earlier, fail-safe reading). Item 14's first live-tick red no longer occurs; entering the real MAR date at
+  the Phase B ceremony is still the owner's step.
+- `dependabot-alerts` at a limit of 0 can stay red on alerts with no available patch (review IN-04); the number is the owner's, and
+  the steady state is not yet known. Revisit the limit after the first live tick.
