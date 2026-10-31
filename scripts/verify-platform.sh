@@ -5016,13 +5016,15 @@ run_own_checks() {
     # no gh, no build. It writes nothing.
     "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
     # NEW (Phase 48, TRAIN-07): the maintenance half of the release-train core. The same --self-test
-    # run carries the six maintenance rows (runner-online, esr-pin-age, channel-liveness, watchdog-age,
-    # synthetic events POST, download-count) with their no-data branches, the byte-stable render, the
+    # run carries the thirteen maintenance rows (the Phase 48 six: runner-online, esr-pin-age, channel-liveness,
+    # watchdog-age, synthetic events POST, download-count; and the Phase 51 seven: renewals-due, repo-controls,
+    # dependabot-prs, dependabot-alerts, codeql-alerts, codeql-push-age, codeberg-mirror) with their no-data
+    # branches, the 30-day and 3-day boundaries, the threshold paragraph read from docs/RELEASING.md, the byte-stable render, the
     # exactly-one write plan, one comment per transition into red and zero on a staying-red re-run, the
     # once-per-day 06:00 UTC sweep gate, the workflow's CLI glue run as a child node (owner unset, empty,
     # malformed, another case), and the planted faults: a stale tag with no published Release, a draft
     # Release as the only match, a 27-hour watchdog, a missing watchdog run, a synthetic POST answering
-    # 500 or 200 without the acknowledgement, a newer tag with no commit date, a seventh row, two tracking
+    # 500 or 200 without the acknowledgement, a newer tag with no commit date, a fourteenth row, two tracking
     # issues, a workflow_run wake from a fork head, one plant per rule of the previous-state selection
     # (event, path, conclusion, branch, repository, head sha, artifact name, expiry, run link) and per rule
     # of the pinned-issue selection (label, author, title, unset owner). Each plant calls the real function
