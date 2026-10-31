@@ -48,7 +48,14 @@ Plans 53-01, 53-02 and 53-03 are built and committed on `dsh/phase-53`. Everythi
 - **What:** the private vulnerability report route, `security@` mail routing (Phase 47) and the phone notification path are owner-proven. No code here can prove them.
 - **Owner steps:** file one private report from the second account and confirm the push arrives inside the `SECURITY.md` window; send one test message to `security@` and record the arrival time; run the existing `notify-drill` workflow from `main` and reject it from the phone. Record the timings in `docs/RELEASING.md`.
 
-## 6. Live rows after the owner steps
+## 6. Maintenance sweep detection for the mirror and the status page (GH-04, MON-02): dependency
+
+- **What:** a lagging Codeberg mirror and a disabled or stale Upptime monitor are detected only by the full-tier rows `codeberg-mirror-live` and `upptime-sweep-live`, when someone runs them by hand. No maintenance sweep runs them, and no sweep row exists in the tree. GH-04 and MON-02 require the sweep to turn red on lag and to report workflow enabled-state and last-run age.
+- **Why not built here:** the sweep belongs to the Phase 48 and 51 work. It is not in this phase, and the `systemd/codeberg-mirror.timer` comment no longer claims otherwise.
+- **Dependency:** Phase 48 and Phase 51 add the Codeberg row and the Upptime row to the sweep, calling `scripts/verify-codeberg-mirror.mjs --live --slug=<owner>/<repo>` and `scripts/verify-upptime.mjs --live --slug=<owner>/<repo>`. Until then a failed or hung push is silent.
+- **Owner action:** none now. Confirm the dependency is recorded in the Phase 48 and Phase 51 plans.
+
+## 7. Live rows after the owner steps
 
 - `scripts/verify-platform.sh --only codeberg-mirror-live` and `--only upptime-sweep-live` (full tier) are expected red until items 2 and 3 are done. They fail closed; they never skip.
 - `repo-controls` (full tier) reads the live `actions-selected.json` admission and goes red until item 1, step 3 is applied.

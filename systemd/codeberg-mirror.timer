@@ -1,6 +1,8 @@
 # GH-04 (Phase 53): runs codeberg-mirror.service once a day. Persistent=true runs a missed
-# start after legion was off. A lagging mirror is caught by the maintenance sweep's Codeberg row,
-# which compares the Codeberg main SHA with the GitHub main SHA.
+# start after legion was off. Nothing alerts on a lagging mirror yet: the full-tier
+# codeberg-mirror-live row (scripts/verify-platform.sh --only codeberg-mirror-live) compares the
+# Codeberg main SHA with the GitHub main SHA when run by hand. The maintenance sweep has no Codeberg
+# row yet; that detection depends on the Phase 48 and 51 sweep (BLOCKED.md item 6).
 
 [Unit]
 Description=Daily push to the Codeberg mirror
