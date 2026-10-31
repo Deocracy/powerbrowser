@@ -259,22 +259,35 @@ needs a live read to prove its shape and is not added; until then the switch can
 
 ## 51-04 items (TRAIN-11 sweep rows, DIST-05 cadence, UPS-02 row)
 
-## 13. Owner grant: the bot App read for repo-controls and the sweep's first live tick (owner)
+## 13. Owner grant: the bot App reads for the sweep's security rows and for repo-controls (owner)
 
-**Blocked piece:** the `repo-controls` row. The row, its no-data branch and its red branch are built and self-tested
-(`scripts/release-train.mjs`), and the facts field `repoControls` is wired as null. The sweep does not yet run
-`scripts/verify-repo-controls.mjs` in the probe, because the read needs Administration read on `powerbrowser`, and
-BLOCKED.md item 2 records that the same grant was not requested for the runner count.
+**Blocked piece 1, the `repo-controls` row (deferred, WR-04).** The row, its no-data branch and its red branch are built and
+self-tested (`scripts/release-train.mjs`). The facts field `repoControls` is `null` on purpose, marked `deferred:
+repo-controls-live-read` in the workflow, and `scripts/verify-sweep-reads.mjs` asserts the marker and the null together. The row
+renders no-data every day with the deferral named in its evidence. Wiring it needs Administration read on `powerbrowser`
+(BLOCKED.md item 2 records that the same grant was not requested for the runner count) and a follow-up plan that runs
+`node scripts/verify-repo-controls.mjs` in the probe with that token and sets `repoControls` to `{ok, drift}` from its FAIL lines.
+TRAIN-11 is therefore partly met: five of the seven rows read live data today; `repo-controls` is deferred here and `codeberg-mirror` waits on item 16.
 
-**Owner steps:** decide whether the bot App gets Administration read (plus the Dependabot alerts, security events and pull
-request reads that the 51-04 security-reads step already requests). If yes, grant them in the App settings. Then a
-follow-up plan adds a step that runs `node scripts/verify-repo-controls.mjs` with that token and sets
-`repoControls` to `{ok, drift}` from its FAIL lines. Until then the row is no-data every day.
+**Blocked piece 2, the security reads' App grants.** The `security-reads` mint (this one repository, read only) requests exactly
+three permissions, and the sweep needs the bot App to hold each. The workflows row (rule `app-token-inputs`) checks the input
+names against the pinned action, so the names below are the real ones:
 
-**Also owner-visible, not a blocker:** the security-reads mint requests `dependabot-alerts: read`, `security-events: read`,
-`pull-requests: read` and `contents: read` on this one repository. If the App lacks a grant, its mint fails, the reads
-leave their outputs empty, and dependabot-prs, dependabot-alerts and codeql-alerts render no-data. Nothing turns red
-silently.
+| Mint input | App settings label (Repository permissions) | Used by | Declared in `.github/settings/app-powerbrowser-bot.json` today |
+| --- | --- | --- | --- |
+| `permission-pull-requests: read` | Pull requests: Read-only | `dependabot-prs` | yes (`pull_requests: write` covers it) |
+| `permission-vulnerability-alerts: read` | Dependabot alerts: Read-only | `dependabot-alerts` | yes (`vulnerability_alerts: read`) |
+| `permission-security-events: read` | Code scanning alerts: Read-only | `codeql-alerts` | **no**: not declared, so granting it is a new owner grant and a change to that file |
+
+`contents` is no longer requested (the default branch, the last push and the Codeberg comparison read through the job's
+`github.token`). **Owner steps:** in the powerbrowser-bot App settings, add "Code scanning alerts: Read-only", accept the
+permission change on the installation, and add `security_events: read` to `app-powerbrowser-bot.json` in the same change so the
+repo-controls row keeps matching. Until then the `codeql-alerts` read answers 403, writes nothing, and the row renders no-data.
+
+**What a failed read does (CR-01).** A read writes its fact only when `gh` exited 0 and the body is a well-formed array of pages;
+an empty body, a 401/403/404, a 5xx and an API error object all write nothing, so the fact is `null` and the row renders
+no-data: never 0 (green) and never a false red. `scripts/verify-sweep-reads.mjs` runs the shipped steps against a stub `gh` and
+`curl` to prove it (the `sweep-reads` rows). A missing grant therefore shows as no-data rows, not as red alerts.
 
 ## 14. The first live sweep turns renewals-due red on the MAR certificate cell (owner decision)
 

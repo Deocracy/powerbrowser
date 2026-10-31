@@ -843,6 +843,9 @@ export const SWEEP_THRESHOLD_LEAD = 'Sweep red thresholds';
 const THRESHOLD_KEYS = Object.freeze(['dependabotPrMax', 'securityPrDays', 'alertMax', 'pushAgeDays']);
 const RENEWALS_WINDOW_DAYS = 30;
 const RENEWALS_NAME = 'docs/RENEWALS.md';
+// repo-controls has no live read yet. This is a named deferral, not an omission: the workflow's repoControls fact is null with the
+// marker `deferred: repo-controls-live-read` (scripts/verify-sweep-reads.mjs asserts the pair), and the row says so every day.
+const REPO_CONTROLS_DEFERRED = 'the daily live read-back is deferred: it needs the bot App to hold Administration read (owner grant) and a follow-up plan that runs scripts/verify-repo-controls.mjs in the probe; no-data until then';
 const THRESHOLDS_NOT_READ = `${SWEEP_THRESHOLDS_REL} was not read in this run`;
 const THRESHOLD_UNREADABLE = `the sweep thresholds are not readable in ${SWEEP_THRESHOLDS_REL}. Next step: keep its ${THRESHOLD_KEYS.length} keys (${THRESHOLD_KEYS.join(', ')}) as non-negative integers.`;
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -1028,7 +1031,7 @@ function renewalsRow(f) {
 function repoControlsRow(f) {
     const name = 'repo-controls';
     const r = f.repoControls;
-    if (r === null || typeof r !== 'object') return maintRow(name, 'no-data', 'the full read-back did not run in this sweep');
+    if (r === null || typeof r !== 'object') return maintRow(name, 'no-data', REPO_CONTROLS_DEFERRED);
     if (r.ok === true) return maintRow(name, 'green', 'the full read-back matches every declared control');
     const drift = Array.isArray(r.drift) ? r.drift.map(String) : [];
     return maintRow(name, 'red', drift.length > 0 ? `read-back drift: ${drift.join('; ')}` : 'the full read-back failed without naming a control');
@@ -1518,6 +1521,11 @@ function maintenanceSelfTest() {
             return bad.length === 0 ? [] : [`${bad.join(', ')} did not render no-data naming ${SWEEP_THRESHOLDS_REL}`];
         } },
         { name: 'control: the file push-age limit exactly is not red', run: () => (rowOf(stateOf(facts({ codeqlLastPushMs: NOW - T.pushAgeDays * DAY_MS })), 'codeql-push-age').status === 'green' ? [] : ['a push at the age limit is not green']) },
+        { name: 'control: the repo-controls no-data row names its deferral and the workflow carries the marker', run: () => {
+            const r = rowOf(stateOf(facts({ repoControls: null })), 'repo-controls');
+            const marked = /^\s*repoControls:\s*null\s*,/m.test(WORKFLOW_TEXT) === WORKFLOW_TEXT.includes('deferred: repo-controls-live-read');
+            return r.status === 'no-data' && r.evidence.includes('deferred') && marked ? [] : [`repo-controls gave ${r.status}: ${r.evidence}; marker consistent: ${marked}`];
+        } },
         { name: 'control: a Codeberg no-data row is green-with-note and writes no comment', run: () => {
             const s = stateOf(facts({ codeberg: null }));
             const d = nextMaintenance([issueBy(renderMaintenance(s).body)], renderMaintenance(s), { ownerLogin: OWNER, stored: null });
