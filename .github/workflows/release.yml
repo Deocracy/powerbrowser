@@ -43,6 +43,12 @@ jobs:
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
+      # A full SHA only: a branch or tag name could resolve differently in checkout and in the gate.
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
       - name: Check out the requested commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -56,7 +62,9 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           TIP="$(git rev-parse refs/remotes/origin/main)"
-          SHA="$(git rev-parse --verify "${RELEASE_SHA}^{commit}")"
+          # Gate the commit actually checked out, and require it to be the one requested.
+          SHA="$(git rev-parse HEAD)"
+          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA" >&2; exit 1; }
           if [ "$SHA" != "$TIP" ]; then
             git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main" >&2; exit 1; }
             git show --name-only --format= "$SHA" | grep -qx 'configuration.toml' \
@@ -93,7 +101,8 @@ jobs:
 
       - name: Build the release container image
         if: steps.key_gate.outputs.build == 'true'
-        run: podman build -t pb-gecko-build -f powerbrowser/packaging/Containerfile .
+        # legion is persistent: rebuild from the digest-pinned base every release, never from a cached layer.
+        run: podman build --pull=always --no-cache -t pb-gecko-build -f powerbrowser/packaging/Containerfile .
 
       - name: Configure and build the release tree, then verify the toolchain baseline in the container
         if: steps.key_gate.outputs.build == 'true'
