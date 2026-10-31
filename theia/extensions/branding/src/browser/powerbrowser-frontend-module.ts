@@ -1,6 +1,8 @@
 import { ContainerModule } from '@theia/core/shared/inversify';
 import { FrontendApplicationContribution, WidgetFactory, bindViewContribution } from '@theia/core/lib/browser';
 import { AboutDialog } from '@theia/core/lib/browser/about-dialog';
+import { CommandContribution } from '@theia/core/lib/common';
+import { PowerBrowserReportBugContribution } from './powerbrowser-report-bug-contribution';
 import { PowerBrowserFaviconContribution } from './powerbrowser-favicon-contribution';
 import { PowerBrowserWelcomeWidget } from './powerbrowser-welcome-widget';
 import { PowerBrowserWelcomeViewContribution } from './powerbrowser-welcome-contribution';
@@ -17,6 +19,8 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
     })).inSingletonScope();
     bindViewContribution(bind, PowerBrowserWelcomeViewContribution);
     bind(FrontendApplicationContribution).toService(PowerBrowserWelcomeViewContribution);
+
+    bind(CommandContribution).to(PowerBrowserReportBugContribution).inSingletonScope();
 
     // D-35: guarded rebind -- the in-tree idiom, keeps the module loadable
     // in a container where the base AboutDialog binding is absent.

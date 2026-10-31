@@ -1,0 +1,18 @@
+{
+  "$comment": "MON-02 (Phase 53). The Upptime status targets, one per public surface the status page covers. What consumes this file: the quick row scripts/verify-upptime.mjs compares its target ids and source keys with configuration.toml by set equality. The live row (--live) reads the status repository's .upptimerc.yml and requires its sites to be exactly the URLs these targets derive from the manifest, so the declaration feeds the live check. The events target derives from [telemetry] endpoint.",
+  "derivation_source": "configuration.toml",
+  "targets": [
+    {
+      "id": "updates",
+      "source": "urls.update"
+    },
+    {
+      "id": "website",
+      "source": "urls.homepage"
+    },
+    {
+      "id": "events",
+      "source": "telemetry.endpoint"
+    }
+  ]
+}

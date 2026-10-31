@@ -4905,6 +4905,50 @@ run_own_checks() {
     # restricted key, an added file, a removed file, a new production hit, a closed known-open entry
     # and zero files; each must go red naming the drift. The control stays green. It writes nothing.
     "mac-entitlements-self-test|node $REPO_ROOT/scripts/verify-mac-entitlements.mjs --self-test"
+    # NEW (Phase 53, GH-03): the triage workflow shape. The row reads the good fixture in fixture
+    # mode (53-01) and the declared workflow in tree mode (53-02), derives the label set from
+    # labels.json, and runs the workflow's own fixed-text step against a hostile model output with
+    # a stub gh. Honestly --quick: text reads, js-yaml from theia/, and a mkdtemp shim; no network.
+    "triage-workflow|node $REPO_ROOT/scripts/verify-triage.mjs"
+    # triage-workflow-self-test plants forty-four faults in the good fixture (the two-job shape:
+    # classify holds the model with no write scope, apply holds issues write and no model), each
+    # red naming the file, job and rule, and requires the hostile-output proof to go red on a removed label filter
+    # and on a raw model template id. The green control runs first. It writes nothing in the tree.
+    "triage-workflow-self-test|node $REPO_ROOT/scripts/verify-triage.mjs --self-test"
+    # NEW (Phase 53, TEL-05): the Report-a-Bug affordance. Derives the prefill keys from the
+    # contribution source and compares them with the Phase 42 bug form's field ids, the target
+    # origin and path with urls.release_notes, the opener id with the GUI-01 export, and the
+    # github.com allowlist row. Honestly --quick: text reads and js-yaml from theia/.
+    "bug-report-affordance|node $REPO_ROOT/scripts/verify-bug-report.mjs"
+    # bug-report-affordance-self-test plants in memory a diagnostics-bearing query key, an origin
+    # mismatch, an extra prefill id outside bug.yml, an absent bug form, a respelled opener id, a
+    # widened github.com disposition, a removed install_format deferral record, a Copy button removed
+    # from the diagnostics layer and a Copy handler that does not write the clipboard; each goes red
+    # naming the drift. It writes nothing.
+    "bug-report-affordance-self-test|node $REPO_ROOT/scripts/verify-bug-report.mjs --self-test"
+    # NEW (Phase 53, GH-04): the legion mirror timer and service. Quick mode reads the two tracked
+    # unit files and the tracked workflow and settings files, checks the timer and service keys and
+    # the absence of token material, and proves the SHA-compare on in-memory pairs. Honestly --quick:
+    # file reads only; no network, gh or build. The live compare is the full-tier codeberg-mirror-live row.
+    "codeberg-mirror|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs"
+    # codeberg-mirror-self-test plants a lagged SHA pair, a token literal, a credential that is not
+    # mirror-push, a credential inside the repository, a relative credential, --prune, --mirror and a
+    # force refspec in the push, a dropped sandbox key, a widened timeout and address-family list, a
+    # removed main guard, and a weekly or non-persistent timer; each goes red naming the drift. The
+    # matching pair and the unmodified units stay green. It writes nothing.
+    "codeberg-mirror-self-test|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --self-test"
+    # NEW (Phase 53, MON-02): the Upptime target set. Derives the expected targets from the
+    # configuration.toml urls and telemetry endpoint at check time and compares them with the
+    # tracked declaration by set equality; the events target is a named deferral until the manifest
+    # declares the telemetry endpoint. Also checks the sweep-report contract on fixtures and that no
+    # product workflow carries a schedule key (D-77). Honestly --quick: text reads only.
+    "upptime-config|node $REPO_ROOT/scripts/verify-upptime.mjs"
+    # upptime-config-self-test plants a dropped target, an added target, an events endpoint the
+    # declaration omits, a disabled status workflow, a stale scheduled workflow, a status site set that
+    # drops the update feed or watches the origin root, and a schedule key; each goes red naming the
+    # target, workflow or URL. The fresh scheduled sweep, an idle event-triggered workflow and the
+    # matching set stay green.
+    "upptime-config-self-test|node $REPO_ROOT/scripts/verify-upptime.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
@@ -5377,6 +5421,17 @@ run_own_checks() {
       # owner fills them, so this row stays red until then. It must be green before the website
       # push (docs/RELEASING.md, the website section).
       "website-publish-ready|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs"
+
+      # NEW (Phase 53, GH-04): the live Codeberg mirror SHA compared with GitHub main. Full tier:
+      # one unauthenticated GET to the Codeberg API and one read-only gh api call. Red until the owner
+      # creates the mirror and applies the timer at the 53-04 checkpoint; an undeclared mirror slug is
+      # a FAIL, never a SKIP. Never called by a quick path.
+      "codeberg-mirror-live|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --live"
+
+      # NEW (Phase 53, MON-02): the live Upptime status repository. Full tier: read-only gh api over
+      # its workflows and their last runs; red until the owner creates the repository and its status
+      # CNAME. An undeclared status slug is a FAIL, never a SKIP. Never called by a quick path.
+      "upptime-sweep-live|node $REPO_ROOT/scripts/verify-upptime.mjs --live"
     )
   fi
 

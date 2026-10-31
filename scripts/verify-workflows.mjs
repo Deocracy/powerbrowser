@@ -39,7 +39,8 @@
 //                 hosted job, no actions/create-github-app-token@ step in the
 //                 same job, and effective contents other than write.
 //  issues-write   Effective issues: write only on release-train.yml job
-//                 report and on any job in triage.yml.
+//                 report and on triage.yml job apply (the write job; the
+//                 model job classify holds read only).
 //  workflow-run-guard  Every job of a workflow_run-triggered workflow has an
 //                 `if` whose top-level && terms include github.event.workflow_run
 //                 .head_repository.full_name == github.repository (whitespace
@@ -520,8 +521,8 @@ function runChecks(root, overrides = {}) {
             }
 
             // permissions
-            if (eff.issues === 'write' && !((file === 'release-train.yml' && jobId === 'report') || file === 'triage.yml')) {
-                fail(rel, jobId, 'issues-write', `has effective issues write, admitted only on release-train.yml job report and in triage.yml. Next step: drop issues write from the job or workflow permissions.`);
+            if (eff.issues === 'write' && !((file === 'release-train.yml' && jobId === 'report') || (file === 'triage.yml' && jobId === 'apply'))) {
+                fail(rel, jobId, 'issues-write', `has effective issues write, admitted only on release-train.yml job report and on triage.yml job apply. Next step: drop issues write from the job or workflow permissions.`);
             }
             if (TRIO.every(s => eff[s] === 'write') && !(file === 'release.yml' && jobId === 'sign-publish')) {
                 fail(rel, jobId, 'write-trio', `holds contents, id-token and attestations write together, admitted only on release.yml job sign-publish. Next step: narrow the job permissions.`);
@@ -730,6 +731,8 @@ function selfTest() {
     const plain = (perms) => ['name: Plain', 'on: workflow_dispatch', ...(perms ? [`permissions: ${perms}`] : []), 'jobs:', '  plain:', '    runs-on: ubuntu-latest', '    steps:', '      - run: echo plain', ''].join('\n');
     const issuesJob = (name, jobId) => [`name: ${name}`, 'on: workflow_dispatch', 'jobs:', `  ${jobId}:`, '    runs-on: ubuntu-latest', '    permissions:', '      issues: write', '    steps:', '      - run: echo report', ''].join('\n');
     const withClaude = { ...selected, patterns_allowed: [...selected.patterns_allowed, 'anthropics/claude-code-action@*'] };
+    // The real triage.yml admits the claude-code-action star. A control that replaces triage.yml sets that admission aside, or admission-used reds on an entry nothing uses.
+    const withoutClaude = { ...selected, patterns_allowed: selected.patterns_allowed.filter(p => !p.startsWith('anthropics/claude-code-action@')) };
     const V_PERMS = '    permissions:\n      contents: read\n';
     const V_CHECK = 'run: nix develop .#theia --command node scripts/generate.mjs --check';
 
@@ -836,6 +839,7 @@ function selfTest() {
         ['issues write in verify.yml', edit(V, V_PERMS, `${V_PERMS}      issues: write\n`), rel(V), 'verify', 'issues-write', 'issues write'],
         ['issues write through permissions: write-all', edit(V, V_PERMS, '    permissions: write-all\n'), rel(V), 'verify', 'issues-write', 'issues write'],
         ['issues write through the repository default write', { files: { ...base, 'plain.yml': plain(null) }, defaultPermissions: 'write' }, rel('plain.yml'), 'plain', 'issues-write', 'issues write'],
+        ['issues write on triage.yml model job classify', { ...with_({ 'triage.yml': issuesJob('Triage', 'classify') }), selected: withoutClaude }, rel('triage.yml'), 'classify', 'issues-write', 'issues write'],
         ['write trio in job publish (not sign-publish)', append(R, job('publish', ['runs-on: ubuntu-latest', 'permissions:', '  contents: write', '  id-token: write', '  attestations: write', 'steps:', '  - run: echo x'])), rel(R), 'publish', 'write-trio', 'sign-publish'],
         ['pull_request on release.yml', edit(R, 'on:\n  workflow_dispatch:', 'on:\n  pull_request:\n  workflow_dispatch:'), rel(R), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
         ['pull_request_target on release-train.yml', with_({ 'release-train.yml': plain(null).replace('on: workflow_dispatch', 'on: [workflow_dispatch, pull_request_target]') }), rel('release-train.yml'), WF_LEVEL, 'no-pr-trigger', 'pull_request_target'],
@@ -923,7 +927,7 @@ function selfTest() {
         ['a flag outside the allowlist', fixerEdit('--max-turns 40 ', '--max-turns 40 --append-system-prompt x '), rel(T), 'fix', 'fixer-tools', '--append-system-prompt'],
         ['--max-turns 4000', fixerEdit('--max-turns 40 ', '--max-turns 4000 '), rel(T), 'fix', 'fixer-tools', '--max-turns'],
         ['a second claude step with bare Bash', fixerEdit('  fix-gate:\n    needs: fix\n', `      - uses: ${FIX_PIN}\n        with:\n          path_to_claude_code_executable: /opt/claude-pinned/claude\n          allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'\n          claude_args: '--max-turns 40 --allowedTools Bash --disallowedTools "WebFetch,WebSearch"'\n  fix-gate:\n    needs: fix\n`), rel(T), 'fix', 'fixer-tools', 'unscoped shell'],
-        ['admitted claude-code-action used by no workflow', { files: base, selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
+        ['admitted claude-code-action used by no workflow', { files: Object.fromEntries(Object.entries(base).filter(([k]) => !k.endsWith('triage.yml'))), selected: withClaude }, SELECTED_REL, WF_LEVEL, 'admission-used', 'anthropics/claude-code-action'],
     ];
     plants.push(...fixerPlants);
 
@@ -933,7 +937,7 @@ function selfTest() {
     const controls = [
         ['good release.yml: build-linux on legion, sign-publish with the write trio', { files: base }],
         ['issues write on release-train.yml job report', with_({ 'release-train.yml': issuesJob('Release train', 'report') })],
-        ['issues write on triage.yml', with_({ 'triage.yml': issuesJob('Triage', 'label') })],
+        ['issues write on triage.yml job apply', { ...with_({ 'triage.yml': issuesJob('Triage', 'apply') }), selected: withoutClaude }],
         ['guarded workflow_run', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true) })],
         ['claude-code-action hosted with contents read', { files: { ...base, 'assist.yml': assist('read') }, selected: withClaude }],
         ['permissions: read-all over a write repository default', { files: { ...base, 'plain.yml': plain('read-all') }, defaultPermissions: 'write' }],
