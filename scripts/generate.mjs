@@ -4286,6 +4286,26 @@ export function resolveConfig(defaultsPath = MANIFEST_PATH, downstreamPath) {
                     );
                 }
             }
+            // TEL-06: the platform states its events endpoint in the defaults layer, so a downstream that
+            // enables a telemetry level without stating its own would send its users' error reports to the
+            // platform's host. Same rule as urls.update above: an enabled level must name its own endpoint.
+            // (Level off is left alone: nothing is sent until the user raises the preference.)
+            const endpoint = config?.telemetry?.endpoint;
+            const platformEndpoint = platform.telemetry?.endpoint;
+            let sameEndpointHost = false;
+            try {
+                sameEndpointHost = !isUnset(endpoint) && !isUnset(platformEndpoint)
+                    && new URL(endpoint).host === new URL(platformEndpoint).host;
+            } catch {
+                sameEndpointHost = false;
+            }
+            if (config?.telemetry?.level !== 'off' && sameEndpointHost) {
+                failures.push(
+                    `telemetry.endpoint is ${JSON.stringify(endpoint)}, the platform's own events endpoint, while telemetry.level is ${JSON.stringify(config?.telemetry?.level)}, `
+                    + `so the error reports of a build under your name would be sent to the platform. `
+                    + `Write your own https address as [telemetry] endpoint in ${MANIFEST_NAME}, or keep [telemetry] level = "off", then run: ${RERUN}`,
+                );
+            }
         }
     }
 
@@ -6030,10 +6050,17 @@ function selfTest() {
             resolved: c => Array.isArray(c.extensions) && c.extensions.length === 0,
         },
         {
-            // TEL-01. An enabled level with no endpoint must fail NAMING
-            // the missing key -- a sender that can never deliver must
-            // never build. TEL-06 states the endpoint in the default manifest, so an
-            // omitted key inherits it; a downstream clears it explicitly to reach this refusal.
+            // TEL-01 / TEL-06. An enabled level with no endpoint of its own must fail NAMING the key.
+            // The default manifest states the platform's endpoint, so an omitted key inherits it and the
+            // downstream would send its users' error reports to the platform: the refusal is the
+            // R11-style rule in resolveConfig, the same as for urls.update.
+            name: 'telemetry level enabled without an endpoint',
+            toml: `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "all"\n`,
+            expect: 'telemetry.endpoint',
+        },
+        {
+            // TEL-01. The explicit form: the endpoint is cleared, so a sender that can never deliver
+            // must never build.
             name: 'telemetry level enabled with the endpoint cleared',
             toml: `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "all"\nendpoint = ""\n`,
             expect: 'telemetry.endpoint',
