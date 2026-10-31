@@ -4523,6 +4523,25 @@ run_own_checks() {
     "crash-collector|node $REPO_ROOT/scripts/verify-crash-collector.mjs"
     "crash-collector-self-test|node $REPO_ROOT/scripts/verify-crash-collector.mjs --self-test"
 
+    # NEW (Phase 48, TEL-10/TEL-11): the telemetry Worker's contract gate. It imports the Worker
+    # and drives every rule against a stub D1: method, path, content type, parse, shape, the body
+    # and batch caps, the string cap, the per-window throttle, the authenticated download-count
+    # route, the per-day upsert, the 30-day retention, and the maintainer query that excludes
+    # synthetic rows. It also cross-checks the admitted set against the producer, the privacy
+    # page's retention, the schema columns, the wrangler descriptor, and that no credential
+    # value is assigned in worker/.
+    #
+    # events-worker-self-test rides alongside for the reason every other self-test row gives: the
+    # unmutated Worker is green first, then one planted fault per rule on a copy of the Worker
+    # (and one on the privacy page) must each go red naming its rule.
+    #
+    # Honestly --quick: node stdlib, text reads and an in-memory stub D1 in mkdtemp. No build,
+    # no browser, no display, no network. The live Worker, the D1 database and the rate-limit
+    # rule are owner actions at plan 48-05: this row proves the code and the descriptor, not the
+    # deploy.
+    "events-worker|node $REPO_ROOT/scripts/verify-events-worker.mjs"
+    "events-worker-self-test|node $REPO_ROOT/scripts/verify-events-worker.mjs --self-test"
+
     # --- non-GUI wave E (NG-068, NG-070, NG-074): quick rows. No build, no browser,
     # no display; ng068 binds a loopback port only and reads upstream/'s report.rs.
     "ng068-crash-extra-part|node $REPO_ROOT/scripts/verify-ng-068-crash-extra-part.mjs"

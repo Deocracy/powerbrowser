@@ -1,0 +1,497 @@
+#!/usr/bin/env node
+// scripts/verify-events-worker.mjs
+//
+// The contract gate for the telemetry Worker (Phase 48, TEL-10 and TEL-11), in the shape of
+// verify-crash-collector.mjs. Named events-worker in verify-platform.sh.
+//
+// WHAT IT ASSERTS. Every expectation is DERIVED at check time from the Worker's own exports, the
+// producer's ADMITTED_KEYS, or the documents that state the same numbers -- never kept here:
+//
+//  1. Static cross-checks.
+//     - The Worker's ADMITTED_KEYS equals the producer's, imported from
+//       theia/extensions/telemetry/src/browser/telemetry-enrichment.ts (the producer is the
+//       source of truth; a wider Worker set fails naming the key).
+//     - website-staging/privacy.html states the Worker's RETENTION_DAYS, so the page and the
+//       Worker cannot state different retention numbers.
+//     - worker/schema.sql declares every column the Worker writes, in both tables.
+//     - worker/wrangler.toml names the Worker, binds the D1 database, schedules the daily job,
+//       states no routes key, and carries the database placeholder exactly once.
+//     - No file in worker/ assigns a credential-shaped value.
+//  2. Behaviour, against the Worker as written and a stub D1 that models the three statement
+//     shapes the Worker issues. Each rejection is checked for the exact status and body and for an
+//     empty store afterwards.
+//
+// Usage:
+//   node scripts/verify-events-worker.mjs
+//   node scripts/verify-events-worker.mjs --self-test
+//
+// The self-test runs the same checks on the real tree first (control green), then on a copy of the
+// Worker and its documents in a temp dir with one fault planted per rule. Each planted fault must go
+// red NAMING its rule. A plant that leaves the gate green would mean nothing; the control proves a
+// red is plant-caused.
+//
+// Honestly --quick: node stdlib, text reads, and in-memory stub D1 in mkdtemp. No build, browser,
+// display or network.
+
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const NAME = 'events-worker';
+
+const args = process.argv.slice(2);
+const SELF_TEST = args.includes('--self-test');
+for (const a of args) {
+    if (a !== '--self-test') {
+        console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
+        process.exit(2);
+    }
+}
+
+const WORKER_REL = 'worker/events-worker.mjs';
+const SCHEMA_REL = 'worker/schema.sql';
+const WRANGLER_REL = 'worker/wrangler.toml';
+const PRIVACY_REL = 'website-staging/privacy.html';
+const ENRICH_REL = 'theia/extensions/telemetry/src/browser/telemetry-enrichment.ts';
+const WORKER_DIR_REL = 'worker';
+const PLACEHOLDER = 'REPLACE-WITH-OWNER-D1-ID';
+const FIXED_NOW = Date.UTC(2026, 9, 31, 12, 0, 0);
+const DAY = 86_400_000;
+
+// The rule labels the self-test requires each plant to name. Each label appears in the failure text.
+const RULE = Object.freeze({
+    control: 'well-formed control',
+    method: 'wrong method',
+    path: 'wrong path',
+    contentType: 'wrong content-type',
+    unparseable: 'unparseable body',
+    nonObjectTop: 'non-object top level',
+    nonObjectEvent: 'non-object event',
+    overCapBody: 'over-cap body',
+    overCapBatch: 'over-cap batch',
+    extraProp: 'extra-prop event',
+    overLength: 'over-length string',
+    overRate: 'over-rate sequence',
+    unauthDownload: 'unauthenticated download-count POST',
+    wrongSecret: 'wrong-secret download-count POST',
+    malformedAuthed: 'malformed authenticated body',
+    duplicateAssetDay: 'duplicate asset-day POST',
+    synthetic: 'synthetic-marked event in the maintainer query',
+    retention: 'retention window',
+    admitted: 'admitted set equals the producer',
+    schemaColumn: 'schema declares every column',
+    noRoutes: 'no routes key',
+    credential: 'credential-shaped assignment in worker/',
+});
+
+// --- stub D1 -----------------------------------------------------------------
+//
+// Models exactly the statement shapes the Worker issues. An unknown statement throws, so a new
+// statement shape fails the gate loudly instead of passing silently. The upsert keeps a stored
+// column unless the SQL names it as excluded.<column>, which is how the real conflict clause works.
+function makeStub() {
+    const stub = { events: [], counts: new Map(), nextId: 1 };
+    stub.prepare = sql => ({
+        bind: (...values) => ({
+            run: async () => execute(stub, sql, values),
+            all: async () => execute(stub, sql, values),
+        }),
+        run: async () => execute(stub, sql, []),
+        all: async () => execute(stub, sql, []),
+    });
+    return stub;
+}
+
+function execute(stub, sql, values) {
+    const insert = /^INSERT INTO (events|download_counts) \(([^)]*)\)/.exec(sql);
+    if (insert !== null) {
+        const columns = insert[2].split(',').map(c => c.trim().replace(/"/g, ''));
+        const row = {};
+        columns.forEach((c, i) => { row[c] = values[i]; });
+        if (insert[1] === 'events') {
+            row.id = stub.nextId;
+            stub.nextId += 1;
+            stub.events.push(row);
+            return { success: true, results: [] };
+        }
+        if (!/ON CONFLICT\("asset", "day"\) DO UPDATE SET/.test(sql)) {
+            throw new Error(`stub D1: download_counts insert without the upsert clause: ${sql}`);
+        }
+        const key = `${row.asset}\u0000${row.day}`;
+        const stored = stub.counts.get(key);
+        if (stored === undefined) {
+            stub.counts.set(key, row);
+        } else {
+            for (const m of sql.matchAll(/"(\w+)" = excluded\."\w+"/g)) stored[m[1]] = row[m[1]];
+        }
+        return { success: true, results: [] };
+    }
+    if (/^SELECT \* FROM events/.test(sql)) {
+        const rows = /WHERE "synthetic" = 0/.test(sql) ? stub.events.filter(r => r.synthetic === 0) : stub.events.slice();
+        return { success: true, results: rows.map(r => ({ ...r })) };
+    }
+    const del = /^DELETE FROM (events|download_counts) WHERE "received_at" < \?$/.exec(sql);
+    if (del !== null) {
+        const cutoff = values[0];
+        if (del[1] === 'events') {
+            stub.events = stub.events.filter(r => !(r.received_at < cutoff));
+        } else {
+            for (const [key, r] of [...stub.counts]) if (r.received_at < cutoff) stub.counts.delete(key);
+        }
+        return { success: true, results: [] };
+    }
+    throw new Error(`stub D1 has no statement shape for: ${sql}`);
+}
+
+function storeIsEmpty(stub) {
+    return stub.events.length === 0 && stub.counts.size === 0;
+}
+
+// --- helpers -----------------------------------------------------------------
+
+function loadModule(root, rel) {
+    return import(`${pathToFileURL(join(root, rel)).href}?root=${encodeURIComponent(root)}`);
+}
+
+function readText(root, rel) {
+    const p = join(root, rel);
+    return existsSync(p) ? readFileSync(p, 'utf8') : null;
+}
+
+function post(path, body, headers = {}) {
+    return {
+        method: 'POST',
+        path,
+        headers: { 'content-type': 'application/json', authorization: '', ...headers },
+        body: typeof body === 'string' ? body : JSON.stringify(body),
+    };
+}
+
+function freshState(nowMs = FIXED_NOW) {
+    return { nowMs, throttle: { acceptedAt: [] } };
+}
+
+const GOOD_EVENTS = {
+    events: [
+        { type: 'TypeError', source: 'bundle.js', line: 12, column: 34, version: '153.5.1', buildID: 'v153.5.1-1', os: 'linux' },
+        { type: 'RangeError', source: 'other.js', line: 3, column: 4, version: '153.5.1', buildID: 'v153.5.1-1', os: 'windows' },
+        { type: 'TypeError', source: 'probe.js', line: 1, column: 1, version: '153.5.1', buildID: 'v153.5.1-1', os: 'unknown', synthetic: true },
+    ],
+};
+
+// --- static checks -----------------------------------------------------------
+
+async function runStatic(root, worker) {
+    const failures = [];
+
+    // 1a. the admitted set is the producer's.
+    if (!existsSync(join(root, ENRICH_REL))) {
+        failures.push(`${RULE.admitted}: ${ENRICH_REL} is absent, so the producer's admitted set cannot be read. Next step: restore the producer module.`);
+    } else {
+        const producer = await loadModule(root, ENRICH_REL);
+        if (JSON.stringify([...worker.ADMITTED_KEYS]) !== JSON.stringify([...producer.ADMITTED_KEYS])) {
+            failures.push(`${RULE.admitted}: the Worker's ADMITTED_KEYS is ${JSON.stringify([...worker.ADMITTED_KEYS])} but the producer exports ${JSON.stringify([...producer.ADMITTED_KEYS])}. Next step: make ${WORKER_REL} restate the producer's set exactly.`);
+        }
+    }
+
+    // 1b. the privacy page states the Worker's retention.
+    const privacy = readText(root, PRIVACY_REL);
+    if (privacy === null) {
+        failures.push(`${RULE.retention}: ${PRIVACY_REL} is absent, so the retention the page states cannot be checked. Next step: restore the page.`);
+    } else if (!privacy.includes(`kept for ${worker.RETENTION_DAYS} days`)) {
+        failures.push(`${RULE.retention}: ${PRIVACY_REL} does not state "kept for ${worker.RETENTION_DAYS} days", but the Worker deletes after RETENTION_DAYS = ${worker.RETENTION_DAYS}. Next step: make the page and the Worker state the same number.`);
+    }
+
+    // 1c. the schema declares every column the Worker writes.
+    const schema = readText(root, SCHEMA_REL);
+    if (schema === null) {
+        failures.push(`${RULE.schemaColumn}: ${SCHEMA_REL} is absent. Next step: restore the DDL the owner applies.`);
+    } else {
+        for (const [table, columns] of [['events', worker.EVENT_COLUMNS], ['download_counts', worker.DOWNLOAD_COLUMNS]]) {
+            const block = new RegExp(`CREATE TABLE ${table} \\(([\\s\\S]*?)\\);`).exec(schema);
+            if (block === null) {
+                failures.push(`${RULE.schemaColumn}: ${SCHEMA_REL} has no CREATE TABLE ${table} statement. Next step: add the table the Worker writes.`);
+                continue;
+            }
+            for (const column of columns) {
+                if (!block[1].includes(`"${column}"`)) failures.push(`${RULE.schemaColumn}: the ${table} table in ${SCHEMA_REL} does not declare "${column}", which the Worker writes. Next step: add the column to the DDL.`);
+            }
+        }
+        if (!schema.includes('PRIMARY KEY ("asset", "day")')) failures.push(`${RULE.schemaColumn}: download_counts has no PRIMARY KEY ("asset", "day"), so the per-day upsert has no conflict key. Next step: restore it.`);
+    }
+
+    // 1d. the deploy descriptor.
+    const wrangler = readText(root, WRANGLER_REL);
+    if (wrangler === null) {
+        failures.push(`${RULE.noRoutes}: ${WRANGLER_REL} is absent. Next step: restore the deploy descriptor.`);
+    } else {
+        for (const [label, literal] of [
+            ['the Worker name', 'name = "powerbrowser-events"'],
+            ['the Worker entry', 'main = "events-worker.mjs"'],
+            ['the D1 binding', 'binding = "DB"'],
+            ['the D1 database name', 'database_name = "powerbrowser-events"'],
+            ['the daily scheduled job', 'crons = ["0 3 * * *"]'],
+        ]) {
+            if (!wrangler.includes(literal)) failures.push(`${WRANGLER_REL} does not state ${label} (${literal}). Next step: restore it in the descriptor.`);
+        }
+        if (/^\s*routes\s*=/m.test(wrangler)) failures.push(`${RULE.noRoutes}: ${WRANGLER_REL} states a routes key, but Phase 47 attaches the events hostname. Next step: remove the routes key.`);
+        const placeholders = wrangler.split(PLACEHOLDER).length - 1;
+        if (placeholders !== 1) failures.push(`${WRANGLER_REL} carries the database placeholder ${placeholders} time(s), not once. Next step: keep one database_id line with the placeholder; the owner replaces it at the checkpoint.`);
+    }
+
+    // 1e. no credential-shaped assignment in the directory.
+    const credentialShape = /[A-Za-z_]*(secret|token|api[_-]?key|passwd|password)[A-Za-z_]*\s*[:=]\s*["'`][^"'`\n]+["'`]/i;
+    for (const name of readdirSync(join(root, WORKER_DIR_REL))) {
+        const text = readText(root, join(WORKER_DIR_REL, name)) ?? '';
+        const hit = text.split('\n').find(line => credentialShape.test(line));
+        if (hit !== undefined) failures.push(`${RULE.credential} in ${WORKER_DIR_REL}/${name}: ${hit.trim().slice(0, 120)}. Next step: remove the value; the shared secret is read from env.DOWNLOAD_COUNT_SECRET at request time only.`);
+    }
+
+    return failures;
+}
+
+// --- behaviour checks --------------------------------------------------------
+
+async function runBehaviour(root, worker, secret) {
+    const failures = [];
+    const env = (stub) => ({ DB: stub, DOWNLOAD_COUNT_SECRET: secret });
+    const expectRejected = async (rule, shape, want, opts = {}) => {
+        const stub = makeStub();
+        let verdict;
+        try {
+            verdict = opts.download
+                ? await worker.handleDownloadCounts(shape, env(stub), freshState())
+                : await worker.handleEvents(shape, env(stub), freshState());
+        } catch (err) {
+            failures.push(`${rule}: the Worker threw instead of answering: ${err.message}. Next step: answer every rejection with its contract status.`);
+            return;
+        }
+        if (verdict.status !== want.status || verdict.body !== want.body) {
+            failures.push(`${rule}: the Worker answered ${verdict.status} ${JSON.stringify(verdict.body)}, but the contract requires ${want.status} ${JSON.stringify(want.body)}. Next step: restore the guard in ${WORKER_REL}.`);
+        }
+        if (!storeIsEmpty(stub)) failures.push(`${rule}: a rejected request left rows in the store. Next step: decide every rejection before the first write.`);
+    };
+
+    // Control: a well-formed batch is stored, the synthetic row is kept out of the maintainer query.
+    {
+        const stub = makeStub();
+        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, GOOD_EVENTS), env(stub), freshState());
+        if (verdict.status !== 200 || verdict.body !== 'ok: stored 3') failures.push(`${RULE.control}: a well-formed batch answered ${verdict.status} ${JSON.stringify(verdict.body)}, not 200 "ok: stored 3". Next step: restore the accept path.`);
+        if (stub.events.length !== 3) failures.push(`${RULE.control}: the batch wrote ${stub.events.length} row(s), not 3. Next step: write one row per admitted event.`);
+        const maintainer = await worker.listMaintainerEvents(stub);
+        if (maintainer.length !== 2) failures.push(`${RULE.synthetic}: the maintainer query returned ${maintainer.length} row(s) for two real events and one synthetic probe; want 2. Next step: keep synthetic rows out of listMaintainerEvents.`);
+        if (maintainer.some(r => r.synthetic !== 0)) failures.push(`${RULE.synthetic}: the maintainer query returned a synthetic row. Next step: filter synthetic = 0 in SQL.`);
+    }
+
+    const good = JSON.stringify(GOOD_EVENTS);
+    await expectRejected(RULE.method, { ...post(worker.EVENTS_PATH, good), method: 'GET' }, { status: 404, body: '' });
+    await expectRejected(RULE.path, post('/events/extra', good), { status: 404, body: '' });
+    await expectRejected(RULE.contentType, post(worker.EVENTS_PATH, good, { 'content-type': 'text/plain' }), { status: 400, body: 'Discarded: malformed_body' });
+    await expectRejected(RULE.unparseable, post(worker.EVENTS_PATH, '{not json'), { status: 400, body: 'Discarded: malformed_body' });
+    await expectRejected(RULE.nonObjectTop, post(worker.EVENTS_PATH, '[1,2]'), { status: 400, body: 'Discarded: malformed_body' });
+    await expectRejected(RULE.overCapBody, post(worker.EVENTS_PATH, { events: [{ type: 'x'.repeat(worker.MAX_BODY_BYTES) }] }), { status: 413, body: 'Discarded: oversized_body' });
+    await expectRejected(RULE.overCapBatch, post(worker.EVENTS_PATH, { events: Array.from({ length: worker.MAX_EVENTS + 1 }, () => ({ type: 'T' })) }), { status: 400, body: 'Discarded: malformed_batch' });
+    await expectRejected(RULE.nonObjectEvent, post(worker.EVENTS_PATH, { events: ['not an object'] }), { status: 400, body: 'Discarded: malformed_body' });
+
+    // Extra property: accepted, and no property outside the admitted set reaches the row.
+    {
+        const event = { type: 'T', source: 's.js', line: 1, column: 2, version: 'v', buildID: 'b', os: 'linux', message: 'page text', stack: 'at f', url: 'https://x.invalid/' };
+        const stub = makeStub();
+        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, { events: [event] }), env(stub), freshState());
+        if (verdict.status !== 200) failures.push(`${RULE.extraProp}: an event with extra properties answered ${verdict.status}, not 200. Next step: drop unadmitted properties instead of rejecting the batch.`);
+        const leaked = Object.keys(worker.admitEvent(event)).filter(k => !worker.EVENT_COLUMNS.includes(k));
+        if (leaked.length > 0) failures.push(`${RULE.extraProp}: the admitted row carries ${JSON.stringify(leaked)}, outside the stored columns. Next step: build the row from ADMITTED_KEYS only.`);
+        const stored = Object.keys(stub.events[0] ?? {}).filter(k => k !== 'id' && !worker.EVENT_COLUMNS.includes(k));
+        if (stored.length > 0) failures.push(`${RULE.extraProp}: the stored row carries ${JSON.stringify(stored)}. Next step: write only the admitted columns.`);
+    }
+
+    // Over-length string: stored truncated to MAX_STRING_CHARS.
+    {
+        const stub = makeStub();
+        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, { events: [{ type: 'x'.repeat(300) }] }), env(stub), freshState());
+        if (verdict.status !== 200) failures.push(`${RULE.overLength}: a 300-character type answered ${verdict.status}, not 200 with truncation. Next step: truncate, do not reject.`);
+        else if (stub.events[0].type.length !== worker.MAX_STRING_CHARS) failures.push(`${RULE.overLength}: the stored type is ${stub.events[0].type.length} characters, not ${worker.MAX_STRING_CHARS}. Next step: truncate every stored string to MAX_STRING_CHARS.`);
+    }
+
+    // Over-rate sequence: MAX POSTs accepted, the next answers the discard and stores nothing.
+    if (worker.THROTTLE_MAX_POSTS > 1000) {
+        failures.push(`${RULE.overRate}: the budget is ${worker.THROTTLE_MAX_POSTS} POSTs, above the 1000 this gate can drive. Next step: lower THROTTLE_MAX_POSTS or raise the gate's bound.`);
+    } else {
+        const stub = makeStub();
+        const state = freshState();
+        const one = post(worker.EVENTS_PATH, { events: [{ type: 'T' }] });
+        for (let i = 0; i < worker.THROTTLE_MAX_POSTS; i += 1) {
+            const verdict = await worker.handleEvents(one, env(stub), state);
+            if (verdict.status !== 200) {
+                failures.push(`${RULE.overRate}: POST ${i + 1} of ${worker.THROTTLE_MAX_POSTS} answered ${verdict.status}, not 200. Next step: the budget must admit THROTTLE_MAX_POSTS POSTs per window.`);
+                break;
+            }
+        }
+        const over = await worker.handleEvents(one, env(stub), state);
+        if (over.status !== 200 || over.body !== 'Discarded: throttled_in_worker_cap') failures.push(`${RULE.overRate}: POST ${worker.THROTTLE_MAX_POSTS + 1} answered ${over.status} ${JSON.stringify(over.body)}, not 200 "Discarded: throttled_in_worker_cap". Next step: restore the throttle guard in handleEvents.`);
+        if (stub.events.length !== worker.THROTTLE_MAX_POSTS) failures.push(`${RULE.overRate}: the store holds ${stub.events.length} row(s) after the discard, not ${worker.THROTTLE_MAX_POSTS}. Next step: a throttled POST stores nothing.`);
+    }
+
+    // Download counts: authentication first, then the shape, then the upsert.
+    const dlBody = { asset: 'PowerBrowser-153.5.1.exe', tag: 'v153.5.1-1', download_count: 10 };
+    const authed = { authorization: `Bearer ${secret}` };
+    await expectRejected(RULE.unauthDownload, post(worker.DL_PATH, dlBody), { status: 401, body: '' }, { download: true });
+    await expectRejected(RULE.wrongSecret, post(worker.DL_PATH, dlBody, { authorization: `Bearer ${secret}-x` }), { status: 401, body: '' }, { download: true });
+    await expectRejected(RULE.malformedAuthed, post(worker.DL_PATH, { ...dlBody, download_count: -1 }, authed), { status: 400, body: 'Discarded: malformed_body' }, { download: true });
+    {
+        const stub = makeStub();
+        const first = await worker.handleDownloadCounts(post(worker.DL_PATH, dlBody, authed), env(stub), freshState());
+        const second = await worker.handleDownloadCounts(post(worker.DL_PATH, { ...dlBody, download_count: 25 }, authed), env(stub), freshState());
+        if (first.status !== 200 || second.status !== 200 || second.body !== 'ok: PowerBrowser-153.5.1.exe') failures.push(`${RULE.duplicateAssetDay}: the authenticated POSTs answered ${first.status} then ${second.status} ${JSON.stringify(second.body)}, not 200 twice. Next step: restore the upsert.`);
+        if (stub.counts.size !== 1) failures.push(`${RULE.duplicateAssetDay}: two POSTs for one asset and day left ${stub.counts.size} row(s), not 1. Next step: upsert on (asset, day).`);
+        const row = [...stub.counts.values()][0];
+        if (row && row.download_count !== 25) failures.push(`${RULE.duplicateAssetDay}: the stored count is ${row.download_count} after a retry that reported 25. Next step: the upsert must replace the count.`);
+    }
+
+    // Retention: rows older than RETENTION_DAYS are deleted from both tables, newer rows kept.
+    {
+        const stub = makeStub();
+        await worker.handleEvents(post(worker.EVENTS_PATH, { events: [{ type: 'old' }] }), env(stub), freshState(FIXED_NOW - (worker.RETENTION_DAYS + 1) * DAY));
+        await worker.handleEvents(post(worker.EVENTS_PATH, { events: [{ type: 'new' }] }), env(stub), freshState(FIXED_NOW - DAY));
+        await worker.handleDownloadCounts(post(worker.DL_PATH, dlBody, authed), env(stub), freshState(FIXED_NOW - (worker.RETENTION_DAYS + 1) * DAY));
+        await worker.runRetention(stub, FIXED_NOW);
+        const kept = stub.events.map(r => r.type);
+        if (JSON.stringify(kept) !== JSON.stringify(['new'])) failures.push(`${RULE.retention}: after the scheduled delete the events are ${JSON.stringify(kept)}, want ["new"]. Next step: delete rows older than RETENTION_DAYS from events.`);
+        if (stub.counts.size !== 0) failures.push(`${RULE.retention}: a download count older than RETENTION_DAYS survived the scheduled delete. Next step: delete from download_counts too.`);
+    }
+
+    return failures;
+}
+
+async function runAll(root, secret) {
+    const worker = await loadModule(root, WORKER_REL);
+    const failures = await runStatic(root, worker);
+    failures.push(...await runBehaviour(root, worker, secret));
+    return failures;
+}
+
+// --- the main run -------------------------------------------------------------
+
+async function main() {
+    const secret = randomUUID();
+    let failures;
+    try {
+        failures = await runAll(REPO_ROOT, secret);
+    } catch (err) {
+        console.error(`${NAME}: FAIL -- the Worker could not be loaded: ${err.message}. Next step: keep ${WORKER_REL} zero-import and importable under plain node.`);
+        process.exit(1);
+    }
+    if (failures.length > 0) {
+        console.error(`${NAME}: FAIL -- ${failures.length} problem(s)`);
+        for (const f of failures) console.error(`  - ${f}`);
+        process.exit(1);
+    }
+    console.log(`${NAME}: PASS -- the Worker holds the admitted set, the retention, the caps, the throttle, the secret and the schema`);
+}
+
+// --- self-test -----------------------------------------------------------------
+
+// Stages a copy of every file the gate reads, so a plant mutates one copy and leaves the rest as written.
+function stage(dir) {
+    for (const rel of [WORKER_REL, SCHEMA_REL, WRANGLER_REL, PRIVACY_REL, ENRICH_REL]) {
+        mkdirSync(dirname(join(dir, rel)), { recursive: true });
+        copyFileSync(join(REPO_ROOT, rel), join(dir, rel));
+    }
+}
+
+// Each plant mutates one line of the Worker or one document, and must go red naming its rule.
+const PLANTS = [
+    { rule: RULE.method, rel: WORKER_REL, find: "if (shape.method !== 'POST' || shape.path !== EVENTS_PATH) return empty(404);", replace: "if (shape.path !== EVENTS_PATH) return empty(404);" },
+    { rule: RULE.path, rel: WORKER_REL, find: "if (shape.method !== 'POST' || shape.path !== EVENTS_PATH) return empty(404);", replace: "if (shape.method !== 'POST') return empty(404);" },
+    { rule: RULE.contentType, rel: WORKER_REL, find: "    if (!isJsonType(shape.headers?.['content-type'])) return discard(400, REASON_MALFORMED);\n    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);\n    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)", replace: "    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);\n    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)" },
+    { rule: RULE.unparseable, rel: WORKER_REL, find: "    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)", replace: "    if (!Array.isArray(top.events)" },
+    { rule: RULE.nonObjectTop, rel: WORKER_REL, find: 'return isPlainObject(value) ? value : undefined;', replace: 'return value;' },
+    { rule: RULE.overCapBody, rel: WORKER_REL, find: '    if (byteLength(shape.body) > MAX_BODY_BYTES) return discard(413, REASON_OVERSIZED);\n    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)', replace: '    const top = parseJsonObject(shape.body);\n    if (top === undefined) return discard(400, REASON_MALFORMED);\n    if (!Array.isArray(top.events)' },
+    { rule: RULE.overCapBatch, rel: WORKER_REL, find: ' || top.events.length > MAX_EVENTS', replace: '' },
+    { rule: RULE.extraProp, rel: WORKER_REL, find: '    row.synthetic = event.synthetic === true ? 1 : 0;', replace: '    row.synthetic = event.synthetic === true ? 1 : 0;\n    row.message = event.message;' },
+    { rule: RULE.overLength, rel: WORKER_REL, find: '    return value.length > MAX_STRING_CHARS ? value.slice(0, MAX_STRING_CHARS) : value;', replace: '    return value;' },
+    { rule: RULE.overRate, rel: WORKER_REL, find: '    if (throttled(state.throttle, state.nowMs)) return discard(200, REASON_THROTTLED);', replace: '' },
+    { rule: RULE.unauthDownload, rel: WORKER_REL, find: '    if (!authorized(shape.headers?.authorization, env)) return empty(401);', replace: '' },
+    { rule: RULE.wrongSecret, rel: WORKER_REL, find: "    return constantTimeEqual(header.slice('Bearer '.length), expected);", replace: "    return header.startsWith('Bearer ');" },
+    { rule: RULE.malformedAuthed, rel: WORKER_REL, find: ' || !Number.isInteger(count) || count < 0', replace: '' },
+    { rule: RULE.duplicateAssetDay, rel: WORKER_REL, find: '"download_count" = excluded."download_count"', replace: '"download_count" = "download_count"' },
+    { rule: RULE.synthetic, rel: WORKER_REL, find: `const SELECT_MAINTAINER = 'SELECT * FROM events WHERE "synthetic" = 0 ORDER BY "id"';`, replace: `const SELECT_MAINTAINER = 'SELECT * FROM events ORDER BY "id"';` },
+    { rule: RULE.retention, rel: WORKER_REL, find: 'export const RETENTION_DAYS = 30;', replace: 'export const RETENTION_DAYS = 3650;' },
+    { rule: RULE.admitted, rel: WORKER_REL, find: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);", replace: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os', 'message']);" },
+    { rule: RULE.schemaColumn, rel: SCHEMA_REL, find: '  "column" INTEGER,\n', replace: '' },
+    { rule: RULE.noRoutes, rel: WRANGLER_REL, find: 'compatibility_date = "2026-10-31"', replace: 'compatibility_date = "2026-10-31"\nroutes = ["events.powerbrowser.org/events"]' },
+    { rule: RULE.credential, rel: WORKER_REL, find: 'export const DAY_MS = 86_400_000;', replace: "export const DAY_MS = 86_400_000;\nconst DOWNLOAD_COUNT_SECRET = 'plant-value';" },
+];
+
+async function selfTest() {
+    let failed = 0;
+    const complain = (name, why) => {
+        console.error(`${NAME}: --self-test FAIL -- '${name}' ${why}`);
+        failed += 1;
+    };
+
+    const secret = randomUUID();
+    const control = await runAll(REPO_ROOT, secret);
+    if (control.length > 0) {
+        complain(RULE.control, `is already red, so the plants below would mean nothing: ${control.join(' | ')}`);
+    } else {
+        console.log(`  ok  unmutated control -> the Worker holds every contract literal, the store is empty after each rejection`);
+    }
+
+    for (const plant of PLANTS) {
+        const dir = mkdtempSync(join(tmpdir(), 'events-worker-selftest-'));
+        try {
+            stage(dir);
+            const target = join(dir, plant.rel);
+            const before = readFileSync(target, 'utf8');
+            if (!before.includes(plant.find)) {
+                complain(plant.rule, `planted no fault at all: the drift text was not found in ${plant.rel}`);
+                continue;
+            }
+            writeFileSync(target, before.replace(plant.find, plant.replace), 'utf8');
+            // The credential plant appends a value, so the directory scan is the one that must fire.
+            const failures = await runAll(dir, secret);
+            if (!failures.some(f => f.includes(plant.rule))) {
+                complain(plant.rule, `did not go red naming '${plant.rule}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+            } else {
+                console.log(`  ok  ${plant.rule} -> red, naming '${plant.rule}'`);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    // The privacy page states another retention: red naming the retention rule.
+    {
+        const dir = mkdtempSync(join(tmpdir(), 'events-worker-selftest-'));
+        try {
+            stage(dir);
+            const target = join(dir, PRIVACY_REL);
+            const before = readFileSync(target, 'utf8');
+            const drifted = before.replace('kept for 30 days', 'kept for 14 days');
+            if (drifted === before) {
+                complain(RULE.retention, 'planted no fault at all: the privacy retention text was not found');
+            } else {
+                writeFileSync(target, drifted, 'utf8');
+                const failures = await runAll(dir, secret);
+                if (!failures.some(f => f.includes(RULE.retention) && f.includes(PRIVACY_REL))) complain(RULE.retention, `the privacy page drift did not go red naming the rule; got: ${failures.join(' | ')}`);
+                else console.log(`  ok  privacy retention drift -> red, naming '${RULE.retention}'`);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    if (failed > 0) return 1;
+    console.log(`${NAME}: --self-test PASS -- control green and ${PLANTS.length + 1} planted faults each red naming their rule`);
+    return 0;
+}
+
+if (SELF_TEST) {
+    process.exit(await selfTest());
+} else {
+    await main();
+}
