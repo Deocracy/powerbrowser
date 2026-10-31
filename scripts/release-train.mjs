@@ -709,6 +709,18 @@ function selfTest() {
             },
         },
         {
+            // IN-02: the real uptake conflict view, the path a live 175 patch conflict takes, writes nothing under
+            // the patch directory. Its only failure is the replay's red result, which the view must still report.
+            name: 'control: the real uptake conflict view writes nothing under the patch directory',
+            run: () => {
+                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'apply-patches: FAIL -- 030-powerbrowser-mar-certificates.patch did not apply (real conflict, not silent)', replayed: false, replayResult: 'failure' });
+                const writes = view.failures.filter(f => f.includes(`${PATCH_DIR}/`));
+                const onlyResult = view.failures.length === 1 && view.failures[0].includes('the uptake replay job ended failure');
+                const conflict = view.lines.some(l => l.includes('state=UPTAKE_CONFLICT'));
+                return writes.length === 0 && onlyResult && conflict ? [] : [`conflict view failures were: ${view.failures.join(' | ') || '(none)'}`];
+            },
+        },
+        {
             name: 'control: a candidate-less uptake run is idle and green when its job was skipped',
             run: () => {
                 const view = uptakeWouldWrite({ tag: '', stage: '', replayed: false, replayResult: 'skipped' });
