@@ -4802,12 +4802,15 @@ run_own_checks() {
     # nothing.
     "detect-upstreams-self-test|node $REPO_ROOT/scripts/detect-upstreams.mjs --self-test"
     # NEW (Phase 43, TRAIN-02, TRAIN-03, TRAIN-09 and AUTO-07): the five Phase-A states as a frozen
-    # table with derive, next and render over fixture facts, compared as set equality against the
-    # fixture list. The planted TRAIN-09 faults (a merged PR with an unchanged pin, a draft Release,
-    # a fork-head workflow_run, a duplicate tracking issue, a 175.x ESR under the 153 guard) and the
-    # conflict-issue faults must each go red naming their drift; the exactly-one and dry-run-safe
-    # controls stay green. Honestly --quick: pure functions over in-memory fixtures; no network, no
-    # gh, no build. It writes nothing.
+    # table, with derive, next and render checked against fixtures that carry their expected action
+    # as a literal, and states, fixtures and actions compared as set equality. Plants that go red
+    # naming their drift: a sixth state, fixture or action, a state with no action, a merged PR with
+    # an unchanged pin, a 175.x ESR under the 153 guard, a conflict line with no patch number, and a
+    # conflict decision that writes under the patch directory. UNWIRED (no workflow caller, so no
+    # plant): findExactlyOne (live tracking writer, BLOCKED.md item 3), admitWakeRun (workflow_run
+    # held out, BLOCKED.md item 1) and classifyRelease (live Release list, Phase 50). A green row
+    # over those is not production coverage. Honestly --quick: pure functions over in-memory
+    # fixtures; no network, no gh, no build. It writes nothing.
     "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and

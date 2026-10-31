@@ -152,6 +152,8 @@ export function render(state, facts) {
  * The exactly-one rule over the issues a label-and-title find returned. Zero
  * creates, one updates (PATCH only when the stored bytes differ from the rendered
  * bytes), two or more fail naming every number and never PATCH. Pure.
+ * UNWIRED: no workflow caller and no self-test plant until the live tracking writer
+ * is approved (BLOCKED.md item 3).
  */
 export function findExactlyOne(found, rendered) {
     if (found.length === 0) return { action: 'create', numbers: [], patch: false };
@@ -202,7 +204,10 @@ export function renderConflict(tag, nnn, logExcerpt, diffExcerpt) {
     return { title, body, assignOwner: true, writes: [] };
 }
 
-/** A workflow_run wake is admitted only from a same-repository source. Pure. */
+/**
+ * A workflow_run wake is admitted only from a same-repository source. Pure.
+ * UNWIRED: the workflow_run trigger is held out (BLOCKED.md item 1); no plant covers it.
+ */
 export function admitWakeRun(run, repository) {
     if (run.headRepository !== repository) {
         return { admit: false, reason: `workflow_run from fork ${run.headRepository} is ignored; only ${repository} may wake the train` };
@@ -210,7 +215,10 @@ export function admitWakeRun(run, repository) {
     return { admit: true, reason: null };
 }
 
-/** A release is published only when it is neither a draft nor a prerelease. Pure. */
+/**
+ * A release is published only when it is neither a draft nor a prerelease. Pure.
+ * UNWIRED: needs the live Release list (Phase 50); no plant covers it.
+ */
 export function classifyRelease(release) {
     if (release.draft === true) return { published: false, reason: `draft Release ${release.tag} is not published, so it never moves the train` };
     if (release.prerelease === true) return { published: false, reason: `prerelease ${release.tag} is not published` };
@@ -238,28 +246,41 @@ const esrTag = (major, minor, patch, kind = 'RELEASE') => `FIREFOX_${major}_${mi
 const BASE_PIN = esrTag(153, 5, 1);
 const NEWER = esrTag(153, 23, 0);
 const BASE = Object.freeze({ pinTag: BASE_PIN, revision: 1, candidateTag: null, openPr: null, bumpConclusion: null, stage: null, verifyCheck: null, merged: false, pinUnchanged: false });
+// Each fixture carries its expected action as a literal. next() is checked against that
+// literal, never against ACTIONS, so a wrong entry in ACTIONS cannot agree with itself.
 const FIXTURES = Object.freeze({
-    DETECTED: { ...BASE, candidateTag: NEWER },
-    BUMPING: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 41 }, bumpConclusion: null },
-    CONFLICT: { ...BASE, candidateTag: NEWER, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply (real conflict, not silent)' },
-    BUMP_RED: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 42 }, verifyCheck: 'failure' },
-    BUMP_PR_GREEN: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 43 }, verifyCheck: 'success', pinUnchanged: false },
+    DETECTED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER }, action: 'bump' }),
+    BUMPING: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 41 }, bumpConclusion: null }, action: 'wait' }),
+    CONFLICT: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply (real conflict, not silent)' }, action: 'conflict-issue' }),
+    BUMP_RED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 42 }, verifyCheck: 'failure' }, action: 'wait-owner' }),
+    BUMP_PR_GREEN: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 43 }, verifyCheck: 'success', pinUnchanged: false }, action: 'gate' }),
 });
+
+/** Failures for a conflict decision that writes anything under the patch directory. Pure. */
+export function conflictWriteFailures(decision) {
+    return (decision.writes ?? [])
+        .filter(w => w.startsWith(`${PATCH_DIR}/`))
+        .map(w => `conflict decision writes ${w} under the patch directory. Next step: the conflict path opens an issue only; regenerate-patches.sh is the one patch writer.`);
+}
 
 function runChecks(overrides = {}) {
     const states = overrides.states ?? Object.keys(STATES);
     const fixtures = overrides.fixtures ?? FIXTURES;
+    const actionKeys = overrides.actionKeys ?? Object.keys(ACTIONS);
     const failures = [];
     const { onlyA: missingFixtures, onlyB: missingStates } = setDiff(states, Object.keys(fixtures));
     for (const s of missingFixtures) failures.push(`state ${s} has no fixture. Next step: add a fixture for ${s} beside the other states.`);
     for (const f of missingStates) failures.push(`fixture ${f} names no state in STATES. Next step: add ${f} to STATES, or delete the fixture.`);
+    const { onlyA: extraActions, onlyB: missingActions } = setDiff(actionKeys, Object.keys(STATES));
+    for (const a of extraActions) failures.push(`action ${a} names no state in STATES. Next step: delete it from ACTIONS, or add the state to STATES.`);
+    for (const s of missingActions) failures.push(`state ${s} has no action in ACTIONS. Next step: map ${s} to its action in ACTIONS.`);
     for (const name of Object.keys(fixtures)) {
         if (!states.includes(name)) continue;
-        const facts = fixtures[name];
+        const { facts, action: expected } = fixtures[name];
         const got = derive(facts);
         if (got !== name) failures.push(`fixture ${name} derives ${got} instead of ${name}. Next step: fix derive() or the fixture facts.`);
         const action = next(got);
-        if (action !== ACTIONS[name]) failures.push(`fixture ${name} maps to action ${action}. Next step: fix next().`);
+        if (action !== expected) failures.push(`fixture ${name} maps to action ${action}, not the expected ${expected}. Next step: fix next() or the expected action beside the fixture.`);
         const rendered = render(name, facts);
         if (!rendered.title.startsWith('release-train: v') || !rendered.body.includes(name)) failures.push(`fixture ${name} renders without its release key or state. Next step: fix render().`);
     }
@@ -273,7 +294,7 @@ function selfTest() {
         baseline.failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`  ok  baseline -> five states, five fixtures, set-equal; derive, next and render agree`);
+    console.log(`  ok  baseline -> five states, five fixtures with expected actions, set-equal; derive, next and render agree`);
 
     const OWNER = 'owner-login-fixture';
     const trainPlants = [
@@ -284,42 +305,28 @@ function selfTest() {
         },
         {
             name: 'a sixth fixture with no state',
-            run: () => runChecks({ fixtures: { ...FIXTURES, BUILT: { ...BASE, candidateTag: NEWER } } }).failures,
+            run: () => runChecks({ fixtures: { ...FIXTURES, BUILT: { facts: { ...BASE, candidateTag: NEWER }, action: 'bump' } } }).failures,
             expect: 'fixture BUILT names no state',
+        },
+        {
+            name: 'a sixth action with no state',
+            run: () => runChecks({ actionKeys: [...Object.keys(ACTIONS), 'BUILDING'] }).failures,
+            expect: 'action BUILDING names no state',
+        },
+        {
+            name: 'a state with no action',
+            run: () => runChecks({ actionKeys: Object.keys(ACTIONS).filter(k => k !== 'BUMPING') }).failures,
+            expect: 'state BUMPING has no action',
         },
         {
             name: 'a merged PR with the pin unchanged',
             run: () => {
-                const facts = { ...FIXTURES.BUMP_PR_GREEN, openPr: null, merged: true, pinUnchanged: true };
+                const facts = { ...FIXTURES.BUMP_PR_GREEN.facts, openPr: null, merged: true, pinUnchanged: true };
                 const got = derive(facts);
                 if (got === 'BUMP_RED') return [`BUMP_RED: merged PR left the pin at ${facts.pinTag} unchanged`];
                 return [`merged PR derives ${got} with the pin unchanged, never a green state`];
             },
             expect: `left the pin at ${BASE_PIN} unchanged`,
-        },
-        {
-            name: 'a draft Release',
-            run: () => {
-                const verdict = classifyRelease({ tag: NEWER, draft: true });
-                return verdict.published ? [`draft Release ${NEWER} counted as published`] : [verdict.reason];
-            },
-            expect: 'draft Release',
-        },
-        {
-            name: 'a fork-head workflow_run',
-            run: () => {
-                const verdict = admitWakeRun({ headRepository: 'someone/fork' }, 'owner/powerbrowser');
-                return verdict.admit ? ['fork-head run admitted to wake the train'] : [verdict.reason];
-            },
-            expect: 'from fork someone/fork is ignored',
-        },
-        {
-            name: 'a duplicate tracking issue',
-            run: () => {
-                const decision = findExactlyOne([{ number: 11, body: 'a' }, { number: 12, body: 'b' }], render('DETECTED', BASE));
-                return decision.patch ? ['duplicate tracking issues would PATCH'] : [decision.reason];
-            },
-            expect: '#11, #12',
         },
         {
             name: 'a 175.x ESR under the 153 guard',
@@ -342,11 +349,9 @@ function selfTest() {
         },
         {
             name: 'a conflict decision that writes under the patch directory',
-            run: () => {
-                const planted = { ...renderConflict(NEWER, '020', 'log', 'diff'), writes: [`${PATCH_DIR}/020-powerbrowser-shell.patch`] };
-                return planted.writes.filter(w => w.startsWith(`${PATCH_DIR}/`)).map(w => `conflict path writes ${w} under the patch directory`);
-            },
-            expect: 'writes',
+            // The real rule (conflictWriteFailures) reads the real decision shape, with one planted write.
+            run: () => conflictWriteFailures({ ...renderConflict(NEWER, '020', 'log', 'diff'), writes: [`${PATCH_DIR}/020-powerbrowser-shell.patch`] }),
+            expect: 'writes patches/020-powerbrowser-shell.patch under the patch directory',
         },
     ];
 
@@ -354,33 +359,14 @@ function selfTest() {
         {
             name: 'control: the owner is mentioned only on the gate state',
             run: () => {
-                const facts = { ...FIXTURES.BUMP_PR_GREEN, ownerLogin: OWNER };
-                const gate = render('BUMP_PR_GREEN', facts);
-                const bumping = render('BUMPING', { ...FIXTURES.BUMPING, ownerLogin: OWNER });
+                const gate = render('BUMP_PR_GREEN', { ...FIXTURES.BUMP_PR_GREEN.facts, ownerLogin: OWNER });
+                const bumping = render('BUMPING', { ...FIXTURES.BUMPING.facts, ownerLogin: OWNER });
                 return gate.mention === OWNER && bumping.mention === null ? [] : ['owner mention drifted from the gate'];
             },
         },
         {
-            name: 'control: a second conflict for the same tag updates, never a second create',
-            run: () => {
-                const first = renderConflict(NEWER, '020', 'log', 'diff');
-                const decision = findExactlyOne([{ number: 7, body: first.body }], first);
-                return decision.action === 'update' && decision.numbers[0] === 7 ? [] : [`conflict decided ${decision.action}, not an update of #7`];
-            },
-        },
-        {
-            name: 'control: identical stored bytes issue no PATCH',
-            run: () => {
-                const rendered = render('DETECTED', BASE);
-                return findExactlyOne([{ number: 5, body: rendered.body }], rendered).patch ? ['identical bytes would PATCH'] : [];
-            },
-        },
-        {
-            name: 'control: differing stored bytes issue a PATCH',
-            run: () => {
-                const rendered = render('DETECTED', BASE);
-                return findExactlyOne([{ number: 5, body: 'stale' }], rendered).patch ? [] : ['differing bytes would not PATCH'];
-            },
+            name: 'control: the real conflict decision writes nothing under the patch directory',
+            run: () => conflictWriteFailures(renderConflict(NEWER, '020', 'log', 'diff')),
         },
     ];
 
