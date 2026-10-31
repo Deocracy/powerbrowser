@@ -135,6 +135,18 @@ The first version selected the pinned issue by title alone and took the previous
 
 Verified: `release-train.mjs --self-test` PASS (25 maintenance cases), `verify-workflows` PASS, zizmor PASS, brand scan PASS, `--quick` exit 0. The stored-state artifact is an owner-visible change: the first live sweep after the pin finds no artifact and notifies every red row once.
 
+## Security fix, follow-up (coordinator, commit ffa20012)
+
+The state artifact lookup took the newest artifact of that name from any run, so a fork PR run or another branch could supply forged previous statuses. The fix:
+
+- **Runs.** The lookup lists runs of this workflow only: `workflow_dispatch`, successful, on the repository's default branch (read from `repos/$GITHUB_REPOSITORY`, not a literal), with head repository equal to this repository.
+- **Artifacts.** The artifact must be unexpired, named `release-train-maintenance-state`, uploaded from that default branch, with the repository id read from the API, and its run must be one of those runs. The pure `selectStateRun` makes this choice; a `--state-select` CLI flag exposes it to the workflow (the same pattern as the earlier CLI flags; recorded as an adaptation).
+- **Fail-safe.** Any error, mismatch or absence leaves the run id empty, so the stored state is null and every red row is treated as newly red.
+- **Gates.** The lookup is a read and carries no dry-run gate, as the coordinator asked. The download step keeps the negated dry-run gate because `actions/download-artifact` is an action outside the read-only list, which `verify-workflows` requires to be gated. The upload step keeps its gate.
+- **Self-test.** A control shows the owner-branch run is picked over a feature-branch artifact and a foreign-repository artifact, and that with no admissible state the notice still fires. Two plants, a foreign-repository artifact and a feature-branch artifact taken as the previous state, each go red naming the suppressed notice.
+
+Verified: `release-train.mjs --self-test` PASS (29 maintenance cases), `verify-workflows` PASS, zizmor PASS, brand scan PASS, `--quick` exit 0.
+
 ## Decisions Made
 
 See key-decisions in the frontmatter. The owner checks at 48-05 are the watchdog-before-pin ordering, the `vars.OWNER_LOGIN` value, and the App permissions for the probe (administration read and actions read on `powerbrowser-updates`).
