@@ -559,12 +559,12 @@ function runChecks(root, overrides = {}) {
                             if (/^Bash(\(\s*:?\*+\s*\)|\(\s*\))?$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${e}, an unscoped shell. Next step: scope it, for example Bash(git -C work diff:*).`);
                             if (/^Bash\(.*\*/.test(e) && !/^Bash\(\s*:?\*+\s*\)$/.test(e)) fail(rel, jobId, 'fixer-tools', `--allowedTools grants ${e}, a wildcard shell grant; a git wildcard lets the model rewrite work/.git and run git with free arguments. Next step: name one exact command with no free arguments.`);
                             // WR-02: Read reaches /proc/self/environ (the job's id-token request token), ~/.claude* and the checkout's
-                            // .git/config. Every grant is confined to the three trees the model needs.
+                            // .git/config. Every grant is confined to the two trees the model reads (IN-04: not upstream/, which a patch can plant symlinks in).
                             const rd = e.match(/^Read(?:\((.*)\))?$/);
                             if (rd) {
                                 const g = (rd[1] ?? '').trim();
                                 if (g === '') fail(rel, jobId, 'fixer-tools', `--allowedTools grants bare ${e}, which reaches the whole filesystem (/proc/self/environ, the home directory, .git/config). Next step: scope it, for example Read(work/**).`);
-                                else if (!['work/', 'fixer-data/', 'upstream/'].some(pre => g.startsWith(pre)) || g.includes('..')) fail(rel, jobId, 'fixer-tools', `--allowedTools grants Read(${g}), which is not confined to work/, fixer-data/ or upstream/. Next step: scope it to one of those.`);
+                                else if (!['work/', 'fixer-data/'].some(pre => g.startsWith(pre)) || g.includes('..')) fail(rel, jobId, 'fixer-tools', `--allowedTools grants Read(${g}), which is not confined to work/ or fixer-data/ (upstream/ carries symlinks the target's patches can create, IN-04). Next step: scope it to one of those.`);
                                 continue;
                             }
                             if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(e)) {
@@ -586,8 +586,8 @@ function runChecks(root, overrides = {}) {
                             }
                         }
                     }
-                    for (const d of ['Read(//proc/**)', 'Read(~/**)', 'Read(.git/**)']) {
-                        if (!denied.includes(d)) fail(rel, jobId, 'fixer-tools', `--disallowedTools does not deny ${d}, so the model can read the process environment, the home directory or the checkout's git config. Next step: add ${d} to --disallowedTools.`);
+                    for (const d of ['Read(//proc/**)', 'Read(~/**)', 'Read(.git/**)', 'Read(upstream/**)']) {
+                        if (!denied.includes(d)) fail(rel, jobId, 'fixer-tools', `--disallowedTools does not deny ${d}, so the model can read the process environment, the home directory, the checkout's git config or the upstream tree (IN-04: the target's patches can plant a symlink there). Next step: add ${d} to --disallowedTools.`);
                     }
                     for (const t of ['WebFetch', 'WebSearch']) {
                         if (!denied.includes(t)) fail(rel, jobId, 'fixer-prompt', `--disallowedTools does not deny ${t}, so the model can reach the open web with repository text. Next step: add ${t} to --disallowedTools.`);
@@ -1064,8 +1064,8 @@ function selfTest() {
     const T = FIXER_FILE;
     const FIXER = FIX_PIN.split('@')[1];
     const FIX_APP = 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510';
-    const ALLOWED = 'Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read(work/**),Read(fixer-data/**),Read(upstream/**)';
-    const DENIED = 'WebFetch,WebSearch,Read(//proc/**),Read(~/**),Read(.git/**),Read(work/.git/**),Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"';
+    const ALLOWED = 'Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read(work/**),Read(fixer-data/**)';
+    const DENIED = 'WebFetch,WebSearch,Read(//proc/**),Read(~/**),Read(.git/**),Read(upstream/**),Read(work/.git/**),Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"';
     const CLAUDE_ARGS = `--max-turns 40 --allowedTools "${ALLOWED}" --disallowedTools "${DENIED}"`;
     const FIX_IF = "github.run_attempt == 1 && github.event_name == 'workflow_dispatch' && inputs.reason == 'fix' && !startsWith(inputs.target-branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]' && github.actor != 'dependabot[bot]'";
     const GATE_IF = "!inputs.dry-run && github.run_attempt == 1 && needs.fix.result == 'success'";
@@ -1315,6 +1315,8 @@ function selfTest() {
         ['Read(//proc/**) granted', fixerEdit('Read(work/**),Read(fixer-data/**)', 'Read(//proc/**),Read(fixer-data/**)'), rel(T), 'fix', 'fixer-tools', 'Read(//proc/**)'],
         ['Read climbing out of work/ with ..', fixerEdit('Read(work/**),Read(fixer-data/**)', 'Read(work/../.git/**),Read(fixer-data/**)'), rel(T), 'fix', 'fixer-tools', 'Read(work/../.git/**)'],
         ['Read(//proc/**) not denied', fixerEdit('Read(//proc/**),', ''), rel(T), 'fix', 'fixer-tools', 'Read(//proc/**)'],
+        ['Read(upstream/**) granted (IN-04)', fixerEdit('Read(work/**),Read(fixer-data/**)', 'Read(work/**),Read(fixer-data/**),Read(upstream/**)'), rel(T), 'fix', 'fixer-tools', 'Read(upstream/**)'],
+        ['Read(upstream/**) not denied (IN-04)', fixerEdit('Read(upstream/**),', ''), rel(T), 'fix', 'fixer-tools', 'Read(upstream/**)'],
         ['Read(~/**) not denied', fixerEdit('Read(~/**),', ''), rel(T), 'fix', 'fixer-tools', 'Read(~/**)'],
         ['Read(.git/**) not denied', fixerEdit('Read(.git/**),', ''), rel(T), 'fix', 'fixer-tools', 'Read(.git/**)'],
         ['bare Edit in --allowedTools', fixerEdit('Edit(work/**),Read', 'Edit,Read'), rel(T), 'fix', 'fixer-tools', 'bare Edit'],

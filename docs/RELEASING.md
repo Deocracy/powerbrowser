@@ -627,6 +627,10 @@ What is live and what is a contract that nothing runs yet:
   `scripts/regenerate-patches.sh`, needs the target's patch stack applied to `upstream/`,
   and a stack in conflict does not apply, so a run would end with no diff. The owner
   resolves patch conflicts.
+- Live. The model's Read tool is granted `work/**` and `fixer-data/**` only, and `upstream/**` is denied;
+  prep also refuses a target whose patch stack adds or changes a symlink in `upstream/` (a patch can create
+  one with `new file mode 120000`), or leaves one that resolves outside the repository. The expected set is
+  the symlinks `fetch-upstream.sh` left, read before the apply and compared after it.
 - Live. `fix` and `fix-gate` free hosted-runner disk space before the upstream fetch with the same
   step `rebase-upstream.yml` uses (the `workflows` row requires the two texts to be equal): `upstream/` is
   5.6 GB and the gate copies it. The gate's copies use `cp -a --reflink=auto` inside a scratch

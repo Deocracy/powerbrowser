@@ -64,6 +64,34 @@ refuse_symlinks() {
   fi
 }
 
+# IN-04: the symlinks of a tree as sorted "path -> target" lines. Plain find, no git; a nested .git is not part of the tree.
+link_list() {
+  (cd "$1" && find . -path ./.git -prune -o -type l -printf '%p -> %l\n' | LC_ALL=C sort)
+}
+
+# IN-04: after the target's patch stack is applied to upstream/, its symlinks must be exactly the ones fetch left (the overlay
+# links into this checkout, derived from the snapshot taken before the apply, never listed by hand), and each must resolve to a path
+# inside the repository: a patch can create a symlink (new file mode 120000), and a read through one that leaves the tree is not
+# something the model's scoping accounts for. $1 before-list, $2 after-list, $3 tree, $4 repository root.
+check_links() {
+  local diffs line p resolved
+  if ! diffs=$(diff "$1" "$2"); then
+    echo "$NAME: FAIL -- [symlink] the target's patch stack changed the symlinks of upstream/ (< before, > after):" >&2
+    printf '%s\n' "$diffs" | head -n 8 >&2
+    echo "  Next step: the owner fixes the patch stack; a patch must not add or change a symlink." >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    p="${line%% -> *}"
+    resolved=$(realpath -m -- "$3/$p")
+    case "$resolved" in
+      "$4"/*) ;;
+      *) echo "$NAME: FAIL -- [symlink] upstream/${p#./} resolves to $resolved, outside the repository." >&2; echo "  Next step: the owner removes that link from the patch stack." >&2; return 1 ;;
+    esac
+  done < "$2"
+}
+
 # IN-01: the .gitattributes files of a tree as a NUL-separated sorted list, with no git call.
 attr_list() {
   (cd "$1" && find . -path ./.git -prune -o -name .gitattributes -print0 | sort -z)
@@ -99,6 +127,8 @@ prep() {
   # The one fetch: upstream/ at the tag. An explicit TAG export overrides the pin fragment.
   TAG="$TAG" bash "$REPO_ROOT/scripts/fetch-upstream.sh"
 
+  link_list "$REPO_ROOT/upstream" > "$STATE/upstream-links.before"
+
   # WR-08: fetch leaves upstream/ pristine, and regenerate-patches.sh needs the patches applied (it re-derives each patch from
   # the applied tree). Apply the target's own stack; a stack that does not apply means the model has no working patch tool.
   if [ -d "$WORK/patches" ]; then
@@ -108,6 +138,8 @@ prep() {
     fi
     echo "$NAME: NOTE -- the target's patch stack is applied to upstream/ at $TAG"
   fi
+  link_list "$REPO_ROOT/upstream" > "$STATE/upstream-links.after"
+  check_links "$STATE/upstream-links.before" "$STATE/upstream-links.after" "$REPO_ROOT/upstream" "$REPO_ROOT" || exit 1
 
   # The pristine copy, taken before the model runs. Every later git call reads this copy only.
   cp -a "$WORK/.git" "$STATE/base.git"
@@ -300,11 +332,29 @@ if [ "$MODE" = self-test ]; then
   ln -s ../scripts "$T/f/work/escape"
   if (refuse_symlinks "$T/f/work") > "$T/f/log" 2>&1; then bad "a symlink in work/ was not refused"; else grep -q '\[symlink\]' "$T/f/log" && ok "a symlink already in work/ is refused at prep, naming [symlink]" || bad "the symlink refusal did not name [symlink]"; fi
 
+  # G. IN-04: upstream/ after the patch apply. The expected links are the ones present before the apply; an added or changed link, or
+  # one that leaves the repository, is refused; an unchanged set passes.
+  mkdir -p "$T/g/repo/upstream" "$T/g/repo/powerbrowser"
+  ln -s ../powerbrowser "$T/g/repo/upstream/powerbrowser"
+  link_list "$T/g/repo/upstream" > "$T/g/before"
+  link_list "$T/g/repo/upstream" > "$T/g/after"
+  if (check_links "$T/g/before" "$T/g/after" "$T/g/repo/upstream" "$T/g/repo") > "$T/g/log" 2>&1; then ok "control: the overlay links fetch left, unchanged by the apply, pass"; else bad "control: unchanged upstream links were refused"; cat "$T/g/log" >&2; fi
+  ln -s ../powerbrowser "$T/g/repo/upstream/added-by-patch"
+  link_list "$T/g/repo/upstream" > "$T/g/after"
+  if (check_links "$T/g/before" "$T/g/after" "$T/g/repo/upstream" "$T/g/repo") > "$T/g/log" 2>&1; then bad "a symlink added by the patch stack was not refused"; else grep -q '\[symlink\]' "$T/g/log" && ok "a symlink added to upstream/ by the patch stack is refused, naming [symlink]" || bad "the added-link refusal did not name [symlink]"; fi
+  rm "$T/g/repo/upstream/added-by-patch"
+  rm "$T/g/repo/upstream/powerbrowser"; ln -s ../../../etc "$T/g/repo/upstream/powerbrowser"
+  link_list "$T/g/repo/upstream" > "$T/g/after"
+  if (check_links "$T/g/before" "$T/g/after" "$T/g/repo/upstream" "$T/g/repo") > "$T/g/log" 2>&1; then bad "a changed link target was not refused"; else grep -q '\[symlink\]' "$T/g/log" && ok "an overlay link retargeted by the patch stack is refused" || bad "the retarget refusal did not name [symlink]"; fi
+  rm "$T/g/repo/upstream/powerbrowser"; ln -s ../../../etc "$T/g/repo/upstream/powerbrowser"
+  link_list "$T/g/repo/upstream" > "$T/g/before"
+  if (check_links "$T/g/before" "$T/g/before" "$T/g/repo/upstream" "$T/g/repo") > "$T/g/log" 2>&1; then bad "a link leaving the repository was accepted"; else grep -q 'outside the repository' "$T/g/log" && ok "a link that resolves outside the repository is refused even when it was there before" || bad "the outside-link refusal did not say so"; fi
+
   # E. a relative --out is refused before any work.
   if (cd "$T" && bash "$REPO_ROOT/scripts/fixer-prepare.sh" --emit-diff --state="$T/a/state" --out=rel.diff) > /dev/null 2>&1; then bad "a relative --out was accepted"; else ok "a relative --out is refused"; fi
 
   if [ "$EXIT" -eq 0 ]; then
-    echo "$NAME: --self-test PASS -- a plain edit is emitted; a planted work/.git/config, a planted hook and a changed, added or removed .gitattributes are each refused before any command from them runs (the .gitattributes ones before any git call), and a symlink in work/ is refused at prep"
+    echo "$NAME: --self-test PASS -- a plain edit is emitted; a planted work/.git/config, a planted hook and a changed, added or removed .gitattributes are each refused before any command from them runs (the .gitattributes ones before any git call), and a symlink in work/ is refused at prep, and a symlink the patch stack adds to or changes in upstream/, or one that leaves the repository, is refused"
   else
     echo "$NAME: --self-test FAIL -- see the lines above" >&2
   fi
