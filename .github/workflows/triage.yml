@@ -1,7 +1,8 @@
 # GH-03 triage workflow (Phase 53). Declared in the repository on the phase branch;
 # it reaches main only when the owner lands it at the 53-04 checkpoint, so until then
-# no issue is triaged. Runs once per opened issue in the triage environment, which
-# admits main only.
+# no issue is triaged. Runs once per opened issue. Only classify runs in the triage
+# environment, which holds the key and admits main only; apply needs no secret and so
+# stays outside it.
 #
 # Two-job trust split (PITFALLS Pitfall 1, and the 53 security fix). GitHub cannot
 # narrow a token per step, so the step that reads issue text and the step that holds
@@ -111,7 +112,6 @@ jobs:
   apply:
     needs: classify
     runs-on: ubuntu-latest
-    environment: triage
     timeout-minutes: 10
     permissions:
       contents: read

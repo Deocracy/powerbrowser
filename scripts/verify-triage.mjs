@@ -28,7 +28,9 @@
 //  ai-write      the job holding the claude-code-action step has no write scope, read
 //                from its job permissions, or from the workflow map when it has none.
 //  post-ai       the job holding the write token (apply) holds no claude-code-action step.
-//  environment   both jobs run in the triage environment.
+//  environment   classify (the model job, which holds the key) runs in the triage environment;
+//                apply declares no environment, because it needs no secret.
+//  secrets       apply references no secrets. expression, so it cannot reach the key.
 //  runner        both jobs run on ubuntu-latest.
 //  timeout       both jobs set timeout-minutes to at most 10.
 //  pin           the claude-code-action step (classify) carries the FIX-08 commit, not a tag object.
@@ -213,8 +215,14 @@ function check(text, rel, labels) {
     for (const jobId of JOBS) {
         const job = jobOf(jobId);
         scopeWrites(`job ${jobId} permissions`, job.permissions, jobId);
-        if (job.environment !== 'triage') {
+        if (jobId === AI_JOB && job.environment !== 'triage') {
             fail(jobId, 'environment', `environment is ${JSON.stringify(job.environment)}, not triage, so the key and the main-only branch policy do not apply. Next step: set environment: triage.`);
+        }
+        if (jobId === POST_JOB && job.environment !== undefined) {
+            fail(jobId, 'environment', `environment is ${JSON.stringify(job.environment)}; apply runs no model and needs no secret, so it stays outside the triage environment. Next step: remove the environment key from apply.`);
+        }
+        if (jobId === POST_JOB && /\bsecrets\./.test(JSON.stringify(job))) {
+            fail(jobId, 'secrets', 'references a secrets. expression, so the write job can reach the model key. Next step: remove the secret from apply; only classify holds it.');
         }
         if (job['runs-on'] !== 'ubuntu-latest') {
             fail(jobId, 'runner', `runs-on is ${JSON.stringify(job['runs-on'])}, not ubuntu-latest. Next step: run the job on ubuntu-latest.`);
@@ -504,14 +512,16 @@ function selfTest() {
         return good.replace(from, to);
     };
     const CLASSIFY = '  classify:\n    runs-on: ubuntu-latest\n    environment: triage\n';
-    const APPLY = '  apply:\n    needs: classify\n    runs-on: ubuntu-latest\n    environment: triage\n';
+    const APPLY = '  apply:\n    needs: classify\n    runs-on: ubuntu-latest\n';
     const APPLY_STEP = '      - name: Apply labels and post the fixed template comment';
     const CLASSIFY_PERMS = '    permissions:\n      contents: read\n      issues: read\n';
     const plants = [
         ['missing issues opened trigger', mutate('types: [opened]', 'types: [closed]'), WF, 'trigger', 'opened'],
         ['environment release instead of triage in classify', mutate(CLASSIFY, CLASSIFY.replace('environment: triage', 'environment: release')), AI_JOB, 'environment', 'release'],
         ['environment missing in classify', mutate(CLASSIFY, CLASSIFY.replace('    environment: triage\n', '')), AI_JOB, 'environment', 'environment is undefined'],
-        ['environment release instead of triage in apply', mutate(APPLY, APPLY.replace('environment: triage', 'environment: release')), POST_JOB, 'environment', 'release'],
+        ['environment release on apply', mutate(APPLY, APPLY.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    environment: release\n')), POST_JOB, 'environment', 'release'],
+        ['environment triage on apply (the key scope reaches the write job)', mutate(APPLY, APPLY.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    environment: triage\n')), POST_JOB, 'environment', 'triage'],
+        ['secret referenced in apply', mutate(APPLY, APPLY.replace('    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest\n    env:\n      MODEL_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n')), POST_JOB, 'secrets', 'secrets.'],
         ['install.cjs step removed (stub binary left in place)', mutate('          node "$RUNNER_TEMP/claude-code/node_modules/@anthropic-ai/claude-code/install.cjs"\n', ''), AI_JOB, 'install', 'install.cjs'],
         ['--version smoke removed', mutate('          "$RUNNER_TEMP/claude-code/node_modules/.bin/claude" --version\n', ''), AI_JOB, 'install', '--version'],
         ['issue data fence removed from the prompt', mutate('            </issue_data>\n', ''), AI_JOB, 'issue-data', 'issue_data'],
