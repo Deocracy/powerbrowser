@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 32
 current_phase_name: Page Tools
 status: executing
-stopped_at: Completed 32-06-PLAN.md
-last_updated: "2026-10-31T22:21:49.554Z"
+stopped_at: "32-07 stopped at Task 3 (f): blocked (remoteness repro not reproduced); plan partial"
+last_updated: "2026-10-31T23:04:58.688Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 32 execution started
-state_head: eded999e365f0fe94332536131c2198831adaf8d
+state_head: 8c3260b3252b42d15504f229379dd3fa7cf75bd8
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 71
-  completed_plans: 40
+  completed_plans: 41
   percent: 8
 ---
 
@@ -476,6 +476,7 @@ Recent decisions affecting current work:
 - WINDOWS.md 18's named residual: no registered check drives a rejection out of either long-lived supervisor loop, so those two terminal handlers rest on the source-derived coverage rule rather than on a runtime red
 - 32-01: soundPlaying never pushed live; DOMAudioPlaybackStarted does not reach the overlay element in 20 s while the tone plays in content (investigate AudioPlaybackChild / audio-playback for the overlay context)
 - 32-01: print-today and edit-today probe verdicts are not recorded; plans 32-04 and 32-06 must report a blocker until scripts/lib/pb-probe-verdicts.json holds those keys
+- 32-07 blocked at Task 3(f): remoteness-repro verdict not-reproduced R 0/4 A 0/4 (fifth tab never switched process); repro the blank reload first, and confirm the ProcessIsolation capture (isolation=none in all runs)
 
 ### Roadmap Evolution
 
@@ -565,8 +566,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T22:21:49.064Z
-Stopped at: Completed 32-06-PLAN.md
+Last session: 2026-10-31T23:04:58.214Z
+Stopped at: 32-07 stopped at Task 3 (f): blocked (remoteness repro not reproduced); plan partial
 Resume file: None
 
 ## Operator Next Steps
