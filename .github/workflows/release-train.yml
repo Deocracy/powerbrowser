@@ -855,11 +855,21 @@ jobs:
           name: fix-diff-${{ inputs.release-key }}-${{ inputs.class }}-${{ inputs.attempt }}
           path: ${{ runner.temp }}/fix-diff
 
-      # Fetch only: upstream at the target tag, and the theia dependencies with their scripts off.
-      - name: Fetch upstream at the target tag and install the theia dependencies
+      # The trusted tree (main, before any model diff exists) is prepared the way verify.yml prepares it for --quick: the
+      # generated surfaces, upstream at the target tag, the theia dependencies with their scripts off and the one native
+      # rebuild, then yarn build. The gate copies every git-ignored input it derives from this tree into its worktree (CR-05),
+      # so the --quick rows that read built output (gui09, tab-uris-typecheck) see it in CI as they do locally.
+      - name: Generate, fetch upstream at the target tag, install and build the trusted theia workspace
         env:
           TARGET_TAG: ${{ inputs.target-tag }}
-        run: nix develop .#theia --command bash -c 'TAG="$TARGET_TAG" bash scripts/fetch-upstream.sh && cd theia && yarn install --ignore-scripts --frozen-lockfile'
+        run: |
+          nix develop .#theia --command bash -c 'set -euo pipefail
+            node scripts/generate.mjs
+            TAG="$TARGET_TAG" bash scripts/fetch-upstream.sh
+            cd theia
+            yarn install --ignore-scripts --frozen-lockfile
+            (cd node_modules/drivelist && node-gyp rebuild)
+            yarn build'
 
       - name: Run the fix gate (verdict only)
         id: gate

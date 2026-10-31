@@ -30,8 +30,8 @@
 //                 In memory: a changed existing patch must change its index line as a
 //                 removed/added pair with a differing hash, or be a moved file (CR-01: a
 //                 moved file is compared on +/- lines only, so a context-only change
-//                 there is a NOTE). Real run, when git's path set holds a patches/ path:
-//                 the diff's patches are replayed onto a fresh copy of upstream/ reset to
+//                 there is a NOTE). Real run, when git's path set holds a patches/ path or
+//                 a --tag was given: the target's patches (the diff applied) are replayed onto a fresh copy of upstream/ reset to
 //                 --tag (scripts/apply-patches.sh), then scripts/regenerate-patches.sh
 //                 --check runs over that replay. No upstream at --tag is a rejection.
 //  4. non-vacuity A diff that changes no file body is rejected.
@@ -481,6 +481,34 @@ function applyAndCheck(buf, dir, deny, registry, expected) {
     }
 }
 
+// Git-ignored inputs the real stages read, derived from the tree and never hand-listed (CLAUDE.md): every path
+// git reports as ignored in `root`, minus the Gecko build outputs --quick never reads (verify.yml runs --quick without
+// them; copying a 13 GB objdir/ would be the cost), and the module folders yarn recorded in
+// theia/node_modules/.yarn-integrity: `yarn check --integrity` fails when one is missing (CR-05), and a folder that
+// holds nothing git can list (theia/applications/browser/node_modules holds only .bin) is created, not copied.
+const NOT_QUICK_INPUTS = /^(objdir[^/]*|\.mozbuild|\.planning)(\/|$)/;
+const TRUSTED_OVERLAY = ['scripts', 'inventory', '.github', 'quick-baseline.txt', 'toolchain-baseline.txt', 'flake.lock'];
+export function ignoredInputs(root) {
+    const copy = [];
+    const r = git(['status', '--porcelain=v1', '-z', '--ignored=traditional'], root);
+    if (r.status === 0) {
+        const toks = splitNul(r.stdout);
+        for (let i = 0; i < toks.length; i++) {
+            const xy = toks[i].subarray(0, 2).toString();
+            if (xy[0] === 'R' || xy[0] === 'C') { i += 1; continue; }
+            if (xy !== '!!') continue;
+            const p = toks[i].subarray(3).toString().replace(/\/$/, '');
+            if (!NOT_QUICK_INPUTS.test(p)) copy.push(p);
+        }
+    }
+    copy.sort();
+    const top = copy.filter((p, i) => !copy.slice(0, i).some(q => p.startsWith(`${q}/`)));
+    let folders = [];
+    try { folders = JSON.parse(readFileSync(join(root, 'theia/node_modules/.yarn-integrity'), 'utf8')).modulesFolders ?? []; } catch { /* no install: the stage reports it */ }
+    const ensure = folders.filter(f => typeof f === 'string' && f !== 'node_modules' && !f.split('/').includes('..') && !f.startsWith('/')).map(f => `theia/${f}`);
+    return { copy: top, ensure: [...new Set(ensure)] };
+}
+
 // The real stages: a throwaway worktree at --ref, the diff applied and re-checked, then the
 // real scripts. Stage 8 (--quick) runs here and nowhere else. Stages 5-8 execute code from the
 // patched tree: see the shortcut in the header.
@@ -501,22 +529,32 @@ function runRealStages(buf, ref, tag, paths, deny, registry) {
 
         // Git-ignored, machine-local inputs the real stages read, copied (never linked) after the
         // apply and the status check above, so the diff cannot have written into them (WR-02).
-        const bring = (rel) => {
+        const { copy, ensure } = ignoredInputs(REPO_ROOT);
+        for (const rel of copy) {
             const src = join(REPO_ROOT, rel);
             const dst = join(wt, rel);
-            if (!existsSync(src)) return null;
-            if (lstatSync(dst, { throwIfNoEntry: false }) !== undefined) return `[apply] ${rel} already exists in the worktree after the diff applied, so the gate's own copy cannot be placed. Next step: drop the change under ${rel}.`;
+            if (lstatSync(dst, { throwIfNoEntry: false }) !== undefined) { failures.push(`[apply] ${rel} already exists in the worktree after the diff applied, so the gate's own copy cannot be placed. Next step: drop the change under ${rel}.`); return failures; }
+            mkdirSync(dirname(dst), { recursive: true });
             const c = run('cp', ['-a', '--reflink=auto', src, dst]);
-            return c.status === 0 ? null : `[apply] could not copy ${rel} into the worktree (${tailOf(c)}). Next step: check free space, then rerun.`;
-        };
-        for (const rel of ['generated', 'upstream', 'theia/node_modules']) {
-            const bad = bring(rel);
-            if (bad !== null) { failures.push(bad); return failures; }
+            if (c.status !== 0) { failures.push(`[apply] could not copy ${rel} into the worktree (${tailOf(c)}). Next step: check free space, then rerun.`); return failures; }
+        }
+        // A module folder yarn recorded but that holds no file does not exist in the source either: create it.
+        for (const rel of ensure) mkdirSync(join(wt, rel), { recursive: true });
+
+        // The gate's own logic and the scripts it runs come from this (trusted) checkout, never from the
+        // target: a base whose verify-platform.sh or check-patch-surface.sh was weakened must not weaken the verdict (CR-03).
+        for (const rel of TRUSTED_OVERLAY) {
+            if (!existsSync(join(REPO_ROOT, rel))) continue;
+            rmSync(join(wt, rel), { recursive: true, force: true });
+            const c = run('cp', ['-a', join(REPO_ROOT, rel), join(wt, rel)]);
+            if (c.status !== 0) { failures.push(`[apply] could not lay the trusted ${rel} over the worktree (${tailOf(c)}). Next step: rerun the gate in an intact checkout.`); return failures; }
         }
 
         // 3 (real). A diff that touches patches/ (per git's set) is replayed onto a fresh upstream
         // at the Gecko tag, then regenerate-patches.sh --check compares the patches to the replay.
-        if (touchesPatches(paths)) {
+        // Stage 8 and the compiled-surface rows read upstream/ with the target's patches applied, so with a --tag the
+        // replay runs for every diff, not only one that touches patches/ (CI has an unpatched upstream/ at the tag).
+        if (touchesPatches(paths) || (tag !== null && existsSync(join(wt, PATCH_PREFIX)))) {
             const up = join(wt, 'upstream');
             const stage = '[regenerate-patches --check]';
             if (tag === null) {
@@ -705,6 +743,32 @@ function selfTest() {
         else bad(`the patches/ guard did not see the quoted non-ASCII patch name in git's path set.`);
         for (const v of ['-x', '--upload-pack=x', 'a..b', 'a b', '', 'x.lock']) if (validRef(v)) bad(`validRef accepted ${JSON.stringify(v)}.`);
         for (const v of ['HEAD', 'main', 'release_1', 'refs/tags/v1']) if (!validRef(v)) bad(`validRef refused ${JSON.stringify(v)}.`);
+
+        // CR-05: the ignored inputs are derived from the tree. A planted ignored build output nobody listed is
+        // brought; a Gecko build output is not; a yarn module folder with only .bin in it is ensured, not copied.
+        {
+            // Tracked placeholders make git list ignored paths inside tracked directories, as in the real tree.
+            const sc = scratchRepo();
+            const put = (rel, text = 'x\n') => { mkdirSync(dirname(join(sc, rel)), { recursive: true }); writeFileSync(join(sc, rel), text); };
+            for (const t of ['theia/applications/browser/package.json', 'theia/extensions/planted-ext/package.json', 'powerbrowser/keep.txt']) put(t);
+            git(['add', 'theia', 'powerbrowser'], sc);
+            git(['-c', 'user.name=fix-gate', '-c', 'user.email=fix-gate@invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'tracked'], sc);
+            put('theia/node_modules/.yarn-integrity', JSON.stringify({ modulesFolders: ['applications/browser/node_modules', 'node_modules', 'node_modules'] }));
+            put('theia/applications/browser/node_modules/.bin/x');
+            put('theia/extensions/planted-ext/lib/index.js');
+            put('powerbrowser/branding-generated/planted.txt');
+            put('objdir/big.o');
+            put('.mozbuild/tool');
+            const got = ignoredInputs(sc);
+            const want = ['theia/node_modules', 'theia/applications/browser/node_modules', 'theia/extensions/planted-ext/lib', 'powerbrowser/branding-generated'];
+            const missing2 = want.filter(w => !got.copy.includes(w));
+            const unwanted = got.copy.filter(c => NOT_QUICK_INPUTS.test(c));
+            if (missing2.length > 0) bad(`ignoredInputs did not derive ${JSON.stringify(missing2)} from git's ignored set (got ${JSON.stringify(got.copy)}).`);
+            else if (unwanted.length > 0) bad(`ignoredInputs brought Gecko build output ${JSON.stringify(unwanted)}.`);
+            else if (!got.ensure.includes('theia/applications/browser/node_modules') || got.ensure.includes('theia/node_modules')) bad(`ignoredInputs did not read the module folders from .yarn-integrity (got ${JSON.stringify(got.ensure)}).`);
+            else console.log(`  ok  ignored inputs: ${got.copy.length} derived from git (a planted extension build output and branding-generated included; objdir/ and .mozbuild/ excluded), module folders read from .yarn-integrity`);
+            rmSync(sc, { recursive: true, force: true });
+        }
 
         const controls = [
             ['hand edit with a removed/added pair of index lines', diffOf('patches/024-planted.patch', ['-+old payload', '++new payload', '-index 1111111111..2222222222 100644', '+index 1111111111..abcdef0123 100644']), (r) => r.failures.length === 0],
