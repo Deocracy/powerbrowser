@@ -33,11 +33,11 @@
 // No network and no gh call. The live mode reads files the release job already wrote.
 
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { releaseIdentity, resolveConfig } from './generate.mjs';
+import { failOpenFaults, loadYaml, stepsOf } from './lib/release-workflow.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'release-asset-set';
@@ -73,12 +73,15 @@ if ((DRAFT_AT >= 0) !== (MANIFEST_AT >= 0) && !EXPECTED && !SELF) {
     process.exit(2);
 }
 
-let yaml;
-try {
-    yaml = createRequire(join(REPO_ROOT, 'theia', 'package.json'))('js-yaml');
-} catch {
-    console.error(`${NAME}: FAIL -- broken instrument: js-yaml is not installed in theia/. Next step: run yarn install in theia/ first.`);
-    process.exit(1);
+// js-yaml lives in theia/node_modules, which the hosted release job does not install: load it
+// only for the row, never for --expected or --draft.
+function yamlOrExit() {
+    try {
+        return loadYaml();
+    } catch {
+        console.error(`${NAME}: FAIL -- broken instrument: js-yaml is not installed in theia/. Next step: run yarn install in theia/ first.`);
+        process.exit(1);
+    }
 }
 
 function readText(root, rel) {
@@ -110,11 +113,20 @@ export function noTokenAssets(docs) {
     return [...m[1].matchAll(/`([^`]+)`/g)].map(x => x[1]);
 }
 
-// The expected set as [kind, name] pairs. The version is the tag minus its leading v.
+// The release key grammar, anchored: v<esr groups>-<revision>. Everything derived from it (tag,
+// asset names, the TAB-separated list the release job copies by) is refused outside it.
+export const RELEASE_KEY = /^v\d+(?:\.\d+)*-\d+$/;
+// A name safe to use as a file name and as a line of the TSV protocol.
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+// The expected set as [kind, name] pairs. The version is the tag minus its leading v. Throws on a
+// release key, token or name outside the grammar, so a hostile manifest cannot write outside assets/.
 export function expectedAssets({ app, releaseKey, token, noToken }) {
+    if (typeof releaseKey !== 'string' || !RELEASE_KEY.test(releaseKey)) throw new Error(`release key ${JSON.stringify(releaseKey)} is not v<esr>-<revision>`);
+    if (typeof token !== 'string' || noToken === null || noToken === undefined) throw new Error('the target token or the no-token asset list is not derivable from docs/RELEASING.md');
     const version = releaseKey.replace(/^v/, '');
     const notices = noToken.filter(n => n !== 'SHA256SUMS');
-    return [
+    const set = [
         ['versioned-tarball', `${app}-${version}.${token}.tar.xz`],
         ['stable-tarball', `${app}-${token}.tar.xz`],
         ['versioned-mar', `${app}-${version}.${token}.complete.mar`],
@@ -123,6 +135,10 @@ export function expectedAssets({ app, releaseKey, token, noToken }) {
         ...notices.map(n => ['notice', n]),
         ['source', `${app}-${version}.source.tar.gz`],
     ];
+    for (const [, name] of set) {
+        if (!SAFE_NAME.test(name) || name.includes('..')) throw new Error(`asset name ${JSON.stringify(name)} is outside [A-Za-z0-9._-]`);
+    }
+    return set;
 }
 
 // Set equality: a missing asset and an extra asset are both failures, each naming the asset.
@@ -137,10 +153,6 @@ export function compareDraft(expected, draft) {
         if (!want.has(n)) out.push(`asset ${n} is on the draft Release but not in the manifest-derived set, so the publish would ship an unchecked file`);
     }
     return out;
-}
-
-function stepsOf(job) {
-    return Array.isArray(job?.steps) ? job.steps.filter(s => s !== null && typeof s === 'object') : [];
 }
 
 function runChecks(root, overrides = {}) {
@@ -163,7 +175,13 @@ function runChecks(root, overrides = {}) {
     if (noToken === null) fail(DOCS_REL, 'derive', `has no paragraph that lists the assets attached once per Release. Next step: restore that sentence.`);
     if (token === null || noToken === null) return { failures, expected: [] };
 
-    const expected = expectedAssets({ app, releaseKey, token, noToken });
+    let expected;
+    try {
+        expected = expectedAssets({ app, releaseKey, token, noToken });
+    } catch (e) {
+        fail(DOCS_REL, 'derive', `${e.message}. Next step: fix the key, the table row or the notice names.`);
+        return { failures, expected: [] };
+    }
     for (const [kind, name] of expected) {
         if (kind === 'notice' && read(name) === null) {
             fail(name, 'derive', `is listed as a no-token asset in ${DOCS_REL} but is not in the tree, so the publish has nothing to attach. Next step: restore the file.`);
@@ -177,6 +195,8 @@ function runChecks(root, overrides = {}) {
         }
     }
 
+    if (overrides.skipWorkflow) return { failures, expected };
+
     // The workflow order and the publish gate.
     const text = overrides.text ?? read(RELEASE_REL);
     if (text === null || text === undefined) {
@@ -188,7 +208,7 @@ function runChecks(root, overrides = {}) {
     }
     let wf;
     try {
-        wf = yaml.load(text);
+        wf = yamlOrExit().load(text);
     } catch (e) {
         fail(RELEASE_REL, 'parse', `does not parse as YAML 1.2 (${e.message.split('\n')[0]}). Next step: fix the file.`);
         return { failures, expected };
@@ -230,6 +250,33 @@ function runChecks(root, overrides = {}) {
         fail(RELEASE_REL, 'order', `the bot step is not actions/create-github-app-token. Next step: mint the bot App token with that action.`);
     }
 
+    // The publish chain fails closed: no step may swallow a failure, and none may be conditional.
+    const finalAt = at('newer_guard_final');
+    if (finalAt < 0 || finalAt !== botAt - 1) {
+        fail(RELEASE_REL, 'order', `the stale-approval re-check (newer_guard_final) is not the step directly before the bot token mint. Next step: re-check for a newer Release immediately before minting.`);
+    }
+    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['newer_guard_final', finalAt], ['publish', publishAt]]) {
+        if (i < 0) continue;
+        for (const f of failOpenFaults(steps[i])) fail(RELEASE_REL, 'fail-open', `${id} step ${f}, so the draft, the equality check or the publish can pass without doing its work. Next step: remove it.`);
+    }
+    for (const f of failOpenFaults(steps[botAt])) fail(RELEASE_REL, 'fail-open', `bot step ${f}. Next step: remove it.`);
+    // Until the R2 copy (plan 49-05) exists, a deliberate failure sits between the equality check and the publish.
+    const r2At = Math.max(at('r2_gate'), at('r2_copy'));
+    if (r2At < 0 || r2At < equalAt || r2At > botAt) {
+        fail(RELEASE_REL, 'order', `sign-publish has neither a fail-closed r2_gate step nor an r2_copy step between the equality check and the bot token mint, so a Release could publish before the origin copy exists (DIST-08). Next step: restore the r2_gate step until plan 49-05 adds the R2 copy.`);
+    } else if (steps[r2At].id === 'r2_gate') {
+        const g = steps[r2At];
+        if (!/\bexit 1\b/.test(String(g.run ?? '')) || g.if !== undefined || g['continue-on-error'] !== undefined) {
+            fail(RELEASE_REL, 'fail-open', `the r2_gate step does not exit 1 unconditionally. Next step: restore the deliberate failure.`);
+        }
+    }
+    // The tag and the manifest-free names: every gh call uses the tree-derived tag.
+    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['publish', publishAt], ['newer_guard_final', finalAt]]) {
+        if (i >= 0 && steps[i].env?.TAG !== '${{ steps.derive_key.outputs.tag }}') {
+            fail(RELEASE_REL, 'order', `${id} step takes its tag from ${JSON.stringify(steps[i].env?.TAG ?? null)}, not steps.derive_key.outputs.tag, so the runner-written manifest could choose the public tag. Next step: use the tree-derived tag.`);
+        }
+    }
+
     failures.sort((a, b) => (a.rule < b.rule ? -1 : a.rule > b.rule ? 1 : a.msg < b.msg ? -1 : 1));
     return { failures, expected };
 }
@@ -256,19 +303,25 @@ function main() {
         const manifest = readJson(args[MANIFEST_AT + 1]);
         const { config } = resolveConfig(join(REPO_ROOT, 'configuration.toml'));
         const docs = readText(REPO_ROOT, DOCS_REL);
-        const expected = expectedAssets({
-            app: config.identity.app_basename,
-            releaseKey: manifest.release_key,
-            token: targetToken(docs),
-            noToken: noTokenAssets(docs),
-        });
+        let expected;
+        try {
+            expected = expectedAssets({
+                app: config.identity.app_basename,
+                releaseKey: manifest.release_key,
+                token: targetToken(docs),
+                noToken: noTokenAssets(docs),
+            });
+        } catch (e) {
+            console.error(`${NAME}: FAIL -- ${e.message}. Next step: nothing is copied; check the manifest and docs/RELEASING.md.`);
+            return 1;
+        }
         for (const [kind, name] of expected) console.log(`${kind}\t${name}`);
         return 0;
     }
     if (DRAFT_AT >= 0) {
         const manifest = readJson(args[MANIFEST_AT + 1]);
         const draft = readJson(args[DRAFT_AT + 1]);
-        const { failures, expected } = runChecks(REPO_ROOT, { releaseKey: manifest.release_key, draft });
+        const { failures, expected } = runChecks(REPO_ROOT, { releaseKey: manifest.release_key, draft, skipWorkflow: true });
         if (failures.length > 0) {
             console.error(`${NAME}: FAIL -- ${failures.length} problem(s): the draft asset set does not equal the manifest-derived set.`);
             failures.forEach(f => console.error(`  ${fmt(f)}`));
@@ -342,6 +395,16 @@ function selfTest() {
         ['stable-name drift', { draft: good.map(n => (n === stableTar ? 'powerbrowser-linux-x86.tar.xz' : n)) }, stableTar],
         ['versioned-name drift', { draft: good.map(n => (n === versionedTar ? versionedTar.replace(/-\d+\.linux/, '-99.linux') : n)) }, versionedTar],
         ['publish before the asset-set equality', { text: swapStepBlocks('asset_set', 'publish') }, 'publish runs before the asset-set equality'],
+        ['continue-on-error on the publish', { text: edit('        id: publish\n', '        id: publish\n        continue-on-error: true\n') }, 'continue-on-error'],
+        ['|| true after the equality check', { text: edit('--draft "$RUNNER_TEMP/draft.json"', '--draft "$RUNNER_TEMP/draft.json" || true') }, '|| true'],
+        ['if: always() on the draft step', { text: edit('        id: draft_release\n', "        id: draft_release\n        if: always()\n") }, 'if:'],
+        ['R2 gate removed with no R2 copy', { text: edit('        id: r2_gate\n', '        id: r2_gate_x\n') }, 'r2_gate'],
+        ['R2 gate no longer fails', { text: edit('          exit 1\n\n      - name: Re-check that no newer', '          true\n\n      - name: Re-check that no newer') }, 'exit 1 unconditionally'],
+        ['publish takes the tag from the manifest', { text: edit('        id: publish\n        env:\n          GH_TOKEN: ${{ steps.bot.outputs.token }}\n          TAG: ${{ steps.derive_key.outputs.tag }}', '        id: publish\n        env:\n          GH_TOKEN: ${{ steps.bot.outputs.token }}\n          TAG: ${{ fromJSON(needs.build-linux.outputs.tag) }}') }, 'tree-derived tag'],
+        ['stale-approval re-check removed', { text: edit('        id: newer_guard_final\n', '        id: newer_guard_final_x\n') }, 'newer_guard_final'],
+        ['release key with a path separator', { releaseKey: 'v153.5.1-1/../../x' }, 'is not v<esr>-<revision>'],
+        ['release key with a newline', { releaseKey: 'v153.5.1-1\nsource\tx' }, 'is not v<esr>-<revision>'],
+        ['release key with a pre-release suffix', { releaseKey: 'v153.5.1-rc1' }, 'is not v<esr>-<revision>'],
     ];
 
     let failed = 0;

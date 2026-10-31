@@ -50,7 +50,7 @@ sidecar and the pinned Node runtime into the application directory, packages,
 emits the MAR, and writes `release-manifest.json` out of the built tree (baked
 update URL, version, build ID, `OS_TARGET`, `TARGET_XPCOM_ABI`,
 `MOZ_UPDATE_CHANNEL`, the joined BUILD_TARGET, and the on-disk asset filenames).
-Its `sign-upload` job runs on `ubuntu-latest` under `environment: release` behind
+Its `sign-publish` job runs on `ubuntu-latest` under `environment: release` behind
 a required reviewer, and is the only job carrying `contents: write`,
 `id-token: write` and `attestations: write`; it decodes the MAR signing key from
 two environment secrets, imports the decoded `.p12` into a scratch NSS database
@@ -75,6 +75,27 @@ command opens a prefilled GitHub issue form in a stock browser window, and the
 Theia frontend's error hooks post to a Cloudflare Worker at the events origin,
 shipped at telemetry level `off` with the endpoint stated so the existing
 preference is a working opt-in.
+
+**What the secret-holding job trusts.** `build-linux` output is untrusted data. The
+write job never executes anything legion produced: it takes the commit from the
+dispatch input, re-runs the SHA gate on its own checkout, derives the release key
+(and so the tag and every asset name) from that tree and refuses a manifest that
+disagrees, and builds `signmar` from the pinned Firefox source with
+`scripts/build-signmar.sh` (each libmar file fetched by exact commit and refused
+unless its sha256 equals `powerbrowser/packaging/signmar/SOURCES.sha256`; re-pin that
+file in the same reviewed commit that moves the ESR tag, or `release-shape` goes
+red). After `signmar -v` the signature is checked a second time with
+`scripts/verify-mar-signature.mjs` (node:crypto, no shared code with `signmar`); the
+limit is that both read the byte layout from `mar_verify.c`. The one credential-shaped
+input legion can read is the Safe Browsing API key directory (`PB_KEYDIR`, mounted
+read-only at `/keys`): it ships inside the binary and is not a signing or publishing
+credential, and it is the single recorded exception to "legion holds no secret".
+The build-provenance attestation names the hosted `sign-publish` job, not the legion
+build that produced the bytes. A re-run of one job conflicts with the artifacts of
+the failed run only when upload-artifact cannot overwrite them; after a late failure
+start a fresh dispatch. Until plan 49-05 adds the R2 copy, `sign-publish` ends in a
+deliberate failure before the bot token is minted: a dispatch leaves a verified draft
+and publishes nothing.
 
 ---
 

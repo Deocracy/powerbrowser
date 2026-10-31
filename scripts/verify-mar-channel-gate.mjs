@@ -14,11 +14,14 @@
 //     emission and the derivation agree (the fixture-read shape of verify-release-identity).
 // It then asserts over the sign-publish steps, found by id:
 //  gate        mar_channel_gate compares the MAR product-info channel with
-//              ACCEPTED_MAR_CHANNEL_IDS read from the emission, exits 1 on a mismatch, and
-//              cross-checks the `--channel` value against MOZ_UPDATE_CHANNEL, naming both.
+//              ACCEPTED_MAR_CHANNEL_IDS read from the emission, exits 1 inside the mismatch branch,
+//              and cross-checks the `--channel` value against MOZ_UPDATE_CHANNEL, naming both.
+//  fail-open   the gate, sign and verify steps carry no continue-on-error, no `|| true`, no
+//              `set +e`, no if:, and run the signmar built from the pinned source.
 //  conflation  the gate never compares the MAR channel with the update channel (--channel).
 //  order       mar_channel_gate runs before sign_mar, and sign_mar before verify_mar.
-//  der         verify_mar verifies with signmar -v against powerbrowser/packaging/mar/mar-primary.der,
+//  der         verify_mar verifies with signmar -v and then with scripts/verify-mar-signature.mjs
+//              (node:crypto, independent of signmar) against powerbrowser/packaging/mar/mar-primary.der,
 //              the tracked certificate, and that file exists in the tree.
 //
 // Honestly --quick: reads the tree (release.yml, mozconfig.release, configuration.toml, the DER)
@@ -27,11 +30,11 @@
 // and this row reads no signing material.
 
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveConfig, updateChannel } from './generate.mjs';
+import { failOpenFaults, ifBody, loadYaml, stepsOf } from './lib/release-workflow.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'mar-channel-gate';
@@ -51,7 +54,7 @@ for (const a of args) {
 
 let yaml;
 try {
-    yaml = createRequire(join(REPO_ROOT, 'theia', 'package.json'))('js-yaml');
+    yaml = loadYaml();
 } catch {
     console.error(`${NAME}: FAIL -- broken instrument: js-yaml is not installed in theia/. Next step: run yarn install in theia/ first.`);
     process.exit(1);
@@ -69,8 +72,7 @@ const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Splits the sign-publish steps by id; a missing step is reported by the caller.
 function signPublishSteps(wf) {
-    const steps = wf?.jobs?.['sign-publish']?.steps;
-    return Array.isArray(steps) ? steps.filter(s => s !== null && typeof s === 'object') : [];
+    return stepsOf(wf?.jobs?.['sign-publish']);
 }
 
 function runChecks(root, overrides = {}) {
@@ -124,15 +126,27 @@ function runChecks(root, overrides = {}) {
     const sign = String(steps[signAt].run ?? '');
     const verify = String(steps[verifyAt].run ?? '');
 
-    // gate: the accepted MAR id, read from the emission, refuses a mismatch with exit 1.
+    // gate: the accepted MAR id, read from the emission, refuses a mismatch with the mismatch branch's own exit 1.
     if (!/ACCEPTED_MAR_CHANNEL_IDS/.test(gate) || !/mozconfig\.release/.test(gate)) {
         fail('gate', `mar_channel_gate does not read ACCEPTED_MAR_CHANNEL_IDS from ${MOZCONFIG_REL}, so the accepted MAR channel is not derived from the emission.`);
     }
-    if (!/"\$MAR_CHANNEL" != "\$ACCEPTED"/.test(gate) || !/exit 1/.test(gate)) {
-        fail('gate', `mar_channel_gate does not refuse a MAR whose product-info channel differs from ACCEPTED_MAR_CHANNEL_IDS; a foreign-channel MAR would be signed. Next step: compare the product-info channel with ACCEPTED_MAR_CHANNEL_IDS and exit 1 on a mismatch.`);
+    const mismatch = ifBody(gate, /if \[ -z "\$ACCEPTED" \] \|\| \[ "\$MAR_CHANNEL" != "\$ACCEPTED" \]/);
+    if (mismatch === null || !/\bexit 1\b/.test(mismatch)) {
+        fail('gate', `mar_channel_gate does not refuse a MAR whose product-info channel differs from ACCEPTED_MAR_CHANNEL_IDS with an exit 1 inside the mismatch branch; a foreign-channel MAR would be signed. Next step: compare the product-info channel with ACCEPTED_MAR_CHANNEL_IDS and exit 1 in that branch.`);
     }
-    if (!/--enable-update-channel=/.test(gate) || !/MOZ_UPDATE_CHANNEL/.test(gate) || !/--channel/.test(gate)) {
-        fail('gate', `mar_channel_gate does not cross-check the \`--channel\` value against MOZ_UPDATE_CHANNEL, naming both on a mismatch. Next step: compare the manifest update channel with the mozconfig MOZ_UPDATE_CHANNEL.`);
+    const crossCheck = ifBody(gate, /if \[ "\$UPDATE_CHANNEL_MANIFEST" != "\$UPDATE_CHANNEL_MOZCONFIG" \]/);
+    if (!/--enable-update-channel=/.test(gate) || !/MOZ_UPDATE_CHANNEL/.test(gate) || !/--channel/.test(gate) || crossCheck === null || !/\bexit 1\b/.test(crossCheck)) {
+        fail('gate', `mar_channel_gate does not cross-check the \`--channel\` value against MOZ_UPDATE_CHANNEL with an exit 1, naming both on a mismatch. Next step: compare the manifest update channel with the mozconfig MOZ_UPDATE_CHANNEL.`);
+    }
+    // fail-open: no continue-on-error, no `|| true`, no `set +e`, no if: on the gate, sign or verify step.
+    for (const [id, i] of [['mar_channel_gate', gateAt], ['sign_mar', signAt], ['verify_mar', verifyAt]]) {
+        for (const f of failOpenFaults(steps[i])) fail('gate', `${id} step ${f}, so the ${id === 'verify_mar' ? 'verification' : id === 'sign_mar' ? 'signing' : 'channel gate'} can pass without doing its work. Next step: remove it.`);
+    }
+    // the signer is the one built from the pinned source, never a runner-supplied binary.
+    for (const [id, i] of [['mar_channel_gate', gateAt], ['sign_mar', signAt], ['verify_mar', verifyAt]]) {
+        if (steps[i].env?.SIGNMAR !== '${{ steps.signmar.outputs.path }}' || /signing-tools|LD_LIBRARY_PATH/.test(String(steps[i].run ?? ''))) {
+            fail('sign', `${id} does not run the signmar built by the signmar step (env SIGNMAR from steps.signmar.outputs.path), or references signing-tools or LD_LIBRARY_PATH. Next step: use the signmar built from the pinned source.`);
+        }
     }
 
     // conflation: the MAR channel is never compared with the update channel named by --channel.
@@ -148,15 +162,18 @@ function runChecks(root, overrides = {}) {
         fail('order', `verify_mar runs before sign_mar, so the MAR is verified before it is signed; a sign-before-verify order is refused. Next step: move verify_mar after sign_mar.`);
     }
 
-    // der: sign, then verify against the tracked certificate.
-    if (!/signmar/.test(sign) || !/\s-s\s/.test(sign)) {
+    // der: sign, then verify against the tracked certificate, twice (signmar, then node:crypto).
+    if (!/SIGNMAR/.test(sign) || !/\s-s\s/.test(sign)) {
         fail('sign', `sign_mar does not sign with signmar -s. Next step: sign the complete MAR with signmar -s.`);
     }
-    if (!/signmar/.test(verify) || !/\s-v\s/.test(verify)) {
+    if (!/SIGNMAR/.test(verify) || !/\s-v\s/.test(verify)) {
         fail('der', `verify_mar does not verify with signmar -v. Next step: verify the signed MAR with signmar -v.`);
     }
-    if (!verify.includes(DER_REL)) {
-        fail('der', `verify_mar does not verify against ${DER_REL}, the tracked certificate. Next step: point the verification at ${DER_REL}.`);
+    if (!new RegExp(`certutil -A [^\\n]*-i ${escapeRe(DER_REL)}`).test(verify)) {
+        fail('der', `verify_mar does not import ${DER_REL}, the tracked certificate, into the verification database. Next step: point the verification at ${DER_REL}.`);
+    }
+    if (!new RegExp(`node scripts/verify-mar-signature\\.mjs "\\$SIGNED" ${escapeRe(DER_REL)}`).test(verify)) {
+        fail('der', `verify_mar does not run the independent node:crypto check (scripts/verify-mar-signature.mjs) against ${DER_REL}, so only the signer's own tool vouches for the signature. Next step: restore the second verifier.`);
     }
     if (read(DER_REL) === null) {
         fail('der', `${DER_REL} is not in the tree, so there is no tracked comparand. Next step: restore the tracked DER.`, DER_REL);
@@ -224,6 +241,15 @@ function selfTest() {
         ['gate compares the MAR channel with --channel', edit('[ "$MAR_CHANNEL" != "$ACCEPTED" ]', '[ "$MAR_CHANNEL" != "$UPDATE_CHANNEL_MANIFEST" ]'), '--channel'],
         // The verification runs against a key other than the tracked DER.
         ['signmar -v against a non-tracked DER', edit(`-i ${DER_REL}`, '-i scratch/other.der'), 'mar-primary.der'],
+        // The independent second verifier is dropped.
+        ['independent node:crypto verification removed', edit('node scripts/verify-mar-signature.mjs "$SIGNED" ' + DER_REL, 'true'), 'independent node:crypto check'],
+        // The mismatch branch loses its own exit 1 (the cross-check's exit 1 elsewhere must not satisfy the row).
+        ['channel mismatch no longer exits', edit('is not ACCEPTED_MAR_CHANNEL_IDS \'$ACCEPTED\' (MAR_CHANNEL_MISMATCH_ERROR); nothing is signed" >&2\n            exit 1', 'is not ACCEPTED_MAR_CHANNEL_IDS \'$ACCEPTED\' (MAR_CHANNEL_MISMATCH_ERROR); nothing is signed" >&2'), 'mismatch branch'],
+        ['update-channel cross-check no longer exits', edit('disagrees with MOZ_UPDATE_CHANNEL $UPDATE_CHANNEL_MOZCONFIG; nothing is signed" >&2\n            exit 1', 'disagrees with MOZ_UPDATE_CHANNEL $UPDATE_CHANNEL_MOZCONFIG; nothing is signed" >&2'), 'cross-check'],
+        ['continue-on-error on the channel gate', edit('        id: mar_channel_gate\n', '        id: mar_channel_gate\n        continue-on-error: true\n'), 'continue-on-error'],
+        ['|| true after signmar -v', edit('-v "$SIGNED"\n', '-v "$SIGNED" || true\n'), '|| true'],
+        ['if: always() on the sign step', edit('        id: sign_mar\n', "        id: sign_mar\n        if: always()\n"), 'if:'],
+        ['signer taken from the runner artifact', edit('SIGNMAR: ${{ steps.signmar.outputs.path }}', 'SIGNMAR: signing-tools/signmar'), 'pinned source'],
         // Signing and verification swapped: the MAR is verified before it is signed.
         ['sign-before-verify swap', swapSteps(real, 'sign_mar', 'verify_mar'), 'verify_mar runs before sign_mar'],
     ];
