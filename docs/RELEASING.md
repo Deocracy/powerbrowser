@@ -44,7 +44,7 @@ The release tag `v<ESR>-<revision>` on `Deocracy/powerbrowser` is created
 by `release.yml`'s `sign-publish` job with the `powerbrowser-bot` App token, after
 the `release` approval (DIST-07, Phase 49), and the `release-tags` ruleset refuses
 that tag pattern from every other actor, the owner included (GH-06).
-The `build-linux` job of `.github/workflows/release.yml` runs on `legion` as an ephemeral self-hosted runner holding
+The `build-linux` job of `.github/workflows/release.yml` runs on `legion` as a non-ephemeral self-hosted runner (label powerbrowser-release) holding
 `contents: read`, no environment and no secret; it builds Gecko, stages the Theia
 sidecar and the pinned Node runtime into the application directory, packages,
 emits the MAR, and writes `release-manifest.json` out of the built tree (baked
@@ -93,7 +93,8 @@ credential, and it is the single recorded exception to "legion holds no secret".
 The build-provenance attestation names the hosted `sign-publish` job, not the legion
 build that produced the bytes. A re-run of one job conflicts with the artifacts of
 the failed run only when upload-artifact cannot overwrite them; after a late failure
-start a fresh dispatch. Until plan 49-05 adds the R2 copy, `sign-publish` ends in a
+start a fresh dispatch. The legion pre-job hook refuses any run attempt other than 1, so a
+re-run of a release run fails at set-up: a release re-run is always a fresh dispatch. Until plan 49-05 adds the R2 copy, `sign-publish` ends in a
 deliberate failure before the bot token is minted: a dispatch leaves a verified draft
 and publishes nothing.
 
@@ -241,7 +242,7 @@ here owns.
 | `mar-signing-and-update-integrity` | The MAR key ceremony (below) | Private key custody |
 | `mar-signing-and-update-integrity` | The MAR key ceremony (key store lives on `legion` at `~/.config/powerbrowser-release/mar-key/`; optional `.p12` backup to the offline medium) and one MAR signed with that store's key for the loopback proof | Private key custody |
 | `packaged-product-correctness-linux` | Node provenance: the release train's detect-node job selects the newest Node 24 line, fetches `SHASUMS256.txt` with its `.sig` from `nodejs.org/dist/<version>/`, verifies the signature with `gpgv` against the nodejs/release-keys keyring, and asserts the tarball sha256 equals the signed entry before it opens `chore/node-v24.x`; the owner reviews that PR, and the shipped-licences and provenance section of `docs/BUILD.md` is written from it | Key trust decision |
-| `linux-release-pipeline-and-update-channel` | Create a fine-grained PAT limited to `Deocracy/powerbrowser` with self-hosted-runner read/write only; write it root-owned mode 0600 to `/var/lib/secrets/github-runner-pat` | Secret custody plus `pkexec` |
+| `linux-release-pipeline-and-update-channel` | Mint a one-time registration token for `Deocracy/powerbrowser` (no PAT, no App key), write it root-owned mode 0600 to `/var/lib/secrets/github-runner-registration` immediately before the runner registration, and leave that file in place afterwards (the unit reads it as a credential on every start) | Secret custody plus `pkexec` |
 | `linux-release-pipeline-and-update-channel` | Add the `services.github-runners` block to `/etc/nixos/configuration.nix` and apply it | Root on `legion` |
 | `linux-release-pipeline-and-update-channel` | Set fork pull request workflows from outside collaborators to **Require approval for all external contributors**; read back `fork-pr-approval.json` rather than re-applying | Repository settings UI |
 | `linux-release-pipeline-and-update-channel` | Confirm the `release` environment still carries a required reviewer and that the MAR key is an **environment** secret; create no repository-level Actions secret (`repo-controls` asserts that count stays zero) | Read-back of a control the owner owns |
@@ -300,42 +301,184 @@ the remote before any tag-triggered release automation is added.
 
 ### Runner registration through the `/etc/nixos` flow
 
-The build runner is `legion` itself, registered as an **ephemeral** self-hosted
-runner. It is used by the build jobs only, triggered by release tags and
-`workflow_dispatch`, never by `pull_request`. Secrets and keys never reach it.
+The build runner is `legion` itself, registered as a **non-ephemeral** self-hosted
+runner with the label powerbrowser-release. It stays registered between jobs. Only the
+`build-linux` job of `release.yml` runs on it, and only from a `workflow_dispatch` of
+`main`: the pre-job hook below refuses any other run before its first step. Secrets and
+keys never reach it.
+
+The credential is a **one-time registration token**, minted for one registration and never
+stored in the tree. No personal access token and no GitHub App key is ever written to
+`legion`:
 
 ```
-pkexec bash -c 'install -d -m 0700 /var/lib/secrets; printf %s "<token>" > /var/lib/secrets/github-runner-pat; chmod 0600 /var/lib/secrets/github-runner-pat'
+gh api -H 'X-GitHub-Api-Version: 2022-11-28' -X POST repos/Deocracy/powerbrowser/actions/runners/registration-token --jq .token
 ```
 
-Then add to `/etc/nixos/configuration.nix`:
+Write it once to the registration file, root-owned mode 0600, immediately before the
+rebuild that registers the runner. The token expires after one hour. **Leave the file in
+place** after the runner shows online: the module reads `tokenFile` as a service credential on
+every start, so deleting it breaks the unit at the next restart or reboot, and the expired token
+inside it is harmless. Changing the file's content, or any registration-triggering option (`url`,
+`name`, `workDir`, `extraLabels`, `ephemeral`, `runnerGroup`), re-registers the runner, so mint
+a fresh token only for a deliberate re-registration:
+
+```
+pkexec bash -c 'install -d -m 0700 /var/lib/secrets; printf %s "<token>" > /var/lib/secrets/github-runner-registration; chmod 0600 /var/lib/secrets/github-runner-registration'
+```
+
+**Registration precondition.** Register the runner only after the three controls are green:
+SEC-11 (fork pull request approval, `fork-pr-approval.json`), SEC-10 (the pre-job hook is
+installed at the path below) and GH-07 (the `release` and `descriptor` environments carry the
+`main` branch policy). The read-back that proves them is
+`scripts/verify-platform.sh --only repo-controls`.
+
+**Runner user and work directory.** The unit runs as its own system user, `pb-runner`, with
+`autoSubUidGidRange` for rootless podman. Its work directory is `/var/lib/pb-runner`. The path
+holds no space, because the build tooling breaks on one (hard rule 4 in `CLAUDE.md`). The runner
+user has **no read access** to `~/.config/powerbrowser-release/` (the MAR key store on `legion`)
+or to the registration file. The owner verifies both with `sudo -u pb-runner test -r <path>`, and
+each check must fail.
+
+**Pre-job hook (SEC-10).** `scripts/legion-pre-job-hook.sh` is the only control bound to the
+runner itself, because a repo-scoped runner sits in no runner group. The runner runs it before
+the first step of every job, and a non-zero exit fails the job before any step runs. It is
+installed as a read-only root-owned copy at `/etc/pb-runner/legion-pre-job-hook.sh`,
+byte-identical to the tracked file, and the unit sets `ACTIONS_RUNNER_HOOK_JOB_STARTED` to that
+path. The `hook-refusal` row proves the refusal table on the tracked text, including a hostile
+environment: an exported shell function, `BASH_ENV` and `ENV` are refused, and a run attempt other
+than 1 is refused.
+
+**Deployed-hook drift check (manual).** The control that runs is the deployed copy, and
+`hook-refusal` tests only the tracked file. After installing the hook, after any later edit of the
+tracked hook, and before each release dispatch, run this from the clone and require one hash printed
+twice:
+
+```
+sha256sum scripts/legion-pre-job-hook.sh /etc/pb-runner/legion-pre-job-hook.sh
+```
+
+Two different hashes mean the deployed copy is stale: copy the tracked file into `/etc/nixos/pb-runner/`
+and apply the `/etc/nixos` flow again. A stale copy fails closed on a changed slug and stays too
+narrow if the tracked hook is ever widened. There is deliberately no automated check of the deployed
+path.
+
+The hook cannot undo a `BASH_ENV` file, which bash runs before the hook's first line. Where the
+runner allows the hook's interpreter to be chosen, invoke it as
+`/run/current-system/sw/bin/bash -p --noprofile --norc /etc/pb-runner/legion-pre-job-hook.sh`
+(`-p` makes bash ignore `BASH_ENV`, `ENV` and imported functions). Whether the runner lets the unit
+choose the interpreter of a `.sh` hook is **not verified**: the runner picks the shell from the
+file extension as far as is known. Record the answer from the live drill below. If the interpreter
+cannot be chosen, the in-script defence is the control, and the live drill decides whether it
+holds.
+
+Add to `/etc/nixos/configuration.nix`, with the hook copied to `/etc/nixos/pb-runner/` first.
+These option names were verified on nixos unstable (2026-10-31): under
+`services.github-runners.<name>`: `enable`, `url`, `name`, `user`, `group`, `workDir`,
+`extraLabels`, `noDefaultLabels`, `extraPackages`, `extraEnvironment`, `tokenFile`, `tokenType`,
+`ephemeral`, `replace`, `runnerGroup` and `nodeRuntimes`; and `users.users.<name>.isSystemUser`
+(exactly one of `isNormalUser` and `isSystemUser` is set), `users.users.<name>.autoSubUidGidRange`,
+`users.groups`, and `environment.etc.<name>.source` and `.mode` (a mode other than `"symlink"`
+copies the file). Set `tokenType = "registration"` explicitly, and `ephemeral = false`: ephemeral
+with a registration token fails on restart. **Not verified:** how the module behaves with a static
+`user` and a custom `workDir` (state directory ownership, sandbox write paths), and whether rootless
+podman works for `pb-runner`. `pkexec nixos-rebuild dry-build` catches a wrong option name but not
+either of those; the owner checks them at apply.
 
 ```nix
 services.github-runners.powerbrowser-release = {
   enable = true;
   url = "https://github.com/Deocracy/powerbrowser";
-  tokenFile = "/var/lib/secrets/github-runner-pat";
-  tokenType = "access";
-  ephemeral = true;
+  tokenFile = "/var/lib/secrets/github-runner-registration";
+  tokenType = "registration";
+  ephemeral = false;
   replace = true;
   name = "legion";
-  extraLabels = [ "legion" ];
-  extraPackages = with pkgs; [ git gh nix ];
+  user = "pb-runner";
+  group = "pb-runner";
+  workDir = "/var/lib/pb-runner";
+  extraLabels = [ "powerbrowser-release" ];
+  extraPackages = with pkgs; [ git gh nix podman ];
+  extraEnvironment.ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";
+};
+users.users.pb-runner = {
+  isSystemUser = true;
+  group = "pb-runner";
+  autoSubUidGidRange = true;
+};
+users.groups.pb-runner = { };
+environment.etc."pb-runner/legion-pre-job-hook.sh" = {
+  source = ./pb-runner/legion-pre-job-hook.sh;
+  mode = "0555";
 };
 ```
 
-and apply it with the documented flow:
+Dry-build, then apply with the documented flow:
 
 ```
-pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nrs "feat: legion ephemeral github runner for powerbrowser release builds"'
+pkexec nixos-rebuild dry-build
+pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nrs "feat: legion non-ephemeral github runner for powerbrowser release builds"'
 ```
 
-Two properties are module behaviour rather than hope. `ephemeral = true`
-de-registers the runner after one job and wipes the state directory on the next
-start, so no job inherits another job's tree or environment. The module places
-`tokenFile` on the service's `InaccessiblePaths`, so the runner process cannot
-read the PAT it was configured from. `count` defaults to 1, so the unit is
-`github-runner-powerbrowser-release.service`.
+The unit is `github-runner-powerbrowser-release.service`, and `count` defaults to 1. The runner
+keeps its registration and its work directory between jobs. A stuck job is cleared by restarting
+the unit, not by cleaning the work directory while the unit runs.
+
+**Runner acceptance drill (mandatory).** The local `env -i` run of the hook tests the script, not
+the runner. It cannot show whether job-controlled environment or a container set-up reaches the hook
+or precedes it. Run the live drill below once the runner is online and **before the runner is
+trusted**: before the first release dispatch and before plan 49-02's first criterion is marked met.
+Push a throwaway branch, never `main`, named `drill/hook`, holding `.github/workflows/hook-drill.yml`
+(a `push` trigger on `drill/**`, so the workflow file need not exist on `main`):
+
+```yaml
+name: hook-drill
+on:
+  push:
+    branches: ['drill/**']
+permissions: {}
+jobs:
+  env-triple:
+    runs-on: [self-hosted, powerbrowser-release]
+    env:
+      GITHUB_REPOSITORY: Deocracy/powerbrowser
+      GITHUB_EVENT_NAME: workflow_dispatch
+    steps:
+      - run: echo DRILL-STEP-REACHED env-triple
+  bash-env:
+    runs-on: [self-hosted, powerbrowser-release]
+    env:
+      BASH_ENV: /dev/null
+    steps:
+      - run: echo DRILL-STEP-REACHED bash-env
+  container:
+    runs-on: [self-hosted, powerbrowser-release]
+    container:
+      image: alpine:3
+    steps:
+      - run: echo DRILL-STEP-REACHED container
+```
+
+Each of the three jobs must be refused at set-up, before any step runs: the job fails, its log
+contains no `DRILL-STEP-REACHED` line, and the `container` job pulls and creates no container
+(check `sudo -u pb-runner podman ps -a` and `podman images` before and after, and the job log has no
+"Initialize containers" step). Record, per job: the conclusion, whether any step ran, the hook's
+refusal line as it appears in the job log (this is the only measurement of "the hook's stderr appears
+in the job log"; until it is recorded the claim is not made), and whether a container was created.
+Record the same for the interpreter question above, and run the `sha256sum` comparison from the
+drift check above so the drill exercises the deployed copy. Then delete the branch and the workflow.
+
+If any job reaches a step, or a container is created before the hook, the runner **must not be
+used**: stop `github-runner-powerbrowser-release.service`, remove the runner registration, and
+redesign the control (for example read the runner's `GITHUB_EVENT_PATH` JSON instead of trusting
+environment). The first real `workflow_dispatch` of `release.yml` from `main` is the positive
+control: the hook must accept it, which also proves the runner sets `GITHUB_WORKFLOW_REF` and
+`GITHUB_RUN_ATTEMPT` in the hook's environment. If it refuses, the hook names the variable, and the
+runner stays fail-closed.
+
+**Probe outcome rule (GH-11).** The recorded runner-group probe result decides only whether this
+document claims a runner-group restriction. The pre-job hook and the branch policies are built and
+asserted whatever that result is.
 
 Package versions from the nixpkgs unstable search index at the time of writing:
 `github-runner` 2.333.1, `wrangler` 4.62.0, `nsis` 3.11, `rcodesign` 0.29.0,
@@ -658,7 +801,7 @@ that is not admitted.
 | `release` environment | `MAR_SIGNING_P12_PASSWORD` | `mar-signing-and-update-integrity` | as above |
 | `release` environment | descriptor-repository PAT (Contents write on `powerbrowser-updates` only) | `linux-release-pipeline-and-update-channel` | as above |
 | `release` environment | `WINGET_TOKEN`, fork-scoped, only under an ADMIT verdict | `listings-and-cadence` | as above |
-| Host filesystem on `legion` | `/var/lib/secrets/github-runner-pat`, root-owned mode 0600 | `linux-release-pipeline-and-update-channel` | the operator; on the unit's `InaccessiblePaths` |
+| Host filesystem on `legion` | `/var/lib/secrets/github-runner-registration`, root-owned mode 0600, present from minting; the token inside it expires after one hour and is harmless afterwards, and the file stays because the unit reads it on every start; the hook copy `/etc/pb-runner/legion-pre-job-hook.sh`, root-owned mode 0555 | `linux-release-pipeline-and-update-channel` | the operator; not readable by the runner user `pb-runner` |
 | Offline medium | `powerbrowser-mar.p12` (from the ceremony block's optional `pk12util` line, protected with the key store's password from `password.txt`) and the key-store password | `mar-signing-and-update-integrity` | the operator, in a safe |
 
 No secret reaches `legion` through Actions. The build job holds `contents: read`,
@@ -694,6 +837,62 @@ carries 1.4.3. A flake update is therefore a deliberate change accompanied by a
 regenerate and a review of the resulting byte diff, never a routine bump. The same
 rule holds for the Gecko toolchain: `scripts/toolchain-baseline.sh` regenerates
 `toolchain-baseline.txt` and the rebase procedure diffs against it.
+
+---
+
+## Train stages after the bump PR merges
+
+The release train (`scripts/release-train.mjs`, `.github/workflows/release-train.yml`)
+carries a release from a merged bump PR to a live descriptor. Every state is derived
+from GitHub facts only, never from a stored train state: the `release.yml` run at the
+merge SHA (matched by the run display title `Release <sha>`), its pending deployments (`release`, `descriptor`), the
+Release at the release key (draft, prerelease, assets, notes marker), the
+`powerbrowser-updates` descriptor bytes, the `channel-live` conclusion and the tracking
+issue state.
+
+Evaluation priority, first match wins: WITHDRAWN (the mark is authoritative), then, for
+a published Release, DESCRIPTOR_LIVE or DONE (served bytes equal and channel-live green;
+DONE only when the issue is already closed), LIVE_RED (a descriptor is present and
+channel-live is red or its bytes drifted), DESCRIPTOR_WAIT (the descriptor environment or
+its timer is engaged), PUBLISHED (asset set equal to the manifest-derived set, no
+descriptor or a no-update one). Before any Release exists: AWAITING_APPROVAL (run waiting
+on the `release` environment), then BUILDING (run in flight).
+
+The train makes at most one transition per release per run and ends at each owner gate:
+the bump merge, the `release` approval, the `descriptor` approval. LIVE_RED is sticky until
+a fresh green `channel-live`. A bad release is withdrawn by the mark and fixed by a new
+revision with a new tag; a Release is never deleted and no tag is reused.
+
+**Dispatch after the merge (`dispatch-release`).** On each tick the train reads the newest
+merged PR for the pinned bump branch `chore/esr-<pin>`, takes its merge commit SHA, counts
+the `release.yml` runs already dispatched for that SHA, and dispatches `release.yml` with
+`inputs.sha` set to that SHA only when the count is zero. A dispatched run's `head_sha` is
+the tip of main, never `inputs.sha`, so `release.yml` sets `run-name: Release ${{ inputs.sha }}`
+(pinned by the `release-shape` row) and the train identifies the run by that exact display
+title together with the `workflow_dispatch` event, the `release.yml` path and this
+repository as head repository. The run is resolved that way, never by `head_sha` or by
+recency, and linked in the job summary. The merged-PR lookup considers only same-repository
+PRs merged into `main`. The `dispatch-release` rows execute these steps against a fixture
+where main has advanced past the merge SHA.
+
+Token decision: `GITHUB_TOKEN` with `actions: write` granted on the `dispatch-release` job
+alone. The bot App token cannot dispatch (it holds no Actions scope, so the call returns
+403), and a clock App would add a second credential for one call. The job holds no
+environment, no App key and no contents write, so its only write is the dispatch. The
+dispatched input is named `sha`, the input `release.yml` already declares and the
+`release-shape` row pins, not `merge_sha`.
+
+Dry run: the reads run and the would-dispatch line is printed; the POST and the run poll do
+not run.
+
+**The SHA rule (release.yml, both build-linux and sign-publish).** A dispatched SHA passes
+only when it equals the tip of main, or when it is an ancestor of main whose own commit
+changes `configuration.toml` and whose `.github/workflows/` tree equals main's. Any other
+SHA exits 1 before the first build or sign step, naming the SHA, the tip and the next step.
+The workflows-tree conjunct exists because the bot App cannot create a Release for a target
+whose workflows differ from main's (404 or 403 far from the cause). The gate text is
+executed against scratch repositories by the `release-sha-gate` rows, so a change to it is
+what the plants test. The input is `sha`, as the release-shape row pins it.
 
 ---
 
@@ -814,6 +1013,29 @@ exactly what the client treats as an upgrade.
 
 Hold the announcement and any package-manager submission until this drill is green.
 
+**Hop record (served: release).** The drill is the clean-room run in `docs/BUILD.md`
+("Clean-room drill for a published Release"). The owner pastes these fields back, and each
+one is what the release assertion set reads or what a reviewer audits:
+
+- `served`: `release`. The fork-server (`loopback`) record is a different proof.
+- `servedUrl` (the public descriptor, under `updates.powerbrowser.org`) and `servedMarUrl`
+  (`https://downloads.powerbrowser.org/<tag>/<asset>`, write-once). Any `github.com`,
+  `release-assets` or latest-download form is refused.
+- Resolver host lines: the `Resolving host [...]` set from `client-resolver.log`. It must name
+  both the update and the download host, and must name neither `github.com` nor
+  `release-assets.githubusercontent.com`, nor any `*.mozilla.org` or `*.mozilla.net` host.
+- `signmar -v` and `signmar -T` output, and the node:crypto check of
+  `scripts/verify-mar-signature.mjs` against `powerbrowser/packaging/mar/mar-primary.der`.
+- Attestation path taken: `bundle` (an offline `gh attestation verify --bundle`) or `host`
+  (a logged-in `gh attestation verify` on the host). Both pin `--signer-workflow` to this
+  repository's `release.yml`, `--source-ref refs/heads/main` and `--deny-self-hosted-runners`.
+  Never a skip.
+- Version pair: N and N+1 with their buildIDs. Same appVersion with a distinct buildID is the
+  ratified scheme, not a relaxation: `updateIsAtLeastAsOldAs` (the client's check) refuses an
+  offer only when the versions compare equal **and** the buildIDs match, so a distinct buildID
+  is an upgrade to the client.
+- Evidence path: `.mozbuild/mar-hop/`, with `hop.json` at `served: "release"`.
+
 ## Release asset names
 
 The generation rule, stated once: the versioned form is
@@ -904,9 +1126,9 @@ today; writing one is open work.
 
 The runner is `github-runner-powerbrowser-release.service` on `legion`, maintained
 through `/etc/nixos/configuration.nix` and the `pkexec ... nrs` flow, never by
-editing the unit. Because it is ephemeral, it de-registers after each job and wipes
-its state directory on the next start, so a stuck job is cleared by restarting the
-unit rather than by cleaning a work directory. Keep disk headroom for the objdirs a
+editing the unit. It is non-ephemeral: it keeps its registration and its work directory
+`/var/lib/pb-runner` between jobs, so a stuck job is cleared by restarting the unit, and the
+work directory is removed only while the unit is stopped. Keep disk headroom for the objdirs a
 release build needs: `objdir/` peaks around 14 GB on top of the roughly 5.6 GB
 `upstream/` checkout, and a Windows or macOS target adds its own objdir. `sccache`
 is already configured in `.mozconfig` and in the `.#firefox` shell; stages
@@ -944,6 +1166,133 @@ covered under **Toolchain pins** above.
 Listing state lives in the Listings table that stage `listings-and-cadence` adds, and
 every deferral lives in the single `## Deferred signing items` register above. Do not
 add a second table for either.
+
+### ESR 175 uptake (UPS-01, TRAIN-05)
+
+The train tracks two ESR majors at the same time. The pinned major (153) keeps the bump
+path: a newer 153.x tag opens `chore/esr-<tag>`. Its tracking issue is not written yet: the report
+job prints the would-write view until the writer is approved (`BLOCKED.md` item 1). The
+uptake major (175, `UPTAKE_MAJOR` in `scripts/detect-upstreams.mjs`) is replay-only: the
+newest 175 `*esr_RELEASE` tag is replayed and nothing is published from it. The lane keys on
+those release tags, which are cut on the ESR release day (2027-06-29), so as built the lane
+starts then, not at the 175 beta (2027-06-10). Whether it should start at the beta needs a
+beta-stage tag form, which is an owner decision (`BLOCKED.md` item 3 of Phase 58). The lane is
+off once the pinned major reaches the uptake major, so the flipped pin is never replayed twice.
+
+**Two keys.** Each release key names one tracking issue: `release-train: v153.x-r` for the bump
+line and `release-train: v175.x-r` for the uptake line. The title is derived from the tag and
+the would-write view prints it. No writer exists yet. The live find-by-label-and-title step, the
+exactly-one rule and the rewrite-only-when-different rule are unwired until the owner approves
+the writer (`BLOCKED.md` item 1). Until then the report job writes no issue. A 153 tag never
+reaches the 175 replay, and a 175 tag never reaches the 153 bump: the guard refuses the
+foreign major in both lanes, and both self-tests plant that fault and require it to go
+red.
+
+**Replay-only procedure** (the `uptake-replay` job in `release-train.yml`):
+
+1. The detect job lists the 175 tags with the 153 tags and names the newest one.
+2. `uptake-replay` calls `rebase-upstream.yml`, the one replay definition. It fetches the
+   tag into a runner-local `upstream/`, then runs `apply-patches.sh`,
+   `check-patch-surface.sh`, `regenerate-patches.sh --check`, the brand scan and the
+   classifier.
+3. A PASS is `UPTAKE_REPLAYED`. A `NOTE` line counts patches that replay onto moved files
+   and is informational. Nothing is committed.
+4. A patch that does not apply is `UPTAKE_CONFLICT`. Its would-write view names the patch
+   (`ESR <tag>: patch <NNN> did not apply`) and prints the FAIL stage line as its apply log.
+   The upstream diff is not carried yet: the view passes an empty diff. No issue is written
+   and no owner is assigned until the writer is approved (`BLOCKED.md` item 1). Any other
+   replay FAIL is `UPTAKE_RED`, with the action wait-owner. A replay job that ends with any
+   result other than success is red in the report, whatever stage line it printed.
+5. Patches are changed only by `regenerate-patches.sh`, never by hand. Routing a fixable
+   conflict to fixer F1 or F2 on a `chore/esr-175*` branch is a ship step (plan 58-03), and
+   no such branch exists until the owner approves the 175 conflict writer.
+
+The uptake lane has no commit, push, PR, dispatch, environment or App token. The
+`uptake-lane` rule in `scripts/verify-workflows.mjs` holds the job to read-only scope and
+to the one replay definition. A dry run runs the same replay and prints the would-write
+view.
+
+**Naming.** Bump branches are `chore/esr-<tag>`, so the 153 and 175 branches never share a
+name. The release key comes from the tag (`v<ESR>-<revision>`), so the two lines cannot
+collide in a title either.
+
+**Calendar** (CONTEXT A-58-4). Nightly 2027-05-27. Beta 2027-06-10: no replay runs, because
+the lane lists only `*esr_RELEASE` tags and the beta does not cut one (see the opening of this
+subsection). Release 2027-06-29: `175.0esr` is published, and its `*esr_RELEASE` tag starts the
+first replay-only run. ESR 153 ends with
+153.27 on 2027-09-07. The ship checklist for 175.x is in plan 58-03, which is an owner
+checkpoint.
+
+**`FIREFOX_ESR` is advisory after the flip.** From 2027-06-29 product-details reports
+`175.0esr` as `FIREFOX_ESR`. The 153 line does not read it. Its candidate comes from the
+153 tag list, and the Phase 43 regression fixture (`FIREFOX_ESR=175.0esr` with
+`FIREFOX_153_23_0esr_RELEASE` present dispatches 153.23) stays in the detector self-test.
+The train never depends on an undocumented `FIREFOX_ESR153` key.
+
+### Rebase onto 175 (UPS-01)
+
+The rebase moves the four hook-only patches from the pinned ESR onto the 175 tag by
+regeneration only. A hunk body is never edited by hand: a hand-edited hunk replays as a
+silent no-op (CLAUDE.md; Pitfall 2 of the Phase 58 research). A patch that does not replay
+is a conflict to report, not an edit to make.
+
+**Scratch tree, never the live one.** The 175 replay runs on a runner-local upstream
+(`rebase-upstream.sh --tag <175 tag>` in the uptake lane). Locally, the same steps run on a
+scratch clone at the pinned commit, and `upstream/` is not touched:
+
+```sh
+git clone --no-checkout --shared <repo>/upstream <scratch>/upstream
+git -C <scratch>/upstream checkout -q <175 tag>
+scripts/apply-patches.sh --upstream <scratch>/upstream
+scripts/regenerate-patches.sh --check --upstream <scratch>/upstream
+scripts/check-patch-surface.sh
+node scripts/scan-brand-residue.mjs --extra-root <scratch>/upstream
+scripts/verify-platform.sh --quick
+```
+
+Every step must exit 0. `apply-patches.sh` takes `--upstream` and `--patches` for the scratch
+tree; with no argument it replays onto the live `upstream/`, as `rebase-upstream.sh` does. Both
+values are resolved to absolute paths before anything changes directory, and a relative value is
+accepted. The script refuses with exit 2 and a named cause when a path is not a directory, when a
+value starts with `-`, when `--upstream` is not the top of its own git repository or is this
+checkout, and when `--patches` holds no `*.patch` file.
+
+**Drift-risk order and the invariant each patch must keep.** Replay and check the patches in
+this order, highest drift first. After each replay, confirm the invariant line is still in
+the patch's `+` lines.
+
+1. `030-powerbrowser-mar-certificates` (`toolkit/mozapps/update/updater/moz.build`, highest
+   drift). Invariant: the fork certificate fills both slots on every channel
+   (`primary_cert.inputs` and `secondary_cert.inputs` both name `mar-primary.der`).
+2. `040-powerbrowser-nsis` (`browser/installer/windows/nsis/defines.nsi.in` and
+   `installer.nsi`, high drift). Invariants: `AppName` is `@MOZ_APP_NAME@`,
+   `CERTIFICATE_NAME` is `${CompanyName}`, `TELEMETRY_BASE_URL` is empty, and the installer
+   ping returns early. The issuer string (`DigiCert ... 2021 CA1`) is the drift to expect.
+3. `010-powerbrowser-identity` (`browser/moz.configure`, medium drift). Invariant:
+   `include("../identity.configure")` is the one hook line.
+4. `020-powerbrowser-shell` (`browser/moz.build`, lowest drift). Invariant: the one `DIRS`
+   entry for `../powerbrowser/shell`. It fails only if the `DIRS` block is restructured.
+
+**NOTE and FAIL** (`regenerate-patches.sh --check`):
+
+- NOTE with PASS: a moved file whose `+` and `-` lines still match. Regenerate the patch in
+  write mode on the scratch tree, check it again byte for byte, and commit it with the pin
+  bump. The NOTE names the file.
+- FAIL: `did not apply`, `added/removed lines differ`, `dropped <path>`, or an empty
+  regeneration. Stop. Do not edit the patch. Record one conflict issue (until the writer is approved, only the would-write view prints it and nothing is written),
+  `ESR <tag>: patch <NNN> did not apply`, with the patch name, the tags, the files, the
+  verbatim apply log, the pre-image and replayed blob hashes, the moved-file list and the
+  surface result. Route fixable classes (F1 patch-replay conflict, F2 red bump PR) to the
+  fixer on a `chore/esr-175*` branch (A-58-3, Phase 52). A branch like that does not exist
+  until the owner approves the 175 conflict writer (`BLOCKED.md` item 1).
+
+**Toolchain re-record** (D-73 tuple: tree, host, toolchain and date). `toolchain-baseline.txt`
+is re-recorded once, against the 175 release container that `build-linux` actually uses. Run
+`scripts/toolchain-baseline.sh --container` inside that container after its bootstrap build.
+Copy each measured line into the file. Never type a value, and never leave an `UNMEASURED`
+line in a committed file. Do not reuse the 153 baseline for a 175 build. The file is
+deny-listed for the fixer (FIX-11). Record the tree (`git rev-parse HEAD`), the host, the
+container image and the date beside the new baseline.
 
 ---
 
@@ -1092,10 +1441,13 @@ systemctl status github-runner-powerbrowser-release.service
 gh api repos/Deocracy/powerbrowser/actions/runners --jq '.runners[] | {name, status, labels: [.labels[].name]}'
 ```
 
-Because the runner is ephemeral it de-registers after each job and re-registers on
-the next start, so a brief absence between jobs is normal. A persistent absence is
-usually the PAT: it is root-owned mode 0600 at `/var/lib/secrets/github-runner-pat`
-and it expires. Renew it, rewrite the file through `pkexec`, and restart the unit.
+The runner is non-ephemeral, so it stays registered between jobs, and a persistent absence is
+not normal. Check the unit first. Then check the hook: a job the hook refuses fails at set-up,
+before any step. The hook's refusal line is expected in the job log; the acceptance drill records
+whether it is. A registration token expires after
+one hour and the file is left in place after registration, so an expired token in it is normal. Mint a
+new one, write it through `pkexec` to `/var/lib/secrets/github-runner-registration` only for a
+deliberate re-registration, and restart the unit. A personal access token is never the fix.
 
 **Nothing runs at all after tagging.** A release-pattern tag pushed by any actor
 other than the `powerbrowser-bot` App, the owner included, is refused at push time

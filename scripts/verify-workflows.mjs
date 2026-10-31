@@ -58,6 +58,10 @@
 //                 expression reading github.event.(issue|comment|
 //                 pull_request|head_commit|review), nested fields and
 //                 review_comment included.
+//  uptake-lane    In release-train.yml only (Phase 58, TRAIN-05, UPS-01), the uptake-replay
+//                 job is read-only: no write scope in its effective permissions, no
+//                 environment, no secrets key (secrets: inherit would hand it every
+//                 repository secret), and a call to rebase-upstream.yml, the one replay definition.
 //  bot-job-gate   In release-train.yml only (Phase 43, TRAIN-08), a job that enters an
 //                 environment (the bot environment holds the App key and may wait on an
 //                 approval) carries a negated inputs.dry-run in its job-level if:, so a
@@ -140,7 +144,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'fixer-spend', 'fixer-auth', 'dry-run-gate', 'bot-job-gate'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'fixer-spend', 'fixer-auth', 'dry-run-gate', 'bot-job-gate', 'uptake-lane'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -599,6 +603,16 @@ function runChecks(root, overrides = {}) {
                 if (!DRY_RUN_NEGATED.test(jobCond)) fail(rel, jobId, 'bot-job-gate', `enters environment ${JSON.stringify(job.environment)} with no negated ${DRY_RUN_GATE} in its job-level if:, so a dry run or a run with nothing to publish would reach the environment and wait on its approval. Next step: gate the job itself with if: \${{ !${DRY_RUN_GATE} && ... }}.`);
             }
 
+            // uptake-lane (TRAIN-05, UPS-01): the 175 replay is read-only and publishes nothing. It holds
+            // no write scope, enters no environment, and calls only the one replay definition.
+            if (file === DRY_RUN_FILE && jobId === 'uptake-replay') {
+                const writeScopes = Object.entries(eff).filter(([, v]) => v === 'write').map(([k]) => k);
+                if (writeScopes.length > 0) fail(rel, jobId, 'uptake-lane', `holds write scope on ${writeScopes.join(', ')}; the uptake replay is read-only and publishes nothing. Next step: set its permissions to contents: read.`);
+                if (job.environment !== undefined) fail(rel, jobId, 'uptake-lane', `enters environment ${JSON.stringify(job.environment)}; the uptake replay holds no environment. Next step: remove the environment key.`);
+                if (job.uses !== './.github/workflows/rebase-upstream.yml') fail(rel, jobId, 'uptake-lane', `calls ${JSON.stringify(job.uses ?? null)}, not the one replay definition rebase-upstream.yml. Next step: call rebase-upstream.yml, the only replay.`);
+                if (job.secrets !== undefined) fail(rel, jobId, 'uptake-lane', `passes secrets (${JSON.stringify(job.secrets)}) to the replay; the uptake replay holds no secret, and secrets: inherit would hand it every repository secret. Next step: remove the secrets key.`);
+            }
+
             // dry-run gate: every write step in release-train.yml names the gate in its if:.
             if (file === DRY_RUN_FILE) {
                 steps.forEach((s, i) => {
@@ -923,6 +937,12 @@ function selfTest() {
         // WR-09: the environment-bound job is gated at job level, so a dry run never reaches the bot environment.
         ['bump-pr without a job-level dry-run gate', withRt(d => { delete d.jobs['bump-pr'].if; }), rel(DRY_RUN_FILE), 'bump-pr', 'bot-job-gate', 'job-level if'],
         ['bump-pr-node gated only by always()', withRt(d => { d.jobs['bump-pr-node'].if = '${{ always() }}'; }), rel(DRY_RUN_FILE), 'bump-pr-node', 'bot-job-gate', 'job-level if'],
+        // TRAIN-05 / T-58-01: the 175 replay-only job holds no write scope, no environment, and one replay definition.
+        ['uptake-replay granted contents write', withRt(d => { d.jobs['uptake-replay'].permissions = { contents: 'write' }; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'holds write scope on contents'],
+        ['uptake-replay granted pull-requests write', withRt(d => { d.jobs['uptake-replay'].permissions = { contents: 'read', 'pull-requests': 'write' }; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'holds write scope on pull-requests'],
+        ['uptake-replay entering the bot environment', withRt(d => { d.jobs['uptake-replay'].environment = 'bot'; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'holds no environment'],
+        ['uptake-replay calling a publishing workflow', withRt(d => { d.jobs['uptake-replay'].uses = './.github/workflows/release.yml'; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'not the one replay definition'],
+        ['uptake-replay passing secrets: inherit to the replay', withRt(d => { d.jobs['uptake-replay'].secrets = 'inherit'; }), rel(DRY_RUN_FILE), 'uptake-replay', 'uptake-lane', 'holds no secret'],
         ['schedule key on release-train.yml', withRt(d => { d.on.schedule = [{ cron: '0 3 * * *' }]; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-schedule', 'schedule'],
         ['pull_request trigger on release-train.yml', withRt(d => { d.on.pull_request = null; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
         ['unguarded workflow_run job in release-train.yml', withRt(d => { d.on.workflow_run = { workflows: ['Verify static layers'], types: ['completed'] }; d.jobs.derive.if = 'true'; }), rel(DRY_RUN_FILE), 'derive', 'workflow-run-guard', 'head_repository'],

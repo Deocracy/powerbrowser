@@ -16,18 +16,28 @@
 # halves are separate jobs, so neither blocks the other. bump calls
 # rebase-upstream.yml, the one replay definition, with the candidate tag.
 # bump-pr and bump-pr-node open or update chore/esr-<tag> and chore/node-v24.x in
-# the bot environment, each with its own token. report owns the only issues write
-# in this file.
+# the bot environment, each with its own token. dispatch-release (Phase 50, TRAIN-10)
+# dispatches release.yml at the merge SHA of the newest merged bump PR, once, and links the
+# exact run by its display title (Release <sha>, set by release.yml's run-name; a dispatched
+# run's head_sha is the tip of main, never the dispatched sha). report owns the only issues write in this file.
 #
 # The fixer (Phase 52). A dispatch with reason fix runs the fix, fix-gate and fix-pr jobs at the
 # bottom of this file and nothing else: every Phase 43 job above is gated off for that reason. fix holds
 # the model and the federated credential but no App token; fix-gate holds no secret, no environment and
 # no id-token; fix-pr is the only App-token minter, and it reads no model prose.
 #
-# Not here yet: the live GitHub facts behind derive (check runs, the Release list)
-# are fixture-backed until plan 43-03 wires them, release.yml joins the wake list
-# and the release-stage states arrive with Phase 50, and the maintenance sweep is
-# Phase 48.
+# The uptake lane (TRAIN-05, UPS-01). detect also lists the uptake major's tags (175,
+# from detect-upstreams.mjs --uptake-major) and names the newest one. uptake-replay
+# replays that tag through the same rebase-upstream.yml, read-only, and is never a
+# bump: no bump job, no branch, no PR, no App token, no environment, no dispatch.
+# report prints its would-write view. A conflict is one issue, written by the report
+# writer once that writer is approved (BLOCKED.md item 3 of Phase 43).
+#
+# Not here yet: the live GitHub facts behind derive (check runs, the Release list) are
+# fixture-backed, and the release-stage states of release-train.mjs have no live collector
+# until the facts source and the tracking-issue writer are approved (BLOCKED.md item 3).
+# dispatch-release prints the run link to the job summary in the meantime, and the
+# maintenance sweep is Phase 48.
 #
 # Dry-run. Every step that commits, opens, comments or dispatches carries a negated
 # inputs.dry-run in its if:. A dry run still validates, decides and replays, because
@@ -175,6 +185,7 @@ jobs:
       candidate: ${{ steps.decide.outputs.candidate }}
       pr-open-tag: ${{ steps.decide.outputs.pr-open-tag }}
       pr-open-number: ${{ steps.decide.outputs.pr-open-number }}
+      uptake-candidate: ${{ steps.decide.outputs.uptake-candidate }}
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -190,17 +201,19 @@ jobs:
 
       # The listing is a read, so it runs in a dry run too. A dry run decides against the live
       # listing, and the would-write lines in report name the real candidate.
-      - name: List the ESR release tags under the pinned major
+      - name: List the ESR release tags under the pinned major and the uptake major
         env:
           PIN: ${{ steps.pin.outputs.pin }}
           REMOTE: https://github.com/mozilla-firefox/firefox.git
         run: |
           set -euo pipefail
           MAJOR=$(printf '%s\n' "$PIN" | sed -n 's/^[A-Za-z]*_\([0-9]*\)_.*/\1/p')
+          # The uptake major comes from the detector, so the number lives in one place (TRAIN-05).
+          UPTAKE=$(node scripts/detect-upstreams.mjs --uptake-major)
           git ls-remote --tags --refs "$REMOTE" > "$RUNNER_TEMP/refs.txt"
           sed -n 's#.*refs/tags/##p' "$RUNNER_TEMP/refs.txt" > "$RUNNER_TEMP/names.txt"
           # grep exits 1 when no tag matches; that empty listing is a FAIL in detect-upstreams, not here.
-          grep -E "^FIREFOX_${MAJOR}_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" "$RUNNER_TEMP/names.txt" > "$RUNNER_TEMP/tags.txt" || [ $? -eq 1 ]
+          grep -E "^FIREFOX_(${MAJOR}|${UPTAKE})_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" "$RUNNER_TEMP/names.txt" > "$RUNNER_TEMP/tags.txt" || [ $? -eq 1 ]
 
       # Read-only: the open PRs tell the decision whether a candidate's bump PR already exists.
       # A candidate with an open PR is PR-open, so no replay runs and no branch is re-pushed.
@@ -209,7 +222,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
 
       # product-details is advisory. An outage leaves the value empty, a NOTE is printed, and
       # the decision does not read it, so the advisory never blocks a bump.
@@ -236,7 +249,7 @@ jobs:
             node scripts/detect-upstreams.mjs --listing "$RUNNER_TEMP/tags.txt" --open-prs "$RUNNER_TEMP/open-prs.txt" > "$RUNNER_TEMP/decide.txt"
           fi
           cat "$RUNNER_TEMP/decide.txt"
-          grep -E '^(candidate|pr-open-tag|pr-open-number)=' "$RUNNER_TEMP/decide.txt" >> "$GITHUB_OUTPUT"
+          grep -E '^(candidate|pr-open-tag|pr-open-number|uptake-candidate)=' "$RUNNER_TEMP/decide.txt" >> "$GITHUB_OUTPUT"
 
   # The Node half is its own detector job. A Node failure (index, release-keys, signature,
   # tarball) fails this job and no other: the ESR detector and the ESR bump do not need it.
@@ -264,7 +277,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
 
       # The Node 24 line: the newest v24 entry of the release index that ships linux-x64 and is
       # strictly newer than the pin in node-runtime.json. No such line, and an open chore/node-v24.x
@@ -321,6 +334,19 @@ jobs:
     uses: ./.github/workflows/rebase-upstream.yml
     with:
       tag: ${{ needs.detect.outputs.candidate }}
+    permissions:
+      contents: read
+
+  # The uptake lane (TRAIN-05, UPS-01): the newest uptake-major tag is replayed through the one
+  # replay definition and nothing is published from it. Like bump, the job reads the tree and a
+  # runner-local upstream, so it runs in a dry run too. It has no environment, no App token, no
+  # bump-pr step and no dispatch: a 175 replay can end only in its stage line, which report prints.
+  uptake-replay:
+    needs: [derive, detect]
+    if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.reason != 'fix') || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) && needs.detect.outputs.uptake-candidate != '' }}
+    uses: ./.github/workflows/rebase-upstream.yml
+    with:
+      tag: ${{ needs.detect.outputs.uptake-candidate }}
     permissions:
       contents: read
 
@@ -429,7 +455,7 @@ jobs:
           fi
           TITLE="chore(esr): move the Firefox ESR pin to ${TAG}"
           BODY="Bump to ${TAG}, replayed through rebase-upstream.yml and regenerated from configuration.toml. verify.yml runs on this PR; the owner merges."
-          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
           if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"; fi
 
   # The Node PR is its own job, with its own App token and checkout, so the ESR bump never
@@ -494,11 +520,117 @@ jobs:
           fi
           TITLE="chore(node): move the Node 24 runtime pin to ${NODE_VERSION}"
           BODY="Node 24 bump to ${NODE_VERSION}. The SHASUMS256.txt signature was checked with gpgv in the release train's detect-node job, and the tarball sha256 equals the signed entry. verify.yml runs on this PR."
-          EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number --jq '.[0].number // empty')
+          EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
           if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head chore/node-v24.x --title "$TITLE" --body "$BODY"; fi
 
+  # TRAIN-10: after the bump PR merges, dispatch release.yml with the merge SHA. The merged PR is
+  # read from GitHub on every tick (no stored state): the newest merged PR for the pinned bump
+  # branch names the SHA, and a release.yml run already at that SHA means nothing is dispatched
+  # again. The reads run in a dry run too; only the POST and the run poll are live.
+  #
+  # Token decision (recorded in docs/RELEASING.md, "Train stages"): GITHUB_TOKEN with
+  # actions: write on this job alone. The bot App holds no Actions scope and would 403, and a
+  # clock App would add a second credential for one call. This job holds no environment, no
+  # App key and no contents write, so the only write it can make is the dispatch.
+  dispatch-release:
+    needs: derive
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.reason != 'fix') || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    outputs:
+      merge-sha: ${{ steps.merged.outputs.sha }}
+      run-url: ${{ steps.run.outputs.url }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Read the merged bump PR for the pinned tag (read)
+        id: merged
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PIN="$(node scripts/detect-upstreams.mjs --pin)"
+          SHA="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --head "chore/esr-${PIN}" --limit 5 --json number,mergeCommit,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)] | sort_by(.number) | reverse | .[0].mergeCommit.oid // empty')"
+          if [ -n "$SHA" ] && ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release-train: FAIL -- the merged bump PR names a merge SHA that is not 40 hex. Next step: do not dispatch; check the PR." >&2
+            exit 1
+          fi
+          echo "pin=${PIN}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      # A dispatched run's head_sha is the tip of main at dispatch time, not the merge SHA, so a run
+      # is matched on what the dispatch controls: its display title (release.yml run-name), the
+      # event, the workflow path and the head repository. Never on head_sha. The newest 100
+      # dispatch runs bound the list; releases are rare, so the run for this SHA is among them.
+      - name: Count the release.yml runs already dispatched for that SHA (read)
+        id: existing
+        if: ${{ steps.merged.outputs.sha != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.merged.outputs.sha }}
+        run: |
+          set -euo pipefail
+          COUNT="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100" --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" and .display_title == "Release " + env.SHA and ((.path // "") | split("@")[0]) == ".github/workflows/release.yml" and .head_repository.full_name == env.GITHUB_REPOSITORY)] | length')"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+
+      # A dry run prints the dispatch a live run would make; nothing is posted.
+      - name: Print the dispatch this run would make (dry-run)
+        if: ${{ inputs.dry-run }}
+        env:
+          SHA: ${{ steps.merged.outputs.sha }}
+          COUNT: ${{ steps.existing.outputs.count }}
+        run: |
+          if [ -z "$SHA" ]; then echo "dry-run: no merged bump PR for the pinned tag; nothing to dispatch"; exit 0; fi
+          if [ "$COUNT" != "0" ]; then echo "dry-run: release.yml already has ${COUNT} run(s) dispatched for ${SHA}; nothing to dispatch"; exit 0; fi
+          echo "dry-run: would dispatch release.yml at ${SHA} on main"
+
+      - name: Dispatch release.yml with the merge SHA (skipped in dry-run)
+        id: dispatch
+        if: ${{ !inputs.dry-run && steps.merged.outputs.sha != '' && steps.existing.outputs.count == '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.merged.outputs.sha }}
+        run: |
+          set -euo pipefail
+          printf '{"ref":"main","inputs":{"sha":"%s"}}' "$SHA" \
+            | gh api -X POST -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/dispatches" --input -
+          echo "dispatched=true" >> "$GITHUB_OUTPUT"
+
+      # The exact run is the newest run whose display title is `Release <sha>` (same filter as the
+      # count above), never the latest run of any SHA. Polled for up to 5 minutes (eventual
+      # consistency); a transient API error counts as not yet visible. If none appears, the summary
+      # links the workflow page and the SHA and the job still ends green (BUILDING-waiting).
+      - name: Resolve the exact run by its display title and link it (skipped in dry-run)
+        id: run
+        if: ${{ !inputs.dry-run && steps.dispatch.outputs.dispatched == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.merged.outputs.sha }}
+        run: |
+          set -euo pipefail
+          URL=""
+          for _ in $(seq 1 20); do
+            URL="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100" --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" and .display_title == "Release " + env.SHA and ((.path // "") | split("@")[0]) == ".github/workflows/release.yml" and .head_repository.full_name == env.GITHUB_REPOSITORY)] | sort_by(.created_at) | reverse | .[0].html_url // empty' || true)"
+            [ -n "$URL" ] && break
+            sleep 15
+          done
+          if [ -n "$URL" ]; then
+            echo "Release run (${URL}) SHA ${SHA}" >> "$GITHUB_STEP_SUMMARY"
+            echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release run not yet visible for SHA ${SHA}; the workflow page is ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/release.yml" >> "$GITHUB_STEP_SUMMARY"
+            echo "release-train: NOTE -- no release.yml run appeared for ${SHA} within the poll window; the next tick sees it by its display title" >&2
+          fi
+
   report:
-    needs: [derive, detect, detect-node, bump, bump-pr, bump-pr-node]
+    needs: [derive, detect, detect-node, bump, uptake-replay, bump-pr, bump-pr-node, dispatch-release]
     if: ${{ always() && ((github.event_name == 'workflow_dispatch' && inputs.reason != 'fix') || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -519,8 +651,13 @@ jobs:
           BUMP: ${{ needs.bump.result }}
           BUMP_PR: ${{ needs.bump-pr.result }}
           BUMP_PR_NODE: ${{ needs.bump-pr-node.result }}
+          UPTAKE_TAG: ${{ needs.detect.outputs.uptake-candidate }}
+          UPTAKE_REPLAY: ${{ needs.uptake-replay.result }}
+          RELEASE_SHA: ${{ needs.dispatch-release.outputs.merge-sha }}
+          RELEASE_RUN: ${{ needs.dispatch-release.outputs.run-url }}
+          DISPATCH: ${{ needs.dispatch-release.result }}
         run: |
-          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} node=${NODE_VERSION:-none} bump=${BUMP} bump-pr=${BUMP_PR} bump-pr-node=${BUMP_PR_NODE}"
+          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} node=${NODE_VERSION:-none} bump=${BUMP} bump-pr=${BUMP_PR} bump-pr-node=${BUMP_PR_NODE} uptake=${UPTAKE_TAG:-none} uptake-replay=${UPTAKE_REPLAY} dispatch-release=${DISPATCH} release-sha=${RELEASE_SHA:-none} release-run=${RELEASE_RUN:-none}"
 
       # A dry run prints the branches a live run would publish, with the values this run decided.
       - name: Print the branches this run would open (dry-run)
@@ -554,6 +691,24 @@ jobs:
           # A candidate whose PR is already open is the PR-open tag; the view reads it as BUMPING.
           TAG="${CANDIDATE:-$PR_TAG}"
           node scripts/release-train.mjs --would-write "$PIN" "$TAG" "$PR_NUMBER" "$STAGE"
+
+      # The uptake lane's view (TRAIN-05). Only a success is a green replay (replayed=true). The job
+      # result is passed too: any other result is red, whatever stage line the job printed, and the
+      # view names its patch when the stage is a conflict. The detect result is passed so a failed
+      # detect reads as detection failed, never as idle (IN-03). always() keeps an earlier failing
+      # step in this job from suppressing the view. Nothing is written.
+      - name: Print the would-write view of the uptake tracking issue (175 lane, writer not wired)
+        if: ${{ always() }}
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          UPTAKE_TAG: ${{ needs.detect.outputs.uptake-candidate }}
+          UPTAKE_RESULT: ${{ needs.uptake-replay.result }}
+          UPTAKE_STAGE: ${{ needs.uptake-replay.outputs.stage }}
+        run: |
+          set -eu
+          REPLAYED=false
+          if [ "$UPTAKE_RESULT" = "success" ]; then REPLAYED=true; fi
+          node scripts/release-train.mjs --uptake-would-write "$UPTAKE_TAG" "$UPTAKE_STAGE" "$REPLAYED" "$UPTAKE_RESULT" "$DETECT_RESULT"
 
   # ---- The fixer (Phase 52, FIX-01 to FIX-12). Reached only by a dispatch with reason fix, which the
   # derive job validated. fix holds the model and the federated credential, and no App token. fix-gate
