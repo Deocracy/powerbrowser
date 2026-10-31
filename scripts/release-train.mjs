@@ -136,8 +136,9 @@ const ACTIONS = Object.freeze({
     DESCRIPTOR_LIVE: 'close-issue',
     LIVE_RED: 'block-and-link',
     WITHDRAWN: 'reopen-and-instruct',
-    // UNWIRED: the cancel of the superseded train's pending release deployment has no executor yet.
-    // The release-stage actions have no live collector until the facts source is approved (BLOCKED.md).
+    // UNWIRED: no executor runs this yet. For a release-stage train it cancels the run (and rejects the pending release
+    // approval) named by supersedeTarget(facts); for a train with nothing in flight, supersedeTarget is null and it only
+    // links the superseder. No live collector sets the supersede facts until the facts source is approved (BLOCKED.md).
     SUPERSEDED: 'cancel-pending-and-link',
     DONE: 'noop',
 });
@@ -195,8 +196,10 @@ export function releaseFactsFromLive(live, { matches = runIsReleaseFor } = {}) {
     return {
         key: live.key,
         mergeSHA: live.mergeSHA,
-        run: newest === null ? null : { status: newest.status, conclusion: newest.conclusion ?? null, htmlUrl: newest.html_url },
+        run: newest === null ? null : { id: newest.id, status: newest.status, conclusion: newest.conclusion ?? null, htmlUrl: newest.html_url },
         pending: live.pending.map(p => p.environment.name),
+        // The pending_deployments entry's environment id: what a reject of the pending approval targets (TRAIN-04 cancel).
+        releaseEnvId: live.pending.find(p => p.environment.name === 'release')?.environment.id ?? null,
         descriptorJob: job === null ? null : job.status,
         published: live.release ? { draft: live.release.draft, prerelease: live.release.prerelease, assets: live.release.assets.map(a => a.name), body: live.release.body ?? '' } : null,
         expectedAssets: live.expectedAssets,
@@ -241,18 +244,25 @@ const newerOnSameLine = (newer, old) => {
     return o !== null && classifyTag(newer, o.tuple[0]).keep && esrAfter(newer, old);
 };
 
+// The ESR tag a release key v<esr groups>-<revision> was made from (keys are built from tagToVersion's esrVersion).
+const keyTag = key => `FIREFOX_${key.slice(1, key.lastIndexOf('-')).replaceAll('.', '_')}esr_RELEASE`;
+
 /**
  * Why a train is superseded (TRAIN-04): 'chemspill' (an open same-ESR revision), 'newer-esr' (a newer
- * validated tag on the same major), 'marked' (supersededMark: the issue already carries the state), or null. Chemspill is tried first. derive and render both read this
- * one function, so the rendered view names the arm that fired. Both arms apply to a scheduled train
+ * validated tag on the same major), 'marked' (supersededMark: the issue already carries the state), or null.
+ * Chemspill is tried first. derive and render both read this one function, so the rendered view names the arm that fired. Both arms apply to a scheduled train
  * only (revision exactly 1): a chemspill revision train is never preempted, whatever flags the
  * collector sets. Fail-safe: a missing or odd revision counts as a revision, so nothing irreversible
  * follows from it. Pure.
  */
 export function supersedeCause(f) {
-    if (f.openPr && f.revision === 1) {
+    // A release-stage train (merged, so no open PR) is identified by its release key; a pre-release one by its PR and candidate.
+    const rel = f.release ?? null;
+    const revision = rel === null ? f.revision : Number(rel.key.slice(rel.key.lastIndexOf('-') + 1));
+    const own = rel === null ? f.candidateTag : keyTag(rel.key);
+    if ((f.openPr || rel !== null) && revision === 1) {
         if (f.chemspillOpen === true) return 'chemspill';
-        if (typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, f.candidateTag)) return 'newer-esr';
+        if (typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, own)) return 'newer-esr';
     }
     // Sticky (WR-01): the superseding facts are transient (the chemspill train publishes, a PR closes), but the
     // tracking issue keeps its state/SUPERSEDED label. supersededMark is that persisted fact, read by the collector;
@@ -262,7 +272,8 @@ export function supersedeCause(f) {
 
 /**
  * The state a release is in, from facts, or null with nothing to do. Pure.
- * The TRAIN-04 arms run after the release-stage check, so a published release is never superseded:
+ * The TRAIN-04 arms apply before publication only: a published or withdrawn release is never superseded,
+ * and a release-stage train (BUILDING, AWAITING_APPROVAL) is superseded by the same arms:
  * (1) an open same-ESR chemspill revision preempts this scheduled train (chemspillOpen);
  * (2) a newer validated ESR tag preempts this open older train (newerTag). Both arms apply to a
  *     scheduled train only (revision 1): a chemspill revision train is never superseded, whatever
@@ -270,7 +281,14 @@ export function supersedeCause(f) {
  */
 export function derive(facts) {
     const f = facts;
-    if (f.release) return deriveRelease(f.release);
+    if (f.release) {
+        const rel = deriveRelease(f.release);
+        // Release-stage supersede: only a train with nothing published yet, in flight, waiting on approval, or whose
+        // run was already cancelled. A published or withdrawn release is never superseded.
+        const unpublished = f.release.published === null || f.release.published.draft;
+        if (unpublished && (rel === null || rel === 'BUILDING' || rel === 'AWAITING_APPROVAL') && supersedeCause(f) !== null) return 'SUPERSEDED';
+        return rel;
+    }
     if (supersedeCause(f) !== null) return 'SUPERSEDED';
     if (f.merged === true && f.pinUnchanged === true) return 'BUMP_RED';
     if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'CONFLICT';
@@ -282,6 +300,18 @@ export function derive(facts) {
     }
     if (typeof f.candidateTag === 'string') return 'DETECTED';
     return null;
+}
+
+/**
+ * What a cancel executor may target for a SUPERSEDED train, or null when nothing is in flight (the action is then
+ * link-only). The ids come from the old train's own release facts: its run is matched by display title to the merge
+ * SHA, so this is never the newest run of another SHA and never the new train's. environmentId is the pending
+ * `release` approval's environment id; it is null for a run that is building with no approval pending. Pure.
+ */
+export function supersedeTarget(facts) {
+    const run = facts.release?.run ?? null;
+    if (derive(facts) !== 'SUPERSEDED' || run === null || run.status === 'completed') return null;
+    return { key: facts.release.key, runId: run.id, environmentId: facts.release.releaseEnvId };
 }
 
 /** The one action a state maps to. A null state is idle. Pure. */
@@ -668,7 +698,7 @@ const FIXTURES_153 = Object.freeze({
     SUPERSEDED: Object.freeze({ facts: { ...BASE, candidateTag: OLDER, openPr: { head: `chore/esr-${OLDER}`, number: 40 }, newerTag: NEWER }, action: 'cancel-pending-and-link' }),
     // Main has advanced past the merge SHA (every run's head_sha is TIP_SHA). The other SHA's run is the newest and must not be linked: the link is by display title.
     BUILDING: Object.freeze({ live: liveBase({ runs: [liveRun(100, OTHER_SHA, 'completed', 'success', '2026-10-31T12:00:00Z'), liveRun(101, MERGE_SHA, 'in_progress', null, '2026-10-31T10:00:00Z')] }), action: 'wait' }),
-    AWAITING_APPROVAL: Object.freeze({ live: liveBase({ runs: [liveRun(102, MERGE_SHA, 'waiting', null, '2026-10-31T10:00:00Z')], pending: [{ environment: { name: 'release' } }], release: liveRelease({ draft: true, assets: [], body: '' }) }), action: 'notify-owner' }),
+    AWAITING_APPROVAL: Object.freeze({ live: liveBase({ runs: [liveRun(102, MERGE_SHA, 'waiting', null, '2026-10-31T10:00:00Z')], pending: [{ environment: { id: 7, name: 'release' } }], release: liveRelease({ draft: true, assets: [], body: '' }) }), action: 'notify-owner' }),
     PUBLISHED: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease() }), action: 'trigger-gh15' }),
     DESCRIPTOR_WAIT: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, pending: [{ environment: { name: 'descriptor' } }], release: liveRelease(), contents: { content: b64(NO_UPDATE_BYTES) } }), action: 'notify-owner' }),
     DESCRIPTOR_LIVE: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease(), contents: { content: b64(SERVED_BYTES) }, channelLive: { conclusion: 'success', subcheck: null } }), action: 'close-issue' }),
@@ -820,6 +850,26 @@ function selfTest() {
             expect: 'superseded by the open chemspill revision',
         },
         {
+            name: 'supersede-release-stage-approval: the pending release approval environment is carried for the cancel',
+            run: () => {
+                const t = supersedeTarget({ ...factsOf(FIXTURES.AWAITING_APPROVAL), newerTag: esrTag(153, 24, 0) });
+                return t === null ? ['no cancel target for a train waiting on approval'] : [`cancel run ${t.runId} and reject approval environment ${t.environmentId} of ${t.key}`];
+            },
+            expect: 'cancel run 102 and reject approval environment 7 of v153.23.0-1',
+        },
+        {
+            name: 'supersede-release-stage-ids: a train waiting on approval or building, with a newer ESR tag, names its own run and approval',
+            // The cancel target is the old train's run (matched by display title), never the newest run of another SHA.
+            run: () => ['AWAITING_APPROVAL', 'BUILDING'].flatMap(name => {
+                const f = { ...factsOf(FIXTURES[name]), newerTag: esrTag(153, 24, 0) };
+                const got = derive(f);
+                if (got !== 'SUPERSEDED') return [`a ${name} train with a newer ESR tag derives ${got}, not SUPERSEDED`];
+                const t = supersedeTarget(f);
+                return [`${name} superseded: cancel run ${t?.runId} and reject approval environment ${t?.environmentId} of ${t?.key}`];
+            }),
+            expect: 'cancel run 101 and reject approval environment null of v153.23.0-1',
+        },
+        {
             name: 'sign-job-newer-release-exit: a stale approval whose key is not newer than the latest published Release',
             // release.yml's newer_guard and newer_guard_final call the same comparator; a refusal must not be a proceed.
             run: () => {
@@ -940,10 +990,37 @@ function selfTest() {
             },
         },
         {
-            name: 'control: a published release is never superseded, even with an open PR, a newer tag and a chemspill',
+            name: 'control: a published, withdrawn or live release is never superseded, even marked, with a newer tag and a chemspill',
+            run: () => [...['PUBLISHED', 'DESCRIPTOR_WAIT', 'DESCRIPTOR_LIVE', 'LIVE_RED', 'WITHDRAWN', 'DONE'].map(name => [name, FIXTURES[name]]),
+                // A published Release whose assets do not match derives no state (null); it is still published, so never superseded.
+                ['a published Release with the wrong assets', { live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease({ assets: [] }) }) }]].flatMap(([name, fx]) => {
+                const want = fx.live === undefined || name.startsWith('a published') ? derive(factsOf(fx)) : name;
+                const got = derive({ ...factsOf(fx), openPr: { head: `chore/esr-${OLDER}`, number: 45 }, newerTag: esrTag(153, 24, 0), chemspillOpen: true, supersededMark: true });
+                return got === want && got !== 'SUPERSEDED' ? [] : [`a ${name} release derived ${got} under supersede facts`];
+            }),
+        },
+        {
+            name: 'control: a chemspill revision release (key revision 2) waiting on approval is not superseded by a newer ESR tag or a chemspill flag',
             run: () => {
-                const got = derive({ ...factsOf(FIXTURES.PUBLISHED), openPr: { head: `chore/esr-${OLDER}`, number: 45 }, newerTag: NEWER, chemspillOpen: true });
-                return got === 'PUBLISHED' ? [] : [`a published release derived ${got} under supersede facts`];
+                const f = { ...BASE, newerTag: esrTag(153, 24, 0), chemspillOpen: true, release: releaseFactsFromLive({ ...FIXTURES.AWAITING_APPROVAL.live, key: 'v153.23.0-2' }) };
+                return derive(f) === 'AWAITING_APPROVAL' ? [] : [`a revision train waiting on approval derives ${derive(f)}`];
+            },
+        },
+        {
+            name: 'control: an equal or older newer-tag, or one on another major, never supersedes a release-stage train',
+            run: () => [NEWER, esrTag(153, 5, 0), UPTAKE_TAG].flatMap(newerTag => {
+                const got = derive({ ...factsOf(FIXTURES.AWAITING_APPROVAL), newerTag });
+                return got === 'AWAITING_APPROVAL' ? [] : [`newerTag ${newerTag} superseded a v153.23.0 release-stage train (derived ${got})`];
+            }),
+        },
+        {
+            name: 'control: a marked train whose run was already cancelled stays SUPERSEDED with no cancel target (link only); a pre-release one has none either',
+            run: () => {
+                const cancelled = { ...BASE, supersededMark: true, release: releaseFactsFromLive({ ...FIXTURES.AWAITING_APPROVAL.live, runs: [liveRun(102, MERGE_SHA, 'completed', 'cancelled', '2026-10-31T10:00:00Z')], pending: [] }) };
+                const failures = [];
+                if (derive(cancelled) !== 'SUPERSEDED' || supersedeTarget(cancelled) !== null) failures.push(`a cancelled marked train derives ${derive(cancelled)} with target ${JSON.stringify(supersedeTarget(cancelled))}`);
+                if (supersedeTarget(FIXTURES.SUPERSEDED.facts) !== null) failures.push('a pre-release SUPERSEDED train carries a cancel target');
+                return failures;
             },
         },
         {

@@ -138,8 +138,10 @@ is a policy choice (red pages a run, green hides a stale approval), so it goes t
 
 **Options (owner picks one):**
 
-- (a) Keep fail-closed (recommended, the status quo): the two existing guards stand, and the
-  stale-approval race is closed by them plus supersede cancellation (item 8). Nothing is changed.
+- (a) Keep fail-closed (recommended, the status quo): the two existing guards stand. They alone close the
+  stale-approval race: a stale approval, once spent, fails the run red before anything is signed. Supersede
+  cancellation (item 8) would reject the pending approval earlier, but no executor runs it yet, so it is
+  not part of this decision. Nothing is changed.
 - (b) Exit 0 with a note: add a first step that writes `proceed=false` and the step summary (both tags
   named), and gate each of the 20 later `sign-publish` steps (21 steps in the job today) on `steps.<id>.outputs.proceed`,
   including the `if: always()` scratch-database step. `verify-release-asset-set` (`newer_guard_final`
@@ -149,23 +151,30 @@ is a policy choice (red pages a run, green hides a stale approval), so it goes t
 
 ## 8. Pending-release cancel on SUPERSEDED: executor unwired (owner, and the Phase 43 live collector)
 
-**Blocked piece:** the `cancel-pending-and-link` action (`next(SUPERSEDED)`). `release-train.mjs` maps the
-state to the action name only. No workflow step executes a release-stage action, because the release-stage
-states have no live collector (`release-train.yml` header, "Not here yet"; Phase 43 BLOCKED item 3).
+**Blocked piece:** the executor of `cancel-pending-and-link` (`next(SUPERSEDED)`). `release-train.mjs` maps the
+state to the action name and, for a release-stage train, names the target: `supersedeTarget(facts)` returns the
+old train's `runId` (matched by display title to its merge SHA, never the newest run of another SHA) and the
+pending `release` approval's `environmentId` (null while the run is building with no approval pending). It
+returns null when nothing is in flight (a train with an open PR and no release run, or a run already
+completed); the action is then link-only. SUPERSEDED is reachable for BUILDING and AWAITING_APPROVAL trains
+(review CR-02 fix). No workflow step executes the action, because the release-stage states have no live
+collector (`release-train.yml` header, "Not here yet"; Phase 43 BLOCKED item 3).
 
 **Why not done:** a live cancel is a write to a `release` environment deployment, and the plan forbids
-live cancels. It also needs the endpoint shape, which the plan asks the executor to probe with read-only
-`gh api` GETs at execution time. That probe is not run here because no collector can supply the old
-train's run ID and pending-deployment ID yet.
+live cancels. The endpoint shape is not probed: the plan asks for read-only `gh api` GETs at execution time,
+which need a real repository with a pending approval. Also unverified: GitHub's pending-deployments entry
+carries the environment id (used above), not a deployment id, and rejecting uses `environment_ids`.
 
 **Owner steps when the collector is approved:**
 
 1. Probe the pending-deployment endpoints with read-only GETs against the real repository, then choose
-   between rejecting the pending `release` deployment and cancelling its run. Cancel only the old train's
-   run, never the new train's and never a `descriptor` deployment.
-2. Confirm the token scopes. The plan says the existing dispatch-release and maintenance scopes suffice
+   between rejecting the pending `release` approval (`environmentId`) and cancelling the run (`runId`). Act only
+   on `supersedeTarget(facts)`, never on "the pending deployment" or "the newest run", and never on a
+   `descriptor` deployment.
+2. Gate the executor on `supersededMark` (item 10), so a cancel is never decided from a transient fact.
+3. Confirm the token scopes. The plan says the existing dispatch-release and maintenance scopes suffice
    with no new token. Not verified against GitHub's current App permission map.
-3. Wire the executor in `release-train.yml` behind the existing dry-run gates, then add its row to the
+4. Wire the executor in `release-train.yml` behind the existing dry-run gates, then add its row to the
    `workflows` row check.
 
 ## 9. Fixture gaps inherited from 43's WR-07: duplicate issue and fork-head wake (no plant)
@@ -184,7 +193,10 @@ items 1 and 3), wire these helpers and add their plants in the same change.
 
 ## 10. Supersede facts collector: not built
 
-`derive()` now reads two new facts, `newerTag` (a newer validated ESR tag on the same major) and
-`chemspillOpen` (an open same-ESR revision train). No collector in `release-train.yml` sets them, because
-the facts source is the Phase 43 live collector (Phase 43 BLOCKED item 3). Until it exists, a live supersede cannot
-fire. The self-test covers the logic over fixtures only.
+`derive()` reads three supersede facts: `newerTag` (a newer validated ESR tag on the same major), `chemspillOpen`
+(an open same-ESR revision train) and `supersededMark` (the key's tracking issue already carries the
+`state/SUPERSEDED` label that `render` writes; this is what keeps SUPERSEDED sticky once `newerTag` or
+`chemspillOpen` stops holding). No collector in `release-train.yml` sets them, because the facts source is the
+Phase 43 live collector (Phase 43 BLOCKED item 3). The collector must also pass `releaseFactsFromLive` the live runs
+(`id`) and pending deployments (`environment.id`), and should restrict `newerIssueUrl` to the repository's own issue
+URLs. Until it exists, a live supersede cannot fire. The self-test covers the logic over fixtures only.
