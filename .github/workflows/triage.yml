@@ -39,8 +39,11 @@ permissions:
   contents: read
   issues: write
 
+# One group per issue. A shared group keeps one pending run and cancels the rest, so a
+# burst of opened issues would leave the middle ones untriaged. Spend is bounded by the
+# triage Console monthly limit (GH-16) and the ten-minute job timeout instead.
 concurrency:
-  group: triage
+  group: triage-${{ github.event.issue.number }}
 
 jobs:
   classify:
