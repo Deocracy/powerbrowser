@@ -97,7 +97,7 @@ returning null.
 - [x] **PAGE-05**: User sees which tabs play audio and can mute or unmute a tab, including with Ctrl+M
 - [ ] **PAGE-06**: User can see downloads in a downloads button and panel, open them, show them in the folder, and cancel or retry them
 - [ ] **PAGE-07**: User can make the window full screen with F11 on a web page, and a page can enter its own fullscreen (video) with Firefox's warning
-- [ ] **PAGE-08**: User can save the page with Ctrl+S and choose where it goes
+- [x] **PAGE-08**: User can save the page with Ctrl+S and choose where it goes
 - [ ] **PAGE-09**: User can cut, copy, paste and undo inside a focused web page from the Edit menu and the usual keys
 - [ ] **PAGE-10**: User can open reader view for article pages, view page source (Ctrl+U) and open page developer tools (F12 on a web page)
 - [ ] **PAGE-11**: User sees a crashed tab with a reload button instead of a blank page
@@ -247,7 +247,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | PAGE-05 | Phase 32 | Complete |
 | PAGE-06 | Phase 32 | Pending |
 | PAGE-07 | Phase 35 | Pending |
-| PAGE-08 | Phase 32 | Pending |
+| PAGE-08 | Phase 32 | Complete |
 | PAGE-09 | Phase 32 | Pending |
 | PAGE-10 | Phase 32 | Pending |
 | PAGE-11 | Phase 32 | Pending |

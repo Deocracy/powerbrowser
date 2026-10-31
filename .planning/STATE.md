@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 32
 current_phase_name: Page Tools
 status: executing
-stopped_at: Completed 32-03-PLAN.md
-last_updated: "2026-10-31T21:00:45.003Z"
+stopped_at: Completed 32-05-PLAN.md
+last_updated: "2026-10-31T21:38:12.844Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 32 execution started
-state_head: 68547992a5ca1d7f4a139a91c63afa91d184d484
+state_head: 7475eb7e79a2f5b6b34661344a3b347d9fe8bc53
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 71
-  completed_plans: 38
+  completed_plans: 39
   percent: 8
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 32 (Page Tools) — EXECUTING
-Plan: 3 of 9
+Plan: 4 of 9
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 32 execution started
 
@@ -173,6 +173,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 30 P05 | 56m | 3 tasks | 8 files |
 | Phase 30 P06 | 70m | 2 tasks | 8 files |
 | Phase 32 P02 | not measured | 2 tasks | 11 files |
+| Phase 32 P05 | not measured | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -450,6 +451,8 @@ Recent decisions affecting current work:
 - [Phase 32]: 32-01: page-tools helpers live at module level after the frozen API object; find, zoom and audio state ride the flat state push as primitives; live scenarios drive arms via WebTabChannel until the 32-02 key relay exists
 - [Phase 32]: Page-tool relay ids are camelCase: the chrome side refuses relay ids outside [A-Za-z0-9]{1,32}, so the hyphenated plan names would never relay (32-02)
 - [Phase 32]: Find, zoom and mute have no Theia command or keybinding contribution; relay actions call widget methods on the pushed tab, and labelled commands would pre-empt Phase 33 palette rows (32-02)
+- [Phase 32]: PAGE-08: pick proposes a file name and writes nothing; the export mints the copy through savePageCopy and copies page.html and page_files to the picked path.
+- [Phase 32]: PAGE-08: no Theia command for save (32-02 precedent); the saveOpen row calls savePage, and the chooser fails closed without a registered dialog.
 
 ### Pending Todos
 
@@ -559,8 +562,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T21:00:44.597Z
-Stopped at: Completed 32-03-PLAN.md
+Last session: 2026-10-31T21:38:12.435Z
+Stopped at: Completed 32-05-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
