@@ -892,7 +892,8 @@ add a second table for either.
 ### ESR 175 uptake (UPS-01, TRAIN-05)
 
 The train tracks two ESR majors at the same time. The pinned major (153) keeps the bump
-path: a newer 153.x tag opens `chore/esr-<tag>` and updates its tracking issue. The
+path: a newer 153.x tag opens `chore/esr-<tag>`. Its tracking issue is not written yet: the report
+job prints the would-write view until the writer is approved (`BLOCKED.md` item 1). The
 uptake major (175, `UPTAKE_MAJOR` in `scripts/detect-upstreams.mjs`) is replay-only: the
 newest 175 `*esr_RELEASE` tag is replayed and nothing is published from it. The lane keys on
 those release tags, which are cut on the ESR release day (2027-06-29), so as built the lane
@@ -900,9 +901,11 @@ starts then, not at the 175 beta (2027-06-10). Whether it should start at the be
 beta-stage tag form, which is an owner decision (`BLOCKED.md` item 3 of Phase 58). The lane is
 off once the pinned major reaches the uptake major, so the flipped pin is never replayed twice.
 
-**Two keys.** Each release key owns one tracking issue, found by label and title on every
-run: `release-train: v153.x-r` for the bump line and `release-train: v175.x-r` for the
-uptake line. The body is rewritten only when its rendered bytes differ. A 153 tag never
+**Two keys.** Each release key names one tracking issue: `release-train: v153.x-r` for the bump
+line and `release-train: v175.x-r` for the uptake line. The title is derived from the tag and
+the would-write view prints it. No writer exists yet. The live find-by-label-and-title step, the
+exactly-one rule and the rewrite-only-when-different rule are unwired until the owner approves
+the writer (`BLOCKED.md` item 1). Until then the report job writes no issue. A 153 tag never
 reaches the 175 replay, and a 175 tag never reaches the 153 bump: the guard refuses the
 foreign major in both lanes, and both self-tests plant that fault and require it to go
 red.
@@ -916,10 +919,12 @@ red.
    classifier.
 3. A PASS is `UPTAKE_REPLAYED`. A `NOTE` line counts patches that replay onto moved files
    and is informational. Nothing is committed.
-4. A patch that does not apply is `UPTAKE_CONFLICT`. Its tracking view names the patch
-   (`ESR <tag>: patch <NNN> did not apply`) and carries the apply log and the upstream
-   diff, assigned to the owner. Any other replay FAIL is `UPTAKE_RED`, and the owner is
-   told to wait.
+4. A patch that does not apply is `UPTAKE_CONFLICT`. Its would-write view names the patch
+   (`ESR <tag>: patch <NNN> did not apply`) and prints the FAIL stage line as its apply log.
+   The upstream diff is not carried yet: the view passes an empty diff. No issue is written
+   and no owner is assigned until the writer is approved (`BLOCKED.md` item 1). Any other
+   replay FAIL is `UPTAKE_RED`, with the action wait-owner. A replay job that ends with any
+   result other than success is red in the report, whatever stage line it printed.
 5. Patches are changed only by `regenerate-patches.sh`, never by hand. Routing a fixable
    conflict to fixer F1 or F2 on a `chore/esr-175*` branch is a ship step (plan 58-03), and
    no such branch exists until the owner approves the 175 conflict writer.
@@ -992,7 +997,7 @@ the patch's `+` lines.
   write mode on the scratch tree, check it again byte for byte, and commit it with the pin
   bump. The NOTE names the file.
 - FAIL: `did not apply`, `added/removed lines differ`, `dropped <path>`, or an empty
-  regeneration. Stop. Do not edit the patch. Record one conflict issue,
+  regeneration. Stop. Do not edit the patch. Record one conflict issue (until the writer is approved, only the would-write view prints it and nothing is written),
   `ESR <tag>: patch <NNN> did not apply`, with the patch name, the tags, the files, the
   verbatim apply log, the pre-image and replayed blob hashes, the moved-file list and the
   surface result. Route fixable classes (F1 patch-replay conflict, F2 red bump PR) to the
