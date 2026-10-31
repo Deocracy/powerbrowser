@@ -1038,9 +1038,12 @@ node scripts/verify-mar-update-hop.mjs
 scripts/verify-platform.sh --only mar-update-hop
 ```
 
-Attestation is verified with `gh attestation verify <mar> --repo <owner/repo> --bundle <bundle>`
-(offline, from a bundle fetched on the host with the owner's `gh` login), or, when no bundle is
-present, with a logged-in `gh` on the host. A MAR with neither is red, never skipped. Pitfall 7
+Attestation is verified with `gh attestation verify <mar> --repo <owner/repo> --signer-workflow
+<owner/repo>/.github/workflows/release.yml --source-ref refs/heads/main --deny-self-hosted-runners
+--bundle <bundle>` (offline, from a bundle fetched on the host with the owner's `gh` login), or,
+when no bundle is present, the same command without `--bundle` from a logged-in `gh` on the host.
+The three pins mean the attestation must come from this repository's release workflow on main
+on a hosted runner (the attesting `sign-publish` job), not from any workflow of the repository. A MAR with neither is red, never skipped. Pitfall 7
 (Nix mounted, or the host resolver inherited) and Pitfall 8 (attestation skipped for lack of a
 login inside the container) are the two ways this drill proves nothing; the record in
 `docs/RELEASING.md` names the path taken.

@@ -828,7 +828,9 @@ one is what the release assertion set reads or what a reviewer audits:
 - `signmar -v` and `signmar -T` output, and the node:crypto check of
   `scripts/verify-mar-signature.mjs` against `powerbrowser/packaging/mar/mar-primary.der`.
 - Attestation path taken: `bundle` (an offline `gh attestation verify --bundle`) or `host`
-  (a logged-in `gh attestation verify` on the host). Never a skip.
+  (a logged-in `gh attestation verify` on the host). Both pin `--signer-workflow` to this
+  repository's `release.yml`, `--source-ref refs/heads/main` and `--deny-self-hosted-runners`.
+  Never a skip.
 - Version pair: N and N+1 with their buildIDs. Same appVersion with a distinct buildID is the
   ratified scheme, not a relaxation: `updateIsAtLeastAsOldAs` (the client's check) refuses an
   offer only when the versions compare equal **and** the buildIDs match, so a distinct buildID

@@ -85,6 +85,8 @@ const SERVED_MODES = Object.freeze(['loopback', 'release']);
 // The hosts the release update path must never contact (UPD-15 layer 3): the Release page origin
 // and the signed asset redirect target, which expires and so cannot be named in a static descriptor.
 const RELEASE_FORBIDDEN_HOSTS = Object.freeze(['github.com', 'release-assets.githubusercontent.com']);
+// The one workflow that attests a release asset (actions/attest-build-provenance in sign-publish, a hosted runner).
+const RELEASE_WORKFLOW_REL = '.github/workflows/release.yml';
 const PRIMARY_DER_REL = 'powerbrowser/packaging/mar/mar-primary.der';
 const MOZCONFIG_REL = 'powerbrowser/packaging/mozconfig.release';
 
@@ -423,8 +425,17 @@ function runReleaseChecks(root, evDir, hop, deps, r) {
     return { skipped: false, failures: r.failures };
 }
 
+/**
+ * The gh attestation verify flags that pin WHO attested: this repository's release.yml (not any workflow
+ * with attestations: write), built from refs/heads/main, on a hosted runner (the attesting job,
+ * sign-publish, never runs on legion). --repo alone only proves some workflow of the repository attested. Pure.
+ */
+export function attestPins(repo) {
+    return ['--signer-workflow', `${repo}/${RELEASE_WORKFLOW_REL}`, '--source-ref', 'refs/heads/main', '--deny-self-hosted-runners'];
+}
+
 /** The live verifiers. The signature is node:crypto plus signmar -v; the channel is signmar -T; attestation is gh. */
-export function realDeps(root, { gh = process.env.GH_BIN ?? 'gh', signer = process.env.SIGNMAR } = {}) {
+export function realDeps(root, { gh = process.env.GH_BIN ?? 'gh', signer = process.env.SIGNMAR, pins = attestPins } = {}) {
     const tool = (cmd, argv) => {
         const res = spawnSync(cmd, argv, { encoding: 'utf8' });
         return { ok: res.status === 0, text: `${res.stdout ?? ''}${res.stderr ?? ''}`.trim(), error: res.error ? res.error.message : null };
@@ -456,9 +467,9 @@ export function realDeps(root, { gh = process.env.GH_BIN ?? 'gh', signer = proce
             return line.replace(/.*[Cc]hannel[^:]*:\s*/, '').trim() || null;
         },
         attest(mar, repo, bundle) {
-            if (bundle !== null && existsSync(bundle)) return attestOf(['attestation', 'verify', mar, '--repo', repo, '--bundle', bundle]);
+            if (bundle !== null && existsSync(bundle)) return attestOf(['attestation', 'verify', mar, '--repo', repo, ...pins(repo), '--bundle', bundle]);
             if (!tool(gh, ['auth', 'status']).ok) return { ok: false, reason: 'no attestation bundle was fetched and gh is not logged in' };
-            return attestOf(['attestation', 'verify', mar, '--repo', repo]);
+            return attestOf(['attestation', 'verify', mar, '--repo', repo, ...pins(repo)]);
         },
     };
 }
@@ -1022,11 +1033,18 @@ function selfTest() {
         const fakeGh = join(ghDir, 'gh');
         writeFileSync(fakeGh, [
             '#!/usr/bin/env node',
-            "import { readFileSync } from 'node:fs';",
+            "import { existsSync, readFileSync } from 'node:fs';",
             'const a = process.argv.slice(2);',
             "if (a[0] === 'auth') process.exit(process.env.FAKE_GH_LOGGED_IN === '1' ? 0 : 1);",
             "const repo = a[a.indexOf('--repo') + 1];",
             'if (repo !== process.env.FAKE_GH_REPO) { console.error(`no attestation for repository ${repo}`); process.exit(1); }',
+            'const flag = n => (a.includes(n) ? a[a.indexOf(n) + 1] : undefined);',
+            "const refuse = m => { console.error(`attestation not verified: ${m}`); process.exit(1); };",
+            "if (flag('--signer-workflow') !== `${repo}/.github/workflows/release.yml`) refuse(`--signer-workflow is ${flag('--signer-workflow')}, not the release workflow of ${repo}`);",
+            "if (flag('--source-ref') !== 'refs/heads/main') refuse(`--source-ref is ${flag('--source-ref')}, not refs/heads/main`);",
+            "if (!a.includes('--deny-self-hosted-runners')) refuse('--deny-self-hosted-runners is absent');",
+            "if (process.env.FAKE_GH_BUNDLE === '1' && !(flag('--bundle') && existsSync(flag('--bundle')))) refuse('--bundle <file> is absent');",
+            "if (process.env.FAKE_GH_BUNDLE === '0' && a.includes('--bundle')) refuse('--bundle was passed with no bundle fetched');",
             "if (readFileSync(a[2]).includes('TAMPERED')) { console.error('attestation digest mismatch'); process.exit(1); }",
             'process.exit(0);',
             '',
@@ -1034,7 +1052,8 @@ function selfTest() {
         chmodSync(fakeGh, 0o755);
         const ghDeps = { ...fakeDeps, attest: realDeps(dir, { gh: fakeGh }).attest };
         const expectedRepo = releaseExpectations(REPO_ROOT).repo;
-        const savedEnv = { FAKE_GH_REPO: process.env.FAKE_GH_REPO, FAKE_GH_LOGGED_IN: process.env.FAKE_GH_LOGGED_IN };
+        const ENV_KEYS = ['PATH', 'FAKE_GH_REPO', 'FAKE_GH_LOGGED_IN', 'FAKE_GH_BUNDLE'];
+        const savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]));
         const setEnv = (vars) => {
             for (const [k, v] of Object.entries(vars)) {
                 if (v === undefined) delete process.env[k];
@@ -1055,7 +1074,7 @@ function selfTest() {
             expectReleaseRed('release: attestation against the wrong repository', () => {}, 'nplus1.mar', 'attestation', ghDeps);
         });
         // Controls for the same wiring: a logged-in verification and an offline bundle both pass.
-        withEnv({ FAKE_GH_REPO: expectedRepo, FAKE_GH_LOGGED_IN: '1' }, () => {
+        withEnv({ FAKE_GH_REPO: expectedRepo, FAKE_GH_LOGGED_IN: '1', FAKE_GH_BUNDLE: '0' }, () => {
             mirrorRelease();
             const logged = runChecks(dir, ghDeps);
             console.log(logged.failures.length === 0
@@ -1065,12 +1084,25 @@ function selfTest() {
             mirrorRelease();
             writeFileSync(join(evDir, 'attestation.jsonl'), '{"bundle":"fixture"}\n');
             editHop(h => { h.attestation = { bundle: 'attestation.jsonl' }; });
+            process.env.FAKE_GH_BUNDLE = '1'; // the double now requires --bundle <existing file>
             const offline = runChecks(dir, ghDeps);
             console.log(offline.failures.length === 0
                 ? `${NAME}: --self-test -- attestation by offline bundle is GREEN`
                 : `${NAME}: --self-test FAIL -- offline-bundle attestation control went red: ${offline.failures.join(' | ')}`);
             if (offline.failures.length !== 0) ok = false;
         });
+
+        // The signer pins (WR-02): the double demands the exact --signer-workflow, --source-ref and
+        // --deny-self-hosted-runners flags, so dropping one through the pins seam goes red naming it.
+        for (const [label, pins, needle] of [
+            ['signer workflow', r => attestPins(r).slice(2), '--signer-workflow'],
+            ['source ref', r => [...attestPins(r).slice(0, 2), attestPins(r)[4]], '--source-ref'],
+            ['hosted-runner requirement', r => attestPins(r).slice(0, 4), '--deny-self-hosted-runners'],
+        ]) {
+            withEnv({ FAKE_GH_REPO: expectedRepo, FAKE_GH_LOGGED_IN: '1', FAKE_GH_BUNDLE: '0' }, () => {
+                expectReleaseRed(`release: attestation verified without the ${label} pin`, () => {}, 'nplus1.mar', needle, { ...fakeDeps, attest: realDeps(dir, { gh: fakeGh, pins }).attest });
+            });
+        }
         rmSync(ghDir, { recursive: true, force: true });
 
         // Control: same appVersion with a distinct buildID is an upgrade to the client (updateIsAtLeastAsOldAs
