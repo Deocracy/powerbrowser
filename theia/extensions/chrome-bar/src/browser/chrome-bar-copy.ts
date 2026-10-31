@@ -50,6 +50,23 @@ export const CHROME_BAR_COPY = Object.freeze({
     retryDownload: 'Retry',
     downloadProgress: (percent: number, bytes: string) => `${percent}% — ${bytes}`,
     downloadFailed: 'Failed — Retry',
+    // Phase 32 plan 02 (PAGE-01, PAGE-02, PAGE-05): the find bar, the zoom chip and the audio mark (32-UI-SPEC Copywriting Contract).
+    findLabel: 'Find in page',
+    findCount: (current: number, total: number) => `${current} of ${total}`,
+    findNotFound: 'Phrase not found',
+    findHighlightAll: 'Highlight all',
+    findMatchCase: 'Match case',
+    findWholeWords: 'Whole words',
+    findNextMatch: 'Next match (F3)',
+    findPreviousMatch: 'Previous match (Shift+F3)',
+    findClose: 'Close find bar (Esc)',
+    zoomPercent: (percent: number) => `${percent}%`,
+    zoomChipTooltip: 'Zoom level — select to reset to 100%',
+    zoomIn: 'Zoom in (Ctrl++)',
+    zoomOut: 'Zoom out (Ctrl+−)',
+    zoomReset: 'Reset zoom (Ctrl+0)',
+    muteTab: 'Mute tab',
+    unmuteTab: 'Unmute tab',
     // Phase 30 (SMODE-01..03): the address bar's modes. modeLabels is keyed by the LOCAL_MODES ids.
     modeLabels: Object.freeze({
         'command-centre': 'Command centre',

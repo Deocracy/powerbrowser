@@ -1204,3 +1204,100 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
 .pb-chrome-bar-download-action:hover {
     text-decoration: underline;
 }
+
+/* Phase 32 plan 02 (PAGE-01, PAGE-02, PAGE-05): the host stacks the 40px bar over the find strip. */
+.pb-chrome-bar-host {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+/* PAGE-01: a 32px strip docked under the bar; the page rect shrinks by its height (never overlays). */
+.pb-chrome-bar-find {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    width: 100%;
+    padding: 0 12px;
+    box-sizing: border-box;
+    background: var(--color-bg, #1c1b22);
+    color: var(--color-text, #fbfbfe);
+    border-bottom: 1px solid var(--color-border, #3f3e4a);
+    font-size: 13px;
+}
+
+.pb-chrome-bar-find-input {
+    flex: 1 1 auto;
+    min-width: 120px;
+    height: 24px;
+    padding: 0 8px;
+    box-sizing: border-box;
+    background: var(--color-surface, #2b2a33);
+    color: var(--color-text, #fbfbfe);
+    border: 1px solid var(--color-border, #3f3e4a);
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.pb-chrome-bar-find-count {
+    min-width: 96px;
+    text-align: right;
+    color: var(--color-text-muted, #9a99a8);
+}
+
+.pb-chrome-bar-find-toggle {
+    height: 24px;
+    padding: 0 8px;
+    background: transparent;
+    color: var(--color-text-muted, #9a99a8);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.pb-chrome-bar-find-toggle.is-active {
+    color: var(--color-text, #fbfbfe);
+    border-color: var(--color-border, #3f3e4a);
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-chrome-bar-find-input:focus-visible,
+.pb-chrome-bar-find-toggle:focus-visible {
+    outline: 2px solid var(--color-primary, #00a6f5);
+    outline-offset: 2px;
+}
+
+/* PAGE-02: the zoom chip, shown only while the pushed level is not 100%. */
+.pb-chrome-bar-zoom-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 32px;
+    padding: 0 8px;
+    background: transparent;
+    color: var(--color-text, #fbfbfe);
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.pb-chrome-bar-zoom-chip:focus-visible {
+    outline: 2px solid var(--color-primary, #00a6f5);
+    outline-offset: 2px;
+}
+
+/* PAGE-05: the audio mark on a strip row; muted ink when the tab is muted. */
+.pb-tab-audio {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+    color: var(--color-text, #fbfbfe);
+    cursor: pointer;
+}
+
+.pb-tab-audio.is-muted {
+    color: var(--color-text-muted, #9a99a8);
+}

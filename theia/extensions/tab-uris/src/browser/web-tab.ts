@@ -862,6 +862,45 @@ export class WebTabWidget extends BaseWidget {
         this.channel.send({ kind: 'webTabStop', tabId: this.tabId });
     }
 
+    /** Phase 32 plan 02 (PAGE-01): the query last run in this tab; kept in memory only, never logged and never pushed. */
+    findQuery = '';
+
+    /** PAGE-01: runs the find in the page. Counts and status return in the state push, not in this reply. */
+    async find(query: string, options: { caseSensitive?: boolean; entireWord?: boolean; highlightAll?: boolean } = {}): Promise<WebTabReply> {
+        this.findQuery = query;
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabFind', tabId: this.tabId, query, ...options }));
+    }
+
+    /** PAGE-01: steps to the next match of the last query, or to the previous one with `backwards`. */
+    async findNext(backwards = false): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabFindNext', tabId: this.tabId, backwards }));
+    }
+
+    /** PAGE-01: ends the find and clears the page selection. The stored query stays for the next open. */
+    async findClose(): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabFindClose', tabId: this.tabId }));
+    }
+
+    /** PAGE-02: one zoom step in; the new level arrives in the state push. */
+    async zoomIn(): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabZoomIn', tabId: this.tabId }));
+    }
+
+    /** PAGE-02: one zoom step out. */
+    async zoomOut(): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabZoomOut', tabId: this.tabId }));
+    }
+
+    /** PAGE-02: back to 100%. */
+    async zoomReset(): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabZoomReset', tabId: this.tabId }));
+    }
+
+    /** PAGE-05: mutes or unmutes this tab. The flag is explicit, never a toggle; the reply reads `audioMuted` back. */
+    async setMuted(muted: boolean): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabMute', tabId: this.tabId, muted }));
+    }
+
     /** Phase 31 (D-31-05): this tab's site information, keyed chrome-side by the overlay's own principal. */
     siteInfo(): Promise<WebTabSiteInfo> {
         return this.channel.request({ kind: 'webTabSiteInfo', tabId: this.tabId }) as Promise<WebTabSiteInfo>;

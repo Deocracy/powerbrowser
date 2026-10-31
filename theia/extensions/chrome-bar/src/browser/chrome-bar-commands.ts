@@ -93,6 +93,18 @@ export function setOpenDownloadsPanel(open: (() => void) | undefined): void {
     openDownloadsPanel = open;
 }
 
+let openFindBar: ((tab: WebTabWidget) => void) | undefined;
+
+/** Set by the chrome bar widget, which owns the find bar; the page relay's find key opens it for the pushed tab through this. */
+export function setOpenFindBar(open: ((tab: WebTabWidget) => void) | undefined): void {
+    openFindBar = open;
+}
+
+/** Opens the find bar for `tab`. A no-op until the widget registers its opener. */
+export function openFindBarFor(tab: WebTabWidget): void {
+    openFindBar?.(tab);
+}
+
 /**
  * GUI-02-owned navigable-tab predicate (13-04, flipped in 14.1-02): back,
  * forward, and reload all read enablement from this one export, and so do

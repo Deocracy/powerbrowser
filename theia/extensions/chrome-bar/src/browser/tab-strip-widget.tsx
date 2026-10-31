@@ -8,6 +8,8 @@ import { Message } from '@theia/core/shared/@lumino/messaging';
 import { DockPanel, TabBar } from '@theia/core/shared/@lumino/widgets';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
+import { WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { CHROME_BAR_COPY } from './chrome-bar-copy';
 
 /** Marks a home-pane tab that the strip lists, so the pane's own bar does not. */
 const STRIP_ONLY_CLASS = 'pb-strip-only';
@@ -637,6 +639,20 @@ export class TabStripWidget extends ReactWidget {
             onPointerDown={event => this.beginDrag(widget, event)}
         >
             <span className='pb-tab-title'>{label}</span>
+            {/* Phase 32 plan 02 (PAGE-05): the audio mark. Muted-ink when muted; its click is the one tab mute affordance. */}
+            {widget instanceof WebTabWidget && (widget.soundPlaying || widget.audioMuted) && <span
+                className={'pb-tab-audio' + (widget.audioMuted ? ' is-muted' : '')}
+                role='button'
+                aria-label={widget.audioMuted ? CHROME_BAR_COPY.unmuteTab : CHROME_BAR_COPY.muteTab}
+                title={widget.audioMuted ? CHROME_BAR_COPY.unmuteTab : CHROME_BAR_COPY.muteTab}
+                onClick={event => {
+                    event.stopPropagation();
+                    void widget.setMuted(!widget.audioMuted);
+                }}
+                onPointerDown={event => event.stopPropagation()}
+            >
+                <span className={'codicon ' + (widget.audioMuted ? 'codicon-mute' : 'codicon-unmute')} />
+            </span>}
             {widget.title.closable && <span
                 className='pb-tab-close'
                 role='button'

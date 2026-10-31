@@ -22,6 +22,7 @@ import {
     currentWebTab,
     setCurrentWebTab,
     setOpenDownloadsPanel,
+    setOpenFindBar,
 } from './chrome-bar-commands';
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
@@ -70,6 +71,9 @@ const HISTORY_HOLD_MS = 500;
 
 /** NAV-01 (27-UI-SPEC, Pitfall P7): Reload ignores clicks for 650 ms after it turns back from Stop. */
 const RELOAD_GUARD_MS = 650;
+
+/** Phase 32 plan 02 (PAGE-01): the three find toggles, held per bar session (never preferences). */
+type FindOptionKey = 'highlightAll' | 'caseSensitive' | 'entireWord';
 
 type NavGesture = 'back' | 'forward' | 'reload';
 type ButtonEvent = React.MouseEvent<HTMLButtonElement>;
@@ -175,6 +179,11 @@ export class ChromeBarWidget extends ReactWidget {
     protected downloadsOpen = false;
     protected readonly downloadsRead = new Set<number>();
 
+    /** Phase 32 plan 02 (PAGE-01): whether the find bar is open for the current web tab. */
+    protected findOpen = false;
+    /** Phase 32 plan 02 (PAGE-01): the find toggles; they re-run the find when changed. */
+    protected findOptions: Record<FindOptionKey, boolean> = { highlightAll: false, caseSensitive: false, entireWord: false };
+
     protected holdTimer: number | undefined;
     /** Set when a hold opened the history menu, so the release's click does not navigate. */
     protected suppressNavClick = false;
@@ -193,6 +202,7 @@ export class ChromeBarWidget extends ReactWidget {
     protected init(): void {
         this.addressBar.attach(this);
         setOpenDownloadsPanel(() => this.toggleDownloads());
+        setOpenFindBar(tab => this.openFind(tab));
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
@@ -511,6 +521,8 @@ export class ChromeBarWidget extends ReactWidget {
     onCurrentWidgetChanged(widget: Widget | undefined): void {
         this.stateSubscription?.dispose();
         this.stateSubscription = undefined;
+        // The find bar belongs to the tab it was opened on; the query stays in that tab.
+        this.findOpen = false;
         if (widget instanceof WebTabWidget) {
             let wasLoading = widget.loading;
             this.stateSubscription = widget.onDidChangeState(state => {
@@ -643,6 +655,130 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
     }
 
+    /** PAGE-01: opens the find bar for `tab` (the page relay's find key) and focuses its field. */
+    protected openFind(tab: WebTabWidget): void {
+        if (currentWebTab() !== tab) {
+            return;
+        }
+        this.findOpen = true;
+        this.update();
+        setTimeout(() => {
+            const input = document.getElementById('pb-chrome-bar-find-input') as HTMLInputElement | null;
+            input?.focus();
+            input?.select();
+        });
+    }
+
+    /** PAGE-01: closes the bar and clears the page selection; Esc and the close button return focus to the page. */
+    protected closeFind(restoreFocus: boolean): void {
+        const tab = currentWebTab();
+        this.findOpen = false;
+        this.update();
+        void tab?.findClose();
+        if (restoreFocus) {
+            tab?.focusPage();
+        }
+    }
+
+    /** PAGE-01: typing runs the find; an emptied field clears the page's matches and the stored query. */
+    protected onFindChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
+        const tab = currentWebTab();
+        if (!tab) {
+            return;
+        }
+        const query = e.currentTarget.value;
+        if (query.length === 0) {
+            tab.findQuery = '';
+            void tab.findClose();
+            return;
+        }
+        void tab.find(query, this.findOptions);
+    };
+
+    /** PAGE-01: Enter steps next, Shift+Enter and Shift+F3 step previous, F3 steps next, Esc closes. */
+    protected onFindKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            this.closeFind(true);
+            return;
+        }
+        if (e.key === 'Enter' || e.key === 'F3') {
+            e.preventDefault();
+            void currentWebTab()?.findNext(e.shiftKey);
+        }
+    };
+
+    /** PAGE-01: a toggle flips its option and re-runs the stored query, so the matches follow at once. */
+    protected toggleFindOption(key: FindOptionKey): void {
+        this.findOptions = { ...this.findOptions, [key]: !this.findOptions[key] };
+        const tab = currentWebTab();
+        if (tab && tab.findQuery.length > 0) {
+            void tab.find(tab.findQuery, this.findOptions);
+        }
+        this.update();
+    }
+
+    /** PAGE-01: the find strip. The count renders from the pushed match index and total, never from the query. */
+    protected renderFind(): React.ReactNode {
+        const tab = currentWebTab();
+        if (!this.findOpen || !tab) {
+            return undefined;
+        }
+        const count = tab.findTotal > 0
+            ? CHROME_BAR_COPY.findCount(tab.findCurrent, tab.findTotal)
+            : tab.findStatus === 'notFound' ? CHROME_BAR_COPY.findNotFound : '';
+        const toggle = (key: FindOptionKey, label: string): React.ReactNode => <button
+            type='button'
+            className={'pb-chrome-bar-find-toggle' + (this.findOptions[key] ? ' is-active' : '')}
+            aria-pressed={this.findOptions[key]}
+            title={label}
+            onClick={() => this.toggleFindOption(key)}
+        >{label}</button>;
+        return <div className='pb-chrome-bar-find' role='search' aria-label={CHROME_BAR_COPY.findLabel}>
+            <input
+                id='pb-chrome-bar-find-input'
+                type='text'
+                className='pb-chrome-bar-find-input'
+                aria-label={CHROME_BAR_COPY.findLabel}
+                placeholder={CHROME_BAR_COPY.findLabel}
+                defaultValue={tab.findQuery}
+                onChange={this.onFindChange}
+                onKeyDown={this.onFindKeyDown}
+            />
+            <span className='pb-chrome-bar-find-count' aria-live='polite'>{count}</span>
+            {toggle('highlightAll', CHROME_BAR_COPY.findHighlightAll)}
+            {toggle('caseSensitive', CHROME_BAR_COPY.findMatchCase)}
+            {toggle('entireWord', CHROME_BAR_COPY.findWholeWords)}
+            <button type='button' className='pb-chrome-bar-button' aria-label={CHROME_BAR_COPY.findPreviousMatch} title={CHROME_BAR_COPY.findPreviousMatch} onClick={() => void tab.findNext(true)}>
+                <span className='codicon codicon-arrow-up' />
+            </button>
+            <button type='button' className='pb-chrome-bar-button' aria-label={CHROME_BAR_COPY.findNextMatch} title={CHROME_BAR_COPY.findNextMatch} onClick={() => void tab.findNext(false)}>
+                <span className='codicon codicon-arrow-down' />
+            </button>
+            <button type='button' className='pb-chrome-bar-button' aria-label={CHROME_BAR_COPY.findClose} title={CHROME_BAR_COPY.findClose} onClick={() => this.closeFind(true)}>
+                <span className='codicon codicon-close' />
+            </button>
+        </div>;
+    }
+
+    /** PAGE-02: the zoom chip, shown only while the pushed level is not 100%; one click resets it. */
+    protected renderZoomChip(): React.ReactNode {
+        const tab = currentWebTab();
+        if (!tab || Math.abs(tab.zoom - 1) < 0.001) {
+            return undefined;
+        }
+        return <button
+            type='button'
+            className='pb-chrome-bar-zoom-chip'
+            aria-label={CHROME_BAR_COPY.zoomChipTooltip}
+            title={CHROME_BAR_COPY.zoomChipTooltip}
+            onClick={() => void tab.zoomReset()}
+        >
+            <span className='codicon codicon-zoom-in' />
+            <span>{CHROME_BAR_COPY.zoomPercent(Math.round(tab.zoom * 100))}</span>
+        </button>;
+    }
+
     protected downloadsBadge(): number {
         return this.downloadRows.filter(row => row.state === 'in-progress' || (row.state === 'finished' && !this.downloadsRead.has(row.id))).length;
     }
@@ -772,7 +908,9 @@ export class ChromeBarWidget extends ReactWidget {
         const canNavigate = chromeBarHasNavigableTab();
         const tab = currentWebTab();
         const stopping = !!tab?.loading;
-        return <div className='pb-chrome-bar'>
+        // Phase 32 plan 02: the find strip sits under the 40px bar inside a host, so the page rect shrinks by its height.
+        return <div className='pb-chrome-bar-host'>
+        <div className='pb-chrome-bar'>
             <button
                 className='pb-chrome-bar-button'
                 aria-label='Back'
@@ -830,6 +968,7 @@ export class ChromeBarWidget extends ReactWidget {
                 </button>
             )}
             {this.addressBar.render()}
+            {this.renderZoomChip()}
             <button
                 className='pb-chrome-bar-button'
                 aria-label='New Tab'
@@ -882,6 +1021,8 @@ export class ChromeBarWidget extends ReactWidget {
                     </div>
                 )}
             </div>
+        </div>
+        {this.renderFind()}
         </div>;
     }
 }
