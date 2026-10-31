@@ -12,22 +12,24 @@
 #
 # Jobs. derive validates the inputs and proves the pure logic on fixtures before
 # anything acts. detect lists the ESR release tags under the pinned major and
-# decides the bump. bump calls rebase-upstream.yml, the one replay definition,
-# with the candidate tag. bump-pr opens or updates chore/esr-<tag> in the bot
-# environment. report owns the only issues write in this file.
+# decides the ESR bump; detect-node selects and verifies the Node 24 line. The two
+# halves are separate jobs, so neither blocks the other. bump calls
+# rebase-upstream.yml, the one replay definition, with the candidate tag.
+# bump-pr and bump-pr-node open or update chore/esr-<tag> and chore/node-v24.x in
+# the bot environment, each with its own token. report owns the only issues write
+# in this file.
 #
-# Not here yet: the live GitHub facts behind derive (open PRs, check runs, the
-# Release list) are fixture-backed until plan 43-03 wires them, the Node 24
-# detector job lands in plan 43-04, release.yml joins the wake list and the
-# release-stage states arrive with Phase 50, and the maintenance sweep is Phase 48.
+# Not here yet: the live GitHub facts behind derive (check runs, the Release list)
+# are fixture-backed until plan 43-03 wires them, release.yml joins the wake list
+# and the release-stage states arrive with Phase 50, and the maintenance sweep is
+# Phase 48.
 #
-# Dry-run. Every step that commits, opens, comments or dispatches carries
-# inputs.dry-run in its if: and prints what it would write instead. A dry run
-# still validates, decides and replays, because the replay writes nothing outside
-# the runner.
+# Dry-run. Every step that commits, opens, comments or dispatches carries a negated
+# inputs.dry-run in its if:. A dry run still validates, decides and replays, because
+# the replay writes nothing outside the runner.
 #
-# Trust. Every job carries the same-repository guard for a workflow_run wake, no
-# job holds a secret except bump-pr, and every dispatched value is validated first.
+# Trust. Every job carries the same-repository guard for a workflow_run wake, only
+# bump-pr and bump-pr-node hold a secret, and the dispatched reason is validated first.
 
 name: Release train
 
@@ -106,11 +108,8 @@ jobs:
     permissions:
       contents: read
     outputs:
+      pin: ${{ steps.pin.outputs.pin }}
       candidate: ${{ steps.decide.outputs.candidate }}
-      node-version: ${{ steps.node-index.outputs.node-version }}
-      node-file: ${{ steps.node-index.outputs.node-file }}
-      node-sha256: ${{ steps.node-verify.outputs.node-sha256 }}
-      node-url: ${{ steps.node-verify.outputs.node-url }}
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -145,6 +144,8 @@ jobs:
           # grep exits 1 when no tag matches; that empty listing is a FAIL in detect-upstreams, not here.
           grep -E "^FIREFOX_${MAJOR}_[0-9]+_[0-9]+(_[0-9]+)?esr_(RELEASE|BUILD[0-9]+)$" "$RUNNER_TEMP/names.txt" > "$RUNNER_TEMP/tags.txt" || [ $? -eq 1 ]
 
+      # product-details is advisory. An outage leaves the value empty, a NOTE is printed, and
+      # the decision does not read it, so the advisory never blocks a bump.
       - name: Read the product-details advisory value (skipped in dry-run)
         id: advisory
         env:
@@ -155,9 +156,12 @@ jobs:
             echo "dry-run: would read FIREFOX_ESR from product-details (advisory only)"
             exit 0
           fi
-          VALUE=$(curl -fsSL https://product-details.mozilla.org/1.0/firefox_versions.json \
-            | node -e 'let s = ""; process.stdin.on("data", d => s += d).on("end", () => console.log(JSON.parse(s).FIREFOX_ESR))')
-          echo "esr=$VALUE" >> "$GITHUB_OUTPUT"
+          if VALUE=$(curl -fsSL https://product-details.mozilla.org/1.0/firefox_versions.json \
+            | node -e 'let s = ""; process.stdin.on("data", d => s += d).on("end", () => console.log(JSON.parse(s).FIREFOX_ESR))'); then
+            echo "esr=$VALUE" >> "$GITHUB_OUTPUT"
+          else
+            echo "release-train: NOTE -- product-details is unavailable; the advisory FIREFOX_ESR value is empty and the decision does not read it." >&2
+          fi
 
       - name: Decide the bump
         id: decide
@@ -179,8 +183,28 @@ jobs:
           cat "$RUNNER_TEMP/decide.txt"
           grep '^candidate=' "$RUNNER_TEMP/decide.txt" >> "$GITHUB_OUTPUT"
 
-      # The Node 24 line: the newest v24 entry of the release index that ships
-      # linux-x64. No such line is a hold, and the outputs stay empty.
+  # The Node half is its own detector job. A Node failure (index, release-keys, signature,
+  # tarball) fails this job and no other: the ESR detector and the ESR bump do not need it.
+  detect-node:
+    needs: derive
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      node-version: ${{ steps.node-index.outputs.node-version }}
+      node-file: ${{ steps.node-index.outputs.node-file }}
+      node-sha256: ${{ steps.node-verify.outputs.node-sha256 }}
+      node-url: ${{ steps.node-verify.outputs.node-url }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The Node 24 line: the newest v24 entry of the release index that ships linux-x64 and is
+      # strictly newer than the pin in node-runtime.json. No such line is a hold, and the outputs stay empty.
       - name: Select the newest Node 24 line (skipped in dry-run)
         id: node-index
         env:
@@ -192,7 +216,6 @@ jobs:
             exit 0
           fi
           curl -fsSL https://nodejs.org/dist/index.json -o "$RUNNER_TEMP/node-index.json"
-          # The node output goes to a file first, so a node failure stops this step.
           # The pin is passed in, so a line that is not newer than the pin holds here, before any download.
           node scripts/detect-upstreams.mjs --node-select "$RUNNER_TEMP/node-index.json" powerbrowser/packaging/node-runtime.json > "$RUNNER_TEMP/node-select.txt"
           cat "$RUNNER_TEMP/node-select.txt" >> "$GITHUB_OUTPUT"
@@ -245,9 +268,8 @@ jobs:
 
   bump-pr:
     needs: [derive, detect, bump]
-    # always(): a skipped bump (a Node-only run) must not skip this job. Every step
-    # below gates itself on the bump result or a non-empty output, so nothing publishes
-    # unless a verified candidate or Node line exists.
+    # always(): a skipped bump (no candidate) must not skip this job's own gates. Every step
+    # below gates itself on the bump result or the candidate, so nothing publishes without one.
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -256,18 +278,16 @@ jobs:
     environment: bot
     permissions: {}
     steps:
-      - name: Print the branches and PRs this run would open (dry-run)
+      - name: Print the ESR branch this run would open (dry-run)
         if: ${{ inputs.dry-run }}
         env:
           CANDIDATE: ${{ needs.detect.outputs.candidate }}
-          NODE_VERSION: ${{ needs.detect.outputs.node-version }}
         run: |
-          echo "dry-run: would open or update chore/esr-<tag> (pin move, regenerated files, replayed patches) when a candidate exists; candidate='${CANDIDATE}'"
-          echo "dry-run: would open or update chore/node-v24.x (node-runtime.json: version, url, verified sha256) when a Node line is held; node='${NODE_VERSION}'"
+          echo "dry-run: would open or update chore/esr-<tag> (pin move, regenerated files, replayed patches); candidate='${CANDIDATE}'"
 
       - name: Mint the bot App token (skipped in dry-run)
         id: app
-        if: ${{ !inputs.dry-run && (needs.bump.result == 'success' || needs.detect.outputs.node-version != '') }}
+        if: ${{ !inputs.dry-run && needs.bump.result == 'success' && needs.detect.outputs.candidate != '' }}
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.BOT_APP_ID }}
@@ -278,44 +298,10 @@ jobs:
           permission-pull-requests: write
 
       - name: Check out the repo without persisting the token (skipped in dry-run)
-        if: ${{ !inputs.dry-run && (needs.bump.result == 'success' || needs.detect.outputs.node-version != '') }}
+        if: ${{ !inputs.dry-run && needs.bump.result == 'success' && needs.detect.outputs.candidate != '' }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-
-      # The Node PR is published first, from the base commit, so the ESR branch below
-      # starts from the same base and never carries the Node edit.
-      - name: Publish chore/node-v24.x with the verified Node release (skipped in dry-run)
-        if: ${{ !inputs.dry-run && needs.detect.outputs.node-version != '' }}
-        env:
-          BASE: ${{ github.sha }}
-          NODE_VERSION: ${{ needs.detect.outputs.node-version }}
-          NODE_URL: ${{ needs.detect.outputs.node-url }}
-          NODE_SHA: ${{ needs.detect.outputs.node-sha256 }}
-          TOKEN: ${{ steps.app.outputs.token }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          set -eu
-          # Whole-value anchored matches: a value with an embedded newline cannot pass a line match.
-          NODE_RE='^v24\.[0-9]+\.[0-9]+$'
-          SHA_RE='^[0-9a-f]{64}$'
-          [[ $NODE_VERSION =~ $NODE_RE ]] || { echo "release-train: FAIL -- Node line '$NODE_VERSION' is not on major 24. Next step: a major move is a separate decision." >&2; exit 1; }
-          [[ $NODE_SHA =~ $SHA_RE ]] || { echo "release-train: FAIL -- the Node sha256 is not a 64-hex digest. Next step: do not bump." >&2; exit 1; }
-          git config user.name "release-train"
-          git config user.email "release-train@users.noreply.github.com"
-          git switch -C chore/node-v24.x "$BASE"
-          node -e 'const fs = require("fs"); const p = "powerbrowser/packaging/node-runtime.json"; const j = JSON.parse(fs.readFileSync(p, "utf8")); j["linux-x64"] = { version: process.env.NODE_VERSION, url: process.env.NODE_URL, sha256: process.env.NODE_SHA }; fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");'
-          node scripts/verify-node-major-agreement.mjs
-          git add -- powerbrowser/packaging/node-runtime.json
-          if git diff --cached --quiet; then echo "release-train: NOTE -- the Node pin already names $NODE_VERSION; no PR"; exit 0; fi
-          git commit -m "chore(node): move the Node 24 runtime pin to ${NODE_VERSION}" -m "Version, URL and sha256 verified against the signed SHASUMS256.txt in the release train's detect job."
-          AUTH=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
-          # chore/node-v24.x is this job's own branch, recomputed from the base on every run.
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" push --force origin "HEAD:refs/heads/chore/node-v24.x"
-          TITLE="chore(node): move the Node 24 runtime pin to ${NODE_VERSION}"
-          BODY="Node 24 bump to ${NODE_VERSION}. The SHASUMS256.txt signature was checked with gpgv in the release train's detect job, and the tarball sha256 equals the signed entry. verify.yml runs on this PR."
-          EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head chore/node-v24.x --title "$TITLE" --body "$BODY"; fi
 
       - name: Install Nix (skipped in dry-run)
         if: ${{ !inputs.dry-run && needs.bump.result == 'success' && needs.detect.outputs.candidate != '' }}
@@ -392,8 +378,77 @@ jobs:
           EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"; fi
 
+  # The Node PR is its own job, with its own App token and checkout, so the ESR bump never
+  # waits on it and a Node failure never reaches the ESR path.
+  bump-pr-node:
+    needs: [derive, detect-node]
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The bot environment holds the App key. The only credential this job uses is the
+    # installation token minted below, and it is passed to git and gh, never printed.
+    environment: bot
+    permissions: {}
+    steps:
+      - name: Print the Node branch this run would open (dry-run)
+        if: ${{ inputs.dry-run }}
+        env:
+          NODE_VERSION: ${{ needs.detect-node.outputs.node-version }}
+        run: |
+          echo "dry-run: would open or update chore/node-v24.x (node-runtime.json: version, url, verified sha256); node='${NODE_VERSION}'"
+
+      - name: Mint the bot App token (skipped in dry-run)
+        id: app
+        if: ${{ !inputs.dry-run && needs.detect-node.result == 'success' && needs.detect-node.outputs.node-sha256 != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check out the repo without persisting the token (skipped in dry-run)
+        if: ${{ !inputs.dry-run && needs.detect-node.result == 'success' && needs.detect-node.outputs.node-sha256 != '' }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The Node PR is published from the base commit, so it never carries the ESR edit.
+      - name: Publish chore/node-v24.x with the verified Node release (skipped in dry-run)
+        if: ${{ !inputs.dry-run && needs.detect-node.result == 'success' && needs.detect-node.outputs.node-sha256 != '' }}
+        env:
+          BASE: ${{ github.sha }}
+          NODE_VERSION: ${{ needs.detect-node.outputs.node-version }}
+          NODE_URL: ${{ needs.detect-node.outputs.node-url }}
+          NODE_SHA: ${{ needs.detect-node.outputs.node-sha256 }}
+          TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -eu
+          NODE_RE='^v24\.[0-9]+\.[0-9]+$'
+          SHA_RE='^[0-9a-f]{64}$'
+          [[ $NODE_VERSION =~ $NODE_RE ]] || { echo "release-train: FAIL -- Node line '$NODE_VERSION' is not on major 24. Next step: a major move is a separate decision." >&2; exit 1; }
+          [[ $NODE_SHA =~ $SHA_RE ]] || { echo "release-train: FAIL -- the Node sha256 is not a 64-hex digest. Next step: do not bump." >&2; exit 1; }
+          git config user.name "release-train"
+          git config user.email "release-train@users.noreply.github.com"
+          git switch -C chore/node-v24.x "$BASE"
+          node -e 'const fs = require("fs"); const p = "powerbrowser/packaging/node-runtime.json"; const j = JSON.parse(fs.readFileSync(p, "utf8")); j["linux-x64"] = { version: process.env.NODE_VERSION, url: process.env.NODE_URL, sha256: process.env.NODE_SHA }; fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");'
+          node scripts/verify-node-major-agreement.mjs
+          git add -- powerbrowser/packaging/node-runtime.json
+          if git diff --cached --quiet; then echo "release-train: NOTE -- the Node pin already names $NODE_VERSION; no PR"; exit 0; fi
+          git commit -m "chore(node): move the Node 24 runtime pin to ${NODE_VERSION}" -m "Version, URL and sha256 verified against the signed SHASUMS256.txt in the release train's detect-node job."
+          AUTH=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          # chore/node-v24.x is this job's own branch, recomputed from the base on every run.
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" push --force origin "HEAD:refs/heads/chore/node-v24.x"
+          TITLE="chore(node): move the Node 24 runtime pin to ${NODE_VERSION}"
+          BODY="Node 24 bump to ${NODE_VERSION}. The SHASUMS256.txt signature was checked with gpgv in the release train's detect-node job, and the tarball sha256 equals the signed entry. verify.yml runs on this PR."
+          EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head chore/node-v24.x --title "$TITLE" --body "$BODY"; fi
+
   report:
-    needs: [derive, detect, bump, bump-pr]
+    needs: [derive, detect, detect-node, bump, bump-pr, bump-pr-node]
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -404,10 +459,12 @@ jobs:
         env:
           REASON: ${{ needs.derive.outputs.reason }}
           CANDIDATE: ${{ needs.detect.outputs.candidate }}
+          NODE_VERSION: ${{ needs.detect-node.outputs.node-version }}
           BUMP: ${{ needs.bump.result }}
           BUMP_PR: ${{ needs.bump-pr.result }}
+          BUMP_PR_NODE: ${{ needs.bump-pr-node.result }}
         run: |
-          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} bump=${BUMP} bump-pr=${BUMP_PR}"
+          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} node=${NODE_VERSION:-none} bump=${BUMP} bump-pr=${BUMP_PR} bump-pr-node=${BUMP_PR_NODE}"
 
       - name: Print the tracking issue this run would write (dry-run)
         if: ${{ inputs.dry-run }}

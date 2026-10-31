@@ -1078,7 +1078,7 @@ runs `./mach package` and adds these to the staged application directory:
 The Node download happens at build time and is deliberately not in the
 runtime allowlist: that file governs browser/sidecar egress only (R15).
 
-The pin's provenance is established by the release train's detect job, not by
+The pin's provenance is established by the release train's detect-node job, not by
 this script. For each Node 24 bump that job fetches nodejs.org's
 `SHASUMS256.txt` and its `.sig`, verifies the signature with `gpgv` against the
 nodejs/release-keys keyring, and asserts that the tarball's sha256 equals the
