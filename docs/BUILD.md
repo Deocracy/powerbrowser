@@ -1076,6 +1076,11 @@ decision per RESEARCH open question 1 and is NOT procured in this phase.
   stages one architecture's bundle, its Node pinned by `node-runtime.json`
   (`darwin-arm64`, `darwin-x64`), and the Theia sidecar. The universal unify
   and the DMG are plan 55-03.
+- The five DMG branding inputs (`document.icns`, `disk.icns`, `background.png`,
+  `dsstore`, `Assets.car`) are generated into `generated/branding/<variant>/`
+  with no tracked comparand and no brand input. Their placeholder meanings and
+  the `actool` upgrade path are in `docs/RELEASING.md`, "Phase 55 macOS build
+  inputs".
 - The per-OS install → launch → uninstall → no-residue matrix, plus the
   alongside-stock-Firefox interleaved launch, run there (matrix section
   below records the Linux cells green and the staged cells with unblocks).

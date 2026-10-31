@@ -145,6 +145,24 @@ notarization ticket. What the user sees:
 - No macOS asset is published until a person has installed, launched, updated,
   and removed the build on a real Mac and recorded every cell verbatim.
 
+Phase 55 macOS build inputs (recorded, not yet built):
+
+- Per-target mozconfigs `powerbrowser/packaging/mozconfig-macos-aarch64` and
+  `-x86_64` share one builder with the Linux dev row. They differ in the Darwin tail
+  (`--target`, `MACOS_SDK_DIR` at the bootstrap `MacOSX26.5.sdk`, `MKFSHFS`, `DMG_TOOL`,
+  `HFS_TOOL`) and in their objdir. Both channel lines match the shared update channel.
+- Node for macOS: `darwin-arm64` and `darwin-x64` pins in `node-runtime.json`, each the
+  `.tar.gz` sha256 from nodejs.org `SHASUMS256.txt` for v24.19.0. The owner runs
+  `gpg --verify SHASUMS256.txt` against the Node release keys before a release; the
+  script enforces the pin, not the key trust.
+- Five branding inputs are generated, not hand-written, for both variants:
+  `document.icns` and `disk.icns` (the application icon set), `background.png`
+  (a 128-pixel placeholder backdrop), `dsstore` (empty: Finder uses its default layout),
+  and `Assets.car` (empty: the Makefile copy succeeds without third-party artwork).
+  The placeholders are not designed artwork. `Assets.car` is expected to degrade the
+  Dock and Finder icon. The upgrade path is a real asset catalog built with `actool`
+  (`xcrun actool`) on a Mac; the plan 55-04 Mac session observes the icon.
+
 ## Deferred signing items
 
 This is the **one** deferral register in this document. Stage

@@ -3422,6 +3422,47 @@ function emitFirefoxIcnsFile(config, variant) {
 }
 
 /**
+ * Phase 55 (PKG-14): the five cocoa and DMG branding inputs. Each is emitted into
+ * generated/ with no tracked comparand and no brand directory input, so a brand
+ * change never adds a file to the tree. The two upstream consumers name them:
+ * upstream/browser/app/Makefile.in copies firefox.icns, document.icns and
+ * Assets.car into the bundle, and upstream/toolkit/moz.configure passes dsstore,
+ * background.png and disk.icns to the DMG step.
+ *
+ * Honest placeholders. These are not designed artwork:
+ *  - document.icns and disk.icns are the application icon's own raster set through
+ *    the same icns writer (emitFirefoxIcnsFile).
+ *  - background.png is the 128-pixel application raster, used as a backdrop.
+ *  - dsstore is an empty file. The DMG extra-file copy finds a file, and Finder
+ *    falls back to its default window layout.
+ *  - Assets.car is an empty file. The unconditional Makefile copy succeeds without
+ *    copying third-party artwork.
+ * RISK, stated plainly: Info.plist declares both CFBundleIconFile firefox.icns and
+ * CFBundleIconName AppIcon. macOS prefers the name, which it resolves out of
+ * Assets.car, so an empty Assets.car is expected to degrade the Dock and Finder
+ * icon to a generic one. Upgrade path: build a real asset catalog with actool
+ * (xcrun actool) on a Mac, then replace this emitter's output. The Mac session in
+ * plan 55-04 observes the icon and records it.
+ */
+function emitDmgBackgroundPng(config, variant) {
+    void config;
+    void variant;
+    return iconPngBytes(128);
+}
+
+function emitDmgDsStorePlaceholder(config, variant) {
+    void config;
+    void variant;
+    return Buffer.alloc(0);
+}
+
+function emitAssetsCarPlaceholder(config, variant) {
+    void config;
+    void variant;
+    return Buffer.alloc(0);
+}
+
+/**
  * The installer support address both NSIS URL defines carry.
  *
  * installer.support_url first; product.homepage as the fallback, so a
@@ -3989,6 +4030,19 @@ export const TARGETS = Object.freeze([
         variant: 'release',
         emit: emitFirefoxIcnsFile,
     }),
+    // NEW (Phase 55, PKG-14): the five cocoa and DMG branding inputs, per variant.
+    // No tracked comparand: see emitDmgBackgroundPng for the placeholder labels and the
+    // Assets.car risk. Each row is a literal path; no brand value reaches a write path.
+    Object.freeze({ generated: 'branding/dev/document.icns', variant: 'dev', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/dev/disk.icns', variant: 'dev', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/dev/background.png', variant: 'dev', emit: emitDmgBackgroundPng }),
+    Object.freeze({ generated: 'branding/dev/dsstore', variant: 'dev', emit: emitDmgDsStorePlaceholder }),
+    Object.freeze({ generated: 'branding/dev/Assets.car', variant: 'dev', emit: emitAssetsCarPlaceholder }),
+    Object.freeze({ generated: 'branding/release/document.icns', variant: 'release', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/release/disk.icns', variant: 'release', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/release/background.png', variant: 'release', emit: emitDmgBackgroundPng }),
+    Object.freeze({ generated: 'branding/release/dsstore', variant: 'release', emit: emitDmgDsStorePlaceholder }),
+    Object.freeze({ generated: 'branding/release/Assets.car', variant: 'release', emit: emitAssetsCarPlaceholder }),
     // NEW (03-03): GEN-03's installer branding fields. Two NSIS/tile files
     // per variant under branding/ plus two XML field fragments per variant
     // under installer/. No tracked comparand: no hand-written originals
