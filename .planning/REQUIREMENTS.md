@@ -92,7 +92,7 @@ returning null.
 
 - [x] **PAGE-01**: User can find in page with Ctrl+F and F3: highlight all, match case, whole words, match count, without hiding the page
 - [x] **PAGE-02**: User can zoom a page with Ctrl+plus, Ctrl+minus and Ctrl+0, and sees and resets the zoom level from a chip in the pill
-- [ ] **PAGE-03**: User can print the page with the system print dialog (Ctrl+P on a web page)
+- [x] **PAGE-03**: User can print the page with the system print dialog (Ctrl+P on a web page)
 - [ ] **PAGE-04**: User sees site favicons on tabs, the strip and the pill
 - [x] **PAGE-05**: User sees which tabs play audio and can mute or unmute a tab, including with Ctrl+M
 - [ ] **PAGE-06**: User can see downloads in a downloads button and panel, open them, show them in the folder, and cancel or retry them
@@ -242,7 +242,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | MENU-04 | Phase 31 | Pending |
 | PAGE-01 | Phase 32 | Complete |
 | PAGE-02 | Phase 32 | Complete |
-| PAGE-03 | Phase 32 | Pending |
+| PAGE-03 | Phase 32 | Complete |
 | PAGE-04 | Phase 32 | Pending |
 | PAGE-05 | Phase 32 | Complete |
 | PAGE-06 | Phase 32 | Pending |
