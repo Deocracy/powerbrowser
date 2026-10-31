@@ -26,9 +26,9 @@ affects: [52-04 fixer workflow jobs, Phase 43 train skeleton, Phase 53 triage]
 actuals:
   tokens: 11720
   tasks: 3
-  commits: 3
+  commits: 5
 plan_head_before: 69659b446e1c91aa2654dbc59f5b5123f30b9e07
-plan_head_after: db1de9c90077c0150c196c543044411fa5966314
+plan_head_after: 3b9e7388
 
 tech-stack:
   added: []
@@ -51,7 +51,7 @@ key-decisions:
   - "MAIN_RED (red main, FIX-01 class F3) is a dispatch-level state name, not a STATES row. Phase 43 has no main-verify state yet; the fixture is the F3 dispatch fixture"
   - "The fixer-auth ANTHROPIC_API_KEY confinement is scoped to release-train.yml. triage.yml holds its key in its own triage environment (Phase 53) and is outside this plan"
   - "The Claude step carries the federation ids as with: inputs; the rule asserts their presence, not their values (values are repository variables)"
-  - "fixer-prepare.sh runs from the trusted root and passes explicit --upstream and --patches to regenerate-patches.sh. It never writes into work/ except through git intent-to-add in emit mode"
+  - "fixer-prepare.sh runs from the trusted root and passes explicit --upstream and --patches to regenerate-patches.sh. After the model runs it never runs git inside work/ and never reads work/.git: the diff is built from a pristine copy of the git directory taken before the model ran (see the security fix section)"
 
 patterns-established:
   - "Plant anchors for the fixer fixture are built from the same constants the rules read (FIX_IF, GUARD, FIX_PIN), so a rule change moves the fixture with it"
@@ -78,7 +78,7 @@ status: complete
 - `scripts/release-train.mjs` gains NEEDS_OWNER (derived when a fixable red meets `fixAttempts >= FIX_BUDGET`, with FIX_BUDGET = 2), `fixerDispatch(facts)` (FIX-01: release.yml, fork, claude-fix/, bot actor, external author, class, target branch, budget, key-not-greater and fingerprint guards), `fixerInputsCheck` (the fix job's own re-check of its seven inputs), `fixAttempts(runs, key, cls)` (exact run-name match, verdict ignored), `keyGreater`, and `renderReleaseRed`. The TRAIN-06 render adds `train:blocked`, the owner assignee and the failing-log link for CONFLICT, BUMP_RED and NEEDS_OWNER.
 - `node scripts/release-train.mjs --fixer-inputs <key> <class> <branch> <target-tag> <check@sha> <attempt> <latest-tag|''>` exits 0 on valid inputs and 2 on bad argument counts.
 - `scripts/verify-workflows.mjs` gains `fixer-spend` (timeout-minutes 90, claude-fixer group) and `fixer-auth` (id-token on fix only, federation ids in the Claude step, no id-token on fix-gate or fix-pr, ANTHROPIC_API_KEY confined to environment fixer in release-train.yml). The good fixer triple now carries the federation ids and stays green.
-- `scripts/fixer-prepare.sh`: `--tag=<gecko-tag>` prep (fetch at the tag, conflict-marker NOTE, baseline regenerate-patches --check over the target's patches) and `--emit-diff --out=<abs path>` (work.diff, upstream excluded, new files via intent-to-add). Negative paths fail closed with a Next step line.
+- `scripts/fixer-prepare.sh`: `--tag=<gecko-tag> --state=<dir>` prep (fetch at the tag, pristine copy of work/.git, conflict-marker NOTE, baseline regenerate-patches --check over the target's patches), `--emit-diff --state=<dir> --out=<abs path>` (work.diff built from the pristine copy, upstream excluded, ignored paths forced in), and `--self-test` (planted git config, hook and attributes change refused). Negative paths fail closed with a Next step line. The first version of this script ran git inside work/; the security fix below replaced it.
 - `docs/RELEASING.md` gains `### Fixer authentication (FIX-12)` after the GitHub Apps section. The outcome is WIF, the fallback is confined to the fixer environment, and the credential state is marked pending the 52-05 checkpoint.
 
 ## Task Commits
@@ -95,7 +95,8 @@ status: complete
 - `node scripts/release-train.mjs --self-test`: `PASS -- 6 states set-equal to 6 fixtures, 24 planted faults went red naming their drift, and 24 controls stayed green (section: all)`
 - Dispatch fixtures: F1 (CONFLICT on chore/esr-*), F2 (BUMP_RED on chore/esr-*), F2 (BUMP_RED on renovate/*) and F3 (MAIN_RED on main) each dispatch exactly the seven keys. The dispatch plants go red naming `release.yml`, `fork`, `external-author`, `bot-actor`, `claude-fix/`, `key-not-greater`, `target-branch` and `budget`.
 - Fingerprint format: `<check-label>@<40-hex base sha>`, for example `verify@11d5960a326750d5838078e36cf38b85af677262`.
-- `node scripts/verify-workflows.mjs --self-test`: `PASS -- 115 planted faults went red naming the file and job, and 11 controls stayed green`. Of the 115, 4 are fixer-spend and 5 are fixer-auth.
+- `node scripts/verify-workflows.mjs --self-test`: `PASS -- 121 planted faults went red naming the file and job, and 11 controls stayed green`. Of the 121, 4 are fixer-spend, 5 are fixer-auth and 6 are the trust-boundary fixer-tools plants (added by the security fix).
+- `scripts/fixer-prepare.sh --self-test`: `PASS -- a plain edit is emitted; a planted work/.git/config, a planted hook and a .gitattributes change are each refused before any command from them runs`. Registry row `fixer-prepare-self-test`.
 - `node scripts/verify-workflows.mjs`: `PASS -- 6 workflow(s), 22 uses: line(s) pinned and admitted, rules enforced: ... fixer-spend, fixer-auth, ...`
 - `bash -n scripts/fixer-prepare.sh` passes. Emit mode, run in a scratch repo: the modified and new files appear in the diff and the git-ignored file does not; no mode, a relative `--out` and a bad `--tag` each exit 1 with a Next step.
 - `scripts/verify-platform.sh --only workflows`, `--only workflows-self-test`, `--only zizmor` and `--only release-train-logic-self-test`: all PASS.
@@ -128,9 +129,20 @@ status: complete
 - The first plant I wrote for "a fix run of another release key" tested a control as if it were a fault. The self-test went red, and I moved it to the controls. The attempt-plant list is now empty.
 - An earlier `node -e` script quoted `''` inside a shell single-quoted string and corrupted `fixerInputsCli`. It was repaired with an Edit and re-run through the full self-test before commit.
 
+## Security fix: work/.git is untrusted after the model runs (CR-01 trust boundary)
+
+The coordinator flagged a remote-code path in the Task 3 design, which this run fixed before completing the plan:
+
+- **The defect.** After Claude runs, `work/` is attacker-controlled, including `work/.git/config` and hooks. The first `fixer-prepare.sh` ran `git -C work diff` after the model, and the fixer's allowlist granted `Bash(git -C work diff:*)` and `Edit(work/**)`. A planted `core.fsmonitor` or `diff.external` would run inside the job that holds the federated credential. The allowlist also let the model write files through `git diff --output`.
+- **The fix in `scripts/fixer-prepare.sh`.** Prep copies `work/.git` into `<state>/base.git` before the model runs, and takes the base sha from that copy. Emit runs no git inside `work/`. Its refusals come before any git call: a `work/.git` that differs from the pristine copy (a plain `diff -rq`), and a diff that touches `.gitattributes`. Every git call uses only the pristine copy, through `GIT_DIR`, a throwaway index and a copied tree, with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `core.fsmonitor=false`, `core.hooksPath=/dev/null`, `core.attributesFile=/dev/null`, and `--no-ext-diff --no-textconv`. The copy excludes `.git` and `upstream/`, and ignored paths are forced in with `add -A -f` so the gate sees them.
+- **Proof.** `scripts/fixer-prepare.sh --self-test` plants a `core.fsmonitor` and a `diff.external` in `work/.git/config`, a hook under `work/.git/hooks`, and a `.gitattributes` change. Each is refused, and a marker file each planted command would have created is asserted absent. A plain edit is emitted with its body, and a relative `--out` is refused. It runs in `--quick` as the `fixer-prepare-self-test` row.
+- **The fixer's allowlist (`--allowedTools`).** No git grant remains. The model gets only `Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches)` and `Bash(scripts/verify-platform.sh --quick)`, both exact with no free arguments, plus `Edit(work/**)` and `Read`. The model reads its changes directly and does not need a git command to see them.
+- **The disallowed list (`--disallowedTools`).** Adds `Edit(work/.git/**)`, `Write(work/.git/**)`, `Edit(work/**/.gitattributes)` and `Write(work/**/.gitattributes)`, next to the existing patches denies.
+- **The workflows row (`fixer-tools`).** Refuses any wildcard shell grant, a `git` wildcard included. Requires the `.git` and `.gitattributes` denies whenever `Edit` or `Write` is granted on `work/`. Five new plants go red naming the grant or the missing deny, plus `wildcard git grant` and `wildcard regenerate grant`. The self-test now reports 121 planted faults and 11 controls.
+
 ## Threat Flags
 
-None. No new network surface, credential path or trust boundary is introduced beyond the fixer contract this plan asserts. fixer-prepare.sh's only network use is the pinned fetch through fetch-upstream.sh.
+fixer-prepare.sh's only network use is the pinned fetch through fetch-upstream.sh. No new network surface or credential path is introduced. The `work/.git` trust boundary above is the one the plan did not anticipate, and it is now enforced.
 
 ---
 *Phase: 52-claude-fixer-f*
