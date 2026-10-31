@@ -1318,8 +1318,11 @@ jobs:
           GOT=$(sha256sum "$DIFF" | cut -d' ' -f1)
           if [ "$GOT" != "$DIFF_SHA256" ]; then echo "release-train: FAIL -- the downloaded diff has sha256 ${GOT}, not the ${DIFF_SHA256} the fix job recorded. Next step: do not use this artifact; re-dispatch the fixer." >&2; exit 1; fi
           git cat-file -e "${BASE_SHA}^{commit}" || { echo "release-train: FAIL -- the base commit ${BASE_SHA} is not in the fetched history. Next step: re-dispatch against the current tip." >&2; exit 1; }
+          # The installer-build-proof row fetches makensis with nix at run time, which the isolated gate (no network) cannot do:
+          # it is built here, before the isolation, and put on the isolated command's PATH.
+          export DIFF TARGET_TAG BASE_SHA NSIS_BIN="$(nix build --no-link --print-out-paths nixpkgs#nsis)/bin"
           set +e
-          nix develop .#theia --command bash scripts/fixer-isolate.sh -- node scripts/verify-fix-gate.mjs --diff="$DIFF" --tag="$TARGET_TAG" --ref="$BASE_SHA"
+          nix develop .#theia --command bash -c 'PATH="$NSIS_BIN:$PATH"; bash scripts/fixer-isolate.sh -- node scripts/verify-fix-gate.mjs --diff="$DIFF" --tag="$TARGET_TAG" --ref="$BASE_SHA"'
           STATUS=$?
           set -e
           # The outputs are written here, by this shell, after the isolated command and every process in it has ended.

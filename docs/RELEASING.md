@@ -626,7 +626,22 @@ What is live and what is a contract that nothing runs yet:
   the gate passed. `fix` exports the diff's sha256 and the base commit; `fix-gate` and
   `fix-pr` check out exactly that base, check the artifact against the digest, and
   `fix-pr` re-runs the pure gate stages on the bytes it publishes. The gate's executing
-  stages run with no network and no new privileges (`scripts/fixer-isolate.sh`). If the
+  stages (5 to 8: `check-patch-surface`, the brand scan, `diff-theia-core`, `verify-platform
+  --quick`) run through `scripts/fixer-isolate.sh`: no network, no new privileges, no
+  capability, a scrubbed environment (no `GITHUB_*`, `ACTIONS_*`, `RUNNER_*` or credential
+  variable), the supplementary groups cleared (sudo form), every filesystem unix socket under
+  `/run`, `/var/run`, `/dev/shm` and `$XDG_RUNTIME_DIR` masked, and a mount namespace in which
+  every mount is read-only except a per-run scratch directory. The runner's file-command files
+  (`GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY`, `GITHUB_STATE`) and the
+  trusted script overlay (`scripts/`, `inventory/`, `.github/` and the baselines laid over the
+  gate's worktree) are read-only, so a hostile stage can neither steer a later step through the
+  runner nor rewrite the scripts a later stage runs. **Stages 5 to 8 are advisory against a hostile
+  diff**: code a stage runs can still lie about its own exit status, so a green dynamic stage means
+  the rows ran and reported green, not that the diff passed them. The binding check is `fix-pr`'s
+  static re-run (`verify-fix-gate.mjs --static-only`) on the hashed bytes, plus the human review
+  of the PR and CI on it. The unprivileged-user-namespace form cannot clear supplementary groups,
+  and the `sudo` form has not run on a hosted runner (its self-test reports itself untested on a
+  host without passwordless sudo; BLOCKED.md item 6). If the
   publish plan refuses (a commit the bot did not author is on the `claude-fix/` branch)
   `fix-pr` ends red; if the gated diff changes nothing, it ends with a warning and a job
   summary and opens nothing.
