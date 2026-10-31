@@ -138,7 +138,10 @@ jobs:
         id: rebase
         env:
           REBASE_TAG: ${{ inputs.tag }}
-        run: nix develop .#theia --command bash scripts/rebase-upstream.sh --tag "$REBASE_TAG" 2>&1 | tee "$RUNNER_TEMP/rebase.log"
+        # pipefail: without it the step takes tee's status and a failed replay reads as success.
+        run: |
+          set -o pipefail
+          nix develop .#theia --command bash scripts/rebase-upstream.sh --tag "$REBASE_TAG" 2>&1 | tee "$RUNNER_TEMP/rebase.log"
 
       # Names the stage for the release train. The first FAIL line in the replay log
       # is the stage; a replay that succeeded reports replayed. Runs even on failure.
