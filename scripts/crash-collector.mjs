@@ -80,10 +80,11 @@ export const ANNOTATION_ALLOWLIST = Object.freeze([
     'ProductName',
     'Version',
     'BuildID',
-    'Platform',
     'ReleaseChannel',
     'CrashTime',
     'StartupTime',
+    'OS',
+    'CPUArchitecture',
 ]);
 /** Annotation values larger than this are not stored (paths and blobs ride the minidump, never the index). */
 export const MAX_ANNOTATION_BYTES = 4096;

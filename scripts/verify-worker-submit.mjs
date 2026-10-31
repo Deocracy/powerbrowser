@@ -129,7 +129,8 @@ const GECKO_EXTRA = JSON.stringify({
     ProductName: 'PowerBrowser',
     Version: '1.6.0',
     BuildID: '20261031000000',
-    Platform: 'Linux',
+    OS: 'Linux',
+    CPUArchitecture: 'amd64',
     ReleaseChannel: 'release',
     CrashTime: '1761900000',
     NotAllowlisted: 'dropped',
@@ -283,6 +284,20 @@ function sharedNameDisagreements() {
     return problems;
 }
 
+/** Every allowlisted annotation is a Gecko annotation sent with a report (derived from CrashAnnotations.yaml, never a kept list). */
+function allowlistProblems() {
+    const yaml = readFileSync(join(REPO_ROOT, 'upstream/toolkit/crashreporter/CrashAnnotations.yaml'), 'utf8');
+    const problems = [];
+    for (const name of crashSubmit.ANNOTATION_ALLOWLIST) {
+        const block = new RegExp(`^${name}:\\s*\\n((?:[ \\t]+.*\\n|\\s*\\n)*)`, 'm').exec(yaml);
+        const scope = block && /^\s+scope:\s*(\S+)/m.exec(block[1])?.[1];
+        if (scope !== 'report' && scope !== 'ping') {
+            problems.push(`the annotation allowlist names ${name}, which is not a Gecko annotation sent with a report (CrashAnnotations.yaml scope ${JSON.stringify(scope ?? null)}); a field Gecko never writes can only be client-supplied`);
+        }
+    }
+    return problems;
+}
+
 // --- the in-memory R2 stub and the synthetic Request --------------------------------
 
 function memoryStore({ failOn = null } = {}) {
@@ -424,7 +439,7 @@ async function acceptProblems() {
         return problems;
     }
     const record = JSON.parse(store.objects.get(`${crashSubmit.CRASH_PREFIX}${id}.json`));
-    const want = ['BuildID', 'CrashTime', 'Platform', 'ProductName', 'ReleaseChannel', 'Version'];
+    const want = ['BuildID', 'CPUArchitecture', 'CrashTime', 'OS', 'ProductName', 'ReleaseChannel', 'Version'];
     if (JSON.stringify(Object.keys(record.annotations).sort()) !== JSON.stringify(want)) {
         problems.push(`the record kept annotations ${JSON.stringify(Object.keys(record.annotations).sort())}, want exactly the allowlisted scalars ${JSON.stringify(want)}`);
     }
@@ -617,6 +632,7 @@ function descriptorProblems(root) {
 async function workerProblems(workerPath) {
     return [
         ...sharedNameDisagreements(),
+        ...allowlistProblems(),
         ...parserDisagreements(),
         ...(await handlerProblems()),
         ...(await acceptProblems()),
@@ -663,6 +679,7 @@ async function selfTest() {
     // Worker check. The unmutated control above is green, so a red is the mutation's, and it must name its rule.
     const handlerPlants = [
         ['allowlist filter removed', 'if (!ANNOTATION_ALLOWLIST.includes(key)) return;', '', 'allowlisted scalars'],
+        ['allowlist names a field Gecko never writes', "    'CPUArchitecture',\n]);", "    'CPUArchitecture',\n    'Platform',\n]);", 'not a Gecko annotation'],
         ['client part names stored', '(RECORDABLE_PART_NAMES.includes(part.name) ? part.name : OTHER_PART_NAME)', 'part.name', 'client part name'],
         ['name read from filename', 'const name = dispositionName(latin1(chunk.subarray(0, headerEnd)));', 'const name = /name="([^"]*)"/i.exec(latin1(chunk.subarray(0, headerEnd)))?.[1] ?? null;', 'filename before name'],
         ['second minidump part allowed', '.length !== 1) return', '.length < 1) return', 'two minidump parts'],

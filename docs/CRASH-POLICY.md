@@ -76,8 +76,12 @@ its minidump does.
 Annotations are allowlist-only. The only submitter-supplied fields ever
 stored are:
 
-- `ProductName`, `Version`, `BuildID`, `Platform`, `ReleaseChannel`,
-  `CrashTime`, `StartupTime`
+- `ProductName`, `Version`, `BuildID`, `ReleaseChannel`, `CrashTime`,
+  `StartupTime`, `OS`, `CPUArchitecture`
+
+Each of these is a crash annotation that Gecko writes and sends with a report
+(`upstream/toolkit/crashreporter/CrashAnnotations.yaml`); the gate derives that
+from the file. A name Gecko never writes is not on the list.
 
 Any other field is dropped before the write, and any allowlisted value
 larger than 4096 bytes is dropped with it. Allowlisted values are scalars: a
@@ -177,9 +181,11 @@ otherwise. The loopback collector keeps accepting any bytes in that part.
 ## Symbols
 
 `mach buildsymbols` writes one `<PKG_BASENAME>.crashreporter-symbols.zip` per
-BUILD_TARGET on a reporter-enabled build. The archive name derives from
+BUILD_TARGET on a reporter-enabled build. The archive suffix derives from
 `upstream/toolkit/mozapps/installer/package-name.mk`, and
-`scripts/verify-release-symbols.mjs` gates it.
+`scripts/verify-release-symbols.mjs` gates it. The on-disk name carries a
+locale, the Gecko version and the platform, so the release workflow renames the
+zip to the asset name (`docs/BUILD.md`, Crash symbols per target).
 
 - **Attachment.** Each Release carries one symbols zip per target, as part of
   the DIST-07 asset set, with its versioned and stable names and an entry in
@@ -195,13 +201,25 @@ Read a crash report with the symbols of the build that produced it.
 
 1. Find the record. Take the `CrashID` from the user's report, or the
    `<uuid>` from the store. Its `<uuid>.json` names the build in the
-   `Version`, `BuildID` and `Platform` annotations.
-2. Find the symbols. The Release asset name is
-   `<app>-<version>.<target>.crashreporter-symbols.zip`, where `<target>` is the
-   BUILD_TARGET of the `Platform` annotation (the asset table in
-   `docs/RELEASING.md` lists the targets). Worked example for the 140.12-1
-   Linux release: `powerbrowser-140.12-1.linux-x86_64.crashreporter-symbols.zip`.
-   Download it, check its line in `SHA256SUMS`, and extract it to a directory.
+   `Version`, `BuildID`, `OS` and `CPUArchitecture` annotations. These exist in
+   `upstream/toolkit/crashreporter/CrashAnnotations.yaml`, and Gecko writes
+   `OS` and `CPUArchitecture` itself (`nsExceptionHandler.cpp`,
+   `RecordPlatformAnnotations`).
+2. Find the Release and the target.
+   - The `Version` annotation is the Gecko version (`MOZ_APP_VERSION`, for
+     example 153.1.0). The asset name carries the tag version (the tag minus its
+     `v`, for example 140.12-1), which is a different number. Match them through
+     the operator record, which lists for each Release its tag, its `Version`
+     and its `BuildID`. A `BuildID` identifies one build.
+   - The target token comes from `OS` and `CPUArchitecture`: `Linux` and
+     `amd64` is `linux-x86_64`. The other targets are added to this line when
+     their tokens are observed (see the asset table in `docs/RELEASING.md`).
+     `minidump-stackwalk` also prints the system info of the dump, which
+     confirms the pair.
+   - The asset is `<app>-<tag version>.<target>.crashreporter-symbols.zip`.
+     Worked example for the 140.12-1 Linux release:
+     `powerbrowser-140.12-1.linux-x86_64.crashreporter-symbols.zip`. Download it,
+     check its line in `SHA256SUMS`, and extract it to a directory.
 3. Read the dump:
 
        minidump-stackwalk <uuid>.dmp <symbols-dir>/ > stack.txt

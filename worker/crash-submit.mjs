@@ -51,10 +51,11 @@ export const ANNOTATION_ALLOWLIST = Object.freeze([
     'ProductName',
     'Version',
     'BuildID',
-    'Platform',
     'ReleaseChannel',
     'CrashTime',
     'StartupTime',
+    'OS',
+    'CPUArchitecture',
 ]);
 export const MAX_ANNOTATION_BYTES = 4096;
 /** Parser bounds (WR-01, WR-02): a delimiter shorter than this or longer than the RFC 2046 limit is not multipart. */

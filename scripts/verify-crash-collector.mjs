@@ -568,7 +568,8 @@ function selfTest() {
                 ProductName: 'PowerBrowser',
                 Version: '1.6.0',
                 BuildID: '20261031000000',
-                Platform: 'Linux',
+                OS: 'Linux',
+                CPUArchitecture: 'amd64',
                 ReleaseChannel: 'release',
                 CrashTime: { unix: 1761900000 },
                 NotAllowlisted: 'dropped',
@@ -589,7 +590,7 @@ function selfTest() {
             const record = id ? JSON.parse(readFileSync(join(storeDir, `${id}.json`), 'utf8')) : null;
             const stored = record ? Object.keys(record.annotations).sort() : [];
             // Non-allowlisted (NotAllowlisted, Nested), oversized (StartupTime) and non-scalar (CrashTime) keys are dropped.
-            const wantStored = ['BuildID', 'Platform', 'ProductName', 'ReleaseChannel', 'Version'];
+            const wantStored = ['BuildID', 'CPUArchitecture', 'OS', 'ProductName', 'ReleaseChannel', 'Version'];
             if (verdict.status !== 200 || !record) {
                 console.error(`${NAME}: --self-test FAIL -- a Gecko-shaped extra part (${shape.filename}, ${shape.mime}) lost the report: answered ${verdict.status}, want 200 CrashID= with a stored record`);
                 ok = false;
