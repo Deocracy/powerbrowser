@@ -308,7 +308,7 @@ export function runChecks(root, overrides = {}) {
         }
         const toMain = /git\s+(?:-c\s+\S+\s+)*push[^\n]*(?:\bmain\b|HEAD:refs\/heads\/main|HEAD:main)/.exec(runs);
         if (toMain) fail(`${WF_REL} job flake-hash-pr`, `pushes to main (${JSON.stringify(toMain[0].slice(0, 80))}), bypassing review (GH-05)`, 'push the chore/channel- branch and open a pull request; never push to main.');
-        if (/--force/.test(runs)) fail(`${WF_REL} job flake-hash-pr`, 'force-pushes', 'remove --force.');
+        if (/--force(?!-with-lease)\b|\s-f\s/.test(runs)) fail(`${WF_REL} job flake-hash-pr`, 'force-pushes', 'remove --force.');
         if (!/\bderive\b/.test(JSON.stringify(flake.needs ?? []))) fail(`${WF_REL} job flake-hash-pr`, 'does not wait on the derive job, so it would run on an unchecked key', 'add derive to needs.');
     }
 

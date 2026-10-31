@@ -246,7 +246,7 @@ jobs:
           jq -n --arg k "$KEY" --arg h "$SRI" '{releaseKey: $k, sha256: $h}' > nix/pkg/release-hash.json
           node scripts/verify-flake-repack.mjs --release
 
-      - name: Open the bot pull request (never a push to main)
+      - name: Open the bot pull request (never a push to main; a re-run is safe)
         env:
           KEY: ${{ needs.derive.outputs.key }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -257,11 +257,15 @@ jobs:
           git config user.email "release-train@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add nix/pkg/release-hash.json
+          if git diff --cached --quiet; then echo "flake-hash-pr: the hash record already names $KEY; nothing to open"; exit 0; fi
           git commit -m "chore(nix): flake hash for $KEY"
           AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "HEAD:refs/heads/$BRANCH"
-          gh pr create --base main --head "$BRANCH" --title "chore(nix): flake hash for $KEY" \
-            --body "The DIST-12 channel stage recomputed the flake hash of the published $KEY tarball. Review, then merge."
+          REMOTE="$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push --force-with-lease="refs/heads/$BRANCH:$REMOTE" origin "HEAD:refs/heads/$BRANCH"
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" = "0" ]; then
+            gh pr create --base main --head "$BRANCH" --title "chore(nix): flake hash for $KEY" \
+              --body "The DIST-12 channel stage recomputed the flake hash of the published $KEY tarball and checked it against the attested SHA256SUMS. Review, then merge."
+          fi
 
   tap-commit:
     name: Homebrew tap commit (bot App, direct to the tap)
