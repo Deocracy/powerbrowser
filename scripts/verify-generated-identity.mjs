@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
  * GEN-04's byte-identity gate: what the generator emits from
- * configuration.toml is byte-for-byte the thirty-three build surfaces Phase 1
- * wrote by hand -- plus three declared exceptions: the identity carrier
+ * configuration.toml is byte-for-byte its tracked comparands: the thirty-three
+ * build surfaces Phase 1 wrote by hand, the surfaces later phases added (the
+ * live total is printed on every run; 39 at Phase 55), and three declared
+ * exceptions: the identity carrier
  * (MIG-05) and the two release-identity version files (REL-01) never had a
  * hand-written original, so their comparands are frozen copies of the
  * emission rather than independent originals.
@@ -41,9 +43,9 @@
  * The freshness of `generated/` itself is a DIFFERENT question with a different
  * answer, and it has its own instrument: `node scripts/generate.mjs --check`.
  *
- * Honestly --quick: it reads the manifest and thirty-six tracked files --
- * ten of them PNG rasters -- and writes into the OS temp directory. No
- * build, no browser, no display, no network.
+ * Honestly --quick: it reads the manifest and every tracked comparand (39 at
+ * Phase 55, ten of them PNG rasters; the run prints the live count) and writes
+ * into the OS temp directory. No build, no browser, no display, no network.
  *
  * Usage:
  *   node scripts/verify-generated-identity.mjs

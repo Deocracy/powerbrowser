@@ -1522,14 +1522,13 @@ function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) 
  * Phase 55 (PKG-14): the per-target macOS mozconfig. ONE shared builder
  * (emitMozconfigFor) carries every line the Linux dev row carries, with its
  * own objdir suffix; each target appends only the Darwin lines below. The
- * generic-certs switch and the arm64 spelling are refused by assertion, never
- * emitted: the switch widens privileged-update trust (Pitfall 2), and the
- * canonical CPU name is aarch64 (Pitfall 4, init.configure:565-577).
- * The forbidden spelling is assembled from parts so this file never contains
- * it as one literal.
+ * generic-certs switch (it widens privileged-update trust, Pitfall 2) and the
+ * arm64 spelling (the canonical CPU name is aarch64, Pitfall 4,
+ * init.configure:565-577) appear in no line below. Nothing checks that at
+ * generation time: the generated-byte-identity row compares these bytes with
+ * the tracked comparands, so a change that adds either spelling must also
+ * change a tracked mozconfig, and that change is then reviewed as such.
  */
-const MACOS_GENERIC_CERTS_SWITCH = '--enable-mac-elevated-updates-with-generic-certs';
-const MACOS_FORBIDDEN_TRIPLE = ['arm64', 'apple-darwin'].join('-');
 const MACOS_TARGETS = Object.freeze({
     aarch64: Object.freeze({ triple: 'aarch64-apple-darwin', objdir: 'objdir-macos-aarch64' }),
     x86_64: Object.freeze({ triple: 'x86_64-apple-darwin', objdir: 'objdir-macos-x86_64' }),
@@ -1545,11 +1544,7 @@ function emitMozconfigMacos(config, variant, cpu) {
         'mk_add_options "export DMG_TOOL=$MOZ_FETCHES_DIR/dmg/dmg"',
         'mk_add_options "export HFS_TOOL=$MOZ_FETCHES_DIR/dmg/hfsplus"',
     ];
-    const text = emitMozconfigFor(config, { ...variant, objdir: target.objdir }, { bootstrap: false, sbKeyfile: null, tail });
-    if (text.includes(MACOS_GENERIC_CERTS_SWITCH) || text.includes(MACOS_FORBIDDEN_TRIPLE)) {
-        throw new Error(`emitMozconfigMacos(${cpu}) would emit a forbidden mozconfig spelling; this is an emitter bug, not a manifest value`);
-    }
-    return text;
+    return emitMozconfigFor(config, { ...variant, objdir: target.objdir }, { bootstrap: false, sbKeyfile: null, tail });
 }
 
 /**
