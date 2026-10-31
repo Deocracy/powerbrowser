@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 32
 current_phase_name: Page Tools
 status: executing
-stopped_at: Completed 32-09-PLAN.md
-last_updated: "2026-10-31T20:12:23.913Z"
+stopped_at: Completed 32-02-PLAN.md
+last_updated: "2026-10-31T20:35:56.645Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 32 execution started
-state_head: d701a9810af8c4a73f1a1d8b59d615c6c63c8485
+state_head: c1e5489cc4135bfa700c7cc5251359fe852e7859
 progress:
   total_phases: 13
   completed_phases: 1
   total_plans: 71
-  completed_plans: 36
+  completed_plans: 37
   percent: 8
 ---
 
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 32 (Page Tools) — EXECUTING
-Plan: 1 of 9
-Status: Executing Phase 32
+Plan: 2 of 9
+Status: Ready to execute
 Last activity: 2026-10-31 — Phase 32 execution started
 
 Progress: [█░░░░░░░░░] 8%
@@ -172,6 +172,7 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 30 P04 | 38m | 3 tasks | 11 files |
 | Phase 30 P05 | 56m | 3 tasks | 8 files |
 | Phase 30 P06 | 70m | 2 tasks | 8 files |
+| Phase 32 P02 | not measured | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -447,6 +448,8 @@ Recent decisions affecting current work:
 - [Phase 30]: SMODE-06: a dotted host with a port is ambiguous (A3); every Go-to commit is visit-only (A4); New Tab ends in Address mode (A2)
 - [Phase 30]: SMODE-06: focusAddressPill reaches AddressBar.focusAddress through setAddressFocus; Alt+D shares Ctrl+L's editor/terminal scope
 - [Phase 32]: 32-01: page-tools helpers live at module level after the frozen API object; find, zoom and audio state ride the flat state push as primitives; live scenarios drive arms via WebTabChannel until the 32-02 key relay exists
+- [Phase 32]: Page-tool relay ids are camelCase: the chrome side refuses relay ids outside [A-Za-z0-9]{1,32}, so the hyphenated plan names would never relay (32-02)
+- [Phase 32]: Find, zoom and mute have no Theia command or keybinding contribution; relay actions call widget methods on the pushed tab, and labelled commands would pre-empt Phase 33 palette rows (32-02)
 
 ### Pending Todos
 
@@ -556,8 +559,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T20:12:23.465Z
-Stopped at: Completed 32-09-PLAN.md
+Last session: 2026-10-31T20:35:56.254Z
+Stopped at: Completed 32-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
