@@ -146,6 +146,9 @@ const EXPECTED = Object.freeze([
     // of the shared builder's output plus the Darwin tail, authored once from the
     // emitter; on a red, the emitter is what changes.
     'powerbrowser/packaging/mozconfig-macos-aarch64',
+    // NEW (Phase 55, PKG-14): the x86_64 macOS mozconfig, the second target through
+    // the same shared builder. Same contract as the aarch64 entry above.
+    'powerbrowser/packaging/mozconfig-macos-x86_64',
 ]);
 
 /** Set difference reported by name, so a failure says WHICH path drifted. */

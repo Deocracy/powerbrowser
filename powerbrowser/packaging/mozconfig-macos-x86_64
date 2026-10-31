@@ -1,0 +1,23 @@
+# Generated from configuration.toml by scripts/generate.mjs -- do not edit here.
+# To change it: edit configuration.toml, run: node scripts/generate.mjs, then copy the
+# matching file out of generated/ over this one. Phase 2 does not write it in place.
+# A disagreement reddens: scripts/verify-platform.sh --only generated-byte-identity
+
+mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/../${POWERBROWSER_OBJDIR:-objdir-macos-x86_64}
+ac_add_options --enable-application=browser
+ac_add_options --enable-update-channel=default
+ac_add_options MAR_CHANNEL_ID=powerbrowser-default
+ac_add_options ACCEPTED_MAR_CHANNEL_IDS=powerbrowser-default
+ac_add_options --without-wasm-sandboxed-libraries
+ac_add_options --with-libclang-path="$LIBCLANG_PATH"
+ac_add_options --with-app-basename=powerbrowser
+ac_add_options --with-distribution-id=org.debios
+ac_add_options --disable-crashreporter
+ac_add_options --with-ccache=sccache
+ac_add_options --with-branding=${POWERBROWSER_BRANDING:-powerbrowser/branding-generated/dev}
+mk_add_options "export MOZ_APP_REMOTINGNAME=powerbrowser"
+ac_add_options --target=x86_64-apple-darwin
+mk_add_options "export MACOS_SDK_DIR=$MOZ_FETCHES_DIR/MacOSX26.5.sdk"
+mk_add_options "export MKFSHFS=$MOZ_FETCHES_DIR/hfsplus/newfs_hfs"
+mk_add_options "export DMG_TOOL=$MOZ_FETCHES_DIR/dmg/dmg"
+mk_add_options "export HFS_TOOL=$MOZ_FETCHES_DIR/dmg/hfsplus"

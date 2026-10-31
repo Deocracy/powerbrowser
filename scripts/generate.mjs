@@ -3626,6 +3626,15 @@ export const TARGETS = Object.freeze([
         variant: 'dev',
         emit: (config, variant) => emitMozconfigMacos(config, variant, 'aarch64'),
     }),
+    // NEW (Phase 55, PKG-14): the x86_64 macOS mozconfig through the same shared
+    // builder as the aarch64 row above. Only the Darwin tail and the objdir suffix
+    // differ; the shared lines are identical by construction.
+    Object.freeze({
+        generated: 'packaging/mozconfig-macos-x86_64',
+        tracked: 'powerbrowser/packaging/mozconfig-macos-x86_64',
+        variant: 'dev',
+        emit: (config, variant) => emitMozconfigMacos(config, variant, 'x86_64'),
+    }),
     // NEW (Phase 45, PKG-17): the release .mozconfig variant. A frozen copy
     // of the release emission, authored once from the emitter and committed,
     // same contract as the hand-written files: on a red, the emitter is what
