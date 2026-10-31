@@ -43,6 +43,12 @@
  *           so the on-screen half is deferred. Verdict written to
  *           scripts/lib/pb-probe-verdicts.json.
  *
+ *   save    PAGE-08, headless part: Ctrl+S from a focused page opens the Theia "Save page as"
+ *           dialog, which Cancel closes; the Theia frame keeps Ctrl+S. The copy is then driven through
+ *           the channel to a scratch destination: the file carries the page and its stylesheet folder,
+ *           and a relative, non-html, oversized or unknown-tab request is refused. Plant: the export is
+ *           skipped, so no file lands.
+ *
  * Not in this file, by design: the edit-today probe. It needs the edit command
  * route that plan 32-06 owns, so it records no verdict here, and a build plan
  * that reads the verdict file reports a blocker instead of assuming.
@@ -110,6 +116,13 @@ async function serveFixtures(downloadBody) {
         } else if (path === '/tone.wav') {
             response.writeHead(200, { 'content-type': 'audio/wav', 'content-length': wav.length });
             response.end(wav);
+        } else if (path === '/save') {
+            // A stylesheet link, so the persisted copy has a page_files folder for the export to carry.
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<!doctype html><html><head><title>Save fixture</title><link rel="stylesheet" href="/save.css"></head><body><p>needle one needle two</p></body></html>');
+        } else if (path === '/save.css') {
+            response.writeHead(200, { 'content-type': 'text/css' });
+            response.end('p { color: rgb(18, 52, 86); }');
         } else if (path === '/download') {
             response.writeHead(200, {
                 'content-type': 'application/octet-stream',
@@ -430,6 +443,116 @@ async function scenarioPrint(app, origin, plant = false) {
     return tabModal === 0 ? null : 'a tab-modal box is in chrome: the print path reached the tab-modal preview (D-08)';
 }
 
+/** True while the Theia frame shows a dialog titled "Save page as". */
+function saveDialogOpen(app) {
+    return probe(app, "return [...document.querySelectorAll('.dialogTitle')].some(node => node.textContent.trim() === 'Save page as');");
+}
+
+/** Clicks the Cancel button of the open dialog; resolves true when a button was clicked. */
+function closeSaveDialog(app) {
+    return probe(app, "const button = [...document.querySelectorAll('.dialogControl button')].find(node => node.textContent.trim() === 'Cancel'); if (!button) { return false; } button.click(); return true;");
+}
+
+/** True when `path` is an existing regular file. */
+async function isFile(path) {
+    return stat(path).then(info => info.isFile(), () => false);
+}
+
+/**
+ * save (PAGE-08), headless part. Ctrl+S from a focused page relays through the saveOpen row and opens the Theia
+ * "Save page as" dialog; the Theia frame keeps Ctrl+S (the row is disabled there). Cancel closes the dialog, so none
+ * is left open. The copy is then driven through the channel, because the picker is a Theia dialog this harness does
+ * not drive: pick proposes a name, and export writes the minted copy to a scratch destination. The file must carry
+ * the page text and link its stylesheet from the copied saved-page_files folder. Refusals: a relative path, a
+ * non-.html name and an oversized path are refused with validation, and none of them writes a file; an unknown tab
+ * replies unknown-tab. Private tabs are not driven live (no private window here); the static gate checks their guards.
+ * Plant: the export is skipped, so no file lands, and the check must go red naming "was not written".
+ */
+async function scenarioSave(app, origin, plant = false) {
+    const { tabId } = await openLoaded(app, `${origin}/save`, '/save');
+    if (await focusOverlay(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused`);
+    }
+    const onPage = await settleValue(() => pageKeyDisabled(app, 'saveOpen'), v => v === false);
+    if (onPage !== false) {
+        return `the saveOpen row did not enable while the page had focus (disabled=${onPage})`;
+    }
+    const mark = (await pushes(app)).length;
+    await pressKey(app, { key: 's', code: 'KeyS', keyCode: 83, modifiers: ['accel'] });
+    const relayed = await waitForPush(app, p => p && p.kind === 'shortcut' && p.id === 'saveOpen' && p.tabId === tabId, { from: mark, timeoutMs: 5000 });
+    if (relayed < 0) {
+        return 'Ctrl+S in a focused page produced no shortcut push: the saveOpen row did not relay';
+    }
+    const opened = await settleValue(() => saveDialogOpen(app), v => v === true);
+    if (opened !== true) {
+        return 'Ctrl+S relayed, but no "Save page as" dialog opened in the Theia frame';
+    }
+    if (await closeSaveDialog(app) !== true) {
+        return 'the "Save page as" dialog has no Cancel button, so it cannot be closed from the harness';
+    }
+    const closed = await settleValue(() => saveDialogOpen(app), v => v === false);
+    if (closed !== false) {
+        return 'the "Save page as" dialog stayed open after Cancel';
+    }
+    if (await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} the Theia frame could not be focused`);
+    }
+    const onTheia = await settleValue(() => pageKeyDisabled(app, 'saveOpen'), v => v === true);
+    if (onTheia !== true) {
+        return 'the saveOpen row is enabled while the Theia frame has focus, so Ctrl+S there would take the page meaning';
+    }
+    const picked = await channelRequest(app, { kind: 'webTabSavePick', tabId });
+    if (picked?.where !== 'ready' || !String(picked.suggestedName ?? '').endsWith('.html')) {
+        return `the save pick did not propose a file name (${JSON.stringify(picked)})`;
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'pb-32-05-save-'));
+    try {
+        const destination = join(dir, 'saved-page.html');
+        if (!plant) {
+            const exported = await channelRequest(app, { kind: 'webTabSaveExport', tabId, path: destination });
+            if (exported?.where !== 'exported') {
+                return `the export did not report a written copy (${JSON.stringify(exported)})`;
+            }
+        }
+        let html;
+        try {
+            html = await readFile(destination, 'utf8');
+        } catch {
+            return 'the picked destination was not written: the export did not land a file';
+        }
+        if (!html.includes('needle one')) {
+            return 'the exported file does not carry the page text';
+        }
+        // The persisted stylesheet keeps a unique name (save_<suffix>.css), so the check follows the href rather than a fixed name.
+        const href = (/<link[^>]*href="([^"]+)"/.exec(html) ?? [])[1] ?? '';
+        if (!href.startsWith('saved-page_files/') || !(await isFile(join(dir, href)))) {
+            const listing = await readdir(dir).catch(() => ['(unreadable)']);
+            return `the exported stylesheet link does not resolve to a file in the copied saved-page_files folder (href: ${href || '(none)'}; destination directory: ${listing.join(', ')})`;
+        }
+        const refusals = [
+            ['a relative path', { kind: 'webTabSaveExport', tabId, path: 'saved-page.html' }],
+            ['a non-html name', { kind: 'webTabSaveExport', tabId, path: join(dir, 'notes.txt') }],
+            ['an oversized path', { kind: 'webTabSaveExport', tabId, path: `${dir}/${'a'.repeat(4096)}.html` }],
+        ];
+        for (const [label, message] of refusals) {
+            const reply = await channelRequest(app, message);
+            if (reply?.ok !== false || reply?.reason !== 'validation') {
+                return `the export did not refuse ${label} (${JSON.stringify(reply)})`;
+            }
+        }
+        if (await isFile(join(dir, 'notes.txt'))) {
+            return 'a refused non-html destination was written';
+        }
+        const unknown = await channelRequest(app, { kind: 'webTabSavePick', tabId: 'unknownsavetab' });
+        if (unknown?.where !== 'unknown-tab') {
+            return `the save pick did not reply unknown-tab for an unknown tab (${JSON.stringify(unknown)})`;
+        }
+        return null;
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+}
+
 /**
  * PROBE print-today: the overlay's browsing context prints silently to a PDF,
  * and the print-dialog service is instantiable. Returns the verdict string.
@@ -520,6 +643,7 @@ const SCENARIOS = {
         return null;
     },
     print: (app, fx) => scenarioPrint(app, fx.origin),
+    save: (app, fx) => scenarioSave(app, fx.origin),
     'print-today': async (app, fx) => {
         const printDir = await mkdtemp(join(tmpdir(), 'pb-32-03-print-'));
         try {
@@ -561,6 +685,12 @@ const PLANTS = [
         target: 'keys-theia',
         run: (app, fx) => scenarioKeysTheia(app, fx.origin, true),
         expect: 'is enabled while the Theia frame has focus',
+    },
+    {
+        plant: 'save-export-skipped',
+        target: 'save',
+        run: (app, fx) => scenarioSave(app, fx.origin, true),
+        expect: 'was not written',
     },
 ];
 

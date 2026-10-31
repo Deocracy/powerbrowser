@@ -69,6 +69,9 @@ export const CHROME_BAR_COPY = Object.freeze({
     unmuteTab: 'Unmute tab',
     // Phase 32 plan 03 (PAGE-03): the print notice (32-UI-SPEC Copywriting Contract, Print failure).
     printFailed: (subject: string) => `${subject} couldn't open the print dialog. Press Ctrl+P to try again.`,
+    // Phase 32 plan 05 (PAGE-08): the save dialog title and the save failure notice (32-UI-SPEC Copywriting Contract, Save page).
+    savePageTitle: 'Save page as',
+    saveFailed: (subject: string) => `${subject} couldn't save that page. Choose a different place and try again.`,
     // Phase 30 (SMODE-01..03): the address bar's modes. modeLabels is keyed by the LOCAL_MODES ids.
     modeLabels: Object.freeze({
         'command-centre': 'Command centre',

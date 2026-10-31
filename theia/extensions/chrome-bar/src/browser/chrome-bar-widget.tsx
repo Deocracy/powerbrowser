@@ -11,6 +11,7 @@ import {
 import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import { PreferenceService } from '@theia/core/lib/common/preferences';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
+import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import {
     CHROME_BAR_BACK_COMMAND_ID,
@@ -21,6 +22,7 @@ import {
     chromeBarHasNavigableTab,
     currentWebTab,
     setCurrentWebTab,
+    setChooseSaveDestination,
     setOpenDownloadsPanel,
     setOpenFindBar,
 } from './chrome-bar-commands';
@@ -175,6 +177,10 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(WebTabChannel)
     protected readonly webTabs: WebTabChannel;
 
+    /** PAGE-08: the Theia file dialog that picks where a saved page goes. */
+    @inject(FileDialogService)
+    protected readonly fileDialogs: FileDialogService;
+
     protected downloadRows: WebTabDownloadRow[] = [];
     protected downloadsOpen = false;
     protected readonly downloadsRead = new Set<number>();
@@ -203,6 +209,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.addressBar.attach(this);
         setOpenDownloadsPanel(() => this.toggleDownloads());
         setOpenFindBar(tab => this.openFind(tab));
+        setChooseSaveDestination(suggestedName => this.chooseSaveDestination(suggestedName));
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
@@ -727,6 +734,25 @@ export class ChromeBarWidget extends ReactWidget {
         return <div className='pb-chrome-bar-notice' role='status'>{CHROME_BAR_COPY.printFailed(appSubject())}</div>;
     }
 
+    /** PAGE-08: the Theia save dialog for a page copy; resolves to the picked file's path, or undefined on cancel. */
+    protected async chooseSaveDestination(suggestedName: string): Promise<string | undefined> {
+        const uri = await this.fileDialogs.showSaveDialog({
+            title: CHROME_BAR_COPY.savePageTitle,
+            inputValue: suggestedName,
+            filters: { 'Web page': ['html', 'htm'] },
+        });
+        return uri ? uri.path.fsPath() : undefined;
+    }
+
+    /** PAGE-08: the notice for a save that did not complete; the next save clears it. */
+    protected renderSaveNotice(): React.ReactNode {
+        const tab = currentWebTab();
+        if (!tab || !tab.saveFailed) {
+            return undefined;
+        }
+        return <div className='pb-chrome-bar-notice' role='status'>{CHROME_BAR_COPY.saveFailed(appSubject())}</div>;
+    }
+
     /** PAGE-01: the find strip. The count renders from the pushed match index and total, never from the query. */
     protected renderFind(): React.ReactNode {
         const tab = currentWebTab();
@@ -1033,6 +1059,7 @@ export class ChromeBarWidget extends ReactWidget {
         </div>
         {this.renderFind()}
         {this.renderPrintNotice()}
+        {this.renderSaveNotice()}
         </div>;
     }
 }

@@ -8,6 +8,7 @@
     "@powerbrowser/modes": "0.1.0",
     "@theia/core": "1.76.0",
     "@theia/editor": "1.76.0",
+    "@theia/filesystem": "1.76.0",
     "p-debounce": "^2.1.0"
   },
   "theiaExtensions": [

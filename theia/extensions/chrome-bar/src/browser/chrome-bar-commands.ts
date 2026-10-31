@@ -105,6 +105,18 @@ export function openFindBarFor(tab: WebTabWidget): void {
     openFindBar?.(tab);
 }
 
+let chooseSaveDestinationDialog: ((suggestedName: string) => Promise<string | undefined>) | undefined;
+
+/** Set by the chrome bar widget, which owns the Theia save dialog; the save relay row picks its destination through this. */
+export function setChooseSaveDestination(choose: ((suggestedName: string) => Promise<string | undefined>) | undefined): void {
+    chooseSaveDestinationDialog = choose;
+}
+
+/** PAGE-08: the path the user picked, or undefined on cancel. Fails closed: with no dialog registered, nothing is saved. */
+export function chooseSaveDestination(suggestedName: string): Promise<string | undefined> {
+    return chooseSaveDestinationDialog ? chooseSaveDestinationDialog(suggestedName) : Promise.resolve(undefined);
+}
+
 /**
  * GUI-02-owned navigable-tab predicate (13-04, flipped in 14.1-02): back,
  * forward, and reload all read enablement from this one export, and so do

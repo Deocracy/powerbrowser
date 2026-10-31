@@ -597,6 +597,8 @@ const EXPECTED_NAV_COPY = new Set([
   "Mute tab",
   "Unmute tab",
   "${name} couldn't open the print dialog. Press Ctrl+P to try again.",
+  "Save page as",
+  "${name} couldn't save that page. Choose a different place and try again.",
   "${name} couldn't read this tab's history. Use Back and Forward to move one page at a time.",
   "Show the Home button next to Reload.",
   "${name} can't open your home page. Press Enter to change it in Settings.",

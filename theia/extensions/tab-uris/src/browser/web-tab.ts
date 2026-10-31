@@ -528,6 +528,8 @@ export class WebTabWidget extends BaseWidget {
 
     /** PAGE-03: true after a print could not open its dialog; the bar shows the notice until the next print. Never pushed. */
     printFailed = false;
+    /** PAGE-08: true after a save could not complete; the bar shows the notice until the next save. Never pushed. */
+    saveFailed = false;
     /** Phase 32 plan 01 (PAGE-05): the last pushed mute flag. */
     audioMuted = false;
     /** Phase 32 plan 01 (PAGE-05): the last pushed audible-playback flag. */
@@ -917,6 +919,37 @@ export class WebTabWidget extends BaseWidget {
         const failed = reply.ok !== true;
         if (this.printFailed !== failed) {
             this.printFailed = failed;
+            this.renderState();
+        }
+        return reply;
+    }
+
+    /**
+     * PAGE-08: saves this tab's page to a file the user picks. `choose` shows the save dialog and resolves to the picked
+     * path, or undefined on cancel. Pick and export are separate kinds; chrome writes the copy, and a failure sets the notice.
+     */
+    async savePage(choose: (suggestedName: string) => Promise<string | undefined>): Promise<WebTabReply> {
+        const picked = this.settleUnknownTab(await this.channel.request({ kind: 'webTabSavePick', tabId: this.tabId }));
+        let reply: WebTabReply = picked;
+        if (picked.ok === true && picked.where === 'ready') {
+            let path: string | undefined;
+            try {
+                path = await choose(picked.suggestedName ?? 'page.html');
+            } catch {
+                return this.settleSave({ ok: false, reason: 'unavailable', message: 'the save dialog did not open' });
+            }
+            reply = path === undefined
+                ? { ok: true, where: 'cancelled' }
+                : this.settleUnknownTab(await this.channel.request({ kind: 'webTabSaveExport', tabId: this.tabId, path }));
+        }
+        return this.settleSave(reply);
+    }
+
+    /** PAGE-08: sets the save notice from a reply. A success or a cancel clears it; any other outcome shows it. */
+    protected settleSave(reply: WebTabReply): WebTabReply {
+        const failed = reply.ok !== true;
+        if (this.saveFailed !== failed) {
+            this.saveFailed = failed;
             this.renderState();
         }
         return reply;

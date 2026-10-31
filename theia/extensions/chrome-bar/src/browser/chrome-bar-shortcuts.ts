@@ -18,7 +18,7 @@ import { CommandRegistry } from '@theia/core/lib/common/command';
 import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
-import { CHROME_BAR_NEW_TAB_COMMAND_ID, focusAddressPill, openFindBarFor } from './chrome-bar-commands';
+import { CHROME_BAR_NEW_TAB_COMMAND_ID, chooseSaveDestination, focusAddressPill, openFindBarFor } from './chrome-bar-commands';
 import { AddressBar } from './address-bar/address-bar';
 import { TabStripWidget } from './tab-strip-widget';
 
@@ -174,8 +174,8 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['zoomReset', tab => tab.zoomReset()],
         ['muteToggle', tab => tab.setMuted(!tab.audioMuted)],
         ['printOpen', tab => tab.print()],
-        // Stub until plan 32-05 (save): it upgrades this row to call savePage(). Focus the page so the key is not lost.
-        ['saveOpen', tab => tab.focusPage()],
+        // PAGE-08 (32-05): the 32-02 focus stub is upgraded; the Theia save dialog picks the destination, chrome writes the copy.
+        ['saveOpen', tab => tab.savePage(chooseSaveDestination)],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */
