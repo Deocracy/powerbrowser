@@ -704,7 +704,7 @@ function selfTest() {
         if (touchesPatches(q.touched)) console.log(`  ok  patches guard: git's path set holds patches/é-x.patch, so the regenerate stage cannot be skipped`);
         else bad(`the patches/ guard did not see the quoted non-ASCII patch name in git's path set.`);
         for (const v of ['-x', '--upload-pack=x', 'a..b', 'a b', '', 'x.lock']) if (validRef(v)) bad(`validRef accepted ${JSON.stringify(v)}.`);
-        for (const v of ['HEAD', 'main', 'FIREFOX_1_2_3esr_BUILD1', 'refs/tags/v1']) if (!validRef(v)) bad(`validRef refused ${JSON.stringify(v)}.`);
+        for (const v of ['HEAD', 'main', 'release_1', 'refs/tags/v1']) if (!validRef(v)) bad(`validRef refused ${JSON.stringify(v)}.`);
 
         const controls = [
             ['hand edit with a removed/added pair of index lines', diffOf('patches/024-planted.patch', ['-+old payload', '++new payload', '-index 1111111111..2222222222 100644', '+index 1111111111..abcdef0123 100644']), (r) => r.failures.length === 0],
