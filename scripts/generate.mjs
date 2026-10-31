@@ -1425,6 +1425,33 @@ export function marOrigin(config) {
 }
 
 /**
+ * TEL-07 (57-02): the crash submit ORIGIN, derived from the ONE stated [urls].crash_report key. The
+ * same key drives the breakpad.reportURL view-link base (verbatim, mozillaEndpointPrefs) and this
+ * origin feeds --with-crashreporter-url, which moz.configure rstrips and application.ini.in joins
+ * with /submit. Only the origin (scheme, host, port) is kept: the path a stated value carries is the
+ * view-link base, never the submit target. Unset returns '' and emits nothing, so the tree stays
+ * byte-identical while the reporter is compiled out (TEL-13 owns the flip).
+ */
+export function crashReporterOrigin(config) {
+    const raw = config.urls?.crash_report;
+    if (isUnset(raw)) return '';
+    const value = assertEmittable('urls.crash_report', raw);
+    let origin = '';
+    try {
+        origin = new URL(value).origin;
+    } catch {
+        origin = '';
+    }
+    if (!origin.startsWith('https://')) {
+        report([
+            `urls.crash_report is ${JSON.stringify(value)}, which is not an https URL. `
+            + `Write your own https crash-report address as [urls] crash_report in ${MANIFEST_NAME}, for example "https://crash.example.org/report", then run: ${RERUN}`,
+        ]);
+    }
+    return origin;
+}
+
+/**
  * The root .mozconfig: the shared generated-from banner, a blank line, then
  * thirteen lines against the file Phase 1 wrote by hand.
  *
@@ -1519,6 +1546,8 @@ function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) 
     // here. (It is still read and guarded where it IS emitted as content:
     // the desktop entry's Icon line.)
     const objdir = assertEmittable(variantPath(variant, 'objdir'), variant.objdir);
+    // TEL-07: empty while [urls].crash_report is unset, so no line is emitted and the bytes do not move.
+    const crashOrigin = crashReporterOrigin(config);
     const brandingDefault = bootstrap
         ? 'powerbrowser/branding-generated/release'
         : 'powerbrowser/branding-generated/dev';
@@ -1537,6 +1566,7 @@ function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) 
         `ac_add_options --with-app-basename=${assertEmittable('identity.app_basename', config.identity.app_basename)}`,
         `ac_add_options --with-distribution-id=${assertEmittable('identity.distribution_id', config.identity.distribution_id)}`,
         'ac_add_options --disable-crashreporter',
+        ...(crashOrigin ? [`ac_add_options --with-crashreporter-url=${crashOrigin}`] : []),
         'ac_add_options --with-ccache=sccache',
         'ac_add_options --with-branding=${POWERBROWSER_BRANDING:-' + brandingDefault + '}',
         `mk_add_options "export MOZ_APP_REMOTINGNAME=${assertEmittable('identity.remoting_name', config.identity.remoting_name)}"`,
@@ -5440,6 +5470,40 @@ function selfTest() {
     // expected pairs are literals: deriving them through emitTheiaTelemetry
     // would make the control agree with the emitter no matter how wrong
     // both were.
+    // TEL-07 (57-02): the crash origin control. A stated https crash_report derives its origin (path
+    // dropped) and emits the --with-crashreporter-url line; an unset key derives '' and emits nothing.
+    // The expected values are literals, so the control cannot agree with the emitter by construction.
+    const crashOriginControl = (() => {
+        const fixtureDir = mkdtempSync(join(tmpdir(), 'generate-selftest-crash-origin-'));
+        try {
+            const checkOne = (toml, wantOrigin, label) => {
+                const fixturePath = join(fixtureDir, `crash-origin-${label}.toml`);
+                writeFileSync(fixturePath, toml, 'utf8');
+                const resolved = resolveConfig(MANIFEST_PATH, fixturePath);
+                if (resolved.failures.length > 0) {
+                    return [`the crash-origin ${label} fixture failed validation: ${resolved.failures.join(' | ')}`];
+                }
+                const dev = resolved.config.variants.find(v => v.id === 'dev');
+                const problems = [];
+                const origin = crashReporterOrigin(resolved.config);
+                if (origin !== wantOrigin) problems.push(`crashReporterOrigin is ${JSON.stringify(origin)} for ${label}, not ${JSON.stringify(wantOrigin)}`);
+                const mozconfig = emitMozconfig(resolved.config, dev);
+                if (wantOrigin === '' && mozconfig.includes('--with-crashreporter-url')) {
+                    problems.push(`${label} emitted --with-crashreporter-url though the key is unset`);
+                }
+                if (wantOrigin !== '' && !mozconfig.includes(`ac_add_options --with-crashreporter-url=${wantOrigin}\n`)) {
+                    problems.push(`${label} did not emit ac_add_options --with-crashreporter-url=${wantOrigin}`);
+                }
+                return problems;
+            };
+            return [
+                ...checkOne(`${FIXTURE_DOWNSTREAM}\ncrash_report = "https://crash.example.org/report"\n`, 'https://crash.example.org', 'stated'),
+                ...checkOne(FIXTURE_DOWNSTREAM, '', 'unset'),
+            ];
+        } finally {
+            rmSync(fixtureDir, { recursive: true, force: true });
+        }
+    })();
     const telemetryControl = (() => {
         const fixtureDir = mkdtempSync(join(tmpdir(), 'generate-selftest-telemetry-'));
         try {
@@ -6228,6 +6292,15 @@ function selfTest() {
             probe: () => telemetryControl,
             holds: 'the stated level and endpoint verbatim, and off with the inherited default endpoint when unset',
             resolved: () => telemetryControl.length === 0,
+        },
+        {
+            // TEL-07 (57-02): the submit origin is derived from the ONE stated crash_report key (path
+            // dropped) and is inert while unset. The control proves the derivation on a fixture
+            // manifest; the real manifest states no key, so the reporter stays compiled out.
+            name: 'crash origin derives from the stated crash_report key and stays inert when unset',
+            probe: () => crashOriginControl,
+            holds: 'the stated https URL reduces to its origin and emits --with-crashreporter-url, and an unset key derives the empty origin and emits no line',
+            resolved: () => crashOriginControl.length === 0,
         },
         {
             // GEN-05 remainder. A theme id outside Theia's builtin set must
