@@ -893,9 +893,12 @@ add a second table for either.
 
 The train tracks two ESR majors at the same time. The pinned major (153) keeps the bump
 path: a newer 153.x tag opens `chore/esr-<tag>` and updates its tracking issue. The
-uptake major (175, `UPTAKE_MAJOR` in `scripts/detect-upstreams.mjs`) is replay-only from
-the 175 beta: the newest 175 `*esr_RELEASE` tag is replayed and nothing is published from
-it.
+uptake major (175, `UPTAKE_MAJOR` in `scripts/detect-upstreams.mjs`) is replay-only: the
+newest 175 `*esr_RELEASE` tag is replayed and nothing is published from it. The lane keys on
+those release tags, which are cut on the ESR release day (2027-06-29), so as built the lane
+starts then, not at the 175 beta (2027-06-10). Whether it should start at the beta needs a
+beta-stage tag form, which is an owner decision (`BLOCKED.md` item 3 of Phase 58). The lane is
+off once the pinned major reaches the uptake major, so the flipped pin is never replayed twice.
 
 **Two keys.** Each release key owns one tracking issue, found by label and title on every
 run: `release-train: v153.x-r` for the bump line and `release-train: v175.x-r` for the
@@ -930,8 +933,10 @@ view.
 name. The release key comes from the tag (`v<ESR>-<revision>`), so the two lines cannot
 collide in a title either.
 
-**Calendar** (CONTEXT A-58-4). Nightly 2027-05-27. Beta 2027-06-10: the first replay-only
-run against a 175 tag. Release 2027-06-29: `175.0esr` is published. ESR 153 ends with
+**Calendar** (CONTEXT A-58-4). Nightly 2027-05-27. Beta 2027-06-10: no replay runs, because
+the lane lists only `*esr_RELEASE` tags and the beta does not cut one (see the opening of this
+subsection). Release 2027-06-29: `175.0esr` is published, and its `*esr_RELEASE` tag starts the
+first replay-only run. ESR 153 ends with
 153.27 on 2027-09-07. The ship checklist for 175.x is in plan 58-03, which is an owner
 checkpoint.
 
