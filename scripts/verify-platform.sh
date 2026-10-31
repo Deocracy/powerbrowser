@@ -3835,6 +3835,8 @@ run_own_checks() {
     "page-tools-zoom-mute-self-test|node $REPO_ROOT/scripts/verify-page-tools-zoom-mute.mjs --self-test"
     "page-tools-downloads|node $REPO_ROOT/scripts/verify-page-tools-downloads.mjs"
     "page-tools-downloads-self-test|node $REPO_ROOT/scripts/verify-page-tools-downloads.mjs --self-test"
+    "page-tools-print-save|node $REPO_ROOT/scripts/verify-page-tools-print-save.mjs"
+    "page-tools-print-save-self-test|node $REPO_ROOT/scripts/verify-page-tools-print-save.mjs --self-test"
 
     # NEW (Phase 29, BAR-02; REQUIREMENTS technical ruling 2026-10-20): the
     # Theia token cookie never reaches a server on another loopback port. Pins
@@ -5095,8 +5097,10 @@ run_own_checks() {
       # NEW (Phase 32 plan 01, PAGE-01/02/05): the find, zoom and audio arms driven through the
       # Theia frame's WebTabChannel in the built shell, with the startup cache purged
       # (MOZ_PURGE_CACHES=1), plus the downloads-today probe (record only; it writes its verdict
-      # to scripts/lib/pb-probe-verdicts.json and never passes or fails). The print-today and
-      # edit-today probes are not in this script (plans 32-02 and later own their command routes).
+      # to scripts/lib/pb-probe-verdicts.json and never passes or fails), and the print scenario
+      # (PAGE-03, headless part: refusals, unknown tab, the printOpen row, and a tab-modal plant; the
+      # system dialog is an OS window and is deferred). The print-today probe is run with
+      # `--scenario print-today`; edit-today is not in this script (plan 32-06 owns its route).
       # Needs the built binary (objdir/.pb-050-build.sha256 must match patch 050) and the last
       # Theia app build, so never --quick. The self-test runs a clean find control and the planted
       # dropped find kind, which must go red naming "no findMatches push".

@@ -4498,7 +4498,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4944,6 +4944,16 @@ async function handleWebTabAction(data, actorRef) {
       }
       return { ok: true, kind, where: await webTabDownloadAction(data.id, data.action) };
     }
+    // Page tools (32-03, PAGE-03): the system-dialog branch only. Options are booleans; no URL or pref comes in.
+    case "webTabPrint": {
+      if (!webTabIdIsValid(data.tabId)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+      }
+      if (data.selectionOnly !== undefined && typeof data.selectionOnly !== "boolean") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a print option that is not a boolean" };
+      }
+      return webTabPrintReply(kind, data.tabId, data.selectionOnly === true);
+    }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
   }
@@ -5197,6 +5207,67 @@ function webTabZoomReply(kind, tabId, step) {
   }
   webTabPagePush(browser);
   return { ok: true, kind, where: "applied", zoom: browser.fullZoom };
+}
+
+// Page tools (32-03, PAGE-03): the system-dialog branch of printUtils.js (startPrintWindow :230-333,
+// getPrintSettings :485-530, handleSystemPrintDialog :542-567), reproduced here because printUtils.js is never
+// loaded. The tab-modal preview (getTabDialogBox, _openTabModalPrint) is never built (D-08), and no
+// nsIBrowserDOMWindow shim is added (D-09a): the shell window has none.
+async function webTabPrintReply(kind, tabId, selectionOnly) {
+  const entry = webTabs.get(tabId);
+  if (!entry) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  let target = entry.browser.browsingContext;
+  if (selectionOnly) {
+    const focused = Services.focus.focusedContentBrowsingContext;
+    if (focused && focused.top.embedderElement === target.top.embedderElement) {
+      target = focused;
+    }
+  }
+  const printSvc = Cc["@mozilla.org/gfx/printsettings-service;1"].getService(Ci.nsIPrintSettingsService);
+  const SAVE_TO_PDF = "Mozilla Save to PDF";
+  let settings = null;
+  try {
+    const lastUsed = printSvc.lastUsedPrinterName;
+    const printerName = lastUsed && lastUsed !== SAVE_TO_PDF
+      ? lastUsed
+      : Cc["@mozilla.org/gfx/printerlist;1"].getService(Ci.nsIPrinterList).systemDefaultPrinterName;
+    settings = printSvc.createNewPrintSettings();
+    settings.printerName = printerName;
+    if (printerName !== SAVE_TO_PDF) {
+      printSvc.initPrintSettingsFromPrinter(printerName, settings);
+    }
+    printSvc.initPrintSettingsFromPrefs(settings, true, Ci.nsIPrintSettings.kInitSaveAll);
+  } catch {
+    PowerBrowserAPI.log("error", "[print] the print settings could not be read");
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: the print settings are not available" };
+  }
+  settings.printSelectionOnly = selectionOnly;
+  const hasSelection = await webTabPrintHasSelection(target);
+  try {
+    await Cc["@mozilla.org/widget/printdialog-service;1"].getService(Ci.nsIPrintDialogService)
+      .showPrintDialog(target.topChromeWindow, hasSelection, settings);
+  } catch (err) {
+    if (err?.result === Cr.NS_ERROR_ABORT) {
+      return { ok: true, kind, where: "cancelled", cancelled: true };
+    }
+    PowerBrowserAPI.log("error", "[print] the print dialog failed");
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: the print dialog did not open" };
+  }
+  printSvc.maybeSaveLastUsedPrinterNameToPrefs(settings.printerName);
+  printSvc.maybeSavePrintSettingsToPrefs(settings, Ci.nsIPrintSettings.kPrintDialogPersistSettings);
+  target.print(settings).catch(() => PowerBrowserAPI.log("error", "[print] the print job failed"));
+  return { ok: true, kind, where: "printed", cancelled: false };
+}
+
+// The selection flag the dialog shows; a missing PrintingSelection actor reads as no selection (printUtils.js:68-78).
+async function webTabPrintHasSelection(browsingContext) {
+  try {
+    return await browsingContext.currentWindowGlobal.getActor("PrintingSelection").sendQuery("PrintingSelection:HasSelection", {});
+  } catch {
+    return false;
+  }
 }
 
 export const PowerBrowserWebTabs = Object.freeze({

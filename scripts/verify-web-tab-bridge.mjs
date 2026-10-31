@@ -96,6 +96,9 @@ const KIND_CLASSES = new Map([
     ['webTabMute', 'selection'],
     ['webTabDownloadsSubscribe', 'selection'],
     ['webTabDownloadsAction', 'selection'],
+    // Phase 32 plan 03 (PAGE-03): the print reads the tab's page and changes no tab, pref or site state; it
+    // sits with navigation as the one tab-scoped page action that opens a system dialog.
+    ['webTabPrint', 'tab-navigation'],
 ]);
 
 /**

@@ -31,10 +31,21 @@
  *           attachment. The verdict is what it does today, written to
  *           scripts/lib/pb-probe-verdicts.json; it is never pass or fail.
  *
- * Not in this file, by design: the print-today and edit-today probes. Each
- * needs a command route (Ctrl+P, the edit commands) that plan 32-02 and the
- * print and edit plans own. They are NOT run here and record no verdict, so a
- * build plan that reads the verdict file reports a blocker instead of assuming.
+ *   print   PAGE-03, headless part: the arm refuses a non-boolean option, an
+ *           unknown tab replies unknown-tab, the printOpen row is enabled while the
+ *           page has focus, and no tab-modal box exists in chrome. The system dialog
+ *           is an OS window this harness cannot close, so its open and cancel are
+ *           deferred to the end-of-milestone pass. Plant: a tab-modal box in chrome.
+ *   print-today  PROBE (record only): the completion half of the system-dialog
+ *           print path on the overlay's own browsing context, silent to a PDF
+ *           file, plus whether the print-dialog service is instantiable. No
+ *           dialog window is opened (an OS window cannot be closed headlessly),
+ *           so the on-screen half is deferred. Verdict written to
+ *           scripts/lib/pb-probe-verdicts.json.
+ *
+ * Not in this file, by design: the edit-today probe. It needs the edit command
+ * route that plan 32-06 owns, so it records no verdict here, and a build plan
+ * that reads the verdict file reports a blocker instead of assuming.
  *
  * Preflight: the binary must carry the current patch 050. The sha256 of
  * patches/050-extension-tab-host.patch must equal the stamp in
@@ -44,7 +55,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -391,6 +402,75 @@ async function probeDownloadsToday(app, origin, requests, downloadDir) {
     return fetched ? 'requested-no-file-saved-within-15s' : 'never-requested';
 }
 
+/**
+ * print (PAGE-03), headless part. `plant` adds a tab-modal box to chrome, which the
+ * absence check must catch. Nothing here opens a dialog.
+ */
+async function scenarioPrint(app, origin, plant = false) {
+    const { tabId } = await openLoaded(app, `${origin}/find`, '/find');
+    const refused = await channelRequest(app, { kind: 'webTabPrint', tabId, selectionOnly: 'yes' });
+    if (refused?.ok !== false || refused?.reason !== 'validation') {
+        return `the print arm did not refuse a non-boolean selectionOnly (${JSON.stringify(refused)})`;
+    }
+    const unknown = await channelRequest(app, { kind: 'webTabPrint', tabId: 'unknownprinttab' });
+    if (unknown?.where !== 'unknown-tab') {
+        return `the print arm did not reply unknown-tab for an unknown tab (${JSON.stringify(unknown)})`;
+    }
+    if (await focusOverlay(app, tabId) !== true) {
+        throw new Error(`${BROKEN} the overlay of ${tabId} could not be focused`);
+    }
+    const enabled = await settleValue(() => pageKeyDisabled(app, 'printOpen'), v => v === false);
+    if (enabled !== false) {
+        return `the printOpen row is disabled while the page has focus (disabled=${enabled})`;
+    }
+    if (plant) {
+        await inChrome(app, "const box = document.createElement('div'); box.className = 'dialogbox'; document.body.appendChild(box); return true;");
+    }
+    const tabModal = await inChrome(app, "return document.querySelectorAll('tabmodalprompt, .dialogbox').length;");
+    return tabModal === 0 ? null : 'a tab-modal box is in chrome: the print path reached the tab-modal preview (D-08)';
+}
+
+/**
+ * PROBE print-today: the overlay's browsing context prints silently to a PDF,
+ * and the print-dialog service is instantiable. Returns the verdict string.
+ */
+async function probePrintToday(app, origin, printDir) {
+    const { tabId } = await openLoaded(app, `${origin}/find`, '/find');
+    const pdf = join(printDir, 'probe-print.pdf');
+    const raw = await inChrome(app, `
+        const o = overlayOf(${JSON.stringify(tabId)});
+        if (!o) return JSON.stringify({ step: 'overlay' });
+        const dialog = Cc['@mozilla.org/widget/printdialog-service;1'].getService(Ci.nsIPrintDialogService);
+        const dialogService = typeof dialog.showPrintDialog === 'function';
+        return (async () => {
+            const settings = Cc['@mozilla.org/gfx/printsettings-service;1'].getService(Ci.nsIPrintSettingsService).createNewPrintSettings();
+            settings.printerName = 'Mozilla Save to PDF';
+            settings.outputDestination = Ci.nsIPrintSettings.kOutputDestinationFile;
+            settings.outputFormat = Ci.nsIPrintSettings.kOutputFormatPDF;
+            settings.toFileName = ${JSON.stringify(pdf)};
+            settings.printSilent = true;
+            try {
+                await o.browsingContext.print(settings);
+                return JSON.stringify({ step: 'printed', dialogService });
+            } catch (err) {
+                return JSON.stringify({ step: 'print-rejected', dialogService, name: String(err && err.name), result: err && err.result });
+            }
+        })();
+    `);
+    const result = JSON.parse(raw);
+    if (result.step === 'overlay') {
+        throw new Error(`${BROKEN} the overlay of ${tabId} was not found in chrome`);
+    }
+    if (result.step !== 'printed') {
+        return `fails-${result.step}-${result.result ?? result.name ?? 'unknown'}`;
+    }
+    const size = await stat(pdf).then(s => s.size, () => 0);
+    if (size === 0) {
+        return 'fails-no-pdf-written';
+    }
+    return result.dialogService ? 'completes-silent-pdf-dialog-service-present' : 'completes-silent-pdf-dialog-service-missing';
+}
+
 /** The verdict file's key for each probe, merged into the file in place. */
 async function recordVerdict(key, verdict) {
     let current = {};
@@ -439,6 +519,18 @@ const SCENARIOS = {
         console.log(`  verdict downloads-today: ${verdict}`);
         return null;
     },
+    print: (app, fx) => scenarioPrint(app, fx.origin),
+    'print-today': async (app, fx) => {
+        const printDir = await mkdtemp(join(tmpdir(), 'pb-32-03-print-'));
+        try {
+            const verdict = await probePrintToday(app, fx.origin, printDir);
+            await recordVerdict('print-today', verdict);
+            console.log(`  verdict print-today: ${verdict}`);
+            return null;
+        } finally {
+            await rm(printDir, { recursive: true, force: true });
+        }
+    },
 };
 
 /**
@@ -457,6 +549,12 @@ const PLANTS = [
         target: 'audio',
         run: (app, fx) => scenarioAudio(app, fx.origin, '/find'),
         expect: 'no soundPlaying push',
+    },
+    {
+        plant: 'print-tab-modal',
+        target: 'print',
+        run: (app, fx) => scenarioPrint(app, fx.origin, true),
+        expect: 'tab-modal box is in chrome',
     },
     {
         plant: 'row-enabled-while-theia-focused',

@@ -718,6 +718,15 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
     }
 
+    /** PAGE-03: the notice for a print whose dialog did not open; the next print clears it. */
+    protected renderPrintNotice(): React.ReactNode {
+        const tab = currentWebTab();
+        if (!tab || !tab.printFailed) {
+            return undefined;
+        }
+        return <div className='pb-chrome-bar-notice' role='status'>{CHROME_BAR_COPY.printFailed(appSubject())}</div>;
+    }
+
     /** PAGE-01: the find strip. The count renders from the pushed match index and total, never from the query. */
     protected renderFind(): React.ReactNode {
         const tab = currentWebTab();
@@ -1023,6 +1032,7 @@ export class ChromeBarWidget extends ReactWidget {
             </div>
         </div>
         {this.renderFind()}
+        {this.renderPrintNotice()}
         </div>;
     }
 }

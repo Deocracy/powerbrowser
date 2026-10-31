@@ -173,8 +173,7 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['zoomOut', tab => tab.zoomOut()],
         ['zoomReset', tab => tab.zoomReset()],
         ['muteToggle', tab => tab.setMuted(!tab.audioMuted)],
-        // Stub until plan 32-03 (print): it upgrades this row to call print(). Focus the page so the key is not lost.
-        ['printOpen', tab => tab.focusPage()],
+        ['printOpen', tab => tab.print()],
         // Stub until plan 32-05 (save): it upgrades this row to call savePage(). Focus the page so the key is not lost.
         ['saveOpen', tab => tab.focusPage()],
     ]);

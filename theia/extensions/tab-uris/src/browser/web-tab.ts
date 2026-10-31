@@ -255,7 +255,9 @@ export type WebTabMessage =
     | { kind: 'webTabDownloadsSubscribe'; tabId: string }
     | { kind: 'webTabDownloadsAction'; tabId: string; id: number; action: DownloadAction }
     // Phase 32 plan 01 (PAGE-05): mute is an explicit flag, never a toggle.
-    | { kind: 'webTabMute'; tabId: string; muted: boolean };
+    | { kind: 'webTabMute'; tabId: string; muted: boolean }
+    // Phase 32 plan 03 (PAGE-03): the system-dialog print of this tab's page; the options are booleans only.
+    | { kind: 'webTabPrint'; tabId: string; selectionOnly?: boolean };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -518,6 +520,9 @@ export class WebTabWidget extends BaseWidget {
     findTotal = 0;
     /** Phase 32 plan 01 (PAGE-01): the last pushed find result, null when no find is running. */
     findStatus: WebTabState['findStatus'] = null;
+
+    /** PAGE-03: true after a print could not open its dialog; the bar shows the notice until the next print. Never pushed. */
+    printFailed = false;
     /** Phase 32 plan 01 (PAGE-05): the last pushed mute flag. */
     audioMuted = false;
     /** Phase 32 plan 01 (PAGE-05): the last pushed audible-playback flag. */
@@ -899,6 +904,17 @@ export class WebTabWidget extends BaseWidget {
     /** PAGE-05: mutes or unmutes this tab. The flag is explicit, never a toggle; the reply reads `audioMuted` back. */
     async setMuted(muted: boolean): Promise<WebTabReply> {
         return this.settleUnknownTab(await this.channel.request({ kind: 'webTabMute', tabId: this.tabId, muted }));
+    }
+
+    /** PAGE-03: opens the system print dialog for this tab's page. A cancel is a clean no-op; a failed open sets the bar's notice. */
+    async print(selectionOnly = false): Promise<WebTabReply> {
+        const reply = this.settleUnknownTab(await this.channel.request({ kind: 'webTabPrint', tabId: this.tabId, ...(selectionOnly ? { selectionOnly } : {}) }));
+        const failed = reply.ok !== true;
+        if (this.printFailed !== failed) {
+            this.printFailed = failed;
+            this.renderState();
+        }
+        return reply;
     }
 
     /** Phase 31 (D-31-05): this tab's site information, keyed chrome-side by the overlay's own principal. */

@@ -293,7 +293,7 @@ function selfTest() {
         },
         {
             name: 'stale mute union member (no arm)',
-            sources: { [WEB_TAB]: plant(clean[WEB_TAB], "    | { kind: 'webTabMute'; tabId: string; muted: boolean };", "    | { kind: 'webTabMuteStale'; tabId: string };\n    | { kind: 'webTabMute'; tabId: string; muted: boolean };") },
+            sources: { [WEB_TAB]: plant(clean[WEB_TAB], "    | { kind: 'webTabMute'; tabId: string; muted: boolean }", "    | { kind: 'webTabMuteStale'; tabId: string }\n    | { kind: 'webTabMute'; tabId: string; muted: boolean }") },
             expect: 'webTabMuteStale',
         },
         {

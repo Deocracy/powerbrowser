@@ -1240,6 +1240,12 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     font-size: 14px;
 }
 
+.pb-chrome-bar-notice {
+    padding: 0 12px;
+    font-size: 12px;
+    color: var(--color-text-muted, #9a99a8);
+}
+
 .pb-chrome-bar-find-count {
     min-width: 96px;
     text-align: right;
