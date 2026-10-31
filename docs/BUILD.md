@@ -1033,10 +1033,12 @@ only.
 ### Packaging hosts (08-05): capability record
 
 One row per host. Every later task cites its host by name; no artifact work
-starts on an unnamed host. MSIX and DMG are never attempted on Linux: the
-pinned tree's own tooling is the authority — `msix.py` raises without
-`makeappx.exe`/`signtool.exe` from the Windows SDK, and `dmg.py` shells out
-to macOS-only `hdiutil`/`SetFile`.
+starts on an unnamed host. MSIX is never attempted on Linux: `msix.py` raises
+without `makeappx.exe`/`signtool.exe` from the Windows SDK. DMG is built on
+Linux through the Linux branch of `dmg.py` (`is_linux`): it uses `rsync` and
+the tools the target mozconfig exports (`MKFSHFS`, `DMG_TOOL`, `HFS_TOOL`).
+The macOS branch (`hdiutil`, `SetFile`) is not used for the release build;
+see the MSIX / DMG mechanics section below.
 
 Numbered versions on `staged-unexecuted` rows are the REQUIRED spec (floor),
 not observations: the exact media, OS, and SDK builds are recorded here at
@@ -1046,6 +1048,7 @@ provision time. Observed facts carry their evidence inline.
 |---|---|---|---|---|
 | nix-linux (legion) | NixOS 26.05.8954 (Yarara), x86_64, `nix develop .#firefox` toolchain per toolchain-baseline.txt | makensis 3.12 (`nix shell nixpkgs#nsis --command makensis -VERSION` gives `v3.12`, re-verified 2026-09-05) | reachable | Proof: 08-04 `installer-build-proof` PASS — the pinned installer.nsi compiled with the generated branding.nsi into setup.exe in 3.4s |
 | pkg-win11 | Windows 11 23H2+ install media (required) + Windows SDK 10.0 with makeappx.exe and signtool.exe via WINDOWSSDKDIR or PATH (required) + NSIS 3.12 (required) | n/a until provisioned (Windows-side NSIS after the guest exists) | staged-unexecuted | Provisioning error (observed 2026-09-05): `sudo -n true` fails (`sudo: a password is required`), so qemu:///system is unmanageable — no domain can be defined, no NAT network created, and the root-owned `/var/lib/libvirt/images/win11.qcow2` is unreadable; `virsh list --all` shows zero defined domains; that qcow2 is 200704 bytes (a fresh-image stub, no installed guest OS); no guest agent, no guest credentials, and no Windows SDK/NSIS on any reachable guest exist. Media present and verified listable: `win11-install.iso` (8471603200 bytes, UDF volume `CCCOMA_X64FRE_EN-US_DV9`, 2026-03-07) with EFI boot plus `sources/install.wim` (7.5 GB) plus `sources/setup.exe`, and `virtio-win.iso` (1435727872 bytes), both 2026-07-29. A genuine MSIX proof additionally needs a full Windows Gecko build (multi-hour Windows compile) that no host can run yet. Unblock (operator, needs privilege): create the libvirt NAT network, define the pkg-win11 domain from the verified media above, run an unattended install, install the QEMU guest agent plus Windows SDK 10.0 plus NSIS 3.12, build the Windows dist, then hand the agent guest access — or provision any Windows 11 host with SDK plus NSIS and name it pkg-win11. Dependent cells (Windows MSIX build, Windows install/launch/uninstall/no-residue, Windows N to N-plus-1 hop, Windows alongside-stock-Firefox) stay staged-unexecuted until then. |
+| nix-linux (legion), macOS cross | Cross-configure and build host for `aarch64-apple-darwin` and `x86_64-apple-darwin` through `nix develop .#firefox-macos` (`flake.nix`); SDK floor 26.5 from the bootstrap `MacOSX26.5.sdk`; DMG via the Linux branch | n/a | declared, not run | `nix flake check --no-build` evaluates `firefox-macos` (Phase 55 plan 55-02). The SDK licence position is UNSETTLED (`55-SEC13-MEMO.md`, section 1); a cross build may not be published until the owner records it. The hosted `macos-26` native build is the recorded fallback. |
 | pkg-macos | macOS 14+ with Xcode command-line tools (required; hdiutil and SetFile are system tools) | n/a (no NSIS role on macOS) | staged-unexecuted | Provisioning error (observed 2026-09-05): no macOS install image exists anywhere reachable — `/var/lib/libvirt/images/` holds only the Windows media and stub above, and a filesystem-wide `*.dmg` search returns nothing; no Apple hardware; no lawful download path for a macOS image from Linux. Unblock (operator): provision a real Mac (or lawful macOS VM) with Xcode command-line tools, build the macOS dist on it, and hand the agent access as pkg-macos. Dependent cells (DMG build, macOS install/launch/uninstall/no-residue, macOS N to N-plus-1 hop, macOS alongside-stock-Firefox) stay staged-unexecuted until then. |
 
 Test-signing posture (T-08-05a, accepted): when the staged hosts provision,
@@ -1059,8 +1062,20 @@ decision per RESEARCH open question 1 and is NOT procured in this phase.
 - MSIX: `upstream/python/mozbuild/mozbuild/repackaging/msix.py`
   raises without `makeappx.exe`/`signtool.exe` from the Windows SDK —
   a real Windows host/VM, no Linux fallback.
-- DMG: `upstream/python/mozbuild/mozpack/dmg.py` shells out to
-  macOS-only `hdiutil`/`SetFile` — a real macOS host/VM.
+- DMG: `upstream/python/mozbuild/mozpack/dmg.py` has two branches. The
+  Linux branch (`is_linux`) builds the image with `rsync`, `newfs_hfs` and the
+  `hfsplus` and `dmg` tools, found through the target mozconfig's
+  `MKFSHFS`, `DMG_TOOL` and `HFS_TOOL` exports (`cross-mozconfig.common`).
+  Phase 55 uses this branch. The macOS branch (`hdiutil`, `SetFile`) is for a
+  real macOS host and is not used. A Mac is still needed to observe the
+  Gatekeeper copy (plan 55-04).
+- macOS per-target inputs (Phase 55): `powerbrowser/packaging/mozconfig-macos-aarch64`
+  and `-x86_64` are generated from one shared builder (`scripts/generate.mjs`
+  `emitMozconfigMacos`), with the objdirs `objdir-macos-aarch64` and
+  `objdir-macos-x86_64`. `powerbrowser/packaging/package-macos.sh <arch>`
+  stages one architecture's bundle, its Node pinned by `node-runtime.json`
+  (`darwin-arm64`, `darwin-x64`), and the Theia sidecar. The universal unify
+  and the DMG are plan 55-03.
 - The per-OS install → launch → uninstall → no-residue matrix, plus the
   alongside-stock-Firefox interleaved launch, run there (matrix section
   below records the Linux cells green and the staged cells with unblocks).

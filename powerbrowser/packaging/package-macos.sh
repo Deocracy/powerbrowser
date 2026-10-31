@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# powerbrowser/packaging/package-macos.sh -- the macOS per-architecture staging (PKG-14, PKG-15).
+# One run stages one architecture's application bundle. Run it once per target after the
+# per-target Gecko build, then the universal step unifies the two bundles (plan 55-03 owns that step
+# and the DMG). It:
+#   - runs `./mach package` for the target's mozconfig (its own objdir);
+#   - stages the Theia sidecar (lib, package.json, plugins) and the pinned official Node for this
+#     architecture under the bundle's Contents/Resources (@RESPATH@ on macOS);
+#   - stages the thin better-sqlite3 prebuild that this architecture's Node loads;
+#   - refreshes precomplete, because full MARs are made from this directory;
+#   - fails before anything is left behind when a pin, a Mach-O check or a checkout-path check fails.
+# Usage: bash powerbrowser/packaging/package-macos.sh aarch64|x86_64
+# Run from the repo root in the firefox-macos dev shell (nix develop .#firefox-macos) after a Theia
+# `yarn build` in theia/ on a matching host. Nothing here needs a Developer ID or an Apple account.
+set -euo pipefail
+ARCH="${1:-}"
+case "$ARCH" in
+    aarch64) NODE_KEY=darwin-arm64; NODE_BIN_DIR=darwin-arm64; PREBUILD=darwin-arm64.node ;;
+    x86_64)  NODE_KEY=darwin-x64;   NODE_BIN_DIR=darwin-x64;   PREBUILD=darwin-x64.node ;;
+    *) echo "package-macos: FAIL -- usage: package-macos.sh aarch64|x86_64 (got '${ARCH}')" >&2; exit 2 ;;
+esac
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OBJ="$ROOT/objdir-macos-$ARCH"
+MOZCONFIG_TRACKED="$ROOT/powerbrowser/packaging/mozconfig-macos-$ARCH"
+APP="$ROOT/theia/applications/browser"
+LIPO="${LIPO:-llvm-lipo}"
+fail() { echo "package-macos: FAIL -- $*" >&2; exit 1; }
+test -f "$APP/lib/backend/main.js" || fail "$APP/lib/backend/main.js is absent; run yarn build in theia/ first"
+
+# The pinned official Node release for this architecture (PKG-15). The sha256 pin in
+# node-runtime.json comes from nodejs.org's SHASUMS256.txt. The owner runs the gpg check on that file
+# (RELEASING.md "Node provenance"); this script enforces the pin, not the key trust. An archive that
+# does not hash to the pin is deleted and the run fails naming it.
+read -r NODE_VERSION NODE_URL NODE_SHA < <(python3 -c 'import json,sys; p=json.load(open(sys.argv[1]))[sys.argv[2]]; print(p["version"], p["url"], p["sha256"])' "$ROOT/powerbrowser/packaging/node-runtime.json" "$NODE_KEY")
+CACHE="$ROOT/.mozbuild/node-dist"; mkdir -p "$CACHE"
+ARCHIVE="$CACHE/$(basename "$NODE_URL")"
+TMP_OUT=""
+trap 'rm -f "$ARCHIVE.part" ${TMP_OUT:+"$TMP_OUT"}' ERR
+if [ ! -f "$ARCHIVE" ]; then
+    curl -fsSL -o "$ARCHIVE.part" "$NODE_URL" \
+        || { rm -f "$ARCHIVE.part"; fail "downloading $NODE_URL failed"; }
+    mv "$ARCHIVE.part" "$ARCHIVE"
+fi
+echo "$NODE_SHA  $ARCHIVE" | sha256sum -c --quiet - || { rm -f "$ARCHIVE"; fail "$ARCHIVE does not hash to the pin in powerbrowser/packaging/node-runtime.json ($NODE_KEY)"; }
+
+# Gecko: the target's own objdir, through its tracked per-target mozconfig.
+( cd "$ROOT/upstream" && POWERBROWSER_OBJDIR="objdir-macos-$ARCH" MOZCONFIG="$MOZCONFIG_TRACKED" ./mach package )
+
+shopt -s nullglob
+APPS=( "$OBJ"/dist/*.app )
+shopt -u nullglob
+test ${#APPS[@]} -eq 1 || fail "expected exactly one staged .app under $OBJ/dist, found ${#APPS[@]}"
+BUNDLE="${APPS[0]}"
+RES="$BUNDLE/Contents/Resources"
+test -f "$RES/precomplete" || fail "$RES/precomplete is absent; the Gecko package did not stage a bundle"
+
+# Theia sidecar: the same files the Linux package stages, under the bundle's Resources directory.
+rm -rf "$RES/theia" "$RES/node" "$RES/distribution"
+mkdir -p "$RES/theia" "$RES/node/bin" "$RES/distribution"
+cp -a "$APP/lib" "$RES/theia/lib"
+find "$RES/theia/lib" -name '*.map' -delete
+cp "$APP/package.json" "$RES/theia/package.json"
+if [ -d "$APP/plugins" ]; then cp -a "$APP/plugins" "$RES/theia/plugins"; fi
+# better-sqlite3 stays outside the backend bundle. This architecture's Node loads exactly one
+# prebuild, the one named for its platform and arch. The thin slice is staged, because a universal
+# merge of two thin trees is the unify step's job (mozpack UnifiedExecutableFile takes thin inputs).
+mkdir -p "$RES/theia/node_modules/better-sqlite3/lib" "$RES/theia/node_modules/better-sqlite3/prebuilds"
+cp -a "$ROOT/theia/node_modules/better-sqlite3/lib/." "$RES/theia/node_modules/better-sqlite3/lib/"
+cp "$ROOT/theia/node_modules/better-sqlite3/package.json" "$RES/theia/node_modules/better-sqlite3/package.json"
+cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD" "$RES/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD"
+
+# Node for this architecture, from the pinned archive. The tar member names carry the version and
+# the os-arch; the staged binary must be a Mach-O of this architecture.
+tar -xzf "$ARCHIVE" -C "$RES/node" --strip-components=1 "node-$NODE_VERSION-$NODE_BIN_DIR/bin/node" "node-$NODE_VERSION-$NODE_BIN_DIR/LICENSE"
+test -f "$RES/node/bin/node" || fail "the archive carries no node-$NODE_VERSION-$NODE_BIN_DIR/bin/node member"
+chmod 755 "$RES/node/bin/node"
+NODE_ARCHS="$("$LIPO" -archs "$RES/node/bin/node" 2>/dev/null || true)"
+case "$ARCH" in
+    aarch64) WANT_ARCH=arm64 ;;
+    x86_64)  WANT_ARCH=x86_64 ;;
+esac
+test "$NODE_ARCHS" = "$WANT_ARCH" || fail "the staged node is not a single $WANT_ARCH Mach-O (lipo reports '${NODE_ARCHS:-nothing}'); the archive does not match $NODE_KEY"
+cp "$ROOT/powerbrowser/distribution/policies.json" "$RES/distribution/policies.json"
+
+# No payload carries a Linux name. The darwin pin and the darwin prebuild are the only natives staged.
+if find "$RES" \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit | grep -q .; then
+    fail "a non-darwin native is staged under $RES: $(find "$RES" \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit)"
+fi
+
+# A checkout path must not ship: the staged sidecar and node, and any RUNPATH or bundle map key that
+# names the build checkout, fail the run naming the file. RUNPATH rewriting for Mach-O needs the exact
+# rpath string from the binary, so it is not guessed here; a hit fails rather than being rewritten.
+while IFS= read -r hit; do
+    fail "the staged bundle still carries a checkout path: $hit"
+done < <(grep -rlF "$ROOT/" "$RES/theia" "$RES/node" 2>/dev/null || true)
+
+# The bundle's precomplete must describe the staged files, because full MARs are made from it.
+( cd "$BUNDLE" && python3 "$ROOT/upstream/config/createprecomplete.py" )
+
+trap - ERR
+rm -f "$ARCHIVE.part"
+echo "package-macos: staged $RES for $ARCH (node $NODE_VERSION, $NODE_KEY pin, prebuild $PREBUILD); the universal unify and DMG steps follow in plan 55-03"

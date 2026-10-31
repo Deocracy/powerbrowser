@@ -3,5 +3,15 @@
     "version": "v24.19.0",
     "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz",
     "sha256": "14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
+  },
+  "darwin-arm64": {
+    "version": "v24.19.0",
+    "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz",
+    "sha256": "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d"
+  },
+  "darwin-x64": {
+    "version": "v24.19.0",
+    "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-x64.tar.gz",
+    "sha256": "d1b5e999db158c62fe8f7267a4476b035d8bd93b1a605bac24a3f0dd166e3316"
   }
 }
