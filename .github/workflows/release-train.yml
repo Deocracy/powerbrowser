@@ -152,7 +152,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
 
       # product-details is advisory. An outage leaves the value empty, a NOTE is printed, and
       # the decision does not read it, so the advisory never blocks a bump.
@@ -207,7 +207,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
 
       # The Node 24 line: the newest v24 entry of the release index that ships linux-x64 and is
       # strictly newer than the pin in node-runtime.json. No such line, and an open chore/node-v24.x
@@ -372,7 +372,7 @@ jobs:
           fi
           TITLE="chore(esr): move the Firefox ESR pin to ${TAG}"
           BODY="Bump to ${TAG}, replayed through rebase-upstream.yml and regenerated from configuration.toml. verify.yml runs on this PR; the owner merges."
-          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
           if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"; fi
 
   # The Node PR is its own job, with its own App token and checkout, so the ESR bump never
@@ -437,7 +437,7 @@ jobs:
           fi
           TITLE="chore(node): move the Node 24 runtime pin to ${NODE_VERSION}"
           BODY="Node 24 bump to ${NODE_VERSION}. The SHASUMS256.txt signature was checked with gpgv in the release train's detect-node job, and the tarball sha256 equals the signed entry. verify.yml runs on this PR."
-          EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number --jq '.[0].number // empty')
+          EXISTING=$(gh pr list --head chore/node-v24.x --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
           if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head chore/node-v24.x --title "$TITLE" --body "$BODY"; fi
 
   report:
