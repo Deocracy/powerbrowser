@@ -476,7 +476,7 @@ jobs:
         run: |
           set -euo pipefail
           PIN="$(node scripts/detect-upstreams.mjs --pin)"
-          SHA="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --head "chore/esr-${PIN}" --limit 5 --json number,mergeCommit --jq 'sort_by(.number) | reverse | .[0].mergeCommit.oid // empty')"
+          SHA="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --head "chore/esr-${PIN}" --limit 5 --json number,mergeCommit,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)] | sort_by(.number) | reverse | .[0].mergeCommit.oid // empty')"
           if [ -n "$SHA" ] && ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "release-train: FAIL -- the merged bump PR names a merge SHA that is not 40 hex. Next step: do not dispatch; check the PR." >&2
             exit 1
