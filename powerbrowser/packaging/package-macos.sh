@@ -3,20 +3,25 @@
 # One run stages one architecture's application bundle. Run it once per target after the
 # per-target Gecko build, then the universal step unifies the two bundles (plan 55-03 owns that step
 # and the DMG). It:
-#   - runs `./mach package` for the target's mozconfig (its own objdir);
-#   - stages the Theia sidecar (lib, package.json, plugins) and the pinned official Node for this
-#     architecture under the bundle's Contents/Resources (@RESPATH@ on macOS);
-#   - stages the thin better-sqlite3 prebuild that this architecture's Node loads;
-#   - refreshes precomplete, because full MARs are made from this directory;
-#   - fails before anything is left behind when a pin, a Mach-O check or a checkout-path check fails.
+#   - checks its inputs (lipo, MOZ_FETCHES_DIR and its SDK and DMG tools, the Theia build, the pinned
+#     Node pin) before anything is downloaded or built;
+#   - runs `./mach package` for the target's mozconfig (its own objdir), and checks that configure
+#     recorded the selected branding (release by default, as on Linux);
+#   - stages the Theia sidecar, the pinned official Node for this architecture and the thin
+#     better-sqlite3 prebuild into a COPY of the staged .app, under Contents/Resources;
+#   - rewrites the esbuild node-file: keys, then checks that every native payload is a thin Mach-O of
+#     this architecture, that no Linux name is staged, and that no checkout path ships;
+#   - refreshes precomplete from Contents/Resources, because full MARs are made from it;
+#   - replaces the objdir's .app with the copy only when every check has passed. A failed run leaves
+#     the .app exactly as mach wrote it, and removes its own working copy.
 # Usage: bash powerbrowser/packaging/package-macos.sh aarch64|x86_64
 # Run from the repo root in the firefox-macos dev shell (nix develop .#firefox-macos) after a Theia
 # `yarn build` in theia/ on a matching host. Nothing here needs a Developer ID or an Apple account.
 set -euo pipefail
 ARCH="${1:-}"
 case "$ARCH" in
-    aarch64) NODE_KEY=darwin-arm64; NODE_BIN_DIR=darwin-arm64; PREBUILD=darwin-arm64.node ;;
-    x86_64)  NODE_KEY=darwin-x64;   NODE_BIN_DIR=darwin-x64;   PREBUILD=darwin-x64.node ;;
+    aarch64) NODE_KEY=darwin-arm64; NODE_BIN_DIR=darwin-arm64; PREBUILD=darwin-arm64.node; WANT_ARCH=arm64 ;;
+    x86_64)  NODE_KEY=darwin-x64;   NODE_BIN_DIR=darwin-x64;   PREBUILD=darwin-x64.node;   WANT_ARCH=x86_64 ;;
     *) echo "package-macos: FAIL -- usage: package-macos.sh aarch64|x86_64 (got '${ARCH}')" >&2; exit 2 ;;
 esac
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -27,6 +32,7 @@ LIPO="${LIPO:-llvm-lipo}"
 fail() { echo "package-macos: FAIL -- $*" >&2; exit 1; }
 command -v "$LIPO" >/dev/null || fail "$LIPO not found; enter nix develop .#firefox-macos (llvm supplies llvm-lipo), or set LIPO to a lipo that supports -archs"
 test -f "$APP/lib/backend/main.js" || fail "$APP/lib/backend/main.js is absent; run yarn build in theia/ first"
+test -f "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD" || fail "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD is absent; run yarn install in theia/ first"
 
 # The target mozconfig expands $MOZ_FETCHES_DIR into the SDK and DMG tool paths when mach loads it.
 # Unset, those paths become /MacOSX26.5.sdk and /hfsplus/newfs_hfs, and configure fails later and less
@@ -46,10 +52,16 @@ read -r NODE_VERSION NODE_URL NODE_SHA <<< "$PIN" || true
 test -n "${NODE_SHA:-}" || fail "no usable $NODE_KEY pin in powerbrowser/packaging/node-runtime.json"
 CACHE="$ROOT/.mozbuild/node-dist"; mkdir -p "$CACHE"
 ARCHIVE="$CACHE/$(basename "$NODE_URL")"
-trap 'rm -f "$ARCHIVE.part"' ERR
+# Every exit removes a partial download and this run's working copy, so a failure leaves nothing.
+WORK=""
+cleanup() {
+    rm -f "$ARCHIVE.part"
+    if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+}
+trap cleanup EXIT
 if [ ! -f "$ARCHIVE" ]; then
     curl -fsSL -o "$ARCHIVE.part" "$NODE_URL" \
-        || { rm -f "$ARCHIVE.part"; fail "downloading $NODE_URL failed"; }
+        || fail "downloading $NODE_URL failed"
     mv "$ARCHIVE.part" "$ARCHIVE"
 fi
 echo "$NODE_SHA  $ARCHIVE" | sha256sum -c --quiet - || { rm -f "$ARCHIVE"; fail "$ARCHIVE does not hash to the pin in powerbrowser/packaging/node-runtime.json ($NODE_KEY)"; }
@@ -69,8 +81,14 @@ APPS=( "$OBJ"/dist/*.app )
 shopt -u nullglob
 test ${#APPS[@]} -eq 1 || fail "expected exactly one staged .app under $OBJ/dist, found ${#APPS[@]}"
 BUNDLE="${APPS[0]}"
-RES="$BUNDLE/Contents/Resources"
-test -f "$RES/precomplete" || fail "$RES/precomplete is absent; the Gecko package did not stage a bundle"
+test -f "$BUNDLE/Contents/Resources/precomplete" || fail "$BUNDLE/Contents/Resources/precomplete is absent; the Gecko package did not stage a bundle"
+
+# Stage into a copy of the whole .app. createprecomplete.py walks the bundle from two levels above its
+# cwd, so the copy must be a complete bundle. The objdir's .app is replaced only after every check passes.
+WORK="$(mktemp -d "$OBJ/.pkg-macos-$ARCH.XXXXXX")"
+STAGED="$WORK/$(basename "$BUNDLE")"
+cp -a "$BUNDLE" "$STAGED"
+RES="$STAGED/Contents/Resources"
 
 # Theia sidecar: the same files the Linux package stages, under the bundle's Resources directory.
 rm -rf "$RES/theia" "$RES/node" "$RES/distribution"
@@ -88,14 +106,11 @@ cp "$ROOT/theia/node_modules/better-sqlite3/package.json" "$RES/theia/node_modul
 cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD" "$RES/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD"
 
 # Node for this architecture, from the pinned archive. The tar member names carry the version and
-# the os-arch; the staged binary must be a Mach-O of this architecture.
-tar -xzf "$ARCHIVE" -C "$RES/node" --strip-components=1 "node-$NODE_VERSION-$NODE_BIN_DIR/bin/node" "node-$NODE_VERSION-$NODE_BIN_DIR/LICENSE"
+# the os-arch; the staged binary must be a Mach-O of this architecture (checked below).
+tar -xzf "$ARCHIVE" -C "$RES/node" --strip-components=1 "node-$NODE_VERSION-$NODE_BIN_DIR/bin/node" "node-$NODE_VERSION-$NODE_BIN_DIR/LICENSE" \
+    || fail "the archive carries no node-$NODE_VERSION-$NODE_BIN_DIR/bin/node member"
 test -f "$RES/node/bin/node" || fail "the archive carries no node-$NODE_VERSION-$NODE_BIN_DIR/bin/node member"
 chmod 755 "$RES/node/bin/node"
-case "$ARCH" in
-    aarch64) WANT_ARCH=arm64 ;;
-    x86_64)  WANT_ARCH=x86_64 ;;
-esac
 cp "$ROOT/powerbrowser/distribution/policies.json" "$RES/distribution/policies.json"
 
 # No payload carries a Linux name. The darwin pin and the darwin prebuild are the only natives staged.
@@ -147,11 +162,16 @@ done < <(grep -rlF "$ROOT/" "$RES/theia" "$RES/node" 2>/dev/null || true)
 # createprecomplete.py takes the Mac layout (Contents/Resources/precomplete, walked from the bundle
 # root) only when its cwd is named Resources. From the bundle root it writes a stray precomplete at
 # X.app/ and leaves the real one stale, so it runs from $RES and both outcomes are checked.
-rm -f "$BUNDLE/precomplete"
+rm -f "$STAGED/precomplete"
 ( cd "$RES" && python3 "$ROOT/upstream/config/createprecomplete.py" )
-test ! -e "$BUNDLE/precomplete" || fail "a stray precomplete landed at the bundle root: $BUNDLE/precomplete"
+test ! -e "$STAGED/precomplete" || fail "a stray precomplete landed at the bundle root: $STAGED/precomplete"
 grep -q 'remove "Contents/Resources/theia/' "$RES/precomplete" || fail "$RES/precomplete does not list the staged theia/ files"
 
-trap - ERR
-rm -f "$ARCHIVE.part"
-echo "package-macos: staged $RES for $ARCH (node $NODE_VERSION, $NODE_KEY pin, prebuild $PREBUILD); the universal unify and DMG steps follow in plan 55-03"
+# Every check passed. Replace the objdir's .app with the staged copy. The previous .app moves into the
+# working directory first, so a failed move puts it back.
+mv "$BUNDLE" "$WORK/previous.app"
+if ! mv "$STAGED" "$BUNDLE"; then
+    mv "$WORK/previous.app" "$BUNDLE"
+    fail "could not move the staged bundle into $BUNDLE; the previous bundle is restored"
+fi
+echo "package-macos: staged $BUNDLE/Contents/Resources for $ARCH (node $NODE_VERSION, $NODE_KEY pin, prebuild $PREBUILD, branding $POWERBROWSER_BRANDING); the universal unify and DMG steps follow in plan 55-03"
