@@ -1,6 +1,11 @@
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
 import { EMPTY_PAGE_URL, NEW_TAB_LABEL, WebTabHistoryEntry } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 
+/** A byte count for a download caption: KB or MB, one decimal. Not copy: it formats a number. */
+export function downloadBytes(bytes: number): string {
+    return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
 /**
  * Phase 27 chrome-bar copy (27-UI-SPEC Copywriting Contract). Every new
  * sentence lives in this one object, so `verify-shell-error-copy.mjs` pins
@@ -34,6 +39,17 @@ export const CHROME_BAR_COPY = Object.freeze({
     selectAll: 'Select All',
     pasteFailed: (subject: string) => `${subject} couldn't read the clipboard. Press Ctrl+V to paste, then press Enter.`,
     searchSuggestionsDescription: 'Show suggestions from your search engine while you type in the address bar. What you type is sent to the search engine.',
+    // Phase 32 plan 04 (PAGE-06): the downloads button and panel (32-UI-SPEC Copywriting Contract).
+    downloads: 'Downloads',
+    downloadsCount: (count: number) => `${count} downloads`,
+    noDownloads: 'No downloads yet.',
+    noDownloadsHint: 'Files you download appear here.',
+    openDownload: 'Open',
+    showInFolder: 'Show in folder',
+    cancelDownload: 'Cancel',
+    retryDownload: 'Retry',
+    downloadProgress: (percent: number, bytes: string) => `${percent}% — ${bytes}`,
+    downloadFailed: 'Failed — Retry',
     // Phase 30 (SMODE-01..03): the address bar's modes. modeLabels is keyed by the LOCAL_MODES ids.
     modeLabels: Object.freeze({
         'command-centre': 'Command centre',

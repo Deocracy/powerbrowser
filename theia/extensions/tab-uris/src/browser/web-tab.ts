@@ -758,6 +758,16 @@ export class WebTabWidget extends BaseWidget {
     }
 
     /** NAV-03: the tab's windowed session history (reply `index` and `entries`). */
+    /** Phase 32 plan 04 (PAGE-06): subscribes this frame to the Downloads view; repeated calls only re-point the push. */
+    async downloadsSubscribe(): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabDownloadsSubscribe', tabId: this.tabId }));
+    }
+
+    /** Phase 32 plan 04 (PAGE-06): one row action by the chrome-assigned row id; the row changes arrive as a push. */
+    async downloadAction(id: number, action: DownloadAction): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabDownloadsAction', tabId: this.tabId, id, action }));
+    }
+
     async history(): Promise<WebTabReply> {
         return this.settleUnknownTab(await this.channel.request({ kind: 'webTabHistory', tabId: this.tabId }));
     }

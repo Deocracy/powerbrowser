@@ -20,6 +20,7 @@ export const CHROME_BAR_BACK_COMMAND_ID = 'powerbrowser.chrome-bar.back';
 export const CHROME_BAR_FORWARD_COMMAND_ID = 'powerbrowser.chrome-bar.forward';
 export const CHROME_BAR_RELOAD_COMMAND_ID = 'powerbrowser.chrome-bar.reload';
 export const CHROME_BAR_NEW_TAB_COMMAND_ID = 'powerbrowser.chrome-bar.new-tab';
+export const CHROME_BAR_DOWNLOADS_COMMAND_ID = 'powerbrowser.chrome-bar.downloads';
 export const CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID = 'powerbrowser.chrome-bar.focus-address';
 
 /**
@@ -53,6 +54,12 @@ export const CHROME_BAR_NEW_TAB: Command = {
     label: 'New Tab',
 };
 
+export const CHROME_BAR_DOWNLOADS: Command = {
+    id: CHROME_BAR_DOWNLOADS_COMMAND_ID,
+    category: CHROME_BAR_COMMAND_CATEGORY,
+    label: 'Downloads',
+};
+
 /** Labelless by design: reachable through Ctrl/Cmd+L, never the palette. */
 export const CHROME_BAR_FOCUS_ADDRESS: Command = {
     id: CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,
@@ -77,6 +84,13 @@ export function currentWebTab(): WebTabWidget | undefined {
 /** Called from the chrome-bar contribution on every current-widget change; a non-web widget clears it. */
 export function setCurrentWebTab(widget: Widget | undefined): void {
     current = widget instanceof WebTabWidget ? widget : undefined;
+}
+
+let openDownloadsPanel: (() => void) | undefined;
+
+/** Set by the chrome bar widget, which owns the panel; the Downloads command opens it through this. */
+export function setOpenDownloadsPanel(open: (() => void) | undefined): void {
+    openDownloadsPanel = open;
 }
 
 /**
@@ -176,6 +190,11 @@ export class ChromeBarCommandContribution implements CommandContribution {
         // window survives only behind the GUI-01 palette command.
         // PAN-03 (22-UI-SPEC A7): the new tab joins the active group, if any;
         // a failed join leaves it open and loose behind the save-error bar.
+        commands.registerCommand(CHROME_BAR_DOWNLOADS, {
+            execute: () => openDownloadsPanel?.(),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
         commands.registerCommand(CHROME_BAR_NEW_TAB, {
             execute: async () => {
                 const uri = new URI(EMPTY_PAGE_URL);

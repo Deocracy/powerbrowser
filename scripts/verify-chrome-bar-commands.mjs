@@ -62,11 +62,12 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.forward',
     'powerbrowser.chrome-bar.reload',
     'powerbrowser.chrome-bar.new-tab',
+    'powerbrowser.chrome-bar.downloads',
     'powerbrowser.chrome-bar.focus-address',
 ]);
 
-/** The four contracted visible labels, verbatim from 13-UI-SPEC.md. */
-const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab']);
+/** The contracted visible labels: four verbatim from 13-UI-SPEC.md, and Downloads from 32-UI-SPEC.md (Phase 32 plan 04). */
+const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads']);
 
 function diff(actual, expected) {
     const a = new Set(actual);

@@ -1114,3 +1114,93 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
 .lm-Menu.pb-app-menu .lm-Menu-item {
     height: 32px;
 }
+
+/* Phase 32 plan 04 (PAGE-06): the downloads button, its badge and the panel rows. */
+.pb-chrome-bar-downloads {
+    position: relative;
+    display: flex;
+}
+
+.pb-chrome-bar-downloads .pb-chrome-bar-button {
+    position: relative;
+}
+
+.pb-chrome-bar-download-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--color-primary);
+    color: var(--color-bg);
+    font-size: 11px;
+    line-height: 14px;
+    text-align: center;
+}
+
+.pb-chrome-bar-downloads-panel {
+    left: auto;
+    right: 0;
+    width: 360px;
+    padding: 0 0 4px;
+}
+
+.pb-chrome-bar-download-heading {
+    padding: 8px 12px;
+    font-size: 14px;
+}
+
+.pb-chrome-bar-download-empty {
+    padding: 12px;
+    font-size: 13px;
+}
+
+.pb-chrome-bar-download-hint {
+    font-size: 12px;
+}
+
+.pb-chrome-bar-download-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 14px;
+}
+
+.pb-chrome-bar-download-row:hover,
+.pb-chrome-bar-download-row:focus-visible {
+    background: var(--color-surface-raised);
+    outline: none;
+}
+
+.pb-chrome-bar-download-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pb-chrome-bar-download-caption {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+}
+
+.pb-chrome-bar-download-action {
+    flex: 0 0 auto;
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    font-size: 13px;
+    padding: 2px 6px;
+    cursor: pointer;
+}
+
+.pb-chrome-bar-download-action:hover {
+    text-decoration: underline;
+}

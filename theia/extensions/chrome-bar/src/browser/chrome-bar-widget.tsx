@@ -11,17 +11,19 @@ import {
 import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import { PreferenceService } from '@theia/core/lib/common/preferences';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
-import { WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import {
     CHROME_BAR_BACK_COMMAND_ID,
     CHROME_BAR_FORWARD_COMMAND_ID,
+    CHROME_BAR_DOWNLOADS_COMMAND_ID,
     CHROME_BAR_NEW_TAB_COMMAND_ID,
     CHROME_BAR_RELOAD_COMMAND_ID,
     chromeBarHasNavigableTab,
     currentWebTab,
     setCurrentWebTab,
+    setOpenDownloadsPanel,
 } from './chrome-bar-commands';
-import { CHROME_BAR_COPY, appSubject, historyLabel } from './chrome-bar-copy';
+import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
 import { AddressBar, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
 import { BUTTON_SHORTCUTS, NavButton, tooltipFor } from './chrome-bar-shortcuts';
@@ -166,6 +168,13 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(AddressBar)
     protected readonly addressBar: AddressBar;
 
+    @inject(WebTabChannel)
+    protected readonly webTabs: WebTabChannel;
+
+    protected downloadRows: WebTabDownloadRow[] = [];
+    protected downloadsOpen = false;
+    protected readonly downloadsRead = new Set<number>();
+
     protected holdTimer: number | undefined;
     /** Set when a hold opened the history menu, so the release's click does not navigate. */
     protected suppressNavClick = false;
@@ -183,6 +192,11 @@ export class ChromeBarWidget extends ReactWidget {
     @postConstruct()
     protected init(): void {
         this.addressBar.attach(this);
+        setOpenDownloadsPanel(() => this.toggleDownloads());
+        this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
+            this.downloadRows = rows;
+            this.update();
+        }));
         // NAV-04: toggling either Home setting updates the bar live, with no reload.
         this.toDispose.push(this.preferences.onPreferenceChanged(change => {
             if (change.preferenceName === SHOW_HOME_BUTTON_PREFERENCE || change.preferenceName === HOME_PAGE_PREFERENCE) {
@@ -629,6 +643,128 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
     }
 
+    protected downloadsBadge(): number {
+        return this.downloadRows.filter(row => row.state === 'in-progress' || (row.state === 'finished' && !this.downloadsRead.has(row.id))).length;
+    }
+
+    protected toggleDownloads(): void {
+        if (this.downloadsOpen) {
+            this.closeDownloads(true);
+            return;
+        }
+        const tab = currentWebTab();
+        if (!tab) {
+            return;
+        }
+        for (const row of this.downloadRows) {
+            if (row.state === 'finished') {
+                this.downloadsRead.add(row.id);
+            }
+        }
+        this.downloadsOpen = true;
+        void tab.downloadsSubscribe();
+        this.update();
+        setTimeout(() => document.getElementById('pb-chrome-bar-downloads')?.focus());
+    }
+
+    protected closeDownloads(restoreFocus: boolean): void {
+        this.downloadsOpen = false;
+        this.update();
+        if (restoreFocus) {
+            currentWebTab()?.focusPage();
+        }
+    }
+
+    protected onDownloadsKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            this.closeDownloads(true);
+            return;
+        }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') {
+            return;
+        }
+        const rows = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'));
+        if (rows.length === 0) {
+            return;
+        }
+        e.preventDefault();
+        const at = rows.indexOf(document.activeElement as HTMLElement);
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        rows[at < 0 ? (step > 0 ? 0 : rows.length - 1) : (at + step + rows.length) % rows.length].focus();
+    };
+
+    protected downloadAction(row: WebTabDownloadRow, action: DownloadAction): void {
+        void currentWebTab()?.downloadAction(row.id, action);
+    }
+
+    protected downloadCaption(row: WebTabDownloadRow): string {
+        if (row.state === 'in-progress') {
+            const percent = row.bytesTotal > 0 ? Math.floor((row.bytesReceived * 100) / row.bytesTotal) : 0;
+            return CHROME_BAR_COPY.downloadProgress(percent, downloadBytes(row.bytesReceived));
+        }
+        return row.state === 'failed' ? CHROME_BAR_COPY.downloadFailed : '';
+    }
+
+    protected renderDownloads(): React.ReactNode {
+        const count = this.downloadsBadge();
+        const hasBadge = count > 0;
+        return <div className='pb-chrome-bar-downloads'>
+            <button
+                className='pb-chrome-bar-button'
+                title={CHROME_BAR_COPY.downloads}
+                aria-label={count > 0 ? CHROME_BAR_COPY.downloadsCount(count) : CHROME_BAR_COPY.downloads}
+                aria-haspopup='listbox'
+                aria-expanded={this.downloadsOpen}
+                disabled={!currentWebTab()}
+                onClick={this.runCommand(CHROME_BAR_DOWNLOADS_COMMAND_ID)}
+            >
+                <span className='codicon codicon-cloud-download' />
+                {hasBadge && <span className='pb-chrome-bar-download-badge'>{count}</span>}
+            </button>
+            {this.downloadsOpen && this.renderDownloadsPanel()}
+        </div>;
+    }
+
+    protected renderDownloadsPanel(): React.ReactNode {
+        return <div
+            className='pb-chrome-bar-dropdown pb-chrome-bar-downloads-panel'
+            id='pb-chrome-bar-downloads'
+            role='listbox'
+            aria-label={CHROME_BAR_COPY.downloads}
+            tabIndex={-1}
+            onKeyDown={this.onDownloadsKeyDown}
+        >
+            <div className='pb-chrome-bar-download-heading'>{CHROME_BAR_COPY.downloads}</div>
+            {this.downloadRows.length === 0 && <div className='pb-chrome-bar-download-empty'>
+                <div>{CHROME_BAR_COPY.noDownloads}</div>
+                <div className='pb-chrome-bar-download-hint'>{CHROME_BAR_COPY.noDownloadsHint}</div>
+            </div>}
+            {this.downloadRows.map(row => this.renderDownloadRow(row))}
+        </div>;
+    }
+
+    protected renderDownloadRow(row: WebTabDownloadRow): React.ReactNode {
+        const actions: [DownloadAction, string][] = row.state === 'finished'
+            ? [['launch', CHROME_BAR_COPY.openDownload], ['showContainingDirectory', CHROME_BAR_COPY.showInFolder]]
+            : row.state === 'in-progress'
+                ? [['cancel', CHROME_BAR_COPY.cancelDownload]]
+                : [['retry', CHROME_BAR_COPY.retryDownload]];
+        const onRowKey = (e: React.KeyboardEvent<HTMLElement>): void => {
+            if (e.key !== 'Enter' || e.target !== e.currentTarget) {
+                return;
+            }
+            e.preventDefault();
+            this.downloadAction(row, row.state === 'finished' ? 'launch' : row.state === 'in-progress' ? 'cancel' : 'retry');
+        };
+        return <div key={row.id} role='option' aria-selected={false} tabIndex={-1} className='pb-chrome-bar-download-row' data-state={row.state} onKeyDown={onRowKey}>
+            <span className='codicon codicon-file' />
+            <span className='pb-chrome-bar-download-title'>{row.filename}</span>
+            <span className='pb-chrome-bar-download-caption'>{this.downloadCaption(row)}</span>
+            {actions.map(([action, label]) => <button key={action} type='button' tabIndex={-1} className='pb-chrome-bar-download-action' onClick={() => this.downloadAction(row, action)}>{label}</button>)}
+        </div>;
+    }
+
     protected render(): React.ReactNode {
         // One shared navigable-tab predicate (GUI-02-owned) narrowed by the
         // active web tab's last state push: all three controls dim with
@@ -716,6 +852,7 @@ export class ChromeBarWidget extends ReactWidget {
             >
                 <span className='codicon codicon-menu' />
             </button>
+            {this.renderDownloads()}
             <div className='pb-chrome-bar-toggle' role='group' aria-label='Mode'>
                 {ChromeBarWidget.MODES.map(name => (
                     <button
@@ -788,6 +925,9 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
     protected syncCurrentWidget(widget: Widget | undefined): void {
         setCurrentWebTab(widget);
         this.barWidget.onCurrentWidgetChanged(widget);
+        if (widget instanceof WebTabWidget) {
+            void widget.downloadsSubscribe();
+        }
     }
 
     /**

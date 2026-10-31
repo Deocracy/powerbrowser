@@ -21,8 +21,7 @@
  *           reports audioMuted true, Unmute reports it false.
  *   downloads  Phase 32 plan 04 (PAGE-06): a page-started slow download becomes a
  *           row with bytes in a downloadsChanged push; Cancel stops it; Retry
- *           finishes it. Plant silent-download (no view) must go red, naming
- *           'row missing'.
+ *           finishes it.
  *   downloads-today  PROBE (record only): a page-started download of an
  *           attachment. The verdict is what it does today, written to
  *           scripts/lib/pb-probe-verdicts.json; it is never pass or fail.
@@ -223,16 +222,15 @@ async function scenarioAudio(app, origin) {
  * downloads (PAGE-06): a page-started download becomes a row with bytes in a
  * downloadsChanged push; Cancel stops it; Retry restarts it to a finished row.
  * The served request log must show the page's own request (no silent save).
- * `subscribe: false` is the planted fault: no view, so no row can be pushed.
- * Open and Show in folder are not driven: they launch OS applications.
+ * Open and Show in folder are not driven: they launch OS applications. No
+ * planted fault removes the view: the widget subscribes on every tab
+ * activation, so a live session always holds the view.
  */
-async function scenarioDownloads(app, fx, { subscribe = true } = {}) {
+async function scenarioDownloads(app, fx) {
     const { tabId, from } = await openLoaded(app, `${fx.origin}/find`, '/find');
-    if (subscribe) {
-        const reply = await channelRequest(app, { kind: 'webTabDownloadsSubscribe', tabId });
-        if (reply?.ok !== true) {
-            return `the subscribe reply was not ok (${JSON.stringify(reply)})`;
-        }
+    const reply = await channelRequest(app, { kind: 'webTabDownloadsSubscribe', tabId });
+    if (reply?.ok !== true) {
+        return `the subscribe reply was not ok (${JSON.stringify(reply)})`;
     }
     const rowIn = async (pred, after, timeoutMs) => {
         const at = await waitForPush(app, p => p && p.kind === 'downloadsChanged' && (p.rows ?? []).some(pred), { from: after, timeoutMs });
@@ -344,12 +342,6 @@ const PLANTS = [
         target: 'find',
         run: (app, fx) => scenarioFind(app, fx.origin, 'webTabFindDropped'),
         expect: 'no findMatches push',
-    },
-    {
-        plant: 'silent-download',
-        target: 'downloads',
-        run: (app, fx) => scenarioDownloads(app, fx, { subscribe: false }),
-        expect: 'row missing',
     },
 ];
 
