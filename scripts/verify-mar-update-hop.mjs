@@ -46,15 +46,23 @@
 // could not find its own subject is the green-by-construction shape
 // deferred-items.md records. The self-test twin below is the --quick half.
 //
-// Honestly --quick (self-test only): node:crypto plus text files in mkdtemp.
-// No build, no browser, no display, no network.
+// SERVED:RELEASE (UPD-16, Phase 50). hop.json carries served loopback or release. loopback is the
+// fork-server drill above, unchanged. release is the real-Release drill: the N+1 MAR downloaded from
+// the write-once origin and the descriptor served from the update host, judged by six properties
+// (hosts, hash, version, signature, allowed channels, attestation) plus the byte-identity detector.
+// The fork-server access log is not demanded (Pages and R2 produce none). An absent or unknown served
+// value fails naming the key; nothing defaults.
+//
+// Honestly --quick (self-test only): node:crypto plus text files in mkdtemp, and a fake gh for the
+// attestation branch. No build, no browser, no display, no network.
 //
 // Usage:
 //   node scripts/verify-mar-update-hop.mjs
 //   node scripts/verify-mar-update-hop.mjs --self-test
 
+import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 // WR-08: the shell's stdout capture of the N+1 run. PowerBrowserAPI's update
 // observer logs one line per appUpdate push, which is the logged event the
@@ -66,13 +74,19 @@ import { tmpdir } from 'node:os';
 import { isIP } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
-import { resolveConfig } from './generate.mjs';
+import { marOrigin, resolveConfig, updateChannel } from './generate.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-mar-update-hop';
 const EVIDENCE_DIR = join(REPO_ROOT, '.mozbuild', 'mar-hop');
 const MANIFEST_REL = 'configuration.toml';
 const URL_KEY = `${MANIFEST_REL} [urls] update`;
+const SERVED_MODES = Object.freeze(['loopback', 'release']);
+// The hosts the release update path must never contact (UPD-15 layer 3): the Release page origin
+// and the signed asset redirect target, which expires and so cannot be named in a static descriptor.
+const RELEASE_FORBIDDEN_HOSTS = Object.freeze(['github.com', 'release-assets.githubusercontent.com']);
+const PRIMARY_DER_REL = 'powerbrowser/packaging/mar/mar-primary.der';
+const MOZCONFIG_REL = 'powerbrowser/packaging/mozconfig.release';
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
@@ -233,7 +247,223 @@ function readManifestUpdateUrl(root) {
     return { url };
 }
 
-function runChecks(root) {
+/** The hostname of a URL, or null when it does not parse. Pure. */
+function hostOf(url) {
+    try {
+        return new URL(url).hostname;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Dotted-numeric compare of two versions: -1, 0 or 1; null when either is not dotted digits. Pure.
+ * Same appVersion with distinct buildIDs compares 0 and is an upgrade to the client
+ * (updateIsAtLeastAsOldAs refuses an offer only when versions compare equal and buildIDs match).
+ */
+export function compareDotted(a, b) {
+    const shape = /^\d+(\.\d+)*$/;
+    if (typeof a !== 'string' || typeof b !== 'string' || !shape.test(a) || !shape.test(b)) return null;
+    const x = a.split('.').map(Number);
+    const y = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+        const p = x[i] ?? 0;
+        const q = y[i] ?? 0;
+        if (p !== q) return p < q ? -1 : 1;
+    }
+    return 0;
+}
+
+/** The accepted MAR channel ids of mozconfig.release, or null when the line is absent. Pure. */
+export function acceptedMarChannels(mozconfigText) {
+    const m = /^ac_add_options ACCEPTED_MAR_CHANNEL_IDS=(\S+)\s*$/m.exec(mozconfigText);
+    return m === null ? null : m[1].split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * The values the release assertions compare against, derived at check time from configuration.toml
+ * (the update host, the primary MAR origin, the release notes repository, the MAR channel id) and
+ * mozconfig.release (the accepted channel ids). Returns { error } on the first input that cannot be
+ * derived, naming the file and key.
+ */
+function releaseExpectations(root) {
+    const update = readManifestUpdateUrl(root);
+    if (update.error) return { error: update.error };
+    let config;
+    try {
+        config = resolveConfig(join(root, MANIFEST_REL)).config;
+    } catch (e) {
+        return { error: `${MANIFEST_REL} could not be read for the release assertions (${e.message}). Next step: run node scripts/generate.mjs` };
+    }
+    const origin = marOrigin(config);
+    if (origin === null) return { error: `${MANIFEST_REL} [urls] mar_origin is unset, so the write-once MAR host is unknown. Next step: set it to the R2 origin` };
+    const repo = (config.urls?.release_notes ?? '').match(/github\.com\/([^/]+\/[^/]+?)(?:\/|$)/);
+    if (repo === null) return { error: `${MANIFEST_REL} [urls] release_notes names no GitHub repository, so attestation cannot name one. Next step: set it to the Releases page of the repository` };
+    const mozconfigPath = join(root, MOZCONFIG_REL);
+    const accepted = existsSync(mozconfigPath) ? acceptedMarChannels(readFileSync(mozconfigPath, 'utf8')) : null;
+    if (accepted === null) return { error: `${MOZCONFIG_REL} carries no ACCEPTED_MAR_CHANNEL_IDS line, so no MAR channel can be accepted. Next step: restore the line` };
+    return {
+        descriptorHost: hostOf(update.url),
+        marHost: hostOf(origin),
+        channelId: updateChannel(config).marChannelId,
+        accepted,
+        repo: repo[1],
+    };
+}
+
+/**
+ * The release assertion set (UPD-16). Every failure names its file and values. The files are the
+ * descriptor as served, the Release MAR as downloaded, and the client resolver log; the hop.json
+ * fields are the served URLs and the two versions. The crypto and the attestation are injected as
+ * deps so the self-test can drive the same wiring without a network, and the drill runs realDeps.
+ */
+function runReleaseChecks(root, evDir, hop, deps, r) {
+    const expect = releaseExpectations(root);
+    if (expect.error) {
+        r.fail(expect.error);
+        return { skipped: false, failures: r.failures };
+    }
+    const descriptorName = hop.descriptor ?? 'update.xml';
+    const missing = [descriptorName, hop.mar, 'client-resolver.log'].filter(f => !existsSync(join(evDir, f)));
+    if (missing.length > 0) {
+        r.fail(`release evidence under .mozbuild/mar-hop/ is absent: ${missing.join(', ')}. Next step: download the published MAR and capture the client resolver log per docs/BUILD.md (served release)`);
+        return { skipped: false, failures: r.failures };
+    }
+
+    // Hosts and URLs. The descriptor comes from the update host; the MAR only from the write-once origin.
+    r.eq('served descriptor host', hostOf(hop.servedUrl), expect.descriptorHost, 'hop.json servedUrl');
+    const marUrl = hop.servedMarUrl;
+    const marUrlParts = typeof marUrl === 'string' ? marUrl.split('/').filter(Boolean) : [];
+    const writeOnce = typeof marUrl === 'string' && hostOf(marUrl) === expect.marHost
+        && marUrl.startsWith('https://') && marUrlParts.length === 4 && !/latest/i.test(marUrl);
+    if (!writeOnce) {
+        r.fail(`hop.json servedMarUrl ${JSON.stringify(marUrl)} is not the write-once ${expect.marHost} form <origin>/<tag>/<asset>; a github.com, release-assets or latest-download URL is refused. Next step: serve the MAR from the R2 origin by its tag and asset name`);
+    }
+
+    // Descriptor bytes: the patch URL is the write-once https URL, the hash and size come from the MAR bytes, and the served bytes equal a fresh emission.
+    const marPath = join(evDir, hop.mar);
+    const marBytes = readFileSync(marPath);
+    const served = readFileSync(join(evDir, descriptorName), 'utf8');
+    const parsed = parseUpdateXml(served);
+    if (!parsed) {
+        r.fail(`served ${descriptorName} does not carry the fork descriptor shape (update plus complete patch). Next step: serve exactly what buildUpdateXml emits`);
+    } else {
+        r.eq('descriptor patch URL', parsed.url, marUrl, `${descriptorName} patch vs hop.json servedMarUrl (the patch URL must be the write-once https URL)`);
+        r.eq('descriptor hashFunction', parsed.hashFunction, 'sha512', `${descriptorName} patch`);
+        const digest = marDigest(marBytes);
+        r.eq('descriptor hashValue', parsed.hashValue, digest.hashValue, `${descriptorName} patch vs ${hop.mar} bytes`);
+        r.eq('descriptor size', parsed.size, digest.size, `${descriptorName} patch vs ${hop.mar} bytes`);
+        r.eq('descriptor appVersion', parsed.appVersion, hop.nplus1.version, `${descriptorName} vs hop.json nplus1`);
+        r.eq('descriptor buildID', parsed.buildID, hop.nplus1.buildID, `${descriptorName} vs hop.json nplus1`);
+    }
+    const gen = buildUpdateXml({
+        marBytes,
+        marUrl: typeof marUrl === 'string' ? marUrl : '',
+        appVersion: hop.nplus1.version,
+        platformVersion: hop.nplus1.platformVersion ?? hop.nplus1.version,
+        buildID: hop.nplus1.buildID,
+        displayVersion: hop.nplus1.displayVersion ?? hop.nplus1.version,
+    });
+    if (served !== gen) {
+        r.fail(`served descriptor ${descriptorName} is not byte-identical to a fresh emission from the ${hop.mar} bytes (served ${served.length} bytes vs emitted ${gen.length}) -- a hand edit may have intervened. Next step: serve exactly what buildUpdateXml emits`);
+    }
+
+    // Version: distinct buildIDs, and N+1 not older than N in dotted order. Same appVersion is the ratified scheme.
+    const order = compareDotted(hop.nplus1.version, hop.n.version);
+    if (order === null) {
+        r.fail(`hop.json versions ${JSON.stringify(hop.n.version)} and ${JSON.stringify(hop.nplus1.version)} are not dotted numbers. Next step: record both as the build reports them`);
+    } else if (order < 0) {
+        r.fail(`hop.json nplus1.version ${hop.nplus1.version} is older than n.version ${hop.n.version}; the client would not offer it. Next step: ship a newer revision`);
+    }
+    if (hop.n.buildID === hop.nplus1.buildID) {
+        r.fail(`hop.json: N and N+1 share buildID ${hop.nplus1.buildID}; the client refuses an offer only when versions compare equal and buildIDs match, so this hop is not an upgrade. Next step: build N+1 with its own buildID per docs/BUILD.md`);
+    }
+    r.eq('hop result', hop.result, 'applied', 'hop.json');
+    r.eq('post-hop version', hop.postHop.version, hop.nplus1.version, 'hop.json (the hop must land on N+1)');
+    r.eq('post-hop buildID', hop.postHop.buildID, hop.nplus1.buildID, 'hop.json (the hop must land on N+1)');
+
+    // Signature and allowed channels, checked on the MAR bytes the client downloaded.
+    const sig = deps.verifySignature(marPath, join(root, PRIMARY_DER_REL));
+    if (!sig.ok) {
+        r.fail(`${hop.mar} fails the signature check against ${PRIMARY_DER_REL} (${sig.reason}). Next step: sign the MAR with the release key; a MAR that verifies under neither check is never offered`);
+    }
+    const channel = deps.marChannel(marPath);
+    if (channel === null) {
+        r.fail(`${hop.mar} carries no product-info channel line (signmar -T). Next step: sign the MAR with the release channel`);
+    } else {
+        if (!expect.accepted.includes(channel)) {
+            r.fail(`${hop.mar} carries MAR channel ${JSON.stringify(channel)}, which is not in ACCEPTED_MAR_CHANNEL_IDS ${JSON.stringify(expect.accepted.join(','))} (${MOZCONFIG_REL}). Next step: rebuild with the release channel`);
+        }
+        r.eq('MAR channel id', channel, expect.channelId, `${hop.mar} vs updateChannel(configuration.toml)`);
+    }
+
+    // Attestation: the offline bundle when one was fetched, else a logged-in host verification. Neither is a skip.
+    const bundle = hop.attestation?.bundle ? join(evDir, hop.attestation.bundle) : null;
+    const att = deps.attest(marPath, expect.repo, bundle);
+    if (!att.ok) {
+        r.fail(`attestation for ${hop.mar} did not verify against ${expect.repo} (${att.reason}). Next step: fetch the bundle on the host and verify it offline, or log in to gh and verify on the host; an unverified attestation is never a pass`);
+    }
+
+    // Hosts over the client's own Resolving lines, with the capture-broken detectors kept.
+    const hosts = siftResolverHosts(readFileSync(join(evDir, 'client-resolver.log'), 'utf8'));
+    if (hosts.length === 0) {
+        r.fail(`client-resolver.log yielded zero Resolving host lines -- the capture never ran. Next step: re-run the client with MOZ_LOG=nsHostResolver:5`);
+    } else {
+        for (const h of [expect.descriptorHost, expect.marHost]) {
+            if (!hosts.includes(h)) r.fail(`client-resolver.log never resolved ${h}, a required layer-3 host. Hosts seen: ${hosts.join(', ')}. Next step: capture the update cycle again with the MAR downloaded from ${h}`);
+        }
+        for (const h of hosts.filter(x => RELEASE_FORBIDDEN_HOSTS.includes(x))) {
+            r.fail(`client-resolver.log resolved ${h}, which the release update path must never contact (UPD-15 layer 3). Next step: remove that origin from the update path`);
+        }
+        const moz = hosts.filter(isMozillaHost);
+        if (moz.length > 0) {
+            r.fail(`client-resolver.log resolved Mozilla host(s) ${moz.join(', ')} during the hop (Pitfall 1). Full host set: ${hosts.join(', ')}`);
+        }
+    }
+    return { skipped: false, failures: r.failures };
+}
+
+/** The live verifiers. The signature is node:crypto plus signmar -v; the channel is signmar -T; attestation is gh. */
+export function realDeps(root, { gh = process.env.GH_BIN ?? 'gh', signer = process.env.SIGNMAR } = {}) {
+    const tool = (cmd, argv) => {
+        const res = spawnSync(cmd, argv, { encoding: 'utf8' });
+        return { ok: res.status === 0, text: `${res.stdout ?? ''}${res.stderr ?? ''}`.trim(), error: res.error ? res.error.message : null };
+    };
+    const attestOf = (argv) => {
+        const res = tool(gh, argv);
+        return { ok: res.ok, reason: res.ok ? null : (res.text || res.error || 'gh exited non-zero') };
+    };
+    return {
+        verifySignature(mar, der) {
+            const node = tool(process.execPath, [join(root, 'scripts', 'verify-mar-signature.mjs'), mar, der]);
+            if (!node.ok) return { ok: false, reason: `node:crypto check: ${node.text || node.error}` };
+            if (!signer) return { ok: false, reason: 'SIGNMAR is unset, so signmar -v cannot run; point it at the signer built from the pinned source' };
+            const db = mkdtempSync(join(tmpdir(), 'mar-hop-nss-'));
+            try {
+                const prepared = tool('certutil', ['-N', '-d', `sql:${db}`, '--empty-password']).ok
+                    && tool('certutil', ['-A', '-d', `sql:${db}`, '-n', 'powerbrowser-mar', '-t', ',,', '-i', der]).ok;
+                if (!prepared) return { ok: false, reason: 'the NSS database for signmar -v could not be prepared' };
+                const v = tool(signer, ['-d', db, '-n', 'powerbrowser-mar', '-v', mar]);
+                return v.ok ? { ok: true, reason: null } : { ok: false, reason: `signmar -v: ${v.text || v.error}` };
+            } finally {
+                rmSync(db, { recursive: true, force: true });
+            }
+        },
+        marChannel(mar) {
+            if (!signer) return null;
+            const line = tool(signer, ['-T', mar]).text.split('\n').find(l => /[Cc]hannel[^:]*:/.test(l));
+            if (line === undefined) return null;
+            return line.replace(/.*[Cc]hannel[^:]*:\s*/, '').trim() || null;
+        },
+        attest(mar, repo, bundle) {
+            if (bundle !== null && existsSync(bundle)) return attestOf(['attestation', 'verify', mar, '--repo', repo, '--bundle', bundle]);
+            if (!tool(gh, ['auth', 'status']).ok) return { ok: false, reason: 'no attestation bundle was fetched and gh is not logged in' };
+            return attestOf(['attestation', 'verify', mar, '--repo', repo]);
+        },
+    };
+}
+
+function runChecks(root, deps = realDeps(root)) {
     const r = makeReporter();
     const evDir = root === REPO_ROOT ? EVIDENCE_DIR : join(root, '.mozbuild', 'mar-hop');
 
@@ -276,10 +506,16 @@ function runChecks(root) {
         r.fail(`hop.json under .mozbuild/mar-hop/ is not valid JSON. Next step: re-run the hop procedure; the file is written, never hand-edited`);
         return { skipped: false, failures: r.failures };
     }
-    for (const k of ['n', 'nplus1', 'mar', 'descriptor', 'servedUrl', 'result', 'postHop']) {
+    for (const k of ['served', 'n', 'nplus1', 'mar', 'descriptor', 'servedUrl', 'result', 'postHop']) {
         if (hop[k] === undefined) r.fail(`hop.json is missing required key ${JSON.stringify(k)}. Next step: re-run the hop procedure; the file is written, never hand-edited`);
     }
     if (r.failures.length > 0) return { skipped: false, failures: r.failures };
+    // The served selector (UPD-16): the mode decides the assertion set. Unknown values fail, never default.
+    if (!SERVED_MODES.includes(hop.served)) {
+        r.fail(`hop.json served is ${JSON.stringify(hop.served)}; it must be one of ${SERVED_MODES.join(', ')} (the served key names the drill mode). Next step: set served to loopback for the fork-server drill or release for the published Release drill`);
+        return { skipped: false, failures: r.failures };
+    }
+    if (hop.served === 'release') return runReleaseChecks(root, evDir, hop, deps, r);
 
     // UPD-24 (46-03): the experience proof. The transcript is REQUIRED: a
     // hop without one predates the experience proof and fails naming the
@@ -459,6 +695,7 @@ function selfTest() {
             const clientUpdateLog = `[update-observer] appUpdate status=ready version=${version}\n`;
             writeFileSync(join(evDir, CLIENT_UPDATE_LOG), clientUpdateLog);
             writeFileSync(join(evDir, 'hop.json'), JSON.stringify({
+                served: 'loopback',
                 n: { version: '153.1.0', buildID: '20260904000000' },
                 nplus1: { version, buildID, platformVersion: '153.1.0', displayVersion: version },
                 mar: 'nplus1.mar',
@@ -492,10 +729,10 @@ function selfTest() {
                 + `127.0.0.1 - - [05/Sep/2026 01:00:01] "GET /nplus1.mar HTTP/1.1" 200 -\n`,
             );
         };
-        const expectRed = (label, mutate, needleFile, needleValue) => {
-            mirror();
+        const expectRed = (label, mutate, needleFile, needleValue, { setup = mirror, deps } = {}) => {
+            setup();
             mutate();
-            const res = runChecks(dir);
+            const res = runChecks(dir, deps);
             const msg = res.failures.find(f => f.includes(needleFile) && f.includes(needleValue));
             if (!msg) {
                 console.error(`${NAME}: --self-test FAIL -- ${label} was NOT rejected naming ${needleFile} and ${needleValue}`);
@@ -678,6 +915,174 @@ function selfTest() {
             } else {
                 console.log(`${NAME}: --self-test -- Mozilla host beside literal-IP serve REJECTED: ${msg}`);
             }
+        }
+
+        // The served selector: absent and unknown values fail naming the key (nothing defaults).
+        expectRed(
+            'served key absent from hop.json',
+            () => {
+                const hopPath = join(evDir, 'hop.json');
+                const hop = JSON.parse(readFileSync(hopPath, 'utf8'));
+                delete hop.served;
+                writeFileSync(hopPath, JSON.stringify(hop));
+            },
+            'hop.json',
+            'served',
+        );
+        expectRed(
+            'served set to an unknown mode',
+            () => {
+                const hopPath = join(evDir, 'hop.json');
+                const hop = JSON.parse(readFileSync(hopPath, 'utf8'));
+                hop.served = 'fork';
+                writeFileSync(hopPath, JSON.stringify(hop));
+            },
+            'hop.json',
+            '"fork"',
+        );
+
+        // served:release (UPD-16). The control is green first on the release mock; the plants each
+        // mutate one property and must go red naming the file and the value.
+        const RELEASE_MAR_URL = 'https://downloads.powerbrowser.org/v153.1.1-1/nplus1.mar';
+        const RELEASE_DESC_URL = 'https://updates.powerbrowser.org/update.xml';
+        const fakes = {};
+        const resetFakes = () => Object.assign(fakes, { signed: true, channel: 'powerbrowser-default', attest: () => ({ ok: true, reason: null }) });
+        resetFakes();
+        const fakeDeps = {
+            verifySignature: () => (fakes.signed ? { ok: true, reason: null } : { ok: false, reason: 'the MAR carries no signature block' }),
+            marChannel: () => fakes.channel,
+            attest: (mar, repo, bundle) => fakes.attest(mar, repo, bundle),
+        };
+        const mirrorRelease = () => {
+            resetFakes();
+            mkdirSync(evDir, { recursive: true });
+            writeFileSync(join(dir, MANIFEST_REL), readFileSync(join(REPO_ROOT, MANIFEST_REL)));
+            mkdirSync(join(dir, 'powerbrowser', 'packaging'), { recursive: true });
+            writeFileSync(join(dir, MOZCONFIG_REL), readFileSync(join(REPO_ROOT, MOZCONFIG_REL)));
+            const marBytes = randomBytes(65536);
+            writeFileSync(join(evDir, 'nplus1.mar'), marBytes);
+            writeFileSync(join(evDir, 'update.xml'), buildUpdateXml({
+                marBytes,
+                marUrl: RELEASE_MAR_URL,
+                appVersion: '153.1.1',
+                platformVersion: '153.1.0',
+                buildID: '20260905010000',
+                displayVersion: '153.1.1',
+            }));
+            writeFileSync(join(evDir, 'hop.json'), JSON.stringify({
+                served: 'release',
+                n: { version: '153.1.0', buildID: '20260904000000' },
+                nplus1: { version: '153.1.1', buildID: '20260905010000', platformVersion: '153.1.0', displayVersion: '153.1.1' },
+                mar: 'nplus1.mar',
+                descriptor: 'update.xml',
+                servedUrl: RELEASE_DESC_URL,
+                servedMarUrl: RELEASE_MAR_URL,
+                result: 'applied',
+                postHop: { version: '153.1.1', buildID: '20260905010000' },
+            }));
+            writeFileSync(join(evDir, 'client-resolver.log'), 'Resolving host [updates.powerbrowser.org]\nResolving host [downloads.powerbrowser.org]\n');
+        };
+        const editHop = (edit) => {
+            const hopPath = join(evDir, 'hop.json');
+            const hop = JSON.parse(readFileSync(hopPath, 'utf8'));
+            edit(hop);
+            writeFileSync(hopPath, JSON.stringify(hop));
+        };
+        const editFile = (name, edit) => writeFileSync(join(evDir, name), edit(readFileSync(join(evDir, name), 'utf8')));
+        const appendResolver = (line) => writeFileSync(join(evDir, 'client-resolver.log'), readFileSync(join(evDir, 'client-resolver.log'), 'utf8') + line + '\n');
+        const expectReleaseRed = (label, mutate, needleFile, needleValue, deps = fakeDeps) => expectRed(label, mutate, needleFile, needleValue, { setup: mirrorRelease, deps });
+
+        mirrorRelease();
+        const releaseControl = runChecks(dir, fakeDeps);
+        if (releaseControl.failures.length !== 0) {
+            console.error(`${NAME}: --self-test FAIL -- the unmutated release mock proof is already red, so a red result after a plant would prove nothing:`);
+            for (const f of releaseControl.failures) console.error(`  - ${f}`);
+            ok = false;
+        } else {
+            console.log(`${NAME}: --self-test -- the unmutated served:release mock proof is GREEN (no access log demanded)`);
+        }
+
+        expectReleaseRed('release: unsigned MAR', () => { fakes.signed = false; }, 'nplus1.mar', 'signature');
+        expectReleaseRed('release: wrong-channel MAR', () => { fakes.channel = 'powerbrowser-nightly'; }, 'nplus1.mar', 'powerbrowser-nightly');
+        expectReleaseRed('release: tampered MAR byte', () => { writeFileSync(join(evDir, 'nplus1.mar'), Buffer.concat([readFileSync(join(evDir, 'nplus1.mar')), Buffer.from('x')])); }, 'update.xml', 'hashValue');
+        expectReleaseRed('release: http patch URL', () => { editFile('update.xml', t => t.replace('https://downloads', 'http://downloads')); }, 'update.xml', 'http://downloads.powerbrowser.org');
+        expectReleaseRed('release: resolver log missing the MAR host', () => { editFile('client-resolver.log', t => t.replace('Resolving host [downloads.powerbrowser.org]\n', '')); }, 'client-resolver.log', 'downloads.powerbrowser.org');
+        expectReleaseRed('release: same-buildID hop (N equals N+1 buildID)', () => { editHop(h => { h.nplus1.buildID = h.n.buildID; }); }, 'hop.json', 'share buildID 20260904000000');
+        expectReleaseRed('release: Mozilla host in the resolver log', () => { appendResolver('Resolving host [aus5.mozilla.org]'); }, 'client-resolver.log', 'aus5.mozilla.org');
+        expectReleaseRed('release: attestation failure', () => { fakes.attest = () => ({ ok: false, reason: 'the MAR digest does not match the attested subject' }); }, 'nplus1.mar', 'attestation');
+        // Built from parts: a github.com download literal in source would trip the update-download-host sweep (fixture strings are built at run time, as in release-train.mjs).
+        const GH_DOWNLOAD_PATH = ['github.com', 'example/r/releases', 'download/v1/nplus1.mar'].join('/');
+        expectReleaseRed('release: servedMarUrl on a github.com release-download URL', () => { editHop(h => { h.servedMarUrl = `https://${GH_DOWNLOAD_PATH}`; }); }, 'hop.json', GH_DOWNLOAD_PATH.split('/').slice(0, 5).join('/'));
+        expectReleaseRed('release: resolver log carrying a github.com line', () => { appendResolver('Resolving host [github.com]'); }, 'client-resolver.log', 'github.com');
+        expectReleaseRed('release: descriptor not byte-identical to a fresh emission', () => { editFile('update.xml', t => `${t} `); }, 'update.xml', 'byte-identical');
+
+        // Attestation through the real wiring, with a gh test double (the offline bundle, the logged-in
+        // host verification, and the failure branches). The double checks the repository and the MAR bytes.
+        const ghDir = mkdtempSync(join(tmpdir(), 'verify-mar-update-hop-gh-'));
+        const fakeGh = join(ghDir, 'gh');
+        writeFileSync(fakeGh, [
+            '#!/usr/bin/env node',
+            "import { readFileSync } from 'node:fs';",
+            'const a = process.argv.slice(2);',
+            "if (a[0] === 'auth') process.exit(process.env.FAKE_GH_LOGGED_IN === '1' ? 0 : 1);",
+            "const repo = a[a.indexOf('--repo') + 1];",
+            'if (repo !== process.env.FAKE_GH_REPO) { console.error(`no attestation for repository ${repo}`); process.exit(1); }',
+            "if (readFileSync(a[2]).includes('TAMPERED')) { console.error('attestation digest mismatch'); process.exit(1); }",
+            'process.exit(0);',
+            '',
+        ].join('\n'));
+        chmodSync(fakeGh, 0o755);
+        const ghDeps = { ...fakeDeps, attest: realDeps(dir, { gh: fakeGh }).attest };
+        const expectedRepo = releaseExpectations(REPO_ROOT).repo;
+        const savedEnv = { FAKE_GH_REPO: process.env.FAKE_GH_REPO, FAKE_GH_LOGGED_IN: process.env.FAKE_GH_LOGGED_IN };
+        const setEnv = (vars) => {
+            for (const [k, v] of Object.entries(vars)) {
+                if (v === undefined) delete process.env[k];
+                else process.env[k] = v;
+            }
+        };
+        const withEnv = (vars, fn) => {
+            setEnv(vars);
+            try { return fn(); } finally { setEnv(savedEnv); }
+        };
+        withEnv({ FAKE_GH_REPO: expectedRepo, FAKE_GH_LOGGED_IN: '1' }, () => {
+            expectReleaseRed('release: attestation of a tampered MAR (logged-in host verification)', () => { writeFileSync(join(evDir, 'nplus1.mar'), Buffer.concat([readFileSync(join(evDir, 'nplus1.mar')), Buffer.from('TAMPERED')])); }, 'nplus1.mar', 'attestation', ghDeps);
+        });
+        withEnv({ FAKE_GH_REPO: expectedRepo, FAKE_GH_LOGGED_IN: undefined }, () => {
+            expectReleaseRed('release: attestation bundle missing and no gh login', () => { editHop(h => { h.attestation = { bundle: 'attestation-missing.jsonl' }; }); }, 'nplus1.mar', 'attestation', ghDeps);
+        });
+        withEnv({ FAKE_GH_REPO: 'other/repository', FAKE_GH_LOGGED_IN: '1' }, () => {
+            expectReleaseRed('release: attestation against the wrong repository', () => {}, 'nplus1.mar', 'attestation', ghDeps);
+        });
+        // Controls for the same wiring: a logged-in verification and an offline bundle both pass.
+        withEnv({ FAKE_GH_REPO: expectedRepo, FAKE_GH_LOGGED_IN: '1' }, () => {
+            mirrorRelease();
+            const logged = runChecks(dir, ghDeps);
+            console.log(logged.failures.length === 0
+                ? `${NAME}: --self-test -- attestation by logged-in host verification is GREEN`
+                : `${NAME}: --self-test FAIL -- logged-in attestation control went red: ${logged.failures.join(' | ')}`);
+            if (logged.failures.length !== 0) ok = false;
+            mirrorRelease();
+            writeFileSync(join(evDir, 'attestation.jsonl'), '{"bundle":"fixture"}\n');
+            editHop(h => { h.attestation = { bundle: 'attestation.jsonl' }; });
+            const offline = runChecks(dir, ghDeps);
+            console.log(offline.failures.length === 0
+                ? `${NAME}: --self-test -- attestation by offline bundle is GREEN`
+                : `${NAME}: --self-test FAIL -- offline-bundle attestation control went red: ${offline.failures.join(' | ')}`);
+            if (offline.failures.length !== 0) ok = false;
+        });
+        rmSync(ghDir, { recursive: true, force: true });
+
+        // Control: same appVersion with a distinct buildID is an upgrade to the client (updateIsAtLeastAsOldAs
+        // refuses only equal versions with matching buildIDs), so the version assertion accepts it.
+        mirrorRelease();
+        editHop(h => { h.n.version = '153.1.1'; });
+        const sameAppVersion = runChecks(dir, fakeDeps);
+        if (sameAppVersion.failures.length !== 0) {
+            console.error(`${NAME}: --self-test FAIL -- same appVersion with a distinct buildID was refused: ${sameAppVersion.failures.join(' | ')}`);
+            ok = false;
+        } else {
+            console.log(`${NAME}: --self-test -- same appVersion with a distinct buildID is accepted as an upgrade (GREEN)`);
         }
     } finally {
         rmSync(dir, { recursive: true, force: true });
