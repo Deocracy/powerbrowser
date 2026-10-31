@@ -4906,6 +4906,14 @@ run_own_checks() {
     # flake-repack-self-test plants a stale hash record, a non-SRI hash, a nodejs_22 literal, a darwin literal,
     # a typed version, a missing DisableAppUpdate merge and a missing overlay, each red naming its file.
     "flake-repack-self-test|node $REPO_ROOT/scripts/verify-flake-repack.mjs --self-test"
+    # NEW (Phase 56, PKG-19/PKG-20): the update-disable split. The release tarball's policies.json carries no
+    # DisableAppUpdate; the Nix repack and the Flatpak staging copy each add exactly that key and keep every
+    # sibling value. Derived from the derivation and the manifest merges, compared as set and value. Honestly
+    # --quick: text reads and JSON parses; no build, no network.
+    "policies-update-split|node $REPO_ROOT/scripts/verify-policies-update-split.mjs"
+    # policies-update-split-self-test plants the key in the tarball, the key missing from either repack, and a
+    # sibling key drifting in either repack; each goes red naming the file, the key or the sibling.
+    "policies-update-split-self-test|node $REPO_ROOT/scripts/verify-policies-update-split.mjs --self-test"
     # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
     # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
     # own pinned group, one regex customManager captures the live configuration.toml theia_release,

@@ -1,0 +1,14 @@
+# Generated from configuration.toml by scripts/generate.mjs -- do not edit here.
+# To change it: edit configuration.toml, run: node scripts/generate.mjs, then copy the
+# matching file out of generated/ over this one. Phase 2 does not write it in place.
+# A disagreement reddens: scripts/verify-platform.sh --only generated-byte-identity
+# Before installing, replace @POWERBROWSER_REPO_ROOT@ with this checkout's absolute path (docs/BUILD.md names the command).
+[Desktop Entry]
+Name=PowerBrowser
+Exec=powerbrowser %u
+Icon=org.debios.PowerBrowser
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+StartupWMClass=powerbrowser
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/vnd.mozilla.xul+xml;application/rss+xml;application/rdf+xml;image/gif;image/jpeg;image/png;x-scheme-handler/http;x-scheme-handler/https;

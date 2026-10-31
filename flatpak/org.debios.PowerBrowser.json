@@ -1,0 +1,53 @@
+{
+  "app-id": "org.debios.PowerBrowser",
+  "runtime": "org.mozilla.firefox.BaseApp",
+  "runtime-version": "stable",
+  "sdk": "org.freedesktop.Sdk",
+  "command": "powerbrowser",
+  "finish-args": [
+    "--share=ipc",
+    "--socket=x11",
+    "--socket=wayland",
+    "--socket=pulseaudio",
+    "--share=network",
+    "--device=dri",
+    "--persist=.debios"
+  ],
+  "modules": [
+    {
+      "name": "powerbrowser",
+      "buildsystem": "simple",
+      "only-arches": ["x86_64"],
+      "build-commands": [
+        "mkdir -p /app/lib /app/bin /app/share/applications /app/share/icons/hicolor/128x128/apps",
+        "cp -a powerbrowser /app/lib/powerbrowser",
+        "python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d[\"policies\"][\"DisableAppUpdate\"]=True; open(p,\"w\").write(json.dumps(d,indent=2)+chr(10))' /app/lib/powerbrowser/distribution/policies.json",
+        "ln -s /app/lib/powerbrowser/powerbrowser /app/bin/powerbrowser",
+        "install -Dm644 org.debios.PowerBrowser.desktop /app/share/applications/org.debios.PowerBrowser.desktop",
+        "install -Dm644 org.debios.PowerBrowser.png /app/share/icons/hicolor/128x128/apps/org.debios.PowerBrowser.png"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "@RELEASE_URL@",
+          "sha256": "@RELEASE_SHA256@",
+          "x-checker-data": {
+            "type": "json",
+            "url": "https://api.github.com/repos/@RELEASE_REPO@/releases/latest",
+            "version-query": ".tag_name | ltrimstr(\"v\")",
+            "url-template": "@RELEASE_URL_TEMPLATE@",
+            "is-main-source": true
+          }
+        },
+        {
+          "type": "file",
+          "path": "org.debios.PowerBrowser.desktop"
+        },
+        {
+          "type": "file",
+          "path": "org.debios.PowerBrowser.png"
+        }
+      ]
+    }
+  ]
+}
