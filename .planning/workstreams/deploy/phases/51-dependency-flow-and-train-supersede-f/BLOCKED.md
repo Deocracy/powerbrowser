@@ -200,3 +200,44 @@ items 1 and 3), wire these helpers and add their plants in the same change.
 Phase 43 live collector (Phase 43 BLOCKED item 3). The collector must also pass `releaseFactsFromLive` the live runs
 (`id`) and pending deployments (`environment.id`), and should restrict `newerIssueUrl` to the repository's own issue
 URLs. Until it exists, a live supersede cannot fire. The self-test covers the logic over fixtures only.
+
+## 51-02 items (AUTO-03: Dependabot, alerts, CodeQL default setup)
+
+Written by the 51-02 executor. The declarative half is built and committed: `.github/dependabot.yml`, the two
+`.github/settings/` bodies, and the two CONTROLS entries with plants. Nothing was pushed, dispatched, enabled or applied.
+Only read-only `gh api` GETs ran against the live repository.
+
+## 11. Apply the two code-security bodies, and merge the first Dependabot PR (owner)
+
+**Blocked piece:** the live state. At plan time Dependabot alerts were already on (the repository answered 204), and
+CodeQL default setup was `not-configured`, so `repo-controls` reads one new red line: the CodeQL state.
+
+**Why not done:** a live write is the owner's. `node scripts/apply-repo-controls.mjs --yes` also refuses while any
+`BLOCKED:` line stands, and it does today (`release-tags`: the bot App is not installed on the org, 41-04), so the
+two writes need the direct commands below until that is cleared.
+
+**Owner steps:**
+
+1. Dry-run: `node scripts/apply-repo-controls.mjs` (lines 19 and 20 are the two new writes).
+2. Enable CodeQL default setup (the body is the tracked file):
+   `gh api -X PATCH -H 'X-GitHub-Api-Version: 2022-11-28' repos/Deocracy/powerbrowser/code-scanning/default-setup --input .github/settings/code-scanning-default-setup.json`
+   Dependabot alerts need no write (already on); if they are ever off:
+   `gh api -X PUT -H 'X-GitHub-Api-Version: 2022-11-28' repos/Deocracy/powerbrowser/vulnerability-alerts`
+3. Read back: `node scripts/verify-repo-controls.mjs`. **Check the CodeQL languages line first.** The comparator requires every
+   declared language (`actions`, `javascript-typescript`) among the live ones. What GitHub lists once configured was not
+   observable before the apply (it listed the repository's available languages, including legacy `javascript` and
+   `typescript`, while not configured). If `javascript-typescript` is absent, the declared body is wrong and must follow the live shape.
+4. Default setup is repository-wide per language and has no path filter. "Covers `theia/extensions` and `scripts/`" holds
+   through `javascript-typescript`, not through a path list. The CodeQL 6-month auto-disable detector (last-push age) is
+   TRAIN-11, not this plan.
+5. First grouped PR (Monday 04:00 UTC after the file reaches `main`): `gh pr view <n>` then `gh pr merge --merge <n>`. Never automerge.
+
+## 12. Dependabot security updates switch and the guard on dependabot.yml (owner decision)
+
+npm "security-only" in `dependabot.yml` is `open-pull-requests-limit: 0` (version updates off; the schema describes the
+key as the limit for version updates). Security updates still need the repository's Dependabot security updates switch,
+which was `enabled` at plan time (`GET repos/Deocracy/powerbrowser/automated-security-fixes`: `{"enabled":true,"paused":false}`).
+No CONTROLS entry reads that switch back, so turning it off would go unnoticed, and nothing guards `dependabot.yml` itself
+against someone raising the npm limit above 0 (T-51-10 rests on review). **Options:** (a) add an `automated-security-fixes`
+control (same shape as `immutable-releases`: `{enabled}` JSON, PUT bodiless) and a `dependabot.yml` rule in `verify-workflows`;
+(b) leave both to review. Not done: the plan scopes this work to two controls and names no `dependabot.yml` verifier.
