@@ -7,8 +7,9 @@
 #   scripts/fixer-isolate.sh --self-test               prove the isolation holds
 #
 # What isolation means here, in the strongest form this host allows:
-#   1. A new network namespace: the command sees a down loopback and nothing else, so it cannot reach the
-#      network, the metadata service or the runner's local services.
+#   1. A new network namespace: the command sees its own private loopback (brought up, because quick rows talk to a
+#      server they start on 127.0.0.1) and nothing else, so it cannot reach the network, the metadata service or
+#      the runner's local services.
 #   2. A new PID namespace with --kill-child: no process of the command outlives it, so nothing can write to a
 #      runner file after the step ended.
 #   3. no_new_privs and every capability dropped: sudo and setuid binaries cannot raise privilege inside it.
@@ -51,6 +52,8 @@ strategy() {
 }
 
 DROP=(--no-new-privs --bounding-set=-all --inh-caps=-all)
+# Inside the new namespace, before the capabilities are dropped: bring the private loopback up.
+LO_UP='ip link set lo up 2> /dev/null || true; exec "$@"'
 
 # exec the command isolated. $@ is the command.
 run_isolated() {
@@ -59,10 +62,10 @@ run_isolated() {
   scrub_env
   case "$how" in
     userns)
-      exec unshare -rn --pid --fork --kill-child --mount-proc -- setpriv "${DROP[@]}" -- "$@"
+      exec unshare -rn --pid --fork --kill-child --mount-proc -- bash -c "$LO_UP" _ setpriv "${DROP[@]}" -- "$@"
       ;;
     sudo)
-      exec sudo -n -E unshare --net --pid --fork --kill-child --mount-proc -- \
+      exec sudo -n -E unshare --net --pid --fork --kill-child --mount-proc -- bash -c "$LO_UP" _ \
         setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups "${DROP[@]}" -- "$@"
       ;;
     *)
@@ -100,6 +103,10 @@ self_test() {
   out=$(probe bash -c 'tail -n +3 /proc/self/net/dev | cut -d: -f1 | tr -d " " | grep -vx lo || true') || bad "the network probe did not run"
   [ -z "$out" ] && ok "the command sees no network interface but a loopback" || bad "the command sees interface(s): $out"
   if probe bash -c 'exec 3<>/dev/tcp/1.1.1.1/53' > /dev/null 2>&1; then bad "the command opened a connection to 1.1.1.1:53"; else ok "a connection to a public address fails"; fi
+
+  # A2. the private loopback is up, so a quick row's own 127.0.0.1 server works inside, with nothing else reachable.
+  out=$(probe node -e "const s=require('net').createServer(c=>c.end('ok')).listen(0,'127.0.0.1',()=>{const p=s.address().port;require('net').connect(p,'127.0.0.1').on('data',d=>{process.stdout.write(String(d));s.close()})})") || true
+  [ "$out" = "ok" ] && ok "control: a server on the private loopback is reachable inside" || bad "the private loopback does not carry a local server (got '${out:-nothing}')"
 
   # B. privilege cannot be raised.
   out=$(probe bash -c "grep -E '^NoNewPrivs:' /proc/self/status | tr -d '[:space:]'") || true
