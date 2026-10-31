@@ -4926,10 +4926,14 @@ run_own_checks() {
     # run carries the six maintenance rows (runner-online, esr-pin-age, channel-liveness, watchdog-age,
     # synthetic events POST, download-count) with their no-data branches, the byte-stable render, the
     # exactly-one write plan, one comment per transition into red and zero on a staying-red re-run, the
-    # 06:00 UTC sweep gate, and the planted faults: a stale tag with no published Release, a draft
+    # once-per-day 06:00 UTC sweep gate, the workflow's CLI glue run as a child node (owner unset, empty,
+    # malformed, another case), and the planted faults: a stale tag with no published Release, a draft
     # Release as the only match, a 27-hour watchdog, a missing watchdog run, a synthetic POST answering
-    # 500, a seventh row, two tracking issues, and a workflow_run wake from a fork head. Each plant goes
-    # red naming its drift with the unmutated control green first. Honestly --quick: in-memory fixtures
+    # 500 or 200 without the acknowledgement, a newer tag with no commit date, a seventh row, two tracking
+    # issues, a workflow_run wake from a fork head, one plant per rule of the previous-state selection
+    # (event, path, conclusion, branch, repository, head sha, artifact name, expiry, run link) and per rule
+    # of the pinned-issue selection (label, author, title, unset owner). Each plant calls the real function
+    # and goes red naming its drift with the unmutated control green first. Honestly --quick: in-memory fixtures
     # only; no network, no gh, no build. It writes nothing. The live sweep and the pinned issue are the
     # plan 48-05 owner checkpoint.
     "release-train-maintenance-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"

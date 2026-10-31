@@ -19,9 +19,9 @@
 # the bot environment, each with its own token. report owns the only issues write
 # in this file.
 #
-# The maintenance sweep (Phase 48, TRAIN-07) runs on a dispatch tick at or past 06:00 UTC: sweep-clock
-# decides the tick, maintenance-probe reads the runner count, the last watchdog run and one synthetic
-# events POST under the bot environment, maintenance derives the six rows and renders the pinned
+# The maintenance sweep (Phase 48, TRAIN-07) runs once per UTC day, on the first dispatch tick at or past
+# 06:00 UTC that has no accepted sweep of today: sweep-clock decides the tick, maintenance-probe reads the
+# last watchdog run and sends one synthetic events POST under the bot environment, maintenance derives the six rows and renders the pinned
 # release-train: maintenance body, and report is the only job that edits that issue (a PATCH on a byte
 # diff, one comment on a transition into red, both live only). No schedule key: the clock is the Worker.
 #
@@ -694,6 +694,7 @@ jobs:
             '{
               pinTag: $pin, nowMs: $now, tags: $tags, tagDates: $dates, releases: $releases[0],
               advisoryEsr: (if $advisory == "" then null else $advisory end),
+              # The runner count (Administration read) arrives with Phase 49; null renders no-data, never green.
               runnersOnline: null,
               watchdogProbed: ($result == "success"),
               watchdogStartedAtMs: (if $result == "success" and $watchdog != "" then ($watchdog | tonumber) else null end),
