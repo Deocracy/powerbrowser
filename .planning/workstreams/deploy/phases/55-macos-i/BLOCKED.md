@@ -82,6 +82,30 @@ hosted runner dispatch, push or payment was attempted.
   `--without-wasm-sandboxed-libraries` from the Linux dev row, and they reference `$MOZ_FETCHES_DIR`
   for the SDK and DMG tools. Confirm both at the first cross configure.
 
+## 9. No Darwin rust-std in the firefox-macos shell (review WR-04)
+
+- **What:** `nix develop .#firefox-macos` takes `rustc` from `firefox-esr-153-unwrapped`, and the locked
+  nixpkgs `rustc` (1.97.1) ships only the host std and the wasm and bpf targets. Its `lib/rustlib/`
+  holds `x86_64-unknown-linux-gnu`, `wasm32-unknown-unknown`, `wasm32v1-none`, `bpfel-unknown-none` and
+  `bpfeb-unknown-none`. There is no `aarch64-apple-darwin` or `x86_64-apple-darwin` std. Checked
+  2026-10-31 against the rustc output in `/nix/store`.
+- **Why it blocks:** `upstream/build/moz.configure/rust.configure` runs `assert_rust_compile` for the
+  target, which compiles a staticlib with `--target`. Without the Darwin std it fails, so the cross
+  configure stops before any Gecko compile. The mozconfigs do not use `--enable-bootstrap`.
+- **Why it is not fixed here:** the locked nixpkgs `rustc.nix` takes its `--target` list from the
+  build platform and `fastCross` only, and exposes no option that adds a target. Three routes remain:
+  1. Add a toolchain input (for example a rust-overlay or fenix input) to `flake.nix`, pin it in
+     `flake.lock`, and take `rust-std` for both Darwin targets from it. This changes the lock. It
+     needs network reads to resolve and cannot be verified offline.
+  2. Use `--enable-bootstrap` in the two macOS mozconfigs, as the release container does. Whether the
+     bootstrap supplies the Darwin target std for a Linux cross build is not verified, and the
+     mozconfig bytes change, so the tracked comparands and `generated/` change with them.
+  3. Run `rustup target add aarch64-apple-darwin x86_64-apple-darwin` in the shell. This fetches over
+     the network at build time and is not reproducible from the lock.
+- **Owner step:** choose a route. Route 1 is the one that keeps the toolchain pinned. The first cross
+  configure (`nix develop .#firefox-macos`, then `MOZCONFIG=powerbrowser/packaging/mozconfig-macos-aarch64
+  ./mach configure` after `MOZ_FETCHES_DIR` is set) confirms the result.
+
 ## Ship gate
 
 WINDOWS.md entries 22 (Team ID, item 2) and 23 (placeholders, item 6) are open, so `/gsd-ship` stays
