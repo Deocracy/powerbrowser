@@ -152,12 +152,12 @@ is a policy choice (red pages a run, green hides a stale approval), so it goes t
 ## 8. Pending-release cancel on SUPERSEDED: executor unwired (owner, and the Phase 43 live collector)
 
 **Blocked piece:** the executor of `cancel-pending-and-link` (`next(SUPERSEDED)`). `release-train.mjs` maps the
-state to the action name and, for a release-stage train, names the target: `supersedeTarget(facts)` returns the
-old train's `runId` (matched by display title to its merge SHA, never the newest run of another SHA) and the
-pending `release` approval's `environmentId` (null while the run is building with no approval pending). It
-returns null when nothing is in flight (a train with an open PR and no release run, or a run already
-completed); the action is then link-only. SUPERSEDED is reachable for BUILDING and AWAITING_APPROVAL trains
-(review CR-02 fix). No workflow step executes the action, because the release-stage states have no live
+state to the action name and, for a train waiting on the `release` approval, names the target: `supersedeTarget(facts)`
+returns the old train's `runId` (matched by display title to its merge SHA, never the newest run of another SHA) and the
+pending `release` approval's `environmentId`. It returns null for every other train, a BUILDING one included (a run past
+the approval may be mid-publish and a published Release is immutable, so it is never cancelled by run id; the two sign
+guards fail a stale build); the action is then link-only. SUPERSEDED is reachable for BUILDING and AWAITING_APPROVAL
+trains (review CR-02 fix; 51-02/03 review WR-03). No workflow step executes the action, because the release-stage states have no live
 collector (`release-train.yml` header, "Not here yet"; Phase 43 BLOCKED item 3).
 
 **Why not done:** a live cancel is a write to a `release` environment deployment, and the plan forbids
@@ -171,7 +171,7 @@ carries the environment id (used above), not a deployment id, and rejecting uses
    between rejecting the pending `release` approval (`environmentId`) and cancelling the run (`runId`). Act only
    on `supersedeTarget(facts)`, never on "the pending deployment" or "the newest run", and never on a
    `descriptor` deployment.
-2. Gate the executor on `supersededMark` (item 10), so a cancel is never decided from a transient fact.
+2. Gate the executor on the verified mark and the superseder facts (item 10), so a cancel is never decided from a transient or unattributed fact.
 3. Confirm the token scopes. The plan says the existing dispatch-release and maintenance scopes suffice
    with no new token. Not verified against GitHub's current App permission map.
 4. Wire the executor in `release-train.yml` behind the existing dry-run gates, then add its row to the
@@ -193,13 +193,26 @@ items 1 and 3), wire these helpers and add their plants in the same change.
 
 ## 10. Supersede facts collector: not built
 
-`derive()` reads three supersede facts: `newerTag` (a newer validated ESR tag on the same major), `chemspillOpen`
-(an open same-ESR revision train) and `supersededMark` (the key's tracking issue already carries the
-`state/SUPERSEDED` label that `render` writes; this is what keeps SUPERSEDED sticky once `newerTag` or
-`chemspillOpen` stops holding). No collector in `release-train.yml` sets them, because the facts source is the
-Phase 43 live collector (Phase 43 BLOCKED item 3). The collector must also pass `releaseFactsFromLive` the live runs
-(`id`) and pending deployments (`environment.id`), and should restrict `newerIssueUrl` to the repository's own issue
-URLs. Until it exists, a live supersede cannot fire. The self-test covers the logic over fixtures only.
+`derive()` reads these supersede facts. No collector in `release-train.yml` sets them, because the facts source is the
+Phase 43 live collector (Phase 43 BLOCKED item 3). Until it exists, a live supersede cannot fire; the self-test covers the
+logic over fixtures only. The collector must produce exactly this contract:
+
+- `newerTag`: a newer tag on the same major, taken only from the detector's validated output (`detect-upstreams.mjs`), never
+  from a raw tag listing. `newerKey` is the superseding train's release key (`v<esr>-<revision>`); `newerIssueUrl` is that
+  train's tracking issue, restricted to the repository's own issue URLs.
+- `chemspillOpen`: an open same-ESR revision train exists (a key with the same ESR groups and a higher revision).
+- `supersederState`: `'open'` while the superseding train is open or unpublished, `'published'` once its Release is published,
+  anything else (closed without publishing, withdrawn, gone) is null or any other string and expires the mark.
+- The mark, in three facts: `ownerLogin`, `botLogin` (the bot App's login) and `markIssues`. `markIssues` is the list of issues
+  for this key, open and closed (a closed one is how a done train stays done), each `{title, author: {login}, labels: [{name}],
+  supersededLabelActor}`. The issue is found by title `release-train: <key>` and the `release-train` label, and only an issue
+  authored by the owner or the bot counts (`selectTracked`, the same selection `selectPinned` uses). `supersededLabelActor` is the
+  actor of the latest `labeled` event for `state/SUPERSEDED` on that issue (the issue events API; a label alone carries no
+  authorship). The mark counts only if that actor is the owner or the bot, exactly one such issue exists, and `newerKey` is a valid
+  newer key. Anyone else's label is ignored. The mark yields to BUMP_RED and CONFLICT, which still page.
+- Clearing the mark: remove the `state/SUPERSEDED` label (owner), or the superseder closes unpublished (`supersederState` not
+  `open`/`published`), or `newerKey` stops being a verified newer key. A published superseder renders the issue closed with a note.
+- `releaseFactsFromLive` needs the live runs (`id`) and pending deployments (`environment.id`).
 
 ## 51-02 items (AUTO-03: Dependabot, alerts, CodeQL default setup)
 

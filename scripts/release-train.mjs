@@ -23,24 +23,33 @@
 //
 // Facts shape (plain values the workflow reads from GitHub):
 //   { candidateTag, pinTag, revision, openPr, bumpConclusion, stage,
-//     verifyCheck, merged, pinUnchanged, evidenceUrl?, ownerLogin? }
+//     verifyCheck, merged, pinUnchanged, evidenceUrl?, ownerLogin?, release?,
+//     newerTag?, newerKey?, newerIssueUrl?, chemspillOpen?, supersederState?,
+//     botLogin?, markIssues? }
 //   candidateTag  a newer *esr_RELEASE tag under the pinned major, or null
 //   openPr        { head, number } for chore/esr-<tag>, or null
 //   stage         the first FAIL line the replay printed (the stage output of
 //                 rebase-upstream.yml), or null
 //   verifyCheck   'success' | 'failure' | 'pending' | null on the bump PR
 //   ownerLogin    the owner's login, passed in by the workflow; never a literal here
+//   release       the normalised release-stage facts (releaseFactsFromLive), or absent
+//   The supersede facts are listed in the next paragraph and in BLOCKED.md item 10.
 //
-// The supersede rule (TRAIN-04) adds one terminal state, SUPERSEDED. An open train with a
-// newer validated ESR tag (facts.newerTag) or an open same-ESR chemspill revision
-// (facts.chemspillOpen) is superseded: routine, no owner page. derive() tries those two
-// arms after the release-stage check and before the Phase 43 ladder, and only for a
-// scheduled train (revision 1), so a chemspill revision is never superseded. Those two
-// facts are transient, so SUPERSEDED is made sticky by a persisted one: supersededMark is
-// true when the key's tracking issue already carries the state/SUPERSEDED label that render
-// writes. supersedeCause(facts) is the one place the arm is decided, and render reads it.
-// Facts shape additions: newerTag, newerKey?, newerIssueUrl?, chemspillOpen, supersededMark.
-// No collector sets them yet (BLOCKED.md item 10).
+// The supersede rule (TRAIN-04) adds one terminal state, SUPERSEDED. A scheduled train (revision
+// exactly 1, and a train must exist: an open bump PR or a release key) with a newer validated ESR tag
+// (facts.newerTag) or an open same-ESR chemspill revision (facts.chemspillOpen) is superseded: routine,
+// no owner page. A chemspill revision train is never superseded, whatever the flags or the mark say.
+// Those two flags are transient, so SUPERSEDED can be kept by a persisted fact, the mark: the key's
+// tracking issue carries the state/SUPERSEDED label that render writes. The mark counts only with
+// provenance (markHolds): the issue is selected by title, tracking label and an owner-or-bot author
+// exactly as selectPinned selects the maintenance issue (selectTracked), it is the only such issue, and
+// the label's labeled-event actor (supersededLabelActor) is the owner or the bot. The mark also expires
+// with its evidence: it holds only while the superseder (facts.newerKey, a valid release key on the same
+// major strictly newer than this key) is open or published (facts.supersederState). A removed label, a
+// closed-unpublished superseder or a missing newerKey clears it. The mark never outranks a failure:
+// BUMP_RED and CONFLICT page whatever it says. When the superseder is published, render closes the issue.
+// supersedeCause(facts) is the one place the arm is decided, and render reads it.
+// No collector sets these facts yet (BLOCKED.md item 10).
 //
 // The uptake lane (TRAIN-05, UPS-01) keeps its own keys and states beside the five
 // above. A 175 candidate derives UPTAKE_* states: UPTAKE_DETECTED (replay due),
@@ -55,8 +64,9 @@
 // findExactlyOne(found, rendered) -> the create, update or fail decision and whether
 // to PATCH; renderConflict(...) -> the conflict issue decision.
 //
-// The tracking issue is a view, never an input. The snapshot comment in the body
-// is debugging output only; no run reads it back.
+// The tracking issue is a view, not an input, with two exceptions: its state (issueState) and the
+// verified supersede mark above. The snapshot comment in the body is debugging output only; no run
+// reads it back.
 //
 // Labels. release-train is declared in .github/settings/labels.json (Phase 42).
 // state/<STATE> is not declared there yet, so the workflow applies only the
@@ -118,7 +128,7 @@ export const STATES = Object.freeze({
     LIVE_RED: Object.freeze({ desc: 'a release descriptor is present and channel-live is red, or its bytes drifted' }),
     WITHDRAWN: Object.freeze({ desc: 'the Release carries the withdrawal mark (prerelease flag or notes marker); authoritative' }),
     DONE: Object.freeze({ desc: 'DESCRIPTOR_LIVE facts with the tracking issue already closed (bookkeeping only)' }),
-    SUPERSEDED: Object.freeze({ desc: 'an open older train with a newer validated ESR tag, or with an open same-ESR chemspill revision: terminal and sticky once the issue carries the state/SUPERSEDED label (supersededMark), routine, no owner page (TRAIN-04)' }),
+    SUPERSEDED: Object.freeze({ desc: 'an open older train with a newer validated ESR tag, or with an open same-ESR chemspill revision: terminal; kept by a verified state/SUPERSEDED mark only while the superseder is open or published; routine, no owner page (TRAIN-04)' }),
 });
 
 // The uptake lane (TRAIN-05). Replay-only: no state here opens a branch, a PR or a dispatch.
@@ -147,9 +157,9 @@ const ACTIONS = Object.freeze({
     DESCRIPTOR_LIVE: 'close-issue',
     LIVE_RED: 'block-and-link',
     WITHDRAWN: 'reopen-and-instruct',
-    // UNWIRED: no executor runs this yet. For a release-stage train it cancels the run (and rejects the pending release
-    // approval) named by supersedeTarget(facts); for a train with nothing in flight, supersedeTarget is null and it only
-    // links the superseder. No live collector sets the supersede facts until the facts source is approved (BLOCKED.md).
+    // UNWIRED: no executor runs this yet. For a train waiting on the release approval it rejects that approval
+    // (and names its run), as supersedeTarget(facts) says; for every other train supersedeTarget is null and it only
+    // links the superseder (a running build is never cancelled: the two sign guards fail a stale one). No live collector sets the supersede facts until the facts source is approved (BLOCKED.md).
     SUPERSEDED: 'cancel-pending-and-link',
     DONE: 'noop',
 });
@@ -257,28 +267,63 @@ const newerOnSameLine = (newer, old) => {
 
 // The ESR tag a release key v<esr groups>-<revision> was made from (keys are built from tagToVersion's esrVersion).
 const keyTag = key => `FIREFOX_${key.slice(1, key.lastIndexOf('-')).replaceAll('.', '_')}esr_RELEASE`;
+const KEY_RE = /^v(\d+(?:\.\d+)*)-(\d+)$/;
+const sameLogin = (a, b) => typeof a === 'string' && typeof b === 'string' && a !== '' && a.toLowerCase() === b.toLowerCase();
+
+/**
+ * Whether release key `newer` is strictly newer than `old` on the same ESR major. Same order as
+ * scripts/release-key-newer.mjs (the sign guards' comparator, which runs on import and so cannot be imported here):
+ * ESR groups numerically with a missing group as 0, then the revision. A value outside the key grammar is false. Pure.
+ */
+function keyNewerOnLine(newer, old) {
+    const [x, y] = [KEY_RE.exec(newer), KEY_RE.exec(old)];
+    if (x === null || y === null) return false;
+    const [p, q] = [x[1].split('.').map(Number), y[1].split('.').map(Number)];
+    if (p[0] !== q[0]) return false;
+    for (let i = 1; i < Math.max(p.length, q.length); i += 1) {
+        if ((p[i] ?? 0) !== (q[i] ?? 0)) return (p[i] ?? 0) > (q[i] ?? 0);
+    }
+    return Number(x[2]) > Number(y[2]);
+}
+
+/** The release key of the train these facts describe, or null when no train exists or its key cannot be built. Pure. */
+function ownKeyOf(f) {
+    if (f.release) return typeof f.release.key === 'string' ? f.release.key : null;
+    return f.openPr && tagToVersion(f.candidateTag) !== null ? releaseKey(f) : null;
+}
+
+/**
+ * Whether the mark on this key is trusted (WR-01, WR-02). Provenance: the tracking issue is selected as selectPinned
+ * selects the maintenance issue (title, tracking label, owner or bot author), is the only such issue, carries
+ * state/SUPERSEDED, and that label's labeled-event actor is the owner or the bot; anyone else's mark is ignored.
+ * Expiry: the superseder (newerKey, a valid newer key on this major) must still be open or published. Pure.
+ */
+function markHolds(f, key) {
+    const trusted = [f.ownerLogin, f.botLogin];
+    const found = selectTracked(f.markIssues, `release-train: ${key}`, trusted);
+    return found.length === 1
+        && found[0].labels.some(l => l && l.name === LABELS.state('SUPERSEDED'))
+        && trusted.some(l => sameLogin(l, found[0].supersededLabelActor))
+        && (f.supersederState === 'open' || f.supersederState === 'published')
+        && keyNewerOnLine(f.newerKey, key);
+}
 
 /**
  * Why a train is superseded (TRAIN-04): 'chemspill' (an open same-ESR revision), 'newer-esr' (a newer
- * validated tag on the same major), 'marked' (supersededMark: the issue already carries the state), or null.
- * Chemspill is tried first. derive and render both read this one function, so the rendered view names the arm that fired. Both arms apply to a scheduled train
- * only (revision exactly 1): a chemspill revision train is never preempted, whatever flags the
- * collector sets. Fail-safe: a missing or odd revision counts as a revision, so nothing irreversible
- * follows from it. Pure.
+ * validated tag on the same major), 'marked' (a verified, unexpired state/SUPERSEDED mark; markHolds), or null.
+ * Every arm needs an existing scheduled train: a train (open PR or release key) with a well-formed key whose
+ * revision is exactly 1. A chemspill revision train, a malformed or missing key, and an empty fact set are never
+ * superseded, whatever the flags or the mark say. Chemspill is tried first. derive and render both read this one
+ * function, so the rendered view names the arm that fired. Pure.
  */
 export function supersedeCause(f) {
-    // A release-stage train (merged, so no open PR) is identified by its release key; a pre-release one by its PR and candidate.
-    const rel = f.release ?? null;
-    const revision = rel === null ? f.revision : Number(rel.key.slice(rel.key.lastIndexOf('-') + 1));
-    const own = rel === null ? f.candidateTag : keyTag(rel.key);
-    if ((f.openPr || rel !== null) && revision === 1) {
-        if (f.chemspillOpen === true) return 'chemspill';
-        if (typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, own)) return 'newer-esr';
-    }
-    // Sticky (WR-01): the superseding facts are transient (the chemspill train publishes, a PR closes), but the
-    // tracking issue keeps its state/SUPERSEDED label. supersededMark is that persisted fact, read by the collector;
-    // without it a superseded key reverts to BUMP_PR_GREEN and pages the owner.
-    return f.supersededMark === true ? 'marked' : null;
+    const key = ownKeyOf(f);
+    // ownKeyOf is null without a train, so "a train exists" and "the key is well formed" are tested before any arm, the mark included.
+    if (key === null || KEY_RE.exec(key)?.[2] !== '1') return null;
+    const own = f.release ? keyTag(key) : f.candidateTag;
+    if (f.chemspillOpen === true) return 'chemspill';
+    if (typeof f.newerTag === 'string' && newerOnSameLine(f.newerTag, own)) return 'newer-esr';
+    return markHolds(f, key) ? 'marked' : null;
 }
 
 /**
@@ -286,9 +331,11 @@ export function supersedeCause(f) {
  * The TRAIN-04 arms apply before publication only: a published or withdrawn release is never superseded,
  * and a release-stage train (BUILDING, AWAITING_APPROVAL) is superseded by the same arms:
  * (1) an open same-ESR chemspill revision preempts this scheduled train (chemspillOpen);
- * (2) a newer validated ESR tag preempts this open older train (newerTag). Both arms apply to a
- *     scheduled train only (revision 1): a chemspill revision train is never superseded, whatever
- *     flags the collector sets, and falls through to the Phase 43 ladder.
+ * (2) a newer validated ESR tag preempts this open older train (newerTag);
+ * (3) a verified, unexpired mark keeps it superseded once those transient facts are gone. The mark yields to
+ *     BUMP_RED and CONFLICT, which still page; (1) and (2) are live facts and are decided first.
+ * All apply to a scheduled train only (revision 1): a chemspill revision train is never superseded, whatever
+ * the collector sets, and falls through to the Phase 43 ladder.
  */
 export function derive(facts) {
     const f = facts;
@@ -300,12 +347,14 @@ export function derive(facts) {
         if (unpublished && (rel === null || rel === 'BUILDING' || rel === 'AWAITING_APPROVAL') && supersedeCause(f) !== null) return 'SUPERSEDED';
         return rel;
     }
-    if (supersedeCause(f) !== null) return 'SUPERSEDED';
+    const cause = supersedeCause(f);
+    if (cause !== null && cause !== 'marked') return 'SUPERSEDED';
     if (f.merged === true && f.pinUnchanged === true) return 'BUMP_RED';
     if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'CONFLICT';
     if (typeof f.stage === 'string' && ANY_FAIL.test(f.stage)) return 'BUMP_RED';
+    if (f.openPr && f.verifyCheck === 'failure') return 'BUMP_RED';
+    if (cause === 'marked') return 'SUPERSEDED';
     if (f.openPr) {
-        if (f.verifyCheck === 'failure') return 'BUMP_RED';
         if (f.verifyCheck === 'success' && f.pinUnchanged !== true) return 'BUMP_PR_GREEN';
         return 'BUMPING';
     }
@@ -314,15 +363,17 @@ export function derive(facts) {
 }
 
 /**
- * What a cancel executor may target for a SUPERSEDED train, or null when nothing is in flight (the action is then
- * link-only). The ids come from the old train's own release facts: its run is matched by display title to the merge
- * SHA, so this is never the newest run of another SHA and never the new train's. environmentId is the pending
- * `release` approval's environment id; it is null for a run that is building with no approval pending. Pure.
+ * What a cancel executor may target for a SUPERSEDED train, or null (the action is then link-only). Only a train
+ * waiting on the release environment approval has a target: rejecting that pending approval stops it before anything
+ * is signed. A BUILDING run may be past the approval, mid-publish, and the Release is immutable once published, so it
+ * is never cancelled by run id; the two sign guards (newer_guard, newer_guard_final) fail a stale build. The ids come
+ * from the old train's own release facts: its run is matched by display title to the merge SHA, so this is never the
+ * newest run of another SHA and never the new train's. Pure.
  */
 export function supersedeTarget(facts) {
-    const run = facts.release?.run ?? null;
-    if (derive(facts) !== 'SUPERSEDED' || run === null || run.status === 'completed') return null;
-    return { key: facts.release.key, runId: run.id, environmentId: facts.release.releaseEnvId };
+    const rel = facts.release ?? null;
+    if (rel === null || derive(facts) !== 'SUPERSEDED' || deriveRelease(rel) !== 'AWAITING_APPROVAL') return null;
+    return { key: rel.key, runId: rel.run.id, environmentId: rel.releaseEnvId };
 }
 
 /** The one action a state maps to. A null state is idle. Pure. */
@@ -369,8 +420,9 @@ function releaseKey(facts) {
 
 /**
  * The tracking-issue view for a state, rendered from facts. Mention and
- * assignment happen only on entering BUMP_PR_GREEN, the Phase-A gate; every
- * other state renders with neither. Pure.
+ * assignment happen only on the NEEDS_OWNER states (BUMP_PR_GREEN, AWAITING_APPROVAL,
+ * DESCRIPTOR_WAIT, LIVE_RED); every other state renders with neither. A SUPERSEDED view
+ * whose superseder is published closes the issue (superseded-done). Pure.
  */
 export function render(state, facts) {
     const rel = facts.release ?? null;
@@ -390,7 +442,8 @@ export function render(state, facts) {
         if (cause === null) throw new Error('render(SUPERSEDED) over facts that supersede nothing. Next step: render the state derive() returned for these facts.');
         const named = { chemspill: 'the open chemspill revision', marked: 'a newer train (recorded earlier on this issue)' };
         const by = facts.newerKey ?? named[cause] ?? `v${tagToVersion(facts.newerTag).esrVersion}-1`;
-        stateLines.push(`superseded by ${by}${facts.newerIssueUrl ? ` (${facts.newerIssueUrl})` : ''}. Routine: no owner action is needed on this issue.`);
+        const done = facts.supersederState === 'published';
+        stateLines.push(`superseded by ${by}${facts.newerIssueUrl ? ` (${facts.newerIssueUrl})` : ''}${done ? ', which is published. This train is done and the issue is closed' : ''}. Routine: no owner action is needed on this issue.`);
     }
     const body = [
         title,
@@ -411,7 +464,7 @@ export function render(state, facts) {
         mention: gate ? facts.ownerLogin : null,
         assign: gate ? [facts.ownerLogin] : [],
         lock: true,
-        close: state === 'DESCRIPTOR_LIVE',
+        close: state === 'DESCRIPTOR_LIVE' || (state === 'SUPERSEDED' && facts.supersederState === 'published'),
         writes: [],
     };
 }
@@ -958,15 +1011,23 @@ function transitionComment(newlyRed, ownerLogin) {
 }
 
 /**
+ * The tracking issues for one title: those that carry the tracking label and whose author is one of `authors`
+ * (logins compare case-insensitively on GitHub; an unset login selects nothing). A same-title issue by anyone else
+ * is not selected: its body, labels and events are never read for a decision. Pure.
+ */
+export function selectTracked(issues, title, authors) {
+    const logins = authors.filter(l => typeof l === 'string' && l !== '');
+    return (Array.isArray(issues) ? issues : []).filter(i => i && i.title === title
+        && i.author !== null && typeof i.author === 'object' && logins.some(l => sameLogin(l, i.author.login))
+        && Array.isArray(i.labels) && i.labels.some(l => l && l.name === LABELS.track));
+}
+
+/**
  * The pinned maintenance issue is the one issue whose author is the owner's login and that carries the
- * tracking label (logins are case-insensitive on GitHub, so they compare so; an unset owner still selects nothing). A same-title issue by anyone else is not the pinned issue: its body is never read
- * for a decision. ownerLogin '' or null selects nothing (the create path, which writes nothing). Pure.
+ * tracking label. ownerLogin '' or null selects nothing (the create path, which writes nothing). Pure.
  */
 export function selectPinned(issues, ownerLogin) {
-    if (typeof ownerLogin !== 'string' || ownerLogin === '') return [];
-    return (Array.isArray(issues) ? issues : []).filter(i => i && i.title === MAINTENANCE_TITLE
-        && i.author !== null && typeof i.author === 'object' && typeof i.author.login === 'string' && i.author.login.toLowerCase() === ownerLogin.toLowerCase()
-        && Array.isArray(i.labels) && i.labels.some(l => l && l.name === LABELS.track));
+    return selectTracked(issues, MAINTENANCE_TITLE, [ownerLogin]);
 }
 
 const normBody = text => String(text ?? '').replace(/\r\n/g, '\n').trimEnd();
@@ -1418,6 +1479,11 @@ function selfTest() {
     console.log(`  ok  baseline -> ${Object.keys(ALL_STATES).length} states (${Object.keys(STATES).length} bump-lane: 5 Phase-A, 8 release-stage and SUPERSEDED; ${Object.keys(UPTAKE_STATES).length} uptake-lane), each with a fixture and an action, set-equal; derive, next and render agree`);
 
     const OWNER = 'owner-login-fixture';
+    const BOT = 'bot-login-fixture[bot]';
+    // A tracking issue the collector would pass for the mark, and the facts that make the mark hold for `key`:
+    // bot-authored issue, label applied by the bot, a newer superseder that is still open.
+    const markIssue = (key, over = {}) => ({ title: `release-train: ${key}`, author: { login: BOT }, labels: [{ name: 'release-train' }, { name: 'state/SUPERSEDED' }], supersededLabelActor: BOT, ...over });
+    const markFacts = (key, over = {}) => ({ ownerLogin: OWNER, botLogin: BOT, supersederState: 'open', newerKey: 'v153.24.0-1', markIssues: [markIssue(key)], ...over });
     const trainPlants = [
         {
             name: 'a sixth state with no fixture',
@@ -1512,16 +1578,16 @@ function selfTest() {
             expect: 'cancel run 102 and reject approval environment 7 of v153.23.0-1',
         },
         {
-            name: 'supersede-release-stage-ids: a train waiting on approval or building, with a newer ESR tag, names its own run and approval',
-            // The cancel target is the old train's run (matched by display title), never the newest run of another SHA.
+            name: 'supersede-release-stage-ids: only a train waiting on approval is a cancel target; a building one is link-only',
+            // The target is the old train's run (matched by display title), never the newest run of another SHA. A building run may be mid-publish.
             run: () => ['AWAITING_APPROVAL', 'BUILDING'].flatMap(name => {
                 const f = { ...factsOf(FIXTURES[name]), newerTag: esrTag(153, 24, 0) };
                 const got = derive(f);
                 if (got !== 'SUPERSEDED') return [`a ${name} train with a newer ESR tag derives ${got}, not SUPERSEDED`];
                 const t = supersedeTarget(f);
-                return [`${name} superseded: cancel run ${t?.runId} and reject approval environment ${t?.environmentId} of ${t?.key}`];
+                return [t === null ? `${name} superseded: link only, no cancel target` : `${name} superseded: cancel run ${t.runId} and reject approval environment ${t.environmentId} of ${t.key}`];
             }),
-            expect: 'cancel run 101 and reject approval environment null of v153.23.0-1',
+            expect: 'BUILDING superseded: link only, no cancel target',
         },
         {
             name: 'sign-job-newer-release-exit: a stale approval whose key is not newer than the latest published Release',
@@ -1651,7 +1717,7 @@ function selfTest() {
                 // A published Release whose assets do not match derives no state (null); it is still published, so never superseded.
                 ['a published Release with the wrong assets', { live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease({ assets: [] }) }) }]].flatMap(([name, fx]) => {
                 const want = fx.live === undefined || name.startsWith('a published') ? derive(factsOf(fx)) : name;
-                const got = derive({ ...factsOf(fx), openPr: { head: `chore/esr-${OLDER}`, number: 45 }, newerTag: esrTag(153, 24, 0), chemspillOpen: true, supersededMark: true });
+                const got = derive({ ...factsOf(fx), openPr: { head: `chore/esr-${OLDER}`, number: 45 }, newerTag: esrTag(153, 24, 0), chemspillOpen: true, ...markFacts(RELEASE_KEY) });
                 return got === want && got !== 'SUPERSEDED' ? [] : [`a ${name} release derived ${got} under supersede facts`];
             }),
         },
@@ -1672,7 +1738,7 @@ function selfTest() {
         {
             name: 'control: a marked train whose run was already cancelled stays SUPERSEDED with no cancel target (link only); a pre-release one has none either',
             run: () => {
-                const cancelled = { ...BASE, supersededMark: true, release: releaseFactsFromLive({ ...FIXTURES.AWAITING_APPROVAL.live, runs: [liveRun(102, MERGE_SHA, 'completed', 'cancelled', '2026-10-31T10:00:00Z')], pending: [] }) };
+                const cancelled = { ...BASE, ...markFacts(RELEASE_KEY), release: releaseFactsFromLive({ ...FIXTURES.AWAITING_APPROVAL.live, runs: [liveRun(102, MERGE_SHA, 'completed', 'cancelled', '2026-10-31T10:00:00Z')], pending: [] }) };
                 const failures = [];
                 if (derive(cancelled) !== 'SUPERSEDED' || supersedeTarget(cancelled) !== null) failures.push(`a cancelled marked train derives ${derive(cancelled)} with target ${JSON.stringify(supersedeTarget(cancelled))}`);
                 if (supersedeTarget(FIXTURES.SUPERSEDED.facts) !== null) failures.push('a pre-release SUPERSEDED train carries a cancel target');
@@ -1707,16 +1773,105 @@ function selfTest() {
             },
         },
         {
-            name: 'control: SUPERSEDED is sticky: a marked key stays SUPERSEDED after the superseding fact is gone, and does not page the owner; unmarked it reverts',
+            name: 'control: SUPERSEDED is kept by a verified mark after the superseding fact is gone, and does not page the owner; unmarked it reverts',
             run: () => {
                 const gone = { ...FIXTURES.BUMP_PR_GREEN.facts, chemspillOpen: false };
-                const marked = { ...gone, supersededMark: true, ownerLogin: OWNER };
+                const marked = { ...gone, ...markFacts(RELEASE_KEY) };
                 const view = render(derive(marked), marked);
                 const failures = [];
                 if (derive(gone) !== 'BUMP_PR_GREEN') failures.push(`an unmarked key with no superseding fact derives ${derive(gone)}, not BUMP_PR_GREEN`);
                 if (derive(marked) !== 'SUPERSEDED') failures.push(`a marked key derives ${derive(marked)}, not SUPERSEDED`);
                 if (view.mention !== null || view.assign.length > 0) failures.push('a marked key paged the owner');
                 return failures;
+            },
+        },
+        {
+            name: 'control: BL-01 a mark never supersedes a chemspill revision, a malformed key, a missing revision or a key with no train',
+            run: () => {
+                const m = key => markFacts(key, { newerKey: 'v153.24.0-1' });
+                const cases = [
+                    ['chemspill revision 2 with an open PR', { ...BASE, candidateTag: NEWER, revision: 2, openPr: { head: `chore/esr-${NEWER}`, number: 44 }, verifyCheck: 'success', ...m('v153.23.0-2') }, 'BUMP_PR_GREEN'],
+                    ['no revision', { ...BASE, candidateTag: NEWER, revision: undefined, openPr: { head: `chore/esr-${NEWER}`, number: 44 }, verifyCheck: 'success', ...m('v153.23.0-undefined') }, 'BUMP_PR_GREEN'],
+                    ['release key v153.23.0-2 (BUILDING)', { ...BASE, ...m('v153.23.0-2'), release: releaseFactsFromLive({ ...FIXTURES.BUILDING.live, key: 'v153.23.0-2' }) }, 'BUILDING'],
+                    ['malformed release key v153.23.0 (BUILDING)', { ...BASE, ...m('v153.23.0'), release: releaseFactsFromLive({ ...FIXTURES.BUILDING.live, key: 'v153.23.0' }) }, 'BUILDING'],
+                    ['no train at all (empty facts plus a mark)', { ...BASE, ...m('v153.5.1-1') }, null],
+                    ['a candidate but no open PR', { ...BASE, candidateTag: NEWER, ...m('v153.23.0-1') }, 'DETECTED'],
+                ];
+                return cases.flatMap(([name, f, want]) => {
+                    const got = derive(f);
+                    const target = supersedeTarget(f);
+                    return got === want && target === null ? [] : [`${name} derives ${got} (want ${want}) with target ${JSON.stringify(target)}`];
+                });
+            },
+        },
+        {
+            name: 'control: WR-01 a mark without provenance is ignored (stranger issue author, stranger label actor, duplicate issues, no label, no owner or bot login)',
+            run: () => {
+                const base = { ...FIXTURES.BUMP_PR_GREEN.facts };
+                const K = RELEASE_KEY;
+                const cases = [
+                    ['issue authored by a stranger', markFacts(K, { markIssues: [markIssue(K, { author: { login: 'stranger' } })] })],
+                    ['label applied by a stranger', markFacts(K, { markIssues: [markIssue(K, { supersededLabelActor: 'stranger' })] })],
+                    ['no label actor recorded', markFacts(K, { markIssues: [markIssue(K, { supersededLabelActor: undefined })] })],
+                    ['two trusted issues for the key', markFacts(K, { markIssues: [markIssue(K), markIssue(K)] })],
+                    ['issue without the state label', markFacts(K, { markIssues: [markIssue(K, { labels: [{ name: 'release-train' }] })] })],
+                    ['issue without the tracking label', markFacts(K, { markIssues: [markIssue(K, { labels: [{ name: 'state/SUPERSEDED' }] })] })],
+                    ['issue titled for another key', markFacts(K, { markIssues: [markIssue('v153.9.0-1')] })],
+                    ['no owner or bot login passed', markFacts(K, { ownerLogin: undefined, botLogin: undefined })],
+                ];
+                return cases.flatMap(([name, extra]) => {
+                    const got = derive({ ...base, ...extra });
+                    return got === 'BUMP_PR_GREEN' ? [] : [`a mark with ${name} derives ${got}, not BUMP_PR_GREEN`];
+                });
+            },
+        },
+        {
+            name: 'control: WR-01 a mark does not outrank BUMP_RED or CONFLICT; live superseding facts still do',
+            run: () => {
+                const m = markFacts(RELEASE_KEY);
+                const open = { ...FIXTURES.BUMP_PR_GREEN.facts };
+                const cases = [
+                    ['a red check', { ...open, verifyCheck: 'failure', ...m }, 'BUMP_RED'],
+                    ['a merged PR with the pin unchanged', { ...open, openPr: null, merged: true, pinUnchanged: true, ...m }, 'BUMP_RED'],
+                    ['a replay FAIL', { ...open, stage: 'rebase-upstream: FAIL -- scan-brand-residue.mjs found residual brand strings', ...m }, 'BUMP_RED'],
+                    ['a patch conflict', { ...open, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply', ...m }, 'CONFLICT'],
+                    ['a patch conflict under a live newer tag', { ...open, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply', newerTag: esrTag(153, 24, 0) }, 'SUPERSEDED'],
+                ];
+                return cases.flatMap(([name, f, want]) => (derive(f) === want ? [] : [`${name} with a mark derives ${derive(f)}, not ${want}`]));
+            },
+        },
+        {
+            name: 'control: WR-02 the mark expires with its evidence and a superseder must be a valid newer key on the same major',
+            run: () => {
+                const base = { ...FIXTURES.BUMP_PR_GREEN.facts };
+                const K = RELEASE_KEY;
+                const failures = [];
+                for (const [name, extra, want] of [
+                    ['an open newer ESR superseder', {}, 'SUPERSEDED'],
+                    ['an open chemspill revision superseder', { newerKey: 'v153.23.0-2' }, 'SUPERSEDED'],
+                    ['a published superseder', { supersederState: 'published' }, 'SUPERSEDED'],
+                    ['a superseder closed unpublished', { supersederState: 'closed' }, 'BUMP_PR_GREEN'],
+                    ['no superseder state', { supersederState: undefined }, 'BUMP_PR_GREEN'],
+                    ['no superseder key', { newerKey: undefined }, 'BUMP_PR_GREEN'],
+                    ['an older superseder key', { newerKey: 'v153.5.1-1' }, 'BUMP_PR_GREEN'],
+                    ['the same key', { newerKey: K }, 'BUMP_PR_GREEN'],
+                    ['a superseder on another major', { newerKey: 'v175.0.0-1' }, 'BUMP_PR_GREEN'],
+                    ['a malformed superseder key', { newerKey: 'v153.24.0' }, 'BUMP_PR_GREEN'],
+                ]) {
+                    const got = derive({ ...base, ...markFacts(K, extra) });
+                    if (got !== want) failures.push(`${name} derives ${got}, not ${want}`);
+                }
+                return failures;
+            },
+        },
+        {
+            name: 'control: WR-02 a published superseder renders the issue closed and not silent; an open one leaves it open',
+            run: () => {
+                const f = { ...FIXTURES.BUMP_PR_GREEN.facts, ...markFacts(RELEASE_KEY, { supersederState: 'published', newerIssueUrl: 'https://example.invalid/issues/9' }) };
+                const done = render(derive(f), f);
+                const open = render(derive({ ...f, supersederState: 'open' }), { ...f, supersederState: 'open' });
+                const ok = done.close === true && done.body.includes('which is published') && done.body.includes('https://example.invalid/issues/9') && done.mention === null && open.close === false;
+                return ok ? [] : [`published superseder: close ${done.close}, open superseder: close ${open.close}`];
             },
         },
         {
