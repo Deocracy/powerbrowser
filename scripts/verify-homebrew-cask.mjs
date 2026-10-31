@@ -12,8 +12,9 @@
 //                             tree's release_notes URL, and equals the url's host and path prefix;
 //  4. auto_updates            auto_updates true (the app updates itself; the cask must say so);
 //  5. livecheck               a livecheck block with url :url and strategy :github_latest;
-//  6. stanzas                 name, desc, homepage, app, uninstall and zap are present (the cask shape
-//                             wingetcreate-style tooling and brew audit both read);
+//  6. stanzas                 name, desc, homepage, app and zap are present (the cask shape wingetcreate-style
+//                             tooling and brew audit both read); an uninstall delete: of the app path is refused,
+//                             because the app stanza already removes the app on uninstall (IN-04);
 //  7. darwin deferral         the "deferred:" marker naming assumption A3 and Phase 55 is present, and no
 //                             arm64 or on_arm enablement appears before Phase 55 evidence exists;
 //  8. no signing claim        the cask and this row name no signing, notary or Gatekeeper result. The
@@ -110,10 +111,13 @@ export function runChecks(root, overrides = {}) {
     if (!/livecheck do[\s\S]*?url :url[\s\S]*?strategy :github_latest[\s\S]*?end/.test(text)) {
         fail(CASK_REL, 'has no livecheck block naming url :url and strategy :github_latest', 'add the livecheck block for the release tags.');
     }
-    const stanzas = { name: /^\s*name "/m, desc: /^\s*desc "/m, homepage: /^\s*homepage "/m, app: /^\s*app "/m, uninstall: /^\s*uninstall /m, zap: /^\s*zap /m };
+    const stanzas = { name: /^\s*name "/m, desc: /^\s*desc "/m, homepage: /^\s*homepage "/m, app: /^\s*app "/m, zap: /^\s*zap /m };
     for (const [label, re] of Object.entries(stanzas)) {
         if (!re.test(text)) fail(CASK_REL, `lacks the ${label} stanza`, 'add the stanza; the cask shape needs every one of them.');
     }
+
+    const redundant = /^\s*uninstall\b[^\n]*\bdelete:[^\n]*\.app\b/m.exec(text);
+    if (redundant) fail(CASK_REL, `has ${JSON.stringify(redundant[0].trim())}, which duplicates the app stanza and would also remove a manually installed copy`, 'delete the uninstall delete: line; brew removes the app stanza target on uninstall.');
 
     // 7: the darwin deferral marker and no early arm enablement
     const deferral = text.split('\n').find(l => l.startsWith('# deferred:')) ?? '';
@@ -174,6 +178,10 @@ function selfTest() {
         {
             name: 'cask block header removed', expect: 'is not one cask',
             overrides: withText(t => t.replace('cask "powerbrowser" do', 'class Powerbrowser do')),
+        },
+        {
+            name: 'uninstall delete of the app path added back (IN-04)', expect: 'duplicates the app stanza',
+            overrides: withText(t => t.replace('  zap trash:', '  uninstall delete: "/Applications/PowerBrowser.app"\n\n  zap trash:')),
         },
         {
             name: 'zap stanza removed', expect: 'zap',

@@ -22,7 +22,5 @@ cask "powerbrowser" do
 
   app "PowerBrowser.app"
 
-  uninstall delete: "/Applications/PowerBrowser.app"
-
   zap trash: "~/Library/Application Support/PowerBrowser"
 end

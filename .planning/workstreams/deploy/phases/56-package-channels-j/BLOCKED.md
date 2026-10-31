@@ -111,7 +111,7 @@ is not executed by this run and is listed at the end.
 
 ## 12. Cask shape decisions and the darwin enablement (DIST-11, Phase 55 and A3)
 
-- **Blocked:** the cask's `depends_on macos: ">= :big_sur"` minimum, the `uninstall delete:` path, and the `zap trash:` path
+- **Blocked:** the cask's `depends_on macos: ">= :big_sur"` minimum and the `zap trash:` path (the redundant `uninstall delete:` line was dropped by the review fix IN-04; `zap` still omits caches and preferences until the bundle paths are confirmed)
   are not confirmed against the notarized app; the macOS asset name is the fixture (A3). The darwin deferral marker stays
   until Phase 55 evidence exists.
 - **Owner steps:** confirm the minimum macOS version and the application's bundle paths in Phase 55; name the Phase 55
