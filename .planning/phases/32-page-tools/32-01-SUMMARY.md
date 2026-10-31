@@ -176,3 +176,16 @@ Files and commits, checked against disk and git:
 - `git merge-base --is-ancestor 6ef566f HEAD` and `git merge-base --is-ancestor 54d1e44 HEAD`: both are ancestors of HEAD.
 
 ## Self-Check: PASSED (files and commits) / PARTIAL (live proof, see Status)
+
+## Audio fix
+
+Supersedes Blocker 1 and the `audio` row above. The defect was in the launch environment, not the chrome arms, the actor registration or the 050 patch.
+
+- **Cause.** Gecko dlopens `libpulse.so.0` by bare name, and libxul's RUNPATH lists alsa-lib but not libpulseaudio. Run outside a Nix wrapper, the audio server in the parent process logged `E/cubeb context.rs:55: libpulse not found` (`MOZ_LOG=sync,cubeb:5`), no backend opened, and the content process's `CubebStreamInit` was shut down at once. The media element then failed with `NS_ERROR_DOM_MEDIA_MEDIASINK_ERR` (`audio.error.code` 3), the audio-playback observer never reported `active`, and `DOMAudioPlaybackStarted` never fired. The earlier note that the tone "plays in content" was wrong: `play()` resolves and `currentTime` advances, but no sound reaches a sink.
+- **Discriminating evidence.** The parent half was fine: calling `overlayOf(id).audioPlaybackStarted()` from chrome produced a `soundPlaying: true` push. With `LD_LIBRARY_PATH` set to the libpulse directory and nothing else changed, the same page reported `err=0` and the natural push arrived (index 5, one push after the loaded push).
+- **Fix.** `scripts/lib/firefox-bidi.mjs` reads the libpulse directory from `MOZ_PULSEAUDIO_LIBS` in the `config.status` beside the binary and prepends it to `LD_LIBRARY_PATH` for the spawned shell only (the harness process's own environment is unchanged). A binary with no `config.status` beside it launches as before.
+- **Self-test.** `verify-page-tools-live.mjs` gained an audio clean control and the `audio-page-silent` plant (the audio scenario on a page that plays nothing), which goes red naming `no soundPlaying push`. The scenario's failure text now names the `libpulse not found` log line.
+- **Instrument check.** The suspected off-by-one in the audio wait was not a defect: `waitForPush`'s `from` is inclusive, so `from: unmuted` already scans the unmute push itself. It was left as is.
+- **Commit.** `16c7875`.
+- **Live result (this tree).** `--scenario audio` PASS three runs in a row; `--scenario find,zoom,audio,downloads` all PASS; `--self-test` PASS (two clean controls, two planted faults red). With the fix disabled (the binary launched from a path with no `config.status`), `audio` FAILs again.
+- **Open risk.** The dev binary at `objdir/dist/bin/powerbrowser` produces no sound when started by hand outside a dev wrapper, for the same reason. This commit fixes the harness only; a release package must put libpulse on the loader path (not addressed here).
