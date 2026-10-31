@@ -432,6 +432,35 @@ setup is blocked.
   and the two variables are owner actions at the 52-05 checkpoint. Until they exist,
   the fixer cannot authenticate and no live fix run is possible.
 
+### Fixer spend limits (FIX-05)
+
+Fixer spend is bounded at four layers. The first is an owner setting, and the
+others are in-tree and asserted by the `workflows` row (`fixer-spend`, `fixer-tools`).
+
+- A dedicated Anthropic Console workspace for the fixer, separate from triage, with
+  a monthly spend limit. The limit is pending the 52-05 owner checkpoint and is
+  recorded here, and its review date is in `docs/RENEWALS.md`.
+- `--max-turns 40` on the `fix` job's Claude step, so one attempt is bounded.
+- `timeout-minutes: 90` on the `fix` job, so one attempt is bounded in time.
+- At most two attempts per (release key, class). The attempts are counted from the
+  `fix` runs whose run-name is `fix <key> <class> attempt <n>`, and a run that
+  `fix-gate` rejects still counts. The third failure moves the release to
+  NEEDS_OWNER, which is a state in the train's state table.
+- The `claude-fixer` concurrency group serializes every fix run, so two attempts
+  never spend the budget at once.
+
+### Fixer routing (TRAIN-06)
+
+- A red stage labels its tracking issue `train:blocked`, assigns the owner, and
+  links the failing log. The labels and the assignee come from the train's render.
+- The fixer starts only for the three classes: F1 (patch-replay conflict on
+  `chore/esr-*`), F2 (red bump PR on `chore/esr-*`, `chore/node-*` or `renovate/*`),
+  and F3 (red `main`). Every other dispatch is refused with the guard it failed.
+- A failed `release.yml` run opens an issue only, with no dispatch instruction in
+  its body. The fixer is never started for it.
+- The report job owns every issue write. The fixer's own writes are one PR, opened
+  by `fix-pr` in the bot environment.
+
 ### The MAR key ceremony and custody
 
 Run the ceremony once, on `legion`, at the repository root, with nobody else at the
