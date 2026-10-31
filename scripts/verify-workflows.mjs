@@ -54,6 +54,10 @@
 //                 expression reading github.event.(issue|comment|
 //                 pull_request|head_commit|review), nested fields and
 //                 review_comment included.
+//  dry-run-gate   In release-train.yml only (Phase 43, TRAIN-08), every step that
+//                 commits, pushes, opens, comments, edits, dispatches or mints an
+//                 App token carries inputs.dry-run in its if:. A dry run then
+//                 prints the write instead of making it. Read steps are exempt.
 //
 // Effective permissions: job permissions, else workflow permissions, else the
 // repository default (default_workflow_permissions in
@@ -93,7 +97,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'dry-run-gate'];
 const SCOPES = ['actions', 'attestations', 'checks', 'contents', 'deployments', 'discussions', 'id-token', 'issues', 'models', 'packages', 'pages', 'pull-requests', 'repository-projects', 'security-events', 'statuses'];
 const HOSTED = /^(ubuntu|windows|macos)-[\w.-]+$/;
 const GUARD = 'github.event.workflow_run.head_repository.full_name == github.repository';
@@ -102,6 +106,11 @@ const TRIO = ['contents', 'id-token', 'attestations'];
 const PIN = /^([^/@]+)\/([^@/]+)(\/[^@]*)?@([0-9a-f]{40})$/;
 const PATTERN = /^([^/@]+\/[^/@]+)@\*$/;
 const WF_LEVEL = '(workflow)';
+const DRY_RUN_FILE = 'release-train.yml';
+const DRY_RUN_GATE = 'inputs.dry-run';
+// A run: body that commits, pushes, opens, comments, edits, dispatches or closes on GitHub.
+const WRITE_RUN = /gh api -X (POST|PATCH|PUT|DELETE)|gh pr (create|merge|comment|edit)|gh issue (create|comment|edit|close|lock|reopen)|gh workflow run|git push|dispatches/;
+const APP_TOKEN = 'actions/create-github-app-token@';
 
 function events(wf) {
     const on = wf.on;
@@ -318,6 +327,16 @@ function runChecks(root, overrides = {}) {
                 });
             }
 
+            // dry-run gate: every write step in release-train.yml names the gate in its if:.
+            if (file === DRY_RUN_FILE) {
+                steps.forEach((s, i) => {
+                    const writes = (typeof s.run === 'string' && WRITE_RUN.test(s.run)) || stepUses[i].startsWith(APP_TOKEN);
+                    if (!writes) return;
+                    const cond = s.if === undefined ? '' : String(s.if);
+                    if (!cond.includes(DRY_RUN_GATE)) fail(rel, jobId, 'dry-run-gate', `step ${i} (${stepUses[i] || 'run'}) writes to GitHub or the repository with no ${DRY_RUN_GATE} gate in its if:. Next step: add if: \${{ !${DRY_RUN_GATE} }} and print the write as a dry-run line instead.`);
+                });
+            }
+
             // event text in run: and prompt:
             steps.forEach((s, i) => {
                 for (const [field, v] of [['run', s.run], ['with.prompt', s.with?.prompt]]) {
@@ -426,6 +445,13 @@ function selfTest() {
         return with_({ [file]: base[file].replace(from, to) });
     };
     const append = (file, text) => with_({ [file]: base[file] + text });
+    // release-train.yml as a parsed document, mutated, and dumped back to text: a plant is a
+    // structural edit, never a text patch that could silently miss its anchor.
+    const withRt = (mutate) => {
+        const doc = yaml.load(files[DRY_RUN_FILE]);
+        mutate(doc);
+        return { files: { ...files, [DRY_RUN_FILE]: yaml.dump(doc) }, selected };
+    };
     const wfRun = (name, source, guarded) => [
         `name: ${name}`,
         'on:',
@@ -504,6 +530,14 @@ function selfTest() {
         ['claude-code-action beside an App-token step', { files: { ...base, 'assist.yml': assist('read', [`      - uses: actions/create-github-app-token@${H40}`]) }, selected: withClaude }, rel('assist.yml'), 'assist', 'claude-code-action', 'create-github-app-token'],
         ['claude-code-action on legion', edit(R, '      - run: echo build\n', `      - uses: anthropics/claude-code-action@${H40}\n      - run: echo build\n`), rel(R), 'build-linux', 'claude-code-action', 'not GitHub-hosted'],
         ['claude-code-action with contents write', { files: { ...base, 'assist.yml': assist('write') }, selected: withClaude }, rel('assist.yml'), 'assist', 'claude-code-action', 'contents write'],
+        // TRAIN-08 and the release-train trust shape, planted on the real release-train.yml
+        ['ungated git push in bump-pr', withRt(d => d.jobs['bump-pr'].steps.push({ run: 'git push origin HEAD:refs/heads/x' })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', `no ${DRY_RUN_GATE} gate`],
+        ['ungated gh issue comment in report', withRt(d => d.jobs.report.steps.push({ run: 'gh issue comment 1 --body x' })), rel(DRY_RUN_FILE), 'report', 'dry-run-gate', `no ${DRY_RUN_GATE} gate`],
+        ['ungated App-token mint in bump-pr', withRt(d => d.jobs['bump-pr'].steps.push({ uses: `${APP_TOKEN}${H40}` })), rel(DRY_RUN_FILE), 'bump-pr', 'dry-run-gate', `no ${DRY_RUN_GATE} gate`],
+        ['schedule key on release-train.yml', withRt(d => { d.on.schedule = [{ cron: '0 3 * * *' }]; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-schedule', 'schedule'],
+        ['pull_request trigger on release-train.yml', withRt(d => { d.on.pull_request = null; }), rel(DRY_RUN_FILE), WF_LEVEL, 'no-pr-trigger', 'pull_request'],
+        ['unguarded workflow_run job in release-train.yml', withRt(d => { d.on.workflow_run = { workflows: ['Verify static layers'], types: ['completed'] }; d.jobs.derive.if = 'true'; }), rel(DRY_RUN_FILE), 'derive', 'workflow-run-guard', 'head_repository'],
+        ['legion runs-on on release-train.yml job detect', withRt(d => { d.jobs.detect['runs-on'] = ['self-hosted', 'legion']; }), rel(DRY_RUN_FILE), 'detect', 'legion', 'build-* or matrix-*'],
     ];
 
     // Green controls: the good release.yml (every plant's base), the two
@@ -516,6 +550,8 @@ function selfTest() {
         ['guarded workflow_run', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true) })],
         ['claude-code-action hosted with contents read', { files: { ...base, 'assist.yml': assist('read') }, selected: withClaude }],
         ['permissions: read-all over a write repository default', { files: { ...base, 'plain.yml': plain('read-all') }, defaultPermissions: 'write' }],
+        ['release-train.yml with its write steps gated by inputs.dry-run', withRt(d => d.jobs['bump-pr'].steps.push({ if: `\${{ !${DRY_RUN_GATE} }}`, run: 'git push origin HEAD:refs/heads/x' }))],
+        ['the unmodified release-train.yml under the new rule', { files }],
     ];
 
     let failed = 0;
