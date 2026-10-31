@@ -1577,6 +1577,26 @@ function emitMozconfigMacos(config, variant, cpu) {
 }
 
 /**
+ * Phase 54 (PKG-11): the per-target Windows mozconfig, through the SAME shared
+ * builder as the release and macOS rows (emitMozconfigFor). The release shape
+ * is the cross-build shape: the container bootstrap (--enable-bootstrap, the
+ * release branch's flags, the release SB keyfile mount) plus the Windows tail.
+ * The tail carries the target triple and --disable-maintenance-service, which
+ * keeps the NSIS maintenance service out of the build (T-54-01). No function
+ * body here spells the enabling flag, so the only way a build gets it is a
+ * reviewed edit to this tail, which the windows-mozconfig row then reds.
+ */
+// node: the powerbrowser/packaging/node-runtime.json key the Windows stage reads (PKG-13).
+export const WINDOWS_TARGET = Object.freeze({ triple: 'x86_64-pc-windows-msvc', objdir: 'objdir-windows-x86_64', node: 'win32-x64' });
+export function emitMozconfigWindows(config, variant) {
+    const tail = [
+        `ac_add_options --target=${WINDOWS_TARGET.triple}`,
+        'ac_add_options --disable-maintenance-service',
+    ];
+    return emitMozconfigFor(config, { ...variant, objdir: WINDOWS_TARGET.objdir }, { bootstrap: true, sbKeyfile: SB_KEYFILE_MOUNT, tail });
+}
+
+/**
  * UPD-29 (Phase 45): the release-variant SB keyfile line joins the release
  * branch only. The mount path is a platform constant (the legion keydir is
  * bind-mounted read-only at /keys inside the container, per the mount
@@ -3710,6 +3730,14 @@ export const TARGETS = Object.freeze([
         tracked: 'powerbrowser/packaging/mozconfig-macos-x86_64',
         variant: 'dev',
         emit: (config, variant) => emitMozconfigMacos(config, variant, 'x86_64'),
+    }),
+    // NEW (Phase 54, PKG-11): the x86_64 Windows mozconfig through the shared
+    // builder. A frozen copy authored once from the emitter, never edited to go green.
+    Object.freeze({
+        generated: 'packaging/mozconfig-windows-x86_64',
+        tracked: 'powerbrowser/packaging/mozconfig-windows-x86_64',
+        variant: 'dev',
+        emit: emitMozconfigWindows,
     }),
     // NEW (Phase 45, PKG-17): the release .mozconfig variant. A frozen copy
     // of the release emission, authored once from the emitter and committed,

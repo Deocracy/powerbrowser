@@ -41,3 +41,15 @@ index 785e5ccfba..5ff2790296 100755
    ClearErrors
    ${GetParameters} $0
    ${GetOptions} $0 "/LaunchedFromStub" $0
+diff --git a/browser/installer/windows/nsis/uninstaller.nsi b/browser/installer/windows/nsis/uninstaller.nsi
+index becbb0f70c..a4f9a06f98 100755
+--- a/browser/installer/windows/nsis/uninstaller.nsi
++++ b/browser/installer/windows/nsis/uninstaller.nsi
+@@ -328,6 +328,7 @@ Function un.OpenRefreshHelpURL
+ FunctionEnd
+ 
+ Function un.SendUninstallPing
++  Return ; no uninstall ping is sent (non-GUI NG-066); both call sites reach this Return
+   ; Notably, we only check the non-private AUMID here. There's no good reason
+   ; to send the uninstall ping twice.
+   ${If} $AppUserModelID == ""

@@ -4909,6 +4909,45 @@ run_own_checks() {
     # renovate-config-self-test plants one fault per rule in memory, after the unmodified tree and a
     # clean fixture stay green; each plant must go red naming its rule. It writes nothing in the tree.
     "renovate-config-self-test|node $REPO_ROOT/scripts/verify-renovate-config.mjs --self-test"
+    # NEW (Phase 54, PKG-11): the per-target Windows mozconfig. The expected lines come from the shared
+    # emitter in memory and the tracked comparand must equal them, with the maintenance service disabled.
+    # Honestly --quick: text reads and an in-memory emit only; no build, browser, display or network.
+    "windows-mozconfig|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs"
+    # windows-mozconfig-self-test plants an inverted service flag, a missing target line, a foreign MAR
+    # channel and an empty emission; each must go red naming the file and the value. It writes nothing.
+    "windows-mozconfig-self-test|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs --self-test"
+    # NEW (Phase 54, PKG-13): the Node pin set equals the per-target keys the packagers read (derived),
+    # each entry carries a version, a url embedding it and a 64-hex sha256. The sha256 value against
+    # SHASUMS256.txt is the Phase 43 detector's job, not this row's. Honestly --quick: JSON and text reads.
+    "node-runtime-targets|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs"
+    # node-runtime-targets-self-test plants a missing win32-x64 key, an extra key, a missing sha256, a
+    # url-version mismatch and an empty set; each must go red naming the key. It writes nothing.
+    "node-runtime-targets-self-test|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs --self-test"
+    # NEW (Phase 54, PKG-10 static half): the build-windows job of release.yml. Legion label set only,
+    # contents: read, no secret, environment or schedule, SHA-pinned uses, gates identical to build-linux,
+    # no fail-open step, repackage calls present, retention 1. Honestly --quick: YAML parse and text reads;
+    # the live cross-build on legion is the owner's at the 54-04 checkpoint, never a quick path.
+    "build-windows-shape|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs"
+    # build-windows-shape-self-test plants a moved runner, a secret, a write grant, a schedule, an unpinned
+    # uses, a missing package-windows.sh call or mach build, a reintroduced get_vs.py or WINSYSROOT, each removed
+    # required repackage argument, upload globs that match nothing, a broken or all-accepting Node-pin filter, a
+    # removed key gate, a drifted sha gate, a dropped pipefail, a raised retention and an image build missing
+    # --no-cache; each must go red naming job and cause.
+    "build-windows-shape-self-test|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs --self-test"
+    # NEW (Phase 54 review fix, PKG-13): the admission and purge gates for the hosted Windows sidecar artifact.
+    # Honestly --quick: mktemp fixtures only, no network. It plants an unlisted file, an absent listed file, a
+    # tampered manifest, a symlink, a '..' and an absolute manifest path, a nested SHA256SUMS, a wrong or unset
+    # out-of-band digest, an empty build root, each slash form of the hosted root, and an unreadable stage.
+    "win-sidecar-check-self-test|bash $REPO_ROOT/powerbrowser/packaging/check-win-sidecar.sh --self-test"
+    # NEW (Phase 54, UPD-30): the sidecar reap blocker. Quit and restart both await the bounded reap, so the
+    # updater rename never meets a live node.exe. Derived from the tree and the catalogue; honestly --quick
+    # (it parses the shell files and evaluates the reap methods against stubs; the live version flip is the
+    # matrix update cell).
+    "sidecar-reap-blocker|node $REPO_ROOT/scripts/verify-sidecar-reap-blocker.mjs"
+    # sidecar-reap-blocker-self-test plants a missing or comment-only registration, a pid poll, a stale handle, a
+    # rejecting wait, a grace mismatch, an ungated ctypes open and a wrong catalogue row; each must go red naming
+    # the rule and the value. It writes nothing.
+    "sidecar-reap-blocker-self-test|node $REPO_ROOT/scripts/verify-sidecar-reap-blocker.mjs --self-test"
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
@@ -5477,6 +5516,15 @@ run_own_checks() {
       # its workflows and their last runs; red until the owner creates the repository and its status
       # CNAME. An undeclared status slug is a FAIL, never a SKIP. Never called by a quick path.
       "upptime-sweep-live|node $REPO_ROOT/scripts/verify-upptime.mjs --live"
+
+      # NEW (Phase 54, MTX-01 and UPD-31): the pkg-win11 matrix record. Full tier: it reads the record the owner's
+      # guest run writes, so it is red until the 54-04 checkpoint runs the matrix. An absent record is FAIL naming
+      # that step, never a skip. Never called by a quick path.
+      "win-matrix-record|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs"
+      # win-matrix-record-self-test builds its fixture with the real writer (scripts/matrix/win-matrix-record.py) from
+      # synthetic guest output and plants each fault (all-FAIL, a missing observation, a namespace mismatch, a drifted
+      # guest script) over mkdtemp fixtures only; hermetic.
+      "win-matrix-record-self-test|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs --self-test"
     )
   fi
 
