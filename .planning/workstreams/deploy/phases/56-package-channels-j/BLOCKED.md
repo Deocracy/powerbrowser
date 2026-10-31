@@ -79,11 +79,17 @@ is not executed by this run and is listed at the end.
   outside the checkout), run item 3, and open the submission under the owner's identity. If the exception is refused,
   the named follow-up is a from-source manifest, which this phase does not build.
 
-## 9. DNS TXT verification value (PKG-20, DNS for powerbrowser.org, Phase 47)
+## 9. Flathub domain verification (PKG-20, DNS or web server for debios.org)
 
-- **Blocked:** the `_flathub.powerbrowser.org` TXT record does not exist. Flathub shows the value only in its verification step.
-- **Owner steps:** after the Flathub verification step shows the value, create the TXT record `_flathub.powerbrowser.org`
-  with that value in the DNS zone, write the value into `x-flathub-verification.token` in the manifest, and run
+- **Changed by the review fix IN-05:** Flathub verifies the domain of the app ID, which for `org.debios.PowerBrowser`
+  is `debios.org`, not the homepage host `powerbrowser.org` (docs.flathub.org "Verification", read 2026-10-31). The two
+  methods are a TXT record `_flathub.debios.org` or the file `https://debios.org/.well-known/org.flathub.VerifiedApps.txt`.
+  The token appears in the Flathub Developer Portal after the submission is accepted. The manifest's `x-flathub-verification`
+  key is a tracked note, not a flatpak-builder key.
+- **Blocked:** the record or file does not exist, and whether the foundation controls `debios.org` is not established
+  in this tree (owner-verify; if it does not, the app ID has to change before the submission).
+- **Owner steps:** after the Developer Portal shows the value, create the TXT record `_flathub.debios.org` with it (or serve
+  the well-known file), write the value into `x-flathub-verification.token` in the manifest, and run
   `node scripts/verify-flathub-manifest.mjs --release`.
 
 ## 10. Homebrew tap repository and the cask audit (DIST-11, Phase 41)

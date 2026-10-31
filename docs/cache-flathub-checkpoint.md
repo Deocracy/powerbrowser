@@ -25,8 +25,12 @@ below. The owner records each reply in that section, verbatim, with its date.
 
    The row refuses the placeholder verification token until the owner sets it.
 
-5. The TXT record name is `_flathub.powerbrowser.org`. The value is the token Flathub shows in
-   the verification step. It is written into `x-flathub-verification.token` only after that step.
+5. Flathub verifies the domain of the app ID, not the homepage host. For `org.debios.PowerBrowser` that is
+   `debios.org`, so the TXT record name is `_flathub.debios.org`; the alternative is to serve the token at
+   `https://debios.org/.well-known/org.flathub.VerifiedApps.txt`. The value is the token the Flathub Developer
+   Portal shows once the submission is accepted and you have collaborator access (docs.flathub.org, "Verification",
+   read on 2026-10-31). It is written into `x-flathub-verification.token` only after that step. The foundation
+   must control `debios.org` for the app ID to verify; confirm that before the submission (owner-verify).
 
 ## Owner steps (not executed in this tree)
 
@@ -96,8 +100,8 @@ Owner reply (record verbatim, with the date): ____
        node scripts/verify-flathub-manifest.mjs --render <scratch-dir>/org.debios.PowerBrowser.json
 
    Then open the submission pull request with the rendered manifest and the desktop and icon files.
-2. Set `x-flathub-verification.token` to the value Flathub shows after the DNS TXT record
-   `_flathub.powerbrowser.org` is in place, then run `node scripts/verify-flathub-manifest.mjs --release`.
+2. Set `x-flathub-verification.token` to the value the Flathub Developer Portal shows after the DNS TXT record
+   `_flathub.debios.org` (or the well-known file on `debios.org`) is in place, then run `node scripts/verify-flathub-manifest.mjs --release`.
 3. Change `x-source-exception.status` only after the written reply is recorded above. Until then
    the value stays `pending-owner-reply`.
 

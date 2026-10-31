@@ -118,8 +118,8 @@ stdenv.mkDerivation {
     # The tracked release desktop entry, with its checkout-root placeholders rewritten to the store paths.
     desktop=$out/share/applications/powerbrowser.desktop
     install -Dm644 ${../../powerbrowser/powerbrowser-release.desktop} "$desktop"
-    sed -i -e 's|^Exec=.*/bin/powerbrowser %u$|Exec=powerbrowser %u|' -e 's|^Icon=.*$|Icon=powerbrowser|' "$desktop"
-    grep -qx 'Exec=powerbrowser %u' "$desktop" && grep -qx 'Icon=powerbrowser' "$desktop" \
+    sed -i -e '/^#/d' -e 's|^Exec=.*/bin/powerbrowser %u$|Exec=powerbrowser %u|' -e 's|^Icon=.*$|Icon=powerbrowser|' "$desktop"
+    grep -qx 'Exec=powerbrowser %u' "$desktop" && grep -qx 'Icon=powerbrowser' "$desktop" && ! grep -q '@POWERBROWSER_REPO_ROOT@' "$desktop" \
       || { echo "powerbrowser: the desktop entry rewrite did not apply" >&2; exit 1; }
     for size in 16 32 48 64 128; do
       install -Dm644 ${../../powerbrowser/branding/release}/default$size.png \

@@ -19,8 +19,10 @@
 //                            the policies-update-split row compares the values;
 //  6. checker data           the archive source carries x-checker-data with a url-template naming the release
 //                            asset shape, so external-data-checker can open the per-release pull request;
-//  7. DNS TXT verification   x-flathub-verification names _flathub.<homepage host>, method dns-txt, and a
-//                            token that is the placeholder until the owner sets the TXT value (release refuses it);
+//  7. DNS TXT verification   x-flathub-verification names _flathub.<domain of the app id> (org.debios.PowerBrowser
+//                            gives debios.org; Flathub's verification page says the domain is the one in the app ID,
+//                            not the homepage host), method dns-txt, and a token that is the placeholder until the
+//                            owner copies the value from the Flathub Developer Portal (release refuses it);
 //  8. exception branch       x-source-exception is pending-owner-reply on the written-exception path, and the
 //                            manifest carries one module: the from-source path is named, never half-built;
 //  9. build executed         the manifest's build-commands are run on a fixture tarball packed with the layout the
@@ -95,7 +97,9 @@ const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
 // The desktop entry the Flatpak installs: the tracked one, with the launcher and the app-id icon.
 export function flatpakDesktop(trackedText, appId) {
+    // The tracked file opens with a checkout-root instruction ("replace @POWERBROWSER_REPO_ROOT@ ..."); it must not ship.
     return trackedText
+        .replace(/^#.*\n/gm, '')
         .replace(/^Exec=.*\/bin\/powerbrowser %u$/m, 'Exec=powerbrowser %u')
         .replace(/^Icon=.*$/m, `Icon=${appId}`);
 }
@@ -173,13 +177,13 @@ export function runChecks(root, overrides = {}) {
         }
         // 7. DNS TXT verification
         const verify = manifest['x-flathub-verification'];
-        const txtRecord = `_flathub.${facts.homeHost}`;
+        const txtRecord = `_flathub.${config.identity.distribution_id.split('.').reverse().join('.')}`;
         if (verify === undefined || verify === null) {
             fail(MANIFEST_REL, 'carries no x-flathub-verification, so the DNS TXT step has no derived record name', 'add x-flathub-verification with the derived record.');
         } else {
             if (verify.method !== 'dns-txt') fail(MANIFEST_REL, `verification method is ${JSON.stringify(verify.method ?? null)}, not dns-txt`, 'set method to dns-txt.');
             if (verify.record !== txtRecord) {
-                fail(MANIFEST_REL, `names the TXT record ${JSON.stringify(verify.record ?? null)} but the homepage host derives ${txtRecord}`, `set record to ${txtRecord}.`);
+                fail(MANIFEST_REL, `names the TXT record ${JSON.stringify(verify.record ?? null)} but the app id domain derives ${txtRecord}`, `set record to ${txtRecord}.`);
             }
             if (verify.token === VERIFY_PLACEHOLDER) {
                 if (release) fail(MANIFEST_REL, `still holds the placeholder ${VERIFY_PLACEHOLDER}, so the submission would name no TXT value`, 'the owner sets the TXT value at the Flathub verification step, then writes it here.');
@@ -396,8 +400,8 @@ function selfTest() {
             overrides: withManifest(d => { delete d.modules[0].sources[0]['x-checker-data']; }),
         },
         {
-            name: 'TXT record name not derived from the homepage host', expect: `_flathub.${facts.homeHost}`,
-            overrides: withManifest(d => { d['x-flathub-verification'].record = '_flathub.example.invalid'; }),
+            name: 'TXT record taken from the homepage host (the old derivation)', expect: '_flathub.debios.org',
+            overrides: withManifest(d => { d['x-flathub-verification'].record = `_flathub.${facts.homeHost}`; }),
         },
         {
             name: 'placeholder TXT token refused under --release', expect: VERIFY_PLACEHOLDER,
@@ -414,6 +418,10 @@ function selfTest() {
         {
             name: 'desktop entry Icon off the app id', expect: DESKTOP_REL,
             overrides: withText(DESKTOP_REL, t => t.replace(/^Icon=.*$/m, 'Icon=powerbrowser')),
+        },
+        {
+            name: 'checkout-root comment header left in the shipped desktop entry', expect: DESKTOP_REL,
+            overrides: withText(DESKTOP_REL, t => `# Before installing, replace @POWERBROWSER_REPO_ROOT@ with this checkout's absolute path.\n${t}`),
         },
         {
             name: 'download copy carries an internal identifier', expect: COPY_REL,
