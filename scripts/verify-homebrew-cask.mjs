@@ -26,8 +26,13 @@
 // Usage:
 //   node scripts/verify-homebrew-cask.mjs
 //   node scripts/verify-homebrew-cask.mjs --release     (refuses the fixture while A3 is open)
+//   node scripts/verify-homebrew-cask.mjs --release --rendered <file>
+//       also checks the rendered cask the tap leg is about to push, against ASSET_NAME and ASSET_SHA from the
+//       environment: no @TOKEN@ left over, the version, the url on the release host naming the asset, and the
+//       sha256 equal to the verified digest (CR-02)
 //   node scripts/verify-homebrew-cask.mjs --self-test
 
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,10 +52,20 @@ const ARM_ENABLEMENT = /\bon_arm\b|depends_on\s+arch:\s*:arm64|depends_on\s+arch
 const TOKENS = ['@RELEASE_VERSION@', '@RELEASE_KEY@', '@RELEASE_REPO@', '@MACOS_DMG_ASSET@', '@MACOS_DMG_SHA256@'];
 
 const args = process.argv.slice(2);
-for (const a of args) {
+const renderedAt = args.indexOf('--rendered');
+for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--rendered') {
+        if (args[i + 1] === undefined || args[i + 1].startsWith('--')) {
+            console.error(`${NAME}: FAIL -- --rendered needs the path of the rendered cask`);
+            process.exit(2);
+        }
+        i += 1;
+        continue;
+    }
     if (a !== '--self-test' && a !== '--release') {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
-        console.error(`  Next step: run: node ${SELF_REL}, or add --release or --self-test.`);
+        console.error(`  Next step: run: node ${SELF_REL}, or add --release, --rendered <file> or --self-test.`);
         process.exit(2);
     }
 }
@@ -139,6 +154,22 @@ export function runChecks(root, overrides = {}) {
     return { failures };
 }
 
+// The rendered cask the tap leg pushes: no token left over, and version, url and sha256 equal to the verified values.
+export function renderedFaults(text, facts, asset, sha) {
+    const out = [];
+    const left = /@[A-Z][A-Z0-9_]*@/.exec(text);
+    if (left) out.push(`the rendered cask still holds the token ${left[0]}. Next step: render it from the tracked template with every value supplied.`);
+    const version = /^\s*version "([^"]*)"/m.exec(text)?.[1];
+    if (version !== facts.version) out.push(`the rendered cask has version ${JSON.stringify(version ?? null)}, not ${facts.version}. Next step: render again for this release key.`);
+    const wantUrl = `https://github.com/${facts.repo}/releases/download/${facts.releaseKey}/${asset}`;
+    const url = /^\s*url "([^"]*)"/m.exec(text)?.[1];
+    if (url !== wantUrl) out.push(`the rendered cask has url ${JSON.stringify(url ?? null)}, not ${wantUrl}. Next step: pass the real asset name.`);
+    const got = /^\s*sha256 "([^"]*)"/m.exec(text)?.[1];
+    if (got !== sha) out.push(`the rendered cask has sha256 ${JSON.stringify(got ?? null)}, not the verified digest ${sha}. Next step: render with the digest the verify-assets job printed.`);
+    if (got === FIXTURE_HEX) out.push('the rendered cask carries the fixture digest. Next step: name the Phase 55 macOS asset first (assumption A3).');
+    return out;
+}
+
 function selfTest() {
     const base = diskReader(REPO_ROOT);
     const withText = (transform) => {
@@ -193,6 +224,17 @@ function selfTest() {
         },
     ];
 
+    // The rendered-cask faults (CR-02): a leftover token, the fixture asset name, a digest that is not the verified one.
+    const realAsset = `${facts.app}-${facts.version}.macos-arm64.dmg`;
+    const verified = 'a'.repeat(64);
+    const goodRender = renderTemplate(base(CASK_REL), { ...channelTokenValues(facts), '@MACOS_DMG_ASSET@': realAsset, '@MACOS_DMG_SHA256@': verified });
+    const renderedCases = [
+        ['rendered cask with a token left over', goodRender.replace(verified, '@MACOS_DMG_SHA256@'), 'still holds the token'],
+        ['rendered cask naming the fixture disk image', goodRender.replace(realAsset, channelTokenValues(facts)['@MACOS_DMG_ASSET@']), 'rendered cask has url'],
+        ['rendered cask with a digest other than the verified one', goodRender.replace(verified, 'b'.repeat(64)), 'not the verified digest'],
+        ['rendered cask with the fixture digest', goodRender.replace(verified, FIXTURE_HEX), 'fixture digest'],
+    ];
+
     let failed = 0;
     let reds = 0;
     let greens = 0;
@@ -228,6 +270,24 @@ function selfTest() {
             console.log(`  ${c.name}: red -- ${hit}`);
         }
     }
+    const controlRender = renderedFaults(goodRender, facts, realAsset, verified);
+    if (controlRender.length > 0) {
+        console.error(`${NAME}: --self-test FAIL -- the good rendered cask went red: ${controlRender.join(' | ')}`);
+        failed += 1;
+    } else {
+        greens += 1;
+        console.log('  control: a cask rendered with a real asset name and the verified digest: green');
+    }
+    for (const [name, text, expect] of renderedCases) {
+        const hit = renderedFaults(text, facts, realAsset, verified).find(f => f.includes(expect));
+        if (hit) {
+            reds += 1;
+            console.log(`  ${name}: red -- ${hit}`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${expect}`);
+            failed += 1;
+        }
+    }
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
@@ -239,6 +299,18 @@ function selfTest() {
 function main() {
     if (args.includes('--self-test')) return selfTest();
     const { failures } = runChecks(REPO_ROOT);
+    if (renderedAt >= 0) {
+        const { facts } = deriveChannel(REPO_ROOT, diskReader(REPO_ROOT));
+        const asset = process.env.ASSET_NAME ?? '';
+        const sha = process.env.ASSET_SHA ?? '';
+        let text = null;
+        try {
+            text = readFileSync(resolve(args[renderedAt + 1]), 'utf8');
+        } catch {
+            failures.push(`${args[renderedAt + 1]}: cannot be read. Next step: render the cask first.`);
+        }
+        if (text !== null && facts !== null) failures.push(...renderedFaults(text, facts, asset, sha).map(f => `${args[renderedAt + 1]}: ${f}`));
+    }
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s) with the cask.`);
         failures.forEach(f => console.error(`  ${f}`));

@@ -24,6 +24,12 @@
 // Modes (the workflow calls these; the row itself takes none):
 //   --facts                       print every token value the tree derives, as JSON
 //   --check-key <key>             the key matches the release-key grammar and equals the key the tree derives
+//   --check-inputs                validate the stage inputs, read from the environment (KEY, LIVE, TARBALL_SHA,
+//                                 DMG_ASSET, DMG_SHA, WINGET_ASSET, WINGET_SHA): names and digests, never a program
+//   --check-asset <kind> <file> <sums>   recompute the digest of a downloaded asset (kind tarball, dmg or installer),
+//                                 compare it with SHA256SUMS and with EXPECT_SHA, and print it; ASSET_NAME names the asset
+//   --render-live <tap|winget> <out>     render the tracked cask (out is a file) or winget set (out is a directory)
+//                                 with ASSET_NAME and ASSET_SHA from the environment; a left-over token fails
 //   --check-checker <key>         the Flatpak x-checker-data template resolves to the tarball URL for the key
 //   --render <dir> --key <key>    render the four payloads into <dir> (outside the repository); submits nothing
 //   --self-test                   plants each fault in memory; writes nothing in the tree
@@ -31,11 +37,13 @@
 // Honestly --quick: YAML parse (js-yaml from theia/), text reads and in-memory plants. No network, no gh, no
 // wingetcreate, no secret.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { RELEASE_KEY_RE, channelTokenValues, deriveChannel, diskReader, renderTemplate } from './lib/channel-identity.mjs';
+import { assetNameFault, checkAsset, digestFault, inputFaults, renderLive } from './lib/channel-render.mjs';
 import { loadYaml } from './lib/release-workflow.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,6 +78,7 @@ function modeFacts() {
         ...channelTokenValues(facts),
         '@RELEASE_URL@': facts.tarballUrl,
         '@RELEASE_URL_TEMPLATE@': facts.checkerUrlTemplate,
+        '@TARBALL_ASSET@': facts.tarballName,
     }, null, 2));
     return 0;
 }
@@ -85,6 +94,78 @@ function modeCheckKey(key) {
         return 1;
     }
     console.log(`${NAME}: PASS -- ${key} is the key the tree derives`);
+    return 0;
+}
+
+function modeCheckInputs() {
+    const { facts } = factsOf(REPO_ROOT, diskReader(REPO_ROOT));
+    if (facts === null) {
+        console.error(`${NAME}: FAIL -- the release identity does not derive. Next step: fix configuration.toml.`);
+        return 1;
+    }
+    const faults = inputFaults(process.env, facts);
+    if (faults.length > 0) {
+        console.error(`${NAME}: FAIL -- ${faults.length} stage input(s) rejected.`);
+        faults.forEach(f => console.error(`  ${f}. Next step: pass a plain asset name and a 64-character lowercase SHA-256 from the Release.`));
+        return 1;
+    }
+    console.log(`${NAME}: PASS -- the stage inputs are plain names and 64-character digests`);
+    return 0;
+}
+
+function modeCheckAsset(kind, file, sums) {
+    const { facts } = factsOf(REPO_ROOT, diskReader(REPO_ROOT));
+    if (facts === null) {
+        console.error(`${NAME}: FAIL -- the release identity does not derive. Next step: fix configuration.toml.`);
+        return 1;
+    }
+    let bytes;
+    let sumsText;
+    try {
+        bytes = readFileSync(file);
+        sumsText = readFileSync(sums, 'utf8');
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- cannot read the downloaded asset or SHA256SUMS (${e.code ?? e.message}). Next step: download the Release asset first.`);
+        return 1;
+    }
+    const { failures, hex } = checkAsset({ kind, name: process.env.ASSET_NAME, expect: process.env.EXPECT_SHA, bytes, sumsText, facts });
+    if (failures.length > 0) {
+        failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}. Next step: do not publish; compare the Release asset, its SHA256SUMS and the digest the train passed.`));
+        return 1;
+    }
+    console.log(hex);
+    return 0;
+}
+
+function modeRenderLive(leg, out) {
+    const read = diskReader(REPO_ROOT);
+    const { facts } = factsOf(REPO_ROOT, read);
+    if (facts === null || out === undefined) {
+        console.error(`${NAME}: FAIL -- the release identity does not derive, or --render-live has no output path. Next step: pass <tap|winget> <out>.`);
+        return 1;
+    }
+    const kind = leg === 'tap' ? 'dmg' : 'installer';
+    const asset = process.env.ASSET_NAME;
+    const sha = process.env.ASSET_SHA;
+    const faults = [assetNameFault(kind, asset, facts), digestFault('the verified digest', sha)].filter(Boolean);
+    if (faults.length > 0) {
+        faults.forEach(f => console.error(`${NAME}: FAIL -- ${f}. Next step: pass the asset name and the digest the verify-assets job printed.`));
+        return 1;
+    }
+    let files;
+    try {
+        files = renderLive(leg, facts, read, { asset, sha });
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- ${e.message}. Next step: restore the tracked template and its tokens.`);
+        return 1;
+    }
+    for (const [file, text] of Object.entries(files)) {
+        const target = leg === 'tap' ? resolve(out) : join(resolve(out), file);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, text, 'utf8');
+        console.log(`  wrote ${target}`);
+    }
+    console.log(`${NAME}: PASS -- rendered the ${leg} payload for ${facts.releaseKey} from the tracked template; no token is left over`);
     return 0;
 }
 
@@ -238,8 +319,10 @@ export function runChecks(root, overrides = {}) {
         for (const [needle, what] of [
             ['Casks/powerbrowser.rb', 'a cask path in the tap'],
             ['homebrew-powerbrowser', 'the tap repository checkout'],
-            ['--facts', 'the derived values the cask renders from'],
-            ['inputs.dmg_sha256', 'the published disk-image digest input'],
+            ['--render-live tap', 'the cask rendered from the tracked template by literal replacement'],
+            ['verify-homebrew-cask.mjs --release --rendered', 'the release check on the rendered cask'],
+            ['inputs.dmg_asset', 'the published disk-image asset name input'],
+            ['needs.verify-assets.outputs.dmg', 'the recomputed, attested disk-image digest'],
         ]) {
             if (!blob.includes(needle)) fail(`${WF_REL} job tap-commit`, `lacks ${what} (${needle})`, `add ${needle}.`);
         }
@@ -397,6 +480,57 @@ function selfTest() {
             console.log(`  ${c.name}: red -- ${hit}`);
         }
     }
+    // The input, asset and render functions the live legs call (CR-02, WR-01, WR-02): pure, so planted directly.
+    const f = deriveChannel(REPO_ROOT, base).facts;
+    const bytes = Buffer.from('release asset bytes\n');
+    const hex = createHash('sha256').update(bytes).digest('hex');
+    const dmgAsset = `${f.app}-${f.version}.macos-universal.dmg`;
+    const sums = `${hex}  ${f.tarballName}\n${'f'.repeat(64)}  ${dmgAsset}\n`;
+    const asset = over => checkAsset({ kind: 'tarball', name: f.tarballName, expect: hex, bytes, sumsText: sums, facts: f, ...over }).failures;
+    const inputs = env => inputFaults({ LIVE: 'true', TARBALL_SHA: hex, ...env }, f);
+    const injected = 'x|g;1e id>/tmp/pwn;s|a|b';
+    const pure = [
+        ['asset: recomputed digest equals SHA256SUMS and the caller digest', () => asset({}), null],
+        ['asset: caller digest differs from the recomputed one', () => asset({ expect: '0'.repeat(64) }), 'the caller supplied'],
+        ['asset: SHA256SUMS lists another digest for the name', () => asset({ sumsText: `${'0'.repeat(64)}  ${f.tarballName}\n` }), 'SHA256SUMS lists'],
+        ['asset: name absent from SHA256SUMS', () => asset({ sumsText: `${hex}  other.tar.xz\n` }), 'zero or several times'],
+        ['asset: the caller digest is injection text', () => asset({ expect: injected }), 'not 64 lowercase hex'],
+        ['asset: upper-case digest refused', () => asset({ expect: hex.toUpperCase() }), 'not 64 lowercase hex'],
+        ['asset: empty digest refused', () => asset({ expect: '' }), 'not 64 lowercase hex'],
+        ['asset: tarball name is not the derived one', () => asset({ name: dmgAsset, sumsText: sums }), 'by the derivation'],
+        ['asset: name with a path separator', () => asset({ kind: 'dmg', name: '../x.dmg' }), 'plain file name'],
+        ['asset: disk image kind with the fixture-shaped name passes the grammar', () => asset({ kind: 'dmg', name: dmgAsset, expect: 'f'.repeat(64), bytes: Buffer.from('x'), sumsText: sums }), 'hashes to'],
+        ['inputs: live with the tarball digest only', () => inputs({}), null],
+        ['inputs: live with no tarball digest', () => inputs({ TARBALL_SHA: '' }), 'tarball_sha256'],
+        ['inputs: tarball digest is injection text', () => inputs({ TARBALL_SHA: injected }), 'tarball_sha256'],
+        ['inputs: disk image digest without its asset name', () => inputs({ DMG_SHA: hex }), 'without dmg_asset'],
+        ['inputs: asset name is shell text', () => inputs({ DMG_ASSET: 'a;rm -rf /.dmg', DMG_SHA: hex }), 'plain file name'],
+        ['inputs: installer asset with the wrong extension', () => inputs({ WINGET_ASSET: `${f.app}-${f.version}.windows-x86_64.msi`, WINGET_SHA: hex }), 'winget_asset'],
+        ['inputs: a dry run may omit the digests', () => inputFaults({ LIVE: 'false' }, f), null],
+        ['render: the cask renders by literal replacement', () => { const out = renderLive('tap', f, base, { asset: dmgAsset, sha: hex })['Casks/powerbrowser.rb']; return out.includes(hex) && out.includes(dmgAsset) ? [] : ['missing']; }, null],
+        ['render: a value with sed and regex metacharacters is written literally', () => { const out = renderLive('tap', f, base, { asset: 'a&b\\1.dmg', sha: hex })['Casks/powerbrowser.rb']; return out.includes('a&b\\1.dmg') ? [] : ['not literal']; }, null],
+        ['render: a template that gains a token nothing supplies', () => { try { renderLive('tap', f, r => (r === TEMPLATE_CASK_REL ? `${base(r)}\n# @NOT_A_TOKEN@\n` : base(r)), { asset: dmgAsset, sha: hex }); return []; } catch (e) { return [e.message]; } }, 'still holds the token'],
+        ['render: the winget set loses its fixture header', () => { const out = renderLive('winget', f, base, { asset: `${f.app}-${f.version}.windows-x86_64.exe`, sha: hex }); return Object.values(out).some(t => /^#/m.test(t)) ? ['comment kept'] : []; }, null],
+    ];
+    for (const [name, run, expect] of pure) {
+        const out = run();
+        const text = out.join(' | ');
+        if (expect === null) {
+            if (out.length > 0) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' went red but must stay green: ${text}`);
+                failed += 1;
+            } else {
+                greens += 1;
+                console.log(`  ${name}: green`);
+            }
+        } else if (out.some(x => x.includes(expect))) {
+            reds += 1;
+            console.log(`  ${name}: red -- ${text.slice(0, 140)}`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${expect}: ${text || '(no failure)'}`);
+            failed += 1;
+        }
+    }
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
@@ -409,6 +543,9 @@ function main() {
     if (args.includes('--self-test')) return selfTest();
     if (args.includes('--facts')) return modeFacts();
     if (flag('--check-key') >= 0) return modeCheckKey(args[flag('--check-key') + 1]);
+    if (args.includes('--check-inputs')) return modeCheckInputs();
+    if (flag('--check-asset') >= 0) return modeCheckAsset(args[flag('--check-asset') + 1], args[flag('--check-asset') + 2], args[flag('--check-asset') + 3]);
+    if (flag('--render-live') >= 0) return modeRenderLive(args[flag('--render-live') + 1], args[flag('--render-live') + 2]);
     if (flag('--check-checker') >= 0) return modeCheckChecker(args[flag('--check-checker') + 1]);
     if (flag('--render') >= 0) {
         if (flag('--key') < 0) {

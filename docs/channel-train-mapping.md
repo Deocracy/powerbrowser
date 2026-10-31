@@ -15,9 +15,11 @@ The train calls the stage as a reusable workflow once a release is published:
           release_key: <v<ESR>-<revision> the train published>
           live: true
           dry_run: ${{ inputs.dry-run }}
-          tarball_sha256: <SHA-256 of the published Linux tarball, from the release>
-          dmg_sha256: <SHA-256 of the published macOS disk image; empty until Phase 55 (A3)>
+          tarball_sha256: <SHA-256 of the published Linux tarball, from the Release SHA256SUMS>
+          dmg_asset: <macOS disk image asset name; empty until Phase 55 (A3)>
+          dmg_sha256: <SHA-256 of that disk image; required with dmg_asset>
           winget_asset: <Windows installer asset name; empty until Phase 54 (A2)>
+          winget_sha256: <SHA-256 of that installer; required with winget_asset>
 
 The live legs run only when `live` is true and `dry_run` is false. The stage never reads `github.event_name`:
 inside a called workflow the `github` context is the caller's, so an event gate is wrong there (the
@@ -35,16 +37,20 @@ for the winget leg), and the environment holds the secret, which the leg reads b
 | `live` | every live job's `if` | True only for a published release. False (the default) runs the `dry-run` job alone. |
 | `dry_run` | every job's `if` | True forces the dry run even when `live` is true. |
 | `release_key` | derive, every live leg | The derive job checks it against the key the tree derives (`--check-key`); every leg derives its payload from it. |
-| `tarball_sha256` | flake-hash-pr | Cross-checks the hash the flake leg prefetches from the published asset; a difference fails the leg. |
-| `dmg_sha256` | tap-commit (and its gate) | The cask's sha256. An empty value skips the tap leg, so no cask names an unpublished disk image. |
-| `winget_asset` | winget-submit (and its gate) | The Windows installer URL under the release key. An empty value skips the winget leg (A2). |
+| `tarball_sha256` | derive, verify-assets, flake-hash-pr | Required when `live`. A cross-check only: verify-assets recomputes the digest from the downloaded asset, compares it with the Release's SHA256SUMS and with this value, and verifies the attestation. A difference fails the stage. |
+| `dmg_asset`, `dmg_sha256` | tap-commit (and its gate) | The disk image name (checked against the tree's naming grammar and SHA256SUMS) and its digest, cross-checked the same way. An empty `dmg_asset` skips the tap leg, so no cask names an unpublished disk image. |
+| `winget_asset`, `winget_sha256` | winget-submit (and its gate) | The Windows installer name and digest, handled the same way. An empty `winget_asset` skips the winget leg (A2). |
+
+Every digest is 64 lowercase hex characters (`^[0-9a-f]{64}$`), validated once in the derive job; a caller value
+is never placed in a sed or shell program, only in an environment variable. The attestation check is
+`gh attestation verify` pinned to `release.yml` on `refs/heads/main` on a GitHub-hosted runner, as Phase 50 does.
 
 ## The four legs
 
 | Leg | Output | Live effect |
 | --- | --- | --- |
 | flake-hash-pr | `nix/pkg/release-hash.json` | A pull request to main on `chore/channel-<key>`. Never a push to main (GH-05). |
-| tap-commit | `Casks/powerbrowser.rb` in the tap repository | A direct push to the tap's default branch with the bot App token. |
+| tap-commit | `Casks/powerbrowser.rb` in the tap repository | A direct push to the tap's default branch with the bot App token, only after `verify-homebrew-cask.mjs --release --rendered` passes on the rendered file. The plan mandates the direct push for the own tap; the release check, not a reviewer, is the gate. |
 | winget-submit | the winget set, written with `wingetcreate update --out`, then submitted | A winget pull request under the owner's fork, with WINGET_TOKEN from the release environment. |
 | checker-freshness | none | Checks that the Flatpak `x-checker-data` template resolves to the tarball URL. No network. |
 

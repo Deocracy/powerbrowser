@@ -3,7 +3,10 @@
 #
 #   flake-hash-pr      the bot opens a pull request to main carrying the flake hash of the published tarball.
 #                      It never pushes to main (GH-05): the branch is chore/channel-<key> and the change is reviewed.
-#   tap-commit         the bot App commits the rendered cask to the own tap repository, a direct push to the tap.
+#   tap-commit         the bot App commits the rendered cask to the own tap repository. This is a direct push to
+#                      the tap (plan 56-04 mandates it and the own tap has no reviewer), allowed only after the
+#                      digest is recomputed and attested and verify-homebrew-cask.mjs --release passes on the
+#                      rendered file.
 #   winget-submit      wingetcreate writes the winget set and submits it with WINGET_TOKEN from the release
 #                      environment, by name. It runs only when the train names the Windows asset (A2).
 #   checker-freshness  the Flatpak x-checker-data template resolves for the release key. Static, no network.
@@ -14,9 +17,16 @@
 # dispatch runs the dry-run job alone: it renders the four payloads into the runner's temp directory and lists
 # them. It writes nothing to any repository and submits nothing.
 #
-# Every live leg reads the release key from the derive job, which checks it against the key the tree derives
-# (scripts/verify-channel-release-jobs.mjs --check-key). Each leg's payload derives from the tree at run time
-# (--facts), never from a typed value. The row scripts/verify-channel-release-jobs.mjs checks this file.
+# Every digest a leg publishes is recomputed here from the downloaded Release asset (verify-assets), compared with
+# the Release's SHA256SUMS, and the asset and SHA256SUMS are verified against the build attestation pinned to
+# release.yml on main, as Phase 50 does. A digest the caller supplies is only cross-checked; a mismatch fails.
+# Asset names derive from the tree (scripts/verify-channel-release-jobs.mjs) and are checked against SHA256SUMS.
+#
+# Every live leg reads the release key from the derive job, which checks it against the key the tree derives and
+# validates every input once (--check-key, --check-inputs). Each leg's payload derives from the tree at run time
+# (--facts, --render-live), and no caller input is ever placed in a sed or shell program: values travel in
+# environment variables and the templates are rendered by literal replacement with a leftover-token check.
+# The row scripts/verify-channel-release-jobs.mjs checks this file.
 #
 # No schedule key (D-77): the Cloudflare Worker clock owns timing. No pull_request trigger. Credentials are
 # referenced by name only, and no job holds write scope on contents at the workflow level (write-trio).
@@ -41,17 +51,27 @@ on:
         type: boolean
         default: false
       tarball_sha256:
-        description: "The SHA-256 of the published Linux tarball, cross-checked by the flake-hash leg"
+        description: "The SHA-256 of the published Linux tarball; required when live, cross-checked against SHA256SUMS"
+        required: false
+        type: string
+        default: ""
+      dmg_asset:
+        description: "The macOS disk image asset name; empty until Phase 55 (A3), which skips the tap leg"
         required: false
         type: string
         default: ""
       dmg_sha256:
-        description: "The SHA-256 of the published macOS disk image; empty until Phase 55 (A3), which skips the tap leg"
+        description: "The SHA-256 of that disk image; required with dmg_asset, cross-checked against SHA256SUMS"
         required: false
         type: string
         default: ""
       winget_asset:
         description: "The Windows installer asset name; empty until Phase 54 (A2), which skips the winget leg"
+        required: false
+        type: string
+        default: ""
+      winget_sha256:
+        description: "The SHA-256 of that installer; required with winget_asset, cross-checked against SHA256SUMS"
         required: false
         type: string
         default: ""
@@ -76,7 +96,7 @@ concurrency:
 
 jobs:
   derive:
-    name: Derive and check the release key
+    name: Derive and check the release key and every input
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -89,13 +109,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check the key against the tree
+      - name: Check the key against the tree and validate every input once
         id: check
         env:
           KEY: ${{ inputs.release_key }}
+          LIVE: ${{ inputs.live }}
+          TARBALL_SHA: ${{ inputs.tarball_sha256 }}
+          DMG_ASSET: ${{ inputs.dmg_asset }}
+          DMG_SHA: ${{ inputs.dmg_sha256 }}
+          WINGET_ASSET: ${{ inputs.winget_asset }}
+          WINGET_SHA: ${{ inputs.winget_sha256 }}
         run: |
           set -eu
           node scripts/verify-channel-release-jobs.mjs --check-key "$KEY"
+          node scripts/verify-channel-release-jobs.mjs --check-inputs
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
 
   dry-run:
@@ -120,10 +147,65 @@ jobs:
           node scripts/verify-channel-release-jobs.mjs --render "$RUNNER_TEMP/payloads" --key "$KEY"
           find "$RUNNER_TEMP/payloads" -type f | sort
 
+  verify-assets:
+    name: Recompute every published digest and verify the build attestation
+    if: ${{ inputs.live && !inputs.dry_run }}
+    needs: [derive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      attestations: read
+    outputs:
+      tarball: ${{ steps.verify.outputs.tarball }}
+      dmg: ${{ steps.verify.outputs.dmg }}
+      winget: ${{ steps.verify.outputs.winget }}
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download each asset, verify its attestation, and recompute its SHA-256 against SHA256SUMS
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ needs.derive.outputs.key }}
+          TARBALL_SHA: ${{ inputs.tarball_sha256 }}
+          DMG_ASSET: ${{ inputs.dmg_asset }}
+          DMG_SHA: ${{ inputs.dmg_sha256 }}
+          WINGET_ASSET: ${{ inputs.winget_asset }}
+          WINGET_SHA: ${{ inputs.winget_sha256 }}
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/assets"
+          mkdir -p "$D"
+          SIGNER="$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          fetch() { gh release download "$KEY" --repo "$GITHUB_REPOSITORY" --pattern "$1" --dir "$D" --clobber >&2; }
+          attest() {
+            gh attestation verify "$D/$1" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" \
+              --source-ref refs/heads/main --deny-self-hosted-runners >&2
+          }
+          check() {
+            fetch "$2"
+            attest "$2"
+            ASSET_NAME="$2" EXPECT_SHA="$3" node scripts/verify-channel-release-jobs.mjs --check-asset "$1" "$D/$2" "$D/SHA256SUMS"
+          }
+          fetch SHA256SUMS
+          attest SHA256SUMS
+          TARBALL="$(node scripts/verify-channel-release-jobs.mjs --facts | jq -r '."@TARBALL_ASSET@"')"
+          echo "tarball=$(check tarball "$TARBALL" "$TARBALL_SHA")" >> "$GITHUB_OUTPUT"
+          if [ -n "$DMG_ASSET" ]; then
+            echo "dmg=$(check dmg "$DMG_ASSET" "$DMG_SHA")" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$WINGET_ASSET" ]; then
+            echo "winget=$(check installer "$WINGET_ASSET" "$WINGET_SHA")" >> "$GITHUB_OUTPUT"
+          fi
+
   flake-hash-pr:
     name: Flake hash bot pull request
     if: ${{ inputs.live && !inputs.dry_run }}
-    needs: [derive]
+    needs: [derive, verify-assets]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # The bot environment holds the App key. The installation token is minted below and passed to git and gh only.
@@ -149,20 +231,18 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
-      - name: Prefetch the published tarball and write the hash record
+      - name: Prefetch the published tarball, compare it with the verified digest and write the hash record
         env:
           KEY: ${{ needs.derive.outputs.key }}
-          TARBALL_SHA: ${{ inputs.tarball_sha256 }}
+          VERIFIED_SHA: ${{ needs.verify-assets.outputs.tarball }}
         run: |
-          set -eu
+          set -euo pipefail
           node scripts/verify-channel-release-jobs.mjs --facts > "$RUNNER_TEMP/facts.json"
           URL="$(jq -r '."@RELEASE_URL@"' "$RUNNER_TEMP/facts.json")"
           PREFETCH="$(nix store prefetch-file --hash-type sha256 --json "$URL")"
           SRI="$(jq -r '.hash' <<<"$PREFETCH")"
-          if [ -n "$TARBALL_SHA" ]; then
-            WANT="$(nix hash convert --hash-algo sha256 --to sri "$TARBALL_SHA")"
-            [ "$WANT" = "$SRI" ] || { echo "flake-hash-pr: FAIL -- the published tarball hashes to $SRI but the train named $WANT" >&2; exit 1; }
-          fi
+          WANT="$(nix hash convert --hash-algo sha256 --to sri "$VERIFIED_SHA")"
+          [ "$WANT" = "$SRI" ] || { echo "flake-hash-pr: FAIL -- the published tarball hashes to $SRI but the attested SHA256SUMS digest is $WANT" >&2; exit 1; }
           jq -n --arg k "$KEY" --arg h "$SRI" '{releaseKey: $k, sha256: $h}' > nix/pkg/release-hash.json
           node scripts/verify-flake-repack.mjs --release
 
@@ -171,7 +251,7 @@ jobs:
           KEY: ${{ needs.derive.outputs.key }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          set -eu
+          set -euo pipefail
           BRANCH="chore/channel-$KEY"
           git config user.name "release-train"
           git config user.email "release-train@users.noreply.github.com"
@@ -185,8 +265,8 @@ jobs:
 
   tap-commit:
     name: Homebrew tap commit (bot App, direct to the tap)
-    if: ${{ inputs.live && !inputs.dry_run && inputs.dmg_sha256 != '' }}
-    needs: [derive]
+    if: ${{ inputs.live && !inputs.dry_run && inputs.dmg_asset != '' }}
+    needs: [derive, verify-assets]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: bot
@@ -215,25 +295,30 @@ jobs:
           path: tap
           persist-credentials: false
 
-      - name: Render the cask from the tree's derived values and the published disk image
+      - name: Render the cask from the tree's derived values and the verified disk image digest
         env:
           KEY: ${{ needs.derive.outputs.key }}
-          DMG_SHA: ${{ inputs.dmg_sha256 }}
+          ASSET_NAME: ${{ inputs.dmg_asset }}
+          ASSET_SHA: ${{ needs.verify-assets.outputs.dmg }}
         run: |
-          set -eu
-          node scripts/verify-channel-release-jobs.mjs --facts > "$RUNNER_TEMP/facts.json"
-          jq --arg s "$DMG_SHA" '."@MACOS_DMG_SHA256@" = $s' "$RUNNER_TEMP/facts.json" \
-            | jq -r 'to_entries[] | "s|\(.key)|\(.value)|g"' > "$RUNNER_TEMP/render.sed"
+          set -euo pipefail
           mkdir -p tap/Casks
-          sed -f "$RUNNER_TEMP/render.sed" homebrew-tap/Casks/powerbrowser.rb > tap/Casks/powerbrowser.rb
-          grep -q "$KEY" tap/Casks/powerbrowser.rb || { echo "tap-commit: FAIL -- the rendered cask does not name $KEY" >&2; exit 1; }
+          node scripts/verify-channel-release-jobs.mjs --render-live tap tap/Casks/powerbrowser.rb
+
+      - name: Refuse a cask that fails the release check (fixture asset, leftover token, digest or name drift)
+        env:
+          ASSET_NAME: ${{ inputs.dmg_asset }}
+          ASSET_SHA: ${{ needs.verify-assets.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-homebrew-cask.mjs --release --rendered tap/Casks/powerbrowser.rb
 
       - name: Commit and push the cask to the tap default branch
         env:
           KEY: ${{ needs.derive.outputs.key }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          set -eu
+          set -euo pipefail
           cd tap
           git config user.name "release-train"
           git config user.email "release-train@users.noreply.github.com"
