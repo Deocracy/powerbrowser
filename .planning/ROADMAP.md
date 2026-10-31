@@ -328,6 +328,7 @@ Plans:
 - [x] 31-03-PLAN.md (wave 3) — Add site-data clearing with the token-cookie exemption and the tracking shield with per-site exception, both in the site panel.
 - [x] 31-04-PLAN.md (wave 4) — Build the Firefox-ordered hamburger with stock-page entries and Quit, closing the phase.
 - [x] 31-05-PLAN.md (wave 5) — Give the menu Quit row its route to chrome and reserve Ctrl+Q chrome-side, closing the phase.
+
 **UI hint**: yes
 
 ### Phase 31.1: Extension Tab Host (INSERTED)
@@ -369,11 +370,11 @@ Plans:
   4. A downloads button and panel list each download, which the user can open, show in its folder, cancel or retry; no page-started download is saved without appearing there
   5. Reader view opens on article pages, Ctrl+U shows the page source, F12 opens the page's developer tools, and a crashed tab shows a reload button instead of a blank page
 
-**Plans**: 9 plans (strictly sequential waves; DSH codes, Claude checks)
+**Plans**: 2/9 plans executed (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
-- [ ] 32-01-PLAN.md (wave 1) — Lead the phase with the three research probes plus the chrome half of the element-method tracers: find (PAGE-01), zoom (PAGE-02), mute/audio (PAGE-05).
-- [ ] 32-04-PLAN.md (wave 2) — Ship the Downloads view-push panel (PAGE-06) on the 32-01 foundation.
+- [x] 32-01-PLAN.md (wave 1) — Lead the phase with the three research probes plus the chrome half of the element-method tracers: find (PAGE-01), zoom (PAGE-02), mute/audio (PAGE-05).
+- [x] 32-04-PLAN.md (wave 2) — Ship the Downloads view-push panel (PAGE-06) on the 32-01 foundation.
 - [ ] 32-09-PLAN.md (wave 3) — Give the extension tab host the mute and zoom members Phase 31.1 left to this phase, so extensions see and drive the same mute and zoom state the chrome bar does (PAGE-05, PAGE-02)
 - [ ] 32-02-PLAN.md (wave 4) — Wire the 32-01 chrome kinds to the Theia UI: widget methods + push subscriptions (find/zoom/mute), the find bar, the zoom chip, audio marks, contracted copy, commands, keybindings,
 - [ ] 32-03-PLAN.md (wave 5) — Ship system-dialog print (PAGE-03) on the 32-01 foundation.
@@ -381,6 +382,7 @@ Plans:
 - [ ] 32-06-PLAN.md (wave 7) — Ship probe-gated edit commands (PAGE-09) on the 32-01 foundation.
 - [ ] 32-07-PLAN.md (wave 8) — Ship the chrome half of the same-tab and stock-window page tools on the 32-01 foundation: reader / view source / devtools arms (PAGE-10), crash signal (PAGE-11), the shared-process
 - [ ] 32-08-PLAN.md (wave 9) — Ship the Theia half of the same-tab and stock-window page tools on the 32-07 chrome foundation: favicon rendering (PAGE-04), reader toggle / view source / devtools wiring (PAGE-10)
+
 **UI hint**: yes
 
 ### Phase 33: Bookmarks, History and the Full Menu
@@ -405,6 +407,7 @@ Plans:
 - [ ] 33-03-PLAN.md (wave 3) — Bookmarks toolbar + reopen closed tab + History submenu (BMK-03, BMK-04, BMK-06): the collapsible toolbar row with live observer refresh, Ctrl+Shift+T history-carrying reopen, and 
 - [ ] 33-04-PLAN.md (wave 4) — Clear Recent History picker (BMK-05): the five-range picker panel, its confirm-only clearHistory call, and Ctrl+Shift+Del on both focus paths.
 - [ ] 33-05-PLAN.md (wave 5) — Full hamburger menu + Actions coverage (MENU-03, SMODE-07): the Firefox-ordered MENU-03 entries with four submenus, the shared-id discipline with Actions rows, and the Command-cent
+
 **UI hint**: yes
 
 ### Phase 34: Tab Strip
@@ -428,6 +431,7 @@ Plans:
 - [ ] 34-03-PLAN.md (wave 3) — Pin with restart persistence (TAB-05) plus multiselect with bulk delegation (TAB-06) — D-01, D-02, D-08, D-09, D-13, D-14, D-15, D-16.
 - [ ] 34-04-PLAN.md (wave 4) — Hover preview card (TAB-07) plus background-title attention mark (TAB-09) — D-01, D-02, D-10, D-11, D-12, D-15, D-16.
 - [ ] 34-05-PLAN.md (wave 5) — Phase-close live run: full twelve-scenario suite (all TAB plus BMK-07 plus modes/D-02), registry order proof, VALIDATION green-marking — D-01..D-16 (all prior decisions proven toge
+
 **UI hint**: yes
 
 ### Phase 35: Shell Furniture and Page Context Menu
@@ -454,6 +458,7 @@ Plans:
 - [ ] 35-05-PLAN.md (wave 5) — Complete the page menu with the two pieces the 28 sign-off and the ROADMAP research line bind to
 - [ ] 35-06-PLAN.md (wave 6) — Host the stock form furniture (PROMPT-06): the `PopupAutoComplete` panel FormHistory and
 - [ ] 35-07-PLAN.md (wave 7) — Ship PAGE-07 with both halves and the stock warning (D-05, B5).
+
 **UI hint**: yes
 
 ### Phase 36: New-Window Links as Web Tabs
@@ -499,6 +504,7 @@ Plans:
 - [ ] 37-02-PLAN.md (wave 2) — Remember, the WebRTC device template and the sharing indicator, on top of the 37-01
 - [ ] 37-03-PLAN.md (wave 3) — Dialogs, with the Chris gate.
 - [ ] 37-04-PLAN.md (wave 4) — Password save and update, and the three per-tab notification bars.
+
 **UI hint**: yes
 
 ### Phase 38: WebExtensions
@@ -524,6 +530,7 @@ Plans:
 - [ ] 38-03-PLAN.md (wave 3) — Prove EXT-08 on the stack that already exists: content scripts + messaging on the
 - [ ] 38-04-PLAN.md (wave 4) — Implement Chris's B5 ruling (2026-10-22, verbatim in 38-CONTEXT.md): sidebar
 - [ ] 38-05-PLAN.md (wave 5) — Close the phase's AMO + fixtures surface: AMO install over the stock prompt path
+
 **UI hint**: yes
 
 ## Progress
@@ -537,7 +544,7 @@ Plans:
 | 29. Address Bar Search and Fixup | 10/10 | In Progress|  |
 | 30. Address-Bar Modes and Command Centre | 6/6 | In Progress|  |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
-| 32. Page Tools | 0/TBD | Not started | - |
+| 32. Page Tools | 2/9 | In Progress | - |
 | 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
 | 34. Tab Strip | 0/TBD | Not started | - |
 | 35. Shell Furniture and Page Context Menu | 0/TBD | Not started | - |

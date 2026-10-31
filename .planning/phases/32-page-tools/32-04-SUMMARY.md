@@ -234,3 +234,9 @@ The planted `silent-download` fault from the plan was removed (see Deviations, i
 ---
 *Phase: 32-page-tools*
 *Completed: 2026-10-31*
+
+## Deferred to the end-of-milestone verification pass
+
+Per the owner's 2026-10-31 rule (all verification at the end of v1.5), the two unproven items are checks, not build work, and are queued for the final pass:
+- Open and Show in folder driven live (they launch OS applications).
+- Downloads panel on screen: button, badge, rows, keyboard, Esc.
