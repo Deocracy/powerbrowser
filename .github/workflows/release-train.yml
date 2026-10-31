@@ -713,6 +713,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # Read only: the previous-state artifact download crosses runs, which a private repository authorises through this scope.
+      actions: read
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -858,3 +860,5 @@ jobs:
           path: ${{ runner.temp }}/maint-next/state.json
           retention-days: 90
           if-no-files-found: error
+          # A re-run attempt of the same run would otherwise answer 409 on the first attempt's artifact.
+          overwrite: true
