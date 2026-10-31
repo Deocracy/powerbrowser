@@ -87,6 +87,15 @@ if find "$RES" \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print
     fail "a non-darwin native is staged under $RES: $(find "$RES" \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit)"
 fi
 
+# esbuild's node-file: module keys name the build checkout. The runtime reads them back by exact
+# string (the modules are not loaded from those paths), so the whole key is rewritten, as
+# package-linux.sh does for the same two bundles. Comments that name the checkout are inert.
+for f in "$RES/theia/lib/backend/main.js" "$RES/theia/lib/backend/parcel-watcher.js"; do
+    test -f "$f" || fail "$f is absent from the staged sidecar"
+done
+perl -pi -e 's{//\s*node-file:\S+}{// node-file:<buildhost>}; s{"node-file:[^"]+"}{"node-file:<buildhost>"}g' \
+    "$RES/theia/lib/backend/main.js" "$RES/theia/lib/backend/parcel-watcher.js"
+
 # A checkout path must not ship: the staged sidecar and node, and any RUNPATH or bundle map key that
 # names the build checkout, fail the run naming the file. RUNPATH rewriting for Mach-O needs the exact
 # rpath string from the binary, so it is not guessed here; a hit fails rather than being rewritten.
