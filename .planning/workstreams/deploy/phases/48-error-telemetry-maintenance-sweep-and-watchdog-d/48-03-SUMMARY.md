@@ -147,6 +147,17 @@ The state artifact lookup took the newest artifact of that name from any run, so
 
 Verified: `release-train.mjs --self-test` PASS (29 maintenance cases), `verify-workflows` PASS, zizmor PASS, brand scan PASS, `--quick` exit 0.
 
+## Security hardening, third pass (coordinator, commit after ffa20012)
+
+The branch name alone did not prove a run was real: a tag named like the default branch could match. The previous-state run is now accepted only when all of these hold:
+
+- **Path.** The run's path is exactly `.github/workflows/release-train.yml`.
+- **Event.** The run's event is one the train uses: `workflow_dispatch` or `schedule`.
+- **Head sha on the default branch.** The workflow calls `repos/$GITHUB_REPOSITORY/compare/<head_sha>...<default>` for each candidate sha and keeps only `identical` or `ahead`. The list goes to the pure selector as `verified-shas.txt`. Any error leaves the sha out, so the run is ignored.
+- **Artifact.** The artifact's `workflow_run.head_sha` must equal its run's head sha, as well as the existing branch, repository id, expiry and name checks.
+
+The selector is `selectStateRun` with a new `onDefaultShas` input; `--state-select` takes the verified-sha file as its sixth argument. The self-test control picks run 11 over a run on an off-branch sha, a feature branch, a foreign repository, and another workflow's run. The plant takes every run's sha as verified and goes red naming `not on the default branch`. Verified: `release-train.mjs --self-test` PASS (30 maintenance cases), `verify-workflows` PASS, zizmor PASS, brand scan PASS, `--quick` exit 0.
+
 ## Decisions Made
 
 See key-decisions in the frontmatter. The owner checks at 48-05 are the watchdog-before-pin ordering, the `vars.OWNER_LOGIN` value, and the App permissions for the probe (administration read and actions read on `powerbrowser-updates`).
