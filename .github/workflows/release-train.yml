@@ -31,6 +31,7 @@
 
 name: Release train
 
+# shortcut: the dispatch takes reason and dry-run only, since the tag and release inputs were validated and then ignored, so an owner-forced bump is not possible from dispatch, upgrade when an owner-forced bump or a release-key lookup is approved and wired into detect.
 on:
   workflow_dispatch:
     inputs:
@@ -43,14 +44,6 @@ on:
         required: false
         type: boolean
         default: false
-      release:
-        description: "Release key v<ESR>-<revision> to act on (optional)"
-        required: false
-        type: string
-      tag:
-        description: "ESR release tag to bump to (optional; never a _BUILDn tag)"
-        required: false
-        type: string
   # workflow_run: ['Verify static layers'] is HELD OUT. zizmor's dangerous-triggers
   # audit flags it, and the repo rule forbids suppressing that finding. The owner
   # decides whether to re-add it; see the phase BLOCKED.md. The guards below stay
@@ -88,28 +81,15 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           REASON: ${{ inputs.reason }}
-          TAG: ${{ inputs.tag }}
-          RELEASE: ${{ inputs.release }}
         run: |
           set -eu
           # A workflow_run wake carries no dispatched reason; it is a self wake.
           if [ "$EVENT" = "workflow_run" ]; then REASON=self; fi
+          # A case pattern matches the whole value, not a line of it.
           case "$REASON" in
             tick|owner|self) ;;
             *) echo "release-train: FAIL -- reason must be tick, owner or self, got '$REASON'. Next step: dispatch with one of those." >&2; exit 1 ;;
           esac
-          if [ -n "$TAG" ]; then
-            case "$TAG" in
-              *_BUILD*) echo "release-train: FAIL -- tag '$TAG' is a _BUILDn candidate, which is never a release. Next step: dispatch an *esr_RELEASE tag." >&2; exit 1 ;;
-            esac
-            printf '%s\n' "$TAG" | grep -Eq '^[A-Za-z]+_[0-9]+_[0-9]+(_[0-9]+)?esr_RELEASE$' \
-              || { echo "release-train: FAIL -- tag '$TAG' is not an *esr_RELEASE tag. Next step: dispatch an *esr_RELEASE tag." >&2; exit 1; }
-          fi
-          if [ -n "$RELEASE" ]; then
-            printf '%s\n' "$RELEASE" | grep -Eq '^v[0-9]+\.[0-9]+(\.[0-9]+)?-[0-9]+$' \
-              || { echo "release-train: FAIL -- release '$RELEASE' is not a release key v<ESR>-<revision>. Next step: dispatch the key as shown on the tracking issue." >&2; exit 1; }
-            echo "release-train: NOTE -- the release key is shape-checked only; the greater-than-latest Release check lands with live Releases in Phase 50." >&2
-          fi
           echo "reason=$REASON" >> "$GITHUB_OUTPUT"
 
       - name: Prove the train logic on fixtures before acting
@@ -316,8 +296,11 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -eu
-          printf '%s\n' "$NODE_VERSION" | grep -Eq '^v24\.[0-9]+\.[0-9]+$' || { echo "release-train: FAIL -- Node line '$NODE_VERSION' is not on major 24. Next step: a major move is a separate decision." >&2; exit 1; }
-          printf '%s\n' "$NODE_SHA" | grep -Eq '^[0-9a-f]{64}$' || { echo "release-train: FAIL -- the Node sha256 is not a 64-hex digest. Next step: do not bump." >&2; exit 1; }
+          # Whole-value anchored matches: a value with an embedded newline cannot pass a line match.
+          NODE_RE='^v24\.[0-9]+\.[0-9]+$'
+          SHA_RE='^[0-9a-f]{64}$'
+          [[ $NODE_VERSION =~ $NODE_RE ]] || { echo "release-train: FAIL -- Node line '$NODE_VERSION' is not on major 24. Next step: a major move is a separate decision." >&2; exit 1; }
+          [[ $NODE_SHA =~ $SHA_RE ]] || { echo "release-train: FAIL -- the Node sha256 is not a 64-hex digest. Next step: do not bump." >&2; exit 1; }
           git config user.name "release-train"
           git config user.email "release-train@users.noreply.github.com"
           git switch -C chore/node-v24.x "$BASE"
@@ -347,7 +330,8 @@ jobs:
           TAG: ${{ needs.detect.outputs.candidate }}
         run: |
           set -eu
-          printf '%s\n' "$TAG" | grep -Eq '^[A-Za-z]+_[0-9]+_[0-9]+(_[0-9]+)?esr_RELEASE$' || { echo "release-train: FAIL -- candidate '$TAG' is not an *esr_RELEASE tag. Next step: do not bump." >&2; exit 1; }
+          TAG_RE='^[A-Za-z]+_[0-9]+_[0-9]+(_[0-9]+)?esr_RELEASE$'
+          [[ $TAG =~ $TAG_RE ]] || { echo "release-train: FAIL -- candidate '$TAG' is not an *esr_RELEASE tag. Next step: do not bump." >&2; exit 1; }
           git config user.name "release-train"
           git config user.email "release-train@users.noreply.github.com"
           git switch -C "chore/esr-${TAG}" "$BASE"
