@@ -92,8 +92,10 @@
 //                 default or plan (bypassPermissions and acceptEdits included),
 //                 --settings, --mcp-config, --add-dir, and any flag outside the allowlist.
 //  fixer-prompt   The fix job's if: is parsed: no top-level ||, and the head_repository
-//                 guard, the claude-fix/ head exclusion and the bot-actor exclusion are
-//                 each a top-level && term. Its --disallowedTools denies WebFetch and
+//                 guard, the claude-fix/ head exclusion, the bot-actor exclusion and the
+//                 dependabot[bot] actor exclusion (a red Dependabot pull request never starts the
+//                 model once the workflow_run trigger is re-added) are each a top-level && term.
+//                 Its --disallowedTools denies WebFetch and
 //                 WebSearch, and its allowed_bots is exactly renovate[bot],powerbrowser-bot[bot].
 //  dependabot     .github/dependabot.yml (Phase 51, AUTO-03): the ecosystems are exactly github-actions and
 //                 npm; no registries and no insecure-external-code-execution; no auto-merge key anywhere;
@@ -154,6 +156,7 @@ const FIX_GUARDS = [
     ['head_repository', 'github.event.workflow_run.head_repository.full_name == github.repository'],
     ['claude-fix/', "!startsWith(github.event.workflow_run.head_branch, 'claude-fix/')"],
     ['powerbrowser-bot[bot]', "github.actor != 'powerbrowser-bot[bot]'"],
+    ['dependabot[bot]', "github.actor != 'dependabot[bot]'"],
 ];
 // claude_args flags the fixer may pass; everything else is refused, with a reason for the known-dangerous ones.
 const FIXER_FLAGS = new Set(['--max-turns', '--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--permission-mode']);
@@ -529,7 +532,7 @@ function runChecks(root, overrides = {}) {
                 const cond = ifTerms(job);
                 if (cond.or) fail(rel, jobId, 'fixer-prompt', `if: has a top-level ||, so the fixer can start with a guard false (for example always() || (...)). Next step: join the guards with && only.`);
                 for (const [kw, lit] of FIX_GUARDS) {
-                    if (!cond.terms.includes(lit)) fail(rel, jobId, 'fixer-prompt', `if: lacks the ${kw} guard (${lit}) as a top-level && term, so a fork, a fixer head or the bot actor could start the fixer. Next step: add it to the job's if: joined with &&.`);
+                    if (!cond.terms.includes(lit)) fail(rel, jobId, 'fixer-prompt', `if: lacks the ${kw} guard (${lit}) as a top-level && term, so a fork, a fixer head, the bot actor or Dependabot could start the fixer. Next step: add it to the job's if: joined with &&.`);
                 }
             }
 
@@ -813,7 +816,7 @@ function selfTest() {
     const FIXER = FIX_PIN.split('@')[1];
     const FIX_APP = 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510';
     const CLAUDE_ARGS = '--max-turns 40 --allowedTools "Bash(git -C work diff:*),Bash(scripts/regenerate-patches.sh:*),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read" --disallowedTools "WebFetch,WebSearch,Edit(work/**/patches/**),Write(work/**/patches/**)"';
-    const FIX_IF = "github.event.workflow_run.head_repository.full_name == github.repository && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]'";
+    const FIX_IF = "github.event.workflow_run.head_repository.full_name == github.repository && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]' && github.actor != 'dependabot[bot]'";
     const GOOD_TRAIN = [
         'name: Release train',
         'on:',
@@ -967,6 +970,7 @@ function selfTest() {
         ['WebFetch not denied', fixerEdit('"WebFetch,WebSearch,', '"WebSearch,'), rel(T), 'fix', 'fixer-prompt', 'WebFetch'],
         ['if: without the claude-fix/ head exclusion', fixerEdit(" && !startsWith(github.event.workflow_run.head_branch, 'claude-fix/')", ''), rel(T), 'fix', 'fixer-prompt', 'claude-fix/'],
         ['if: without the bot-actor exclusion', fixerEdit(" && github.actor != 'powerbrowser-bot[bot]'", ''), rel(T), 'fix', 'fixer-prompt', 'powerbrowser-bot[bot]'],
+        ['if: without the dependabot actor exclusion', fixerEdit(" && github.actor != 'dependabot[bot]'", ''), rel(T), 'fix', 'fixer-prompt', 'dependabot[bot]'],
         ['allowed_bots star', fixerEdit("allowed_bots: 'renovate[bot],powerbrowser-bot[bot]'", "allowed_bots: '*'"), rel(T), 'fix', 'fixer-prompt', 'allowed_bots'],
         ['event text in the fixer prompt', fixerEdit('prompt: ${{ inputs.trusted-prompt }}', 'prompt: ${{ github.event.pull_request.body }}'), rel(T), 'fix', 'event-text', 'with.prompt'],
         ['legion runner on fix', fixerEdit('    runs-on: ubuntu-latest\n    environment: fixer', '    runs-on: [self-hosted, legion]\n    environment: fixer'), rel(T), 'fix', 'legion', 'build-* or matrix-*'],
