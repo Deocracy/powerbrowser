@@ -106,3 +106,15 @@ conclusion is the one place a red replay shows.
   non-success result is red.
 
 **Who decides:** the owner, with item 1. Executor default: A, unchanged by the review fix.
+
+## 6. 153.x security trains after the 175 flip (owner decision, before 2027-06-29)
+
+Blocked piece: detection of 153.x point releases once the pin moves to 175.
+
+Why: the 58 review fix (WR-03) turns the uptake lane off when the uptake major is not newer than the pin. After the pin flips to 175 the detector follows the 175 line only, so 153.x point releases (which Mozilla keeps shipping while 153 is supported) are no longer detected for any build that still needs them. ROADMAP Phase 58 criterion 2 says 153.x security trains continue while the 175 train runs.
+
+Options:
+- A. Flip the pin only after the last 153.x point release the project will ship; 153.x detection ends with it. Simple; no parallel lines.
+- B. Keep a second, 153-only lane after the flip until 153 end of life (a new detector lane and train key; follow-up plan).
+
+Who decides: the owner, before the flip. Executor default: none (the flip is an owner action in 58-03).
