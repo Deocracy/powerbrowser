@@ -143,7 +143,7 @@ is a policy choice (red pages a run, green hides a stale approval), so it goes t
   cancellation (item 8) would reject the pending approval earlier, but no executor runs it yet, so it is
   not part of this decision. Nothing is changed.
 - (b) Exit 0 with a note: add a first step that writes `proceed=false` and the step summary (both tags
-  named), and gate each of the 20 later `sign-publish` steps (21 steps in the job today) on `steps.<id>.outputs.proceed`,
+  named), and gate every later `sign-publish` step (21 steps in the job today, so 21 after the new first step) on `steps.<id>.outputs.proceed`,
   including the `if: always()` scratch-database step. `verify-release-asset-set` (`newer_guard_final`
   directly before the mint) and the `workflows` row must stay green under the new `if:` lines. Plan
   wording says "strictly greater"; the existing guards refuse equal keys too, which is the correct
