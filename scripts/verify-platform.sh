@@ -4824,6 +4824,18 @@ run_own_checks() {
     # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
     # the file, the rule and the fault.
     "release-shape-self-test|node $REPO_ROOT/scripts/verify-release-shape.mjs --self-test"
+    # NEW (Phase 50, TRAIN-10): the release SHA gate. The bash step text that release.yml carries
+    # in build-linux and sign-publish is read with js-yaml and executed, unchanged, against scratch
+    # git repositories with a local bare origin: the tip of main and a configuration.toml ancestor
+    # with main's workflows are green; the two job texts must be identical. Honestly --quick: local
+    # git in mkdtemp; no network, build, browser or display.
+    "release-sha-gate|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs"
+    # NEW (Phase 50, TRAIN-10): the plants for the same gate, each run against the shipped text and
+    # required to go red naming the drift: a side commit not on main (its SHA), an ancestor that does
+    # not change configuration.toml, an ancestor whose .github/workflows/ diverges from the tip, and a
+    # checked-out HEAD that is not the requested SHA. Each refusal names its next step. Honestly
+    # --quick, as the row above.
+    "release-sha-gate-self-test|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs --self-test"
     # NEW (Phase 49, SEC-07): the sign-publish channel gate. mar_channel_gate refuses a MAR whose
     # product-info channel is not ACCEPTED_MAR_CHANNEL_IDS, cross-checks the `--channel` value against
     # MOZ_UPDATE_CHANNEL, and never compares the MAR id with the update channel; signmar -s runs

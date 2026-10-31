@@ -95,13 +95,13 @@ jobs:
           TIP="$(git rev-parse refs/remotes/origin/main)"
           # Gate the commit actually checked out, and require it to be the one requested.
           SHA="$(git rev-parse HEAD)"
-          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA" >&2; exit 1; }
+          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA. Next step: dispatch the SHA the run checks out; nothing is built" >&2; exit 1; }
           if [ "$SHA" != "$TIP" ]; then
-            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main" >&2; exit 1; }
+            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main (tip $TIP). Next step: dispatch the merge SHA of a merged bump PR, or the tip of main" >&2; exit 1; }
             git show --name-only --format= "$SHA" | grep -x 'configuration.toml' >/dev/null \
-              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main" >&2; exit 1; }
+              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main ($TIP). Next step: dispatch a SHA whose own commit changes configuration.toml" >&2; exit 1; }
             git diff --quiet "$SHA" "$TIP" -- .github/workflows/ \
-              || { echo "::error::.github/workflows/ at $SHA differs from main; the bot App cannot create a Release for that target" >&2; exit 1; }
+              || { echo "::error::.github/workflows/ at $SHA differs from main (tip $TIP); the bot App cannot create a Release for that target. Next step: rebase the bump onto the tip of main" >&2; exit 1; }
           fi
           echo "validated $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -218,13 +218,13 @@ jobs:
           TIP="$(git rev-parse refs/remotes/origin/main)"
           # Gate the commit actually checked out, and require it to be the one requested.
           SHA="$(git rev-parse HEAD)"
-          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA" >&2; exit 1; }
+          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA. Next step: dispatch the SHA the run checks out; nothing is built" >&2; exit 1; }
           if [ "$SHA" != "$TIP" ]; then
-            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main" >&2; exit 1; }
+            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main (tip $TIP). Next step: dispatch the merge SHA of a merged bump PR, or the tip of main" >&2; exit 1; }
             git show --name-only --format= "$SHA" | grep -x 'configuration.toml' >/dev/null \
-              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main" >&2; exit 1; }
+              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main ($TIP). Next step: dispatch a SHA whose own commit changes configuration.toml" >&2; exit 1; }
             git diff --quiet "$SHA" "$TIP" -- .github/workflows/ \
-              || { echo "::error::.github/workflows/ at $SHA differs from main; the bot App cannot create a Release for that target" >&2; exit 1; }
+              || { echo "::error::.github/workflows/ at $SHA differs from main (tip $TIP); the bot App cannot create a Release for that target. Next step: rebase the bump onto the tip of main" >&2; exit 1; }
           fi
           echo "validated $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"

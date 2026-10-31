@@ -680,6 +680,15 @@ dispatched input is named `sha`, the input `release.yml` already declares and th
 Dry run: the reads run and the would-dispatch line is printed; the POST and the run poll do
 not run.
 
+**The SHA rule (release.yml, both build-linux and sign-publish).** A dispatched SHA passes
+only when it equals the tip of main, or when it is an ancestor of main whose own commit
+changes `configuration.toml` and whose `.github/workflows/` tree equals main's. Any other
+SHA exits 1 before the first build or sign step, naming the SHA, the tip and the next step.
+The workflows-tree conjunct exists because the bot App cannot create a Release for a target
+whose workflows differ from main's (404 or 403 far from the cause). The gate text is
+executed against scratch repositories by the `release-sha-gate` rows, so a change to it is
+what the plants test. The input is `sha`, as the release-shape row pins it.
+
 ---
 
 ## Per-release procedure
