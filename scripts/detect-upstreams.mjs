@@ -34,6 +34,10 @@
 // Usage:
 //   node scripts/detect-upstreams.mjs
 //   node scripts/detect-upstreams.mjs --self-test
+//   node scripts/detect-upstreams.mjs --pin
+//   node scripts/detect-upstreams.mjs --listing <tags> [--firefox-esr <value>]
+//   node scripts/detect-upstreams.mjs --node-select <index.json> <node-runtime.json>
+//   node scripts/detect-upstreams.mjs --node-shasum <SHASUMS256.txt> <filename>
 
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -61,7 +65,7 @@ export function parseArgs(argv) {
     if (argv.length === 0) return { mode: 'skip' };
     if (argv.length === 1 && argv[0] === '--self-test') return { mode: 'self-test' };
     if (argv.length === 1 && argv[0] === '--pin') return { mode: 'pin' };
-    if (argv[0] === '--node-select' && argv.length === 2 && argv[1] !== '') return { mode: 'node-select', path: argv[1] };
+    if (argv[0] === '--node-select' && argv.length === 3 && argv[1] !== '' && argv[2] !== '') return { mode: 'node-select', path: argv[1], runtimePath: argv[2] };
     if (argv[0] === '--node-shasum' && argv.length === 3 && argv[1] !== '' && argv[2] !== '') return { mode: 'node-shasum', path: argv[1], filename: argv[2] };
     if (argv[0] === '--listing' && argv.length >= 2 && argv[1] !== '') {
         if (argv.length === 2) return { mode: 'listing', path: argv[1], firefoxEsr: undefined };
@@ -137,6 +141,30 @@ export function selectNode24(index) {
     return best === null ? null : { version: best.version, date: best.date };
 }
 
+/**
+ * bump when the selected Node line is strictly newer than the pinned line, none when it is
+ * the same or older (a registry that lists a lower v24 as newest must not cause a downgrade).
+ * No pin at all is a bump. Pure.
+ */
+export function nodeDecision(selected, pinVersion) {
+    if (pinVersion === null || pinVersion === undefined) return 'bump';
+    const pinTuple = nodeTuple(pinVersion);
+    if (pinTuple === null) throw new Error(`the Node pin ${JSON.stringify(pinVersion)} is not a vN.N.N version`);
+    return compareTuples(pinTuple, nodeTuple(selected.version)) < 0 ? 'bump' : 'none';
+}
+
+/** The numeric tuple of a vN.N.N Node version, or null. */
+function nodeTuple(version) {
+    const m = NODE_VERSION.exec(String(version ?? ''));
+    return m === null ? null : [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+/** The linux-x64 version in a node-runtime.json manifest, or null when none is pinned. Throws on a malformed file. */
+export function readNodePin(path) {
+    const v = JSON.parse(readFileSync(path, 'utf8'))?.[NODE_PLATFORM]?.version;
+    return typeof v === 'string' ? v : null;
+}
+
 /** The sha256 for one exact filename in a SHASUMS256.txt body, or null. */
 export function shasumsEntry(text, filename) {
     for (const line of String(text).split('\n')) {
@@ -177,13 +205,9 @@ export function decide({ pin, tags, firefoxEsr, nodePin, indexJson, shasumsText 
             const filename = `node-${selected.version}-${NODE_PLATFORM}.tar.xz`;
             const sha256 = shasumsText === undefined ? null : shasumsEntry(shasumsText, filename);
             const pinned = nodePin ?? null;
-            node = {
-                version: selected.version,
-                date: selected.date,
-                filename,
-                sha256,
-                decision: pinned !== null && pinned.version === selected.version ? 'none' : 'bump',
-            };
+            const decision = nodeDecision(selected, pinned?.version ?? null);
+            node = { version: selected.version, date: selected.date, filename, sha256, decision };
+            if (decision === 'none') notes.push(`the Node pin ${pinned.version} is not older than ${selected.version}, so no Node bump`);
             if (sha256 === null) notes.push(`SHASUMS256.txt carries no entry for ${filename}, so the Node bump cannot be verified`);
         }
     }
@@ -265,10 +289,29 @@ function main(parsed) {
             return 1;
         }
         if (parsed.mode === 'node-select') {
-            // No Node 24 line is a hold, not a failure: the empty value is the answer.
-            const selected = selectNode24(JSON.parse(text));
-            console.log(`node-version=${selected?.version ?? ''}`);
-            console.log(`node-file=${selected ? `node-${selected.version}-${NODE_PLATFORM}.tar.xz` : ''}`);
+            // A hold is not a failure: the empty values are the answer, and the reason goes to stderr.
+            let index;
+            let pinVersion;
+            try {
+                index = JSON.parse(text);
+                pinVersion = readNodePin(parsed.runtimePath);
+            } catch (e) {
+                console.error(`${NAME}: FAIL -- the Node index or the pin manifest could not be read (${e.message}). Next step: check the detect job's download and the pin manifest, then re-run.`);
+                return 1;
+            }
+            const selected = selectNode24(index);
+            let version = '';
+            let file = '';
+            if (selected === null) {
+                console.error(`${NAME}: NOTE -- no Node 24 entry in the index ships ${NODE_PLATFORM}; the Node half holds`);
+            } else if (nodeDecision(selected, pinVersion) === 'none') {
+                console.error(`${NAME}: NOTE -- the newest Node 24 line ${selected.version} is not newer than the pin ${pinVersion}; the Node half holds`);
+            } else {
+                version = selected.version;
+                file = `node-${selected.version}-${NODE_PLATFORM}.tar.xz`;
+            }
+            console.log(`node-version=${version}`);
+            console.log(`node-file=${file}`);
             return 0;
         }
         const sha = shasumsEntry(text, parsed.filename);
@@ -356,6 +399,12 @@ function selfTest() {
     console.log(`  ok  node baseline -> ${NODE_NEW} selected (linux-x64 only, v24 only); ${NODE_FILE} sha matched exactly; decision bump`);
 
     const plants = [
+        {
+            name: 'a Node pin newer than the newest linux-x64 v24 line (a downgrade)',
+            overrides: { pin: PIN, tags: [PIN], nodePin: { version: 'v24.30.0' }, indexJson: NODE_INDEX, shasumsText: SHASUMS },
+            expect: `is not older than ${NODE_NEW}, so no Node bump`,
+            held: r => r.decision.node?.decision === 'none',
+        },
         {
             name: '_BUILDn offered as the only newer tag',
             overrides: { pin: PIN, tags: [PIN, tag(153, 6, 0, 'BUILD1')] },

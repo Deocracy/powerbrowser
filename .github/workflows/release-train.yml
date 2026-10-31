@@ -213,7 +213,8 @@ jobs:
           fi
           curl -fsSL https://nodejs.org/dist/index.json -o "$RUNNER_TEMP/node-index.json"
           # The node output goes to a file first, so a node failure stops this step.
-          node scripts/detect-upstreams.mjs --node-select "$RUNNER_TEMP/node-index.json" > "$RUNNER_TEMP/node-select.txt"
+          # The pin is passed in, so a line that is not newer than the pin holds here, before any download.
+          node scripts/detect-upstreams.mjs --node-select "$RUNNER_TEMP/node-index.json" powerbrowser/packaging/node-runtime.json > "$RUNNER_TEMP/node-select.txt"
           cat "$RUNNER_TEMP/node-select.txt" >> "$GITHUB_OUTPUT"
 
       # Provenance happens here, in the job, on every bump: the SHASUMS file and its
@@ -351,14 +352,34 @@ jobs:
           git config user.email "release-train@users.noreply.github.com"
           git switch -C "chore/esr-${TAG}" "$BASE"
           nix develop .#theia --command bash scripts/rebase-upstream.sh --tag "$TAG"
-          sed -i "s/^firefox_esr_tag = \".*\"/firefox_esr_tag = \"${TAG}\"/" configuration.toml
+          cp configuration.toml "$RUNNER_TEMP/configuration.before.toml"
+          sed -i "s/^firefox_esr_tag = \"[^\"]*\"/firefox_esr_tag = \"${TAG}\"/" configuration.toml
+          # A sed that matched nothing would leave the pin where it was and end the run green as
+          # "no PR", every tick. The pin must move, and the line must name the new tag.
+          if cmp -s configuration.toml "$RUNNER_TEMP/configuration.before.toml"; then
+            echo "release-train: FAIL -- the firefox_esr_tag line did not change to ${TAG}. Next step: check the line shape in configuration.toml." >&2
+            exit 1
+          fi
+          if ! grep -qx "firefox_esr_tag = \"${TAG}\"" configuration.toml; then
+            echo "release-train: FAIL -- configuration.toml does not carry firefox_esr_tag = ${TAG} after the move. Next step: do not bump; check the manifest." >&2
+            exit 1
+          fi
           nix develop .#theia --command node scripts/generate.mjs
           nix develop .#theia --command node scripts/verify-release-identity.mjs
           nix develop .#theia --command node scripts/verify-upstream-pins.mjs
           nix develop .#theia --command bash scripts/regenerate-patches.sh --check
-          # Only the manifest, the generated tracked surfaces, the version files and the
-          # patch stack may be staged. The App cannot push a commit that touches workflows.
-          git add -u -- configuration.toml powerbrowser patches
+          # Only the manifest, the powerbrowser tree (tracked and new files) and the patch stack
+          # are staged, by explicit path. The App cannot push a commit that touches workflows.
+          git add -A -- configuration.toml powerbrowser patches
+          # Any change outside those paths is a replay defect, not part of the bump. Ignored paths
+          # (upstream/, generated/) are not listed by git status.
+          UNEXPECTED=$(git status --porcelain --untracked-files=all -- . ':(exclude)configuration.toml' ':(exclude)powerbrowser' ':(exclude)patches')
+          if [ -n "$UNEXPECTED" ]; then
+            echo "release-train: FAIL -- the replay changed paths outside the bump surfaces:" >&2
+            printf '%s\n' "$UNEXPECTED" >&2
+            echo "Next step: do not bump; find the step that wrote outside configuration.toml, powerbrowser and patches." >&2
+            exit 1
+          fi
           # A pathspec query, not a pipe into grep -q: under pipefail an early grep exit would read as a failed git.
           if [ -n "$(git diff --cached --name-only -- .github/workflows)" ]; then
             echo "release-train: FAIL -- the bump would touch a workflow file, which the bot App may not push. Next step: remove that change from the bump." >&2
