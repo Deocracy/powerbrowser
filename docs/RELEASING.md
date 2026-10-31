@@ -784,6 +784,62 @@ rule holds for the Gecko toolchain: `scripts/toolchain-baseline.sh` regenerates
 
 ---
 
+## Train stages after the bump PR merges
+
+The release train (`scripts/release-train.mjs`, `.github/workflows/release-train.yml`)
+carries a release from a merged bump PR to a live descriptor. Every state is derived
+from GitHub facts only, never from a stored train state: the `release.yml` run at the
+merge SHA (matched by the run display title `Release <sha>`), its pending deployments (`release`, `descriptor`), the
+Release at the release key (draft, prerelease, assets, notes marker), the
+`powerbrowser-updates` descriptor bytes, the `channel-live` conclusion and the tracking
+issue state.
+
+Evaluation priority, first match wins: WITHDRAWN (the mark is authoritative), then, for
+a published Release, DESCRIPTOR_LIVE or DONE (served bytes equal and channel-live green;
+DONE only when the issue is already closed), LIVE_RED (a descriptor is present and
+channel-live is red or its bytes drifted), DESCRIPTOR_WAIT (the descriptor environment or
+its timer is engaged), PUBLISHED (asset set equal to the manifest-derived set, no
+descriptor or a no-update one). Before any Release exists: AWAITING_APPROVAL (run waiting
+on the `release` environment), then BUILDING (run in flight).
+
+The train makes at most one transition per release per run and ends at each owner gate:
+the bump merge, the `release` approval, the `descriptor` approval. LIVE_RED is sticky until
+a fresh green `channel-live`. A bad release is withdrawn by the mark and fixed by a new
+revision with a new tag; a Release is never deleted and no tag is reused.
+
+**Dispatch after the merge (`dispatch-release`).** On each tick the train reads the newest
+merged PR for the pinned bump branch `chore/esr-<pin>`, takes its merge commit SHA, counts
+the `release.yml` runs already dispatched for that SHA, and dispatches `release.yml` with
+`inputs.sha` set to that SHA only when the count is zero. A dispatched run's `head_sha` is
+the tip of main, never `inputs.sha`, so `release.yml` sets `run-name: Release ${{ inputs.sha }}`
+(pinned by the `release-shape` row) and the train identifies the run by that exact display
+title together with the `workflow_dispatch` event, the `release.yml` path and this
+repository as head repository. The run is resolved that way, never by `head_sha` or by
+recency, and linked in the job summary. The merged-PR lookup considers only same-repository
+PRs merged into `main`. The `dispatch-release` rows execute these steps against a fixture
+where main has advanced past the merge SHA.
+
+Token decision: `GITHUB_TOKEN` with `actions: write` granted on the `dispatch-release` job
+alone. The bot App token cannot dispatch (it holds no Actions scope, so the call returns
+403), and a clock App would add a second credential for one call. The job holds no
+environment, no App key and no contents write, so its only write is the dispatch. The
+dispatched input is named `sha`, the input `release.yml` already declares and the
+`release-shape` row pins, not `merge_sha`.
+
+Dry run: the reads run and the would-dispatch line is printed; the POST and the run poll do
+not run.
+
+**The SHA rule (release.yml, both build-linux and sign-publish).** A dispatched SHA passes
+only when it equals the tip of main, or when it is an ancestor of main whose own commit
+changes `configuration.toml` and whose `.github/workflows/` tree equals main's. Any other
+SHA exits 1 before the first build or sign step, naming the SHA, the tip and the next step.
+The workflows-tree conjunct exists because the bot App cannot create a Release for a target
+whose workflows differ from main's (404 or 403 far from the cause). The gate text is
+executed against scratch repositories by the `release-sha-gate` rows, so a change to it is
+what the plants test. The input is `sha`, as the release-shape row pins it.
+
+---
+
 ## Per-release procedure
 
 Read `docs/BUILD.md` for what each build step costs. A full Gecko build is roughly
@@ -900,6 +956,29 @@ equal **and** the build IDs match, so a same-appVersion distinct-buildID hop is
 exactly what the client treats as an upgrade.
 
 Hold the announcement and any package-manager submission until this drill is green.
+
+**Hop record (served: release).** The drill is the clean-room run in `docs/BUILD.md`
+("Clean-room drill for a published Release"). The owner pastes these fields back, and each
+one is what the release assertion set reads or what a reviewer audits:
+
+- `served`: `release`. The fork-server (`loopback`) record is a different proof.
+- `servedUrl` (the public descriptor, under `updates.powerbrowser.org`) and `servedMarUrl`
+  (`https://downloads.powerbrowser.org/<tag>/<asset>`, write-once). Any `github.com`,
+  `release-assets` or latest-download form is refused.
+- Resolver host lines: the `Resolving host [...]` set from `client-resolver.log`. It must name
+  both the update and the download host, and must name neither `github.com` nor
+  `release-assets.githubusercontent.com`, nor any `*.mozilla.org` or `*.mozilla.net` host.
+- `signmar -v` and `signmar -T` output, and the node:crypto check of
+  `scripts/verify-mar-signature.mjs` against `powerbrowser/packaging/mar/mar-primary.der`.
+- Attestation path taken: `bundle` (an offline `gh attestation verify --bundle`) or `host`
+  (a logged-in `gh attestation verify` on the host). Both pin `--signer-workflow` to this
+  repository's `release.yml`, `--source-ref refs/heads/main` and `--deny-self-hosted-runners`.
+  Never a skip.
+- Version pair: N and N+1 with their buildIDs. Same appVersion with a distinct buildID is the
+  ratified scheme, not a relaxation: `updateIsAtLeastAsOldAs` (the client's check) refuses an
+  offer only when the versions compare equal **and** the buildIDs match, so a distinct buildID
+  is an upgrade to the client.
+- Evidence path: `.mozbuild/mar-hop/`, with `hop.json` at `served: "release"`.
 
 ## Release asset names
 
@@ -1031,6 +1110,133 @@ covered under **Toolchain pins** above.
 Listing state lives in the Listings table that stage `listings-and-cadence` adds, and
 every deferral lives in the single `## Deferred signing items` register above. Do not
 add a second table for either.
+
+### ESR 175 uptake (UPS-01, TRAIN-05)
+
+The train tracks two ESR majors at the same time. The pinned major (153) keeps the bump
+path: a newer 153.x tag opens `chore/esr-<tag>`. Its tracking issue is not written yet: the report
+job prints the would-write view until the writer is approved (`BLOCKED.md` item 1). The
+uptake major (175, `UPTAKE_MAJOR` in `scripts/detect-upstreams.mjs`) is replay-only: the
+newest 175 `*esr_RELEASE` tag is replayed and nothing is published from it. The lane keys on
+those release tags, which are cut on the ESR release day (2027-06-29), so as built the lane
+starts then, not at the 175 beta (2027-06-10). Whether it should start at the beta needs a
+beta-stage tag form, which is an owner decision (`BLOCKED.md` item 3 of Phase 58). The lane is
+off once the pinned major reaches the uptake major, so the flipped pin is never replayed twice.
+
+**Two keys.** Each release key names one tracking issue: `release-train: v153.x-r` for the bump
+line and `release-train: v175.x-r` for the uptake line. The title is derived from the tag and
+the would-write view prints it. No writer exists yet. The live find-by-label-and-title step, the
+exactly-one rule and the rewrite-only-when-different rule are unwired until the owner approves
+the writer (`BLOCKED.md` item 1). Until then the report job writes no issue. A 153 tag never
+reaches the 175 replay, and a 175 tag never reaches the 153 bump: the guard refuses the
+foreign major in both lanes, and both self-tests plant that fault and require it to go
+red.
+
+**Replay-only procedure** (the `uptake-replay` job in `release-train.yml`):
+
+1. The detect job lists the 175 tags with the 153 tags and names the newest one.
+2. `uptake-replay` calls `rebase-upstream.yml`, the one replay definition. It fetches the
+   tag into a runner-local `upstream/`, then runs `apply-patches.sh`,
+   `check-patch-surface.sh`, `regenerate-patches.sh --check`, the brand scan and the
+   classifier.
+3. A PASS is `UPTAKE_REPLAYED`. A `NOTE` line counts patches that replay onto moved files
+   and is informational. Nothing is committed.
+4. A patch that does not apply is `UPTAKE_CONFLICT`. Its would-write view names the patch
+   (`ESR <tag>: patch <NNN> did not apply`) and prints the FAIL stage line as its apply log.
+   The upstream diff is not carried yet: the view passes an empty diff. No issue is written
+   and no owner is assigned until the writer is approved (`BLOCKED.md` item 1). Any other
+   replay FAIL is `UPTAKE_RED`, with the action wait-owner. A replay job that ends with any
+   result other than success is red in the report, whatever stage line it printed.
+5. Patches are changed only by `regenerate-patches.sh`, never by hand. Routing a fixable
+   conflict to fixer F1 or F2 on a `chore/esr-175*` branch is a ship step (plan 58-03), and
+   no such branch exists until the owner approves the 175 conflict writer.
+
+The uptake lane has no commit, push, PR, dispatch, environment or App token. The
+`uptake-lane` rule in `scripts/verify-workflows.mjs` holds the job to read-only scope and
+to the one replay definition. A dry run runs the same replay and prints the would-write
+view.
+
+**Naming.** Bump branches are `chore/esr-<tag>`, so the 153 and 175 branches never share a
+name. The release key comes from the tag (`v<ESR>-<revision>`), so the two lines cannot
+collide in a title either.
+
+**Calendar** (CONTEXT A-58-4). Nightly 2027-05-27. Beta 2027-06-10: no replay runs, because
+the lane lists only `*esr_RELEASE` tags and the beta does not cut one (see the opening of this
+subsection). Release 2027-06-29: `175.0esr` is published, and its `*esr_RELEASE` tag starts the
+first replay-only run. ESR 153 ends with
+153.27 on 2027-09-07. The ship checklist for 175.x is in plan 58-03, which is an owner
+checkpoint.
+
+**`FIREFOX_ESR` is advisory after the flip.** From 2027-06-29 product-details reports
+`175.0esr` as `FIREFOX_ESR`. The 153 line does not read it. Its candidate comes from the
+153 tag list, and the Phase 43 regression fixture (`FIREFOX_ESR=175.0esr` with
+`FIREFOX_153_23_0esr_RELEASE` present dispatches 153.23) stays in the detector self-test.
+The train never depends on an undocumented `FIREFOX_ESR153` key.
+
+### Rebase onto 175 (UPS-01)
+
+The rebase moves the four hook-only patches from the pinned ESR onto the 175 tag by
+regeneration only. A hunk body is never edited by hand: a hand-edited hunk replays as a
+silent no-op (CLAUDE.md; Pitfall 2 of the Phase 58 research). A patch that does not replay
+is a conflict to report, not an edit to make.
+
+**Scratch tree, never the live one.** The 175 replay runs on a runner-local upstream
+(`rebase-upstream.sh --tag <175 tag>` in the uptake lane). Locally, the same steps run on a
+scratch clone at the pinned commit, and `upstream/` is not touched:
+
+```sh
+git clone --no-checkout --shared <repo>/upstream <scratch>/upstream
+git -C <scratch>/upstream checkout -q <175 tag>
+scripts/apply-patches.sh --upstream <scratch>/upstream
+scripts/regenerate-patches.sh --check --upstream <scratch>/upstream
+scripts/check-patch-surface.sh
+node scripts/scan-brand-residue.mjs --extra-root <scratch>/upstream
+scripts/verify-platform.sh --quick
+```
+
+Every step must exit 0. `apply-patches.sh` takes `--upstream` and `--patches` for the scratch
+tree; with no argument it replays onto the live `upstream/`, as `rebase-upstream.sh` does. Both
+values are resolved to absolute paths before anything changes directory, and a relative value is
+accepted. The script refuses with exit 2 and a named cause when a path is not a directory, when a
+value starts with `-`, when `--upstream` is not the top of its own git repository or is this
+checkout, and when `--patches` holds no `*.patch` file.
+
+**Drift-risk order and the invariant each patch must keep.** Replay and check the patches in
+this order, highest drift first. After each replay, confirm the invariant line is still in
+the patch's `+` lines.
+
+1. `030-powerbrowser-mar-certificates` (`toolkit/mozapps/update/updater/moz.build`, highest
+   drift). Invariant: the fork certificate fills both slots on every channel
+   (`primary_cert.inputs` and `secondary_cert.inputs` both name `mar-primary.der`).
+2. `040-powerbrowser-nsis` (`browser/installer/windows/nsis/defines.nsi.in` and
+   `installer.nsi`, high drift). Invariants: `AppName` is `@MOZ_APP_NAME@`,
+   `CERTIFICATE_NAME` is `${CompanyName}`, `TELEMETRY_BASE_URL` is empty, and the installer
+   ping returns early. The issuer string (`DigiCert ... 2021 CA1`) is the drift to expect.
+3. `010-powerbrowser-identity` (`browser/moz.configure`, medium drift). Invariant:
+   `include("../identity.configure")` is the one hook line.
+4. `020-powerbrowser-shell` (`browser/moz.build`, lowest drift). Invariant: the one `DIRS`
+   entry for `../powerbrowser/shell`. It fails only if the `DIRS` block is restructured.
+
+**NOTE and FAIL** (`regenerate-patches.sh --check`):
+
+- NOTE with PASS: a moved file whose `+` and `-` lines still match. Regenerate the patch in
+  write mode on the scratch tree, check it again byte for byte, and commit it with the pin
+  bump. The NOTE names the file.
+- FAIL: `did not apply`, `added/removed lines differ`, `dropped <path>`, or an empty
+  regeneration. Stop. Do not edit the patch. Record one conflict issue (until the writer is approved, only the would-write view prints it and nothing is written),
+  `ESR <tag>: patch <NNN> did not apply`, with the patch name, the tags, the files, the
+  verbatim apply log, the pre-image and replayed blob hashes, the moved-file list and the
+  surface result. Route fixable classes (F1 patch-replay conflict, F2 red bump PR) to the
+  fixer on a `chore/esr-175*` branch (A-58-3, Phase 52). A branch like that does not exist
+  until the owner approves the 175 conflict writer (`BLOCKED.md` item 1).
+
+**Toolchain re-record** (D-73 tuple: tree, host, toolchain and date). `toolchain-baseline.txt`
+is re-recorded once, against the 175 release container that `build-linux` actually uses. Run
+`scripts/toolchain-baseline.sh --container` inside that container after its bootstrap build.
+Copy each measured line into the file. Never type a value, and never leave an `UNMEASURED`
+line in a committed file. Do not reuse the 153 baseline for a 175 build. The file is
+deny-listed for the fixer (FIX-11). Record the tree (`git rev-parse HEAD`), the host, the
+container image and the date beside the new baseline.
 
 ---
 

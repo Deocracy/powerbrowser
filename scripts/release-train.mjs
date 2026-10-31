@@ -8,8 +8,7 @@
 // Nothing here touches the network, the filesystem or gh: facts in, state /
 // action / issue decision out. Every gh call stays in the workflow YAML.
 //
-// The five Phase-A states (the release-stage states BUILDING onward land with
-// Phase 50 and are absent here by design):
+// The five Phase-A states, then the eight release-stage states of Phase 50 (TRAIN-10):
 //   DETECTED       a newer *esr_RELEASE tag exists and no bump PR is open.
 //   BUMPING        a bump PR chore/esr-<tag> is open and not yet green.
 //   CONFLICT       the replay stage FAILed in apply-patches: a patch did not apply.
@@ -17,6 +16,10 @@
 //                  left the pin unchanged.
 //   BUMP_PR_GREEN  the bump PR is open, the pin moved, and the required verify
 //                  check succeeded. This is the run's end: the owner merge gate.
+//   BUILDING, AWAITING_APPROVAL, PUBLISHED, DESCRIPTOR_WAIT, DESCRIPTOR_LIVE,
+//   LIVE_RED, WITHDRAWN, DONE  the release stage, derived by deriveRelease() from the
+//                  release facts. The release facts exist once a release.yml run at the
+//                  merge SHA or a Release at the key exists; before that the Phase-A rules decide.
 //
 // Facts shape (plain values the workflow reads from GitHub):
 //   { candidateTag, pinTag, revision, openPr, bumpConclusion, stage,
@@ -27,6 +30,14 @@
 //                 rebase-upstream.yml), or null
 //   verifyCheck   'success' | 'failure' | 'pending' | null on the bump PR
 //   ownerLogin    the owner's login, passed in by the workflow; never a literal here
+//
+// The uptake lane (TRAIN-05, UPS-01) keeps its own keys and states beside the five
+// above. A 175 candidate derives UPTAKE_* states: UPTAKE_DETECTED (replay due),
+// UPTAKE_CONFLICT (a patch did not apply), UPTAKE_RED (another replay FAIL) and
+// UPTAKE_REPLAYED (replay PASS, NOTE counts only). Its action is replay-only, note
+// or conflict-issue; no uptake state ever maps to a bump, a branch or a PR. Its
+// tracking issue is keyed by its own release key (release-train: v175.<x>-<rev>).
+// deriveUptake and uptakeGuard refuse any candidate that is not a uptake-major tag.
 //
 // Pure contract: derive(facts) -> state name or null; next(state) -> action;
 // render(state, facts) -> { title, body, labels, mention, assign, lock, close, writes };
@@ -55,6 +66,10 @@
 //
 // Usage:
 //   node scripts/release-train.mjs --self-test
+//   node scripts/release-train.mjs --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>
+//   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false> <replay-result> <detect-result>
+//                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
+//                                        each is success|failure|cancelled|skipped)
 //   node scripts/release-train.mjs --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>]
 //   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
 //   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state> <state-out>
@@ -66,12 +81,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { classifyTag, tagToVersion } from './detect-upstreams.mjs';
+import { classifyTag, tagToVersion, UPTAKE_MAJOR } from './detect-upstreams.mjs';
 
 const NAME = 'release-train-logic';
 const SELF_REL = 'scripts/release-train.mjs';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const LABELS = Object.freeze({ track: 'release-train', state: (s) => `state/${s}` });
+const LABELS = Object.freeze({ track: 'release-train', blocked: 'train:blocked', state: (s) => `state/${s}` });
 const PATCH_DIR = 'patches';
 const APPLY_FAIL = /FAIL -- (apply-patches\.sh|\S+\.patch did not apply)/;
 const ANY_FAIL = /FAIL --/;
@@ -84,7 +99,24 @@ export const STATES = Object.freeze({
     CONFLICT: Object.freeze({ desc: 'the replay stage FAILed in apply-patches: a patch did not apply' }),
     BUMP_RED: Object.freeze({ desc: 'another replay FAIL, a red bump check, or a merged PR with the pin unchanged' }),
     BUMP_PR_GREEN: Object.freeze({ desc: 'bump PR open, pin moved, required verify check success' }),
+    BUILDING: Object.freeze({ desc: 'release.yml run at the merge SHA is in flight, or waiting with no release approval pending' }),
+    AWAITING_APPROVAL: Object.freeze({ desc: 'release.yml run waiting on the release environment approval' }),
+    PUBLISHED: Object.freeze({ desc: 'Release published with the manifest asset set; descriptor not yet engaged' }),
+    DESCRIPTOR_WAIT: Object.freeze({ desc: 'Release published and the descriptor environment or its timer is engaged' }),
+    DESCRIPTOR_LIVE: Object.freeze({ desc: 'served descriptor bytes equal the public update.xml and channel-live is green' }),
+    LIVE_RED: Object.freeze({ desc: 'a release descriptor is present and channel-live is red, or its bytes drifted' }),
+    WITHDRAWN: Object.freeze({ desc: 'the Release carries the withdrawal mark (prerelease flag or notes marker); authoritative' }),
+    DONE: Object.freeze({ desc: 'DESCRIPTOR_LIVE facts with the tracking issue already closed (bookkeeping only)' }),
 });
+
+// The uptake lane (TRAIN-05). Replay-only: no state here opens a branch, a PR or a dispatch.
+export const UPTAKE_STATES = Object.freeze({
+    UPTAKE_DETECTED: Object.freeze({ desc: 'a uptake-major *esr_RELEASE tag exists and its replay has not run: replay-only, no branch, no PR' }),
+    UPTAKE_CONFLICT: Object.freeze({ desc: 'the uptake replay FAILed in apply-patches: a patch did not apply' }),
+    UPTAKE_RED: Object.freeze({ desc: 'another uptake replay FAIL: a check or the brand scan, not a patch conflict' }),
+    UPTAKE_REPLAYED: Object.freeze({ desc: 'the uptake replay PASSed: NOTE counts only, nothing written' }),
+});
+export const ALL_STATES = Object.freeze({ ...STATES, ...UPTAKE_STATES });
 
 const ACTIONS = Object.freeze({
     DETECTED: 'bump',
@@ -92,11 +124,110 @@ const ACTIONS = Object.freeze({
     CONFLICT: 'conflict-issue',
     BUMP_RED: 'wait-owner',
     BUMP_PR_GREEN: 'gate',
+    UPTAKE_DETECTED: 'replay-only',
+    UPTAKE_CONFLICT: 'conflict-issue',
+    UPTAKE_RED: 'wait-owner',
+    UPTAKE_REPLAYED: 'note',
+    BUILDING: 'wait',
+    AWAITING_APPROVAL: 'notify-owner',
+    PUBLISHED: 'trigger-gh15',
+    DESCRIPTOR_WAIT: 'notify-owner',
+    DESCRIPTOR_LIVE: 'close-issue',
+    LIVE_RED: 'block-and-link',
+    WITHDRAWN: 'reopen-and-instruct',
+    DONE: 'noop',
 });
+
+// --- Release stage (Phase 50, TRAIN-10) -------------------------------------------
+// derive reads normalised release facts (releaseFactsFromLive), never the raw GitHub
+// responses. A withdrawal mark in the Release notes is the marker shape; the flag shape is
+// prerelease true. The marker is an HTML comment, so it is never rendered on the Release page.
+export const WITHDRAWAL_MARK = '<!-- release-withdrawn -->';
+const RUN_IN_FLIGHT = Object.freeze(['queued', 'in_progress', 'requested', 'pending']);
+export const RELEASE_WORKFLOW_PATH = '.github/workflows/release.yml';
+/** The display title release.yml gives its run (run-name), the key that finds the run for a SHA. Pure. */
+export const releaseRunTitle = sha => `Release ${sha}`;
+const NEEDS_OWNER = Object.freeze(['BUMP_PR_GREEN', 'AWAITING_APPROVAL', 'DESCRIPTOR_WAIT', 'LIVE_RED']);
+
+const assetsEqual = (assets, expected) => {
+    if (expected.length === 0) return false;
+    const a = [...new Set(assets)].sort();
+    const e = [...new Set(expected)].sort();
+    return a.length === e.length && a.every((x, i) => x === e[i]);
+};
+const withdrawn = rel => rel.published !== null && (rel.published.prerelease === true || rel.published.body.includes(WITHDRAWAL_MARK));
+const waitingDescriptor = rel => rel.pending.includes('descriptor') || rel.descriptorJob === 'waiting';
+
+/** Whether a workflow run is the release.yml dispatch for live.mergeSHA. Pure. */
+function runIsReleaseFor(r, live) {
+    return r.event === 'workflow_dispatch'
+        && r.display_title === releaseRunTitle(live.mergeSHA)
+        && String(r.path ?? '').split('@')[0] === RELEASE_WORKFLOW_PATH
+        && r.head_repository?.full_name === live.repository;
+}
+
+/** The channel-live subcheck that is red, or byte-equal for a drifted descriptor. Pure. */
+export function redSubcheck(rel) {
+    if (rel.channelLive !== null && rel.channelLive.green === false) return rel.channelLive.subcheck ?? 'channel-live';
+    return 'byte-equal';
+}
+
+/**
+ * Normalise one release's live GitHub responses into the release facts. The input is the
+ * live response shape: runs objects (display_title, path, head_repository, event, status, conclusion,
+ * html_url, created_at),
+ * pending_deployments entries, the jobs of the run, the Release by tag, the descriptor contents
+ * (base64), the channel-live job conclusion and the tracking issue state. The run is the newest
+ * workflow_dispatch run of release.yml in this repository whose display title is `Release <mergeSHA>`;
+ * never the latest run of any SHA, and never keyed on head_sha: a dispatched run's head_sha is the tip
+ * of the dispatched ref (main), not the sha input. live.repository is this repository's full name.
+ * The matcher is injectable for the self-test's planted head_sha matcher only. Pure.
+ */
+export function releaseFactsFromLive(live, { matches = runIsReleaseFor } = {}) {
+    const matching = live.runs.filter(r => matches(r, live));
+    const newest = [...matching].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))[0] ?? null;
+    const job = (live.jobs ?? []).find(j => j.name === 'descriptor') ?? null;
+    const bytes = live.contents ? Buffer.from(live.contents.content, 'base64').toString('utf8') : null;
+    return {
+        key: live.key,
+        mergeSHA: live.mergeSHA,
+        run: newest === null ? null : { status: newest.status, conclusion: newest.conclusion ?? null, htmlUrl: newest.html_url },
+        pending: live.pending.map(p => p.environment.name),
+        descriptorJob: job === null ? null : job.status,
+        published: live.release ? { draft: live.release.draft, prerelease: live.release.prerelease, assets: live.release.assets.map(a => a.name), body: live.release.body ?? '' } : null,
+        expectedAssets: live.expectedAssets,
+        descriptor: { present: bytes !== null, matchesServed: bytes !== null && bytes === live.servedBytes, noUpdate: bytes !== null && bytes === live.noUpdateBytes },
+        channelLive: live.channelLive ? { green: live.channelLive.conclusion === 'success', subcheck: live.channelLive.subcheck ?? null } : null,
+        issueState: live.issue ? live.issue.state : null,
+    };
+}
+
+/** The release-stage state from the release facts, or null when none applies. Pure. */
+function deriveRelease(rel) {
+    const pub = rel.published;
+    const d = rel.descriptor;
+    if (withdrawn(rel)) return 'WITHDRAWN';
+    if (pub !== null && !pub.draft) {
+        const green = rel.channelLive !== null && rel.channelLive.green === true;
+        const channelRed = rel.channelLive !== null && rel.channelLive.green === false;
+        const drift = d.present && !d.matchesServed && !d.noUpdate && !waitingDescriptor(rel);
+        if (d.matchesServed && green) return rel.issueState === 'closed' ? 'DONE' : 'DESCRIPTOR_LIVE';
+        if (d.present && (channelRed || drift)) return 'LIVE_RED';
+        if (waitingDescriptor(rel)) return 'DESCRIPTOR_WAIT';
+        if (!pub.prerelease && assetsEqual(pub.assets, rel.expectedAssets) && (!d.present || d.noUpdate)) return 'PUBLISHED';
+        return null;
+    }
+    if (rel.run !== null && (pub === null || pub.draft)) {
+        if (rel.run.status === 'waiting' && rel.pending.includes('release')) return 'AWAITING_APPROVAL';
+        if (RUN_IN_FLIGHT.includes(rel.run.status) || rel.run.status === 'waiting') return 'BUILDING';
+    }
+    return null;
+}
 
 /** The state a release is in, from facts, or null with nothing to do. Pure. */
 export function derive(facts) {
     const f = facts;
+    if (f.release) return deriveRelease(f.release);
     if (f.merged === true && f.pinUnchanged === true) return 'BUMP_RED';
     if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'CONFLICT';
     if (typeof f.stage === 'string' && ANY_FAIL.test(f.stage)) return 'BUMP_RED';
@@ -114,6 +245,29 @@ export function next(state) {
     if (state === null) return 'idle';
     if (!Object.hasOwn(ACTIONS, state)) throw new Error(`no action for unknown state ${JSON.stringify(state)}`);
     return ACTIONS[state];
+}
+
+/**
+ * Null when the tag may be replayed on the uptake lane, else the named refusal. A 153 tag and
+ * a _BUILDn tag are both refused here. Pure.
+ */
+export function uptakeGuard(tag) {
+    const c = classifyTag(tag, UPTAKE_MAJOR, 'uptake');
+    return c.keep ? null : c.reason;
+}
+
+/**
+ * The uptake state for one candidate, or null when there is no candidate or the candidate is not
+ * a uptake-major tag (uptakeGuard names that refusal). Facts: candidateTag, stage (the first FAIL
+ * line the replay printed, or null) and replayed (true when the replay job ended success). Pure.
+ */
+export function deriveUptake(facts) {
+    const f = facts;
+    if (typeof f.candidateTag !== 'string' || uptakeGuard(f.candidateTag) !== null) return null;
+    if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'UPTAKE_CONFLICT';
+    if (typeof f.stage === 'string' && ANY_FAIL.test(f.stage)) return 'UPTAKE_RED';
+    if (f.replayed === true) return 'UPTAKE_REPLAYED';
+    return 'UPTAKE_DETECTED';
 }
 
 /** The patch number named by a conflict stage line, or null when the line names none. Pure. */
@@ -134,9 +288,16 @@ function releaseKey(facts) {
  * other state renders with neither. Pure.
  */
 export function render(state, facts) {
-    const title = `release-train: ${releaseKey(facts)}`;
-    const evidence = facts.evidenceUrl ?? 'pending';
+    const rel = facts.release ?? null;
+    const title = `release-train: ${rel !== null ? rel.key : releaseKey(facts)}`;
+    const runUrl = rel !== null && rel.run !== null ? rel.run.htmlUrl : null;
+    const evidence = facts.evidenceUrl ?? runUrl ?? 'pending';
     const snapshot = JSON.stringify({ state, pin: facts.pinTag, candidate: facts.candidateTag ?? null });
+    const stateLines = [];
+    // The exact run for this merge SHA, linked by its display title (never recency across SHAs).
+    if (runUrl !== null) stateLines.push(`Release run (${runUrl}) SHA ${rel.mergeSHA}`);
+    if (state === 'LIVE_RED') stateLines.push(`channel-live red on ${redSubcheck(rel)}. Next step: read the failing log linked from the run.`);
+    if (state === 'WITHDRAWN') stateLines.push('Withdrawn. The fix is a new revision with a new tag; a Release is never deleted and no tag is reused.');
     const body = [
         title,
         '',
@@ -144,18 +305,19 @@ export function render(state, facts) {
         '| --- | --- | --- |',
         `| ${state} | ${state} | ${evidence} |`,
         '',
+        ...stateLines.flatMap(l => [l, '']),
         `<!-- release-train:v1 ${snapshot} -->`,
         '',
     ].join('\n');
-    const gate = state === 'BUMP_PR_GREEN' && typeof facts.ownerLogin === 'string' && facts.ownerLogin !== '';
+    const gate = NEEDS_OWNER.includes(state) && typeof facts.ownerLogin === 'string' && facts.ownerLogin !== '';
     return {
         title,
         body,
-        labels: [LABELS.track, LABELS.state(state)],
+        labels: [LABELS.track, LABELS.state(state), ...(state === 'LIVE_RED' ? [LABELS.blocked] : [])],
         mention: gate ? facts.ownerLogin : null,
         assign: gate ? [facts.ownerLogin] : [],
         lock: true,
-        close: false,
+        close: state === 'DESCRIPTOR_LIVE',
         writes: [],
     };
 }
@@ -275,6 +437,63 @@ export function wouldWrite({ pinTag, tag, openPrNumber, stage }) {
     };
 }
 
+/**
+ * The would-write view for the uptake lane: the 175 candidate's state and action, and the conflict
+ * issue when the replay FAILed on a patch. Replay-only: it names what a live run would do and writes
+ * nothing. The tracking writer is unwired (BLOCKED.md item 3 of Phase 43), so the view prints the
+ * rendered body and does not PATCH. replayResult is the uptake-replay job result: a candidate needs
+ * success, and an empty candidate needs skipped. Any other result is red whatever stage line the job
+ * printed, because a late step can fail after the stage already reads replayed. detectResult is the
+ * detect job result: when detection did not succeed, no candidate is known, so the view reports the
+ * failure and never reads the empty candidate as idle (IN-03). Pure.
+ */
+export function uptakeWouldWrite({ tag, stage, replayed, replayResult, detectResult }) {
+    if (detectResult !== 'success') {
+        return {
+            lines: [`release-train: would-write: uptake detection failed (the detect job ended ${detectResult}), so the uptake lane was not judged`],
+            failures: [`the detect job ended ${detectResult}, so the uptake candidate is unknown and the lane was not judged. Next step: fix the detect job, then re-run.`],
+        };
+    }
+    const expected = tag === '' ? 'skipped' : 'success';
+    const resultFailures = replayResult === expected ? [] : [`the uptake replay job ended ${replayResult} (expected ${expected}) after stage ${stage || 'none'}. Next step: read the uptake replay log, fix the step it names, and re-run.`];
+    if (tag === '') return { lines: ['release-train: would-write: uptake idle; no uptake-major tag is listed, so nothing is replayed'], failures: resultFailures };
+    const guard = uptakeGuard(tag);
+    if (guard !== null) return { lines: [], failures: [`${guard}. Next step: pass only a uptake-major *esr_RELEASE tag to the replay lane.`, ...resultFailures] };
+    // A job that did not succeed derives red from its own result: a FAIL stage line keeps its
+    // conflict or red state, and any other stage (replayed, or none) becomes a synthetic FAIL line.
+    const stageLine = stage === '' ? null : stage;
+    const judged = resultFailures.length > 0 && !(typeof stageLine === 'string' && ANY_FAIL.test(stageLine))
+        ? `FAIL -- the uptake replay job ended ${replayResult} after stage ${stage || 'none'}`
+        : stageLine;
+    const facts = { candidateTag: tag, revision: 1, stage: judged, replayed: replayed === true };
+    const state = deriveUptake(facts);
+    const action = next(state);
+    if (state === 'UPTAKE_CONFLICT') {
+        const reason = conflictStageReason(facts.stage);
+        if (reason !== null) return { lines: [`release-train: would-write: refused -- ${reason}`], failures: resultFailures };
+        const decision = renderConflict(tag, conflictPatchNumber(facts.stage), facts.stage, '');
+        return {
+            lines: [`release-train: would-write: state=${state} action=${action}`, `would-write: conflict issue "${decision.title}", assigned to the owner; no patch is written`],
+            failures: [...conflictWriteFailures(decision), ...resultFailures],
+        };
+    }
+    const rendered = render(state, facts);
+    return {
+        lines: [`release-train: would-write: state=${state} action=${action}`, `would-write: uptake tracking issue "${rendered.title}" labels=${rendered.labels.join(',')}; the writer is not wired`, rendered.body],
+        failures: resultFailures,
+    };
+}
+
+function uptakeWouldWriteCli([tag, stage, replayed, replayResult, detectResult]) {
+    const view = uptakeWouldWrite({ tag, stage, replayed: replayed === 'true', replayResult, detectResult });
+    view.lines.forEach(l => console.log(l));
+    if (view.failures.length > 0) {
+        view.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
+        return 1;
+    }
+    return 0;
+}
+
 function wouldWriteCli([pinTag, tag, openPrNumber, stage]) {
     if (tagToVersion(pinTag) === null) {
         console.error(`${NAME}: FAIL -- the pin ${JSON.stringify(pinTag)} is not an *esr_RELEASE tag. Next step: check the pin in configuration.toml.`);
@@ -357,13 +576,60 @@ const NEWER = esrTag(153, 23, 0);
 const BASE = Object.freeze({ pinTag: BASE_PIN, revision: 1, candidateTag: null, openPr: null, bumpConclusion: null, stage: null, verifyCheck: null, merged: false, pinUnchanged: false });
 // Each fixture carries its expected action as a literal. next() is checked against that
 // literal, never against ACTIONS, so a wrong entry in ACTIONS cannot agree with itself.
-const FIXTURES = Object.freeze({
+// Release-stage fixtures are in the live response shape (runs, pending_deployments, Release,
+// contents base64, check conclusion, issue state) and pass through releaseFactsFromLive, so the
+// normaliser is exercised by the same rows as derive. The SHA and URL literals are fixture-only.
+const MERGE_SHA = '1'.repeat(40);
+const OTHER_SHA = '2'.repeat(40);
+// The tip of main when the run was dispatched. It is never the merge SHA: main advanced past the bump
+// merge, which is the normal shape (release.yml accepts a configuration.toml ancestor of the tip).
+const TIP_SHA = '3'.repeat(40);
+const REPO_FIXTURE = 'owner-fixture/repo-fixture';
+const RELEASE_KEY = 'v153.23.0-1';
+const SERVED_BYTES = 'served-public-descriptor-bytes';
+const NO_UPDATE_BYTES = 'no-update-descriptor-bytes';
+const EXPECTED_ASSETS = Object.freeze(['powerbrowser-153.23.0.tar.xz', 'powerbrowser-153.23.0.complete.mar', 'SHA256SUMS']);
+const b64 = s => Buffer.from(s, 'utf8').toString('base64');
+const runUrl = id => `https://example.invalid/actions/runs/${id}`;
+// A dispatched run carries head_sha = the tip of main and display_title = `Release <inputs.sha>` (run-name).
+const liveRun = (id, forSha, status, conclusion, createdAt, over = {}) => ({
+    id, head_sha: TIP_SHA, display_title: releaseRunTitle(forSha), path: RELEASE_WORKFLOW_PATH, head_repository: { full_name: REPO_FIXTURE },
+    event: 'workflow_dispatch', status, conclusion, created_at: createdAt, html_url: runUrl(id), ...over,
+});
+const liveRelease = (over = {}) => ({ draft: false, prerelease: false, assets: EXPECTED_ASSETS.map(name => ({ name })), body: 'PowerBrowser release notes', ...over });
+const liveBase = (over = {}) => ({
+    key: RELEASE_KEY, mergeSHA: MERGE_SHA, repository: REPO_FIXTURE, expectedAssets: EXPECTED_ASSETS, servedBytes: SERVED_BYTES, noUpdateBytes: NO_UPDATE_BYTES,
+    runs: [], pending: [], jobs: [], release: null, contents: null, channelLive: null, issue: { state: 'open' }, ...over,
+});
+const LIVE_DONE_RUN = [liveRun(103, MERGE_SHA, 'completed', 'success', '2026-10-31T11:00:00Z')];
+const factsOf = fx => (fx.live !== undefined ? { ...BASE, release: releaseFactsFromLive(fx.live) } : fx.facts);
+
+const FIXTURES_153 = Object.freeze({
     DETECTED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER }, action: 'bump' }),
     BUMPING: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 41 }, bumpConclusion: null }, action: 'wait' }),
     CONFLICT: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply (real conflict, not silent)' }, action: 'conflict-issue' }),
     BUMP_RED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 42 }, verifyCheck: 'failure' }, action: 'wait-owner' }),
     BUMP_PR_GREEN: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 43 }, verifyCheck: 'success', pinUnchanged: false }, action: 'gate' }),
+    // Main has advanced past the merge SHA (every run's head_sha is TIP_SHA). The other SHA's run is the newest and must not be linked: the link is by display title.
+    BUILDING: Object.freeze({ live: liveBase({ runs: [liveRun(100, OTHER_SHA, 'completed', 'success', '2026-10-31T12:00:00Z'), liveRun(101, MERGE_SHA, 'in_progress', null, '2026-10-31T10:00:00Z')] }), action: 'wait' }),
+    AWAITING_APPROVAL: Object.freeze({ live: liveBase({ runs: [liveRun(102, MERGE_SHA, 'waiting', null, '2026-10-31T10:00:00Z')], pending: [{ environment: { name: 'release' } }], release: liveRelease({ draft: true, assets: [], body: '' }) }), action: 'notify-owner' }),
+    PUBLISHED: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease() }), action: 'trigger-gh15' }),
+    DESCRIPTOR_WAIT: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, pending: [{ environment: { name: 'descriptor' } }], release: liveRelease(), contents: { content: b64(NO_UPDATE_BYTES) } }), action: 'notify-owner' }),
+    DESCRIPTOR_LIVE: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease(), contents: { content: b64(SERVED_BYTES) }, channelLive: { conclusion: 'success', subcheck: null } }), action: 'close-issue' }),
+    LIVE_RED: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease(), contents: { content: b64(`${SERVED_BYTES} stale`) }, channelLive: { conclusion: 'failure', subcheck: 'byte-equal' } }), action: 'block-and-link' }),
+    WITHDRAWN: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease({ prerelease: true }), contents: { content: b64(NO_UPDATE_BYTES) } }), action: 'reopen-and-instruct' }),
+    DONE: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease(), contents: { content: b64(SERVED_BYTES) }, channelLive: { conclusion: 'success', subcheck: null }, issue: { state: 'closed' } }), action: 'noop' }),
 });
+// The uptake lane's fixtures, one per UPTAKE_* state. The candidate is a 175 tag, built from parts.
+const UPTAKE_TAG = esrTag(UPTAKE_MAJOR, 0, 0);
+const UPTAKE_BASE = Object.freeze({ candidateTag: UPTAKE_TAG, stage: null, replayed: false });
+const UPTAKE_FIXTURES = Object.freeze({
+    UPTAKE_DETECTED: Object.freeze({ facts: { ...UPTAKE_BASE }, action: 'replay-only' }),
+    UPTAKE_CONFLICT: Object.freeze({ facts: { ...UPTAKE_BASE, stage: 'apply-patches: FAIL -- 030-powerbrowser-mar-certificates.patch did not apply (real conflict, not silent)' }, action: 'conflict-issue' }),
+    UPTAKE_RED: Object.freeze({ facts: { ...UPTAKE_BASE, stage: 'rebase-upstream: FAIL -- scan-brand-residue.mjs found residual brand strings after the replay' }, action: 'wait-owner' }),
+    UPTAKE_REPLAYED: Object.freeze({ facts: { ...UPTAKE_BASE, replayed: true }, action: 'note' }),
+});
+const FIXTURES = Object.freeze({ ...FIXTURES_153, ...UPTAKE_FIXTURES });
 
 /** Failures for a conflict decision that writes anything under the patch directory. Pure. */
 export function conflictWriteFailures(decision) {
@@ -373,20 +639,22 @@ export function conflictWriteFailures(decision) {
 }
 
 function runChecks(overrides = {}) {
-    const states = overrides.states ?? Object.keys(STATES);
+    const states = overrides.states ?? Object.keys(ALL_STATES);
     const fixtures = overrides.fixtures ?? FIXTURES;
     const actionKeys = overrides.actionKeys ?? Object.keys(ACTIONS);
     const failures = [];
     const { onlyA: missingFixtures, onlyB: missingStates } = setDiff(states, Object.keys(fixtures));
     for (const s of missingFixtures) failures.push(`state ${s} has no fixture. Next step: add a fixture for ${s} beside the other states.`);
     for (const f of missingStates) failures.push(`fixture ${f} names no state in STATES. Next step: add ${f} to STATES, or delete the fixture.`);
-    const { onlyA: extraActions, onlyB: missingActions } = setDiff(actionKeys, Object.keys(STATES));
+    const { onlyA: extraActions, onlyB: missingActions } = setDiff(actionKeys, Object.keys(ALL_STATES));
     for (const a of extraActions) failures.push(`action ${a} names no state in STATES. Next step: delete it from ACTIONS, or add the state to STATES.`);
     for (const s of missingActions) failures.push(`state ${s} has no action in ACTIONS. Next step: map ${s} to its action in ACTIONS.`);
     for (const name of Object.keys(fixtures)) {
         if (!states.includes(name)) continue;
-        const { facts, action: expected } = fixtures[name];
-        const got = derive(facts);
+        const facts = factsOf(fixtures[name]);
+        const expected = fixtures[name].action;
+        // The uptake lane derives with its own function, so a 175 fixture is never judged by the 153 table.
+        const got = name.startsWith('UPTAKE_') ? deriveUptake(facts) : derive(facts);
         if (got !== name) failures.push(`fixture ${name} derives ${got} instead of ${name}. Next step: fix derive() or the fixture facts.`);
         const action = next(got);
         if (action !== expected) failures.push(`fixture ${name} maps to action ${action}, not the expected ${expected}. Next step: fix next() or the expected action beside the fixture.`);
@@ -1040,14 +1308,22 @@ function selfTest() {
         baseline.failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`  ok  baseline -> five states, five fixtures with expected actions, set-equal; derive, next and render agree`);
+    console.log(`  ok  baseline -> ${Object.keys(ALL_STATES).length} states (${Object.keys(STATES).length} bump-lane: 5 Phase-A and 8 release-stage; ${Object.keys(UPTAKE_STATES).length} uptake-lane), each with a fixture and an action, set-equal; derive, next and render agree`);
 
     const OWNER = 'owner-login-fixture';
     const trainPlants = [
         {
             name: 'a sixth state with no fixture',
-            run: () => runChecks({ states: [...Object.keys(STATES), 'BUILDING'] }).failures,
-            expect: 'BUILDING',
+            run: () => runChecks({ states: [...Object.keys(ALL_STATES), 'UNBUILT'] }).failures,
+            expect: 'state UNBUILT has no fixture',
+        },
+        {
+            name: 'a release-stage state whose fixture is removed',
+            run: () => {
+                const { DONE: _removed, ...rest } = FIXTURES;
+                return runChecks({ fixtures: rest }).failures;
+            },
+            expect: 'state DONE has no fixture',
         },
         {
             name: 'a sixth fixture with no state',
@@ -1056,8 +1332,32 @@ function selfTest() {
         },
         {
             name: 'a sixth action with no state',
-            run: () => runChecks({ actionKeys: [...Object.keys(ACTIONS), 'BUILDING'] }).failures,
-            expect: 'action BUILDING names no state',
+            run: () => runChecks({ actionKeys: [...Object.keys(ACTIONS), 'UNBUILT'] }).failures,
+            expect: 'action UNBUILT names no state',
+        },
+        {
+            name: 'a release descriptor whose bytes drifted under a green channel-live',
+            // Drift must go red naming the byte-equal subcheck, never derive DESCRIPTOR_LIVE on a green flag alone.
+            run: () => {
+                const live = { ...FIXTURES.DESCRIPTOR_LIVE.live, contents: { content: b64(`${SERVED_BYTES} drifted`) } };
+                const facts = factsOf({ live });
+                const got = derive(facts);
+                return got === 'LIVE_RED' ? [`LIVE_RED: channel-live red on ${redSubcheck(facts.release)}`] : [`drifted descriptor derived ${got}`];
+            },
+            expect: 'channel-live red on byte-equal',
+        },
+        {
+            name: 'a run matcher keyed on head_sha, with main advanced past the merge SHA',
+            // The pre-fix key. A dispatched run carries head_sha = the tip of main, so this matcher finds no run,
+            // BUILDING and AWAITING_APPROVAL never derive, and the train would dispatch again every tick.
+            run: () => {
+                const byHeadSha = (r, live) => r.head_sha === live.mergeSHA && r.event === 'workflow_dispatch';
+                return ['BUILDING', 'AWAITING_APPROVAL'].flatMap(name => {
+                    const got = derive({ ...BASE, release: releaseFactsFromLive(FIXTURES[name].live, { matches: byHeadSha }) });
+                    return got === name ? [] : [`fixture ${name} derives ${got} instead of ${name} with a head_sha matcher`];
+                });
+            },
+            expect: 'derives null instead of BUILDING',
         },
         {
             name: 'a state with no action',
@@ -1165,12 +1465,68 @@ function selfTest() {
             run: () => (wouldWrite({ pinTag: BASE_PIN, tag: '', openPrNumber: '', stage: '' }).lines[0].includes('idle') ? [] : ['no-candidate run was not idle']),
         },
         {
-            name: 'control: the owner is mentioned only on the gate state',
+            name: 'control: the owner is mentioned on needs-owner states and not on progress states',
             run: () => {
                 const gate = render('BUMP_PR_GREEN', { ...FIXTURES.BUMP_PR_GREEN.facts, ownerLogin: OWNER });
                 const bumping = render('BUMPING', { ...FIXTURES.BUMPING.facts, ownerLogin: OWNER });
-                return gate.mention === OWNER && bumping.mention === null ? [] : ['owner mention drifted from the gate'];
+                const approval = render('AWAITING_APPROVAL', { ...factsOf(FIXTURES.AWAITING_APPROVAL), ownerLogin: OWNER });
+                const building = render('BUILDING', { ...factsOf(FIXTURES.BUILDING), ownerLogin: OWNER });
+                return gate.mention === OWNER && approval.mention === OWNER && bumping.mention === null && building.mention === null ? [] : ['owner mention drifted from the needs-owner states'];
             },
+        },
+        {
+            name: 'control: with main advanced past the merge SHA, BUILDING and AWAITING_APPROVAL derive and link the run titled for the merge SHA, never a newer run for another SHA',
+            run: () => {
+                const live = FIXTURES.BUILDING.live;
+                if (live.runs.some(r => r.head_sha === MERGE_SHA)) return ['the BUILDING fixture does not model main having advanced (a run carries head_sha = the merge SHA)'];
+                const body = render('BUILDING', { ...factsOf(FIXTURES.BUILDING), ownerLogin: OWNER }).body;
+                const approval = render('AWAITING_APPROVAL', factsOf(FIXTURES.AWAITING_APPROVAL)).body;
+                const linked = body.includes(`Release run (${runUrl(101)}) SHA ${MERGE_SHA}`) && !body.includes(runUrl(100)) && approval.includes(runUrl(102));
+                return linked ? [] : ['the run titled for the merge SHA was not linked'];
+            },
+        },
+        {
+            name: 'control: a dispatch at the tip of main (head_sha equals the merge SHA) still derives BUILDING',
+            run: () => {
+                const live = liveBase({ runs: [liveRun(104, MERGE_SHA, 'in_progress', null, '2026-10-31T10:00:00Z', { head_sha: MERGE_SHA })] });
+                return derive(factsOf({ live })) === 'BUILDING' ? [] : ['a tip-of-main dispatch did not derive BUILDING'];
+            },
+        },
+        {
+            name: 'control: a run from another repository, another workflow path, another event or another title is never linked',
+            run: () => {
+                const at = '2026-10-31T10:00:00Z';
+                const foreign = [
+                    liveRun(110, MERGE_SHA, 'in_progress', null, at, { head_repository: { full_name: 'fork-fixture/repo-fixture' } }),
+                    liveRun(111, MERGE_SHA, 'in_progress', null, at, { path: '.github/workflows/verify.yml' }),
+                    liveRun(112, MERGE_SHA, 'in_progress', null, at, { event: 'push' }),
+                    liveRun(113, MERGE_SHA, 'in_progress', null, at, { display_title: 'Release' }),
+                    liveRun(114, OTHER_SHA, 'in_progress', null, at, { head_sha: MERGE_SHA }),
+                ];
+                const rel = releaseFactsFromLive(liveBase({ runs: foreign }));
+                const ref = releaseFactsFromLive(liveBase({ runs: [liveRun(115, MERGE_SHA, 'in_progress', null, at, { path: `${RELEASE_WORKFLOW_PATH}@refs/heads/main` })] }));
+                return rel.run === null && ref.run !== null ? [] : ['a foreign run was linked, or a path with a ref suffix was refused'];
+            },
+        },
+        {
+            name: 'control: requested and pending release runs derive BUILDING',
+            run: () => ['requested', 'pending'].flatMap(status => (derive(factsOf({ live: liveBase({ runs: [liveRun(120, MERGE_SHA, status, null, '2026-10-31T10:00:00Z')] }) })) === 'BUILDING' ? [] : [`a ${status} run did not derive BUILDING`])),
+        },
+        {
+            name: 'control: the notes marker alone derives WITHDRAWN, as does the prerelease flag',
+            run: () => {
+                const marked = { ...FIXTURES.DESCRIPTOR_LIVE.live, release: liveRelease({ body: `notes ${WITHDRAWAL_MARK}` }) };
+                const flagged = FIXTURES.WITHDRAWN.live;
+                return derive(factsOf({ live: marked })) === 'WITHDRAWN' && derive(factsOf({ live: flagged })) === 'WITHDRAWN' ? [] : ['a withdrawal mark did not derive WITHDRAWN'];
+            },
+        },
+        {
+            name: 'control: a fact set that could advance twice derives one state (waiting outranks PUBLISHED)',
+            run: () => (derive(factsOf(FIXTURES.DESCRIPTOR_WAIT)) === 'DESCRIPTOR_WAIT' ? [] : ['a double-advance fact set did not derive one state']),
+        },
+        {
+            name: 'control: LIVE_RED names the red subcheck in its body',
+            run: () => (render('LIVE_RED', factsOf(FIXTURES.LIVE_RED)).body.includes('channel-live red on byte-equal') ? [] : ['LIVE_RED body does not name byte-equal']),
         },
         {
             name: 'control: the real conflict decision writes nothing under the patch directory',
@@ -1178,8 +1534,55 @@ function selfTest() {
         },
     ];
 
+    // The uptake lane's faults (TRAIN-05, UPS-01): a 153 tag never reaches the 175 replay, a conflict
+    // names its patch, a conflict writes nothing under patches/, and a branch never names another tag.
+    const uptakePlants = [
+        {
+            name: 'a 153.x tag offered to the 175 uptake guard',
+            run: () => { const reason = uptakeGuard(NEWER); return reason === null ? [] : [reason]; },
+            expect: `major 153 is not the uptake major ${UPTAKE_MAJOR}`,
+        },
+        {
+            name: 'a 153.x tag offered as the uptake replay candidate',
+            run: () => uptakeWouldWrite({ tag: NEWER, stage: '', replayed: false, replayResult: 'success', detectResult: 'success' }).failures,
+            expect: `not the uptake major ${UPTAKE_MAJOR}`,
+        },
+        {
+            name: 'a uptake conflict stage line naming no patch number',
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'FAIL -- apply-patches.sh failed replaying', replayed: false, replayResult: 'failure', detectResult: 'success' }).lines.filter(l => l.includes('refused')),
+            expect: 'names no patch number',
+        },
+        {
+            // The review's reproduction (WR-02): the replay printed stage replayed, then a later step failed.
+            name: 'a uptake replay that printed stage replayed and then ended failure is red, not replay due',
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'replayed', replayed: false, replayResult: 'failure', detectResult: 'success' }).failures,
+            expect: 'the uptake replay job ended failure',
+        },
+        {
+            name: 'a uptake replay cancelled at its timeout with no stage line is red',
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: false, replayResult: 'cancelled', detectResult: 'success' }).failures,
+            expect: 'the uptake replay job ended cancelled',
+        },
+        {
+            // IN-03: a failed detect leaves the candidate empty, which must not read as idle.
+            name: 'a failed detect job with an empty uptake candidate reads as detection failed, not idle',
+            run: () => uptakeWouldWrite({ tag: '', stage: '', replayed: false, replayResult: 'skipped', detectResult: 'failure' }).failures,
+            expect: 'the detect job ended failure',
+        },
+        {
+            name: 'a 175 candidate whose replay job was skipped is red, never idle',
+            run: () => uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: false, replayResult: 'skipped', detectResult: 'success' }).failures,
+            expect: 'the uptake replay job ended skipped',
+        },
+        {
+            name: 'a uptake conflict decision that writes under the patch directory',
+            run: () => conflictWriteFailures({ ...renderConflict(UPTAKE_TAG, '030', 'log', 'diff'), writes: [`${PATCH_DIR}/030-powerbrowser-mar-certificates.patch`] }),
+            expect: `writes patches/030-powerbrowser-mar-certificates.patch under the patch directory`,
+        },
+    ];
+
     let failed = 0;
-    for (const p of [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants]) {
+    for (const p of [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants, ...uptakePlants]) {
         const failures = p.run();
         const named = failures.find(f => f.includes(p.expect));
         if (failures.some(f => f.includes(REPO_ROOT))) {
@@ -1192,7 +1595,66 @@ function selfTest() {
             failed += 1;
         }
     }
-    for (const g of greens) {
+    const uptakeGreens = [
+        {
+            name: 'control: a 175 candidate is accepted by the uptake guard and, before its replay, derives UPTAKE_DETECTED',
+            run: () => {
+                const got = deriveUptake(UPTAKE_FIXTURES.UPTAKE_DETECTED.facts);
+                const ok = uptakeGuard(UPTAKE_TAG) === null && got === 'UPTAKE_DETECTED';
+                return ok ? [] : [`a 175 candidate before its replay derived ${got}`];
+            },
+        },
+        {
+            name: 'control: a 175 replay PASS derives UPTAKE_REPLAYED with the note action and no failure',
+            run: () => {
+                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: '', replayed: true, replayResult: 'success', detectResult: 'success' });
+                const ok = view.lines[0].includes('state=UPTAKE_REPLAYED action=note') && view.failures.length === 0;
+                return ok ? [] : [`uptake PASS view said ${view.lines[0]} with ${view.failures.length} failure(s)`];
+            },
+        },
+        {
+            // IN-02: the real uptake conflict view, the path a live 175 patch conflict takes, writes nothing under
+            // the patch directory. Its only failure is the replay's red result, which the view must still report.
+            name: 'control: the real uptake conflict view writes nothing under the patch directory',
+            run: () => {
+                const view = uptakeWouldWrite({ tag: UPTAKE_TAG, stage: 'apply-patches: FAIL -- 030-powerbrowser-mar-certificates.patch did not apply (real conflict, not silent)', replayed: false, replayResult: 'failure', detectResult: 'success' });
+                const writes = view.failures.filter(f => f.includes(`${PATCH_DIR}/`));
+                const onlyResult = view.failures.length === 1 && view.failures[0].includes('the uptake replay job ended failure');
+                const conflict = view.lines.some(l => l.includes('state=UPTAKE_CONFLICT'));
+                return writes.length === 0 && onlyResult && conflict ? [] : [`conflict view failures were: ${view.failures.join(' | ') || '(none)'}`];
+            },
+        },
+        {
+            name: 'control: a candidate-less uptake run is idle and green when its job was skipped',
+            run: () => {
+                const view = uptakeWouldWrite({ tag: '', stage: '', replayed: false, replayResult: 'skipped', detectResult: 'success' });
+                return view.lines[0].includes('idle') && view.failures.length === 0 ? [] : [`idle view said ${view.lines[0]}`];
+            },
+        },
+        {
+            // Lane precedence: the withdrawal mark outranks every other fact in derive(), and the two lanes never
+            // share a derive: the uptake function refuses a 153 candidate and ignores release facts.
+            name: 'control: a withdrawn release outranks a fresh candidate and an open bump PR, and the uptake lane never derives from a 153 tag or a release',
+            run: () => {
+                const release = factsOf(FIXTURES.WITHDRAWN).release;
+                const crowded = { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 44 }, verifyCheck: 'success', release };
+                const viaTrain = derive(crowded);
+                const viaUptake153 = deriveUptake({ ...UPTAKE_BASE, candidateTag: NEWER });
+                const viaUptakeRelease = deriveUptake({ ...UPTAKE_BASE, release });
+                const ok = viaTrain === 'WITHDRAWN' && viaUptake153 === null && viaUptakeRelease === 'UPTAKE_DETECTED';
+                return ok ? [] : [`crowded facts derived ${viaTrain}; uptake over a 153 tag ${viaUptake153}; uptake over release facts ${viaUptakeRelease}`];
+            },
+        },
+        {
+            name: 'control: the 153 and 175 keys differ, so their tracking issues never collide',
+            run: () => {
+                const bump = render('DETECTED', { ...FIXTURES.DETECTED.facts });
+                const uptake = render('UPTAKE_DETECTED', { ...UPTAKE_BASE });
+                return bump.title !== uptake.title && uptake.title.startsWith('release-train: v175.') ? [] : [`titles ${bump.title} and ${uptake.title} are not distinct per key`];
+            },
+        },
+    ];
+    for (const g of [...greens, ...uptakeGreens]) {
         const failures = g.run();
         if (failures.length === 0) {
             console.log(`  ok  ${g.name} -> green`);
@@ -1207,8 +1669,8 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    const total = trainPlants.length + conflictPlants.length + viewPlants.length + publishPlants.length;
-    console.log(`${NAME}: --self-test PASS -- ${Object.keys(STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length} controls stayed green; maintenance half: ${maint.total} case(s) proven (six rows, no-data branches, transition comments, exactly-one, fork head, draft Release)`);
+    const total = trainPlants.length + conflictPlants.length + viewPlants.length + publishPlants.length + uptakePlants.length;
+    console.log(`${NAME}: --self-test PASS -- ${Object.keys(ALL_STATES).length} states set-equal to ${Object.keys(FIXTURES).length} fixtures, ${total} planted faults went red naming their drift, and ${greens.length + uptakeGreens.length} controls stayed green; maintenance half: ${maint.total} case(s) proven (six rows, no-data branches, transition comments, exactly-one, fork head, draft Release)`);
     return 0;
 }
 
@@ -1223,6 +1685,7 @@ if (isEntry) {
     }
     if (args.length === 1 && args[0] === '--self-test') process.exit(selfTest());
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
+    if (args[0] === '--uptake-would-write' && args.length === 6) process.exit(uptakeWouldWriteCli(args.slice(1)));
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
     if (args[0] === '--sweep-due' && (args.length === 2 || args.length === 3)) process.exit(sweepDueCli(args.slice(1)));
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));

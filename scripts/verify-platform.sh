@@ -4858,6 +4858,29 @@ run_own_checks() {
     # hook text, and a legion job without the SHA step, each in memory; each goes red naming the file, the
     # variable or job, and the value. It writes nothing.
     "hook-refusal-self-test|node $REPO_ROOT/scripts/verify-hook-refusal.mjs --self-test"
+    # NEW (Phase 50, TRAIN-10): the release SHA gate. The bash step text that release.yml carries
+    # in build-linux and sign-publish is read with js-yaml and executed, unchanged, against scratch
+    # git repositories with a local bare origin: the tip of main and a configuration.toml ancestor
+    # with main's workflows are green; the two job texts must be identical. Honestly --quick: local
+    # git in mkdtemp; no network, build, browser or display.
+    "release-sha-gate|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs"
+    # NEW (Phase 50, TRAIN-10): the plants for the same gate, each run against the shipped text and
+    # required to go red naming the drift: a side commit not on main (its SHA), an ancestor that does
+    # not change configuration.toml, an ancestor whose .github/workflows/ diverges from the tip, and a
+    # checked-out HEAD that is not the requested SHA. Each refusal names its next step. Honestly
+    # --quick, as the row above.
+    "release-sha-gate-self-test|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs --self-test"
+    # NEW (Phase 50 review CR-01, WR-01): the dispatch-release correlation. The merged, existing, dispatch
+    # and run steps of release-train.yml are executed unchanged under a fake gh that answers from fixtures
+    # through the real jq. A dispatched run's head_sha is the tip of main, not inputs.sha, so with main
+    # advanced past the merge SHA the count must be 1 (no re-dispatch) and the link must be the run
+    # titled `Release <sha>`; a cross-repository merged PR and runs from another repository, path or
+    # event are ignored. Honestly --quick: bash, jq and node in mkdtemp; no network, gh, build or display.
+    "dispatch-release|node $REPO_ROOT/scripts/verify-dispatch-release.mjs"
+    # NEW (Phase 50 review CR-01, WR-01): the plants for the same steps (a head_sha key, a missing
+    # isCrossRepository select, a missing --base main, a missing repository, path or event condition,
+    # a dispatch no longer gated on a zero count), each required to go red naming the drift.
+    "dispatch-release-self-test|node $REPO_ROOT/scripts/verify-dispatch-release.mjs --self-test"
     # NEW (Phase 49, SEC-07): the sign-publish channel gate. mar_channel_gate refuses a MAR whose
     # product-info channel is not ACCEPTED_MAR_CHANNEL_IDS, cross-checks the `--channel` value against
     # MOZ_UPDATE_CHANNEL, and never compares the MAR id with the update channel; signmar -s runs
@@ -4898,6 +4921,17 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
+    # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
+    # own pinned group, one regex customManager captures the live configuration.toml theia_release,
+    # automerge is off, the nix manager is off (flake.lock not moved, BLOCKED.md item 5), the post-upgrade
+    # hook is the licensing pair, the branch prefix
+    # is chore/theia-, and no clock key exists. Honestly --quick: JSON5 and JSON text reads; no
+    # renovate binary, no network, no gh.
+    "renovate-config|node $REPO_ROOT/scripts/verify-renovate-config.mjs"
+    # renovate-config-self-test plants one fault per rule in memory, after the unmodified tree and a
+    # clean fixture stay green; each plant must go red naming its rule. It writes nothing in the tree.
+    "renovate-config-self-test|node $REPO_ROOT/scripts/verify-renovate-config.mjs --self-test"
     # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
     # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
     # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
