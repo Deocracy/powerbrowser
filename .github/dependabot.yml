@@ -1,0 +1,40 @@
+# .github/dependabot.yml
+#
+# AUTO-03 (Phase 51, plan 51-02). Dependabot is GitHub-native: nothing here is an action to admit or a SHA to pin.
+# This file lives outside .github/workflows/, so scripts/verify-workflows.mjs never parses it, and `interval: weekly`
+# below is Dependabot's own cadence, not a workflow `on.schedule` event (D-77 is not touched).
+#
+#  - github-actions: one grouped pull request per week for every workflow's `uses:`. Dependabot rewrites the
+#    40-hex pin and its plain `# vX.Y.Z` comment together. Pin comments stay plain; a compound comment
+#    (`# vX.Y.Z # note`) would go stale on the next bump and is not used anywhere.
+#  - npm, /theia: security updates only. `open-pull-requests-limit: 0` is the documented way to switch version updates
+#    off for an ecosystem; Dependabot security updates run on their own limit and still open a pull request for a
+#    vulnerable dependency in theia/yarn.lock. They need the repository's Dependabot security updates switch on, which
+#    this file cannot set (live it was enabled at plan time; see the 51-02 summary). The Theia version line itself
+#    is Renovate's, see .github/renovate.json5.
+#  - There is no auto-merge key and no auto-merge workflow: every Dependabot pull request merges by owner hand.
+#  - The weekly runs fire at 04:00 UTC on Monday, before the maintenance sweep's 06:00 UTC gate, so the sweep that day
+#    already sees the grouped pull request. A week with no updates opens no pull request (Dependabot behaviour);
+#    this file adds no paging on empty.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
+  - package-ecosystem: "npm"
+    directory: "/theia"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 0
