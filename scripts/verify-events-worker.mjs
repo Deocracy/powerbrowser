@@ -85,6 +85,8 @@ const RULE = Object.freeze({
     retention: 'retention window',
     admitted: 'admitted set equals the producer',
     contract: 'producer-to-Worker contract',
+    shapes: 'admitted shapes equal the producer',
+    content: 'content in an admitted key',
     flat: 'old flat event shape',
     usage: 'usage event skipped',
     schemaColumn: 'schema declares every column',
@@ -204,6 +206,20 @@ async function runStatic(root, worker) {
         const producer = await loadModule(root, ENRICH_REL);
         if (JSON.stringify([...worker.ADMITTED_KEYS]) !== JSON.stringify([...producer.ADMITTED_KEYS])) {
             failures.push(`${RULE.admitted}: the Worker's ADMITTED_KEYS is ${JSON.stringify([...worker.ADMITTED_KEYS])} but the producer exports ${JSON.stringify([...producer.ADMITTED_KEYS])}. Next step: make ${WORKER_REL} restate the producer's set exactly.`);
+        }
+    }
+
+    // 1a'. the value shapes are the producer's, derived by comparing both modules.
+    if (existsSync(join(root, ENRICH_REL))) {
+        const producer = await loadModule(root, ENRICH_REL);
+        const pairs = [
+            ...Object.keys(producer.ADMITTED_SHAPES).map(k => [`${k} shape`, String(producer.ADMITTED_SHAPES[k]), String(worker.ADMITTED_SHAPES?.[k])]),
+            ['os buckets', JSON.stringify([...producer.OS_BUCKETS]), JSON.stringify([...(worker.OS_BUCKETS ?? [])])],
+            ['position maximum', String(producer.POSITION_MAX), String(worker.POSITION_MAX)],
+            ['event name shape', String(producer.EVENT_NAME), String(worker.NAME_SHAPE)],
+        ];
+        for (const [what, want, got] of pairs) {
+            if (want !== got) failures.push(`${RULE.shapes}: the producer's ${what} is ${want} but the Worker restates ${got}. Next step: make ${WORKER_REL} restate the producer's shape exactly.`);
         }
     }
 
@@ -331,13 +347,37 @@ async function runBehaviour(root, worker, secret) {
         if (stored.length > 0) failures.push(`${RULE.extraProp}: the stored row carries ${JSON.stringify(stored)}. Next step: write only the admitted columns.`);
     }
 
-    // Over-length string: stored truncated to MAX_STRING_CHARS.
+    // Over-length string: a stored free string (a download-count asset) is truncated to MAX_STRING_CHARS.
     {
         const stub = makeStub();
-        const verdict = await worker.handleEvents(post(worker.EVENTS_PATH, { events: [errorEvent({}, { name: 'x'.repeat(300) })] }), env(stub), freshState());
-        if (verdict.status !== 200) failures.push(`${RULE.overLength}: a 300-character name answered ${verdict.status}, not 200 with truncation. Next step: truncate, do not reject.`);
-        else if (stub.events[0].name.length !== worker.MAX_STRING_CHARS) failures.push(`${RULE.overLength}: the stored name is ${stub.events[0].name.length} characters, not ${worker.MAX_STRING_CHARS}. Next step: truncate every stored string to MAX_STRING_CHARS.`);
+        const authedLong = { authorization: `Bearer ${secret}` };
+        const long = 'x'.repeat(300);
+        const verdict = await worker.handleDownloadCounts(post(worker.DL_PATH, { asset: long, tag: 't'.repeat(300), download_count: 1 }, authedLong), { DB: stub, DOWNLOAD_COUNT_SECRET: secret }, freshState());
+        const row = [...stub.counts.values()][0];
+        if (verdict.status !== 200 || row === undefined) failures.push(`${RULE.overLength}: a 300-character asset answered ${verdict.status}, not 200 with truncation. Next step: truncate, do not reject.`);
+        else {
+            if (Array.from(row.asset).length > worker.MAX_STRING_CHARS) failures.push(`${RULE.overLength}: the stored asset is ${Array.from(row.asset).length} characters, over ${worker.MAX_STRING_CHARS}. Next step: truncate every stored free string to MAX_STRING_CHARS.`);
+        }
     }
+
+    // Content in an admitted key: the key is allowed, the value is free text. The batch is rejected whole.
+    for (const data of [
+        { type: "Unable to read '/home/alice/secret.txt'" },
+        { type: 'T', source: 'file:///home/alice/proj/a.ts' },
+        { type: 'T', source: 'a/b.js' },
+        { type: 'T', source: 'C:\\x.js' },
+        { type: 'T', os: 'Alice-laptop' },
+        { type: 'T', version: 'x'.repeat(5000) },
+        { type: 'T', version: '1.2.3.4.5' },
+        { type: 'T', buildID: '/tmp/x' },
+        { type: 'T', line: -1 },
+        { type: 'T', line: 1.5 },
+        { type: 'T', column: 1e308 },
+        { type: 'T', line: '12' },
+    ]) {
+        await expectRejected(RULE.content, post(worker.EVENTS_PATH, { events: [errorEvent(data)] }), { status: 400, body: 'Discarded: malformed_event' });
+    }
+    await expectRejected(RULE.content, post(worker.EVENTS_PATH, { events: [errorEvent({ type: 'T' }, { name: 'plugin failed: /home/alice/x' })] }), { status: 400, body: 'Discarded: malformed_event' });
 
     // Over-rate sequence: MAX POSTs accepted, the next answers the discard and stores nothing.
     if (worker.THROTTLE_MAX_POSTS > 1000) {
@@ -503,6 +543,8 @@ const PLANTS = [
     { rule: RULE.usage, rel: WORKER_REL, find: "    if (event.kind !== 'error') return event.kind === 'usage' ? null : undefined;\n", replace: '' },
     { rule: RULE.contract, rel: SENDER_REL, find: 'this.queue.push({ kind, name, data, at: this.nowFn() });', replace: 'this.queue.push({ kind, name, ...data, at: this.nowFn() });' },
     { rule: RULE.contract, rel: SENDER_REL, find: 'this.queue.push({ kind, name, data, at: this.nowFn() });', replace: 'this.queue.push({ kind, name, payload: data, at: this.nowFn() });' },
+    { rule: RULE.content, rel: WORKER_REL, find: '        if (!valueOk(wire, value)) return undefined;\n', replace: '' },
+    { rule: RULE.shapes, rel: WORKER_REL, find: "    source: /^[\\w.-]{1,100}$/,", replace: '    source: /^.{1,100}$/,' },
     { rule: RULE.admitted, rel: WORKER_REL, find: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);", replace: "export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os', 'message']);" },
     { rule: RULE.schemaColumn, rel: SCHEMA_REL, find: '  "column" INTEGER,\n', replace: '' },
     { rule: RULE.noRoutes, rel: WRANGLER_REL, find: 'compatibility_date = "2026-10-31"', replace: 'compatibility_date = "2026-10-31"\nroutes = ["events.powerbrowser.org/events"]' },

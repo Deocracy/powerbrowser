@@ -2,7 +2,7 @@
 //
 // DELIBERATELY ZERO-DEPENDENCY: this file imports only its zero-dependency
 // siblings telemetry-error-report.ts (typeOf, the Error-input name) and
-// telemetry-enrichment.ts (ADMITTED_KEYS), so the unit suite
+// telemetry-enrichment.ts (the admitted keys and shapes), so the unit suite
 // (test/telemetry-sender.test.mjs) imports it straight from src/ under plain
 // node with no build, no browser and no install -- and so it can never drag a
 // Theia module (or its side effects) into the test.
@@ -22,13 +22,13 @@
 // point catches; the worst case is a dropped event plus a diagnostic).
 // Never grows without bound (the queue caps; see maxQueueEvents).
 // Never enriches: the error path carries an identifier-shaped name plus only the
-// admitted keys of caller data (ADMITTED_KEYS, string or finite-number values),
+// admitted keys of caller data (ADMITTED_KEYS, each value in its admitted shape),
 // never a message and never a stack (stacks carry file paths). Version, buildID
 // and OS are added upstream by telemetry-enrichment.ts, not here. The at
 // timestamp is transport metadata, not enrichment.
 
 import { typeOf } from './telemetry-error-report.ts';
-import { ADMITTED_KEYS } from './telemetry-enrichment.ts';
+import { EVENT_NAME, admittedErrorData } from './telemetry-enrichment.ts';
 
 export const TELEMETRY_LEVELS = ['off', 'crash', 'error', 'all'] as const;
 export type TelemetryLevel = typeof TELEMETRY_LEVELS[number];
@@ -86,25 +86,11 @@ export function levelAllowsEvent(level: TelemetryLevel, kind: TelemetryEventKind
     return level === 'all';
 }
 
-// The error path names an event by identifier shape only: text spoken as a name (a message, a
-// path) is dropped to 'unknown' rather than sent.
-const EVENT_NAME = /^[A-Za-z0-9._-]{1,100}$/;
-
-// The error path sends only the TEL-06 admitted keys whatever the caller passed, and only string
-// or finite-number values, so a plugin's own error data can never widen the wire set. An object
-// value (where a message or stack would sit) is dropped.
-// shortcut: string values are not content-checked here (the in-tree reporter bounds its own),
-// upgrade if a caller other than the reporter starts passing free text in type or source.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function admittedData(data: Record<string, any> | undefined): Record<string, string | number> | undefined {
-    if (data === undefined || data === null || typeof data !== 'object') return undefined;
-    const out: Record<string, string | number> = {};
-    for (const key of ADMITTED_KEYS) {
-        const value = data[key];
-        if (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) out[key] = value;
-    }
-    return Object.keys(out).length > 0 ? out : undefined;
-}
+// The error path names an event by identifier shape only (EVENT_NAME): text spoken as a name (a
+// message, a path) is dropped to 'unknown' rather than sent. Its data goes through admittedErrorData:
+// only the TEL-06 admitted keys, each value checked against its shape, and a report with a value that
+// fails its shape is dropped whole. A plugin's own error data can never widen the wire set or put
+// free text in an admitted key.
 
 export class PowerBrowserTelemetrySender {
     protected readonly endpoint: string | undefined;
@@ -174,7 +160,9 @@ export class PowerBrowserTelemetrySender {
     sendErrorData(error: Error | string, data?: Record<string, any>): void {
         try {
             const raw = typeof error === 'string' ? error : typeOf(error);
-            this.enqueue('error', EVENT_NAME.test(raw) ? raw : 'unknown', admittedData(data));
+            const clean = admittedErrorData(data);
+            if (clean === null) return;
+            this.enqueue('error', EVENT_NAME.test(raw) ? raw : 'unknown', clean);
         } catch {
             // Never a throw out of a telemetry path.
         }

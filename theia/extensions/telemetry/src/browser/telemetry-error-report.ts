@@ -17,7 +17,7 @@
 // non-string name gives 'unknown' or an omitted field, never a throw out of the listener.
 
 import type { EnrichmentContext } from './telemetry-enrichment.ts';
-import { withEnrichment } from './telemetry-enrichment.ts';
+import { ADMITTED_SHAPES, withEnrichment } from './telemetry-enrichment.ts';
 
 export const UNCAUGHT_ERROR_EVENT = 'frontend.uncaught-error';
 export const UNHANDLED_REJECTION_EVENT = 'frontend.unhandled-rejection';
@@ -40,10 +40,10 @@ export type ErrorReport = {
 };
 
 // A runtime-assigned constructor name could carry any text; an identifier cannot carry a path.
-const IDENTIFIER = /^[A-Za-z_$][\w$]{0,63}$/;
+const IDENTIFIER = ADMITTED_SHAPES.type;
 // Only a script loaded from a URL has a file name; a data: or eval source's last segment is code.
 const SCRIPT_URL = /^(https?|file):\/\//i;
-const FILE_NAME = /^[\w.-]{1,100}$/;
+const FILE_NAME = ADMITTED_SHAPES.source;
 
 function read(target: unknown, key: string): unknown {
     try {

@@ -39,14 +39,16 @@
 //   node scripts/verify-telemetry.mjs
 //   node scripts/verify-telemetry.mjs --self-test
 //
-// The self-test plants six faults and requires each to go red, each with the unmutated control
+// The self-test plants eight faults and requires each to go red, each with the unmutated control
 // green first, so a red is plant-caused: the suite run against the always-send stub (the off
 // assertion must fail), a drifted tracked block, a drifted fragment, an extra key in the
 // enrichment, a stack field the sender forwards (the admitted-set filter removed), and a one-word
 // change to the preference description. It also drives the NG-067 error reporter into the real
 // sender, and the plugin error path straight into it: the sent payload carries only admitted keys,
 // no message, no stack and no path beyond a base name, a hostile event never throws out of the
-// listener, and a repeated error is sent once.
+// listener, and a repeated error is sent once. Two further plants remove the value-shape check on
+// the admitted keys, and weaken it to drop only the key: a path or message in type, source, os,
+// version or buildID, or a negative or fractional line, must keep the whole report off the wire.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
@@ -92,8 +94,9 @@ const OS_VECTORS = [
     ['Mozilla/5.0 (X11; Linux x86_64)', 'linux'],
     ['', 'unknown'],
 ];
-// Fixture version and buildID for the producer checks. Chosen so no tripwire word appears in them.
-const CONTEXT_FIXTURE = Object.freeze({ version: 'vtest-1', buildID: 'bidtest-1' });
+// Fixture version and buildID for the producer checks. They have the release-identity shape the
+// producer admits (version <ESR>, buildID v<ESR>-<revision>); a value of any other shape is omitted.
+const CONTEXT_FIXTURE = Object.freeze({ version: '153.5.1', buildID: 'v153.5.1-1' });
 
 function readBytes(root, rel) {
     const p = join(root, rel);
@@ -347,6 +350,23 @@ async function driveErrorReport(root) {
     sender.sendErrorData('plugin.error', { type: 'PluginError', message: secret, stack: `at f (${secret})` });
     sender.sendErrorData(`plugin failed: ${secret}`);
     sender.sendErrorData(new TypeError(secret));
+    // Content in an admitted key (the review's CR-04): the key is allowed, the value is free text. Each
+    // call has its own event name, so a report that reaches the wire with a key merely trimmed away
+    // is seen too. The whole report must be dropped.
+    const hostile = [
+        { type: `Unable to read '${secret}'` },
+        { type: 'T', source: 'file:///home/alice/proj/a.ts' },
+        { type: 'T', source: 'a/b.js' },
+        { type: 'T', source: 'C:\\x.js' },
+        { type: 'T', os: 'Alice-laptop' },
+        { type: 'T', version: 'x'.repeat(5000) },
+        { type: 'T', buildID: '/tmp/x' },
+        { type: 'T', line: -1 },
+        { type: 'T', line: 1.5 },
+        { type: 'T', column: 2 ** 40 },
+        { type: 'T', line: '12' },
+    ];
+    hostile.forEach((data, i) => sender.sendErrorData(`plugin.hostile.${i}`, data));
     await sender.flush();
     const text = bodies.join('\n');
     const events = bodies.flatMap(b => JSON.parse(b).events);
@@ -363,6 +383,9 @@ async function driveErrorReport(root) {
         }
     }
     if (!events.some(e => e.name === 'frontend.unhandled-rejection' && e.data?.type === 'RangeError')) problems.push('the rejection was not sent with its type');
+    for (const e of events.filter(e => e.name.startsWith('plugin.hostile.'))) {
+        problems.push(`content in an admitted key reached the wire on '${e.name}': ${JSON.stringify(e.data)}`);
+    }
     if (events.length !== 10) problems.push(`expected 10 events (seven distinct reporter errors, three plugin-path calls), got ${events.length}`);
     // The plugin path: only the admitted type survives, a message-shaped name becomes 'unknown', and
     // an Error input is named by its type with no data.
@@ -490,7 +513,7 @@ async function selfTest() {
             for (const rel of [ENRICH_REL, REPORT_REL, SENDER_REL]) copyInto(dir, rel);
             const target = join(dir, SENDER_REL);
             const before = readFileSync(target, 'utf8');
-            const drifted = before.replace(', admittedData(data));', ', data);');
+            const drifted = before.replace(', clean);', ', data);');
             if (drifted === before) {
                 complain('stack field', 'planted no fault at all: the drift did not land');
             } else {
@@ -507,8 +530,36 @@ async function selfTest() {
         }
     }
 
+    // Plants 7 and 8: the shape check on admitted values is removed, then weakened to drop only the
+    // key. A path or message in type, source or os must still keep the whole report off the wire.
+    for (const plant of [
+        { name: 'content in an admitted key', find: 'if (!admittedValueOk(key, value)) return null;', replace: '' },
+        { name: 'key-only drop', find: 'if (!admittedValueOk(key, value)) return null;', replace: 'if (!admittedValueOk(key, value)) continue;' },
+    ]) {
+        const dir = mkdtempSync(join(tmpdir(), 'telemetry-selftest-'));
+        try {
+            for (const rel of [ENRICH_REL, REPORT_REL, SENDER_REL]) copyInto(dir, rel);
+            const target = join(dir, ENRICH_REL);
+            const before = readFileSync(target, 'utf8');
+            const drifted = before.replace(plant.find, plant.replace);
+            if (drifted === before) {
+                complain(plant.name, 'planted no fault at all: the drift did not land');
+                continue;
+            }
+            writeFileSync(target, drifted, 'utf8');
+            const { problems } = await driveErrorReport(dir);
+            if (!problems.some(p => p.includes('content in an admitted key'))) {
+                complain(plant.name, `did not go red naming 'content in an admitted key'; got: ${problems.join(' | ') || '(no problems at all)'}`);
+            } else {
+                console.log(`  ok  ${plant.name} -> red, naming 'content in an admitted key'`);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 6 planted faults and the error-report case all behaved as pinned`);
+    console.log(`${NAME}: --self-test PASS -- 8 planted faults and the error-report case all behaved as pinned`);
     return 0;
 }
 

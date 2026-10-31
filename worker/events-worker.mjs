@@ -25,7 +25,8 @@
 // CAPS AND RETENTION. The privacy page states the same numbers; the gate derives both sides.
 //   body       MAX_BODY_BYTES = 65536 bytes, checked before parse; over it answers 413 oversized_body
 //   batch      MAX_EVENTS = 100 events per POST; over it answers 400 malformed_batch
-//   string     MAX_STRING_CHARS = 256 characters per stored string; a longer string is truncated
+//   string     MAX_STRING_CHARS = 256 characters per stored free string (a download-count asset or tag);
+//              a longer string is truncated. Event values are shape-checked, never truncated.
 //   retention  RETENTION_DAYS = 30 days, deleted by the scheduled job from both tables
 //
 // THROTTLE. At most THROTTLE_MAX_POSTS accepted /events POSTs per THROTTLE_WINDOW_MS. An excess
@@ -61,7 +62,30 @@ export const DAY_MS = 86_400_000;
 export const ADMITTED_KEYS = Object.freeze(['type', 'source', 'line', 'column', 'version', 'buildID', 'os']);
 /** Wire key to D1 column. source is stored as basename; buildID as buildid. */
 const COLUMN_FOR = Object.freeze({ type: 'type', source: 'basename', line: 'line', column: 'column', version: 'version', buildID: 'buildid', os: 'os' });
-const STRING_KEYS = Object.freeze(['type', 'source', 'version', 'buildID', 'os']);
+
+/**
+ * The shape of every admitted value, restated from the producer (telemetry-enrichment.ts is the
+ * source of truth; the gate requires equality). A value that fails its shape is free text, so the
+ * batch is rejected rather than trimmed: nothing that is not an identifier, a bare file name, a
+ * release version, a bucket or a small integer is ever stored. The sender enforces the same shapes
+ * before anything leaves the machine; this is the second wall, for a hostile or old client.
+ */
+export const ADMITTED_SHAPES = Object.freeze({
+    type: /^[A-Za-z_$][\w$]{0,63}$/,
+    source: /^[\w.-]{1,100}$/,
+    version: /^\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/,
+    buildID: /^v\d{1,4}\.\d{1,4}(?:\.\d{1,4})?-\d{1,6}$/,
+});
+export const OS_BUCKETS = Object.freeze(['windows', 'macos', 'linux', 'unknown']);
+export const POSITION_MAX = 2147483647;
+/** The event name shape (the sender's EVENT_NAME). */
+export const NAME_SHAPE = /^[A-Za-z0-9._-]{1,100}$/;
+
+function valueOk(wire, value) {
+    if (wire === 'line' || wire === 'column') return Number.isSafeInteger(value) && value >= 0 && value <= POSITION_MAX;
+    if (wire === 'os') return typeof value === 'string' && OS_BUCKETS.includes(value);
+    return typeof value === 'string' && ADMITTED_SHAPES[wire]?.test(value) === true;
+}
 /** The events table, in insert order. received_at is server time; synthetic is the control flag. */
 export const EVENT_COLUMNS = Object.freeze(['received_at', 'name', 'type', 'basename', 'line', 'column', 'version', 'buildid', 'os', 'synthetic']);
 export const DOWNLOAD_COLUMNS = Object.freeze(['asset', 'tag', 'day', 'download_count', 'received_at']);
@@ -136,24 +160,22 @@ export function throttled(throttle, nowMs) {
 
 /**
  * Reduce one client event, in the sender's envelope {kind, name, data, at}, to the stored row. Only
- * name and the ADMITTED_KEYS of data are read; a string key that is not a string and a number key
- * that is not finite are omitted. synthetic is a control flag read as a boolean, never stored as
+ * name and the ADMITTED_KEYS of data are read, each in its admitted shape; a value that fails its
+ * shape makes the event malformed. synthetic is a control flag read as a boolean, never stored as
  * payload text. Returns null for an event that is not an error report (skipped, not stored) and
  * undefined for an error event whose envelope does not match (the batch is rejected).
  */
 export function admitEvent(event) {
     if (event.kind !== 'error') return event.kind === 'usage' ? null : undefined;
-    if (typeof event.name !== 'string' || event.name === '') return undefined;
+    if (typeof event.name !== 'string' || !NAME_SHAPE.test(event.name)) return undefined;
     if (event.data !== undefined && !isPlainObject(event.data)) return undefined;
     const data = event.data ?? {};
-    const row = { name: truncate(event.name) };
+    const row = { name: event.name };
     for (const wire of ADMITTED_KEYS) {
         const value = data[wire];
-        if (STRING_KEYS.includes(wire)) {
-            if (typeof value === 'string') row[COLUMN_FOR[wire]] = truncate(value);
-        } else if (typeof value === 'number' && Number.isFinite(value)) {
-            row[COLUMN_FOR[wire]] = value;
-        }
+        if (value === undefined) continue;
+        if (!valueOk(wire, value)) return undefined;
+        row[COLUMN_FOR[wire]] = value;
     }
     row.synthetic = event.synthetic === true ? 1 : 0;
     return row;
