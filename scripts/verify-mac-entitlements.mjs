@@ -36,7 +36,8 @@
 // Quick tier: text reads and XML parsing only. No build, no browser, no
 // display, no network. The Team-ID patch, once it exists, changes the upstream
 // plists it patches, so this gate reads the patched tree and needs no second
-// input. .planning/ history is never read, so it cannot count as a signing
+// input. Under .planning/ the gate reads one file, WINDOWS.md, for the status of
+// entry 22 only. Its prose is never scanned, so no .planning/ text is a signing
 // input.
 //
 // This script and its --self-test only read the tree; every plant is applied
@@ -106,10 +107,10 @@ function listXml(root, rel) {
     }
 }
 
-// The status of one broken-windows entry, read from its fenced JSON block.
-// null (unreadable, unknown id) is treated as not open: fail closed.
-function windowsStatus(root, id) {
-    const text = readText(root, WINDOWS_REL);
+// The status of one broken-windows entry, read from the fenced JSON block of the WINDOWS.md text. The
+// caller reads the text through the injectable reader. null (unreadable, unknown id) is treated as
+// not open: fail closed.
+function windowsStatus(text, id) {
     const m = text?.match(/````json\n([\s\S]*?)\n````/);
     if (!m) return null;
     let entries;
@@ -186,7 +187,7 @@ function runChecks(root, overrides = {}) {
     const hits = [];
     const read = overrides.read ?? ((rel) => readText(root, rel));
     const list = overrides.list ?? ((rel) => listXml(root, rel));
-    const status = overrides.windowsStatus ?? (() => windowsStatus(root, KNOWN_OPEN_WINDOWS_ID));
+    const status = overrides.windowsStatus ?? (() => windowsStatus(read(WINDOWS_REL), KNOWN_OPEN_WINDOWS_ID));
 
     // --- 1. derivation -----------------------------------------------------
     const configText = read(SIGN_CONFIG_REL);
@@ -318,8 +319,17 @@ function selfTest() {
     const removedList = (rel) => (rel === DEV ? realList(DEV).filter(n => n !== 'utility.xml') : realList(rel));
     const emptyList = () => [];
 
-    // Each plant names the file and the value it must name. `needle` is the
-    // text the failure must carry; the file must appear in the same message.
+    // A copy of the real file with one value replaced, applied in memory.
+    const withReplaced = (target, from, to) => (rel) => (rel === target
+        ? realRead(rel).replaceAll(from, to)
+        : realRead(rel));
+    // The config with every signing-group entitlement name removed: no group derives a file.
+    const noSigningNames = (rel) => (rel === SIGN_CONFIG_REL
+        ? realRead(rel).replace(/public\/build\/security\/[A-Za-z0-9._-]+\.xml/g, 'none')
+        : realRead(rel));
+
+    // Each plant names the file and the value it must name. The optional `needle` is
+    // text the same failure must also carry. The file must appear in the same message.
     const plants = [
         ['43AQ936H96 string in a developer input', { read: withEntry(DEV_BROWSER, '<key>planted</key><string>43AQ936H96.org.planted</string>') }, DEV_BROWSER, '43AQ936H96'],
         ['org.mozilla string in a developer input', { read: withEntry(DEV_BROWSER, '<key>planted</key><string>org.mozilla.planted</string>') }, DEV_BROWSER, 'org.mozilla'],
@@ -328,12 +338,19 @@ function selfTest() {
         ['removed developer input the config names', { list: removedList }, `${DEV}/utility.xml`, 'utility.xml'],
         ['new forbidden value beyond the known-open set', { read: withEntry(PROD_FIREFOX, '<key>planted</key><string>43AQ936H96.org.mozilla.planted</string>') }, PROD_FIREFOX, '43AQ936H96.org.mozilla.planted'],
         ['known-open entry closed, its hits still present', { windowsStatus: () => 'fixed' }, PROD_FIREFOX, '43AQ936H96.org.mozilla.firefox'],
+        // Vacuity, observed side: zero entitlement files must name the instrument, not pass.
+        ['zero entitlement files (observed side)', { list: emptyList }, NAME, 'no entitlement file'],
+        // Vacuity, derived side: a signing group that derives no file is red naming the group. Without
+        // this, a broken hardened-sign-config reader that returns empty groups would pass the self-test.
+        ['signing group that derives no file (derived side)', { read: noSigningNames }, SIGN_CONFIG_REL, "'production' signing group"],
+        // Stale exclusion: entry 22 is open and its hit is excluded, but the hit is gone from the tree.
+        ['known-open hit removed from the tree (stale exclusion)', { read: withReplaced(PROD_FIREFOX, '43AQ936H96.org.mozilla.firefox', 'PowerBrowser.example.firefox') }, PROD_FIREFOX, '43AQ936H96.org.mozilla.firefox', 'stale'],
     ];
 
     let failed = 0;
-    for (const [name, overrides, file, value] of plants) {
+    for (const [name, overrides, file, value, needle = ''] of plants) {
         const { failures } = runChecks(REPO_ROOT, { read: realRead, list: realList, ...overrides });
-        const hit = failures.some(f => f.includes(file) && f.includes(value));
+        const hit = failures.some(f => f.includes(file) && f.includes(value) && f.includes(needle));
         if (hit) {
             console.log(`  ok  ${name} -> red, naming '${file}' and '${value}'`);
         } else {
@@ -342,25 +359,14 @@ function selfTest() {
         }
     }
 
-    // Vacuity: zero entitlement files must name the instrument, not pass.
+    // Control: .planning/ text never counts as a signing input. WINDOWS.md is a .planning/ file the gate
+    // does read, for its status only, through the same injectable reader. Forbidden text planted in its
+    // prose must stay green. If the gate ever scanned that file for hits, this control would go red.
     {
-        const { failures } = runChecks(REPO_ROOT, { read: realRead, list: emptyList });
-        if (failures.some(f => f.includes(NAME) && f.includes('no entitlement file'))) {
-            console.log(`  ok  zero entitlement files -> red, naming the ${NAME} instrument`);
-        } else {
-            console.error(`${NAME}: --self-test FAIL -- zero entitlement files did not go red naming the instrument; got: ${failures.join(' | ') || '(no failures at all)'}`);
-            failed += 1;
-        }
-    }
-
-    // Control: the planning history and the ledger history never count as
-    // signing inputs. Forbidden text planted in a planning file stays green.
-    {
-        const planning = '.planning/workstreams/deploy/phases/55-macos-i/55-SEC13-MEMO.md';
-        const control = (rel) => (rel === planning ? '43AQ936H96 org.mozilla' : realRead(rel));
+        const control = (rel) => (rel === WINDOWS_REL ? `${realRead(rel)}\n43AQ936H96 org.mozilla planted in prose\n` : realRead(rel));
         const { failures } = runChecks(REPO_ROOT, { read: control, list: realList });
         if (failures.length === 0) {
-            console.log(`  ok  control: forbidden text under .planning/ -> green`);
+            console.log(`  ok  control: forbidden text in the prose of ${WINDOWS_REL} -> green`);
         } else {
             console.error(`${NAME}: --self-test FAIL -- the control went red: ${failures.join(' | ')}`);
             failed += 1;
@@ -368,7 +374,7 @@ function selfTest() {
     }
 
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- ${plants.length + 1} planted faults went red naming the drifted file, and the control stayed green`);
+    console.log(`${NAME}: --self-test PASS -- ${plants.length} planted faults went red naming the drifted file, and the control stayed green`);
     return 0;
 }
 
