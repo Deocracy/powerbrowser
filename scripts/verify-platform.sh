@@ -4371,6 +4371,12 @@ run_own_checks() {
     # browser, no display, no network.
     "telemetry|node $REPO_ROOT/scripts/verify-telemetry.mjs"
     "telemetry-self-test|node $REPO_ROOT/scripts/verify-telemetry.mjs --self-test"
+    # NEW (Phase 48, TEL-06): the analyzer half of the live-delivery row. The pure analyzeCapture over
+    # captured requests: the control is one preflight and one POST carrying both corrected events; each
+    # plant (no POST, a stack field, an unadmitted key, a full path in source, an empty capture, a request
+    # at level off) must go red naming its drift. Honestly --quick: in-memory fixtures only; no build, no
+    # browser, no display, no network.
+    "tel06-error-delivery-live-self-test|node $REPO_ROOT/scripts/verify-telemetry-live-delivery.mjs --self-test"
 
     # NEW (04-04): GEN-05 remainder's branding gate -- the manifest's
     # [theia]/[installer] display values plus brand/mark.svg reach the
@@ -4807,6 +4813,16 @@ run_own_checks() {
     # and the bot-job-gate rule (an environment-bound job with no negated job-level dry-run gate);
     # each red naming file and job. It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
+    # NEW (Phase 48, MON-01): the watchdog source. The decision over an in-memory run table (a 25-hour
+    # silence opens nothing, a 27-hour silence opens one issue with the run link, a missing run opens one
+    # naming it, an open same-title issue suppresses a second), and the source checks over docs/watchdog.yml
+    # (schedule-only triggers, one 06:17 UTC cron, GITHUB_TOKEN read only, no secret, pinned uses, no event
+    # text in run) plus the product repository's no-schedule rule.
+    "watchdog|node $REPO_ROOT/scripts/verify-watchdog.mjs"
+    # watchdog-self-test plants an unguarded workflow_run wake, event text in a run step, a secret
+    # reference, a drifted cron, a 25-hour threshold, a product-repository schedule key and a 25-hour
+    # window that opens an issue; each must go red naming its drift, with the control green first.
+    "watchdog-self-test|node $REPO_ROOT/scripts/verify-watchdog.mjs --self-test"
     # NEW (Phase 49, DIST-02): the release.yml shape the workflows row does not cover. Dispatch
     # only with a required sha input; build-linux on the release runner label with no environment
     # and no secret; the SHA-ancestor and key>tag gates before the first build step; retention-days
@@ -5036,6 +5052,14 @@ run_own_checks() {
 
   if [ "$QUICK" -eq 0 ]; then
     CHECKS+=(
+      # NEW (Phase 48, TEL-06): the live loopback delivery drill. Full tier: it needs the nix theia shell
+      # (a frontend rebuild), the built binary through the BiDi harness, and a free loopback port. It binds
+      # 127.0.0.1, rewrites only the tracked powerbrowserTelemetry endpoint to the loopback URL, drives an
+      # uncaught error and an unhandled rejection at level error (flushed by batch size), asserts one POST
+      # with both corrected events after the CORS preflight, then sets level off and asserts zero requests in
+      # the same run. It restores package.json byte-identical, rebuilds, and greps the bundle for the marker.
+      # The live run is the plan 48-05 owner checkpoint; this row is the registry entry for it.
+      "tel06-error-delivery-live|node $REPO_ROOT/scripts/verify-telemetry-live-delivery.mjs"
       # NEW (01-07): the Theia half's smoke gate. It was the ONLY member of
       # 01-VALIDATION.md's full-suite command with no row in this registry --
       # a real superset gap, found by reconciling the two at the phase gate
