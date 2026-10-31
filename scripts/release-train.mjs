@@ -58,7 +58,7 @@
 //   node scripts/release-train.mjs --sweep-due <epoch-seconds>
 //   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
 //   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state> <state-out>
-//   node scripts/release-train.mjs --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch>
+//   node scripts/release-train.mjs --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -582,27 +582,37 @@ export function selectPinned(issues, ownerLogin) {
 }
 
 export const STATE_ARTIFACT = 'release-train-maintenance-state';
+export const TRAIN_WORKFLOW_PATH = '.github/workflows/release-train.yml';
+const TRAIN_EVENTS = Object.freeze(['workflow_dispatch', 'schedule']);
 
 /**
- * The run whose maintenance-state artifact is the previous state, or null. Only artifacts of runs of this
- * workflow that succeeded on the repository's default branch in this repository count: the artifact must be
- * unexpired, named for the state, uploaded from the same branch and the same repository id, and its run must be
- * one of those runs. Newest first, so the first match wins. Any mismatch is ignored; no match is null, which the
- * plan treats as fail-safe notify. Pure.
+ * The run whose maintenance-state artifact is the previous state, or null. A run counts only when it is a run of
+ * exactly the train workflow file (path), on one of the events the train uses, that succeeded on the repository's
+ * default branch in this repository, and whose head sha is on that branch (onDefaultShas: the shas the workflow
+ * verified with the compare endpoint as identical or ahead of the default branch). The artifact must be unexpired,
+ * named for the state, uploaded from the same branch, repository id and head sha as its run. A branch name alone
+ * is not enough: a tag named like the branch is refused by the event and sha checks. Newest first; the first match
+ * wins. Any mismatch is ignored; no match is null, which the plan treats as fail-safe notify. Pure.
  */
-export function selectStateRun({ runs, artifacts, repo, repoId, branch }) {
-    if (!Array.isArray(runs) || !Array.isArray(artifacts)) return null;
+export function selectStateRun({ runs, artifacts, repo, repoId, branch, onDefaultShas }) {
+    if (!Array.isArray(runs) || !Array.isArray(artifacts) || !Array.isArray(onDefaultShas)) return null;
     if (typeof repo !== 'string' || repo === '' || typeof branch !== 'string' || branch === '') return null;
     if (!Number.isSafeInteger(repoId) || repoId <= 0) return null;
-    const allowed = new Set(runs
-        .filter(r => r && r.event === 'workflow_dispatch' && r.status === 'completed' && r.conclusion === 'success'
-            && r.head_branch === branch && r.head_repository && r.head_repository.full_name === repo)
-        .map(r => r.id));
+    const verified = new Set(onDefaultShas);
+    const allowed = new Map();
+    for (const r of runs) {
+        if (!r || r.path !== TRAIN_WORKFLOW_PATH || !TRAIN_EVENTS.includes(r.event)) continue;
+        if (r.status !== 'completed' || r.conclusion !== 'success') continue;
+        if (r.head_branch !== branch || !r.head_repository || r.head_repository.full_name !== repo) continue;
+        if (typeof r.head_sha !== 'string' || !verified.has(r.head_sha)) continue;
+        allowed.set(r.id, r.head_sha);
+    }
     for (const a of artifacts) {
         if (!a || a.name !== STATE_ARTIFACT || a.expired !== false) continue;
         const w = a.workflow_run;
         if (!w || w.head_branch !== branch || w.head_repository_id !== repoId) continue;
-        if (allowed.has(w.id)) return w.id;
+        if (!allowed.has(w.id) || w.head_sha !== allowed.get(w.id)) continue;
+        return w.id;
     }
     return null;
 }
@@ -670,9 +680,10 @@ function maintenanceCli([factsPath, bodyPath]) {
 }
 
 /** The state run id on stdout, or nothing (the fail-safe path). Unreadable input is nothing, never an error. */
-function stateSelectCli([runsPath, artifactsPath, repo, repoIdText, branch]) {
+function stateSelectCli([runsPath, artifactsPath, repo, repoIdText, branch, verifiedPath]) {
     try {
-        const id = selectStateRun({ runs: readFacts(runsPath), artifacts: readFacts(artifactsPath), repo, repoId: Number(repoIdText), branch });
+        const onDefaultShas = readFileSync(verifiedPath, 'utf8').split('\n').map(x => x.trim()).filter(x => x !== '');
+        const id = selectStateRun({ runs: readFacts(runsPath), artifacts: readFacts(artifactsPath), repo, repoId: Number(repoIdText), branch, onDefaultShas });
         if (id !== null) console.log(String(id));
     } catch {
         // No output: the workflow treats an empty run id as absent, so the notice fires.
@@ -757,15 +768,20 @@ function maintenanceSelfTest() {
             repo: REPO_FIXTURE,
             repoId: 1001,
             branch: 'main',
+            onDefaultShas: ['sha-main-11', 'sha-main-12', 'sha-main-13'],
             runs: [
-                { id: 11, event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_repository: { full_name: REPO_FIXTURE } },
-                { id: 12, event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'feature/x', head_repository: { full_name: REPO_FIXTURE } },
-                { id: 13, event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_repository: { full_name: 'fork-owner/powerbrowser' } },
+                { id: 11, path: '.github/workflows/release-train.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-main-11', head_repository: { full_name: REPO_FIXTURE } },
+                { id: 12, path: '.github/workflows/release-train.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'feature/x', head_sha: 'sha-main-12', head_repository: { full_name: REPO_FIXTURE } },
+                { id: 13, path: '.github/workflows/release-train.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-main-13', head_repository: { full_name: 'fork-owner/powerbrowser' } },
+                { id: 14, path: '.github/workflows/release-train.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-off-main', head_repository: { full_name: REPO_FIXTURE } },
+                { id: 15, path: '.github/workflows/verify.yml', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'sha-main-11', head_repository: { full_name: REPO_FIXTURE } },
             ],
             artifacts: [
-                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 12, head_branch: 'feature/x', head_repository_id: 1001 } },
-                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 13, head_branch: 'main', head_repository_id: FOREIGN_ID } },
-                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 11, head_branch: 'main', head_repository_id: 1001 } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 14, head_branch: 'main', head_repository_id: 1001, head_sha: 'sha-off-main' } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 15, head_branch: 'main', head_repository_id: 1001, head_sha: 'sha-main-11' } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 12, head_branch: 'feature/x', head_repository_id: 1001, head_sha: 'sha-main-12' } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 13, head_branch: 'main', head_repository_id: FOREIGN_ID, head_sha: 'sha-main-13' } },
+                { name: STATE_ARTIFACT, expired: false, workflow_run: { id: 11, head_branch: 'main', head_repository_id: 1001, head_sha: 'sha-main-11' } },
             ],
         },
     });
@@ -798,7 +814,7 @@ function maintenanceSelfTest() {
             const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: null });
             return d.comment !== null && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`missing state gave newlyRed ${JSON.stringify(d.newlyRed)}`];
         } },
-        { name: 'control: a foreign-repo or non-main artifact is ignored and the state run is the owner-branch run', run: () => {
+        { name: 'control: a foreign-repo, non-main, off-main-sha or other-workflow artifact is ignored and the state run is run 11', run: () => {
             const fx = stateFixtures();
             const id = selectStateRun(fx.input);
             return id === 11 ? [] : [`state selection picked ${id}, not run 11`];
@@ -835,6 +851,11 @@ function maintenanceSelfTest() {
             const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: { number: 7, statuses: statusesOf(redBody) } });
             return d.newlyRed.length === 0 ? [`the artifact of run ${naive.workflow_run.id} from repository ${naive.workflow_run.head_repository_id} suppressed the newly-red notice`] : [];
         }, expect: 'suppressed the newly-red notice' },
+        { name: 'a run whose head sha is not on the default branch taken as the previous state', run: () => {
+            const fx = stateFixtures();
+            const trustAll = selectStateRun({ ...fx.input, onDefaultShas: fx.input.runs.map(r => r.head_sha) });
+            return trustAll === 14 ? [`run ${trustAll} whose head sha sha-off-main is not on the default branch was taken as the previous state`] : [];
+        }, expect: 'not on the default branch' },
         { name: 'a feature-branch artifact taken as the previous state (no branch filter)', run: () => {
             const fx = stateFixtures();
             const naive = fx.input.artifacts.find(a => a.workflow_run.head_branch !== 'main');
@@ -1062,8 +1083,8 @@ if (isEntry) {
     if (args[0] === '--sweep-due' && args.length === 2) process.exit(sweepDueCli(args.slice(1)));
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
     if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
-    if (args[0] === '--state-select' && args.length === 6) process.exit(stateSelectCli(args.slice(1)));
+    if (args[0] === '--state-select' && args.length === 7) process.exit(stateSelectCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds>, node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch>.`);
+    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds>, node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>.`);
     process.exit(2);
 }
