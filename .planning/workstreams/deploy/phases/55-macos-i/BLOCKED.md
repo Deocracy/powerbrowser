@@ -49,8 +49,40 @@ hosted runner dispatch, push or payment was attempted.
 - **Owner step:** re-read the release page before the signing wiring is used. A newer release updates
   section 2 of the memo.
 
-## 5. Plans 55-03 and 55-04 (not executed in this run)
+## 5. Node darwin pins: owner gpg check (plan 55-02)
+
+- **What:** `powerbrowser/packaging/node-runtime.json` carries `darwin-arm64` and `darwin-x64` pins
+  for v24.19.0. Each sha256 is the `.tar.gz` entry of nodejs.org `SHASUMS256.txt`, read on
+  2026-10-31. The signature file was fetched, but this shell has no `gpg` and no Node release keyring,
+  so the signature was not verified.
+- **Owner steps:** run `gpg --verify SHASUMS256.txt.sig SHASUMS256.txt` with the Node release keys
+  (RELEASING.md "Node provenance"), then record the result in the release notes. The script enforces
+  the pin, not the key trust.
+
+## 6. DMG branding placeholders (plan 55-02, WINDOWS.md entry 23)
+
+- **What:** `Assets.car` and `dsstore` are empty, and `background.png` is the 128-pixel icon. The Dock
+  and Finder icon degrades until a real asset catalog exists.
+- **Owner steps (Mac):** build an asset catalog with `actool` for the application icon, replace the
+  placeholder `Assets.car` in `emitAssetsCarPlaceholder`, and observe the icon in the plan 55-04
+  session. Then mark WINDOWS.md entry 23 `fixed`.
+
+## 7. Plans 55-03 and 55-04 (not executed in this run)
 
 - Plan 55-03 needs Phase 49's `release.yml` and the Team-ID patch from item 2.
 - Plan 55-04 is the owner checkpoint: live Apple actions, the hosted `macos-26` matrix, and the real-Mac
   Gatekeeper session. Every step there is an owner action.
+
+## 8. Build-time checks that have not run (no macOS host)
+
+- `package-macos.sh` is syntax-checked (`bash -n`) and its argument guard and pin read are exercised.
+  The Gecko `mach package`, the Theia staging and the Mach-O checks have not run. They need a built
+  objdir and a macOS-capable toolchain.
+- The Darwin mozconfigs inherit the shared lines `--with-libclang-path="$LIBCLANG_PATH"` and
+  `--without-wasm-sandboxed-libraries` from the Linux dev row, and they reference `$MOZ_FETCHES_DIR`
+  for the SDK and DMG tools. Confirm both at the first cross configure.
+
+## Ship gate
+
+WINDOWS.md entries 22 (Team ID, item 2) and 23 (placeholders, item 6) are open, so `/gsd-ship` stays
+blocked for Phase 55 until the owner completes them.
