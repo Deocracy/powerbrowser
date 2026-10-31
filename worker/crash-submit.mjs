@@ -8,7 +8,7 @@
 // every shared name, and runs the same multipart bodies through both parsers, so the two receivers
 // cannot drift.
 //
-// THE DELTA FROM THE COLLECTOR, RECORDED (the policy page states the same three points).
+// THE DELTA FROM THE COLLECTOR, RECORDED (the policy page states the same four points).
 //   1. No in-Worker throttle. The collector's rolling-window counter is per process; a per-isolate
 //      counter is not a rate limit (Cloudflare runs many isolates), and a counter shared by all callers
 //      lets one client make every other client's report be discarded. Phase 48 WR-02 removed the same
@@ -17,6 +17,8 @@
 //   2. Retention is the R2 lifecycle rule over CRASH_PREFIX (worker/crash-r2-lifecycle.json), not a sweep:
 //      no second job and no deletion code runs here.
 //   3. A wrong method on /submit answers 405 with Allow: POST, not 404 (Phase 48 IN-02).
+//   4. The minidump part must be at least 32 bytes and start with the MDMP signature, or the submit answers
+//      400 malformed_no_minidump and nothing is stored (Phase 57 IN-02).
 //
 // NO CORS. The sender is the native crash reporter, not a browser page, so no preflight and no
 // Access-Control header applies, and none is sent.
@@ -69,6 +71,9 @@ export const MAX_PART_NAME_LENGTH = 128;
  */
 export const MEMORY_REPORT_PART_NAME = 'memory_report';
 export const OTHER_PART_NAME = '(other)';
+/** A minidump starts with the 32-byte MINIDUMP_HEADER whose signature is "MDMP". */
+export const MIN_MINIDUMP_BYTES = 32;
+const MDMP_MAGIC = Uint8Array.of(0x4d, 0x44, 0x4d, 0x50);
 /** R2 key prefix for every object this Worker writes. The lifecycle rule expires this prefix. */
 export const CRASH_PREFIX = 'crash/';
 
@@ -240,8 +245,13 @@ export async function handleCrashSubmit(shape, env, nowMs) {
     if (shape.method !== 'POST') return { status: 405, body: '', allow: 'POST' };
     const parsed = parseMultipart(shape.bytes, shape.contentType);
     if (!parsed.ok) return discard(parsed.reason === REASON_OVERSIZED ? 413 : 400, parsed.reason);
-    const crashId = crypto.randomUUID();
     const minidump = parsed.parts.find(part => part.name === MINIDUMP_PART_NAME);
+    // IN-02: an empty or non-minidump part is not stored. The collector (loopback, scripts/crash-collector.mjs)
+    // keeps accepting any bytes because scripts/verify-ng-068-crash-extra-part.mjs posts a random-bytes dump to it.
+    if (minidump.data.byteLength < MIN_MINIDUMP_BYTES || !MDMP_MAGIC.every((byte, i) => minidump.data[i] === byte)) {
+        return discard(400, REASON_NO_MINIDUMP);
+    }
+    const crashId = crypto.randomUUID();
     const record = `${JSON.stringify({
         id: crashId,
         receivedAt: new Date(nowMs).toISOString(),

@@ -130,6 +130,10 @@ A request to any path other than `/submit` answers 404. A wrong method on
 `/submit` answers 405 with `Allow: POST` (the receiver) or 404 (the collector).
 A rejected submit writes nothing: no record and no minidump remain.
 
+The receiver also requires the minidump part to be at least 32 bytes and to
+start with the `MDMP` signature, and answers `Discarded=malformed_no_minidump`
+otherwise. The loopback collector keeps accepting any bytes in that part.
+
 ## Symbols
 
 `mach buildsymbols` writes one `<PKG_BASENAME>.crashreporter-symbols.zip` per

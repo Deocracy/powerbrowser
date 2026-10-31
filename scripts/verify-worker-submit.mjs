@@ -343,6 +343,16 @@ function rejectionCases() {
             status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
         },
         {
+            rule: 'empty minidump',
+            request: () => submitRequest(buildMultipart([{ name: crashSubmit.MINIDUMP_PART_NAME, data: Buffer.alloc(0) }])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
+            rule: 'minidump without the MDMP signature',
+            request: () => submitRequest(buildMultipart([{ name: crashSubmit.MINIDUMP_PART_NAME, data: Buffer.alloc(64, 0x41) }])),
+            status: 400, body: `Discarded=${crashSubmit.REASON_NO_MINIDUMP}`,
+        },
+        {
             rule: 'one-character boundary',
             request: () => submitRequest(Buffer.from('\r\n--a'.repeat(100000), 'latin1'), { ct: 'multipart/form-data; boundary=a' }),
             status: 400, body: `Discarded=${crashSubmit.REASON_WRONG_CONTENT_TYPE}`,
