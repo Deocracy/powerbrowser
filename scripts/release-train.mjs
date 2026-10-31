@@ -69,11 +69,13 @@
 //
 // Usage:
 //   node scripts/release-train.mjs --self-test
+//   node scripts/release-train.mjs --fix-guard <facts.json>      (the derive job's live FIX-01 and FIX-05 guard)
 //   node scripts/release-train.mjs --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>
 //   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false> <replay-result> <detect-result>
 //                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
 //                                        each is success|failure|cancelled|skipped)
 
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -340,26 +342,6 @@ export function render(state, facts) {
 }
 
 /**
- * The issue for a failed release.yml run (TRAIN-06). The fixer is never started for it, so the body
- * carries no dispatch instruction; the report job opens the issue, and this renders its bytes. Pure.
- */
-export function renderReleaseRed(facts) {
-    const owner = typeof facts.ownerLogin === 'string' && facts.ownerLogin !== '' ? facts.ownerLogin : null;
-    const title = `release-train: release.yml failed for ${facts.releaseKey}`;
-    const body = [
-        title,
-        '',
-        `release.yml failed on ${facts.releaseKey}. A release.yml failure is not fixable by the automated fixer, so no fix is started.`,
-        '',
-        `Failing log: ${facts.logUrl ?? 'pending'}`,
-        '',
-        'Next step: the owner reads the failing log and decides the release.',
-        '',
-    ].join('\n');
-    return { title, body, labels: [LABELS.track, LABELS.blocked], assign: owner === null ? [] : [owner], writes: [] };
-}
-
-/**
  * The exactly-one rule over the issues a label-and-title find returned. Zero
  * creates, one updates (PATCH only when the stored bytes differ from the rendered
  * bytes), two or more fail naming every number and never PATCH. Pure.
@@ -541,6 +523,45 @@ export function fixerDispatch(f) {
 }
 
 /**
+ * The live FIX-01 and FIX-05 guard the derive job runs for every fixer dispatch (CR-04). `dispatched` is the seven
+ * inputs as given (already shape-checked by fixerInputsCheck); the rest are facts the workflow read from GitHub:
+ * actor, author (the base commit's author login), headRepository (the repository the target branch lives in),
+ * repository, ownerLogin, latestTag, and runs (the display titles of this workflow's other dispatch runs in this
+ * repository). The attempt count comes from the runs, never from the input: the input must be exactly one more than
+ * the fix runs already spent for this key and class, and fixerDispatch refuses once the budget is spent. A dry-run fix
+ * run carries a different run-name and is not counted. Returns [{ guard, msg }], empty when the dispatch may run. Pure.
+ */
+export function fixerGuard(g) {
+    const d = g.dispatched ?? {};
+    const [checkLabel = '', baseSha = ''] = String(d.fingerprint ?? '').split('@');
+    const state = Object.keys(FIXER_CLASS_OF).find(k => FIXER_CLASS_OF[k] === d.class);
+    const spent = fixAttempts((g.runs ?? []).map(name => ({ name })), d['release-key'], d.class);
+    if (String(d.attempt) !== String(spent + 1)) {
+        return [{ guard: 'attempt', msg: `attempt ${JSON.stringify(d.attempt)} does not follow the ${spent} fix run(s) already spent for ${d['release-key']} ${d.class}; dispatch attempt ${spent + 1}` }];
+    }
+    const r = fixerDispatch({
+        source: checkLabel === 'release' ? 'release.yml' : (d.class === 'F3' ? 'verify' : 'bump'),
+        state,
+        branch: d['target-branch'],
+        headRepository: g.headRepository,
+        repository: g.repository,
+        actor: g.actor,
+        author: g.author,
+        ownerLogin: g.ownerLogin,
+        releaseKey: d['release-key'],
+        latestTag: g.latestTag === '' ? null : g.latestTag,
+        targetTag: d['target-tag'],
+        checkLabel,
+        baseSha,
+        attempt: Number(d.attempt),
+        fixAttempts: spent,
+    });
+    if (r.dispatch === null) return [{ guard: r.guard, msg: r.reason }];
+    const given = JSON.stringify(Object.fromEntries(DISPATCH_INPUTS.map(k => [k, String(d[k])])));
+    return JSON.stringify(r.dispatch) === given ? [] : [{ guard: 'dispatch-mismatch', msg: `the dispatch decision ${JSON.stringify(r.dispatch)} differs from the inputs as given` }];
+}
+
+/**
  * A workflow_run wake is admitted only from a same-repository source. Pure.
  * UNWIRED: the workflow_run trigger is held out (BLOCKED.md item 1); no plant covers it.
  */
@@ -608,6 +629,22 @@ function fixerInputsCli([releaseKey, cls, branch, targetTag, fingerprint, attemp
         return 0;
     }
     failures.forEach(f => console.error(`${NAME}: FAIL -- [${f.guard}] ${f.msg}. Next step: re-dispatch the fixer with valid inputs, or leave the release to the owner.`));
+    return 1;
+}
+
+/** The derive job's live guard (CR-04). facts.json holds fixerGuard's facts. Exit 0 when the dispatch may run. */
+function fixerGuardCli([factsPath]) {
+    let facts;
+    try { facts = JSON.parse(readFileSync(factsPath, 'utf8')); } catch (e) {
+        console.error(`${NAME}: FAIL -- the guard facts ${factsPath} could not be read (${e.code ?? e.message}). Next step: re-run the derive job.`);
+        return 1;
+    }
+    const failures = fixerGuard(facts);
+    if (failures.length === 0) {
+        console.log(`${NAME}: fix-guard PASS -- ${facts.dispatched['release-key']} ${facts.dispatched.class} attempt ${facts.dispatched.attempt} is admitted (${(facts.runs ?? []).length} other release-train run(s) read)`);
+        return 0;
+    }
+    failures.forEach(f => console.error(`${NAME}: FAIL -- [${f.guard}] ${f.msg}. Next step: leave the release to the owner, or dispatch the attempt number named above.`));
     return 1;
 }
 
@@ -1148,8 +1185,25 @@ function selfTest(mode = 'all') {
             run: () => (keyGreater(FIX_KEY, FIX_OLD_KEY) && !keyGreater(FIX_KEY, FIX_KEY) && keyGreater(FIX_KEY, '') ? [] : ['keyGreater ordering drifted']),
         },
     ];
-    const attemptPlants = [];
+    // CR-04: the live guard. attempt comes from the run list, not from the input.
+    const gDispatched = (over = {}) => ({ reason: 'fix', 'release-key': FIX_KEY, class: 'F2', 'target-branch': `chore/esr-${FIX_TAG}`, 'target-tag': FIX_TAG, fingerprint: `verify@${FIX_SHA}`, attempt: '1', ...over });
+    const gFacts = (over = {}, dOver = {}) => ({ dispatched: gDispatched(dOver), actor: FIX_OWNER, author: FIX_OWNER, headRepository: FIX_REPO, repository: FIX_REPO, ownerLogin: FIX_OWNER, latestTag: FIX_OLD_KEY, runs: [], ...over });
+    const prior = (n, cls = 'F2', key = FIX_KEY) => `fix ${key} ${cls} attempt ${n}`;
+    const guardMsgs = (over, dOver) => fixerGuard(gFacts(over, dOver)).map(x => `${x.guard}: ${x.msg}`);
+    const attemptPlants = [
+        { name: 'a repeated attempt 1 after one spent fix run', run: () => guardMsgs({ runs: [prior(1)] }), expect: 'does not follow' },
+        { name: 'attempt 7 with no fix run spent', run: () => guardMsgs({}, { attempt: '7' }), expect: 'does not follow' },
+        { name: 'a third dispatch after two spent fix runs', run: () => guardMsgs({ runs: [prior(1), prior(2)] }, { attempt: '3' }), expect: 'budget' },
+        { name: 'a bot actor dispatching through the live guard', run: () => guardMsgs({ actor: 'powerbrowser-bot[bot]' }), expect: 'bot-actor' },
+        { name: 'an external author of the base commit', run: () => guardMsgs({ author: 'outside-contributor' }), expect: 'external-author' },
+        { name: 'a target branch that lives in a fork', run: () => guardMsgs({ headRepository: 'fixture-fork/powerbrowser' }), expect: 'fork' },
+        { name: 'a release-check fingerprint', run: () => guardMsgs({}, { fingerprint: `release@${FIX_SHA}` }), expect: 'release.yml' },
+        { name: 'a release key equal to the latest Release through the live guard', run: () => guardMsgs({ latestTag: FIX_KEY }), expect: 'key-not-greater' },
+    ];
     const attemptGreens = [
+        { name: 'control: attempt 1 with no fix run spent is admitted', run: () => fixerGuard(gFacts()).map(x => x.msg) },
+        { name: 'control: attempt 2 after one spent fix run is admitted', run: () => fixerGuard(gFacts({ runs: [prior(1)] }, { attempt: '2' })).map(x => x.msg) },
+        { name: 'control: runs of another key, another class and a dry run are not spent', run: () => fixerGuard(gFacts({ runs: [prior(1, 'F2', FIX_OLD_KEY), prior(1, 'F3'), `fix dry-run ${FIX_KEY} F2 attempt 1`, 'release train tick'] })).map(x => x.msg) },
         { name: 'control: a fix run of another release key is not counted against this key', run: () => (fixAttempts([{ name: `fix ${FIX_OLD_KEY} F1 attempt 1`, verdict: 'pass', labels: [] }], FIX_KEY, 'F1') === 0 ? [] : [`attempt for ${FIX_OLD_KEY} counted against ${FIX_KEY}`]) },
         { name: 'control: a fix run whose gate rejected it still spends the budget', run: () => (fixAttempts([{ name: `fix ${FIX_KEY} F1 attempt 1`, verdict: 'reject', labels: [] }], FIX_KEY, 'F1') === 1 ? [] : ['a rejected attempt was not counted']) },
         { name: 'control: a claude-fix label with no fix run-name is not counted', run: () => (fixAttempts([{ name: 'release-train', verdict: null, labels: ['claude-fix'] }], FIX_KEY, 'F1') === 0 ? [] : ['a label was counted as an attempt']) },
@@ -1160,7 +1214,6 @@ function selfTest(mode = 'all') {
         { name: 'control: a red open bump PR with two prior runs moves to NEEDS_OWNER', run: () => (derive({ ...FIXTURES.BUMP_RED.facts, fixAttempts: 2 }) === 'NEEDS_OWNER' ? [] : ['a red bump PR did not move']) },
     ];
     const renderPlants = [
-        { name: 'a release.yml issue body that names a dispatch', run: () => { const body = `${renderReleaseRed({ releaseKey: FIX_KEY, logUrl: 'https://example.invalid/run/1' }).body}\nDispatch the fixer.`; return /dispatch/i.test(body) ? ['release.yml body carries a dispatch instruction'] : []; }, expect: 'dispatch instruction' },
         { name: 'a red stage rendered with no owner assignee', run: () => (render('NEEDS_OWNER', { ...FIXTURES.NEEDS_OWNER.facts, ownerLogin: '' }).assign.length === 0 ? ['NEEDS_OWNER rendered with no owner assignee'] : []), expect: 'no owner assignee' },
     ];
     const renderGreens = [
@@ -1170,13 +1223,6 @@ function selfTest(mode = 'all') {
                 const r = render('NEEDS_OWNER', { ...FIXTURES.NEEDS_OWNER.facts, ownerLogin: FIX_OWNER, logUrl: 'https://example.invalid/run/2' });
                 const ok = r.labels.includes('train:blocked') && r.assign.includes(FIX_OWNER) && r.body.includes('https://example.invalid/run/2');
                 return ok ? [] : [`NEEDS_OWNER render labels=${r.labels.join(',')} assign=${r.assign.join(',')}`];
-            },
-        },
-        {
-            name: 'control: a release.yml red renders its issue with no dispatch instruction',
-            run: () => {
-                const r = renderReleaseRed({ releaseKey: FIX_KEY, logUrl: 'https://example.invalid/run/3', ownerLogin: FIX_OWNER });
-                return !/dispatch/i.test(r.body) && r.labels.includes('train:blocked') && r.assign.includes(FIX_OWNER) ? [] : ['release.yml render carried a dispatch or lost its labels'];
             },
         },
         {
@@ -1347,6 +1393,7 @@ if (isEntry) {
     if (args.length === 2 && ['derive', 'next', 'render'].includes(args[0]) && args[1] === '--self-test') process.exit(selfTest(args[0]));
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
     if (args[0] === '--fixer-inputs' && args.length === 8) process.exit(fixerInputsCli(args.slice(1)));
+    if (args[0] === '--fix-guard' && args.length === 2) process.exit(fixerGuardCli(args.slice(1)));
     if (args[0] === '--uptake-would-write' && args.length === 6) process.exit(uptakeWouldWriteCli(args.slice(1)));
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);

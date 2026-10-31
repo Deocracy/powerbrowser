@@ -48,7 +48,7 @@
 
 name: Release train
 
-run-name: ${{ inputs.reason == 'fix' && format('fix {0} {1} attempt {2}', inputs.release-key, inputs.class, inputs.attempt) || format('release train {0}', inputs.reason) }}
+run-name: ${{ inputs.reason == 'fix' && (inputs.dry-run && format('fix dry-run {0} {1} attempt {2}', inputs.release-key, inputs.class, inputs.attempt) || format('fix {0} {1} attempt {2}', inputs.release-key, inputs.class, inputs.attempt)) || format('release train {0}', inputs.reason) }}
 
 # shortcut: the dispatch takes reason and dry-run only, since the tag and release inputs were validated and then ignored, so an owner-forced bump is not possible from dispatch, upgrade when an owner-forced bump or a release-key lookup is approved and wired into detect.
 on:
@@ -122,6 +122,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read
     outputs:
       reason: ${{ steps.validate.outputs.reason }}
       latest-tag: ${{ steps.fixer-inputs.outputs.latest-tag }}
@@ -153,9 +154,12 @@ jobs:
       - name: Prove the detector on fixtures before acting
         run: node scripts/detect-upstreams.mjs --self-test
 
-      # A fixer dispatch is checked before the fix job starts. The latest Release tag is read here;
-      # no Release yet is an empty value, which keyGreater takes as the first release.
-      - name: Validate the fixer dispatch inputs (reason fix only)
+      # A fixer dispatch is checked before the fix job starts: the input shapes, then the live FIX-01 and FIX-05 guard
+      # (CR-04). The guard counts the fix runs this workflow already ran in this repository, by display title and by an
+      # earlier run id, and admits only attempt number spent+1 within the budget; a dry-run fix run has another run-name and
+      # is not counted. The latest Release tag is read here; no Release yet is an empty value, which keyGreater takes as
+      # the first release.
+      - name: Validate the fixer dispatch inputs and the attempt budget (reason fix only)
         id: fixer-inputs
         if: ${{ inputs.reason == 'fix' }}
         env:
@@ -165,12 +169,26 @@ jobs:
           TAG: ${{ inputs.target-tag }}
           FINGERPRINT: ${{ inputs.fingerprint }}
           ATTEMPT: ${{ inputs.attempt }}
+          ACTOR: ${{ github.triggering_actor }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [ "$RUN_ATTEMPT" != "1" ]; then echo "release-train: FAIL -- a re-run of a fixer run is not admitted, because it would spend model budget the attempt count does not see. Next step: dispatch the next attempt." >&2; exit 1; fi
           LATEST=$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName // empty')
           echo "latest-tag=$LATEST" >> "$GITHUB_OUTPUT"
           node scripts/release-train.mjs --fixer-inputs "$KEY" "$CLASS" "$BRANCH" "$TAG" "$FINGERPRINT" "$ATTEMPT" "$LATEST"
+          # The facts the guard cannot take from the inputs. The branch must exist in this repository; the author is the
+          # base commit's login (the bot App commits with BOT_EMAIL and has no login of its own).
+          gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/branches/$BRANCH" --jq '.name' > /dev/null
+          AUTHOR=$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/commits/${FINGERPRINT#*@}" --jq '(.author.login // (if .commit.author.email == env.BOT_EMAIL then "powerbrowser-bot[bot]" else "" end))')
+          # The other fix runs of this workflow in this repository that started before this one (run ids grow with time).
+          RUNS=$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/release-train.yml/runs?event=workflow_dispatch&per_page=100" --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" and .id < (env.GITHUB_RUN_ID | tonumber) and ((.path // "") | split("@")[0]) == ".github/workflows/release-train.yml" and .head_repository.full_name == env.GITHUB_REPOSITORY) | .display_title] | @json' | jq -s 'add // []')
+          jq -n --arg key "$KEY" --arg class "$CLASS" --arg branch "$BRANCH" --arg tag "$TAG" --arg fp "$FINGERPRINT" --arg attempt "$ATTEMPT" \
+            --arg actor "$ACTOR" --arg author "$AUTHOR" --arg repo "$GITHUB_REPOSITORY" --arg owner "$OWNER" --arg latest "$LATEST" --argjson runs "$RUNS" \
+            '{dispatched: {reason: "fix", "release-key": $key, class: $class, "target-branch": $branch, "target-tag": $tag, fingerprint: $fp, attempt: $attempt}, actor: $actor, author: $author, headRepository: $repo, repository: $repo, ownerLogin: $owner, latestTag: $latest, runs: $runs}' > "$RUNNER_TEMP/fix-guard.json"
+          node scripts/release-train.mjs --fix-guard "$RUNNER_TEMP/fix-guard.json"
 
   detect:
     needs: derive
