@@ -40,7 +40,9 @@
 //                 same job, and effective contents other than write.
 //  issues-write   Effective issues: write only on release-train.yml job
 //                 report and on triage.yml job apply (the write job; the
-//                 model job classify holds read only).
+//                 model job classify holds read only). An actions/create-github-app-token step
+//                 counts too: permission-issues: write, or no permission-* input at all (which
+//                 inherits every permission of the App), is red outside those two jobs (WR-06).
 //  workflow-run-guard  Every job of a workflow_run-triggered workflow has an
 //                 `if` whose top-level && terms include github.event.workflow_run
 //                 .head_repository.full_name == github.repository (whitespace
@@ -579,6 +581,15 @@ function runChecks(root, overrides = {}) {
             if (eff.issues === 'write' && !((file === 'release-train.yml' && jobId === 'report') || (file === 'triage.yml' && jobId === 'apply'))) {
                 fail(rel, jobId, 'issues-write', `has effective issues write, admitted only on release-train.yml job report and on triage.yml job apply. Next step: drop issues write from the job or workflow permissions.`);
             }
+            // The App token is a permission grant too: permission-issues: write mints an issues-write token, and a token
+            // step with no permission-* input at all inherits every permission of the App, issues write included (WR-06).
+            if (!((file === 'release-train.yml' && jobId === 'report') || (file === 'triage.yml' && jobId === 'apply'))) {
+                for (const s of steps.filter(x => typeof x.uses === 'string' && x.uses.startsWith(APP_TOKEN))) {
+                    const grants = Object.entries(s.with ?? {}).filter(([k]) => k.startsWith('permission-'));
+                    if (grants.some(([k, v]) => k === 'permission-issues' && String(v) === 'write')) fail(rel, jobId, 'issues-write', `mints an App token with permission-issues: write, admitted only on release-train.yml job report and on triage.yml job apply. Next step: drop permission-issues from the token step.`);
+                    if (grants.length === 0) fail(rel, jobId, 'issues-write', `mints an App token with no permission-* input, so it inherits every permission of the App, issues write included. Next step: list the permission-* inputs the job needs.`);
+                }
+            }
             if (TRIO.every(s => eff[s] === 'write') && !(file === 'release.yml' && jobId === 'sign-publish')) {
                 fail(rel, jobId, 'write-trio', `holds contents, id-token and attestations write together, admitted only on release.yml job sign-publish. Next step: narrow the job permissions.`);
             }
@@ -1008,6 +1019,16 @@ function selfTest() {
     plants.push(...fixerPlants);
     // FIX-05 spend: the fix job's time bound and its serialized attempt group.
     // CR-01 trust boundary: no wildcard shell grant, and Edit/Write on the git directory and attributes files denied.
+    // WR-06: the App token's permission inputs are seen by the issues-write rule.
+    const rtEdit = (from, to) => {
+        const t = files[T];
+        if (!t.includes(from)) throw new Error(`self-test anchor '${from}' is absent from ${T}`);
+        return { files: { ...files, [T]: t.replace(from, to) } };
+    };
+    plants.push(
+        ['permission-issues: write on the fix-pr App token (real release-train.yml)', rtEdit('          permission-pull-requests: write\n\n      # The one step that holds the token', '          permission-pull-requests: write\n          permission-issues: write\n\n      # The one step that holds the token'), rel(T), 'fix-pr', 'issues-write', 'permission-issues: write'],
+        ['an App token step with no permission-* input in fix-pr', fixerEdit('          permission-contents: write\n          permission-pull-requests: write\n', ''), rel(T), 'fix-pr', 'issues-write', 'no permission-* input'],
+    );
     plants.push(
         ['wildcard git grant (Bash(git -C work diff:*))', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(git -C work diff:*)'), rel(T), 'fix', 'fixer-tools', 'Bash(git -C work diff:*)'],
         ['wildcard regenerate grant', fixerEdit('Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches)', 'Bash(scripts/regenerate-patches.sh:*)'), rel(T), 'fix', 'fixer-tools', 'Bash(scripts/regenerate-patches.sh:*)'],

@@ -3,7 +3,8 @@
 //
 // The fix PR opener (Phase 52, FIX-03). The fix-pr job runs it after fix-gate passed and the
 // bot commit is published to claude-fix/<key>-<class>-<attempt>. It opens or edits that PR, labels it
-// claude-fix and, when the label exists, release:<key>, and assigns the owner.
+// claude-fix and, when the label exists, release:<key>, and assigns the owner. It never creates a label: the App token
+// holds no issues scope (WR-06).
 //
 // The body is rendered from the structured fields only: the failing check, the diff statistics, the
 // changed paths, the attempt count and the gate log link. Model prose never reaches the body; a field
@@ -145,13 +146,13 @@ export function openPr({ run = ghRun, summary, branch, target, owner, key, title
     }
     const notes = [];
     const releaseLabel = `release:${key}`;
-    // The bot App holds Issues write, so a missing release label is created here, then added.
+    // The App token holds contents and pull-requests write only (WR-06), so a missing release label is a NOTE for the
+    // owner, never created here. The PR still opens with claude-fix.
     const found = run(['label', 'list', '--search', releaseLabel, '--json', 'name', '--jq', '.[].name']);
     if (found.status !== 0) return { ok: false, failure: `gh label list failed: ${firstLine(found.stderr)}` };
     if (!found.stdout.split('\n').includes(releaseLabel)) {
-        const created = run(['label', 'create', releaseLabel, '--color', '6f42c1', '--description', 'Automated fix for this release key']);
-        if (created.status !== 0) return { ok: false, failure: `gh label create ${releaseLabel} failed: ${firstLine(created.stderr)}` };
-        notes.push(`label ${releaseLabel} was created for this release key`);
+        notes.push(`label ${releaseLabel} does not exist, so the PR carries claude-fix only. Next step: the owner creates ${releaseLabel} and adds it`);
+        return { ok: true, number: number === '' ? null : number, notes };
     }
     const add = run(['pr', 'edit', branch, '--add-label', releaseLabel]);
     if (add.status !== 0) return { ok: false, failure: `gh pr edit ${branch} --add-label ${releaseLabel} failed: ${firstLine(add.stderr)}` };
@@ -223,8 +224,10 @@ function selfTest() {
     calls.some(a => a[1] === 'edit' && a.includes(`release:${KEY}`)) ? ok('an existing release label is added to the PR') : bad('release label', 'not added');
 
     const noLabel = [];
-    openPr({ run: (args) => { noLabel.push(args); return args[1] === 'list' && args[0] === 'label' ? { status: 0, stdout: '', stderr: '' } : { status: 0, stdout: '', stderr: '' }; }, summary, branch, target: summary.target, owner: 'owner-fixture', key: KEY, title: 't' });
-    noLabel.some(a => a[0] === 'label' && a[1] === 'create') && noLabel.some(a => a[0] === 'pr' && a[1] === 'edit' && a.includes('--add-label')) ? ok('a missing release label is created, then added to the PR') : bad('missing release label', 'the label was not created and added');
+    const noLabelRun = openPr({ run: (args) => { noLabel.push(args); return { status: 0, stdout: '', stderr: '' }; }, summary, branch, target: summary.target, owner: 'owner-fixture', key: KEY, title: 't' });
+    noLabelRun.ok && noLabelRun.notes.some(n => n.includes('does not exist')) && !noLabel.some(a => a[0] === 'label' && a[1] === 'create') && !noLabel.some(a => a.includes('--add-label'))
+        ? ok('a missing release label is a NOTE: it is never created and the PR still opens (no issues scope)')
+        : bad('missing release label', JSON.stringify(noLabelRun));
 
     const failing = openPr({ run: () => ({ status: 1, stdout: '', stderr: 'HTTP 403: Resource not accessible' }), summary, branch, target: summary.target, owner: 'owner-fixture', key: KEY, title: 't' });
     !failing.ok && failing.failure.includes('gh pr list') ? ok('a failed gh call fails closed, naming the endpoint') : bad('failure path', JSON.stringify(failing));
