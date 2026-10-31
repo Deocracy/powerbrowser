@@ -83,3 +83,26 @@ the Phase 45 comparator contract and needs the host measurement wired into `buil
 
 **Who decides:** the owner. Nothing in 58-03 depends on the choice, but the 175 re-record (RELEASING.md
 "Rebase onto 175") records the digest either way.
+
+## 5. A red uptake replay turns every tick red with no writer (58-REVIEW IN-04)
+
+**Plan:** 58-01 (the uptake lane and its report view).
+
+**Blocked piece:** the signal for a 175 replay that ends red. The review fixes WR-02 and IN-03 make any
+uptake replay result other than success red in the report, so a patch conflict, a red gate or a
+cancelled run fails the whole workflow run on every hourly tick. The conflict writer (item 1) is not
+wired, so no issue is opened. The stage line is printed in the job log, and the run conclusion is the
+only signal.
+
+**Why:** the signal belongs with the writer decision (item 1). Until that is approved, the run
+conclusion is the one place a red replay shows.
+
+**Options:**
+
+- A. Keep the red run as the interim signal, and name it in RELEASING.md as the signal to watch. This is
+  the code as built.
+- B. Mark the uptake job `continue-on-error`, so the run stays green and the stage line carries the
+  signal. This hides a failed replay from the run conclusion and contradicts the WR-02 rule that a
+  non-success result is red.
+
+**Who decides:** the owner, with item 1. Executor default: A, unchanged by the review fix.
