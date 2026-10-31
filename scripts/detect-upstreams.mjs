@@ -21,7 +21,8 @@
 //    every other major, so a 175 tag can never become a 153 candidate.
 //  - The uptake major (UPTAKE_MAJOR, 175) is a replay-only lane. decideUptake
 //    names the newest *esr_RELEASE tag under 175 and nothing else. It opens no
-//    branch and no PR; the workflow replays the tag and writes nothing. A 153 tag
+//    branch and no PR; the workflow replays the tag and writes nothing. The lane is off once
+//    the pinned major reaches the uptake major (WR-03), so a flipped pin never replays its own line. A 153 tag
 //    is refused by the same guard, with the role 'uptake' in its reason.
 //  - Both lanes read one tag listing. FIREFOX_ESR is advisory for both lanes.
 //
@@ -158,17 +159,20 @@ export function classifyTag(tag, major, role = 'pinned') {
  * It has no pin of its own, so every 175 tag is a candidate; the replay runs against the
  * newest. decision is replay-only or none, and nothing else: the lane never opens a branch
  * or a PR. refused lists every ESR-shaped tag the 175 guard drops, with its reason (data only:
- * the pinned-major notes already cover the 175 tags on the 153 line). Pure.
+ * the pinned-major notes already cover the 175 tags on the 153 line). pinnedMajor (WR-03): once
+ * the pin has reached the uptake major (after the flip), that line is the bump path, so the lane
+ * is off and the same tag is never replayed twice. Pure.
  */
-export function decideUptake(tags, uptakeMajor = UPTAKE_MAJOR) {
+export function decideUptake(tags, uptakeMajor = UPTAKE_MAJOR, pinnedMajor = null) {
     const refused = [];
     for (const t of tags) {
         if (!ESR_SHAPED.test(t) || t.endsWith('^{}')) continue;
         const c = classifyTag(t, uptakeMajor, 'uptake');
         if (!c.keep) refused.push(c.reason);
     }
-    const candidate = pickLatest(tags, uptakeMajor);
-    return { major: uptakeMajor, candidate, decision: candidate === null ? 'none' : 'replay-only', refused };
+    const off = pinnedMajor !== null && uptakeMajor <= pinnedMajor;
+    const candidate = off ? null : pickLatest(tags, uptakeMajor);
+    return { major: uptakeMajor, candidate, decision: candidate === null ? 'none' : 'replay-only', refused, off };
 }
 
 /** The maximum numeric candidate under the pinned major, or null when none survives. */
@@ -285,8 +289,9 @@ export function decide({ pin, tags, firefoxEsr, nodePin, indexJson, shasumsText,
         }
     }
     // The uptake lane (TRAIN-05) reads the same listing. It is replay-only: a note, never a branch.
-    const uptake = decideUptake(tags);
+    const uptake = decideUptake(tags, UPTAKE_MAJOR, major);
     if (uptake.candidate !== null) notes.push(`${uptake.candidate.tag} (uptake major ${uptake.major}) is replay-only: the workflow replays it and writes nothing, and the 153 line is unaffected`);
+    if (uptake.off) notes.push(`the uptake lane is off: the pinned major ${major} has reached the uptake major ${uptake.major}, so the pin's own line is the bump path and no ${uptake.major} tag is replayed`);
     return { esr, node, notes, uptake };
 }
 
@@ -536,6 +541,13 @@ function selfTest() {
             overrides: { pin: PIN, tags: [PIN], firefoxEsr: '175.0esr' },
             expect: 'FIREFOX_ESR 175.0esr is advisory only',
             held: r => r.decision.esr.candidate === null && r.decision.esr.decision === 'none',
+        },
+        {
+            // WR-03: after the flip the pin is 175, so the 175 tags are the bump line and the uptake lane must be off.
+            name: 'a 175 pin with a newer 175 tag: the uptake lane would replay the bump line a second time',
+            overrides: { pin: tag(UPTAKE_MAJOR, 0, 0), tags: [tag(UPTAKE_MAJOR, 0, 0), tag(UPTAKE_MAJOR, 1, 0)] },
+            expect: 'the uptake lane is off',
+            held: r => r.decision.uptake.candidate === null && r.decision.uptake.off === true && r.decision.esr.decision === 'bump',
         },
         {
             name: 'a Node index with no v24 line that ships linux-x64',
