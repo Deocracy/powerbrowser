@@ -112,15 +112,16 @@ Owner steps, in order:
    `sha256sum <clone>/scripts/legion-pre-job-hook.sh /etc/nixos/pb-runner/legion-pre-job-hook.sh`
    The two hashes must match. `environment.etc` sets the 0555 mode on the deployed path.
 4. Add the block from docs/RELEASING.md, section "Runner registration through the `/etc/nixos` flow",
-   to `/etc/nixos/configuration.nix`: the `services.github-runners.powerbrowser-release` unit (user
-   `pb-runner`, work directory `/var/lib/pb-runner`, label `powerbrowser-release`, no `ephemeral` key),
-   `users.users.pb-runner` with `autoSubUidGidRange`, `environment.etc."pb-runner/legion-pre-job-hook.sh"`,
-   and `systemd.services.github-runner-powerbrowser-release.environment.ACTIONS_RUNNER_HOOK_JOB_STARTED`
-   pointing at `/etc/pb-runner/legion-pre-job-hook.sh`. The option names were NOT verified in this run:
-   no nixpkgs source was on NIX_PATH and the nixos MCP was not reachable from the executor. Check every
-   option name against the nixos MCP or the pinned `github-runner/options.nix` before writing it, and
-   add a token-type option only if the pinned module has one. Do not create a `configuration.nix.pre-*`
-   backup; git history is the backup.
+   to `/etc/nixos/configuration.nix`: the `services.github-runners.powerbrowser-release` unit (user and
+   group `pb-runner`, work directory `/var/lib/pb-runner`, label `powerbrowser-release`,
+   `tokenType = "registration"`, `ephemeral = false`, and
+   `extraEnvironment.ACTIONS_RUNNER_HOOK_JOB_STARTED` pointing at `/etc/pb-runner/legion-pre-job-hook.sh`),
+   `users.users.pb-runner` with `isSystemUser` and `autoSubUidGidRange`, `users.groups.pb-runner`, and
+   `environment.etc."pb-runner/legion-pre-job-hook.sh"`. The option names are verified (last section of
+   this file). Do not create a `configuration.nix.pre-*` backup; git history is the backup. Where the
+   runner lets the unit choose the hook's interpreter, start the hook as
+   `/run/current-system/sw/bin/bash -p --noprofile --norc /etc/pb-runner/legion-pre-job-hook.sh`
+   (`-p` ignores `BASH_ENV`, `ENV` and imported functions) and record whether the runner allows that.
 5. Dry-build before applying: `pkexec nixos-rebuild dry-build` must succeed.
 6. Mint the one-time registration token immediately before the rebuild that registers the runner:
    `gh api -H 'X-GitHub-Api-Version: 2022-11-28' -X POST repos/Deocracy/powerbrowser/actions/runners/registration-token --jq .token`
@@ -128,14 +129,17 @@ Owner steps, in order:
    The token expires after one hour. No PAT and no App key go to legion.
 7. Apply: `pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nrs "feat: legion non-ephemeral github runner for powerbrowser release builds (SEC-08, SEC-10)"'`.
    `nrs` commits, rebuilds, and pushes in one step. Bare `nrs` fails under Claude's sudo; the pkexec form is the only one.
-8. Check the runner user boundary while the registration file still exists:
+8. Check the runner user boundary (the registration file stays in place, so this can run at any time):
    `sudo -u pb-runner test -r /home/chris/.config/powerbrowser-release/mar-key && echo READABLE` and
    `sudo -u pb-runner test -r /var/lib/secrets/github-runner-registration && echo READABLE`. Both must
    print nothing. If either prints READABLE, stop and fix the ownership or the home-directory mode first.
-9. Confirm the runner and remove the token file. `gh api repos/Deocracy/powerbrowser/actions/runners --jq '.runners[] | {name, status, labels: [.labels[].name]}'`
-   shows one runner named `legion`, online, with the label `powerbrowser-release`. Then
-   `pkexec rm -f /var/lib/secrets/github-runner-registration`. If the unit fails on a later restart
-   because the module wants the token file again, mint a new one-time token; never restore a PAT.
+9. Confirm the runner. `gh api repos/Deocracy/powerbrowser/actions/runners --jq '.runners[] | {name, status, labels: [.labels[].name]}'`
+   shows one runner named `legion`, online, with the label `powerbrowser-release`. **Leave the token file
+   `/var/lib/secrets/github-runner-registration` in place.** The module reads `tokenFile` as a service
+   credential on every start, so deleting it breaks the unit at the next restart or reboot; the expired
+   token inside it is harmless. Mint a fresh one-time token only for a deliberate re-registration
+   (changing the file's content, or `url`, `name`, `workDir`, `extraLabels`, `ephemeral` or `runnerGroup`,
+   re-registers). Never restore a PAT.
 10. Refusal drill. Local, no GitHub write: `env -i GITHUB_REPOSITORY=Deocracy/powerbrowser GITHUB_WORKFLOW_REF='Deocracy/powerbrowser/.github/workflows/release.yml@refs/heads/feature' GITHUB_EVENT_NAME=workflow_dispatch /etc/pb-runner/legion-pre-job-hook.sh`
     must exit 1 and name `refs/heads/main`. Live drill (optional, the owner's choice): push a throwaway branch with a
     `powerbrowser-release` job, confirm the job fails at set-up before any step, then delete the branch. Not run here.
@@ -152,7 +156,15 @@ Items this record adds for the owner:
 
 ### 49-02 Task 3: option names verified (2026-10-31, nixos MCP, channel unstable)
 
-All exist: `services.github-runners.<name>.{enable, url, name, user, workDir, extraLabels, noDefaultLabels, tokenFile, tokenType, ephemeral, replace, runnerGroup, extraEnvironment, nodeRuntimes}` and `users.users.<name>.autoSubUidGidRange`. Two corrections to the steps above:
+This section is authoritative; steps 4, 8 and 9 above and docs/RELEASING.md now follow it.
 
-1. Prefer `services.github-runners.powerbrowser-release.extraEnvironment.ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";` over a separate `systemd.services.github-runner-powerbrowser-release.environment` entry; it is the module's own option. Set `tokenType = "registration";` explicitly rather than relying on auto-detection.
-2. Per the `tokenFile` option text, a registration token is valid for one hour, and changing the file's content or any registration-triggering option (url, name, workDir, extraLabels, ephemeral, runnerGroup) re-registers. Do not delete the token file while the option points at it: leave the (expired, harmless) file in place after the first successful registration, and mint a fresh one-time token only before a deliberate re-registration. Keep `ephemeral = false`; the docs say ephemeral with a registration token fails on restart.
+All exist: `services.github-runners.<name>.{enable, url, name, user, group, workDir, extraLabels, noDefaultLabels, extraPackages, tokenFile, tokenType, ephemeral, replace, runnerGroup, extraEnvironment, nodeRuntimes}`, `users.users.<name>.{autoSubUidGidRange, isSystemUser}` (exactly one of `isNormalUser` and `isSystemUser`), `users.groups`, and `environment.etc.<name>.{source, mode}` (a mode other than `"symlink"` copies the file). Two corrections to the original steps, now applied:
+
+1. Use `services.github-runners.powerbrowser-release.extraEnvironment.ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";` (the module's own option), not a separate `systemd.services.github-runner-powerbrowser-release.environment` entry. Set `tokenType = "registration";` explicitly rather than relying on auto-detection.
+2. Per the `tokenFile` option text, a registration token is valid for one hour, and changing the file's content or any registration-triggering option (url, name, workDir, extraLabels, ephemeral, runnerGroup) re-registers. Do not delete the token file while the option points at it: leave the (expired, harmless) file in place after the first successful registration, and mint a fresh one-time token only before a deliberate re-registration. Keep `ephemeral = false`; ephemeral with a registration token fails on restart.
+
+Not verified (owner checks at apply, `nixos-rebuild dry-build` does not catch either):
+
+- The module's behaviour with a static `user` plus a custom `workDir`: state directory ownership and sandbox write paths.
+- Rootless podman for `pb-runner` (`podman` is in `extraPackages` and `autoSubUidGidRange` is set, but nothing has run a container as that user).
+- Whether the runner lets the unit choose the hook's interpreter (see step 4).

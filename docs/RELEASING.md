@@ -242,7 +242,7 @@ here owns.
 | `mar-signing-and-update-integrity` | The MAR key ceremony (below) | Private key custody |
 | `mar-signing-and-update-integrity` | The MAR key ceremony (key store lives on `legion` at `~/.config/powerbrowser-release/mar-key/`; optional `.p12` backup to the offline medium) and one MAR signed with that store's key for the loopback proof | Private key custody |
 | `packaged-product-correctness-linux` | Node provenance: the release train's detect-node job selects the newest Node 24 line, fetches `SHASUMS256.txt` with its `.sig` from `nodejs.org/dist/<version>/`, verifies the signature with `gpgv` against the nodejs/release-keys keyring, and asserts the tarball sha256 equals the signed entry before it opens `chore/node-v24.x`; the owner reviews that PR, and the shipped-licences and provenance section of `docs/BUILD.md` is written from it | Key trust decision |
-| `linux-release-pipeline-and-update-channel` | Mint a one-time registration token for `Deocracy/powerbrowser` (no PAT, no App key), write it root-owned mode 0600 to `/var/lib/secrets/github-runner-registration` immediately before the runner registration, and remove that file once the runner is online | Secret custody plus `pkexec` |
+| `linux-release-pipeline-and-update-channel` | Mint a one-time registration token for `Deocracy/powerbrowser` (no PAT, no App key), write it root-owned mode 0600 to `/var/lib/secrets/github-runner-registration` immediately before the runner registration, and leave that file in place afterwards (the unit reads it as a credential on every start) | Secret custody plus `pkexec` |
 | `linux-release-pipeline-and-update-channel` | Add the `services.github-runners` block to `/etc/nixos/configuration.nix` and apply it | Root on `legion` |
 | `linux-release-pipeline-and-update-channel` | Set fork pull request workflows from outside collaborators to **Require approval for all external contributors**; read back `fork-pr-approval.json` rather than re-applying | Repository settings UI |
 | `linux-release-pipeline-and-update-channel` | Confirm the `release` environment still carries a required reviewer and that the MAR key is an **environment** secret; create no repository-level Actions secret (`repo-controls` asserts that count stays zero) | Read-back of a control the owner owns |
@@ -316,8 +316,12 @@ gh api -H 'X-GitHub-Api-Version: 2022-11-28' -X POST repos/Deocracy/powerbrowser
 ```
 
 Write it once to the registration file, root-owned mode 0600, immediately before the
-rebuild that registers the runner. The token expires after one hour. Remove the file once
-the runner shows online:
+rebuild that registers the runner. The token expires after one hour. **Leave the file in
+place** after the runner shows online: the module reads `tokenFile` as a service credential on
+every start, so deleting it breaks the unit at the next restart or reboot, and the expired token
+inside it is harmless. Changing the file's content, or any registration-triggering option (`url`,
+`name`, `workDir`, `extraLabels`, `ephemeral`, `runnerGroup`), re-registers the runner, so mint
+a fresh token only for a deliberate re-registration:
 
 ```
 pkexec bash -c 'install -d -m 0700 /var/lib/secrets; printf %s "<token>" > /var/lib/secrets/github-runner-registration; chmod 0600 /var/lib/secrets/github-runner-registration'
@@ -341,25 +345,47 @@ runner itself, because a repo-scoped runner sits in no runner group. The runner 
 the first step of every job, and a non-zero exit fails the job before any step runs. It is
 installed as a read-only root-owned copy at `/etc/pb-runner/legion-pre-job-hook.sh`,
 byte-identical to the tracked file, and the unit sets `ACTIONS_RUNNER_HOOK_JOB_STARTED` to that
-path. The `hook-refusal` row proves the refusal table on the tracked text. A deployed copy that
-drifts is caught by comparing `sha256sum` of both files.
+path. The `hook-refusal` row proves the refusal table on the tracked text, including a hostile
+environment: an exported shell function, `BASH_ENV` and `ENV` are refused, and a run attempt other
+than 1 is refused.
 
-Add to `/etc/nixos/configuration.nix`, with the hook copied to `/etc/nixos/pb-runner/` first. Verify
-every option name against the pinned nixpkgs module
-(`nixos/modules/services/continuous-integration/github-runner/options.nix`) before the rebuild.
-If the module has a token-type option, it must match a one-time registration token:
+The hook cannot undo a `BASH_ENV` file, which bash runs before the hook's first line. Where the
+runner allows the hook's interpreter to be chosen, invoke it as
+`/run/current-system/sw/bin/bash -p --noprofile --norc /etc/pb-runner/legion-pre-job-hook.sh`
+(`-p` makes bash ignore `BASH_ENV`, `ENV` and imported functions). Whether the runner lets the unit
+choose the interpreter of a `.sh` hook is **not verified**: the runner picks the shell from the
+file extension as far as is known. Record the answer from the live drill below. If the interpreter
+cannot be chosen, the in-script defence is the control, and the live drill decides whether it
+holds.
+
+Add to `/etc/nixos/configuration.nix`, with the hook copied to `/etc/nixos/pb-runner/` first.
+These option names were verified on nixos unstable (2026-10-31): under
+`services.github-runners.<name>`: `enable`, `url`, `name`, `user`, `group`, `workDir`,
+`extraLabels`, `noDefaultLabels`, `extraPackages`, `extraEnvironment`, `tokenFile`, `tokenType`,
+`ephemeral`, `replace`, `runnerGroup` and `nodeRuntimes`; and `users.users.<name>.isSystemUser`
+(exactly one of `isNormalUser` and `isSystemUser` is set), `users.users.<name>.autoSubUidGidRange`,
+`users.groups`, and `environment.etc.<name>.source` and `.mode` (a mode other than `"symlink"`
+copies the file). Set `tokenType = "registration"` explicitly, and `ephemeral = false`: ephemeral
+with a registration token fails on restart. **Not verified:** how the module behaves with a static
+`user` and a custom `workDir` (state directory ownership, sandbox write paths), and whether rootless
+podman works for `pb-runner`. `pkexec nixos-rebuild dry-build` catches a wrong option name but not
+either of those; the owner checks them at apply.
 
 ```nix
 services.github-runners.powerbrowser-release = {
   enable = true;
   url = "https://github.com/Deocracy/powerbrowser";
   tokenFile = "/var/lib/secrets/github-runner-registration";
+  tokenType = "registration";
+  ephemeral = false;
   replace = true;
   name = "legion";
   user = "pb-runner";
+  group = "pb-runner";
   workDir = "/var/lib/pb-runner";
   extraLabels = [ "powerbrowser-release" ];
   extraPackages = with pkgs; [ git gh nix podman ];
+  extraEnvironment.ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";
 };
 users.users.pb-runner = {
   isSystemUser = true;
@@ -371,7 +397,6 @@ environment.etc."pb-runner/legion-pre-job-hook.sh" = {
   source = ./pb-runner/legion-pre-job-hook.sh;
   mode = "0555";
 };
-systemd.services.github-runner-powerbrowser-release.environment.ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";
 ```
 
 Dry-build, then apply with the documented flow:
@@ -654,7 +679,7 @@ that is not admitted.
 | `release` environment | `MAR_SIGNING_P12_PASSWORD` | `mar-signing-and-update-integrity` | as above |
 | `release` environment | descriptor-repository PAT (Contents write on `powerbrowser-updates` only) | `linux-release-pipeline-and-update-channel` | as above |
 | `release` environment | `WINGET_TOKEN`, fork-scoped, only under an ADMIT verdict | `listings-and-cadence` | as above |
-| Host filesystem on `legion` | `/var/lib/secrets/github-runner-registration`, root-owned mode 0600, present only from minting until the runner is online; the hook copy `/etc/pb-runner/legion-pre-job-hook.sh`, root-owned mode 0555 | `linux-release-pipeline-and-update-channel` | the operator; not readable by the runner user `pb-runner` |
+| Host filesystem on `legion` | `/var/lib/secrets/github-runner-registration`, root-owned mode 0600, present from minting; the token inside it expires after one hour and is harmless afterwards, and the file stays because the unit reads it on every start; the hook copy `/etc/pb-runner/legion-pre-job-hook.sh`, root-owned mode 0555 | `linux-release-pipeline-and-update-channel` | the operator; not readable by the runner user `pb-runner` |
 | Offline medium | `powerbrowser-mar.p12` (from the ceremony block's optional `pk12util` line, protected with the key store's password from `password.txt`) and the key-store password | `mar-signing-and-update-integrity` | the operator, in a safe |
 
 No secret reaches `legion` through Actions. The build job holds `contents: read`,
@@ -1091,9 +1116,9 @@ gh api repos/Deocracy/powerbrowser/actions/runners --jq '.runners[] | {name, sta
 The runner is non-ephemeral, so it stays registered between jobs, and a persistent absence is
 not normal. Check the unit first. Then check the hook: a job the hook refuses fails at set-up,
 before any step, and the hook's stderr appears in the job log. A registration token expires after
-one hour. Mint a new one, write it through `pkexec` to `/var/lib/secrets/github-runner-registration`
-only when the runner needs re-registration, and restart the unit. A personal access token is never
-the fix.
+one hour and the file is left in place after registration, so an expired token in it is normal. Mint a
+new one, write it through `pkexec` to `/var/lib/secrets/github-runner-registration` only for a
+deliberate re-registration, and restart the unit. A personal access token is never the fix.
 
 **Nothing runs at all after tagging.** A release-pattern tag pushed by any actor
 other than the `powerbrowser-bot` App, the owner included, is refused at push time
