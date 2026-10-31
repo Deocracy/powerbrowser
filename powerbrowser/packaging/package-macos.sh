@@ -51,8 +51,15 @@ if [ ! -f "$ARCHIVE" ]; then
 fi
 echo "$NODE_SHA  $ARCHIVE" | sha256sum -c --quiet - || { rm -f "$ARCHIVE"; fail "$ARCHIVE does not hash to the pin in powerbrowser/packaging/node-runtime.json ($NODE_KEY)"; }
 
+# Release branding is the default, as on Linux: mozconfig.release falls back to the release branding
+# directory, while the macOS mozconfigs fall back to dev. Exporting it here makes a bare run stage the
+# release brand; a dev build names the dev directory explicitly.
+export POWERBROWSER_BRANDING="${POWERBROWSER_BRANDING:-powerbrowser/branding-generated/release}"
+
 # Gecko: the target's own objdir, through its tracked per-target mozconfig.
 ( cd "$ROOT/upstream" && POWERBROWSER_OBJDIR="objdir-macos-$ARCH" MOZCONFIG="$MOZCONFIG_TRACKED" ./mach package )
+# config.status records every configure argument. Fail if the build did not take the selected branding.
+grep -qF -- "--with-branding=$POWERBROWSER_BRANDING" "$OBJ/config.status" || fail "$OBJ/config.status does not record --with-branding=$POWERBROWSER_BRANDING; the Gecko build used another branding"
 
 shopt -s nullglob
 APPS=( "$OBJ"/dist/*.app )

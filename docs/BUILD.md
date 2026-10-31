@@ -1083,6 +1083,11 @@ decision per RESEARCH open question 1 and is NOT procured in this phase.
   any of them is missing. Its staging also requires every native payload of the
   Theia build to be a Mach-O of the target arch: a Linux `yarn build` leaves ELF
   natives, and the script fails on them by name.
+- `package-macos.sh` stages release branding (`powerbrowser/branding-generated/release`)
+  unless `POWERBROWSER_BRANDING` is set. A dev bundle needs
+  `POWERBROWSER_BRANDING=powerbrowser/branding-generated/dev` named explicitly.
+  The script checks that `objdir-macos-<arch>/config.status` records the chosen
+  branding.
 - The five DMG branding inputs (`document.icns`, `disk.icns`, `background.png`,
   `dsstore`, `Assets.car`) are generated into `generated/branding/<variant>/`
   with no tracked comparand and no brand input. Their placeholder meanings and
