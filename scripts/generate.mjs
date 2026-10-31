@@ -1477,7 +1477,7 @@ function emitMozconfig(config, variant) {
  * rows, so a foreign-channel MAR still fails with updater error 22.
  */
 const SB_KEYFILE_MOUNT = '/keys/sb-gapi.data';
-function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile }) {
+function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) {
     // NG-065: one MAR channel for every build of this manifest, <app_basename>-<update channel>.
     // It is baked into MAR_CHANNEL_ID and into update-settings.ini's ACCEPTED_MAR_CHANNEL_IDS,
     // so a MAR made for another product or channel is refused (updater error
@@ -1511,8 +1511,45 @@ function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile }) {
         'ac_add_options --with-ccache=sccache',
         'ac_add_options --with-branding=${POWERBROWSER_BRANDING:-' + brandingDefault + '}',
         `mk_add_options "export MOZ_APP_REMOTINGNAME=${assertEmittable('identity.remoting_name', config.identity.remoting_name)}"`,
+        // Per-target tail (Phase 55, PKG-14). Empty for every existing row, so
+        // their bytes do not move.
+        ...tail,
     ];
     return lines.join('\n') + '\n';
+}
+
+/**
+ * Phase 55 (PKG-14): the per-target macOS mozconfig. ONE shared builder
+ * (emitMozconfigFor) carries every line the Linux dev row carries, with its
+ * own objdir suffix; each target appends only the Darwin lines below. The
+ * generic-certs switch and the arm64 spelling are refused by assertion, never
+ * emitted: the switch widens privileged-update trust (Pitfall 2), and the
+ * canonical CPU name is aarch64 (Pitfall 4, init.configure:565-577).
+ * The forbidden spelling is assembled from parts so this file never contains
+ * it as one literal.
+ */
+const MACOS_GENERIC_CERTS_SWITCH = '--enable-mac-elevated-updates-with-generic-certs';
+const MACOS_FORBIDDEN_TRIPLE = ['arm64', 'apple-darwin'].join('-');
+const MACOS_TARGETS = Object.freeze({
+    aarch64: Object.freeze({ triple: 'aarch64-apple-darwin', objdir: 'objdir-macos-aarch64' }),
+    x86_64: Object.freeze({ triple: 'x86_64-apple-darwin', objdir: 'objdir-macos-x86_64' }),
+});
+function emitMozconfigMacos(config, variant, cpu) {
+    const target = MACOS_TARGETS[cpu];
+    const tail = [
+        `ac_add_options --target=${target.triple}`,
+        // The bootstrap SDK floor is 26.5 (toolchain.configure mac_sdk_min_version).
+        'mk_add_options "export MACOS_SDK_DIR=$MOZ_FETCHES_DIR/MacOSX26.5.sdk"',
+        // The DMG tools for the Linux branch of dmg.py (upstream cross-mozconfig.common).
+        'mk_add_options "export MKFSHFS=$MOZ_FETCHES_DIR/hfsplus/newfs_hfs"',
+        'mk_add_options "export DMG_TOOL=$MOZ_FETCHES_DIR/dmg/dmg"',
+        'mk_add_options "export HFS_TOOL=$MOZ_FETCHES_DIR/dmg/hfsplus"',
+    ];
+    const text = emitMozconfigFor(config, { ...variant, objdir: target.objdir }, { bootstrap: false, sbKeyfile: null, tail });
+    if (text.includes(MACOS_GENERIC_CERTS_SWITCH) || text.includes(MACOS_FORBIDDEN_TRIPLE)) {
+        throw new Error(`emitMozconfigMacos(${cpu}) would emit a forbidden mozconfig spelling; this is an emitter bug, not a manifest value`);
+    }
+    return text;
 }
 
 /**
@@ -3578,6 +3615,16 @@ export const TARGETS = Object.freeze([
         tracked: '.mozconfig',
         variant: 'dev',
         emit: emitMozconfig,
+    }),
+    // NEW (Phase 55, PKG-14): the aarch64 macOS mozconfig through the shared
+    // builder. The variant is 'dev' because the macOS row carries no variant
+    // of its own: the objdir suffix and the Darwin tail come from the emitter.
+    // A frozen copy authored once from the emitter; never edited to go green.
+    Object.freeze({
+        generated: 'packaging/mozconfig-macos-aarch64',
+        tracked: 'powerbrowser/packaging/mozconfig-macos-aarch64',
+        variant: 'dev',
+        emit: (config, variant) => emitMozconfigMacos(config, variant, 'aarch64'),
     }),
     // NEW (Phase 45, PKG-17): the release .mozconfig variant. A frozen copy
     // of the release emission, authored once from the emitter and committed,

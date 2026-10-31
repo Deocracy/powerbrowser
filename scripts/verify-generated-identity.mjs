@@ -141,6 +141,11 @@ const EXPECTED = Object.freeze([
     // it from TARGETS would compare the generator with itself, so a dropped or
     // renamed release target would never go red.
     'powerbrowser/packaging/mozconfig.release',
+    // NEW (Phase 55, PKG-14): the aarch64 macOS mozconfig. A deliberate contract
+    // change, so it lands here in the same commit as its TARGETS row. Frozen copy
+    // of the shared builder's output plus the Darwin tail, authored once from the
+    // emitter; on a red, the emitter is what changes.
+    'powerbrowser/packaging/mozconfig-macos-aarch64',
 ]);
 
 /** Set difference reported by name, so a failure says WHICH path drifted. */

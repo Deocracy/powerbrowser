@@ -4794,6 +4794,16 @@ run_own_checks() {
     # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
     # must exit 0. It writes nothing in the tree.
     "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 55, PKG-24): the macOS entitlement gate. Derives the signing inputs from the
+    # hardened-sign-config block, compares the files on disk with set equality both ways, and fails
+    # on any 43AQ936H96, org.mozilla or restricted key outside the known-open hits of .planning/
+    # WINDOWS.md entry 22 (the upstream production plists, until the owner's Team-ID patch lands).
+    # Honestly --quick: text reads and XML parsing only, no build, browser, display or network.
+    "mac-entitlements|node $REPO_ROOT/scripts/verify-mac-entitlements.mjs"
+    # mac-entitlements-self-test plants a Team ID and an org.mozilla string in a developer input, a
+    # restricted key, an added file, a removed file, a new production hit, a closed known-open entry
+    # and zero files; each must go red naming the drift. The control stays green. It writes nothing.
+    "mac-entitlements-self-test|node $REPO_ROOT/scripts/verify-mac-entitlements.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
