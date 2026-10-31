@@ -4810,11 +4810,13 @@ run_own_checks() {
     # as a literal, and states, fixtures and actions compared as set equality. Plants that go red
     # naming their drift: a sixth state, fixture or action, a state with no action, a merged PR with
     # an unchanged pin, a 175.x ESR under the 153 guard, a conflict line with no patch number, and a
-    # conflict decision that writes under the patch directory. UNWIRED (no workflow caller, so no
-    # plant): findExactlyOne (live tracking writer, BLOCKED.md item 3), admitWakeRun (workflow_run
-    # held out, BLOCKED.md item 1) and classifyRelease (live Release list, Phase 50). A green row
-    # over those is not production coverage. Honestly --quick: pure functions over in-memory
-    # fixtures; no network, no gh, no build. It writes nothing.
+    # conflict decision that writes under the patch directory. The would-write view (--would-write,
+    # called by the release-train report job) runs the same derive, next, render and conflict rules,
+    # with a green control and a refusal plant. UNWIRED (no workflow caller, so no plant):
+    # findExactlyOne (live tracking writer, BLOCKED.md item 3), admitWakeRun (workflow_run held out,
+    # BLOCKED.md item 1) and classifyRelease (live Release list, Phase 50). A green row over those is
+    # not production coverage. Honestly --quick: pure functions over in-memory fixtures; no network,
+    # no gh, no build. It writes nothing.
     "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and

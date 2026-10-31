@@ -231,6 +231,49 @@ export function conflictStageReason(stage) {
     return `the conflict stage line ${JSON.stringify(stage)} names no patch number, so no issue can be titled. Next step: read the apply log and name the patch.`;
 }
 
+/**
+ * The would-write view for one run: derive, next and render over the facts the run's jobs
+ * produced, and the conflict issue when the state is CONFLICT. Pure. The run's facts are not
+ * live GitHub facts: verifyCheck, merged and pinUnchanged are null or false, and the revision is
+ * fixed at 1. shortcut: the view reads job outputs only, not check runs or the Release list; upgrade when the live facts source is approved (BLOCKED.md item 3) and Releases are keyed (Phase 50).
+ */
+export function wouldWrite({ pinTag, tag, openPrNumber, stage }) {
+    const candidateTag = tag === '' ? null : tag;
+    const openPr = openPrNumber === '' ? null : { head: `chore/esr-${candidateTag}`, number: Number(openPrNumber) };
+    const facts = { pinTag, candidateTag, revision: 1, openPr, stage: stage === '' ? null : stage, verifyCheck: null, merged: false, pinUnchanged: false };
+    const state = derive(facts);
+    if (state === null) return { lines: ['release-train: would-write: idle; no candidate and no open bump PR, so nothing is written'], failures: [] };
+    const action = next(state);
+    if (state === 'CONFLICT') {
+        const reason = conflictStageReason(facts.stage);
+        if (reason !== null) return { lines: [`release-train: would-write: refused -- ${reason}`], failures: [] };
+        const decision = renderConflict(candidateTag, conflictPatchNumber(facts.stage), facts.stage, '');
+        return {
+            lines: [`release-train: would-write: state=${state} action=${action}`, `would-write: conflict issue "${decision.title}", assigned to the owner; no patch is written`],
+            failures: conflictWriteFailures(decision),
+        };
+    }
+    const rendered = render(state, facts);
+    return {
+        lines: [`release-train: would-write: state=${state} action=${action}`, `would-write: tracking issue "${rendered.title}" labels=${rendered.labels.join(',')}; the writer is not wired`, rendered.body],
+        failures: [],
+    };
+}
+
+function wouldWriteCli([pinTag, tag, openPrNumber, stage]) {
+    if (tagToVersion(pinTag) === null) {
+        console.error(`${NAME}: FAIL -- the pin ${JSON.stringify(pinTag)} is not an *esr_RELEASE tag. Next step: check the pin in configuration.toml.`);
+        return 2;
+    }
+    const view = wouldWrite({ pinTag, tag, openPrNumber, stage });
+    view.lines.forEach(l => console.log(l));
+    if (view.failures.length > 0) {
+        view.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
+        return 1;
+    }
+    return 0;
+}
+
 function setDiff(a, b) {
     const sa = new Set(a);
     const sb = new Set(b);
@@ -355,7 +398,25 @@ function selfTest() {
         },
     ];
 
+    const viewPlants = [
+        {
+            name: 'a conflict stage line naming no patch number is refused by the would-write view',
+            run: () => wouldWrite({ pinTag: BASE_PIN, tag: NEWER, openPrNumber: '', stage: 'FAIL -- apply-patches.sh failed replaying' }).lines.filter(l => l.includes('refused')),
+            expect: 'names no patch number',
+        },
+    ];
     const greens = [
+        {
+            name: 'control: a fresh candidate is would-written as a bump and carries the tracking title',
+            run: () => {
+                const view = wouldWrite({ pinTag: BASE_PIN, tag: NEWER, openPrNumber: '', stage: '' });
+                return view.lines[0].includes('state=DETECTED action=bump') && view.lines[1].includes('release-train: v153.23.0-1') ? [] : [`would-write said ${view.lines[0]}`];
+            },
+        },
+        {
+            name: 'control: no candidate and no open PR is idle, with nothing written',
+            run: () => (wouldWrite({ pinTag: BASE_PIN, tag: '', openPrNumber: '', stage: '' }).lines[0].includes('idle') ? [] : ['no-candidate run was not idle']),
+        },
         {
             name: 'control: the owner is mentioned only on the gate state',
             run: () => {
@@ -371,7 +432,7 @@ function selfTest() {
     ];
 
     let failed = 0;
-    for (const p of [...trainPlants, ...conflictPlants]) {
+    for (const p of [...trainPlants, ...conflictPlants, ...viewPlants]) {
         const failures = p.run();
         const named = failures.find(f => f.includes(p.expect));
         if (failures.some(f => f.includes(REPO_ROOT))) {
@@ -407,16 +468,13 @@ const isEntry = process.argv[1] !== undefined && resolve(process.argv[1]) === fi
 
 // Run only as the entry point, so the exports stay importable without side effects.
 if (isEntry) {
-    for (const a of args) {
-        if (a !== '--self-test') {
-            console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
-            console.error(`  Next step: run: node ${SELF_REL} --self-test.`);
-            process.exit(2);
-        }
-    }
     if (args.length === 0) {
         console.log(`${NAME}: SKIP -- no mode given; run: node ${SELF_REL} --self-test`);
         process.exit(0);
     }
-    process.exit(selfTest());
+    if (args.length === 1 && args[0] === '--self-test') process.exit(selfTest());
+    if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
+    console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
+    console.error(`  Next step: run: node ${SELF_REL} --self-test, or node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>.`);
+    process.exit(2);
 }

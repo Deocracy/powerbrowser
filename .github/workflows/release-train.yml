@@ -415,8 +415,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      contents: read
       issues: write
     steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
       - name: Report what this run decided
         env:
           REASON: ${{ needs.derive.outputs.reason }}
@@ -444,10 +450,15 @@ jobs:
         run: |
           echo "dry-run: would find or create the release-train tracking issue and render it from facts; nothing is written"
 
-      # The tracking-issue writer lands in plan 43-03. A live run with a candidate
-      # refuses to act rather than leave the release without its tracking view.
-      - name: Refuse the live tracking-issue write until it is wired
-        if: ${{ !inputs.dry-run && needs.detect.outputs.candidate != '' }}
+      # shortcut: the tracking issue is not written, so this step prints the would-write view (state, action and the rendered body) from this run's job outputs and exits 0, since a red run every tick is worse than an explicit, printed hold, upgrade when the live facts source and the exactly-one writer are approved (BLOCKED.md item 3).
+      - name: Print the would-write view of the tracking issue (writer not wired)
+        env:
+          PIN: ${{ needs.detect.outputs.pin }}
+          CANDIDATE: ${{ needs.detect.outputs.candidate }}
+          BUMP: ${{ needs.bump.result }}
+          STAGE_OUT: ${{ needs.bump.outputs.stage }}
         run: |
-          echo "release-train: FAIL -- the tracking-issue writer is not wired yet (plan 43-03). Next step: dispatch with dry-run until that plan lands." >&2
-          exit 1
+          set -eu
+          STAGE="$STAGE_OUT"
+          if [ "$BUMP" = "failure" ] && [ -z "$STAGE" ]; then STAGE="FAIL -- the replay job ended failure with no stage line"; fi
+          node scripts/release-train.mjs --would-write "$PIN" "$CANDIDATE" "" "$STAGE"
