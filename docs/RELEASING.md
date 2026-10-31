@@ -121,6 +121,11 @@ Azure Artifact Signing subscription. What the user sees:
 
 ### macOS
 
+Record before build (SEC-13): `.planning/workstreams/deploy/phases/55-macos-i/55-SEC13-MEMO.md`
+holds the Apple SDK licence position, the rcodesign maintenance status and the Developer ID CA
+expiry, each with its read source and date. No Phase 55 build runs before that memo exists. The
+posture below stays ad-hoc until the owner checkpoint flips it.
+
 The universal DMG is cross-built on Linux and carries an **ad-hoc signature only**.
 There is no Apple Developer Program membership, no Developer ID certificate and no
 notarization ticket. What the user sees:
