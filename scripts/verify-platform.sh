@@ -4821,6 +4821,16 @@ run_own_checks() {
     # service, and a weekly timer, a dropped Persistent, and --mirror in the service; each goes red
     # naming the drift. The matching pair stays green. It writes nothing.
     "codeberg-mirror-self-test|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --self-test"
+    # NEW (Phase 53, MON-02): the Upptime target set. Derives the expected targets from the
+    # configuration.toml urls and telemetry endpoint at check time and compares them with the
+    # tracked declaration by set equality; the events target is a named deferral until the manifest
+    # declares the telemetry endpoint. Also checks the sweep-report contract on fixtures and that no
+    # product workflow carries a schedule key (D-77). Honestly --quick: text reads only.
+    "upptime-config|node $REPO_ROOT/scripts/verify-upptime.mjs"
+    # upptime-config-self-test plants a dropped target, an added target, an events endpoint the
+    # declaration omits, a disabled status workflow, a stale last-run age and a schedule key; each
+    # goes red naming the target or workflow. The fresh active sweep and the matching set stay green.
+    "upptime-config-self-test|node $REPO_ROOT/scripts/verify-upptime.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
@@ -5300,6 +5310,10 @@ run_own_checks() {
       # a FAIL, never a SKIP. Never called by a quick path.
       "codeberg-mirror-live|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --live"
 
+      # NEW (Phase 53, MON-02): the live Upptime status repository. Full tier: read-only gh api over
+      # its workflows and their last runs; red until the owner creates the repository and its status
+      # CNAME. An undeclared status slug is a FAIL, never a SKIP. Never called by a quick path.
+      "upptime-sweep-live|node $REPO_ROOT/scripts/verify-upptime.mjs --live"
     )
   fi
 

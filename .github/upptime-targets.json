@@ -1,0 +1,8 @@
+{
+  "$comment": "MON-02 (Phase 53). The Upptime status targets, one per public surface the status page covers. This list is not hand-kept: scripts/verify-upptime.mjs derives the expected set from configuration.toml at check time and compares it by set equality. The events target (the telemetry POST /events route) joins when configuration.toml declares [telemetry] endpoint; until then the row names it as deferred and does not guess a host.",
+  "derivation_source": "configuration.toml",
+  "targets": [
+    { "id": "updates", "source": "urls.update" },
+    { "id": "website", "source": "urls.homepage" }
+  ]
+}
