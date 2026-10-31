@@ -523,8 +523,9 @@ jobs:
           TAG="${CANDIDATE:-$PR_TAG}"
           node scripts/release-train.mjs --would-write "$PIN" "$TAG" "$PR_NUMBER" "$STAGE"
 
-      # The uptake lane's view (TRAIN-05). A replay that PASSed is replayed=true, which derives the
-      # note state; a FAIL names its patch and derives the conflict view. Nothing is written.
+      # The uptake lane's view (TRAIN-05). Only a success is a green replay (replayed=true). The job
+      # result is passed too: any other result is red, whatever stage line the job printed, and the
+      # view names its patch when the stage is a conflict. Nothing is written.
       - name: Print the would-write view of the uptake tracking issue (175 lane, writer not wired)
         env:
           UPTAKE_TAG: ${{ needs.detect.outputs.uptake-candidate }}
@@ -532,8 +533,6 @@ jobs:
           UPTAKE_STAGE: ${{ needs.uptake-replay.outputs.stage }}
         run: |
           set -eu
-          STAGE="$UPTAKE_STAGE"
-          if [ "$UPTAKE_RESULT" = "failure" ] && [ -z "$STAGE" ]; then STAGE="FAIL -- the uptake replay job ended failure with no stage line"; fi
           REPLAYED=false
           if [ "$UPTAKE_RESULT" = "success" ]; then REPLAYED=true; fi
-          node scripts/release-train.mjs --uptake-would-write "$UPTAKE_TAG" "$STAGE" "$REPLAYED"
+          node scripts/release-train.mjs --uptake-would-write "$UPTAKE_TAG" "$UPTAKE_STAGE" "$REPLAYED" "$UPTAKE_RESULT"
