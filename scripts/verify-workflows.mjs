@@ -102,6 +102,19 @@
 //                 attempts for every release key are serialized (FIX-05). The Console
 //                 workspace monthly cap is an owner setting, not an in-tree surface.
 //
+//  fixer-gate     The isolation of the job that runs the model's diff and of the only App-token minter
+//                 (release-train.yml fix, fix-gate, fix-pr; FIX-04, FIX-06, CR-02, CR-03). fix exports
+//                 diff-sha256 and base-sha. fix-gate has no environment, no secrets. text, permissions
+//                 of exactly contents: read, no App-token step, persist-credentials: false on every
+//                 checkout, --ignore-scripts on every yarn or npm install, and runs the gate through
+//                 scripts/fixer-isolate.sh against the fix job's base-sha after checking the artifact's
+//                 sha256 against the fix job's diff-sha256. fix-pr needs fix and fix-gate; its if: holds
+//                 top-level && terms for the gate result, the verdict and both bindings (digest and base);
+//                 it runs no claude step; its root checkout is main and its target checkout lives under a
+//                 path at the gated base-sha; its App token carries exactly contents and pull-requests
+//                 write, and is read by exactly one step; it re-runs the pure gate stages (--static-only)
+//                 on the digest-checked bytes. Every download-artifact step in the three jobs names no
+//                 github-token and no run-id other than this run's.
 //  fixer-auth     The fixer credential path (FIX-12, workload identity federation). The fix job
 //                 holds id-token: write, and its Claude step carries with.anthropic_federation_rule_id
 //                 and with.anthropic_organization_id. fix-gate and fix-pr hold no id-token. In
@@ -146,7 +159,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'fixer-spend', 'fixer-auth', 'dry-run-gate', 'bot-job-gate', 'uptake-lane'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'fixer-spend', 'fixer-auth', 'fixer-gate', 'dry-run-gate', 'bot-job-gate', 'uptake-lane'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -570,6 +583,74 @@ function runChecks(root, overrides = {}) {
             if (fixer && (jobId === 'fix-gate' || jobId === 'fix-pr') && eff['id-token'] === 'write') {
                 fail(rel, jobId, 'fixer-auth', `holds effective id-token: write, so a job with no model and no environment could mint a credential. Next step: remove id-token from ${jobId}; only the fix job holds it.`);
             }
+            // fixer-gate: the gate job runs the model's code and holds nothing; fix-pr is the one minter and publishes
+            // only the bytes the gate judged. Each term below is one fact a plant removes.
+            if (fixer) {
+                const gf = (msg) => fail(rel, jobId, 'fixer-gate', msg);
+                const uses = (prefix) => steps.filter(x => typeof x.uses === 'string' && x.uses.startsWith(prefix));
+                const exprOf = (v) => String(v ?? '').replace(/\s+/g, '');
+                for (const d of uses('actions/download-artifact@')) {
+                    const w = d.with ?? {};
+                    if (w['github-token'] !== undefined) gf(`a download-artifact step passes github-token, which can reach another run's or repository's artifacts. Next step: remove it; the default token reads this run's artifacts.`);
+                    if (w['run-id'] !== undefined && exprOf(w['run-id']) !== '${{github.run_id}}') gf(`a download-artifact step names run-id ${JSON.stringify(w['run-id'])}, not this run (\${{ github.run_id }}), so it could take another run's artifact. Next step: remove run-id.`);
+                }
+                const runText = (x) => (typeof x.run === 'string' ? x.run : '');
+                if (jobId === 'fix') {
+                    for (const o of ['diff-sha256', 'base-sha']) {
+                        if (!/^\$\{\{\s*steps\.[\w-]+\.outputs\.[\w-]+\s*\}\}$/.test(String(job.outputs?.[o] ?? ''))) gf(`has no job output ${o} taken from a step, so the later jobs cannot bind the diff to what this job produced. Next step: export ${o} from a step that runs after or without the model.`);
+                    }
+                }
+                if (jobId === 'fix-gate') {
+                    if (job.environment !== undefined) gf(`has environment ${JSON.stringify(job.environment)}; the gate runs the model's code and may hold no environment or its secrets. Next step: remove the environment key.`);
+                    if (JSON.stringify(job).includes('secrets.')) gf(`references a secrets. value; the gate runs the model's code and may hold no secret. Next step: remove it.`);
+                    const extra = Object.entries(eff).filter(([k, v]) => !(k === 'contents' && v === 'read') && v !== 'none');
+                    if (eff.contents !== 'read' || extra.length > 0) gf(`holds permissions ${JSON.stringify(Object.fromEntries(extra.length > 0 || eff.contents !== 'read' ? [...extra, ['contents', eff.contents]] : []))}; the gate may hold exactly contents: read. Next step: set permissions to contents: read only.`);
+                    if (uses(APP_TOKEN).length > 0) gf(`mints an App token; the gate runs the model's code. Next step: remove the actions/create-github-app-token step.`);
+                    for (const c of uses('actions/checkout@')) {
+                        if ((c.with ?? {})['persist-credentials'] !== false) gf(`a checkout step does not set persist-credentials: false, so the token stays in .git/config beside the model's code. Next step: set it.`);
+                    }
+                    for (const x of steps) {
+                        for (const m of runText(x).matchAll(/\b(yarn\s+install|npm\s+(?:ci|install|i))\b[^\n'"]*/g)) {
+                            if (!m[0].includes('--ignore-scripts')) gf(`runs \`${m[0].trim()}\` without --ignore-scripts, so a dependency's install script runs beside the model's code. Next step: add --ignore-scripts.`);
+                        }
+                    }
+                    const gateRuns = steps.filter(x => /verify-fix-gate\.mjs\s+--diff/.test(runText(x)));
+                    if (gateRuns.length === 0) gf(`has no step that runs verify-fix-gate.mjs --diff. Next step: restore the gate step.`);
+                    for (const x of gateRuns) {
+                        const t = runText(x);
+                        if (!/fixer-isolate\.sh\s+--\s+node\s+scripts\/verify-fix-gate\.mjs/.test(t)) gf(`runs the gate outside scripts/fixer-isolate.sh, so the diff's code has the network and sudo. Next step: run it as: bash scripts/fixer-isolate.sh -- node scripts/verify-fix-gate.mjs ...`);
+                        if (!/--ref="?\$BASE_SHA"?/.test(t) || exprOf(x.env?.BASE_SHA) !== '${{needs.fix.outputs.base-sha}}') gf(`does not gate against the fix job's base-sha (--ref="$BASE_SHA" with BASE_SHA from needs.fix.outputs.base-sha), so the target could have moved between the fix and the gate. Next step: gate that exact commit.`);
+                        if (!/sha256sum/.test(t) || exprOf(x.env?.DIFF_SHA256) !== '${{needs.fix.outputs.diff-sha256}}') gf(`does not check the downloaded diff's sha256 against needs.fix.outputs.diff-sha256, so the gate could judge other bytes than the fix job produced. Next step: compare the digests before the gate runs.`);
+                    }
+                }
+                if (jobId === 'fix-pr') {
+                    const needs = [].concat(job.needs ?? []).map(String);
+                    for (const n of ['fix', 'fix-gate']) if (!needs.includes(n)) gf(`does not need ${n}, so its if: cannot read ${n}'s outputs. Next step: add ${n} to needs.`);
+                    const cond = ifTerms(job);
+                    if (cond.or) gf(`if: has a top-level ||, so the PR job can run with a guard false. Next step: join the terms with && only.`);
+                    for (const t of ["needs.fix-gate.result == 'success'", "needs.fix-gate.outputs.verdict == 'pass'", 'needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256', 'needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha']) {
+                        if (!cond.terms.includes(t)) gf(`if: lacks the top-level && term (${t}), so a verdict that names another diff or base, or a gate that did not pass, could publish. Next step: add it.`);
+                    }
+                    if (claude.length > 0) gf(`runs a claude-code-action step; fix-pr is the App-token minter and reads no model. Next step: remove it.`);
+                    const mints = uses(APP_TOKEN);
+                    for (const m of mints) {
+                        const grants = Object.entries(m.with ?? {}).filter(([k]) => k.startsWith('permission-')).map(([k, v]) => `${k}: ${v}`).sort();
+                        if (JSON.stringify(grants) !== JSON.stringify(['permission-contents: write', 'permission-pull-requests: write'])) gf(`mints an App token with ${JSON.stringify(grants)}, not exactly contents and pull-requests write. Next step: grant only those two.`);
+                        const id = m.id;
+                        const readers = steps.filter(x => x !== m && id !== undefined && JSON.stringify(x).includes(`steps.${id}.outputs.token`));
+                        if (id === undefined || readers.length !== 1) gf(`its App token is read by ${readers.length} step(s), not exactly one, so the token is present in more steps than need it. Next step: read steps.${id ?? '<id>'}.outputs.token in the one step that publishes.`);
+                    }
+                    if (mints.length === 0) gf(`mints no App token, so nothing here is the minter the policy names. Next step: restore the minting step.`);
+                    for (const c of uses('actions/checkout@')) {
+                        const w = c.with ?? {};
+                        if (w['persist-credentials'] !== false || w.token !== undefined) gf(`a checkout step keeps or sets a credential (persist-credentials must be false, no token input). Next step: set persist-credentials: false.`);
+                        if (w.path === undefined && w.ref !== 'main') gf(`its root checkout is ref ${JSON.stringify(w.ref ?? '(default)')}, not main, so scripts from the target branch run with the App token. Next step: check out main at the root and the target under a path.`);
+                        if (w.path !== undefined && exprOf(w.ref) !== '${{needs.fix.outputs.base-sha}}') gf(`its target checkout is not at the gated base-sha (needs.fix.outputs.base-sha), so it could publish onto a tree nobody gated. Next step: check out that exact commit.`);
+                    }
+                    if (!steps.some(x => /verify-fix-gate\.mjs\s+--static-only/.test(runText(x)) && /sha256sum/.test(runText(x)) && exprOf(x.env?.DIFF_SHA256) === '${{needs.fix.outputs.diff-sha256}}')) gf(`does not check the downloaded diff against needs.fix.outputs.diff-sha256 and re-run verify-fix-gate.mjs --static-only on it before publishing. Next step: add that step.`);
+                }
+            }
+
             // The fallback key (the owner's choice at the 52-05 checkpoint) is confined to the fixer environment.
             // Scoped to release-train.yml: triage.yml's key lives in its own triage environment (Phase 53).
             if (file === FIXER_FILE && (/secrets\.ANTHROPIC_API_KEY\b/.test(JSON.stringify(job)) || /secrets\.ANTHROPIC_API_KEY\b/.test(JSON.stringify(wf.env ?? {})))) {
@@ -821,7 +902,7 @@ function selfTest() {
     const CLAUDE_ARGS = '--max-turns 40 --allowedTools "Bash(scripts/regenerate-patches.sh --upstream upstream --patches work/patches),Bash(scripts/verify-platform.sh --quick),Edit(work/**),Read" --disallowedTools "WebFetch,WebSearch,Edit(work/**/patches/**),Write(work/**/patches/**),Edit(work/.git/**),Write(work/.git/**),Edit(work/**/.gitattributes),Write(work/**/.gitattributes)"';
     const FIX_IF = "github.event_name == 'workflow_dispatch' && inputs.reason == 'fix' && !startsWith(inputs.target-branch, 'claude-fix/') && github.actor != 'powerbrowser-bot[bot]'";
     const GATE_IF = "!inputs.dry-run && needs.fix.result == 'success'";
-    const PR_IF = "!inputs.dry-run && needs.fix-gate.outputs.verdict == 'pass'";
+    const PR_IF = "!inputs.dry-run && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256 && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha";
     const GOOD_TRAIN = [
         'name: Release train',
         'on:',
@@ -840,6 +921,9 @@ function selfTest() {
         '      contents: read',
         '      actions: read',
         '      id-token: write',
+        '    outputs:',
+        '      diff-sha256: ${{ steps.digest.outputs.diff-sha256 }}',
+        '      base-sha: ${{ steps.base.outputs.base-sha }}',
         `    if: "!inputs.dry-run && ${FIX_IF}"`,
         '    steps:',
         `      - uses: ${CHECKOUT}`,
@@ -865,19 +949,59 @@ function selfTest() {
         `    if: "${GATE_IF}"`,
         '    steps:',
         '      - run: echo gate',
+        `      - uses: ${CHECKOUT}`,
+        '        with:',
+        '          persist-credentials: false',
+        `      - uses: actions/download-artifact@${H40}`,
+        '        if: ${{ !inputs.dry-run }}',
+        '        with:',
+        '          name: fix-diff',
+        '          path: /tmp/fix-diff',
+        '      - run: cd theia && yarn install --ignore-scripts --frozen-lockfile',
+        '      - id: gate',
+        '        if: ${{ !inputs.dry-run }}',
+        '        env:',
+        '          DIFF_SHA256: ${{ needs.fix.outputs.diff-sha256 }}',
+        '          BASE_SHA: ${{ needs.fix.outputs.base-sha }}',
+        '        run: |',
+        '          sha256sum /tmp/fix-diff/work.diff',
+        '          bash scripts/fixer-isolate.sh -- node scripts/verify-fix-gate.mjs --diff=/tmp/fix-diff/work.diff --ref="$BASE_SHA"',
         '  fix-pr:',
-        '    needs: fix-gate',
+        '    needs: [fix, fix-gate]',
         `    if: "${PR_IF}"`,
         '    runs-on: ubuntu-latest',
         '    environment: bot',
         '    permissions: {}',
         '    steps:',
+        `      - uses: ${CHECKOUT}`,
+        '        with:',
+        '          ref: main',
+        '          persist-credentials: false',
+        `      - uses: ${CHECKOUT}`,
+        '        with:',
+        '          ref: ${{ needs.fix.outputs.base-sha }}',
+        '          path: target',
+        '          persist-credentials: false',
+        `      - uses: actions/download-artifact@${H40}`,
+        '        if: ${{ !inputs.dry-run }}',
+        '        with:',
+        '          name: fix-diff',
+        '          path: /tmp/fix-diff',
+        '      - if: ${{ !inputs.dry-run }}',
+        '        env:',
+        '          DIFF_SHA256: ${{ needs.fix.outputs.diff-sha256 }}',
+        '        run: |',
+        '          sha256sum /tmp/fix-diff/work.diff',
+        '          node scripts/verify-fix-gate.mjs --static-only --diff=/tmp/fix-diff/work.diff',
         `      - uses: ${FIX_APP}`,
+        '        id: app',
         '        if: ${{ !inputs.dry-run }}',
         '        with:',
         '          permission-contents: write',
         '          permission-pull-requests: write',
         '      - if: ${{ !inputs.dry-run }}',
+        '        env:',
+        '          GH_TOKEN: ${{ steps.app.outputs.token }}',
         '        run: node scripts/fix-open-pr.mjs',
         '',
     ].join('\n');
@@ -1028,6 +1152,39 @@ function selfTest() {
     plants.push(
         ['permission-issues: write on the fix-pr App token (real release-train.yml)', rtEdit('          permission-pull-requests: write\n\n      # The one step that holds the token', '          permission-pull-requests: write\n          permission-issues: write\n\n      # The one step that holds the token'), rel(T), 'fix-pr', 'issues-write', 'permission-issues: write'],
         ['an App token step with no permission-* input in fix-pr', fixerEdit('          permission-contents: write\n          permission-pull-requests: write\n', ''), rel(T), 'fix-pr', 'issues-write', 'no permission-* input'],
+    );
+    // WR-01: the fix-gate and fix-pr isolation, each fact removed from the real release-train.yml (the reviewer's survivors
+    // 1-7 and the CR-02 and CR-03 bindings). rtEdit throws when an anchor is gone, so a rewrite of the job fails loudly here.
+    const GATE_HEAD = "    if: ${{ !inputs.dry-run && needs.fix.result == 'success' }}\n    runs-on: ubuntu-latest\n    timeout-minutes: 60\n";
+    const DL_GATE = '      - name: Download the diff\n        if: ${{ !inputs.dry-run }}\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n';
+    const gateEdit = (from, to) => rtEdit(from, to);
+    plants.push(
+        ['fix-gate with environment bot', gateEdit(GATE_HEAD, `${GATE_HEAD}    environment: bot\n`), rel(T), 'fix-gate', 'fixer-gate', 'environment'],
+        ['fix-gate reading secrets.BOT_APP_PRIVATE_KEY', gateEdit('    outputs:\n      verdict: ${{ steps.gate.outputs.verdict }}', '    env:\n      K: ${{ secrets.BOT_APP_PRIVATE_KEY }}\n    outputs:\n      verdict: ${{ steps.gate.outputs.verdict }}'), rel(T), 'fix-gate', 'fixer-gate', 'secrets.'],
+        ['fix-gate with contents write and pull-requests write', gateEdit('    timeout-minutes: 60\n    permissions:\n      contents: read\n', '    timeout-minutes: 60\n    permissions:\n      contents: write\n      pull-requests: write\n'), rel(T), 'fix-gate', 'fixer-gate', 'contents: read'],
+        ['fix-gate with actions read as well', gateEdit('    timeout-minutes: 60\n    permissions:\n      contents: read\n', '    timeout-minutes: 60\n    permissions:\n      contents: read\n      actions: read\n'), rel(T), 'fix-gate', 'fixer-gate', 'exactly contents: read'],
+        ['an App-token step inside fix-gate', gateEdit(DL_GATE, `      - uses: ${FIX_APP}\n        if: \${{ !inputs.dry-run }}\n        with:\n          permission-contents: write\n${DL_GATE}`), rel(T), 'fix-gate', 'fixer-gate', 'mints an App token'],
+        ['fix-gate yarn install without --ignore-scripts', gateEdit('            yarn install --ignore-scripts --frozen-lockfile', '            yarn install --frozen-lockfile'), rel(T), 'fix-gate', 'fixer-gate', '--ignore-scripts'],
+        ['fix-gate checkout without persist-credentials false', gateEdit("          ref: main\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # This run's artifact only", "          ref: main\n          fetch-depth: 0\n\n      - name: Install Nix\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # This run's artifact only"), rel(T), 'fix-gate', 'fixer-gate', 'persist-credentials'],
+        ['fix-gate download-artifact with another run-id', gateEdit(DL_GATE, `${DL_GATE}          run-id: 12345\n`), rel(T), 'fix-gate', 'fixer-gate', 'run-id'],
+        ['fix-gate download-artifact with a github-token', gateEdit(DL_GATE, `${DL_GATE}          github-token: \${{ secrets.GITHUB_TOKEN }}\n`), rel(T), 'fix-gate', 'fixer-gate', 'github-token'],
+        ['fix-gate running the gate outside fixer-isolate.sh', gateEdit('bash scripts/fixer-isolate.sh -- node scripts/verify-fix-gate.mjs', 'node scripts/verify-fix-gate.mjs'), rel(T), 'fix-gate', 'fixer-gate', 'fixer-isolate.sh'],
+        ['fix-gate gating HEAD instead of the fix job base-sha', gateEdit('--ref="$BASE_SHA"', '--ref=HEAD'), rel(T), 'fix-gate', 'fixer-gate', 'base-sha'],
+        ['fix-gate not checking the artifact digest', gateEdit('          DIFF_SHA256: ${{ needs.fix.outputs.diff-sha256 }}\n          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          DIFF=', '          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          DIFF='), rel(T), 'fix-gate', 'fixer-gate', 'sha256'],
+        ['fix job without the diff-sha256 output', gateEdit('      diff-sha256: ${{ steps.digest.outputs.diff-sha256 }}\n', ''), rel(T), 'fix', 'fixer-gate', 'diff-sha256'],
+        ['fix job without the base-sha output', gateEdit('      base-sha: ${{ steps.base.outputs.base-sha }}\n    steps:', '    steps:'), rel(T), 'fix', 'fixer-gate', 'base-sha'],
+        ['fix-pr if: without the verdict term', gateEdit(" && needs.fix-gate.outputs.verdict == 'pass'", ''), rel(T), 'fix-pr', 'fixer-gate', "verdict == 'pass'"],
+        ['fix-pr if: without the gate result term', gateEdit(" && needs.fix-gate.result == 'success' && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256", " && needs.fix-gate.outputs.verdict == 'pass' && needs.fix-gate.outputs.diff-sha256"), rel(T), 'fix-pr', 'fixer-gate', "result == 'success'"],
+        ['fix-pr if: without the digest binding', gateEdit(' && needs.fix-gate.outputs.diff-sha256 == needs.fix.outputs.diff-sha256', ''), rel(T), 'fix-pr', 'fixer-gate', 'diff-sha256 =='],
+        ['fix-pr if: without the base binding', gateEdit(' && needs.fix-gate.outputs.base-sha == needs.fix.outputs.base-sha }}\n    runs-on: ubuntu-latest\n    timeout-minutes: 30', ' }}\n    runs-on: ubuntu-latest\n    timeout-minutes: 30'), rel(T), 'fix-pr', 'fixer-gate', 'base-sha =='],
+        ['fix-pr not needing the fix job', gateEdit('    needs: [fix, fix-gate]\n    if: ${{ !inputs.dry-run && needs.fix-gate.result', '    needs: fix-gate\n    if: ${{ !inputs.dry-run && needs.fix-gate.result'), rel(T), 'fix-pr', 'fixer-gate', 'does not need fix'],
+        ['fix-pr root checkout of the target branch', gateEdit("          ref: main\n          persist-credentials: false\n\n      - name: Check out the target at exactly the gated base commit, under target/", "          ref: ${{ inputs.target-branch }}\n          persist-credentials: false\n\n      - name: Check out the target at exactly the gated base commit, under target/"), rel(T), 'fix-pr', 'fixer-gate', 'not main'],
+        ['fix-pr target checkout at the branch name instead of the base-sha', gateEdit('          ref: ${{ needs.fix.outputs.base-sha }}\n          path: target', '          ref: ${{ inputs.target-branch }}\n          path: target'), rel(T), 'fix-pr', 'fixer-gate', 'gated base-sha'],
+        ['fix-pr App token read by a second step', gateEdit('          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n        run: |\n          set -euo pipefail\n          T() {', '          BASE_SHA: ${{ needs.fix.outputs.base-sha }}\n          LEAK: ${{ steps.app.outputs.token }}\n        run: |\n          set -euo pipefail\n          T() {'), rel(T), 'fix-pr', 'fixer-gate', 'read by 2 step(s)'],
+        ['fix-pr App token with workflows write as well', gateEdit('          permission-pull-requests: write\n\n      # The one step that holds the token', '          permission-pull-requests: write\n          permission-workflows: write\n\n      # The one step that holds the token'), rel(T), 'fix-pr', 'fixer-gate', 'not exactly contents and pull-requests write'],
+        ['fix-pr not re-running the pure stages on the digest-checked bytes', gateEdit('          node scripts/verify-fix-gate.mjs --static-only --diff="$DIFF"', '          true'), rel(T), 'fix-pr', 'fixer-gate', '--static-only'],
+        ['a claude step inside fix-pr', gateEdit("      - name: Mint the bot App token\n        id: app\n        if: ${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}\n", `      - uses: ${FIX_PIN}\n        if: \${{ !inputs.dry-run }}\n      - name: Mint the bot App token\n        id: app\n        if: \${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}\n`), rel(T), 'fix-pr', 'fixer-gate', 'claude-code-action step'],
+        ['fix-pr download-artifact with another run-id', gateEdit('      - name: Download the gated diff\n        if: ${{ !inputs.dry-run }}\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n', '      - name: Download the gated diff\n        if: ${{ !inputs.dry-run }}\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          run-id: 777\n'), rel(T), 'fix-pr', 'fixer-gate', 'run-id'],
     );
     plants.push(
         ['wildcard git grant (Bash(git -C work diff:*))', fixerEdit('Bash(scripts/verify-platform.sh --quick)', 'Bash(git -C work diff:*)'), rel(T), 'fix', 'fixer-tools', 'Bash(git -C work diff:*)'],
