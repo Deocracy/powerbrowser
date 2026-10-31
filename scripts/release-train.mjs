@@ -8,8 +8,7 @@
 // Nothing here touches the network, the filesystem or gh: facts in, state /
 // action / issue decision out. Every gh call stays in the workflow YAML.
 //
-// The five Phase-A states (the release-stage states BUILDING onward land with
-// Phase 50 and are absent here by design):
+// The five Phase-A states, then the eight release-stage states of Phase 50 (TRAIN-10):
 //   DETECTED       a newer *esr_RELEASE tag exists and no bump PR is open.
 //   BUMPING        a bump PR chore/esr-<tag> is open and not yet green.
 //   CONFLICT       the replay stage FAILed in apply-patches: a patch did not apply.
@@ -17,6 +16,10 @@
 //                  left the pin unchanged.
 //   BUMP_PR_GREEN  the bump PR is open, the pin moved, and the required verify
 //                  check succeeded. This is the run's end: the owner merge gate.
+//   BUILDING, AWAITING_APPROVAL, PUBLISHED, DESCRIPTOR_WAIT, DESCRIPTOR_LIVE,
+//   LIVE_RED, WITHDRAWN, DONE  the release stage, derived by deriveRelease() from the
+//                  release facts. The release facts exist once a release.yml run at the
+//                  merge SHA or a Release at the key exists; before that the Phase-A rules decide.
 //
 // Facts shape (plain values the workflow reads from GitHub):
 //   { candidateTag, pinTag, revision, openPr, bumpConclusion, stage,
@@ -59,7 +62,7 @@ import { classifyTag, tagToVersion } from './detect-upstreams.mjs';
 const NAME = 'release-train-logic';
 const SELF_REL = 'scripts/release-train.mjs';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const LABELS = Object.freeze({ track: 'release-train', state: (s) => `state/${s}` });
+const LABELS = Object.freeze({ track: 'release-train', blocked: 'train:blocked', state: (s) => `state/${s}` });
 const PATCH_DIR = 'patches';
 const APPLY_FAIL = /FAIL -- (apply-patches\.sh|\S+\.patch did not apply)/;
 const ANY_FAIL = /FAIL --/;
@@ -72,6 +75,14 @@ export const STATES = Object.freeze({
     CONFLICT: Object.freeze({ desc: 'the replay stage FAILed in apply-patches: a patch did not apply' }),
     BUMP_RED: Object.freeze({ desc: 'another replay FAIL, a red bump check, or a merged PR with the pin unchanged' }),
     BUMP_PR_GREEN: Object.freeze({ desc: 'bump PR open, pin moved, required verify check success' }),
+    BUILDING: Object.freeze({ desc: 'release.yml run at the merge SHA is in flight, or waiting with no release approval pending' }),
+    AWAITING_APPROVAL: Object.freeze({ desc: 'release.yml run waiting on the release environment approval' }),
+    PUBLISHED: Object.freeze({ desc: 'Release published with the manifest asset set; descriptor not yet engaged' }),
+    DESCRIPTOR_WAIT: Object.freeze({ desc: 'Release published and the descriptor environment or its timer is engaged' }),
+    DESCRIPTOR_LIVE: Object.freeze({ desc: 'served descriptor bytes equal the public update.xml and channel-live is green' }),
+    LIVE_RED: Object.freeze({ desc: 'a release descriptor is present and channel-live is red, or its bytes drifted' }),
+    WITHDRAWN: Object.freeze({ desc: 'the Release carries the withdrawal mark (prerelease flag or notes marker); authoritative' }),
+    DONE: Object.freeze({ desc: 'DESCRIPTOR_LIVE facts with the tracking issue already closed (bookkeeping only)' }),
 });
 
 const ACTIONS = Object.freeze({
@@ -80,11 +91,91 @@ const ACTIONS = Object.freeze({
     CONFLICT: 'conflict-issue',
     BUMP_RED: 'wait-owner',
     BUMP_PR_GREEN: 'gate',
+    BUILDING: 'wait',
+    AWAITING_APPROVAL: 'notify-owner',
+    PUBLISHED: 'trigger-gh15',
+    DESCRIPTOR_WAIT: 'notify-owner',
+    DESCRIPTOR_LIVE: 'close-issue',
+    LIVE_RED: 'block-and-link',
+    WITHDRAWN: 'reopen-and-instruct',
+    DONE: 'noop',
 });
+
+// --- Release stage (Phase 50, TRAIN-10) -------------------------------------------
+// derive reads normalised release facts (releaseFactsFromLive), never the raw GitHub
+// responses. A withdrawal mark in the Release notes is the marker shape; the flag shape is
+// prerelease true. The marker is an HTML comment, so it is never rendered on the Release page.
+export const WITHDRAWAL_MARK = '<!-- release-withdrawn -->';
+const RUN_IN_FLIGHT = Object.freeze(['queued', 'in_progress']);
+const NEEDS_OWNER = Object.freeze(['BUMP_PR_GREEN', 'AWAITING_APPROVAL', 'DESCRIPTOR_WAIT', 'LIVE_RED']);
+
+const assetsEqual = (assets, expected) => {
+    if (expected.length === 0) return false;
+    const a = [...new Set(assets)].sort();
+    const e = [...new Set(expected)].sort();
+    return a.length === e.length && a.every((x, i) => x === e[i]);
+};
+const withdrawn = rel => rel.published !== null && (rel.published.prerelease === true || rel.published.body.includes(WITHDRAWAL_MARK));
+const waitingDescriptor = rel => rel.pending.includes('descriptor') || rel.descriptorJob === 'waiting';
+
+/** The channel-live subcheck that is red, or byte-equal for a drifted descriptor. Pure. */
+export function redSubcheck(rel) {
+    if (rel.channelLive !== null && rel.channelLive.green === false) return rel.channelLive.subcheck ?? 'channel-live';
+    return 'byte-equal';
+}
+
+/**
+ * Normalise one release's live GitHub responses into the release facts. The input is the
+ * live response shape: runs objects (head_sha, event, status, conclusion, html_url, created_at),
+ * pending_deployments entries, the jobs of the run, the Release by tag, the descriptor contents
+ * (base64), the channel-live job conclusion and the tracking issue state. The run is the newest
+ * run whose head_sha EQUALS the merge SHA; never the latest run of any SHA. Pure.
+ */
+export function releaseFactsFromLive(live) {
+    const matching = live.runs.filter(r => r.head_sha === live.mergeSHA && r.event === 'workflow_dispatch');
+    const newest = [...matching].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))[0] ?? null;
+    const job = (live.jobs ?? []).find(j => j.name === 'descriptor') ?? null;
+    const bytes = live.contents ? Buffer.from(live.contents.content, 'base64').toString('utf8') : null;
+    return {
+        key: live.key,
+        mergeSHA: live.mergeSHA,
+        run: newest === null ? null : { status: newest.status, conclusion: newest.conclusion ?? null, htmlUrl: newest.html_url },
+        pending: live.pending.map(p => p.environment.name),
+        descriptorJob: job === null ? null : job.status,
+        published: live.release ? { draft: live.release.draft, prerelease: live.release.prerelease, assets: live.release.assets.map(a => a.name), body: live.release.body ?? '' } : null,
+        expectedAssets: live.expectedAssets,
+        descriptor: { present: bytes !== null, matchesServed: bytes !== null && bytes === live.servedBytes, noUpdate: bytes !== null && bytes === live.noUpdateBytes },
+        channelLive: live.channelLive ? { green: live.channelLive.conclusion === 'success', subcheck: live.channelLive.subcheck ?? null } : null,
+        issueState: live.issue ? live.issue.state : null,
+    };
+}
+
+/** The release-stage state from the release facts, or null when none applies. Pure. */
+function deriveRelease(rel) {
+    const pub = rel.published;
+    const d = rel.descriptor;
+    if (withdrawn(rel)) return 'WITHDRAWN';
+    if (pub !== null && !pub.draft) {
+        const green = rel.channelLive !== null && rel.channelLive.green === true;
+        const channelRed = rel.channelLive !== null && rel.channelLive.green === false;
+        const drift = d.present && !d.matchesServed && !d.noUpdate && !waitingDescriptor(rel);
+        if (d.matchesServed && green) return rel.issueState === 'closed' ? 'DONE' : 'DESCRIPTOR_LIVE';
+        if (d.present && (channelRed || drift)) return 'LIVE_RED';
+        if (waitingDescriptor(rel)) return 'DESCRIPTOR_WAIT';
+        if (!pub.prerelease && assetsEqual(pub.assets, rel.expectedAssets) && (!d.present || d.noUpdate)) return 'PUBLISHED';
+        return null;
+    }
+    if (rel.run !== null && (pub === null || pub.draft)) {
+        if (rel.run.status === 'waiting' && rel.pending.includes('release')) return 'AWAITING_APPROVAL';
+        if (RUN_IN_FLIGHT.includes(rel.run.status) || rel.run.status === 'waiting') return 'BUILDING';
+    }
+    return null;
+}
 
 /** The state a release is in, from facts, or null with nothing to do. Pure. */
 export function derive(facts) {
     const f = facts;
+    if (f.release) return deriveRelease(f.release);
     if (f.merged === true && f.pinUnchanged === true) return 'BUMP_RED';
     if (typeof f.stage === 'string' && APPLY_FAIL.test(f.stage)) return 'CONFLICT';
     if (typeof f.stage === 'string' && ANY_FAIL.test(f.stage)) return 'BUMP_RED';
@@ -122,9 +213,16 @@ function releaseKey(facts) {
  * other state renders with neither. Pure.
  */
 export function render(state, facts) {
-    const title = `release-train: ${releaseKey(facts)}`;
-    const evidence = facts.evidenceUrl ?? 'pending';
+    const rel = facts.release ?? null;
+    const title = `release-train: ${rel !== null ? rel.key : releaseKey(facts)}`;
+    const runUrl = rel !== null && rel.run !== null ? rel.run.htmlUrl : null;
+    const evidence = facts.evidenceUrl ?? runUrl ?? 'pending';
     const snapshot = JSON.stringify({ state, pin: facts.pinTag, candidate: facts.candidateTag ?? null });
+    const stateLines = [];
+    // The exact run for this merge SHA, linked by head_sha equality (never recency across SHAs).
+    if (runUrl !== null) stateLines.push(`Release run (${runUrl}) SHA ${rel.mergeSHA}`);
+    if (state === 'LIVE_RED') stateLines.push(`channel-live red on ${redSubcheck(rel)}. Next step: read the failing log linked from the run.`);
+    if (state === 'WITHDRAWN') stateLines.push('Withdrawn. The fix is a new revision with a new tag; a Release is never deleted and no tag is reused.');
     const body = [
         title,
         '',
@@ -132,18 +230,19 @@ export function render(state, facts) {
         '| --- | --- | --- |',
         `| ${state} | ${state} | ${evidence} |`,
         '',
+        ...stateLines.flatMap(l => [l, '']),
         `<!-- release-train:v1 ${snapshot} -->`,
         '',
     ].join('\n');
-    const gate = state === 'BUMP_PR_GREEN' && typeof facts.ownerLogin === 'string' && facts.ownerLogin !== '';
+    const gate = NEEDS_OWNER.includes(state) && typeof facts.ownerLogin === 'string' && facts.ownerLogin !== '';
     return {
         title,
         body,
-        labels: [LABELS.track, LABELS.state(state)],
+        labels: [LABELS.track, LABELS.state(state), ...(state === 'LIVE_RED' ? [LABELS.blocked] : [])],
         mention: gate ? facts.ownerLogin : null,
         assign: gate ? [facts.ownerLogin] : [],
         lock: true,
-        close: false,
+        close: state === 'DESCRIPTOR_LIVE',
         writes: [],
     };
 }
@@ -345,12 +444,41 @@ const NEWER = esrTag(153, 23, 0);
 const BASE = Object.freeze({ pinTag: BASE_PIN, revision: 1, candidateTag: null, openPr: null, bumpConclusion: null, stage: null, verifyCheck: null, merged: false, pinUnchanged: false });
 // Each fixture carries its expected action as a literal. next() is checked against that
 // literal, never against ACTIONS, so a wrong entry in ACTIONS cannot agree with itself.
+// Release-stage fixtures are in the live response shape (runs, pending_deployments, Release,
+// contents base64, check conclusion, issue state) and pass through releaseFactsFromLive, so the
+// normaliser is exercised by the same rows as derive. The SHA and URL literals are fixture-only.
+const MERGE_SHA = '1'.repeat(40);
+const OTHER_SHA = '2'.repeat(40);
+const RELEASE_KEY = 'v153.23.0-1';
+const SERVED_BYTES = 'served-public-descriptor-bytes';
+const NO_UPDATE_BYTES = 'no-update-descriptor-bytes';
+const EXPECTED_ASSETS = Object.freeze(['powerbrowser-153.23.0.tar.xz', 'powerbrowser-153.23.0.complete.mar', 'SHA256SUMS']);
+const b64 = s => Buffer.from(s, 'utf8').toString('base64');
+const runUrl = id => `https://example.invalid/actions/runs/${id}`;
+const liveRun = (id, headSha, status, conclusion, createdAt) => ({ id, head_sha: headSha, event: 'workflow_dispatch', status, conclusion, created_at: createdAt, html_url: runUrl(id) });
+const liveRelease = (over = {}) => ({ draft: false, prerelease: false, assets: EXPECTED_ASSETS.map(name => ({ name })), body: 'PowerBrowser release notes', ...over });
+const liveBase = (over = {}) => ({
+    key: RELEASE_KEY, mergeSHA: MERGE_SHA, expectedAssets: EXPECTED_ASSETS, servedBytes: SERVED_BYTES, noUpdateBytes: NO_UPDATE_BYTES,
+    runs: [], pending: [], jobs: [], release: null, contents: null, channelLive: null, issue: { state: 'open' }, ...over,
+});
+const LIVE_DONE_RUN = [liveRun(103, MERGE_SHA, 'completed', 'success', '2026-10-31T11:00:00Z')];
+const factsOf = fx => (fx.live !== undefined ? { ...BASE, release: releaseFactsFromLive(fx.live) } : fx.facts);
+
 const FIXTURES = Object.freeze({
     DETECTED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER }, action: 'bump' }),
     BUMPING: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 41 }, bumpConclusion: null }, action: 'wait' }),
     CONFLICT: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply (real conflict, not silent)' }, action: 'conflict-issue' }),
     BUMP_RED: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 42 }, verifyCheck: 'failure' }, action: 'wait-owner' }),
     BUMP_PR_GREEN: Object.freeze({ facts: { ...BASE, candidateTag: NEWER, openPr: { head: `chore/esr-${NEWER}`, number: 43 }, verifyCheck: 'success', pinUnchanged: false }, action: 'gate' }),
+    // The other SHA's run is the newest and must not be linked: the link is by head_sha equality.
+    BUILDING: Object.freeze({ live: liveBase({ runs: [liveRun(100, OTHER_SHA, 'completed', 'success', '2026-10-31T12:00:00Z'), liveRun(101, MERGE_SHA, 'in_progress', null, '2026-10-31T10:00:00Z')] }), action: 'wait' }),
+    AWAITING_APPROVAL: Object.freeze({ live: liveBase({ runs: [liveRun(102, MERGE_SHA, 'waiting', null, '2026-10-31T10:00:00Z')], pending: [{ environment: { name: 'release' } }], release: liveRelease({ draft: true, assets: [], body: '' }) }), action: 'notify-owner' }),
+    PUBLISHED: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease() }), action: 'trigger-gh15' }),
+    DESCRIPTOR_WAIT: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, pending: [{ environment: { name: 'descriptor' } }], release: liveRelease(), contents: { content: b64(NO_UPDATE_BYTES) } }), action: 'notify-owner' }),
+    DESCRIPTOR_LIVE: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease(), contents: { content: b64(SERVED_BYTES) }, channelLive: { conclusion: 'success', subcheck: null } }), action: 'close-issue' }),
+    LIVE_RED: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease(), contents: { content: b64(`${SERVED_BYTES} stale`) }, channelLive: { conclusion: 'failure', subcheck: 'byte-equal' } }), action: 'block-and-link' }),
+    WITHDRAWN: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease({ prerelease: true }), contents: { content: b64(NO_UPDATE_BYTES) } }), action: 'reopen-and-instruct' }),
+    DONE: Object.freeze({ live: liveBase({ runs: LIVE_DONE_RUN, release: liveRelease(), contents: { content: b64(SERVED_BYTES) }, channelLive: { conclusion: 'success', subcheck: null }, issue: { state: 'closed' } }), action: 'noop' }),
 });
 
 /** Failures for a conflict decision that writes anything under the patch directory. Pure. */
@@ -373,7 +501,8 @@ function runChecks(overrides = {}) {
     for (const s of missingActions) failures.push(`state ${s} has no action in ACTIONS. Next step: map ${s} to its action in ACTIONS.`);
     for (const name of Object.keys(fixtures)) {
         if (!states.includes(name)) continue;
-        const { facts, action: expected } = fixtures[name];
+        const facts = factsOf(fixtures[name]);
+        const expected = fixtures[name].action;
         const got = derive(facts);
         if (got !== name) failures.push(`fixture ${name} derives ${got} instead of ${name}. Next step: fix derive() or the fixture facts.`);
         const action = next(got);
@@ -391,14 +520,22 @@ function selfTest() {
         baseline.failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`  ok  baseline -> five states, five fixtures with expected actions, set-equal; derive, next and render agree`);
+    console.log(`  ok  baseline -> ${Object.keys(STATES).length} states (5 Phase-A, 8 release-stage), one fixture each with expected actions, set-equal; derive, next and render agree`);
 
     const OWNER = 'owner-login-fixture';
     const trainPlants = [
         {
             name: 'a sixth state with no fixture',
-            run: () => runChecks({ states: [...Object.keys(STATES), 'BUILDING'] }).failures,
-            expect: 'BUILDING',
+            run: () => runChecks({ states: [...Object.keys(STATES), 'UNBUILT'] }).failures,
+            expect: 'state UNBUILT has no fixture',
+        },
+        {
+            name: 'a release-stage state whose fixture is removed',
+            run: () => {
+                const { DONE: _removed, ...rest } = FIXTURES;
+                return runChecks({ fixtures: rest }).failures;
+            },
+            expect: 'state DONE has no fixture',
         },
         {
             name: 'a sixth fixture with no state',
@@ -407,8 +544,19 @@ function selfTest() {
         },
         {
             name: 'a sixth action with no state',
-            run: () => runChecks({ actionKeys: [...Object.keys(ACTIONS), 'BUILDING'] }).failures,
-            expect: 'action BUILDING names no state',
+            run: () => runChecks({ actionKeys: [...Object.keys(ACTIONS), 'UNBUILT'] }).failures,
+            expect: 'action UNBUILT names no state',
+        },
+        {
+            name: 'a release descriptor whose bytes drifted under a green channel-live',
+            // Drift must go red naming the byte-equal subcheck, never derive DESCRIPTOR_LIVE on a green flag alone.
+            run: () => {
+                const live = { ...FIXTURES.DESCRIPTOR_LIVE.live, contents: { content: b64(`${SERVED_BYTES} drifted`) } };
+                const facts = factsOf({ live });
+                const got = derive(facts);
+                return got === 'LIVE_RED' ? [`LIVE_RED: channel-live red on ${redSubcheck(facts.release)}`] : [`drifted descriptor derived ${got}`];
+            },
+            expect: 'channel-live red on byte-equal',
         },
         {
             name: 'a state with no action',
@@ -516,12 +664,38 @@ function selfTest() {
             run: () => (wouldWrite({ pinTag: BASE_PIN, tag: '', openPrNumber: '', stage: '' }).lines[0].includes('idle') ? [] : ['no-candidate run was not idle']),
         },
         {
-            name: 'control: the owner is mentioned only on the gate state',
+            name: 'control: the owner is mentioned on needs-owner states and not on progress states',
             run: () => {
                 const gate = render('BUMP_PR_GREEN', { ...FIXTURES.BUMP_PR_GREEN.facts, ownerLogin: OWNER });
                 const bumping = render('BUMPING', { ...FIXTURES.BUMPING.facts, ownerLogin: OWNER });
-                return gate.mention === OWNER && bumping.mention === null ? [] : ['owner mention drifted from the gate'];
+                const approval = render('AWAITING_APPROVAL', { ...factsOf(FIXTURES.AWAITING_APPROVAL), ownerLogin: OWNER });
+                const building = render('BUILDING', { ...factsOf(FIXTURES.BUILDING), ownerLogin: OWNER });
+                return gate.mention === OWNER && approval.mention === OWNER && bumping.mention === null && building.mention === null ? [] : ['owner mention drifted from the needs-owner states'];
             },
+        },
+        {
+            name: 'control: BUILDING links the run whose head_sha equals the merge SHA, never a newer run of another SHA',
+            run: () => {
+                const body = render('BUILDING', { ...factsOf(FIXTURES.BUILDING), ownerLogin: OWNER }).body;
+                const exact = runUrl(101);
+                return body.includes(`Release run (${exact}) SHA ${MERGE_SHA}`) && !body.includes(runUrl(100)) ? [] : ['BUILDING body did not link the equal-SHA run'];
+            },
+        },
+        {
+            name: 'control: the notes marker alone derives WITHDRAWN, as does the prerelease flag',
+            run: () => {
+                const marked = { ...FIXTURES.DESCRIPTOR_LIVE.live, release: liveRelease({ body: `notes ${WITHDRAWAL_MARK}` }) };
+                const flagged = FIXTURES.WITHDRAWN.live;
+                return derive(factsOf({ live: marked })) === 'WITHDRAWN' && derive(factsOf({ live: flagged })) === 'WITHDRAWN' ? [] : ['a withdrawal mark did not derive WITHDRAWN'];
+            },
+        },
+        {
+            name: 'control: a fact set that could advance twice derives one state (waiting outranks PUBLISHED)',
+            run: () => (derive(factsOf(FIXTURES.DESCRIPTOR_WAIT)) === 'DESCRIPTOR_WAIT' ? [] : ['a double-advance fact set did not derive one state']),
+        },
+        {
+            name: 'control: LIVE_RED names the red subcheck in its body',
+            run: () => (render('LIVE_RED', factsOf(FIXTURES.LIVE_RED)).body.includes('channel-live red on byte-equal') ? [] : ['LIVE_RED body does not name byte-equal']),
         },
         {
             name: 'control: the real conflict decision writes nothing under the patch directory',

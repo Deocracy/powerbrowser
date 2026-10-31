@@ -641,6 +641,31 @@ rule holds for the Gecko toolchain: `scripts/toolchain-baseline.sh` regenerates
 
 ---
 
+## Train stages after the bump PR merges
+
+The release train (`scripts/release-train.mjs`, `.github/workflows/release-train.yml`)
+carries a release from a merged bump PR to a live descriptor. Every state is derived
+from GitHub facts only, never from a stored train state: the `release.yml` run at the
+merge SHA (`head_sha` equality), its pending deployments (`release`, `descriptor`), the
+Release at the release key (draft, prerelease, assets, notes marker), the
+`powerbrowser-updates` descriptor bytes, the `channel-live` conclusion and the tracking
+issue state.
+
+Evaluation priority, first match wins: WITHDRAWN (the mark is authoritative), then, for
+a published Release, DESCRIPTOR_LIVE or DONE (served bytes equal and channel-live green;
+DONE only when the issue is already closed), LIVE_RED (a descriptor is present and
+channel-live is red or its bytes drifted), DESCRIPTOR_WAIT (the descriptor environment or
+its timer is engaged), PUBLISHED (asset set equal to the manifest-derived set, no
+descriptor or a no-update one). Before any Release exists: AWAITING_APPROVAL (run waiting
+on the `release` environment), then BUILDING (run in flight).
+
+The train makes at most one transition per release per run and ends at each owner gate:
+the bump merge, the `release` approval, the `descriptor` approval. LIVE_RED is sticky until
+a fresh green `channel-live`. A bad release is withdrawn by the mark and fixed by a new
+revision with a new tag; a Release is never deleted and no tag is reused.
+
+---
+
 ## Per-release procedure
 
 Read `docs/BUILD.md` for what each build step costs. A full Gecko build is roughly
