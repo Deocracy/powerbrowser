@@ -36,7 +36,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-    DOCS_REL, RELEASE_HASH_REL, SENTINEL_SRI, SENTINEL_TEXT, SRI_RE, deriveChannel, diskReader,
+    DOCS_REL, HEX_RE, RELEASE_HASH_REL, SENTINEL_SRI, SENTINEL_TEXT, SRI_RE, deriveChannel, diskReader, sriToHex,
 } from './lib/channel-identity.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,6 +44,10 @@ const NAME = 'flake-repack';
 const SELF_REL = 'scripts/verify-flake-repack.mjs';
 const DERIV_REL = 'nix/pkg/powerbrowser-bin.nix';
 const FLAKE_REL = 'flake.nix';
+const FLATPAK_REL = 'flatpak/org.debios.PowerBrowser.json';
+const URL_TOKEN = '@RELEASE_URL@';
+const SHA_TOKEN = '@RELEASE_SHA256@';
+const TEMPLATE_TOKEN = '@RELEASE_URL_TEMPLATE@';
 const BOT_STEP = 'the DIST-12 bot PR (channel-manifests.yml, job flake-hash-pr) writes it with nix store prefetch-file on the published asset';
 
 const args = process.argv.slice(2);
@@ -155,8 +159,49 @@ export function runChecks(root, overrides = {}) {
         if (hit) fail(FLAKE_REL, `carries the literal ${JSON.stringify(hit[0])}; the sidecar uses the nodejs_24 binding and the flake is x86_64-linux only`, 'remove the literal and reuse the nodejs let-binding.');
     }
 
+    // --- 6. the Flatpak manifest shares the derivation's URL, hash and checker template (PKG-20) -----
+    // The manifest carries the release values as tokens, which the release renders; a literal is allowed
+    // only when it equals the derived value, so a second literal for the same tarball cannot drift apart.
+    const manifestText = read(FLATPAK_REL);
+    if (manifestText === null) {
+        fail(FLATPAK_REL, 'is missing, so the Flatpak repack has no tarball source to compare with the derivation.', 'restore flatpak/org.debios.PowerBrowser.json from git.');
+    } else {
+        let manifest = null;
+        try {
+            manifest = JSON.parse(manifestText);
+        } catch {
+            fail(FLATPAK_REL, 'does not parse as JSON.', 'restore the manifest from git.');
+        }
+        const archive = manifest?.modules?.[0]?.sources?.find(src => src.type === 'archive');
+        if (manifest !== null && archive === undefined) {
+            fail(FLATPAK_REL, 'has no archive source for the release tarball.', 'add the archive source with the release URL and hash tokens.');
+        }
+        if (archive !== undefined) {
+            if (archive.url !== URL_TOKEN && archive.url !== facts.tarballUrl) {
+                fail(FLATPAK_REL, `fetches ${JSON.stringify(archive.url)} but the derivation fetches ${facts.tarballUrl}; the manifest must carry ${URL_TOKEN} or that exact URL`, 'replace the URL with the release token.');
+            }
+            const expectHex = record === null ? null : sriToHex(record.sha256);
+            if (archive.sha256 !== SHA_TOKEN && !(HEX_RE.test(archive.sha256 ?? '') && archive.sha256 === expectHex)) {
+                fail(FLATPAK_REL, `pins sha256 ${JSON.stringify(archive.sha256 ?? null)} but ${RELEASE_HASH_REL} holds ${expectHex ?? 'no valid hash'} for the derivation; two hashes for one tarball disagree`, `replace the hash with ${SHA_TOKEN}, so the release renders it from the hash record.`);
+            }
+            const checker = archive['x-checker-data'];
+            if (checker === undefined || checker === null) {
+                fail(FLATPAK_REL, 'has no x-checker-data on the archive source, so external-data-checker cannot open the per-release pull request', 'add x-checker-data with the release URL template.');
+            } else if (checker['url-template'] !== TEMPLATE_TOKEN && checker['url-template'] !== facts.checkerUrlTemplate) {
+                fail(FLATPAK_REL, `x-checker-data url-template is ${JSON.stringify(checker['url-template'] ?? null)} but the release derives ${facts.checkerUrlTemplate}`, `set url-template to ${TEMPLATE_TOKEN}.`);
+            }
+        }
+        const literalVersion = /\b\d{2,}\.\d+\.\d+/.exec(manifestText);
+        if (literalVersion) fail(FLATPAK_REL, `carries the version literal ${JSON.stringify(literalVersion[0])}; every version reaches the manifest through a token`, 'replace the literal with the release token.');
+    }
+
     notes.push(`release key ${facts.releaseKey}, tarball ${facts.tarballName}`);
     return { failures, notes, placeholder: record?.sha256 === SENTINEL_SRI };
+}
+
+// The tarball URL of the neighbouring release key, derived from the current one.
+function neighbourUrl(facts) {
+    return facts.tarballUrl.replace(facts.releaseKey, neighbourKey(facts.releaseKey)).replace(facts.tarballName, facts.tarballName.replace(facts.version, neighbourKey(facts.releaseKey).slice(1)));
 }
 
 function selfTest() {
@@ -202,6 +247,18 @@ function selfTest() {
         {
             name: 'overlays.default missing from the flake', expect: 'overlays.default',
             overrides: withPlant(FLAKE_REL, t => t.replace('overlays.default =', 'overlays.other =')),
+        },
+        {
+            name: 'Flatpak URL literal for a neighbouring release', expect: FLATPAK_REL,
+            overrides: withPlant(FLATPAK_REL, t => t.replace(`"url": "${URL_TOKEN}"`, `"url": "${neighbourUrl(facts)}"`)),
+        },
+        {
+            name: 'Flatpak hash literal disagreeing with the hash record', expect: FLATPAK_REL,
+            overrides: withPlant(FLATPAK_REL, t => t.replace(`"sha256": "${SHA_TOKEN}"`, `"sha256": "${'0'.repeat(64)}"`)),
+        },
+        {
+            name: 'Flatpak x-checker-data missing', expect: 'x-checker-data',
+            overrides: withPlant(FLATPAK_REL, t => t.replace('"x-checker-data": {', '"x-checker-data-removed": {')),
         },
         {
             name: 'control: unmodified tree stays green', expect: null,
