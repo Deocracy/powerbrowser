@@ -1,0 +1,21 @@
+# signmar build pin (Phase 49 review BL-01). The source of the MAR signer that sign-publish runs.
+# Format: '# tag <ESR tag>', '# commit <40-hex commit the tag names>', then '<sha256>  <path in the Firefox tree>'.
+# scripts/build-signmar.sh fetches each path at that commit and refuses any file whose sha256 differs.
+# Re-pin on an ESR move: in an upstream checkout at the new tag run sha256sum over the paths below and update the tag and commit lines (a reviewed commit); the release-shape row goes red until the tag line equals configuration.toml.
+# tag FIREFOX_153_5_1esr_RELEASE
+# commit 6cd88e7d45fe7a5b0b87b984fb32a8779151860e
+1c9238025566fcaab44de982a50f786ceaade4282ee5c4723e5d28c882ed52b9  modules/libmar/src/mar_cmdline.h
+f3d82257a720aead966931ba809cfefa342395d5c51bce607700c7e1c7135971  modules/libmar/src/mar_create.c
+1e8a9aaed807293618ffb03aebffc530071dc18e89aa776c8e5f1595e8ec8cd7  modules/libmar/src/mar_extract.c
+3114a871db208c695114fca7bb166367d2095e77b47a63736615e8638f9f7f9a  modules/libmar/src/mar_private.h
+02949ed26b412dfd30979d1f96280000d56716d670ff48f35214c5cec547a476  modules/libmar/src/mar_read.c
+1d9ce93d52d1b837b7d783543cc85443cac776c95e7bdfbb03ba532f6eee72d1  modules/libmar/src/mar.h
+346b7d6e025857a4aa019539fba92a2e6362ba3d52b9c713240bbb35268e4093  modules/libmar/sign/mar_sign.c
+9cc632fb674c043c4821f63f9774bbb07d96a52b4b341599ba2353677da0f2be  modules/libmar/sign/nss_secutil.c
+e48cb70d5f22c6ac1c253981e0568b491d2619d4ba21ccfddb7bf3060215a59a  modules/libmar/sign/nss_secutil.h
+449ed139023535c0b50bce32c1070abfddf42c2ba148c62f98848aa189a0cb58  modules/libmar/verify/cryptox.c
+d6b015f157f6502b4d6b399aead673e43a6a543432a00134fe3a48ef4d729ae0  modules/libmar/verify/cryptox.h
+e14b3f2c2c3bac68b5009140760ab8cc225339ccdd582b1f1ca7dfc74f05eb15  modules/libmar/verify/mar_verify.c
+ebb7de60c08f574270db9b3ba27597306173c4f2116941860fe282f769210f75  modules/libmar/tool/mar.c
+4999174e36007da7ac159881477bede03f639b420bf9f8bb3ae7de1b240c550e  other-licenses/nsis/Contrib/CityHash/cityhash/city.cpp
+06da4f67286fc172a580239fc8fa9516438a7d7c99eadb0db176ed570f7feffe  other-licenses/nsis/Contrib/CityHash/cityhash/city.h
