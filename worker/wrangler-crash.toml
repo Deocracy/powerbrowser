@@ -1,0 +1,41 @@
+# worker/wrangler-crash.toml: the deploy descriptor for the crash-report receiver (Phase 57, TEL-07).
+#
+# A separate file from worker/wrangler.toml on purpose: the events Worker must not gain an R2 binding it
+# does not use. No secret or token is stated here, and the Worker reads none.
+#
+# RUNBOOK (owner, once; the executor never runs these). Use the pinned wrangler from nixpkgs.
+# wrangler never enters a flake dev shell. Record the version at each step in the operator record.
+#   1. Pin and record the version:    nix run nixpkgs#wrangler -- --version
+#   2. Enable R2 on the account (dashboard). A payment method may be required by the free tier.
+#   3. Create the bucket:             nix run nixpkgs#wrangler -- r2 bucket create powerbrowser-crash-reports
+#   4. Apply the 30-day lifecycle:    worker/crash-r2-lifecycle.json records the rule (prefix "crash/", 30 days).
+#      Check the exact flag names against `nix run nixpkgs#wrangler -- r2 bucket lifecycle add --help` at
+#      the pinned version, then add the one rule. The gate pins the rule's prefix and age in the descriptor.
+#   5. Deploy:                        nix run nixpkgs#wrangler -- deploy --config worker/wrangler-crash.toml
+#   6. Rate-limit rule (dashboard):   ONE zone rule, per IP, action block, whose expression matches the
+#      crash hostname with the path equal to "/submit". The Worker keeps no counter (see crash-submit.mjs),
+#      so this rule is the only rate limit. Record the threshold and the period verbatim at the checkpoint.
+#      workers_dev and preview_urls are off below: a workers.dev URL would bypass the zone rule.
+#   7. Probe, well-formed:            a Gecko-shaped multipart POST with a minidump part named
+#      upload_file_minidump answers 200 and "CrashID=<uuid>"; the record <uuid>.json holds the allowlisted
+#      annotations only. Expect 200 in the operator record.
+#   8. Probe, oversized:              a body over 20 MiB answers 413 "Discarded=oversized_body" with nothing stored.
+#   9. Probe, burst:                  a burst over the zone rule threshold answers the rule's block, not 200.
+#      Record the three responses (200, 413, blocked) in the operator record.
+#
+# RETENTION. The R2 lifecycle rule expires the crash/ prefix after 30 days (RETENTION_DAYS in crash-submit.mjs).
+# No Worker code deletes records, so the lifecycle rule is the only retention.
+
+name = "powerbrowser-crash-submit"
+main = "crash-submit.mjs"
+# Fixed past date, the same floor as worker/wrangler.toml: the Worker uses only fetch, Request, Response,
+# Uint8Array, TextDecoder and the R2 binding, none of which changes behaviour with the compatibility date.
+compatibility_date = "2025-01-01"
+
+# No workers.dev URL and no preview URLs: the zone rate-limit rule (runbook step 6) does not apply to them.
+workers_dev = false
+preview_urls = false
+
+[[r2_buckets]]
+binding = "CRASH_STORE"
+bucket_name = "powerbrowser-crash-reports"

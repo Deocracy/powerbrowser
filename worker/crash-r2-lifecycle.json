@@ -1,0 +1,12 @@
+{
+  "$comment": "Recorded R2 lifecycle configuration for the crash-report bucket (Phase 57, TEL-07). The owner applies this rule at the runbook step in worker/wrangler-crash.toml; the Worker runs no deletion code. scripts/verify-worker-submit.mjs pins the prefix and the age against crash-submit.mjs exports.",
+  "bucket": "powerbrowser-crash-reports",
+  "rules": [
+    {
+      "id": "crash-reports-30-day",
+      "prefix": "crash/",
+      "enabled": true,
+      "expire_days": 30
+    }
+  ]
+}
