@@ -21,7 +21,11 @@
     "generated/**",
     "upstream/**",
     "theia/node_modules/**",
-    "flake.nix"
+    "flake.nix",
+    "flatpak/**",
+    "winget/**",
+    "homebrew-tap/**",
+    "nix/**"
   ],
-  "notes": "Not a complete list of what the fixer must not change: it is the 13 FIX-11 entries, scripts/** (the gate runs checks from the patched worktree), the git control files, the git-ignored inputs the gate reads (generated/**, upstream/**, theia/node_modules/**) and flake.nix, plus every file a verify-platform.sh registry row names, derived by parsing the registry at gate time. Entries are path globs matched case-insensitively against the paths git itself reports for the diff (git apply --numstat, forward and reverse) and, in the real run, against the paths git status reports after the apply, ignored files included. The real run also executes code from the patched tree (powerbrowser/, theia/), which no path list can bound: it must run in an isolated job (see the header of scripts/verify-fix-gate.mjs)."
+  "notes": "Not a complete list of what the fixer must not change: it is the 13 FIX-11 entries, scripts/** (the gate runs checks from the patched worktree), the git control files, the git-ignored inputs the gate reads (generated/**, upstream/**, theia/node_modules/**) and flake.nix, plus every file a verify-platform.sh registry row names, derived by parsing the registry at gate time. Entries are path globs matched case-insensitively against the paths git itself reports for the diff (git apply --numstat, forward and reverse) and, in the real run, against the paths git status reports after the apply, ignored files included. The real run also executes code from the patched tree (powerbrowser/, theia/), which no path list can bound: it must run in an isolated job (see the header of scripts/verify-fix-gate.mjs). flatpak/**, winget/**, homebrew-tap/** and nix/** are release-channel data (manifests, cask, release hash record); a quick row executes the Flatpak build-commands, and a fixer has no reason to change any of them."
 }

@@ -77,6 +77,7 @@ export function simulateFlatpakBuild({ manifest, top, tarballFiles, fileSources 
         mkdirSync(build, { recursive: true });
         execFileSync('tar', ['-C', build, `--strip-components=${strip}`, '-xf', tarball]);
         for (const src of module.sources.filter(s => s.type === 'file')) {
+            if (typeof src.path !== 'string' || !/^[A-Za-z0-9._-]+$/.test(src.path)) return { ok: false, error: `the file source path ${JSON.stringify(src.path)} is not a plain file name`, cleanup };
             const text = fileSources[src.path];
             if (text === undefined) return { ok: false, error: `no fixture content for the file source ${src.path}`, cleanup };
             writeFileSync(join(build, src.path), text);
@@ -85,7 +86,8 @@ export function simulateFlatpakBuild({ manifest, top, tarballFiles, fileSources 
         const app = join(root, 'app');
         for (const command of module['build-commands'] ?? []) {
             try {
-                execFileSync('bash', ['-ec', rebase(command, app)], { cwd: build, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+                // Manifest text runs here, so give it nothing to inherit: no tokens, no HOME, a fixed PATH.
+                execFileSync('bash', ['--noprofile', '--norc', '-ec', rebase(command, app)], { cwd: build, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', env: { PATH: process.env.PATH, LC_ALL: 'C' } });
             } catch (e) {
                 const detail = String(e.stderr || e.message).trim().split('\n').slice(-1)[0];
                 return { ok: false, error: `the build command ${JSON.stringify(command.slice(0, 70))} failed (${detail})`, cleanup };
