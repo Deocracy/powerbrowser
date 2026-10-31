@@ -4810,8 +4810,10 @@ run_own_checks() {
     # github.com allowlist row. Honestly --quick: text reads and js-yaml from theia/.
     "bug-report-affordance|node $REPO_ROOT/scripts/verify-bug-report.mjs"
     # bug-report-affordance-self-test plants in memory a diagnostics-bearing query key, an origin
-    # mismatch, an extra prefill id outside bug.yml, an absent bug form, a respelled opener id and
-    # a widened github.com disposition; each goes red naming the drift. It writes nothing.
+    # mismatch, an extra prefill id outside bug.yml, an absent bug form, a respelled opener id, a
+    # widened github.com disposition, a removed install_format deferral record, a Copy button removed
+    # from the diagnostics layer and a Copy handler that does not write the clipboard; each goes red
+    # naming the drift. It writes nothing.
     "bug-report-affordance-self-test|node $REPO_ROOT/scripts/verify-bug-report.mjs --self-test"
     # NEW (Phase 53, GH-04): the legion mirror timer and service. Quick mode reads the two tracked
     # unit files and the tracked workflow and settings files, checks the timer and service keys and

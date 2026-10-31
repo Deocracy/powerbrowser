@@ -15,6 +15,9 @@
 //  opener       the command the contribution executes is the GUI-01 opener id exported by
 //               theia/extensions/tab-uris/src/browser/browser-window-command.ts.
 //  disposition  the github.com row of powerbrowser/endpoint-allowlist.json is user-initiated.
+//  install_format  the install_format prefill resolves to a derived value, or is empty with the
+//               recorded deferral (a shortcut: install format comment) beside its constant.
+//  copy         the diagnostics layer has a Copy button, and its click writes the clipboard.
 //
 // Every failure names the file, the rule and the drift, and ends with a next step. The
 // self-test runs a green control on the unmodified tree first, then plants each fault in
@@ -31,6 +34,9 @@ const SELF_REL = 'scripts/verify-bug-report.mjs';
 const CONTRIB_REL = 'theia/extensions/branding/src/browser/powerbrowser-report-bug-contribution.ts';
 const OPENER_REL = 'theia/extensions/tab-uris/src/browser/browser-window-command.ts';
 const BUG_REL = '.github/ISSUE_TEMPLATE/bug.yml';
+const XHTML_REL = 'powerbrowser/shell/powerbrowser.xhtml';
+const SHELL_JS_REL = 'powerbrowser/shell/powerbrowser.js';
+const COPY_ID = 'powerbrowser-diagnostics-copy';
 const ALLOWLIST_REL = 'powerbrowser/endpoint-allowlist.json';
 const MANIFEST_REL = 'configuration.toml';
 const TEMPLATE_KEY = 'template';
@@ -69,7 +75,7 @@ function constString(src, name) {
 function check(inputs) {
     const failures = [];
     const fail = (file, rule, msg) => failures.push({ file, rule, msg });
-    const { contrib, opener, bugYml, allowlist, manifestText } = inputs;
+    const { contrib, opener, bugYml, allowlist, manifestText, shellXhtml, shellJs } = inputs;
 
     // Derive the prefill object literal and its keys.
     const lit = contrib.match(/new\s+URLSearchParams\(\s*\{([\s\S]*?)\}\s*\)/);
@@ -135,6 +141,24 @@ function check(inputs) {
         fail(CONTRIB_REL, 'origin', 'declares no ISSUES_NEW_URL literal, so the target cannot be checked. Next step: keep the issues URL as one literal constant.');
     }
 
+    // install_format: derived, or empty with the recorded deferral beside the constant. The gate names the
+    // deferral; removing the record while the value stays empty turns it red.
+    const installRef = (lit[1].match(/install_format\s*:\s*([A-Za-z_][A-Za-z0-9_]*|'[^']*')/) ?? [])[1];
+    const installValue = installRef && installRef.startsWith("'") ? installRef.slice(1, -1) : constString(contrib, installRef ?? '');
+    if (installValue === undefined) {
+        fail(CONTRIB_REL, 'install_format', 'prefills install_format from a name this row cannot resolve to a literal. Next step: pass a derived string or a literal constant.');
+    } else if (installValue === '' && !/\/\/\s*shortcut:\s*install format/.test(contrib)) {
+        fail(CONTRIB_REL, 'install_format', 'sends install_format empty with no recorded deferral. TEL-05 requires the install format, so either derive it from an in-tree source or keep the shortcut: install format comment beside the constant. Next step: restore the deferral record.');
+    }
+
+    // copy: the diagnostics layer's Copy button exists and its click writes the clipboard.
+    if (!shellXhtml.includes(`id="${COPY_ID}"`)) {
+        fail(XHTML_REL, 'copy', `the diagnostics layer has no Copy button (id ${COPY_ID}). Next step: add the button beside the Close button.`);
+    }
+    if (!shellJs.includes(`getElementById("${COPY_ID}")`) || !shellJs.includes('navigator.clipboard.writeText(')) {
+        fail(SHELL_JS_REL, 'copy', 'the diagnostics Copy button is not wired to the clipboard write. Next step: bind its click to navigator.clipboard.writeText.');
+    }
+
     // opener id, derived from the call's first argument
     const call = contrib.match(/executeCommand\(\s*([A-Za-z_][A-Za-z0-9_]*|'[^']*')/);
     const callee = call ? call[1] : '';
@@ -161,6 +185,8 @@ function defaultInputs(root) {
         contrib: readFileSync(join(root, CONTRIB_REL), 'utf8'),
         opener: readFileSync(join(root, OPENER_REL), 'utf8'),
         bugYml: existsSync(join(root, BUG_REL)) ? readFileSync(join(root, BUG_REL), 'utf8') : null,
+        shellXhtml: readFileSync(join(root, XHTML_REL), 'utf8'),
+        shellJs: readFileSync(join(root, SHELL_JS_REL), 'utf8'),
         allowlist: JSON.parse(readFileSync(join(root, ALLOWLIST_REL), 'utf8')),
         manifestText: readFileSync(join(root, MANIFEST_REL), 'utf8'),
     };
@@ -184,7 +210,7 @@ function main() {
         return 1;
     }
     const keys = [...new Set([...inputs.contrib.match(/new\s+URLSearchParams\(\s*\{([\s\S]*?)\}\s*\)/)[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*:/g)].map(m => m[1]))];
-    console.log(`${NAME}: PASS -- ${CONTRIB_REL} prefills ${keys.filter(k => k !== TEMPLATE_KEY).join(', ')} (a subset of ${BUG_REL} field ids), its target agrees with urls.release_notes, it runs the GUI-01 opener, and github.com is user-initiated`);
+    console.log(`${NAME}: PASS -- ${CONTRIB_REL} prefills ${keys.filter(k => k !== TEMPLATE_KEY).join(', ')} (a subset of ${BUG_REL} field ids), its target agrees with urls.release_notes, it runs the GUI-01 opener, and github.com is user-initiated. install_format is the named deferral (shortcut: install format has no in-tree source), and the diagnostics layer has a Copy button wired to the clipboard`);
     return 0;
 }
 
@@ -209,6 +235,9 @@ function selfTest() {
         ['Phase 42 bug form absent', { ...base, bugYml: null }, BUG_REL, 'prefill', 'absent'],
         ['opener id respelled', { ...base, contrib: base.contrib.replace("const OPEN_BROWSER_WINDOW_ID = 'powerbrowser.open-browser-window';", "const OPEN_BROWSER_WINDOW_ID = 'powerbrowser.open-window';") }, CONTRIB_REL, 'opener', 'powerbrowser.open-window'],
         ['github.com widened to allow', { ...base, allowlist: { ...base.allowlist, ...widenGithub(base.allowlist) } }, ALLOWLIST_REL, 'disposition', 'allow'],
+        ['install_format deferral record removed', { ...base, contrib: anchor(base.contrib, 'shortcut: install format').replace('shortcut: install format', 'note: install channel') }, CONTRIB_REL, 'install_format', 'install_format'],
+        ['Copy button removed from the layer', { ...base, shellXhtml: anchor(base.shellXhtml, `id="${COPY_ID}"`).replace(`id="${COPY_ID}"`, 'id="powerbrowser-diagnostics-x"') }, XHTML_REL, 'copy', COPY_ID],
+        ['Copy handler does not write the clipboard', { ...base, shellJs: anchor(base.shellJs, 'navigator.clipboard.writeText(').replace('navigator.clipboard.writeText(', 'window.console.log(') }, SHELL_JS_REL, 'copy', 'clipboard'],
     ];
 
     let failed = 0;

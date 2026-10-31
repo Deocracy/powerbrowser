@@ -59,4 +59,5 @@ Plans 53-01, 53-02 and 53-03 are built and committed on `dsh/phase-53`. Everythi
 
 - `scripts/verify-platform.sh --only codeberg-mirror-live` and `--only upptime-sweep-live` (full tier) are expected red until items 2 and 3 are done. They fail closed; they never skip.
 - `repo-controls` (full tier) reads the live `actions-selected.json` admission and goes red until item 1, step 3 is applied.
+- TEL-05 diagnostics Copy button: the quick row proves the button exists and its click calls the clipboard write. It does not prove the chrome window accepts the write. Owner check: open the diagnostics layer from the error view or the chord, press Copy diagnostics, and paste into a text field. The install format stays a named deferral (no in-tree source), recorded in the contribution file and enforced by `bug-report-affordance`.
 - `plan 53-04` is the owner checkpoint that collects the twelve-field reply for items 1 to 5. It was not executed.
