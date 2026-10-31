@@ -4372,9 +4372,12 @@ run_own_checks() {
     "telemetry|node $REPO_ROOT/scripts/verify-telemetry.mjs"
     "telemetry-self-test|node $REPO_ROOT/scripts/verify-telemetry.mjs --self-test"
     # NEW (Phase 48, TEL-06): the analyzer half of the live-delivery row. The pure analyzeCapture over
-    # captured requests: the control is one preflight and one POST carrying both corrected events; each
-    # plant (no POST, a stack field, an unadmitted key, a full path in source, an empty capture, a request
-    # at level off) must go red naming its drift. Honestly --quick: in-memory fixtures only; no build, no
+    # captured requests: the control is one preflight and one POST carrying both corrected events; every rule
+    # has a plant (no POST, no preflight, a wrong content type, a non-JSON or non-events body, a top-level or
+    # per-event extra key, a stack or message field, an unadmitted key, a full path, a non-number position, a
+    # position on a rejection, a missing required key, a missing uncaught or rejection event, a usage event,
+    # the drill's own message text, a body the Worker's handleEvents rejects, an empty capture, a request at
+    # level off) and must go red naming its drift. Honestly --quick: in-memory fixtures only; no build, no
     # browser, no display, no network.
     "tel06-error-delivery-live-self-test|node $REPO_ROOT/scripts/verify-telemetry-live-delivery.mjs --self-test"
 
@@ -4813,15 +4816,19 @@ run_own_checks() {
     # and the bot-job-gate rule (an environment-bound job with no negated job-level dry-run gate);
     # each red naming file and job. It writes nothing.
     "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
-    # NEW (Phase 48, MON-01): the watchdog source. The decision over an in-memory run table (a 25-hour
-    # silence opens nothing, a 27-hour silence opens one issue with the run link, a missing run opens one
-    # naming it, an open same-title issue suppresses a second), and the source checks over docs/watchdog.yml
-    # (schedule-only triggers, one 06:17 UTC cron, GITHUB_TOKEN read only, no secret, pinned uses, no event
-    # text in run) plus the product repository's no-schedule rule.
+    # NEW (Phase 48, MON-01): the watchdog source. The decision is the workflow's own shell: the run: bodies
+    # of docs/watchdog.yml are extracted and run under bash with a stub gh (a 25-hour silence opens nothing, a
+    # 27-hour silence opens one issue with the run link and the fixed label, a missing run opens one naming it,
+    # the bot-and-label dedupe suppresses a second while a stranger's same-title issue does not), and the source
+    # checks over the YAML (schedule-only triggers, one 06:17 UTC cron, issues write only, no secret, pinned
+    # uses, no event text in run) plus the product repository's parsed no-schedule rule.
     "watchdog|node $REPO_ROOT/scripts/verify-watchdog.mjs"
     # watchdog-self-test plants an unguarded workflow_run wake, event text in a run step, a secret
-    # reference, a drifted cron, a 25-hour threshold, a product-repository schedule key and a 25-hour
-    # window that opens an issue; each must go red naming its drift, with the control green first.
+    # reference, a drifted cron, a 25-hour threshold, a contents write scope, a dropped label, three
+    # product-repository schedule forms, and fourteen faults in the watchdog's own shell (inverted or removed
+    # dedupe, any-author dedupe, missing label or state filter, a skipped dedupe on an unset author, the
+    # missing-run branch, OPEN turned off, a reversed age, an inverted open gate, a wrong runs path, an
+    # unlabeled issue, a label never created); each must go red naming its drift, with the control green first.
     "watchdog-self-test|node $REPO_ROOT/scripts/verify-watchdog.mjs --self-test"
     # NEW (Phase 49, DIST-02): the release.yml shape the workflows row does not cover. Dispatch
     # only with a required sha input; build-linux on the release runner label with no environment
