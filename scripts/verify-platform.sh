@@ -4888,6 +4888,17 @@ run_own_checks() {
     # not production coverage. Honestly --quick: pure functions over in-memory fixtures; no network,
     # no gh, no build. It writes nothing.
     "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
+    # NEW (Phase 48, TRAIN-07): the maintenance half of the release-train core. The same --self-test
+    # run carries the six maintenance rows (runner-online, esr-pin-age, channel-liveness, watchdog-age,
+    # synthetic events POST, download-count) with their no-data branches, the byte-stable render, the
+    # exactly-one write plan, one comment per transition into red and zero on a staying-red re-run, the
+    # 06:00 UTC sweep gate, and the planted faults: a stale tag with no published Release, a draft
+    # Release as the only match, a 27-hour watchdog, a missing watchdog run, a synthetic POST answering
+    # 500, a seventh row, two tracking issues, and a workflow_run wake from a fork head. Each plant goes
+    # red naming its drift with the unmutated control green first. Honestly --quick: in-memory fixtures
+    # only; no network, no gh, no build. It writes nothing. The live sweep and the pinned issue are the
+    # plan 48-05 owner checkpoint.
+    "release-train-maintenance-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
     # NEW (Phase 52, FIX-07/FIX-11): fix-gate-self-test serves a green control diff, then one
     # planted diff per .github/fix-gate-deny.json entry (the plant list read from the deny file
     # itself), a registry-named file, a hand-edited patch hunk, a vacuous diff, a compiled-file
