@@ -59,3 +59,27 @@ the beta" needs a beta-stage tag form, which the detector does not list.
   live 175 beta tag, which does not exist yet.
 
 **Who decides:** the owner, before 2027-06-10. Executor default: A (the code as built).
+
+## 4. The container image line records the OS codename, not the image digest (58-02 Task 3)
+
+**Plan:** 58-02 Task 3, toolchain container set ("clang, rust, cbindgen, sysroot, glibc ceiling,
+image digest").
+
+**Blocked piece:** the compared `image` line of `toolchain-baseline.txt`. The container mode
+(Phase 45) prints `image pb-gecko-build <VERSION_CODENAME>`, so the drift diff compares the OS
+codename. The digest is not compared.
+
+**Why:** a container cannot read its own image digest from inside. The digest has to be measured on
+the host with podman. The file already records the pin as a host-measured comment
+(`base debian:bookworm@sha256:...`), which the drift diff skips. Comparing the digest would change
+the Phase 45 comparator contract and needs the host measurement wired into `build-linux`.
+
+**Options:**
+
+- A. Keep the codename line and the digest comment. The digest is recorded, not enforced. Executor
+  default.
+- B. Compare the digest: the host runs `podman image inspect` before the container build, and
+  `build-linux` passes it in. This changes the drift contract, so it needs the owner's approval.
+
+**Who decides:** the owner. Nothing in 58-03 depends on the choice, but the 175 re-record (RELEASING.md
+"Rebase onto 175") records the digest either way.
