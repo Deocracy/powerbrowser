@@ -150,19 +150,6 @@ export function deriveUptake(facts) {
     return 'UPTAKE_DETECTED';
 }
 
-/**
- * A bump branch must be the one its tag names, chore/esr-<tag>, so a branch and its tag can
- * never disagree on major (Pitfall 1). UNWIRED: publish derives the branch from the tag
- * (esrBranch in detect-upstreams.mjs), so this refusal guards any future writer that takes a
- * branch name from elsewhere. Pure.
- */
-export function branchTagFailure(branch, tag) {
-    const v = tagToVersion(tag);
-    if (v === null) return `the tag ${JSON.stringify(tag)} is not an *esr_RELEASE tag, so branch ${branch} names nothing. Next step: name the branch from a valid tag.`;
-    if (branch !== `chore/esr-${tag}`) return `branch ${branch} does not name tag ${tag} (major ${v.tuple[0]}), so the branch and the tag disagree. Next step: rename the branch to chore/esr-${tag}.`;
-    return null;
-}
-
 /** The patch number named by a conflict stage line, or null when the line names none. Pure. */
 export function conflictPatchNumber(stage) {
     const m = typeof stage === 'string' ? PATCH_NUMBER.exec(stage) : null;
@@ -660,11 +647,6 @@ function selfTest() {
             name: 'a uptake conflict decision that writes under the patch directory',
             run: () => conflictWriteFailures({ ...renderConflict(UPTAKE_TAG, '030', 'log', 'diff'), writes: [`${PATCH_DIR}/030-powerbrowser-mar-certificates.patch`] }),
             expect: `writes patches/030-powerbrowser-mar-certificates.patch under the patch directory`,
-        },
-        {
-            name: 'a bump branch named for a 175 tag while its tag is 153',
-            run: () => { const reason = branchTagFailure(`chore/esr-${UPTAKE_TAG}`, NEWER); return reason === null ? [] : [reason]; },
-            expect: `does not name tag ${NEWER}`,
         },
     ];
 

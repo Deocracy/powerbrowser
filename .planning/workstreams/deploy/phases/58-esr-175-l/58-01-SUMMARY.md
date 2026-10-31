@@ -117,7 +117,7 @@ self-check: PASSED
 
 ### Shortcuts (coded, recorded)
 
-- `branchTagFailure` (release-train.mjs) is UNWIRED. Publish derives the branch from the tag (`esrBranch`), so the guard can only ever see a branch the code named. It is kept, with its plant, for any future writer that takes a branch name from elsewhere. The same convention as the Phase 43 UNWIRED rows.
+- `branchTagFailure` (release-train.mjs) was UNWIRED and is removed by the 58-REVIEW fix WR-01 (see the correction section at the end). Publish derives the branch from the tag (`esrBranch`), so the guard had no caller and its plant proved only its own string compare.
 - The live `dry-run: true` dispatch was not run. A dispatch is a GitHub write, so it is an owner action (Phase 43 BLOCKED.md item 2). The dry-run contract is proven statically: the `uptake-lane` rule, the dry-run-gate rule and the `uptake-replay` job's read-only shape.
 
 ## Calendar pointer for the live replay
@@ -140,3 +140,8 @@ None. The new job calls the existing reusable replay with read scope and no secr
 - FOUND: `.github/workflows/release-train.yml`, `scripts/verify-workflows.mjs` (commit `80a11fd2`)
 - FOUND: `docs/RELEASING.md`, `.planning/workstreams/deploy/phases/58-esr-175-l/BLOCKED.md` (commit `12cbc67a`)
 - `scripts/verify-platform.sh --quick` exit 0 on the tree after `12cbc67a`
+
+## Review corrections (58-REVIEW, WR-01)
+
+- The `branchTagFailure` helper and its plant are removed. Nothing called the helper outside the self-test, so the plant proved only the helper's own string compare. The Phase 43 rule for unwired helpers is no plant.
+- The release-train logic self-test count that this summary quotes (`17 planted faults`) was correct for the tree at `12cbc67a`. After WR-01 it is `16 planted faults went red`. Later review fixes change the detector and pin-sweep counts as well; the counts after all review fixes are in `58-REVIEW-FIX.md`.
