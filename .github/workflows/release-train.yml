@@ -710,7 +710,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --search 'in:title "release-train: maintenance"' --json number,title,body > "$RUNNER_TEMP/maint-found.json"
+          gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --search 'in:title "release-train: maintenance"' --json number,title,body,author,labels > "$RUNNER_TEMP/maint-found.json"
+
+      # The previous row statuses come from the maintenance-state artifact of the latest unexpired run that
+      # saved one (read only). They are the only source of the transition comment: the issue body is
+      # editable by anyone with write access, so it never supplies the previous statuses. No artifact, or
+      # one that cannot be read, is the fail-safe path: every red row is treated as newly red.
+      - name: Look up the latest maintenance-state artifact (read)
+        id: maint-prev
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=release-train-maintenance-state&per_page=10" --jq '[.artifacts[] | select(.expired == false)][0].workflow_run.id // empty' || true)
+          echo "run-id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the previous maintenance state (read; absent is fail-safe)
+        id: maint-restore
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-prev.outputs.run-id != '' }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-train-maintenance-state
+          path: ${{ runner.temp }}/maint-state
+          run-id: ${{ steps.maint-prev.outputs.run-id }}
+          github-token: ${{ github.token }}
 
       - name: Plan the write for the pinned maintenance issue (read)
         id: maint-plan
@@ -721,7 +746,8 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$BODY_B64" | base64 -d > "$RUNNER_TEMP/maint-body.md"
-          node scripts/release-train.mjs --maintenance-plan "$RUNNER_TEMP/maint-found.json" "$RUNNER_TEMP/maint-body.md" "$RUNNER_TEMP/maint-comment.md" > "$RUNNER_TEMP/maint-plan.txt"
+          mkdir -p "$RUNNER_TEMP/maint-next"
+          node scripts/release-train.mjs --maintenance-plan "$RUNNER_TEMP/maint-found.json" "$RUNNER_TEMP/maint-body.md" "$RUNNER_TEMP/maint-comment.md" "$RUNNER_TEMP/maint-state/state.json" "$RUNNER_TEMP/maint-next/state.json" > "$RUNNER_TEMP/maint-plan.txt"
           cat "$RUNNER_TEMP/maint-plan.txt"
           grep -E '^(action|number|patch|comment)=' "$RUNNER_TEMP/maint-plan.txt" >> "$GITHUB_OUTPUT"
 
@@ -761,3 +787,15 @@ jobs:
         run: |
           set -euo pipefail
           gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/maint-comment.md"
+
+      # Live only, after the plan succeeded: the statuses this run rendered become the previous state for
+      # the next sweep. A dry run stores nothing.
+      - name: Save the maintenance state for the next sweep (live only)
+        id: maint-save
+        if: ${{ !inputs.dry-run && needs.maintenance.result == 'success' && steps.maint-plan.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-train-maintenance-state
+          path: ${{ runner.temp }}/maint-next/state.json
+          retention-days: 90
+          if-no-files-found: error

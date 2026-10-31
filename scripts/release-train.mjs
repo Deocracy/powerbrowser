@@ -57,7 +57,7 @@
 //   node scripts/release-train.mjs --self-test
 //   node scripts/release-train.mjs --sweep-due <epoch-seconds>
 //   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
-//   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out>
+//   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state> <state-out>
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -569,18 +569,43 @@ function transitionComment(newlyRed, ownerLogin) {
 }
 
 /**
- * The write plan for the pinned maintenance issue. found: the open issues with the maintenance
- * title, as { number, body }. rendered: renderMaintenance output. Returns the exactly-one decision
- * (create, update with a patch flag, or fail), and at most one comment, only when a row in the
- * update path turned from non-red (or absent) to red. A staying-red re-run returns no comment. Pure.
+ * The pinned maintenance issue is the one issue whose author is the owner's login and that carries the
+ * tracking label. A same-title issue by anyone else is not the pinned issue: its body is never read
+ * for a decision. ownerLogin '' or null selects nothing (the create path, which writes nothing). Pure.
  */
-export function nextMaintenance(found, rendered, ownerLogin = null) {
-    const decision = findExactlyOne(found, rendered);
-    if (decision.action !== 'update') return { ...decision, comment: null, newlyRed: [] };
-    const prior = new Map(parseRows(found[0].body).map(r => [r.name, r.status]));
-    const newlyRed = parseRows(rendered.body).filter(r => r.status === 'red' && prior.get(r.name) !== 'red');
-    if (newlyRed.length === 0) return { ...decision, comment: null, newlyRed: [] };
-    return { ...decision, comment: transitionComment(newlyRed, ownerLogin), newlyRed: newlyRed.map(r => r.name) };
+export function selectPinned(issues, ownerLogin) {
+    if (typeof ownerLogin !== 'string' || ownerLogin === '') return [];
+    return (Array.isArray(issues) ? issues : []).filter(i => i && i.title === MAINTENANCE_TITLE
+        && i.author !== null && typeof i.author === 'object' && i.author.login === ownerLogin
+        && Array.isArray(i.labels) && i.labels.some(l => l && l.name === LABELS.track));
+}
+
+/** The row statuses a rendered body carries, keyed by row name. Pure. */
+export function statusesOf(body) {
+    return Object.fromEntries(parseRows(body).map(r => [r.name, r.status]));
+}
+
+/**
+ * The write plan for the pinned maintenance issue. issues: every open issue the find returned (any
+ * author); the pinned one is selected by selectPinned. rendered: renderMaintenance output. stored: the
+ * previous run's { number, statuses } from the maintenance-state artifact, or null. The exactly-one
+ * decision (create, update with a patch flag, or fail) comes from findExactlyOne over the pinned issues.
+ * A comment is posted only for a row red now that was not red in the stored previous state. The body
+ * of the issue is never the source of the previous statuses: when the stored state is missing or names
+ * another issue, every red row is newly red (fail-safe notify). A staying-red re-run posts no comment.
+ * Returns the plan and the state to store for the next run. Pure.
+ */
+export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = null } = {}) {
+    const pinned = selectPinned(issues, ownerLogin);
+    const decision = findExactlyOne(pinned, rendered);
+    const state = { number: pinned.length === 1 ? pinned[0].number : null, statuses: statusesOf(rendered.body) };
+    if (decision.action !== 'update') return { ...decision, comment: null, newlyRed: [], state };
+    const usable = stored !== null && typeof stored === 'object' && stored.number === pinned[0].number
+        && stored.statuses !== null && typeof stored.statuses === 'object';
+    const prior = usable ? stored.statuses : null;
+    const newlyRed = parseRows(rendered.body).filter(r => r.status === 'red' && (prior === null || prior[r.name] !== 'red'));
+    if (newlyRed.length === 0) return { ...decision, comment: null, newlyRed: [], state };
+    return { ...decision, comment: transitionComment(newlyRed, ownerLogin), newlyRed: newlyRed.map(r => r.name), state };
 }
 
 function readFacts(path) {
@@ -617,11 +642,20 @@ function maintenanceCli([factsPath, bodyPath]) {
     return 0;
 }
 
-function maintenancePlanCli([foundPath, bodyPath, commentPath]) {
+/** The stored previous state, or null when it is missing or unreadable (the fail-safe notify path). */
+function readStored(path) {
+    try {
+        return JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
+function maintenancePlanCli([foundPath, bodyPath, commentPath, storedPath, statePath]) {
     let found;
     let rendered;
     try {
-        found = readFacts(foundPath).filter(i => i.title === MAINTENANCE_TITLE);
+        found = readFacts(foundPath);
         rendered = { title: MAINTENANCE_TITLE, body: readFileSync(bodyPath, 'utf8') };
     } catch (e) {
         console.error(`${NAME}: FAIL -- the pinned-issue read or the rendered body did not load (${e.message}). Next step: re-run the report job.`);
@@ -629,12 +663,15 @@ function maintenancePlanCli([foundPath, bodyPath, commentPath]) {
     }
     const raw = process.env.OWNER_LOGIN ?? '';
     const ownerLogin = OWNER_RE.test(raw) ? raw : null;
-    const decision = nextMaintenance(found, rendered, ownerLogin);
+    const stored = readStored(storedPath);
+    if (stored === null) console.log('maintenance: no usable previous state; every red row is treated as newly red (fail-safe notify)');
+    const decision = nextMaintenance(found, rendered, { ownerLogin, stored });
     if (decision.action === 'fail') {
         console.error(`${NAME}: FAIL -- ${decision.reason}`);
         return 1;
     }
     if (decision.comment !== null) writeFileSync(commentPath, decision.comment);
+    writeFileSync(statePath, JSON.stringify(decision.state));
     console.log(`action=${decision.action}`);
     console.log(`number=${decision.numbers[0] ?? ''}`);
     console.log(`patch=${decision.patch}`);
@@ -647,6 +684,8 @@ function maintenanceSelfTest() {
     const NOW = Date.UTC(2026, 10, 1, 12, 0, 0);
     const NEWER_153 = esrTag(153, 6, 0);
     const TAG_175 = esrTag(175, 0, 0);
+    const OWNER = 'owner-login-fixture';
+    const STRANGER = 'stranger-login-fixture';
     const facts = (over = {}) => ({
         pinTag: BASE_PIN,
         nowMs: NOW,
@@ -668,8 +707,12 @@ function maintenanceSelfTest() {
     const wantStatuses = (s, want) => Object.keys(want).filter(k => statuses(s)[k] !== want[k]).map(k => `${k} is ${statuses(s)[k]}, not ${want[k]}`);
     const DEFERRED_GREEN = { 'runner-online': 'green', 'esr-pin-age': 'green', 'channel-liveness': 'no-data', 'watchdog-age': 'green', 'synthetic events POST': 'green', 'download-count': 'no-data' };
     const priorBody = renderMaintenance(stateOf(facts())).body;
-    const issue = body => [{ number: 7, title: MAINTENANCE_TITLE, body }];
+    const issueBy = (body, login = OWNER, number = 7) => ({ number, title: MAINTENANCE_TITLE, body, author: { login }, labels: [{ name: 'release-train' }] });
     const TWO_RED = facts({ watchdogStartedAtMs: NOW - 27 * HOUR_MS, syntheticStatus: 500 });
+    const redRendered = renderMaintenance(stateOf(TWO_RED));
+    const redBody = redRendered.body;
+    const storedOf = body => ({ number: 7, statuses: statusesOf(body) });
+    const EDIT_WATCHDOG_AND_SYNTH = body => body.replace('| watchdog-age | green |', '| watchdog-age | red |').replace('| synthetic events POST | green |', '| synthetic events POST | red |');
     const controls = [
         { name: 'control: the all-green fixture renders the expected statuses', run: () => wantStatuses(stateOf(facts()), DEFERRED_GREEN) },
         { name: 'control: a 175 tag five days old with no Release is ignored under the 153 guard', run: () => wantStatuses(stateOf(facts({ tagDates: { [NEWER_153]: NOW - DAY_MS, [TAG_175]: NOW - 5 * DAY_MS } })), { 'esr-pin-age': 'green' }) },
@@ -678,18 +721,29 @@ function maintenanceSelfTest() {
         { name: 'control: zero online runners is no-data naming Phase 49', run: () => { const r = stateOf(facts({ runnersOnline: 0 })).rows.find(x => x.name === 'runner-online'); return r.status === 'no-data' && r.evidence.includes('Phase 49') ? [] : [`runner-online is ${r.status} with "${r.evidence}"`]; } },
         { name: 'control: an empty facts response renders six no-data rows', run: () => { const s = stateOf(facts({ tags: [], tagDates: {}, releases: [], runnersOnline: null, watchdogProbed: false, syntheticStatus: null, channelOk: null, downloadRows: 0 })); return s.rows.length === 6 && s.rows.every(r => r.status === 'no-data') ? [] : [`empty facts gave ${JSON.stringify(statuses(s))}`]; } },
         { name: 'control: two rows turn red together and the transition posts one comment naming both', run: () => {
-            const d = nextMaintenance(issue(priorBody), renderMaintenance(stateOf(TWO_RED)), 'owner-login-fixture');
+            const d = nextMaintenance([issueBy(priorBody)], redRendered, { ownerLogin: OWNER, stored: storedOf(priorBody) });
             const named = ['watchdog-age', 'synthetic events POST'].every(n => d.comment?.includes(n));
             return d.action === 'update' && d.patch === true && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' && named ? [] : [`transition gave ${JSON.stringify({ action: d.action, patch: d.patch, newlyRed: d.newlyRed })}`];
         } },
         { name: 'control: a staying-red re-run posts zero new comments', run: () => {
-            const red = renderMaintenance(stateOf(TWO_RED)).body;
-            const d = nextMaintenance(issue(red), renderMaintenance(stateOf(TWO_RED)), null);
+            const d = nextMaintenance([issueBy(redBody)], renderMaintenance(stateOf(TWO_RED)), { ownerLogin: OWNER, stored: storedOf(redBody) });
             return d.comment === null && d.patch === false ? [] : [`a staying-red re-run gave comment=${d.comment !== null} patch=${d.patch}`];
         } },
+        { name: 'control: a same-title issue by a stranger is ignored', run: () => {
+            const d = nextMaintenance([issueBy('stranger body', STRANGER, 9), issueBy(priorBody)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            return d.action === 'update' && d.numbers.join(',') === '7' ? [] : [`the stranger issue changed the selection: ${d.action} ${d.numbers.join(',')}`];
+        } },
+        { name: 'control: an edited body that marks a red row as previously red still notifies on a transition', run: () => {
+            const d = nextMaintenance([issueBy(EDIT_WATCHDOG_AND_SYNTH(priorBody))], redRendered, { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            return d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`an edited body suppressed the notice: newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
+        { name: 'control: a missing stored state treats every red row as newly red', run: () => {
+            const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: null });
+            return d.comment !== null && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`missing state gave newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
         { name: 'control: one tracking issue is patched only when its bytes differ', run: () => {
-            const same = nextMaintenance(issue(priorBody), renderMaintenance(stateOf(facts())), null);
-            const diff = nextMaintenance(issue('stale body'), renderMaintenance(stateOf(facts())), null);
+            const same = nextMaintenance([issueBy(priorBody)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
+            const diff = nextMaintenance([issueBy('stale body')], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: storedOf(priorBody) });
             return same.patch === false && diff.patch === true ? [] : [`same bytes patch=${same.patch}, differing bytes patch=${diff.patch}`];
         } },
         { name: 'control: the rendered body is byte-stable under shuffled facts order', run: () => {
@@ -706,8 +760,17 @@ function maintenanceSelfTest() {
         { name: 'no watchdog run recorded', run: () => reds(stateOf(facts({ watchdogStartedAtMs: null }))), expect: 'no watchdog run recorded' },
         { name: 'a synthetic events POST answering 500', run: () => reds(stateOf(facts({ syntheticStatus: 500 }))), expect: 'answered 500' },
         { name: 'a seventh row for a later phase', run: () => { const s = stateOf(facts()); return maintenanceRowDrift({ rows: [...s.rows, maintRow('renewals-due', 'green', 'x')] }, renderMaintenance(s).body); }, expect: 'renewals-due' },
-        { name: 'two tracking issues share the maintenance title', run: () => { const d = nextMaintenance([{ number: 7, body: priorBody }, { number: 9, body: 'other' }], renderMaintenance(stateOf(facts())), null); return d.action === 'fail' ? [d.reason] : []; }, expect: 'open tracking issues' },
+        { name: 'two owner-authored tracking issues share the maintenance title', run: () => { const d = nextMaintenance([issueBy(priorBody, OWNER, 7), issueBy('other', OWNER, 9)], renderMaintenance(stateOf(facts())), { ownerLogin: OWNER, stored: null }); return d.action === 'fail' ? [d.reason] : []; }, expect: 'open tracking issues' },
         { name: 'a workflow_run wake from a fork head', run: () => { const a = admitWakeRun({ headRepository: 'fork-owner/powerbrowser' }, 'DeBIOS-Foundation/powerbrowser'); return a.admit ? [] : [a.reason]; }, expect: 'from fork' },
+        { name: 'a stranger same-title issue taken as the pinned issue (title-only selection)', run: () => {
+            const titleOnly = [issueBy('stranger body', STRANGER, 9)].filter(i => i.title === MAINTENANCE_TITLE);
+            return titleOnly.filter(i => i.author.login !== OWNER).map(i => `title-only selection would take stranger issue #${i.number} by ${i.author.login} as the pinned issue`);
+        }, expect: 'as the pinned issue' },
+        { name: 'an edited body suppressing the newly-red notice (body as the previous state)', run: () => {
+            const edited = statusesOf(EDIT_WATCHDOG_AND_SYNTH(priorBody));
+            const fromBody = parseRows(redBody).filter(r => r.status === 'red' && edited[r.name] !== 'red');
+            return fromBody.length === 0 ? ['the edited body suppressed the newly-red notice: no row is newly red'] : [];
+        }, expect: 'suppressed the newly-red notice' },
     ];
     let failed = 0;
     for (const c of controls) {
@@ -723,6 +786,7 @@ function maintenanceSelfTest() {
     }
     return { failed, total: controls.length + plants.length };
 }
+
 
 function selfTest() {
     const baseline = runChecks();
@@ -917,8 +981,8 @@ if (isEntry) {
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
     if (args[0] === '--sweep-due' && args.length === 2) process.exit(sweepDueCli(args.slice(1)));
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
-    if (args[0] === '--maintenance-plan' && args.length === 4) process.exit(maintenancePlanCli(args.slice(1)));
+    if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds>, node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out>.`);
+    console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds>, node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>.`);
     process.exit(2);
 }
