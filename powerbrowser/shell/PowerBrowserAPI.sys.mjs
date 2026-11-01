@@ -3298,6 +3298,11 @@ export const PowerBrowserAPI = Object.freeze({
     }
     if (webTabs.has(tabId)) {
       resendWebTabSharing(tabId);
+      // 38-REVIEW CR-03: the widget's own open on attach; only now can the frontend show the tab an extension activated.
+      if (webTabs.get(tabId).activateOnAttach) {
+        webTabs.get(tabId).activateOnAttach = false;
+        sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });
+      }
       return "already-open";
     }
     const doc = theiaBrowser.ownerDocument;
@@ -7105,6 +7110,7 @@ function createPendingOverlay(opener, spec, background, openWindowInfo) {
   // 38-01: one microtask later, so the selectedTab write tabs.create makes right after addTab can still foreground it.
   Promise.resolve().then(() => {
     const { background } = pending;
+    pending.pushed = true;
     sendWebTabPush(theiaBrowser, { kind: "adoptTab", pcKey, openerTabId, url: spec, background });
   });
   PowerBrowserAPI.sleep(ADOPT_ACK_TIMEOUT_MS).then(() => adoptFallback(pcKey, pending));
@@ -7160,7 +7166,9 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
   }
   pendingContent.delete(pcKey);
   const live = pending.browser.currentURI?.spec ?? "";
-  PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, pending.browser, null, /^https?:\/\//i.test(live) ? live : pending.url);
+  const entry = PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, pending.browser, null, /^https?:\/\//i.test(live) ? live : pending.url);
+  // 38-REVIEW CR-03: an extension activated it after the adoptTab push went; webTabOpen shows it once the widget attaches.
+  entry.activateOnAttach = Boolean(pending.activateOnAck);
   // 37-REVIEW CR-01: an adopted tab is a tab-host node like any other, so prompts, bars, favicon, F12 and extensions see it.
   tabHostAddTab(theiaBrowser.ownerGlobal, tabId, pending.browser, pending.opener);
   // 37-REVIEW WR-01: what arrived while the overlay was pending gets its tab id now and is pushed.
@@ -10140,8 +10148,10 @@ function tabsBridgeRemove(host, tab) {
 }
 
 // A selection write. The selected tab stays selected; there is always a web tab selected, never none (sub-ruling 1).
-// A tab still waiting for its ack is foregrounded by its adoptTab push; an adopted one is shown by the selectTab push,
-// and the frontend's webTabActivated that follows finds it already selected.
+// An adopted tab is shown by the selectTab push, and the frontend's webTabActivated that follows finds it already
+// selected. A tab still waiting for its ack is foregrounded by its adoptTab push while that push has not gone (stock
+// create's synchronous write). 38-REVIEW CR-03: once it has gone, the host selection must not move ahead of a tab the
+// frontend never shows (Pitfall 12), so the request waits for the widget's attach and webTabActivated selects the node.
 function tabsBridgeActivate(host, tab) {
   // 38-04 (B5): a tab page tabs.create put in the stock window is already selected there.
   if (tab === host.selected || (tab?.ownerDocument && tab.ownerDocument !== host.win.document)) {
@@ -10150,14 +10160,20 @@ function tabsBridgeActivate(host, tab) {
   if (!isHostTab(host, tab)) {
     throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to switch to that tab: it is not one of this window's web tabs.");
   }
-  selectNode(host, tab);
   const tabId = tabIdOfBrowser(tab.linkedBrowser);
   if (tabId !== null) {
+    selectNode(host, tab);
     sendWebTabPush(host.theiaBrowser, { kind: "selectTab", tabId });
     return;
   }
   for (const pending of pendingContent.values()) {
-    if (pending.browser === tab.linkedBrowser) {
+    if (pending.browser !== tab.linkedBrowser) {
+      continue;
+    }
+    if (pending.pushed) {
+      pending.activateOnAck = true;
+    } else {
+      selectNode(host, tab);
       pending.background = false;
     }
   }

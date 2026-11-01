@@ -32,7 +32,12 @@
  *                    exactly one triggerClickOrPopup( call, spelled
  *                    triggerClickOrPopup(selectedTab), and reads tab identity
  *                    only from the 31.1 host (no tabTracker, no
- *                    getTabForBrowser of its own).
+ *                    getTabForBrowser of its own). 38-REVIEW CR-03: the host
+ *                    selection moves only to a tab the frontend shows:
+ *                    tabsBridgeActivate selects an adopted tab, or a pending
+ *                    one whose adoptTab push has not gone; after the push the
+ *                    request rides the entry to webTabOpen's already-open
+ *                    branch, which pushes selectTab once the widget attaches.
  *   7. signal     -- every event patch 050 dispatches (its updateWindow skip
  *                    fires one on setBadgeText/setIcon) is one the extension
  *                    section listens for in EXTENSION_TAB_EVENTS, so a badge
@@ -332,6 +337,17 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             for (const word of ['tabTracker', 'getTabForBrowser(']) {
                 if (section.includes(word)) failures.push(`click-path: the extension section names ${word}; tab identity comes only from the 31.1 host (D-05)`);
             }
+            // 38-REVIEW CR-03: the host selection follows only a tab the frontend shows. tabsBridgeActivate selects an
+            // adopted tab, or a pending one whose adoptTab push has not gone; after the push it defers to the attach.
+            const act = span(apiLines, /^function tabsBridgeActivate\(/);
+            const actBody = act ? apiLines.slice(act.start, act.end + 1).join('\n') : '';
+            const selects = (actBody.match(/selectNode\(/g) ?? []).length;
+            if (selects !== 2 || !/if \(tabId !== null\) \{\s*selectNode\(host, tab\);/.test(actBody) || !/if \(pending\.pushed\) \{\s*pending\.activateOnAck = true;\s*\} else \{\s*selectNode\(host, tab\);/.test(actBody)) {
+                failures.push(`click-path: tabsBridgeActivate moves the host selection ahead of the frontend (${selects} selectNode( call(s); the rule is one for an adopted tab and one for a pending tab whose adoptTab push has not gone)`);
+            }
+            if (!/pending\.pushed = true;\s*sendWebTabPush\(theiaBrowser, \{ kind: "adoptTab"/.test(stripComments(src[API]))) failures.push(`click-path: createPendingOverlay does not mark pending.pushed as its adoptTab push goes`);
+            if (!/entry\.activateOnAttach = Boolean\(pending\.activateOnAck\);/.test(src[API])) failures.push(`click-path: adoptPendingOverlay does not carry a deferred activation (activateOnAck) to the adopted entry`);
+            if (!/if \(webTabs\.get\(tabId\)\.activateOnAttach\) \{\s*webTabs\.get\(tabId\)\.activateOnAttach = false;\s*sendWebTabPush\(theiaBrowser, \{ kind: "selectTab", tabId \}\);/.test(src[API])) failures.push(`click-path: webTabOpen's already-open branch does not show a deferred activation (selectTab) once the widget attaches`);
         }
     }
 
@@ -517,6 +533,8 @@ function selfTest() {
         { name: 'planted messagemanagergroup', run: () => check(apiWith('frame.setAttribute("messagemanagergroup", "browsers");')), expect: 'names messagemanagergroup outside the 31.1 host sites' },
         { name: 'unclassified kind', run: () => check({ ...clean, [API]: clean[API].replace('const STORE_REQUEST_KINDS = new Set([', 'const STORE_REQUEST_KINDS = new Set([\n  "extensionPlanted",') }), expect: 'the store kind extensionPlanted has no STORE_KIND_CLASSES entry' },
         { name: 'click path re-targeted', run: () => check({ ...clean, [API]: clean[API].replace('triggerClickOrPopup(selectedTab)', 'triggerClickOrPopup(host.selected)') }), expect: 'spelled triggerClickOrPopup(selectedTab)' },
+        { name: 'activate ahead of ack', run: () => check({ ...clean, [API]: clean[API].replace('      pending.activateOnAck = true;\n', '      pending.activateOnAck = true;\n      selectNode(host, tab);\n') }), expect: 'tabsBridgeActivate moves the host selection ahead of the frontend' },
+        { name: 'deferred activation never shown', run: () => check({ ...clean, [API]: clean[API].replace('        webTabs.get(tabId).activateOnAttach = false;\n        sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });\n', '        webTabs.get(tabId).activateOnAttach = false;\n') }), expect: "already-open branch does not show a deferred activation" },
         { name: 'signal unheard', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('new window.Event("TabHostActionUpdate")', 'new window.Event("TabHostPlanted")') }), expect: 'dispatches TabHostPlanted, which EXTENSION_TAB_EVENTS does not listen for' },
         { name: 'popup-dom', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <iframe src={popupUrl} />;\n` }), expect: `${EXTENSIONS_WIDGET}:` },
         { name: 'inlined svg icon', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <span dangerouslySetInnerHTML={{ __html: row.icon }} />;\n` }), expect: '(dangerouslySetInnerHTML)' },

@@ -48,7 +48,9 @@
 //                   pinned pref before the reload and must go red naming the lost pin.
 //   tabs-bridge  -- the action fixture's tabs.create opens /b adopted, selected and
 //                   next to /a; a background create of /c then tabs.update({active})
-//                   shows it; tabs.remove closes it; an extension-page create goes to a
+//                   shows it; tabs.remove closes it; a background create of /d activated
+//                   at once, before the frontend's ack (38-REVIEW CR-03), is shown in
+//                   the frontend and only then selected in chrome; an extension-page create goes to a
 //                   new stock window (38-04, B5), never an overlay; after the frontend
 //                   reloads no orphan overlay is left.
 //                   Plant create-unadopted swallows the adoptTab push in the frame
@@ -352,6 +354,12 @@ async function scenarioTabsBridge({ app, plant, command }) {
   if (!gone) {
     return verdict(false, null, `tabs.remove of /c did not close its overlay: ${rm.ok ? 'still present' : rm.error}`);
   }
+  // 38-REVIEW CR-03: activated before its ack, /d must end shown in the frontend AND selected in chrome, never in chrome alone.
+  const ca = await command('create-activate', { props: { url: `${ORIGIN}/d` } });
+  const D = ca.ok ? await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, ca.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').currentWidget?.tabId ?? null };")).id }), v => v.chrome.tabId !== null && v.chrome.selected && v.current === v.chrome.tabId, 10000) : null;
+  if (!D) {
+    return verdict(false, null, `tabs.update({active}) on /d before its adoption ack did not leave it shown in the frontend and selected in chrome: ${JSON.stringify(ca.ok ? { chrome: await overlayOfExtTab(app, ca.result.id) } : ca.error)}`);
+  }
   const ext = await command('create', { props: { url: 'page.html' } });
   // 38-04 (B5): with no stock window open the page opens in a new one and no tab comes back (the tab-pages scenario
   // covers the stock window that is already open).
@@ -363,7 +371,7 @@ async function scenarioTabsBridge({ app, plant, command }) {
   if (settled === null) {
     return verdict(false, null, `an orphan overlay outlived the frontend reload (${await orphanCount(app)} overlay(s) with no frontend tab)`);
   }
-  return verdict(true, `tabs.create /b landed adopted, selected and next to /a; /c landed in the background, tabs.update({active}) showed it and tabs.remove closed it; an extension page went to a new stock window (${ext.error}); no orphan overlay after the frontend reload`, null);
+  return verdict(true, `tabs.create /b landed adopted, selected and next to /a; /c landed in the background, tabs.update({active}) showed it and tabs.remove closed it; /d activated before its ack was shown and selected; an extension page went to a new stock window (${ext.error}); no orphan overlay after the frontend reload`, null);
 }
 
 // 38-03 (EXT-08): content scripts and the page action's show_matches on the 31.1 identity, after a zero-overlay boot.

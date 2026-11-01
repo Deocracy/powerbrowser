@@ -42,6 +42,10 @@ async function run(cmd) {
     } else if (cmd.op === 'remove') {
       await browser.tabs.remove(cmd.tabId);
       result = true;
+    } else if (cmd.op === 'create-activate') {
+      const t = await browser.tabs.create({ ...cmd.props, active: false });
+      const u = await browser.tabs.update(t.id, { active: true });
+      result = { id: u.id, active: u.active };
     } else if (cmd.op === 'activate') {
       const t = await browser.tabs.update(cmd.tabId, { active: true });
       result = { id: t.id, active: t.active };
