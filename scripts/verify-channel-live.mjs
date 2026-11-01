@@ -234,7 +234,7 @@ export function treeAuthority(root, manifest) {
     const problems = [];
     if (manifest.mar_origin !== origin) problems.push(`the manifest mar_origin ${show(manifest.mar_origin)} differs from configuration.toml [urls] mar_origin ${show(origin)}; the build output is data and the tree decides. Next step: rebuild from the dispatched commit`);
     if (manifest.update_channel !== channel) problems.push(`the manifest update_channel ${show(manifest.update_channel)} differs from the tree's update channel ${show(channel)}; the build output is data and the tree decides. Next step: rebuild from the dispatched commit`);
-    // update_url is checked only when the caller reads it (the live row); --form-only never fetches.
+    // update_url is checked whenever the manifest carries it, so --form-only judges it as well (package-linux.sh always writes it).
     if (manifest.update_url !== undefined && manifest.update_url !== updateUrl) problems.push(`the manifest update_url ${show(manifest.update_url)} differs from ${show(updateUrl)}, derived from configuration.toml [urls] update and the Gecko update path; the build output is data and the tree decides. Next step: rebuild from the dispatched commit`);
     return { tree: { ...manifest, mar_origin: origin, update_channel: channel, update_url: updateUrl }, problems };
 }
