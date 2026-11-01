@@ -54,7 +54,7 @@
 //   node scripts/verify-descriptor-monotonic.mjs --self-test
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -169,17 +169,36 @@ function shownDir(root, dir) {
     return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? dir : rel;
 }
 
-/** Candidate descriptors on disk: <channel>/<BUILD_TARGET>/update.xml under base. Missing tree is an empty set. */
-function listDescriptors(root, base = join(root, CANDIDATE_REL)) {
+/**
+ * Candidate descriptors on disk: <channel>/<BUILD_TARGET>/update.xml under base. Missing tree is an
+ * empty set. Symlinked directories are followed. Anything else in the tree (a file where a channel or
+ * target directory belongs, or a target directory with no update.xml) is pushed to failures: a
+ * smaller candidate set must never pass for a complete one.
+ */
+function listDescriptors(root, base = join(root, CANDIDATE_REL), failures = []) {
     if (!existsSync(base)) return [];
     const shown = shownDir(root, base);
-    const dirs = d => readdirSync(d, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort();
+    const isDir = p => {
+        try {
+            return statSync(p).isDirectory();
+        } catch {
+            return false;
+        }
+    };
+    const dirs = (d, relDir) => readdirSync(d).sort().filter(name => {
+        if (isDir(join(d, name))) return true;
+        failures.push(`${relDir}/${name} is not a directory, where the descriptor tree holds only <channel>/<BUILD_TARGET>/ directories, so the candidate set is not what was emitted. Next step: remove it, or re-emit the tree with node scripts/build-update-xml.mjs --emit.`);
+        return false;
+    });
     const out = [];
-    for (const channel of dirs(base)) {
-        for (const target of dirs(join(base, channel))) {
+    for (const channel of dirs(base, shown)) {
+        for (const target of dirs(join(base, channel), `${shown}/${channel}`)) {
             const file = join(base, channel, target, 'update.xml');
-            if (!existsSync(file)) continue;
             const rel = `${shown}/${channel}/${target}/update.xml`;
+            if (!existsSync(file)) {
+                failures.push(`${rel} is absent although its target directory exists, so that target offers no comparable descriptor. Next step: re-emit the tree with node scripts/build-update-xml.mjs --emit, or remove the empty directory.`);
+                continue;
+            }
             let text = null;
             try {
                 text = readFileSync(file, 'utf8');
@@ -254,7 +273,7 @@ export function runChecks(root, overrides = {}) {
     if (explicitDir !== null && !existsSync(explicitDir)) {
         failures.push(`--descriptors ${candidateSource} does not exist, so no offered buildID can be compared. Next step: pass the directory build-update-xml.mjs --emit --outdir wrote.`);
     }
-    const descriptors = overrides.descriptors ?? (explicitDir === null ? listDescriptors(root) : listDescriptors(root, explicitDir));
+    const descriptors = overrides.descriptors ?? listDescriptors(root, explicitDir ?? join(root, CANDIDATE_REL), failures);
     if (explicitDir !== null && existsSync(explicitDir) && descriptors.length === 0) {
         failures.push(`--descriptors ${candidateSource} holds zero <channel>/<BUILD_TARGET>/update.xml descriptors; the thing under test is absent. Next step: run node scripts/build-update-xml.mjs --emit --outdir ${candidateSource} first.`);
     }
@@ -512,6 +531,19 @@ function selfTest() {
         writeFileSync(join(tree, 'default', TARGET_TOKEN, 'update.xml'), descriptorFixture('153.5.1', '20261021000000', slug));
         const emptyTree = join(tmp, 'empty');
         mkdirSync(emptyTree);
+        // A symlinked target directory is followed; a stray file and a target with no update.xml are red.
+        const linked = join(tmp, 'linked');
+        mkdirSync(join(linked, 'default'), { recursive: true });
+        symlinkSync(join(tree, 'default', TARGET_TOKEN), join(linked, 'default', TARGET_TOKEN));
+        const stray = join(tmp, 'stray');
+        mkdirSync(join(stray, 'default', TARGET_TOKEN), { recursive: true });
+        writeFileSync(join(stray, 'default', TARGET_TOKEN, 'update.xml'), descriptorFixture('153.5.1', '20261021000000', slug));
+        writeFileSync(join(stray, 'default', 'notes.txt'), 'stray\n');
+        const hollow = join(tmp, 'hollow');
+        mkdirSync(join(hollow, 'default', TARGET_TOKEN), { recursive: true });
+        writeFileSync(join(hollow, 'default', TARGET_TOKEN, 'update.xml'), descriptorFixture('153.5.1', '20261021000000', slug));
+        mkdirSync(join(hollow, 'default', 'Darwin_aarch64-gcc3'));
+        const fromLink = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), descriptorsDir: linked });
         const fromDisk = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), descriptorsDir: tree });
         const diskOk = fromDisk.failures.length === 0 && fromDisk.candidates.length === 1
             && fromDisk.candidates[0].rel === `${tree}/default/${TARGET_TOKEN}/update.xml`;
@@ -520,6 +552,8 @@ function selfTest() {
         const disk = [
             ['--descriptors tree with one descriptor is read and passes', diskOk && pass.code === 0 && /: PASS -- .*each of the 1 candidate/.test(pass.lines[0]),
                 `${fromDisk.failures.join(' | ')} ${pass.lines[0]}`],
+            ['a symlinked target directory is followed and read', fromLink.failures.length === 0 && fromLink.candidates.length === 1,
+                `${fromLink.candidates.length} candidate(s); ${fromLink.failures.join(' | ')}`],
             ['zero candidates under the default tree is a named SKIP, not a PASS claiming every candidate', skip.code === 0
                 && skip.lines[0].startsWith(`${NAME}: SKIP -- `) && skip.lines[0].includes('0 candidate descriptor(s)') && !/every candidate|each of/.test(skip.lines[0]),
                 skip.lines[0]],
@@ -534,6 +568,8 @@ function selfTest() {
         const diskPlants = [
             ['explicit --descriptors tree with zero descriptors', { descriptorsDir: emptyTree }, [emptyTree, 'zero']],
             ['explicit --descriptors tree that does not exist', { descriptorsDir: join(tmp, 'absent') }, [join(tmp, 'absent'), 'does not exist']],
+            ['a file where a target directory belongs', { descriptorsDir: stray }, [`${stray}/default/notes.txt`, 'not a directory']],
+            ['a target directory with no update.xml', { descriptorsDir: hollow }, [`${hollow}/default/Darwin_aarch64-gcc3/update.xml`, 'absent']],
         ];
         for (const [name, o, needles] of diskPlants) {
             const r = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), ...o });
