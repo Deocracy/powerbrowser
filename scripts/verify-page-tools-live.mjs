@@ -320,26 +320,35 @@ async function settleValue(read, pred) {
  * find: a count, FindNext (channel, then F3 from a focused page), Ctrl+F opens
  * the Theia find bar, and a reset on close. Returns a failure reason, or null.
  */
-async function scenarioFind(app, origin, kind = 'webTabFind') {
+async function scenarioFind(app, origin, kind = 'webTabFind', plant = false) {
     const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
     await channelRequest(app, { kind, tabId, query: 'needle' });
     const hit = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findStatus === 'found'), { from, timeoutMs: 15000 });
     if (hit < 0) {
         return 'no findMatches push: a find of "needle" never reported three matches with a current index in a state push';
     }
+    if (plant === 'step-noop') {
+        // The planted fault: the overlay's Finder ignores a step, so only the recount follows FindNext and F3.
+        await inChrome(app, `overlayOf(${JSON.stringify(tabId)}).finder.findAgain = () => {}; return true;`);
+    }
+    // 32-REVIEW WR-09: a step must move the current match. The arm recounts after every step, so a push with the same
+    // findCurrent is what a step that did nothing produces.
+    const all = await pushes(app);
+    const hitCurrent = all[all.findLastIndex(p => stateOf(tabId, q => q.findTotal >= 3)(p))].findCurrent;
     await channelRequest(app, { kind: 'webTabFindNext', tabId });
     // from: hit + 1. The hit push already matches this predicate, and `from` is inclusive, so `hit` could never fail.
-    const next = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findStatus !== null), { from: hit + 1, timeoutMs: 10000 });
+    const next = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findCurrent !== hitCurrent && p.findStatus !== null), { from: hit + 1, timeoutMs: 10000 });
     if (next < 0) {
-        return 'FindNext produced no state push carrying a find status';
+        return `FindNext did not move the current match off ${hitCurrent} in a state push`;
     }
+    const nextCurrent = (await pushes(app))[next].findCurrent;
     const f3 = await pressPageKey(app, tabId, 'findNext', { key: 'F3', code: 'F3', keyCode: 114 });
     if (f3 < 0) {
         return 'F3 in a focused page produced no shortcut push: the findNext row did not relay';
     }
-    const stepped = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findStatus !== null), { from: f3 + 1, timeoutMs: 10000 });
+    const stepped = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findCurrent !== nextCurrent && p.findStatus !== null), { from: f3 + 1, timeoutMs: 10000 });
     if (stepped < 0) {
-        return 'F3 relayed, but no state push carried a find status after the step';
+        return `F3 relayed, but no state push moved the current match off ${nextCurrent}`;
     }
     const ctrlF = await pressPageKey(app, tabId, 'findOpen', { key: 'f', code: 'KeyF', keyCode: 70, modifiers: ['accel'] });
     if (ctrlF < 0) {
@@ -1747,6 +1756,12 @@ const PLANTS = [
         target: 'find',
         run: (app, fx) => scenarioFind(app, fx.origin, 'webTabFindDropped'),
         expect: 'no findMatches push',
+    },
+    {
+        plant: 'find-step-noop',
+        target: 'find',
+        run: (app, fx) => scenarioFind(app, fx.origin, 'webTabFind', 'step-noop'),
+        expect: 'FindNext did not move the current match',
     },
     {
         plant: 'audio-page-silent',
