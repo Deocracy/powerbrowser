@@ -4960,11 +4960,12 @@ run_own_checks() {
     "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
     # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A
     # mkdtemp manifest (mar_origin from configuration.toml) and descriptor tree served by one loopback
-    # server through an injected transport go green first, then ten plants each go red naming the
+    # server through an injected transport go green first, then twelve plants each go red naming the
     # target and the value: a wrong hashValue, a missing target file, a 404 MAR, a size mismatch,
     # five string-level patch URLs refused before any MAR fetch (a github.com Releases download, a
     # release-assets URL, another host, a path other than /<tag>/<asset>, a non-https scheme), and a
-    # manifest mar_origin that disagrees with the tree (red naming both values; the tree decides). Honestly
+    # manifest mar_origin or update_url that disagrees with the tree (red naming both values; the tree
+    # decides), and a build_target carrying a path separator and ../ (red before any request). Honestly
     # --quick: node:crypto, text files in mkdtemp and loopback HTTP; no build, browser, display or
     # public network. It writes nothing in the repo.
     "channel-live-self-test|node $REPO_ROOT/scripts/verify-channel-live.mjs --self-test"

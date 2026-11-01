@@ -10,8 +10,10 @@
 //     update_channel, update_url (the baked [AppUpdate] URL template) and mar_origin. A missing field
 //     or a null mar_origin is a FAIL naming the field. --manifest <path> reads the build job's copy;
 //     without it the row reads the release-manifest.json asset of the latest published Release. The
-//     manifest is untrusted build output: its mar_origin and update_channel are claims that must equal
-//     configuration.toml (marOrigin, updateChannel), else a FAIL naming both values; the tree decides.
+//     manifest is untrusted build output: its mar_origin, update_channel and update_url are claims that
+//     must equal configuration.toml (marOrigin, updateChannel, [urls] update host plus the Gecko update
+//     path), else a FAIL naming both values; the tree decides. Each BUILD_TARGET token must match
+//     [A-Za-z0-9_-]+ before it becomes a path segment, and every segment is URI-encoded.
 //  2. Latest Release. GET repos/<owner>/<repo>/releases/latest (owner and repo from configuration.toml
 //     [urls] release_notes). Its tag must equal the manifest's release_key, and each descriptor's
 //     offered version must equal that tag. No published Release is a FAIL, never a SKIP.
@@ -64,6 +66,14 @@ const MANIFEST_ASSET = 'release-manifest.json';
 const UPDATES_SUFFIX = '-updates';
 const NEXT_AUTH = 'Next step: run gh auth status; the row needs read access to the repository and the updates repo.';
 const show = v => JSON.stringify(v ?? null);
+// The Gecko [AppUpdate] URL path (upstream/build/application.ini.in, URL=https://@MOZ_APPUPDATE_HOST@/...), the
+// 11-segment shape the updates host's _redirects rule (updates-staging/_redirects) rewrites. The host comes from
+// configuration.toml [urls] update, which generate.mjs emits as MOZ_APPUPDATE_HOST.
+// shortcut: a copy of the pinned upstream line, because the hosted job does not fetch upstream/; the self-test compares it with upstream/build/application.ini.in wherever that checkout exists.
+export const UPDATE_PATH = '/update/6/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%SYSTEM_CAPABILITIES%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml';
+// One BUILD_TARGET token (OS_TARGET_TARGET_XPCOM_ABI). It becomes a path segment, so nothing else is admitted.
+const TARGET_TOKEN = /^[A-Za-z0-9_-]+$/;
+const targetsOf = v => String(v).split(/[\s,]+/).filter(Boolean);
 
 // --- reads ------------------------------------------------------------------
 
@@ -101,7 +111,7 @@ const FIELDS = Object.freeze({
     release_key: v => typeof v === 'string' && RELEASE_KEY_RE.test(v),
     version: v => typeof v === 'string' && /^\d+(\.\d+)*$/.test(v),
     build_id: v => typeof v === 'string' && /^\d{14}$/.test(v),
-    build_target: v => typeof v === 'string' && v.trim() !== '',
+    build_target: v => typeof v === 'string' && targetsOf(v).length > 0 && targetsOf(v).every(t => TARGET_TOKEN.test(t)),
     update_channel: v => typeof v === 'string' && /^[A-Za-z0-9._-]+$/.test(v),
     update_url: v => typeof v === 'string' && v.startsWith('https://') && v.includes('%BUILD_TARGET%') && v.includes('%CHANNEL%'),
     mar_origin: v => typeof v === 'string' && v.startsWith('https://'),
@@ -110,7 +120,7 @@ const FIELDS = Object.freeze({
 /** The named manifest fields, each validated. Returns the problems, empty when every field holds. Pure. */
 export function manifestProblems(doc, keys = Object.keys(FIELDS)) {
     if (doc === null || typeof doc !== 'object') return [`the manifest is not a JSON object, so no channel value can be derived. Next step: pass the build job's ${MANIFEST_ASSET}`];
-    return keys.filter(k => !FIELDS[k](doc[k])).map(k => `the manifest field ${k} is ${show(doc[k])}, which is missing or malformed${k === 'mar_origin' ? ' (a null mar_origin means configuration.toml [urls] mar_origin was unset at build time)' : ''}. Next step: rebuild with powerbrowser/packaging/package-linux.sh, which writes it`);
+    return keys.filter(k => !FIELDS[k](doc[k])).map(k => `the manifest field ${k} is ${show(doc[k])}, which is missing or malformed${k === 'build_target' ? ' (each BUILD_TARGET token must match [A-Za-z0-9_-]+, because it becomes a path segment)' : ''}${k === 'mar_origin' ? ' (a null mar_origin means configuration.toml [urls] mar_origin was unset at build time)' : ''}. Next step: rebuild with powerbrowser/packaging/package-linux.sh, which writes it`);
 }
 
 /** The published MAR asset name, derived from the tree exactly as build-update-xml.mjs derives it. */
@@ -191,7 +201,7 @@ function listDescriptors(dir) {
 
 /**
  * The tree is the authority for the MAR origin and the update channel: the manifest is written by the
- * untrusted build job, so its mar_origin and update_channel are claims compared with configuration.toml
+ * untrusted build job, so its mar_origin, update_channel and update_url are claims compared with configuration.toml
  * (marOrigin, updateChannel), the way release.yml compares the manifest's release_key. Returns
  * { tree, problems }; tree carries the values every later check uses.
  */
@@ -204,17 +214,21 @@ export function treeAuthority(root, manifest) {
     }
     let origin = null;
     let channel = null;
+    let updateUrl = null;
     try {
         origin = config === undefined ? null : marOrigin(config);
         channel = config === undefined ? null : updateChannel(config).channel;
+        updateUrl = config === undefined ? null : `https://${new URL(config.urls.update).host}${UPDATE_PATH}`;
     } catch { /* reported below */ }
-    if (origin === null || channel === null) {
-        return { tree: null, problems: [`configuration.toml does not yield a MAR origin and an update channel (got ${show(origin)} and ${show(channel)}), so the manifest cannot be checked against the tree. Next step: set [urls] mar_origin and run node scripts/generate.mjs`] };
+    if (origin === null || channel === null || updateUrl === null) {
+        return { tree: null, problems: [`configuration.toml does not yield a MAR origin, an update channel and an update host (got ${show(origin)}, ${show(channel)} and ${show(updateUrl)}), so the manifest cannot be checked against the tree. Next step: set [urls] mar_origin and [urls] update, then run node scripts/generate.mjs`] };
     }
     const problems = [];
     if (manifest.mar_origin !== origin) problems.push(`the manifest mar_origin ${show(manifest.mar_origin)} differs from configuration.toml [urls] mar_origin ${show(origin)}; the build output is data and the tree decides. Next step: rebuild from the dispatched commit`);
     if (manifest.update_channel !== channel) problems.push(`the manifest update_channel ${show(manifest.update_channel)} differs from the tree's update channel ${show(channel)}; the build output is data and the tree decides. Next step: rebuild from the dispatched commit`);
-    return { tree: { ...manifest, mar_origin: origin, update_channel: channel }, problems };
+    // update_url is checked only when the caller reads it (the live row); --form-only never fetches.
+    if (manifest.update_url !== undefined && manifest.update_url !== updateUrl) problems.push(`the manifest update_url ${show(manifest.update_url)} differs from ${show(updateUrl)}, derived from configuration.toml [urls] update and the Gecko update path; the build output is data and the tree decides. Next step: rebuild from the dispatched commit`);
+    return { tree: { ...manifest, mar_origin: origin, update_channel: channel, update_url: updateUrl }, problems };
 }
 
 /** --form-only: the pre-commit gate over a local descriptor tree. No network. */
@@ -238,8 +252,8 @@ export function formOnly(root, manifestDoc, dir) {
 /** The baked [AppUpdate] URL template with one target's values; the other segments are probe values. */
 function bakedUrl(manifest, target) {
     const values = {
-        PRODUCT: 'channel-live', VERSION: manifest.version, BUILD_ID: manifest.build_id, BUILD_TARGET: target,
-        LOCALE: 'en-US', CHANNEL: manifest.update_channel, OS_VERSION: encodeURIComponent('Linux 6.0'),
+        PRODUCT: 'channel-live', VERSION: manifest.version, BUILD_ID: manifest.build_id, BUILD_TARGET: encodeURIComponent(target),
+        LOCALE: 'en-US', CHANNEL: encodeURIComponent(manifest.update_channel), OS_VERSION: encodeURIComponent('Linux 6.0'),
         SYSTEM_CAPABILITIES: encodeURIComponent('ISET:SSE4_2,MEM:16000'), DISTRIBUTION: 'default', DISTRIBUTION_VERSION: 'default',
     };
     return manifest.update_url.replace(/%([A-Z_]+)%/g, (m, k) => values[k] ?? m);
@@ -314,7 +328,7 @@ export async function runChecks(root, overrides = {}) {
         return { failures, targets: 0 };
     }
 
-    const targets = manifest.build_target.split(/[\s,]+/).filter(Boolean);
+    const targets = targetsOf(manifest.build_target);
     for (const target of targets) {
         const rel = `${manifest.update_channel}/${target}/update.xml`;
         const publicUrl = bakedUrl(manifest, target);
@@ -324,7 +338,7 @@ export async function runChecks(root, overrides = {}) {
             continue;
         }
         const text = pub.bytes.toString('utf8');
-        const copyPath = `repos/${slug.owner}/${slug.repo}${UPDATES_SUFFIX}/contents/${rel}?ref=main`;
+        const copyPath = `repos/${slug.owner}/${slug.repo}${UPDATES_SUFFIX}/contents/${[manifest.update_channel, target, 'update.xml'].map(encodeURIComponent).join('/')}?ref=main`;
         const copy = get(copyPath);
         if (!copy?.ok || typeof copy.body?.content !== 'string') {
             fail(`${target}: ${copy?.why ?? `GET ${copyPath} carries no content`}`);
@@ -372,11 +386,21 @@ async function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- the fixture cannot be derived (${why ?? 'configuration.toml [urls] mar_origin is unset'})`);
         return 1;
     }
+    // UPDATE_PATH is a copy; where the pinned upstream checkout exists, it must equal the source line.
+    let ini = null;
+    try {
+        ini = readFileSync(join(REPO_ROOT, 'upstream/build/application.ini.in'), 'utf8');
+    } catch { /* no checkout: the copy stands */ }
+    const upstreamPath = ini === null ? UPDATE_PATH : /^URL=https:\/\/@MOZ_APPUPDATE_HOST@(\S+)$/m.exec(ini)?.[1];
+    if (upstreamPath !== UPDATE_PATH) {
+        console.error(`${NAME}: --self-test FAIL -- UPDATE_PATH ${show(UPDATE_PATH)} differs from upstream/build/application.ini.in ${show(upstreamPath)}. Next step: re-copy the path from the pinned upstream file`);
+        return 1;
+    }
     const target = 'SelfTest_fixture-abi';
     const manifest = {
         release_key: tag, version: tag.slice(1, tag.lastIndexOf('-')), build_id: '20261031120000', build_target: target,
         update_channel: updateChannel(config).channel, mar_origin: origin,
-        update_url: `https://${new URL(config.urls.update).host}/update/6/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%SYSTEM_CAPABILITIES%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml`,
+        update_url: `https://${new URL(config.urls.update).host}${UPDATE_PATH}`,
     };
     const mar = Buffer.from('channel-live self-test MAR bytes\n');
     const goodUrl = `${origin}/${tag}/${asset}`;
@@ -385,8 +409,9 @@ async function selfTest() {
     const dir = mkdtempSync(join(tmpdir(), 'channel-live-'));
     const xmlFile = join(dir, 'tree', manifest.update_channel, target, 'update.xml');
     const marFile = join(dir, 'origin', tag, asset);
-    const hits = { mar: 0 };
+    const hits = { mar: 0, all: 0 };
     const server = createServer((req, res) => {
+        hits.all += 1;
         const path = decodeURIComponent(req.url.split('?')[0]);
         const seg = path.split('/').filter(Boolean);
         // The _redirects rule: /update/6/<10 placeholders>/update.xml -> /<channel>/<target>/update.xml.
@@ -432,6 +457,7 @@ async function selfTest() {
             writeFileSync(marFile, mar);
         }
         hits.mar = 0;
+        hits.all = 0;
     };
     const run = () => runChecks(REPO_ROOT, { manifest, get, transport });
     let failed = 0;
@@ -494,8 +520,23 @@ async function selfTest() {
             console.error(`${NAME}: --self-test FAIL -- a manifest mar_origin ${drifted} did not go red naming it and the tree's ${origin}; got: ${[...driftLive, ...driftForm].join(' | ') || '(no failures)'}`);
             failed += 1;
         }
+        // Two more build-output claims, each refused before any request: an update_url off the tree, and a
+        // BUILD_TARGET carrying a path separator and a parent segment.
+        const claims = [
+            ['manifest update_url disagreeing with the tree', { update_url: `https://mirror.example.invalid${UPDATE_PATH}` }, [`https://mirror.example.invalid${UPDATE_PATH}`, manifest.update_url]],
+            ['manifest build_target carrying ../ and a path separator', { build_target: '../../contents/evil' }, ['../../contents/evil']],
+        ];
+        for (const [name, patch, values] of claims) {
+            reset();
+            const { failures } = await runChecks(REPO_ROOT, { manifest: { ...manifest, ...patch }, get, transport });
+            if (failures.some(f => values.every(v => f.includes(v))) && hits.all === 0) console.log(`  ok  ${name} -> red naming ${values.join(' and ')}, before any request`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${values.join(' and ')} before any request (requests ${hits.all}); got: ${failures.join(' | ') || '(no failures)'}`);
+                failed += 1;
+            }
+        }
         if (failed > 0) return 1;
-        console.log(`${NAME}: --self-test PASS -- the clean fixture is green and ${network.length + strings.length + 1} planted faults each went red naming the target and the value`);
+        console.log(`${NAME}: --self-test PASS -- the clean fixture is green and ${network.length + strings.length + 1 + claims.length} planted faults each went red naming the target and the value`);
         return 0;
     } finally {
         server.close();
