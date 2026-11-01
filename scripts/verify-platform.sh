@@ -4960,12 +4960,17 @@ run_own_checks() {
     "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
     # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A
     # mkdtemp manifest (mar_origin from configuration.toml) and descriptor tree served by one loopback
-    # server through an injected transport go green first, then twelve plants each go red naming the
-    # target and the value: a wrong hashValue, a missing target file, a 404 MAR, a size mismatch,
-    # five string-level patch URLs refused before any MAR fetch (a github.com Releases download, a
-    # release-assets URL, another host, a path other than /<tag>/<asset>, a non-https scheme), and a
-    # manifest mar_origin or update_url that disagrees with the tree (red naming both values; the tree
-    # decides), and a build_target carrying a path separator and ../ (red before any request). Honestly
+    # server through an injected transport go green first, then twenty-four plants each go red naming
+    # the target and the value: a wrong hashValue, a missing target file, a 404 MAR, a size mismatch, a
+    # public descriptor not byte-equal to the repo copy, an appVersion, buildID or offered version off
+    # the manifest or the latest Release, a latest tag off release_key, no published Release (404),
+    # a decoy data-URL beside or ahead of an evil URL and a second patch element (the gate judges the
+    # URL parseUpdateXml returns), six string-level patch URLs refused before any MAR fetch (a
+    # github.com Releases download, a release-assets or objects.githubusercontent.com signed URL,
+    # another host, a path other than /<tag>/<asset>, a non-https scheme), a manifest mar_origin or
+    # update_url that disagrees with the tree (red naming both values; the tree decides), a
+    # build_target carrying a path separator and ../ (red before any request), and a latest Release
+    # without the manifest asset (red naming BLOCKED.md's open owner decision). Honestly
     # --quick: node:crypto, text files in mkdtemp and loopback HTTP; no build, browser, display or
     # public network. It writes nothing in the repo.
     "channel-live-self-test|node $REPO_ROOT/scripts/verify-channel-live.mjs --self-test"
@@ -5293,11 +5298,13 @@ run_own_checks() {
     "update-state-contract-self-test|node $REPO_ROOT/scripts/verify-update-state-contract.mjs --self-test"
     # NEW (Phase 46, WR-07 owner ruling 2026-10-25, amended 2026-10-29): no tracked
     # descriptor template, generator output or fixture names a github.com
-    # /releases/download/ URL or a release-assets URL as an update download (github.com
+    # /releases/download/ URL or a GitHub signed asset URL as an update download (github.com
     # is user-initiated; the signed asset URL expires; the R2 primary origin is the MAR
-    # host). Verifier scripts are exempt by pattern. Derived from git ls-files; the
-    # self-test plants four forms (three github, one release-assets) and proves three
-    # controls (a release-notes link, a MAR-origin patch URL, a verifier script).
+    # host). Only the selfTest function of a verifier script is exempt. Derived from git
+    # ls-files; the self-test plants seven forms (three github data files, a release-assets
+    # and an objects.githubusercontent.com template, a non-verifier script, a verifier
+    # outside its selfTest) and proves three controls (a release-notes link, a MAR-origin
+    # patch URL, a verifier script carrying the form inside its selfTest).
     "update-download-host|node $REPO_ROOT/scripts/verify-update-download-host.mjs"
     "update-download-host-self-test|node $REPO_ROOT/scripts/verify-update-download-host.mjs --self-test"
   )
