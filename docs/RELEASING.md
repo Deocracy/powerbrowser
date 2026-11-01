@@ -2171,3 +2171,29 @@ exist yet, and each blocks something named.
    nowhere else.
 9. **The daily update-channel liveness schedule is an owner decision that has not
    been taken.** D-77 is kept and the row runs as `release.yml`'s final job.
+
+## Phase 56 checkpoint
+
+The live half of Phase 56 (package channels). Plans 56-01 to 56-04 built every channel payload in the tree;
+every step below is an owner step in the owner's shell, browser or account, and none of them has run. Each
+field holds the owner's pasted evidence (URLs, SHAs, dates, holder names, verbatim replies) once it exists.
+A field never holds a secret value: a token, a PAT or a private key is never written here. A leg the owner
+has not pasted evidence for stays `AWAITING-OWNER` or becomes `DEFERRED-A<n>` naming the assumption that
+resumes it (A2 Phase 54 Windows asset, A3 Phase 55 notarization, A4 Phase 47 site and DNS, A5 Phase 41 tap
+repository and Apps). It is never recorded as passed. The step text and commands are in
+`docs/cache-flathub-checkpoint.md` and `docs/winget-tap-checkpoint.md`; the order is the order of this list.
+
+The repositories named below sit under the GitHub organisation that `configuration.toml` names.
+
+1. **Cachix licence reply** (`CACHIX_REPLY`): AWAITING-OWNER
+2. **R2 fallback state** (`R2_STATE`; enable only if Cachix refuses or needs a payment method): AWAITING-OWNER
+3. **Flathub exception reply** (`FLATHUB_EXCEPTION`; ADMIT or DENY, verbatim, with the date): AWAITING-OWNER
+4. **Flathub submission pull request** (`FLATHUB_PR`; opened by the owner after an ADMIT and the real release digest): AWAITING-OWNER
+5. **winget credential holder** (`WINGET_HOLDER`; the dedicated bot account, name only): AWAITING-OWNER
+6. **winget token stored** (`WINGET_TOKEN_STORED`; yes or no and the date, in the `winget` environment, never the value): AWAITING-OWNER
+7. **winget pull request** (`WINGET_PR`; needs the Phase 54 Windows asset, otherwise DEFERRED-A2): AWAITING-OWNER
+8. **Tap repository and tap commit** (`TAP_REPO`; expected `homebrew-powerbrowser` under that organisation, then the bot App's commit SHA; the cask stays DEFERRED-A3 until Phase 55): AWAITING-OWNER
+9. **DNS TXT value** (`TXT_SET`; record `_flathub.debios.org`, the digest only, shown by the Flathub Developer Portal after the submission is accepted): AWAITING-OWNER
+10. **Clean-machine substitute log** (`SUBSTITUTE_LOG`; the `nix build .#powerbrowser` lines proving no rebuild, pasted verbatim): AWAITING-OWNER
+11. **/download rows** (`DOWNLOAD_URLS`; the live URLs of the Nix and Flatpak rows on the Phase 47 site, otherwise DEFERRED-A4): AWAITING-OWNER
+12. **Deferrals** (`DEFERRED`; each deferred leg with its resuming assumption, A2, A3, A4 or A5): AWAITING-OWNER
