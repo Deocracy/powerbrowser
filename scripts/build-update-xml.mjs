@@ -15,8 +15,10 @@
 //     refused, naming the table. An OS inside the table with another ABI is refused
 //     as a disagreement. PENDING names the OS values whose rows wait for stages 6
 //     and 7 (docs/RELEASING.md) and are refused until observed.
-//  2. Build identity. objdir/dist/bin/application.ini gives Version and BuildID.
-//     BuildID is refused when absent or not fourteen digits.
+//  2. Build identity. objdir/dist/bin/application.ini gives Version, BuildID and the [Gecko]
+//     MaxVersion, which is the descriptor's platformVersion (never assumed equal to Version: a
+//     point release can sit on an older platform). BuildID is refused when absent or not
+//     fourteen digits. Version must equal the ESR version of the release.txt tag.
 //  3. Channel. The channel flag defaults to UPDATE_CHANNEL (scripts/generate.mjs). It must
 //     equal MOZ_UPDATE_CHANNEL in objdir/config.status. The MAR channel id is refused
 //     by name when given as the channel: it is an identifier, not an update channel.
@@ -45,8 +47,6 @@
 //
 // shortcut: one built tree and one MAR per run, so the target loop has one
 // iteration. Upgrade to a per-target MAR map when Darwin or Windows is observed.
-// shortcut: platformVersion equals Version (the Gecko ESR convention). Upgrade when
-// the build reports a platform version that differs.
 //
 // Usage:
 //   node scripts/build-update-xml.mjs --emit --outdir <dir> [--channel <name>]
@@ -129,9 +129,10 @@ export function substsOf(text) {
     return out;
 }
 
-/** Version and BuildID from application.ini, each null when absent. Pure. */
+/** Version, BuildID and the [Gecko] MaxVersion from application.ini, each null when absent. Pure. */
 export function appIniOf(text) {
     return {
+        maxVersion: /^MaxVersion=(\S+)\s*$/m.exec(text)?.[1] ?? null,
         version: /^Version=(\S+)\s*$/m.exec(text)?.[1] ?? null,
         buildID: /^BuildID=(\S+)\s*$/m.exec(text)?.[1] ?? null,
     };
@@ -209,9 +210,12 @@ function runChecks(root, overrides = {}) {
         fail(`${shown(paths.appIni)} is absent, so the build identity cannot be read. Next step: build the tree (./mach build) before running this check`);
         return none();
     }
-    const { version, buildID } = appIniOf(iniText);
+    const { version, buildID, maxVersion } = appIniOf(iniText);
     if (version === null || !DOTTED.test(version)) {
         fail(`${shown(paths.appIni)} carries no dotted Version (got ${JSON.stringify(version)}). Next step: rebuild the tree`);
+    }
+    if (maxVersion === null || !DOTTED.test(maxVersion)) {
+        fail(`${shown(paths.appIni)} carries no dotted [Gecko] MaxVersion, the platformVersion (got ${JSON.stringify(maxVersion)}). Next step: rebuild the tree`);
     }
     if (buildID === null || !BUILD_ID.test(buildID)) {
         fail(`${shown(paths.appIni)} carries no BuildID of fourteen digits (got ${JSON.stringify(buildID)}). Next step: rebuild the tree; a descriptor without a BuildID is refused`);
@@ -280,13 +284,14 @@ function runChecks(root, overrides = {}) {
         marBytes,
         marUrl,
         appVersion: version,
-        platformVersion: version,
+        platformVersion: maxVersion,
         buildID,
         displayVersion: tag.slice(1),
         detailsURL: details,
     };
     const expect = {
         appVersion: version,
+        platformVersion: maxVersion,
         buildID,
         detailsURL: details,
         url: marUrl,
@@ -362,8 +367,8 @@ function statusFixture({ os = 'Linux', abi = 'x86_64-gcc3', channel = UPDATE_CHA
     ].join('\n');
 }
 
-function iniFixture({ buildID = FIXTURE_BUILD_ID } = {}) {
-    return ['[App]', `Version=${FIXTURE_VERSION}`, ...(buildID === null ? [] : [`BuildID=${buildID}`]), '[Gecko]', ''].join('\n');
+function iniFixture({ buildID = FIXTURE_BUILD_ID, maxVersion = FIXTURE_VERSION } = {}) {
+    return ['[App]', `Version=${FIXTURE_VERSION}`, ...(buildID === null ? [] : [`BuildID=${buildID}`]), '[Gecko]', 'MinVersion=153.0', ...(maxVersion === null ? [] : [`MaxVersion=${maxVersion}`]), ''].join('\n');
 }
 
 function makeFixture() {
@@ -446,10 +451,20 @@ function selfTest() {
         }
         console.log('  ok  byte-identity control: two runs over identical inputs write identical bytes');
 
+        // platformVersion follows MaxVersion, not Version (a point release on an older platform).
+        const older = runChecks(root, { texts: { ...green, [APP_INI_REL]: iniFixture({ maxVersion: '153.5.0' }) } });
+        const olderParsed = older.outputs[0] && parseUpdateXml(buildUpdateXml(older.outputs[0].args));
+        if (older.failures.length > 0 || olderParsed?.platformVersion !== '153.5.0' || olderParsed.appVersion !== FIXTURE_VERSION) {
+            console.error(`${NAME}: --self-test FAIL -- MaxVersion 153.5.0 under Version ${FIXTURE_VERSION} did not give platformVersion 153.5.0; got ${JSON.stringify(olderParsed)} ${older.failures.join(' | ')}`);
+            return 1;
+        }
+        console.log('  ok  platformVersion follows application.ini MaxVersion, not Version');
+
         let failed = 0;
         const plants = [
             ['unknown target token (OS_TARGET Plan9)', { texts: { [CONFIG_STATUS_REL]: statusFixture({ os: 'Plan9', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'Plan9'],
             ['application.ini with no BuildID', { texts: { ...green, [APP_INI_REL]: iniFixture({ buildID: null }) } }, APP_INI_REL, 'BuildID'],
+            ['application.ini with no MaxVersion', { texts: { ...green, [APP_INI_REL]: iniFixture({ maxVersion: null }) } }, APP_INI_REL, 'MaxVersion'],
             ['TARGET_XPCOM_ABI disagreeing with the table', { texts: { [CONFIG_STATUS_REL]: statusFixture({ abi: 'i686-gcc3', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'i686-gcc3'],
             ['channel flag given the MAR channel id', { texts: green, channel: marId }, CONFIG_STATUS_REL, marId],
             ['docs/RELEASING.md without the asset table (no target token)', { texts: { ...green, [DOCS_REL]: '' } }, DOCS_REL, 'Release asset names'],
