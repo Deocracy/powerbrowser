@@ -49,8 +49,8 @@ interface FrontendRow {
 
 /**
  * Rows the frontend performs with the widget's existing methods, keyed by upstream id. Their keys equal the
- * `runs: "frontend"` rows of chrome's PAGE_MENU_ROWS (furniture rule 6). The edit rows run Phase 32's `edit(cmd)`
- * with chrome's enabled state from the page's own command state; Paste runs only from this pick (Pitfall 13).
+ * `runs: "frontend"` rows of chrome's PAGE_MENU_ROWS (furniture rule 6). The edit rows and Copy Image are chrome
+ * rows (CR-02): chrome runs them on the right-clicked frame, which may be a cross-origin iframe this frontend cannot name.
  */
 const FRONTEND_ROWS: Readonly<Record<string, FrontendRow>> = Object.freeze({
     'context-back': { run: widget => widget.back(), enabled: widget => widget.canGoBack },
@@ -58,15 +58,7 @@ const FRONTEND_ROWS: Readonly<Record<string, FrontendRow>> = Object.freeze({
     'context-reload': { run: widget => widget.reload() },
     'context-stop': { run: widget => widget.stop() },
     'context-bookmarkpage': { run: (widget, menu) => menu.bookmarkThisPage(widget), keepsFocus: true },
-    'context-copyimage-contents': { run: widget => widget.edit('cmd_copyImage') },
     'context-savepage': { run: widget => widget.savePage(chooseSaveDestination) },
-    'context-undo': { run: widget => widget.edit('cmd_undo') },
-    'context-redo': { run: widget => widget.edit('cmd_redo') },
-    'context-cut': { run: widget => widget.edit('cmd_cut') },
-    'context-copy': { run: widget => widget.edit('cmd_copy') },
-    'context-paste': { run: widget => widget.edit('cmd_paste') },
-    'context-delete': { run: widget => widget.edit('cmd_delete') },
-    'context-selectall': { run: widget => widget.edit('cmd_selectAll') },
     'context-viewsource': { run: widget => widget.viewSource() },
 });
 

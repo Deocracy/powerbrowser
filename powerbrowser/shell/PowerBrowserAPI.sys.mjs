@@ -6678,12 +6678,26 @@ const WEB_TAB_EDIT_CMDS = Object.freeze(["cmd_undo", "cmd_redo", "cmd_cut", "cmd
 // The chrome route is the Controllers actor (ControllersParent.sys.mjs). A remote overlay has no parent-side
 // docShell, so `docShell.doCommand` is not reachable. The child (ControllersChild) runs its own docShell
 // isCommandEnabled guard before the command, so an unavailable command is a no-op, not an edit.
+// CR-02 (35-REVIEW): the browsing context an edit command belongs to, chosen as nsWindowRoot::
+// GetControllerForCommand chooses it (nsWindowRoot.cpp:270-281): the given frame (the page menu's
+// right-clicked one), else the focused frame, while it is inside this overlay; else the overlay's top.
+// A cross-origin iframe runs in its own process, so its own Controllers actor is the only route to it.
+function webTabEditContext(browser, frame) {
+  const top = browser.browsingContext;
+  for (const context of [frame, Services.focus.focusedContentBrowsingContext]) {
+    if (context && !context.isDiscarded && context.top === top) {
+      return context;
+    }
+  }
+  return top;
+}
+
 async function webTabEditReply(kind, tabId, cmd, checkOnly) {
   const entry = webTabs.get(tabId);
   if (!entry) {
     return { ok: true, kind, where: "unknown-tab" };
   }
-  const controller = entry.browser.browsingContext?.currentWindowGlobal?.getActor("Controllers");
+  const controller = webTabEditContext(entry.browser)?.currentWindowGlobal?.getActor("Controllers");
   if (!controller) {
     return { ok: false, reason: "unavailable", message: "handleWebTabAction: the page's command route is not available" };
   }
@@ -7922,19 +7936,19 @@ const PAGE_MENU_ROWS = Object.freeze([
   { id: "context-saveimage", l10n: "main-context-menu-image-save-as", when: "saveImage", runs: "chrome", group: "image" },
   { id: "context-savevideo", l10n: "main-context-menu-video-save-as", when: "saveVideo", runs: "chrome", group: "image" },
   { id: "context-saveaudio", l10n: "main-context-menu-audio-save-as", when: "saveAudio", runs: "chrome", group: "image" },
-  { id: "context-copyimage-contents", l10n: "main-context-menu-image-copy", when: "copyImageContents", runs: "frontend", group: "image" },
+  { id: "context-copyimage-contents", l10n: "main-context-menu-image-copy", when: "copyImageContents", runs: "chrome", group: "image" },
   { id: "context-copyimage", l10n: "main-context-menu-image-copy-link", when: "copyImage", runs: "chrome", group: "image" },
   { id: "context-copyvideourl", l10n: "main-context-menu-video-copy-link", when: "onVideo", off: "noMediaURL", runs: "chrome", group: "image" },
   { id: "context-copyaudiourl", l10n: "main-context-menu-audio-copy-link", when: "onAudio", off: "noMediaURL", runs: "chrome", group: "image" },
   { id: "context-viewimagedesc", l10n: "main-context-menu-image-desc", when: "viewImageDesc", runs: "chrome", group: "image" },
   { id: "context-savepage", l10n: "main-context-menu-page-save", when: "savePage", runs: "frontend", group: "page" },
-  { id: "context-undo", l10n: "text-action-undo", when: "onTextInput", off: "cmdUndoOff", runs: "frontend", group: "undo" },
-  { id: "context-redo", l10n: "text-action-redo", when: "onTextInput", off: "cmdRedoOff", runs: "frontend", group: "undo" },
-  { id: "context-cut", l10n: "text-action-cut", when: "onTextInput", off: "cmdCutOff", runs: "frontend", group: "edit" },
-  { id: "context-copy", l10n: "text-action-copy", when: "copy", off: "cmdCopyOff", runs: "frontend", group: "edit" },
-  { id: "context-paste", l10n: "text-action-paste", when: "onTextInput", off: "cmdPasteOff", runs: "frontend", group: "edit" },
-  { id: "context-delete", l10n: "text-action-delete", when: "onTextInput", off: "cmdDeleteOff", runs: "frontend", group: "edit" },
-  { id: "context-selectall", l10n: "text-action-select-all", when: "selectAll", off: "cmdSelectAllOff", runs: "frontend", group: "edit" },
+  { id: "context-undo", l10n: "text-action-undo", when: "onTextInput", off: "cmdUndoOff", runs: "chrome", group: "undo" },
+  { id: "context-redo", l10n: "text-action-redo", when: "onTextInput", off: "cmdRedoOff", runs: "chrome", group: "undo" },
+  { id: "context-cut", l10n: "text-action-cut", when: "onTextInput", off: "cmdCutOff", runs: "chrome", group: "edit" },
+  { id: "context-copy", l10n: "text-action-copy", when: "copy", off: "cmdCopyOff", runs: "chrome", group: "edit" },
+  { id: "context-paste", l10n: "text-action-paste", when: "onTextInput", off: "cmdPasteOff", runs: "chrome", group: "edit" },
+  { id: "context-delete", l10n: "text-action-delete", when: "onTextInput", off: "cmdDeleteOff", runs: "chrome", group: "edit" },
+  { id: "context-selectall", l10n: "text-action-select-all", when: "selectAll", off: "cmdSelectAllOff", runs: "chrome", group: "edit" },
   { id: "context-searchselect", bundle: "contextMenuSearch", when: "search", runs: "chrome", group: "search" },
   { id: "frame", l10n: "main-context-menu-frame", when: "inFrame", group: "frame", children: [
     { id: "context-showonlythisframe", l10n: "main-context-menu-frame-show-this", when: "frameTarget", runs: "chrome", group: "frame-open" },
@@ -8388,6 +8402,15 @@ async function runPageMenuRow(id, pending, state, itemId) {
       return pageMenuSpell(state, data, spell => spell.undoAddToDictionary());
     case "spell-check-enabled":
       return pageMenuSpell(state, data, spell => spell.toggleEnabled());
+    case "context-undo":
+    case "context-redo":
+    case "context-cut":
+    case "context-copy":
+    case "context-paste": // Paste runs only from this validated pick (Pitfall 13)
+    case "context-delete":
+    case "context-selectall":
+    case "context-copyimage-contents": // CR-02: on the right-clicked frame, whose document viewer holds Copy Image's node
+      return pageMenuEdit(data, PAGE_MENU_EDIT_CMDS[id]);
     case "context-inspect-a11y":
     case "context-inspect": // inspectA11Y / inspectNode (:1424-1436), on the toolbox the 32-07 devtools route opened (D-13)
       return pageMenuInspect(id, pending);
@@ -8505,11 +8528,12 @@ const PAGE_MENU_DYNAMIC = Object.freeze({
 
 const pageMenuRowOf = itemId => pageMenuFlatRows().find(row => row.id === itemId || (row.dynamic && itemId.startsWith(`${row.dynamic}-`)));
 
-// The edit rows read the page's own command state from the overlay's top window
-// global (ControllersParent.sys.mjs:34-43); the spelling rows read the spellInfo
-// ContextMenuChild sent (:736-743) and this window's undo stack (initSpellingItems).
+// The edit rows read the page's own command state from the right-clicked frame's
+// window global (ControllersParent.sys.mjs:34-43; CR-02), as pageMenuEdit runs them;
+// the spelling rows read the spellInfo ContextMenuChild sent (:736-743) and this
+// window's undo stack (initSpellingItems).
 function pageEditFacts(data) {
-  const controller = data.browser.browsingContext?.currentWindowGlobal?.getActor("Controllers");
+  const controller = webTabEditContext(data.browser, data.frameBrowsingContext)?.currentWindowGlobal?.getActor("Controllers");
   const spellInfo = data.spellInfo;
   const canSpell = !!(spellInfo?.canSpellCheck && !spellInfo.initialSpellCheckPending && data.context.canSpellCheck);
   return {
@@ -8523,6 +8547,28 @@ function pageEditFacts(data) {
     spellEnabled: !!spellInfo?.enableRealTimeSpell,
     spellUndo: !!pageMenus.get(data.browser.ownerGlobal)?.spell?.canUndo(),
   };
+}
+
+// CR-02 (35-REVIEW): the edit rows' commands, each one of the frozen WEB_TAB_EDIT_CMDS
+// (verify-page-tools-edit rule 4), run on the frame pageEditFacts read them from.
+const PAGE_MENU_EDIT_CMDS = Object.freeze({
+  "context-undo": "cmd_undo",
+  "context-redo": "cmd_redo",
+  "context-cut": "cmd_cut",
+  "context-copy": "cmd_copy",
+  "context-paste": "cmd_paste",
+  "context-delete": "cmd_delete",
+  "context-selectall": "cmd_selectAll",
+  "context-copyimage-contents": "cmd_copyImage",
+});
+
+function pageMenuEdit(data, cmd) {
+  const controller = webTabEditContext(data.browser, data.frameBrowsingContext)?.currentWindowGlobal?.getActor("Controllers");
+  if (!controller) {
+    return { where: "refused" };
+  }
+  controller.doCommand(cmd);
+  return { where: "done" };
 }
 
 // The window's one spell checker (browser.js's InlineSpellCheckerUI), bound to
@@ -9461,7 +9507,7 @@ function registerEditStateActor() {
     parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
     child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE },
     messageManagerGroups: ["browsers"],
-    allFrames: false,
+    allFrames: true, // CR-02 (35-REVIEW): a focused subframe answers for itself, as its Controllers actor does
   });
 }
 
@@ -9471,7 +9517,7 @@ function registerEditStateActor() {
 const EDIT_STATE_BUDGET_MS = 250;
 async function webTabEditEnabled(entry, cmd, cached) {
   try {
-    const actor = entry.browser.browsingContext.currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
+    const actor = webTabEditContext(entry.browser).currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
     const query = actor.sendQuery(EDIT_STATE_QUERY, { cmd }).then(answer => answer === true);
     return await Promise.race([query, PowerBrowserAPI.sleep(EDIT_STATE_BUDGET_MS).then(() => cached)]);
   } catch {

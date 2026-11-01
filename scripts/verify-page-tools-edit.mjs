@@ -13,8 +13,9 @@
  *      bare-command path that could send the kind without a widget handler.
  *   4. the Edit items: every edit('cmd_…') call in the Theia sources names a
  *      frozen command, and at least one item exists (the positive control for 3).
- *      The page menu's edit rows (35-04, page-context-menu.ts FRONTEND_ROWS) are
- *      Edit items too: they reach the page only through WebTabWidget.edit.
+ *      The page menu's edit rows are Edit items too; since 35-REVIEW CR-02 chrome
+ *      runs them on the right-clicked frame, so every PAGE_MENU_EDIT_CMDS value in
+ *      PowerBrowserAPI.sys.mjs must also name a frozen command.
  *   5. (33-05, PAGE-09) the Edit menu: the hamburger's Edit submenu (the widget's
  *      appSubmenu `case 'edit'`) has one commandLeaf per Edit command, compared as
  *      set equality with the commands chrome-bar-commands.ts registers whose
@@ -195,6 +196,15 @@ function checkEdit(sources) {
     if (items.length === 0) {
         failures.push('no Edit item calls WebTabWidget.edit with a command literal (positive control for the send-site rule is missing)');
     }
+    const pageMenuEdits = /const PAGE_MENU_EDIT_CMDS = Object\.freeze\(\{([^}]*)\}\)/.exec(api)?.[1];
+    const pageMenuCmds = [...(pageMenuEdits ?? '').matchAll(/"context-[a-z-]+": "(cmd_[A-Za-z]+)"/g)].map(m => m[1]);
+    if (!pageMenuCmds.length) {
+        failures.push(`${API}: PAGE_MENU_EDIT_CMDS (the page menu's edit rows, CR-02) derived no command -- broken instrument, never a pass`);
+    } else if (frozen) {
+        for (const cmd of pageMenuCmds.filter(c => !frozen.includes(c))) {
+            failures.push(`${API}: page menu edit row names '${cmd}', which is outside the frozen set WEB_TAB_EDIT_CMDS`);
+        }
+    }
 
     // 5. the Edit menu (PAGE-09): one row per Edit command, both ways.
     const commands = stripComments(sources.theia[COMMANDS] ?? '');
@@ -273,7 +283,6 @@ function selfTest() {
         return 1;
     }
     const menuPath = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
-    const pageMenuPath = 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts';
     const cases = [
         {
             name: 'surplus literal (a non-probed command added to the frozen set)',
@@ -292,8 +301,8 @@ function selfTest() {
         },
         {
             name: 'page menu row naming an unfrozen command (35-04)',
-            build: () => ({ ...clean, theia: { ...clean.theia, [pageMenuPath]: plant(clean.theia[pageMenuPath], "edit('cmd_copyImage')", "edit('cmd_zzzPlanted')") } }),
-            expect: `${pageMenuPath}: Edit item names 'cmd_zzzPlanted', which is outside the frozen set`,
+            build: () => ({ ...clean, api: plant(clean.api, '"context-copyimage-contents": "cmd_copyImage"', '"context-copyimage-contents": "cmd_zzzPlanted"') }),
+            expect: `${API}: page menu edit row names 'cmd_zzzPlanted', which is outside the frozen set`,
         },
         {
             name: 'Edit row dropped (Select All has a command but no row)',
