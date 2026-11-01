@@ -244,7 +244,13 @@ export class TabStripWidget extends ReactWidget {
         // has to be told.
         this.toDispose.pushAll([
             this.shell.onDidAddWidget(() => this.update()),
-            this.shell.onDidRemoveWidget(() => this.update()),
+            // WR-05: a removed tab never fires pointerleave, so its open card (and the hidden page) is closed here.
+            this.shell.onDidRemoveWidget(() => {
+                if (this.preview && (this.preview.widget.isDisposed || !this.shownTabs().includes(this.preview.widget))) {
+                    this.closePreview();
+                }
+                this.update();
+            }),
             this.shell.onDidChangeCurrentWidget(() => this.update()),
             this.groups.onDidChange(() => this.update()),
             // Phase 32 plan 08 (PAGE-04, PAGE-11): a pushed favicon or crash flag repaints the row's icon and mark.
@@ -1188,9 +1194,10 @@ export class TabStripWidget extends ReactWidget {
     }
 
     /** TAB-07: hover starts the dwell. Never for a tab on screen: the active tab's page is already visible. */
-    protected schedulePreview(widget: Widget, node: HTMLElement): void {
+    protected schedulePreview(widget: Widget, node: HTMLElement, pressed: boolean): void {
         this.closePreview();
-        if (widget.isVisible) {
+        // WR-05: no dwell while a button is down or a reorder is in flight (the drag has no pointer capture).
+        if (widget.isVisible || pressed || this.reorder) {
             return;
         }
         this.previewTimer = window.setTimeout(() => this.openPreview(widget, node), PREVIEW_DWELL_MS);
@@ -1203,7 +1210,7 @@ export class TabStripWidget extends ReactWidget {
      */
     protected openPreview(widget: Widget, node: HTMLElement): void {
         this.previewTimer = undefined;
-        if (!node.isConnected || widget.isVisible) {
+        if (!node.isConnected || widget.isVisible || this.reorder) {
             return;
         }
         const box = node.getBoundingClientRect();
@@ -1632,7 +1639,7 @@ export class TabStripWidget extends ReactWidget {
             className={'pb-tab' + (active ? ' is-active' : '') + (pinned ? ' is-pinned' : '') + (selected ? ' is-selected' : '') + drag + drop}
             onClick={event => this.onTabClick(widget, event)}
             onPointerDown={event => { this.closePreview(false); this.beginDrag(widget, event); }}
-            onPointerEnter={event => this.schedulePreview(widget, event.currentTarget)}
+            onPointerEnter={event => this.schedulePreview(widget, event.currentTarget, event.buttons !== 0)}
             onPointerLeave={() => this.closePreview()}
             onMouseDown={event => { if (event.button === 1) { event.preventDefault(); } }}
             onAuxClick={event => this.onTabAuxClick(widget, event)}

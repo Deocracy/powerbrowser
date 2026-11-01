@@ -390,6 +390,15 @@ function check(src) {
         failures.push(`keyboard: openTabMenu does not anchor a keyboard-raised contextmenu at the tab's rect -- the menu would open at 0,0 (WR-04)`);
     }
 
+    // 10d. preview lifetime (WR-05): no dwell during a press or reorder, and a removed tab's card closes.
+    if (!/pressed \|\| this\.reorder/.test(methodBody(strip, 'protected schedulePreview(') ?? '')
+        || !/pressed: boolean/.test(strip) || !/schedulePreview\([^)]*event\.buttons !== 0\)/.test(strip)) {
+        failures.push(`preview lifetime: schedulePreview does not refuse a dwell while a button is down or a reorder is in flight -- the card would open mid-drag and hide the page (WR-05)`);
+    }
+    if (!/onDidRemoveWidget\(\(\) => \{[^}]*closePreview\(\)/.test(strip)) {
+        failures.push(`preview lifetime: onDidRemoveWidget does not close the preview of a removed tab -- the card and the hidden page would stay (WR-05)`);
+    }
+
     // 11. preview occlusion and anchor
     const members = selector ? selector.split(',').map(member => member.trim()) : [];
     const renderPreview = methodBody(strip, 'protected renderPreview(');
@@ -405,7 +414,7 @@ function check(src) {
     if (!box || !new RegExp(`top: ${box}\\.bottom \\+ 4[,}\\s]`).test(openCard)) {
         failures.push(`anchor: ${STRIP}: openPreview does not place the card at the hovered tab's bottom plus 4px -- the card is not anchored below the tab`);
     }
-    if (!/if \(widget\.isVisible\)/.test(schedule) || !/widget\.isVisible\)/.test(openCard)) {
+    if (!/if \(widget\.isVisible\b/.test(schedule) || !/widget\.isVisible\b/.test(openCard)) {
         failures.push(`active: ${STRIP}: schedulePreview/openPreview do not refuse a tab on screen -- a card could hide the active tab's visible page`);
     }
 
@@ -666,6 +675,18 @@ const PLANTS = [
         expect: 'anchor a keyboard-raised contextmenu',
     },
     {
+        name: 'preview-dwell-during-drag',
+        file: STRIP,
+        mutate: s => s.replace('widget.isVisible || pressed || this.reorder', 'widget.isVisible'),
+        expect: 'refuse a dwell while a button is down',
+    },
+    {
+        name: 'preview-outlives-tab',
+        file: STRIP,
+        mutate: s => s.replace(/(onDidRemoveWidget\(\(\) => \{[^}]*?)this\.closePreview\(\);/, '$1'),
+        expect: 'does not close the preview of a removed tab',
+    },
+    {
         name: 'url-keyed-pin',
         file: STRIP,
         mutate: s => s.replace('this.pinnedIds.add(this.tabKey(widget));', 'this.pinnedIds.add(widget.url);'),
@@ -716,7 +737,7 @@ const PLANTS = [
     {
         name: 'preview-on-active-tab',
         file: STRIP,
-        mutate: s => s.replace(/(protected schedulePreview\([^)]*\): void \{\n\s*this\.closePreview\(\);\n\s*)if \(widget\.isVisible\) \{\n\s*return;\n\s*\}\n/, '$1'),
+        mutate: s => s.replace(/(protected schedulePreview\([^)]*\): void \{\n\s*this\.closePreview\(\);\n(?:\s*\/\/[^\n]*\n)?\s*)if \(widget\.isVisible[^)]*\) \{\n\s*return;\n\s*\}\n/, '$1'),
         expect: 'active',
     },
     {
