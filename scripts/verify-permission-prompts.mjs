@@ -81,10 +81,10 @@
  *   (w) bar answers (D-12): webTabBarActionReply resolves the chrome-held
  *       record by token, checks it belongs to the sender's own tab and frame,
  *       and the bar section reads no sender-supplied URL, origin or principal.
- *   (x) Phase 36 call site (D-12): openAdoptedWebTab is called exactly once,
- *       inside openBlockedPopup, behind the http(s) wall, with no typeof guard
- *       and no openStockTab fallback (Phase 36 is merged, so a popup the
- *       adoption path refuses opens nothing).
+ *   (x) replay call site (D-12, 37-REVIEW WR-04): the blocked-popup Allow
+ *       calls the stock unblockPopup exactly once, inside openBlockedPopup, on
+ *       the stored identifiers, behind the scheme wall, and loads nothing into
+ *       a tab of its own (which would drop window.opener).
  *   (y) enum parity (D-03): the barKind:action pairs web-tab.ts sends
  *       (NOTIFICATION_BAR_ACTIONS, the one webTabBarAction sender's set) equal
  *       the pairs handleWebTabAction accepts (WEB_TAB_BAR_ACTIONS), both derived
@@ -749,17 +749,18 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
             failures.push(`bar-answer: Allow opened a frame-supplied URL -- the bar section reads ${read.replace(/\s/g, '')} (D-12: the stored record only)`);
         }
     }
-    // (x) The one Phase 36 adoption call site, behind the http(s) wall, called directly. Calls only: the method's own
-    // definition in the PowerBrowserAPI literal is not a call.
-    const adoptCalls = [...api.matchAll(/\.openAdoptedWebTab\(/g)].length;
+    // (x) 37-REVIEW WR-04: the Allow replays the page's own window.open through the stock unblockPopup, once, inside
+    // openBlockedPopup, on the stored identifiers, behind the scheme wall; nothing loads the spec into a tab of its own,
+    // which would drop window.opener.
+    const replayCalls = [...api.matchAll(/\.unblockPopup\(/g)].length;
     const opener = functionBody(api, 'openBlockedPopup');
-    if (adoptCalls !== 1 || !/\bopenAdoptedWebTab\(/.test(opener)) {
-        failures.push(`adopt-call: ${API} calls openAdoptedWebTab ${adoptCalls} times, or outside openBlockedPopup -- the blocked-popup Allow has one thin Phase 36 call site (D-12)`);
-    } else if (opener.search(/https\?/) === -1 || opener.search(/https\?/) > opener.search(/\bopenAdoptedWebTab\(/)) {
-        failures.push(`adopt-call: openBlockedPopup reaches openAdoptedWebTab before an http(s) wall on the stored spec`);
+    if (replayCalls !== 1 || !/\.popupAndRedirectBlocker\.unblockPopup\(\s*popup\.browsingContext,\s*popup\.innerWindowId,\s*popup\.reportIndex\s*\)/.test(opener)) {
+        failures.push(`adopt-call: ${API} calls unblockPopup ${replayCalls} times, or not inside openBlockedPopup on the stored popup's browsingContext, innerWindowId and reportIndex -- the Allow is not the page's own replay (D-12, WR-04)`);
+    } else if (opener.search(/https\?/) === -1 || opener.search(/https\?/) > opener.search(/\.unblockPopup\(/)) {
+        failures.push(`adopt-call: openBlockedPopup reaches unblockPopup before a scheme wall on the stored spec`);
     }
-    if (/\bopenStockTab\b|typeof\s+PowerBrowserAPI\.openAdoptedWebTab/.test(stripComments(opener))) {
-        failures.push(`adopt-call: openBlockedPopup keeps the pre-merge typeof guard or openStockTab fallback -- Phase 36 is merged; call openAdoptedWebTab directly`);
+    if (/\b(?:openStockTab|openAdoptedWebTab|adoptLinkIn|createPendingOverlay|loadURI|fixupAndLoadURIString)\b/.test(stripComments(opener))) {
+        failures.push(`adopt-call: openBlockedPopup loads the stored spec into a tab of its own -- the popup loses window.opener (37-REVIEW WR-04); replay it through unblockPopup`);
     }
 
     // (y) The bar action enum: what the frontend sends equals what chrome accepts, per bar kind, both derived.
@@ -985,7 +986,7 @@ function selfTest() {
         },
         {
             name: 'allow-loads-frame-url',
-            sources: { ...clean, [API]: clean[API].replace('openBlockedPopup(record.browser, popup.spec, popup.principal)', 'openBlockedPopup(record.browser, record.data.url, popup.principal)') },
+            sources: { ...clean, [API]: clean[API].replace('openBlockedPopup(record.browser, popup)', 'openBlockedPopup(record.browser, { spec: record.data.url })') },
             expect: 'Allow opened a frame-supplied URL',
         },
         {
@@ -1004,14 +1005,20 @@ function selfTest() {
             expect: 'the notificationBar push carries url',
         },
         {
-            name: 'adoption call outside the thin call site',
-            sources: { ...clean, [API]: `${clean[API]}\nfunction plantedAdopt(b, u) { return PowerBrowserAPI.openAdoptedWebTab(b, u); }\n` },
-            expect: 'calls openAdoptedWebTab 2 times',
+            name: 'second replay call outside the thin call site',
+            sources: { ...clean, [API]: `${clean[API]}\nfunction plantedReplay(b, p) { b.popupAndRedirectBlocker.unblockPopup(p.browsingContext, p.innerWindowId, p.reportIndex); }\n` },
+            expect: 'calls unblockPopup 2 times',
         },
         {
-            name: 'pre-merge stock-tab fallback',
-            sources: { ...clean, [API]: clean[API].replace('  return PowerBrowserAPI.openAdoptedWebTab(opener, spec, { triggeringPrincipal: principal });', '  if (typeof PowerBrowserAPI.openAdoptedWebTab !== "function") {\n    return PowerBrowserAPI.openStockTab(spec);\n  }\n  return PowerBrowserAPI.openAdoptedWebTab(opener, spec, { triggeringPrincipal: principal });') },
-            expect: 'keeps the pre-merge typeof guard or openStockTab fallback',
+            // 37-REVIEW WR-04 reverted: the Allow loads the spec into a fresh adopted tab, so window.opener is null.
+            name: 'allow loads the spec into a fresh tab',
+            sources: { ...clean, [API]: clean[API].replace('  opener.popupAndRedirectBlocker.unblockPopup(popup.browsingContext, popup.innerWindowId, popup.reportIndex);', '  adoptLinkIn(popup.spec, "tab", { openerBrowser: opener });') },
+            expect: 'calls unblockPopup 0 times',
+        },
+        {
+            name: 'replay without the scheme wall',
+            sources: { ...clean, [API]: clean[API].replace('if (popup.spec !== "" && popup.spec !== "about:blank" && !/^https?:\\/\\//i.test(popup.spec)) {', 'if (false) {') },
+            expect: 'before a scheme wall',
         },
         {
             name: 'unaccepted sender value',

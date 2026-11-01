@@ -4068,18 +4068,6 @@ export const PowerBrowserAPI = Object.freeze({
     win.openLinkIn = (url, where, params) => adoptLinkIn(url, where, params);
   },
 
-  /**
-   * Phase 36 (PROMPT-05): opens `url` as an adopted web tab directly after the
-   * overlay `openerBrowser`, loaded with `triggeringPrincipal` (a null
-   * principal when absent). The public entry for chrome code that must open a
-   * page's window itself, such as allowing a blocked popup (Phase 37). Returns
-   * the pending overlay; "refused-scheme" (a non-http(s) URL) and null (opener not
-   * an overlay this host holds) both mean NOTHING opened, and the caller must act.
-   */
-  openAdoptedWebTab(openerBrowser, url, { inBackground = false, triggeringPrincipal = null } = {}) {
-    return adoptLinkIn(url, "tab", { openerBrowser, inBackground, triggeringPrincipal });
-  },
-
   /** Phase 35 (D-01): wires the shell furniture once per shell window; the receivers live in the end-of-file section. */
   installShellFurniture(window) {
     installShellFurnitureReceivers(window);
@@ -7535,7 +7523,7 @@ async function showBlockedPopupBar(host, browser) {
     }
     const opened = openedPopups.get(browser) ?? new Set();
     const popups = (await blocker.getBlockedPopups())
-      .map(p => ({ key: `${p.innerWindowId}:${p.reportIndex}`, spec: String(p.popupWindowURISpec || ""), principal: p.browsingContext.currentWindowGlobal?.innerWindowId === p.innerWindowId ? p.browsingContext.currentWindowGlobal.documentPrincipal : null }))
+      .map(p => ({ key: `${p.innerWindowId}:${p.reportIndex}`, spec: String(p.popupWindowURISpec || ""), browsingContext: p.browsingContext, innerWindowId: p.innerWindowId, reportIndex: p.reportIndex }))
       .filter(p => !opened.has(p.key));
     if (!popups.length && !redirectBlocked) {
       setBar(browser, "blocked-popup", null, null);
@@ -7568,20 +7556,23 @@ async function webTabBarActionReply(kind, data, sender) {
 
 // action -> what it does to the stored record. Nothing here writes a permission.
 const BAR_ANSWERS = {
-  // D-12: the one stored popup, opened next to its opener. Not unblockPopup's site-wide sibling toggleAllowPopupsForSite.
-  async "allow-popup"(record) {
-    const popup = record.stored.popups.shift();
+  // D-12: the one stored popup, replayed by the page's own window.open, so Phase 36's receivers adopt it next to its
+  // opener with window.opener, name and features kept (37-REVIEW WR-04). Not the site-wide toggleAllowPopupsForSite. It
+  // leaves the list only once the replay is sent.
+  "allow-popup"(record) {
+    const popup = record.stored.popups[0];
     if (!popup) {
       return "nothing-to-open";
     }
+    const replayed = openBlockedPopup(record.browser, popup);
+    record.stored.popups.shift();
     const opened = openedPopups.get(record.browser) ?? new Set();
     opened.add(popup.key);
     openedPopups.set(record.browser, opened);
     const left = record.stored.popups;
     setBar(record.browser, record.barKind, left.length || record.displayFields.redirectBlocked ? { popupCount: left.length, redirectBlocked: record.displayFields.redirectBlocked } : null, { popups: left });
-    const tab = await openBlockedPopup(record.browser, popup.spec, popup.principal);
-    if (tab === "refused-scheme" || tab === null) {
-      PowerBrowserAPI.log("error", `[bar] blocked-popup allow opened no tab (${tab === null ? "no-opener" : tab})`);
+    if (!replayed) {
+      PowerBrowserAPI.log("error", "[bar] blocked-popup allow opened no tab (refused-scheme)");
       return "not-opened";
     }
     return "opened";
@@ -7639,13 +7630,17 @@ const BAR_ANSWERS = {
   },
 };
 
-// D-12: the one call site of the Phase 36 adoption path, on the stored popup's own spec and principal (never a frame
-// field), behind the http(s) wall.
-async function openBlockedPopup(opener, spec, principal) {
-  if (!/^https?:\/\//i.test(spec)) {
-    return "refused-scheme";
+// D-12, 37-REVIEW WR-04: the stock Allow's replay (PopupAndRedirectBlockingParent.unblockPopup :164-172, whose child
+// runs requestingWindow.open(spec, name, features), PopupAndRedirectBlockingChild.sys.mjs:117-127) on the identifiers the
+// blocker reported, never a frame field. The page's own call then reaches Phase 36's receivers like any window.open, so
+// the popup keeps window.opener. The wall admits http(s) and an empty URL (window.open() is about:blank), which
+// createPendingOverlay admits too; the replay is dropped by the blocker if the document has navigated since.
+function openBlockedPopup(opener, popup) {
+  if (popup.spec !== "" && popup.spec !== "about:blank" && !/^https?:\/\//i.test(popup.spec)) {
+    return false;
   }
-  return PowerBrowserAPI.openAdoptedWebTab(opener, spec, { triggeringPrincipal: principal });
+  opener.popupAndRedirectBlocker.unblockPopup(popup.browsingContext, popup.innerWindowId, popup.reportIndex);
+  return true;
 }
 
 // D-08: hung scripts. ProcessHangMonitor draws its bar only in stock browser windows ("navigator:browser",

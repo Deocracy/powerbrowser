@@ -76,8 +76,9 @@
  *                       and the tab's notificationBar (blocked-popup) shows
  *                       inside the web tab widget with the page rect shrunk below
  *                       it; the bar's Allow opens the stored popup as a web tab
- *                       right after its opener (the Phase 36 openAdoptedWebTab
- *                       path), and no
+ *                       right after its opener (the stock unblockPopup replay of
+ *                       the page's own window.open, adopted by Phase 36, so
+ *                       window.opener is kept, 37-REVIEW WR-04), and no
  *                       popup permission is written, read back through the same
  *                       reader that sees a stock location grant (the control);
  *   hung-script      -- (37-04) a page loop past dom.max_script_run_time shows the
