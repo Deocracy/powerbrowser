@@ -444,6 +444,13 @@ export class WebTabChannel {
             this.downloadRows = downloadRowsOf(detail);
             this.downloadsEmitter.fire(this.downloadRows);
         });
+        // Phase 35 plan 05 (D-08, G4b): the right-clicked page's still, shown on its placeholder under the page menu.
+        this.onPush('pageStill', detail => {
+            const { tabId, menuId, dataUrl } = detail;
+            if (typeof tabId === 'string' && typeof menuId === 'number' && typeof dataUrl === 'string' && dataUrl.startsWith('data:image/jpeg;base64,')) {
+                this.widgets.get(tabId)?.showStill(menuId, dataUrl);
+            }
+        });
     }
 
     /** Phase 32 plan 04 (PAGE-06): the last Downloads rows chrome pushed, newest first. */
@@ -606,6 +613,8 @@ export class WebTabWidget extends BaseWidget {
 
     protected raf = 0;
     protected lastSent = '';
+    /** D-08 (35-05): the page still under an open page menu; `layerSeen` once the menu's blocking layer has shown. */
+    protected still: { img: HTMLImageElement; layerSeen: boolean; at: number } | undefined;
     /** A focusPage() waiting for the publish that shows the overlay. */
     protected focusWanted = false;
     protected resizeObserver: ResizeObserver | undefined;
@@ -813,6 +822,7 @@ export class WebTabWidget extends BaseWidget {
                 h: Math.round(r.height),
                 visible: showable && !blockingLayerOpen(),
             };
+            this.settleStill();
             const key = JSON.stringify(msg);
             if (key !== this.lastSent) {
                 this.lastSent = key;
@@ -838,6 +848,35 @@ export class WebTabWidget extends BaseWidget {
                 }
             }
         });
+    }
+
+    /** D-08: a still for a new menu replaces the last one; it fills the placeholder, which the hidden overlay leaves showing. */
+    showStill(menuId: number, dataUrl: string): void {
+        this.still?.img.remove();
+        const img = document.createElement('img');
+        img.className = 'pb-web-tab-still';
+        img.alt = '';
+        img.src = dataUrl;
+        img.dataset.menuId = String(menuId);
+        this.node.appendChild(img);
+        this.still = { img, layerSeen: false, at: Date.now() };
+    }
+
+    /**
+     * The still stays while the menu's blocking layer is open and goes on the first publish after it closes (the
+     * overlay visible again). The pageStill push precedes the menu's, so a publish before the layer first shows keeps
+     * it, unless no layer showed within a second (a menu that never opened).
+     */
+    protected settleStill(): void {
+        if (!this.still) {
+            return;
+        }
+        if (blockingLayerOpen()) {
+            this.still.layerSeen = true;
+        } else if (this.still.layerSeen || Date.now() - this.still.at > 1000) {
+            this.still.img.remove();
+            this.still = undefined;
+        }
     }
 
     async navigate(url: string): Promise<WebTabReply> {

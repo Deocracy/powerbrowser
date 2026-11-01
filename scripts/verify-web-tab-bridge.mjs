@@ -895,6 +895,12 @@ function selfTest() {
             sources: { ...clean, [PAGE_CONTEXT_MENU]: clean[PAGE_CONTEXT_MENU].replace("this.channel.onPush('pageContextMenu',", 'this.channel.onPushGone(') },
             expect: 'chrome pushes kinds no frontend source subscribes to: pageContextMenu',
         },
+        {
+            // Phase 35 (35-05, D-08): the freeze-frame still's one subscription removed.
+            name: 'planted web tab without its pageStill subscription',
+            sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace("this.onPush('pageStill',", 'this.onPushGone(') },
+            expect: 'chrome pushes kinds no frontend source subscribes to: pageStill',
+        },
     ];
 
     let failed = 0;

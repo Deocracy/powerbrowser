@@ -72,6 +72,16 @@
     cursor: pointer;
 }
 
+/* D-08 (35-05): the page still under an open page menu fills the placeholder; it never takes a click. */
+.pb-web-tab-still {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+    pointer-events: none;
+}
+
 .pb-web-tab-reload:focus-visible {
     outline: 2px solid var(--color-primary, #00a6f5);
     outline-offset: 2px;

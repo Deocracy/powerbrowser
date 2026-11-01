@@ -7242,6 +7242,7 @@ async function openPageMenu(window, theiaBrowser, state, data) {
   }
   const pending = { menuId, tabId, data, facts: null, offered: new Set(), extensionItems: new Map(), at: Date.now() };
   state.pending = pending;
+  const still = pageMenuStill(window, data.browser); // D-08: raced against its deadline from here, beside the facts
   const [facts] = await Promise.all([pageMenuFacts(data), pageMenuFormatLabels(pageMenuFlatRows())]);
   if (state.pending !== pending) {
     return; // a newer right-click replaced this one while the strings formatted
@@ -7258,6 +7259,13 @@ async function openPageMenu(window, theiaBrowser, state, data) {
   const frame = theiaBrowser.getBoundingClientRect();
   const x = data.context.screenXDevPx / window.devicePixelRatio - window.mozInnerScreenX - frame.left;
   const y = data.context.screenYDevPx / window.devicePixelRatio - window.mozInnerScreenY - frame.top;
+  const dataUrl = await still;
+  if (state.pending !== pending) {
+    return; // a newer right-click closed this menu while the still was racing
+  }
+  if (dataUrl) {
+    sendWebTabPush(theiaBrowser, { kind: "pageStill", tabId, menuId, dataUrl });
+  }
   theiaBrowser.focus();
   sendWebTabPush(theiaBrowser, { kind: "pageContextMenu", tabId, menuId, x, y, items });
 }
@@ -7694,4 +7702,49 @@ function pageMenuClose(data) {
   const window = data.browser.ownerGlobal;
   window.document.getElementById("contentAreaContextMenu").dispatchEvent(new window.Event("popuphidden"));
   data.actor.hiding();
+}
+
+// 35-05 (D-08, G4b): the freeze-frame. Before the overlay hides under the page
+// menu, the right-clicked overlay's visible viewport is drawn (the
+// captureShellRegion path) at most 640 px wide and encoded as a JPEG, and the
+// web tab's placeholder shows it under the menu. The capture races a 50 ms
+// deadline: a late capture is dropped when it settles, never pushed, and the
+// menu opens over the hidden page as before. The still is the user's own page
+// shown in the product's own frame (the Panorama thumbnail precedent); it is
+// never written to disk or logged.
+const PAGE_STILL_DEADLINE_MS = 50;
+const PAGE_STILL_MAX_WIDTH = 640;
+
+async function pageMenuStill(window, browser) {
+  const capture = (async () => {
+    const rect = browser.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+    if (w < 1 || h < 1) {
+      return null;
+    }
+    // fullViewport: the scrolled-to view the user sees, not the document's top.
+    const bitmap = await browser.drawSnapshot(0, 0, w, h, Math.min(1, PAGE_STILL_MAX_WIDTH / w), "white", true);
+    if (!bitmap) {
+      return null;
+    }
+    const canvas = window.document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return canvas.toDataURL("image/jpeg", 0.8);
+  })().catch(err => {
+    PowerBrowserAPI.log("error", `[web-tab] pageStill capture failed: ${err && err.message ? err.message : err}`);
+    return null;
+  });
+  let timer;
+  const deadline = new Promise(resolve => {
+    timer = window.setTimeout(resolve, PAGE_STILL_DEADLINE_MS, null);
+  });
+  try {
+    return await Promise.race([capture, deadline]);
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
