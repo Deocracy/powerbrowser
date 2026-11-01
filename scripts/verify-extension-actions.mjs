@@ -82,6 +82,15 @@
  *                    capture command listener stops the stock _execute_* path;
  *                    and the boundary creates no <key> of its own and names no
  *                    Phase 27 row id (the key table owns Theia's keys).
+ *  14. private    -- (38-04 security fix) every function in the extension
+ *      browsing      section that reaches a private-browsing sink (one of
+ *                    PB_SINKS: loads a sidebar page, runs a click, opens a
+ *                    popup, reads an extension's action or sidebar for a
+ *                    window) contains an extension canAccessWindow check, as
+ *                    stock ext-sidebarAction.js and ext-browserAction.js do;
+ *                    the function set is derived from the section, and a
+ *                    guarded function taking `win` is called with `win`.
+ *                    The self-test derives one plant per guarded function.
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -121,6 +130,8 @@ const THEIA_DOM_POPUP = [['<iframe', 'an <iframe'], ['dangerouslySetInnerHTML', 
 // The stock delegate's call, assembled so this file's own text never matches rule 3's scan of the tree.
 const STOCK_TRIGGER = ['trigger', 'Action('].join('');
 const FIXTURE_NAMESPACE = /@powerbrowser\.test$/;
+// Rule 14: what reaching a window for an extension looks like in the section (the sink markers; the functions are derived).
+const PB_SINKS = ['.loadPanel(', 'triggerClickOrPopup(', 'shellPanelPopup(', 'actionFor(extension)', 'sidebarFor(extension)'];
 
 // D-11, the one hand-kept table: the classes a ruling fixed, not a derivation.
 const REQUIRED_STORE_CLASS = new Map([
@@ -194,6 +205,26 @@ function enclosingFunction(lines, index) {
         return s && index <= s.end ? { name: m[1], ...s } : null;
     }
     return null;
+}
+
+/** Rule 14: each extension-section function (name -> span, marker) whose body reaches a PB_SINKS marker. */
+function privateBrowsingSinks(apiLines, text) {
+    const at = text.indexOf(SECTION_MARK);
+    const base = at < 0 ? apiLines.length : text.slice(0, at).split('\n').length - 1;
+    const guarded = new Map();
+    const unreached = [];
+    for (const marker of PB_SINKS) {
+        let found = 0;
+        for (let i = base; i < apiLines.length; i++) {
+            const fn = apiLines[i].includes(marker) ? enclosingFunction(apiLines, i) : null;
+            if (fn && i !== fn.start) {
+                found++;
+                guarded.set(fn.name, { ...fn, marker });
+            }
+        }
+        if (!found) unreached.push(marker);
+    }
+    return { guarded, unreached };
 }
 
 function setMembers(text, name) {
@@ -444,6 +475,18 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
         if (/createXULElement\("key"\)/.test(stripComments(src[API]))) failures.push(`commands: ${API} creates a <key> of its own; the Phase 27 key table owns key rows (key collision)`);
         if (stripComments(src[API]).includes('powerbrowser-page-key-')) failures.push(`commands: ${API} names a Phase 27 row id (powerbrowser-page-key-); an extension key must not take a Theia key's row (key collision)`);
     }
+    // 14. private browsing
+    if (bridgeLanded) {
+        const { guarded, unreached } = privateBrowsingSinks(apiLines, src[API]);
+        for (const marker of unreached) failures.push(`private-browsing: no function in the extension section reaches ${marker} (broken instrument)`);
+        for (const [name, fn] of guarded) {
+            if (!apiLines.slice(fn.start + 1, fn.end + 1).join('\n').includes('.canAccessWindow(')) failures.push(`private-browsing: ${name} reaches ${fn.marker} with no extension canAccessWindow check; an extension not allowed in private windows would reach a private window`);
+            if (!/^(?:async )?function \w+\(win[,)]/.test(apiLines[fn.start])) continue;
+            apiLines.forEach((line, i) => {
+                if (i !== fn.start && new RegExp(`\\b${name}\\((?!win\\b)`).test(line)) failures.push(`private-browsing: ${API}:${i + 1} calls ${name} without the window it checks (win)`);
+            });
+        }
+    }
     return failures;
 }
 
@@ -483,6 +526,13 @@ function selfTest() {
         { name: 'key collision', run: () => check(apiWith('const key = document.createXULElement("key"); key.id = "powerbrowser-page-key-newTab";')), expect: '(key collision)' },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
+    // Rule 14: one plant per guarded function, derived; each removes that function's canAccessWindow check.
+    const cleanLines = clean[API].split('\n');
+    for (const [name, fn] of privateBrowsingSinks(stripComments(clean[API]).split('\n'), clean[API]).guarded) {
+        const planted = cleanLines.map((l, i) => (i > fn.start && i <= fn.end ? l.replaceAll('.canAccessWindow(', '.plantedAccess(') : l)).join('\n');
+        plants.push({ name: `${name} unguarded`, run: () => check({ ...clean, [API]: planted }), expect: `private-browsing: ${name} reaches` });
+    }
+    plants.push({ name: 'sidebar set read without the window', run: () => check({ ...clean, [API]: clean[API].replace('const sidebars = extensionSidebarsById(win);', 'const sidebars = extensionSidebarsById();') }), expect: 'calls extensionSidebarsById without the window it checks' });
     let failed = 0;
     for (const plant of plants) {
         const red = plant.run();
@@ -508,7 +558,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows; the sidebar stays off in the shell window and loads only in the stock panel document; extension tab pages go to the stock window, never an overlay; extension shortcuts follow page focus and _execute_* runs on the bridge' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows; the sidebar stays off in the shell window and loads only in the stock panel document; extension tab pages go to the stock window, never an overlay; extension shortcuts follow page focus and _execute_* runs on the bridge; every private-browsing sink checks canAccessWindow' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();

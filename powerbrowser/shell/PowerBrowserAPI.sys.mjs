@@ -9702,8 +9702,8 @@ function extensionSetPinnedIds(ids) {
 
 // Each running extension with a browser action (or, 38-03, a page action), by id. ext-browserAction.js and
 // ext-pageAction.js define browserActionFor and pageActionFor when the first such extension starts, so before that no
-// extension has an action.
-function extensionActionsById(page = false) {
+// extension has an action. Only extensions allowed in `win` (below).
+function extensionActionsById(win, page = false) {
   const { apiManager, GlobalManager } = extensionLazy.ExtensionParent;
   const actionFor = page ? apiManager.global.pageActionFor : apiManager.global.browserActionFor;
   const byId = new Map();
@@ -9711,6 +9711,11 @@ function extensionActionsById(page = false) {
     return byId;
   }
   for (const extension of GlobalManager.extensionMap.values()) {
+    // As stock (ext-browserAction.js, ext-sidebarAction.js updateWindow): an extension not allowed in private windows has
+    // no row, click, popup or sidebar in a private shell window.
+    if (!extension.canAccessWindow(win)) {
+      continue;
+    }
     const browserAction = actionFor(extension);
     if (browserAction?.action) {
       byId.set(extension.id, { extension, action: browserAction.action, browserStyle: browserAction.browserStyle });
@@ -9721,7 +9726,7 @@ function extensionActionsById(page = false) {
 
 // 38-04 (B5): each running extension with a sidebar, by id. ext-sidebarAction.js defines sidebarActionFor when the
 // first such extension starts. Patch 050 keeps the stock sidebar off in the shell window, so the page is hosted here.
-function extensionSidebarsById() {
+function extensionSidebarsById(win) {
   const { apiManager, GlobalManager } = extensionLazy.ExtensionParent;
   const sidebarFor = apiManager.global.sidebarActionFor;
   const byId = new Map();
@@ -9729,6 +9734,10 @@ function extensionSidebarsById() {
     return byId;
   }
   for (const extension of GlobalManager.extensionMap.values()) {
+    // As stock ext-sidebarAction.js createMenuItem and updateWindow: no sidebar of an extension not allowed in `win`.
+    if (!extension.canAccessWindow(win)) {
+      continue;
+    }
     const sidebar = sidebarFor(extension);
     if (sidebar) {
       byId.set(extension.id, { extension, sidebar });
@@ -9783,7 +9792,7 @@ async function pushExtensionActions(win) {
   const pinned = extensionPinnedIds();
   const popupAction = extensionPopups.get(win)?.action ?? null;
   // 38-04 (B5): a sidebar whose extension stopped (disabled, removed) closes first; the close pushes again.
-  const sidebars = extensionSidebarsById();
+  const sidebars = extensionSidebarsById(win);
   const openSidebar = extensionSidebars.get(win)?.extensionId ?? null;
   if (openSidebar !== null && !sidebars.has(openSidebar)) {
     extensionSidebarClose(win, openSidebar);
@@ -9791,7 +9800,7 @@ async function pushExtensionActions(win) {
   }
   let actions;
   try {
-    const toolbar = extensionActionsById();
+    const toolbar = extensionActionsById(win);
     const rows = [...toolbar.values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned, popupAction));
     // 38-04 (B5): an extension with a sidebar and no toolbar action still gets a row, read from its sidebar action, so the
     // puzzle menu reaches its sidebar.
@@ -9802,7 +9811,7 @@ async function pushExtensionActions(win) {
     }
     // 38-03 (EXT-08): a page action is sent only while shown for the selected tab (show_matches, show()/hide()); with
     // no web tab none is. Patch 050's updateButton signal re-pushes on show(), hide() and a navigation.
-    for (const { extension, action } of extensionActionsById(true).values()) {
+    for (const { extension, action } of extensionActionsById(win, true).values()) {
       if (host.selected && action.isShownForTab(host.selected)) {
         rows.push(extensionActionRow(extension, action, host.selected, pinned, popupAction, true));
       }
@@ -9860,13 +9869,13 @@ function extensionActionsSubscribe(win, theiaBrowser) {
 
 // The extension a store kind names, when the running set holds it with an action: its page action when the click
 // came from the pill icon (38-03), else its browser action, else (38-04) its sidebar, whose row's click toggles it.
-function extensionNamed(data) {
+function extensionNamed(win, data) {
   const id = data?.extensionId;
   if (typeof id !== "string" || id.length > 256) {
     return null;
   }
   const page = data.pageAction === true;
-  return extensionActionsById(page).get(id) ?? (page ? null : extensionSidebarsById().get(id)) ?? null;
+  return extensionActionsById(win, page).get(id) ?? (page ? null : extensionSidebarsById(win).get(id)) ?? null;
 }
 
 // D-02: the stock PanelPopup (ExtensionPopups.sys.mjs:484-518) parented to the shell's popupset, since the shell has no
@@ -9929,6 +9938,9 @@ function extensionPopupRect(win, theiaBrowser, rect) {
 // rollup), focus moving into a page, a tab switch, or a second click (extensionClick). On close, focus goes back to the
 // Theia frame and the push shows no popup open, which is the widget's cue to focus the pill.
 function extensionOpenPopup(win, named, popupUrl, anchorRect) {
+  if (!named.extension.canAccessWindow(win)) {
+    throw new Error("extension not allowed in this window"); // unreachable past extensionClick's check; logged, never shown
+  }
   const bridge = extensionBridges.get(win);
   const host = tabHosts.get(win);
   const popup = shellPanelPopup(named.extension, win.document, popupUrl, named.browserStyle);
@@ -9967,6 +9979,9 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
 // (sub-ruling 1). A popup opens in the native panel at `anchorRect`; its URL never crosses to the frame. A click on the
 // button of the popup already open closes it, as in Firefox.
 function extensionClick(win, named, anchorRect) {
+  if (!named.extension.canAccessWindow(win)) {
+    return "refused";
+  }
   const open = extensionPopups.get(win);
   if (open) {
     open.popup.closePopup();
@@ -10038,7 +10053,7 @@ async function extensionStoreRequest(kind, data, actorRef) {
     const where = extensionSidebarRequest(win, kind, data);
     return where ? { ok: true, kind, where } : { ok: false, kind, reason: "validation", message: "handleStoreRequest: refusing a malformed sidebar request or an extension with no sidebar" };
   }
-  const named = extensionNamed(data);
+  const named = extensionNamed(win, data);
   if (!named) {
     return { ok: false, kind, reason: "validation", message: "handleStoreRequest: refusing an extension that is not running with a toolbar action" };
   }
@@ -10146,6 +10161,10 @@ function tabsBridgeActivate(host, tab) {
 
 // Show Sidebar: the page loads in a new panel browser, replacing any other open sidebar. Hidden until the view's rect.
 function extensionSidebarOpen(win, named) {
+  // As stock ext-sidebarAction.js: no sidebar page of an extension not allowed in private windows in a private window.
+  if (!named.extension.canAccessWindow(win)) {
+    return "refused";
+  }
   const open = extensionSidebars.get(win);
   if (open) {
     extensionSidebarClose(win, open.extensionId);
@@ -10203,7 +10222,7 @@ function extensionSidebarRequest(win, kind, data) {
   if (kind === "extensionSidebarGeometry") {
     return typeof data?.extensionId === "string" && [data.x, data.y, data.w, data.h].every(Number.isFinite) ? extensionSidebarPlace(win, data) : null;
   }
-  const named = typeof data?.extensionId === "string" ? extensionSidebarsById().get(data.extensionId) : undefined;
+  const named = typeof data?.extensionId === "string" ? extensionSidebarsById(win).get(data.extensionId) : undefined;
   if (!named || typeof data.open !== "boolean") {
     return null;
   }
@@ -10334,14 +10353,14 @@ async function extensionKeysetArrived(win, keyset) {
 // action only while shown there), the sidebar toggles in its Theia view.
 function extensionExecute(win, extension, name) {
   if (name === "_execute_sidebar_action") {
-    const named = extensionSidebarsById().get(extension.id);
+    const named = extensionSidebarsById(win).get(extension.id);
     if (named) {
       extensionSidebarToggle(win, named);
     }
     return;
   }
   const page = name === "_execute_page_action";
-  const named = extensionActionsById(page).get(extension.id);
+  const named = extensionActionsById(win, page).get(extension.id);
   const selected = tabHosts.get(win)?.selected ?? null;
   if (named && (!page || (selected && named.action.isShownForTab(selected)))) {
     extensionClick(win, named, extensionAnchors.get(named.action) ?? EXTENSION_SHORTCUT_ANCHOR);
