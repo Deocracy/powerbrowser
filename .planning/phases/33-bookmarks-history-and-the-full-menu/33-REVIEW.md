@@ -268,3 +268,49 @@ Applied 2026-11-01 on `workspace/p33` by gsd-code-fixer. The other findings are 
 - Six new `--self-test` plants, each red naming its drift: closed-row DELETE ignores the range, saved-page SELECT ignores the range, thumbnail reset ignores the range, fan-out missing the sessionstore target, sessionstore forget ignores the range, and sessionstore target after the closed-row target. 16/16 plants go red.
 
 Verification ran in the `workspace/p33` worktree (no separate fixer worktree): `nix develop .#theia --command scripts/verify-platform.sh --quick` exited 0 after each fix, with changes staged. No Gecko build or live run is available here.
+
+## Fixes applied (WR-01..WR-07)
+
+Applied 2026-11-01 on `workspace/p33` by gsd-code-fixer, in the worktree (no separate fixer worktree). Each fix is one commit; WR-01 and WR-02 share one because one function claims the row for both. INFO findings were not in scope. Gates ran in the `workspace/p33` worktree with changes staged: `nix develop .#theia --command scripts/verify-platform.sh --quick`. The chrome-bar and tab-uris extensions were rebuilt with `yarn build` (`tsc -b`) after each frontend change. No Gecko build or live run was available.
+
+### WR-01, WR-02: fixed (commit `cbbb7eaa`), live confirmation deferred
+
+- `reopenClosedTab` now claims the row it answers through `claimClosedTabRow` (appended at the end of `PowerBrowserAPI.sys.mjs`). The claim takes an in-memory per-uri guard with no await between check and add, then re-checks `closed_at IS NOT NULL` in the store, so an overlapping call and a later call both answer null. A web row is marked open (`closed_at = NULL`, which `webTabOpen`'s own write would also do). A stock row is used up: its SessionStore record is forgotten by `closedId` (found by recomputing its `stock:*` key with the new shared `stockClosedTabUri`, which `parseSessionStoreClosedRows` now also uses) and its `tabs` row is deleted, so the sweep does not re-import it and the next Ctrl+Shift+T moves on to the next closed tab.
+- `reopenClosedTab` is now classed `store-write` in `verify-web-tab-bridge.mjs` (it was `read`) and the section comment says so. It stays reachable from the Ctrl+Shift+T command, so it is not `privileged`.
+- Two catalogue rows added to `INTERNAL-APIS.md` for the new `SessionStore.getClosedTabData` and `SessionStore.forgetClosedTabById` call sites.
+- Not done: a frontend in-flight guard in `reopenClosedTabRow`, and refusing `openUrl` with a key that is already open. The chrome-side claim removes the cause, and a held key now opens successive closed tabs, as Firefox does.
+- Residual: if the frontend's open fails after the claim, a claimed web row stays marked open with no tab (it restores at the next start, like any open row).
+- **Deferred live check:** hold or double-press Ctrl+Shift+T with two closed tabs and assert two distinct tabs open and the History submenu loses both rows. Close a stock-window tab, press Ctrl+Shift+T from the shell, and assert it opens once and that a second press does not reopen it.
+
+### WR-03: fixed (commit `813ac7fd`)
+
+- Chrome runs `bookmarkPage` calls for one url through a per-url promise queue (`bookmarkPageQueue`), so the fetch and the insert of two overlapping calls no longer interleave. The comment now says it answers the most recently modified bookmark (IN-03's second point).
+- `openBookmarkStar` sets `bookmarkStarPending` before the await and clears it in `finally`, and returns early while it is set.
+- **Deferred live check:** hold Ctrl+D on an unbookmarked page and count the page's bookmarks in Places (expect one).
+
+### WR-04: fixed (commit `d7c7fd07`)
+
+- `removeFromBookmarkEditor` sends `editor.guid`, so Remove deletes only the bookmark the panel shows. Copies filed in other folders stay, and the star re-reads and stays filled while one remains. The REVIEW's alternative (a "Remove N bookmarks" label) needs a new copy row and an owner decision, so the recommended minimal option was taken.
+- **Deferred live check:** bookmark one page into two folders, open the editor on one, press Remove, and assert the other survives and the star stays filled.
+
+### WR-05: fixed (commit `1d9ff773`)
+
+- `ChromeStoreClient.clearHistory` waits `CLEAR_HISTORY_ACK_TIMEOUT_MS` (120 s, as `savePageCopy` does) instead of 8 s.
+- The picker ignores Esc, Cancel and blur while `busy`, so a refusal always lands on the failure row. On success, focus is restored to the opener only when focus is still in the panel or on the body.
+- **Deferred live check:** Clear Everything on a large profile and confirm no failure row appears while it runs; click elsewhere during a clear and confirm the panel stays until the answer.
+
+### WR-06: fixed (commit `953a7cf4`)
+
+- Chrome's `webTabEditEnabled` races the content-process query against 250 ms (`EDIT_STATE_BUDGET_MS`) and falls back to the cached flag. A hung page no longer holds the hamburger for 5 s. The abandoned query stays pending in chrome until the content process answers or dies; that cannot be cancelled.
+- The hamburger's store reads (History, Bookmarks) and the edit-state read each give up after 1 s (`withinBudget`, `MENU_READ_BUDGET_MS`) and draw the existing failure row or disabled Edit rows. `openAppMenu` ignores a click while its reads are pending (`appMenuOpening`).
+- The REVIEW suggested a frontend race to 250 ms for the edit rows; the timeout lives in chrome instead because only chrome holds the cached flag to fall back to.
+- **Deferred live check:** hang a page with a script loop, open the hamburger, and confirm it opens within about 300 ms with the Quit row usable; double-click the hamburger and confirm one menu.
+
+### WR-07: fixed (commit `c3f5675b`)
+
+- `CHROME_BAR_FULL_SCREEN` has no `isEnabled` predicate, so the row is never dimmed. This is a deviation from 33-UI-SPEC line 212, which lists Full Screen among the rows that need a web tab; the toggle acts on the shell window, and the shell has no other exit (no F11 row, Escape does not leave window full screen). `33-UI-SPEC.md` was not edited. Phase 35 keeps the same command id.
+- **Deferred live check:** enter full screen, activate a non-web editor, open the hamburger, and confirm Full Screen is enabled and leaves full screen.
+
+### Catalogue note
+
+The WR-03 and WR-06 insertions shifted catalogue rows. `verify-ng-040 --fix` moved the `## Touchpoints` rows. The five rows under `## Deliberately not touched` (`removeVisitsByFilter`, `IOUtils.remove`, `IOUtils.readJSON`, `IOUtils.writeJSON`, `win.fullScreen`) were moved by hand and each was checked against its target line (now `:7085, :7123, :7152, :7158, :7199`).
