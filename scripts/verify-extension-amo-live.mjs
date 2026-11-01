@@ -6,7 +6,7 @@
 // site through the STOCK install prompt (D-04: the shell authors no install
 // UI) and then works in web tabs, and that the D-07 extensions (an ad blocker,
 // a password manager, a dark-mode extension) each have a page-side effect in
-// a web tab (the fixtures scenario, 38-05 Task 2).
+// a web tab.
 //
 // The add-ons site is upstream's own extensions.getAddons.link.url, read in the
 // running shell; its origin is the listing API's origin. The D-07 extensions
@@ -32,6 +32,19 @@
 //                  its installed name, and a click on that row on /a opens its popup in
 //                  chrome's native panel. Plant prompt-bypassed starts the same install
 //                  with no prompt handler and must go red naming the prompt.
+//   fixtures    -- each D-07 listing installs signed from the add-ons site. Before
+//                  any install the same session shows each baseline: the tracker image
+//                  on /ad loads (its host resolved to this server by
+//                  network.dns.localDomains), the login form on /login is empty, and
+//                  /plain paints a light background. Then: the ad blocker makes that
+//                  image fail AND sets a numeric badge above zero on /ad (the push);
+//                  the password manager's toolbar action opens its own popup in the
+//                  native panel on /login; the dark-mode extension turns /plain's
+//                  painted background dark. The password manager FILL is not scored:
+//                  D-09 allows no vault account and no vault server, and the manager
+//                  holds no login without one (owner decision, 38-05-SUMMARY). Plant
+//                  fixtures-no-op disables the three after install and must go red
+//                  naming each missing effect.
 //
 // Modes:
 //   node scripts/verify-extension-amo-live.mjs [--scenario a,b]   live sessions (needs the network)
@@ -55,6 +68,10 @@ const verdict = (ok, detail, fail) => (ok ? { ok: true, detail, fail: null } : {
 
 // D-07, by listing slug. The role is how a scenario reads each one.
 const AMO_FIXTURES = { blocker: 'ublock-origin', manager: 'bitwarden-password-manager', dark: 'darkreader' };
+// A tracker host the ad blocker's bundled lists block outright; resolved to this server for the session only.
+const TRACKER_HOST = 'ad.doubleclick.net';
+// A 1x1 PNG, so the baseline image has a natural width.
+const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 
 // ---------------------------------------------------------------------------
 // Scenarios. Each gets { app, plant } and returns a verdict.
@@ -122,14 +139,63 @@ async function scenarioAmoInstall({ app, plant }) {
   return verdict(true, `the install footer opened ${new URL(site).host} in the stock window; ${smallest.slug} (${installed.name} ${installed.version}, ${smallest.fileUrl}) raised the stock prompt "${prompt.named}" with its Add button "${prompt.button}"; accepted, it installed signed and its popup opened on /a in the native panel`, null);
 }
 
+async function scenarioFixtures({ app, plant }) {
+  const AD = await openTab(app, '/ad');
+  const LOGIN = await openTab(app, '/login');
+  const PLAIN = await openTab(app, '/plain');
+  // Baselines, before any extension, by the same readers that score the effects.
+  const adBase = await pollUntil(() => adImage(app), i => i && i.complete, 15000);
+  if (!adBase || !(adBase.width > 0)) throw new Error(`BROKEN INSTRUMENT: the tracker image did not load before any extension (${JSON.stringify(adBase)}), so a later failure would prove nothing`);
+  const loginBase = await pollUntil(() => loginValues(app), v => v !== null, 15000);
+  if (!loginBase || loginBase.user !== '' || loginBase.pass !== '') throw new Error(`BROKEN INSTRUMENT: the login form is not empty before any extension: ${JSON.stringify(loginBase)}`);
+  const plainBase = await pollUntil(() => paintedLuminance(app, '/plain'), l => l !== null, 15000);
+  if (!(plainBase > 0.5)) throw new Error(`BROKEN INSTRUMENT: /plain does not paint light before any extension (luminance ${plainBase})`);
+  const site = await siteUrl(app);
+  const got = {};
+  for (const [role, slug] of Object.entries(AMO_FIXTURES)) {
+    const listing = await amoListing(site, slug);
+    got[role] = { ...listing, ...(await installSigned(app, listing.fileUrl)) };
+    if (!got[role].active || !got[role].signed) throw new Error(`BROKEN INSTRUMENT: ${slug} did not install signed and active: ${JSON.stringify(got[role])}`);
+  }
+  if (plant?.name === 'fixtures-no-op') {
+    for (const role of Object.keys(got)) await setAddonEnabled(app, got[role].id, false);
+  }
+  const missing = [];
+  // (a) the ad blocker: reload /ad until its lists are compiled, then the image fails and the badge counts it.
+  await live.makeCurrent(app, AD);
+  let blocked = null;
+  for (let attempt = 0; attempt < 12 && !blocked; attempt++) {
+    await live.inChrome(app, `overlayOf(${JSON.stringify(AD)}).reload(); return true;`);
+    await sleep(5000);
+    const image = await adImage(app);
+    const badge = await badgeOf(app, got.blocker.id);
+    if (image && image.complete && image.width === 0 && Number(badge) > 0) blocked = { badge };
+  }
+  if (!blocked) missing.push(`the ad blocker blocked nothing on /ad (image ${JSON.stringify(await adImage(app))}, badge ${JSON.stringify(await badgeOf(app, got.blocker.id))})`);
+  // (b) the password manager: its own popup opens on /login in the native panel.
+  await live.makeCurrent(app, LOGIN);
+  const offered = await extensionPopupOn(app, LOGIN, got.manager);
+  if (!offered.ok) missing.push(`the password manager offered nothing on /login: ${offered.fail}`);
+  // (c) the dark-mode extension: /plain's painted background turns dark.
+  await live.makeCurrent(app, PLAIN);
+  await live.inChrome(app, `overlayOf(${JSON.stringify(PLAIN)}).reload(); return true;`);
+  const dark = await pollUntil(() => paintedLuminance(app, '/plain'), l => l !== null && l < 0.3, 30000);
+  if (dark === null) missing.push(`the dark-mode extension did not restyle /plain (luminance ${await paintedLuminance(app, '/plain')}, was ${plainBase.toFixed(2)})`);
+  if (missing.length) return verdict(false, null, `missing effect: ${missing.join('; ')}`);
+  const route = role => `${got[role].name} ${got[role].version} from ${got[role].fileUrl}`;
+  return verdict(true, `signed installs: ${Object.keys(got).map(route).join('; ')}. The tracker image that loaded before failed on /ad with badge ${blocked.badge}; the password manager's popup opened on /login over the empty form (fill not scored, D-09); /plain went from luminance ${plainBase.toFixed(2)} to ${dark.toFixed(2)}`, null);
+}
+
 const SCENARIOS_TABLE = {
   'amo-install': scenarioAmoInstall,
+  fixtures: scenarioFixtures,
 };
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
 // patched product: the scenario reads `plant.name`.
 const PLANTS_TABLE = {
   'prompt-bypassed': { scenario: 'amo-install', expect: 'the stock install prompt never appeared' },
+  'fixtures-no-op': { scenario: 'fixtures', expect: 'the ad blocker blocked nothing' },
 };
 
 // ---------------------------------------------------------------------------
@@ -182,12 +248,22 @@ async function startHarness() {
   live = { ...(await import('./lib/pb-live-probe.mjs')), ...(await import('./lib/pb-relaunch.mjs')) };
   const pages = {
     '/a': '<title>page /a</title><body>live page /a',
+    '/ad': `<title>page /ad</title><body>an ad slot <img id="ad" alt="">`,
+    '/login': '<title>page /login</title><body><form action="/login" method="post"><input id="user" name="username" autocomplete="username"><input id="pass" type="password" autocomplete="current-password"><button>Sign in</button></form>',
+    '/plain': '<title>page /plain</title><body><p>An unstyled page.</p>',
   };
   server = createServer((req, res) => {
     const path = new URL(req.url, 'http://x').pathname;
+    if (path === '/ddm/ad/pb.png') {
+      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
+      res.end(PIXEL);
+      return;
+    }
     if (pages[path]) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(`<!doctype html>${pages[path]}`);
+      // The tracker URL carries this server's port, so the page is built per request.
+      const port = server.address().port;
+      res.end(`<!doctype html>${pages[path].replace('<img id="ad" alt="">', `<img id="ad" alt="" src="http://${TRACKER_HOST}:${port}/ddm/ad/pb.png">`)}`);
       return;
     }
     res.writeHead(404);
@@ -245,6 +321,63 @@ async function stockWindowOnHost(app, host, timeoutMs) {
   }, c => c !== null, timeoutMs);
 }
 
+// Installs a signed XPI from its listing URL (no prompt: the fixtures prove the effects, amo-install the prompt).
+async function installSigned(app, fileUrl) {
+  return JSON.parse(await app.evaluateIn(app.chrome, `(async () => {
+    try {
+      const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+      const install = await AddonManager.getInstallForURL(${JSON.stringify(fileUrl)}, { telemetryInfo: { source: 'amo' } });
+      const addon = await install.install();
+      return JSON.stringify({ id: addon.id, name: addon.name, version: addon.version, active: addon.isActive, signed: addon.signedState >= AddonManager.SIGNEDSTATE_SIGNED });
+    } catch (e) { return JSON.stringify({ error: String(e) }); }
+  })()`));
+}
+
+async function setAddonEnabled(app, id, enabled) {
+  await app.evaluateIn(app.chrome, `(async () => {
+    const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+    const addon = await AddonManager.getAddonByID(${JSON.stringify(id)});
+    await (${enabled} ? addon.enable() : addon.disable());
+    return true;
+  })()`);
+}
+
+// The last pushed badge text of the extension's row (the host's selected tab), or null.
+async function badgeOf(app, id) {
+  const rows = (await live.pushes(app)).filter(p => p.kind === 'extensionAction').pop()?.actions ?? [];
+  return rows.find(r => r.extensionId === id)?.badgeText ?? null;
+}
+
+// A page-realm read in the web tab's own content context, found by its URL.
+async function inPage(app, path, expr) {
+  const ctx = (await app.contexts()).find(entry => entry.url === `${ORIGIN}${path}`);
+  return ctx ? app.evaluateIn(ctx.context, expr) : null;
+}
+
+async function adImage(app) {
+  const r = await inPage(app, '/ad', "JSON.stringify((() => { const i = document.getElementById('ad'); return i ? { complete: i.complete, width: i.naturalWidth } : null; })())");
+  return r ? JSON.parse(r) : null;
+}
+
+async function loginValues(app) {
+  const r = await inPage(app, '/login', "JSON.stringify({ user: document.getElementById('user').value, pass: document.getElementById('pass').value })");
+  return r ? JSON.parse(r) : null;
+}
+
+// The relative luminance of what the page paints behind its text: the root's background, else the body's, else the
+// canvas default (white).
+async function paintedLuminance(app, path) {
+  const r = await inPage(app, path, `(() => {
+    const rgba = el => (getComputedStyle(el).backgroundColor.match(/[\\d.]+/g) || []).map(Number);
+    let c = rgba(document.documentElement);
+    if (!(c.length >= 3 && (c[3] ?? 1) > 0)) c = rgba(document.body);
+    if (!(c.length >= 3 && (c[3] ?? 1) > 0)) c = [255, 255, 255];
+    const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+  })()`);
+  return typeof r === 'number' ? r : null;
+}
+
 // A click on the extension's puzzle row with web tab `tabId` on screen opens its own popup in chrome's native panel.
 async function extensionPopupOn(app, tabId, addon) {
   await live.makeCurrent(app, tabId);
@@ -277,6 +410,7 @@ async function stampCheck() {
 const SESSION_PREFS = {
   // The signed path: no unsigned add-on may install in these sessions.
   'xpinstall.signatures.required': true,
+  'network.dns.localDomains': TRACKER_HOST,
 };
 
 async function runSession(scenarioName, plantName = null) {
