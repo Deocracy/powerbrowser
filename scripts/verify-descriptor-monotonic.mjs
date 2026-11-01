@@ -38,8 +38,8 @@
 //   node scripts/verify-descriptor-monotonic.mjs
 //   node scripts/verify-descriptor-monotonic.mjs --self-test
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -61,7 +61,17 @@ const BUILD_ID = /^\d{14}$/;
 const TARGET = /^[A-Za-z0-9]+_[A-Za-z0-9_.-]+$/;
 const NEXT_AUTH = 'Next step: run gh auth status; the row needs read access to the repository.';
 
-const args = process.argv.slice(2);
+// Argument handling and the exit run on direct invocation only, so the exports stay importable.
+// realpath on both sides, as scripts/generate.mjs isEntryPoint() documents.
+const DIRECT_RUN = (() => {
+    try {
+        return process.argv[1] !== undefined
+            && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+    } catch {
+        return false;
+    }
+})();
+const args = DIRECT_RUN ? process.argv.slice(2) : [];
 for (const a of args) {
     if (a !== '--self-test') {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
@@ -362,9 +372,20 @@ function selfTest() {
         }
     }
 
+    // An import must resolve with the exports, not run main and exit (the DIRECT_RUN guard).
+    const imported = spawnSync(process.execPath, ['--input-type=module', '-e',
+        `const m = await import(${JSON.stringify(import.meta.url)}); console.log('imported', typeof m.runChecks);`],
+    { encoding: 'utf8' });
+    if (imported.status === 0 && imported.stdout.trim() === 'imported function') {
+        console.log('  ok  import resolves with runChecks and runs nothing');
+    } else {
+        console.error(`${NAME}: --self-test FAIL -- importing ${SELF_REL} did not resolve cleanly (exit ${imported.status}): ${(imported.stdout + imported.stderr).trim().split('\n')[0]}`);
+        failed += 1;
+    }
+
     if (failed > 0) return 1;
     console.log(`${NAME}: --self-test PASS -- control green first; zero published Releases green by count; ${plants.length} planted faults went red naming the drifted file, Release or endpoint`);
     return 0;
 }
 
-process.exit(args.includes('--self-test') ? selfTest() : main());
+if (DIRECT_RUN) process.exit(args.includes('--self-test') ? selfTest() : main());
