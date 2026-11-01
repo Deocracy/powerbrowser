@@ -4,7 +4,7 @@
 // The descriptor buildID monotonicity gate (Phase 44, UPD-26). No descriptor the
 // pipeline offers may carry a build older than one already published for the same
 // appVersion. Every candidate buildID must be strictly greater than every buildID the
-// live Releases publish for that appVersion, across every BUILD_TARGET.
+// live Releases publish for that appVersion and BUILD_TARGET.
 //
 //  1. Published set (full tier). Every non-draft Release of the repository named in
 //     configuration.toml [urls] release_notes must carry a release-manifest.json asset.
@@ -21,8 +21,11 @@
 //     Each is read through parseUpdateXml, the shared parser. A file that does not parse is a FAIL.
 //     An explicit --descriptors directory that is absent or holds zero descriptors is a FAIL: the
 //     thing under test is missing, and "nothing offered" cannot be told from "emit never ran".
-//  3. Rule. A candidate (appVersion, buildID) must have buildID strictly greater than every
-//     published buildID with the same appVersion. The comparison is a string comparison, which
+//  3. Rule. A candidate (appVersion, buildID, target) must have buildID strictly greater than every
+//     published buildID with the same appVersion and the same build_target. The target is the
+//     <BUILD_TARGET> directory the candidate sits in; a directory that is not an OS_ABI token is a
+//     FAIL. Targets do not compare with each other: the update server selects a descriptor by
+//     BUILD_TARGET, so a downgrade exists only within one target, and targets build at different times. The comparison is a string comparison, which
 //     orders the same as the number because every BuildID is fourteen digits (%Y%m%d%H%M%S).
 //     An older or equal buildID fails, naming the descriptor, the offered buildID, the published
 //     buildID and its Release tag. Different appVersion lines do not compare.
@@ -242,15 +245,21 @@ export function runChecks(root, overrides = {}) {
             failures.push(`${d.rel} does not parse as a descriptor (no update element with appVersion and buildID, and no patch), so its buildID cannot be compared. Next step: regenerate it with node scripts/build-update-xml.mjs --emit --outdir ${CANDIDATE_REL}`);
             continue;
         }
-        candidates.push({ rel: d.rel, appVersion: parsed.appVersion, buildID: parsed.buildID });
+        const segments = d.rel.split('/');
+        const target = segments.length >= 2 ? segments[segments.length - 2] : null;
+        candidates.push({ rel: d.rel, appVersion: parsed.appVersion, buildID: parsed.buildID, target });
+        if (target === null || !TARGET.test(target)) {
+            failures.push(`${d.rel} sits under ${show(target)}, not an OS_ABI BUILD_TARGET directory, so its target cannot be matched with a published build_target. Next step: emit it as <channel>/<BUILD_TARGET>/update.xml with node scripts/build-update-xml.mjs --emit.`);
+            continue;
+        }
         if (!BUILD_ID.test(parsed.buildID)) {
             failures.push(`${d.rel} offers buildID ${show(parsed.buildID)}, not fourteen digits, so it cannot be ordered. Next step: rebuild the descriptor from a build with a fourteen-digit BuildID.`);
             continue;
         }
         for (const p of published) {
-            if (p.appVersion !== parsed.appVersion) continue;
+            if (p.appVersion !== parsed.appVersion || p.target !== target) continue;
             if (parsed.buildID <= p.buildID) {
-                failures.push(`${d.rel} offers buildID ${parsed.buildID} for appVersion ${parsed.appVersion}, but ${p.tag} already publishes buildID ${p.buildID}; a descriptor must offer a strictly newer buildID than every published one. Next step: rebuild the descriptor from a build whose BuildID is newer than ${p.buildID}.`);
+                failures.push(`${d.rel} offers buildID ${parsed.buildID} for appVersion ${parsed.appVersion} on ${target}, but ${p.tag} already publishes buildID ${p.buildID} for that target; a descriptor must offer a strictly newer buildID than every published one. Next step: rebuild the descriptor from a build whose BuildID is newer than ${p.buildID}.`);
             }
         }
     }
@@ -377,6 +386,14 @@ function selfTest() {
     }
     console.log('  ok  control: older appVersion line with a newer buildID -> green');
 
+    // Another target: an older buildID than the published Linux build, offered for a different target, is green.
+    const otherTarget = run(baseWorld(), [candidate('153.5.1', '20260101000000', 'Darwin_aarch64-gcc3')]);
+    if (otherTarget.failures.length > 0) {
+        console.error(`${NAME}: --self-test FAIL -- a different BUILD_TARGET went red: ${otherTarget.failures.join(' | ')}`);
+        return 1;
+    }
+    console.log('  ok  control: different BUILD_TARGET with an older buildID -> green');
+
     let failed = 0;
     const plants = [
         {
@@ -390,6 +407,12 @@ function selfTest() {
             w: baseWorld(),
             d: [candidate('153.5.1', PUBLISHED_BUILD)],
             needles: [`${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, PUBLISHED_BUILD, 'v153.5.1-1'],
+        },
+        {
+            name: 'candidate outside a BUILD_TARGET directory',
+            w: baseWorld(),
+            d: [{ rel: `${CANDIDATE_REL}/default/update.xml`, text: descriptorFixture('153.5.1', '20261021000000', slug) }],
+            needles: [`${CANDIDATE_REL}/default/update.xml`, '"default"', 'BUILD_TARGET'],
         },
         {
             name: 'malformed release-manifest.json',
