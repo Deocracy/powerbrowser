@@ -12,17 +12,23 @@
  *      copy object holds (set equality: a row with no copy and a copy row no
  *      menu reads both go red). The wording itself is pinned by
  *      verify-shell-error-copy.mjs.
- *   3. occlusion: the menu renders through ContextMenuRenderer (a stock
+ *   3. occlusion: the tab menu and the List All Tabs menu both render
+ *      through showMenu, which renders through ContextMenuRenderer (a stock
  *      `.lm-Menu`), and `.lm-Menu` is in web-tab.ts BLOCKING_LAYER_SELECTOR,
- *      so the page hides while the menu is open.
- *   4. kinds: no uncatalogued kind. Every WEB_TAB_ACTION_KINDS and
- *      STORE_REQUEST_KINDS member in PowerBrowserAPI.sys.mjs is classified in
- *      verify-web-tab-bridge.mjs (KIND_CLASSES / STORE_KIND_CLASSES), and the
- *      strip sends no kind itself: Mute and Bookmark are calls (D-13).
+ *      so the page hides while either menu is open.
+ *   4. kinds: no uncatalogued kind. Both kind-union literals in
+ *      PowerBrowserAPI.sys.mjs (WEB_TAB_ACTION_KINDS, STORE_REQUEST_KINDS) are
+ *      derived at check time and every member must be classified in
+ *      verify-web-tab-bridge.mjs (KIND_CLASSES / STORE_KIND_CLASSES); the
+ *      strip sends no kind itself: Mute and Bookmark are calls (D-13), and
+ *      reorder, drop and List All Tabs are frontend-only (34-02).
  *   5. codicons: every `codicon-*` glyph the strip names exists in
  *      @vscode/codicons dist/codicon.css.
  *   6. target: the menu code never reads the current widget, so every row
  *      acts on the right-clicked tab (T-34-06).
+ *   7. overflow (34-02, TAB-04): measureOverflow derives the overflow as
+ *      scrollWidth > clientWidth and is the only writer of `overflowing`, and
+ *      render shows the List All Tabs chevron only under `this.overflowing`.
  *
  * --self-test: the unmodified tree must be green first (the positive control
  * every plant preserves), then each named plant edits one source in memory
@@ -101,6 +107,8 @@ function check(src) {
     const strip = stripComments(src[STRIP]);
     const rows = methodBody(strip, 'protected tabMenuRows(');
     const opener = methodBody(strip, 'protected openTabMenu(');
+    const lister = methodBody(strip, 'protected openListAllMenu(');
+    const shower = methodBody(strip, 'protected showMenu(');
 
     // 1. menu
     const expected = roadmapItems(src[ROADMAP_KEY]);
@@ -145,8 +153,13 @@ function check(src) {
     } else if (!selector.split(',').map(s => s.trim()).includes('.lm-Menu')) {
         failures.push(`occlusion: BLOCKING_LAYER_SELECTOR lacks .lm-Menu -- the tab menu would paint under the page`);
     }
-    if (!opener || !/this\.menus\.render\(/.test(opener)) {
-        failures.push(`occlusion: ${STRIP}: openTabMenu does not render through ContextMenuRenderer (this.menus.render) -- the menu is not the stock .lm-Menu the selector lists`);
+    if (!shower || !/this\.menus\.render\(/.test(shower)) {
+        failures.push(`occlusion: ${STRIP}: showMenu does not render through ContextMenuRenderer (this.menus.render) -- the strip's menus are not the stock .lm-Menu the selector lists`);
+    }
+    for (const [label, body] of [['openTabMenu', opener], ['openListAllMenu', lister]]) {
+        if (!body || !/this\.showMenu\(/.test(body)) {
+            failures.push(`occlusion: ${STRIP}: ${label} does not render through showMenu -- that menu is not the stock .lm-Menu the selector lists`);
+        }
     }
 
     // 4. kinds
@@ -190,6 +203,20 @@ function check(src) {
         if (hit) {
             failures.push(`target: ${label} reads ${hit[1]} -- a menu row acts on the right-clicked tab only, never the current widget`);
         }
+    }
+
+    // 7. overflow
+    const measure = methodBody(strip, 'protected measureOverflow(');
+    const render = methodBody(strip, 'protected render(');
+    if (!measure || !/(\w+)\.scrollWidth\s*>\s*\1\.clientWidth/.test(measure)) {
+        failures.push(`overflow: ${STRIP}: measureOverflow does not derive the overflow as scrollWidth > clientWidth -- the chevron has no overflow predicate`);
+    }
+    const writes = text => (text ?? '').match(/this\.overflowing\s*=[^=]/g)?.length ?? 0;
+    if (writes(strip) !== writes(measure)) {
+        failures.push(`overflow: ${STRIP}: \`overflowing\` is written outside measureOverflow (${writes(strip)} writes, ${writes(measure)} in measureOverflow) -- the chevron can show without overflow`);
+    }
+    if (!render || !/\{this\.overflowing && <button\s+className='pb-tab-strip-chevron\b/.test(render)) {
+        failures.push(`overflow: ${STRIP}: render does not show the List All Tabs chevron (pb-tab-strip-chevron) only under this.overflowing -- the chevron can show without overflow`);
     }
     return failures;
 }
@@ -239,6 +266,18 @@ const PLANTS = [
         file: CODICONS,
         mutate: s => s.replace(/\.codicon-pin:before/g, '.codicon-planted-gone:before'),
         expect: 'pin',
+    },
+    {
+        name: 'uncatalogued-kind-added-34-02',
+        file: API,
+        mutate: s => s.replace('const STORE_REQUEST_KINDS = new Set([', 'const STORE_REQUEST_KINDS = new Set(["storeTabReorder", '),
+        expect: 'storeTabReorder',
+    },
+    {
+        name: 'chevron-without-overflow',
+        file: STRIP,
+        mutate: s => s.replace('{this.overflowing && <button', '{<button'),
+        expect: 'chevron',
     },
     {
         name: 'current-widget-fallback',
@@ -291,7 +330,7 @@ function main() {
         failures.forEach(f => console.error(`  - ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- tab menu matches ROADMAP criterion 1, copy, occlusion, kinds, codicons and target hold`);
+    console.log(`${NAME}: PASS -- tab menu matches ROADMAP criterion 1, copy, occlusion, kinds, codicons, target and overflow hold`);
     return 0;
 }
 

@@ -729,6 +729,7 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} couldn't close that tab. Try again.",
   "Double-click to open a new tab",
   "${name} can't open that link in a tab. Drop a link to a web page instead.",
+  "List All Tabs",
 ]);
 
 /**

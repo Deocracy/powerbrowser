@@ -41,6 +41,14 @@
 //     same as plain text, are refused with the strip's failure sentence,
 //     nothing loads and the current page keeps its title.
 //
+//   overflow (TAB-04): with the strip narrowed until its row overflows
+//     (scrollWidth > clientWidth), the List All Tabs chevron is present; its
+//     menu lists exactly the strip's tabs in strip order (the TabBar's, which
+//     puts pinned tabs first once 34-03 pins them); picking the tab scrolled
+//     out of view makes it current and scrolls it into the row. Restoring the
+//     width in the same session, the row no longer overflows and the chevron
+//     is gone while the strip order still reads.
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
@@ -53,7 +61,7 @@
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
@@ -502,6 +510,69 @@ async function drop({ app, pages, expect, plant }) {
     }
 }
 
+/** overflow: TAB-04 scroll, chevron and List All Tabs. */
+async function overflow({ app, pages, expect, plant }) {
+    const urls = { a: pages.url('/a'), b: pages.url('/b'), c: pages.url('/c') };
+    const listed = `
+        const listMenu = () => document.querySelector('.lm-Menu.pb-tab-list-menu');
+        const listRows = () => Array.from((listMenu() || document.createElement('div')).querySelectorAll('.lm-Menu-item'))
+            .map(e => ({ label: (e.querySelector('.lm-Menu-itemLabel') || e).textContent.trim(), node: e }));
+        const chevron = () => document.querySelector('.pb-tab-strip-chevron');
+        const labels = () => stripIds().map(id => byId(id).title.label || id);
+        const inRow = id => { const t = rect(tabEl(id)), r = rect(row()); return !!t && t.left >= r.left - 1 && t.right <= r.right + 1; };
+    `;
+    const forced = await step(app, 'overflow: force the overflow', `${listed}
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify(urls)});
+        if (${JSON.stringify(plant)} === 'overflow-unmeasured') strip.measureOverflow = () => undefined;
+        shell.activateWidget(S.a);
+        await until(() => current() && current().id === S.a, 5000);
+        strip.node.style.maxWidth = '300px';
+        const overflowing = await until(() => row().scrollWidth > row().clientWidth, 5000);
+        const shown = await until(() => !!chevron(), 3000);
+        row().scrollLeft = 0;
+        await sleep(100);
+        const hidden = stripIds().find(id => !inRow(id));
+        return { painted, overflowing, shown, tooltip: shown ? chevron().getAttribute('title') : null, hidden: hidden || null };
+    `);
+    expect(forced.painted, 'overflow: setup: /a, /b and /c are not all painted in the strip');
+    expect(forced.overflowing, 'overflow: NOT SCORED -- the narrowed strip row never overflowed');
+    expect(forced.shown, 'overflow: the overflowing strip shows no List All Tabs chevron');
+    expect(!forced.shown || forced.tooltip === copyRow('listAllTabs'), `overflow: the chevron's tooltip is ${JSON.stringify(forced.tooltip)}`);
+    expect(!!forced.hidden, 'overflow: NOT SCORED -- every tab is in view, so picking one cannot show scrollIntoView');
+    if (forced.shown && forced.hidden) {
+        const picked = await step(app, 'overflow: List All Tabs', `${listed}
+            chevron().click();
+            await until(() => listRows().length > 0, 3000);
+            const rows = listRows().map(r => r.label);
+            const order = labels();
+            const target = listRows().find(r => r.label === (byId(${JSON.stringify(forced.hidden)}).title.label || ${JSON.stringify(forced.hidden)}));
+            if (target) {
+                const r = target.node.getBoundingClientRect();
+                const at = { bubbles: true, cancelable: true, button: 0, clientX: r.left + 4, clientY: r.top + r.height / 2 };
+                target.node.dispatchEvent(new MouseEvent('mousemove', at));
+                target.node.dispatchEvent(new MouseEvent('mouseup', at));
+            }
+            await until(() => current() && current().id === ${JSON.stringify(forced.hidden)} && inRow(${JSON.stringify(forced.hidden)}), 5000);
+            return { rows, order, found: !!target, activated: !!current() && current().id === ${JSON.stringify(forced.hidden)}, inView: inRow(${JSON.stringify(forced.hidden)}) };
+        `);
+        expect(picked.rows.length > 0 && picked.rows.join(' | ') === picked.order.join(' | '),
+            `overflow: List All Tabs lists [${picked.rows.join(' | ')}], not the strip order [${picked.order.join(' | ')}]`);
+        expect(picked.found && picked.activated, `overflow: picking the scrolled-out tab in List All Tabs did not activate it (${JSON.stringify(picked)})`);
+        expect(picked.inView, 'overflow: the picked tab was not scrolled into view in the row');
+    }
+    // Control, same session and recorders: no overflow, no chevron, and the order still reads.
+    const control = await step(app, 'overflow: restore the width', `${listed}
+        strip.node.style.maxWidth = '';
+        await until(() => row().scrollWidth <= row().clientWidth, 5000);
+        await until(() => !chevron(), 3000);
+        return { overflowing: row().scrollWidth > row().clientWidth, chevron: !!chevron(), strip: stripIds(), bar: barIds() };
+    `);
+    expect(!control.overflowing, 'overflow: NOT SCORED -- the full-width strip still overflows, so the chevron-absent control proves nothing');
+    expect(!control.chevron, 'overflow: the full-width strip still shows the List All Tabs chevron without overflow');
+    expect(control.strip.length === 3 && control.strip.every(id => control.bar.includes(id)), `overflow: the control session read no strip order (${JSON.stringify(control)})`);
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
@@ -509,6 +580,7 @@ const SCENARIOS = {
     middle: { run: middle, probe: true, prefs: { 'middlemouse.paste': true }, plant: 'middle-not-closing', expect: 'did not close /a' },
     double: { run: double, probe: true, plant: 'double-noop', expect: 'opened no new tab' },
     drop: { run: drop, probe: true, plant: 'drop-link-noop', expect: 'did not open /d' },
+    overflow: { run: overflow, probe: true, plant: 'overflow-unmeasured', expect: 'shows no List All Tabs chevron' },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */

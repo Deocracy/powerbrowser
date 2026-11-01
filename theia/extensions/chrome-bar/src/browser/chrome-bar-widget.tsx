@@ -1414,7 +1414,8 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         const menubar = this.shell.topPanel.widgets.find(w => w.id === 'theia:menubar')?.node;
         const toolbar = document.querySelector('.pb-org-toolbar');
         if (mode === 'browsing') {
-            rows.push({ row: this.tabStrip.node, items: Array.from(this.tabStrip.node.querySelectorAll('.pb-tab')) });
+            // TAB-04 (34-02): the List All Tabs chevron stays clickable like a tab.
+            rows.push({ row: this.tabStrip.node, items: Array.from(this.tabStrip.node.querySelectorAll('.pb-tab, .pb-tab-strip-chevron')) });
         } else if (mode === 'coding' && menubar) {
             rows.push({
                 row: menubar,
@@ -1470,6 +1471,8 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         window.addEventListener('resize', () => this.scheduleDragRegions());
         new MutationObserver(() => this.scheduleDragRegions())
             .observe(this.tabStrip.node, { childList: true, subtree: true, characterData: true, attributes: true });
+        // TAB-04 (34-02): an overflowing row scrolls its tabs under the handles; scroll does not bubble, so capture.
+        this.tabStrip.node.addEventListener('scroll', () => this.scheduleDragRegions(), true);
         void this.webTabs.request({ kind: 'windowChrome' }).then(reply => {
             if (reply.ok && typeof reply.width === 'number') {
                 document.body.style.setProperty('--pb-window-controls', `${reply.width}px`);

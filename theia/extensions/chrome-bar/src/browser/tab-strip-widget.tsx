@@ -44,6 +44,12 @@ interface TabMenuRow {
     run(): Promise<void>;
 }
 
+/** TAB-04: runs `run` after every commit of the strip's render, when the row's widths are final. */
+function AfterRender({ run }: { run: () => void }): null {
+    React.useLayoutEffect(run);
+    return null;
+}
+
 /** A refused web-tab reply is a failed action, not a silent one. */
 function settled(reply: WebTabReply): void {
     if (!reply.ok) {
@@ -173,6 +179,12 @@ export class TabStripWidget extends ReactWidget {
      */
     protected reorder: { widget: Widget; before: Widget | undefined; moves: boolean } | undefined;
 
+    /** TAB-04 (D-07): whether the strip row overflows; written only by measureOverflow, and the List All Tabs chevron shows iff true. */
+    protected overflowing = false;
+
+    /** TAB-04: re-measures the overflow when the strip's width changes (window resize, mode switch showing the strip). */
+    protected readonly resizes = new ResizeObserver(() => this.measureOverflow());
+
     protected readonly toDispose = new DisposableCollection();
 
     @postConstruct()
@@ -236,6 +248,7 @@ export class TabStripWidget extends ReactWidget {
         // the home pane, it was dropped onto the blank row (or into that
         // pane), which is how a tab joins the stack on the home side.
         this.shell.mainPanel.node.addEventListener('lm-drop', this.onDockDrop);
+        this.resizes.observe(this.node);
     }
 
     protected override onBeforeDetach(msg: Message): void {
@@ -244,6 +257,7 @@ export class TabStripWidget extends ReactWidget {
         this.node.removeEventListener('lm-dragleave', this.onDragLeave);
         this.node.removeEventListener('lm-drop', this.onDrop);
         this.shell.mainPanel.node.removeEventListener('lm-drop', this.onDockDrop);
+        this.resizes.disconnect();
         super.onBeforeDetach(msg);
     }
 
@@ -713,20 +727,59 @@ export class TabStripWidget extends ReactWidget {
                 })),
             ],
         };
+        this.showMenu(menu, { x: event.clientX, y: event.clientY }, event.currentTarget as HTMLElement);
+    }
+
+    /**
+     * One per-request menu through ContextMenuRenderer, a stock `.lm-Menu` (in the overlay's blocking-layer selector).
+     * The renderer takes no class; the menu it just drew is marked so the sheet can size its rows.
+     */
+    protected showMenu(menu: CompoundMenuNode, anchor: { x: number; y: number }, context: HTMLElement, marks = 'pb-tab-menu'): void {
         const before = new Set(Array.from(document.querySelectorAll('.lm-Menu')));
-        this.menus.render({
-            menuPath: TAB_MENU_PATH,
-            menu,
-            anchor: { x: event.clientX, y: event.clientY },
-            context: event.currentTarget as HTMLElement,
-            includeAnchorArg: false,
-        });
-        // The renderer takes no class; the menu it just drew is marked so the sheet can size its rows.
+        this.menus.render({ menuPath: TAB_MENU_PATH, menu, anchor, context, includeAnchorArg: false });
         for (const element of Array.from(document.querySelectorAll('.lm-Menu'))) {
             if (!before.has(element)) {
-                element.classList.add('pb-tab-menu');
+                element.classList.add(...marks.split(' '));
             }
         }
+    }
+
+    /** TAB-04 (D-07): the chevron iff the row's content is wider than the row; re-renders only on a change. */
+    protected measureOverflow(): void {
+        const row = this.node.querySelector<HTMLElement>('.pb-tab-strip-row');
+        const overflowing = !!row && row.scrollWidth > row.clientWidth;
+        if (overflowing !== this.overflowing) {
+            this.overflowing = overflowing;
+            this.update();
+        }
+    }
+
+    /**
+     * TAB-04 (D-07): List All Tabs, a second per-request menu under the chevron: every strip tab in strip order (the
+     * TabBar's, so pinned tabs lead once 34-03 pins them), the current one checked. Picking a row activates that
+     * tab and scrolls it into view. shortcut: no attention dot until 34-04 adds the attention state.
+     */
+    protected openListAllMenu(event: React.MouseEvent<HTMLElement>): void {
+        event.preventDefault();
+        event.stopPropagation();
+        const current = this.shell.mainPanel.currentTitle?.owner;
+        const children: CommandMenu[] = this.stripTabs(current).map((widget, index) => ({
+            id: `tab-list-${index}`,
+            label: widget.title.label || widget.id,
+            icon: widget instanceof WebTabWidget ? `codicon ${widget.crashed ? 'codicon-warning' : 'codicon-globe'}` : widget.title.iconClass || undefined,
+            sortString: String(index).padStart(4, '0'),
+            isVisible: () => true,
+            isEnabled: () => true,
+            isToggled: () => widget === current,
+            run: async () => {
+                this.activateTab(widget);
+                requestAnimationFrame(() => this.tabNode(widget)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+            },
+        }));
+        const box = event.currentTarget.getBoundingClientRect();
+        this.showMenu(
+            { id: 'tab-list-menu', sortString: '0', isVisible: () => true, isEmpty: () => children.length === 0, children },
+            { x: box.left, y: box.bottom }, event.currentTarget, 'pb-tab-menu pb-tab-list-menu');
     }
 
     /**
@@ -1067,7 +1120,7 @@ export class TabStripWidget extends ReactWidget {
             }
             widget.title.className = kept.join(' ');
         }
-        return <div
+        return <>{<div
             className='pb-tab-strip-row'
             role='tablist'
             title={CHROME_BAR_COPY.emptyStripTooltip}
@@ -1101,7 +1154,17 @@ export class TabStripWidget extends ReactWidget {
                 >✕</span>
             </div>}
             {this.notice && <span className='pb-tab-strip-notice' role='status'>{this.notice}</span>}
-        </div>;
+        </div>}
+        {this.overflowing && <button
+            className='pb-tab-strip-chevron codicon codicon-list-selection'
+            type='button'
+            title={CHROME_BAR_COPY.listAllTabs}
+            aria-label={CHROME_BAR_COPY.listAllTabs}
+            onClick={event => this.openListAllMenu(event)}
+            onPointerDown={event => event.stopPropagation()}
+        />}
+        <AfterRender run={() => this.measureOverflow()} />
+        </>;
     }
 
     /**
