@@ -59,7 +59,10 @@
     <!-- Phase 35 (D-04): stock elements a remote page reaches through this
          window, each one upstream's own element (verify-shell-furniture.mjs). -->
     <xul:tooltip id="remoteBrowserTooltip"/>
+    <!-- PROMPT-04 (D-02): the stub ContextMenuParent opens; its popupshowing is
+         cancelled and the rows render in Theia. No children. -->
+    <xul:menupopup id="contentAreaContextMenu" showservicesmenu="true"/>
     <!-- shell furniture: end -->
-    <xul:browser id="powerbrowser-content" type="content" primary="true" remote="true" remoteType="web" src="about:blank" tabindex="-1"/>
+    <xul:browser id="powerbrowser-content" type="content" primary="true" remote="true" remoteType="web" src="about:blank" tabindex="-1" disablecontextmenu="true"/>
   </body>
 </html>

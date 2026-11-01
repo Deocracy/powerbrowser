@@ -279,7 +279,10 @@ export type WebTabMessage =
     // source URL is minted chrome-side, never sent by the frame) and DevTools (the stock toolbox window for this tab, minted chrome-side).
     | { kind: 'webTabReader'; tabId: string; enter: boolean }
     | { kind: 'webTabViewSource'; tabId: string; inNewTab?: boolean }
-    | { kind: 'webTabDevtools'; tabId: string };
+    | { kind: 'webTabDevtools'; tabId: string }
+    // Phase 35 plan 03 (PROMPT-04, D-09): the page menu pick, privileged. It names the tab, chrome's menu id and an
+    // offered row id (null dismisses); never a URL. Sent only from chrome-bar's page-context-menu.ts.
+    | { kind: 'webTabContextMenuAction'; tabId: string; menuId: number; itemId: string | null };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -315,6 +318,10 @@ export interface WebTabReply {
     entries?: WebTabHistoryEntry[];
     /** `webTabSavePick`: the proposed file name (a page title, bounded, with an .html suffix). */
     suggestedName?: string;
+    /** `webTabContextMenuAction` (35-03): a one-time open grant, its chrome-derived target and whether it opens in the background. */
+    grantId?: string;
+    url?: string;
+    background?: boolean;
 }
 
 /** Phase 31 plan 02: one managed permission on this tab's principal, in table order. */

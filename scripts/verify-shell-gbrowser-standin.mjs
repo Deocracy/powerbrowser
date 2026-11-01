@@ -1314,12 +1314,15 @@ function selfTest() {
       } else ok(`staged window.FullScreen with only enterDomFullscreen -> red, naming 'FullScreen.cleanupDomFullscreen' UNIMPLEMENTED`);
     }
 
-    // (k) window.nsContextMenu with a surplus method.
+    // (k) window.nsContextMenu with a surplus method, added to the boundary file's own definition (35-03 defines it).
     {
-      const path = boundaryWith('boundary-contextmenu.mjs', 'window.nsContextMenu = {\n  get contentData() { return null; },\n  set contentData(v) {},\n  zzzSurplusMenuMethod() { return null; },\n};');
+      const realText = readSource(BOUNDARY_FILE) ?? '';
+      const planted = realText.replace(/^(\s*)window\.nsContextMenu = \{\n/m, '$&$1  zzzSurplusMenuMethod() { return null; },\n');
+      const path = join(stage, 'boundary-contextmenu.mjs');
+      writeFileSync(path, planted);
       const r = runScan({ ...real, boundaryFile: path });
       const shim = shimOf(r, 'nsContextMenu');
-      if (!shim?.defined) fail(`'nsContextMenu' plant did not land`);
+      if (planted === realText || !shim?.defined) fail(`'nsContextMenu' plant did not land`);
       else if (r.ok || !shim.surplus.includes('zzzSurplusMenuMethod') || shim.unimplemented.length) {
         fail(`a surplus nsContextMenu method did not go red as DEAD SURFACE alone; got: ${JSON.stringify({ reason: r.reason, surplus: shim.surplus, unimplemented: shim.unimplemented })}`);
       } else ok(`staged window.nsContextMenu with a surplus method -> red, naming 'nsContextMenu.zzzSurplusMenuMethod' DEAD SURFACE`);

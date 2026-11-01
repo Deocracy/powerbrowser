@@ -4532,7 +4532,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools", "webTabContextMenuAction"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -5042,6 +5042,10 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
       return webTabDevtoolsReply(kind, data.tabId);
+    }
+    // PROMPT-04 (D-09): the page menu pick, the first privileged kind here; walls in handlePageMenuAction (Phase 35 section).
+    case "webTabContextMenuAction": {
+      return handlePageMenuAction(data, actorRef);
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -6807,6 +6811,7 @@ ChromeUtils.defineESModuleGetters(furnitureLazy, {
 
 function installShellFurnitureReceivers(window) {
   installTooltipsAndLinkStatus(window);
+  installPageContextMenu(window);
 }
 
 // A hovered link as browser.js:1985-2005 shows it: unescaped for display, the
@@ -6895,4 +6900,208 @@ function installTooltipsAndLinkStatus(window) {
     },
   };
   window.docShell.treeOwner.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIAppWindow).XULBrowserWindow = window.XULBrowserWindow;
+}
+
+// PROMPT-04 (D-02, D-06, D-09, D-12): the page context menu. ContextMenuParent
+// writes window.nsContextMenu.contentData and opens #contentAreaContextMenu
+// (ContextMenuParent.sys.mjs:190-256); its message cannot be observed from outside
+// the actor. So the shim keeps the data of a visible overlay only, the stub's
+// popupshowing is always cancelled, and the rows reach Theia as a pageContextMenu
+// push. A pick comes back as webTabContextMenuAction naming the tab, the menu and
+// the row, never a target: every URL and principal is read from the captured data.
+
+// One row per upstream element, in browser-context.inc.xhtml order: `id` is the
+// element id, `l10n` its data-l10n-id in browserContext.ftl (or `bundle`, a
+// browser.properties key), `when` (and `off`, `on`) name PAGE_MENU_WHEN
+// predicates, `runs` says who performs it. verify-shell-furniture.mjs rules 5-6
+// compare every field with upstream and with the two row dispatchers.
+const PAGE_MENU_ROWS = Object.freeze([
+  { id: "context-copylink", l10n: "main-context-menu-copy-link-simple", when: "copyLink", runs: "chrome", group: "copy" },
+]);
+
+// Upstream's show, disable and check conditions (nsContextMenu.sys.mjs), read
+// over the captured context plus the facts pageMenuFacts adds.
+const PAGE_MENU_WHEN = Object.freeze({
+  copyLink: f => f.onLink && !f.onMailtoLink && !f.onTelLink, // :1033-1037
+});
+
+const PAGE_MENU_TTL_MS = 60000;
+const pageMenus = new WeakMap(); // shell window -> { captured, kept, pending, nextMenuId, grants, nextGrant }
+const pageMenuLabelCache = new Map();
+let pageMenuStrings = null;
+
+function pageMenuState(window) {
+  let state = pageMenus.get(window);
+  if (!state) {
+    state = { captured: null, kept: false, pending: null, nextMenuId: 0, grants: new Map(), nextGrant: 0 };
+    pageMenus.set(window, state);
+  }
+  return state;
+}
+
+const pageMenuFlatRows = (rows = PAGE_MENU_ROWS) => rows.flatMap(row => [row, ...(row.children ? pageMenuFlatRows(row.children) : [])]);
+
+// The context fields ContextMenuChild sent, plus what the parent knows.
+function pageMenuFacts(data) {
+  return { ...data.context, selected: !!data.selectionInfo?.text };
+}
+
+// Firefox's own strings, formatted once per id: the label attribute, or the
+// aria-label of the Linux navigation group that upstream draws as icon buttons.
+async function pageMenuFormatLabels(rows) {
+  const missing = [...new Set(rows.filter(row => row.l10n && !pageMenuLabelCache.has(row.l10n)).map(row => row.l10n))];
+  if (!missing.length) {
+    return;
+  }
+  pageMenuStrings ??= new Localization(["browser/browserContext.ftl", "branding/brand.ftl"]);
+  const messages = await pageMenuStrings.formatMessages(missing.map(id => ({ id, args: { shortcut: "" } })));
+  missing.forEach((id, i) => {
+    const attrs = new Map((messages[i]?.attributes ?? []).map(attr => [attr.name, attr.value]));
+    pageMenuLabelCache.set(id, attrs.get("label") ?? attrs.get("aria-label") ?? messages[i]?.value ?? "");
+  });
+}
+
+// Rows whose condition holds, as push items (labels, never a URL). Enabled leaf
+// rows go into `offered`, the only ids a pick may name.
+function pageMenuItems(rows, facts, offered) {
+  const items = [];
+  for (const row of rows) {
+    if (!PAGE_MENU_WHEN[row.when](facts)) {
+      continue;
+    }
+    const item = { id: row.id, label: pageMenuLabelCache.get(row.l10n) ?? "", enabled: !(row.off && PAGE_MENU_WHEN[row.off](facts)), group: row.group };
+    if (row.on) {
+      item.checked = !!PAGE_MENU_WHEN[row.on](facts);
+    }
+    if (row.children) {
+      item.children = pageMenuItems(row.children, facts, offered);
+      if (!item.children.length) {
+        continue;
+      }
+    } else if (item.enabled) {
+      offered.add(row.id);
+    }
+    items.push(item);
+  }
+  return items;
+}
+
+function installPageContextMenu(window) {
+  const document = window.document;
+  const theiaBrowser = window.powerbrowserGetBrowser();
+  const state = pageMenuState(window);
+  // T-35-11: only a visible overlay's capture is kept. The actor reads
+  // contentData.context right after writing it (ContextMenuParent.sys.mjs:219),
+  // so the getter returns what was written either way.
+  window.nsContextMenu = {
+    get contentData() {
+      return state.captured;
+    },
+    set contentData(data) {
+      state.captured = data;
+      state.kept = tabIdOfBrowser(data?.browser) !== null && data.browser.style.visibility === "visible";
+    },
+  };
+  document.getElementById("contentAreaContextMenu").addEventListener(
+    "popupshowing",
+    event => {
+      event.preventDefault(); // the native popup never opens
+      const { captured: data, kept } = state;
+      state.captured = null;
+      state.kept = false;
+      if (!data) {
+        return;
+      }
+      if (!kept) {
+        data.actor.hiding();
+        return;
+      }
+      openPageMenu(window, theiaBrowser, state, data).catch(err => {
+        PowerBrowserAPI.log("error", `[web-tab] pageContextMenu failed: ${err && err.message ? err.message : err}`);
+        data.actor.hiding();
+      });
+    },
+    true
+  );
+}
+
+async function openPageMenu(window, theiaBrowser, state, data) {
+  const tabId = tabIdOfBrowser(data.browser);
+  const menuId = ++state.nextMenuId;
+  state.pending?.data.actor.hiding();
+  const pending = { menuId, tabId, data, offered: new Set(), at: Date.now() };
+  state.pending = pending;
+  const facts = pageMenuFacts(data);
+  await pageMenuFormatLabels(pageMenuFlatRows());
+  if (state.pending !== pending) {
+    return; // a newer right-click replaced this one while the strings formatted
+  }
+  const items = pageMenuItems(PAGE_MENU_ROWS, facts, pending.offered);
+  if (!items.length) {
+    state.pending = null;
+    data.actor.hiding();
+    return;
+  }
+  // Theia-frame client pixels from the device-pixel screen point the child sent.
+  const frame = theiaBrowser.getBoundingClientRect();
+  const x = data.context.screenXDevPx / window.devicePixelRatio - window.mozInnerScreenX - frame.left;
+  const y = data.context.screenYDevPx / window.devicePixelRatio - window.mozInnerScreenY - frame.top;
+  theiaBrowser.focus();
+  sendWebTabPush(theiaBrowser, { kind: "pageContextMenu", tabId, menuId, x, y, items });
+}
+
+// T-35-09: the payload names the tab, the menu and the row. The menu is single
+// use and at most a minute old, the row must be one this menu offered, and the
+// reply never echoes a URL. Logs carry the kind and the error text only.
+async function handlePageMenuAction(data, actorRef) {
+  const kind = data.kind;
+  if (!webTabIdIsValid(data.tabId)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+  }
+  if (!Number.isSafeInteger(data.menuId) || (data.itemId !== null && typeof data.itemId !== "string")) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed page menu pick" };
+  }
+  const state = pageMenuState(actorRef.browsingContext.top.embedderElement.ownerGlobal);
+  const pending = state.pending;
+  if (!pending || pending.menuId !== data.menuId || pending.tabId !== data.tabId) {
+    return { ok: true, kind, where: "stale" };
+  }
+  state.pending = null;
+  try {
+    if (Date.now() - pending.at > PAGE_MENU_TTL_MS) {
+      return { ok: true, kind, where: "stale" };
+    }
+    if (data.itemId === null) {
+      return { ok: true, kind, where: "dismissed" };
+    }
+    if (!pending.offered.has(data.itemId)) {
+      return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a row this menu did not offer" };
+    }
+    if (pageMenuFlatRows().find(row => row.id === data.itemId).runs === "frontend") {
+      return { ok: true, kind, where: "frontend" };
+    }
+    return { ok: true, kind, ...(await runPageMenuRow(data.itemId, pending.data, state)) };
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[web-tab] ${kind} failed: ${err && err.message ? err.message : err}`);
+    return { ok: false, reason: "failed", message: "handleWebTabAction: the page menu row failed" };
+  } finally {
+    pending.data.actor.hiding();
+  }
+}
+
+// The chrome-run rows (browser-context.js arms and the nsContextMenu methods they call).
+async function runPageMenuRow(id, data, state) {
+  const context = data.context;
+  switch (id) {
+    case "context-copylink": // upstream copyLink
+      copyFromPage(data, context.linkURL.replace(/^view-source:/, ""));
+      return { where: "done" };
+    default:
+      throw new Error(`no dispatcher arm for ${id}`);
+  }
+}
+
+// T-35-13: written only on an explicit pick of a copy row.
+function copyFromPage(data, text) {
+  Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString(text, data.frameBrowsingContext.currentWindowGlobal);
 }

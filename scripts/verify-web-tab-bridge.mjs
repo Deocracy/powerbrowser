@@ -62,6 +62,9 @@ const TAB_URIS_DIR = 'theia/extensions/tab-uris/src/browser';
  * privileged class only under checkWebTabPrivileged: the frontend method
  * exists, it is called only from the chrome-bar event-handler tree, and no
  * command or keybinding file names the kind or calls its method.
+ * Phase 35 plan 03 (D-09): `webTabContextMenuAction` is the first privileged kind
+ * with a literal sender rather than a web-tab.ts method; PRIVILEGED_WEB_TAB_KINDS
+ * below names each privileged kind's reason and owning file.
  */
 const KIND_CLASS_NAMES = ['tab-navigation', 'tab-lifecycle', 'selection', 'privileged'];
 const KIND_CLASSES = new Map([
@@ -108,6 +111,24 @@ const KIND_CLASSES = new Map([
     ['webTabReader', 'tab-navigation'],
     ['webTabViewSource', 'tab-navigation'],
     ['webTabDevtools', 'tab-navigation'],
+    // Phase 35 plan 03 (PROMPT-04, D-09): the page menu pick performs a row outside the tab's own navigation
+    // (clipboard writes, a new tab with the page's principal), so privileged; fenced to its owning file below.
+    ['webTabContextMenuAction', 'privileged'],
+]);
+
+/**
+ * Phase 35 plan 03 (D-09): each privileged webTab kind, with its reason and the one file that owns its sender.
+ * Owner WEB_TAB is the Phase 31 shape: a same-named web-tab.ts method called only from the chrome-bar
+ * event-handler tree (checkWebTabPrivileged). Any other owner is a literal sender: the literal
+ * `kind: '<kind>'` appears in that file and in the web-tab.ts union only, derived over every chrome-bar and
+ * tab-uris source. Compared with the privileged entries of KIND_CLASSES as set equality.
+ */
+const PAGE_CONTEXT_MENU = `${CHROME_BAR_DIR}/page-context-menu.ts`;
+const PRIVILEGED_WEB_TAB_KINDS = new Map([
+    ['webTabSetPermission', { owner: WEB_TAB, reason: 'writes a site permission' }],
+    ['webTabClearSiteData', { owner: WEB_TAB, reason: "clears a site's stored data" }],
+    ['webTabShieldToggle', { owner: WEB_TAB, reason: 'writes the per-site shield exception' }],
+    ['webTabContextMenuAction', { owner: PAGE_CONTEXT_MENU, reason: 'performs a page menu row: a clipboard write, a new tab with the page principal, a page media or frame command' }],
 ]);
 
 /**
@@ -238,7 +259,7 @@ function classMethodBodies(text) {
 /**
  * @returns {string[]} failure messages -- empty means the bridge contract holds.
  */
-function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
+function checkBridge(raw, storeClasses = STORE_KIND_CLASSES, kindClasses = KIND_CLASSES, privilegedKinds = PRIVILEGED_WEB_TAB_KINDS) {
     const failures = [];
     const src = Object.fromEntries(Object.entries(raw).map(([file, text]) => [file, stripComments(text)]));
 
@@ -467,9 +488,10 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
     }
 
     // 11. CLASSIFICATION (privileged-kind rule): every webTab arm in either
-    // handler has one class, and the privileged class is empty.
+    // handler has one class, and each privileged kind is listed with its reason
+    // and sent only from its owning file.
     if (apiKinds.length) {
-        const { surplus, missing } = diff(apiKinds, [...KIND_CLASSES.keys()]);
+        const { surplus, missing } = diff(apiKinds, [...kindClasses.keys()]);
         if (surplus.length) {
             failures.push(`classification: webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): ${surplus.join(', ')}`);
         }
@@ -477,12 +499,12 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
             failures.push(`classification: KIND_CLASSES entries with no case arm left (stale): ${missing.join(', ')}`);
         }
     }
-    for (const [kind, kindClass] of KIND_CLASSES) {
+    for (const [kind, kindClass] of kindClasses) {
         if (!KIND_CLASS_NAMES.includes(kindClass)) {
             failures.push(`classification: ${kind} has the unknown class '${kindClass}'`);
         }
     }
-    failures.push(...checkWebTabPrivileged(src, KIND_CLASSES));
+    failures.push(...checkWebTabPrivileged(src, kindClasses, privilegedKinds));
 
     failures.push(...checkStoreKinds(src, storeClasses));
     return failures;
@@ -496,14 +518,41 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
  * method in web-tab.ts, be called only from the chrome-bar event-handler tree,
  * and be named or called by no command or keybinding file.
  */
-function checkWebTabPrivileged(src, classes) {
+function checkWebTabPrivileged(src, classes, privilegedKinds) {
     const failures = [];
     const commandLike = Object.entries(src).filter(([file, text]) =>
         (text.includes('registerCommand(') || text.includes('registerKeybinding(')) && file.startsWith(`${CHROME_BAR_DIR}/`));
-    for (const [kind, kindClass] of classes) {
-        if (kindClass !== 'privileged') {
+    const privileged = [...classes].filter(([, kindClass]) => kindClass === 'privileged').map(([kind]) => kind);
+    const listed = diff(privileged, [...privilegedKinds.keys()]);
+    for (const kind of listed.surplus) {
+        failures.push(`classification: the privileged webTab kind ${kind} is not listed in PRIVILEGED_WEB_TAB_KINDS with its reason and owning file`);
+    }
+    for (const kind of listed.missing) {
+        failures.push(`classification: PRIVILEGED_WEB_TAB_KINDS lists ${kind}, which KIND_CLASSES does not class privileged (stale)`);
+    }
+    const frontendFiles = Object.keys(src).filter(file => file.startsWith(`${CHROME_BAR_DIR}/`) || file.startsWith(`${TAB_URIS_DIR}/`));
+    for (const kind of privileged) {
+        for (const [file, text] of commandLike) {
+            if (new RegExp(`\\b${kind}\\b`).test(text)) {
+                failures.push(`classification: the privileged webTab kind ${kind} is named by a command or keybinding file, ${file}`);
+            }
+        }
+        const owner = privilegedKinds.get(kind)?.owner;
+        if (!owner || owner === WEB_TAB) {
             continue;
         }
+        // A literal sender: the kind literal lives in its owning file and the web-tab.ts union, nowhere else.
+        const literal = new RegExp(`kind:\\s*['"]${kind}['"]`);
+        if (!literal.test(src[owner] ?? '')) {
+            failures.push(`classification: the privileged webTab kind ${kind} is no longer sent from its owning file ${owner}`);
+        }
+        for (const file of frontendFiles) {
+            if (file !== owner && file !== WEB_TAB && literal.test(src[file])) {
+                failures.push(`classification: the privileged webTab kind ${kind} is sent from ${file}, outside its owning file ${owner}`);
+            }
+        }
+    }
+    for (const kind of privileged.filter(name => privilegedKinds.get(name)?.owner === WEB_TAB)) {
         const method = kind.replace(/^webTab/, '').replace(/^[A-Z]/, c => c.toLowerCase());
         if (!new RegExp(`^\\s+${method}\\(`, 'm').test(src[WEB_TAB] ?? '')) {
             failures.push(`classification: the privileged webTab kind ${kind} has no frontend method ${method}( in ${WEB_TAB}`);
@@ -514,11 +563,6 @@ function checkWebTabPrivileged(src, classes) {
             }
             if (text.includes(`.${method}(`) && file.startsWith(`${CHROME_BAR_DIR}/`) && (text.includes('registerCommand(') || text.includes('registerKeybinding('))) {
                 failures.push(`classification: the privileged webTab kind ${kind} is called from a command or keybinding file, ${file}`);
-            }
-        }
-        for (const [file, text] of commandLike) {
-            if (new RegExp(`\\b${kind}\\b`).test(text)) {
-                failures.push(`classification: the privileged webTab kind ${kind} is named by a command or keybinding file, ${file}`);
             }
         }
     }
@@ -828,17 +872,40 @@ function selfTest() {
             sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace(/^(\s+)setPermission\(/m, '$1setPermissionGone(') },
             expect: 'the privileged webTab kind webTabSetPermission has no frontend method setPermission(',
         },
+        // Phase 35 plan 03 (D-09): the page menu pick, the first literal-sender privileged kind.
+        {
+            name: 'planted unclassified webTabContextMenuAction arm',
+            sources: clean,
+            kindClasses: new Map([...KIND_CLASSES].filter(([kind]) => kind !== 'webTabContextMenuAction')),
+            expect: 'webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): webTabContextMenuAction',
+        },
+        {
+            name: 'planted privileged kind missing from PRIVILEGED_WEB_TAB_KINDS',
+            sources: clean,
+            privilegedKinds: new Map([...PRIVILEGED_WEB_TAB_KINDS].filter(([kind]) => kind !== 'webTabContextMenuAction')),
+            expect: 'the privileged webTab kind webTabContextMenuAction is not listed in PRIVILEGED_WEB_TAB_KINDS',
+        },
+        {
+            name: 'planted page menu pick sent from a second chrome-bar file',
+            sources: { ...clean, [WIDGET]: clean[WIDGET] + "\nexport const plantedPick = (channel) => channel.request({ kind: 'webTabContextMenuAction', tabId: 'x', menuId: 1, itemId: null });\n" },
+            expect: `the privileged webTab kind webTabContextMenuAction is sent from ${WIDGET}, outside its owning file ${PAGE_CONTEXT_MENU}`,
+        },
+        {
+            name: 'planted page menu without its pageContextMenu subscription',
+            sources: { ...clean, [PAGE_CONTEXT_MENU]: clean[PAGE_CONTEXT_MENU].replace("this.channel.onPush('pageContextMenu',", 'this.channel.onPushGone(') },
+            expect: 'chrome pushes kinds no frontend source subscribes to: pageContextMenu',
+        },
     ];
 
     let failed = 0;
     for (const testCase of cases) {
         const mutated = Object.keys({ ...clean, ...testCase.sources }).some(file => testCase.sources[file] !== clean[file]);
-        if (!mutated && !testCase.storeClasses) {
+        if (!mutated && !testCase.storeClasses && !testCase.kindClasses && !testCase.privilegedKinds) {
             console.error(`verify-web-tab-bridge --self-test: FAIL -- '${testCase.name}' did not modify any source; the anchor it edits has drifted`);
             failed++;
             continue;
         }
-        const failures = checkBridge(testCase.sources, testCase.storeClasses);
+        const failures = checkBridge(testCase.sources, testCase.storeClasses, testCase.kindClasses, testCase.privilegedKinds);
         if (!failures.some(f => f.includes(testCase.expect))) {
             console.error(`verify-web-tab-bridge --self-test: FAIL -- '${testCase.name}' did not go red naming '${testCase.expect}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
             failed++;
