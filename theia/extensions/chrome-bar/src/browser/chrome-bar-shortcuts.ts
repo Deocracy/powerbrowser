@@ -23,6 +23,7 @@ import {
     chooseSaveDestination,
     focusAddressPill,
     openBookmarkStar,
+    openClearHistory,
     openFindBarFor,
     reopenLastClosedTab,
     toggleBookmarksToolbar,
@@ -90,6 +91,8 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     // Phase 33 plan 03 (BMK-03, BMK-04, D-15): the page-focused halves; the Theia-focused twins are chrome-bar-keybindings.ts.
     { id: 'reopenClosedTab', key: 'T', modifiers: 'accel,shift', label: 'Ctrl+Shift+T', macLabel: '⇧⌘T' },
     { id: 'toggleBookmarksToolbar', key: 'B', modifiers: 'accel,shift', label: 'Ctrl+Shift+B', macLabel: '⇧⌘B' },
+    // Phase 33 plan 04 (BMK-05, D-15): opens the clear-history picker; the Theia-focused twin is chrome-bar-keybindings.ts.
+    { id: 'clearHistory', keycode: 'VK_DELETE', modifiers: 'accel,shift', label: 'Ctrl+Shift+Del', macLabel: '⇧⌘⌦' },
 ];
 
 export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
@@ -201,6 +204,8 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         // BMK-03/BMK-04 (T-27-19): the widget's reopen path and the toolbar toggle (a setting), never a store kind.
         ['reopenClosedTab', () => reopenLastClosedTab()],
         ['toggleBookmarksToolbar', () => toggleBookmarksToolbar()],
+        // BMK-05 (T-27-19): opens the picker only; the clear runs from the picker's confirm, never from the relay.
+        ['clearHistory', () => openClearHistory()],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */

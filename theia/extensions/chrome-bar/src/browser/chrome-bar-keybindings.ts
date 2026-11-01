@@ -2,6 +2,7 @@ import { injectable } from '@theia/core/shared/inversify';
 import { KeybindingContribution, KeybindingRegistry } from '@theia/core/lib/browser';
 import {
     CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID,
+    CHROME_BAR_CLEAR_HISTORY_COMMAND_ID,
     CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,
     CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID,
     CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID,
@@ -62,6 +63,12 @@ export class ChromeBarKeybindingContribution implements KeybindingContribution {
             command: CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID,
             keybinding: 'ctrlcmd+shift+b',
             when: '!editorFocus && !terminalFocus',
+        });
+        // BMK-05 (D-15): Ctrl+Shift+Del opens the clear-history picker from anywhere in Theia. No when-clause:
+        // no installed Theia or Monaco keybinding uses Ctrl+Shift+Delete, so editors and terminals lose nothing.
+        keybindings.registerKeybinding({
+            command: CHROME_BAR_CLEAR_HISTORY_COMMAND_ID,
+            keybinding: 'ctrlcmd+shift+delete',
         });
         // WR-02: F6/Shift+F6 in the pill go to the page (the pill's own keydown
         // handler). Theia's capture-phase dispatch would otherwise run

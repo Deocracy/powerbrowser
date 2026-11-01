@@ -759,7 +759,7 @@ const EXPECTED_SHORTCUT_COPY = new Set([
   "Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+6", "Alt+7", "Alt+8", "Alt+9",
   "F6", "Shift+F6",
   "Ctrl+F", "F3", "Shift+F3", "Ctrl+=", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+M", "Ctrl+P", "Ctrl+S", "Ctrl+U", "F12", "Ctrl+D",
-  "Ctrl+Shift+T", "Ctrl+Shift+B",
+  "Ctrl+Shift+T", "Ctrl+Shift+B", "Ctrl+Shift+Del",
   "Back", "Forward", "Reload", "Stop", "Home", "New Tab",
 ]);
 

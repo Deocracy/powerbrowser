@@ -430,6 +430,8 @@ document.addEventListener(
       // Phase 33 plan 03 (BMK-03, BMK-04, D-15): the reopened tab takes focus, so reopen lands in Theia; the toolbar toggle leaves focus in the page.
       { id: "reopenClosedTab", key: "T", modifiers: "accel,shift", reserved: false, landsInTheia: true, firefox: "key_restoreLastClosedTabOrWindowOrSession" },
       { id: "toggleBookmarksToolbar", key: "B", modifiers: "accel,shift", reserved: false, landsInTheia: false, firefox: "viewBookmarksToolbarKb" },
+      // Phase 33 plan 04 (BMK-05, D-15): the clear-history picker opens in Theia and takes focus, so the row lands there.
+      { id: "clearHistory", keycode: "VK_DELETE", modifiers: "accel,shift", reserved: false, landsInTheia: true, firefox: "key_sanitize" },
       // No upstream <key>: content's document navigation consumes F6, so these ride the reply listener below.
       { id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false, landsInTheia: true, via: "replyListener" },
       { id: "focusAddressShiftF6", keycode: "VK_F6", modifiers: "shift", reserved: false, landsInTheia: true, via: "replyListener" },

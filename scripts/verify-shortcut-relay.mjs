@@ -88,6 +88,7 @@ export const RESERVED_EXCEPTIONS = new Map([
  */
 export const ALWAYS_ON_TWINS = new Map([
     ['reopenClosedTab', "Theia's reopen-closed-editor is Alt+Shift+T in the browser build and no installed package binds Ctrl+Shift+T, so reopening a closed tab from an editor takes nothing (Phase 33 D-15)"],
+    ['clearHistory', 'no installed Theia or Monaco keybinding uses Ctrl+Shift+Delete (Monaco binds Shift+Delete to cut, never with Ctrl), so opening the clear-history picker from an editor takes nothing (Phase 33 D-15)'],
 ]);
 
 const KEY_NAMES = {
@@ -98,6 +99,7 @@ const KEY_NAMES = {
     VK_TAB: ['Tab', '⇥'],
     VK_PAGE_UP: ['Page Up', '⇞'],
     VK_PAGE_DOWN: ['Page Down', '⇟'],
+    VK_DELETE: ['Del', '⌦'],
 };
 
 const mods = row => new Set(String(row.modifiers ?? '').split(',').map(m => m.trim()).filter(Boolean));
@@ -364,6 +366,9 @@ function theiaRowOf(keybinding) {
     const modifiers = parts.map(p => (p === 'ctrlcmd' ? 'accel' : p)).join(',');
     if (/^[a-z0-9]$/.test(key)) {
         return { key: key.toUpperCase(), modifiers };
+    }
+    if (key === 'delete') {
+        return { keycode: 'VK_DELETE', modifiers };
     }
     return /^f\d{1,2}$/.test(key) ? { keycode: `VK_${key.toUpperCase()}`, modifiers } : null;
 }
@@ -774,6 +779,10 @@ const PLANTS = [
     { name: 'single-sided Ctrl+Shift+T: Theia binding gone', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+shift+t',", to: "keybinding: 'ctrlcmd+alt+shift+f8',", expect: 'reopenClosedTab: the page-focused row of CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID has no Theia-focused twin' },
     { name: 'single-sided Ctrl+Shift+B: chrome row gone', rel: CHROME_REL, from: '      { id: "toggleBookmarksToolbar", key: "B", modifiers: "accel,shift", reserved: false, landsInTheia: false, firefox: "viewBookmarksToolbarKb" },\n', to: '', expect: 'toggleBookmarksToolbar: a PAGE_SHORTCUTS row with no chrome row' },
     { name: 'Ctrl+Shift+B twin takes the key from Monaco', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+shift+b',\n            when: '!editorFocus && !terminalFocus',", to: "keybinding: 'ctrlcmd+shift+b',", expect: "toggleBookmarksToolbar: the Theia-focused twin 'ctrlcmd+shift+b' has a when clause" },
+    // Phase 33 plan 04 (D-15): Ctrl+Shift+Del on one focus path only, and the picker twin made editor-scoped while excepted.
+    { name: 'single-sided Ctrl+Shift+Del: chrome row gone', rel: CHROME_REL, from: '      { id: "clearHistory", keycode: "VK_DELETE", modifiers: "accel,shift", reserved: false, landsInTheia: true, firefox: "key_sanitize" },\n', to: '', expect: 'clearHistory: a PAGE_SHORTCUTS row with no chrome row' },
+    { name: 'single-sided Ctrl+Shift+Del: Theia binding gone', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+shift+delete',", to: "keybinding: 'ctrlcmd+alt+shift+f7',", expect: 'clearHistory: the page-focused row of CHROME_BAR_CLEAR_HISTORY_COMMAND_ID has no Theia-focused twin' },
+    { name: 'stale always-on Ctrl+Shift+Del twin', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+shift+delete',", to: "keybinding: 'ctrlcmd+shift+delete', when: '!editorFocus && !terminalFocus',", expect: 'clearHistory: stale ALWAYS_ON_TWINS entry' },
     { name: 'stale always-on twin', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+shift+t',", to: "keybinding: 'ctrlcmd+shift+t', when: '!editorFocus && !terminalFocus',", expect: 'reopenClosedTab: stale ALWAYS_ON_TWINS entry' },
     { name: 'quit-badge-drift', rel: COPY_REL, from: 'menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,', to: 'menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Alt+Q)`,', expect: 'quit key: the Quit row badge' },
 ];
