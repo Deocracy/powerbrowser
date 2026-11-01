@@ -268,7 +268,7 @@ here owns.
 | `linux-release-pipeline-and-update-channel` | Confirm the `release` environment still carries a required reviewer and that the MAR key is an **environment** secret; create no repository-level Actions secret (`repo-controls` asserts that count stays zero) | Read-back of a control the owner owns |
 | `linux-release-pipeline-and-update-channel` | Create the public repository `Deocracy/powerbrowser-updates` with a root `_redirects` and a placeholder no-update descriptor at `default/Linux_x86_64-gcc3/update.xml`; create the Cloudflare Pages project (empty build command, output `/`); add `updates.powerbrowser.org` as a custom domain | Cloudflare account and DNS |
 | `linux-release-pipeline-and-update-channel` | Probe the eleven-segment path live with real client segment shapes, then switch to a minimal `_worker.js` if the placeholder rule does not match, and record which mechanism shipped | Live infrastructure; the branch cannot be decided from documentation |
-| `linux-release-pipeline-and-update-channel` | Create a fine-grained PAT with Contents write on `powerbrowser-updates` only; store it as a `release` environment secret | Secret custody |
+| `linux-release-pipeline-and-update-channel` | Create no personal access token for the descriptor repository. The `descriptor` job mints a `powerbrowser-bot` App token scoped to `powerbrowser-updates`; generate the bot App key once and store it as the `BOT_APP_PRIVATE_KEY` secret in each of the `bot`, `release` and `descriptor` environments, with the App id as the `BOT_APP_ID` variable | Secret custody |
 | `linux-release-pipeline-and-update-channel` | Fill the four website routes (`/`, `/download`, `/privacy`, `/legal`, each a real file, no fragment redirect); with the `website-publish-ready` row green, deploy `powerbrowser.org` | Site repository and Pages |
 | `linux-release-pipeline-and-update-channel` | Approve the `release` environment gate after reviewing the artifact list and the descriptor commit diff; hold any announcement until the release-mode hop drill is green | The approval is the only point at which the MAR key is used |
 | `windows-unsigned` | Provision the `pkg-win11` guest: confirm the media, create or start the libvirt NAT network, create a **new** `pkg-win11` disk (leave the pre-existing shut-off `win11` domain alone), define the domain with qcow2 nvram, install Windows 11, install the QEMU guest agent and stock Firefox, take the `clean-baseline` snapshot | `sudo` for `qemu:///system` |
@@ -955,12 +955,16 @@ that is not admitted.
 | Repository Actions secrets | none, and the count must stay zero | n/a | `repo-controls` asserts it |
 | `release` environment | `MAR_SIGNING_P12_B64`: the base64 of the **primary** `.p12`. The owner sets it by hand, never through Actions and never through the runner: on `legion`, as the owner, with one offline medium mounted and the clone as the working directory, run `base64 -w0 <medium>/powerbrowser-mar.p12 \| gh secret set MAR_SIGNING_P12_B64 --env release`, then unmount the medium. Next step: run `gh secret list --env release` and confirm the updated date is today | `mar-signing-and-update-integrity` | GitHub, gated on the required reviewer |
 | `release` environment | `MAR_SIGNING_P12_PASSWORD`: the primary key store's password, which also protects the primary `.p12`. Same session: `gh secret set MAR_SIGNING_P12_PASSWORD --env release < ~/.config/powerbrowser-release/mar-key/password.txt`. Next step: run `gh secret list --env release` and confirm both rows carry the same updated date | `mar-signing-and-update-integrity` | as above |
-| `release` environment | descriptor-repository PAT (Contents write on `powerbrowser-updates` only) | `linux-release-pipeline-and-update-channel` | as above |
+| `bot`, `release` and `descriptor` environments | `BOT_APP_PRIVATE_KEY`: the `powerbrowser-bot` App key, stored once per environment because a job references exactly one environment (the App id is the `BOT_APP_ID` variable) | Phase 43, the first consumer | GitHub, gated on each environment's protection; the owner holds the offline copy |
+| `descriptor` environment | no descriptor-repository PAT: the descriptor PAT is replaced by the scoped App token, a `powerbrowser-bot` token minted in the job with `repositories: powerbrowser-updates`, revoked when the job ends | `linux-release-pipeline-and-update-channel` | n/a, nothing to rotate |
+| `fixer` and `triage` environments | the Anthropic credential for each (see the fixer sections); no App key | the fixer and triage stages | GitHub, gated on the environment's branch policy |
+| Cloudflare Worker | the `powerbrowser-clock` App key, held by the Worker and not by any GitHub environment | Phase 43 | the Worker's secret store |
 | `winget` environment | `WINGET_TOKEN`: a classic PAT with `public_repo` on a dedicated bot account whose only write access is its winget-pkgs fork (wingetcreate does not support fine-grained tokens), branch-restricted to `main`; it shares no environment with the signing key | `listings-and-cadence`, `package-channels` | the bot account holder, recorded in `docs/RENEWALS.md` |
-| Host filesystem on `legion` | `/var/lib/secrets/github-runner-registration`, root-owned mode 0600, present from minting; the token inside it expires after one hour and is harmless afterwards, and the file stays because the unit reads it on every start; the hook copy `/etc/pb-runner/legion-pre-job-hook.sh`, root-owned mode 0555 | `linux-release-pipeline-and-update-channel` | the operator; not readable by the runner user `pb-runner` |
+| Host filesystem on `legion` | no personal access token and no App key; only `/var/lib/secrets/github-runner-registration`, root-owned mode 0600, present from minting; the token inside it expires after one hour and is harmless afterwards, and the file stays because the unit reads it on every start; the hook copy `/etc/pb-runner/legion-pre-job-hook.sh`, root-owned mode 0555 | `linux-release-pipeline-and-update-channel` | the operator; not readable by the runner user `pb-runner` |
 | Two offline media, stored apart | On each: `powerbrowser-mar.p12` and `powerbrowser-mar-secondary.p12` (from the ceremony blocks' mandatory `pk12util` lines, each protected with its own store's `password.txt`) and both key-store passwords. The secondary `.p12` signs nothing and enters no environment until a rotation; if the owner ever dual-signs, it first gains its own named `release` rows in this table. The ceremony record holds each copy's existence and date, never a medium's location | `mar-signing-and-update-integrity` | the operator |
 
-No secret reaches `legion` through Actions. The build job holds `contents: read`,
+Holders are named here and values never are: nothing in this table, the tree or a log carries
+a token or key content. No secret reaches `legion` through Actions. The build job holds `contents: read`,
 no `environment:` and no `secrets.` reference; the static release-workflow gate
 asserts all three.
 
@@ -1296,6 +1300,12 @@ check runs as `release.yml`'s final job rather than on a timer. A daily liveness
 schedule remains an owner decision that has not been taken; if it is taken, it
 reverses D-77 and both `rebase-upstream.yml` and this section change together.
 
+The ESR 175 dates the cadence follows are nightly 2027-05-27, beta 2027-06-10 and release
+2027-06-29; ESR 153 ends with 153.27 on 2027-09-07, so PowerBrowser ships on 175.x before
+that date. The 153 point releases fall on 2026-11-10, 2026-11-24, 2026-12-08 and 2027-01-12.
+The `docs/RENEWALS.md` ESR rows carry the same dates and are checked against the Mozilla
+calendar before each train opens.
+
 ### Key rotation
 
 PowerBrowser's updater trusts two keys, one per certificate slot: the primary signs
@@ -1365,6 +1375,31 @@ is already configured in `.mozconfig` and in the `.#firefox` shell; stages
 same export, and `macos-adhoc-signed` adds `.#firefox-macos`, which inherits it.
 `flake.nix` defines no `.#firefox-win64` shell. The `.#theia` shell carries none
 and needs none. No second cache backend is added.
+
+### Rebuilding legion
+
+A rebuild of `legion` (reinstall, disk replacement or a new host) brings the runner back
+without storing a credential for it. The release build keeps up to four objdirs on the runner,
+about 14 GB each (about 56 GB), plus the roughly 5.6 GB `upstream/` checkout: the Linux release
+objdir, the N-plus-1 objdir used for the update hop, and the Windows and macOS target objdirs.
+Provision about 62 GB of free disk for them before registering.
+
+1. Restore `/etc/nixos` from its git remote and apply it with the `pkexec ... nrs` flow. The
+   `services.github-runners` block is declarative, so the runner user `pb-runner`, the work
+   directory `/var/lib/pb-runner` and the pre-job hook come back with it.
+2. Create `/var/lib/secrets/github-runner-registration` from a fresh registration token (see
+   "Runner registration through the `/etc/nixos` flow"). Old tokens are expired and a
+   rebuilt host is a new registration; remove the stale runner entry from the repository's
+   runner list first.
+3. Fetch `upstream/` with `scripts/fetch-upstream.sh` and run `nix develop .#firefox` once, so
+   the toolchain and `sccache` warm up. The four objdirs are build output and are not
+   restored; the first build of each is a full build (about 54 minutes for Linux).
+4. Confirm the runner shows online with its registered runner label (the one `release.yml`'s
+   `build-linux` job selects), that no PAT and no
+   App key exists on the host, and that the pre-job hook refuses a run that is not a
+   `workflow_dispatch` of `main`. The MAR key store at `~/.config/powerbrowser-release/mar-key/`
+   belongs to the owner's account, not the runner's, and a rebuild restores it only from the
+   offline `.p12` backup.
 
 ### Cloudflare upkeep
 
@@ -1686,8 +1721,9 @@ function, so `PopulategMARStrings` reads `/update-settings.ini`, fails, and retu
 verification` with exit 0, which means the build still carries
 `--enable-unverified-updates`.
 
-**The runner is offline.** `release.yml`'s build job queues forever rather than
-failing. Check the unit and the registration:
+**The runner is offline.** `release.yml`'s build job queues rather than failing, and
+GitHub cancels a self-hosted job that has waited 24 hours in the queue, so an offline runner
+ends the run after a 24-hour wait with no build. Check the unit and the registration:
 
 ```
 systemctl status github-runner-powerbrowser-release.service
