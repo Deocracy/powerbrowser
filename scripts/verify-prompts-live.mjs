@@ -51,7 +51,12 @@
  *                       (--scenario dialog-probe) it writes
  *                       .planning/probes/prompt-probe-verdict.json and its
  *                       evidence directory, replacing a provisional verdict.
- *                       Red when the stock dialog blocks the IDE.
+ *                       Red when the stock dialog blocks the IDE. When it does,
+ *                       an adopted tab is opened and relayFeasible is measured
+ *                       (relayFeasibleFrom: every host and adopted web tab has
+ *                       a getTabForBrowser node, and the cross-domain auth
+ *                       branch needs no stand-in widening); it can be false,
+ *                       which rule (p) routes to Chris (37-REVIEW WR-05).
  *   dialog           -- (37-03 Task 4) the same five kinds: each answer resolves
  *                       the page, an IDE edit lands and the shell's input stays
  *                       enabled while it is open, and the push sequence
@@ -673,9 +678,46 @@ function shellInputEnabled(app) {
         return window.docShell.treeOwner.QueryInterface(I.nsIBaseWindow).enabled;`);
 }
 
-/** The PromptParent tab branch's other gBrowser reads (:224-260) exist on the stand-in; getTabDialogBox itself is the open question. */
-function tabBranchReachable(app) {
-    return inChrome(app, `const g = window.gBrowser; return !!g && typeof g.getTabForBrowser === 'function' && 'selectedBrowser' in g;`);
+/**
+ * 37-REVIEW WR-05: the facts a tab-dialog relay would depend on, read live. PromptParent's tab branch (:222-260) keys the
+ * dialog on gBrowser.getTabForBrowser(browser), so every web tab, a host tab and an adopted one alike, must have a node;
+ * with privacy.authPromptSpoofingProtection on, a cross-domain auth prompt also reads gURLBar.setURI and
+ * setTabLabelForAuthPrompts, which the stand-in may not grow without the Pitfall-2 widening.
+ */
+async function tabBranchFacts(app) {
+    const tabs = await probe(app, `return get('ApplicationShell').getWidgets('main').filter(w => typeof w.tabId === 'string').map(w => ({ tabId: w.tabId, adopted: !!w.adopted }));`);
+    return inChrome(app, `const g = window.gBrowser;
+        const tabs = ${JSON.stringify(tabs ?? [])}.map(t => ({ ...t, tabbed: !!(g && overlayOf(t.tabId) && g.getTabForBrowser(overlayOf(t.tabId))) }));
+        return {
+            tabs,
+            selectedBrowser: !!g && 'selectedBrowser' in g,
+            authSpoof: Services.prefs.getBoolPref('privacy.authPromptSpoofingProtection', false),
+            authMembers: !!g && typeof g.setTabLabelForAuthPrompts === 'function' && typeof window.gURLBar?.setURI === 'function',
+        };`);
+}
+
+/** WR-05: the relay verdict from those facts. Every term can be false; `why` names each that is. */
+function relayFeasibleFrom(facts) {
+    const tabs = facts?.tabs ?? [];
+    const why = [
+        !tabs.some(t => !t.adopted) && 'no host tab measured',
+        !tabs.some(t => t.adopted) && 'no adopted tab measured',
+        ...tabs.filter(t => !t.tabbed).map(t => `getTabForBrowser has no node for ${t.adopted ? 'adopted' : 'host'} tab ${t.tabId}`),
+        !facts?.selectedBrowser && 'the stand-in has no selectedBrowser',
+        facts?.authSpoof && !facts?.authMembers && 'cross-domain auth needs gURLBar.setURI and setTabLabelForAuthPrompts (a Pitfall-2 widening)',
+    ].filter(Boolean);
+    return { feasible: why.length === 0, why };
+}
+
+/** WR-05: an adopted tab for the relay measurement, made by the blocked-popup Allow (the stock replay, adopted by Phase 36). */
+async function openAdoptedTab(app, fx) {
+    const opener = await openPage(app, fx, '/opener');
+    const from = (await pushes(app)).length;
+    await app.evaluateIn(opener.ctx, `(() => { window.open(${JSON.stringify(fx.url('/b'))}); return true; })()`);
+    if (await waitForPush(app, isBar(opener.tabId, 'blocked-popup', true), { from }) < 0 || await clickBar(app, opener.tabId, 'blocked-popup', 'allow-popup') !== 'clicked') {
+        return false;
+    }
+    return pollFor(async () => ((await mainOrder(app)).find(w => String(w.url).endsWith('/b')) ? true : null), 8000, 'the adopted tab').catch(() => false);
 }
 
 /** Opens an untitled editor in the Theia frame; returns the Theia document's BiDi context id, or a BROKEN reason. */
@@ -831,6 +873,13 @@ async function scenarioDialogProbe(app, fx, plant) {
         return `${BROKEN} no KWin screenshot for ${missingShots.join(', ')} (run with the sandbox off: spectacle needs the session DBus); no verdict written`;
     }
     const blocked = blockedKinds(run.rows);
+    let relay = null;
+    if (blocked.length) {
+        if (!await openAdoptedTab(app, fx)) {
+            return `${BROKEN} no adopted tab could be opened, so the relay's getTabForBrowser precondition was not measured; no verdict written`;
+        }
+        relay = relayFeasibleFrom(await tabBranchFacts(app));
+    }
     if (writeVerdict) {
         const pushLog = join(EVIDENCE_DIR, 'push-log.json');
         writeFileSync(join(REPO_ROOT, pushLog), `${JSON.stringify({ rows: run.rows, pushes: await pushes(app) }, null, 2)}\n`);
@@ -840,8 +889,9 @@ async function scenarioDialogProbe(app, fx, plant) {
             outcome: blocked.length ? 'stock-blocks-ide' : 'stock-keeps-ide-usable',
             provisional: false,
             source: 'live probe 1 (verify-prompts-live.mjs --scenario dialog-probe)',
-            relayFeasible: blocked.length ? await tabBranchReachable(app) : null,
+            relayFeasible: relay ? relay.feasible : null,
             evidence: {
+                relayWhy: relay ? relay.why : null,
                 screenshots: run.rows.map(r => r.shot.slice(REPO_ROOT.length + 1)),
                 pushLog,
                 ideEditOk: run.rows.every(r => r.landed && r.inputEnabled === true),
@@ -1407,6 +1457,25 @@ function staticAudit() {
     }
     if (!(PREFS[BEFOREUNLOAD_PREF] === false)) {
         failures.push(`PREFS does not turn ${BEFOREUNLOAD_PREF} off; the leave kind needs a gesture the harness never gives`);
+    }
+    // WR-05: the relay measurement can return false. A clean fact set is feasible, and each planted fault is not.
+    const cleanFacts = { tabs: [{ tabId: 'wt-h', adopted: false, tabbed: true }, { tabId: 'wt-a', adopted: true, tabbed: true }], selectedBrowser: true, authSpoof: true, authMembers: true };
+    if (!relayFeasibleFrom(cleanFacts).feasible) {
+        failures.push(`relayFeasibleFrom refuses a clean fact set (${relayFeasibleFrom(cleanFacts).why.join('; ')}) (broken instrument)`);
+    }
+    const relayPlants = [
+        ['adopted tab without a node', { ...cleanFacts, tabs: [cleanFacts.tabs[0], { ...cleanFacts.tabs[1], tabbed: false }] }, 'no node for adopted tab'],
+        ['no adopted tab measured', { ...cleanFacts, tabs: [cleanFacts.tabs[0]] }, 'no adopted tab measured'],
+        ['auth branch needs a widening', { ...cleanFacts, authMembers: false }, 'Pitfall-2 widening'],
+    ];
+    for (const [label, facts, expect] of relayPlants) {
+        const got = relayFeasibleFrom(facts);
+        if (got.feasible || !got.why.some(w => w.includes(expect))) {
+            failures.push(`relay plant '${label}' did not make relayFeasible false naming '${expect}' (got ${JSON.stringify(got)})`);
+        }
+    }
+    if (!/relayFeasible: relay \? relay\.feasible : null/.test(own)) {
+        failures.push('probe 1 does not write relayFeasible from relayFeasibleFrom; the route-to-Chris branch of rule (p) is unreachable');
     }
     return failures;
 }

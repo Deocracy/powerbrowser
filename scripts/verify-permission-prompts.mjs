@@ -57,8 +57,15 @@
  *       member retargets every content dialog onto the tab-dialog path.
  *       stock-blocks-ide with relayFeasible true requires the member;
  *       relayFeasible false is red (PROMPT-03 cannot be met as written; route
- *       to Chris). A provisional verdict (the owner default, before the live
- *       probe) is accepted and named in the output; it must claim no evidence.
+ *       to Chris). relayFeasible is measured live (verify-prompts-live.mjs
+ *       relayFeasibleFrom: every web tab, host and adopted, has a
+ *       getTabForBrowser node, and the cross-domain auth branch needs no
+ *       widening), so it can be false. A provisional verdict (the owner
+ *       default, before the live probe) is accepted and named in the output;
+ *       it must claim no evidence, and it is superseded by the live run: with
+ *       --require-live-verdict (the full-set row prompt-probe-verdict-live, run
+ *       by --gate at the end-of-milestone live pass) a provisional verdict is
+ *       red (37-REVIEW WR-05).
  *       A live verdict must carry its screenshots, push log and build, and the
  *       evidence paths must exist.
  *   (q) moved to verify-shell-furniture.mjs rule 13 at the Phase 35 merge.
@@ -285,7 +292,7 @@ function readSources() {
  * Rule (p): the probe-1 verdict against the tree's dialog state.
  * @returns {{failures: string[], outcome: string|null, provisional: boolean}}
  */
-function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, file))) {
+function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, file)), requireLive = false) {
     const failures = [];
     let verdict;
     try {
@@ -301,6 +308,9 @@ function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, fil
         failures.push(`dialog outcome: '${outcome}' is not one of ${OUTCOMES.join(', ')}`);
     }
     const shots = evidence.screenshots;
+    if (provisional === true && requireLive) {
+        failures.push(`dialog outcome: the provisional verdict has expired -- it stands only until the end-of-milestone live pass, which must run verify-prompts-live.mjs --scenario dialog-probe and supersede it with a live verdict (37-REVIEW WR-05)`);
+    }
     if (provisional === true) {
         if (!Array.isArray(shots) || shots.length || evidence.pushLog != null || evidence.ideEditOk != null || verdict.build != null) {
             failures.push(`dialog outcome: the provisional verdict claims live evidence -- a provisional verdict carries none until the live probe overwrites it`);
@@ -1123,16 +1133,24 @@ function selfTest() {
             console.log(`  ok  ${testCase.name} -> red, naming '${testCase.expect}'`);
         }
     }
+    // WR-05: under --require-live-verdict a provisional verdict is red, and a live one is not refused for being live.
+    const expiry = checkDialogOutcome({ ...clean, [VERDICT]: verdictWith({ provisional: true }) }, undefined, true).failures;
+    if (!expiry.some(f => f.includes('the provisional verdict has expired'))) {
+        console.error(`${NAME} --self-test: FAIL -- 'provisional verdict under --require-live-verdict' did not go red naming 'the provisional verdict has expired'; got: ${expiry.join(' | ') || '(green)'}`);
+        failed++;
+    } else {
+        console.log(`  ok  provisional verdict under --require-live-verdict -> red, naming 'the provisional verdict has expired'`);
+    }
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- the unmodified fixture is green and ${cases.length} planted faults all went red`);
+    console.log(`${NAME} --self-test: PASS -- the unmodified fixture is green and ${cases.length + 1} planted faults all went red`);
     return 0;
 }
 
 function main() {
     if (process.argv.includes('--help')) {
-        console.log('usage: verify-permission-prompts.mjs [--self-test]\nDerives the permission-prompt contract (panel, one construction site, own principal, forbidden kind family, facade audit, no request kind, display-only subscriber) from the tree and compares it.');
+        console.log('usage: verify-permission-prompts.mjs [--self-test | --require-live-verdict]\nDerives the permission-prompt contract (panel, one construction site, own principal, forbidden kind family, facade audit, no request kind, display-only subscriber) from the tree and compares it.');
         return 0;
     }
     if (process.argv.includes('--self-test')) {
@@ -1145,9 +1163,13 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    const dialog = checkDialogOutcome(sources);
+    const dialog = checkDialogOutcome(sources, undefined, process.argv.includes('--require-live-verdict'));
+    if (dialog.failures.length) {
+        console.error(`${NAME}: FAIL -- ${dialog.failures.join('; ')}`);
+        return 1;
+    }
     console.log(`${NAME}: dialog outcome ${dialog.outcome}${dialog.provisional ? ' (PROVISIONAL: the owner default pending live probe 1; the live dialog-probe run overwrites it with evidence)' : ' (live probe-1 verdict)'}; getTabDialogBox ${dialog.outcome === 'stock-keeps-ide-usable' ? 'absent, the stock window-modal fallback' : 'present, the audited relay member'}`);
-    console.log(`${NAME}: PASS -- one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, the sharing indicator follows chrome-observed webrtcUI state only, the stock prompter alone owns the credential fields, no credential reaches a push, a Theia message or a log, the notification bars sit outside the blocking layer and shrink the page rect, each bar answer resolves a chrome-held record of the sender's own tab, the bar action enum matches between sender and arm, openAdoptedWebTab has one call site, and no stock notification box is reached (the furniture rows (a), (j), (k), (q), (r) are verify-shell-furniture.mjs rule 13)`);
+    console.log(`${NAME}: PASS -- one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, the sharing indicator follows chrome-observed webrtcUI state only, the stock prompter alone owns the credential fields, no credential reaches a push, a Theia message or a log, the notification bars sit outside the blocking layer and shrink the page rect, each bar answer resolves a chrome-held record of the sender's own tab, the bar action enum matches between sender and arm, the blocked-popup Allow is the stock unblockPopup replay, and no stock notification box is reached (the furniture rows (a), (j), (k), (q), (r) are verify-shell-furniture.mjs rule 13)`);
     return 0;
 }
 

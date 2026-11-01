@@ -5201,6 +5201,9 @@ run_own_checks() {
       # target scenario, then one session per planted fault.
       "prompts-live|node $REPO_ROOT/scripts/verify-prompts-live.mjs"
       "prompts-live-self-test|node $REPO_ROOT/scripts/verify-prompts-live.mjs --self-test"
+      # 37-REVIEW WR-05: the probe-1 verdict must be live by the end-of-milestone pass. Text only, but full-set only,
+      # because the provisional owner default is expected to stand until that pass's dialog-probe run supersedes it.
+      "prompt-probe-verdict-live|node $REPO_ROOT/scripts/verify-permission-prompts.mjs --require-live-verdict"
 
       # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
       # and identity-local (31-01), site-panel (31-02: certificate, six tri-state
