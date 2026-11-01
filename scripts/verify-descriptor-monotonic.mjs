@@ -25,7 +25,13 @@
 //     published buildID with the same appVersion and the same build_target. The target is the
 //     <BUILD_TARGET> directory the candidate sits in; a directory that is not an OS_ABI token is a
 //     FAIL. Targets do not compare with each other: the update server selects a descriptor by
-//     BUILD_TARGET, so a downgrade exists only within one target, and targets build at different times. The comparison is a string comparison, which
+//     BUILD_TARGET, so a downgrade exists only within one target, and targets build at different times.
+//     The candidate's own Release is exempt from the order. Its patch URL is
+//     <mar_origin>/<tag>/<asset>, and a descriptor is offered once that Release is reachable, so the
+//     descriptor job may run before or after its own Release is published. When the Release named by
+//     <tag> is published, its manifest is the same build, not an older one: it must carry the
+//     candidate's appVersion, buildID and target exactly, else a FAIL naming both sides. Every
+//     other Release is compared by the strict rule. The comparison is a string comparison, which
 //     orders the same as the number because every BuildID is fourteen digits (%Y%m%d%H%M%S).
 //     An older or equal buildID fails, naming the descriptor, the offered buildID, the published
 //     buildID and its Release tag. Different appVersion lines do not compare.
@@ -55,6 +61,7 @@ import { fileURLToPath } from 'node:url';
 
 import { buildUpdateXml, parseUpdateXml } from './verify-mar-update-hop.mjs';
 import { API_VERSION_HEADER, repoSlug } from './verify-repo-controls.mjs';
+import { RELEASE_KEY_RE } from './lib/channel-identity.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'descriptor-monotonic';
@@ -125,6 +132,18 @@ function guardedGet(get) {
         if (r.ok === true && typeof r.text !== 'string') return { ok: false, why: `GET ${path} returned no text. ${NEXT_AUTH}` };
         return r;
     };
+}
+
+/** The release tag in a patch URL <mar_origin>/<tag>/<asset>, or null when the URL names none. */
+function releaseTagOf(url) {
+    let segments;
+    try {
+        segments = new URL(url).pathname.split('/').filter(Boolean);
+    } catch {
+        return null;
+    }
+    const tag = segments.length >= 2 ? decodeURIComponent(segments[segments.length - 2]) : null;
+    return tag !== null && RELEASE_KEY_RE.test(tag) ? tag : null;
 }
 
 function parseJson(text) {
@@ -256,7 +275,15 @@ export function runChecks(root, overrides = {}) {
             failures.push(`${d.rel} offers buildID ${show(parsed.buildID)}, not fourteen digits, so it cannot be ordered. Next step: rebuild the descriptor from a build with a fourteen-digit BuildID.`);
             continue;
         }
+        const ownTag = releaseTagOf(parsed.url);
         for (const p of published) {
+            if (p.tag === ownTag) {
+                // Its own Release: the same build, compared for identity rather than order.
+                if (p.appVersion !== parsed.appVersion || p.buildID !== parsed.buildID || p.target !== target) {
+                    failures.push(`${d.rel} names Release ${ownTag} in its patch URL, but ${ownTag} ${ASSET_NAME} publishes appVersion ${p.appVersion}, buildID ${p.buildID}, build_target ${p.target}, not this descriptor's appVersion ${parsed.appVersion}, buildID ${parsed.buildID}, target ${target}; the descriptor does not describe the build its Release publishes. Next step: regenerate the descriptor from the build ${ownTag} published with node scripts/build-update-xml.mjs --emit.`);
+                }
+                continue;
+            }
             if (p.appVersion !== parsed.appVersion || p.target !== target) continue;
             if (parsed.buildID <= p.buildID) {
                 failures.push(`${d.rel} offers buildID ${parsed.buildID} for appVersion ${parsed.appVersion} on ${target}, but ${p.tag} already publishes buildID ${p.buildID} for that target; a descriptor must offer a strictly newer buildID than every published one. Next step: rebuild the descriptor from a build whose BuildID is newer than ${p.buildID}.`);
@@ -310,10 +337,11 @@ const FIXTURE_MAR = Buffer.from('power-browser descriptor-monotonic fixture\n');
 const PUBLISHED_BUILD = '20261020215955';
 const TARGET_TOKEN = 'Linux_x86_64-gcc3';
 
-function descriptorFixture(appVersion, buildID, slug) {
+// A candidate is the next revision's descriptor: its patch URL names its own Release v<appVersion>-2.
+function descriptorFixture(appVersion, buildID, slug, tag = `v${appVersion}-2`) {
     return buildUpdateXml({
         marBytes: FIXTURE_MAR,
-        marUrl: `https://downloads.powerbrowser.org/v${appVersion}-1/fixture.mar`,
+        marUrl: `https://downloads.powerbrowser.org/${tag}/fixture.mar`,
         appVersion,
         platformVersion: appVersion,
         buildID,
@@ -344,6 +372,11 @@ function selfTest() {
     const baseWorld = () => world({
         releases: [release('v153.5.1-1', 101)],
         manifests: { 101: manifest('153.5.1', PUBLISHED_BUILD) },
+    });
+    // The published v153.5.1-1 plus the candidate's own v153.5.1-2 with the given manifest; olderManifest replaces -1's.
+    const ownWorld = (ownManifest, olderManifest = manifest('153.5.1', PUBLISHED_BUILD)) => world({
+        releases: [release('v153.5.1-1', 101), release('v153.5.1-2', 201)],
+        manifests: { 101: olderManifest, 201: ownManifest },
     });
     const fakeGet = w => (path) => {
         if (path === w.throwOn) throw new Error('fixture: HTTP 503 from the Releases endpoint');
@@ -386,6 +419,15 @@ function selfTest() {
     }
     console.log('  ok  control: older appVersion line with a newer buildID -> green');
 
+    // Its own Release already published (the descriptor job ran after publish): the equal buildID is
+    // the same build, not a regression, and the older Release still orders it.
+    const own = run(ownWorld(manifest('153.5.1', '20261021000000')), [candidate('153.5.1', '20261021000000')]);
+    if (own.failures.length > 0 || own.published.length !== 2) {
+        console.error(`${NAME}: --self-test FAIL -- a descriptor whose own Release is published went red or was not read: ${own.failures.join(' | ') || `${own.published.length} published, not 2`}`);
+        return 1;
+    }
+    console.log('  ok  control: own Release already published with the same build -> green');
+
     // Another target: an older buildID than the published Linux build, offered for a different target, is green.
     const otherTarget = run(baseWorld(), [candidate('153.5.1', '20260101000000', 'Darwin_aarch64-gcc3')]);
     if (otherTarget.failures.length > 0) {
@@ -407,6 +449,24 @@ function selfTest() {
             w: baseWorld(),
             d: [candidate('153.5.1', PUBLISHED_BUILD)],
             needles: [`${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, PUBLISHED_BUILD, 'v153.5.1-1'],
+        },
+        {
+            name: 'own Release published with a different build_id',
+            w: ownWorld(manifest('153.5.1', '20261021000001')),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: ['v153.5.1-2', '20261021000001', '20261021000000', 'does not describe the build'],
+        },
+        {
+            name: 'own Release published with a different build_target',
+            w: ownWorld(manifest('153.5.1', '20261021000000', 'Darwin_aarch64-gcc3')),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: ['v153.5.1-2', 'Darwin_aarch64-gcc3', TARGET_TOKEN, 'does not describe the build'],
+        },
+        {
+            name: 'own Release published, equal to an older Release that is not its own',
+            w: ownWorld(manifest('153.5.1', '20261021000000'), manifest('153.5.1', '20261021000000')),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: ['20261021000000', 'v153.5.1-1', 'already publishes'],
         },
         {
             name: 'candidate outside a BUILD_TARGET directory',
