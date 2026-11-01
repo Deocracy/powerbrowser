@@ -9185,15 +9185,15 @@ function installFullscreen(window) {
   };
   // "onscreen" and "ontop" take effect at once; "hidden" passes through "hiding" until the transition ends.
   const setState = newState => {
-    const currentState = getState();
-    if (currentState == newState) {
+    const shownState = getState();
+    if (shownState == newState) {
       return;
     }
-    if (currentState != "hiding") {
-      lastState = currentState;
-      element.removeAttribute(currentState);
+    if (shownState != "hiding") {
+      lastState = shownState;
+      element.removeAttribute(shownState);
     }
-    if (currentState == "hidden") {
+    if (shownState == "hidden") {
       element.showPopover();
     }
     if (newState != "hidden") {

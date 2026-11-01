@@ -1,7 +1,7 @@
 /**
  * UPD-20/21/22/23 (46-02): the Theia-side update client. Listens for
- * `{ kind: 'appUpdate', status, version? }` pushes on WEB_TAB_STATE_EVENT
- * (the same listener shape as ShellStateFlushContribution.onStart), renders
+ * `{ kind: 'appUpdate', status, version? }` pushes through WebTabChannel.onPush
+ * (the one chrome push router), renders
  * the contracted ready / cannot-update / could-not-check notifications plus
  * a status-bar item, issues the three shell kinds from plan 46-01
  * (appUpdateState / checkForUpdates / restartToUpdate) over the
@@ -16,11 +16,11 @@
  * re-showing the prompt; a success resets the flag.
  */
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
-import { Command, CommandContribution, CommandRegistry, CommandService, MessageService } from '@theia/core/lib/common';
+import { Command, CommandContribution, CommandRegistry, CommandService, Disposable, MessageService } from '@theia/core/lib/common';
 import { FrontendApplication, FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { StatusBar, StatusBarAlignment } from '@theia/core/lib/browser';
 import { POWERBROWSER_DOWNLOAD_URL, POWERBROWSER_UPDATE_COPY } from '@powerbrowser/branding/src/browser/powerbrowser-update-copy';
-import { WEB_TAB_STATE_EVENT } from './web-tab';
+import { WebTabChannel } from './web-tab';
 import { OPEN_BROWSER_WINDOW_COMMAND_ID } from './browser-window-command';
 
 const SHELL_STATE_REQUEST_EVENT = 'PowerBrowserGroupRequest';
@@ -89,6 +89,11 @@ export class UpdateClientContribution implements FrontendApplicationContribution
     @inject(CommandService)
     protected readonly commands: CommandService;
 
+    @inject(WebTabChannel)
+    protected readonly channel: WebTabChannel;
+
+    protected pushSubscription: Disposable | undefined;
+
     protected seq = 0;
     protected checkAgainShown = false;
     protected readyVersion = '';
@@ -96,12 +101,12 @@ export class UpdateClientContribution implements FrontendApplicationContribution
 
     onStart(app: FrontendApplication): void {
         void app;
-        window.addEventListener(WEB_TAB_STATE_EVENT, this.onAppUpdatePush);
+        this.pushSubscription = this.channel.onPush('appUpdate', detail => this.onAppUpdatePush(new CustomEvent('appUpdate', { detail })));
         void this.seedState();
     }
 
     onStop(): void {
-        window.removeEventListener(WEB_TAB_STATE_EVENT, this.onAppUpdatePush);
+        this.pushSubscription?.dispose();
     }
 
     registerCommands(commands: CommandRegistry): void {

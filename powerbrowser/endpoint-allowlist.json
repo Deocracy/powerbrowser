@@ -40,18 +40,21 @@
     {
       "host": "lite.duckduckgo.com",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "29-03 (BAR-01/BAR-03): the search-results host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default.",
       "manifest": "search_engines[0].url"
     },
     {
       "host": "ac.duckduckgo.com",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "29-03 (BAR-01/BAR-03): the suggestions host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default.",
       "manifest": "search_engines[0].suggest_url"
     },
     {
       "host": "en.wikipedia.org",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "29-03 (BAR-01/BAR-03): the search-results and suggestions host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default.",
       "manifest": "search_engines[1].url"
     },
