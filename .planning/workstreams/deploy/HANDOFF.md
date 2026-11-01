@@ -79,7 +79,9 @@ Haiku/Sonnet default for this run).
 
 - `.planning/WINDOWS.md` is out of sync with its fenced JSON (rows 10, 11, 19, 22, 23), so
   `gsd_run windows append` refuses. The unrun full-tier rows from 44-02/44-03 are not recorded there.
-  Regenerate the file, then append.
+  Regenerate the file, then append. **Fixed 2026-10-31 (7c6d311a):** the table was re-rendered from the
+  JSON and the 44-02 `build-update-xml` row appended as entry 24. 44-03's two named gaps (manifest
+  `build_id`/`build_target`, wrapper `GH_CONFIG_DIR`) were already fixed in the tree, so they were not appended.
 - `fixer-isolate-self-test` flaked once in `--quick` (socket mount race in `scripts/fixer-isolate.sh`),
   then passed. Pre-existing.
 - `descriptor-monotonic` prints SKIP with zero candidates, but the driver summary shows PASS because
