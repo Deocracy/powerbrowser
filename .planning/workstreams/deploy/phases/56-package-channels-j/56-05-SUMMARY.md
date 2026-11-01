@@ -132,7 +132,7 @@ The executor performs no live step. Owner steps, in order (text and commands are
 5. Substitute proof: on a clean machine with the live cache config, run `nix build .#powerbrowser` and paste the
    substitute log lines proving no rebuild. This needs a published Release and a real `nix/pkg/release-hash.json`
    digest first (BLOCKED.md items 1 and 2).
-6. /download: render `@RELEASE_REPO@` as `Deocracy/powerbrowser` (derive the slug from `configuration.toml`
+6. /download: render `@RELEASE_REPO@` as the `<org>/<repo>` slug (the organisation is Deocracy; derive it from `configuration.toml`
    `[urls] release_notes`), paste `docs/download-nix.md` and `docs/download-flatpak.md` into the Phase 47 site, and
    paste the two live row URLs. Anything the site cannot carry is DEFERRED-A4.
 7. Notarization-dependent legs (cask live, aarch64-darwin) are DEFERRED-A3 until Phase 55; the Windows-asset leg is
