@@ -6792,7 +6792,7 @@ function webTabPushedSpec(spec) {
 // The shell element the panel opens against (powerbrowser.xhtml). With iconBox null, the stock module finds an anchor
 // only through the browser's popupnotificationanchor attribute, so every overlay that asks names this id.
 const PROMPT_ANCHOR_ID = "powerbrowser-notification-anchor";
-// D-04: background requests waiting for their tab, per shell window, oldest first. A fourth evicts the oldest.
+// D-04: background requests waiting for their tab, per tab, oldest first. A fourth from the same tab evicts that tab's oldest.
 const PROMPT_QUEUE_CAP = 3;
 // token -> the display record of one stock notification. Nothing reads a record to answer a prompt.
 const promptRecords = new Map();
@@ -6865,7 +6865,8 @@ export function installPermissionPromptFurniture(window) {
     if (promptRecords.has(record.token) && !record.seen) {
       record.queued = true;
       pushDoorhanger(record, true);
-      const queued = [...promptRecords.values()].filter(r => r.window === window && r.queued);
+      // Per tab, so a page that floods requests can evict only its own oldest, never another tab's prompt.
+      const queued = [...promptRecords.values()].filter(r => r.tabId === tabId && r.queued);
       if (queued.length > PROMPT_QUEUE_CAP) {
         // The stock removal without a user response runs PermissionUI's cancel(), so the page sees a denial, never a hang.
         notifications.remove(queued[0].notification, true);

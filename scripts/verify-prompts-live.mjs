@@ -22,9 +22,11 @@
  *   background-queue -- a background tab's request shows no panel, keeps its
  *                       pending push, does not show on another tab's
  *                       activation, and shows and grants once its tab is active;
- *   cancel-on-evict  -- three background requests wait; a fourth evicts the
- *                       oldest, whose page sees a denial and whose stock
- *                       notification is gone; the other three grant.
+ *   cancel-on-evict  -- one background tab asks three distinct prompts; a
+ *                       fourth from the same tab evicts that tab's oldest,
+ *                       whose page sees a denial and whose stock notification
+ *                       is gone; another background tab's prompt survives
+ *                       (the cap is per tab); the remaining prompts grant.
  *
  * --self-test runs a clean control session per target scenario, then one
  * session per planted fault, each required to go red naming its drift.
@@ -40,7 +42,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
-import { inChrome, loadedAt, makeCurrent, openWebTab, pollFor, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { inChrome, loadedAt, makeCurrent, openWebTab, pollFor, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'prompts-live';
 const SELF = fileURLToPath(import.meta.url);
@@ -58,6 +60,18 @@ const PREFS = {
     'geo.prompt.open_system_prefs': false,
     // A wide delay keeps the early click inside it on a slow host; answerStock reads the pref, never a literal.
     [DELAY_PREF]: 2000,
+    // cancel-on-evict asks four distinct stock prompts from one tab: notifications without a gesture, a fake camera.
+    'dom.webnotifications.requireuserinteraction': false,
+    'media.navigator.streams.fake': true,
+    'media.navigator.permission.disabled': false,
+};
+
+/** Page-side requests: each lands on window.__pbOut[kind] ('pending', 'granted', 'denied'); `id` is its stock notification id. */
+const REQUESTS = {
+    geo: { id: GEO_ID, start: "navigator.geolocation.getCurrentPosition(() => done('granted'), e => done(e.code === 1 ? 'denied' : 'granted'))" },
+    notify: { id: 'web-notifications', start: "Notification.requestPermission().then(r => done(r === 'granted' ? 'granted' : 'denied'))" },
+    storage: { id: 'persistent-storage', start: "navigator.storage.persist().then(b => done(b ? 'granted' : 'denied'))" },
+    camera: { id: 'webRTC-shareDevices', start: "navigator.mediaDevices.getUserMedia({ video: true }).then(() => done('granted'), e => done(e.name === 'NotAllowedError' ? 'denied' : 'granted'))" },
 };
 
 const PAGES = Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map(p => [`/${p}`, { title: `Prompt ${p}`, body: `<p>prompt page ${p}</p>` }]));
@@ -85,26 +99,32 @@ async function openPage(app, fx, path) {
     return { tabId, ctx };
 }
 
-/** Starts a geolocation request in the page; its outcome lands on window.__pbGeo ('pending', 'granted', 'denied'). */
-function startGeo(app, page) {
+/** Starts one REQUESTS kind in the page. */
+function startRequest(app, page, kind) {
+    const key = JSON.stringify(kind);
     return app.evaluateIn(page.ctx, `(() => {
-        window.__pbGeo = 'pending';
-        navigator.geolocation.getCurrentPosition(() => { window.__pbGeo = 'granted'; }, e => { window.__pbGeo = e.code === 1 ? 'denied' : 'granted'; });
+        window.__pbOut = window.__pbOut || {};
+        window.__pbOut[${key}] = 'pending';
+        const done = v => { window.__pbOut[${key}] = v; };
+        ${REQUESTS[kind].start};
         return true;
     })()`);
 }
 
-/** The page's outcome after up to `timeoutMs`: the first non-pending value, else 'pending'. */
-async function geoOutcome(app, page, timeoutMs = 5000) {
+/** The page's outcome for `kind` after up to `timeoutMs`: the first non-pending value, else 'pending'. */
+async function outcome(app, page, kind, timeoutMs = 5000) {
     try {
         return await pollFor(async () => {
-            const v = await app.evaluateIn(page.ctx, 'window.__pbGeo');
+            const v = await app.evaluateIn(page.ctx, `(window.__pbOut || {})[${JSON.stringify(kind)}]`);
             return v !== 'pending' ? v : null;
         }, timeoutMs, 'a page outcome');
     } catch {
         return 'pending';
     }
 }
+
+const startGeo = (app, page) => startRequest(app, page, 'geo');
+const geoOutcome = (app, page, timeoutMs) => outcome(app, page, 'geo', timeoutMs);
 
 /** Chrome's view of tab `tabId`'s stock notification `id`: exists, shown in the open panel. */
 function promptState(app, tabId, id = GEO_ID) {
@@ -115,9 +135,9 @@ function promptState(app, tabId, id = GEO_ID) {
         return { has: !!n, inPanel: !!n && panel.state === 'open' && [...panel.children].some(el => el.notification === n) };`);
 }
 
-async function waitInPanel(app, tabId, timeoutMs = 15000) {
+async function waitInPanel(app, tabId, id = GEO_ID, timeoutMs = 15000) {
     try {
-        return await pollFor(async () => ((await promptState(app, tabId)).inPanel ? true : null), timeoutMs, 'the stock doorhanger');
+        return await pollFor(async () => ((await promptState(app, tabId, id)).inPanel ? true : null), timeoutMs, 'the stock doorhanger');
     } catch {
         return false;
     }
@@ -128,10 +148,10 @@ async function waitInPanel(app, tabId, timeoutMs = 15000) {
  * passed since timeShown (which a rejected click moves); `early` clicks at once; `bypass` is the delay-bypassed plant;
  * `skip` is the answer-dropped plant. Block carries disableSecurityDelay upstream, so it never waits.
  */
-function answerStock(app, tabId, { which = 'allow', remember = false, early = false, bypass = false, skip = false } = {}) {
+function answerStock(app, tabId, { id = GEO_ID, which = 'allow', remember = false, early = false, bypass = false, skip = false } = {}) {
     return inChrome(app, `
         const o = overlayOf(${JSON.stringify(tabId)});
-        const n = o ? window.PopupNotifications.getNotification(${JSON.stringify(GEO_ID)}, o) : null;
+        const n = o ? window.PopupNotifications.getNotification(${JSON.stringify(id)}, o) : null;
         const el = n && [...document.getElementById('notification-popup').children].find(e => e.notification === n);
         if (!el) return 'no stock notification element';
         window.focus();
@@ -260,37 +280,55 @@ async function scenarioBackgroundQueue(app, fx, plant) {
     return await geoOutcome(app, back) === 'granted' ? null : 'Allow after activation did not grant (the positive control is red)';
 }
 
+/**
+ * D-04 per tab: one tab asks three distinct stock prompts while backgrounded (stock keeps one per id per tab), then a
+ * fourth evicts that tab's oldest; another background tab's prompt must survive the flood.
+ */
 async function scenarioCancelOnEvict(app, fx, plant) {
-    const pages = [];
-    for (const path of ['/a', '/b', '/c', '/d', '/e']) {
-        pages.push(await openPage(app, fx, path));
+    const other = await openPage(app, fx, '/a');
+    const flood = await openPage(app, fx, '/b');
+    const front = await openPage(app, fx, '/c');
+    await makeCurrent(app, front.tabId);
+    await startRequest(app, other, 'geo');
+    if (await waitForPush(app, isDoorhanger(other.tabId, true)) < 0) {
+        return 'no doorhanger push with pending true for a queued tab';
     }
-    const [oldest, ...rest] = pages.slice(0, 4);
-    await makeCurrent(app, pages[4].tabId);
-    for (const page of [oldest, rest[0], rest[1]]) {
-        await startGeo(app, page);
-        if (await waitForPush(app, isDoorhanger(page.tabId, true)) < 0) {
-            return `no doorhanger push with pending true for a queued tab`;
+    for (const kind of ['geo', 'notify', 'storage']) {
+        const from = (await pushes(app)).length;
+        await startRequest(app, flood, kind);
+        if (await waitForPush(app, p => isDoorhanger(flood.tabId, true)(p) && p.permission === REQUESTS[kind].id, { from }) < 0) {
+            return `no doorhanger push with pending true for the queued ${kind} request`;
         }
     }
     if (plant === 'evict-hangs') {
         // Suppresses the stock removal callback, so the eviction cannot reach PermissionUI's cancel().
-        await inChrome(app, `const n = window.PopupNotifications.getNotification(${JSON.stringify(GEO_ID)}, overlayOf(${JSON.stringify(oldest.tabId)})); n.options.eventCallback = () => false; return true;`);
+        await inChrome(app, `const n = window.PopupNotifications.getNotification(${JSON.stringify(GEO_ID)}, overlayOf(${JSON.stringify(flood.tabId)})); n.options.eventCallback = () => false; return true;`);
     }
-    await startGeo(app, rest[2]);
-    if (await geoOutcome(app, oldest) !== 'denied') {
+    if (plant === 'evict-cross-tab') {
+        // What a window-wide cap does: the flood removes the other tab's oldest prompt.
+        await inChrome(app, `const pn = window.PopupNotifications; pn.remove(pn.getNotification(${JSON.stringify(GEO_ID)}, overlayOf(${JSON.stringify(other.tabId)})), true); return true;`);
+    }
+    await startRequest(app, flood, 'camera');
+    if (await outcome(app, flood, 'geo') !== 'denied') {
         return 'evicted page promise pending, not cancelled';
     }
-    if ((await promptState(app, oldest.tabId)).has) {
+    if ((await promptState(app, flood.tabId, GEO_ID)).has) {
         return 'the evicted request still has a stock notification';
     }
-    for (const page of rest) {
-        await makeCurrent(app, page.tabId);
-        if (!await waitInPanel(app, page.tabId)) {
+    if (!(await promptState(app, other.tabId, GEO_ID)).has || await outcome(app, other, 'geo', 1000) !== 'pending') {
+        return 'a prompt of another tab was evicted by requests from this tab';
+    }
+    if (!(await promptState(app, flood.tabId, REQUESTS.camera.id)).has) {
+        return 'the newest request of the flooding tab was not queued';
+    }
+    // The camera prompt is answered in 37-02, which installs its stock template; the two PermissionUI prompts grant here.
+    await makeCurrent(app, flood.tabId);
+    for (const kind of ['notify', 'storage']) {
+        if (!await waitInPanel(app, flood.tabId, REQUESTS[kind].id)) {
             return 'a remaining queued doorhanger did not show on activation';
         }
-        await answerStock(app, page.tabId);
-        if (await geoOutcome(app, page) !== 'granted') {
+        await answerStock(app, flood.tabId, { id: REQUESTS[kind].id });
+        if (await outcome(app, flood, kind) !== 'granted') {
             return 'a remaining queued request did not grant after activation (the positive control is red)';
         }
     }
@@ -311,6 +349,7 @@ const PLANTS = [
     { plant: 'queue-shown-early', target: 'background-queue', expect: 'panel shown for a backgrounded tab' },
     { plant: 'activation-wrong-tab', target: 'background-queue', expect: 'queued record shown for the wrong tab' },
     { plant: 'evict-hangs', target: 'cancel-on-evict', expect: 'evicted page promise pending, not cancelled' },
+    { plant: 'evict-cross-tab', target: 'cancel-on-evict', expect: 'a prompt of another tab was evicted by requests from this tab' },
 ];
 
 async function runSession(name, plant) {

@@ -29,6 +29,8 @@
  *   (h) visible tab (post-review): the facade reports a web tab selected only
  *       while the Theia frame reports one current, and the one write of that
  *       truth (setActiveTabOfFrame) refreshes the stock module on a focus move.
+ *   (i) queue scope (post-review): the D-04 cap counts and evicts the
+ *       requesting tab's waiting records only.
  *
  * Every expectation is derived from the tree at check time. --self-test runs
  * the unmodified fixture green first (the same-session positive control), then
@@ -271,6 +273,15 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name)) {
             failures.push(`visible-tab: promptVisibleTab does not read activeTabByFrame, the Theia frame's current web tab`);
         }
     }
+    // (i) Post-review fix 2 (cross-tab denial): the queue cap counts and evicts the requesting tab's records only.
+    if (section) {
+        const cap = /\.filter\(([^;]*)\);\s*if \(queued\.length > PROMPT_QUEUE_CAP\)/.exec(section);
+        if (!cap) {
+            failures.push(`queue-scope: the prompt section has no PROMPT_QUEUE_CAP eviction over a filtered queue -- the D-04 cap cannot be read`);
+        } else if (!/\br\.tabId === tabId\b/.test(cap[1]) || /\br\.window\b/.test(cap[1])) {
+            failures.push(`queue-scope: the queue cap filters ${cap[1].trim()} -- not the requesting tab alone, so one page's requests can evict another tab's prompt`);
+        }
+    }
     const writes = (api.match(/\bactiveTabByFrame\.set\(/g) ?? []).length;
     const setter = functionBody(api, 'setActiveTabOfFrame');
     if (writes !== 1 || !setter.includes('activeTabByFrame.set(')) {
@@ -352,6 +363,12 @@ function selfTest() {
             name: 'activation writes the map directly',
             sources: { ...clean, [API]: clean[API].replace('setActiveTabOfFrame(actorRef.browsingContext.top.embedderElement, data.tabId);', 'activeTabByFrame.set(actorRef.browsingContext.top.embedderElement, data.tabId);') },
             expect: 'activeTabByFrame is written 2 times',
+        },
+        {
+            // Post-review fix 2 reverted: the cap counts every queued record in the window.
+            name: 'window-wide queue cap',
+            sources: { ...clean, [API]: clean[API].replace('.filter(r => r.tabId === tabId && r.queued);', '.filter(r => r.window === window && r.queued);') },
+            expect: 'not the requesting tab alone',
         },
     ];
     let failed = 0;
