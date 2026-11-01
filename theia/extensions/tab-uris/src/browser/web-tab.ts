@@ -214,6 +214,7 @@ export type DownloadAction = 'cancel' | 'launch' | 'showContainingDirectory' | '
 export const NOTIFICATION_BAR_ACTIONS = {
     'blocked-popup': ['allow-popup', 'dismiss'],
     'hung-script': ['stop-script', 'wait-longer'],
+    'protocol-handler': ['add-handler', 'deny-handler'],
 } as const;
 export type NotificationBarKind = keyof typeof NOTIFICATION_BAR_ACTIONS;
 export type NotificationBarAction = typeof NOTIFICATION_BAR_ACTIONS[NotificationBarKind][number];

@@ -7021,7 +7021,7 @@ function pushWebTabSharing(browser, tabId, host, state, force) {
 // ---------------------------------------------------------------------------
 
 // barKind -> the actions its bar offers; verify-permission-prompts.mjs compares this with web-tab.ts's table.
-const WEB_TAB_BAR_ACTIONS = { "blocked-popup": ["allow-popup", "dismiss"], "hung-script": ["stop-script", "wait-longer"] };
+const WEB_TAB_BAR_ACTIONS = { "blocked-popup": ["allow-popup", "dismiss"], "hung-script": ["stop-script", "wait-longer"], "protocol-handler": ["add-handler", "deny-handler"] };
 // token -> the chrome-held record of one bar on screen.
 const barRecords = new Map();
 // overlay -> barKind -> its record: one bar of each kind per tab.
@@ -7046,11 +7046,13 @@ function installNotificationBars(window, host) {
     onLocationChange(browser, webProgress, _request, _location, flags) {
       if (webProgress.isTopLevel && !(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT)) {
         hideBars(browser);
+        refusedHandlers.delete(browser);
       }
     },
   });
   host.strip.addEventListener("TabClose", event => hideBars(event.target.linkedBrowser));
   installHangBars();
+  installProtocolBars();
 }
 
 // Shows, updates or hides one tab's bar of `barKind`. `stored` is chrome-only data the bar's answers act on.
@@ -7185,6 +7187,29 @@ const BAR_ANSWERS = {
     pausedHangs.set(report, { win, timer });
     return "waiting";
   },
+  // WebProtocolHandlerRegistrar's Add button (:483-504) on the stored registration; the URI never comes from the frame.
+  "add-handler"(record) {
+    const { protocol, uri, name } = record.stored;
+    setBar(record.browser, record.barKind, null, null);
+    const handler = Cc["@mozilla.org/uriloader/web-handler-app;1"].createInstance(Ci.nsIWebHandlerApp);
+    handler.name = name;
+    handler.uriTemplate = uri;
+    const handlerInfo = Cc["@mozilla.org/uriloader/external-protocol-service;1"].getService(Ci.nsIExternalProtocolService).getProtocolHandlerInfo(protocol);
+    handlerInfo.possibleApplicationHandlers.appendElement(handler);
+    // As the stock Add: ask before the next use of this kind of link.
+    handlerInfo.alwaysAskBeforeHandling = true;
+    Cc["@mozilla.org/uriloader/handler-service;1"].getService(Ci.nsIHandlerService).store(handlerInfo);
+    return "added";
+  },
+  // The stock bar's close: nothing is stored. The refusal holds for this document, so the page cannot re-ask in a loop.
+  "deny-handler"(record) {
+    const { protocol, uri } = record.stored;
+    const refused = refusedHandlers.get(record.browser) ?? new Set();
+    refused.add(`${protocol} ${uri}`);
+    refusedHandlers.set(record.browser, refused);
+    setBar(record.browser, record.barKind, null, null);
+    return "refused";
+  },
   // The stock bar's dismissal: the blocker remembers it for this document (hasBeenDismissed).
   dismiss(record) {
     record.browser.popupAndRedirectBlocker.eventCallback("dismissed");
@@ -7261,4 +7286,53 @@ function hungOverlay(report) {
     }
   }
   return null;
+}
+
+// D-08 (N2): protocol registration. WebProtocolHandlerRegistrar.registerProtocolHandler (:421-527) asks through
+// browser.getTabBrowser().getNotificationBox(browser) (:506, :582). The tab host gives an overlay a getTabBrowser()
+// receiver but no getNotificationBox (deliberately absent in verify-shell-gbrowser-standin.mjs), so for every overlay the
+// stock path throws a TypeError and the page's request is lost. The service is the module's own constructor
+// (components.conf:8), so its prototype method is wrapped: an overlay's call runs the stock checks and then asks through
+// the per-tab bar; every other caller takes the stock path unchanged. No tabbrowser or notification box is fabricated.
+const PROTOCOL_REGISTRAR_CONTRACT = "@mozilla.org/embeddor.implemented/web-protocol-handler-registrar;1";
+const PROTOCOL_REGISTRAR_MODULE = "resource:///modules/WebProtocolHandlerRegistrar.sys.mjs";
+// overlay -> "protocol uri" registrations the user refused on its current document.
+const refusedHandlers = new WeakMap();
+let protocolWrapInstalled = false;
+
+function installProtocolBars() {
+  if (protocolWrapInstalled) {
+    return;
+  }
+  protocolWrapInstalled = true;
+  const proto = ChromeUtils.importESModule(PROTOCOL_REGISTRAR_MODULE).WebProtocolHandlerRegistrar.prototype;
+  const stock = proto.registerProtocolHandler;
+  const wrapped = function (aProtocol, aURI, aTitle, aDocumentURI, aBrowserOrWindow) {
+    if (tabIdOfBrowser(aBrowserOrWindow) === null) {
+      return stock.apply(this, arguments);
+    }
+    return showProtocolHandlerBar(this, aProtocol, aURI, aTitle, aDocumentURI, aBrowserOrWindow);
+  };
+  // The live harness's protocol-stock-path-unhooked plant puts the stock method back to show the stock throw.
+  wrapped.stock = stock;
+  proto.registerProtocolHandler = wrapped;
+}
+
+// The stock method's own checks (:430-462) for one overlay, then the bar in place of the notification box. The
+// registration is stored chrome-side; Theia sees the handler's host and the scheme.
+function showProtocolHandlerBar(registrar, aProtocol, aURI, aTitle, aDocumentURI, browser) {
+  const protocol = (aProtocol || "").toLowerCase();
+  if (!aURI || !aDocumentURI) {
+    return;
+  }
+  try {
+    browser.documentGlobal.navigator.checkProtocolHandlerAllowed(protocol, aURI, aDocumentURI);
+  } catch {
+    // Refused: the platform has already reported it, as on the stock path.
+    return;
+  }
+  if (registrar._protocolHandlerRegistered(protocol, aURI.spec) || refusedHandlers.get(browser)?.has(`${protocol} ${aURI.spec}`)) {
+    return;
+  }
+  setBar(browser, "protocol-handler", { displayHost: aURI.host, scheme: protocol }, { protocol, uri: aURI.spec, name: String(aTitle || "") });
 }

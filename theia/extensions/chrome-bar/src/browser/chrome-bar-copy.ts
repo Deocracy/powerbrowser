@@ -81,6 +81,9 @@ export const CHROME_BAR_COPY = Object.freeze({
     barHungScript: 'A script on this page is taking too long.',
     barStopScript: 'Stop script',
     barKeepWaiting: 'Keep waiting',
+    barProtocolHandler: (host: string, scheme: string) => `Allow ${host} to open ${scheme} links?`,
+    barAddHandler: 'Add',
+    barDenyHandler: "Don't allow",
     // Phase 32 plan 08 (PAGE-10): the reader toggle and view source (32-UI-SPEC Copywriting Contract, Reader toggle and View source).
     readerView: 'Reader view',
     exitReaderView: 'Exit reader view',
@@ -206,6 +209,9 @@ export function notificationBarCopy(bar: NotificationBar): NotificationBarText |
     }
     if (bar.barKind === 'hung-script') {
         return { message: CHROME_BAR_COPY.barHungScript, labels: { 'stop-script': CHROME_BAR_COPY.barStopScript, 'wait-longer': CHROME_BAR_COPY.barKeepWaiting }, destructive: ['stop-script'] };
+    }
+    if (bar.barKind === 'protocol-handler' && typeof fields.displayHost === 'string' && typeof fields.scheme === 'string') {
+        return { message: CHROME_BAR_COPY.barProtocolHandler(fields.displayHost, fields.scheme), labels: { 'add-handler': CHROME_BAR_COPY.barAddHandler, 'deny-handler': CHROME_BAR_COPY.barDenyHandler } };
     }
     return undefined;
 }

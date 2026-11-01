@@ -102,6 +102,11 @@
  *   (z) no stock bar call (N2): nothing under powerbrowser/shell calls or reads
  *       getNotificationBox or gNotificationBox; the stock boxes throw in the
  *       shell, so the bars replace them wholesale.
+ *   (aa) protocol hook (N2): the bar section names the registrar contract, and
+ *       the module it wraps is the one upstream's components.conf registers for
+ *       that contract; installProtocolBars wraps the prototype's
+ *       registerProtocolHandler; no getTabBrowser member or call exists under
+ *       powerbrowser/shell (a fabricated tabbrowser is the rejected widening).
  * The prompt section ends where the '// Phase 37: notification bars.' section
  * starts; rules (c), (f) and (h) read the prompt section only.
  * Rules (j), (k), (q) and (r) are the furniture-gate rows for plans 02 and 04; at
@@ -129,6 +134,7 @@ const UPSTREAM_PANEL = 'upstream/browser/base/content/popup-notifications.inc.xh
 const UPSTREAM_MOZBUILD = 'upstream/toolkit/modules/moz.build';
 const UPSTREAM_BROWSER_JS = 'upstream/browser/base/content/browser.js';
 const UPSTREAM_POPUPSET = 'upstream/browser/base/content/main-popupset.inc.xhtml';
+const UPSTREAM_REGISTRAR_CONF = 'upstream/browser/components/protocolhandler/components.conf';
 const UPSTREAM_PROMPTER = 'upstream/toolkit/components/passwordmgr/LoginManagerPrompter.sys.mjs';
 const GATE = 'scripts/verify-permission-prompts.mjs';
 const VERDICT = '.planning/probes/prompt-probe-verdict.json';
@@ -261,7 +267,7 @@ function moduleUrl(mozbuild) {
 }
 
 function readSources() {
-    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_BROWSER_JS, UPSTREAM_POPUPSET, UPSTREAM_PROMPTER, GATE]);
+    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_BROWSER_JS, UPSTREAM_POPUPSET, UPSTREAM_PROMPTER, UPSTREAM_REGISTRAR_CONF, GATE]);
     for (const name of readdirSync(join(REPO_ROOT, SHELL_DIR))) {
         if (/\.m?js$/.test(name)) {
             files.add(`${SHELL_DIR}/${name}`);
@@ -807,6 +813,26 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
         }
     }
 
+    // (aa) The protocol hook wraps the registrar service's own method; no tabbrowser is fabricated for it.
+    const contract = /const PROTOCOL_REGISTRAR_CONTRACT = "([^"]+)";/.exec(bars)?.[1];
+    const wrappedModule = /const PROTOCOL_REGISTRAR_MODULE = "([^"]+)";/.exec(bars)?.[1];
+    const conf = raw[UPSTREAM_REGISTRAR_CONF] ?? '';
+    const confModule = contract ? new RegExp(`'contract_ids':\\s*\\['${contract.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'\\][\\s\\S]*?'esModule':\\s*'([^']+)'`).exec(conf)?.[1] : undefined;
+    if (!contract || !wrappedModule) {
+        failures.push(`protocol-hook: protocol hook missing -- the bar section names no PROTOCOL_REGISTRAR_CONTRACT or PROTOCOL_REGISTRAR_MODULE`);
+    } else if (confModule !== wrappedModule) {
+        failures.push(`protocol-hook: ${UPSTREAM_REGISTRAR_CONF} registers ${contract} as ${confModule ?? '(no esModule)'}, not ${wrappedModule} -- the wrap would miss the service`);
+    }
+    const protocolInstall = functionBody(api, 'installProtocolBars');
+    if (!/importESModule\(PROTOCOL_REGISTRAR_MODULE\)\.WebProtocolHandlerRegistrar\.prototype/.test(protocolInstall) || !/proto\.registerProtocolHandler = wrapped;/.test(protocolInstall)) {
+        failures.push(`protocol-hook: protocol hook missing -- installProtocolBars does not wrap WebProtocolHandlerRegistrar.prototype.registerProtocolHandler, so the stock path throws for every overlay`);
+    }
+    for (const file of shellFiles) {
+        if (/\bgetTabBrowser\b/.test(stripComments(raw[file]))) {
+            failures.push(`protocol-hook: ${file} names getTabBrowser -- the rejected widening (a fabricated tabbrowser handed to privileged actors, N2)`);
+        }
+    }
+
     const writes = (api.match(/\bactiveTabByFrame\.set\(/g) ?? []).length;
     const setter = functionBody(api, 'setActiveTabOfFrame');
     if (writes !== 1 || !setter.includes('activeTabByFrame.set(')) {
@@ -1013,6 +1039,16 @@ function selfTest() {
             name: 'stock notification box call',
             sources: { ...clean, [API]: inBars('function plantedBox(win) { return win.gNotificationBox.appendNotification("process-hang", {}, []); }') },
             expect: 'the stock notification box throws in the shell',
+        },
+        {
+            name: 'getTabBrowser member added',
+            sources: { ...clean, [SHELL]: clean[SHELL].replace('window.gBrowser = {', 'window.gBrowser = {\n      getTabBrowser() { return window.gBrowser; },') },
+            expect: 'the rejected widening',
+        },
+        {
+            name: 'protocol hook removed',
+            sources: { ...clean, [API]: clean[API].replace('  proto.registerProtocolHandler = wrapped;\n', '') },
+            expect: 'protocol hook missing',
         },
         // Plan 04 (D-07): the password template, the login callback and the no-credential scans.
         {
