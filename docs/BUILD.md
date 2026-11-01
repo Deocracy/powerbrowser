@@ -1149,6 +1149,36 @@ decision per RESEARCH open question 1 and is NOT procured in this phase.
   alongside-stock-Firefox interleaved launch, run there (matrix section
   below records the Linux cells green and the staged cells with unblocks).
 
+### macOS universal package (plan 55-03)
+
+The `macos-package-payload` row judges the evidence the universal step leaves under
+`.mozbuild/macos-package/`. With no evidence the row FAILs naming this section; it never skips.
+The evidence contract, one file or directory each:
+
+| Evidence | Holds |
+|---|---|
+| `application-<arch>.ini` | Each per-target bundle's `Contents/Resources/application.ini`, copied before unify. |
+| `config.status-<arch>` | Each per-target objdir's `config.status`. |
+| `<App>.app/` | The unified bundle, signed ad hoc. |
+| `*.macos-universal.dmg` | The disk image, built through `mozbuild.action.make_dmg`. |
+| `*.macos-universal.complete.mar` | The complete MAR of the unified bundle. |
+| `update/<channel>/Darwin_<cpu>-gcc3/update.xml` | One descriptor per per-target mozconfig, emitted through `buildUpdateXml`. |
+
+The row derives what it compares from the tree, not from a list: the Darwin targets from the
+`--target` line of each `powerbrowser/packaging/mozconfig-macos-<arch>`, the forbidden
+generic-certs switch from `upstream/build/moz.configure/update-programs.configure`, the sidecar
+paths from `TheiaService.sys.mjs`, and the drag-to-install symlink from `mozpack/dmg.py`. It
+asserts one shared fourteen-digit BuildID across both `.ini` copies, the bundle and every
+descriptor (two independent builds stamp two clock-time BuildIDs, and `unify.py` refuses the
+differing `application.ini`); both
+slices in every Mach-O; a verifying ad-hoc signature with no Team ID, no certificate chain and no
+stapled ticket; the same bundle inside the DMG; and each descriptor byte-identical to a fresh
+`buildUpdateXml` emission over the MAR bytes. Opening the DMG needs the Linux `dmg` and `hfsplus`
+tools (`DMG_TOOL` and `HFS_TOOL`, or `MOZ_FETCHES_DIR/dmg/`).
+
+The Developer ID signature, notarization and stapling are not part of this evidence. They wait on
+the owner's Team ID (plan 55-03 Task 2, `BLOCKED.md` item 2), and the row stays ad hoc until then.
+
 ### Linux package (NG-063, NG-072)
 
 `nix develop .#firefox --command bash powerbrowser/packaging/package-linux.sh`

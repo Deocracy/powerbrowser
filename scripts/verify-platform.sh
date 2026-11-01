@@ -5186,6 +5186,15 @@ run_own_checks() {
     # restricted key, an added file, a removed file, a new production hit, a closed known-open entry
     # and zero files; each must go red naming the drift. The control stays green. It writes nothing.
     "mac-entitlements-self-test|node $REPO_ROOT/scripts/verify-mac-entitlements.mjs --self-test"
+    # NEW (Phase 55, PKG-14, PKG-15, SEC-04 wiring): the universal macOS payload gate's self-test twin. It
+    # builds a synthetic evidence tree in mkdtemp (fat Mach-O files with real CodeDirectory page hashes, a
+    # fake DMG extractor, descriptors from buildUpdateXml) and plants a single-slice binary, divergent
+    # BuildIDs, a stripped signature, a certificate chain, a Team ID, a non-ad-hoc flag, a byte changed after
+    # signing, a stapled ticket, a hash-mismatched descriptor, a same-target descriptor pair, a generic-certs
+    # config.status, missing evidence, an ELF node, a missing backend entry, a checkout path, a file missing
+    # from the DMG, no Applications symlink and a shell-string spawn; each must go red naming the drift. The
+    # control stays green. It writes nothing outside mkdtemp. Honestly --quick: no build, browser or network.
+    "macos-package-payload-self-test|node $REPO_ROOT/scripts/verify-macos-package-payload.mjs --self-test"
     # NEW (Phase 53, GH-03): the triage workflow shape. The row reads the good fixture in fixture
     # mode (53-01) and the declared workflow in tree mode (53-02), derives the label set from
     # labels.json, and runs the workflow's own fixed-text step against a hostile model output with
@@ -5703,6 +5712,14 @@ run_own_checks() {
       # see P2 (a lib-only import) or P3 (the web-tab.css path); the self-test plants both.
       "theia-fresh-clone-build|bash $REPO_ROOT/scripts/verify-theia-fresh-clone-build.sh"
       "theia-fresh-clone-build-self-test|bash $REPO_ROOT/scripts/verify-theia-fresh-clone-build.sh --self-test"
+
+      # NEW (Phase 55, PKG-14, PKG-15, SEC-04 wiring): the universal macOS payload gate. It reads the evidence
+      # package-macos.sh universal leaves under .mozbuild/macos-package/ and derives every expectation from the
+      # tree: the Darwin targets from the per-target mozconfigs, the generic-certs switch from upstream, the
+      # sidecar paths from TheiaService, the DMG install symlink from dmg.py, and each descriptor re-emitted
+      # through buildUpdateXml. Full tier: it needs the built universal bundle, DMG and MAR (and the Linux dmg
+      # tools to open the DMG); absent evidence FAILs naming the docs/BUILD.md procedure, never a skip.
+      "macos-package-payload|node $REPO_ROOT/scripts/verify-macos-package-payload.mjs"
 
       # NEW (Phase 41, GH-02): the live org and repo equal the declared .github/settings/
       # bodies, by projection and set equality, failing closed on any unreadable endpoint.
