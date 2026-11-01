@@ -108,6 +108,9 @@ export const CRASHED_RELOAD_LABEL = 'Reload tab';
 //     chrome-bar hover requests `position: 'top'`.
 //   focus rule: a Theia popup opened by a key while a page has focus first
 //     moves focus to the Theia frame, and returns it to the page on close.
+// Phase 37 plan 04 (D-08): the notification bar host. A bar is page furniture that shrinks the page rect, never a
+// blocking layer, so this class stays out of the selector below (verify-permission-prompts.mjs).
+const BAR_HOST_CLASS = 'pb-web-tab-bars';
 const BLOCKING_LAYER_SELECTOR = '.pb-chrome-bar-dropdown, .quick-input-widget, .lm-Widget.dialogOverlay, .lm-Menu, .lm-mod-drag-image';
 
 function blockingLayerOpen(): boolean {
@@ -204,6 +207,31 @@ export interface WebTabState {
 /** Phase 32 plan 04 (PAGE-06): a row action, the frozen set the chrome arm accepts. */
 export type DownloadAction = 'cancel' | 'launch' | 'showContainingDirectory' | 'remove' | 'retry';
 
+/**
+ * Phase 37 plan 04 (D-08): the actions each notification bar offers. The fixed enum chrome's webTabBarAction arm
+ * accepts (WEB_TAB_BAR_ACTIONS in PowerBrowserAPI.sys.mjs); verify-permission-prompts.mjs compares the two as sets.
+ */
+export const NOTIFICATION_BAR_ACTIONS = {
+    'blocked-popup': ['allow-popup', 'dismiss'],
+} as const;
+export type NotificationBarKind = keyof typeof NOTIFICATION_BAR_ACTIONS;
+export type NotificationBarAction = typeof NOTIFICATION_BAR_ACTIONS[NotificationBarKind][number];
+
+/** Phase 37 plan 04: one bar as chrome pushed it: a token naming chrome's record, and display fields only. */
+export interface NotificationBar {
+    token: string;
+    barKind: NotificationBarKind;
+    displayFields: Record<string, unknown>;
+}
+
+/** A bar's message and the label of each action it offers; an action with no label is not shown. */
+export interface NotificationBarText {
+    message: string;
+    labels: Partial<Record<NotificationBarAction, string>>;
+    /** Actions drawn in the destructive colour (UI-SPEC: hung-script stop only). */
+    destructive?: NotificationBarAction[];
+}
+
 /** Phase 37 plan 02 (D-05): whether a tab shares each kind now, as chrome observed it (sharingChanged push). */
 export interface WebTabSharing {
     camera: boolean;
@@ -286,7 +314,9 @@ export type WebTabMessage =
     // source URL is minted chrome-side, never sent by the frame) and DevTools (the stock toolbox window for this tab, minted chrome-side).
     | { kind: 'webTabReader'; tabId: string; enter: boolean }
     | { kind: 'webTabViewSource'; tabId: string; inNewTab?: boolean }
-    | { kind: 'webTabDevtools'; tabId: string };
+    | { kind: 'webTabDevtools'; tabId: string }
+    // Phase 37 plan 04 (D-08): a notification bar's button; the token names chrome's record, the action is the fixed enum.
+    | { kind: 'webTabBarAction'; tabId: string; token: string; action: NotificationBarAction };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -464,6 +494,27 @@ export class WebTabChannel {
             widget.sharing = { camera: detail.camera === true, microphone: detail.microphone === true, screen: detail.screen === true };
             this.tabStatusEmitter.fire(widget);
         });
+        // Phase 37 plan 04 (D-08): a tab's notification bar appears, changes or goes. Only a known bar kind is kept, and
+        // only display fields: the record the bar's buttons act on stays in chrome.
+        this.onPush('notificationBar', detail => {
+            const widget = typeof detail.tabId === 'string' ? this.widgets.get(detail.tabId) : undefined;
+            const barKind = detail.barKind;
+            if (!widget || typeof detail.token !== 'string' || typeof barKind !== 'string' || !Object.prototype.hasOwnProperty.call(NOTIFICATION_BAR_ACTIONS, barKind)) {
+                return;
+            }
+            const fields = detail.displayFields;
+            widget.setNotificationBar(barKind as NotificationBarKind, detail.visible === true
+                ? { token: detail.token, barKind: barKind as NotificationBarKind, displayFields: typeof fields === 'object' && fields !== null ? fields as Record<string, unknown> : {} }
+                : undefined);
+        });
+    }
+
+    /** Phase 37 plan 04: the bar copy, supplied by chrome-bar (which owns CHROME_BAR_COPY and depends on this package). */
+    barCopy: ((bar: NotificationBar) => NotificationBarText | undefined) | undefined;
+
+    setBarCopy(copy: (bar: NotificationBar) => NotificationBarText | undefined): void {
+        this.barCopy = copy;
+        this.widgets.forEach(widget => widget.renderBars());
     }
 
     /** Phase 32 plan 04 (PAGE-06): the last Downloads rows chrome pushed, newest first. */
@@ -626,6 +677,11 @@ export class WebTabWidget extends BaseWidget {
     /** Phase 37 plan 02 (D-05): the kinds this tab shares now, only from chrome's sharingChanged push; all false until one arrives. */
     sharing: WebTabSharing = { camera: false, microphone: false, screen: false };
 
+    /** Phase 37 plan 04 (D-08): this tab's notification bars, one per kind, from chrome's notificationBar push. */
+    readonly notificationBars = new Map<NotificationBarKind, NotificationBar>();
+    /** The bar host: inside this widget, above the page; the page rect published below it shrinks by its height. */
+    protected barsNode: HTMLDivElement;
+
     protected readonly stateEmitter = new Emitter<WebTabState>();
     readonly onDidChangeState: TheiaEvent<WebTabState> = this.stateEmitter.event;
 
@@ -666,6 +722,10 @@ export class WebTabWidget extends BaseWidget {
         this.stateNode.className = 'pb-web-tab-state';
         this.stateNode.setAttribute('aria-live', 'polite');
         this.node.appendChild(this.stateNode);
+        this.barsNode = document.createElement('div');
+        this.barsNode.className = BAR_HOST_CLASS;
+        this.barsNode.setAttribute('aria-live', 'polite');
+        this.node.appendChild(this.barsNode);
         // Keyboard entry into the page (UI-SPEC A14): Enter or Space on the
         // focused placeholder hands focus to the overlay; leaving it again
         // is a page-scoped focus row (Alt+D, Ctrl+L, F6, Shift+F6) through the shortcut relay.
@@ -827,15 +887,17 @@ export class WebTabWidget extends BaseWidget {
                 return;
             }
             const r = this.node.getBoundingClientRect();
+            // D-08: the notification bars sit at the top of this node, so the page starts below them and never under them.
+            const bars = Math.min(this.barsNode.offsetHeight, r.height);
             // A crashed tab is not showable: the overlay hides and the placeholder carries the crash UI (PAGE-11, 32-08).
             const showable = this.isAttached && this.isVisible && this.hasPage && !this.crashed;
             const msg: WebTabMessage = {
                 kind: 'webTabGeometry',
                 tabId: this.tabId,
                 x: Math.round(r.left),
-                y: Math.round(r.top),
+                y: Math.round(r.top + bars),
                 w: Math.round(r.width),
-                h: Math.round(r.height),
+                h: Math.round(r.height - bars),
                 visible: showable && !blockingLayerOpen(),
             };
             const key = JSON.stringify(msg);
@@ -863,6 +925,57 @@ export class WebTabWidget extends BaseWidget {
                 }
             }
         });
+    }
+
+    /** Phase 37 plan 04: shows, replaces or (undefined) removes this tab's bar of one kind. */
+    setNotificationBar(barKind: NotificationBarKind, bar: NotificationBar | undefined): void {
+        if (bar) {
+            this.notificationBars.set(barKind, bar);
+        } else {
+            this.notificationBars.delete(barKind);
+        }
+        this.renderBars();
+    }
+
+    /** The bars, text values only; then the geometry, so the page rect follows the bar height in the same frame. */
+    renderBars(): void {
+        const copy = this.channel.barCopy;
+        const rows: HTMLElement[] = [];
+        for (const bar of this.notificationBars.values()) {
+            const text = copy?.(bar);
+            if (!text) {
+                continue;
+            }
+            const row = document.createElement('div');
+            row.className = 'pb-web-tab-bar';
+            row.setAttribute('role', 'status');
+            const message = document.createElement('span');
+            message.className = 'pb-web-tab-bar-message';
+            message.textContent = text.message;
+            row.appendChild(message);
+            for (const action of NOTIFICATION_BAR_ACTIONS[bar.barKind] as readonly NotificationBarAction[]) {
+                const label = text.labels[action];
+                if (!label) {
+                    continue;
+                }
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = text.destructive?.includes(action) ? 'theia-button pb-web-tab-bar-destructive' : 'theia-button';
+                button.textContent = label;
+                button.addEventListener('click', () => void this.barAction(bar.token, action));
+                // The placeholder's Enter and Space handler hands focus to the page; the button keeps its own activation.
+                button.addEventListener('keydown', event => event.stopPropagation());
+                row.appendChild(button);
+            }
+            rows.push(row);
+        }
+        this.barsNode.replaceChildren(...rows);
+        this.publish();
+    }
+
+    /** A bar button: the token and one action of its bar's fixed set. Chrome resolves the record and pushes the result. */
+    async barAction(token: string, action: NotificationBarAction): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabBarAction', tabId: this.tabId, token, action }));
     }
 
     async navigate(url: string): Promise<WebTabReply> {

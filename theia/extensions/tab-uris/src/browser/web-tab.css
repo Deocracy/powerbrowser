@@ -77,4 +77,35 @@
     outline-offset: 2px;
 }
 
+/* Phase 37 plan 04 (D-08, 37-UI-SPEC (e)): notification bars at the top of the placeholder. The page rect the widget
+   publishes starts below them, so a bar never covers page content; the bars stack, and the rect shrinks by their total. */
+.pb-web-tab-bars {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.pb-web-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--theia-foreground);
+    background: var(--theia-sideBar-background);
+    border-bottom: 1px solid var(--theia-panel-border);
+}
+
+.pb-web-tab-bar-message {
+    flex: 1;
+}
+
+.pb-web-tab-bar .pb-web-tab-bar-destructive {
+    color: var(--theia-errorForeground);
+}
+
 }

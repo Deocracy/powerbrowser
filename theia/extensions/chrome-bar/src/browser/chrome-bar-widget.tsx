@@ -26,7 +26,7 @@ import {
     setOpenDownloadsPanel,
     setOpenFindBar,
 } from './chrome-bar-commands';
-import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel } from './chrome-bar-copy';
+import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel, notificationBarCopy } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
 import { AddressBar, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
 import { BUTTON_SHORTCUTS, NavButton, tooltipFor } from './chrome-bar-shortcuts';
@@ -217,6 +217,8 @@ export class ChromeBarWidget extends ReactWidget {
         setOpenDownloadsPanel(() => this.toggleDownloads());
         setOpenFindBar(tab => this.openFind(tab));
         setChooseSaveDestination(suggestedName => this.chooseSaveDestination(suggestedName));
+        // Phase 37 plan 04 (D-08): the web tab widgets draw their notification bars with this package's copy.
+        this.webTabs.setBarCopy(notificationBarCopy);
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();

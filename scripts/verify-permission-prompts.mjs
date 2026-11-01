@@ -82,6 +82,21 @@
  *       webTab kind literal carries a credential-shaped key, and no log call
  *       under powerbrowser/shell carries a credential-shaped argument. Both
  *       scans walk every call site in the tree.
+ *   (u) bar host (37-04, D-08, Pitfall 8): the notification bar host class is
+ *       not in BLOCKING_LAYER_SELECTOR, it is a child of the web tab widget's
+ *       node, and the published page rect starts below it and shrinks by its
+ *       height, so a bar never covers page content.
+ *   (v) bar push (rule 9 companion): the one notificationBar push is in
+ *       pushNotificationBar, and it carries no URL, principal, origin or
+ *       callback (display fields and a token).
+ *   (w) bar answers (D-12): webTabBarActionReply resolves the chrome-held
+ *       record by token, checks it belongs to the sender's own tab and frame,
+ *       and the bar section reads no sender-supplied URL, origin or principal.
+ *   (x) Phase 36 call site (D-12): openAdoptedWebTab is called exactly once,
+ *       inside openBlockedPopup, behind the http(s) wall, and the superseded
+ *       webTabAdopt/adoptTab vocabulary appears nowhere.
+ * The prompt section ends where the '// Phase 37: notification bars.' section
+ * starts; rules (c), (f) and (h) read the prompt section only.
  * Rules (j), (k), (q) and (r) are the furniture-gate rows for plans 02 and 04; at
  * the Phase 35 merge they move to verify-shell-furniture.mjs with rule (a).
  *
@@ -120,6 +135,7 @@ const PERMISSION_WRITE = /\b(?:setForPrincipal|removeFromPrincipal|addFromPrinci
 
 const MODULE_FILE = 'PopupNotifications.sys.mjs';
 const SECTION_MARKER = '// Phase 37: permission prompts.';
+const BAR_SECTION_MARKER = '// Phase 37: notification bars.';
 const INSTALLER = 'installPermissionPromptFurniture';
 const PANEL_ID = 'notification-popup';
 const TEMPLATE_ID = 'webRTC-shareDevices-notification';
@@ -188,6 +204,22 @@ function templateBlock(text, id = TEMPLATE_ID) {
 /** Each start tag of a block as `tag attr="v" ...` (attributes sorted, namespace declarations dropped), in document order. */
 function startTags(block) {
     return [...block.matchAll(/<([\w:-]+)((?:\s+[\w:-]+="[^"]*")*)\s*\/?>/g)].map(m => [m[1], ...[...attrSet(m[2])].filter(a => !/^xmlns(?::|=)/.test(a)).sort()].join(' '));
+}
+
+/** Each sendWebTabPush payload object literal of `text`, nested braces included, with the call text before it. */
+function pushPayloads(text) {
+    return [...text.matchAll(/sendWebTabPush\(\s*[\w$.]+\s*,\s*(?=\{)/g)].map(m => ({ call: m[0], body: braceBlock(text, m.index + m[0].length) }));
+}
+
+/** The top-level keys of an object literal (nested literals and parentheses skipped). */
+function topKeys(body) {
+    let depth = 0;
+    let flat = '';
+    for (const ch of body.slice(1, -1)) {
+        depth += '{(['.includes(ch) ? 1 : ')}]'.includes(ch) ? -1 : 0;
+        flat += depth === 0 || '{(['.includes(ch) && depth === 1 ? ch : ' ';
+    }
+    return derive(flat, /(?:^|,)\s*([A-Za-z_$][\w$]*)\s*(?=[:,]|$)/g);
 }
 
 /** The argument text of the call whose `(` is at `open`, string literal text blanked (template interpolations kept). */
@@ -298,7 +330,9 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
     const api = stripComments(raw[API]);
     const markup = raw[XHTML].replace(/<!--[\s\S]*?-->/g, '');
     const sectionAt = raw[API].indexOf(SECTION_MARKER);
-    const section = sectionAt === -1 ? '' : stripComments(raw[API].slice(sectionAt));
+    const barAt = raw[API].indexOf(BAR_SECTION_MARKER);
+    const section = sectionAt === -1 ? '' : stripComments(raw[API].slice(sectionAt, barAt > sectionAt ? barAt : undefined));
+    const bars = barAt === -1 ? '' : stripComments(raw[API].slice(barAt));
     if (sectionAt === -1) {
         failures.push(`section: ${API} has no '${SECTION_MARKER}' end-of-file section -- the prompt code has no home, so rules (a), (c) and (f) prove nothing`);
     }
@@ -556,10 +590,9 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
     let logSites = 0;
     for (const file of apiFiles) {
         const text = stripComments(raw[file]);
-        for (const push of text.matchAll(/sendWebTabPush\(\s*[\w$.]+\s*,\s*\{([^}]*)\}/g)) {
+        for (const push of pushPayloads(text)) {
             pushSites++;
-            const keys = derive(push[1], /\b([A-Za-z_$][\w$]*)\s*[:,]|\b([A-Za-z_$][\w$]*)\s*$/g).filter(Boolean);
-            const leak = keys.filter(key => CREDENTIAL.test(key));
+            const leak = topKeys(push.body).filter(key => CREDENTIAL.test(key));
             if (leak.length) {
                 failures.push(`no-credential: credential field in a Theia push in ${file} (${leak.join(', ')}) -- the prompter owns credential values; none crosses to Theia (D-07)`);
             }
@@ -675,6 +708,64 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
         }
     }
 
+    // (u) The bar host is page furniture inside the widget, outside the blocking layer, and the page rect starts below it.
+    const webTab = stripComments(raw[WEB_TAB]);
+    const hostClass = /const BAR_HOST_CLASS = '([\w-]+)'/.exec(webTab)?.[1];
+    const blocking = /const BLOCKING_LAYER_SELECTOR = '([^']*)'/.exec(webTab)?.[1];
+    if (!hostClass || blocking === undefined) {
+        failures.push(`bar-host: ${WEB_TAB} has no BAR_HOST_CLASS or BLOCKING_LAYER_SELECTOR -- the bar placement cannot be read (broken instrument)`);
+    } else {
+        if (blocking.split(',').some(sel => sel.trim().split(/\s+/).some(part => part.split('.').includes(hostClass)))) {
+            failures.push(`bar-host: bar inside blocking layer -- BLOCKING_LAYER_SELECTOR lists .${hostClass}, so a bar would hide the page instead of shrinking its rect (D-08)`);
+        }
+        if (!/this\.barsNode\.className = BAR_HOST_CLASS;/.test(webTab) || !/this\.node\.appendChild\(this\.barsNode\)/.test(webTab)) {
+            failures.push(`bar-host: the bar host is not a .${hostClass} child of the web tab widget's node -- a bar outside the widget is not the tab's (D-08)`);
+        }
+        const publish = braceBlock(webTab, webTab.search(/\n\s+publish\(\): void \{/));
+        if (!/const bars = [^;]*this\.barsNode\.offsetHeight/.test(publish) || !/r\.top \+ bars/.test(publish) || !/r\.height - bars/.test(publish)) {
+            failures.push(`bar-host: bar covers page content -- publish() does not start the page rect below the bar host and shrink it by the bar height (D-08, Pitfall 8)`);
+        }
+    }
+    // (v) One notificationBar push, display-only.
+    const barPushes = pushPayloads(api).filter(p => /^\{\s*kind:\s*"notificationBar"/.test(p.body));
+    if (barPushes.length !== 1 || !functionBody(api, 'pushNotificationBar').includes(barPushes[0].body)) {
+        failures.push(`bar-push: ${API} has ${barPushes.length} notificationBar pushes, or one outside pushNotificationBar -- the bar has more than one source`);
+    } else {
+        const leak = topKeys(barPushes[0].body).filter(key => /principal|url|uri|origin|spec|callback/i.test(key));
+        if (leak.length) {
+            failures.push(`bar-push: the notificationBar push carries ${leak.join(', ')} -- chrome to Theia is display fields and a token`);
+        }
+    }
+    // (w) A bar answer acts on the chrome-held record of the sender's own tab; the bar section takes no URL from a frame.
+    if (barAt === -1) {
+        failures.push(`bar-answer: ${API} has no '${BAR_SECTION_MARKER}' section -- the notification bars have no home`);
+    } else {
+        const reply = functionBody(api, 'webTabBarActionReply');
+        if (!/barRecords\.get\(data\.token\)/.test(reply)) {
+            failures.push(`bar-answer: webTabBarActionReply does not resolve the chrome-held record by token`);
+        }
+        if (!/record\.theiaBrowser !== sender/.test(reply) || !/record\.tabId !== data\.tabId/.test(reply)) {
+            failures.push(`bar-answer: a bar answer is not checked against the sending frame and its tab -- one tab's frame could answer another tab's bar`);
+        }
+        for (const read of new Set(bars.match(/\b(?:data|detail|message|msg)\s*\??\.\s*(?:url|uri|spec|href|origin|principal|triggeringPrincipal|host)\b/g) ?? [])) {
+            failures.push(`bar-answer: Allow opened a frame-supplied URL -- the bar section reads ${read.replace(/\s/g, '')} (D-12: the stored record only)`);
+        }
+    }
+    // (x) The one Phase 36 adoption call site, behind the http(s) wall; the superseded vocabulary is absent.
+    const adoptCalls = [...api.matchAll(/\bopenAdoptedWebTab\(/g)].length;
+    const opener = functionBody(api, 'openBlockedPopup');
+    if (adoptCalls !== 1 || !/\bopenAdoptedWebTab\(/.test(opener)) {
+        failures.push(`adopt-call: ${API} calls openAdoptedWebTab ${adoptCalls} times, or outside openBlockedPopup -- the blocked-popup Allow has one thin Phase 36 call site (D-12)`);
+    } else if (opener.search(/https\?/) === -1 || opener.search(/https\?/) > opener.search(/\bopenAdoptedWebTab\(/)) {
+        failures.push(`adopt-call: openBlockedPopup reaches openAdoptedWebTab before an http(s) wall on the stored spec`);
+    }
+    for (const file of [API, ...frontend]) {
+        const hit = /\b(webTabAdopt|adoptTab|dropAdoptedTab|installNewWindowReceivers)\b/.exec(stripComments(raw[file] ?? ''));
+        if (hit) {
+            failures.push(`adopt-call: ${file} names ${hit[1]} -- the Phase 36 API is openAdoptedWebTab; the plan's adoption vocabulary was superseded`);
+        }
+    }
+
     const writes = (api.match(/\bactiveTabByFrame\.set\(/g) ?? []).length;
     const setter = functionBody(api, 'setActiveTabOfFrame');
     if (writes !== 1 || !setter.includes('activeTabByFrame.set(')) {
@@ -698,8 +789,11 @@ function selfTest() {
     }
     console.log(`  ok  unmodified fixture -> green (same-session positive control)`);
     const verdictWith = patch => JSON.stringify({ ...JSON.parse(clean[VERDICT] ?? '{}'), ...patch });
-    const sectionAt = clean[API].indexOf(SECTION_MARKER);
-    const inSection = text => clean[API].slice(0, sectionAt) + clean[API].slice(sectionAt).replace(/\n$/, `\n${text}\n`);
+    // Into the prompt section: just before the notification-bar section that follows it.
+    const barAt = clean[API].indexOf(BAR_SECTION_MARKER);
+    const promptEnd = clean[API].lastIndexOf('\n// ----', barAt);
+    const inSection = text => `${clean[API].slice(0, promptEnd)}\n${text}\n${clean[API].slice(promptEnd)}`;
+    const inBars = text => `${clean[API].replace(/\n$/, '')}\n${text}\n`;
     const cases = [
         {
             name: 'missing panel',
@@ -822,6 +916,47 @@ function selfTest() {
             name: 'no sharing re-push on re-registration',
             sources: { ...clean, [API]: clean[API].replace(/\n\s*resendWebTabSharing\(tabId\);\n(\s*return "already-open";)/, '\n$1') },
             expect: "already-open branch does not re-push",
+        },
+        // Plan 04 (D-08, D-12): the bar host, the bar push and the bar answers.
+        {
+            name: 'bar inside blocking layer',
+            sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace(/(const BLOCKING_LAYER_SELECTOR = '[^']*)'/, "$1, .pb-web-tab-bars'") },
+            expect: 'bar inside blocking layer',
+        },
+        {
+            name: 'bar covers page content',
+            sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace('y: Math.round(r.top + bars),', 'y: Math.round(r.top),') },
+            expect: 'bar covers page content',
+        },
+        {
+            name: 'allow-loads-frame-url',
+            sources: { ...clean, [API]: clean[API].replace('openBlockedPopup(record.browser, popup.spec, popup.principal)', 'openBlockedPopup(record.browser, record.data.url, popup.principal)') },
+            expect: 'Allow opened a frame-supplied URL',
+        },
+        {
+            name: 'bar answer not checked against the sender',
+            sources: { ...clean, [API]: clean[API].replace(' || record.theiaBrowser !== sender', '') },
+            expect: 'not checked against the sending frame',
+        },
+        {
+            name: 'second notificationBar push',
+            sources: { ...clean, [API]: `${clean[API]}\nfunction plantedBar(b) { sendWebTabPush(b, { kind: "notificationBar", token: "t", tabId: "x", barKind: "blocked-popup", displayFields: {}, visible: true }); }\n` },
+            expect: '2 notificationBar pushes',
+        },
+        {
+            name: 'bar push carries a url',
+            sources: { ...clean, [API]: clean[API].replace('displayFields: visible ? record.displayFields : {}, visible });', 'displayFields: visible ? record.displayFields : {}, url: record.stored, visible });') },
+            expect: 'the notificationBar push carries url',
+        },
+        {
+            name: 'adoption call outside the thin call site',
+            sources: { ...clean, [API]: `${clean[API]}\nfunction plantedAdopt(b, u) { return PowerBrowserAPI.openAdoptedWebTab(b, u); }\n` },
+            expect: 'calls openAdoptedWebTab 2 times',
+        },
+        {
+            name: 'superseded adoption vocabulary',
+            sources: { ...clean, [WEB_TAB]: `${clean[WEB_TAB]}\nexport const plantedAdopt = (c: WebTabChannel) => c.onPush('adoptTab', () => undefined);\n` },
+            expect: 'names adoptTab',
         },
         // Plan 04 (D-07): the password template, the login callback and the no-credential scans.
         {

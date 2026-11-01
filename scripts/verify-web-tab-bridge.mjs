@@ -108,6 +108,9 @@ const KIND_CLASSES = new Map([
     ['webTabReader', 'tab-navigation'],
     ['webTabViewSource', 'tab-navigation'],
     ['webTabDevtools', 'tab-navigation'],
+    // Phase 37 plan 04 (D-08, D-12): a notification bar's button. A token and a fixed-enum action on a chrome-held
+    // record of the sender's own tab; it writes no permission, so tab-lifecycle (the bar lives and goes with the tab).
+    ['webTabBarAction', 'tab-lifecycle'],
 ]);
 
 /**
@@ -789,6 +792,11 @@ function selfTest() {
             name: 'planted webTabStop dropped from WEB_TAB_ACTION_KINDS',
             sources: { ...clean, [API]: clean[API].replace(/(const WEB_TAB_ACTION_KINDS = new Set\(\[)"webTabStop",\s*/, '$1') },
             expect: 'handleWebTabAction has case arms WEB_TAB_ACTION_KINDS does not route: webTabStop',
+        },
+        {
+            name: 'planted webTabBarAction dropped from WEB_TAB_ACTION_KINDS',
+            sources: { ...clean, [API]: clean[API].replace(/,\s*"webTabBarAction"(\]\);)/, '$1') },
+            expect: 'handleWebTabAction has case arms WEB_TAB_ACTION_KINDS does not route: webTabBarAction',
         },
         {
             name: 'planted extra arm in handleWebTabAction',
