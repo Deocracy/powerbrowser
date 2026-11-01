@@ -3891,6 +3891,7 @@ export const PowerBrowserAPI = Object.freeze({
     } catch {
       PowerBrowserAPI.log("error", "[web-tab] tab host drop failed; the overlay is closed anyway");
     }
+    webTabCloseToolbox(browser);
     browser.remove();
     webTabs.delete(tabId);
     return "closed";
@@ -6703,13 +6704,42 @@ function webTabViewSourceReply(kind, tabId, inNewTab) {
   return { ok: true, kind, where: "applied" };
 }
 
-// DevTools (PAGE-10, D-23): the route is Phase 31's openStockPage. Its enum has no devtools page, and a DevTools window
-// needs a real XUL tab for this overlay, so the route is missing. Refused: no toolbox window and no custom inspector.
+// DevTools (PAGE-10, D-23 as amended by the 32-07 gap closure): the stock toolbox window for this overlay, through
+// DevToolsShim. The shim's showToolboxForTab takes the overlay's tab-host node (its linkedBrowser is the overlay) and a
+// window host, which needs no docked tab; the node is the stable key, so a second F12 raises the same toolbox. No custom
+// inspector is built and no toolbox is docked in the shell.
+function webTabDevToolsShim() {
+  return ChromeUtils.importESModule("chrome://devtools-startup/content/DevToolsShim.sys.mjs").DevToolsShim;
+}
+
 function webTabDevtoolsReply(kind, tabId) {
-  if (!webTabs.get(tabId)) {
+  const entry = webTabs.get(tabId);
+  if (!entry) {
     return { ok: true, kind, where: "unknown-tab" };
   }
-  return { ok: false, reason: "unavailable", message: "handleWebTabAction: the DevTools route is not built; openStockPage has no devtools page" };
+  const node = tabHostNodeOf(entry.browser);
+  const shim = webTabDevToolsShim();
+  if (!node || !shim.isEnabled()) {
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: DevTools are not available for this tab" };
+  }
+  shim.showToolboxForTab(node, { hostType: "window" }).catch(err => {
+    PowerBrowserAPI.log("error", `[web-tab] devtools failed to open (${err && err.name ? err.name : "error"})`);
+  });
+  return { ok: true, kind, where: "opened" };
+}
+
+// Called by webTabClose before browser.remove(): the stock TabClose wiring closes a toolbox only for a local XUL tab, so a
+// toolbox opened for an overlay is destroyed here. Matched by browserId; nothing happens when DevTools never started.
+function webTabCloseToolbox(browser) {
+  try {
+    for (const toolbox of webTabDevToolsShim().getToolboxes()) {
+      if (toolbox.commands?.descriptorFront?.browserId === browser.browserId) {
+        toolbox.destroy().catch(() => {});
+      }
+    }
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[web-tab] toolbox close failed (${err && err.name ? err.name : "error"})`);
+  }
 }
 
 // Phase 32 plan 08 (PAGE-10): a view-source overlay's URL and title are its own source string. Theia gets the page's

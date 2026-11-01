@@ -71,7 +71,8 @@
  *            the overlay hides, Reload tab brings the page back with its history (kept by the shell, restored on the reopen).
  *   remoteness-regression  (32-08, D-25a): five same-site tabs, the fifth reloaded and then activated; each must end on its
  *            page with docShellIsActive. Self-sessioned; writes no verdict.
- *   Not scenarios: F12 DevTools (its route is not built) and the readability signal (not built). Neither has a row.
+ *   devtools  PAGE-10 (32-07 gap closure): F12 from a page opens one stock toolbox window for that tab; a second open keeps one;
+ *            closing the tab closes it; a quit with a toolbox open exits. Plant: the open never reaches chrome.
  *
  * Preflight: the binary must carry the current patch 050. The sha256 of
  * patches/050-extension-tab-host.patch must equal the stamp in
@@ -500,6 +501,70 @@ async function scenarioSource(app, origin, plant = false) {
     }
     const pushed = (await pushes(app)).slice(from).filter(p => JSON.stringify(p).includes('view-source:'));
     return pushed.length === 0 ? null : `${pushed.length} push(es) carried a view-source: string into Theia`;
+}
+
+/**
+ * devtools (PAGE-10, 32-07 gap closure): F12 from a focused page opens the stock DevTools toolbox window for that tab's
+ * overlay. Positive control: before any open there is no toolbox for the overlay, and chrome's own read of the toolbox
+ * list (DevToolsShim) is what proves the window exists. Then: exactly one toolbox for the overlay; a second open (the
+ * channel kind, the same arm F12's widget method sends) still leaves one; closing the tab closes its toolbox and window;
+ * and a quit with a toolbox open exits. `plant` sends a kind chrome does not know instead of the open, which must go red.
+ */
+async function scenarioDevtools(app, origin, plant = false) {
+    const { tabId } = await openLoaded(app, `${origin}/find`, '/find');
+    const read = body => inChrome(app, `const { DevToolsShim } = ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs');
+        const o = overlayOf(${JSON.stringify(tabId)});
+        const mine = o ? DevToolsShim.getToolboxes().filter(t => t.commands?.descriptorFront?.browserId === o.browserId) : [];
+        ${body}`);
+    const count = () => read('return mine.length;');
+    const windowOpen = () => inChrome(app, "return Services.wm.getMostRecentWindow('devtools:toolbox') !== null;");
+    /** Polls `readValue` every 200 ms for up to `ms` until it equals `want`; returns the last value read. */
+    const until = async (readValue, want, ms = 15000) => {
+        let value = await readValue();
+        for (let waited = 0; value !== want && waited < ms; waited += 200) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+            value = await readValue();
+        }
+        return value;
+    };
+    if (await count() !== 0 || await windowOpen() !== false) {
+        throw new Error(`${BROKEN} a toolbox exists before F12 was pressed, so the read cannot show an open`);
+    }
+    if (plant) {
+        // The planted fault: the open never reaches chrome (a kind it does not know), so F12 does nothing.
+        await channelRequest(app, { kind: 'webTabDevtoolsDropped', tabId });
+    } else if (await pressPageKey(app, tabId, 'devtoolsOpen', { key: 'F12', code: 'F12', keyCode: 123 }) < 0) {
+        return 'F12 in a focused page produced no shortcut push: the devtoolsOpen row did not relay';
+    }
+    const opened = await until(count, 1);
+    if (opened !== 1) {
+        return `no DevTools toolbox for the tab after F12 (toolboxes for its overlay: ${opened})`;
+    }
+    if (await windowOpen() !== true) {
+        return 'the toolbox exists but no devtools:toolbox window is open';
+    }
+    const again = await channelRequest(app, { kind: 'webTabDevtools', tabId });
+    if (again?.ok !== true) {
+        return `a second DevTools open was refused (${JSON.stringify(again)})`;
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    if (await count() !== 1) {
+        return `a second DevTools open left ${await count()} toolboxes for the tab, want 1`;
+    }
+    const closed = await channelRequest(app, { kind: 'webTabClose', tabId });
+    if (closed?.ok !== true) {
+        return `closing the tab was refused (${JSON.stringify(closed)})`;
+    }
+    if (await until(windowOpen, false) !== false) {
+        return 'closing the tab left its DevTools toolbox window open';
+    }
+    // A toolbox open at quit: a second tab, its toolbox, then the desktop close. The browser must exit.
+    const second = await openLoaded(app, `${origin}/find`, '/find');
+    const reply = await channelRequest(app, { kind: 'webTabDevtools', tabId: second.tabId });
+    if (reply?.ok !== true || await until(windowOpen, true) !== true) {
+        return `DevTools did not open on the second tab to quit over (${JSON.stringify(reply)})`;
+    }
+    return await app.quit({ how: 'desktop-close', timeoutMs: 25000 }) === 'exited' ? null : 'the browser did not exit with a DevTools toolbox open';
 }
 
 /**
@@ -1321,6 +1386,7 @@ const SCENARIOS = {
     reader: (app, fx) => scenarioReader(app, fx.origin),
     source: (app, fx) => scenarioSource(app, fx.origin),
     crash: (app, fx) => scenarioCrash(app, fx.origin),
+    devtools: (app, fx) => scenarioDevtools(app, fx.origin),
     downloads: (app, fx) => scenarioDownloads(app, fx),
     'downloads-today': async (app, fx, downloadDir) => {
         const verdict = await probeDownloadsToday(app, fx.origin, fx.requests, downloadDir);
@@ -1414,6 +1480,12 @@ const PLANTS = [
         target: 'crash',
         run: (app, fx) => scenarioCrash(app, fx.origin, true),
         expect: 'shows no contracted crash copy',
+    },
+    {
+        plant: 'devtools-open-dropped',
+        target: 'devtools',
+        run: (app, fx) => scenarioDevtools(app, fx.origin, true),
+        expect: 'no DevTools toolbox for the tab after F12',
     },
     {
         plant: 'crash-history-dropped',

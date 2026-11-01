@@ -75,6 +75,8 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'saveOpen', key: 'S', modifiers: 'accel', label: 'Ctrl+S', macLabel: '⌘S' },
     // Phase 32 plan 08 (PAGE-10): view source in the same tab; chrome mints the source load, Theia never holds its URL.
     { id: 'viewSource', key: 'U', modifiers: 'accel', label: 'Ctrl+U', macLabel: '⌘U' },
+    // PAGE-10 (32-07 gap closure): F12 opens the stock DevTools toolbox window for the focused page.
+    { id: 'devtoolsOpen', keycode: 'VK_F12', modifiers: '', label: 'F12', macLabel: 'F12' },
 ];
 
 export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
@@ -180,6 +182,7 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['saveOpen', tab => tab.savePage(chooseSaveDestination)],
         // PAGE-10 (32-08): the widget method, never a kind; the reader toggle has no key (the button and command only).
         ['viewSource', tab => tab.viewSource()],
+        ['devtoolsOpen', tab => tab.openDevtools()],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */

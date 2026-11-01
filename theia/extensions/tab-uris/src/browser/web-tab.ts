@@ -274,7 +274,7 @@ export type WebTabMessage =
     // only a Theia-initiated Edit item does. checkOnly reads enablement and runs nothing.
     | { kind: 'webTabEdit'; tabId: string; cmd: 'cmd_undo' | 'cmd_redo' | 'cmd_cut' | 'cmd_copy' | 'cmd_paste' | 'cmd_selectAll' | 'cmd_delete'; checkOnly?: boolean }
     // Phase 32 plan 07 (PAGE-10): reader enter/leave (same overlay), view source (the inner page is the overlay's own; the
-    // source URL is minted chrome-side, never sent by the frame) and DevTools (refused until openStockPage has a devtools page).
+    // source URL is minted chrome-side, never sent by the frame) and DevTools (the stock toolbox window for this tab, minted chrome-side).
     | { kind: 'webTabReader'; tabId: string; enter: boolean }
     | { kind: 'webTabViewSource'; tabId: string; inNewTab?: boolean }
     | { kind: 'webTabDevtools'; tabId: string };
@@ -887,7 +887,9 @@ export class WebTabWidget extends BaseWidget {
     /**
      * PAGE-11 (32-08): a crashed overlay has no remote tab, so webTabReload and a
      * history jump both fail on it (live, 32-08). Its overlay is closed and opened
-     * again at the same URL with the same tab id instead.
+     * again at the same URL with the same tab id instead. Chrome keeps the crashed
+     * overlay's session history across the close and restores it on the open, so
+     * Back and Forward still hold the page's entries.
      */
     protected async recreate(): Promise<WebTabReply> {
         await this.channel.request({ kind: 'webTabClose', tabId: this.tabId });
@@ -1012,6 +1014,14 @@ export class WebTabWidget extends BaseWidget {
      */
     async viewSource(): Promise<WebTabReply> {
         return this.settleUnknownTab(await this.channel.request({ kind: 'webTabViewSource', tabId: this.tabId }));
+    }
+
+    /**
+     * PAGE-10 (32-07 gap closure): opens the stock DevTools toolbox window for this tab's page. Chrome opens it; this widget
+     * sends only the tab id. A second call raises the same toolbox. Closing the tab closes the toolbox.
+     */
+    async openDevtools(): Promise<WebTabReply> {
+        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabDevtools', tabId: this.tabId }));
     }
 
     /** PAGE-05: mutes or unmutes this tab. The flag is explicit, never a toggle; the reply reads `audioMuted` back. */
