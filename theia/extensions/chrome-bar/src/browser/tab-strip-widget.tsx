@@ -24,6 +24,9 @@ import { LINK_DRAG_TYPES, droppedTextOf, safeIcon } from './address-bar/address-
 /** Marks a home-pane tab that the strip lists, so the pane's own bar does not. */
 const STRIP_ONLY_CLASS = 'pb-strip-only';
 
+/** TAB-07 (34-04, D-10): the hover dwell before a tab's preview card opens (Firefox parity). */
+const PREVIEW_DWELL_MS = 400;
+
 /** TAB-01 (34-01): the tab menu's path; the menu itself is built fresh per right-click (D-03). */
 const TAB_MENU_PATH: MenuPath = ['powerbrowser-tab-strip-menu'];
 
@@ -214,6 +217,17 @@ export class TabStripWidget extends ReactWidget {
     /** TAB-05: the pin restore, settled when the stored pins are back (the live pin-restore scenario awaits it). */
     pinRestore: Promise<void> = Promise.resolve();
 
+    /**
+     * TAB-07 (34-04, D-10/D-11): the open preview card: the hovered tab, its fixed position (the tab's bottom-left
+     * plus 4px), whether its image is still resolving, and the page to refocus on close (set only when that page
+     * had focus when the card hid it).
+     */
+    protected preview: { widget: Widget; left: number; top: number; resolving: boolean; refocus: WebTabWidget | undefined } | undefined;
+    protected previewTimer: number | undefined;
+
+    /** TAB-07: the tab id of the page chrome last reported focused (the pageFocus push), for the focus rule. */
+    protected focusedPageTabId: string | undefined;
+
     protected readonly toDispose = new DisposableCollection();
 
     @postConstruct()
@@ -233,6 +247,9 @@ export class TabStripWidget extends ReactWidget {
             this.groups.onDidChange(() => this.update()),
             // Phase 32 plan 08 (PAGE-04, PAGE-11): a pushed favicon or crash flag repaints the row's icon and mark.
             this.channel.onDidChangeTabStatus(() => this.update()),
+            this.channel.onPush('pageFocus', detail => {
+                this.focusedPageTabId = typeof detail.tabId === 'string' ? detail.tabId : undefined;
+            }),
         ]);
         // TAB-01: each single-tab command runs the same row the menu shows, for the tab it is handed.
         setTabActions({
@@ -247,7 +264,11 @@ export class TabStripWidget extends ReactWidget {
         // TAB-05: pins come back after the launch restore, and the quit flush writes them with each tab's last URL.
         this.pinRestore = this.setups.sessionRestored.then(() => this.restorePins());
         this.toDispose.push(this.storage.onWillFlush(event => event.waitUntil(this.savePins())));
-        this.shell.mainPanel.onDidChangeCurrent(() => this.update());
+        this.shell.mainPanel.onDidChangeCurrent(() => {
+            // TAB-07: a tab switch closes the preview; the switched-to tab takes focus, not the page the card hid.
+            this.closePreview(false);
+            this.update();
+        });
         // A split moves a tab between panes without adding or removing it,
         // and which pane a tab is in is exactly what this strip now shows.
         this.shell.mainPanel.layoutModified.connect(() => this.update());
@@ -255,6 +276,7 @@ export class TabStripWidget extends ReactWidget {
     }
 
     override dispose(): void {
+        window.clearTimeout(this.previewTimer);
         this.toDispose.dispose();
         super.dispose();
     }
@@ -1138,6 +1160,90 @@ export class TabStripWidget extends ReactWidget {
      * this widget and replaces the tab node mid-gesture, which would strand
      * the drag on a detached element.
      */
+    /**
+     * TAB-07 (D-10): the settled GUI-08 thumbnail of a tab: the tabs.thumbnail column as GroupModel's cards carry it
+     * (projectSessionStoreTabs rows, with rememberThumbnail's session memory folded in). null when the tab has none
+     * (a web tab on the empty page is never captured), undefined while no card for it is loaded. Never a capture
+     * and never a TabPlacesRow: that row carries no thumbnail.
+     */
+    protected previewImage(widget: Widget): string | null | undefined {
+        if (widget instanceof WebTabWidget && !widget.hasPage) {
+            return null;
+        }
+        const key = this.tabKey(widget);
+        const card = [...this.groups.listUngrouped(), ...this.groups.listGroups().flatMap(group => this.groups.getTabs(group.id))]
+            .find(candidate => candidate.uri === key);
+        if (!card) {
+            return undefined;
+        }
+        return typeof card.thumbnail === 'string' && card.thumbnail.startsWith('data:image/') ? card.thumbnail : null;
+    }
+
+    /** TAB-07: hover starts the dwell. Never for a tab on screen: the active tab's page is already visible. */
+    protected schedulePreview(widget: Widget, node: HTMLElement): void {
+        this.closePreview();
+        if (widget.isVisible) {
+            return;
+        }
+        this.previewTimer = window.setTimeout(() => this.openPreview(widget, node), PREVIEW_DWELL_MS);
+    }
+
+    /**
+     * TAB-07 (D-11): opens the card below the tab. The card is in BLOCKING_LAYER_SELECTOR (web-tab.ts), so the
+     * overlay hides while it is open and never paints over it. Fixed, not absolute: the scrolling row clips its
+     * children, so the anchor is the tab's own rect (its bottom plus 4px, the sheet's calc(100% + 4px)).
+     */
+    protected openPreview(widget: Widget, node: HTMLElement): void {
+        this.previewTimer = undefined;
+        if (!node.isConnected || widget.isVisible) {
+            return;
+        }
+        const box = node.getBoundingClientRect();
+        const current = this.shell.mainPanel.currentTitle?.owner;
+        const refocus = current instanceof WebTabWidget && current.tabId === this.focusedPageTabId ? current : undefined;
+        const resolving = this.previewImage(widget) === undefined;
+        this.preview = { widget, left: Math.max(0, Math.min(box.left, window.innerWidth - 288)), top: box.bottom + 4, resolving, refocus };
+        if (resolving) {
+            // The tab may be newer than the loaded cards: one reload, then the image or the text card.
+            void this.groups.scheduleReload().finally(() => {
+                if (this.preview?.widget === widget) {
+                    this.preview.resolving = false;
+                    this.update();
+                }
+            });
+        }
+        this.update();
+    }
+
+    /** TAB-07: closes the card (pointer-leave, press, scroll, tab switch); the page gets focus back when it had it. */
+    protected closePreview(refocus = true): void {
+        window.clearTimeout(this.previewTimer);
+        this.previewTimer = undefined;
+        const open = this.preview;
+        if (!open) {
+            return;
+        }
+        this.preview = undefined;
+        this.update();
+        if (refocus) {
+            open.refocus?.focusPage();
+        }
+    }
+
+    /** TAB-07 (D-10): image (or the skeleton while it resolves) plus title plus URL; aria-hidden, a tooltip equivalent. */
+    protected renderPreview(preview: NonNullable<TabStripWidget['preview']>): React.ReactNode {
+        const { widget } = preview;
+        const image = this.previewImage(widget);
+        const url = widget instanceof WebTabWidget && widget.hasPage ? widget.url : undefined;
+        return <div className='pb-tab-preview' aria-hidden='true' style={{ left: preview.left, top: preview.top }}>
+            {image
+                ? <img className='pb-tab-preview-image' src={image} alt='' />
+                : preview.resolving && <div className='pb-tab-preview-image is-shimmer' />}
+            <div className='pb-tab-preview-title'>{widget.title.label || widget.id}</div>
+            {url && <div className='pb-tab-preview-url'>{url}</div>}
+        </div>;
+    }
+
     protected beginDrag(widget: Widget, event: React.PointerEvent): void {
         if (event.button !== 0) {
             return;
@@ -1393,6 +1499,7 @@ export class TabStripWidget extends ReactWidget {
             onDragEnter={event => this.onStripDragOver(event)}
             onDragOver={event => this.onStripDragOver(event)}
             onDrop={event => { void this.onStripDrop(event); }}
+            onScroll={() => this.closePreview()}
         >
             {/* TAB-05: the pinned block, sticky at the row's start with a separator after it, so pins never scroll away. */}
             {tabs.some(tab => this.isPinned(tab)) && <div className='pb-tab-pinned-block' role='presentation'>
@@ -1432,6 +1539,7 @@ export class TabStripWidget extends ReactWidget {
             onClick={event => this.openListAllMenu(event)}
             onPointerDown={event => event.stopPropagation()}
         />}
+        {this.preview && this.renderPreview(this.preview)}
         <AfterRender run={() => this.measureOverflow()} />
         </>;
     }
@@ -1467,7 +1575,9 @@ export class TabStripWidget extends ReactWidget {
             data-pb-tab={widget.id}
             className={'pb-tab' + (active ? ' is-active' : '') + (pinned ? ' is-pinned' : '') + (selected ? ' is-selected' : '') + drag + drop}
             onClick={event => this.onTabClick(widget, event)}
-            onPointerDown={event => this.beginDrag(widget, event)}
+            onPointerDown={event => { this.closePreview(false); this.beginDrag(widget, event); }}
+            onPointerEnter={event => this.schedulePreview(widget, event.currentTarget)}
+            onPointerLeave={() => this.closePreview()}
             onMouseDown={event => { if (event.button === 1) { event.preventDefault(); } }}
             onAuxClick={event => this.onTabAuxClick(widget, event)}
             onContextMenu={event => this.openTabMenu(widget, event)}

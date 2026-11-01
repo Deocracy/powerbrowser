@@ -71,6 +71,16 @@
 //     2 Tabs runs tab-close for each, /a and /c stay open, and the selection
 //     is empty.
 //
+//   preview (TAB-07, 34-04): /a and /b open, /b current, /a's settled GUI-08
+//     thumbnail loaded into the strip's cards (else NOT SCORED). A trusted
+//     hover on /a opens the card after the 400 ms dwell (never before 380 ms),
+//     below /a (its top at /a's bottom plus 4px), carrying the thumbnail image,
+//     /a's title and URL, while chrome's overlay of /b reads hidden (the card
+//     is a blocking layer); moving off closes it and the overlay reads visible
+//     again. A tab on the empty page (no capture) gets the text card: title,
+//     no image. Hovering the current tab /b for twice the dwell opens no card
+//     while chrome's overlay of /b reads visible (positive overlay read).
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
@@ -83,7 +93,7 @@
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
@@ -91,7 +101,7 @@ import { newProfile, runCheck, withShell, withShellQuit } from './lib/ng-a-live.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/ng-a-live.mjs';
-import { appNameExpr, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { appNameExpr, overlayVisibility, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'tab-strip-live';
 
@@ -804,6 +814,80 @@ async function multi({ run, pages, expect, plant }) {
     expect(bulk.selection === 0, `multi: the selection still holds ${bulk.selection} key(s) after every selected tab closed`);
 }
 
+/** preview: TAB-07 dwell, settled image and text fallback, below-tab anchor, occlusion, active-tab suppression. */
+async function preview({ app, pages, expect, plant }) {
+    const card = `
+        const cardEl = () => document.querySelector('.pb-tab-preview');
+        const cardRead = () => { const c = cardEl(); if (!c) return null; const img = c.querySelector('img.pb-tab-preview-image');
+            return { top: c.getBoundingClientRect().top, image: img ? img.getAttribute('src') : null, shimmer: !!c.querySelector('.is-shimmer'),
+                title: (c.querySelector('.pb-tab-preview-title') || {}).textContent || null, url: (c.querySelector('.pb-tab-preview-url') || {}).textContent || null,
+                hidden: c.getAttribute('aria-hidden') }; };
+    `;
+    const setup = await step(app, 'preview: setup', `${card}
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify({ a: pages.url('/a'), b: pages.url('/b') })});
+        if (${JSON.stringify(plant)} === 'preview-never-opens') strip.openPreview = () => undefined;
+        shell.activateWidget(S.b);
+        await until(() => current() && current().id === S.b, 5000);
+        const groups = get('GroupModel');
+        // /a was hidden after its load settled, so GUI-08 captured it; the strip reads it from the reloaded cards.
+        const settledImage = await until(async () => { await groups.scheduleReload(); return typeof strip.previewImage(byId(S.a)) === 'string'; }, 30000);
+        return { painted, settledImage, a: rect(tabEl(S.a)), b: rect(tabEl(S.b)), aLabel: byId(S.a).title.label, aUrl: byId(S.a).url, bTab: byId(S.b).tabId };
+    `);
+    expect(setup.painted, 'preview: setup: /a and /b are not painted in the strip');
+    expect(setup.settledImage, 'preview: NOT SCORED -- /a never got a settled GUI-08 thumbnail, so the image card cannot be read');
+    expect(await overlayVisibility(app, setup.bTab) === 'visible', 'preview: NOT SCORED -- /b\'s overlay is not visible before the hover, so the occlusion read proves nothing');
+    const theia = await theiaContext(app);
+    const hoverAt = Date.now();
+    await pointer(app, theia, [moveTo(setup.a.x, setup.a.y)], { release: false });
+    const opened = await step(app, 'preview: dwell on /a', `${card}
+        const t0 = Date.now();
+        await until(() => !!cardEl(), 3000);
+        return { card: cardRead(), waited: Date.now() - t0 };
+    `);
+    const dwell = Date.now() - hoverAt;
+    expect(!!opened.card, 'preview: hovering /a opened no preview card');
+    if (opened.card) {
+        expect(dwell >= 380, `preview: the card opened ${dwell} ms after the hover, before the 400 ms dwell`);
+        expect(opened.card.top >= setup.a.bottom + 3 && opened.card.top <= setup.a.bottom + 5, `preview: the card's top ${opened.card.top} is not 4px below /a's bottom ${setup.a.bottom}`);
+        expect(typeof opened.card.image === 'string' && opened.card.image.startsWith('data:image/'), 'preview: the card for /a carries no settled thumbnail image');
+        expect(opened.card.title === setup.aLabel && opened.card.url === setup.aUrl, `preview: the card reads ${JSON.stringify([opened.card.title, opened.card.url])}, not /a's title and URL`);
+        expect(opened.card.hidden === 'true', 'preview: the card is not aria-hidden');
+        expect(await overlayVisibility(app, setup.bTab) === 'hidden', 'preview: chrome\'s overlay of /b is still visible behind the open card (not a blocking layer)');
+    }
+    await pointer(app, theia, [moveTo(4, 4), { type: 'pause', duration: 300 }]);
+    const closed = await step(app, 'preview: pointer leaves /a', `${card} return { gone: await until(() => !cardEl(), 3000) };`);
+    expect(closed.gone, 'preview: the card stayed open after the pointer left /a');
+    expect(await overlayVisibility(app, setup.bTab) === 'visible', 'preview: /b\'s overlay did not come back after the card closed');
+
+    // Text fallback: a new tab on the empty page is never captured.
+    const blank = await step(app, 'preview: an empty-page tab', `
+        await get('CommandRegistry').executeCommand('powerbrowser.chrome-bar.new-tab');
+        await until(() => current() && current().id !== S.b && current().url === 'about:blank', 5000);
+        S.blank = current().id;
+        shell.activateWidget(S.b);
+        await until(() => current() && current().id === S.b, 5000);
+        await sleep(200);
+        return { at: rect(tabEl(S.blank)), label: byId(S.blank).title.label };
+    `);
+    await pointer(app, theia, [moveTo(blank.at.x, blank.at.y)], { release: false });
+    const text = await step(app, 'preview: dwell on the empty-page tab', `${card}
+        await until(() => !!cardEl() && !cardEl().querySelector('.is-shimmer'), 5000);
+        return { card: cardRead() };
+    `);
+    expect(!!text.card && text.card.image === null && !text.card.shimmer && text.card.title === blank.label,
+        `preview: the empty-page tab's card is not the text card (title, no image): ${JSON.stringify(text.card)}`);
+    await pointer(app, theia, [moveTo(4, 4), { type: 'pause', duration: 300 }]);
+
+    // Active tab: twice the dwell on /b, then a positive overlay read.
+    await pointer(app, theia, [moveTo(setup.b.x, setup.b.y), { type: 'pause', duration: 800 }], { release: false });
+    const active = await step(app, 'preview: dwell on the current tab', `${card} return { current: current() && current().id === S.b, card: !!cardEl() };`);
+    const bShown = await overlayVisibility(app, setup.bTab);
+    expect(active.current && bShown === 'visible', `preview: NOT SCORED -- /b is not current with its overlay visible (${bShown})`);
+    expect(!active.card, 'preview: hovering the current tab opened a preview card over its visible page');
+    await pointer(app, theia, [moveTo(4, 4)]);
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
@@ -814,6 +898,7 @@ const SCENARIOS = {
     overflow: { run: overflow, probe: true, plant: 'overflow-unmeasured', expect: 'shows no List All Tabs chevron' },
     'pin-restore': { run: pinRestore, own: true, plant: 'pin-not-stored', expect: 'was not pinned after the relaunch' },
     multi: { run: multi, plant: 'multi-touches-unselected', expect: 'touched an unselected tab' },
+    preview: { run: preview, probe: true, plant: 'preview-never-opens', expect: 'opened no preview card' },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */

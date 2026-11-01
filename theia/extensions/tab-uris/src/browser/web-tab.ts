@@ -108,7 +108,8 @@ export const CRASHED_RELOAD_LABEL = 'Reload tab';
 //     chrome-bar hover requests `position: 'top'`.
 //   focus rule: a Theia popup opened by a key while a page has focus first
 //     moves focus to the Theia frame, and returns it to the page on close.
-const BLOCKING_LAYER_SELECTOR = '.pb-chrome-bar-dropdown, .quick-input-widget, .lm-Widget.dialogOverlay, .lm-Menu, .lm-mod-drag-image';
+// Phase 34 plan 04 (TAB-07, D-11): the strip's hover preview card is a rule (a) layer.
+const BLOCKING_LAYER_SELECTOR = '.pb-chrome-bar-dropdown, .quick-input-widget, .lm-Widget.dialogOverlay, .lm-Menu, .lm-mod-drag-image, .pb-tab-preview';
 
 function blockingLayerOpen(): boolean {
     return Array.from(document.querySelectorAll(BLOCKING_LAYER_SELECTOR))

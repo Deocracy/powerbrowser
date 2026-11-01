@@ -905,6 +905,62 @@
     background: var(--color-bg, #1c1b22);
 }
 
+/* TAB-07 (34-04, D-10/D-11): the hover preview card, 280px, below the tab (the widget sets left/top from the tab's
+   rect: its bottom plus 4px). A blocking layer (web-tab.ts BLOCKING_LAYER_SELECTOR): the page hides while it is open.
+   Not a pointer target, so leaving the tab closes it. */
+.pb-tab-preview {
+    position: fixed;
+    z-index: 1000;
+    width: 280px;
+    min-height: 48px;
+    padding: 8px;
+    box-sizing: border-box;
+    background: var(--color-surface, #2b2a33);
+    border: 1px solid var(--color-border, #3f3e4a);
+    border-radius: 4px;
+    box-shadow: 0 10px 15px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+}
+
+.pb-tab-preview-image {
+    display: block;
+    width: 264px;
+    height: 150px;
+    margin-bottom: 8px;
+    object-fit: cover;
+    border-radius: 4px;
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-tab-preview-image.is-shimmer {
+    animation: pb-chrome-bar-shimmer 0.9s ease-in-out infinite alternate;
+}
+
+.pb-tab-preview-title,
+.pb-tab-preview-url {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.35;
+}
+
+.pb-tab-preview-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text, #fbfbfe);
+}
+
+.pb-tab-preview-url {
+    font-size: 12px;
+    color: var(--color-text-muted, #9a99a8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pb-tab-preview-image.is-shimmer {
+        animation: none;
+    }
+}
+
 }
 
 /* GUI-06 (13-UI-SPEC "Single chrome bar, full-bleed, 40px", ratified order
