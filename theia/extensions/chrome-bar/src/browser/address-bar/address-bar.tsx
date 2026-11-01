@@ -2763,7 +2763,7 @@ export class AddressBar {
         this.refreshStar(true);
     }
 
-    /** BMK-02: Remove runs at once (the panel is the confirmation) and removes every bookmark of the page, as Firefox's star does. */
+    /** BMK-02: Remove runs at once (the panel is the confirmation) and removes the one bookmark the panel shows, by guid (WR-04); copies filed elsewhere stay. */
     protected async removeFromBookmarkEditor(): Promise<void> {
         const editor = this.bookmarkEditor;
         if (!editor || editor.busy || !editor.guid) {
@@ -2771,7 +2771,7 @@ export class AddressBar {
         }
         editor.busy = true;
         try {
-            await this.store.removeBookmark(editor.url);
+            await this.store.removeBookmark(editor.guid);
         } catch {
             this.failBookmarkEditor(editor, 'remove');
             return;
