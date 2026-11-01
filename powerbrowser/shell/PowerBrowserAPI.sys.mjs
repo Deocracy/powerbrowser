@@ -6753,7 +6753,7 @@ function webTabDevtoolsReply(kind, tabId) {
   if (!node || !shim.isEnabled()) {
     return { ok: false, reason: "unavailable", message: "handleWebTabAction: DevTools are not available for this tab" };
   }
-  shim.showToolboxForTab(node, { hostType: "window" }).catch(err => {
+  entry.toolboxOpening = shim.showToolboxForTab(node, { hostType: "window" }).catch(err => { // the page menu's Inspect awaits it (35-04)
     PowerBrowserAPI.log("error", `[web-tab] devtools failed to open (${err && err.name ? err.name : "error"})`);
   });
   return { ok: true, kind, where: "opened" };
@@ -6960,6 +6960,8 @@ const PAGE_MENU_ROWS = Object.freeze([
     { id: "context-openframeintab", l10n: "main-context-menu-frame-open-tab", when: "frameTarget", runs: "chrome", group: "frame-open" },
     { id: "context-reloadframe", l10n: "main-context-menu-frame-reload", when: "always", runs: "chrome", group: "frame-reload" },
   ] },
+  { id: "context-inspect-a11y", l10n: "main-context-menu-inspect-a11y-properties", when: "inspectA11y", runs: "chrome", group: "inspect" },
+  { id: "context-inspect", l10n: "main-context-menu-inspect", when: "inspect", runs: "chrome", group: "inspect" },
 ]);
 
 // Upstream's show, disable and check conditions (nsContextMenu.sys.mjs), read
@@ -7006,6 +7008,8 @@ const PAGE_MENU_WHEN = Object.freeze({
   search: f => f.search !== null,
   inFrame: f => !!f.inFrame, // :897
   frameTarget: f => !f.inSrcdocFrame && f.webFrame, // :921-922
+  inspect: f => f.showInspect, // :842-846
+  inspectA11y: f => f.showInspect && f.showInspectA11y, // :848-855
 });
 
 const PAGE_MENU_TTL_MS = 60000;
@@ -7055,6 +7059,7 @@ async function pageMenuFacts(data) {
     canStrip: false,
     search: null,
     searchLabel: "",
+    ...pageToolFacts(data),
   };
   if (facts.stripOnShareEnabled && facts.webLink) {
     try {
@@ -7297,6 +7302,9 @@ async function runPageMenuRow(id, pending, state) {
     case "context-reloadframe": // reloadFrame (:1586-1589), never forced
       actor.reloadFrame(context.targetIdentifier, false);
       return { where: "done" };
+    case "context-inspect-a11y":
+    case "context-inspect": // inspectA11Y / inspectNode (:1424-1436), on the toolbox the 32-07 devtools route opened (D-13)
+      return pageMenuInspect(id, pending);
     default:
       throw new Error(`no dispatcher arm for ${id}`);
   }
@@ -7376,4 +7384,35 @@ function takeOpenGrant(window, grantId, spec) {
 // T-35-13: written only on an explicit pick of a copy row.
 function copyFromPage(data, text) {
   Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString(text, data.frameBrowsingContext.currentWindowGlobal);
+}
+
+// 35-04: the page-tool rows. Each one calls the mechanism an earlier plan built
+// (Phase 32's devtools, edit, view-source and save routes); none is a second path.
+
+// Inspect's conditions (nsContextMenu.sys.mjs:842-855). The overlay's tab-host node is inTabBrowser.
+function pageToolFacts(data) {
+  const showInspect = !!tabHostNodeOf(data.browser) && Services.prefs.getBoolPref("devtools.inspector.enabled", true) && !Services.prefs.getBoolPref("devtools.policy.disabled", false);
+  const a11yPrefs = Services.prefs.getBoolPref("devtools.accessibility.enabled", false) && Services.prefs.getBoolPref("devtools.enabled", true);
+  return {
+    showInspect,
+    showInspectA11y: showInspect && a11yPrefs && (Services.prefs.getBoolPref("devtools.everOpened", false) || webTabDevToolsShim().isDevToolsUser()),
+  };
+}
+
+// D-13: open the overlay's toolbox through the webTabDevtools function and wait
+// for it, so gDevTools.inspectNode finds it open and selects the node there
+// (devtools.js:883-920) instead of opening a docked toolbox the shell cannot host.
+async function pageMenuInspect(id, pending) {
+  const opened = webTabDevtoolsReply("webTabDevtools", pending.tabId);
+  const toolbox = opened.ok ? await webTabs.get(pending.tabId)?.toolboxOpening : null;
+  if (!toolbox) {
+    return { where: "refused" };
+  }
+  const DevToolsShim = webTabDevToolsShim();
+  const tab = tabHostNodeOf(pending.data.browser);
+  const target = pending.data.context.targetIdentifier;
+  (id === "context-inspect" ? DevToolsShim.inspectNode(tab, target) : DevToolsShim.inspectA11Y(tab, target)).catch(err => {
+    PowerBrowserAPI.log("error", `[web-tab] inspect failed (${err && err.name ? err.name : "error"})`);
+  });
+  return { where: "done" };
 }
