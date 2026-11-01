@@ -3841,6 +3841,15 @@ run_own_checks() {
     "page-tools-edit-self-test|node $REPO_ROOT/scripts/verify-page-tools-edit.mjs --self-test"
     "page-tools-reader-crash|node $REPO_ROOT/scripts/verify-page-tools-reader-crash.mjs"
     "page-tools-reader-crash-self-test|node $REPO_ROOT/scripts/verify-page-tools-reader-crash.mjs --self-test"
+    # NEW (Phase 33, BMK-05/BMK-04): Clear Recent History's fan-out equals the
+    # browsing-history stores the boundary declares (Places, closed tab rows,
+    # thumbnails, saved pages, the web-tab history file), never reaches the
+    # token cookie, offers exactly the five D-09 ranges; the bookmark observer
+    # is installed once, on stock chrome's event list. Honestly --quick: text
+    # reads only. The self-test rides alongside: each plant must go red naming
+    # its drift.
+    "clear-history|node $REPO_ROOT/scripts/verify-clear-history.mjs"
+    "clear-history-self-test|node $REPO_ROOT/scripts/verify-clear-history.mjs --self-test"
 
     # NEW (Phase 29, BAR-02; REQUIREMENTS technical ruling 2026-10-20): the
     # Theia token cookie never reaches a server on another loopback port. Pins
