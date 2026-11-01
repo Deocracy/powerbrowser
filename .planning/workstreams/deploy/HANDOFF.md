@@ -41,22 +41,55 @@ Last `--quick`: PASS on 4de8a340. Self-tests: channel-live 25 ok, update-downloa
 
 Owner rule recorded 2026-10-31: DSH is not used for Power Browser work; Claude executes.
 
+## Update 2026-10-31 (third pass): every automatic task is done
+
+The owner instructed the run to settle any item not needing owner input and to keep working until
+every automatic part was complete. Seventeen work items ran in parallel worktrees
+(`deploy-w1-*`, `deploy-w2-*`, `deploy-w3-*`, all merged and removed) and are on `workspace/deploy`.
+Final `--quick` on the merged head: `verify-platform: PASS -- all checks passed` (146 rows).
+90 commits since aa11e1ee. Nothing pushed.
+
+| Item | Result |
+|------|--------|
+| 49-04 CR-02 + IN-03 | manifest is a Release asset; one `--manifest-agrees` mode replaces the shell copies |
+| 49-05 Tasks 1-2 | toolchain-container row; `r2_copy` write-once MAR copy (wrangler lockfile, bucket-scoped token) |
+| 54-04 Tasks 1-2 | unsigned-first copy, Windows descriptors, sign-windows job with tree-derived PE allowlist; attestation of legion bytes removed |
+| 55-03 Tasks 1, 3 | macOS payload gate, lipo universal step, macOS update copy |
+| 55-04 Task 1 | matrix-record and download-copy gates (live row red until the Mac session) |
+| 57 B1 + 57-01 Task 1 | patch-surface allowlist for the two consent files; patch 050 fails the crash-ping consent closed |
+| 44-04 | ceremony and rotation docs; six fill-in lines after 44-01 (see 44-04-SUMMARY.md) |
+| 42-04, 43-05, 48-05, 50-03 T2, 53-04, 56-05, 58-03 Task 1 | pre-checkpoint proofs, owner command packs, new rows |
+| repo slug | derived from configuration.toml everywhere; `repo-slug-derived` quick row |
+| nix default shell | `devShells.default` = theia shell; `nix-default-shell` row |
+| planning | six settlements recorded; STATE.md rewritten; WINDOWS.md re-rendered |
+
+Settlements (by the run under that instruction, not by the owner): org = Deocracy; 43 train wake =
+clock-only (B); 50 dispatch token = `GITHUB_TOKEN` as recorded; 44-03 WR-03 exemption stays;
+57 B1 = option (a); manifest published as a Release asset. Model tiering from this date: Opus for
+security-sensitive code and reviews, Sonnet for ordinary plan execution, Haiku for bookkeeping.
+
+Not settled, needs the owner: whether a failed Windows sign may block the Linux release (54-04
+SUMMARY, "Windows publish not wired").
+
 ## Next autonomous step
 
-**None.** Every unfinished plan is an owner checkpoint or is blocked on an owner action (below).
-Per the owner's rule, owner checks are deferred to one end-of-milestone pass. Start that pass with
-the "Blocked on the owner" and "Open questions" lists, plus BLOCKED.md "49-04" item 2.
-
-Owner instruction for this run: **every subagent runs on Opus** (given 2026-10-31, supersedes the
-Haiku/Sonnet default for this run).
+**None.** Nothing automatic remains in v1.6. What is left is the owner pass below, then
+`--gate`, `/gsd-verify-work <phase> --ws deploy` per checkpoint plan, a fix round, and
+`/gsd-audit-milestone` → `/gsd-complete-milestone v1.6` → `/gsd-cleanup`.
 
 ## Blocked on the owner
 
-- **44-01, 44-04:** offline secondary MAR key ceremony (SEC-05). 44-04 documents it.
-- **55-03:** Apple Team ID for the hook-only entitlements patch. See `phases/55-macos-i/BLOCKED.md`.
-- **49-02 Task 3, 49-05:** legion runner registration and R2 origin. See `phases/49-*/BLOCKED.md`.
-- Non-autonomous checkpoint plans: 41-04, 42-04, 43-05, 47-04, 48-05, 50-03, 50-04, 52-05, 53-04,
-  54-04, 55-04, 56-05, 57-04, 58-03.
+- **44-01:** offline secondary MAR key ceremony (SEC-05); then fill the six lines 44-04-SUMMARY.md names.
+- **55-03 Task 2:** Apple Team ID (after D-U-N-S and Developer Program enrolment); then the hook-only patch.
+- **49-02 Task 3, 49-05 Task 3:** legion runner registration; R2 bucket, custom domain, `R2_MAR_BUCKET`,
+  `CLOUDFLARE_ACCOUNT_ID`, `R2_MAR_WRITE_TOKEN` in the `release` environment.
+- **Descriptor environment:** `BOT_APP_CLIENT_ID` / `BOT_APP_PRIVATE_KEY`; bot App Actions-read grant.
+- **54-04 Task 3:** Azure Trusted Signing, legion libvirt VM, the Windows asset-table row.
+- **57-01 Task 2, 57-04:** tier-3 reporter-enabled build and the TEL-13 flip, after Windows ships.
+- **Checkpoint tasks still owner-only:** 41-04 T1/T2/T4, 42-04 T2, 43-05 T2, 47-04, 48-05 T2, 49-05 T3,
+  50-03 T1/T3, 50-04, 52-05, 53-04 T2, 54-04 T3, 55-04 T2, 56-05 T2, 57-04, 58-03 T2/T3.
+  Their post-checkpoint record tasks (41-04 T3, 42-04 T3, 48-05 T3, 53-04 T3) run once the owner replies.
+- Each phase's BLOCKED.md and each `*-SUMMARY.md` written today lists the exact owner steps.
 
 ## Open questions for the owner
 
