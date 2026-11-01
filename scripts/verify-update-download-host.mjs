@@ -1,32 +1,36 @@
 #!/usr/bin/env node
 // scripts/verify-update-download-host.mjs
 //
-// The update-download host gate (Phase 46, WR-07 owner ruling 2026-10-25).
-// github.com is user-initiated in powerbrowser/endpoint-allowlist.json, so an
+// The update-download host gate (Phase 46, WR-07 owner ruling 2026-10-25, amended
+// 2026-10-29). github.com is user-initiated in powerbrowser/endpoint-allowlist.json, so an
 // unattended request to it fails the verdict model (scripts/lib/endpoint-verdict.mjs).
-// The unattended MAR download must therefore never name a github.com
-// /releases/download/ URL as its update source. The update descriptor's
-// patchURL (and servedMarUrl) must point at the write-once MAR origin, the
-// mar_origin host of configuration.toml [urls], in the form <origin>/<tag>/<asset>
-// (owner ruling 2026-10-29, enforced end to end by verify-mar-update-hop.mjs, which
-// also refuses release-assets.githubusercontent.com in a release drill). This row
-// guards only the github.com half, and derives the origin it names from the manifest.
+// The update descriptor's patchURL (and servedMarUrl) names the R2 primary MAR origin,
+// the mar_origin host of configuration.toml [urls], in the form <origin>/<tag>/<asset>
+// (owner ruling 2026-10-29). Two forms are therefore red in update-download context: a
+// github.com /releases/download/ URL, and a release-assets.githubusercontent.com URL,
+// whose signed form expires about an hour after issue, so a static descriptor cannot
+// name it. The positive check (the patch URL IS on the MAR origin) belongs to
+// verify-channel-live.mjs; this row only refuses the two forbidden forms, and derives
+// the origin its next step names from the manifest.
 //
 // The descriptor is emitted by a later phase (49/50), so this row guards every
 // tracked file that could carry one: descriptor templates, generator output and
 // fixtures. It reads the tracked tree (git ls-files), skips prose and binaries,
-// and fails on a github.com /releases/download/ URL that sits in update-download
-// context: on a line that names a MAR or a patch, or in a file that does.
-// A release-notes URL (no /releases/download/ segment) is not a download and passes.
+// and fails on either forbidden form that sits in update-download context: on a
+// line that names a MAR or a patch, or in a file that does. A release-notes URL (no
+// /releases/download/ segment) is not a download and passes. Verifier scripts
+// (scripts/verify-*.mjs) are exempt by pattern: their self-test fixtures carry the
+// forbidden forms as literals by design. Data files and other scripts stay scanned.
 //
 // Usage:
 //   node scripts/verify-update-download-host.mjs
 //   node scripts/verify-update-download-host.mjs --self-test
 //
 // Exit 0 pass, 1 fail. --self-test plants a descriptor template, a generator
-// output and a fixture carrying the github.com form, and requires each to go
-// red naming the file and the manifest's MAR origin; two controls (a release-assets
-// URL, which this row does not judge, and a release-notes URL) must stay green.
+// output and a fixture carrying the github.com form, plus a descriptor template
+// carrying the release-assets form, and requires each to go red naming the file and
+// the manifest's MAR origin; three controls (a release-notes URL, a patch URL on the
+// MAR origin, and a verifier script carrying the github form) must stay green.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -52,6 +56,10 @@ for (const a of args) {
 
 // A github.com Releases DOWNLOAD URL (the asset path), not a releases page.
 const GITHUB_DOWNLOAD = /https?:\/\/github\.com\/[^\s"'<>]+\/releases\/download\//i;
+// A release-assets URL: GitHub's signed redirect target, expiring about an hour after issue.
+const RELEASE_ASSETS = /https?:\/\/release-assets\.githubusercontent\.com\//i;
+// Verifier scripts carry the forbidden forms as self-test fixtures by design.
+const VERIFIER = /^scripts\/verify-[^/]*\.mjs$/;
 // Update-download context: a MAR, a patch, a descriptor, or the update XML.
 const UPDATE_CONTEXT = /\.mar\b|patchURL|servedMarUrl|<patch\b|update\.xml/i;
 // Prose, binaries and lockfiles are not descriptors, templates or fixtures.
@@ -92,16 +100,16 @@ function manifestMarOrigin(root) {
     }
 }
 
-/** The file:line hits of a github.com download URL in update-download context. */
+/** The file:line hits of a forbidden download URL (github.com or release-assets) in update-download context. */
 export function githubDownloadHits(files, read) {
     const hits = [];
     for (const rel of files) {
-        if (rel === SELF_REL || SKIP.some(re => re.test(rel))) continue;
+        if (VERIFIER.test(rel) || SKIP.some(re => re.test(rel))) continue;
         const text = read(rel);
         if (text === null || text === undefined) continue;
         const fileIsUpdate = UPDATE_CONTEXT.test(text);
         text.split('\n').forEach((line, i) => {
-            if (GITHUB_DOWNLOAD.test(line) && (fileIsUpdate || UPDATE_CONTEXT.test(line))) {
+            if ((GITHUB_DOWNLOAD.test(line) || RELEASE_ASSETS.test(line)) && (fileIsUpdate || UPDATE_CONTEXT.test(line))) {
                 hits.push(`${rel}:${i + 1}`);
             }
         });
@@ -112,12 +120,12 @@ export function githubDownloadHits(files, read) {
 export function runChecks(root, overrides = {}) {
     const files = overrides.files ?? listTracked(root);
     if (files === null) {
-        return { failures: [`git ls-files could not list the tracked tree, so no descriptor, template or fixture can be proven free of a github.com update download. Next step: run this row inside the git worktree.`] };
+        return { failures: [`git ls-files could not list the tracked tree, so no descriptor, template or fixture can be proven free of a forbidden update download. Next step: run this row inside the git worktree.`] };
     }
     const read = overrides.read ?? ((rel) => readText(root, rel));
     const hits = githubDownloadHits(files, read);
     const origin = manifestMarOrigin(root) ?? 'named by configuration.toml [urls] mar_origin';
-    const failures = hits.map(h => `${h} names a github.com /releases/download/ URL as an update download. github.com is user-initiated, so the unattended update fetch would fail the verdict model. Next step: point patchURL and servedMarUrl at the write-once MAR origin ${origin} (configuration.toml [urls] mar_origin), in the form <origin>/<tag>/<asset>; ${CONSTRAINT}.`);
+    const failures = hits.map(h => `${h} names a github.com /releases/download/ URL or a GitHub signed asset URL as an update download. github.com is user-initiated and the signed asset URL expires within an hour, so an unattended update fetch would fail. Next step: point patchURL and servedMarUrl at the R2 primary MAR origin ${origin} (configuration.toml [urls] mar_origin, owner ruling 2026-10-29), in the form <origin>/<tag>/<asset>; ${CONSTRAINT}.`);
     return { failures, files: files.length };
 }
 
@@ -125,11 +133,11 @@ function main() {
     if (args.includes('--self-test')) return selfTest();
     const { failures, files } = runChecks(REPO_ROOT);
     if (failures.length > 0) {
-        console.error(`${NAME}: FAIL -- ${failures.length} tracked file(s) name a github.com update download.`);
+        console.error(`${NAME}: FAIL -- ${failures.length} tracked line(s) name a forbidden update download.`);
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- no tracked descriptor, template, generator output or fixture (${files} tracked file(s) read) names a github.com /releases/download/ URL as an update download`);
+    console.log(`${NAME}: PASS -- no tracked descriptor, template, generator output or fixture (${files} tracked file(s) read) names a github.com /releases/download/ URL or a release-assets URL as an update download`);
     return 0;
 }
 
@@ -157,8 +165,10 @@ function selfTest() {
         'theia/extensions/tab-uris/fixtures/update.xml.tmpl': '<updates><update appVersion="{{v}}"><patch type="complete" URL="https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/{{tag}}/powerbrowser.mar"/></update></updates>\n',
         'scripts/generated-update-descriptor.json': '{\n  "servedMarUrl": "https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/powerbrowser-1.0.0.mar"\n}\n',
         'powerbrowser/branding/release/fixtures/patch-manifest.json': '{ "patchURL": "https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar" }\n',
-        'control/release-assets-patch.xml': '<updates><update><patch URL="https://release-assets.githubusercontent.com/github-production-release-asset/1/x.mar"/></update></updates>\n',
+        'powerbrowser/packaging/update-xml.tmpl': '<updates><update><patch URL="https://release-assets.githubusercontent.com/github-production-release-asset/1/x.mar"/></update></updates>\n',
         'control/release-notes-link.json': '{ "app.releaseNotesURL": "https://github.com/DeBIOS-Foundation/powerbrowser/releases" }\n',
+        'control/mar-origin-patch.xml': `<updates><update><patch URL="${manifestMarOrigin(REPO_ROOT)}/v1.0.0-1/x.mar"/></update></updates>\n`,
+        'scripts/verify-planted-fixture.mjs': "const BAD = 'patchURL https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\n",
     };
     const planted = (rels) => ({ files: [...real, ...rels], read: (rel) => (rel in fixtures ? fixtures[rel] : realRead(rel)) });
 
@@ -167,20 +177,22 @@ function selfTest() {
         ['descriptor template names the github.com download', 'theia/extensions/tab-uris/fixtures/update.xml.tmpl'],
         ['generator output names the github.com download', 'scripts/generated-update-descriptor.json'],
         ['fixture names the github.com download as patchURL', 'powerbrowser/branding/release/fixtures/patch-manifest.json'],
+        ['descriptor template names a release-assets download', 'powerbrowser/packaging/update-xml.tmpl'],
     ];
     for (const [name, rel] of plants) {
         const { failures } = runChecks(REPO_ROOT, planted([rel]));
         // The guidance must send the reader to the manifest's MAR origin, never to the release-assets host.
         const origin = manifestMarOrigin(REPO_ROOT);
         const hit = failures.find(f => f.includes(rel));
-        if (hit !== undefined && origin !== null && hit.includes(origin) && !hit.includes('release-assets')) {
+        if (hit !== undefined && origin !== null && hit.includes(origin) && !hit.includes('release-assets.')) {
             console.log(`  ok  ${name} -> red naming ${rel} and the MAR origin ${origin}`);
         } else {
             console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${rel}; got: ${failures.join(' | ') || '(no failures)'}`);
             failed += 1;
         }
     }
-    for (const rel of ['control/release-assets-patch.xml', 'control/release-notes-link.json']) {
+    const controls = ['control/release-notes-link.json', 'control/mar-origin-patch.xml', 'scripts/verify-planted-fixture.mjs'];
+    for (const rel of controls) {
         const { failures } = runChecks(REPO_ROOT, planted([rel]));
         if (failures.length === 0) {
             console.log(`  ok  control ${rel} -> green`);
@@ -191,7 +203,7 @@ function selfTest() {
     }
 
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- ${plants.length} planted github.com download(s) went red naming their file, and both controls stayed green`);
+    console.log(`${NAME}: --self-test PASS -- ${plants.length} planted forbidden download(s) went red naming their file, and ${controls.length} controls stayed green`);
     return 0;
 }
 
