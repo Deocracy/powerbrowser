@@ -1393,6 +1393,39 @@ follow-up needs the package (nixpkgs `desktop-file-utils`) added to a dev
 shell before it can be run; neither `.desktop` file has been installed here
 yet, so this has not blocked anything so far.
 
+### Dual-build window (UPS-03)
+
+While the 153 line is live and the 175 line is being brought up, two objdirs of about
+14 GB each sit beside `upstream/` on one disk. This table records whether both fit. It is
+filled by the owner from a real run on `legion` (two tier-3 builds, about 40 to 60 minutes
+each), or closed with a hosted-fallback verdict when `legion` cannot hold both. Until a
+row is measured it stays empty: no digit in it is carried over from research, from an
+earlier phase, or from an estimate.
+
+Pre-flight, at the repository root, before the first 175 build (more than 30 GB free is
+required; record both outputs):
+
+    df -h; du -sh upstream/ objdir*
+
+The 175 build gets its own objdir from its first compile and never touches the live one:
+
+    POWERBROWSER_OBJDIR=objdir-175 MOZCONFIG=../.mozconfig ./mach build
+
+Never run `./mach clobber`, or any build, against the live 153 `objdir/` to prove 175.
+Re-run the pre-flight command after the build and fill the `after` columns.
+
+Fill a row completely or not at all. A row with any measurement in it must also carry the
+build tuple (tree commit, host, a cite of `toolchain-baseline.txt` as used for the
+measured build, and the date) and a verdict. If `legion` cannot hold both objdirs, do not
+force it: write `spills to hosted` as the verdict with the hosted-build evidence link
+(INF-04), together with the tuple. `scripts/verify-dual-build-table.mjs` holds the table to
+that shape.
+
+| line | objdir | du before | du after | df before | df after | mach wall time | D-73 tuple | verdict |
+|---|---|---|---|---|---|---|---|---|
+| 153 line (live) | `objdir/` | | | | | | | |
+| 175 line (objdir-175) | `objdir-175/` | | | | | | | |
+
 ## Crash symbols per target (TEL-12, Phase 57)
 
 `mach buildsymbols` writes `objdir/dist/<PKG_BASENAME>.crashreporter-symbols.zip` for each BUILD_TARGET (the suffix derives from `upstream/toolkit/mozapps/installer/package-name.mk`, and `scripts/verify-release-symbols.mjs` gates it). The target is a no-op while the reporter is compiled out (`--disable-crashreporter`), so the command runs only on a reporter-enabled build, which the TEL-13 flip produces.

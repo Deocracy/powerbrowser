@@ -3601,6 +3601,15 @@ run_own_checks() {
     # naming the other owner, and requires each to go red naming the file and the literal.
     "repo-slug-derived|node $REPO_ROOT/scripts/verify-repo-slug-derived.mjs"
     "repo-slug-derived-self-test|node $REPO_ROOT/scripts/verify-repo-slug-derived.mjs --self-test"
+    # NEW (58-03, UPS-03): the dual-build measurement table in docs/BUILD.md. The tuple and verdict
+    # columns are found in the table's own header, and a row with any measurement must carry the
+    # tree commit, the toolchain-baseline cite, a date and a verdict (or a hosted-spill verdict with
+    # its evidence link); an empty row is the honest "not measured yet" and stays green. Shape only:
+    # it cannot tell a real number from an invented one. The self-test plants twelve faults and
+    # requires each to go red naming the cause, with four clean controls. Honestly --quick: one
+    # text read, no build, no browser, no network.
+    "dual-build-table|node $REPO_ROOT/scripts/verify-dual-build-table.mjs"
+    "dual-build-table-self-test|node $REPO_ROOT/scripts/verify-dual-build-table.mjs --self-test"
     "branding-preflight|node $REPO_ROOT/scripts/verify-branding-preflight.mjs"
     "branding-preflight-self-test|node $REPO_ROOT/scripts/verify-branding-preflight.mjs --self-test"
     # NEW (06-01): VER-01's static layer -- the manifest's own display
