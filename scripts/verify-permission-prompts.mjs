@@ -55,6 +55,17 @@
  *       compares the frontend WindowGlobal too, and webTabOpen of an overlay
  *       chrome already holds re-pushes its last observed state, so a reloaded
  *       frontend never shows a stale or missing indicator.
+ *   (p) dialog outcome (37-03, D-06, Pitfall 2): the probe-1 verdict
+ *       (.planning/probes/prompt-probe-verdict.json) must equal the tree.
+ *       stock-keeps-ide-usable requires powerbrowser.js to define no
+ *       getTabDialogBox member, because PromptParent feature-detects it and a
+ *       member retargets every content dialog onto the tab-dialog path.
+ *       stock-blocks-ide with relayFeasible true requires the member;
+ *       relayFeasible false is red (PROMPT-03 cannot be met as written; route
+ *       to Chris). A provisional verdict (the owner default, before the live
+ *       probe) is accepted and named in the output; it must claim no evidence.
+ *       A live verdict must carry its screenshots, push log and build, and the
+ *       evidence paths must exist.
  * Rules (j) and (k) are the furniture-gate rows for this plan; at the Phase 35
  * merge they move to verify-shell-furniture.mjs with rule (a).
  *
@@ -64,7 +75,7 @@
  * drift. Text reads only: --quick.
  */
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FACADES } from './verify-shell-gbrowser-standin.mjs';
@@ -80,6 +91,10 @@ const UPSTREAM_PANEL = 'upstream/browser/base/content/popup-notifications.inc.xh
 const UPSTREAM_MOZBUILD = 'upstream/toolkit/modules/moz.build';
 const UPSTREAM_BROWSER_JS = 'upstream/browser/base/content/browser.js';
 const GATE = 'scripts/verify-permission-prompts.mjs';
+const VERDICT = '.planning/probes/prompt-probe-verdict.json';
+const OUTCOMES = ['stock-keeps-ide-usable', 'stock-blocks-ide'];
+/** A getTabDialogBox member, method, property or assignment on the stand-in. */
+const TAB_DIALOG_MEMBER = /\bgetTabDialogBox\s*(?:\(|:|=(?!=))/;
 const FRONTEND_DIRS = ['theia/extensions/tab-uris/src/browser', 'theia/extensions/chrome-bar/src/browser'];
 const SHELL_DIR = 'powerbrowser/shell';
 /** Every grant or revoke call of SitePermissions and the permission manager. */
@@ -179,7 +194,57 @@ function readSources() {
             }
         }
     }
-    return Object.fromEntries([...files].map(file => [file, readFileSync(join(REPO_ROOT, file), 'utf8')]));
+    const sources = Object.fromEntries([...files].map(file => [file, readFileSync(join(REPO_ROOT, file), 'utf8')]));
+    sources[VERDICT] = existsSync(join(REPO_ROOT, VERDICT)) ? readFileSync(join(REPO_ROOT, VERDICT), 'utf8') : null;
+    return sources;
+}
+
+/**
+ * Rule (p): the probe-1 verdict against the tree's dialog state.
+ * @returns {{failures: string[], outcome: string|null, provisional: boolean}}
+ */
+function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, file))) {
+    const failures = [];
+    let verdict;
+    try {
+        verdict = JSON.parse(raw[VERDICT] ?? 'null');
+    } catch (error) {
+        return { failures: [`dialog outcome: ${VERDICT} is not JSON (${error.message})`], outcome: null, provisional: false };
+    }
+    if (!verdict || typeof verdict !== 'object') {
+        return { failures: [`dialog outcome: ${VERDICT} is missing -- probe 1 has no verdict, so the dialog branch is unpinned`], outcome: null, provisional: false };
+    }
+    const { outcome, provisional, relayFeasible, evidence = {} } = verdict;
+    if (!OUTCOMES.includes(outcome)) {
+        failures.push(`dialog outcome: '${outcome}' is not one of ${OUTCOMES.join(', ')}`);
+    }
+    const shots = evidence.screenshots;
+    if (provisional === true) {
+        if (!Array.isArray(shots) || shots.length || evidence.pushLog != null || evidence.ideEditOk != null || verdict.build != null) {
+            failures.push(`dialog outcome: the provisional verdict claims live evidence -- a provisional verdict carries none until the live probe overwrites it`);
+        }
+    } else if (!Array.isArray(shots) || !shots.length || typeof evidence.pushLog !== 'string' || typeof evidence.ideEditOk !== 'boolean' || !verdict.build || !verdict.date) {
+        failures.push(`dialog outcome: the live verdict lacks live evidence (screenshots, pushLog, ideEditOk, build and date are all required)`);
+    } else {
+        const missing = [...shots, evidence.pushLog].filter(file => !exists(file));
+        if (missing.length) {
+            failures.push(`dialog outcome: the live verdict names evidence that is not on disk: ${missing.join(', ')}`);
+        }
+    }
+    if (outcome === 'stock-blocks-ide' && typeof relayFeasible !== 'boolean') {
+        failures.push(`dialog outcome: stock-blocks-ide needs relayFeasible true or false, got ${JSON.stringify(relayFeasible)}`);
+    }
+    if (outcome === 'stock-blocks-ide' && relayFeasible === false) {
+        failures.push(`dialog outcome: PROMPT-03 cannot be met as written (stock-blocks-ide, relayFeasible false) -- route to Chris`);
+    }
+    const member = TAB_DIALOG_MEMBER.test(stripComments(raw[SHELL]));
+    if (outcome === 'stock-keeps-ide-usable' && member) {
+        failures.push(`dialog outcome drift: the verdict says stock-keeps-ide-usable but ${SHELL} defines getTabDialogBox -- PromptParent would retarget every content dialog onto the tab-dialog path (Pitfall 2)`);
+    }
+    if (outcome === 'stock-blocks-ide' && relayFeasible === true && !member) {
+        failures.push(`dialog outcome drift: the verdict says stock-blocks-ide with a feasible relay but ${SHELL} has no getTabDialogBox member -- build the audited relay branch (37-03 Task 3)`);
+    }
+    return { failures, outcome: outcome ?? null, provisional: provisional === true };
 }
 
 /**
@@ -187,7 +252,7 @@ function readSources() {
  * @param facadeNames the facade names verify-shell-gbrowser-standin.mjs audits
  * @returns {string[]} failures; empty means the contract holds
  */
-function checkPrompts(raw, facadeNames = FACADES.map(f => f.name)) {
+function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = undefined) {
     const failures = [];
     const api = stripComments(raw[API]);
     const markup = raw[XHTML].replace(/<!--[\s\S]*?-->/g, '');
@@ -470,6 +535,7 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name)) {
     } else if (!setter.includes('anchorVisibilityChange(')) {
         failures.push(`visible-tab: setActiveTabOfFrame does not call the stock anchorVisibilityChange -- a waiting prompt would not hide or show with focus`);
     }
+    failures.push(...checkDialogOutcome(raw, exists).failures);
     return failures;
 }
 
@@ -484,6 +550,7 @@ function selfTest() {
         return 1;
     }
     console.log(`  ok  unmodified fixture -> green (same-session positive control)`);
+    const verdictWith = patch => JSON.stringify({ ...JSON.parse(clean[VERDICT] ?? '{}'), ...patch });
     const sectionAt = clean[API].indexOf(SECTION_MARKER);
     const inSection = text => clean[API].slice(0, sectionAt) + clean[API].slice(sectionAt).replace(/\n$/, `\n${text}\n`);
     const cases = [
@@ -609,6 +676,46 @@ function selfTest() {
             sources: { ...clean, [API]: clean[API].replace(/\n\s*resendWebTabSharing\(tabId\);\n(\s*return "already-open";)/, '\n$1') },
             expect: "already-open branch does not re-push",
         },
+        {
+            name: 'getTabDialogBox added under the stock verdict',
+            sources: { ...clean, [SHELL]: clean[SHELL].replace('window.gBrowser = {', 'window.gBrowser = {\n      getTabDialogBox(browser) { return null; },') },
+            expect: 'dialog outcome drift: the verdict says stock-keeps-ide-usable',
+        },
+        {
+            name: 'relay verdict without the member',
+            sources: { ...clean, [VERDICT]: verdictWith({ outcome: 'stock-blocks-ide', relayFeasible: true }) },
+            expect: 'has no getTabDialogBox member',
+        },
+        {
+            name: 'stock blocks the IDE and no relay is feasible',
+            sources: { ...clean, [VERDICT]: verdictWith({ outcome: 'stock-blocks-ide', relayFeasible: false }) },
+            expect: 'PROMPT-03 cannot be met as written',
+        },
+        {
+            name: 'provisional verdict claiming evidence',
+            sources: { ...clean, [VERDICT]: verdictWith({ provisional: true, evidence: { screenshots: ['shot.png'], pushLog: null, ideEditOk: null } }) },
+            expect: 'the provisional verdict claims live evidence',
+        },
+        {
+            name: 'live verdict without evidence',
+            sources: { ...clean, [VERDICT]: verdictWith({ provisional: false }) },
+            expect: 'the live verdict lacks live evidence',
+        },
+        {
+            name: 'live verdict naming missing evidence',
+            sources: { ...clean, [VERDICT]: verdictWith({ provisional: false, evidence: { screenshots: ['.planning/probes/prompt-probe/planted.png'], pushLog: '.planning/probes/prompt-probe/planted.json', ideEditOk: true }, date: '2026-10-31', build: { binaryMtime: 'x' } }) },
+            expect: 'names evidence that is not on disk',
+        },
+        {
+            name: 'verdict outcome outside the enum',
+            sources: { ...clean, [VERDICT]: verdictWith({ outcome: 'relay' }) },
+            expect: "'relay' is not one of",
+        },
+        {
+            name: 'verdict file missing',
+            sources: { ...clean, [VERDICT]: null },
+            expect: 'probe 1 has no verdict',
+        },
     ];
     let failed = 0;
     for (const testCase of cases) {
@@ -641,12 +748,15 @@ function main() {
     if (process.argv.includes('--self-test')) {
         return selfTest();
     }
-    const failures = checkPrompts(readSources());
+    const sources = readSources();
+    const failures = checkPrompts(sources);
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the permission-prompt contract does not hold:`);
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
+    const dialog = checkDialogOutcome(sources);
+    console.log(`${NAME}: dialog outcome ${dialog.outcome}${dialog.provisional ? ' (PROVISIONAL: the owner default pending live probe 1; the live dialog-probe run overwrites it with evidence)' : ' (live probe-1 verdict)'}; getTabDialogBox ${dialog.outcome === 'stock-keeps-ide-usable' ? 'absent, the stock window-modal fallback' : 'present, the audited relay member'}`);
     console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, the ${PREVIEW_ELEMENT} callback is registered, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, and the sharing indicator follows chrome-observed webrtcUI state only`);
     return 0;
 }
