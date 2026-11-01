@@ -86,8 +86,10 @@
  *      browsing      section that reaches a private-browsing sink (one of
  *                    PB_SINKS: loads a sidebar page, runs a click, opens a
  *                    popup, reads an extension's action or sidebar for a
- *                    window) contains an extension canAccessWindow check, as
- *                    stock ext-sidebarAction.js and ext-browserAction.js do;
+ *                    window, resolves a stock window for a tab page, creates
+ *                    a tab in the shell window) contains an extension
+ *                    canAccessWindow check, as stock ext-sidebarAction.js,
+ *                    ext-browserAction.js and ext-tabs.js create do;
  *                    the function set is derived from the section, and a
  *                    guarded function taking `win` is called with `win`.
  *                    The self-test derives one plant per guarded function.
@@ -131,7 +133,7 @@ const THEIA_DOM_POPUP = [['<iframe', 'an <iframe'], ['dangerouslySetInnerHTML', 
 const STOCK_TRIGGER = ['trigger', 'Action('].join('');
 const FIXTURE_NAMESPACE = /@powerbrowser\.test$/;
 // Rule 14: what reaching a window for an extension looks like in the section (the sink markers; the functions are derived).
-const PB_SINKS = ['.loadPanel(', 'triggerClickOrPopup(', 'shellPanelPopup(', 'actionFor(extension)', 'sidebarFor(extension)'];
+const PB_SINKS = ['.loadPanel(', 'triggerClickOrPopup(', 'shellPanelPopup(', 'actionFor(extension)', 'sidebarFor(extension)', 'getMostRecentWindow(', 'createPendingOverlay('];
 
 // D-11, the one hand-kept table: the classes a ruling fixed, not a derivation.
 const REQUIRED_STORE_CLASS = new Map([

@@ -10085,6 +10085,12 @@ function tabsBridgeCreate(host, url, options) {
   if (typeof url === "string" && url.startsWith("moz-extension:")) {
     return extensionOpenTabPage(url, options?.triggeringPrincipal);
   }
+  // As stock tabs.create (context.canAccessWindow before addTab): no tab of an extension not allowed in a private shell
+  // window. Upstream's window choice already skips that window; this checks it rather than assuming it.
+  const addonId = options?.triggeringPrincipal?.addonId;
+  if (addonId && !WebExtensionPolicy.getByID(addonId)?.canAccessWindow(host.win)) {
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: this extension is not allowed in private windows.");
+  }
   if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
     throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: an extension may open only web pages in a tab.");
   }
@@ -10236,15 +10242,28 @@ function extensionSidebarRequest(win, kind, data) {
 // the shell window's switchToTabHavingURI.
 // ---------------------------------------------------------------------------
 
-// A stock tab loading `url` with the extension's own principal, selected in the most recent stock window. Only the
-// calling extension's own pages: another extension's page is refused.
+// A stock tab loading `url` with the extension's own principal, selected in the most recent stock window the extension
+// may use (a private one only if it is allowed in private windows). Only the calling extension's own pages: another
+// extension's page is refused.
 function extensionOpenTabPage(url, principal) {
   const policy = WebExtensionPolicy.getByURI(Services.io.newURI(url));
   if (!policy || principal?.addonId !== policy.id) {
     throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: an extension may open only its own pages.");
   }
-  const win = Services.wm.getMostRecentWindow("navigator:browser");
+  // As stock tabs.create's getTopNormalWindow (private: false unless the extension is allowed in private windows).
+  let win = Services.wm.getMostRecentWindow("navigator:browser");
+  if (win && !policy.canAccessWindow(win)) {
+    try {
+      win = Services.wm.getMostRecentNonPBWindow("navigator:browser");
+    } catch {
+      win = null; // NS_ERROR_FAILURE: no non-private stock window is open
+    }
+  }
   if (!win?.gBrowserInit?.delayedStartupFinished) {
+    // The new window is private only under permanent private browsing (browser.privatebrowsing.autostart).
+    if (!policy.privateBrowsingAllowed && lazy.PrivateBrowsingUtils.permanentPrivateBrowsing) {
+      throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: this extension is not allowed in private windows.");
+    }
     // shortcut: with no started stock window the page opens in a new one and the caller gets no tab back; hand back its
     // tab once an extension needs it (tabs.create would have to wait for that window's delayed startup).
     PowerBrowserAPI.openBrowserWindow(url);
