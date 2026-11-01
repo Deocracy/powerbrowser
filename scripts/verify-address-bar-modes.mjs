@@ -61,14 +61,34 @@
  *      Actions, Command centre; a contract pin), and without Actions the same
  *      minus Actions;
  *  14. nextMode wraps from Command centre to Address and back, and steps
- *      once each way in the middle.
+ *      once each way in the middle;
+ *  15. MENU-03 (W4): the app-menu entry list of ROADMAP.md's Phase 33 success
+ *      criterion 5, parsed at check time (never a hand-kept copy), is rendered
+ *      by the hamburger as wired rows, in that order: each entry equals the
+ *      label (CHROME_BAR_COPY via the widget's appMenuLabel switch, a trailing
+ *      "…" dropped) of a row of MENU_ORDER at or below MENU_PHASE that
+ *      WIRED_MENU_IDS wires; a missing entry fails naming it;
+ *  16. SMODE-07: the same criterion's Actions list (print, downloads, clear
+ *      history, settings) each names a labelled Browser-category command;
+ *  17. MENU-03 (D-13, T-33-05): every hamburger row that runs an action runs
+ *      a Browser-category command id that chrome-bar-commands.ts registers --
+ *      the id the Actions row for it runs -- (APP_MENU_COMMANDS, each
+ *      commandLeaf, New Tab's arm), and no submenu row runs its own
+ *      implementation (a row is a commandLeaf, a disabled information row, a
+ *      page open or a stock-page open);
+ *  18. SMODE-07 (D-13): ActionsAddressBarMode lists the Browser-category
+ *      commands the registry holds at enumeration time and each row runs
+ *      `executeCommand(command.id)` and nothing else: no id literal, no id
+ *      const, no store client, no typed-text kind in its body. Command
+ *      centre's silence is cases 5, 8 and 9 (MODE_SENDS all-false and the
+ *      call-site scan); this phase adds no exception.
  *
  * Each case prints `ok <case>`; the run ends `verify-address-bar-modes: PASS`
  * or one `verify-address-bar-modes: FAIL -- <case>: <got>` line per red case.
  * A derivation that finds nothing (no MODES literal, no modeLabels) or a table
  * missing an export is a FAIL, never a pass.
  *
- * --self-test: the clean tree must be green; then seventeen planted copies in a
+ * --self-test: the clean tree must be green; then twenty-three planted copies in a
  * mkdtemp directory (the organising row removed, browsing set to history,
  * command-centre's suggestions flag set true, the fallback removed from
  * defaultModeFor, tabs and bookmarks swapped in LOCAL_MODES, one modeLabels
@@ -78,11 +98,13 @@
  * enterLocalRow falling back to the typed text, a resolve call added to
  * command-centre.ts, the contribution
  * id changed to address, tokenise accepting a token without a space,
- * nextMode not wrapping) must each go red naming the case that
+ * nextMode not wrapping; Phase 33 plan 05: removed-command, reordered-menu,
+ * resolve:true, ROADMAP-entry-missing, twin-implementation, actions-store)
+ * must each go red naming the case that
  * catches it. A plant whose text did not change its source fails as "plant did
  * not apply".
  *
- * Honestly --quick: reads six source files, writes only under mkdtemp, no
+ * Honestly --quick: reads ten source files, writes only under mkdtemp, no
  * build, no browser, no display, no network.
  *
  * Usage:
@@ -103,6 +125,11 @@ const COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
 const ADDRESS_BAR_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-bar.tsx';
 const MODES_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/address-bar-modes.ts';
 const CENTRE_REL = 'theia/extensions/chrome-bar/src/browser/address-bar/command-centre.ts';
+// Phase 33 plan 05 (MENU-03, SMODE-07): the hamburger table, its builder, the command registry and the ROADMAP criterion.
+const CMD_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
+const MENU_TABLE_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/site-identity-table.ts';
+const APP_MENU_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/app-menu.ts';
+const ROADMAP_REL = '.planning/ROADMAP.md';
 /** D-26: the names a mode reaches chrome or an engine through while typing. */
 const TYPED_TEXT_SENDERS = ['ChromeStoreClient', 'resolveTypedAddress', 'searchSuggestions', 'autofillOrigin', 'searchPlaces', 'ChromeBarSuggestionService'];
 const EXPORTS = ['LOCAL_MODES', 'DEFAULT_MODE_BY_UI_MODE', 'defaultModeFor', 'MODE_SENDS', 'engineModeId', 'engineNameOf', 'tokenise', 'cycleOrder', 'nextMode'];
@@ -346,11 +373,121 @@ function cases(m, uiModes, labelKeys, srcs) {
             const want = ['address', 'command-centre', 'engine:A', 'bookmarks'];
             return JSON.stringify(got) === JSON.stringify(want) ? null : got;
         }],
+        ['MENU-03 (W4): the ROADMAP Phase 33 app-menu entries are wired hamburger rows, in ROADMAP order (derived at check time)', () => {
+            const roadmap = deriveRoadmapMenu(srcs[ROADMAP_REL]);
+            const rows = deriveMenuRows(srcs);
+            if (!roadmap || !roadmap.menu.length || !rows) {
+                return { brokenInstrument: `ROADMAP entries ${JSON.stringify(roadmap)} or hamburger rows ${JSON.stringify(rows)} did not derive from ${ROADMAP_REL} / the menu sources` };
+            }
+            const labels = rows.map(row => row.label);
+            const missing = roadmap.menu.filter(name => !labels.includes(name));
+            if (missing.length) {
+                return { roadmapEntriesMissingFromTheMenu: missing };
+            }
+            const order = labels.filter(label => roadmap.menu.includes(label));
+            return JSON.stringify(order) === JSON.stringify(roadmap.menu) ? null : { menuOrder: order, roadmapOrder: roadmap.menu };
+        }],
+        ['SMODE-07: the ROADMAP Phase 33 Actions entries each name a labelled Browser-category command', () => {
+            const roadmap = deriveRoadmapMenu(srcs[ROADMAP_REL]);
+            const browser = deriveBrowserCommands(srcs[CMD_REL]);
+            if (!roadmap || !roadmap.actions.length || !browser) {
+                return { brokenInstrument: `ROADMAP Actions entries ${JSON.stringify(roadmap?.actions)} or Browser commands did not derive` };
+            }
+            const labels = [...browser.values()].map(label => label.toLowerCase());
+            const missing = roadmap.actions.filter(entry => !labels.some(label => entry.toLowerCase().split(/\s+/).every(word => label.includes(word))));
+            return missing.length ? { actionsEntriesWithNoBrowserCommand: missing } : null;
+        }],
+        ['MENU-03 (D-13): every hamburger row that runs an action runs a registered Browser-category command id, and no submenu row runs its own implementation', () => {
+            const browser = deriveBrowserCommands(srcs[CMD_REL]);
+            const menuIds = deriveMenuCommandIds(srcs[WIDGET_REL]);
+            if (!browser || !menuIds) {
+                return { brokenInstrument: `Browser commands (${browser?.size ?? 0}) or menu command ids (${menuIds?.length ?? 0}) did not derive` };
+            }
+            const notBrowser = menuIds.filter(id => !browser.has(id));
+            const submenu = /protected appSubmenu\([\s\S]*?\n {4}\}\n/.exec(srcs[WIDGET_REL])?.[0] ?? '';
+            if (!submenu) {
+                return { brokenInstrument: `no appSubmenu in ${WIDGET_REL}` };
+            }
+            const ownRows = [...submenu.matchAll(/this\.menuLeaf\(([^\n]*)/g)].map(x => x[1])
+                .filter(call => !/\(\) => undefined, false\)/.test(call) && !/\(\) => this\.(openPlace|openStockPageRow)\(/.test(call) && !/^`bookmark-\$\{index\}`/.test(call));
+            return notBrowser.length || ownRows.length ? { menuIdsNotBrowserCommands: notBrowser, submenuRowsRunningTheirOwnImplementation: ownRows } : null;
+        }],
+        ['SMODE-07 (D-13): Actions rows are the Browser-category enumeration at check time and run the command id only', () => {
+            const body = methodBody(srcs[MODES_REL], 'export class ActionsAddressBarMode');
+            if (!body) {
+                return { brokenInstrument: `no ActionsAddressBarMode class in ${MODES_REL}` };
+            }
+            const enumerates = /command\.category === CHROME_BAR_COMMAND_CATEGORY/.test(body) && /await this\.commands\.executeCommand\(command\.id\);/.test(body);
+            const reaches = [...sendersIn(body), ...(/'powerbrowser\.|_COMMAND_ID\b|this\.store\b/.test(stripComments(body)) ? ['an id literal, an id const or the store'] : [])];
+            return enumerates && !reaches.length ? null : { enumeratesTheBrowserCategory: enumerates, actionsRowReaches: reaches };
+        }],
         ['engineModeId and engineNameOf round-trip; a local id has no engine', () => {
             const got = [m.engineNameOf(m.engineModeId('Some Engine')), m.engineNameOf('tabs'), m.engineNameOf('address')];
             return JSON.stringify(got) === JSON.stringify(['Some Engine', null, null]) ? null : got;
         }],
     ];
+}
+
+/** ROADMAP.md's Phase 33 success criterion 5: its app-menu entries and its Actions entries; null when the line is gone. */
+function deriveRoadmapMenu(roadmapSrc) {
+    const start = roadmapSrc.indexOf('### Phase 33:');
+    const end = roadmapSrc.indexOf('\n### ', start + 1);
+    const section = start < 0 ? '' : roadmapSrc.slice(start, end < 0 ? undefined : end);
+    const line = /The app menu reaches (.+?); Actions mode runs (.+?) and the other browser actions/.exec(section);
+    if (!line) {
+        return null;
+    }
+    const split = text => text.split(/,\s*|\s+and\s+/).map(x => x.trim()).filter(Boolean);
+    return { menu: split(line[1]), actions: split(line[2]) };
+}
+
+/** A CHROME_BAR_COPY value by key: a plain literal, or a template whose interpolation reads as {App}. */
+function copyValue(copySrc, key) {
+    const plain = new RegExp(`^\\s*${key}: '([^']*)',`, 'm').exec(copySrc);
+    if (plain) {
+        return plain[1];
+    }
+    const template = new RegExp(`^\\s*${key}: \\([^)]*\\) => \`([^\`]*)\`,`, 'm').exec(copySrc);
+    return template ? template[1].replace(/\$\{[^}]+\}/g, '{App}') : null;
+}
+
+/** The hamburger rows this tree renders as wired rows, in table order, each with its label; null when a derivation is empty. */
+function deriveMenuRows(srcs) {
+    const phase = Number(/export const MENU_PHASE = (\d+);/.exec(srcs[MENU_TABLE_REL])?.[1]);
+    const table = [...srcs[MENU_TABLE_REL].matchAll(/\{ menuId: '([a-z-]+)',(?: stockPage: '[a-z]+',)? minPhase: (\d+), group: \d+ \}/g)].map(x => ({ id: x[1], minPhase: Number(x[2]) }));
+    const wiredBody = /export const WIRED_MENU_IDS[^=]*= Object\.freeze\(\[([\s\S]*?)\]\);/.exec(srcs[APP_MENU_REL])?.[1] ?? '';
+    const wired = [...wiredBody.matchAll(/'([a-z-]+)'/g)].map(x => x[1]);
+    const labelSwitch = /function appMenuLabel\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(srcs[WIDGET_REL])?.[1] ?? '';
+    const labels = new Map([...labelSwitch.matchAll(/case '([a-z-]+)': return CHROME_BAR_COPY\.([A-Za-z]+)/g)].map(x => [x[1], copyValue(srcs[COPY_REL], x[2])]));
+    if (!phase || !table.length || !wired.length || !labels.size) {
+        return null;
+    }
+    return table.filter(row => row.minPhase <= phase && wired.includes(row.id))
+        .map(row => ({ id: row.id, label: (labels.get(row.id) ?? '').replace(/…$/, '').replace(/ \(Ctrl\+[A-Z]\)$/, '') }));
+}
+
+/** The labelled Browser-category commands chrome-bar-commands.ts registers: id const -> label; null when none derive. */
+function deriveBrowserCommands(commandsSrc) {
+    const out = new Map();
+    for (const [, name, body] of commandsSrc.matchAll(/export const (CHROME_BAR_\w+): Command = \{([^}]*)\}/g)) {
+        const id = /id: (CHROME_BAR_[A-Z_]+_COMMAND_ID)/.exec(body)?.[1];
+        const label = /label: '([^']+)'/.exec(body)?.[1];
+        if (id && label && /category: CHROME_BAR_COMMAND_CATEGORY\b/.test(body) && commandsSrc.includes(`commands.registerCommand(${name}, {`)) {
+            out.set(id, label);
+        }
+    }
+    return out.size ? out : null;
+}
+
+/** The command id consts the hamburger runs: APP_MENU_COMMANDS, each commandLeaf, New Tab's arm; null when none derive. */
+function deriveMenuCommandIds(widgetSrc) {
+    const map = /const APP_MENU_COMMANDS[^=]*= Object\.freeze\(\{([\s\S]*?)\}\);/.exec(widgetSrc)?.[1] ?? '';
+    const ids = [
+        ...[...map.matchAll(/'[a-z-]+': (CHROME_BAR_[A-Z_]+_COMMAND_ID)/g)].map(x => x[1]),
+        ...[...widgetSrc.matchAll(/this\.commandLeaf\('[a-z-]+', CHROME_BAR_COPY\.[A-Za-z]+, (CHROME_BAR_[A-Z_]+_COMMAND_ID)/g)].map(x => x[1]),
+        ...[...widgetSrc.matchAll(/row\.menuId === 'new-tab'\) \{\s*void this\.runCommand\((CHROME_BAR_[A-Z_]+_COMMAND_ID)\)/g)].map(x => x[1]),
+    ];
+    return ids.length ? ids : null;
 }
 
 /** Runs every case against the table at `tablePath` and the sources' text (by rel path); returns `{ oks, failures }`. */
@@ -384,7 +521,7 @@ async function runAt(tablePath, srcs) {
 }
 
 const read = rel => readFileSync(join(REPO_ROOT, rel), 'utf8');
-const SOURCES = [TABLE_REL, WIDGET_REL, COPY_REL, ADDRESS_BAR_REL, MODES_REL, CENTRE_REL];
+const SOURCES = [TABLE_REL, WIDGET_REL, COPY_REL, ADDRESS_BAR_REL, MODES_REL, CENTRE_REL, CMD_REL, MENU_TABLE_REL, APP_MENU_REL, ROADMAP_REL];
 const readSources = () => Object.fromEntries(SOURCES.map(rel => [rel, read(rel)]));
 
 async function main() {
@@ -478,6 +615,48 @@ const PLANTS = [
         from: "    const space = text.indexOf(' ');\n",
         to: "    const space = text.indexOf(' ') < 0 ? 1 : text.indexOf(' ');\n",
         expect: 'tokenise: a token without a following space stays text',
+    },
+    {
+        name: 'removed-command: the Print row runs a command that is no longer registered',
+        rel: CMD_REL,
+        from: '        commands.registerCommand(CHROME_BAR_PRINT, {',
+        to: '        commands.registerCommand({ id: \'planted-unregistered\' }, {',
+        expect: 'MENU-03 (D-13): every hamburger row',
+    },
+    {
+        name: 'reordered-menu: Find in Page listed after Zoom',
+        rel: MENU_TABLE_REL,
+        from: "    { menuId: 'find-in-page', minPhase: 33, group: 6 },\n    { menuId: 'zoom', minPhase: 33, group: 6 },\n",
+        to: "    { menuId: 'zoom', minPhase: 33, group: 6 },\n    { menuId: 'find-in-page', minPhase: 33, group: 6 },\n",
+        expect: 'MENU-03 (W4): the ROADMAP Phase 33 app-menu entries',
+    },
+    {
+        name: 'resolve:true: Command centre may resolve typed text',
+        rel: TABLE_REL,
+        from: "'command-centre': { resolve: false,",
+        to: "'command-centre': { resolve: true,",
+        expect: 'MODE_SENDS keys',
+    },
+    {
+        name: 'ROADMAP-entry-missing: the Zoom row is gone from the menu',
+        rel: MENU_TABLE_REL,
+        from: "    { menuId: 'zoom', minPhase: 33, group: 6 },\n",
+        to: '',
+        expect: 'MENU-03 (W4): the ROADMAP Phase 33 app-menu entries',
+    },
+    {
+        name: 'twin-implementation: the Zoom In row calls the tab instead of its command id',
+        rel: WIDGET_REL,
+        from: "this.commandLeaf('zoom-in', CHROME_BAR_COPY.zoomInRow, CHROME_BAR_ZOOM_IN_COMMAND_ID, pageKeyLabel('zoomIn')),",
+        to: "this.menuLeaf('zoom-in', CHROME_BAR_COPY.zoomInRow, () => currentWebTab()?.zoomIn()),",
+        expect: 'MENU-03 (D-13): every hamburger row',
+    },
+    {
+        name: 'actions-store: an Actions row reaches the store',
+        rel: MODES_REL,
+        from: '                    await this.commands.executeCommand(command.id);',
+        to: '                    await this.commands.executeCommand(command.id);\n                    await this.store.searchPlaces(text, 1);',
+        expect: 'SMODE-07 (D-13): Actions rows',
     },
     {
         name: 'nextMode does not wrap',
