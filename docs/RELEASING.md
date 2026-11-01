@@ -967,6 +967,148 @@ whose workflows differ from main's (404 or 403 far from the cause). The gate tex
 executed against scratch repositories by the `release-sha-gate` rows, so a change to it is
 what the plants test. The input is `sha`, as the release-shape row pins it.
 
+### The train skeleton contract (TRAIN-01, TRAIN-08)
+
+This records `.github/workflows/release-train.yml` as built; the workflow header comment
+is the shorter statement of the same thing.
+
+**Wake and inputs.** The train starts from `workflow_dispatch` only. The hourly clock
+(previous section) dispatches it with `reason=tick`; the owner uses `reason=owner`;
+`reason=self` is how a `workflow_run` wake would be labelled (held out, below); `reason=fix` is the fixer lane (Phase 52) and
+runs the fixer jobs alone. `reason` is validated first, in `derive`, by a shell `case`
+pattern (a pattern matches the whole value, never a line of it): anything else exits 1
+naming the four admitted values and the next step. `dry-run` is a boolean. The fixer-only
+inputs are required, and checked by `scripts/release-train.mjs --fixer-inputs`, only when
+`reason=fix`. The merge wake (`workflow_run` on a completed `Verify static layers` run) is
+**not** in the file: zizmor's `dangerous-triggers` audit flags it and this repository
+never suppresses a finding to make a row green. The owner settled this on 2026-10-31
+(phase BLOCKED.md item 1, option B): TRAIN-01's merge wake is out of scope for v1.6, and a
+merge is seen on the next tick, at most an hour later.
+
+**Concurrency.** One group for the whole workflow, `release-train`, with no per-ref or
+per-reason suffix. Two runs never reconcile at once, so two ticks cannot both open the
+same bump branch; a run queued behind a running one waits, and GitHub keeps only the
+newest queued run in a group, so a stalled tick is replaced by the next one rather than
+piling up.
+
+**Jobs as built for the skeleton and their permissions.** The workflow default is
+`permissions: {}`; each job grants itself only what it reads or writes.
+
+| Job | Permissions | Role |
+|---|---|---|
+| `derive` | `contents: read`, `actions: read` | validates `reason`, runs both self-tests before anything acts |
+| `detect` | `contents: read`, `pull-requests: read` | lists the ESR tags and decides the ESR bump |
+| `detect-node` | `contents: read`, `pull-requests: read` | selects and verifies the Node 24 line (next section) |
+| `bump` | `contents: read` | calls `rebase-upstream.yml`, the one replay definition, with the candidate tag |
+| `bump-pr`, `bump-pr-node` | none, in the `bot` environment | mint the bot App token, open or update `chore/esr-<tag>` and `chore/node-v24.x` |
+| `report` | `contents: read`, `issues: write` | the only job that writes issues |
+
+The plan named five Phase-A jobs; the skeleton as built has the seven rows above (the two
+bump-PR jobs count as one row here). Later phases added `uptake-replay` (Phase 58),
+`dispatch-release` (Phase 50), the maintenance jobs (Phase 48) and the fixer jobs
+(Phase 52); each is recorded in its own section. `detect` and `detect-node` are separate
+jobs on purpose, so a Node failure never blocks the ESR bump and the reverse.
+
+**The `workflow_run` guard and the chain ban.** Every job's `if:` admits a dispatch, or a
+`workflow_run` event only when `github.event.workflow_run.head_repository.full_name`
+equals `github.repository` and its conclusion is `success`, so a fork's run can never wake
+the train. The two `verify-workflows.mjs` rules `workflow-run-guard` and
+`workflow-run-chain` enforce that shape and refuse any workflow that names itself in a
+`workflow_run` source list (a fork could chain through it). The trigger is held out
+today; the guards stay in place so re-adding it later changes nothing else.
+
+**Dry-run semantics (TRAIN-08).** `dry-run: true` validates, decides, replays and renders;
+it commits, opens, comments and dispatches nothing. The replay is read-only on the runner,
+so `bump` runs in a dry run too. Three layers enforce it, and each has planted faults in
+`scripts/verify-workflows.mjs --self-test`: the `dry-run-gate` rule (every step in
+`release-train.yml` that pushes, commits, opens, comments, dispatches or mints an App
+token carries a negated `inputs.dry-run` in its `if:`; an inverted or `always() ||`
+gate fails), the `bot-job-gate` rule (a job that enters the `bot` environment carries the
+negated gate at job level, so a dry run never reaches the environment or its approval
+wait), and the `workflows` row that runs both. A dry run prints `dry-run: would open or
+update chore/esr-<tag>`, `dry-run: would open or update chore/node-v24.x at <version>` and
+the tracking-issue view it would write, from the facts it derived.
+
+**Dry-run evidence, reproducible with no network** (all four read fixtures and write
+nothing to the tree): `node scripts/release-train.mjs --self-test` (state table set-equal
+to its fixtures, planted faults red, controls green); `node scripts/detect-upstreams.mjs
+--self-test`; `node scripts/detect-upstreams.mjs --listing <tags-file>` for a listing with
+one newer `*esr_RELEASE` tag, a `_BUILDn` tag and a 175 tag (prints
+`candidate=...` and the refusal reasons); `node scripts/release-train.mjs --would-write
+<pin> <tag> '' ''` (renders the tracking issue the writer would write). The live
+equivalent is `gh workflow run release-train.yml -f reason=owner -f dry-run=true`, an
+owner action; see the exit-test section for why that run is recorded.
+
+**Tracking issue.** One issue per release key, titled `release-train: v<ESR>-<revision>`,
+a view re-rendered from facts each run and never an input. Its pure protocol
+(`findExactlyOne`, `render`, `renderConflict`) is in `scripts/release-train.mjs`. The live
+writer is not wired (phase BLOCKED.md item 3): `report` prints the would-write view and
+does not create or edit the issue until the owner approves the live facts source.
+
+### Node provenance (AUTO-04)
+
+This replaces the manual `gpg --verify` step that `docs/BUILD.md` carried for the Node
+pin; BUILD.md now points here. For the Linux pin the train owns the whole chain, in the
+`detect-node` job, on every bump, before anything is opened:
+
+1. **Selection.** Download `https://nodejs.org/dist/index.json` and pick the newest entry
+   whose version matches `^v24\.` and whose `files` list includes `linux-x64`
+   (`selectNode24` in `scripts/detect-upstreams.mjs`). A major other than 24 is never
+   selected, and a line not strictly newer than the pin in
+   `powerbrowser/packaging/node-runtime.json`, or an already-open `chore/node-v24.x` PR, is a
+   hold with empty outputs.
+2. **Signature.** Clone the `nodejs/release-keys` repository, import its keys into a scratch
+   keyring, fetch `SHASUMS256.txt` and `SHASUMS256.txt.sig` from `nodejs.org/dist/<version>/`
+   and run `gpgv` over them. A bad or unknown signature fails the job.
+3. **Entry.** Read the sha256 for the exact tarball filename from the verified file
+   (`shasumsEntry`); a malformed line is skipped, a missing entry fails the job.
+4. **Tarball.** Download the tarball and assert its sha256 equals the signed entry.
+5. **PR.** `bump-pr-node` re-checks the version shape (`^v24\.[0-9]+\.[0-9]+$`) and the
+   64-hex digest, rewrites only the `linux-x64` entry of `node-runtime.json`, runs
+   `scripts/verify-node-major-agreement.mjs`, and publishes `chore/node-v24.x` through
+   `scripts/publish-bump-branch.sh` as a PR for the owner to review.
+
+`powerbrowser/packaging/package-linux.sh`'s check of the downloaded archive against the pin stays as the second layer: it
+enforces the committed pin, it does not establish provenance. The `win32-x64` and
+`darwin-*` pins are not moved by this job; they keep the owner's manual `gpg --verify` of
+`SHASUMS256.txt` (see the macOS notes under **Current posture**) until a later plan extends the
+chain. The Node half has no live run yet: its network steps run only in the workflow, never in
+`--quick`.
+
+### The calendar exit test (Phase 43, ROADMAP criterion 1)
+
+The train is proven by the calendar, not by a dispatch. The first ESR 153 point release
+after the Phase 43 owner checkpoint is the test: **153.7 on 2026-11-10**, else **153.8 on
+2026-11-24**, then every two weeks until one arrives. The dates are the plan's calendar and
+were not re-fetched from Mozilla's schedule here.
+
+**What arrival must show, with the owner dispatching nothing for it:**
+
+- a bot PR `chore/esr-<tag>` for the new tag, opened by the train, whose `verify.yml` run is
+  green without an approval click;
+- exactly one tracking issue for that release key, locked, titled
+  `release-train: v<ESR>-<revision>`;
+
+**The three-leg proof that the owner dispatched nothing:**
+
+1. *Tick-only dispatches.* The `release-train.yml` runs of event `workflow_dispatch`
+   between the previous point release and the arrival are all titled `release train tick`
+   (the run name carries the reason) and dispatched by the clock App; none is titled
+   `release train owner`.
+2. *Run linkage.* The Worker's `return_run_details` response names the run each tick
+   started, and the run of the tick that opened the PR is linked in the tracking issue's
+   snapshot.
+3. *Rendered from facts.* The issue body matches what `release-train.mjs --would-write
+   <pin> <tag> '' ''` renders for that pin and tag, including its
+   `<!-- release-train:v1 ... -->` marker.
+
+**Recording rule.** The test is recorded green only with all three links (PR, run, issue).
+Otherwise it is recorded `exit-test: pending <date>` and the plan stays open. Two things
+bound what can be observed today: an owner `reason=owner` dry run is itself a dispatch, so
+make it before the window opens or list it in the record, and the issue leg cannot be
+observed until the live tracking-issue writer is wired (phase BLOCKED.md item 3), because
+today `report` prints the view without writing it.
+
 ---
 
 ## Per-release procedure
@@ -1250,6 +1392,119 @@ hostname and the site. The one contract that must not drift is the `_redirects` 
 onto `<channel>/<BUILD_TARGET>/update.xml`: every installed client depends on it, and
 the baked path cannot be changed for builds already in users' hands. Free-tier caps
 are what keep MAR bytes on GitHub Release assets rather than on Pages.
+
+#### The scheduler clock (INF-03)
+
+The release train wakes from one external clock: the `powerbrowser-scheduler` Worker.
+Its source lives in its **own repository** (public, created empty by the owner), never in
+this tree; this tree holds the dispatch contract it calls (below) and the scaffold
+reference at the end of this section. It is a second Worker, separate from the events
+Worker above, and runs on `workers.dev` first, so it does not wait for the DNS move.
+Its Cloudflare account is the free one.
+
+The Worker is a clock only. One cron trigger, `17 * * * *` (hourly, UTC, off the
+top of the hour), runs `scheduled()`, which does exactly four things:
+
+1. mints an RS256 JWT for the `powerbrowser-clock` App (Actions write and metadata read,
+   installed on `powerbrowser` only, `.github/settings/app-powerbrowser-clock.json`) from
+   the App private key, which the Worker holds as a secret in **PKCS#8** form (WebCrypto
+   imports PKCS#8 only; GitHub issues PKCS#1, so convert once with
+   `openssl pkcs8 -topk8 -nocrypt -in <downloaded>.pem -out clock-pkcs8.pem`, store the
+   result as the secret, and shred the download);
+2. exchanges the JWT for an installation token narrowed to the `powerbrowser` repository
+   and `actions: write`;
+3. sends one `workflow_dispatch` of `release-train.yml` on `main` with the input
+   `reason=tick` and the request field `return_run_details: true`, so the response names
+   the run it started;
+4. on any non-success status from steps 1 to 3, mails the owner through Email Routing.
+
+Every request carries `User-Agent: powerbrowser-scheduler` (GitHub rejects a request with
+none). The Worker has **no** detection logic, no liveness check, no pin-age test and no
+descriptor knowledge: whether anything is new is decided inside the train from
+GitHub facts, so a wrong clock can only wake the train too often or not at all, and a
+dispatch is idempotent. The dead-man watchdog that notices a silent clock is Phase 48
+work; its absence from this section is recorded scope, not a gap. D-77 stands: no
+workflow carries a `schedule` key, and this Worker is the schedule.
+
+**Worker scaffold reference.** This is own-repo content, copied out of this tree when the
+owner creates the repository; it is a reference, not a deployed file, and it has not been
+run. Check the `send_email` binding and the `return_run_details` response status against
+the live APIs at deploy time.
+
+```ts
+// powerbrowser-scheduler, src/index.ts (own repository). Clock only: no detection.
+import { githubAppJwt } from 'universal-github-app-jwt'; // 2.2.2, WebCrypto
+import { EmailMessage } from 'cloudflare:email';
+
+interface Env {
+  CLOCK_APP_ID: string; CLOCK_PRIVATE_KEY: string; // the key is a PKCS#8 secret
+  REPO_OWNER: string; REPO_NAME: string;           // vars: the org and `powerbrowser`
+  MAIL: { send(m: EmailMessage): Promise<void> };  // send_email binding
+  ALERT_FROM: string; ALERT_TO: string;
+}
+const API = 'https://api.github.com';
+const hdr = (t: string) => ({
+  authorization: `Bearer ${t}`, accept: 'application/vnd.github+json',
+  'x-github-api-version': '2022-11-28', 'user-agent': 'powerbrowser-scheduler',
+});
+
+async function dispatchTick(env: Env): Promise<void> {
+  const { token: jwt } = await githubAppJwt({ id: env.CLOCK_APP_ID, privateKey: env.CLOCK_PRIVATE_KEY });
+  const repo = `${API}/repos/${env.REPO_OWNER}/${env.REPO_NAME}`;
+  const inst = await fetch(`${repo}/installation`, { headers: hdr(jwt) });
+  if (!inst.ok) throw new Error(`installation lookup ${inst.status}`);
+  const { id } = (await inst.json()) as { id: number };
+  const tok = await fetch(`${API}/app/installations/${id}/access_tokens`, {
+    method: 'POST', headers: hdr(jwt),
+    body: JSON.stringify({ repositories: [env.REPO_NAME], permissions: { actions: 'write' } }),
+  });
+  if (!tok.ok) throw new Error(`installation token ${tok.status}`);
+  const { token } = (await tok.json()) as { token: string };
+  const res = await fetch(`${repo}/actions/workflows/release-train.yml/dispatches`, {
+    method: 'POST', headers: hdr(token),
+    body: JSON.stringify({ ref: 'main', inputs: { reason: 'tick' }, return_run_details: true }),
+  });
+  if (res.status !== 200 && res.status !== 204) throw new Error(`dispatch ${res.status}`);
+}
+
+export default {
+  async scheduled(_e: ScheduledController, env: Env): Promise<void> {
+    try { await dispatchTick(env); } catch (err) {
+      const raw = `From: ${env.ALERT_FROM}\r\nTo: ${env.ALERT_TO}\r\nSubject: PowerBrowser clock tick failed\r\n\r\n${String(err)}\r\n`;
+      await env.MAIL.send(new EmailMessage(env.ALERT_FROM, env.ALERT_TO, raw));
+    }
+  },
+};
+```
+
+The mail carries the failing step and status only. It never carries a token, the JWT or
+the key, and it fires only on a failed dispatch.
+
+#### JWT-mint CPU measurement (INF-03)
+
+The Workers Free plan limits CPU time to **10 ms** per invocation, and the one
+CPU-bound step in the clock is the RS256 signature. The library is
+`universal-github-app-jwt` **2.2.2** over WebCrypto (`crypto.subtle`, no Node
+polyfill), key form PKCS#8.
+
+JWT-mint CPU: pending owner tick measurement (recorded 2026-10-31; no deployed Worker
+exists yet, so no number exists and none is estimated here).
+
+The owner follows this procedure after the first deploy, and the executor follows it
+afterwards to fill this record:
+
+1. Deploy the Worker with the real key. Let it tick for at least 24 hours (24 values).
+2. Read each invocation's CPU time from the Worker's own metrics: the dashboard CPU-time
+   statistic gives a cross-check quantile, and the per-invocation `cpuTime` of each trace
+   event gives the values to compute the median and p95 from. Time spent waiting on
+   GitHub is not CPU time, but the 10 ms limit applies to the whole invocation, so the
+   figure that decides is the whole invocation, not the mint alone.
+3. Record here: library and version, key form, the median and p95 in milliseconds, the
+   date, and the verdict.
+4. Verdict rule: p95 at or under 10 ms keeps the Free plan. Over it, take the fallback:
+   Workers Paid (a flat monthly fee, a higher CPU limit), or drop the Worker and
+   dispatch the train from the Phase 48 watchdog instead. The pending line above is
+   replaced by a dated line, never edited toward a flattering number.
 
 ### ESR train change
 
