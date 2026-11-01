@@ -3852,6 +3852,15 @@ run_own_checks() {
     "permission-prompts|node $REPO_ROOT/scripts/verify-permission-prompts.mjs"
     "permission-prompts-self-test|node $REPO_ROOT/scripts/verify-permission-prompts.mjs --self-test"
 
+    # NEW (Phase 38 plan 01, EXT-06/07, D-03/D-06/D-11): the extension bridge
+    # gate. Derives the fixture set from scripts/lib/pb-extension-fixtures.mjs,
+    # bans a fixture id literal and the stock delegate's trigger-action call in
+    # product sources, holds messagemanagergroup to the 31.1 host sites, and
+    # requires every extension* / tabsBridge* kind classified (click, pin and
+    # remove privileged store kinds). Honestly --quick: text reads only.
+    "extension-actions|node $REPO_ROOT/scripts/verify-extension-actions.mjs"
+    "extension-actions-self-test|node $REPO_ROOT/scripts/verify-extension-actions.mjs --self-test"
+
     # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the
     # WebTabMessage union, the routed set and the state fields agree (derive and
     # compare, set equality). The find gate also pins the Finder listener and the
