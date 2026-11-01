@@ -7225,11 +7225,14 @@ function registerEditStateActor() {
 }
 
 // The live answer for `cmd` (already checked against WEB_TAB_EDIT_CMDS); a failed query (the page navigating away,
-// the actor gone) falls back to the cached flag, so the row stays usable rather than greyed by an error.
+// the actor gone) or one a hung page leaves unanswered for EDIT_STATE_BUDGET_MS (WR-06: the hamburger waits on this)
+// falls back to the cached flag, so the row stays usable rather than greyed by an error.
+const EDIT_STATE_BUDGET_MS = 250;
 async function webTabEditEnabled(entry, cmd, cached) {
   try {
     const actor = entry.browser.browsingContext.currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
-    return (await actor.sendQuery(EDIT_STATE_QUERY, { cmd })) === true;
+    const query = actor.sendQuery(EDIT_STATE_QUERY, { cmd }).then(answer => answer === true);
+    return await Promise.race([query, PowerBrowserAPI.sleep(EDIT_STATE_BUDGET_MS).then(() => cached)]);
   } catch {
     return cached;
   }

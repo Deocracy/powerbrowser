@@ -155,6 +155,18 @@ const BOOKMARKS_HISTORY_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-bookmark
 /** BMK-06: each History section lists at most this many rows (closed tabs, recent pages). */
 const HISTORY_MENU_ROWS = 10;
 
+/** WR-06: how long a menu open waits on a store or page read before it draws without it (the store's own ack timeout is 8 s). */
+const MENU_READ_BUDGET_MS = 1000;
+
+/** `read`'s answer, or `fallback` when it rejects or takes longer than MENU_READ_BUDGET_MS. */
+function withinBudget<T>(read: Promise<T>, fallback: T): Promise<T> {
+    return new Promise(resolve => {
+        const timer = setTimeout(() => resolve(fallback), MENU_READ_BUDGET_MS);
+        const settle = (value: T): void => { clearTimeout(timer); resolve(value); };
+        read.then(settle, () => settle(fallback));
+    });
+}
+
 /** BMK-06: one section's read, or 'failed' when chrome refused it. */
 interface HistoryMenuReads {
     closed: ClosedTabRow[] | 'failed';
@@ -475,6 +487,8 @@ export class ChromeBarWidget extends ReactWidget {
     protected menuTarget: OpenTarget = 'current';
     /** BMK-05: the Clear Recent History picker while it is open. */
     protected clearHistoryPicker: ClearHistoryPickerState | undefined;
+    /** WR-06: the hamburger's reads are pending, so another click does not open a second menu. */
+    protected appMenuOpening = false;
     /** The Phase 31 hamburger button: the picker's anchor and the History row's focus return. */
     protected appMenuButton: HTMLButtonElement | null = null;
     /** Stable, so React calls it only on mount and unmount. */
@@ -553,8 +567,8 @@ export class ChromeBarWidget extends ReactWidget {
     /** BMK-06: both History sections' reads, in parallel; one refused read fails only its own section. */
     protected async readHistoryMenu(): Promise<HistoryMenuReads> {
         const [closed, recent] = await Promise.all([
-            this.store.listClosedTabs(HISTORY_MENU_ROWS).catch((): 'failed' => 'failed'),
-            this.store.searchPlaces('', HISTORY_MENU_ROWS, 'history').catch((): 'failed' => 'failed'),
+            withinBudget<ClosedTabRow[] | 'failed'>(this.store.listClosedTabs(HISTORY_MENU_ROWS), 'failed'),
+            withinBudget<PlaceMatch[] | 'failed'>(this.store.searchPlaces('', HISTORY_MENU_ROWS, 'history'), 'failed'),
         ]);
         return { closed, recent };
     }
@@ -1103,11 +1117,22 @@ export class ChromeBarWidget extends ReactWidget {
      * NAV-03 rule).
      */
     protected async openAppMenu(button: HTMLElement): Promise<void> {
-        const [history, bookmarks, editState] = await Promise.all([
-            this.readHistoryMenu(),
-            this.store.searchPlaces('', HISTORY_MENU_ROWS, 'bookmark').catch((): 'failed' => 'failed'),
-            this.readEditState(),
-        ]);
+        // WR-06: a click while the reads are pending would draw a second menu.
+        if (this.appMenuOpening) {
+            return;
+        }
+        this.appMenuOpening = true;
+        let reads: [HistoryMenuReads, PlaceMatch[] | 'failed', Partial<Record<EditCmd, boolean>>];
+        try {
+            reads = await Promise.all([
+                this.readHistoryMenu(),
+                withinBudget<PlaceMatch[] | 'failed'>(this.store.searchPlaces('', HISTORY_MENU_ROWS, 'bookmark'), 'failed'),
+                withinBudget<Partial<Record<EditCmd, boolean>>>(this.readEditState(), {}),
+            ]);
+        } finally {
+            this.appMenuOpening = false;
+        }
+        const [history, bookmarks, editState] = reads;
         const menu = buildAppMenu(MENU_ORDER, WIRED_MENU_IDS, MENU_PHASE, {
             label: (menuId, enabled) => (enabled ? appMenuLabel(menuId) : CHROME_BAR_COPY.comingSoonRow(appMenuLabel(menuId))),
             run: row => this.runAppMenuRow(row),
