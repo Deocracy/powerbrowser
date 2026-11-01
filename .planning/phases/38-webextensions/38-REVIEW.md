@@ -93,6 +93,8 @@ get tabContainer() {
 
 Add `tabContainer` to the stand-in gate's implemented set. Add a rule (to `verify-shell-gbrowser-standin.mjs` or `verify-extension-actions.mjs`) that derives every `window.gBrowser.<member>` read from 050's `+` lines and requires each to be a stand-in member, with a plant that deletes the getter. Do not rely on `upstream/` being re-patched.
 
+**Outcome:** Fixed in `de1dd0e5`. The shell `window.gBrowser` now has `get tabContainer()`, returning the hidden host strip through a new tab host accessor (`tabContainer: () => strip`). That is the node `EXTENSION_TAB_EVENTS` already listens on, so patch 050 and the listener are unchanged and no regeneration was needed. `verify-shell-gbrowser-standin.mjs` now also derives required members from 050's `+` lines, read from the patch text (WR-09). Plant s2 removes the getter, and the gate goes red naming `tabContainer` UNIMPLEMENTED at the patch. Its converse strips the patch's reads and leaves `tabContainer` DEAD SURFACE. The live `popup-action` run is still deferred.
+
 ### CR-02: `tabs.create({cookieStoreId})` silently loads the page in the default container
 
 **File:** `powerbrowser/shell/PowerBrowserAPI.sys.mjs:10083-10107`
@@ -108,6 +110,8 @@ if (options?.userContextId) {
 ```
 
 Put this next to the private-window check. Add a `verify-extension-actions` rule and plant for it, and a `tabs-bridge` live row: a `cookieStoreId` create must reject.
+
+**Outcome:** Fixed in `defbc088`, by refusing. `tabsBridgeCreate` throws `ExtensionError("PowerBrowser refused to open that page: container tabs are not supported in this window.")` on any non-zero `options.userContextId`, before either branch opens anything. `firefox-default` maps to 0 and still passes. Neither the overlay path nor the stock-window tab page can carry a container, so honouring it would not be a small change. `verify-extension-actions` rule 12 requires the refusal ahead of the moz-extension route, and plant `container dropped` goes red. The live row is deferred: it needs a fixture with the `cookies` permission and containers enabled, or stock validation rejects the call before it reaches the bridge.
 
 ### CR-03: Activating a tab that is still waiting for its ack moves the host selection to a tab the frontend never shows
 
@@ -141,6 +145,13 @@ if (pending.activateOnAck) {
 ```
 
 Stock `create`'s synchronous `selectedTab` write must still select the node at once, because `tabs.create` returns `active: true`. Restrict the deferred path to calls made after the push has been sent, using a `pending.pushed` flag set inside the microtask. Add a live row: background create, immediate `tabs.update({active})`, and the tab must be the frontend's current widget and `host.selected`.
+
+**Outcome:** Fixed in `4bc15671`, by deferring. `createPendingOverlay` sets `pending.pushed` when the adoptTab push goes:
+
+- **Push not yet sent** (stock create's synchronous write): `tabsBridgeActivate` selects the node and clears `background`, as before.
+- **Push already sent:** it only records `activateOnAck`. `adoptPendingOverlay` copies that onto the adopted entry (`activateOnAttach`). `webTabOpen`'s already-open branch is the widget's own open on attach. There, chrome pushes `selectTab`, and `webTabActivated` then selects the node. The push is not sent from the ack itself because the frontend acks before `addWidget`, so a `selectTab` sent at the ack would find no attached widget.
+
+`verify-extension-actions` rule 6 requires this shape. Plants `activate ahead of ack` and `deferred activation never shown` go red. The live `tabs-bridge` scenario gains a step on `/d`: fixture op `create-activate`, which creates in the background and activates at once. It requires `/d` to end both current in the frontend and `host.selected`. Live run deferred. Until the attach, `tabs.update` returns the tab with `active: false`.
 
 ## Warnings
 
@@ -215,6 +226,13 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 **Issue:** Rule 6 requires the text `triggerClickOrPopup(selectedTab)`, not that `selectedTab` is the host's current selection. Its plant renames the argument. CR-03 shows the host selection itself can diverge, and no rule can see it. Rule 14 accepts a function if its body contains `.canAccessWindow(` anywhere, whether or not that check guards the sink. In `tabsBridgeCreate`, the check is skipped when the principal has no `addonId`, and the rule cannot tell. The gBrowser audit derives from `upstream/`, which lags the patch file whenever a re-patch is deferred. That is how CR-01 passed every static gate.
 
 **Fix:** In rule 6, also require the binding `const selectedTab = tabHosts.get(win)?.selected` inside `extensionClick`. Add a rule that the only `selectNode(` calls in the extension section are on nodes the frontend has acknowledged (see CR-03). In rule 14, require the check to appear on a line before the sink that returns or throws. Make the gBrowser audit read 050's `+` lines in addition to `upstream/` (see CR-01).
+
+**Outcome:** Fixed in `de1dd0e5` (gBrowser audit) and `bcea29df` (rules 6 and 14). The CR-03 `selectNode` rule landed in `4bc15671`.
+
+- **gBrowser audit:** derives from 050's added lines as well as from `upstream/` (see CR-01).
+- **Rule 6:** also requires `const selectedTab = tabHosts.get(win)?.selected` inside `extensionClick` (plant `click selection unbound`). The CR-03 part restricts `tabsBridgeActivate` to two `selectNode(` calls: one for an adopted tab and one for a pending tab whose push has not gone.
+- **Rule 14:** the check must come before its sink, unless the sink line resolves the window the check tests (`extensionOpenTabPage`'s `getMostRecentWindow`). Within three lines it must also return, throw, continue or replace that window. Plants `private check without effect` and `private check after its sink` cover this.
+- **Not tightened:** a guard made conditional on its own input. `tabsBridgeCreate` skips the check when the principal has no `addonId`. Stock `tabs.create` always passes the extension's `context.principal`, so only a non-extension caller reaches that skip.
 
 ## Info
 
