@@ -4685,7 +4685,7 @@ async function handleWebTabAction(data, actorRef) {
       const entries = [];
       for (let i = start; i < end; i++) {
         const e = sh.getEntryAtIndex(i);
-        entries.push({ index: i, title: String(e.title || ""), url: webTabPushedSpec(String(e.URI?.spec || "")) });
+        entries.push({ index: i, title: webTabPushedSpec(String(e.title || "")), url: webTabPushedSpec(String(e.URI?.spec || "")) });
       }
       return { ok: true, kind, where: "done", index, entries };
     }

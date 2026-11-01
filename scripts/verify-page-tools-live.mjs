@@ -606,7 +606,7 @@ async function scenarioSource(app, origin, plant = false) {
     if (browsersAfter !== browsersBefore) {
         return `Ctrl+U opened another browser element (${browsersBefore} to ${browsersAfter}): the source did not stay in the tab`;
     }
-    if (plant) {
+    if (plant === true) {
         await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).url = 'view-source:' + ${JSON.stringify(origin)} + '/find'; return true;`);
     }
     const held = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); return w ? w.url : null;`);
@@ -614,7 +614,18 @@ async function scenarioSource(app, origin, plant = false) {
         return 'Theia holds a view-source: URL (its widget url names the source, not the page)';
     }
     const pushed = (await pushes(app)).slice(from).filter(p => JSON.stringify(p).includes('view-source:'));
-    return pushed.length === 0 ? null : `${pushed.length} push(es) carried a view-source: string into Theia`;
+    if (pushed.length > 0) {
+        return `${pushed.length} push(es) carried a view-source: string into Theia`;
+    }
+    // 32-REVIEW WR-02: the history reply crosses the same wall. A view-source document's title is its view-source: URL.
+    const reply = await channelRequest(app, { kind: 'webTabHistory', tabId });
+    if (!Array.isArray(reply?.entries) || reply.entries.length < 2) {
+        throw new Error(`${BROKEN} the history reply holds no source entry to read (${JSON.stringify(reply).slice(0, 80)})`);
+    }
+    if (plant === 'history-title') {
+        reply.entries[reply.entries.length - 1].title = minted;
+    }
+    return JSON.stringify(reply).includes('view-source:') ? 'the history reply carried a view-source: string into Theia' : null;
 }
 
 /**
@@ -1717,6 +1728,12 @@ const PLANTS = [
         target: 'source',
         run: (app, fx) => scenarioSource(app, fx.origin, true),
         expect: 'Theia holds a view-source: URL',
+    },
+    {
+        plant: 'source-history-title',
+        target: 'source',
+        run: (app, fx) => scenarioSource(app, fx.origin, 'history-title'),
+        expect: 'the history reply carried a view-source: string',
     },
     {
         plant: 'crash-ui-absent',
