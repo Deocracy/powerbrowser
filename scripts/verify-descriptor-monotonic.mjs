@@ -35,6 +35,9 @@
 //     orders the same as the number because every BuildID is fourteen digits (%Y%m%d%H%M%S).
 //     An older or equal buildID fails, naming the descriptor, the offered buildID, the published
 //     buildID and its Release tag. Different appVersion lines do not compare.
+//     Every buildID, published or offered, must also be a real %Y%m%d%H%M%S date no later than now
+//     plus one day (Gecko stamps the build machine's local time). One typo such as 99999999999999
+//     would otherwise outrank every later build of that appVersion and target for good.
 //  4. Empty sets are named, never silent. Zero published buildIDs is a PASS with a named count:
 //     with nothing published, no descriptor can be a downgrade. Zero candidates under the default
 //     tree (gitignored, so every clean checkout) prints a SKIP verdict naming the count and the
@@ -76,6 +79,7 @@ const RAW_ACCEPT = 'application/octet-stream';
 const DOTTED = /^\d+(\.\d+)*$/;
 const BUILD_ID = /^\d{14}$/;
 const TARGET = /^[A-Za-z0-9]+_[A-Za-z0-9_.-]+$/;
+const SKEW_MS = 24 * 60 * 60 * 1000;
 const NEXT_AUTH = 'Next step: run gh auth status; the row needs read access to the repository.';
 
 // Argument handling and the exit run on direct invocation only, so the exports stay importable.
@@ -154,11 +158,24 @@ function parseJson(text) {
     }
 }
 
+/** Why a BuildID cannot be ordered, or null: fourteen digits, a real UTC date-time, not after now plus SKEW_MS. */
+export function buildIdProblem(id, now = Date.now()) {
+    if (typeof id !== 'string' || !BUILD_ID.test(id)) return 'not fourteen digits';
+    const [y, mo, d, h, mi, se] = [[0, 4], [4, 6], [6, 8], [8, 10], [10, 12], [12, 14]].map(([a, b]) => Number(id.slice(a, b)));
+    const at = new Date(Date.UTC(y, mo - 1, d, h, mi, se));
+    const real = at.getUTCFullYear() === y && at.getUTCMonth() === mo - 1 && at.getUTCDate() === d
+        && at.getUTCHours() === h && at.getUTCMinutes() === mi && at.getUTCSeconds() === se;
+    if (!real) return 'not a real %Y%m%d%H%M%S date';
+    if (at.getTime() > now + SKEW_MS) return `later than now plus one day (${new Date(now).toISOString()})`;
+    return null;
+}
+
 /** The three manifest fields, or an error naming the field that is wrong. Unknown keys are ignored. */
-export function manifestFields(doc) {
+export function manifestFields(doc, now = Date.now()) {
     if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return { error: 'is not a JSON object' };
     if (typeof doc.version !== 'string' || !DOTTED.test(doc.version)) return { error: `version is ${show(doc.version)}, not a dotted appVersion` };
-    if (typeof doc.build_id !== 'string' || !BUILD_ID.test(doc.build_id)) return { error: `build_id is ${show(doc.build_id)}, not fourteen digits` };
+    const idProblem = buildIdProblem(doc.build_id, now);
+    if (idProblem !== null) return { error: `build_id is ${show(doc.build_id)}, ${idProblem}` };
     if (typeof doc.build_target !== 'string' || !TARGET.test(doc.build_target)) return { error: `build_target is ${show(doc.build_target)}, not an OS_ABI token` };
     return { value: { appVersion: doc.version, buildID: doc.build_id, target: doc.build_target } };
 }
@@ -220,6 +237,7 @@ export function runChecks(root, overrides = {}) {
     const published = [];
     const candidates = [];
     const get = guardedGet(overrides.get ?? ghRead);
+    const now = overrides.now ?? Date.now();
 
     let slug;
     try {
@@ -257,7 +275,7 @@ export function runChecks(root, overrides = {}) {
                     continue;
                 }
                 const doc = parseJson(got.text);
-                const fields = doc.error ? { error: 'is not valid JSON' } : manifestFields(doc.value);
+                const fields = doc.error ? { error: 'is not valid JSON' } : manifestFields(doc.value, now);
                 if (fields.error) {
                     failures.push(`Release ${tag} ${ASSET_NAME} ${fields.error}. Next step: re-upload a well-formed manifest to ${tag}; the descriptor the Release offers cannot be compared until it is.`);
                     continue;
@@ -290,8 +308,9 @@ export function runChecks(root, overrides = {}) {
             failures.push(`${d.rel} sits under ${show(target)}, not an OS_ABI BUILD_TARGET directory, so its target cannot be matched with a published build_target. Next step: emit it as <channel>/<BUILD_TARGET>/update.xml with node scripts/build-update-xml.mjs --emit.`);
             continue;
         }
-        if (!BUILD_ID.test(parsed.buildID)) {
-            failures.push(`${d.rel} offers buildID ${show(parsed.buildID)}, not fourteen digits, so it cannot be ordered. Next step: rebuild the descriptor from a build with a fourteen-digit BuildID.`);
+        const idProblem = buildIdProblem(parsed.buildID, now);
+        if (idProblem !== null) {
+            failures.push(`${d.rel} offers buildID ${show(parsed.buildID)}, ${idProblem}, so it cannot be ordered. Next step: rebuild the descriptor from a build whose BuildID is the real build time.`);
             continue;
         }
         const ownTag = releaseTagOf(parsed.url);
@@ -354,6 +373,8 @@ function main() {
 const FIXTURE_MAR = Buffer.from('power-browser descriptor-monotonic fixture\n');
 // The fixture detailsURL derives from configuration.toml at run time, never typed.
 const PUBLISHED_BUILD = '20261020215955';
+// The self-test clock, so the future-buildID bound never depends on the host clock.
+const FIXTURE_NOW = Date.UTC(2026, 10, 1);
 const TARGET_TOKEN = 'Linux_x86_64-gcc3';
 
 // A candidate is the next revision's descriptor: its patch URL names its own Release v<appVersion>-2.
@@ -408,7 +429,7 @@ function selfTest() {
         rel: `${CANDIDATE_REL}/default/${target}/update.xml`,
         text: descriptorFixture(appVersion, buildID, slug),
     });
-    const run = (w, descriptors) => runChecks(REPO_ROOT, { get: fakeGet(w), descriptors });
+    const run = (w, descriptors) => runChecks(REPO_ROOT, { get: fakeGet(w), descriptors, now: FIXTURE_NOW });
 
     // Control first: a candidate above the only published buildID is green.
     const baseline = run(baseWorld(), [candidate('153.5.1', '20261021000000')]);
@@ -431,7 +452,7 @@ function selfTest() {
     console.log('  ok  control: zero published Releases -> green, named by count');
 
     // Older appVersion line: a newer buildID on a different version line is green.
-    const otherLine = run(baseWorld(), [candidate('152.9.0', '20270101000000')]);
+    const otherLine = run(baseWorld(), [candidate('152.9.0', '20261030000000')]);
     if (otherLine.failures.length > 0) {
         console.error(`${NAME}: --self-test FAIL -- a different appVersion line went red: ${otherLine.failures.join(' | ')}`);
         return 1;
@@ -506,6 +527,24 @@ function selfTest() {
             needles: ['v153.5.1-1', 'build_id', '2026-10-20'],
         },
         {
+            name: 'manifest with a far-future build_id',
+            w: world({ releases: [release('v153.5.1-1', 101)], manifests: { 101: manifest('153.5.1', '99999999999999') } }),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: ['v153.5.1-1', 'build_id', '99999999999999', 'not a real'],
+        },
+        {
+            name: 'candidate buildID that is not a real date',
+            w: baseWorld(),
+            d: [candidate('153.5.1', '20261332000000')],
+            needles: [`${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, '20261332000000', 'not a real'],
+        },
+        {
+            name: 'candidate buildID later than now plus one day',
+            w: baseWorld(),
+            d: [candidate('153.5.1', '20261103000000')],
+            needles: [`${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, '20261103000000', 'later than now'],
+        },
+        {
             name: 'throwing getter on the Releases endpoint',
             w: world({ releases: [], throwOn: listPath }),
             d: [candidate('153.5.1', '20261021000000')],
@@ -543,8 +582,8 @@ function selfTest() {
         mkdirSync(join(hollow, 'default', TARGET_TOKEN), { recursive: true });
         writeFileSync(join(hollow, 'default', TARGET_TOKEN, 'update.xml'), descriptorFixture('153.5.1', '20261021000000', slug));
         mkdirSync(join(hollow, 'default', 'Darwin_aarch64-gcc3'));
-        const fromLink = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), descriptorsDir: linked });
-        const fromDisk = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), descriptorsDir: tree });
+        const fromLink = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), descriptorsDir: linked, now: FIXTURE_NOW });
+        const fromDisk = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), descriptorsDir: tree, now: FIXTURE_NOW });
         const diskOk = fromDisk.failures.length === 0 && fromDisk.candidates.length === 1
             && fromDisk.candidates[0].rel === `${tree}/default/${TARGET_TOKEN}/update.xml`;
         const pass = verdict(fromDisk);
@@ -572,7 +611,7 @@ function selfTest() {
             ['a target directory with no update.xml', { descriptorsDir: hollow }, [`${hollow}/default/Darwin_aarch64-gcc3/update.xml`, 'absent']],
         ];
         for (const [name, o, needles] of diskPlants) {
-            const r = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), ...o });
+            const r = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), now: FIXTURE_NOW, ...o });
             const v = verdict(r);
             if (v.code === 1 && r.failures.some(f => needles.every(n => f.includes(n)))) {
                 console.log(`  ok  ${name} -> red, naming ${needles.map(n => `'${n}'`).join(', ')}`);
