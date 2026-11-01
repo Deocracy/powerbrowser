@@ -169,8 +169,9 @@ export function patchUrlForm(url, manifest, asset) {
     if (u.hostname === 'github.com' && u.pathname.includes('/releases/download/')) {
         return `${show(url)} is a github.com Releases download URL; github.com is user-initiated, so the unattended fetch fails. Next step: name ${origin.origin}${want}`;
     }
-    if (u.hostname.startsWith('release-assets.')) {
-        return `${show(url)} is a release-assets signed URL, which expires about one hour after issue. Next step: name ${origin.origin}${want}`;
+    // GitHub's two signed asset hosts: release-assets.githubusercontent.com and objects.githubusercontent.com.
+    if (u.hostname.startsWith('release-assets.') || u.hostname === 'objects.githubusercontent.com') {
+        return `${show(url)} is a GitHub signed asset URL, which expires about one hour after issue. Next step: name ${origin.origin}${want}`;
     }
     if (u.protocol !== 'https:') return `${show(url)} is not https. Next step: name ${origin.origin}${want}`;
     if (u.host !== origin.host) return `${show(url)} names host ${u.host}, not the MAR origin host ${origin.host}. Next step: name ${origin.origin}${want}`;
@@ -509,6 +510,7 @@ async function selfTest() {
         const strings = [
             ['github.com Releases download patch URL', `https://${ghHost}/${slug.owner}/${slug.repo}/releases/download/${tag}/${asset}`],
             ['release-assets patch URL', `https://release-assets.githubusercontent.com/github-production-release-asset/1/${asset}`],
+            ['objects.githubusercontent.com patch URL', `https://objects.githubusercontent.com/github-production-release-asset-2e65be/1/${asset}`],
             ['patch URL on another host', `https://mirror.example.invalid/${tag}/${asset}`],
             ['patch path that is not /<tag>/<asset>', `${origin}/latest/${asset}`],
             ['non-https patch URL', `http://${new URL(origin).host}/${tag}/${asset}`],

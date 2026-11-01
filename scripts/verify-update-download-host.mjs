@@ -7,8 +7,8 @@
 // The update descriptor's patchURL (and servedMarUrl) names the R2 primary MAR origin,
 // the mar_origin host of configuration.toml [urls], in the form <origin>/<tag>/<asset>
 // (owner ruling 2026-10-29). Two forms are therefore red in update-download context: a
-// github.com /releases/download/ URL, and a release-assets.githubusercontent.com URL,
-// whose signed form expires about an hour after issue, so a static descriptor cannot
+// github.com /releases/download/ URL, and a GitHub signed asset URL (on
+// release-assets.githubusercontent.com or objects.githubusercontent.com), which expires about an hour after issue, so a static descriptor cannot
 // name it. The positive check (the patch URL IS on the MAR origin) belongs to
 // verify-channel-live.mjs; this row only refuses the two forbidden forms, and derives
 // the origin its next step names from the manifest.
@@ -29,7 +29,7 @@
 //
 // Exit 0 pass, 1 fail. --self-test plants a descriptor template, a generator
 // output and a fixture carrying the github.com form, a descriptor template carrying
-// the release-assets form, a non-verifier script carrying the github form, and a
+// the release-assets form, one carrying the objects.githubusercontent.com form, a non-verifier script carrying the github form, and a
 // verifier script carrying it outside its selfTest function, and requires each to go
 // red naming the file and the manifest's MAR origin; three controls (a release-notes
 // URL, a patch URL on the MAR origin, and a verifier script carrying the github form
@@ -59,8 +59,8 @@ for (const a of args) {
 
 // A github.com Releases DOWNLOAD URL (the asset path), not a releases page.
 const GITHUB_DOWNLOAD = /https?:\/\/github\.com\/[^\s"'<>]+\/releases\/download\//i;
-// A release-assets URL: GitHub's signed redirect target, expiring about an hour after issue.
-const RELEASE_ASSETS = /https?:\/\/release-assets\.githubusercontent\.com\//i;
+// A GitHub signed asset URL (release-assets or objects host): the redirect target, expiring about an hour after issue.
+const RELEASE_ASSETS = /https?:\/\/(?:release-assets|objects)\.githubusercontent\.com\//i;
 // Verifier scripts carry the forbidden forms as self-test fixtures by design, inside their selfTest function.
 const VERIFIER = /^scripts\/verify-[^/]*\.mjs$/;
 const SELF_TEST_START = /^(?:async\s+)?function\s+selfTest\s*\(/;
@@ -146,7 +146,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- no tracked descriptor, template, generator output or fixture (${files} tracked file(s) read) names a github.com /releases/download/ URL or a release-assets URL as an update download`);
+    console.log(`${NAME}: PASS -- no tracked descriptor, template, generator output or fixture (${files} tracked file(s) read) names a github.com /releases/download/ URL or a GitHub signed asset URL as an update download`);
     return 0;
 }
 
@@ -175,6 +175,7 @@ function selfTest() {
         'scripts/generated-update-descriptor.json': '{\n  "servedMarUrl": "https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/powerbrowser-1.0.0.mar"\n}\n',
         'powerbrowser/branding/release/fixtures/patch-manifest.json': '{ "patchURL": "https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar" }\n',
         'powerbrowser/packaging/update-xml.tmpl': '<updates><update><patch URL="https://release-assets.githubusercontent.com/github-production-release-asset/1/x.mar"/></update></updates>\n',
+        'powerbrowser/packaging/update-objects.xml.tmpl': '<updates><update><patch URL="https://objects.githubusercontent.com/github-production-release-asset-2e65be/1/x.mar"/></update></updates>\n',
         'control/release-notes-link.json': '{ "app.releaseNotesURL": "https://github.com/DeBIOS-Foundation/powerbrowser/releases" }\n',
         'control/mar-origin-patch.xml': `<updates><update><patch URL="${manifestMarOrigin(REPO_ROOT)}/v1.0.0-1/x.mar"/></update></updates>\n`,
         'scripts/build-planted-descriptor.mjs': "const patchURL = 'https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\n",
@@ -189,6 +190,7 @@ function selfTest() {
         ['generator output names the github.com download', 'scripts/generated-update-descriptor.json'],
         ['fixture names the github.com download as patchURL', 'powerbrowser/branding/release/fixtures/patch-manifest.json'],
         ['descriptor template names a release-assets download', 'powerbrowser/packaging/update-xml.tmpl'],
+        ['descriptor template names an objects.githubusercontent.com download', 'powerbrowser/packaging/update-objects.xml.tmpl'],
         ['non-verifier script names the github.com download as patchURL', 'scripts/build-planted-descriptor.mjs'],
         ['verifier script names the github.com download outside its selfTest function', 'scripts/verify-planted-outside.mjs'],
     ];
