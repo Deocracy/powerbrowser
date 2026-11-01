@@ -30,6 +30,8 @@
     <meta http-equiv="Content-Security-Policy" content="default-src chrome:"/>
     <title>PowerBrowser</title>
     <link rel="stylesheet" href="chrome://powerbrowser/content/powerbrowser.css"/>
+    <!-- D-15: document.l10n for ClipboardContextMenu's paste popup (text-action-paste). -->
+    <link rel="localization" href="toolkit/global/textActions.ftl"/>
     <script src="chrome://powerbrowser/content/powerbrowser.js"></script>
   </head>
   <body>
@@ -65,6 +67,13 @@
     <!-- PROMPT-06 (D-03, W6): the popup FormHistory and LoginManager drive through
          every overlay's autocompletepopup attribute. -->
     <xul:panel is="autocomplete-richlistbox-popup" type="autocomplete-richlistbox" id="PopupAutoComplete" role="group" noautofocus="true" hidden="true" overflowpadding="4" norolluponanchor="true" nomaxresults="true" locationspecific="true"/>
+    <!-- D-14: FormValidationParent swaps the template for its content on first use and
+         anchors the panel to the invalid field. -->
+    <template id="invalidFormTemplate">
+      <xul:panel id="invalid-form-popup" type="arrow" orient="vertical" noautofocus="true" level="parent" locationspecific="true">
+        <xul:description/>
+      </xul:panel>
+    </template>
     <!-- shell furniture: end -->
     <xul:browser id="powerbrowser-content" type="content" primary="true" remote="true" remoteType="web" src="about:blank" tabindex="-1" disablecontextmenu="true"/>
   </body>

@@ -11,8 +11,11 @@
 //      `shell furniture: end` XML comments of powerbrowser.xhtml. A = every id
 //      the `// Phase 35: shell furniture.` section of PowerBrowserAPI.sys.mjs
 //      passes to getElementById("..."), plus the autocompletepopup value of
-//      webTabOpen's attribute map once 35-06 adds it. A == B: an element nothing
-//      wires is DEAD FURNITURE; a wired id with no element is MISSING FURNITURE.
+//      webTabOpen's attribute map, plus (35-06) every id an ADOPTED_ACTORS parent
+//      under upstream/browser/actors or upstream/toolkit/actors passes to
+//      getElementById("...") (FormValidationParent's template and panel). A == B:
+//      an element nothing wires is DEAD FURNITURE; a wired id with no element is
+//      MISSING FURNITURE.
 //   2. Upstream parity. Each element in B has the start tag (local name with the
 //      xul:/html: prefix dropped, attribute set and values) of the upstream
 //      element with the same id in main-popupset.inc.xhtml or
@@ -48,13 +51,22 @@
 //      literal (the on-build-contextmenu subject) equal the keys of upstream's
 //      `let subject = {` literal in nsContextMenu.sys.mjs, as set equality, so
 //      ext-menus reads every field it reads in Firefox and nothing invented.
+//   9. Autocomplete popup (35-06, D-03, W6). webTabOpen's autocompletepopup value
+//      equals the id of the furniture <panel> whose type is autocomplete-richlistbox,
+//      so AutoCompleteParent's browser.autoCompletePopup is upstream's element.
+//  10. Localization (35-06, D-15). Each <link rel="localization"> href in the shell
+//      head names an upstream en-US file (browser/locales/en-US/ or
+//      toolkit/locales/en-US/), and every data-l10n-id in the furniture block plus
+//      each id ClipboardContextMenu.sys.mjs sets through setAttributes is a message
+//      in a linked file (without one, document.l10n is absent and the page's
+//      navigator.clipboard.readText() rejects).
 //
 // A section, block or selector that cannot be found, or empty A and B, is a BROKEN
 // INSTRUMENT, never a clean pass. `--self-test` asserts the clean tree green,
 // then plants one fault per rule into staged copies; each must land and go red
 // naming its drift.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -75,7 +87,16 @@ const FILES = {
   browserProperties: 'upstream/browser/locales/en-US/chrome/browser/browser.properties',
   pageMenu: 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts',
   nsContextMenu: 'upstream/browser/base/content/nsContextMenu.sys.mjs',
+  clipboardMenu: 'upstream/toolkit/modules/ClipboardContextMenu.sys.mjs',
 };
+const ACTOR_DIRS = ['upstream/browser/actors', 'upstream/toolkit/actors'];
+const L10N_ROOTS = ['upstream/browser/locales/en-US', 'upstream/toolkit/locales/en-US'];
+// Upstream actor parents whose chrome-window elements this shell hosts, each with its reason (35-06).
+// Every id such a parent looks up joins the wired set A, so a missing element is MISSING FURNITURE.
+const ADOPTED_ACTORS = new Map([
+  ['ContextMenuParent.sys.mjs', 'PROMPT-04 (D-02): the stub page menu the actor opens'],
+  ['FormValidationParent.sys.mjs', 'PROMPT-06 (D-14): the stock form-validation bubble, reached once 31.1 makes the overlay the selected browser'],
+]);
 const UPSTREAM_KEYS = ['popupset', 'fullscreen'];
 const SECTION_HEADER = '// Phase 35: shell furniture.';
 const BLOCK_BEGIN = '<!-- shell furniture: begin -->';
@@ -97,7 +118,24 @@ function readInputs() {
       inputs[key] = null;
     }
   }
+  // { "<rel path>": text } for every *Parent.sys.mjs under ACTOR_DIRS (recursive).
+  inputs.actorParents = {};
+  for (const dir of ACTOR_DIRS) {
+    let entries = [];
+    try {
+      entries = readdirSync(join(REPO_ROOT, dir), { recursive: true });
+    } catch {}
+    for (const entry of entries.filter(e => e.endsWith('Parent.sys.mjs'))) inputs.actorParents[`${dir}/${entry}`] = readRepo(`${dir}/${entry}`);
+  }
   return inputs;
+}
+
+function readRepo(rel) {
+  try {
+    return readFileSync(join(REPO_ROOT, rel), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 // The top-level keys of the object literal opened on the first line matching `declRe` and closed by `};` at its indent.
@@ -243,15 +281,24 @@ function check(inputs) {
   const sectionCode = codeLines(section).join('\n');
   const setA = new Set([...sectionCode.matchAll(/getElementById\(\s*["']([^"']+)["']\s*\)/g)].map(m => m[1]));
   const openAt = inputs.api.search(/^ {2}webTabOpen\(/m);
+  let popup = null;
   if (openAt !== -1) {
     const body = inputs.api.slice(openAt, inputs.api.indexOf('\n  },', openAt));
-    const popup = /autocompletepopup:\s*["']([^"']+)["']/.exec(body);
-    if (popup) setA.add(popup[1]);
+    popup = /autocompletepopup:\s*["']([^"']+)["']/.exec(body)?.[1] ?? null;
+    if (popup) setA.add(popup);
+  }
+  const actorFiles = Object.keys(inputs.actorParents);
+  if (!actorFiles.length) return { broken: [`no *Parent.sys.mjs under ${ACTOR_DIRS.join(' or ')}: rule 1's actor wiring would prove nothing`], failures };
+  for (const name of ADOPTED_ACTORS.keys()) {
+    const rel = actorFiles.find(f => f.endsWith(`/${name}`));
+    const ids = rel ? [...codeLines(inputs.actorParents[rel] ?? '').join('\n').matchAll(/getElementById\(\s*["']([^"']+)["']\s*\)/g)].map(m => m[1]) : [];
+    if (!ids.length) return { broken: [`adopted actor ${name} is not under ${ACTOR_DIRS.join(' or ')} or looks up no element id: rule 1 would prove nothing for it`], failures };
+    for (const id of ids) setA.add(id);
   }
   // Both empty is a parse that found nothing; B empty against a wired A is missing furniture, reported below.
   if (setB.size === 0 && setA.size === 0) return { broken: [`the furniture block of ${FILES.xhtml} and the Phase 35 section yield no id: the comparison would prove nothing`], failures };
   for (const id of [...setB].filter(id => !setA.has(id)).sort()) failures.push(`DEAD FURNITURE: #${id} is in the furniture block but nothing in the Phase 35 section wires it`);
-  for (const id of [...setA].filter(id => !setB.has(id)).sort()) failures.push(`MISSING FURNITURE: #${id} is wired by the Phase 35 section but the furniture block has no such element`);
+  for (const id of [...setA].filter(id => !setB.has(id)).sort()) failures.push(`MISSING FURNITURE: #${id} is wired (Phase 35 section, overlay attribute or an adopted actor parent) but the furniture block has no such element`);
 
   // Rule 2: upstream parity.
   const upstreamTokens = UPSTREAM_KEYS.map(key => ({ rel: FILES[key], tokens: tokenize(preprocess(inputs[key], FILES[key], broken)) }));
@@ -358,7 +405,30 @@ function check(inputs) {
   for (const key of upstreamSubject.filter(k => !shellSubject.includes(k))) failures.push(`SUBJECT: key ${key} of upstream's on-build-contextmenu subject (${FILES.nsContextMenu}) is missing from the section's subject`);
   for (const key of shellSubject.filter(k => !upstreamSubject.includes(k))) failures.push(`SUBJECT: key ${key} of the section's subject is not in upstream's on-build-contextmenu subject`);
 
-  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}}, each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys` };
+  // Rule 9: the overlays' autocompletepopup is the furniture's autocomplete panel.
+  const acPanels = blockTokens.filter(t => t.type === 'start' && t.name === 'panel' && t.attrs.get('type') === 'autocomplete-richlistbox').map(t => t.attrs.get('id'));
+  if (acPanels.length !== 1) failures.push(`AUTOCOMPLETE: the furniture block must hold exactly one <panel type="autocomplete-richlistbox">; found ${acPanels.length}`);
+  else if (popup !== acPanels[0]) failures.push(`AUTOCOMPLETE: webTabOpen's autocompletepopup is ${popup ? `"${popup}"` : 'unset'}, the furniture's autocomplete panel is #${acPanels[0]}`);
+
+  // Rule 10: localization links name upstream en-US files that carry every id the shell needs.
+  const head = /<head>([\s\S]*?)<\/head>/.exec(inputs.xhtml.replace(/<!--[\s\S]*?-->/g, ''));
+  if (!head) return { broken: [`no <head> in ${FILES.xhtml}`], failures };
+  const hrefs = [...head[1].matchAll(/<link\b[^>]*\brel="localization"[^>]*>/g)].map(m => /\bhref="([^"]*)"/.exec(m[0])?.[1] ?? '');
+  const linked = [];
+  for (const href of hrefs) {
+    const text = L10N_ROOTS.map(root => readRepo(`${root}/${href}`)).find(t => t !== null);
+    if (text === undefined) failures.push(`LOCALIZATION: <link rel="localization" href="${href}"> names no file under ${L10N_ROOTS.join(' or ')}`);
+    else linked.push(text);
+  }
+  const clipboardIds = [...inputs.clipboardMenu.matchAll(/\.setAttributes\([^,]+,\s*["']([^"']+)["']/g)].map(m => [m[1], 'ClipboardContextMenu.sys.mjs']);
+  if (!clipboardIds.length) return { broken: [`no setAttributes(..., "<id>") call in ${FILES.clipboardMenu}: rule 10 would prove nothing for the paste popup`], failures };
+  const blockIds = blockTokens.filter(t => t.type === 'start' && t.attrs.has('data-l10n-id')).map(t => [t.attrs.get('data-l10n-id'), 'the furniture block']);
+  const l10nIds = [...blockIds, ...clipboardIds];
+  for (const [id, from] of l10nIds) {
+    if (!linked.some(text => new RegExp(`^${id} =`, 'm').test(text))) failures.push(`LOCALIZATION: ${id} (set by ${from}) is a message in no linked localization file of ${FILES.xhtml}`);
+  }
+
+  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}} (section, overlay attribute and ${ADOPTED_ACTORS.size} adopted actor parents of ${actorFiles.length}), each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys; overlays name the autocomplete panel #${acPanels[0]}; ${hrefs.length} localization link(s) carry the ${l10nIds.length} id(s) the shell needs` };
 }
 
 function report(result) {
@@ -393,6 +463,10 @@ function selfTest() {
     { name: '(n) a dynamic row of an unknown kind', key: 'api', mutate: t => t.replace('{ dynamic: "spell-suggestion",', '{ dynamic: "zzz-planted",'), expect: 'ROWS: dynamic row kind "zzz-planted" is not in DYNAMIC_KINDS' },
     { name: '(o) a key dropped from the on-build-contextmenu subject', key: 'api', mutate: t => t.replace(/^ {4}frameId: context\.frameID,\n/m, ''), expect: 'SUBJECT: key frameId of upstream\'s on-build-contextmenu subject' },
     { name: '(p) an invented key in the on-build-contextmenu subject', key: 'api', mutate: t => t.replace(/^( {4}frameId: context\.frameID,\n)/m, '$1    zzzPlanted: true,\n'), expect: 'SUBJECT: key zzzPlanted of the section\'s subject is not in upstream\'s' },
+    { name: '(q) the autocomplete panel as a <popup> (W6)', key: 'xhtml', mutate: t => t.replace('<xul:panel is="autocomplete-richlistbox-popup"', '<xul:popup is="autocomplete-richlistbox-popup"'), expect: 'PARITY: #PopupAutoComplete: element is <popup>, upstream\'s is <panel>' },
+    { name: '(r) the overlay attribute naming another id', key: 'api', mutate: t => t.replace('autocompletepopup: "PopupAutoComplete",', 'autocompletepopup: "contentAreaContextMenu",'), expect: 'AUTOCOMPLETE: webTabOpen\'s autocompletepopup is "contentAreaContextMenu", the furniture\'s autocomplete panel is #PopupAutoComplete' },
+    { name: '(s) the textActions.ftl localization link removed', key: 'xhtml', mutate: t => t.replace(/^\s*<link rel="localization" href="toolkit\/global\/textActions\.ftl"\/>\n/m, ''), expect: 'LOCALIZATION: text-action-paste (set by ClipboardContextMenu.sys.mjs)' },
+    { name: '(t) the validation template removed', key: 'xhtml', mutate: t => t.replace(/^\s*<template id="invalidFormTemplate">[\s\S]*?<\/template>\n/m, ''), expect: 'MISSING FURNITURE: #invalidFormTemplate' },
   ];
   let failed = false;
   for (const plant of plants) {
@@ -415,7 +489,7 @@ function selfTest() {
     console.error(`${NAME} --self-test: FAIL`);
     process.exit(1);
   }
-  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (p) each landed and went red naming their drift`);
+  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (t) each landed and went red naming their drift`);
 }
 
 if (process.argv.includes('--self-test')) {
