@@ -60,7 +60,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildUpdateXml, parseUpdateXml } from './verify-mar-update-hop.mjs';
+import { buildUpdateXml, isCleanHttpsUrl, parseUpdateXml } from './verify-mar-update-hop.mjs';
 import { UPDATE_CHANNEL, marOrigin, resolveConfig, updateChannel } from './generate.mjs';
 import { DOCS_REL, targetTokenOf } from './lib/channel-identity.mjs';
 
@@ -242,14 +242,8 @@ function runChecks(root, overrides = {}) {
     const { config } = resolved;
     const details = overrides.detailsURL ?? config.urls?.release_notes;
     const detailsSource = overrides.detailsURL !== undefined ? '--details-url' : `${MANIFEST_REL} [urls] release_notes`;
-    let detailsHttps = false;
-    try {
-        detailsHttps = new URL(details).protocol === 'https:';
-    } catch {
-        detailsHttps = false;
-    }
-    if (!detailsHttps) {
-        fail(`${detailsSource} is ${JSON.stringify(details)}, which is not an https: URL, so the descriptor's detailsURL is refused. Next step: set it to an https: Releases page`);
+    if (!isCleanHttpsUrl(details)) {
+        fail(`${detailsSource} is ${JSON.stringify(details)}, which is not a clean https: URL (no whitespace or control character), so the descriptor's detailsURL is refused. Next step: set it to an https: Releases page`);
     }
     const origin = marOrigin(config);
     if (origin === null) {
@@ -486,6 +480,7 @@ function selfTest() {
             ['channel flag given the MAR channel id', { texts: green, channel: marId }, CONFIG_STATUS_REL, marId],
             ['docs/RELEASING.md without the asset table (no target token)', { texts: { ...green, [DOCS_REL]: '' } }, DOCS_REL, 'Release asset names'],
             ['release.txt tag disagreeing with the built Version', { texts: { ...green, [RELEASE_TXT_REL]: 'v153.6.0-1\n' } }, RELEASE_TXT_REL, '153.6.0'],
+            ['--details-url with an embedded tab', { texts: green, detailsURL: 'https://example.invalid/a\tb' }, '--details-url', 'https://example.invalid/a'],
             ['--details-url not https', { texts: green, detailsURL: 'http://example.invalid/releases' }, '--details-url', 'http://example.invalid/releases'],
         ];
         for (const [name, overrides, file, value, plantRoot = root] of plants) {
