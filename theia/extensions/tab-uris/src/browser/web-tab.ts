@@ -605,6 +605,7 @@ export class WebTabChannel {
         // subscribes (ChromeStoreClient.extensionActionsSubscribe); the buttons and puzzle menu read onDidChangeExtensionActions.
         this.onPush('extensionAction', detail => {
             this.extensionActions = extensionActionRowsOf(detail);
+            this.extensionActionsRefocus = detail.refocus === true;
             this.extensionActionsEmitter.fire(this.extensionActions);
         });
     }
@@ -628,6 +629,8 @@ export class WebTabChannel {
 
     /** Phase 38 plan 01 (EXT-06): the last extension action rows chrome pushed. */
     extensionActions: ExtensionActionRow[] = [];
+    /** 38-REVIEW WR-02: the last extensionAction push closed a popup the user ended (Esc, click outside), so the pill takes focus; not a close because focus moved into a page. */
+    extensionActionsRefocus = false;
     private readonly extensionActionsEmitter = new Emitter<ExtensionActionRow[]>();
     readonly onDidChangeExtensionActions: TheiaEvent<ExtensionActionRow[]> = this.extensionActionsEmitter.event;
 

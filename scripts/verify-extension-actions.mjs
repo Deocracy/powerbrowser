@@ -48,6 +48,10 @@
  *                    extension content in Theia DOM: no <iframe, no
  *                    dangerouslySetInnerHTML (an icon is an <img src> only) and
  *                    no moz-extension: string. The popup is the native panel.
+ *                    38-REVIEW WR-02: focus returns to the pill only for a close
+ *                    the user made in the popup or on the button; the page-focus
+ *                    and TabSelect closes clear `refocus`, so chrome does not
+ *                    refocus the Theia frame and the widget skips the pill.
  *   9. page action -- (38-03, EXT-08 SC3, B2) the pill icon shows what chrome
  *                    pushed: the extension section reads isShownForTab on the
  *                    host's selected tab, the row validator requires
@@ -382,6 +386,16 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             }
         });
     }
+    // 8b. WR-02: a close caused by page focus or a tab switch never pulls focus back to Theia or the pill.
+    if (bridgeLanded) {
+        const open = span(apiLines, /^function extensionOpenPopup\(/);
+        const body = open ? apiLines.slice(open.start, open.end + 1).join('\n') : '';
+        if (!open) failures.push(`popup-focus: ${API} has no extensionOpenPopup (broken instrument)`);
+        else if (!/const close = \(\) => \{\s*refocus = false;\s*popup\.closePopup\(\);/.test(body) || !/if \(refocus\) \{\s*bridge\.theiaBrowser\.focus\(\);/.test(body)) {
+            failures.push(`popup-focus: extensionOpenPopup refocuses the Theia frame on a close caused by page focus or a tab switch (38-REVIEW WR-02)`);
+        }
+        if (!/popupClosed && this\.webTabs\.extensionActionsRefocus/.test(src[EXTENSIONS_WIDGET] ?? '')) failures.push(`popup-focus: ${EXTENSIONS_WIDGET} focuses the pill on every popup close, not only the ones chrome marked refocus (38-REVIEW WR-02)`);
+    }
     // 9. page action
     if (bridgeLanded) {
         const section = stripComments(src[API].slice(Math.max(0, src[API].indexOf(SECTION_MARK))));
@@ -563,6 +577,8 @@ function selfTest() {
         { name: 'activate ahead of ack', run: () => check({ ...clean, [API]: clean[API].replace('      pending.activateOnAck = true;\n', '      pending.activateOnAck = true;\n      selectNode(host, tab);\n') }), expect: 'tabsBridgeActivate moves the host selection ahead of the frontend' },
         { name: 'deferred activation never shown', run: () => check({ ...clean, [API]: clean[API].replace('    entry.activateOnAttach = false;\n    sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });\n', '    entry.activateOnAttach = false;\n') }), expect: "already-open branch does not show a deferred activation" },
         { name: 'signal unheard', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('new window.Event("TabHostActionUpdate")', 'new window.Event("TabHostPlanted")') }), expect: 'dispatches TabHostPlanted, which EXTENSION_TAB_EVENTS does not listen for' },
+        { name: 'page-focus refocuses', run: () => check({ ...clean, [API]: clean[API].replace('    refocus = false;\n    popup.closePopup();', '    popup.closePopup();') }), expect: 'extensionOpenPopup refocuses the Theia frame on a close caused by page focus' },
+        { name: 'pill always focused', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: clean[EXTENSIONS_WIDGET].replace('popupClosed && this.webTabs.extensionActionsRefocus', 'popupClosed') }), expect: 'focuses the pill on every popup close' },
         { name: 'popup-dom', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <iframe src={popupUrl} />;\n` }), expect: `${EXTENSIONS_WIDGET}:` },
         { name: 'inlined svg icon', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <span dangerouslySetInnerHTML={{ __html: row.icon }} />;\n` }), expect: '(dangerouslySetInnerHTML)' },
         { name: 'anchor reporter gone', run: () => check(Object.fromEntries(Object.entries(clean).filter(([f]) => f !== EXTENSIONS_ANCHOR))), expect: `${EXTENSIONS_ANCHOR} is missing` },

@@ -191,13 +191,14 @@ export class ExtensionActionsWidget {
         this.host = host;
         this.rows = this.webTabs.extensionActions;
         this.webTabs.onDidChangeExtensionActions(rows => {
-            // A popup closed (Esc, a click outside, page focus, a tab switch, a second click): chrome has focused this
-            // frame, and focus goes back to the pill (38-UI-SPEC focus contract).
+            // A popup closed by Esc, a click outside or a second click: chrome has focused this frame, and focus goes back
+            // to the pill (38-UI-SPEC focus contract). One closed because focus moved into a page, or the tab changed,
+            // leaves focus where it went (38-REVIEW WR-02).
             const popupClosed = this.rows.some(row => row.popupOpen) && !rows.some(row => row.popupOpen);
             this.rows = rows;
             this.update();
             this.syncSidebar();
-            if (popupClosed) {
+            if (popupClosed && this.webTabs.extensionActionsRefocus) {
                 focusAddressPill();
             }
         });

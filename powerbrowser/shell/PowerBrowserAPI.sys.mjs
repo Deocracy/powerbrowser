@@ -9838,7 +9838,9 @@ async function pushExtensionActions(win) {
     return;
   }
   bridge.last = text;
-  sendWebTabPush(bridge.theiaBrowser, { kind: "extensionAction", actions });
+  const refocus = bridge.refocus === true;
+  bridge.refocus = false;
+  sendWebTabPush(bridge.theiaBrowser, { kind: "extensionAction", actions, refocus });
 }
 
 // The subscribing frame becomes the push target and gets the whole set at once. The listeners are added once per
@@ -9850,7 +9852,7 @@ function extensionActionsSubscribe(win, theiaBrowser) {
   }
   let bridge = extensionBridges.get(win);
   if (!bridge) {
-    bridge = { theiaBrowser, last: null, seq: 0 };
+    bridge = { theiaBrowser, last: null, seq: 0, refocus: false };
     extensionBridges.set(win, bridge);
     const update = () => {
       pushExtensionActions(win);
@@ -9940,8 +9942,10 @@ function extensionPopupRect(win, theiaBrowser, rect) {
 }
 
 // EXT-07 (D-02): the popup in a native panel under the button. It closes on Esc and a click outside (the panel's own
-// rollup), focus moving into a page, a tab switch, or a second click (extensionClick). On close, focus goes back to the
-// Theia frame and the push shows no popup open, which is the widget's cue to focus the pill.
+// rollup), focus moving into a page, a tab switch, or a second click (extensionClick). On a close the user caused in
+// the popup or the button (Esc, a click outside, a second click), focus goes back to the Theia frame and the push says
+// refocus, the widget's cue to focus the pill. 38-REVIEW WR-02: a close because focus moved into a page, or the tab
+// changed, leaves focus where the user or the page put it.
 function extensionOpenPopup(win, named, popupUrl, anchorRect) {
   if (!named.extension.canAccessWindow(win)) {
     throw new Error("extension not allowed in this window"); // unreachable past extensionClick's check; logged, never shown
@@ -9950,7 +9954,11 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
   const host = tabHosts.get(win);
   const popup = shellPanelPopup(named.extension, win.document, popupUrl, named.browserStyle);
   const at = extensionPopupRect(win, bridge.theiaBrowser, anchorRect);
-  const close = () => popup.closePopup();
+  let refocus = true;
+  const close = () => {
+    refocus = false;
+    popup.closePopup();
+  };
   const pageFocus = event => {
     if (tabIdOfBrowser(event.target) !== null) {
       close();
@@ -9964,7 +9972,10 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
       extensionPopups.delete(win);
     }
     if (!win.closed) {
-      bridge.theiaBrowser.focus();
+      if (refocus) {
+        bridge.theiaBrowser.focus();
+        bridge.refocus = true; // carried by the next push actually sent, so a newer push cannot drop it
+      }
       pushExtensionActions(win);
     }
   };

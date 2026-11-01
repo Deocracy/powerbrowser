@@ -184,15 +184,17 @@ async function scenarioPopupAction({ app, plant }) {
       Object.assign(d.style, { position: 'fixed', top: b.bottom + 'px', left: b.left + 'px', width: '320px', height: '400px' });
       document.body.appendChild(d); return true; })()`);
   }
-  // Each close way: [name, how]. A popup is opened by a real click on the popup fixture's button first.
+  // Each close way: [name, how, pill]. A popup is opened by a real click on the popup fixture's button first. Focus returns to
+  // the pill only for a close the user made in the popup or on the button (38-REVIEW WR-02); a close because focus moved
+  // into the page leaves it in the page (pill false), and a tab switch leaves it wherever the switch put it (null).
   const closeWays = [
-    ['Esc', () => live.pressKey(app, { key: 'Escape', code: 'Escape', keyCode: 27 })],
-    ['focus into page /a', () => live.focusOverlay(app, A)],
-    ['tab switch to /b', () => live.makeCurrent(app, B)],
-    ['second click', () => clickInFrame(app, actionButton('popup'))],
+    ['Esc', () => live.pressKey(app, { key: 'Escape', code: 'Escape', keyCode: 27 }), true],
+    ['focus into page /a', () => live.focusOverlay(app, A), false],
+    ['tab switch to /b', () => live.makeCurrent(app, B), null],
+    ['second click', () => clickInFrame(app, actionButton('popup')), true],
   ];
   const closed = [];
-  for (const [way, how] of closeWays) {
+  for (const [way, how, pill] of closeWays) {
     await clickInFrame(app, actionButton('popup'));
     const shown = await pollUntil(() => popupState(app), p => p.panel === 'open' && p.pressed, 10000);
     if (!shown) {
@@ -206,9 +208,16 @@ async function scenarioPopupAction({ app, plant }) {
       return verdict(false, null, `the native panel shows ${JSON.stringify(shown.url)} with Theia DOM popup content ${shown.inTheiaDom}, not the fixture's popup page alone`);
     }
     await how();
-    const after = await pollUntil(() => popupState(app), p => p.panel !== 'open' && !p.pressed && p.pillFocused, 10000);
+    const after = await pollUntil(() => popupState(app), p => p.panel !== 'open' && !p.pressed && (pill === null || p.pillFocused === pill), 10000);
     if (!after) {
-      return verdict(false, null, `the ${way} close left ${JSON.stringify(await popupState(app))}; the panel must close with focus back in the pill`);
+      return verdict(false, null, `the ${way} close left ${JSON.stringify(await popupState(app))}; the panel must close ${pill ? 'with focus back in the pill' : pill === false ? 'without pulling focus back to the pill' : 'unpressed'}`);
+    }
+    if (pill === false) {
+      // Give a late refocus push time to land, then require the pill still unfocused.
+      await new Promise(resolve => setTimeout(resolve, 500));
+      if ((await popupState(app)).pillFocused) {
+        return verdict(false, null, `the ${way} close pulled focus back to the pill after the page took it`);
+      }
     }
     closed.push(way);
     if (way === 'tab switch to /b') {
@@ -216,7 +225,7 @@ async function scenarioPopupAction({ app, plant }) {
       await waitForSelected(app, A, '/a');
     }
   }
-  return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action button's click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup button opened its page in the native panel and it closed by ${closed.join(', ')}, focus back in the pill each time`, null);
+  return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action button's click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup button opened its page in the native panel and it closed by ${closed.join(', ')}, focus back in the pill only for Esc and the second click`, null);
 }
 
 // 38-02 (EXT-06): the buttons and puzzle rows equal the set the push carries, and a pushed badge reaches the button.

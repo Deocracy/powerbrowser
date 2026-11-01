@@ -95,7 +95,9 @@ inherited 12px `md-gap` step.
   rect Theia reports (`{left, top, width, height}` in CSS px, shell window space);
   default 320×400 clamped to the window; extension content decides inner scroll.
   The panel closes on Esc, focus-out to the page, tab switch, or a second click on
-  the action button. Focus returns to the pill on close.
+  the action button. Focus returns to the pill when the user closes it (Esc, a
+  click outside, a second click); when focus moved into a page or the tab changed,
+  focus stays where it went.
 - **Sidebar view** (B5 ruling): the extension's sidebar page renders as a Theia
   view in the left or right side panel (same `SidePanelHandler` the top-tabs bar
   rebinds — `chrome-bar-frontend-module.ts:66`), titled with the extension name,
