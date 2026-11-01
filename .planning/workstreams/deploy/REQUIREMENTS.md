@@ -238,7 +238,7 @@ the project's own planning record. This section must survive when this file repl
 - [ ] **UPD-31**: The Windows background update task path is verified live in the matrix, or deferred with the reason recorded. (H)
 - [ ] **LEG-01**: `verify-trademark-surface.mjs` extends to the NSIS surface (`defines.nsi.in`, the uninstaller), application.ini Name and Vendor, Info.plist and `MOZ_LAUNCHER_SUBKEY`; its self-test plants a Mozilla mark in each. A Windows no-residue registry diff runs in the matrix. (H)
 - [ ] **SEC-03**: The first Windows release ships unsigned with the maintenance service disabled, and /download states: "Windows may show a 'Windows protected your PC' warning when you open the PowerBrowser installer, because this release is not yet code-signed. Check the download against SHA256SUMS, then choose More info and Run anyway." (H)
-- [ ] **SEC-12**: Windows Authenticode signing through Azure Artifact Signing Basic with jsign on Linux signs the inner PE files, then the installer, then the MAR is produced. /download updates its signing status. (H)
+- [ ] **SEC-12**: Windows Authenticode signing through Azure Artifact Signing Basic with jsign on Linux signs the inner PE files, then the installer, then the MAR is produced. /download updates its signing status. (H) **Out of scope for v1.6 (owner ruling 2026-11-01: no official Microsoft or Apple publishing; Windows and macOS ship unsigned or ad-hoc signed; the tracked signing code stays and fails closed).**
 - [ ] **DIST-10**: `release.yml` gains a per-OS sign job and per-target descriptors for the Windows BUILD_TARGET. (H)
 
 ### macOS
@@ -247,8 +247,8 @@ the project's own planning record. This section must survive when this file repl
 - [ ] **PKG-15**: The darwin Theia sidecar is built per architecture on hosted macOS runners, and its natives, `rg` and `node` are merged with `lipo`; `package-target-natives` passes on the DMG. (I)
 - [ ] **PKG-16**: A Mac matrix row runs on a hosted macOS runner against the draft DMG, and one real Mac session records the Gatekeeper copy. (I)
 - [ ] **PKG-24**: The quick row `mac-entitlements` fails on any `43AQ936H96`, `org.mozilla` or restricted entitlement key in the signing inputs, which derive from `developer/browser.xml`; its self-test plants each. (I)
-- [ ] **SEC-04**: The bundle is signed inside-out with a Developer ID (natives, `node`, `rg`, then frameworks, then the bundle) and notarized through an App Store Connect API key held as a `release` secret, with the Team ID supplied by a hook-only patch. (I)
-- [ ] **SEC-13**: The Apple SDK licence position for cross builds, rcodesign's maintenance status and the Developer ID CA expiry date are checked and recorded before Phase I builds. (I)
+- [ ] **SEC-04**: The bundle is signed inside-out with a Developer ID (natives, `node`, `rg`, then frameworks, then the bundle) and notarized through an App Store Connect API key held as a `release` secret, with the Team ID supplied by a hook-only patch. (I) **Out of scope for v1.6 (owner ruling 2026-11-01: no official Microsoft or Apple publishing; Windows and macOS ship unsigned or ad-hoc signed; the tracked signing code stays and fails closed).**
+- [ ] **SEC-13**: The Apple SDK licence position for cross builds, rcodesign's maintenance status and the Developer ID CA expiry date are checked and recorded before Phase I builds. (I) **Out of scope for v1.6 (owner ruling 2026-11-01: no official Microsoft or Apple publishing; Windows and macOS ship unsigned or ad-hoc signed; the tracked signing code stays and fails closed).**
 
 ### Package channels
 

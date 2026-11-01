@@ -81,11 +81,11 @@ build-linux); the `win-sign-chain` row now reds any Linux-publish-path job that 
 ## Blocked on the owner
 
 - **44-01:** offline secondary MAR key ceremony (SEC-05); then fill the six lines 44-04-SUMMARY.md names.
-- **55-03 Task 2:** Apple Team ID (after D-U-N-S and Developer Program enrolment); then the hook-only patch.
+- **55-03 Task 2:** out of scope (owner ruling 2026-11-01): no Apple Team ID, Developer ID or notarization; macOS ships ad-hoc signed.
 - **49-02 Task 3, 49-05 Task 3:** legion runner registration; R2 bucket, custom domain, `R2_MAR_BUCKET`,
   `CLOUDFLARE_ACCOUNT_ID`, `R2_MAR_WRITE_TOKEN` in the `release` environment.
 - **Descriptor environment:** `BOT_APP_CLIENT_ID` / `BOT_APP_PRIVATE_KEY`; bot App Actions-read grant.
-- **54-04 Task 3:** Azure Trusted Signing, legion libvirt VM, the Windows asset-table row.
+- **54-04 Task 3:** legion libvirt VM and the Windows asset-table row. Azure Trusted Signing is out of scope (owner ruling 2026-11-01: no official Microsoft or Apple publishing).
 - **57-01 Task 2, 57-04:** tier-3 reporter-enabled build and the TEL-13 flip, after Windows ships.
 - **Checkpoint tasks still owner-only:** 41-04 T1/T2/T4, 42-04 T2, 43-05 T2, 47-04, 48-05 T2, 49-05 T3,
   50-03 T1/T3, 50-04, 52-05, 53-04 T2, 54-04 T3, 55-04 T2, 56-05 T2, 57-04, 58-03 T2/T3.
