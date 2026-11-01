@@ -64,6 +64,10 @@ strict rule. So the descriptor job may run before or after its own Release is pu
 with the same build is green; differing build_id or build_target is red; equal to an older Release that is not its own
 is red. **Human check:** this encodes "before or after publish"; if Phase 49 must instead run only while the Release is
 a draft, the exemption should become a FAIL.
+**Settled 2026-10-31:** the exemption stays. `release.yml` publishes the Release in `sign-publish`
+(`gh release edit --draft=false`), and the `descriptor` job `needs: sign-publish`, so the own Release is always
+published when the descriptor runs and a strict rule could never pass. Settled by the autonomous run on 2026-10-31
+under the owner's instruction to decide items not needing owner input.
 
 ### IN-02: symlinked and hollow directories skipped
 `statSync` follows symlinks; a non-directory where a channel or target directory belongs, and a target directory with

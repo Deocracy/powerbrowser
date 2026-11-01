@@ -70,6 +70,9 @@ Haiku/Sonnet default for this run).
 2. **44-03 WR-03 ordering.** A descriptor whose own Release is already published is exempt from the
    strict-order rule. If descriptors must always be committed while the Release is a draft, the
    exemption should become a FAIL. See `phases/44-trust-path-b/44-03-REVIEW-FIX.md`.
+   **Closed 2026-10-31: the exemption stays.** Settled by the autonomous run on 2026-10-31 under the
+   owner's instruction to decide items not needing owner input: `release.yml` publishes the Release in
+   `sign-publish` before the `descriptor` job runs, so a strict rule could never pass.
 
 ## Known issues found on the way
 
