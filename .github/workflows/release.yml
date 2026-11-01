@@ -704,6 +704,13 @@ jobs:
           cd "$RUNNER_TEMP/descriptors"
           find . -type f -name update.xml | sed 's|^\./||' | sort > "$RUNNER_TEMP/descriptor-list.txt"
           [ -s "$RUNNER_TEMP/descriptor-list.txt" ] || { echo "::error::no descriptor was emitted; nothing is committed" >&2; exit 1; }
+          # GitHub answers 404 both for an absent file and for a repo the token cannot see. Prove the token
+          # sees the repo first, so a 404 on a descriptor path below can only mean the file is absent.
+          if ! SEEN="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$REPO" --jq .full_name 2> "$RUNNER_TEMP/repo.err")" || [ "${SEEN,,}" != "${REPO,,}" ]; then
+            STATUS="$(grep -o 'HTTP [0-9]\{3\}' "$RUNNER_TEMP/repo.err" | head -n 1 || true)"
+            echo "::error::the descriptor commit step cannot read $REPO with the minted token (${STATUS:-no HTTP status}); nothing is committed. Next step: install the bot App on $REPO with contents write" >&2
+            exit 1
+          fi
           while read -r REL; do
             SHA=""
             if gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$REPO/contents/$REL?ref=main" > "$RUNNER_TEMP/current.json" 2> "$RUNNER_TEMP/current.err"; then
@@ -718,7 +725,20 @@ jobs:
             fi
             PUT=(-X PUT -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$REPO/contents/$REL" -f "message=descriptor $REL for $TAG" -f "content=$(base64 -w0 "$REL")" -f branch=main)
             [ -z "$SHA" ] || PUT+=(-f "sha=$SHA")
-            echo "committed $REL to $REPO at $(gh api "${PUT[@]}" --jq .commit.sha)"
+            # The write runs as its own command: a failure inside $(...) in echo's arguments would not stop set -e.
+            if ! gh api "${PUT[@]}" > "$RUNNER_TEMP/put.json" 2> "$RUNNER_TEMP/put.err"; then
+              STATUS="$(grep -o 'HTTP [0-9]\{3\}' "$RUNNER_TEMP/put.err" | head -n 1 || true)"
+              echo "::error::the descriptor commit step could not write $REL to $REPO (${STATUS:-no HTTP status}: $(head -n 1 "$RUNNER_TEMP/put.err")); nothing more is committed. Next step: re-run the descriptor job; a 409 means the file moved since it was read" >&2
+              exit 1
+            fi
+            COMMIT="$(jq -r '.commit.sha // empty' "$RUNNER_TEMP/put.json")"
+            BLOB="$(jq -r '.content.sha // empty' "$RUNNER_TEMP/put.json")"
+            # The Contents API reports the stored blob; it must be the git blob of the bytes this job emitted.
+            if ! [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || [ "$BLOB" != "$(git hash-object "$REL")" ]; then
+              echo "::error::the descriptor commit step got no commit SHA, or a stored blob other than the emitted bytes, for $REL in $REPO; it is not proven committed. Next step: read $REL in $REPO, then re-run the descriptor job" >&2
+              exit 1
+            fi
+            echo "committed $REL to $REPO at $COMMIT"
           done < "$RUNNER_TEMP/descriptor-list.txt"
 
   # UPD-17. Runs last and only reads: contents read, no environment, no secret, no App token. The sweep
