@@ -403,7 +403,7 @@ Plans:
 
 Plans:
 - [x] 33-01-PLAN.md (wave 1) — Chrome-side foundation for every Phase 33 store surface: the bookmark write/remove/update kinds, the closed-tab read kind, the single clearHistory fan-out kind, the client methods,
-- [ ] 33-02-PLAN.md (wave 2) — Star button + editor popover (BMK-01, BMK-02): the in-pill star, its filled state, Ctrl+D on both focus paths, and the anchored editor portal with name/folder/Remove/Done.
+- [x] 33-02-PLAN.md (wave 2) — Star button + editor popover (BMK-01, BMK-02): the in-pill star, its filled state, Ctrl+D on both focus paths, and the anchored editor portal with name/folder/Remove/Done.
 - [ ] 33-03-PLAN.md (wave 3) — Bookmarks toolbar + reopen closed tab + History submenu (BMK-03, BMK-04, BMK-06): the collapsible toolbar row with live observer refresh, Ctrl+Shift+T history-carrying reopen, and 
 - [ ] 33-04-PLAN.md (wave 4) — Clear Recent History picker (BMK-05): the five-range picker panel, its confirm-only clearHistory call, and Ctrl+Shift+Del on both focus paths.
 - [ ] 33-05-PLAN.md (wave 5) — Full hamburger menu + Actions coverage (MENU-03, SMODE-07): the Firefox-ordered MENU-03 entries with four submenus, the shared-id discipline with Actions rows, and the Command-cent
