@@ -156,6 +156,9 @@ document.addEventListener(
       return browserElement;
     };
 
+    // Phase 35 (D-01): page tooltips, link status and the rest of the shell furniture, wired once.
+    PowerBrowserAPI.installShellFurniture(window);
+
     // SHELL-03 (05-02): the error layer, reached by TheiaService exactly
     // the same way powerbrowserSwapToUrl is -- through this window's exposed
     // globals, never by touching browserElement's own location (D-114).

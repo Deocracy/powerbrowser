@@ -511,6 +511,10 @@ function objectLiteralMembers(code, anchor) {
 
   const members = new Set();
   let depth = 0;
+  // True where a key may start: right after the opening brace or a depth-1 comma.
+  // Without it a call inside a value (`QueryInterface: ChromeUtils.generateQI([...])`)
+  // read as a method shorthand named `generateQI`.
+  let keyPos = true;
   for (let i = open; i < code.length; i++) {
     const c = code[i];
     if (c === '"' || c === "'" || c === '`') {
@@ -531,15 +535,21 @@ function objectLiteralMembers(code, anchor) {
       if (depth === 0) return members;
       continue;
     }
+    if (depth === 1 && c === ',') {
+      keyPos = true;
+      continue;
+    }
     if (depth === 1 && /[A-Za-z_$]/.test(c)) {
       let j = i;
       while (j < code.length && /[\w$]/.test(code[j])) j++;
       const word = code.slice(i, j);
       let k = j;
       while (k < code.length && /\s/.test(code[k])) k++;
-      // A key is an identifier followed by `:` (property) or `(` (method
-      // shorthand, getter, setter). Anything else at depth 1 is not a member name.
-      if (code[k] === ':' || code[k] === '(') members.add(word);
+      // A key is an identifier in key position followed by `:` (property) or
+      // `(` (method shorthand, getter, setter). `get`/`set`/`async` before a
+      // name keep the key position for that name.
+      if (keyPos && (code[k] === ':' || code[k] === '(')) members.add(word);
+      keyPos = keyPos && ['get', 'set', 'async'].includes(word) && /[A-Za-z_$]/.test(code[k] ?? '');
       i = j - 1;
     }
   }
@@ -1315,16 +1325,13 @@ function selfTest() {
       } else ok(`staged window.nsContextMenu with a surplus method -> red, naming 'nsContextMenu.zzzSurplusMenuMethod' DEAD SURFACE`);
     }
 
-    // (l) a staged IDL with one more method against a XULBrowserWindow implementing the three.
+    // (l) a staged IDL with one more method against the boundary file's own XULBrowserWindow (35-02 defines it with the three).
     {
       const idl = IDL_SHIMS.get('XULBrowserWindow');
       const idlCopy = join(stage, 'nsIXULBrowserWindow.idl');
       const idlText = readSource(idl.idl) ?? '';
       writeFileSync(idlCopy, idlText.replace(/(\n\s*void hideTooltip\(\);)/, '$1\n  void zzzPlantedIdlMethod(in AString x);'));
-      const path = boundaryWith(
-        'boundary-xulbw.mjs',
-        'window.XULBrowserWindow = {\n  QueryInterface: null,\n  setOverLink(link) {},\n  showTooltip(x, y, text, dir, browser) {},\n  hideTooltip() {},\n};'
-      );
+      const path = real.boundaryFile;
       const control = shimOf(runScan({ ...real, boundaryFile: path }), 'XULBrowserWindow');
       const r = runScan({ ...real, boundaryFile: path, idlShims: new Map([['XULBrowserWindow', { ...idl, idl: idlCopy }]]) });
       const shim = shimOf(r, 'XULBrowserWindow');
@@ -1344,12 +1351,15 @@ function selfTest() {
       } else ok(`two staged PointerlockFsWarning definitions -> broken instrument naming PointerlockFsWarning`);
     }
 
-    // (n) a XULBrowserWindow definition without QueryInterface.
+    // (n) the boundary file's XULBrowserWindow with its QueryInterface line removed.
     {
-      const path = boundaryWith('boundary-xulbw-noqi.mjs', 'window.XULBrowserWindow = {\n  setOverLink(link) {},\n  showTooltip(x, y, text, dir, browser) {},\n  hideTooltip() {},\n};');
+      const boundaryText = readSource(BOUNDARY_FILE) ?? '';
+      const withoutQi = boundaryText.replace(/\n\s*QueryInterface: ChromeUtils\.generateQI\(\["nsIXULBrowserWindow"\]\),/, '');
+      const path = join(stage, 'boundary-xulbw-noqi.mjs');
+      writeFileSync(path, withoutQi);
       const r = runScan({ ...real, boundaryFile: path });
       const shim = shimOf(r, 'XULBrowserWindow');
-      if (!shim?.defined) fail(`'no QueryInterface' plant did not land`);
+      if (!shim?.defined || withoutQi === boundaryText) fail(`'no QueryInterface' plant did not land`);
       else if (r.ok || !shim.missingData.includes('QueryInterface')) {
         fail(`a XULBrowserWindow without QueryInterface did not go red naming it; got: ${JSON.stringify({ reason: r.reason, missingData: shim.missingData })}`);
       } else ok(`staged XULBrowserWindow without QueryInterface -> red, naming MISSING DATA MEMBER 'XULBrowserWindow.QueryInterface'`);

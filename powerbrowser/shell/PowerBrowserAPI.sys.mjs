@@ -3968,6 +3968,11 @@ export const PowerBrowserAPI = Object.freeze({
   isInitialLaunch(cmdLine) {
     return cmdLine.state === Ci.nsICommandLine.STATE_INITIAL_LAUNCH;
   },
+
+  /** Phase 35 (D-01): wires the shell furniture once per shell window; the receivers live in the end-of-file section. */
+  installShellFurniture(window) {
+    installShellFurnitureReceivers(window);
+  },
 });
 
 /**
@@ -6776,4 +6781,118 @@ function webTabPushedSpec(spec) {
     }
   }
   return spec;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 35: shell furniture.
+//
+// The stock pieces a remote page reaches through the shell window itself, not
+// through the Theia frontend: page tooltips and link status first (PROMPT-08,
+// D-04); later plans add the page context menu, form autocomplete, fullscreen
+// and the pointer-lock warning. PowerBrowserAPI.installShellFurniture is the
+// one entry (D-01) and calls installShellFurnitureReceivers below, nothing
+// else. Every receiver wires an element of the furniture block in
+// powerbrowser.xhtml by its literal id (scripts/verify-shell-furniture.mjs
+// compares the two sets, and each element with upstream's).
+//
+// This section sits at the end of the file on purpose: nothing above the
+// last catalogued internals line moves when it grows. It has its own
+// lazy-getter block, so the top block does not move either.
+// ---------------------------------------------------------------------------
+
+const furnitureLazy = {};
+ChromeUtils.defineESModuleGetters(furnitureLazy, {
+  BrowserUIUtils: "resource:///modules/BrowserUIUtils.sys.mjs",
+});
+
+function installShellFurnitureReceivers(window) {
+  installTooltipsAndLinkStatus(window);
+}
+
+// A hovered link as browser.js:1985-2005 shows it: unescaped for display, the
+// bidi controls encoded so a page cannot reorder the text, trimURLs applied.
+function linkStatusText(url) {
+  const text = Services.textToSubURI.unEscapeURIForUI(url).replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, encodeURIComponent);
+  return Services.prefs.getBoolPref("browser.urlbar.trimURLs", true) ? furnitureLazy.BrowserUIUtils.trimURL(text) : text;
+}
+
+// PROMPT-08: remote content reaches tooltips and link status only through the
+// AppWindow's nsIXULBrowserWindow (BrowserParent.cpp:2520-2566). Gecko looks the
+// object up on every call (BrowserParent.cpp:512-536), so registering it after
+// the Theia frame exists is enough. Only overlays are served: the Theia frame
+// keeps its own HoverService hovers (the 27-08 invariant).
+function installTooltipsAndLinkStatus(window) {
+  const document = window.document;
+  const theiaBrowser = window.powerbrowserGetBrowser();
+  // The last mouseover target: setOverLink carries no browser, so the source is
+  // the hovered overlay, else the focused one (browser-init.js:649 reads pointer
+  // moves over remote content the same way).
+  let hovered;
+  let statusTabId = null;
+  let pending = null;
+  let frameQueued = false;
+
+  // T-35-08: one push per animation frame, latest wins. The log line of a
+  // failed push is sendWebTabPush's (kind and error only, never the URL).
+  const queue = (tabId, url) => {
+    pending = { tabId, url };
+    statusTabId = url ? tabId : null;
+    if (frameQueued) {
+      return;
+    }
+    frameQueued = true;
+    window.requestAnimationFrame(() => {
+      frameQueued = false;
+      const next = pending;
+      pending = null;
+      sendWebTabPush(theiaBrowser, { kind: "overLink", tabId: next.tabId, url: next.url });
+    });
+  };
+  const clearStatus = () => {
+    if (statusTabId !== null) {
+      queue(statusTabId, "");
+    }
+  };
+
+  document.addEventListener(
+    "mouseover",
+    event => {
+      hovered = event.target;
+      if (tabIdOfBrowser(hovered) === null) {
+        clearStatus();
+      }
+    },
+    true
+  );
+
+  window.XULBrowserWindow = {
+    QueryInterface: ChromeUtils.generateQI(["nsIXULBrowserWindow"]),
+    setOverLink(url) {
+      // Content sends the clear on leave, often once the pointer is already over the Theia frame.
+      if (!url) {
+        clearStatus();
+        return;
+      }
+      const tabId = tabIdOfBrowser(tabIdOfBrowser(hovered) !== null ? hovered : document.activeElement);
+      if (tabId !== null) {
+        queue(tabId, linkStatusText(url));
+      }
+    },
+    showTooltip(x, y, text, direction, browser) {
+      if (Cc["@mozilla.org/widget/dragservice;1"].getService(Ci.nsIDragService).getCurrentSession()) {
+        return;
+      }
+      if (!document.hasFocus() || tabIdOfBrowser(browser) === null) {
+        return;
+      }
+      const tooltip = document.getElementById("remoteBrowserTooltip");
+      tooltip.label = text;
+      tooltip.style.direction = direction;
+      tooltip.openPopupAtScreen(x / window.devicePixelRatio, y / window.devicePixelRatio, false, null);
+    },
+    hideTooltip() {
+      document.getElementById("remoteBrowserTooltip").hidePopup();
+    },
+  };
+  window.docShell.treeOwner.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIAppWindow).XULBrowserWindow = window.XULBrowserWindow;
 }

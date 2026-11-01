@@ -1327,3 +1327,18 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
 .pb-tab-audio.is-muted {
     color: var(--color-text-muted, #9a99a8);
 }
+
+/* Phase 35 (PROMPT-08): the hovered link as one 13px line beside the pill, inside the 40px bar (never over the page). */
+.pb-page-status {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 40%;
+    padding: 0 12px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    background: transparent;
+    color: var(--color-primary, #00a6f5);
+    font-size: 13px;
+    line-height: 1.4;
+}

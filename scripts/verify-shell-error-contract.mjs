@@ -320,6 +320,7 @@ function makeFakeApi(state, overrides = {}) {
     },
     // Reached by the chrome bootstrap rather than the supervisor.
     createPermanentKey: () => ({}),
+    installShellFurniture: () => {},
     getAppIdentity: () => ({ name: "Power Browser", vendor: "Power Browser", version: "0.0.0" }),
     notifyStartupFinished: () => {},
   };
