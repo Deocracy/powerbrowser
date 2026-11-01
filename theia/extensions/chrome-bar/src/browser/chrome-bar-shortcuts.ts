@@ -128,6 +128,12 @@ export function tooltipFor(button: NavButton): string {
     return row ? `${verb} (${isOSX ? row.macLabel : row.label})` : verb;
 }
 
+/** Phase 33 (MENU-03): a page row's key label as a menu row's shortcut hint (macOS: its macLabel); none for an unknown row. */
+export function pageKeyLabel(id: string): string[] {
+    const row = PAGE_SHORTCUTS.find(r => r.id === id);
+    return row ? [isOSX ? row.macLabel : row.label] : [];
+}
+
 /** True while a web page (an overlay) has keyboard focus. */
 export const PAGE_FOCUS_CONTEXT_KEY = 'powerbrowser.webPageFocused';
 

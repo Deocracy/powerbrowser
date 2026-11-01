@@ -134,6 +134,8 @@ const UPSTREAM_PERMS_REL = 'upstream/browser/modules/SitePermissions.sys.mjs';
 const UPSTREAM_IDL_REL = 'upstream/uriloader/base/nsIWebProgressListener.idl';
 const UPSTREAM_CERT_VALIDITY_REL = 'upstream/security/manager/ssl/nsIX509CertValidity.idl';
 const UI_SPEC_REL = '.planning/phases/31-site-identity-permissions-and-app-menu/31-UI-SPEC.md';
+/** Phase 33 plan 05 (MENU-03): the full hamburger's design contract -- its new-rows cell and its numbered order. */
+const UI_SPEC_33_REL = '.planning/phases/33-bookmarks-history-and-the-full-menu/33-UI-SPEC.md';
 const INTERNAL_APIS_REL = 'powerbrowser/INTERNAL-APIS.md';
 const CODICON_REL = 'theia/node_modules/@vscode/codicons/dist/codicon.css';
 const TOKEN_GATE_REL = 'theia/extensions/token-gate/src/node/token-gate-backend-contribution.ts';
@@ -361,6 +363,30 @@ function deriveStyleLiterals(srcs) {
 function deriveSpecHamburgerCell(uiSpecSrc) {
     const row = (uiSpecSrc ?? '').split('\n').find(line => line.startsWith('| Hamburger entries |'));
     return row ? row.split('|')[2] ?? null : null;
+}
+
+/** Phase 33 (MENU-03): the bold row names of 33-UI-SPEC's "Hamburger, new rows" cell, in order; null when the row is gone. */
+function deriveSpec33NewRows(uiSpecSrc) {
+    const row = (uiSpecSrc ?? '').split('\n').find(line => line.startsWith('| Hamburger, new rows'));
+    return row ? [...(row.split('|')[2] ?? '').matchAll(/\*\*([^*]+)\*\*/g)].map(x => x[1]) : null;
+}
+
+/**
+ * Phase 33 (MENU-03): 33-UI-SPEC's numbered "Full menu" order -- each item's bold name, or the separator token --
+ * from the "### Full menu (MENU-03)" heading to the Omissions bullet; null when the list is gone.
+ */
+function deriveSpec33Order(uiSpecSrc) {
+    const text = uiSpecSrc ?? '';
+    const start = text.indexOf('### Full menu (MENU-03)');
+    const end = text.indexOf('- **Omissions', start);
+    if (start < 0 || end < 0) {
+        return null;
+    }
+    const out = [];
+    for (const m of text.slice(start, end).matchAll(/^\s+\d+\. (separator|\*\*([^*]+)\*\*)/gm)) {
+        out.push(m[1] === 'separator' ? SEPARATOR : m[2]);
+    }
+    return out.length ? out : null;
 }
 
 /** A CHROME_BAR_COPY value by key: a plain literal, or a template whose one interpolation reads as {App}. */
@@ -663,17 +689,37 @@ function cases(m, srcs, mm) {
                 return { badge: `the Quit row label ${JSON.stringify(quitLabel)} lacks the UI-SPEC badge (${specBadge})` };
             }
             const nameOf = label => label.replace(/ \(Ctrl\+[A-Z]\)$/, '');
-            const at = rows.map(row => cell.indexOf(`\`${nameOf(labels.get(row.menuId))}\``));
-            const absent = rows.filter((_, i) => at[i] < 0).map(row => labels.get(row.menuId));
+            // Phase 33 plan 05 (MENU-03): a row is contracted by the Phase 31 sentence, by 33-UI-SPEC's new-rows cell,
+            // or both; each spec's rows keep that spec's order (MENU-03 moves no Phase 31 row). Separators between two
+            // rows 33-UI-SPEC's numbered order names come from that order; between two Phase 31-only rows, from the sentence.
+            const newRows = deriveSpec33NewRows(srcs[UI_SPEC_33_REL]);
+            const order33 = deriveSpec33Order(srcs[UI_SPEC_33_REL]);
+            if (!newRows || !order33) {
+                return `no "Hamburger, new rows" row or numbered "Full menu (MENU-03)" order in ${UI_SPEC_33_REL} -- broken instrument`;
+            }
+            const names = rows.map(row => nameOf(labels.get(row.menuId)));
+            const at = names.map(name => cell.indexOf(`\`${name}\``));
+            const at33 = names.map(name => newRows.indexOf(name));
+            const absent = names.filter((_, i) => at[i] < 0 && at33[i] < 0);
             if (absent.length) {
                 return { absentFromUiSpec: absent };
             }
-            const ordered = at.every((pos, i) => i === 0 || pos > at[i - 1]);
-            if (!ordered) {
-                return { order: rows.map(row => row.menuId), uiSpecPositions: at };
+            const increasing = positions => positions.filter(pos => pos >= 0).every((pos, i, kept) => i === 0 || pos > kept[i - 1]);
+            if (!increasing(at) || !increasing(at33)) {
+                return { order: rows.map(row => row.menuId), phase31Positions: at, phase33Positions: at33 };
             }
-            const separatorsAgree = rows.slice(1).every((row, i) => cell.slice(at[i], at[i + 1]).includes('separator') === (row.group !== rows[i].group));
-            return separatorsAgree ? null : { separators: 'a separator falls where the table groups differ from the UI-SPEC sentence, or misses where they do not' };
+            const in33 = names.map(name => order33.indexOf(name));
+            const separatorsAgree = rows.slice(1).every((row, i) => {
+                const split = row.group !== rows[i].group;
+                if (in33[i] >= 0 && in33[i + 1] >= 0) {
+                    return order33.slice(in33[i], in33[i + 1]).includes(SEPARATOR) === split;
+                }
+                if (in33[i] < 0 && in33[i + 1] < 0 && at[i] >= 0 && at[i + 1] >= 0) {
+                    return cell.slice(at[i], at[i + 1]).includes('separator') === split;
+                }
+                return true;
+            });
+            return separatorsAgree ? null : { separators: 'a separator falls where the table groups differ from the UI-SPEC order, or misses where they do not' };
         }],
         ['every rendered row has a label (derived from the widget switch and CHROME_BAR_COPY)', () => {
             const labels = deriveRowLabels(srcs[WIDGET_REL], srcs[COPY_REL]);
@@ -694,9 +740,22 @@ function cases(m, srcs, mm) {
             // Phase 33 plan 03 (BMK-06): History is wired once the widget builds its submenu from the closed-tab read.
             const history = /menuId === 'history' \? \{ menuPath: BOOKMARKS_HISTORY_MENU_PATH, children: this\.historyMenuChildren\(/.test(widget)
                 && widget.includes('this.store.listClosedTabs(');
+            // Phase 33 plan 05 (MENU-03, D-13): a command row is wired when the widget's APP_MENU_COMMANDS maps it to an id
+            // const that chrome-bar-commands.ts registers; a submenu row when the widget's appSubmenu builds its case.
+            const commandMap = /const APP_MENU_COMMANDS[^=]*= Object\.freeze\(\{([\s\S]*?)\}\);/.exec(widget);
+            const mapped = new Map(commandMap ? [...commandMap[1].matchAll(/'([a-z-]+)': (CHROME_BAR_[A-Z_]+_COMMAND_ID)/g)].map(x => [x[1], x[2]]) : []);
+            const registered = idConst => [...commands.matchAll(/export const (CHROME_BAR_[A-Z_]+): Command = \{\s*id: ([A-Z_]+),/g)]
+                .some(x => x[2] === idConst && commands.includes(`commands.registerCommand(${x[1]}, {`));
+            const appSubmenu = /protected appSubmenu\([\s\S]*?\n {4}\}\n/.exec(widget)?.[0] ?? '';
             const expected = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE).filter(row => {
                 if (row.menuId === 'new-tab') {
                     return newTab;
+                }
+                if (mapped.has(row.menuId) && registered(mapped.get(row.menuId))) {
+                    return true;
+                }
+                if (appSubmenu.includes(`case '${row.menuId}':`) && !row.stockPage) {
+                    return true;
                 }
                 if (row.menuId === 'quit') {
                     return quit;
@@ -1100,7 +1159,7 @@ const read = rel => {
         return '';
     }
 };
-const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UPSTREAM_CERT_VALIDITY_REL, UI_SPEC_REL, CODICON_REL, INTERNAL_APIS_REL, TOKEN_GATE_REL, APP_MENU_REL, WIDGET_REL, CMD_REL, STORE_CLIENT_REL];
+const SOURCES = [TABLE_REL, API_REL, WEB_TAB_REL, ADDRESS_BAR_REL, COPY_REL, CSS_REL, SITE_PANEL_REL, UPSTREAM_PERMS_REL, UPSTREAM_IDL_REL, UPSTREAM_CERT_VALIDITY_REL, UI_SPEC_REL, UI_SPEC_33_REL, CODICON_REL, INTERNAL_APIS_REL, TOKEN_GATE_REL, APP_MENU_REL, WIDGET_REL, CMD_REL, STORE_CLIENT_REL];
 /**
  * Phase 31 plan 05 (MENU-04, D-31-13, T-31-06): every source that could spell a quit, read from the tree
  * at check time: powerbrowser/shell and each theia/extensions/<name>/src (never lib/ or node_modules).
@@ -1471,10 +1530,31 @@ const PLANTS = [
         expect: 'the wired rows are the rows this tree acts on',
     },
     {
+        name: 'menu-03-out-of-order: Save Page As listed before Print',
+        rel: TABLE_REL,
+        from: "    { menuId: 'print', minPhase: 33, group: 6 },\n    { menuId: 'save-page', minPhase: 33, group: 6 },\n",
+        to: "    { menuId: 'save-page', minPhase: 33, group: 6 },\n    { menuId: 'print', minPhase: 33, group: 6 },\n",
+        expect: 'the app menu order and separators match the UI-SPEC hamburger entries',
+    },
+    {
+        name: 'menu-03-separator: Bookmarks joins the New Tab group',
+        rel: TABLE_REL,
+        from: "    { menuId: 'bookmarks', minPhase: 33, group: 5 },\n",
+        to: "    { menuId: 'bookmarks', minPhase: 33, group: 1 },\n",
+        expect: 'the app menu order and separators match the UI-SPEC hamburger entries',
+    },
+    {
+        name: 'command-row-unmapped: Print wired with no command behind it',
+        rel: WIDGET_REL,
+        from: "    'print': CHROME_BAR_PRINT_COMMAND_ID,\n",
+        to: '',
+        expect: 'the wired rows are the rows this tree acts on',
+    },
+    {
         name: 'quit unwired though its kind exists',
         rel: APP_MENU_REL,
-        from: "'help', 'quit']);",
-        to: "'help']);",
+        from: "'more-tools', 'help', 'quit',\n]);",
+        to: "'more-tools', 'help',\n]);",
         expect: 'the wired rows are the rows this tree acts on',
     },
     {
@@ -1508,8 +1588,8 @@ const PLANTS = [
     {
         name: 'a stock page dropped from the openStockPage switch',
         rel: API_REL,
-        from: '    case "processes":\n    case "support":\n      break;',
-        to: '    case "support":\n      break;',
+        from: '    case "processes":\n    case "support":\n    case "about":\n      break;',
+        to: '    case "support":\n    case "about":\n      break;',
         expect: 'STOCK_PAGES equal the openStockPage switch arms',
     },
     {

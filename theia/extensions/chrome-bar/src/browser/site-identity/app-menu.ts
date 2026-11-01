@@ -20,10 +20,15 @@ export const APP_MENU_ID = 'powerbrowser-app-menu';
 /**
  * The rows whose action this tree wires: the new-tab command, the stock pages and
  * Quit (plan 05, MENU-04: the `quitRequest` store kind), and History (Phase 33
- * plan 03, BMK-06: the widget's History submenu). The static gate derives this set
- * from chrome-bar-commands.ts, STOCK_PAGES, the client's quitRequest and the widget.
+ * plan 03, BMK-06: the widget's History submenu). Phase 33 plan 05 (MENU-03): the
+ * command rows (each runs the Browser command id its Actions row runs) and the
+ * Bookmarks, Zoom and More Tools submenus. The static gate derives this set from
+ * chrome-bar-commands.ts, STOCK_PAGES, the client's quitRequest and the widget.
  */
-export const WIRED_MENU_IDS: readonly string[] = Object.freeze(['new-tab', 'history', 'settings', 'passwords', 'addons', 'help', 'quit']);
+export const WIRED_MENU_IDS: readonly string[] = Object.freeze([
+    'new-tab', 'new-window', 'bookmarks', 'history', 'downloads', 'print', 'save-page', 'find-in-page', 'zoom', 'full-screen',
+    'settings', 'passwords', 'addons', 'more-tools', 'help', 'quit',
+]);
 
 /** A table row, structurally (MenuEntry in site-identity-table.ts). */
 export interface AppMenuRow {
@@ -53,6 +58,8 @@ export function applyMenuOrder(rows: readonly AppMenuRow[], wired: readonly stri
 export interface AppMenuView {
     label(menuId: string, enabled: boolean): string;
     run(row: AppMenuRow): void;
+    /** Phase 33 (MENU-03): a wired row that needs a web tab dims without one, keeping its place; absent: always enabled. */
+    isEnabled?(menuId: string): boolean;
     /** Phase 33 (BMK-06): an enabled row drawn as a submenu instead, with these children; undefined keeps it a row. */
     submenu?(menuId: string): AppMenuSubmenu | undefined;
 }
@@ -121,10 +128,10 @@ export function buildAppMenu(rows: readonly AppMenuRow[], wired: readonly string
             label,
             sortString,
             isVisible: () => true,
-            isEnabled: () => enabled,
+            isEnabled: () => enabled && (view.isEnabled?.(row.menuId) ?? true),
             isToggled: () => false,
             run: async () => {
-                if (enabled) {
+                if (enabled && (view.isEnabled?.(row.menuId) ?? true)) {
                     view.run(row);
                 }
             },

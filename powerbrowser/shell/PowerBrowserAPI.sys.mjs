@@ -4116,6 +4116,7 @@ const STORE_REQUEST_KINDS = new Set([
   "listClosedTabs",
   "reopenClosedTab",
   "clearHistory",
+  "fullScreen",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -4244,6 +4245,10 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "clearHistory": {
         return { ok: true, kind, cleared: await clearHistory(data.range) };
+      }
+      // Phase 33 (MENU-03, D-14/D-14b): window chrome state, classed window-chrome; the full-screen command reaches it.
+      case "fullScreen": {
+        return { ok: true, kind, where: toggleShellFullscreen(actorRef) };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -6091,6 +6096,7 @@ async function openStockPageFromMenu(page) {
     case "passwords":
     case "processes":
     case "support":
+    case "about":
       break;
     default:
       throw new Error("openStockPage: refusing an unknown page");
@@ -6107,6 +6113,9 @@ async function openStockPageFromMenu(page) {
     Promise.resolve(win.openPreferences()).catch(failed);
   } else if (page === "addons") {
     Promise.resolve(win.BrowserAddonUI.openAddonsMgr()).catch(failed);
+  } else if (page === "about") {
+    // Phase 33 (MENU-03): the Help submenu's About row, through upstream's own openAboutDialog (the stock About dialog).
+    Promise.resolve(win.openAboutDialog()).catch(failed);
   } else {
     const tab = win.gBrowser.addTrustedTab(STOCK_PAGE_TRUSTED_URLS[page]);
     win.gBrowser.selectedTab = tab;
@@ -7164,4 +7173,15 @@ async function clearHistory(range) {
 // catalogued line moves.
 function bookmarkFolderName(parentGuid) {
   return Object.keys(BOOKMARK_FOLDER_ROOTS).find(name => resolveBookmarkFolder(name) === parentGuid) ?? "";
+}
+
+// Phase 33 (MENU-03, D-14/D-14b): the Full Screen row and its command. The toggle body is upstream's
+// (browser-commands.js:567-569, `window.fullScreen = !window.fullScreen`) on the shell window that holds the
+// sender's Theia frame; Phase 35's fullscreen path replaces this behind the same command id. Window chrome
+// state only: no Places write, no clipboard read, nothing sent off the machine. Appended last so no
+// catalogued line moves.
+function toggleShellFullscreen(actorRef) {
+  const win = actorRef.browsingContext.top.embedderElement.ownerDocument.defaultView;
+  win.fullScreen = !win.fullScreen;
+  return win.fullScreen ? "entered" : "left";
 }

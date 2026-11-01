@@ -308,6 +308,19 @@ export class ChromeStoreClient {
         return String(reply['cleared']);
     }
 
+    /**
+     * Phase 33 (MENU-03, D-14/D-14b): toggles the shell window's full screen; resolves 'entered' or 'left'. A
+     * window-chrome kind: the Full Screen row and command reach it through the chrome bar widget's handler only,
+     * and it is never relayed. Phase 35's fullscreen path replaces the chrome side behind the same command id.
+     */
+    async fullScreen(): Promise<string> {
+        const reply = await this.request({ kind: 'fullScreen' });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `fullScreen failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply.where);
+    }
+
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
     queryTabsWithPlaces(query: TabPlacesQuery = {}): Promise<TabPlacesRow[]> {
         return this.field<TabPlacesRow[]>({ kind: 'queryTabsWithPlaces', ...query }, 'rows');

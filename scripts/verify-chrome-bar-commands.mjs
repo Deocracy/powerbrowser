@@ -69,7 +69,7 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.edit-cut',
     'powerbrowser.chrome-bar.edit-copy',
     'powerbrowser.chrome-bar.edit-paste',
-    // Phase 32 plan 08 (PAGE-10): labelless and uncategorised; the palette rows are Phase 33's.
+    // Phase 32 plan 08 (PAGE-10); Phase 33 plan 05 gives them the More Tools labels and the Browser category.
     'powerbrowser.chrome-bar.view-source',
     'powerbrowser.chrome-bar.reader-toggle',
     // Phase 33 plan 02 (BMK-01): the star path's command, label from 33-UI-SPEC.md.
@@ -79,10 +79,24 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.toggle-bookmarks-toolbar',
     // Phase 33 plan 04 (BMK-05): opens the clear-history picker only, label from 33-UI-SPEC.md.
     'powerbrowser.chrome-bar.clear-history',
+    // Phase 33 plan 05 (MENU-03, D-12/D-13/D-14): the hamburger rows' commands, each an Actions row too.
+    'powerbrowser.chrome-bar.new-window',
+    'powerbrowser.chrome-bar.full-screen',
+    'powerbrowser.chrome-bar.print',
+    'powerbrowser.chrome-bar.save-page',
+    'powerbrowser.chrome-bar.find-in-page',
+    'powerbrowser.chrome-bar.zoom-in',
+    'powerbrowser.chrome-bar.zoom-out',
+    'powerbrowser.chrome-bar.zoom-reset',
+    'powerbrowser.chrome-bar.devtools',
+    'powerbrowser.chrome-bar.settings',
 ]);
 
 /** The contracted visible labels: four verbatim from 13-UI-SPEC.md, Downloads from 32-UI-SPEC.md (plan 04), and the Edit items (plan 06). */
-const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste', 'Bookmark This Page', 'Reopen Closed Tab', 'Show Bookmarks Toolbar', 'Clear Recent History…']);
+const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste', 'Bookmark This Page', 'Reopen Closed Tab', 'Show Bookmarks Toolbar', 'Clear Recent History…',
+    // Phase 33 plan 05 (MENU-03): 33-UI-SPEC's hamburger and More Tools rows, Firefox's casing; the zoom reset reads "Reset Zoom" out of its submenu.
+    'Page Source', 'Reader View', 'New Window', 'Full Screen', 'Print…', 'Save Page As…', 'Find in Page…', 'Zoom In', 'Zoom Out', 'Reset Zoom',
+    'Page Developer Tools', 'Settings']);
 
 function diff(actual, expected) {
     const a = new Set(actual);
@@ -260,6 +274,17 @@ function selfTest() {
                 "'powerbrowser.chrome-bar.back'"
             ),
             expect: 'powerbrowser.chrome-bar.back',
+        },
+        {
+            name: 'planted full-screen id removal (Phase 35 runs it by this id)',
+            mutate: src => src.replace("export const CHROME_BAR_FULL_SCREEN_COMMAND_ID = 'powerbrowser.chrome-bar.full-screen';", '// planted removal'),
+            expect: 'powerbrowser.chrome-bar.full-screen',
+        },
+        {
+            name: 'planted surplus menu command',
+            mutate: src => src.replace("export const CHROME_BAR_SETTINGS_COMMAND_ID = 'powerbrowser.chrome-bar.settings';",
+                "export const CHROME_BAR_SETTINGS_COMMAND_ID = 'powerbrowser.chrome-bar.settings';\nexport const CHROME_BAR_PLANTED_COMMAND_ID = 'powerbrowser.chrome-bar.planted';"),
+            expect: 'powerbrowser.chrome-bar.planted',
         },
     ];
 

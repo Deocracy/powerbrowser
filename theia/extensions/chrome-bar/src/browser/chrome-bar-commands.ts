@@ -6,6 +6,7 @@ import { EMPTY_PAGE_URL, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { SHOW_BOOKMARKS_TOOLBAR_PREFERENCE } from './chrome-bar-preferences';
+import { OPEN_BROWSER_WINDOW_COMMAND_ID } from '@powerbrowser/tab-uris/lib/browser/browser-window-command';
 
 /**
  * GUI-06 (13-03): the chrome bar's five commands -- back, forward, reload,
@@ -38,6 +39,22 @@ export const CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID = 'powerbrowser.chrome-bar.
 export const CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID = 'powerbrowser.chrome-bar.toggle-bookmarks-toolbar';
 // Phase 33 plan 04 (BMK-05, D-10): opens the range picker only; the clear runs from the picker's confirm, never from a command.
 export const CHROME_BAR_CLEAR_HISTORY_COMMAND_ID = 'powerbrowser.chrome-bar.clear-history';
+// Phase 33 plan 05 (MENU-03, D-12/D-13/D-14): the hamburger rows' commands, each also an Actions row.
+// New Window runs GUI-01's stock-window command (D-12: no second shell window).
+export const CHROME_BAR_NEW_WINDOW_COMMAND_ID = 'powerbrowser.chrome-bar.new-window';
+// Full Screen: the same id before and after Phase 35's fullscreen path lands (D-14); 35-07 runs it by CHROME_BAR_FULL_SCREEN_COMMAND.
+export const CHROME_BAR_FULL_SCREEN_COMMAND_ID = 'powerbrowser.chrome-bar.full-screen';
+export const CHROME_BAR_FULL_SCREEN_COMMAND = CHROME_BAR_FULL_SCREEN_COMMAND_ID;
+// The Phase 32 page tools had relay rows and widget methods but no command; each id runs that same tab method.
+export const CHROME_BAR_PRINT_COMMAND_ID = 'powerbrowser.chrome-bar.print';
+export const CHROME_BAR_SAVE_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.save-page';
+export const CHROME_BAR_FIND_IN_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.find-in-page';
+export const CHROME_BAR_ZOOM_IN_COMMAND_ID = 'powerbrowser.chrome-bar.zoom-in';
+export const CHROME_BAR_ZOOM_OUT_COMMAND_ID = 'powerbrowser.chrome-bar.zoom-out';
+export const CHROME_BAR_ZOOM_RESET_COMMAND_ID = 'powerbrowser.chrome-bar.zoom-reset';
+export const CHROME_BAR_DEVTOOLS_COMMAND_ID = 'powerbrowser.chrome-bar.devtools';
+// ROADMAP Phase 33 criterion 5 (Actions runs settings): the Settings row's command, the same stock page path.
+export const CHROME_BAR_SETTINGS_COMMAND_ID = 'powerbrowser.chrome-bar.settings';
 
 /**
  * D-11 (30-03): the palette category of the four visible commands ("Browser:
@@ -88,10 +105,22 @@ export const CHROME_BAR_REOPEN_CLOSED_TAB: Command = { id: CHROME_BAR_REOPEN_CLO
 export const CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR: Command = { id: CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Show Bookmarks Toolbar' };
 export const CHROME_BAR_CLEAR_HISTORY: Command = { id: CHROME_BAR_CLEAR_HISTORY_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Clear Recent History…' };
 
-// PAGE-10 (32-08): labelless and categorised by neither, like Focus Address; Phase 33 owns the palette and menu rows.
+// PAGE-10 (32-08) left these labelless for Phase 33's rows: 33-05 gives them the More Tools labels (33-UI-SPEC), so Actions lists them.
 // Each one acts on the active web tab.
-export const CHROME_BAR_VIEW_SOURCE: Command = { id: CHROME_BAR_VIEW_SOURCE_COMMAND_ID };
-export const CHROME_BAR_READER_TOGGLE: Command = { id: CHROME_BAR_READER_TOGGLE_COMMAND_ID };
+export const CHROME_BAR_VIEW_SOURCE: Command = { id: CHROME_BAR_VIEW_SOURCE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Page Source' };
+export const CHROME_BAR_READER_TOGGLE: Command = { id: CHROME_BAR_READER_TOGGLE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Reader View' };
+
+// 33-UI-SPEC hamburger rows, Firefox's casing; the zoom reset reads "Reset Zoom" outside its submenu.
+export const CHROME_BAR_NEW_WINDOW: Command = { id: CHROME_BAR_NEW_WINDOW_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'New Window' };
+export const CHROME_BAR_FULL_SCREEN: Command = { id: CHROME_BAR_FULL_SCREEN_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Full Screen' };
+export const CHROME_BAR_PRINT: Command = { id: CHROME_BAR_PRINT_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Print…' };
+export const CHROME_BAR_SAVE_PAGE: Command = { id: CHROME_BAR_SAVE_PAGE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Save Page As…' };
+export const CHROME_BAR_FIND_IN_PAGE: Command = { id: CHROME_BAR_FIND_IN_PAGE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Find in Page…' };
+export const CHROME_BAR_ZOOM_IN: Command = { id: CHROME_BAR_ZOOM_IN_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Zoom In' };
+export const CHROME_BAR_ZOOM_OUT: Command = { id: CHROME_BAR_ZOOM_OUT_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Zoom Out' };
+export const CHROME_BAR_ZOOM_RESET: Command = { id: CHROME_BAR_ZOOM_RESET_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Reset Zoom' };
+export const CHROME_BAR_DEVTOOLS: Command = { id: CHROME_BAR_DEVTOOLS_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Page Developer Tools' };
+export const CHROME_BAR_SETTINGS: Command = { id: CHROME_BAR_SETTINGS_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Settings' };
 
 /** Labelless by design: reachable through Ctrl/Cmd+L, never the palette. */
 export const CHROME_BAR_FOCUS_ADDRESS: Command = {
@@ -205,6 +234,30 @@ export function setOpenClearHistory(open: (() => void) | undefined): void {
 /** BMK-05: opens the Clear Recent History picker; never clears (the picker is the confirmation). */
 export function openClearHistory(): void {
     openClearHistoryPath?.();
+}
+
+let toggleFullScreenPath: (() => void) | undefined;
+
+/** Set by the chrome bar widget, whose handler sends the window-chrome store kind (rule 12: never this file). */
+export function setToggleFullScreen(toggle: (() => void) | undefined): void {
+    toggleFullScreenPath = toggle;
+}
+
+/** MENU-03 (D-14): toggles full screen for the shell window; a no-op until the widget registers. */
+export function toggleFullScreen(): void {
+    toggleFullScreenPath?.();
+}
+
+let openStockPagePath: ((page: string) => void) | undefined;
+
+/** Set by the chrome bar widget, which owns the stock-page row handler (MENU-02). */
+export function setOpenStockPage(open: ((page: string) => void) | undefined): void {
+    openStockPagePath = open;
+}
+
+/** Opens one stock page by its enum name, through the same handler the hamburger's rows use. */
+export function openStockPage(page: string): void {
+    openStockPagePath?.(page);
 }
 
 /**
@@ -369,6 +422,63 @@ export class ChromeBarCommandContribution implements CommandContribution {
         // BMK-05 (rule 12): opens the range picker only; needs no web tab, so it is always enabled.
         commands.registerCommand(CHROME_BAR_CLEAR_HISTORY, {
             execute: () => openClearHistory(),
+            isVisible: () => true,
+        });
+        // MENU-03 (D-12): the stock window through GUI-01's own command; no second shell window.
+        commands.registerCommand(CHROME_BAR_NEW_WINDOW, {
+            execute: () => this.commands.executeCommand(OPEN_BROWSER_WINDOW_COMMAND_ID),
+            isVisible: () => true,
+        });
+        // MENU-03 (D-14/D-14b): the widget's handler sends the window-chrome kind; this id stays when Phase 35 lands.
+        commands.registerCommand(CHROME_BAR_FULL_SCREEN, {
+            execute: () => toggleFullScreen(),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        // MENU-03 (D-13): the Phase 32 page tools, one tab method each -- the method the page relay's key runs.
+        commands.registerCommand(CHROME_BAR_PRINT, {
+            execute: () => currentWebTab()?.print(),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_SAVE_PAGE, {
+            execute: () => currentWebTab()?.savePage(chooseSaveDestination),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_FIND_IN_PAGE, {
+            execute: () => {
+                const tab = currentWebTab();
+                if (tab) {
+                    openFindBarFor(tab);
+                }
+            },
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_ZOOM_IN, {
+            execute: () => currentWebTab()?.zoomIn(),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_ZOOM_OUT, {
+            execute: () => currentWebTab()?.zoomOut(),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_ZOOM_RESET, {
+            execute: () => currentWebTab()?.zoomReset(),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_DEVTOOLS, {
+            execute: () => currentWebTab()?.openDevtools(),
+            isEnabled: () => !!currentWebTab()?.hasPage,
+            isVisible: () => true,
+        });
+        // The Settings row's stock page (MENU-02), through the widget's row handler; needs no web tab.
+        commands.registerCommand(CHROME_BAR_SETTINGS, {
+            execute: () => openStockPage('settings'),
             isVisible: () => true,
         });
         commands.registerCommand(CHROME_BAR_FOCUS_ADDRESS, {

@@ -217,6 +217,28 @@ export const CHROME_BAR_COPY = Object.freeze({
     clearHistoryConfirm: 'Clear',
     clearHistoryCancel: 'Cancel',
     clearHistoryFailed: (subject: string) => `${subject} couldn't clear that history. Press Enter to try again.`,
+    // Phase 33 plan 05 (MENU-03): the hamburger's new rows and submenus (33-UI-SPEC strings, Firefox's casing).
+    menuNewWindow: 'New Window',
+    menuBookmarks: 'Bookmarks',
+    menuDownloads: 'Downloads',
+    menuPrint: 'Print…',
+    menuSavePage: 'Save Page As…',
+    menuFindInPage: 'Find in Page…',
+    menuZoom: 'Zoom',
+    menuFullScreen: 'Full Screen',
+    menuMoreTools: 'More Tools',
+    bookmarkThisPageRow: 'Bookmark This Page',
+    showBookmarksToolbarRow: 'Show Bookmarks Toolbar',
+    bookmarksMenuFailed: (subject: string) => `${subject} couldn't read your bookmarks. Open this menu again to try again.`,
+    zoomInRow: 'Zoom In',
+    zoomOutRow: 'Zoom Out',
+    zoomResetRow: 'Reset',
+    zoomLevelRow: (percent: number) => `Zoom: ${percent}%`,
+    pageSourceRow: 'Page Source',
+    readerViewRow: 'Reader View',
+    pageDevToolsRow: 'Page Developer Tools',
+    getHelpRow: 'Get Help',
+    aboutAppRow: (subject: string) => `About ${subject}`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

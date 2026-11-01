@@ -745,6 +745,27 @@ const EXPECTED_NAV_COPY = new Set([
   "Everything",
   "This also clears ${name}'s closed tabs, thumbnails, saved pages and web-tab history. Your open tabs stay open.",
   "${name} couldn't clear that history. Press Enter to try again.",
+  // Phase 33 plan 05 (MENU-03): the hamburger's new rows and its Bookmarks, Zoom, More Tools and Help submenus ("Downloads" is pinned above).
+  "New Window",
+  "Bookmarks",
+  "Print…",
+  "Save Page As…",
+  "Find in Page…",
+  "Zoom",
+  "Full Screen",
+  "More Tools",
+  "Bookmark This Page",
+  "Show Bookmarks Toolbar",
+  "${name} couldn't read your bookmarks. Open this menu again to try again.",
+  "Zoom In",
+  "Zoom Out",
+  "Reset",
+  "Zoom: ${name}%",
+  "Page Source",
+  "Reader View",
+  "Page Developer Tools",
+  "Get Help",
+  "About ${name}",
 ]);
 
 /**

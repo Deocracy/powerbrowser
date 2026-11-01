@@ -17,12 +17,26 @@ import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import {
     CHROME_BAR_BACK_COMMAND_ID,
+    CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID,
     CHROME_BAR_CLEAR_HISTORY_COMMAND_ID,
+    CHROME_BAR_DEVTOOLS_COMMAND_ID,
+    CHROME_BAR_FIND_IN_PAGE_COMMAND_ID,
     CHROME_BAR_FORWARD_COMMAND_ID,
+    CHROME_BAR_FULL_SCREEN_COMMAND_ID,
     CHROME_BAR_DOWNLOADS_COMMAND_ID,
     CHROME_BAR_NEW_TAB_COMMAND_ID,
+    CHROME_BAR_NEW_WINDOW_COMMAND_ID,
+    CHROME_BAR_PRINT_COMMAND_ID,
+    CHROME_BAR_READER_TOGGLE_COMMAND_ID,
     CHROME_BAR_RELOAD_COMMAND_ID,
     CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID,
+    CHROME_BAR_SAVE_PAGE_COMMAND_ID,
+    CHROME_BAR_SETTINGS_COMMAND_ID,
+    CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID,
+    CHROME_BAR_VIEW_SOURCE_COMMAND_ID,
+    CHROME_BAR_ZOOM_IN_COMMAND_ID,
+    CHROME_BAR_ZOOM_OUT_COMMAND_ID,
+    CHROME_BAR_ZOOM_RESET_COMMAND_ID,
     chromeBarHasNavigableTab,
     currentWebTab,
     setCurrentWebTab,
@@ -30,13 +44,15 @@ import {
     setOpenClearHistory,
     setOpenDownloadsPanel,
     setOpenFindBar,
+    setOpenStockPage,
     setReopenLastClosedTab,
     setToggleBookmarksToolbar,
+    setToggleFullScreen,
 } from './chrome-bar-commands';
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
 import { AddressBar, DROPDOWN_MAX_HEIGHT, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
-import { BUTTON_SHORTCUTS, NavButton, tooltipFor } from './chrome-bar-shortcuts';
+import { BUTTON_SHORTCUTS, NavButton, pageKeyLabel, tooltipFor } from './chrome-bar-shortcuts';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 // The organising placeholder's own id, imported for the same const-discipline
@@ -67,15 +83,39 @@ const APP_MENU_PATH: MenuPath = [APP_MENU_ID];
 function appMenuLabel(menuId: string): string {
     switch (menuId) {
         case 'new-tab': return CHROME_BAR_COPY.menuNewTab;
+        case 'new-window': return CHROME_BAR_COPY.menuNewWindow;
+        case 'bookmarks': return CHROME_BAR_COPY.menuBookmarks;
         case 'history': return CHROME_BAR_COPY.menuHistory;
+        case 'downloads': return CHROME_BAR_COPY.menuDownloads;
+        case 'print': return CHROME_BAR_COPY.menuPrint;
+        case 'save-page': return CHROME_BAR_COPY.menuSavePage;
+        case 'find-in-page': return CHROME_BAR_COPY.menuFindInPage;
+        case 'zoom': return CHROME_BAR_COPY.menuZoom;
+        case 'full-screen': return CHROME_BAR_COPY.menuFullScreen;
         case 'settings': return CHROME_BAR_COPY.menuSettings;
         case 'passwords': return CHROME_BAR_COPY.menuPasswords;
         case 'addons': return CHROME_BAR_COPY.menuAddons;
+        case 'more-tools': return CHROME_BAR_COPY.menuMoreTools;
         case 'help': return CHROME_BAR_COPY.menuHelp;
         case 'quit': return CHROME_BAR_COPY.menuQuit(appSubject());
         default: throw new Error(`no label for menu row ${menuId}`);
     }
 }
+
+/**
+ * Phase 33 plan 05 (MENU-03, D-13): the hamburger rows that run a Browser command -- the same id the Actions row
+ * runs, so a menu row and its Actions twin can never run two implementations. A row here dims when its command
+ * is disabled (no web tab), keeping its place. New Tab keeps its Phase 31 arm.
+ */
+const APP_MENU_COMMANDS: Readonly<Record<string, string>> = Object.freeze({
+    'new-window': CHROME_BAR_NEW_WINDOW_COMMAND_ID,
+    'downloads': CHROME_BAR_DOWNLOADS_COMMAND_ID,
+    'print': CHROME_BAR_PRINT_COMMAND_ID,
+    'save-page': CHROME_BAR_SAVE_PAGE_COMMAND_ID,
+    'find-in-page': CHROME_BAR_FIND_IN_PAGE_COMMAND_ID,
+    'full-screen': CHROME_BAR_FULL_SCREEN_COMMAND_ID,
+    'settings': CHROME_BAR_SETTINGS_COMMAND_ID,
+});
 
 /** NAV-03: Firefox's click-hold delay before Back/Forward open the history menu. */
 const HISTORY_HOLD_MS = 500;
@@ -437,6 +477,8 @@ export class ChromeBarWidget extends ReactWidget {
         setReopenLastClosedTab(() => void this.reopenClosedTabRow());
         setToggleBookmarksToolbar(() => void this.toggleBookmarksToolbar());
         setOpenClearHistory(() => this.openClearHistoryPicker());
+        setToggleFullScreen(() => void this.toggleFullScreenRow());
+        setOpenStockPage(page => void this.openStockPageRow(page));
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
@@ -1045,11 +1087,16 @@ export class ChromeBarWidget extends ReactWidget {
      * NAV-03 rule).
      */
     protected async openAppMenu(button: HTMLElement): Promise<void> {
-        const history = await this.readHistoryMenu();
+        const [history, bookmarks] = await Promise.all([
+            this.readHistoryMenu(),
+            this.store.searchPlaces('', HISTORY_MENU_ROWS, 'bookmark').catch((): 'failed' => 'failed'),
+        ]);
         const menu = buildAppMenu(MENU_ORDER, WIRED_MENU_IDS, MENU_PHASE, {
             label: (menuId, enabled) => (enabled ? appMenuLabel(menuId) : CHROME_BAR_COPY.comingSoonRow(appMenuLabel(menuId))),
             run: row => this.runAppMenuRow(row),
-            submenu: menuId => (menuId === 'history' ? { menuPath: BOOKMARKS_HISTORY_MENU_PATH, children: this.historyMenuChildren(history) as unknown as AppMenuSubmenu['children'] } : undefined),
+            isEnabled: menuId => APP_MENU_COMMANDS[menuId] === undefined || this.commands.isEnabled(APP_MENU_COMMANDS[menuId]),
+            submenu: menuId => (menuId === 'history' ? { menuPath: BOOKMARKS_HISTORY_MENU_PATH, children: this.historyMenuChildren(history) as unknown as AppMenuSubmenu['children'] }
+                : this.appSubmenu(menuId, bookmarks)),
         });
         const before = new Set(Array.from(document.querySelectorAll('.lm-Menu')));
         this.renderBarMenu(APP_MENU_PATH, menu as CompoundMenuNode, button);
@@ -1061,10 +1108,81 @@ export class ChromeBarWidget extends ReactWidget {
         }
     }
 
+    /** A per-request row that runs a Browser command id (D-13), dimmed while the command is disabled. */
+    protected commandLeaf(id: string, label: string, command: string, accelerator: string[] = []): CommandMenu {
+        return this.menuLeaf(id, label, () => this.runCommand(command)(), this.commands.isEnabled(command), accelerator);
+    }
+
+    /**
+     * Phase 33 plan 05 (MENU-03, 33-UI-SPEC "Full menu"): the Bookmarks, Zoom, More Tools and Help submenus, built
+     * per open. Every row that does what a Browser command does runs that command's id; Get Help and About open
+     * their stock pages through the Phase 31 row handler. Undefined keeps a row a plain row.
+     */
+    protected appSubmenu(menuId: string, bookmarks: PlaceMatch[] | 'failed'): AppMenuSubmenu | undefined {
+        const ordered = (children: (CommandMenu | CompoundMenuNode)[]): AppMenuSubmenu => ({
+            children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })) as unknown as AppMenuSubmenu['children'],
+        });
+        switch (menuId) {
+            case 'bookmarks': {
+                const toolbarRow = {
+                    ...this.commandLeaf('bookmarks-toolbar', CHROME_BAR_COPY.showBookmarksToolbarRow, CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID,
+                        this.acceleratorOf(CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID)),
+                    isToggled: () => this.commands.isToggled(CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID),
+                };
+                const recent = bookmarks === 'failed'
+                    ? [this.menuLeaf('bookmarks-failed', CHROME_BAR_COPY.bookmarksMenuFailed(appSubject()), () => undefined, false)]
+                    : bookmarks.map((page, index) => this.menuLeaf(`bookmark-${index}`, historyLabel({ index, url: page.url, title: page.title }),
+                        () => this.openPlace(page.url, this.menuTarget)));
+                return ordered([
+                    this.commandLeaf('bookmark-page', CHROME_BAR_COPY.bookmarkThisPageRow, CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, pageKeyLabel('bookmarkPage')),
+                    this.menuGroup('bookmarks-toolbar-group', [toolbarRow]),
+                    ...(recent.length ? [this.menuGroup('bookmarks-recent', recent)] : []),
+                ]);
+            }
+            case 'zoom': {
+                const percent = Math.round((currentWebTab()?.zoom ?? 1) * 100);
+                return ordered([
+                    this.commandLeaf('zoom-in', CHROME_BAR_COPY.zoomInRow, CHROME_BAR_ZOOM_IN_COMMAND_ID, pageKeyLabel('zoomIn')),
+                    this.commandLeaf('zoom-out', CHROME_BAR_COPY.zoomOutRow, CHROME_BAR_ZOOM_OUT_COMMAND_ID, pageKeyLabel('zoomOut')),
+                    this.commandLeaf('zoom-reset', CHROME_BAR_COPY.zoomResetRow, CHROME_BAR_ZOOM_RESET_COMMAND_ID, pageKeyLabel('zoomReset')),
+                    this.menuGroup('zoom-level', [this.menuLeaf('zoom-level-row', CHROME_BAR_COPY.zoomLevelRow(percent), () => undefined, false)]),
+                ]);
+            }
+            case 'more-tools':
+                return ordered([
+                    this.commandLeaf('page-source', CHROME_BAR_COPY.pageSourceRow, CHROME_BAR_VIEW_SOURCE_COMMAND_ID, pageKeyLabel('viewSource')),
+                    this.commandLeaf('reader-view', CHROME_BAR_COPY.readerViewRow, CHROME_BAR_READER_TOGGLE_COMMAND_ID),
+                    this.commandLeaf('page-devtools', CHROME_BAR_COPY.pageDevToolsRow, CHROME_BAR_DEVTOOLS_COMMAND_ID, pageKeyLabel('devtoolsOpen')),
+                ]);
+            case 'help':
+                return ordered([
+                    this.menuLeaf('get-help', CHROME_BAR_COPY.getHelpRow, () => this.openStockPageRow('support')),
+                    this.menuGroup('help-about', [this.menuLeaf('about', CHROME_BAR_COPY.aboutAppRow(appSubject()), () => this.openStockPageRow('about'))]),
+                ]);
+            default:
+                return undefined;
+        }
+    }
+
+    /** MENU-03 (D-14/D-14b): the Full Screen row's and command's handler, the one sender of the window-chrome kind. */
+    protected async toggleFullScreenRow(): Promise<void> {
+        try {
+            await this.store.fullScreen();
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] toggling full screen failed:', error instanceof Error ? error.name : typeof error);
+        }
+    }
+
     /** Phase 31 plan 04: a wired row's action. The builder never calls this for a disabled row. */
     protected runAppMenuRow(row: AppMenuRow): void {
         if (row.menuId === 'new-tab') {
             void this.runCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)();
+            return;
+        }
+        // MENU-03 (D-13): a command row runs the id its Actions row runs.
+        const command = APP_MENU_COMMANDS[row.menuId];
+        if (command) {
+            void this.runCommand(command)();
             return;
         }
         if (row.menuId === 'quit') {
