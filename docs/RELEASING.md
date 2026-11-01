@@ -1648,7 +1648,7 @@ resumes it (A2 Phase 54 Windows asset, A3 Phase 55 notarization, A4 Phase 47 sit
 repository and Apps). It is never recorded as passed. The step text and commands are in
 `docs/cache-flathub-checkpoint.md` and `docs/winget-tap-checkpoint.md`; the order is the order of this list.
 
-The GitHub organisation is `Deocracy`; the repositories named below sit under it.
+The repositories named below sit under the GitHub organisation that `configuration.toml` names.
 
 1. **Cachix licence reply** (`CACHIX_REPLY`): AWAITING-OWNER
 2. **R2 fallback state** (`R2_STATE`; enable only if Cachix refuses or needs a payment method): AWAITING-OWNER
@@ -1657,7 +1657,7 @@ The GitHub organisation is `Deocracy`; the repositories named below sit under it
 5. **winget credential holder** (`WINGET_HOLDER`; the dedicated bot account, name only): AWAITING-OWNER
 6. **winget token stored** (`WINGET_TOKEN_STORED`; yes or no and the date, in the `winget` environment, never the value): AWAITING-OWNER
 7. **winget pull request** (`WINGET_PR`; needs the Phase 54 Windows asset, otherwise DEFERRED-A2): AWAITING-OWNER
-8. **Tap repository and tap commit** (`TAP_REPO`; expected `Deocracy/homebrew-powerbrowser`, then the bot App's commit SHA; the cask stays DEFERRED-A3 until Phase 55): AWAITING-OWNER
+8. **Tap repository and tap commit** (`TAP_REPO`; expected `homebrew-powerbrowser` under that organisation, then the bot App's commit SHA; the cask stays DEFERRED-A3 until Phase 55): AWAITING-OWNER
 9. **DNS TXT value** (`TXT_SET`; record `_flathub.debios.org`, the digest only, shown by the Flathub Developer Portal after the submission is accepted): AWAITING-OWNER
 10. **Clean-machine substitute log** (`SUBSTITUTE_LOG`; the `nix build .#powerbrowser` lines proving no rebuild, pasted verbatim): AWAITING-OWNER
 11. **/download rows** (`DOWNLOAD_URLS`; the live URLs of the Nix and Flatpak rows on the Phase 47 site, otherwise DEFERRED-A4): AWAITING-OWNER

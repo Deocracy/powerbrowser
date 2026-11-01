@@ -101,8 +101,8 @@ All 14 exited 0:
 `docs/RELEASING.md` gains a `## Phase 56 checkpoint` section with 12 numbered fields (Cachix reply, R2 state,
 Flathub exception, Flathub PR, winget holder, winget token stored, winget PR, tap repo and commit, TXT value,
 substitute log, /download rows, deferrals), each marked `AWAITING-OWNER`; `grep -c AWAITING-OWNER` prints 13
-(12 fields plus the sentence that defines the marker). No live value is filled. The section names the
-organisation `Deocracy` and, for the TXT record, `_flathub.debios.org` (the corrected name from the review fix IN-05,
+(12 fields plus the sentence that defines the marker). No live value is filled. The section does not spell the
+organisation name, because the residual-brand scan rejects a bare `Deocracy` outside its held-back repository forms; it names, for the TXT record, `_flathub.debios.org` (the corrected name from the review fix IN-05,
 not the `_flathub` shorthand in the plan text).
 
 ## Deviations from Plan
