@@ -3,7 +3,13 @@
 Recorded 2026-10-31 by the autonomous executor for plans 57-01, 57-02 and 57-03 on branch `dsh/phase-57`.
 Plan 57-04 (the TEL-13 flip) was not executed, by instruction.
 
-## B1. 57-01 Task 1: the TEL-09 consent patch conflicts with the compiled-file guard (BLOCKED, owner decision)
+## B1. 57-01 Task 1: the TEL-09 consent patch conflicts with the compiled-file guard (DECIDED, LANDED)
+
+**Decided 2026-10-31: (a), implemented in 1d378bef (the `check-patch-surface.sh` exact-path exception, D-72/D-73
+amended) and f02ada50 (patch 050, `scripts/verify-crash-ping-consent.mjs`, rows `crash-ping-consent` and
+`crash-ping-consent-self-test`).** Only `glean.rs` is patched; `send_ping.rs` did not need a change (its
+`--send-ping` path runs only behind CrashManager's in-process pref check). The record below is the original
+blocker, kept as written.
 
 **What the plan asks.** A hook-only patch, `patches/050-powerbrowser-crash-ping-consent.patch`, that fails the
 Glean crash-ping consent read closed, plus a static gate, with `check-patch-surface` green on the new patch.
@@ -36,6 +42,8 @@ Glean crash-ping consent read closed, plus a static gate, with `check-patch-surf
 any reporter-enabled build.
 
 ## B2. 57-01 Task 2: the reporter-enabled layer-3 observation (NOT LANDED, pending B1)
+
+B1 is landed (f02ada50), so this item now waits only on a reporter-enabled build on the owner machine.
 
 The plan's Task 2 adds a layer-3 `verify-endpoints.sh` assertion with a consent-true positive control. The
 assertion is meaningful only once the consent gate of B1 exists. Without it, a reporter-enabled run is expected to
