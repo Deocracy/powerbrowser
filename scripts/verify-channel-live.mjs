@@ -32,6 +32,9 @@
 //     The asset is <app_basename>-<tag minus v>.<target token>.complete.mar, the name
 //     scripts/build-update-xml.mjs writes into the descriptor.
 //
+// --manifest-agrees --manifest <path> runs only the manifest-versus-tree comparison of check 1, with no
+// network: release.yml calls it in the descriptor and channel-live jobs, so this script is the one copy.
+//
 // --form-only --manifest <path> --descriptors <dir> runs check 4 alone over a local descriptor
 // tree, with no network: the descriptor job's pre-commit gate. The descriptor carries exactly one
 // patch, and the URL judged is the one parseUpdateXml returns, the value the live fetch and Gecko
@@ -47,6 +50,7 @@
 //
 // Usage:
 //   node scripts/verify-channel-live.mjs [--manifest <release-manifest.json>]
+//   node scripts/verify-channel-live.mjs --manifest-agrees --manifest <path>
 //   node scripts/verify-channel-live.mjs --form-only --manifest <path> --descriptors <dir>
 //   node scripts/verify-channel-live.mjs --self-test
 
@@ -239,11 +243,15 @@ export function treeAuthority(root, manifest) {
     return { tree: { ...manifest, mar_origin: origin, update_channel: channel, update_url: updateUrl }, problems };
 }
 
+/** --manifest-agrees: the fields the tree decides are present and equal the tree. No network. Returns { tree, problems }. */
+export function manifestAgrees(root, manifestDoc, keys = ['mar_origin', 'update_channel']) {
+    const problems = manifestProblems(manifestDoc, keys);
+    return problems.length > 0 ? { tree: null, problems } : treeAuthority(root, manifestDoc);
+}
+
 /** --form-only: the pre-commit gate over a local descriptor tree. No network. */
 export function formOnly(root, manifestDoc, dir) {
-    const problems = manifestProblems(manifestDoc, ['release_key', 'mar_origin', 'update_channel']);
-    if (problems.length > 0) return problems;
-    const { tree: manifest, problems: drift } = treeAuthority(root, manifestDoc);
+    const { tree: manifest, problems: drift } = manifestAgrees(root, manifestDoc, ['release_key', 'mar_origin', 'update_channel']);
     if (drift.length > 0) return drift;
     const { asset, why } = marAssetName(root, manifest.release_key);
     if (why) return [why];
@@ -617,8 +625,29 @@ async function selfTest() {
                 failed += 1;
             }
         }
+        // --manifest-agrees, the one copy release.yml calls: green on the fixture, red naming both values or the field.
+        const agreeBase = manifestAgrees(REPO_ROOT, manifest).problems;
+        if (agreeBase.length === 0) console.log('  ok  --manifest-agrees baseline -> green');
+        else {
+            console.error(`${NAME}: --self-test FAIL -- --manifest-agrees is not green on the fixture: ${agreeBase.join(' | ')}`);
+            failed += 1;
+        }
+        const agreePlants = [
+            ['--manifest-agrees: update_channel off the tree', { update_channel: 'nightly-x' }, ['"nightly-x"', show(manifest.update_channel)]],
+            ['--manifest-agrees: mar_origin off the tree', { mar_origin: drifted }, [drifted, origin]],
+            ['--manifest-agrees: update_url off the tree', { update_url: `https://mirror.example.invalid${UPDATE_PATH}` }, ['mirror.example.invalid', manifest.update_url]],
+            ['--manifest-agrees: null mar_origin', { mar_origin: null }, ['field mar_origin is null']],
+        ];
+        for (const [name, patch, values] of agreePlants) {
+            const { problems } = manifestAgrees(REPO_ROOT, { ...manifest, ...patch });
+            if (problems.some(f => values.every(v => f.includes(v)))) console.log(`  ok  ${name} -> red naming ${values.join(' and ')}`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${values.join(' and ')}; got: ${problems.join(' | ') || '(no failures)'}`);
+                failed += 1;
+            }
+        }
         if (failed > 0) return 1;
-        console.log(`${NAME}: --self-test PASS -- the clean fixture is green (with --manifest and from the Release asset) and ${network.length + release.length + strings.length + decoys.length + 1 + claims.length + assetPlants.length} planted faults each went red naming the target and the value`);
+        console.log(`${NAME}: --self-test PASS -- the clean fixture is green (with --manifest, from the Release asset and through --manifest-agrees) and ${network.length + release.length + strings.length + decoys.length + 1 + claims.length + assetPlants.length + agreePlants.length} planted faults each went red naming the target and the value`);
         return 0;
     } finally {
         server.close();
@@ -630,7 +659,7 @@ async function selfTest() {
 
 function usage(msg) {
     console.error(`${NAME}: FAIL -- ${msg}`);
-    console.error(`  Next step: run: node ${SELF_REL} [--manifest <release-manifest.json>], node ${SELF_REL} --form-only --manifest <path> --descriptors <dir>, or add --self-test.`);
+    console.error(`  Next step: run: node ${SELF_REL} [--manifest <release-manifest.json>], node ${SELF_REL} --manifest-agrees --manifest <path>, node ${SELF_REL} --form-only --manifest <path> --descriptors <dir>, or add --self-test.`);
     return 2;
 }
 
@@ -638,13 +667,30 @@ async function main(argv) {
     const opts = {};
     for (let i = 0; i < argv.length; i += 1) {
         const a = argv[i];
-        if (a === '--self-test' || a === '--form-only') opts[a] = true;
+        if (a === '--self-test' || a === '--form-only' || a === '--manifest-agrees') opts[a] = true;
         else if ((a === '--manifest' || a === '--descriptors') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') && opts[a] === undefined) {
             opts[a] = argv[i + 1];
             i += 1;
         } else return usage(`unknown, repeated or incomplete argument '${a}'`);
     }
     if (opts['--self-test']) return Object.keys(opts).length === 1 ? selfTest() : usage('--self-test takes no other flags');
+    if (opts['--manifest-agrees']) {
+        if (opts['--manifest'] === undefined || Object.keys(opts).length !== 2) return usage('--manifest-agrees takes --manifest <path> and nothing else');
+        let manifest;
+        try {
+            manifest = JSON.parse(readFileSync(opts['--manifest'], 'utf8'));
+        } catch {
+            manifest = null;
+        }
+        const { tree, problems } = manifestAgrees(REPO_ROOT, manifest);
+        if (problems.length > 0) {
+            console.error(`${NAME}: --manifest-agrees FAIL -- ${problems.length} problem(s); the manifest is build output and the tree decides`);
+            problems.forEach(p => console.error(`  - ${p}`));
+            return 1;
+        }
+        console.log(`${NAME}: --manifest-agrees PASS -- ${opts['--manifest']} agrees with configuration.toml: MAR origin ${tree.mar_origin}, update channel ${tree.update_channel}${manifest.update_url === undefined ? '' : ', update URL'}`);
+        return 0;
+    }
     if (opts['--form-only']) {
         if (opts['--manifest'] === undefined || opts['--descriptors'] === undefined) return usage('--form-only needs --manifest <path> and --descriptors <dir>');
         let manifest;
