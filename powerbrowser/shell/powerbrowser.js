@@ -65,7 +65,8 @@ document.addEventListener(
     // browser-custom-element.mjs, every *Parent.sys.mjs under
     // upstream/browser/actors and upstream/toolkit/actors, every parent module
     // the two actor registries name (DesktopActorRegistry.sys.mjs,
-    // ActorManagerParent.sys.mjs), and the extension scope.
+    // ActorManagerParent.sys.mjs), the extension scope, and the added lines of
+    // patches/050-extension-tab-host.patch (read from the patch text).
     //
     // The never-synthesise rule is reversed for the tab host only (Phase 28
     // sign-off, 2026-10-21): each host node stands for one live overlay that
@@ -80,6 +81,11 @@ document.addEventListener(
       },
       get webDriverTabs() {
         return [theiaRecord, ...host.tabs()];
+      },
+      // Phase 38 (38-REVIEW CR-01): patch 050's action skips dispatch TabHostActionUpdate here, the hidden host strip
+      // that the extension section listens on. It is not a tab strip: it is never shown and holds only host nodes.
+      get tabContainer() {
+        return host.tabContainer();
       },
       get selectedTab() {
         return host.selectedTab();

@@ -6646,6 +6646,7 @@ export const PowerBrowserTabHost = Object.freeze({
     installExtensionReceivers(win); // Phase 38 plan 04 (B5): the extension section's per-window receivers
     return Object.freeze({
       tabs: () => [...strip.children],
+      tabContainer: () => strip, // 38-REVIEW CR-01: patch 050's TabHostActionUpdate dispatch target
       selectedTab: () => host.selected,
       selectedBrowser: () => (host.selected ? host.selected.linkedBrowser : null),
       currentURI: () => (host.selected ? host.selected.linkedBrowser.currentURI : null),
