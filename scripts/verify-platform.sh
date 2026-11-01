@@ -4760,6 +4760,12 @@ run_own_checks() {
     # fixtures, node:crypto and text reads, no build, browser, display or network; it writes nothing
     # outside mkdtemp.
     "build-update-xml-self-test|node $REPO_ROOT/scripts/build-update-xml.mjs --self-test"
+    # NEW (Phase 44, UPD-26): the descriptor buildID order, proven in memory. A green control first (a
+    # candidate above the published buildID, zero published Releases green by named count, a different
+    # appVersion line), then planted faults each red naming the descriptor, Release or endpoint: a same-version
+    # older or equal buildID, a malformed release-manifest.json, a build_id that is not fourteen digits, a
+    # throwing getter. Honestly --quick: fixtures in memory, no network, no gh, no write.
+    "descriptor-monotonic-self-test|node $REPO_ROOT/scripts/verify-descriptor-monotonic.mjs --self-test"
     # NEW (Phase 40, UPD-33): layer 3's real `Resolving host [...]` extraction and the shared
     # verdict (scripts/lib/endpoint-verdict.mjs) over fixture logs. An unattended user-initiated
     # host goes red naming it, passes after a user action; deny fails in both modes; allow passes;
@@ -5662,6 +5668,13 @@ run_own_checks() {
       # Full tier: read-only gh api against the live org and repo (network, gh auth with repo
       # and read:org); green only after the owner applies the settings at plan 41-04.
       "repo-controls|node $REPO_ROOT/scripts/verify-repo-controls.mjs"
+
+      # NEW (Phase 44, UPD-26): full tier. Read-only gh api against the live Releases (network, gh auth with
+      # read access to the repository): each non-draft Release's release-manifest.json is read, and each candidate
+      # descriptor under .mozbuild/update-descriptors must offer a buildID strictly newer than every published
+      # buildID for its appVersion. Zero published Releases is green with a named count. FAILs naming the
+      # endpoint or Release on any unreadable input, never SKIPs.
+      "descriptor-monotonic|node $REPO_ROOT/scripts/verify-descriptor-monotonic.mjs"
 
       # NEW (Phase 47, DIST-03): the live updates repo holds no functions/ directory and no root
       # _worker.js, by the absence property over one read-only recursive tree listing. Full tier:
