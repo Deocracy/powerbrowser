@@ -6926,7 +6926,7 @@ function installTooltipsAndLinkStatus(window) {
 // with upstream and with the two row dispatchers. The fullscreen media row lands
 // with the fullscreen stand-ins (35-07). A `dynamic` row has no upstream id: it
 // expands into one row per PAGE_MENU_DYNAMIC label (spelling suggestions are
-// dictionary words), ids `<kind>-<index>`.
+// dictionary words), ids `<kind>-<index>`; extension entries (D-16) arrive built.
 const PAGE_MENU_ROWS = Object.freeze([
   { id: "context-back", l10n: "main-context-menu-back-2", when: "navigation", runs: "frontend", group: "navigation" },
   { id: "context-forward", l10n: "main-context-menu-forward-2", when: "navigation", runs: "frontend", group: "navigation" },
@@ -6986,6 +6986,7 @@ const PAGE_MENU_ROWS = Object.freeze([
   { id: "context-viewsource", l10n: "main-context-menu-view-page-source", when: "viewSource", runs: "frontend", group: "inspect" },
   { id: "context-inspect-a11y", l10n: "main-context-menu-inspect-a11y-properties", when: "inspectA11y", runs: "chrome", group: "inspect" },
   { id: "context-inspect", l10n: "main-context-menu-inspect", when: "inspect", runs: "chrome", group: "inspect" },
+  { dynamic: "extension-entry", when: "extensionEntries", runs: "chrome", group: "extension" },
 ]);
 
 // Upstream's show, disable and check conditions (nsContextMenu.sys.mjs), read
@@ -7060,6 +7061,7 @@ const PAGE_MENU_WHEN = Object.freeze({
   viewSource: f => f.viewableTop && !(f.contentSelected || f.onImage || f.onCanvas || f.onVideo || f.onAudio || f.onLink || f.onTextInput), // :830-839
   inspect: f => f.showInspect, // :842-846
   inspectA11y: f => f.showInspect && f.showInspectA11y, // :848-855
+  extensionEntries: f => f.extensionEntries.length > 0, // D-16: what ext-menus built into the stub, after the stock rows
 });
 
 const PAGE_MENU_TTL_MS = 60000;
@@ -7162,6 +7164,10 @@ function pageMenuItems(rows, facts, offered) {
     }
     if (row.dynamic) {
       for (const [i, label] of PAGE_MENU_DYNAMIC[row.dynamic](facts).entries()) {
+        if (typeof label !== "string") {
+          items.push(label); // an extension entry, built and offered by pageMenuExtensionItems
+          continue;
+        }
         items.push({ id: `${row.dynamic}-${i}`, label, enabled: true, group: row.group });
         offered.add(`${row.dynamic}-${i}`);
       }
@@ -7221,7 +7227,7 @@ function installPageContextMenu(window) {
       }
       openPageMenu(window, theiaBrowser, state, data).catch(err => {
         PowerBrowserAPI.log("error", `[web-tab] pageContextMenu failed: ${err && err.message ? err.message : err}`);
-        data.actor.hiding();
+        pageMenuClose(data);
       });
     },
     true
@@ -7231,18 +7237,21 @@ function installPageContextMenu(window) {
 async function openPageMenu(window, theiaBrowser, state, data) {
   const tabId = tabIdOfBrowser(data.browser);
   const menuId = ++state.nextMenuId;
-  state.pending?.data.actor.hiding();
-  const pending = { menuId, tabId, data, facts: null, offered: new Set(), at: Date.now() };
+  if (state.pending) {
+    pageMenuClose(state.pending.data);
+  }
+  const pending = { menuId, tabId, data, facts: null, offered: new Set(), extensionItems: new Map(), at: Date.now() };
   state.pending = pending;
   const [facts] = await Promise.all([pageMenuFacts(data), pageMenuFormatLabels(pageMenuFlatRows())]);
   if (state.pending !== pending) {
     return; // a newer right-click replaced this one while the strings formatted
   }
   pending.facts = facts;
+  facts.extensionEntries = pageMenuExtensionEntries(window, data, facts, pending);
   const items = pageMenuItems(PAGE_MENU_ROWS, facts, pending.offered);
   if (!items.length) {
     state.pending = null;
-    data.actor.hiding();
+    pageMenuClose(data);
     return;
   }
   // Theia-frame client pixels from the device-pixel screen point the child sent.
@@ -7302,7 +7311,7 @@ async function handlePageMenuAction(data, actorRef) {
     PowerBrowserAPI.log("error", `[web-tab] ${kind} failed: ${err && err.message ? err.message : err}`);
     return { ok: false, reason: "failed", message: "handleWebTabAction: the page menu row failed" };
   } finally {
-    pending.data.actor.hiding();
+    pageMenuClose(pending.data);
   }
 }
 
@@ -7390,6 +7399,9 @@ async function runPageMenuRow(id, pending, state, itemId) {
     case "context-inspect-a11y":
     case "context-inspect": // inspectA11Y / inspectNode (:1424-1436), on the toolbox the 32-07 devtools route opened (D-13)
       return pageMenuInspect(id, pending);
+    case "extension-entry": // ext-menus listens for command on each item it built (ext-menus.js:385-440)
+      pending.extensionItems.get(itemId).doCommand();
+      return { where: "done" };
     default:
       throw new Error(`no dispatcher arm for ${id}`);
   }
@@ -7496,6 +7508,7 @@ ChromeUtils.defineESModuleGetters(pageToolsLazy, {
 // Rows with no upstream id: one row per label (D-12). Spelling suggestions are dictionary words, rendered verbatim.
 const PAGE_MENU_DYNAMIC = Object.freeze({
   "spell-suggestion": f => f.spellSuggestions,
+  "extension-entry": f => f.extensionEntries, // built items (35-05): their labels and ids come from the stub
 });
 
 const pageMenuRowOf = itemId => pageMenuFlatRows().find(row => row.id === itemId || (row.dynamic && itemId.startsWith(`${row.dynamic}-`)));
@@ -7588,4 +7601,97 @@ async function pageMenuInspect(id, pending) {
     PowerBrowserAPI.log("error", `[web-tab] inspect failed (${err && err.name ? err.name : "error"})`);
   });
   return { where: "done" };
+}
+
+// 35-05 (D-16, EXT-08): extension entries. Upstream's nsContextMenu constructor
+// notifies on-build-contextmenu with this subject (nsContextMenu.sys.mjs:147-180)
+// and ext-menus builds each extension's menus entries into subject.menu
+// (ext-menus.js:51-60, 1046-1050), appended after a separator (:188-201). Here
+// subject.menu is the #contentAreaContextMenu stub, which never opens, and each
+// field is derived from the captured data as setContext derives it (:196-305).
+// verify-shell-furniture.mjs rule 8 compares this literal's keys with upstream's.
+function pageMenuExtensionEntries(window, data, facts, pending) {
+  const context = data.context;
+  const stub = window.document.getElementById("contentAreaContextMenu");
+  let linkURI = null;
+  try {
+    linkURI = Services.io.newURI(context.linkURL);
+  } catch {} // e.g. an empty URL string (getLinkURI, :2398-2406)
+  const subject = {
+    menu: stub,
+    tab: window.gBrowser?.getTabForBrowser(data.browser),
+    timeStamp: context.timeStamp,
+    isContentSelected: facts.contentSelected,
+    inFrame: context.inFrame,
+    isTextSelected: facts.selected,
+    onTextInput: context.onTextInput,
+    onLink: context.onLink,
+    onImage: context.onImage,
+    onVideo: context.onVideo,
+    onAudio: context.onAudio,
+    onCanvas: context.onCanvas,
+    onEditable: context.onEditable,
+    onSpellcheckable: context.onSpellcheckable,
+    onPassword: context.onPassword,
+    passwordRevealed: context.passwordRevealed,
+    srcUrl: context.originalMediaURL || facts.mediaURL,
+    frameUrl: data.docLocation,
+    pageUrl: data.browser.currentURI.spec,
+    linkText: context.linkTextStr,
+    linkUrl: context.linkURL,
+    linkURI,
+    selectionText: facts.selected ? data.selectionInfo.fullText : undefined,
+    frameId: context.frameID,
+    webExtBrowserType: data.browser.getAttribute("webextension-view-type"),
+    webExtContextData: data.webExtContextData,
+  };
+  subject.wrappedJSObject = subject;
+  Services.obs.notifyObservers(subject, "on-build-contextmenu");
+  return pageMenuExtensionItems(stub, pending);
+}
+
+// The stub's children after the notify, as page menu items: a menuitem is a row
+// (label, disabled, and checked for a checkbox or radio), a menu a submenu of its
+// menupopup's items, a menuseparator a group break. Ids are extension-entry-<n>,
+// each element kept for the pick; enabled leaves are offered. Labels are the
+// extension's plain text. Icons are not forwarded: the Theia frame cannot load
+// moz-extension: images, so the rows are label-only (UI-SPEC).
+function pageMenuExtensionItems(popup, pending, groups = { n: 0 }) {
+  const items = [];
+  for (const element of popup.children) {
+    if (element.localName === "menuseparator") {
+      groups.n++;
+      continue;
+    }
+    if (element.hidden || (element.localName !== "menuitem" && element.localName !== "menu")) {
+      continue;
+    }
+    const id = `extension-entry-${pending.extensionItems.size}`;
+    pending.extensionItems.set(id, element);
+    const item = { id, label: element.getAttribute("label") ?? "", enabled: element.getAttribute("disabled") !== "true", group: `extension-${groups.n}` };
+    if (element.localName === "menu") {
+      item.children = pageMenuExtensionItems(element.querySelector(":scope > menupopup"), pending, { n: 0 });
+      if (!item.children.length) {
+        continue;
+      }
+    } else {
+      if (["checkbox", "radio"].includes(element.getAttribute("type"))) {
+        item.checked = element.getAttribute("checked") === "true";
+      }
+      if (item.enabled) {
+        pending.offered.add(id);
+      }
+    }
+    items.push(item);
+  }
+  return items;
+}
+
+// Every close of a page menu, picked or dismissed: ext-menus removes its items
+// on the stub's popuphidden (ext-menus.js:560-572 checks only the target and
+// type), then the actor hears the menu is gone.
+function pageMenuClose(data) {
+  const window = data.browser.ownerGlobal;
+  window.document.getElementById("contentAreaContextMenu").dispatchEvent(new window.Event("popuphidden"));
+  data.actor.hiding();
 }

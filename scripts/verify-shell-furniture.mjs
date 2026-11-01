@@ -39,11 +39,15 @@
 //      A `dynamic` row (no upstream id) is accepted only for a kind in
 //      DYNAMIC_KINDS, each with its reason.
 //   6. Page menu actions. The `runs: "chrome"` ids (a dynamic row by its kind)
-//      equal the `case "context-..."` / `case "spell-..."` arms of runPageMenuRow,
+//      equal the `case "context-..."` / `case "spell-..."` / `case "extension-..."` arms of runPageMenuRow,
 //      and the `runs: "frontend"` ids equal the keys of FRONTEND_ROWS in
 //      page-context-menu.ts, both as set equality.
 //   7. Page menu policy. #powerbrowser-content carries disablecontextmenu="true"
 //      (ContextMenuParent.sys.mjs:29), so an IDE right-click never reaches the shim.
+//   8. Extension subject (35-05, D-16). The keys of the section's `const subject = {`
+//      literal (the on-build-contextmenu subject) equal the keys of upstream's
+//      `let subject = {` literal in nsContextMenu.sys.mjs, as set equality, so
+//      ext-menus reads every field it reads in Firefox and nothing invented.
 //
 // A section, block or selector that cannot be found, or empty A and B, is a BROKEN
 // INSTRUMENT, never a clean pass. `--self-test` asserts the clean tree green,
@@ -70,6 +74,7 @@ const FILES = {
   textActionsFtl: 'upstream/toolkit/locales/en-US/toolkit/global/textActions.ftl',
   browserProperties: 'upstream/browser/locales/en-US/chrome/browser/browser.properties',
   pageMenu: 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts',
+  nsContextMenu: 'upstream/browser/base/content/nsContextMenu.sys.mjs',
 };
 const UPSTREAM_KEYS = ['popupset', 'fullscreen'];
 const SECTION_HEADER = '// Phase 35: shell furniture.';
@@ -80,6 +85,7 @@ const INCLUDE_MARK = 'PB_FURNITURE_UPSTREAM_INCLUDE';
 // Page menu rows with no upstream element id, each with the reason it has none (35-04).
 const DYNAMIC_KINDS = new Map([
   ['spell-suggestion', 'spelling suggestions are dictionary words the spell checker returns; upstream inserts them as unnamed menuitems (InlineSpellChecker.sys.mjs _addSuggestionsToMenu), so no upstream id exists'],
+  ['extension-entry', 'extension entries are built by ext-menus into the stub from each extension\'s menus.create calls (ext-menus.js buildSingleElement); their labels and element ids come from the extension, so no upstream id exists'],
 ]);
 
 function readInputs() {
@@ -92,6 +98,22 @@ function readInputs() {
     }
   }
   return inputs;
+}
+
+// The top-level keys of the object literal opened on the first line matching `declRe` and closed by `};` at its indent.
+function literalKeys(text, declRe) {
+  const lines = text.split('\n');
+  const at = lines.findIndex(line => declRe.test(line));
+  if (at === -1) return null;
+  const indent = /^\s*/.exec(lines[at])[0];
+  const keyRe = new RegExp(`^${indent}  ([A-Za-z_$][\\w$]*)(?::|,\\s*$)`);
+  const keys = [];
+  for (let i = at + 1; i < lines.length; i++) {
+    if (lines[i] === `${indent}};`) return keys;
+    const m = keyRe.exec(lines[i]);
+    if (m) keys.push(m[1]);
+  }
+  return null;
 }
 
 const codeLines = text => text.split('\n').filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line));
@@ -307,7 +329,7 @@ function check(inputs) {
   // Rule 6: chrome rows == runPageMenuRow arms; frontend rows == FRONTEND_ROWS keys.
   const dispatcherAt = sectionCode.search(/^async function runPageMenuRow\(/m);
   const dispatcher = dispatcherAt === -1 ? '' : sectionCode.slice(dispatcherAt, sectionCode.indexOf('\n}', dispatcherAt));
-  const arms = new Set([...dispatcher.matchAll(/case "((?:context|spell)-[^"]+)"/g)].map(m => m[1]));
+  const arms = new Set([...dispatcher.matchAll(/case "((?:context|spell|extension)-[^"]+)"/g)].map(m => m[1]));
   const frontendAt = inputs.pageMenu.indexOf('const FRONTEND_ROWS');
   const frontendKeys = new Set(frontendAt === -1 ? [] : [...inputs.pageMenu.slice(frontendAt, inputs.pageMenu.indexOf('});', frontendAt)).matchAll(/^\s*'(context-[^']+)':/gm)].map(m => m[1]));
   if (!arms.size) return { broken: [`no case "context-..." arms in runPageMenuRow in ${FILES.api}: rule 6 would prove nothing`], failures };
@@ -328,7 +350,15 @@ function check(inputs) {
   if (!content) return { broken: [`no #powerbrowser-content browser in ${FILES.xhtml}`], failures };
   if (!/\sdisablecontextmenu="true"/.test(content[0])) failures.push('POLICY: #powerbrowser-content does not carry disablecontextmenu="true" (ContextMenuParent.sys.mjs:29): an IDE right-click would reach the page menu');
 
-  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}}, each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu` };
+  // Rule 8: the on-build-contextmenu subject has exactly upstream's keys.
+  const upstreamSubject = literalKeys(inputs.nsContextMenu, /^\s*let subject = \{$/);
+  const shellSubject = literalKeys(sectionCode, /^\s*const subject = \{$/);
+  if (!upstreamSubject?.length) return { broken: [`no 'let subject = {' literal in ${FILES.nsContextMenu}: rule 8 would prove nothing`], failures };
+  if (!shellSubject) return { broken: [`no 'const subject = {' literal in the Phase 35 section of ${FILES.api}: rule 8 would prove nothing`], failures };
+  for (const key of upstreamSubject.filter(k => !shellSubject.includes(k))) failures.push(`SUBJECT: key ${key} of upstream's on-build-contextmenu subject (${FILES.nsContextMenu}) is missing from the section's subject`);
+  for (const key of shellSubject.filter(k => !upstreamSubject.includes(k))) failures.push(`SUBJECT: key ${key} of the section's subject is not in upstream's on-build-contextmenu subject`);
+
+  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}}, each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys` };
 }
 
 function report(result) {
@@ -361,6 +391,8 @@ function selfTest() {
     { name: '(l) a frontend row with no frontend handler', key: 'pageMenu', mutate: t => t.replace(/^\s*'context-stop':.*\n/m, ''), expect: `ACTIONS: frontend rows with no FRONTEND_ROWS handler in ${FILES.pageMenu}: context-stop` },
     { name: '(m) disablecontextmenu removed from the Theia frame', key: 'xhtml', mutate: t => t.replace(' disablecontextmenu="true"', ''), expect: 'POLICY: #powerbrowser-content does not carry disablecontextmenu="true"' },
     { name: '(n) a dynamic row of an unknown kind', key: 'api', mutate: t => t.replace('{ dynamic: "spell-suggestion",', '{ dynamic: "zzz-planted",'), expect: 'ROWS: dynamic row kind "zzz-planted" is not in DYNAMIC_KINDS' },
+    { name: '(o) a key dropped from the on-build-contextmenu subject', key: 'api', mutate: t => t.replace(/^ {4}frameId: context\.frameID,\n/m, ''), expect: 'SUBJECT: key frameId of upstream\'s on-build-contextmenu subject' },
+    { name: '(p) an invented key in the on-build-contextmenu subject', key: 'api', mutate: t => t.replace(/^( {4}frameId: context\.frameID,\n)/m, '$1    zzzPlanted: true,\n'), expect: 'SUBJECT: key zzzPlanted of the section\'s subject is not in upstream\'s' },
   ];
   let failed = false;
   for (const plant of plants) {
@@ -383,7 +415,7 @@ function selfTest() {
     console.error(`${NAME} --self-test: FAIL`);
     process.exit(1);
   }
-  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (n) each landed and went red naming their drift`);
+  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (p) each landed and went red naming their drift`);
 }
 
 if (process.argv.includes('--self-test')) {

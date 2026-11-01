@@ -12,6 +12,9 @@
  * no row run. A save-target row (35-04) is the one two-step pick: chrome
  * answers `save-pick`, Theia's save dialog runs, and a second message carries
  * the same menu and row plus the picked path (or the dismiss on cancel).
+ * Extension entries (35-05, D-16) are chrome-run rows like any other: ext-menus
+ * builds them, chrome forwards them after the stock rows in their own groups,
+ * label-only, and their labels render as the extension's plain text.
  */
 
 import { inject, injectable } from '@theia/core/shared/inversify';
