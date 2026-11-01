@@ -178,3 +178,27 @@ Not verified (owner checks at apply, `nixos-rebuild dry-build` does not catch ei
 - The module's behaviour with a static `user` plus a custom `workDir`: state directory ownership and sandbox write paths.
 - Rootless podman for `pb-runner` (`podman` is in `extraPackages` and `autoSubUidGidRange` is set, but nothing has run a container as that user).
 - Whether the runner lets the unit choose the hook's interpreter (see step 4).
+
+## 49-04: descriptor and channel-live gaps (2026-10-31)
+
+Nothing below was run. No descriptor was committed, no token was minted, no environment was approved.
+
+1. **Artifact retention against the descriptor wait.** `release-linux` and `release-linux-identity` keep
+   `retention-days: 1` (the `release-shape` row requires it). The `descriptor` environment waits 1440
+   minutes after `sign-publish`, so both artifacts have usually expired before `descriptor` and
+   `channel-live` run. Both jobs then fail closed at the download step. This works only if the owner
+   bypasses the wait after the own N-1 to N hop, within a day of the build. Durable fix (owner decision):
+   attach `release-manifest.json` to the Release, which `descriptor-monotonic` already expects, and have
+   the descriptor job read the manifest and the identity files from a durable source.
+2. **release-manifest.json is not a Release asset.** `descriptor-monotonic` FAILs when a published
+   Release has no `release-manifest.json` asset, and `channel-live` without `--manifest` reads the same
+   asset. The asset set (`verify-release-asset-set.mjs`, `docs/RELEASING.md`) does not include it, and
+   the manifest's `host` field names the build machine. The owner decides whether to publish it, and
+   whether to publish it without `host`.
+3. **Bot App credentials in the descriptor environment.** The descriptor job mints the bot App token
+   (`vars.BOT_APP_CLIENT_ID`, `secrets.BOT_APP_PRIVATE_KEY`, scoped `repositories: powerbrowser-updates`).
+   If both live only in the `release` environment, set them at repository level or in `descriptor` as well.
+   Without them the mint fails and nothing is committed.
+4. **Reading the updates repo with the default token.** `channel-live` reads
+   `<owner>/<repo>-updates/contents/...` with the job's `github.token`. That works only because the
+   updates repo is public. Confirm on the first run.
