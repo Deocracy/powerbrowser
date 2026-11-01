@@ -279,16 +279,17 @@ export type WebTabMessage =
     | { kind: 'webTabSavePick'; tabId: string }
     | { kind: 'webTabSaveExport'; tabId: string; path: string }
     // Phase 32 plan 06 (PAGE-09): the chrome-help edit set the edit-today probe recorded. Keys never send this kind;
-    // only a Theia-initiated Edit item does. checkOnly reads enablement and runs nothing.
-    | { kind: 'webTabEdit'; tabId: string; cmd: 'cmd_undo' | 'cmd_redo' | 'cmd_cut' | 'cmd_copy' | 'cmd_paste' | 'cmd_selectAll' | 'cmd_delete'; checkOnly?: boolean }
+    // only a Theia-initiated Edit item does (a page menu row is one, 35-04, which adds cmd_copyImage). checkOnly reads enablement and runs nothing.
+    | { kind: 'webTabEdit'; tabId: string; cmd: 'cmd_undo' | 'cmd_redo' | 'cmd_cut' | 'cmd_copy' | 'cmd_paste' | 'cmd_selectAll' | 'cmd_delete' | 'cmd_copyImage'; checkOnly?: boolean }
     // Phase 32 plan 07 (PAGE-10): reader enter/leave (same overlay), view source (the inner page is the overlay's own; the
     // source URL is minted chrome-side, never sent by the frame) and DevTools (the stock toolbox window for this tab, minted chrome-side).
     | { kind: 'webTabReader'; tabId: string; enter: boolean }
     | { kind: 'webTabViewSource'; tabId: string; inNewTab?: boolean }
     | { kind: 'webTabDevtools'; tabId: string }
     // Phase 35 plan 03 (PROMPT-04, D-09): the page menu pick, privileged. It names the tab, chrome's menu id and an
-    // offered row id (null dismisses); never a URL. Sent only from chrome-bar's page-context-menu.ts.
-    | { kind: 'webTabContextMenuAction'; tabId: string; menuId: number; itemId: string | null };
+    // offered row id (null dismisses); never a URL. Sent only from chrome-bar's page-context-menu.ts. `path` (35-04)
+    // answers a save row's `save-pick` reply with the file the user picked in Theia's save dialog.
+    | { kind: 'webTabContextMenuAction'; tabId: string; menuId: number; itemId: string | null; path?: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:

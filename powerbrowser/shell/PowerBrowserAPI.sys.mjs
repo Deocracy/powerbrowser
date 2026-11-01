@@ -6502,8 +6502,9 @@ export const PowerBrowserTabHost = Object.freeze({
 // ---------------------------------------------------------------------------
 // Phase 32 plan 06 (PAGE-09): probe-gated edit commands. The set is the chrome-help subset the edit-today
 // probe recorded (scripts/lib/pb-probe-verdicts.json). cmd_pasteNoFormatting had no chrome effect there, so
-// it has no kind. Frozen: the union, the Edit items and verify-page-tools-edit.mjs derive from this list.
-const WEB_TAB_EDIT_CMDS = Object.freeze(["cmd_undo", "cmd_redo", "cmd_cut", "cmd_copy", "cmd_paste", "cmd_selectAll", "cmd_delete"]);
+// it has no kind (and the page menu omits Paste Without Formatting, 35-04). cmd_copyImage is the page menu's Copy
+// Image (35-04). Frozen: the union, the Edit items and verify-page-tools-edit.mjs derive from this list.
+const WEB_TAB_EDIT_CMDS = Object.freeze(["cmd_undo", "cmd_redo", "cmd_cut", "cmd_copy", "cmd_paste", "cmd_selectAll", "cmd_delete", "cmd_copyImage"]);
 
 // The chrome route is the Controllers actor (ControllersParent.sys.mjs). A remote overlay has no parent-side
 // docShell, so `docShell.doCommand` is not reachable. The child (ControllersChild) runs its own docShell
@@ -6717,7 +6718,7 @@ function webTabReaderReply(kind, tabId, enter) {
 // View source (PAGE-10): the inner URL is this overlay's own page, validated chrome-side. The view-source: load is minted
 // here through the overlay's navigation, the webTabNavigate shape. The ViewSource actor is child-only and is never messaged.
 // A new overlay for the source is not built (inNewTab is refused).
-function webTabViewSourceReply(kind, tabId, inNewTab) {
+function webTabViewSourceReply(kind, tabId, inNewTab, frameUrl) {
   const entry = webTabs.get(tabId);
   if (!entry) {
     return { ok: true, kind, where: "unknown-tab" };
@@ -6725,7 +6726,7 @@ function webTabViewSourceReply(kind, tabId, inNewTab) {
   if (inNewTab) {
     return { ok: false, reason: "unavailable", message: "handleWebTabAction: a view-source overlay is not built; use the same tab" };
   }
-  const inner = entry.browser.currentURI ? entry.browser.currentURI.spec : "";
+  const inner = frameUrl ?? (entry.browser.currentURI ? entry.browser.currentURI.spec : ""); // frameUrl: the page menu's View Frame Source (35-04)
   if (!/^(https?|file):/i.test(inner)) {
     return { ok: false, reason: "validation", message: "handleWebTabAction: view source needs a web or file page" };
   }
@@ -6923,13 +6924,21 @@ function installTooltipsAndLinkStatus(window) {
 // predicates (shown, disabled, checked, replaced by the refusal row), `runs`
 // says who performs it. verify-shell-furniture.mjs rules 5-6 compare every field
 // with upstream and with the two row dispatchers. The fullscreen media row lands
-// with the fullscreen stand-ins (35-07); 35-04 adds the page-tool rows.
+// with the fullscreen stand-ins (35-07). A `dynamic` row has no upstream id: it
+// expands into one row per PAGE_MENU_DYNAMIC label (spelling suggestions are
+// dictionary words), ids `<kind>-<index>`.
 const PAGE_MENU_ROWS = Object.freeze([
   { id: "context-back", l10n: "main-context-menu-back-2", when: "navigation", runs: "frontend", group: "navigation" },
   { id: "context-forward", l10n: "main-context-menu-forward-2", when: "navigation", runs: "frontend", group: "navigation" },
   { id: "context-reload", l10n: "main-context-menu-reload", when: "reload", runs: "frontend", group: "navigation" },
   { id: "context-stop", l10n: "main-context-menu-stop", when: "stop", runs: "frontend", group: "navigation" },
+  { id: "context-bookmarkpage", l10n: "main-context-menu-bookmark-page", when: "bookmarkPage", runs: "frontend", group: "navigation" },
+  { id: "spell-no-suggestions", l10n: "text-action-spell-no-suggestions", when: "spellNoSuggestions", off: "always", group: "spell" },
+  { dynamic: "spell-suggestion", when: "spellSuggestions", runs: "chrome", group: "spell" },
+  { id: "spell-add-to-dictionary", l10n: "text-action-spell-add-to-dictionary", when: "onMisspelling", runs: "chrome", group: "spell" },
+  { id: "spell-undo-add-to-dictionary", l10n: "text-action-spell-undo-add-to-dictionary", when: "spellUndo", runs: "chrome", group: "spell" },
   { id: "context-openlinkintab", l10n: "main-context-menu-open-link-new-tab", when: "openLink", refuse: "linkNotWeb", runs: "chrome", group: "open" },
+  { id: "context-savelink", l10n: "main-context-menu-save-link", when: "saveLink", runs: "chrome", group: "copy" },
   { id: "context-copyemail", l10n: "main-context-menu-copy-email", when: "mailtoLink", runs: "chrome", group: "copy" },
   { id: "context-copylink", l10n: "main-context-menu-copy-link-simple", when: "copyLink", runs: "chrome", group: "copy" },
   { id: "context-stripOnShareLink", l10n: "main-context-menu-copy-clean-link", when: "stripOnShare", off: "cannotStrip", runs: "chrome", group: "copy" },
@@ -6950,16 +6959,31 @@ const PAGE_MENU_ROWS = Object.freeze([
   { id: "context-viewvideo", l10n: "main-context-menu-video-view-new-tab", when: "viewVideo", runs: "chrome", group: "media-view" },
   { id: "context-reloadimage", l10n: "main-context-menu-image-reload", when: "reloadImage", runs: "chrome", group: "image" },
   { id: "context-viewimage", l10n: "main-context-menu-image-view-new-tab", when: "viewImage", runs: "chrome", group: "image" },
+  { id: "context-saveimage", l10n: "main-context-menu-image-save-as", when: "saveImage", runs: "chrome", group: "image" },
+  { id: "context-savevideo", l10n: "main-context-menu-video-save-as", when: "saveVideo", runs: "chrome", group: "image" },
+  { id: "context-saveaudio", l10n: "main-context-menu-audio-save-as", when: "saveAudio", runs: "chrome", group: "image" },
+  { id: "context-copyimage-contents", l10n: "main-context-menu-image-copy", when: "copyImageContents", runs: "frontend", group: "image" },
   { id: "context-copyimage", l10n: "main-context-menu-image-copy-link", when: "copyImage", runs: "chrome", group: "image" },
   { id: "context-copyvideourl", l10n: "main-context-menu-video-copy-link", when: "onVideo", off: "noMediaURL", runs: "chrome", group: "image" },
   { id: "context-copyaudiourl", l10n: "main-context-menu-audio-copy-link", when: "onAudio", off: "noMediaURL", runs: "chrome", group: "image" },
   { id: "context-viewimagedesc", l10n: "main-context-menu-image-desc", when: "viewImageDesc", runs: "chrome", group: "image" },
+  { id: "context-savepage", l10n: "main-context-menu-page-save", when: "savePage", runs: "frontend", group: "page" },
+  { id: "context-undo", l10n: "text-action-undo", when: "onTextInput", off: "cmdUndoOff", runs: "frontend", group: "undo" },
+  { id: "context-redo", l10n: "text-action-redo", when: "onTextInput", off: "cmdRedoOff", runs: "frontend", group: "undo" },
+  { id: "context-cut", l10n: "text-action-cut", when: "onTextInput", off: "cmdCutOff", runs: "frontend", group: "edit" },
+  { id: "context-copy", l10n: "text-action-copy", when: "copy", off: "cmdCopyOff", runs: "frontend", group: "edit" },
+  { id: "context-paste", l10n: "text-action-paste", when: "onTextInput", off: "cmdPasteOff", runs: "frontend", group: "edit" },
+  { id: "context-delete", l10n: "text-action-delete", when: "onTextInput", off: "cmdDeleteOff", runs: "frontend", group: "edit" },
+  { id: "context-selectall", l10n: "text-action-select-all", when: "selectAll", off: "cmdSelectAllOff", runs: "frontend", group: "edit" },
   { id: "context-searchselect", bundle: "contextMenuSearch", when: "search", runs: "chrome", group: "search" },
   { id: "frame", l10n: "main-context-menu-frame", when: "inFrame", group: "frame", children: [
     { id: "context-showonlythisframe", l10n: "main-context-menu-frame-show-this", when: "frameTarget", runs: "chrome", group: "frame-open" },
     { id: "context-openframeintab", l10n: "main-context-menu-frame-open-tab", when: "frameTarget", runs: "chrome", group: "frame-open" },
     { id: "context-reloadframe", l10n: "main-context-menu-frame-reload", when: "always", runs: "chrome", group: "frame-reload" },
+    { id: "context-viewframesource", l10n: "main-context-menu-frame-view-source", when: "frameSource", runs: "chrome", group: "frame-source" },
   ] },
+  { id: "spell-check-enabled", l10n: "text-action-spell-check-toggle", when: "canSpell", on: "spellEnabled", runs: "chrome", group: "spell-check" },
+  { id: "context-viewsource", l10n: "main-context-menu-view-page-source", when: "viewSource", runs: "frontend", group: "inspect" },
   { id: "context-inspect-a11y", l10n: "main-context-menu-inspect-a11y-properties", when: "inspectA11y", runs: "chrome", group: "inspect" },
   { id: "context-inspect", l10n: "main-context-menu-inspect", when: "inspect", runs: "chrome", group: "inspect" },
 ]);
@@ -6971,6 +6995,7 @@ const PAGE_MENU_ROWS = Object.freeze([
 const pageMenuOnMedia = f => !!(f.onVideo || f.onAudio);
 const pageMenuNavigation = f => !(f.selected || f.onLink || f.onImage || f.onCanvas || f.onVideo || f.onAudio || f.onTextInput); // :548-557
 const pageMenuRate = rate => f => f.target?.playbackRate === rate;
+const pageMenuCommandOff = cmd => f => !f.commands[cmd]; // the page's own command state, as goUpdateGlobalEditMenuItems reads it
 const PAGE_MENU_WHEN = Object.freeze({
   always: () => true,
   navigation: pageMenuNavigation,
@@ -7008,6 +7033,31 @@ const PAGE_MENU_WHEN = Object.freeze({
   search: f => f.search !== null,
   inFrame: f => !!f.inFrame, // :897
   frameTarget: f => !f.inSrcdocFrame && f.webFrame, // :921-922
+  bookmarkPage: f => !(f.contentSelected || f.onTextInput || f.onLink || f.onImage || f.onVideo || f.onAudio || f.onCanvas), // :872-886
+  spellNoSuggestions: f => f.onMisspelling && !f.spellSuggestions.length, // :965-978
+  spellSuggestions: f => f.onMisspelling && f.spellSuggestions.length > 0,
+  onMisspelling: f => f.onMisspelling,
+  spellUndo: f => f.canSpell && f.spellUndo,
+  canSpell: f => f.canSpell,
+  spellEnabled: f => f.canSpell && f.spellEnabled,
+  saveLink: f => f.onSaveableLink && f.webLink, // :637-640, a link the shell can fetch
+  saveImage: f => f.onLoadedImage && f.webMedia, // :730-734 (a canvas has no URL to save)
+  saveVideo: f => f.onVideo && f.webMedia, // :653-657
+  saveAudio: f => f.onAudio && f.webMedia,
+  copyImageContents: f => !!(f.onImage || f.onCanvas), // :748
+  savePage: f => !(f.onTextInput || f.onLink || f.contentSelected || f.onImage || f.onCanvas || f.onVideo || f.onAudio), // :625-634
+  onTextInput: f => !!f.onTextInput, // :1004-1010
+  copy: f => !!(f.contentSelected || f.onTextInput),
+  selectAll: f => !(f.onLink || f.onImage || f.onVideo || f.onAudio || f.inSyntheticDoc) || !!f.isDesignMode,
+  cmdUndoOff: pageMenuCommandOff("cmd_undo"),
+  cmdRedoOff: pageMenuCommandOff("cmd_redo"),
+  cmdCutOff: pageMenuCommandOff("cmd_cut"),
+  cmdCopyOff: pageMenuCommandOff("cmd_copy"),
+  cmdPasteOff: pageMenuCommandOff("cmd_paste"),
+  cmdDeleteOff: pageMenuCommandOff("cmd_delete"),
+  cmdSelectAllOff: pageMenuCommandOff("cmd_selectAll"),
+  frameSource: f => f.frameSource, // :927-931
+  viewSource: f => f.viewableTop && !(f.contentSelected || f.onImage || f.onCanvas || f.onVideo || f.onAudio || f.onLink || f.onTextInput), // :830-839
   inspect: f => f.showInspect, // :842-846
   inspectA11y: f => f.showInspect && f.showInspectA11y, // :848-855
 });
@@ -7093,7 +7143,7 @@ async function pageMenuFormatLabels(rows) {
   if (!missing.length) {
     return;
   }
-  pageMenuStrings ??= new Localization(["browser/browserContext.ftl", "branding/brand.ftl"]);
+  pageMenuStrings ??= new Localization(["browser/browserContext.ftl", "toolkit/global/textActions.ftl", "branding/brand.ftl"]);
   const messages = await pageMenuStrings.formatMessages(missing.map(id => ({ id, args: { shortcut: "" } })));
   missing.forEach((id, i) => {
     const attrs = new Map((messages[i]?.attributes ?? []).map(attr => [attr.name, attr.value]));
@@ -7108,6 +7158,13 @@ function pageMenuItems(rows, facts, offered) {
   const items = [];
   for (const row of rows) {
     if (!PAGE_MENU_WHEN[row.when](facts)) {
+      continue;
+    }
+    if (row.dynamic) {
+      for (const [i, label] of PAGE_MENU_DYNAMIC[row.dynamic](facts).entries()) {
+        items.push({ id: `${row.dynamic}-${i}`, label, enabled: true, group: row.group });
+        offered.add(`${row.dynamic}-${i}`);
+      }
       continue;
     }
     const refused = !!(row.refuse && PAGE_MENU_WHEN[row.refuse](facts));
@@ -7221,13 +7278,26 @@ async function handlePageMenuAction(data, actorRef) {
     if (data.itemId === null) {
       return { ok: true, kind, where: "dismissed" };
     }
+    if (pending.savePick !== undefined || data.path !== undefined) {
+      // T-35-14: a path answers only this menu's pending save pick; the target stays the captured URL.
+      if (pending.savePick !== data.itemId || !pageMenuSavePathOk(data.path)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a save path this menu did not ask for" };
+      }
+      return { ok: true, kind, ...(await pageMenuSave(pending, data.path)) };
+    }
     if (!pending.offered.has(data.itemId)) {
       return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a row this menu did not offer" };
     }
-    if (pageMenuFlatRows().find(row => row.id === data.itemId).runs === "frontend") {
+    const row = pageMenuRowOf(data.itemId);
+    if (row.runs === "frontend") {
       return { ok: true, kind, where: "frontend" };
     }
-    return { ok: true, kind, ...(await runPageMenuRow(data.itemId, pending, state)) };
+    const result = await runPageMenuRow(row.id ?? row.dynamic, pending, state, data.itemId);
+    if (result.where === "save-pick") {
+      pending.savePick = data.itemId; // kept for the one path reply (T-35-14)
+      state.pending = pending;
+    }
+    return { ok: true, kind, ...result };
   } catch (err) {
     PowerBrowserAPI.log("error", `[web-tab] ${kind} failed: ${err && err.message ? err.message : err}`);
     return { ok: false, reason: "failed", message: "handleWebTabAction: the page menu row failed" };
@@ -7237,7 +7307,7 @@ async function handlePageMenuAction(data, actorRef) {
 }
 
 // The chrome-run rows: browser-context.js's arms and the menu-class methods they call.
-async function runPageMenuRow(id, pending, state) {
+async function runPageMenuRow(id, pending, state, itemId) {
   const { data, facts } = pending;
   const context = data.context;
   const actor = data.actor;
@@ -7302,6 +7372,21 @@ async function runPageMenuRow(id, pending, state) {
     case "context-reloadframe": // reloadFrame (:1586-1589), never forced
       actor.reloadFrame(context.targetIdentifier, false);
       return { where: "done" };
+    case "context-viewframesource": // viewFrameSource (:1663-1670) through the 32-07 view-source function, with the frame's own document
+      return { where: webTabViewSourceReply("webTabViewSource", pending.tabId, false, data.docLocation).where ?? "refused" };
+    case "context-savelink":
+    case "context-saveimage":
+    case "context-savevideo":
+    case "context-saveaudio": // saveLink / saveMedia (:2104-2160): the captured target; the path comes from Theia's save dialog
+      return pageMenuSavePick(id, pending);
+    case "spell-suggestion": // replaceMisspelling (InlineSpellChecker.sys.mjs:350-363)
+      return pageMenuSpell(state, data, spell => spell.replaceMisspelling(facts.spellSuggestions[Number(itemId.slice("spell-suggestion-".length))]));
+    case "spell-add-to-dictionary":
+      return pageMenuSpell(state, data, spell => spell.addToDictionary());
+    case "spell-undo-add-to-dictionary":
+      return pageMenuSpell(state, data, spell => spell.undoAddToDictionary());
+    case "spell-check-enabled":
+      return pageMenuSpell(state, data, spell => spell.toggleEnabled());
     case "context-inspect-a11y":
     case "context-inspect": // inspectA11Y / inspectNode (:1424-1436), on the toolbox the 32-07 devtools route opened (D-13)
       return pageMenuInspect(id, pending);
@@ -7396,7 +7481,95 @@ function pageToolFacts(data) {
   return {
     showInspect,
     showInspectA11y: showInspect && a11yPrefs && (Services.prefs.getBoolPref("devtools.everOpened", false) || webTabDevToolsShim().isDevToolsUser()),
+    ...pageEditFacts(data),
   };
+}
+
+// 35-04 continued: the edit, save, view-source and spelling facts.
+const pageToolsLazy = {};
+ChromeUtils.defineESModuleGetters(pageToolsLazy, {
+  BrowserUtils: "resource://gre/modules/BrowserUtils.sys.mjs",
+  DownloadPaths: "resource://gre/modules/DownloadPaths.sys.mjs",
+  InlineSpellChecker: "resource://gre/modules/InlineSpellChecker.sys.mjs",
+});
+
+// Rows with no upstream id: one row per label (D-12). Spelling suggestions are dictionary words, rendered verbatim.
+const PAGE_MENU_DYNAMIC = Object.freeze({
+  "spell-suggestion": f => f.spellSuggestions,
+});
+
+const pageMenuRowOf = itemId => pageMenuFlatRows().find(row => row.id === itemId || (row.dynamic && itemId.startsWith(`${row.dynamic}-`)));
+
+// The edit rows read the page's own command state from the overlay's top window
+// global (ControllersParent.sys.mjs:34-43); the spelling rows read the spellInfo
+// ContextMenuChild sent (:736-743) and this window's undo stack (initSpellingItems).
+function pageEditFacts(data) {
+  const controller = data.browser.browsingContext?.currentWindowGlobal?.getActor("Controllers");
+  const spellInfo = data.spellInfo;
+  const canSpell = !!(spellInfo?.canSpellCheck && !spellInfo.initialSpellCheckPending && data.context.canSpellCheck);
+  return {
+    contentSelected: data.selectionInfo ? !data.selectionInfo.docSelectionIsCollapsed : false,
+    commands: Object.fromEntries(WEB_TAB_EDIT_CMDS.map(cmd => [cmd, controller?.isCommandEnabled(cmd) === true])),
+    viewableTop: /^(https?|file):/i.test(data.browser.currentURI?.spec ?? ""),
+    frameSource: /^(https?|file):/i.test(data.docLocation ?? "") && pageToolsLazy.BrowserUtils.mimeTypeIsTextBased(data.contentType ?? ""),
+    canSpell,
+    onMisspelling: !!spellInfo?.overMisspelling,
+    spellSuggestions: spellInfo?.overMisspelling && Array.isArray(spellInfo.spellSuggestions) ? spellInfo.spellSuggestions : [],
+    spellEnabled: !!spellInfo?.enableRealTimeSpell,
+    spellUndo: !!pageMenus.get(data.browser.ownerGlobal)?.spell?.canUndo(),
+  };
+}
+
+// The window's one spell checker (browser.js's InlineSpellCheckerUI), bound to
+// this right-click's remote spell info for the one action, then released as
+// upstream releases it when the popup hides (nsContextMenu.sys.mjs:349-351).
+function pageMenuSpell(state, data, act) {
+  state.spell ??= new pageToolsLazy.InlineSpellChecker();
+  state.spell.initFromRemote(data.spellInfo, data.actor.manager);
+  try {
+    act(state.spell);
+  } finally {
+    state.spell.uninit();
+  }
+  return { where: "done" };
+}
+
+// Save step one: the target is the captured URL behind the http(s) wall; the
+// reply proposes a file name and the frontend shows Theia's save dialog. The
+// referrer is the one upstream's saveLink and saveMedia choose (:2104-2160).
+function pageMenuSavePick(id, pending) {
+  const { data, facts } = pending;
+  const link = id === "context-savelink";
+  const url = link ? data.context.linkURL : facts.mediaURL;
+  if (!pageMenuTargetAllowed(data.principal, url)) {
+    return { where: "refused" };
+  }
+  pending.save = { url, referrerInfo: link && data.context.onLink ? data.linkReferrerInfo : data.referrerInfo };
+  let name = "";
+  try {
+    name = pageToolsLazy.DownloadPaths.sanitize(decodeURIComponent(new URL(url).pathname.split("/").pop()));
+  } catch {}
+  return { where: "save-pick", suggestedName: name || "download" };
+}
+
+// The path is the only frontend value: absolute, bounded, a string.
+function pageMenuSavePathOk(path) {
+  return typeof path === "string" && path.length > 0 && path.length <= 4096 && PathUtils.isAbsolute(path);
+}
+
+// Save step two: a Downloads download of the captured target with the page's
+// referrer, principal and cookie jar, added to the public list Phase 32's
+// downloads panel reads, so no save is silent (T-35-15).
+async function pageMenuSave(pending, path) {
+  const { Downloads } = downloadsLazy;
+  const { url, referrerInfo } = pending.save;
+  const download = await Downloads.createDownload({
+    source: { url, referrerInfo, loadingPrincipal: pending.data.principal, cookieJarSettings: pending.data.cookieJarSettings, isPrivate: false },
+    target: path,
+  });
+  await (await Downloads.getList(Downloads.PUBLIC)).add(download);
+  download.start().catch(() => {}); // a failed transfer is the panel's failed row with Retry (32-04)
+  return { where: "saved" };
 }
 
 // D-13: open the overlay's toolbox through the webTabDevtools function and wait

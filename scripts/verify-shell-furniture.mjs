@@ -34,11 +34,14 @@
 //      Phase 35 section is an element id of upstream browser-context.inc.xhtml as a
 //      Linux release build preprocesses it (the non-mac navigation menugroup), in
 //      upstream's order; its `l10n` equals that element's data-l10n-id and exists
-//      in upstream browserContext.ftl; a `bundle` key exists in upstream
-//      browser.properties.
-//   6. Page menu actions. The `runs: "chrome"` ids equal the `case "context-..."`
-//      arms of runPageMenuRow, and the `runs: "frontend"` ids equal the keys of
-//      FRONTEND_ROWS in page-context-menu.ts, both as set equality.
+//      in upstream browserContext.ftl or toolkit textActions.ftl (35-04: the edit
+//      and spelling rows); a `bundle` key exists in upstream browser.properties.
+//      A `dynamic` row (no upstream id) is accepted only for a kind in
+//      DYNAMIC_KINDS, each with its reason.
+//   6. Page menu actions. The `runs: "chrome"` ids (a dynamic row by its kind)
+//      equal the `case "context-..."` / `case "spell-..."` arms of runPageMenuRow,
+//      and the `runs: "frontend"` ids equal the keys of FRONTEND_ROWS in
+//      page-context-menu.ts, both as set equality.
 //   7. Page menu policy. #powerbrowser-content carries disablecontextmenu="true"
 //      (ContextMenuParent.sys.mjs:29), so an IDE right-click never reaches the shim.
 //
@@ -64,6 +67,7 @@ const FILES = {
   fullscreen: 'upstream/browser/base/content/fullscreen-and-pointerlock.inc.xhtml',
   contextMenu: 'upstream/browser/base/content/browser-context.inc.xhtml',
   contextFtl: 'upstream/browser/locales/en-US/browser/browserContext.ftl',
+  textActionsFtl: 'upstream/toolkit/locales/en-US/toolkit/global/textActions.ftl',
   browserProperties: 'upstream/browser/locales/en-US/chrome/browser/browser.properties',
   pageMenu: 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts',
 };
@@ -73,6 +77,10 @@ const BLOCK_BEGIN = '<!-- shell furniture: begin -->';
 const BLOCK_END = '<!-- shell furniture: end -->';
 const LINUX_DEFINES = new Set(['XP_UNIX', 'XP_GNOME']);
 const INCLUDE_MARK = 'PB_FURNITURE_UPSTREAM_INCLUDE';
+// Page menu rows with no upstream element id, each with the reason it has none (35-04).
+const DYNAMIC_KINDS = new Map([
+  ['spell-suggestion', 'spelling suggestions are dictionary words the spell checker returns; upstream inserts them as unnamed menuitems (InlineSpellChecker.sys.mjs _addSuggestionsToMenu), so no upstream id exists'],
+]);
 
 function readInputs() {
   const inputs = {};
@@ -271,7 +279,12 @@ function check(inputs) {
   const rowsAt = sectionCode.indexOf('const PAGE_MENU_ROWS = Object.freeze([');
   const rowsText = rowsAt === -1 ? '' : sectionCode.slice(rowsAt, sectionCode.indexOf('\n]);', rowsAt));
   const field = (line, name) => new RegExp(`\\b${name}: "([^"]*)"`).exec(line)?.[1];
-  const rows = rowsText.split('\n').filter(line => /^\s*\{ id: "/.test(line)).map(line => ({ id: field(line, 'id'), l10n: field(line, 'l10n'), bundle: field(line, 'bundle'), runs: field(line, 'runs') }));
+  const rowLines = rowsText.split('\n').filter(line => /^\s*\{ (id|dynamic): "/.test(line));
+  const dynamicRows = rowLines.filter(line => /^\s*\{ dynamic: "/.test(line)).map(line => ({ dynamic: field(line, 'dynamic'), runs: field(line, 'runs') }));
+  const rows = rowLines.filter(line => /^\s*\{ id: "/.test(line)).map(line => ({ id: field(line, 'id'), l10n: field(line, 'l10n'), bundle: field(line, 'bundle'), runs: field(line, 'runs') }));
+  for (const row of dynamicRows) {
+    if (!DYNAMIC_KINDS.has(row.dynamic)) failures.push(`ROWS: dynamic row kind "${row.dynamic}" is not in DYNAMIC_KINDS: a row with no upstream id needs a recorded reason`);
+  }
   if (!rows.length) return { broken: [`no PAGE_MENU_ROWS rows in the Phase 35 section of ${FILES.api}: rules 5 and 6 would prove nothing`], failures };
   const menuTokens = tokenize(preprocess(inputs.contextMenu, FILES.contextMenu, broken));
   if (broken.length) return { broken, failures };
@@ -286,7 +299,7 @@ function check(inputs) {
     lastAt = at;
     const upstreamL10n = menuTokens[at].attrs.get('data-l10n-id');
     if (row.l10n !== undefined && row.l10n !== upstreamL10n) failures.push(`ROWS: ${row.id}: l10n "${row.l10n}" differs from upstream's data-l10n-id "${upstreamL10n ?? '(none)'}"`);
-    if (row.l10n !== undefined && !new RegExp(`^${row.l10n} =`, 'm').test(inputs.contextFtl)) failures.push(`ROWS: ${row.id}: l10n "${row.l10n}" is not a message in upstream ${FILES.contextFtl}`);
+    if (row.l10n !== undefined && !new RegExp(`^${row.l10n} =`, 'm').test(inputs.contextFtl) && !new RegExp(`^${row.l10n} =`, 'm').test(inputs.textActionsFtl)) failures.push(`ROWS: ${row.id}: l10n "${row.l10n}" is not a message in upstream ${FILES.contextFtl} or ${FILES.textActionsFtl}`);
     if (row.bundle !== undefined && !new RegExp(`^${row.bundle}=`, 'm').test(inputs.browserProperties)) failures.push(`ROWS: ${row.id}: bundle key "${row.bundle}" is not in upstream ${FILES.browserProperties}`);
     if (row.l10n === undefined && row.bundle === undefined) failures.push(`ROWS: ${row.id} has neither an l10n id nor a bundle key: its label would not be Firefox's string`);
   }
@@ -294,12 +307,12 @@ function check(inputs) {
   // Rule 6: chrome rows == runPageMenuRow arms; frontend rows == FRONTEND_ROWS keys.
   const dispatcherAt = sectionCode.search(/^async function runPageMenuRow\(/m);
   const dispatcher = dispatcherAt === -1 ? '' : sectionCode.slice(dispatcherAt, sectionCode.indexOf('\n}', dispatcherAt));
-  const arms = new Set([...dispatcher.matchAll(/case "(context-[^"]+)"/g)].map(m => m[1]));
+  const arms = new Set([...dispatcher.matchAll(/case "((?:context|spell)-[^"]+)"/g)].map(m => m[1]));
   const frontendAt = inputs.pageMenu.indexOf('const FRONTEND_ROWS');
   const frontendKeys = new Set(frontendAt === -1 ? [] : [...inputs.pageMenu.slice(frontendAt, inputs.pageMenu.indexOf('});', frontendAt)).matchAll(/^\s*'(context-[^']+)':/gm)].map(m => m[1]));
   if (!arms.size) return { broken: [`no case "context-..." arms in runPageMenuRow in ${FILES.api}: rule 6 would prove nothing`], failures };
   if (!frontendKeys.size) return { broken: [`no FRONTEND_ROWS keys in ${FILES.pageMenu}: rule 6 would prove nothing`], failures };
-  const chromeRows = new Set(rows.filter(r => r.runs === 'chrome').map(r => r.id));
+  const chromeRows = new Set([...rows, ...dynamicRows].filter(r => r.runs === 'chrome').map(r => r.id ?? r.dynamic));
   const frontendRows = new Set(rows.filter(r => r.runs === 'frontend').map(r => r.id));
   const missingArms = [...chromeRows].filter(id => !arms.has(id)).sort();
   const surplusArms = [...arms].filter(id => !chromeRows.has(id)).sort();
@@ -347,6 +360,7 @@ function selfTest() {
     { name: '(k) a chrome row with no dispatcher arm', key: 'api', mutate: t => t.replace(/^\s*case "context-reloadframe":.*\n/m, ''), expect: 'ACTIONS: chrome rows with no runPageMenuRow arm: context-reloadframe' },
     { name: '(l) a frontend row with no frontend handler', key: 'pageMenu', mutate: t => t.replace(/^\s*'context-stop':.*\n/m, ''), expect: `ACTIONS: frontend rows with no FRONTEND_ROWS handler in ${FILES.pageMenu}: context-stop` },
     { name: '(m) disablecontextmenu removed from the Theia frame', key: 'xhtml', mutate: t => t.replace(' disablecontextmenu="true"', ''), expect: 'POLICY: #powerbrowser-content does not carry disablecontextmenu="true"' },
+    { name: '(n) a dynamic row of an unknown kind', key: 'api', mutate: t => t.replace('{ dynamic: "spell-suggestion",', '{ dynamic: "zzz-planted",'), expect: 'ROWS: dynamic row kind "zzz-planted" is not in DYNAMIC_KINDS' },
   ];
   let failed = false;
   for (const plant of plants) {
@@ -369,7 +383,7 @@ function selfTest() {
     console.error(`${NAME} --self-test: FAIL`);
     process.exit(1);
   }
-  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (m) each landed and went red naming their drift`);
+  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (n) each landed and went red naming their drift`);
 }
 
 if (process.argv.includes('--self-test')) {

@@ -9,14 +9,18 @@
  * command id (D-09): each one's `run` sends `webTabContextMenuAction` naming
  * the tab, chrome's menu id and the row, and nothing else. Exactly one action
  * message leaves per menu: the pick, or the dismiss when the menu closes with
- * no row run.
+ * no row run. A save-target row (35-04) is the one two-step pick: chrome
+ * answers `save-pick`, Theia's save dialog runs, and a second message carries
+ * the same menu and row plus the picked path (or the dismiss on cancel).
  */
 
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { ApplicationShell, ContextMenuRenderer, FrontendApplicationContribution } from '@theia/core/lib/browser';
-import { CommandMenu, CompoundMenuNode, MenuNode, MenuPath, Submenu } from '@theia/core/lib/common';
+import { CommandMenu, CommandRegistry, CompoundMenuNode, MenuNode, MenuPath, MessageService, Submenu } from '@theia/core/lib/common';
+import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { WebTabChannel, WebTabOpenHandler, WebTabReply, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { CHROME_BAR_COPY, appSubject } from './chrome-bar-copy';
+import { chooseSaveDestination } from './chrome-bar-commands';
 
 export const PAGE_CONTEXT_MENU_PATH: MenuPath = ['powerbrowser-page-context-menu'];
 
@@ -33,20 +37,48 @@ interface PageMenuItem {
 }
 
 interface FrontendRow {
-    run: (widget: WebTabWidget) => unknown;
+    run: (widget: WebTabWidget, menu: PageContextMenuContribution) => unknown;
     /** Enablement from the widget's own state; chrome's `enabled` when absent. */
     enabled?: (widget: WebTabWidget) => boolean;
+    /** The row hands focus to a surface of its own (the bookmark editor), so the page does not take it back. */
+    keepsFocus?: boolean;
 }
 
 /**
+ * Cross-lane (35-04): Phase 33 plan 33-02 registers this command (bookmark the current page, then open the star
+ * editor). It is executed by id; until it is registered, CommandRegistry rejects and the page gets focus back.
+ */
+const BOOKMARK_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.bookmark-page';
+
+/**
  * Rows the frontend performs with the widget's existing methods, keyed by upstream id. Their keys equal the
- * `runs: "frontend"` rows of chrome's PAGE_MENU_ROWS (furniture rule 6).
+ * `runs: "frontend"` rows of chrome's PAGE_MENU_ROWS (furniture rule 6). The edit rows run Phase 32's `edit(cmd)`
+ * with chrome's enabled state from the page's own command state; Paste runs only from this pick (Pitfall 13).
  */
 const FRONTEND_ROWS: Readonly<Record<string, FrontendRow>> = Object.freeze({
     'context-back': { run: widget => widget.back(), enabled: widget => widget.canGoBack },
     'context-forward': { run: widget => widget.forward(), enabled: widget => widget.canGoForward },
     'context-reload': { run: widget => widget.reload() },
     'context-stop': { run: widget => widget.stop() },
+    'context-bookmarkpage': { run: (widget, menu) => menu.bookmarkPage(widget), keepsFocus: true },
+    'context-copyimage-contents': { run: widget => widget.edit('cmd_copyImage') },
+    'context-savepage': { run: widget => widget.savePage(chooseSaveDestination) },
+    'context-undo': { run: widget => widget.edit('cmd_undo') },
+    'context-redo': { run: widget => widget.edit('cmd_redo') },
+    'context-cut': { run: widget => widget.edit('cmd_cut') },
+    'context-copy': { run: widget => widget.edit('cmd_copy') },
+    'context-paste': { run: widget => widget.edit('cmd_paste') },
+    'context-delete': { run: widget => widget.edit('cmd_delete') },
+    'context-selectall': { run: widget => widget.edit('cmd_selectAll') },
+    'context-viewsource': { run: widget => widget.viewSource() },
+});
+
+/** The save dialog title per save-target row (35-UI-SPEC copy). */
+const SAVE_TITLES: Readonly<Record<string, string>> = Object.freeze({
+    'context-savelink': CHROME_BAR_COPY.saveLinkTitle,
+    'context-saveimage': CHROME_BAR_COPY.saveImageTitle,
+    'context-savevideo': CHROME_BAR_COPY.saveVideoTitle,
+    'context-saveaudio': CHROME_BAR_COPY.saveAudioTitle,
 });
 
 const sortKey = (index: number): string => String(index).padStart(3, '0');
@@ -72,6 +104,15 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
 
+    @inject(CommandRegistry)
+    protected readonly commands: CommandRegistry;
+
+    @inject(FileDialogService)
+    protected readonly fileDialogs: FileDialogService;
+
+    @inject(MessageService)
+    protected readonly messages: MessageService;
+
     onStart(): void {
         this.channel.onPush('pageContextMenu', detail => this.open(detail));
     }
@@ -91,7 +132,7 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
         const pick = (itemId: string | null): void => {
             if (!sent) {
                 sent = true;
-                void this.send(tabId, menuId, itemId).then(reply => this.settle(widget, itemId, reply)).catch(() => widget.focusPage());
+                void this.send(tabId, menuId, itemId).then(reply => this.settle(widget, tabId, menuId, itemId, reply)).catch(() => widget.focusPage());
             }
         };
         const menu: CompoundMenuNode = {
@@ -163,18 +204,49 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
         return row;
     }
 
-    protected send(tabId: string, menuId: number, itemId: string | null): Promise<WebTabReply> {
-        return this.channel.request({ kind: 'webTabContextMenuAction', tabId, menuId, itemId });
+    protected send(tabId: string, menuId: number, itemId: string | null, path?: string): Promise<WebTabReply> {
+        return this.channel.request({ kind: 'webTabContextMenuAction', tabId, menuId, itemId, ...(path !== undefined ? { path } : {}) });
+    }
+
+    /** Bookmark Page: the right-clicked tab becomes current, then Phase 33's bookmark path runs for it. */
+    async bookmarkPage(widget: WebTabWidget): Promise<void> {
+        await this.shell.activateWidget(widget.id);
+        await this.commands.executeCommand(BOOKMARK_PAGE_COMMAND_ID);
     }
 
     /**
-     * After chrome answers: a frontend row runs on the widget; a grant (D-06) opens a new web tab after the
-     * opener with chrome's target and grant id, activated unless chrome said background. Otherwise, and for a
-     * background tab, the page gets focus back.
+     * Save step two (T-35-14): Theia's save dialog picks the path; chrome downloads its own captured target there.
+     * A cancel sends the dismiss; a refused or failed save says so with the next step.
      */
-    protected async settle(widget: WebTabWidget, itemId: string | null, reply: WebTabReply): Promise<void> {
+    protected async saveTarget(widget: WebTabWidget, tabId: string, menuId: number, itemId: string, suggestedName: string): Promise<void> {
+        let path: string | undefined;
+        try {
+            const uri = await this.fileDialogs.showSaveDialog({ title: SAVE_TITLES[itemId] ?? CHROME_BAR_COPY.saveLinkTitle, inputValue: suggestedName });
+            path = uri ? uri.path.fsPath() : undefined;
+        } catch {
+            path = undefined;
+        }
+        const reply = await this.send(tabId, menuId, path === undefined ? null : itemId, path);
+        if (path !== undefined && reply.ok !== true) {
+            this.messages.error(CHROME_BAR_COPY.saveTargetFailed(appSubject()));
+        }
+    }
+
+    /**
+     * After chrome answers: a frontend row runs on the widget; a save pick shows the save dialog (35-04); a grant
+     * (D-06) opens a new web tab after the opener with chrome's target and grant id, activated unless chrome said
+     * background. Otherwise, and for a background tab, the page gets focus back.
+     */
+    protected async settle(widget: WebTabWidget, tabId: string, menuId: number, itemId: string | null, reply: WebTabReply): Promise<void> {
         if (itemId !== null && reply.ok && reply.where === 'frontend') {
-            FRONTEND_ROWS[itemId]?.run(widget);
+            const row = FRONTEND_ROWS[itemId];
+            await row?.run(widget, this);
+            if (row?.keepsFocus) {
+                return;
+            }
+        }
+        if (itemId !== null && reply.ok && reply.where === 'save-pick') {
+            await this.saveTarget(widget, tabId, menuId, itemId, reply.suggestedName ?? 'download');
         }
         if (reply.ok && reply.where === 'grant' && typeof reply.url === 'string' && typeof reply.grantId === 'string') {
             const opened = await this.webTabs.openInBackground(reply.url, widget, reply.grantId);
