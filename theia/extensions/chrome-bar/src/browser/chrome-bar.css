@@ -823,6 +823,32 @@
     color: var(--theia-errorForeground);
 }
 
+/* TAB-02 (34-02): the reorder drop indicator, a 2px accent bar in the 2px gap before the target tab or after the
+   last one. Accent use: highlight (34-UI-SPEC Color). */
+.pb-tab.is-drop-before,
+.pb-tab.is-drop-after {
+    position: relative;
+}
+
+.pb-tab.is-drop-before::before,
+.pb-tab.is-drop-after::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    bottom: 0;
+    width: 2px;
+    background: var(--theia-focusBorder, var(--color-primary, #00a6f5));
+    pointer-events: none;
+}
+
+.pb-tab.is-drop-before::before {
+    left: -3px;
+}
+
+.pb-tab.is-drop-after::after {
+    right: -3px;
+}
+
 }
 
 /* GUI-06 (13-UI-SPEC "Single chrome bar, full-bleed, 40px", ratified order
@@ -1027,7 +1053,8 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
 /* The tab stays put while its clone travels; dimming says which one is in
    flight without moving anything in the strip. */
 .pb-tab.is-dragging {
-    opacity: 0.4;
+    /* 34-UI-SPEC Drag: 0.6, for the in-strip reorder and the dock drag alike. */
+    opacity: 0.6;
 }
 
 /* The strip is where a tab dragged out of a pane goes back. Said while the

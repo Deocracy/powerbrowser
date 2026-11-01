@@ -65,14 +65,17 @@ const WIDGET_FACTORY_MIME = 'application/vnd.lumino.widget-factory';
 
 /**
  * Pointer travel, in px, before a press on a tab becomes a drag rather than a
- * click. Small on purpose: this strip sits in the top panel with nothing to
- * reorder within itself, so unlike Lumino's own tab bar there is no in-bar
- * reorder phase to get through first -- every drag here is heading for the
- * dock. Lumino's tab bar makes you pull 20px clear of the bar before it will
- * start a drag at all, which is the wrong feel for a strip that is already
- * outside the thing you are dropping into.
+ * click. Small on purpose: Lumino's tab bar makes you pull 20px clear of the
+ * bar before it will start a dock drag, which is the wrong feel for a strip
+ * that is already outside the thing you are dropping into. TAB-02 (34-02): a
+ * drag that stays in the strip row reorders; one that leaves the row is handed
+ * to the dock, so the 5px start serves both.
  */
 const DRAG_THRESHOLD = 5;
+
+/** TAB-02 (34-UI-SPEC Drag): the row's edge zone, in px, where a reorder drag auto-scrolls, and the step per frame. */
+const EDGE_ZONE = 8;
+const EDGE_STEP = 8;
 
 /**
  * GUI-07: the tab strip's Browsing home — the very top of the window, above
@@ -150,6 +153,13 @@ export class TabStripWidget extends ReactWidget {
 
     /** A failed tab action's sentence, shown at the strip's end until the next tab menu opens. */
     protected notice: string | undefined;
+
+    /**
+     * TAB-02 (34-02): an in-strip reorder drag in flight: the dragged tab and where it would land, before `before`
+     * or, with no `before`, after the strip's last tab. `moves` is false where the drop would change nothing.
+     * Presentation only; the order itself is the home pane TabBar's.
+     */
+    protected reorder: { widget: Widget; before: Widget | undefined; moves: boolean } | undefined;
 
     protected readonly toDispose = new DisposableCollection();
 
@@ -742,21 +752,119 @@ export class TabStripWidget extends ReactWidget {
         const box = tab.getBoundingClientRect();
         const startX = event.clientX;
         const startY = event.clientY;
+        // TAB-02 (D-05): a strip tab (not a stacked one) first reorders within the row; leaving the row hands the
+        // same gesture to the dock drag below, unchanged.
+        const row = this.mainTabs().includes(widget) ? tab.closest<HTMLElement>('.pb-tab-strip-row') : null;
+        let reordering = false;
+        let pointerX = startX;
+        let edge = 0;
+        let frame = 0;
 
+        // A reorder still ends in a pointerup over some tab; the click that follows would activate it.
+        const swallowClick = (click: MouseEvent) => {
+            click.stopPropagation();
+            click.preventDefault();
+        };
         const stop = () => {
             window.removeEventListener('pointermove', move, true);
-            window.removeEventListener('pointerup', stop, true);
+            window.removeEventListener('pointerup', up, true);
+            window.removeEventListener('pointercancel', stop, true);
+            cancelAnimationFrame(frame);
+            if (reordering) {
+                window.setTimeout(() => window.removeEventListener('click', swallowClick, true), 0);
+                this.reorder = undefined;
+                this.update();
+            }
+        };
+        // 8px edge zones scroll the row while the pointer rests there, re-aiming the drop as the tabs pass under it.
+        const scroll = () => {
+            frame = 0;
+            if (row && reordering && edge) {
+                row.scrollLeft += edge * EDGE_STEP;
+                this.aimReorder(widget, pointerX);
+                frame = requestAnimationFrame(scroll);
+            }
         };
         const move = (moved: PointerEvent) => {
-            if (Math.abs(moved.clientX - startX) < DRAG_THRESHOLD
+            if (!reordering && Math.abs(moved.clientX - startX) < DRAG_THRESHOLD
                 && Math.abs(moved.clientY - startY) < DRAG_THRESHOLD) {
                 return;
             }
+            const bounds = row?.getBoundingClientRect();
+            if (!row || !bounds || moved.clientY < bounds.top || moved.clientY > bounds.bottom) {
+                stop();
+                this.startWidgetDrag(widget, tab, box, moved);
+                return;
+            }
+            if (!reordering) {
+                reordering = true;
+                window.addEventListener('click', swallowClick, true);
+            }
+            pointerX = moved.clientX;
+            edge = pointerX < bounds.left + EDGE_ZONE ? -1 : pointerX > bounds.right - EDGE_ZONE ? 1 : 0;
+            this.aimReorder(widget, pointerX);
+            if (edge && !frame) {
+                frame = requestAnimationFrame(scroll);
+            }
+        };
+        const up = () => {
+            const aim = this.reorder;
             stop();
-            this.startWidgetDrag(widget, tab, box, moved);
+            if (aim?.moves) {
+                this.reorderTo(aim.widget, aim.before);
+            }
         };
         window.addEventListener('pointermove', move, true);
-        window.addEventListener('pointerup', stop, true);
+        window.addEventListener('pointerup', up, true);
+        window.addEventListener('pointercancel', stop, true);
+    }
+
+    /** A strip tab's node, by the widget id it is rendered with. */
+    protected tabNode(widget: Widget): HTMLElement | undefined {
+        return Array.from(this.node.querySelectorAll<HTMLElement>('.pb-tab[data-pb-tab]'))
+            .find(node => node.dataset.pbTab === widget.id);
+    }
+
+    /**
+     * TAB-02 (D-05): the midpoint rule. The drop lands before the first strip tab whose horizontal midpoint is past
+     * `x`; past every midpoint, it lands after the last tab (undefined).
+     */
+    protected dropBefore(x: number): Widget | undefined {
+        return this.shownTabs().find(tab => {
+            const box = this.tabNode(tab)?.getBoundingClientRect();
+            return !!box && box.left + box.width / 2 > x;
+        });
+    }
+
+    /** TAB-02: aims the in-flight reorder at the pointer and repaints the 2px drop indicator. */
+    protected aimReorder(widget: Widget, x: number): void {
+        const before = this.dropBefore(x);
+        const tabs = this.shownTabs();
+        const at = tabs.indexOf(widget);
+        // Before itself or before its right neighbour, or after the last tab when it is the last: nowhere new.
+        const moves = before ? before !== widget && tabs[at + 1] !== before : at !== tabs.length - 1;
+        if (this.reorder?.widget !== widget || this.reorder.before !== before || this.reorder.moves !== moves) {
+            this.reorder = { widget, before, moves };
+            this.update();
+        }
+    }
+
+    /**
+     * TAB-02 (D-05): puts `widget` before `before` in the strip, or after the strip's last tab, by moving its title
+     * in the home pane TabBar (insertTab through moveInBar). The strip may hide some of that bar's tabs (PAN-03,
+     * the stack), so the index is the bar's, not the strip's. Never touches the dock's layout.
+     */
+    protected reorderTo(widget: Widget, before: Widget | undefined): void {
+        const titles = this.primaryBar()?.titles ?? [];
+        const from = titles.indexOf(widget.title);
+        const tabs = this.shownTabs();
+        const anchor = before ?? tabs[tabs.length - 1];
+        if (from < 0 || !anchor) {
+            return;
+        }
+        const target = titles.indexOf(anchor.title);
+        // Lumino moves the title to exactly the index given, so the index shifts by the slot the title vacates.
+        this.moveInBar(widget, before ? (from < target ? target - 1 : target) : (from > target ? target + 1 : target));
     }
 
     /**
@@ -868,7 +976,7 @@ export class TabStripWidget extends ReactWidget {
             widget.title.className = kept.join(' ');
         }
         return <div className='pb-tab-strip-row' role='tablist'>
-            {tabs.map(widget => this.renderTab(widget, widget === current))}
+            {tabs.map((widget, index) => this.renderTab(widget, widget === current, index === tabs.length - 1))}
             {stack.length > 0 && <div
                 role='tab'
                 aria-selected={!this.collapsed}
@@ -910,14 +1018,19 @@ export class TabStripWidget extends ReactWidget {
             : <span className='codicon codicon-globe pb-tab-favicon' aria-hidden='true' />;
     }
 
-    protected renderTab(widget: Widget, active: boolean): React.ReactNode {
+    protected renderTab(widget: Widget, active: boolean, last: boolean): React.ReactNode {
         const label = widget.title.label || widget.id;
+        // TAB-02: the reorder's dragged tab, and the 2px drop indicator before the target or after the last tab.
+        const aim = this.reorder;
+        const drag = aim?.widget === widget ? ' is-dragging' : '';
+        const drop = !aim?.moves ? '' : aim.before === widget ? ' is-drop-before' : !aim.before && last ? ' is-drop-after' : '';
         return <div
             key={widget.id}
             role='tab'
             aria-selected={active}
             title={label}
-            className={'pb-tab' + (active ? ' is-active' : '')}
+            data-pb-tab={widget.id}
+            className={'pb-tab' + (active ? ' is-active' : '') + drag + drop}
             onClick={() => this.activateTab(widget)}
             onPointerDown={event => this.beginDrag(widget, event)}
             onContextMenu={event => this.openTabMenu(widget, event)}
