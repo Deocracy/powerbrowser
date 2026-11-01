@@ -1085,6 +1085,13 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
     display: none;
 }
 
+/* TAB-06 (34-03): a selected tab carries the sheet's accent-tinted wash (accent use: highlight). Unlayered for the
+   same reason as .is-pinned: the unlayered .pb-tab background would win over a layered one. */
+.pb-tab.is-selected {
+    background: rgba(0, 166, 245, 0.18);
+    color: var(--color-text, #fbfbfe);
+}
+
 /*-----------------------------------------------------------------------------
 | Dragging a tab out of the strip and into the dock
 |

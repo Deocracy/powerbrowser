@@ -201,6 +201,13 @@ export class TabStripWidget extends ReactWidget {
      */
     protected readonly pinnedIds = new Set<string>();
 
+    /**
+     * TAB-06 (D-09): the selected tabs, by GroupModel.keyOf only, and the Shift-click range's anchor. Strip-local:
+     * Lumino's TabBar has no multiselect. The selection is the only input a bulk row acts on (T-34-06).
+     */
+    protected selectedIds = new Set<string>();
+    protected anchorKey: string | undefined;
+
     /** TAB-05: false until the stored pins are restored; before then nothing may overwrite the stored list. */
     protected pinsRestored = false;
 
@@ -274,6 +281,7 @@ export class TabStripWidget extends ReactWidget {
         // pane), which is how a tab joins the stack on the home side.
         this.shell.mainPanel.node.addEventListener('lm-drop', this.onDockDrop);
         this.resizes.observe(this.node);
+        window.addEventListener('keydown', this.onKeyDown);
     }
 
     protected override onBeforeDetach(msg: Message): void {
@@ -283,6 +291,7 @@ export class TabStripWidget extends ReactWidget {
         this.node.removeEventListener('lm-drop', this.onDrop);
         this.shell.mainPanel.node.removeEventListener('lm-drop', this.onDockDrop);
         this.resizes.disconnect();
+        window.removeEventListener('keydown', this.onKeyDown);
         super.onBeforeDetach(msg);
     }
 
@@ -590,8 +599,8 @@ export class TabStripWidget extends ReactWidget {
         const tabs = this.shownTabs();
         const at = tabs.indexOf(widget);
         const closable = (list: Widget[]) => list.filter(tab => tab.title.closable);
-        // TAB-05 (D-08): the range closes leave pinned tabs open.
-        const ranged = (list: Widget[]) => closable(list).filter(tab => !this.isPinned(tab));
+        // TAB-05 (D-08): the range closes leave pinned tabs open, unless the user selected them (TAB-06).
+        const ranged = (list: Widget[]) => closable(list).filter(tab => !this.isPinned(tab) || this.selectedIds.has(this.tabKey(tab)));
         const others = ranged(tabs.filter(tab => tab !== widget));
         const left = ranged(at < 0 ? [] : tabs.slice(0, at));
         const right = ranged(at < 0 ? [] : tabs.slice(at + 1));
@@ -680,6 +689,132 @@ export class TabStripWidget extends ReactWidget {
         ];
     }
 
+    /**
+     * TAB-06 (D-09, 34-UI-SPEC Bulk): the N-Tabs rows, offered when the right-clicked tab is in a selection of two or
+     * more. Each runs every selected tab's own single-tab row (runOnEach), never a second close, move, mute or
+     * bookmark path; a row is enabled when that single row is enabled for at least one selected tab.
+     */
+    protected bulkMenuRows(widget: Widget): TabMenuRow[] {
+        const selected = this.selectedTabs();
+        if (selected.length < 2 || !selected.includes(widget)) {
+            return [];
+        }
+        const COPY = CHROME_BAR_COPY.tabMenu;
+        const count = selected.length;
+        const can = (id: string, tabs: Widget[]) => tabs.some(tab => this.tabMenuRows(tab).find(row => row.id === id)?.enabled);
+        // Mute N Tabs mutes the unmuted ones; once every selected web tab is muted the row is Unmute N Tabs.
+        const webs = selected.filter((tab): tab is WebTabWidget => tab instanceof WebTabWidget);
+        const unmute = webs.length > 0 && webs.every(tab => tab.audioMuted);
+        const audible = webs.filter(tab => tab.audioMuted === unmute);
+        // Moved one at a time, last first to the start and first first to the end, so the selection keeps its order.
+        const backwards = [...selected].reverse();
+        return [
+            {
+                id: 'close-n', label: COPY.closeN(count), icon: 'codicon codicon-close', group: 4,
+                enabled: can('close', selected), failed: CHROME_BAR_COPY.closeTabFailed,
+                run: () => this.runOnEach(selected, 'close'),
+            },
+            {
+                id: 'move-start-n', label: COPY.moveNToStart(count), icon: 'codicon codicon-arrow-left', group: 4,
+                enabled: can('move-start', selected),
+                run: () => this.runOnEach(backwards, 'move-start'),
+            },
+            {
+                id: 'move-end-n', label: COPY.moveNToEnd(count), icon: 'codicon codicon-arrow-right', group: 4,
+                enabled: can('move-end', selected),
+                run: () => this.runOnEach(selected, 'move-end'),
+            },
+            {
+                id: 'mute-n', label: unmute ? COPY.unmuteN(count) : COPY.muteN(count),
+                icon: unmute ? 'codicon codicon-unmute' : 'codicon codicon-mute', group: 4,
+                enabled: can('mute', audible), failed: CHROME_BAR_COPY.muteTabFailed,
+                run: () => this.runOnEach(audible, 'mute'),
+            },
+            {
+                id: 'bookmark-n', label: COPY.bookmarkN(count), icon: 'codicon codicon-star-empty', group: 4,
+                enabled: can('bookmark', selected), failed: CHROME_BAR_COPY.bookmarkTabFailed,
+                run: () => this.runOnEach(selected, 'bookmark'),
+            },
+        ];
+    }
+
+    /**
+     * TAB-06 (C-03): one bulk action as each tab's own single-tab row, in turn: the row's command when it has one
+     * (the 34-01 tab commands), else the row itself (the Bookmark row's one bookmarkTabs callback). Each row is
+     * rebuilt per tab, so its predicate reads the strip as the earlier tabs left it.
+     */
+    protected async runOnEach(tabs: Widget[], id: string): Promise<void> {
+        for (const tab of tabs) {
+            const row = this.tabMenuRows(tab).find(candidate => candidate.id === id);
+            if (row) {
+                await this.runTabRow(row, tab);
+            }
+        }
+    }
+
+    /** A tab-menu row for `widget`, through its single-tab command when it has one; a disabled row does nothing. */
+    protected async runTabRow(row: TabMenuRow, widget: Widget): Promise<void> {
+        if (!row.enabled) {
+            return;
+        }
+        if (row.command) {
+            await this.commands.executeCommand(row.command, widget);
+        } else {
+            await this.runRow(row);
+        }
+    }
+
+    /** TAB-06: the selected tabs the strip shows, in strip order. */
+    protected selectedTabs(): Widget[] {
+        return this.shownTabs().filter(tab => this.selectedIds.has(this.tabKey(tab)));
+    }
+
+    protected clearSelection(): void {
+        if (this.selectedIds.size || this.anchorKey) {
+            this.selectedIds.clear();
+            this.anchorKey = undefined;
+            this.update();
+        }
+    }
+
+    /**
+     * TAB-06 (D-09): Ctrl/Cmd-click toggles the tab in the selection and makes it the anchor; Shift-click selects the
+     * strip-order range from the anchor (the current tab when there is none) to the tab; a plain click clears the
+     * selection and activates the tab.
+     */
+    protected onTabClick(widget: Widget, event: React.MouseEvent): void {
+        if (event.ctrlKey || event.metaKey) {
+            if (!this.selectedIds.delete(this.tabKey(widget))) {
+                this.selectedIds.add(this.tabKey(widget));
+                this.watch(widget);
+            }
+            this.anchorKey = this.tabKey(widget);
+            this.update();
+            return;
+        }
+        if (event.shiftKey) {
+            const tabs = this.shownTabs();
+            const from = tabs.findIndex(tab => this.tabKey(tab) === this.anchorKey);
+            const anchor = from >= 0 ? from : Math.max(0, tabs.indexOf(this.shell.mainPanel.currentTitle?.owner as Widget));
+            const to = tabs.indexOf(widget);
+            const range = tabs.slice(Math.min(anchor, to), Math.max(anchor, to) + 1);
+            range.forEach(tab => this.watch(tab));
+            this.selectedIds = new Set(range.map(tab => this.tabKey(tab)));
+            this.anchorKey = tabs[anchor] ? this.tabKey(tabs[anchor]) : undefined;
+            this.update();
+            return;
+        }
+        this.clearSelection();
+        this.activateTab(widget);
+    }
+
+    /** TAB-06: Esc clears the selection. Not consumed: Esc keeps every other meaning it has. */
+    protected readonly onKeyDown = (event: KeyboardEvent): void => {
+        if (event.key === 'Escape') {
+            this.clearSelection();
+        }
+    };
+
     /** Runs one row; a failure shows the row's sentence in the strip and logs the action and error name only (T-34-04). */
     protected async runRow(row: TabMenuRow): Promise<void> {
         try {
@@ -720,9 +855,16 @@ export class TabStripWidget extends ReactWidget {
             .filter(widget => !TabStripWidget.MODE_SURFACES.includes(widget.id));
     }
 
-    /** A closed tab leaves the strip state: its pin (the pin store stays bounded by open tabs, T-34-05). */
+    /**
+     * A closed tab leaves the strip state: its pin (the pin store stays bounded by open tabs, T-34-05) and its
+     * selection, which clears once every selected tab has closed.
+     */
     protected readonly forgetTab = (widget: Widget): void => {
         this.pinnedIds.delete(this.tabKey(widget));
+        this.selectedIds.delete(this.tabKey(widget));
+        if (!this.selectedIds.size) {
+            this.anchorKey = undefined;
+        }
         void this.savePins();
         this.update();
     };
@@ -812,8 +954,13 @@ export class TabStripWidget extends ReactWidget {
         event.stopPropagation();
         const groups: CommandMenu[][] = [];
         this.notice = undefined;
+        // TAB-06: right-clicking a tab outside the selection drops the selection, as a plain click does.
+        if (!this.selectedIds.has(this.tabKey(widget))) {
+            this.selectedIds.clear();
+            this.anchorKey = undefined;
+        }
         this.update();
-        for (const row of this.tabMenuRows(widget)) {
+        for (const row of [...this.tabMenuRows(widget), ...this.bulkMenuRows(widget)]) {
             (groups[row.group] ??= []).push({
                 id: `tab-menu-${row.id}`,
                 label: row.label,
@@ -822,16 +969,7 @@ export class TabStripWidget extends ReactWidget {
                 isVisible: () => true,
                 isEnabled: () => row.enabled,
                 isToggled: () => false,
-                run: async () => {
-                    if (!row.enabled) {
-                        return;
-                    }
-                    if (row.command) {
-                        await this.commands.executeCommand(row.command, widget);
-                    } else {
-                        await this.runRow(row);
-                    }
-                },
+                run: () => this.runTabRow(row, widget),
             });
         }
         const [first = [], ...rest] = groups.filter(group => group);
@@ -1249,6 +1387,7 @@ export class TabStripWidget extends ReactWidget {
         return <>{<div
             className='pb-tab-strip-row'
             role='tablist'
+            aria-multiselectable={true}
             title={CHROME_BAR_COPY.emptyStripTooltip}
             onDoubleClick={event => this.onStripDoubleClick(event)}
             onDragEnter={event => this.onStripDragOver(event)}
@@ -1314,6 +1453,7 @@ export class TabStripWidget extends ReactWidget {
     protected renderTab(widget: Widget, active: boolean, last: boolean): React.ReactNode {
         const label = widget.title.label || widget.id;
         const pinned = this.isPinned(widget);
+        const selected = this.selectedIds.has(this.tabKey(widget));
         // TAB-02: the reorder's dragged tab, and the 2px drop indicator before the target or after the last tab.
         const aim = this.reorder;
         const drag = aim?.widget === widget ? ' is-dragging' : '';
@@ -1321,12 +1461,12 @@ export class TabStripWidget extends ReactWidget {
         return <div
             key={widget.id}
             role='tab'
-            aria-selected={active}
+            aria-selected={active || selected}
             title={label}
             aria-label={pinned ? CHROME_BAR_COPY.pinnedTabLabel(label) : undefined}
             data-pb-tab={widget.id}
-            className={'pb-tab' + (active ? ' is-active' : '') + (pinned ? ' is-pinned' : '') + drag + drop}
-            onClick={() => this.activateTab(widget)}
+            className={'pb-tab' + (active ? ' is-active' : '') + (pinned ? ' is-pinned' : '') + (selected ? ' is-selected' : '') + drag + drop}
+            onClick={event => this.onTabClick(widget, event)}
             onPointerDown={event => this.beginDrag(widget, event)}
             onMouseDown={event => { if (event.button === 1) { event.preventDefault(); } }}
             onAuxClick={event => this.onTabAuxClick(widget, event)}

@@ -56,6 +56,18 @@
 //     after the strip's pin restore a tab carries the stored key, its rowKey
 //     equals that key (W1 continuity), and it is pinned and first.
 //
+//   multi (TAB-06, 34-03): with /a current, Ctrl-click /b and /d selects
+//     exactly those two (is-selected) and leaves /a current; Shift-click /b
+//     from the /d anchor selects /b../d; Esc clears; a plain click clears and
+//     activates. Then with /b and /d selected, /b's menu offers the N-Tabs
+//     rows with N = 2, and each bulk row reaches /b and /d only, through the
+//     single-tab path: Move 2 Tabs to Start runs the tab-move-start command
+//     for each (the strip reads /b /d /a /c); Mute 2 Tabs sends webTabMute for
+//     each; Bookmark 2 Tabs calls the one bookmarkTabs callback once per tab
+//     (or is disabled exactly while Phase 33's bookmarkPage is absent); Close
+//     2 Tabs runs tab-close for each, /a and /c stay open, and the selection
+//     is empty.
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
@@ -68,7 +80,7 @@
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
@@ -630,6 +642,145 @@ async function pinRestore({ pages, expect, plant, profileName }) {
     expect(!second.pinned || second.first, 'pin-restore: the restored pin is not first in the strip');
 }
 
+/**
+ * multi: TAB-06 selection gestures and bulk delegation (ng-a-live shell). Spies record every command the strip runs
+ * and every web-tab request, each with the tab it names. The plant widens the running strip's bulk delegation to
+ * every shown tab, so the bulk rows reach /a and /c.
+ */
+async function multi({ run, pages, expect, plant }) {
+    const urls = { a: pages.url('/a'), b: pages.url('/b'), c: pages.url('/c'), d: pages.url('/d') };
+    const MULTI = `
+        const click = (w, mods) => {
+            const node = tabNode(w);
+            if (!node) throw new Error('no strip tab for ' + labelOf(w));
+            const r = node.getBoundingClientRect();
+            node.dispatchEvent(new MouseEvent('click', Object.assign({ bubbles: true, cancelable: true, button: 0, clientX: r.left + 8, clientY: r.top + 8 }, mods || {})));
+        };
+        const selected = () => ['a', 'b', 'c', 'd'].filter(n => S[n] && !S[n].isDisposed && tabNode(S[n]) && tabNode(S[n]).classList.contains('is-selected'));
+        const commandSpy = () => {
+            const registry = A.get('CommandRegistry');
+            if (!S.ran) {
+                S.ran = [];
+                const original = registry.executeCommand.bind(registry);
+                registry.executeCommand = (id, ...args) => { S.ran.push({ id, tab: args[0] && args[0].id }); return original(id, ...args); };
+            }
+            return S.ran;
+        };
+        const nameOf = id => ['a', 'b', 'c', 'd'].find(n => S[n] && S[n].id === id) || id;
+    `;
+    const setup = await run(`
+        ${PROBES}${MULTI}
+        await A.get('ModeService').activateMode('browsing');
+        const urls = ${JSON.stringify(urls)};
+        for (const name of Object.keys(urls)) S[name] = await A.open(urls[name]);
+        await settle(() => ['a', 'b', 'c', 'd'].every(n => /^page /.test(labelOf(S[n]))));
+        A.shell().activateWidget(S.a.id);
+        await settle(() => current() === S.a && ['a', 'b', 'c', 'd'].every(n => !!tabNode(S[n])));
+        if (${JSON.stringify(plant)} === 'multi-touches-unselected') {
+            const each = strip().runOnEach.bind(strip());
+            strip().runOnEach = (tabs, id) => each(strip().shownTabs(), id);
+        }
+        click(S.b, { ctrlKey: true });
+        click(S.d, { ctrlKey: true });
+        await settle(() => selected().length === 2);
+        const toggled = selected();
+        const stillCurrent = current() === S.a;
+        click(S.b, { shiftKey: true });
+        await settle(() => selected().length === 3);
+        const ranged = selected();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await settle(() => selected().length === 0);
+        const escaped = selected();
+        click(S.b, { ctrlKey: true });
+        await settle(() => selected().length === 1);
+        click(S.c);
+        await settle(() => current() === S.c);
+        return { toggled, stillCurrent, ranged, escaped, plainCleared: selected().length === 0, plainActivated: current() === S.c };
+    `);
+    expect(setup.toggled.join(',') === 'b,d', `multi: Ctrl-click /b and /d selected [${setup.toggled}], want b,d`);
+    expect(setup.stillCurrent, 'multi: a Ctrl-click changed the current tab away from /a');
+    expect(setup.ranged.join(',') === 'b,c,d', `multi: Shift-click /b from the /d anchor selected [${setup.ranged}], want b,c,d`);
+    expect(setup.escaped.length === 0, `multi: Esc left [${setup.escaped}] selected`);
+    expect(setup.plainCleared && setup.plainActivated, `multi: a plain click did not clear the selection and activate /c (${JSON.stringify(setup)})`);
+
+    const bulk = await run(`
+        ${PROBES}${MULTI}
+        const ran = commandSpy();
+        const sent = spy();
+        const store = A.get('ChromeStoreClient');
+        const bookmarked = [];
+        if (strip().bookmarkTabs) {
+            const original = strip().bookmarkTabs;
+            strip().bookmarkTabs = tabs => { bookmarked.push(tabs.map(t => nameOf(t.id))); return original(tabs); };
+        }
+        A.shell().activateWidget(S.a.id);
+        await settle(() => current() === S.a);
+        click(S.b, { ctrlKey: true });
+        click(S.d, { ctrlKey: true });
+        await settle(() => selected().length === 2);
+        const rows = (await openMenu(S.b)).map(r => ({ label: r.label, enabled: r.enabled }));
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        if (menuNode()) menuNode().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+        await settle(() => !menuNode());
+        // Esc cleared the selection along with the menu; select again for each bulk row.
+        const reselect = async () => {
+            if (selected().join(',') !== 'b,d') {
+                strip().clearSelection();
+                click(S.b, { ctrlKey: true });
+                click(S.d, { ctrlKey: true });
+                await settle(() => selected().join(',') === 'b,d');
+            }
+        };
+        const act = async label => {
+            await reselect();
+            const from = ran.length, sentFrom = sent.length;
+            await openMenu(S.b);
+            await choose(label);
+            await A.sleep(750);
+            return { ran: ran.slice(from).map(r => ({ id: r.id, tab: nameOf(r.tab) })), sent: sent.slice(sentFrom).map(m => ({ kind: m.kind, tab: ['a', 'b', 'c', 'd'].find(n => S[n] && S[n].tabId === m.tabId) || m.tabId })) };
+        };
+        const moved = await act('Move 2 Tabs to Start');
+        const order = strip().shownTabs().map(w => nameOf(w.id));
+        // Phase 32's mute is offered for a tab that plays sound; mark /b and /d as playing so the row is enabled.
+        S.b.soundPlaying = true; S.d.soundPlaying = true;
+        const muted = await act('Mute 2 Tabs');
+        let bookmark = { skipped: typeof store.bookmarkPage !== 'function' };
+        if (!bookmark.skipped) bookmark = Object.assign(await act('Bookmark 2 Tabs'), { calls: bookmarked });
+        const closed = await act('Close 2 Tabs');
+        await settle(() => S.b.isDisposed && S.d.isDisposed);
+        return {
+            rows, moved, order, muted, bookmark, closed,
+            bookmarkPresent: typeof store.bookmarkPage === 'function',
+            open: ['a', 'b', 'c', 'd'].filter(n => !S[n].isDisposed), selection: strip().selectedIds.size,
+        };
+    `);
+    const row = label => bulk.rows.find(r => r.label === label);
+    for (const label of ['Close 2 Tabs', 'Move 2 Tabs to Start', 'Move 2 Tabs to End', 'Mute 2 Tabs', 'Bookmark 2 Tabs']) {
+        expect(!!row(label), `multi: /b's menu with /b and /d selected has no "${label}" row (rows: ${bulk.rows.map(r => r.label).join(' | ')})`);
+    }
+    expect(row('Bookmark 2 Tabs')?.enabled === bulk.bookmarkPresent, `multi: Bookmark 2 Tabs enabled ${row('Bookmark 2 Tabs')?.enabled}, want ${bulk.bookmarkPresent} (Phase 33 bookmarkPage present)`);
+    const only = (label, list, field, value) => {
+        const hits = list.filter(entry => entry[field] === value);
+        expect(hits.length > 0, `multi: ${label} ran no ${value} at all`);
+        const strays = hits.filter(entry => entry.tab !== 'b' && entry.tab !== 'd');
+        expect(strays.length === 0, `multi: ${label} touched an unselected tab (${strays.map(entry => entry.tab).join(', ')})`);
+        expect(['b', 'd'].every(n => hits.some(entry => entry.tab === n)), `multi: ${label} did not reach both /b and /d (${hits.map(entry => entry.tab).join(', ')})`);
+    };
+    only('Move 2 Tabs to Start', bulk.moved.ran, 'id', 'powerbrowser.chrome-bar.tab-move-start');
+    expect(bulk.order.join(',') === 'b,d,a,c', `multi: after Move 2 Tabs to Start the strip reads [${bulk.order}], want b,d,a,c`);
+    only('Mute 2 Tabs', bulk.muted.ran, 'id', 'powerbrowser.chrome-bar.tab-mute');
+    only('Mute 2 Tabs (webTabMute)', bulk.muted.sent, 'kind', 'webTabMute');
+    if (!bulk.bookmark.skipped) {
+        const calls = bulk.bookmark.calls;
+        expect(calls.length === 2 && calls.every(call => call.length === 1), `multi: Bookmark 2 Tabs did not call bookmarkTabs once per tab (${JSON.stringify(calls)})`);
+        const strays = calls.flat().filter(n => n !== 'b' && n !== 'd');
+        expect(strays.length === 0, `multi: Bookmark 2 Tabs touched an unselected tab (${strays.join(', ')})`);
+    }
+    only('Close 2 Tabs', bulk.closed.ran, 'id', 'powerbrowser.chrome-bar.tab-close');
+    expect(bulk.open.join(',') === 'a,c', `multi: after Close 2 Tabs the open tabs are [${bulk.open}], want a,c (an unselected tab was touched or a selected one survived)`);
+    expect(bulk.selection === 0, `multi: the selection still holds ${bulk.selection} key(s) after every selected tab closed`);
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
@@ -639,6 +790,7 @@ const SCENARIOS = {
     drop: { run: drop, probe: true, plant: 'drop-link-noop', expect: 'did not open /d' },
     overflow: { run: overflow, probe: true, plant: 'overflow-unmeasured', expect: 'shows no List All Tabs chevron' },
     'pin-restore': { run: pinRestore, own: true, plant: 'pin-not-stored', expect: 'was not pinned after the relaunch' },
+    multi: { run: multi, plant: 'multi-touches-unselected', expect: 'touched an unselected tab' },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */

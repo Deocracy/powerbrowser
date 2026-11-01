@@ -191,6 +191,13 @@ export const CHROME_BAR_COPY = Object.freeze({
         closeRight: 'Close Tabs to the Right',
         closeDuplicates: 'Close Duplicate Tabs',
         close: 'Close Tab',
+        // Phase 34 plan 03 (TAB-06): the bulk rows a selection of two or more tabs offers; N is the selection count.
+        closeN: (count: number) => `Close ${count} Tabs`,
+        moveNToStart: (count: number) => `Move ${count} Tabs to Start`,
+        moveNToEnd: (count: number) => `Move ${count} Tabs to End`,
+        muteN: (count: number) => `Mute ${count} Tabs`,
+        unmuteN: (count: number) => `Unmute ${count} Tabs`,
+        bookmarkN: (count: number) => `Bookmark ${count} Tabs`,
     }),
     // One failure sentence per verb (34-UI-SPEC Failures), shown in the strip; never an id, URL or raw error.
     reloadTabFailed: (subject: string) => `${subject} couldn't reload that tab. Try again.`,

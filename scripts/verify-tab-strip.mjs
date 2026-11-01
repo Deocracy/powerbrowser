@@ -106,6 +106,7 @@ function check(src) {
     const failures = [];
     const strip = stripComments(src[STRIP]);
     const rows = methodBody(strip, 'protected tabMenuRows(');
+    const bulk = methodBody(strip, 'protected bulkMenuRows(');
     const opener = methodBody(strip, 'protected openTabMenu(');
     const lister = methodBody(strip, 'protected openListAllMenu(');
     const shower = methodBody(strip, 'protected showMenu(');
@@ -131,9 +132,12 @@ function check(src) {
     const copy = stripComments(src[COPY]);
     const copyBody = braceBody(copy, copy.indexOf('{', copy.indexOf('tabMenu: Object.freeze(')));
     const copyKeys = copyBody ? derive(copyBody, /^\s*(\w+):/gm) : [];
-    // The rows read CHROME_BAR_COPY.tabMenu directly or through one local alias of it.
-    const alias = rows ? /const (\w+) = CHROME_BAR_COPY\.tabMenu;/.exec(rows)?.[1] : undefined;
-    const usedKeys = rows ? derive(rows, new RegExp(`(?:CHROME_BAR_COPY\\.tabMenu${alias ? `|\\b${alias}` : ''})\\.(\\w+)`, 'g')) : [];
+    // The rows (single-tab, and 34-03's bulk rows) read CHROME_BAR_COPY.tabMenu directly or through one local alias of it.
+    const readKeys = body => {
+        const alias = body ? /const (\w+) = CHROME_BAR_COPY\.tabMenu;/.exec(body)?.[1] : undefined;
+        return body ? derive(body, new RegExp(`(?:CHROME_BAR_COPY\\.tabMenu${alias ? `|\\b${alias}` : ''})\\.(\\w+)`, 'g')) : [];
+    };
+    const usedKeys = [...readKeys(rows), ...readKeys(bulk)];
     if (copyBody === null || usedKeys.length === 0) {
         failures.push(`copy: CHROME_BAR_COPY.tabMenu ${copyBody === null ? 'not found' : 'found'}, ${usedKeys.length} keys read by the rows -- the comparison proves nothing`);
     } else {
