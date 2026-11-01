@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // scripts/verify-tab-strip-live.mjs -- Phase 34 (TAB-01..TAB-09, BMK-07): the
-// tab strip on the built binary, one scenario per behaviour. Plan 34-01 lands
+// tab strip on the built binary, one scenario per behaviour (twelve). Plan 34-01 lands
 // the `menu` scenario; 34-02..34-05 add theirs to SCENARIOS below.
 //
 //   menu (TAB-01, BMK-07): with /c current, right-clicking /a's strip tab
@@ -91,19 +91,39 @@
 //     flag (a page-realm state event naming /a, window.titleChanged) and /a
 //     stays unmarked: the flag is chrome-minted only.
 //
+//   bookmark-all (BMK-07, 34-05): /a, /b on localhost and /c open, /c
+//     current. /a's menu shows Bookmark All Tabs enabled exactly while Phase
+//     33's ChromeStoreClient.bookmarkPage exists; while it is absent the row
+//     reads disabled and the scenario reports NOT SCORED, never PASS. With it
+//     present: every tab read back null through readBookmarkByUrl before
+//     (else NOT SCORED), choosing the row makes each tab read back as a
+//     bookmark carrying its own title and URL (a positive per-tab read, never
+//     a log line), /c stays current; then with bookmarkPage refusing, the row
+//     shows the strip's bookmark failure sentence.
+//
+//   modes (D-02, 34-05): /a, /b on localhost and /c open in Browsing. Through
+//     Coding, Organising and back to Browsing the strip stays the one
+//     TabStripWidget (one .pb-tab-strip node, the same instance), its
+//     visibility is what the mode contract says (the setHidden expression in
+//     chrome-bar-widget.tsx, derived at check time) and measures so (painted
+//     row or zero height), and its stripTabs reader and the home TabBar keep
+//     the order read before the first switch; where it is shown the painted
+//     strip reads that order too.
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
 //
-// Positive page-side assertions only, never the absence of a log line. One
-// host, at most four same-site tabs per session (the shared-process defect).
+// Positive page-side assertions only, never the absence of a log line. At
+// most four same-site tabs per session (the shared-process defect);
+// bookmark-all and modes put /b on localhost, a second host.
 //
 // --self-test plants one fault per scenario in the running page (the object
 // that runs, not this file) and requires the scenario to go red naming it,
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention,bookmark-all,modes[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
@@ -969,6 +989,195 @@ async function attention({ app, pages, expect, plant }) {
     expect(!spoofed.dot && !spoofed.flag, 'attention: a page-side titleChanged write marked /a (the flag must be chrome-minted only)');
 }
 
+/** A served URL on localhost: another site than 127.0.0.1, so one session holds distinct hosts (the shared-process defect). */
+const otherSite = (pages, path) => pages.url(path).replace('//127.0.0.1:', '//localhost:');
+
+/** The tab menu inside a probe() page: open it on a strip tab, read its rows, choose one, close it. No backticks inside. */
+const MENU_PROBES = `
+    const menuNode = () => document.querySelector('.lm-Menu.pb-tab-menu');
+    const menuRows = () => Array.from((menuNode() || document.createElement('div')).querySelectorAll('.lm-Menu-item')).map(e => ({
+        label: (e.querySelector('.lm-Menu-itemLabel') || e).textContent.trim(), enabled: !e.classList.contains('lm-mod-disabled'), node: e }));
+    const openMenu = async id => {
+        const node = tabEl(id);
+        if (!node) throw new Error('no strip tab for ' + id);
+        const r = node.getBoundingClientRect();
+        node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: r.left + 8, clientY: r.top + 8 }));
+        await until(() => menuRows().length > 0, 3000);
+        return menuRows().map(x => ({ label: x.label, enabled: x.enabled }));
+    };
+    const closeMenu = async () => {
+        if (menuNode()) menuNode().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+        await until(() => !menuNode(), 3000);
+    };
+    const choose = async label => {
+        const found = menuRows().find(x => x.label === label);
+        if (!found) throw new Error('the tab menu has no row ' + label);
+        const r = found.node.getBoundingClientRect();
+        const at = { bubbles: true, cancelable: true, button: 0, clientX: r.left + 4, clientY: r.top + r.height / 2 };
+        found.node.dispatchEvent(new MouseEvent('mousemove', at));
+        found.node.dispatchEvent(new MouseEvent('mouseup', at));
+        await until(() => !menuNode(), 3000);
+    };
+    const notice = () => { const n = document.querySelector('.pb-tab-strip-notice'); return n ? n.textContent : ''; };
+`;
+
+/**
+ * bookmark-all: BMK-07 through Phase 33's bookmarkPage (the one bookmarkTabs callback the chrome bar hands the strip).
+ * While that client method is absent the row must read disabled and the scenario is NOT SCORED, never a pass.
+ */
+async function bookmarkAll({ app, pages, expect, plant }) {
+    const urls = { a: pages.url('/a'), b: otherSite(pages, '/b'), c: pages.url('/c') };
+    const names = Object.keys(urls);
+    const allLabel = copyRow('bookmarkAll');
+    const setup = await step(app, 'bookmark-all: setup', `
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify(urls)});
+        const named = await until(() => ${JSON.stringify(names)}.every(n => /^page /.test(byId(S[n]).title.label)), 15000);
+        shell.activateWidget(S.c);
+        await until(() => current() && current().id === S.c, 5000);
+        const store = get('ChromeStoreClient');
+        if (${JSON.stringify(plant)} === 'bookmark-all-drops-tab' && typeof strip.bookmarkTabs === 'function') {
+            const original = strip.bookmarkTabs;
+            strip.bookmarkTabs = tabs => original(tabs.slice(0, -1));
+        }
+        const tabs = {};
+        for (const n of ${JSON.stringify(names)}) {
+            const w = byId(S[n]);
+            tabs[n] = { url: w.url, label: w.title.label, before: await store.readBookmarkByUrl(w.url) };
+        }
+        return { painted, named: !!named, current: !!current() && current().id === S.c,
+            present: typeof store.bookmarkPage === 'function', wired: typeof strip.bookmarkTabs === 'function', tabs };
+    `);
+    expect(setup.painted && setup.named && setup.current, `bookmark-all: setup: /a, /b (localhost) and /c are not painted and named with /c current (${JSON.stringify(setup)})`);
+    expect(setup.wired === setup.present,
+        `bookmark-all: the strip's bookmarkTabs callback is ${setup.wired ? 'set' : 'unset'} while Phase 33's ChromeStoreClient.bookmarkPage is ${setup.present ? 'present' : 'absent'}`);
+    const rows = await step(app, 'bookmark-all: /a\'s menu', `${MENU_PROBES} const rows = await openMenu(S.a); await closeMenu(); return rows;`);
+    const all = rows.find(r => r.label === allLabel);
+    expect(!!all, `bookmark-all: /a's menu has no "${allLabel}" row (rows: ${rows.map(r => r.label).join(' | ')})`);
+    expect(all?.enabled === setup.present, `bookmark-all: "${allLabel}" enabled ${all?.enabled}, want ${setup.present} (Phase 33 bookmarkPage ${setup.present ? 'present' : 'absent'})`);
+    if (!setup.present) {
+        expect(false, `bookmark-all: NOT SCORED -- Phase 33's ChromeStoreClient.bookmarkPage is absent from this build, so "${allLabel}" is disabled and no tab's bookmark can be read back`);
+        return;
+    }
+    const stale = names.filter(n => setup.tabs[n].before !== null);
+    expect(stale.length === 0, `bookmark-all: NOT SCORED -- ${stale.map(n => '/' + n).join(', ')} already bookmarked on a fresh profile, so a read-back proves nothing`);
+
+    const done = await step(app, 'bookmark-all: choose the row', `${MENU_PROBES}
+        await openMenu(S.a);
+        await choose(${JSON.stringify(allLabel)});
+        const store = get('ChromeStoreClient');
+        const urls = ${JSON.stringify(names)}.map(n => byId(S[n]).url);
+        const read = () => Promise.all(urls.map(u => store.readBookmarkByUrl(u)));
+        await until(async () => (await read()).every(Boolean), 10000);
+        return { after: await read(), notice: notice(), current: !!current() && current().id === S.c };
+    `);
+    names.forEach((n, i) => {
+        const got = done.after[i];
+        expect(!!got, `bookmark-all: /${n} (${new URL(setup.tabs[n].url).hostname}) was not bookmarked by "${allLabel}" (readBookmarkByUrl returned null)`);
+        if (got) {
+            expect(got.url === setup.tabs[n].url && got.title === setup.tabs[n].label,
+                `bookmark-all: /${n}'s bookmark reads ${JSON.stringify([got.title, got.url])}, not its title and URL ${JSON.stringify([setup.tabs[n].label, setup.tabs[n].url])}`);
+        }
+    });
+    expect(done.notice === '', `bookmark-all: a successful "${allLabel}" showed the strip notice ${JSON.stringify(done.notice)}`);
+    expect(done.current, `bookmark-all: "${allLabel}" changed the current tab away from /c`);
+
+    // Failure copy: bookmarkPage refusing must show the strip's bookmark failure sentence.
+    const sentence = copyRow('bookmarkTabFailed', await subjectOf(app));
+    const refused = await step(app, 'bookmark-all: a refused bookmarkPage', `${MENU_PROBES}
+        const store = get('ChromeStoreClient');
+        const original = store.bookmarkPage;
+        store.bookmarkPage = async () => { throw new Error('refused by the check'); };
+        try {
+            await openMenu(S.b);
+            await choose(${JSON.stringify(allLabel)});
+            await until(() => notice() !== '', 3000);
+        } finally {
+            store.bookmarkPage = original;
+        }
+        return { notice: notice() };
+    `);
+    expect(refused.notice === sentence, `bookmark-all: a refused bookmarkPage was not reported with the failure sentence (notice ${JSON.stringify(refused.notice)}, want ${JSON.stringify(sentence)})`);
+}
+
+/**
+ * The strip's visibility contract per mode, derived at check time from the one expression ChromeBarContribution hands
+ * tabStrip.setHidden(...). A harness error when that call is missing, repeated or not one modeId comparison.
+ */
+function stripHiddenContract() {
+    const source = readFileSync(join(REPO_ROOT, 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx'), 'utf8');
+    const found = [...source.matchAll(/this\.tabStrip\.setHidden\(([^;]+)\);/g)].map(m => m[1].trim());
+    const parsed = found.length === 1 ? /^modeId\s*(!==|===)\s*'([\w-]+)'$/.exec(found[0]) : null;
+    if (!parsed) {
+        throw new Error(`chrome-bar-widget.tsx: expected one tabStrip.setHidden(modeId !==|=== '<mode>') call, found ${JSON.stringify(found)}`);
+    }
+    const [, op, mode] = parsed;
+    return { expr: found[0], hidden: id => (op === '!==' ? id !== mode : id === mode) };
+}
+
+/** modes: D-02, one strip (the same TabStripWidget and stripTabs reader) in Coding, Organising and Browsing; order survives. */
+async function modes({ app, pages, expect, plant }) {
+    const contract = stripHiddenContract();
+    const urls = { a: pages.url('/a'), b: otherSite(pages, '/b'), c: pages.url('/c') };
+    const names = JSON.stringify(Object.keys(urls));
+    const reads = `
+        const ours = ids => ids.map(id => ${names}.find(n => S[n] === id)).filter(Boolean);
+        const read = () => {
+            const box = strip.node.getBoundingClientRect();
+            return {
+                mode: document.body.getAttribute('data-pb-mode'),
+                nodes: document.querySelectorAll('.pb-tab-strip').length,
+                same: strip === S.modesStrip && strip.node.isConnected,
+                hidden: strip.isHidden,
+                width: box.width, height: box.height,
+                reader: ours(strip.shownTabs().map(w => w.id)),
+                bar: ours(barIds()),
+                dom: ours(stripIds()),
+            };
+        };
+    `;
+    const setup = await step(app, 'modes: setup', `${reads}
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify(urls)});
+        S.modesStrip = strip;
+        if (${JSON.stringify(plant)} === 'modes-order-lost') {
+            const service = get('ModeService'), activate = service.activateMode.bind(service);
+            service.activateMode = async id => {
+                const out = await activate(id);
+                const bar = strip.primaryBar(), moved = bar && bar.titles.find(t => t.owner.id === S.a);
+                if (moved) bar.insertTab(bar.titles.length - 1, moved);
+                return out;
+            };
+        }
+        await sleep(300);
+        return { painted, base: read() };
+    `);
+    const order = setup.base.reader.join(',');
+    expect(setup.painted && setup.base.reader.length === 3, `modes: setup: /a, /b (localhost) and /c are not all in the strip's reader (${JSON.stringify(setup.base)})`);
+    expect(!contract.hidden('browsing') && !setup.base.hidden && setup.base.height > 0, `modes: NOT SCORED -- the strip is not painted in Browsing before any switch (${JSON.stringify(setup.base)})`);
+    expect(setup.base.dom.join(',') === order && setup.base.bar.join(',') === order,
+        `modes: setup: the painted strip [${setup.base.dom}] and the TabBar [${setup.base.bar}] do not read the reader's order [${order}]`);
+    for (const mode of ['coding', 'organising', 'browsing']) {
+        const seen = await step(app, `modes: switch to ${mode}`, `${reads}
+            await get('ModeService').activateMode(${JSON.stringify(mode)});
+            const switched = await until(() => document.body.getAttribute('data-pb-mode') === ${JSON.stringify(mode)}, 5000);
+            await sleep(400);
+            return Object.assign({ switched: !!switched }, read());
+        `);
+        expect(seen.switched, `modes: NOT SCORED -- the shell never entered ${mode} (data-pb-mode reads ${seen.mode})`);
+        expect(seen.nodes === 1 && seen.same, `modes: in ${mode} the strip is not the one TabStripWidget (${seen.nodes} strip nodes, same instance ${seen.same}): a per-mode strip variant`);
+        const hidden = contract.hidden(mode);
+        expect(seen.hidden === hidden, `modes: in ${mode} the strip is ${seen.hidden ? 'hidden' : 'shown'}, but the mode contract setHidden(${contract.expr}) says ${hidden ? 'hidden' : 'shown'}`);
+        expect(hidden ? seen.height === 0 : seen.height > 0 && seen.width > 0,
+            `modes: in ${mode} the strip measures ${seen.width}x${seen.height}, want ${hidden ? 'zero height (hidden by the contract)' : 'a painted row'}`);
+        expect(seen.reader.join(',') === order && seen.bar.join(',') === order,
+            `modes: the strip order did not survive the switch to ${mode} (reader [${seen.reader}], TabBar [${seen.bar}], want [${order}])`);
+        if (!hidden) {
+            expect(seen.dom.join(',') === order, `modes: in ${mode} the painted strip reads [${seen.dom}], not its reader's order [${order}]`);
+        }
+    }
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
@@ -981,6 +1190,8 @@ const SCENARIOS = {
     multi: { run: multi, plant: 'multi-touches-unselected', expect: 'touched an unselected tab' },
     preview: { run: preview, probe: true, plant: 'preview-never-opens', expect: 'opened no preview card' },
     attention: { run: attention, probe: true, plant: 'attention-flag-dropped', expect: 'showed no attention dot' },
+    'bookmark-all': { run: bookmarkAll, probe: true, plant: 'bookmark-all-drops-tab', expect: 'was not bookmarked' },
+    modes: { run: modes, probe: true, plant: 'modes-order-lost', expect: 'did not survive the switch' },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */
