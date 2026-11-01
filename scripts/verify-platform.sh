@@ -5121,6 +5121,16 @@ run_own_checks() {
       "page-tools-live|node $REPO_ROOT/scripts/verify-page-tools-live.mjs"
       "page-tools-live-self-test|node $REPO_ROOT/scripts/verify-page-tools-live.mjs --self-test"
 
+      # NEW (Phase 37 plan 01, PROMPT-01, D-01/D-04/D-11): the permission prompts in the built
+      # shell with the startup cache purged (MOZ_PURGE_CACHES=1). Prompts are answered by
+      # activating the stock popupnotification's own buttons in chrome after the stock delay;
+      # outcomes are page-side and chrome-side, never BiDi on the XUL panel. No --scenario
+      # filter, so the scenarios plans 37-02..37-04 add join this row. Needs the built binary
+      # and the last Theia app build, so never --quick. The self-test runs a clean control per
+      # target scenario, then one session per planted fault.
+      "prompts-live|node $REPO_ROOT/scripts/verify-prompts-live.mjs"
+      "prompts-live-self-test|node $REPO_ROOT/scripts/verify-prompts-live.mjs --self-test"
+
       # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
       # and identity-local (31-01), site-panel (31-02: certificate, six tri-state
       # rows, icons, the origin race), and clear-data and shield (31-03: the
