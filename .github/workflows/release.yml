@@ -760,7 +760,8 @@ jobs:
     needs: descriptor
     if: needs.descriptor.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Ten attempts 60 s apart (the deploy wait below) plus one row run per attempt.
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -789,7 +790,22 @@ jobs:
           [ "$M_CHANNEL" = "$CHANNEL" ] || { echo "::error::manifest update_channel '$M_CHANNEL' differs from '$CHANNEL' derived from the dispatched commit; the tree decides" >&2; exit 1; }
           echo "manifest agrees with the tree: MAR origin $ORIGIN, update channel $CHANNEL"
 
+      # The updates host deploys from the push the descriptor job just made, and its edge can serve the
+      # previous update.xml for a while, so a red verdict is retried here; the row itself stays one pure
+      # read per run. The last attempt decides, and anything but a red verdict (exit 1) stops at once.
       - name: Prove the public channel equals the Release (byte-equal descriptors, MAR-origin form, HEAD size, GET sha512, latest version)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/verify-channel-live.mjs --manifest release/release-manifest.json
+        run: |
+          set -euo pipefail
+          ATTEMPTS=10
+          for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
+            RC=0
+            node scripts/verify-channel-live.mjs --manifest release/release-manifest.json || RC=$?
+            [ "$RC" -eq 1 ] || exit "$RC"
+            [ "$ATTEMPT" -eq "$ATTEMPTS" ] && break
+            echo "channel-live attempt $ATTEMPT of $ATTEMPTS is red; the updates host may still be deploying, so it is read again in 60 s"
+            sleep 60
+          done
+          echo "::error::the public update channel is not proven equal to the Release after $ATTEMPTS attempts over about $((ATTEMPTS - 1)) minutes; nothing was changed. Next step: read the failures of the last attempt above, fix the named descriptor or MAR, then re-run this job" >&2
+          exit 1
