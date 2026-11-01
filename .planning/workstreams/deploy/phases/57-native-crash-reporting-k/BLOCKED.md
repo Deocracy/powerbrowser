@@ -5,6 +5,12 @@ Plan 57-04 (the TEL-13 flip) was not executed, by instruction.
 
 ## B1. 57-01 Task 1: the TEL-09 consent patch conflicts with the compiled-file guard (BLOCKED, owner decision)
 
+**Settled: (a); implementation in progress in a sibling run.** The narrow `.rs` allowlist for the two
+crash-reporter consent files (`toolkit/crashreporter/client/app/src/glean.rs` and `send_ping.rs`), with a
+self-test plant that any other `.rs` path stays red. Settled by the autonomous run on 2026-10-31 under the
+owner's instruction to decide items not needing owner input. The safety note below still binds until that
+work lands.
+
 **What the plan asks.** A hook-only patch, `patches/050-powerbrowser-crash-ping-consent.patch`, that fails the
 Glean crash-ping consent read closed, plus a static gate, with `check-patch-surface` green on the new patch.
 
