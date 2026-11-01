@@ -2,13 +2,13 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 33
-current_phase_name: Bookmarks, History and the Full Menu
-status: executing
-stopped_at: "Phase 32 plans 9/9 done, review fixes and F3 gap closure (59f61fd1) proven live; verification human_needed, deferred (32-UAT.md); PAGE-09 carried to Phase 33. Phases 33-37 run in parallel worktrees, merged later"
+current_phase: 38
+current_phase_name: WebExtensions
+status: blocked
+stopped_at: "Phases 33-37 merged into main, reviewed, fixed, verified human_needed with 0 gaps; all live checks deferred to one end-of-milestone pass (.planning/v1.5-LIVE-PASS.md). Phase 38 not started; blocked on the Phase 28 route sign-off (owner)"
 last_updated: "2026-11-01T03:25:55.228Z"
 last_activity: 2026-11-01
-last_activity_desc: Phase 32 verified (human_needed, deferred); Phase 33 next
+last_activity_desc: Phases 33-37 closed with verification deferred; Phase 38 blocked on the Phase 28 sign-off
 state_head: 4b332e170e413e5814fbba6551f017ef0f11bae6
 progress:
   total_phases: 13
@@ -25,14 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 33 — Bookmarks, History and the Full Menu (executing in a parallel worktree; results merge into main later)
+**Current focus:** Phase 38 — WebExtensions (not started; blocked on the Phase 28 route sign-off, owner)
 
 ## Current Position
 
-Phase: 33 (Bookmarks, History and the Full Menu) — not started on main (parallel worktree)
+Phase: 38 — not started; blocked on the Phase 28 route sign-off (owner)
 Plan: —
-Status: Phase 32 closed with verification deferred to the end-of-milestone pass
-Last activity: 2026-11-01 — Phase 32 verified human_needed after the in-line F3 gap closure
+Status: Phases 32-37 closed with verification deferred to the end-of-milestone pass (.planning/v1.5-LIVE-PASS.md)
+Last activity: 2026-11-01 — Phases 33-37 closed by hand (verification human_needed, 0 gaps)
+
+**v1.5 parallel-lane run:** lanes p33..p37 were cut from 23c08bb5 and merged into main in order 36 (aa8989d9), 34 (8143fedd), 37 (14319419), 35 (68a38581), 33 (d6f9fcbb). Each was reviewed and fixed on main. All live checks are deferred to one end-of-milestone pass.
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -534,8 +536,11 @@ with "autonomous interactive".
 | 30 | verification_deferred_human (52/55 verified, no gaps; review 1 critical + 6 warnings fixed, security SECURED 24/24; real typing/IME, visuals vs 30-MOCKUPS.html, placeholder suffix IN-05, confirm D-34, WR-02 in Bookmarks/History, @alias default, 3 judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 30 |
 | 31 | verification_deferred_human (5/5 criteria, 11/11 requirements, no gaps; review 3 critical + 9 warnings fixed incl. WR-04 quit leave prompt, live 12/12 PASS, security SECURED 12/12 re-audited on the fixes; pixel review of identity box, site panel, hamburger and 280px sheet, real-keyboard menu/ConfirmDialog/shield, real Ctrl+Q incl. Monaco unsaved editor and Leave, OS session-end quit, confirm the registrable-domain clear scope (D-31-12, also wipes Theia frame storage on 127.0.0.1, O-31-D) — Chris at end of milestone) | /gsd-verify-work 31 |
 | 32 | verification_deferred_human (9/9 plans; 17/20 truths, 2 by override, 0 gaps after F3 closure 59f61fd1; review 1 critical + 11 warnings, 10 fixed, WR-07/WR-10 skipped; --quick PASS, live 16/16 PASS, self-test 21 plants red; crash UI look + WR-08 navigate-after-restore, reader toggle both themes, 16px favicons + dock-bar scope, DevTools toolbox window, downloads panel + Open/Show in folder (PAGE-06 Pending), find strip layout, print dialog, WR-10 audio on a hand-started binary, confirm 2 overrides, PAGE-09 owner — carried to Phase 33 but absent from its plans — Chris at end of milestone; 32-UAT.md) | /gsd-verify-work 32 |
-| 34 | verification_deferred_human (5/5 plans executed on workspace/p34, static gates green: verify-tab-strip 15 checks + 24 self-test plants, Theia build, --quick exit 0; twelve live scenarios, sidecar DOM measure, visuals, drag-handle vs double-click owner call, D-02 strip-visibility owner call, bookmark-all pending the Phase 33 merge (assumes ChromeStoreClient.bookmarkPage) — end-of-milestone live pass) | /gsd-verify-work 34 |
-| 37 | verification_deferred_human (4/4 plans executed on workspace/p37, merged into main; static gates green: verify-permission-prompts + self-test, verify-prompts-live --self-test --static, Theia build, --quick exit 0; live prompt, WebRTC, dialog probe-1 and Chris gate, password save/update, popup-block Allow, hung-script and protocol bars, doorhanger visuals without browser.css — end-of-milestone live pass) | /gsd-verify-work 37 |
+| 33 | verification_deferred_human (5/5 plans; 5/5 criteria verified static + PAGE-09, 0 gaps, merged d6f9fcbb; review fixed on main; six live items: bookmark-star/editor/keys, reopen-closed + history-menu, bookmarks-toolbar, clear-history, app-menu/actions-list/command-centre-privacy, PAGE-09 manual greying (no scenario), visual and copy pass incl. 300 ms submenu delay vs 200 ms spec, Edit placement, Settings command, copy strings — Chris at end of milestone; 33-UAT.md) | /gsd-verify-work 33 |
+| 34 | verification_deferred_human (5/5 plans, 3/15 must-haves verified, 0 gaps, merged 8143fedd; review fixed on main; 15 UAT items: twelve-scenario verify-tab-strip-live chain, sidecar DOM measure, visuals, double-click vs window-drag handles owner call, D-02 strip-visibility owner call, bookmark-all now unblocked by the Phase 33 merge — Chris at end of milestone; 34-UAT.md) | /gsd-verify-work 34 |
+| 35 | verification_deferred_human (7/7 plans, 5/13 must-haves verified, 8 present and wired with behavior unverified, 0 gaps, merged 68a38581; review fixed on main; 22 UAT items: verify-page-furniture-live, shell-furniture visuals, Edit-submenu fallback owner call, WINDOWS.md ledger repair — Chris at end of milestone; 35-UAT.md) | /gsd-verify-work 35 |
+| 36 | verification_deferred_human (3/3 plans, 10/19 must-haves verified, 0 gaps, merged aa8989d9; review fixed on main; 18 UAT items: seven verify-new-window-adopt-live scenarios + self-test, GUI-01 rows and palette run, A-06 browserDOMWindow read-back, four 36-REVIEW live legs, VB-01 parity, CLAUDE.md rule 5 wording owner decision — Chris at end of milestone; 36-UAT.md) | /gsd-verify-work 36 |
+| 37 | verification_deferred_human (4/4 plans, 9/18 must-haves verified, 0 gaps, merged 14319419; review fixed on main; 41 UAT items: verify-prompts-live with --scenario dialog-probe first (writes the verdict that unblocks rule (p) and the prompt-probe-verdict-live row), live prompt, WebRTC, 37-03 dialog gate (both outcomes), password save/update, popup-block Allow, hung-script and protocol bars, doorhanger visuals — Chris at end of milestone; 37-UAT.md) | /gsd-verify-work 37 |
 | focus-fix | verification_deferred_human (overlay focus race fixed c423f1a, 15/15 loops; on a real keyboard: F6 from the pill with suggestions open then type, Paste & Go then Down scrolls, same-site link then Down scrolls — Chris at end of milestone; record .planning/debug/overlay-focus-intermittent.md) | /gsd-debug overlay-focus-intermittent |
 
 ## Deferred Items
@@ -576,7 +581,7 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-11-01T03:25:54.249Z
-Stopped at: 32-07 and 32-08 gap closure complete: F12, reader signal, crash history, pill favicons delivered; blank reload closed as obsolete (afda7df1); D-25b four-tab cap still open
+Stopped at: Phases 33-37 closed with verification deferred; Phase 38 not started, blocked on the Phase 28 route sign-off (owner)
 Resume file: None
 
 ## Operator Next Steps

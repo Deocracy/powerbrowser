@@ -401,6 +401,7 @@ Plans:
   5. The app menu reaches New Tab, New Window, Bookmarks, History, Downloads, Print, Save Page As, Find in Page, Zoom, Full Screen, More Tools and Help; Actions mode runs print, downloads, clear history, settings and the other browser actions, and Command centre still never sends typed text to a search engine
 
 **Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
+**Status**: plans done; verification human_needed, deferred to the end-of-milestone pass (see 33-VERIFICATION.md, 33-UAT.md). PAGE-09 was delivered here (33-05).
 
 Plans:
 - [x] 33-01-PLAN.md (wave 1) — Chrome-side foundation for every Phase 33 store surface: the bookmark write/remove/update kinds, the closed-tab read kind, the single clearHistory fan-out kind, the client methods,
@@ -425,6 +426,7 @@ Plans:
   4. The user selects several tabs and closes, moves, mutes or bookmarks them together; hovering a tab shows a preview card; a background tab whose title changes shows an attention mark
 
 **Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
+**Status**: plans done; verification human_needed, deferred to the end-of-milestone pass (see 34-VERIFICATION.md, 34-UAT.md).
 
 Plans:
 - [x] 34-01-PLAN.md (wave 1) — Tab context menu (TAB-01) plus Bookmark Tab / Bookmark All Tabs (BMK-07) on the extended strip (D-01, D-02, D-03, D-04, D-13, D-15, D-16).
@@ -450,6 +452,7 @@ Plans:
   4. F11 on a web page makes the window full screen, and a page video that enters fullscreen shows Firefox's fullscreen warning and leaves fullscreen on Esc
 
 **Plans**: 7 plans (strictly sequential waves; DSH codes, Claude checks)
+**Status**: plans done; verification human_needed, deferred to the end-of-milestone pass (see 35-VERIFICATION.md, 35-UAT.md).
 
 Plans:
 - [x] 35-01-PLAN.md (wave 1) — Close T-27-11 and give every Phase 35 shim global its derived coverage before any shim lands.
@@ -476,6 +479,7 @@ Plans:
   3. A `window.open` with popup features still opens a popup window, and the IDE's open-browser-window command still opens the stock browser window (GUI-01)
 
 **Plans**: 3 plans (strictly sequential waves; DSH codes, Claude checks)
+**Status**: plans done; verification human_needed, deferred to the end-of-milestone pass (see 36-VERIFICATION.md, 36-UAT.md).
 
 Plans:
 - [x] 36-01-PLAN.md (wave 1) — Build the chrome half of PROMPT-05: a minimal nsIBrowserDOMWindow shim behind the boundary, installed by one `installNewWindowReceivers(window)` call, that adopts overlay-opener ne
@@ -499,6 +503,7 @@ Plans:
   5. Per-tab notification bars appear for a blocked popup, a hung script and a protocol handler, and their actions work (Allow on a blocked popup opens it as a web tab)
 
 **Plans**: 4 plans (strictly sequential waves; DSH codes, Claude checks; prompts answer only via Firefox's own buttons, Chris 2026-10-25)
+**Status**: plans done; verification human_needed, deferred to the end-of-milestone pass (see 37-VERIFICATION.md, 37-UAT.md).
 
 Plans:
 - [x] 37-01-PLAN.md (wave 1) — Wave 0 gates plus the first end-to-end tracer.
@@ -546,11 +551,11 @@ Plans:
 | 30. Address-Bar Modes and Command Centre | 6/6 | In Progress|  |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
 | 32. Page Tools | 9/9 | In Progress | - |
-| 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
-| 34. Tab Strip | 5/5 | Executed, live verification deferred | - |
-| 35. Shell Furniture and Page Context Menu | 7/7 | Executed; live verification deferred | - |
-| 36. New-Window Links as Web Tabs | 3/3 | In Progress (live checks deferred) | - |
-| 37. Permission Prompts and Dialogs | 4/4 | In Progress (live checks deferred) | - |
+| 33. Bookmarks, History and the Full Menu | 5/5 | Executed, verification deferred | - |
+| 34. Tab Strip | 5/5 | Executed, verification deferred | - |
+| 35. Shell Furniture and Page Context Menu | 7/7 | Executed, verification deferred | - |
+| 36. New-Window Links as Web Tabs | 3/3 | Executed, verification deferred | - |
+| 37. Permission Prompts and Dialogs | 4/4 | Executed, verification deferred | - |
 | 38. WebExtensions | 0/TBD | Not started | - |
 
 ## Hard constraints (every phase)
