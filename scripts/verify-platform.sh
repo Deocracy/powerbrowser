@@ -5885,6 +5885,19 @@ run_own_checks() {
       # controls (unsigned, signed), then a reworded word per source, an empty set, an unreadable source, an absent
       # or disagreeing record and a stale block after signing, each red naming its file. Hermetic; writes nothing.
       "win-download-copy-self-test|node $REPO_ROOT/scripts/verify-win-download-copy.mjs --self-test"
+
+      # NEW (Phase 54, SEC-12, DIST-10): the Windows Authenticode chain in release.yml sign-windows. Full tier because
+      # the signing status it compares includes the published download page (one GET); the live chain evidence is the
+      # owner's first sign-windows run at the 54-04 checkpoint. It classifies each sign-windows step from its own
+      # text and compares the sequence with inner jsign, repackage installer, installer jsign, repackage mar, signmar
+      # sign, signmar verify as ordered equality, plus OIDC-only Azure behind every gate, no stored Azure secret, no
+      # schedule key, no secret or environment on a legion job, and the Windows status line against the posture
+      # line in docs/RELEASING.md. Never called by a quick path.
+      "win-sign-chain|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs"
+      # win-sign-chain-self-test plants every fault in memory over the real workflow, docs and page (two green
+      # controls, then an out-of-order step, a stored secret, a schedule key, a legion secret and a stale unsigned
+      # status among others), each red naming its step or key. Hermetic; writes nothing.
+      "win-sign-chain-self-test|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs --self-test"
     )
   fi
 

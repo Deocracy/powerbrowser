@@ -891,6 +891,58 @@ Email Routing proof shape: send one test message to each of `security@`, `contac
 from the destination address proves nothing. Measured results: pending the owner
 checkpoint (plan 47-04).
 
+### Windows signing (SEC-12)
+
+The `sign-windows` job in `release.yml` is the only place a Windows file is signed. It runs on
+`ubuntu-latest` under the `release` environment, after `build-windows`, and in this order, which
+`win-sign-chain` compares as ordered equality: jsign over the inner `.exe` and `.dll` files of the
+staged zip (the vendor-signed Node runtime excepted) and the `setup.exe` stub, `mach repackage
+installer` from the pinned source, jsign over the installer, `mach repackage mar` (signmar, built from
+the pinned source, is the mar tool), then signmar sign and verify against the tracked DER. It
+hands the signed installer, the signed complete MAR and their `SHA256SUMS` off as the one-day
+`release-windows-signed` artifact with a provenance attestation. It does not publish.
+
+Azure is reached over OIDC only: `Azure/login` v3.1.0 (commit
+`a641126d1b8aa4d1fa005f4f92df94a3a4c4c906`, admitted in `.github/settings/actions-selected.json`)
+signs in with three ids, and jsign reads a short-lived access token from the job shell. No Azure
+secret exists. The job fails closed, before the sign-in, when any of these `release` environment
+variables is empty:
+
+| Variable | Holds |
+|---|---|
+| `AZURE_CLIENT_ID` | the app registration whose federated credential trusts this repository's `release` environment |
+| `AZURE_TENANT_ID` | the tenant of that app registration |
+| `AZURE_SUBSCRIPTION_ID` | the subscription billed for Artifact Signing |
+| `AZURE_SIGNING_ENDPOINT` | the account's regional endpoint host, `<region>.codesigning.azure.net` |
+| `AZURE_SIGNING_ACCOUNT` | the Artifact Signing account name |
+| `AZURE_SIGNING_PROFILE` | the certificate profile name |
+
+Tool pins, as the job states them: jsign 7.6, the `ebourg/jsign` release asset `jsign-7.6.jar`,
+2551899 bytes, sha256 `6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5` (read
+2026-10-31; the job refuses any other bytes). `openjdk-21-jre-headless`, `libnss3-tools` and
+`7zip` come from the `ubuntu-latest` archive; the job prints their versions with `dpkg-query`, and the
+first live run's versions are recorded here: pending.
+
+Owner steps, at the 54-04 checkpoint (none of them is an agent's):
+
+1. Create the Azure account with two-factor sign-in, an Artifact Signing account and a Public Trust
+   certificate profile, and request the identity validation (1 to 20 business days, billed from
+   creation).
+2. Create an app registration with a federated credential for subject
+   `repo:<owner>/<repo>:environment:release`, where `<owner>/<repo>` is the release home that
+   `configuration.toml` names, and give it the Artifact Signing certificate profile signer role on
+   the profile. Create no client secret.
+3. Set the six variables: `gh variable set <NAME> --env release --body <value>`, then
+   `gh variable list --env release` to confirm them.
+4. Apply the admission list (`Azure/login@*` is new) with the repository-controls procedure.
+5. When the validation completes, replace `pending` in the "Azure Artifact Signing identity
+   validation" line under "Current posture, honestly", Windows, with the date, and make the four
+   content changes of the signing flip in the same commit: deferred signing item 1 (a certificate
+   exists), item 2 (the maintenance-service decision is revisited, not silently enabled), item 3 (the
+   `CERTIFICATE_*` NSIS defines are emitted by regenerating patch 040), and item 4 with the download
+   page (the SEC-03 block is removed and the Windows status line states the signed status).
+   `win-download-copy` and `win-sign-chain` go red on a page that disagrees with that line.
+
 ### The Windows VM
 
 `pkg-win11` is a **new** libvirt domain on a new disk. A shut-off domain named
@@ -1010,6 +1062,7 @@ that is not admitted.
 | Cloudflare Worker | the `powerbrowser-clock` App key, held by the Worker and not by any GitHub environment | Phase 43 | the Worker's secret store |
 | `release` environment | `R2_MAR_WRITE_TOKEN`: an R2 API token with object read and write on the MAR bucket only (the bucket behind `downloads.powerbrowser.org`); read by `sign-publish`'s `r2_copy` step and by no other step or workflow | `linux-release-pipeline-and-update-channel` (plan 49-05) | one holder, the owner (Christopher Colantuono); renewal row "Cloudflare R2 object-write token" in `docs/RENEWALS.md` |
 | `release` environment variables (not secrets) | `R2_MAR_BUCKET` (the MAR bucket name) and `CLOUDFLARE_ACCOUNT_ID` | `linux-release-pipeline-and-update-channel` (plan 49-05) | the owner |
+| `release` environment variables (not secrets) | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE`, read by `sign-windows` only; Azure is reached over OIDC and no Azure secret exists anywhere (section "Windows signing (SEC-12)"). `sign-windows`'s `sign_mar` step also reads the two `MAR_SIGNING_P12_*` secrets above | `windows-unsigned` (plan 54-04) | the owner |
 | `winget` environment | `WINGET_TOKEN`: a classic PAT with `public_repo` on a dedicated bot account whose only write access is its winget-pkgs fork (wingetcreate does not support fine-grained tokens), branch-restricted to `main`; it shares no environment with the signing key | `listings-and-cadence`, `package-channels` | the bot account holder, recorded in `docs/RENEWALS.md` |
 | Host filesystem on `legion` | no personal access token and no App key; only `/var/lib/secrets/github-runner-registration`, root-owned mode 0600, present from minting; the token inside it expires after one hour and is harmless afterwards, and the file stays because the unit reads it on every start; the hook copy `/etc/pb-runner/legion-pre-job-hook.sh`, root-owned mode 0555 | `linux-release-pipeline-and-update-channel` | the operator; not readable by the runner user `pb-runner` |
 | Two offline media, stored apart | On each: `powerbrowser-mar.p12` and `powerbrowser-mar-secondary.p12` (from the ceremony blocks' mandatory `pk12util` lines, each protected with its own store's `password.txt`) and both key-store passwords. The secondary `.p12` signs nothing and enters no environment until a rotation; if the owner ever dual-signs, it first gains its own named `release` rows in this table. The ceremony record holds each copy's existence and date, never a medium's location | `mar-signing-and-update-integrity` | the operator |
