@@ -4,11 +4,11 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 38
 current_phase_name: WebExtensions
-status: blocked
-stopped_at: "Phases 33-37 merged into main, reviewed, fixed, verified human_needed with 0 gaps; all live checks deferred to one end-of-milestone pass (.planning/v1.5-LIVE-PASS.md). Phase 38 not started; blocked on the Phase 28 route sign-off (owner)"
+status: ready_to_execute
+stopped_at: "Phases 33-37 merged into main, reviewed, fixed, verified human_needed with 0 gaps; all live checks deferred to one end-of-milestone pass (.planning/v1.5-LIVE-PASS.md). Phase 38 not started; ready to execute (Phase 28 route signed off 2026-10-21)"
 last_updated: "2026-11-01T03:25:55.228Z"
 last_activity: 2026-11-01
-last_activity_desc: Phases 33-37 closed with verification deferred; Phase 38 blocked on the Phase 28 sign-off
+last_activity_desc: Phases 33-37 closed with verification deferred; Phase 38 ready to execute
 state_head: 4b332e170e413e5814fbba6551f017ef0f11bae6
 progress:
   total_phases: 13
@@ -25,11 +25,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 38 — WebExtensions (not started; blocked on the Phase 28 route sign-off, owner)
+**Current focus:** Phase 38 — WebExtensions (not started; ready to execute — Phase 28 route signed off 2026-10-21)
 
 ## Current Position
 
-Phase: 38 — not started; blocked on the Phase 28 route sign-off (owner)
+Phase: 38 — not started; ready to execute (Phase 28 route signed off 2026-10-21, 28-SPIKE-DECISION.md)
 Plan: —
 Status: Phases 32-37 closed with verification deferred to the end-of-milestone pass (.planning/v1.5-LIVE-PASS.md)
 Last activity: 2026-11-01 — Phases 33-37 closed by hand (verification human_needed, 0 gaps)
