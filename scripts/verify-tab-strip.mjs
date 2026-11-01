@@ -92,6 +92,7 @@ const COPY = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const BRIDGE_GATE = 'scripts/verify-web-tab-bridge.mjs';
+const SHEET = 'theia/extensions/chrome-bar/src/browser/chrome-bar.css';
 const CODICONS = 'theia/node_modules/@vscode/codicons/dist/codicon.css';
 const ROADMAP = '.planning/ROADMAP.md';
 // After a milestone closes its roadmap moves here; the criterion is searched in both.
@@ -399,6 +400,13 @@ function check(src) {
         failures.push(`preview lifetime: onDidRemoveWidget does not close the preview of a removed tab -- the card and the hidden page would stay (WR-05)`);
     }
 
+    // 10e. pinned audio mark (WR-06): no rule hides .pb-tab-audio on a pinned tab; derived from the sheet's rules.
+    const hidden = [...src[SHEET].matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+        .filter(m => /\.is-pinned[^,{]*\.pb-tab-audio/.test(m[1].replace(/\/\*[\s\S]*?\*\//g, '')) && /display:\s*none/.test(m[2]));
+    if (!src[SHEET] || hidden.length) {
+        failures.push(`pinned audio: ${SHEET} hides .pb-tab-audio on a pinned tab (display: none) -- a pinned tab that plays sound shows no mark and cannot be muted by click (WR-06)`);
+    }
+
     // 11. preview occlusion and anchor
     const members = selector ? selector.split(',').map(member => member.trim()) : [];
     const renderPreview = methodBody(strip, 'protected renderPreview(');
@@ -594,7 +602,7 @@ function readSources() {
     const out = {};
     out[FRAME_KEY] = frameFiles();
     out[DRIVERS_KEY] = driverFiles();
-    for (const rel of new Set([STRIP, COPY, WEB_TAB, API, BRIDGE_GATE, CODICONS, REGISTRY, ...out[FRAME_KEY]])) {
+    for (const rel of new Set([STRIP, COPY, WEB_TAB, API, BRIDGE_GATE, SHEET, CODICONS, REGISTRY, ...out[FRAME_KEY]])) {
         out[rel] = existsSync(join(REPO_ROOT, rel)) ? readFileSync(join(REPO_ROOT, rel), 'utf8') : '';
     }
     const archived = existsSync(join(REPO_ROOT, MILESTONES))
@@ -685,6 +693,12 @@ const PLANTS = [
         file: STRIP,
         mutate: s => s.replace(/(onDidRemoveWidget\(\(\) => \{[^}]*?)this\.closePreview\(\);/, '$1'),
         expect: 'does not close the preview of a removed tab',
+    },
+    {
+        name: 'pinned-audio-hidden',
+        file: SHEET,
+        mutate: s => s.replace('.pb-tab.is-pinned .pb-tab-title {', '.pb-tab.is-pinned .pb-tab-title,\n.pb-tab.is-pinned .pb-tab-audio {'),
+        expect: 'hides .pb-tab-audio on a pinned tab',
     },
     {
         name: 'url-keyed-pin',

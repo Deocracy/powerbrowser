@@ -1146,9 +1146,23 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
     gap: 0;
 }
 
-.pb-tab.is-pinned .pb-tab-title,
-.pb-tab.is-pinned .pb-tab-audio {
+.pb-tab.is-pinned .pb-tab-title {
     display: none;
+}
+
+/* WR-06: a pinned tab keeps its audio mark as a 10px badge over the icon's corner, so a pinned tab that plays
+   sound shows it and still mutes by click. Out of the flow: the 32px tab keeps the icon centered. */
+.pb-tab.is-pinned {
+    position: relative;
+}
+
+.pb-tab.is-pinned .pb-tab-audio {
+    position: absolute;
+    right: 0;
+    bottom: 2px;
+    margin: 0;
+    font-size: 10px;
+    line-height: 1;
 }
 
 /* TAB-06 (34-03): a selected tab carries the sheet's accent-tinted wash (accent use: highlight). Unlayered for the
