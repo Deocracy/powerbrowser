@@ -556,6 +556,8 @@ export class WebTabWidget extends BaseWidget {
     canGoBack = false;
     canGoForward = false;
     lostView = false;
+    /** 36-REVIEW WR-04: a page's new window chrome adopted. Shown on about:blank too, where its script may write the content. Never restored. */
+    adopted = false;
     /** Phase 31 (D-31-01): the last pushed connection state; undefined before the first push. */
     securityState: string | undefined;
     /** Phase 31 (D-31-03): the last pushed display host. */
@@ -800,7 +802,7 @@ export class WebTabWidget extends BaseWidget {
             }
             const r = this.node.getBoundingClientRect();
             // A crashed tab is not showable: the overlay hides and the placeholder carries the crash UI (PAGE-11, 32-08).
-            const showable = this.isAttached && this.isVisible && this.hasPage && !this.crashed;
+            const showable = this.isAttached && this.isVisible && (this.hasPage || this.adopted) && !this.crashed;
             const msg: WebTabMessage = {
                 kind: 'webTabGeometry',
                 tabId: this.tabId,
@@ -1357,6 +1359,7 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
             dropUnshown();
             return;
         }
+        widget.adopted = true;
         // An opener closed meanwhile: the tab still lands, at the end, rather than being dropped.
         const opener = this.channel.widgetOf(openerTabId);
         try {
