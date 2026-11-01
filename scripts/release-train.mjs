@@ -113,6 +113,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { classifyTag, tagToVersion, UPTAKE_MAJOR } from './detect-upstreams.mjs';
+import { repoSlug } from './verify-repo-controls.mjs';
 import { expiryStartMs, runChecks as renewalsStructureChecks } from './verify-renewals.mjs';
 
 const NAME = 'release-train-logic';
@@ -1708,7 +1709,9 @@ function maintenanceSelfTest() {
     const TAG_175 = esrTag(175, 0, 0);
     const OWNER = 'owner-login-fixture';
     const STRANGER = 'stranger-login-fixture';
-    const REPO_FIXTURE = 'DeBIOS-Foundation/powerbrowser';
+    // The product repository is configuration.toml's, through the same repoSlug the repo-controls row uses.
+    const { owner: REPO_OWNER, repo: REPO_NAME } = repoSlug(REPO_ROOT);
+    const REPO_FIXTURE = `${REPO_OWNER}/${REPO_NAME}`;
     // Phase 51 fixtures: a RENEWALS table with the given Expiry cells (line 3 is the first data row), the RELEASING
     // threshold paragraph as the owner wrote it, and the day of an instant as the strict ISO text the table holds.
     const isoOf = ms => new Date(ms).toISOString().slice(0, 10);
@@ -2091,7 +2094,7 @@ function maintenanceSelfTest() {
         }, expect: 'was ignored, so every red row is newly red' },
         { name: 'a synthetic probe 200 without the synthetic acknowledgement', run: () => reds(stateOf(facts({ syntheticAcked: false }))), expect: 'without the synthetic acknowledgement' },
         { name: 'a newer tag whose commit date was not read', run: () => stateOf(facts({ tagDates: {} })).rows.filter(r => r.status === 'no-data' && r.name === 'esr-pin-age').map(r => `${r.name} no-data: ${r.evidence}`), expect: 'unavailable' },
-        { name: 'a workflow_run wake from a fork head', run: () => { const a = admitWakeRun({ headRepository: 'fork-owner/powerbrowser' }, 'DeBIOS-Foundation/powerbrowser'); return a.admit ? [] : [a.reason]; }, expect: 'from fork' },
+        { name: 'a workflow_run wake from a fork head', run: () => { const a = admitWakeRun({ headRepository: `fork-owner/${REPO_NAME}` }, REPO_FIXTURE); return a.admit ? [] : [a.reason]; }, expect: 'from fork' },
         ...[
             ['an owner issue without the release-train label', [{ ...issueBy(priorBody), labels: [] }], OWNER],
             ['a same-title issue by a stranger', [issueBy(priorBody, STRANGER)], OWNER],

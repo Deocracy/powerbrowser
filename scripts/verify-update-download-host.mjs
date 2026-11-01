@@ -41,6 +41,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { marOrigin, resolveConfig } from './generate.mjs';
+import { repoSlug } from './verify-repo-controls.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SELF), '..');
@@ -169,18 +170,20 @@ function selfTest() {
     }
     console.log(`  ok  baseline -> green (${baseline.files} tracked file(s))`);
 
-    // In-memory synthetic files: nothing is written to the tree.
+    // In-memory synthetic files: nothing is written to the tree. The repo is configuration.toml's (repoSlug), never a literal.
+    const { owner, repo } = repoSlug(REPO_ROOT);
+    const R = `${owner}/${repo}`;
     const fixtures = {
-        'theia/extensions/tab-uris/fixtures/update.xml.tmpl': '<updates><update appVersion="{{v}}"><patch type="complete" URL="https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/{{tag}}/powerbrowser.mar"/></update></updates>\n',
-        'scripts/generated-update-descriptor.json': '{\n  "servedMarUrl": "https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/powerbrowser-1.0.0.mar"\n}\n',
-        'powerbrowser/branding/release/fixtures/patch-manifest.json': '{ "patchURL": "https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar" }\n',
+        'theia/extensions/tab-uris/fixtures/update.xml.tmpl': `<updates><update appVersion="{{v}}"><patch type="complete" URL="https://github.com/${R}/releases/download/{{tag}}/powerbrowser.mar"/></update></updates>\n`,
+        'scripts/generated-update-descriptor.json': `{\n  "servedMarUrl": "https://github.com/${R}/releases/download/v1.0.0/powerbrowser-1.0.0.mar"\n}\n`,
+        'powerbrowser/branding/release/fixtures/patch-manifest.json': `{ "patchURL": "https://github.com/${R}/releases/download/v1.0.0/x.mar" }\n`,
         'powerbrowser/packaging/update-xml.tmpl': '<updates><update><patch URL="https://release-assets.githubusercontent.com/github-production-release-asset/1/x.mar"/></update></updates>\n',
         'powerbrowser/packaging/update-objects.xml.tmpl': '<updates><update><patch URL="https://objects.githubusercontent.com/github-production-release-asset-2e65be/1/x.mar"/></update></updates>\n',
-        'control/release-notes-link.json': '{ "app.releaseNotesURL": "https://github.com/DeBIOS-Foundation/powerbrowser/releases" }\n',
+        'control/release-notes-link.json': `{ "app.releaseNotesURL": "https://github.com/${R}/releases" }\n`,
         'control/mar-origin-patch.xml': `<updates><update><patch URL="${manifestMarOrigin(REPO_ROOT)}/v1.0.0-1/x.mar"/></update></updates>\n`,
-        'scripts/build-planted-descriptor.mjs': "const patchURL = 'https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\n",
-        'scripts/verify-planted-outside.mjs': "const BAD = 'patchURL https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\nfunction selfTest() {\n    return 0;\n}\n",
-        'scripts/verify-planted-fixture.mjs': "export const servedMarUrl = 'https://downloads.example.invalid/x.mar';\nfunction selfTest() {\n    const BAD = 'patchURL https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\n    return BAD;\n}\n",
+        'scripts/build-planted-descriptor.mjs': `const patchURL = 'https://github.com/${R}/releases/download/v1.0.0/x.mar';\n`,
+        'scripts/verify-planted-outside.mjs': `const BAD = 'patchURL https://github.com/${R}/releases/download/v1.0.0/x.mar';\nfunction selfTest() {\n    return 0;\n}\n`,
+        'scripts/verify-planted-fixture.mjs': `export const servedMarUrl = 'https://downloads.example.invalid/x.mar';\nfunction selfTest() {\n    const BAD = 'patchURL https://github.com/${R}/releases/download/v1.0.0/x.mar';\n    return BAD;\n}\n`,
     };
     const planted = (rels) => ({ files: [...real, ...rels], read: (rel) => (rel in fixtures ? fixtures[rel] : realRead(rel)) });
 
