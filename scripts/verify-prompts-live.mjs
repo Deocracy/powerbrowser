@@ -77,7 +77,7 @@
  *                       inside the web tab widget with the page rect shrunk below
  *                       it; the bar's Allow opens the stored popup as a web tab
  *                       right after its opener (the Phase 36 openAdoptedWebTab
- *                       path; a binary without it is a broken instrument), and no
+ *                       path), and no
  *                       popup permission is written, read back through the same
  *                       reader that sees a stock location grant (the control);
  *   hung-script      -- (37-04) a page loop past dom.max_script_run_time shows the
@@ -1088,9 +1088,6 @@ function mainOrder(app) {
 }
 
 async function scenarioPopupBlock(app, fx, plant) {
-    if (!await inChrome(app, `return typeof ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs').PowerBrowserAPI.openAdoptedWebTab === 'function';`)) {
-        return `${BROKEN} this binary has no PowerBrowserAPI.openAdoptedWebTab (Phase 36 not merged); the Allow falls back to a stock tab and the adoption cannot be scored`;
-    }
     const opener = await openPage(app, fx, '/opener');
     const from = (await pushes(app)).length;
     await app.evaluateIn(opener.ctx, `(() => { window.__pbPopup = window.open(${JSON.stringify(fx.url('/b'))}); return true; })()`);

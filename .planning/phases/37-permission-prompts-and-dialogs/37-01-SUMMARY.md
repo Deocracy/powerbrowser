@@ -221,3 +221,7 @@ A security review of the first three commits flagged two MEDIUM findings in the 
 
 **Verification after both fixes:** `verify-permission-prompts.mjs --self-test` passes (control green, 12 plants red). `verify-prompts-live.mjs --self-test --static` passes (6 plants). `check-internals-boundary.sh --catalogue` and NG-040 pass; the catalogue rows were renumbered, and the construction row was corrected to `:6830` by hand because `--fix` picked the import line. `nix develop .#theia --command scripts/verify-platform.sh --quick` reports "all checks passed" with no FAIL row. The live runs are still deferred, as above.
 
+
+## Merge into main
+
+- Phase 35 fold still pending: `installPermissionPromptFurniture(window)` and gate rules (a), (j), (k), (q), (r) in `verify-permission-prompts.mjs` stay until the Phase 35 merge folds them into `installShellFurniture` and `verify-shell-furniture.mjs`.

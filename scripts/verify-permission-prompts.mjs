@@ -93,8 +93,9 @@
  *       record by token, checks it belongs to the sender's own tab and frame,
  *       and the bar section reads no sender-supplied URL, origin or principal.
  *   (x) Phase 36 call site (D-12): openAdoptedWebTab is called exactly once,
- *       inside openBlockedPopup, behind the http(s) wall, and the superseded
- *       webTabAdopt/adoptTab vocabulary appears nowhere.
+ *       inside openBlockedPopup, behind the http(s) wall, with no typeof guard
+ *       and no openStockTab fallback (Phase 36 is merged, so a popup the
+ *       adoption path refuses opens nothing).
  *   (y) enum parity (D-03): the barKind:action pairs web-tab.ts sends
  *       (NOTIFICATION_BAR_ACTIONS, the one webTabBarAction sender's set) equal
  *       the pairs handleWebTabAction accepts (WEB_TAB_BAR_ACTIONS), both derived
@@ -764,19 +765,17 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
             failures.push(`bar-answer: Allow opened a frame-supplied URL -- the bar section reads ${read.replace(/\s/g, '')} (D-12: the stored record only)`);
         }
     }
-    // (x) The one Phase 36 adoption call site, behind the http(s) wall; the superseded vocabulary is absent.
-    const adoptCalls = [...api.matchAll(/\bopenAdoptedWebTab\(/g)].length;
+    // (x) The one Phase 36 adoption call site, behind the http(s) wall, called directly. Calls only: the method's own
+    // definition in the PowerBrowserAPI literal is not a call.
+    const adoptCalls = [...api.matchAll(/\.openAdoptedWebTab\(/g)].length;
     const opener = functionBody(api, 'openBlockedPopup');
     if (adoptCalls !== 1 || !/\bopenAdoptedWebTab\(/.test(opener)) {
         failures.push(`adopt-call: ${API} calls openAdoptedWebTab ${adoptCalls} times, or outside openBlockedPopup -- the blocked-popup Allow has one thin Phase 36 call site (D-12)`);
     } else if (opener.search(/https\?/) === -1 || opener.search(/https\?/) > opener.search(/\bopenAdoptedWebTab\(/)) {
         failures.push(`adopt-call: openBlockedPopup reaches openAdoptedWebTab before an http(s) wall on the stored spec`);
     }
-    for (const file of [API, ...frontend]) {
-        const hit = /\b(webTabAdopt|adoptTab|dropAdoptedTab|installNewWindowReceivers)\b/.exec(stripComments(raw[file] ?? ''));
-        if (hit) {
-            failures.push(`adopt-call: ${file} names ${hit[1]} -- the Phase 36 API is openAdoptedWebTab; the plan's adoption vocabulary was superseded`);
-        }
+    if (/\bopenStockTab\b|typeof\s+PowerBrowserAPI\.openAdoptedWebTab/.test(stripComments(opener))) {
+        failures.push(`adopt-call: openBlockedPopup keeps the pre-merge typeof guard or openStockTab fallback -- Phase 36 is merged; call openAdoptedWebTab directly`);
     }
 
     // (y) The bar action enum: what the frontend sends equals what chrome accepts, per bar kind, both derived.
@@ -1021,9 +1020,9 @@ function selfTest() {
             expect: 'calls openAdoptedWebTab 2 times',
         },
         {
-            name: 'superseded adoption vocabulary',
-            sources: { ...clean, [WEB_TAB]: `${clean[WEB_TAB]}\nexport const plantedAdopt = (c: WebTabChannel) => c.onPush('adoptTab', () => undefined);\n` },
-            expect: 'names adoptTab',
+            name: 'pre-merge stock-tab fallback',
+            sources: { ...clean, [API]: clean[API].replace('  return PowerBrowserAPI.openAdoptedWebTab(opener, spec, { triggeringPrincipal: principal });', '  if (typeof PowerBrowserAPI.openAdoptedWebTab !== "function") {\n    return PowerBrowserAPI.openStockTab(spec);\n  }\n  return PowerBrowserAPI.openAdoptedWebTab(opener, spec, { triggeringPrincipal: principal });') },
+            expect: 'keeps the pre-merge typeof guard or openStockTab fallback',
         },
         {
             name: 'unaccepted sender value',

@@ -7493,10 +7493,6 @@ async function openBlockedPopup(opener, spec, principal) {
   if (!/^https?:\/\//i.test(spec)) {
     return "refused-scheme";
   }
-  // Phase 36's openAdoptedWebTab is on its own branch; until the merge the popup opens as a stock tab. This guard goes away at merge.
-  if (typeof PowerBrowserAPI.openAdoptedWebTab !== "function") {
-    return PowerBrowserAPI.openStockTab(spec);
-  }
   return PowerBrowserAPI.openAdoptedWebTab(opener, spec, { triggeringPrincipal: principal });
 }
 
