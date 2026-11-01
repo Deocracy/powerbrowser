@@ -357,7 +357,8 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
     const env = pulse
         ? { ...process.env, LD_LIBRARY_PATH: [pulse, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') }
         : process.env;
-    const child = spawn(binPath, [
+    // `ulimit -c 0; exec` keeps the pid (kill still reaches the browser) and stops crash scenarios writing systemd coredumps.
+    const child = spawn('bash', ['-c', 'ulimit -c 0; exec "$@"', 'bash', binPath,
         '--headless',
         '--profile', profileDir,
         `--remote-debugging-port=${port}`,
