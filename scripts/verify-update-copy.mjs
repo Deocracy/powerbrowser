@@ -23,6 +23,16 @@
 //   6. Once-per-session (UPD-22, CR-06): the real update client is
 //      transpiled from the tree and driven through its push path, stubbed only
 //      at the Theia import boundary. No constant stands in for the transition.
+//   7. macOS cannot-update variant (UPD-21, Phase 55): the body the client
+//      renders on a Mac (read from its `mac ?` branch) must tell the user to
+//      move PowerBrowser to the folder the DMG's drag-to-install symlink points
+//      at, read from upstream/python/mozbuild/mozpack/dmg.py.
+//   8. macOS signing status on the download page (website-staging/
+//      download.html): the claims its macOS line makes (ad-hoc or Developer ID
+//      signed, notarized or not) must equal, as a set, the posture the release
+//      workflow implements: a Developer ID only when a macos-sign step passes a
+//      p12 file, notarized only when a notarization step exists. An overclaim
+//      and an underclaim are both red.
 //
 // No expectation list is hand-kept: the key set, the affordance set and the
 // classification are all read from the contribution at check time.
@@ -58,6 +68,9 @@ for (const a of args) {
 const COPY_REL = 'theia/extensions/branding/src/browser/powerbrowser-update-copy.ts';
 const CLIENT_REL = 'theia/extensions/tab-uris/src/browser/update-client.ts';
 const THEIA_PKG_REL = 'theia/package.json';
+const DMG_PY_REL = 'upstream/python/mozbuild/mozpack/dmg.py';
+const DOWNLOAD_REL = 'website-staging/download.html';
+const RELEASE_YML_REL = '.github/workflows/release.yml';
 
 // An ALL-CAPS underscored token, four characters or more.
 const ALL_CAPS_TOKEN = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g;
@@ -321,6 +334,41 @@ export function runChecks(root, overrides = {}) {
         }
     }
 
+    // 7. The macOS variant names the folder the DMG installs into.
+    const macKey = /\bmac\s*\?\s*POWERBROWSER_UPDATE_COPY\.(\w+)/.exec(code)?.[1] ?? null;
+    const target = /"symlink",\s*"\/[^"]*",\s*"([^"]+)"/.exec(read(DMG_PY_REL) ?? '')?.[1] ?? null;
+    if (macKey === null || target === null) {
+        failures.push(`the macOS cannot-update variant cannot be derived (${macKey === null ? `${CLIENT_REL} has no mac ? ${CLIENT_NAME}.<key> branch` : `${DMG_PY_REL} names no create_app_symlink target`}). Next step: restore it, or check this row's derivation.`);
+    } else {
+        const folder = target.split('/').filter(Boolean).pop();
+        const macBody = strings.find(s => s.key === macKey);
+        if (!macBody) failures.push(`${CLIENT_REL} renders ${CLIENT_NAME}.${macKey} on a Mac, but ${COPY_REL} has no such string. Next step: add it.`);
+        else if (!macBody.value.includes(`${folder} folder`)) failures.push(`${COPY_REL} string '${macKey}' (the macOS cannot-update text) does not tell the user to move PowerBrowser to the ${folder} folder, where the DMG installs it: ${JSON.stringify(macBody.value)}. Next step: name the ${folder} folder in the next step.`);
+    }
+
+    // 8. The download page states the macOS signing status the release workflow implements.
+    const page = read(DOWNLOAD_REL);
+    const macLine = page === null ? null : (/<li><strong>macOS:<\/strong>([^<]*)<\/li>/.exec(page)?.[1] ?? null);
+    if (macLine === null) {
+        failures.push(`${DOWNLOAD_REL} carries no "macOS:" signing-status line, so the macOS signing claim is unproven. Next step: restore the Signing status list.`);
+    } else {
+        const wf = read(RELEASE_YML_REL) ?? '';
+        const posture = new Set([
+            /macos-sign[^\n]*--rcodesign-p12-file/.test(wf) ? 'Developer ID signed' : 'ad-hoc signed',
+            /\b(notary-submit|notarytool)\b/.test(wf) ? 'notarized' : 'not notarized',
+        ]);
+        const claims = new Set();
+        if (/\bad-hoc signed\b/.test(macLine)) claims.add('ad-hoc signed');
+        if (/\bDeveloper ID\b/.test(macLine)) claims.add('Developer ID signed');
+        if (/\bnot notarized\b/.test(macLine)) claims.add('not notarized');
+        if (/(?<!not )\bnotarized\b/.test(macLine)) claims.add('notarized');
+        const over = [...claims].filter(c => !posture.has(c));
+        const under = [...posture].filter(c => !claims.has(c));
+        if (over.length || under.length) {
+            failures.push(`${DOWNLOAD_REL} macOS signing status ${JSON.stringify(macLine.trim())} claims [${[...claims].join(', ')}] but ${RELEASE_YML_REL} implements [${[...posture].join(', ')}]${over.length ? `; overclaim: ${over.join(', ')}` : ''}${under.length ? `; unstated: ${under.join(', ')}` : ''}. Next step: state the posture the release workflow implements.`);
+        }
+    }
+
     return { failures, strings };
 }
 
@@ -363,6 +411,10 @@ async function selfTest() {
     const bodyValue = baseline.strings.find(s => s.key === bodyKey).value;
     const titleKey = 'readyTitle';
     const titleValue = baseline.strings.find(s => s.key === titleKey).value;
+    const macValue = baseline.strings.find(s => s.key === 'cannotUpdateMacBody').value;
+    const withFile = (target, fn) => ({
+        read: (rel) => (rel === target ? fn(realRead(rel)) : realRead(rel)),
+    });
 
     // Each plant must change its file, or it proves nothing.
     const plants = [
@@ -374,11 +426,15 @@ async function selfTest() {
         ['unclassified string added', withCopy(t => t.replace('});', `    extraString: 'PowerBrowser extra string. Choose Check again.',\n});`)), 'extraString', 'extra'],
         ['literal user-facing text in the client', withClient(t => t.replace('export class UpdateClientContribution', "export const STRAY = 'PowerBrowser stray literal. Choose Later.';\nexport class UpdateClientContribution")), 'stray literal', 'literal'],
         ['single-word copy value typed into the client', withClient(t => t.replace('export class UpdateClientContribution', "export const STRAY = 'Later';\nexport class UpdateClientContribution")), 'Later', 'literal'],
+        ['pref key in the macOS cannot-update body', withCopy(t => t.replace(macValue, `app.update.url.manual blocks this. ${macValue}`)), 'cannotUpdateMacBody', 'pref'],
+        ['macOS body drops the Applications folder', withCopy(t => t.replace(macValue, macValue.replace('Applications folder', 'home folder'))), 'Applications folder', 'folder'],
+        ['notarization overclaim on the download page', withFile(DOWNLOAD_REL, t => t.replace('ad-hoc signed and not notarized', 'ad-hoc signed and notarized')), 'overclaim: notarized', 'page'],
+        ['Developer ID overclaim on the download page', withFile(DOWNLOAD_REL, t => t.replace('ad-hoc signed and not notarized', 'signed with a Developer ID and not notarized')), 'overclaim: Developer ID signed', 'page'],
     ];
 
     let failed = 0;
     for (const [name, overrides, needle] of plants) {
-        const planted = overrides.read(COPY_REL) !== realRead(COPY_REL) || overrides.read(CLIENT_REL) !== realRead(CLIENT_REL);
+        const planted = [COPY_REL, CLIENT_REL, DOWNLOAD_REL].some(rel => overrides.read(rel) !== realRead(rel));
         if (!planted) {
             console.error(`${NAME}: --self-test FAIL -- '${name}' did not apply (its search text is gone); the plant proves nothing.`);
             failed += 1;

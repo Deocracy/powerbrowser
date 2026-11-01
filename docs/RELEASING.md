@@ -190,6 +190,21 @@ Phase 55 macOS build inputs (recorded, not yet built):
   Dock and Finder icon. The upgrade path is a real asset catalog built with `actool`
   (`xcrun actool`) on a Mac; the plan 55-04 Mac session observes the icon.
 
+Phase 55 universal payload and macOS copy (plan 55-03, recorded, not yet built):
+
+- `package-macos.sh universal` merges the darwin sidecar with `lipo`: `node`, `rg` and every
+  `.node` from the two per-target bundles become fat files under `Contents/Resources`. The node
+  binaries are re-checked against the `darwin-arm64` and `darwin-x64` pins first. The procedure
+  and the evidence contract are in `docs/BUILD.md`, "macOS universal package (plan 55-03)".
+- The bundle is signed ad hoc only. `macos-package-payload` asserts no Team ID, no certificate
+  chain and no stapled ticket, so the signing posture above cannot change without that row
+  changing too.
+- The macOS cannot-update text is `cannotUpdateMacBody` in
+  `theia/extensions/branding/src/browser/powerbrowser-update-copy.ts`, the one site for update
+  strings. `update-copy` requires it to name the Applications folder the DMG installs into, and
+  requires the download page's macOS signing line to state exactly the posture `release.yml`
+  implements: ad-hoc signed and not notarized until a Developer ID and notarization step exist.
+
 ## Deferred signing items
 
 This is the **one** deferral register in this document. Stage

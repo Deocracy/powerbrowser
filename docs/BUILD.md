@@ -1158,6 +1158,64 @@ decision per RESEARCH open question 1 and is NOT procured in this phase.
   alongside-stock-Firefox interleaved launch, run there (matrix section
   below records the Linux cells green and the staged cells with unblocks).
 
+### macOS universal package (plan 55-03)
+
+The `macos-package-payload` row judges the evidence the universal step leaves under
+`.mozbuild/macos-package/`. With no evidence the row FAILs naming this section; it never skips.
+The evidence contract, one file or directory each:
+
+| Evidence | Holds |
+|---|---|
+| `application-<arch>.ini` | Each per-target bundle's `Contents/Resources/application.ini`, copied before unify. |
+| `config.status-<arch>` | Each per-target objdir's `config.status`. |
+| `<App>.app/` | The unified bundle, signed ad hoc. |
+| `*.macos-universal.dmg` | The disk image, built through `mozbuild.action.make_dmg`. |
+| `*.macos-universal.complete.mar` | The complete MAR of the unified bundle. |
+| `update/<channel>/Darwin_<cpu>-gcc3/update.xml` | One descriptor per per-target mozconfig, emitted through `buildUpdateXml`. |
+
+The row derives what it compares from the tree, not from a list: the Darwin targets from the
+`--target` line of each `powerbrowser/packaging/mozconfig-macos-<arch>`, the forbidden
+generic-certs switch from `upstream/build/moz.configure/update-programs.configure`, the sidecar
+paths from `TheiaService.sys.mjs`, and the drag-to-install symlink from `mozpack/dmg.py`. It
+asserts one shared fourteen-digit BuildID across both `.ini` copies, the bundle and every
+descriptor (two independent builds stamp two clock-time BuildIDs, and `unify.py` refuses the
+differing `application.ini`); both
+slices in every Mach-O; a verifying ad-hoc signature with no Team ID, no certificate chain and no
+stapled ticket; the same bundle inside the DMG; and each descriptor byte-identical to a fresh
+`buildUpdateXml` emission over the MAR bytes. Opening the DMG needs the Linux `dmg` and `hfsplus`
+tools (`DMG_TOOL` and `HFS_TOOL`, or `MOZ_FETCHES_DIR/dmg/`).
+
+The Developer ID signature, notarization and stapling are not part of this evidence. They wait on
+the owner's Team ID (plan 55-03 Task 2, `BLOCKED.md` item 2), and the row stays ad hoc until then.
+
+Procedure, in `nix develop .#firefox-macos` with `MOZ_FETCHES_DIR` set as above:
+
+1. Build both targets, each with its own mozconfig and objdir. Both builds must stamp one BuildID.
+   Gecko takes the BuildID from a build date the build environment supplies, else from the clock
+   (`upstream/build/variables.py`). No tracked file sets that date yet: the `no-build-date-pin`
+   row (UPD-26) refuses one, and the shared per-build date belongs to the `release.yml`
+   `build-macos` job (plan 55-03 Task 2), where that row must be narrowed with its reason first.
+2. `bash powerbrowser/packaging/package-macos.sh aarch64`, then `... x86_64`. Each stages its
+   own thin sidecar from the Theia build of a matching host.
+3. `bash powerbrowser/packaging/package-macos.sh universal`. It refuses differing BuildIDs, lifts
+   both sidecars out, re-checks each staged `node` byte for byte against its pinned archive,
+   unifies the Gecko halves with `unify.py` (x86_64 first, as `unify.sh` orders them), and merges
+   the sidecar with `lipo -create`. Every thin Mach-O pair (`.node`, `rg`, `node`) becomes one fat
+   file. Every other file must be byte-identical in both trees. The two `better-sqlite3`
+   prebuilds become one fat file staged under both names, because the loader picks
+   `prebuilds/<platform>-<arch>.node`. Absolute `LC_RPATH` entries are deleted, every native must
+   read Mach-O universal (`package-target-natives --target macos` runs on the merged sidecar),
+   and a file naming the checkout fails the run. The merged sidecar lands under
+   `Contents/Resources` (macOS GreD). The bundle is signed ad hoc with
+   `./mach macos-sign --use_rcodesign -e developer`. The script then writes the DMG through
+   `mozbuild.action.make_dmg`, the complete MAR through `make_full_update.sh`, and one descriptor
+   per Darwin target through `buildUpdateXml`, replaces `.mozbuild/macos-package/`, and runs the
+   `macos-package-payload` row.
+
+Not run on this tree yet: it needs both built objdirs, and the cross configure stops before the
+Gecko compile until the Darwin `rust-std` question is settled (`BLOCKED.md` items 8 and 9). The
+sidecar merge was exercised against synthetic thin Mach-O pairs with `llvm-lipo`.
+
 ### Linux package (NG-063, NG-072)
 
 `nix develop .#firefox --command bash powerbrowser/packaging/package-linux.sh`
