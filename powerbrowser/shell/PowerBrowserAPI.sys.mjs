@@ -3387,8 +3387,8 @@ export const PowerBrowserAPI = Object.freeze({
    * The registration half of webTabOpen, split out so an adopted new window
    * (Phase 36) gets the same entry, store row, listeners and webTabs record as
    * a tab the frontend opened. It never loads and never adds a tab-host node:
-   * webTabOpen does both for its own tabs, and the tab-host node is webTabOpen's
-   * alone (verify-ext-tab-host-scope.mjs).
+   * webTabOpen does both for its own tabs, and adoptPendingOverlay adds the node
+   * for an adopted one (37-REVIEW CR-01; verify-ext-tab-host-scope.mjs).
    */
   webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec, grant = null) {
     const win = theiaBrowser.ownerDocument.defaultView;
@@ -6380,15 +6380,17 @@ function selectNode(host, node) {
   fireTabEvent(node, "TabSelect", { previousTab });
 }
 
-// Called by webTabOpen once the overlay is in webTabs. The first overlay, or
-// the one the Theia frame already named selected, becomes the selection.
-function tabHostAddTab(win, tabId, browser) {
+// Called by webTabOpen once the overlay is in webTabs, and by adoptPendingOverlay for an overlay webTabOpen's pending
+// branch built (37-REVIEW CR-01). The first overlay, or the one the Theia frame already named selected, becomes the
+// selection. An adopted tab names its opener's node as openerTab (tabbrowser.js addTab's openerTab), else null.
+function tabHostAddTab(win, tabId, browser, openerBrowser = null) {
   const host = tabHosts.get(win);
   // D-06: only an overlay gets a node. The Theia frame lacks this group.
   if (!host || browser.getAttribute("messagemanagergroup") !== "browsers") {
     return;
   }
   const node = makeTabNode(host, browser);
+  node.openerTab = (openerBrowser && host.byBrowser.get(openerBrowser)) ?? null;
   host.strip.appendChild(node);
   host.byBrowser.set(browser, node);
   host.byTabId.set(tabId, node);
@@ -6566,6 +6568,12 @@ function tabHostDropTab(win, browser) {
   host.strip.removeChild(node);
   host.byBrowser.delete(browser);
   detachProgress(host, browser);
+  // An adopted tab's openerTab never names a node the strip no longer holds.
+  for (const tab of host.strip.children) {
+    if (tab.openerTab === node) {
+      tab.openerTab = null;
+    }
+  }
   for (const [tabId, tab] of host.byTabId) {
     if (tab === node) {
       host.byTabId.delete(tabId);
@@ -7061,7 +7069,7 @@ function createPendingOverlay(opener, spec, background, openWindowInfo) {
   const theiaBrowser = opener.ownerDocument.getElementById(SHELL_CONTENT_BROWSER_ID);
   const pcKey = mintPendingKey();
   const browser = PowerBrowserAPI.webTabOpen(theiaBrowser, null, pcKey, spec, null, undefined, { remoteType: opener.remoteType, openWindowInfo });
-  const pending = { browser, theiaBrowser, url: spec };
+  const pending = { browser, theiaBrowser, url: spec, opener };
   pendingContent.set(pcKey, pending);
   sendWebTabPush(theiaBrowser, { kind: "adoptTab", pcKey, openerTabId, url: spec, background });
   PowerBrowserAPI.sleep(ADOPT_ACK_TIMEOUT_MS).then(() => adoptFallback(pcKey, pending));
@@ -7110,6 +7118,8 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
   pendingContent.delete(pcKey);
   const live = pending.browser.currentURI?.spec ?? "";
   PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, pending.browser, null, /^https?:\/\//i.test(live) ? live : pending.url);
+  // 37-REVIEW CR-01: an adopted tab is a tab-host node like any other, so prompts, bars, favicon, F12 and extensions see it.
+  tabHostAddTab(theiaBrowser.ownerGlobal, tabId, pending.browser, pending.opener);
   // 36-REVIEW WR-03: a page-opened context may close itself; BrowserElementParent re-dispatches that window.close()
   // on the overlay (BrowserElementParent.sys.mjs:12-30), and the frontend closes the tab as a user's close would.
   pending.browser.addEventListener("DOMWindowClose", () => sendWebTabPush(theiaBrowser, { kind: "closeAdoptedTab", tabId }));
@@ -7235,9 +7245,11 @@ function installPermissionPromptFurniture(window) {
   installNotificationBars(window, host);
 }
 
-// The web tab the user is looking at: the host's selection, only while the Theia frame reports a web tab current.
+// The web tab the user is looking at: the host's selection, only while the Theia frame reports that same tab current.
+// 37-REVIEW CR-01: a current tab with no node yet (an adoption awaiting its ack) shows no other tab's prompt.
 function promptVisibleTab(host) {
-  return Boolean(host.selected) && (activeTabByFrame.get(host.theiaBrowser) ?? null) !== null;
+  const tabId = activeTabByFrame.get(host.theiaBrowser) ?? null;
+  return tabId !== null && Boolean(host.selected) && host.byTabId.get(tabId) === host.selected;
 }
 
 // The webTabActivated arm's one write of activeTabByFrame. When focus moves between the IDE and a web tab the stock

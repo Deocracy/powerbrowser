@@ -5,8 +5,10 @@
 //
 //   consumers        every per-window extension consumer of browserWindows() and addOpenListener() is either
 //                    skipped by patch 050 or carries a reason whose claims hold (D-10)
-//   theia-exclusion  tabHostAddTab has one call, inside webTabOpen, on the browser webTabOpen creates in the
-//                    browsers group; the Theia frame stays out of the gBrowser tabs and out of extension code (D-06)
+//   theia-exclusion  tabHostAddTab has one call inside webTabOpen, on the browser webTabOpen creates in the
+//                    browsers group, and one inside adoptPendingOverlay, on the pending record's browser, which
+//                    webTabOpen's pending branch created (37-REVIEW CR-01); the Theia frame stays out of the
+//                    gBrowser tabs and out of extension code (D-06)
 //   scheme-wall      webTabOpen and webTabNavigate refuse every scheme but about:blank and http(s), and the
 //                    ext-tabs.js URL wall in patch 050 carries the identical allow-list literal (D-05, D-17)
 //   window-type      openShellWindow's features carry toolbar, so the shell is a normal window (D-08)
@@ -497,22 +499,46 @@ function theiaFamily(ctx, out) {
   const api = stripComments(ctx.text(API_REL)).split('\n');
   const js = stripComments(ctx.text(JS_REL)).split('\n');
 
-  // (a) one call of tabHostAddTab, inside webTabOpen, passing the browser webTabOpen created.
+  // (a) two calls of tabHostAddTab: one inside webTabOpen, passing the browser webTabOpen created, and one inside
+  // adoptPendingOverlay (37-REVIEW CR-01), passing the browser of the pendingContent record, which only
+  // createPendingOverlay writes, with the browser webTabOpen's pending branch returned. Every node is an overlay.
   const wto = methodSpan(api, 'webTabOpen');
   if (wto.error) return brokenOut(out, F, 'webTabOpen', wto.error);
+  const apo = methodSpan(api, 'adoptPendingOverlay');
+  if (apo.error) return brokenOut(out, F, 'adoptPendingOverlay', apo.error);
+  const cpo = methodSpan(api, 'createPendingOverlay');
+  if (cpo.error) return brokenOut(out, F, 'createPendingOverlay', cpo.error);
   const ws = api.slice(wto.start, wto.end + 1).join('\n');
+  const thirdOf = line => /tabHostAddTab\(\s*[^,()]+,\s*[^,()]+,\s*([^,()]+?)\s*(?:,\s*[^,()]+?\s*)?\)/.exec(line);
   const calls = [];
   api.forEach((l, i) => { if (/tabHostAddTab\(/.test(l) && !/function\s+tabHostAddTab\(/.test(l)) calls.push(i); });
-  if (calls.length !== 1) {
-    fail('tabHostAddTab', 'CALL COUNT', `tabHostAddTab( is called ${calls.length} time(s) in PowerBrowserAPI.sys.mjs; the rule is exactly one, inside webTabOpen`);
+  const inWto = calls.filter(L => L >= wto.start && L <= wto.end);
+  const inApo = calls.filter(L => L >= apo.start && L <= apo.end);
+  if (calls.length !== 2 || inWto.length !== 1 || inApo.length !== 1) {
+    fail('tabHostAddTab', 'CALL COUNT', `tabHostAddTab( is called ${calls.length} time(s) in PowerBrowserAPI.sys.mjs (${inWto.length} in webTabOpen, ${inApo.length} in adoptPendingOverlay); the rule is exactly one in each`);
+    for (const L of calls) {
+      if (!inWto.includes(L) && !inApo.includes(L)) fail('tabHostAddTab', 'CALL SITE', `the call at line ${L + 1} is outside webTabOpen and adoptPendingOverlay`);
+    }
   } else {
-    const L = calls[0];
-    if (L < wto.start || L > wto.end) fail('tabHostAddTab', 'CALL SITE', `the call at line ${L + 1} is outside webTabOpen`);
     const bind = /(?:const|let|var)\s+([\w$]+)\s*=\s*[\w$.]+\.createXULElement\("browser"\)/.exec(ws);
-    const third = /tabHostAddTab\(\s*[^,()]+,\s*[^,()]+,\s*([^,()]+?)\s*\)/.exec(api[L]);
+    const third = thirdOf(api[inWto[0]]);
     if (!bind) brokenOut(out, F, 'webTabOpen', 'webTabOpen binds no browser from createXULElement("browser")');
     else if (!third || third[1] !== bind[1]) {
       fail('tabHostAddTab', 'THIRD ARGUMENT', `the call passes ${third ? third[1] : '(none)'} where webTabOpen binds ${bind[1]}`);
+    }
+    const as = api.slice(apo.start, apo.end + 1).join('\n');
+    const rec = /(?:const|let|var)\s+([\w$]+)\s*=\s*pendingContent\.get\(/.exec(as);
+    const adoptThird = thirdOf(api[inApo[0]]);
+    if (!rec) brokenOut(out, F, 'adoptPendingOverlay', 'adoptPendingOverlay binds no record from pendingContent.get(');
+    else if (!adoptThird || adoptThird[1] !== `${rec[1]}.browser`) {
+      fail('tabHostAddTab', 'THIRD ARGUMENT', `the adopt call passes ${adoptThird ? adoptThird[1] : '(none)'} where adoptPendingOverlay's pending record is ${rec[1]}.browser`);
+    }
+    const writers = api.map((l, i) => (/pendingContent\.set\(/.test(l) ? i : -1)).filter(i => i >= 0);
+    const cs = api.slice(cpo.start, cpo.end + 1).join('\n');
+    const made = /(?:const|let|var)\s+([\w$]+)\s*=\s*PowerBrowserAPI\.webTabOpen\([^\n]*\{\s*remoteType/.exec(cs);
+    const recordOf = made && (made[1] === 'browser' ? /\{\s*browser\s*[,}]/ : new RegExp(`\\{\\s*browser:\\s*${made[1]}\\s*[,}]`));
+    if (writers.length !== 1 || writers[0] < cpo.start || writers[0] > cpo.end || !recordOf || !recordOf.test(cs)) {
+      fail('pendingContent', 'PENDING SOURCE', 'pendingContent is written outside createPendingOverlay, or not with the browser webTabOpen\'s pending branch returned');
     }
   }
   if (!/messagemanagergroup:\s*"browsers"/.test(ws)) {
@@ -565,7 +591,7 @@ function theiaFamily(ctx, out) {
   }
 
   if (out.failures.length === before) {
-    out.passes.push(`theia-exclusion PASS -- tabHostAddTab has one call, inside webTabOpen, passing the browser webTabOpen creates in the browsers group; the group guard precedes node creation; ${[...ids].join(', ')} appears in the gBrowser literal only inside webDriverTabs; no one of ${scope.length} extension-scope files names webDriverTabs`);
+    out.passes.push(`theia-exclusion PASS -- tabHostAddTab has one call inside webTabOpen, passing the browser webTabOpen creates in the browsers group, and one inside adoptPendingOverlay, passing the pending record's browser createPendingOverlay took from webTabOpen; the group guard precedes node creation; ${[...ids].join(', ')} appears in the gBrowser literal only inside webDriverTabs; no one of ${scope.length} extension-scope files names webDriverTabs`);
   }
 }
 
@@ -845,6 +871,22 @@ function selfTest() {
       api.splice(at + 1, 0, '    tabHostAddTab(win, tabId, theiaBrowser);');
       const res = checkAll({ texts: new Map([[API_REL, api.join('\n')]]) });
       expect('second tabHostAddTab call', has(res, f => f.family === 'theia-exclusion' && f.id === 'tabHostAddTab' && f.kind === 'CALL COUNT'), 1, 'CALL COUNT naming tabHostAddTab');
+    }
+  }
+  {
+    const from = 'tabHostAddTab(theiaBrowser.ownerGlobal, tabId, pending.browser, pending.opener);';
+    const text = apiRaw.includes(from) ? apiRaw.replace(from, 'tabHostAddTab(theiaBrowser.ownerGlobal, tabId, theiaBrowser, pending.opener);') : apiRaw;
+    if (landed('adopt call passes the Theia frame', text !== apiRaw)) {
+      const res = checkAll({ texts: new Map([[API_REL, text]]) });
+      expect('adopt call passes the Theia frame', has(res, f => f.family === 'theia-exclusion' && f.id === 'tabHostAddTab' && f.kind === 'THIRD ARGUMENT'), 1, 'THIRD ARGUMENT naming tabHostAddTab');
+    }
+  }
+  {
+    const from = '  pendingContent.set(pcKey, pending);';
+    const text = apiRaw.includes(from) ? apiRaw.replace(from, `${from}\n  pendingContent.set(pcKey, { browser: theiaBrowser });`) : apiRaw;
+    if (landed('second pendingContent writer', text !== apiRaw)) {
+      const res = checkAll({ texts: new Map([[API_REL, text]]) });
+      expect('second pendingContent writer', has(res, f => f.family === 'theia-exclusion' && f.id === 'pendingContent' && f.kind === 'PENDING SOURCE'), 1, 'PENDING SOURCE naming pendingContent');
     }
   }
   {

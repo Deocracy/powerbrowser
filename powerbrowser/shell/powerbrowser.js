@@ -165,7 +165,7 @@ document.addEventListener(
     // web tab next to it. The receivers live behind the boundary; a request
     // from the Theia frame itself still falls through to the stock browser
     // window (GUI-01). The link-click companion is plain JS, not part of the
-    // Gecko interface. Adopted tabs do not yet enter the Phase 31.1 tab host.
+    // Gecko interface. An adopted tab enters the Phase 31.1 tab host at its ack (37-REVIEW CR-01).
     PowerBrowserAPI.installNewWindowReceivers(window);
     // Phase 35 (D-01): page tooltips, link status, Phase 37's prompt furniture and the rest of the shell furniture,
     // wired once, after the tab host the prompt furniture reads.
