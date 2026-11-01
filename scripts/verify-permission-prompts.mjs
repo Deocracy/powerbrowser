@@ -105,6 +105,10 @@
  *       adoption's resend (37-REVIEW WR-01), and resetWebTabSharing, which the
  *       navigation listener calls after locationChange, pushes every mark off
  *       (37-REVIEW WR-02).
+ *   (ad) dismissed prompt (37-REVIEW WR-03): the show wrapper returns through
+ *       the stock path for options.dismissed before it creates a record, so a
+ *       notification only an anchor icon could open is never queued, counted
+ *       or marked "Open the tab to answer it".
  *   (ac) pending overlay (37-REVIEW WR-01): adoptPendingOverlay calls
  *       adoptPendingPushes, which pushes the kept prompts, sharing and blocked
  *       popups; setBar, hungOverlay and showBlockedPopupBar keep a pending
@@ -670,6 +674,17 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
 
     // (ab) The sharing functions run against stub maps: each scenario's pushes must match what the state means.
     failures.push(...checkSharingBehaviour(api));
+    // (ad) WR-03: a dismissed show takes the stock path before any record exists, so it is never queued or marked.
+    {
+        const wrapper = /notifications\.show = function \(browser, id, message, anchorID, mainAction, secondaryActions, options\) \{([\s\S]*?)\n  \};/.exec(api)?.[1] ?? '';
+        const stockAt = wrapper.search(/if \([^\n]*\boptions\.dismissed\b[^\n]*\) \{\s*return stockShow\.apply\(this, arguments\);/);
+        const recordAt = wrapper.indexOf('promptRecords.set(');
+        if (!wrapper || recordAt < 0) {
+            failures.push('dismissed-prompt: no show wrapper with a promptRecords.set( record was found (broken instrument)');
+        } else if (stockAt < 0 || stockAt > recordAt) {
+            failures.push('dismissed-prompt: a notification shown dismissed gets a queued record -- it counts toward the cap and shows "Open the tab to answer it", which no affordance can answer (37-REVIEW WR-03)');
+        }
+    }
     // (ab) WR-02: the prompt section's navigation listener resets the sharing state, as browser.js does after locationChange.
     if (!/notifications\.locationChange\(browser\);\s*resetWebTabSharing\(browser\);/.test(api)) {
         failures.push('sharing-behaviour: the navigation listener does not call resetWebTabSharing after notifications.locationChange -- a mark outlives its page (37-REVIEW WR-02)');
@@ -915,6 +930,12 @@ function selfTest() {
             name: 'geo report replaces the camera state',
             sources: { ...clean, [API]: clean[API].replace('if (!host || !("webRTC" in sharingState)) {', 'if (!host) {').replace('const webRTC = merged.webRTC || {};', 'const webRTC = sharingState.webRTC || {};') },
             expect: 'location-grant-while-camera-shared',
+        },
+        {
+            // 37-REVIEW WR-03 reverted: a dismissed show is queued and marked like a waiting prompt.
+            name: 'dismissed show is queued',
+            sources: { ...clean, [API]: clean[API].replace(' || !options || options.dismissed) {', ' || !options) {') },
+            expect: 'a notification shown dismissed gets a queued record',
         },
         {
             // 37-REVIEW WR-02 reverted: the reset forgets the state but pushes nothing.

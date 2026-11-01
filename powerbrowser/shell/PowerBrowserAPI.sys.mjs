@@ -7208,7 +7208,11 @@ function installPermissionPromptFurniture(window) {
     const tabId = tabIdOfBrowser(browser);
     // Every stock prompt passes options; a request from the Theia frame (no tab id) takes the stock path unchanged. An
     // overlay awaiting its adoption ack is a background tab whose tab id comes at the ack (adoptPendingPushes).
-    if ((tabId === null && !isPendingOverlay(browser)) || !options) {
+    // 37-REVIEW WR-03: a notification shown dismissed (the notification post-prompt, PermissionUI.sys.mjs:521-529 and
+    // :723; some password captures, LoginManagerPrompter.sys.mjs:758-787) opens only from an anchor icon, and the shell
+    // has none (iconBox null). It takes the stock path too, so it stays invisible as in a chromeless stock window, makes
+    // no record, is not counted toward the cap and gets no "Open the tab to answer it" mark that nothing could answer.
+    if ((tabId === null && !isPendingOverlay(browser)) || !options || options.dismissed) {
       return stockShow.apply(this, arguments);
     }
     browser.setAttribute("popupnotificationanchor", PROMPT_ANCHOR_ID);
