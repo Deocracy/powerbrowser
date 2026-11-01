@@ -163,6 +163,8 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 
 **Fix:** Either carry the caller's identity across `addTab` (a regenerated 050 hunk that sets `options.callerPrincipal = context.principal` in tab host windows, compared here), or delete the claim, the INTERNAL-APIS wording and the plant so they match stock. For the window branch, open the window empty (`openBrowserWindow("")`), wait for `browser-delayed-startup-finished`, then `addTab(url, { triggeringPrincipal: principal })`. Never pass a non-web URL through `openBrowserWindow`.
 
+**Outcome:** Fixed in `d573e26a`, by matching stock. `extensionOpenTabPage` no longer claims or checks "own pages only": it refuses a URL no extension owns, and a started stock window gets `addTab` with the caller's principal. The no-window branch no longer passes the page through `openBrowserWindow`. It opens an empty window (or reuses the one still starting), waits for `browser-delayed-startup-finished` (`stockWindowStarted`), then adds the tab with the caller's principal. `verify-extension-actions` rule 12 now fails a page passed through `openBrowserWindow(url...)`, and the old unfalsifiable plant is replaced by `page via window argument`. INTERNAL-APIS rows were reworded, and `stockWindowStarted` and `extensionSelectTabPage` have rows. Deferred part: `tabs.create` with no started stock window still rejects with "opened that page in a new browser window" after the page has opened, because stock `create` needs the tab synchronously (see WR-06).
+
 ### WR-02: Closing the popup because focus moved into the page pulls focus back to the address pill
 
 **File:** `powerbrowser/shell/PowerBrowserAPI.sys.mjs:9949-9965`; `theia/extensions/chrome-bar/src/browser/extensions/extension-actions-widget.tsx:193-202`; `scripts/verify-extension-actions-live.mjs:190-205`
@@ -170,6 +172,8 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 **Issue:** `onDestroy` always calls `bridge.theiaBrowser.focus()`. The frontend then sees `popupOpen` go false and calls `focusAddressPill()`. When the close was caused by `pageFocus` (focus entering a web tab) or by `TabSelect`, this takes focus away from the page the user or the page just focused. The user's next keystrokes go into the address bar. It also pushes page focus as null, which disables the extension keys. The UI-SPEC line ("Focus returns to the pill on close") and the live close way `focus into page /a`, which requires `pillFocused`, both encode this behaviour.
 
 **Fix:** Pass the close reason to `onDestroy`. Refocus the Theia frame only for Esc, a second click and the panel's own rollup. Leave focus where it is for `pageFocus` and `TabSelect`. Add a `refocus: false` field to the push so the widget skips `focusAddressPill()`, and change the live row to require page focus after the page-focus close.
+
+**Outcome:** Fixed in `e599d419`. `extensionOpenPopup` clears `refocus` on the page-focus and `TabSelect` closes. Chrome then does not refocus the Theia frame, and the push carries `refocus: false` (a `bridge.refocus` flag consumed by the next push actually sent, so a newer push cannot drop it for an Esc close). `web-tab.ts` exposes it as `extensionActionsRefocus`, and the widget calls `focusAddressPill()` only when it is set. 38-UI-SPEC's popup-host line now says so. `verify-extension-actions` rule 8b requires both halves, with plants `page-focus refocuses` and `pill always focused`. The live `popup-action` close ways now carry the expected pill state (Esc and second click: pill; focus into page: not the pill, rechecked after 500 ms; tab switch: unconstrained). The live run is deferred.
 
 ### WR-03: `tabs.remove` resolves before the tab is closed
 
@@ -179,6 +183,8 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 
 **Fix:** Drop the host node synchronously (`tabHostDropTab`, so `TabClose`/`onRemoved` fire before the promise resolves), close the overlay chrome-side (`PowerBrowserAPI.webTabClose(tabId)`), then push `closeAdoptedTab` so the frontend removes its widget.
 
+**Outcome:** Fixed in `150bfbbd`. `tabsBridgeRemove` calls `PowerBrowserAPI.webTabClose(tabId)` for an adopted tab before pushing `closeAdoptedTab`. The node, overlay and row go synchronously, `TabClose` and `onRemoved` fire before `tabs.remove` resolves, and the widget's own later `webTabClose` answers unknown-tab. Rule 12b and plant `remove resolves early` guard the order. The live `tabs-bridge` row now reads the overlay once right after the reply instead of polling. The live run is deferred.
+
 ### WR-04: The Remove confirm tells the user the extension's data stays until restart; upstream deletes it at once
 
 **File:** `theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts` (`removeExtensionBody`); `powerbrowser/shell/PowerBrowserAPI.sys.mjs:10030-10043`
@@ -186,6 +192,8 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 **Issue:** The confirm row says "The extension and its data stay in the profile until the browser restarts." `addon.uninstall()` uninstalls an active WebExtension immediately. `ExtensionAddonObserver.onUninstalled` → `clearOnUninstall` (`Extension.sys.mjs:507-575`) then clears permissions, cache, service workers and stored data, unless `extensions.webextensions.keepStorageOnUninstall` is set, and the shell does not set it. This promise of recoverability appears right before a destructive action.
 
 **Fix:** Change the copy (and 38-UI-SPEC line 159) to state the real effect, for example "The extension and its data are removed from this profile." Do not promise data retention unless the shell sets the keep-storage pref.
+
+**Outcome:** Fixed in `02887332`. `removeExtensionBody` is now "The extension and its data are removed from this profile." (the list in `verify-shell-error-copy.mjs` and 38-UI-SPEC line 161 follow; `verify-shell-error-copy` and its `--self-test` stay green). `verify-extension-actions` rule 8a derives the truth from the tree: the copy may promise retention only if the product sets `keepStorageOnUninstall`. Plants: `remove copy promises retention` and `keep pref set`.
 
 ### WR-05: The sidebar panel browser and an open popup are not torn down with the frontend that owns them
 
@@ -195,6 +203,8 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 
 **Fix:** In the same teardown path, set the open sidebar frame's `visibility` to `hidden` (chrome keeps it open, and the next subscribe's push re-shows the view) and close any open extension popup for that window.
 
+**Outcome:** Fixed in `ac325805`. `extensionActionsSubscribe` records the subscribing actor on the bridge, and `webTabDropOwnedBy` (the actor's `didDestroy` path) now calls `extensionFrontendGone(actorRef)`. It closes the open popup and hides the sidebar browser (chrome keeps it open, and the next frontend's subscribe push shows the view again). A frontend that has already re-subscribed owns the bridge and is left alone. The shell window comes from the existing `findShellWindow`, so there is no new catalogued touchpoint. Rule 11b and plants `sidebar left painted` and `sidebar not hidden` guard it. No live row was added: reload behaviour needs a built binary, so the check is deferred to the live pass.
+
 ### WR-06: An extension tab page that opened successfully is reported as an error, and `openOptionsPage` reopens instead of switching
 
 **File:** `powerbrowser/shell/PowerBrowserAPI.sys.mjs:10262-10275`, `:10281-10284`
@@ -202,6 +212,8 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 **Issue:** With no started stock window, the page opens in a new window, and then `ExtensionError("PowerBrowser opened that page in a new browser window.")` is thrown. `tabs.create` therefore rejects after the page has opened. In `runtime.openOptionsPage`, the throw escapes `switchToTabHavingURI`, so the extension gets an error for a success. A stock window that exists but has not finished delayed startup also gets a second window. `switchToTabHavingURI` always adds a tab, so every Options click opens a duplicate instead of switching to the open one, which is what the name promises and what stock does.
 
 **Fix:** Wait for `browser-delayed-startup-finished` on the window just opened (as stock `create` does) and return its tab. In the receiver, look for an existing tab with that URI in the chosen stock window and select it, and add a tab only when none exists. Never throw on the success path.
+
+**Outcome:** Fixed in `541ae2ea` for `runtime.openOptionsPage`: the `switchToTabHavingURI` receiver passes `reuse`. It switches to the stock tab already showing the page (new INTERNAL-APIS row for `gBrowser.tabs`) and adds one only when none matches. When the stock window is still starting it waits for that window (WR-01) instead of opening a second one, and it throws nothing for a page that opened. Rule 12 and plants `options page duplicated` and `success reported as error` guard it. Deferred: `tabs.create` of an extension page with no started stock window still rejects with "opened that page in a new browser window" after the page has opened. Stock `create` needs the tab object synchronously, and only a regenerated 050 hunk or an async return contract could remove that throw. A window opened for this also keeps its own `about:newtab` tab.
 
 ### WR-07: Two live plants return red unconditionally, and one simulates a symptom
 
@@ -211,6 +223,8 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 
 **Fix:** Make each plant change what the product does and read the result through the same assertion the clean run uses. For example, replace `extensionOpenTabPage` in chrome (via `live.inChrome`) with a call that opens an overlay, then run the normal `tab-pages` assertions. If that is not possible, remove the plant and rely on static rules 11 and 12, saying so in the file header.
 
+**Outcome:** Fixed in `37cd1110`. `sidebar-as-tab` and `tabpage-in-overlay` no longer return a verdict: they send the open to a web tab (`WebTabOpenHandler.openUrl`, which the shell refuses), and the scenario's own assertions go red (the sidebar view never opens; `tabs.create of the dashboard page did not open it in the stock window`). `popup-dom` became `popup-native-blocked`: it cancels the native panel's `popupshowing` and draws nothing, so the scenario's own "opened its page in the native panel" assertion goes red. `staticAudit` now also fails any plant branch that contains `return verdict(`, with an audit plant for it. `--static` and `--self-test` pass without a browser. The Theia-DOM popup stays covered by static rule 8. The live plant run is deferred.
+
 ### WR-08: The privileged-caller fence is shared by every privileged kind, so it widened when the extension widget was added
 
 **File:** `scripts/verify-web-tab-bridge.mjs:234-237`, `:729`
@@ -218,6 +232,8 @@ Stock `create`'s synchronous `selectedTab` write must still select the node at o
 **Issue:** `PRIVILEGED_CALLERS` is one list for every privileged store kind. Adding `extension-actions-widget.tsx` lets that file call `readClipboardText`, `removeBookmark`, `clearHistory` and every other privileged kind. It also lets `address-bar.tsx` and `chrome-bar-widget.tsx` call `extensionRemove`, `extensionClick` and `extensionSidebar*`. The gate cannot go red on either.
 
 **Fix:** Key the homes by kind: a `Map<kind, files[]>` where the extension kinds map only to `extension-actions-widget.tsx` and the earlier kinds keep their two files. Add one plant per direction: `readClipboardText` in the extension widget, and `extensionRemove` in `address-bar.tsx`.
+
+**Outcome:** Fixed in `b839c76e`. The fence is now one per group: `PRIVILEGED_CALLERS` (pill, chrome bar widget) for the earlier privileged kinds, and `EXTENSION_CALLERS` (the extension widget alone) for every privileged kind named `extension*`, chosen per kind by `privilegedCallersOf`. The clean tree passes both narrower fences. Plants added: `readClipboardText` in the extension widget, `extensionRemove` in the pill, and `extensionClick` in the chrome bar widget.
 
 ### WR-09: Rules 6 and 14 match spelling, not the property, and the gBrowser audit cannot see unapplied 050 lines
 
