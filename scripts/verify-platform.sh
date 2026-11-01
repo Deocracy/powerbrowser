@@ -5235,6 +5235,22 @@ run_own_checks() {
     # from the DMG, no Applications symlink and a shell-string spawn; each must go red naming the drift. The
     # control stays green. It writes nothing outside mkdtemp. Honestly --quick: no build, browser or network.
     "macos-package-payload-self-test|node $REPO_ROOT/scripts/verify-macos-package-payload.mjs --self-test"
+    # NEW (Phase 55, PKG-16): the self-test twins of the two macOS record gates. The matrix twin
+    # derives the expected cells from the macOS row of the BUILD.md install matrix and the targets from the
+    # per-target mozconfigs, requires the draft record to be structurally clean with its unobserved items
+    # named, builds a fully observed fixture, and plants a missing cell, an invented cell, a causeless RED, a
+    # RED, a doubled and a malformed verdict line, GREEN without evidence, a hosted GREEN with no run, an
+    # empty, foreign and incomplete BUILD_TARGET set, a Mozilla-root residue path, a path outside the product
+    # namespace, surviving paths, an absent Gatekeeper block, a dropped update limit, a SHA256 mismatch and a
+    # staple without notarization. The copy twin derives the page claims and the record
+    # claims, compares them as set equality, and plants a dropped Gatekeeper consequence, three internal
+    # identifiers, notarization, staple and Developer ID overclaims, a dropped signing line, en-US scope line
+    # and complete-MAR size line, a wrong and a stale size, an unobserved Gatekeeper sentence, a misspelt
+    # product name, a missing macOS line and an unreadable record; each must go red naming the drift. The
+    # controls stay green. Both are honestly --quick: they read tracked text and build fixtures in memory; no
+    # build, browser, network or Mac.
+    "macos-install-matrix-self-test|node $REPO_ROOT/scripts/verify-macos-install-matrix.mjs --self-test"
+    "macos-download-copy-self-test|node $REPO_ROOT/scripts/verify-macos-download-copy.mjs --self-test"
     # NEW (Phase 53, GH-03): the triage workflow shape. The row reads the good fixture in fixture
     # mode (53-01) and the declared workflow in tree mode (53-02), derives the label set from
     # labels.json, and runs the workflow's own fixed-text step against a hostile model output with
@@ -5778,6 +5794,20 @@ run_own_checks() {
       # through buildUpdateXml. Full tier: it needs the built universal bundle, DMG and MAR (and the Linux dmg
       # tools to open the DMG); absent evidence FAILs naming the docs/BUILD.md procedure, never a skip.
       "macos-package-payload|node $REPO_ROOT/scripts/verify-macos-package-payload.mjs"
+
+      # NEW (Phase 55, PKG-16): the macOS matrix record gate. It reads 55-MACOS-MATRIX.md, which the owner's hosted
+      # run and real-Mac session complete, so it is red on the draft: every UNVERIFIED value is named as
+      # unobserved, never counted as a pass. Structure is derived from the tree (the cells from the macOS row of
+      # the BUILD.md install matrix, the Darwin BUILD_TARGET set from the per-target mozconfigs). Full tier:
+      # the record only exists after the session; the self-test twin is in --quick.
+      "macos-install-matrix|node $REPO_ROOT/scripts/verify-macos-install-matrix.mjs"
+      # NEW (Phase 55, PKG-16, SEC-04): the macOS download copy gate. It compares the claims website-staging/
+      # download.html makes (signing, notarization, staple, en-US scope, complete-MAR size, Gatekeeper path) with
+      # the claims the record observed, as set equality, and runs the no-internal-identifier shape test over the
+      # macOS strings. Green on the draft because an unobserved value maps to the conservative claim; it goes red
+      # the moment the page gets ahead of the record or falls behind it. Full tier next to the matrix row; it
+      # reads two text files and never touches the network.
+      "macos-download-copy|node $REPO_ROOT/scripts/verify-macos-download-copy.mjs"
 
       # NEW (Phase 41, GH-02): the live org and repo equal the declared .github/settings/
       # bodies, by projection and set equality, failing closed on any unreadable endpoint.
