@@ -11,9 +11,9 @@
 //     Its JSON gives { version, build_id, build_target }: the appVersion, the fourteen-digit
 //     Gecko BuildID and the joined BUILD_TARGET. Unknown keys are ignored. Every read goes
 //     through one fail-closed gh api helper with the pinned X-GitHub-Api-Version. A non-2xx,
-//     a missing gh, failed auth, a non-JSON response, a Release with no manifest, a malformed
-//     field, or a Release list at the page limit is a FAIL naming the endpoint or the Release,
-//     never a SKIP. The manifest contract is written by the release packaging step.
+//     a missing gh, failed auth, a non-JSON response, a Release with no manifest or a malformed
+//     field is a FAIL naming the endpoint or the Release, never a SKIP. The Release list is read
+//     with gh api --paginate --slurp, every page, so no published Release falls off a page limit. The manifest contract is written by the release packaging step.
 //  2. Candidate set. Every <channel>/<BUILD_TARGET>/update.xml under the descriptor tree: the
 //     directory given as --descriptors <dir> (the Phase 49 descriptor job passes its own output),
 //     else .mozbuild/update-descriptors/, the output tree of
@@ -73,7 +73,6 @@ const CANDIDATE_REL = '.mozbuild/update-descriptors';
 const ASSET_NAME = 'release-manifest.json';
 const RELEASES_PATH = 'repos/{owner}/{repo}/releases?per_page=100';
 const ASSET_PATH = 'repos/{owner}/{repo}/releases/assets/{id}';
-const PAGE_LIMIT = 100;
 const JSON_ACCEPT = 'application/vnd.github+json';
 const RAW_ACCEPT = 'application/octet-stream';
 const DOTTED = /^\d+(\.\d+)*$/;
@@ -112,9 +111,11 @@ for (let i = 0; i < args.length; i += 1) {
 const show = v => JSON.stringify(v ?? null);
 
 /** One fail-closed read through gh api. Returns { ok: true, text } or { ok: false, why }. */
-export function ghRead(path, accept = JSON_ACCEPT, exec = execFileSync) {
+export function ghRead(path, accept = JSON_ACCEPT, opts = {}, exec = execFileSync) {
+    // --paginate --slurp: one JSON array holding every page, each page the endpoint's own array.
+    const paging = opts.paginate === true ? ['--paginate', '--slurp'] : [];
     try {
-        const text = exec('gh', ['api', '-H', API_VERSION_HEADER, '-H', `Accept: ${accept}`, path],
+        const text = exec('gh', ['api', ...paging, '-H', API_VERSION_HEADER, '-H', `Accept: ${accept}`, path],
             { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
         return { ok: true, text };
     } catch (e) {
@@ -125,10 +126,10 @@ export function ghRead(path, accept = JSON_ACCEPT, exec = execFileSync) {
 
 // Every getter, real or planted, goes through this: a throw or a malformed result is unreadable, never green.
 function guardedGet(get) {
-    return (path, accept) => {
+    return (path, accept, opts) => {
         let r;
         try {
-            r = get(path, accept);
+            r = get(path, accept, opts);
         } catch (e) {
             return { ok: false, why: `GET ${path} could not be read (${String(e?.message ?? e).split('\n')[0]}). ${NEXT_AUTH}` };
         }
@@ -249,18 +250,17 @@ export function runChecks(root, overrides = {}) {
     const fill = tpl => tpl.replace('{owner}', slug.owner).replace('{repo}', slug.repo);
 
     // --- 1. published set ----------------------------------------------------
-    const listed = get(fill(RELEASES_PATH), JSON_ACCEPT);
+    const listed = get(fill(RELEASES_PATH), JSON_ACCEPT, { paginate: true });
     let nonDraft = 0;
     if (!listed.ok) {
         failures.push(listed.why);
     } else {
         const parsed = parseJson(listed.text);
-        if (parsed.error || !Array.isArray(parsed.value)) {
-            failures.push(`GET ${fill(RELEASES_PATH)} returned no list of Releases. ${NEXT_AUTH}`);
-        } else if (parsed.value.length >= PAGE_LIMIT) {
-            failures.push(`GET ${fill(RELEASES_PATH)} returned ${parsed.value.length} Releases, the page limit, so the published set may be truncated and is unproven. Next step: page the endpoint in ${SELF_REL} before trusting the verdict.`);
+        const pages = parsed.error ? null : parsed.value;
+        if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+            failures.push(`GET ${fill(RELEASES_PATH)} returned no list of Release pages. ${NEXT_AUTH}`);
         } else {
-            for (const release of parsed.value) {
+            for (const release of pages.flat()) {
                 if (release?.draft === true) continue;
                 nonDraft += 1;
                 const tag = typeof release?.tag_name === 'string' ? release.tag_name : `(unnamed Release ${show(release?.id)})`;
@@ -408,7 +408,7 @@ function selfTest() {
         version, build_id: buildId, build_target: target, unknown_key: 'ignored',
     }, null, 2);
     // The fake world: one published Release with its manifest, and the endpoints it answers.
-    const world = ({ releases, manifests = {}, throwOn = null } = {}) => ({ releases, manifests, throwOn });
+    const world = ({ releases, pages = null, listBody = null, manifests = {}, throwOn = null } = {}) => ({ releases, pages, listBody, manifests, throwOn });
     const baseWorld = () => world({
         releases: [release('v153.5.1-1', 101)],
         manifests: { 101: manifest('153.5.1', PUBLISHED_BUILD) },
@@ -420,7 +420,7 @@ function selfTest() {
     });
     const fakeGet = w => (path) => {
         if (path === w.throwOn) throw new Error('fixture: HTTP 503 from the Releases endpoint');
-        if (path === listPath) return { ok: true, text: JSON.stringify(w.releases) };
+        if (path === listPath) return { ok: true, text: w.listBody ?? JSON.stringify(w.pages ?? [w.releases]) };
         const m = /\/releases\/assets\/(\d+)$/.exec(path);
         if (m && w.manifests[m[1]] !== undefined) return { ok: true, text: w.manifests[m[1]] };
         return { ok: false, why: `GET ${path} could not be read (fixture has no endpoint). ${NEXT_AUTH}` };
@@ -467,6 +467,21 @@ function selfTest() {
         return 1;
     }
     console.log('  ok  control: own Release already published with the same build -> green');
+
+    // The real ghRead, through a stub exec: the list read asks for every page, and its pages are read.
+    const calls = [];
+    const stubExec = (cmd, argv) => {
+        calls.push([cmd, ...argv]);
+        return argv.includes(listPath) ? JSON.stringify([[release('v153.5.1-1', 101)], []]) : manifest('153.5.1', PUBLISHED_BUILD);
+    };
+    const viaGh = runChecks(REPO_ROOT, { get: (path, accept, opts) => ghRead(path, accept, opts, stubExec), descriptors: [candidate('153.5.1', '20261021000000')], now: FIXTURE_NOW });
+    const listCall = calls.find(c => c.includes(listPath));
+    if (viaGh.failures.length > 0 || viaGh.published.length !== 1 || !listCall
+        || !['--paginate', '--slurp', API_VERSION_HEADER].every(a => listCall.includes(a))) {
+        console.error(`${NAME}: --self-test FAIL -- ghRead did not page the Release list or read its answer: ${viaGh.failures.join(' | ') || JSON.stringify(listCall ?? null)}`);
+        return 1;
+    }
+    console.log('  ok  control: ghRead pages the Release list (--paginate --slurp, pinned API version) and reads it -> green');
 
     // Another target: an older buildID than the published Linux build, offered for a different target, is green.
     const otherTarget = run(baseWorld(), [candidate('153.5.1', '20260101000000', 'Darwin_aarch64-gcc3')]);
@@ -545,6 +560,37 @@ function selfTest() {
             needles: [`${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, '20261103000000', 'later than now'],
         },
         {
+            name: 'regression against a Release on the second page',
+            w: world({
+                pages: [[release('v152.9.0-1', 90)], [release('v153.5.1-1', 101)]],
+                manifests: { 90: manifest('152.9.0', '20260901000000'), 101: manifest('153.5.1', PUBLISHED_BUILD) },
+            }),
+            d: [candidate('153.5.1', '20260101000000')],
+            needles: ['v153.5.1-1', '20260101000000', PUBLISHED_BUILD, 'already publishes'],
+        },
+        {
+            name: 'Releases response that is an object, not pages',
+            w: world({ listBody: '{}' }),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: [listPath, 'no list of Release pages'],
+        },
+        {
+            name: 'Releases page that is not an array',
+            w: world({ listBody: '[{}]' }),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: [listPath, 'no list of Release pages'],
+        },
+        {
+            name: 'gh itself fails (ghRead with a stub exec that throws with stderr)',
+            get: (path, accept, opts) => ghRead(path, accept, opts, () => {
+                const e = new Error('Command failed: gh api');
+                e.stderr = 'HTTP 401: Bad credentials (https://api.github.com/)\n';
+                throw e;
+            }),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: [listPath, 'HTTP 401: Bad credentials', 'gh auth status'],
+        },
+        {
             name: 'throwing getter on the Releases endpoint',
             w: world({ releases: [], throwOn: listPath }),
             d: [candidate('153.5.1', '20261021000000')],
@@ -552,7 +598,7 @@ function selfTest() {
         },
     ];
     for (const p of plants) {
-        const { failures } = run(p.w, p.d);
+        const { failures } = p.get ? runChecks(REPO_ROOT, { get: p.get, descriptors: p.d, now: FIXTURE_NOW }) : run(p.w, p.d);
         const hit = failures.some(f => p.needles.every(n => f.includes(n)));
         if (hit) {
             console.log(`  ok  ${p.name} -> red, naming ${p.needles.map(n => `'${n}'`).join(', ')}`);
