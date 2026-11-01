@@ -5679,8 +5679,9 @@ run_own_checks() {
       # NEW (Phase 44, UPD-26): full tier. Read-only gh api against the live Releases (network, gh auth with
       # read access to the repository): each non-draft Release's release-manifest.json is read, and each candidate
       # descriptor under .mozbuild/update-descriptors must offer a buildID strictly newer than every published
-      # buildID for its appVersion. Zero published Releases is green with a named count. FAILs naming the
-      # endpoint or Release on any unreadable input, never SKIPs.
+      # buildID for its appVersion. Zero published Releases is green with a named count. Zero candidates under
+      # the gitignored default tree prints a named SKIP, never a PASS; the Phase 49 job passes --descriptors
+      # <dir>, where zero descriptors is a FAIL. FAILs naming the endpoint or Release on any unreadable input.
       "descriptor-monotonic|node $REPO_ROOT/scripts/verify-descriptor-monotonic.mjs"
 
       # NEW (Phase 47, DIST-03): the live updates repo holds no functions/ directory and no root

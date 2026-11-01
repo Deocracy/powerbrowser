@@ -14,16 +14,22 @@
 //     a missing gh, failed auth, a non-JSON response, a Release with no manifest, a malformed
 //     field, or a Release list at the page limit is a FAIL naming the endpoint or the Release,
 //     never a SKIP. The manifest contract is written by the release packaging step.
-//  2. Candidate set. Every <channel>/<BUILD_TARGET>/update.xml under .mozbuild/update-descriptors/,
-//     the output tree of node scripts/build-update-xml.mjs --emit --outdir .mozbuild/update-descriptors.
+//  2. Candidate set. Every <channel>/<BUILD_TARGET>/update.xml under the descriptor tree: the
+//     directory given as --descriptors <dir> (the Phase 49 descriptor job passes its own output),
+//     else .mozbuild/update-descriptors/, the output tree of
+//     node scripts/build-update-xml.mjs --emit --outdir .mozbuild/update-descriptors.
 //     Each is read through parseUpdateXml, the shared parser. A file that does not parse is a FAIL.
+//     An explicit --descriptors directory that is absent or holds zero descriptors is a FAIL: the
+//     thing under test is missing, and "nothing offered" cannot be told from "emit never ran".
 //  3. Rule. A candidate (appVersion, buildID) must have buildID strictly greater than every
 //     published buildID with the same appVersion. The comparison is a string comparison, which
 //     orders the same as the number because every BuildID is fourteen digits (%Y%m%d%H%M%S).
 //     An older or equal buildID fails, naming the descriptor, the offered buildID, the published
 //     buildID and its Release tag. Different appVersion lines do not compare.
-//  4. Empty sets are green by name. Zero published buildIDs and zero candidate descriptors each
-//     print a named count. The row never passes silently.
+//  4. Empty sets are named, never silent. Zero published buildIDs is a PASS with a named count:
+//     with nothing published, no descriptor can be a downgrade. Zero candidates under the default
+//     tree (gitignored, so every clean checkout) prints a SKIP verdict naming the count and the
+//     emit step, never a PASS claiming every candidate was compared.
 //
 // Rollback boundary. This row is the refusal. A deliberate downgrade (--rollback-to) is an
 // owner-dispatched override that belongs to the Phase 49/50 withdraw and descriptor path
@@ -35,12 +41,13 @@
 // live Releases and the candidate tree, and it FAILs on a missing gh or auth.
 //
 // Usage:
-//   node scripts/verify-descriptor-monotonic.mjs
+//   node scripts/verify-descriptor-monotonic.mjs [--descriptors <dir>]
 //   node scripts/verify-descriptor-monotonic.mjs --self-test
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildUpdateXml, parseUpdateXml } from './verify-mar-update-hop.mjs';
@@ -72,10 +79,18 @@ const DIRECT_RUN = (() => {
     }
 })();
 const args = DIRECT_RUN ? process.argv.slice(2) : [];
-for (const a of args) {
-    if (a !== '--self-test') {
-        console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
-        console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the buildID rule discriminates.`);
+let SELF_TEST = false;
+let DESCRIPTORS_ARG = null;
+for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--self-test') {
+        SELF_TEST = true;
+    } else if (a === '--descriptors' && DESCRIPTORS_ARG === null && args[i + 1] !== undefined && !args[i + 1].startsWith('--')) {
+        DESCRIPTORS_ARG = args[i + 1];
+        i += 1;
+    } else {
+        console.error(`${NAME}: FAIL -- unknown, repeated or incomplete argument '${a}'`);
+        console.error(`  Next step: run: node ${SELF_REL} [--descriptors <dir>], or add --self-test to prove the buildID rule discriminates.`);
         process.exit(2);
     }
 }
@@ -126,17 +141,23 @@ export function manifestFields(doc) {
     return { value: { appVersion: doc.version, buildID: doc.build_id, target: doc.build_target } };
 }
 
-/** Candidate descriptors on disk: <channel>/<BUILD_TARGET>/update.xml under CANDIDATE_REL. Missing tree is an empty set. */
-function listDescriptors(root) {
-    const base = join(root, CANDIDATE_REL);
+/** The descriptor tree as shown in messages: repo-relative when inside the repo, else absolute. */
+function shownDir(root, dir) {
+    const rel = relative(root, dir);
+    return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? dir : rel;
+}
+
+/** Candidate descriptors on disk: <channel>/<BUILD_TARGET>/update.xml under base. Missing tree is an empty set. */
+function listDescriptors(root, base = join(root, CANDIDATE_REL)) {
     if (!existsSync(base)) return [];
+    const shown = shownDir(root, base);
     const dirs = d => readdirSync(d, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort();
     const out = [];
     for (const channel of dirs(base)) {
         for (const target of dirs(join(base, channel))) {
             const file = join(base, channel, target, 'update.xml');
             if (!existsSync(file)) continue;
-            const rel = `${CANDIDATE_REL}/${channel}/${target}/update.xml`;
+            const rel = `${shown}/${channel}/${target}/update.xml`;
             let text = null;
             try {
                 text = readFileSync(file, 'utf8');
@@ -149,7 +170,8 @@ function listDescriptors(root) {
 
 /**
  * Compare every candidate descriptor with the live published set. Returns
- * { failures, published, candidates, notes }. overrides.get replaces the gh read;
+ * { failures, published, candidates, notes, explicit }. overrides.get replaces the gh read;
+ * overrides.descriptorsDir names the candidate tree explicitly (the --descriptors argument);
  * overrides.descriptors replaces the candidate tree with { rel, text } entries.
  */
 export function runChecks(root, overrides = {}) {
@@ -205,7 +227,15 @@ export function runChecks(root, overrides = {}) {
     }
 
     // --- 2 and 3. candidates against the published set -----------------------
-    const descriptors = overrides.descriptors ?? listDescriptors(root);
+    const explicitDir = overrides.descriptorsDir == null ? null : resolve(root, overrides.descriptorsDir);
+    const candidateSource = explicitDir === null ? CANDIDATE_REL : shownDir(root, explicitDir);
+    if (explicitDir !== null && !existsSync(explicitDir)) {
+        failures.push(`--descriptors ${candidateSource} does not exist, so no offered buildID can be compared. Next step: pass the directory build-update-xml.mjs --emit --outdir wrote.`);
+    }
+    const descriptors = overrides.descriptors ?? (explicitDir === null ? listDescriptors(root) : listDescriptors(root, explicitDir));
+    if (explicitDir !== null && existsSync(explicitDir) && descriptors.length === 0) {
+        failures.push(`--descriptors ${candidateSource} holds zero <channel>/<BUILD_TARGET>/update.xml descriptors; the thing under test is absent. Next step: run node scripts/build-update-xml.mjs --emit --outdir ${candidateSource} first.`);
+    }
     for (const d of descriptors) {
         const parsed = d.text === null || d.text === undefined ? null : parseUpdateXml(d.text);
         if (parsed === null) {
@@ -227,22 +257,41 @@ export function runChecks(root, overrides = {}) {
 
     const notes = [
         `${published.length} published buildID(s) across ${nonDraft} non-draft Release(s)`,
-        `${candidates.length} candidate descriptor(s) under ${CANDIDATE_REL}`,
+        `${candidates.length} candidate descriptor(s) under ${candidateSource}`,
     ];
-    return { failures, published, candidates, notes };
+    return { failures, published, candidates, notes, explicit: explicitDir !== null };
+}
+
+/** The row verdict for one runChecks result: { code, out } where out is the lines and the stream. */
+export function verdict({ failures, published, candidates, notes }) {
+    if (failures.length > 0) {
+        return {
+            code: 1,
+            stream: 'stderr',
+            lines: [`${NAME}: FAIL -- ${failures.length} problem(s) with the descriptor buildID order.`, ...failures.map(f => `  ${f}`)],
+        };
+    }
+    const emptyNote = published.length === 0 ? ' (zero published buildIDs: nothing to compare against)' : '';
+    if (candidates.length === 0) {
+        // Not a PASS: the default tree is gitignored, so this is every clean checkout. An explicit
+        // --descriptors tree with zero descriptors never reaches here; runChecks fails it.
+        return {
+            code: 0,
+            stream: 'stdout',
+            lines: [`${NAME}: SKIP -- ${notes.join('; ')}${emptyNote}; no candidate descriptor exists, so no offered buildID was compared. Next step: run node scripts/build-update-xml.mjs --emit --outdir ${CANDIDATE_REL}, or pass --descriptors <dir>.`],
+        };
+    }
+    return {
+        code: 0,
+        stream: 'stdout',
+        lines: [`${NAME}: PASS -- ${notes.join('; ')}${emptyNote}; each of the ${candidates.length} candidate buildID(s) is strictly greater than every published buildID for its appVersion`],
+    };
 }
 
 function main() {
-    const { failures, published, candidates, notes } = runChecks(REPO_ROOT);
-    if (failures.length > 0) {
-        console.error(`${NAME}: FAIL -- ${failures.length} problem(s) with the descriptor buildID order.`);
-        failures.forEach(f => console.error(`  ${f}`));
-        return 1;
-    }
-    const emptyNote = published.length === 0 ? ' (zero published buildIDs: nothing to compare against)' : '';
-    const candNote = candidates.length === 0 ? ' (zero candidate descriptors: nothing offered to compare)' : '';
-    console.log(`${NAME}: PASS -- ${notes.join('; ')}${emptyNote}${candNote}; every candidate buildID is strictly greater than every published buildID for its appVersion`);
-    return 0;
+    const v = verdict(runChecks(REPO_ROOT, { descriptorsDir: DESCRIPTORS_ARG }));
+    v.lines.forEach(l => (v.stream === 'stderr' ? console.error(l) : console.log(l)));
+    return v.code;
 }
 
 // --- self-test ---------------------------------------------------------------
@@ -372,6 +421,51 @@ function selfTest() {
         }
     }
 
+    // The candidate tree on disk and the verdict over it (WR-01): mkdtemp only, removed in finally.
+    const tmp = mkdtempSync(join(tmpdir(), 'descriptor-monotonic-'));
+    try {
+        const tree = join(tmp, 'tree');
+        mkdirSync(join(tree, 'default', TARGET_TOKEN), { recursive: true });
+        writeFileSync(join(tree, 'default', TARGET_TOKEN, 'update.xml'), descriptorFixture('153.5.1', '20261021000000', slug));
+        const emptyTree = join(tmp, 'empty');
+        mkdirSync(emptyTree);
+        const fromDisk = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), descriptorsDir: tree });
+        const diskOk = fromDisk.failures.length === 0 && fromDisk.candidates.length === 1
+            && fromDisk.candidates[0].rel === `${tree}/default/${TARGET_TOKEN}/update.xml`;
+        const pass = verdict(fromDisk);
+        const skip = verdict(run(baseWorld(), []));
+        const disk = [
+            ['--descriptors tree with one descriptor is read and passes', diskOk && pass.code === 0 && /: PASS -- .*each of the 1 candidate/.test(pass.lines[0]),
+                `${fromDisk.failures.join(' | ')} ${pass.lines[0]}`],
+            ['zero candidates under the default tree is a named SKIP, not a PASS claiming every candidate', skip.code === 0
+                && skip.lines[0].startsWith(`${NAME}: SKIP -- `) && skip.lines[0].includes('0 candidate descriptor(s)') && !/every candidate|each of/.test(skip.lines[0]),
+                skip.lines[0]],
+        ];
+        for (const [name, ok, got] of disk) {
+            if (ok) console.log(`  ok  ${name}`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- ${name}: got ${got}`);
+                failed += 1;
+            }
+        }
+        const diskPlants = [
+            ['explicit --descriptors tree with zero descriptors', { descriptorsDir: emptyTree }, [emptyTree, 'zero']],
+            ['explicit --descriptors tree that does not exist', { descriptorsDir: join(tmp, 'absent') }, [join(tmp, 'absent'), 'does not exist']],
+        ];
+        for (const [name, o, needles] of diskPlants) {
+            const r = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), ...o });
+            const v = verdict(r);
+            if (v.code === 1 && r.failures.some(f => needles.every(n => f.includes(n)))) {
+                console.log(`  ok  ${name} -> red, naming ${needles.map(n => `'${n}'`).join(', ')}`);
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${needles.join(', ')}; got: ${r.failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+
     // An import must resolve with the exports, not run main and exit (the DIRECT_RUN guard).
     const imported = spawnSync(process.execPath, ['--input-type=module', '-e',
         `const m = await import(${JSON.stringify(import.meta.url)}); console.log('imported', typeof m.runChecks);`],
@@ -388,4 +482,4 @@ function selfTest() {
     return 0;
 }
 
-if (DIRECT_RUN) process.exit(args.includes('--self-test') ? selfTest() : main());
+if (DIRECT_RUN) process.exit(SELF_TEST ? selfTest() : main());
