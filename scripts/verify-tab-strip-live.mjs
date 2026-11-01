@@ -81,6 +81,16 @@
 //     no image. Hovering the current tab /b for twice the dwell opens no card
 //     while chrome's overlay of /b reads visible (positive overlay read).
 //
+//   attention (TAB-09, 34-04): /a and /b open, /b current. /a's own page sets
+//     document.title (BiDi script.evaluate in /a's top-level context): /a
+//     shows the attention dot, its tooltip is the Updated addition and its
+//     accessible name the ", updated" one (the positive control for every
+//     no-dot read below). A title change in the current /b marks nothing.
+//     Activating /a hides the dot and chrome's next push clears the flag;
+//     back in the background /a stays unmarked. Pages then try to write the
+//     flag (a page-realm state event naming /a, window.titleChanged) and /a
+//     stays unmarked: the flag is chrome-minted only.
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
@@ -93,7 +103,7 @@
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
@@ -348,11 +358,11 @@ async function reorder({ app, pages, expect, plant }) {
 /** A copy row's text, derived from chrome-bar-copy.ts at check time; a function row's `${subject}` becomes `subject`. */
 function copyRow(key, subject = '') {
     const source = readFileSync(join(REPO_ROOT, 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts'), 'utf8');
-    const match = new RegExp(`\\b${key}: (?:'([^']+)'|\\(subject: string\\) => \`([^\`]+)\`)`).exec(source);
+    const match = new RegExp(`\\b${key}: (?:'([^']+)'|\\((\\w+): string\\) => \`([^\`]+)\`)`).exec(source);
     if (!match) {
         throw new Error(`chrome-bar-copy.ts has no ${key} row, so the expected text cannot be derived`);
     }
-    return match[1] ?? match[2].replace('${subject}', subject);
+    return match[1] ?? match[3].replace(`\${${match[2]}}`, subject);
 }
 
 /** The sentence subject the copy uses: the configured application name, else the copy's noAppName. */
@@ -888,6 +898,77 @@ async function preview({ app, pages, expect, plant }) {
     await pointer(app, theia, [moveTo(4, 4)]);
 }
 
+/** The BiDi context of the one top-level page on `url` (an overlay); a harness error otherwise. */
+async function pageContext(app, url) {
+    const found = (await app.contexts()).filter(c => c.url === url);
+    if (found.length !== 1) {
+        throw new Error(`expected one top-level browsing context on ${url}, saw ${found.length}`);
+    }
+    return found[0].context;
+}
+
+/** attention: TAB-09 chrome-minted titleChanged, clear on activation, never page-settable. */
+async function attention({ app, pages, expect, plant }) {
+    const marks = `
+        const dotOf = id => { const t = tabEl(id); return !!t && !!t.querySelector('.pb-tab-attention'); };
+        const read = id => { const t = tabEl(id); return { dot: dotOf(id), flag: byId(id).titleChanged, tip: t ? t.getAttribute('title') : null,
+            name: t ? t.getAttribute('aria-label') : null, label: byId(id).title.label }; };
+    `;
+    const setup = await step(app, 'attention: setup', `${marks}
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify({ a: pages.url('/a'), b: pages.url('/b') })});
+        if (${JSON.stringify(plant)} === 'attention-flag-dropped') {
+            const a = byId(S.a), apply = a.applyState.bind(a);
+            a.applyState = state => apply({ ...state, titleChanged: false });
+        }
+        shell.activateWidget(S.b);
+        await until(() => current() && current().id === S.b, 5000);
+        const settled = await until(() => !byId(S.a).loading && !byId(S.b).loading && !byId(S.a).titleChanged, 10000);
+        return { painted, settled, aUrl: byId(S.a).url, bUrl: byId(S.b).url, aTab: byId(S.a).tabId };
+    `);
+    expect(setup.painted && setup.settled, `attention: setup: /a and /b are not painted and settled (${JSON.stringify(setup)})`);
+    const pageA = await pageContext(app, setup.aUrl);
+    const pageB = await pageContext(app, setup.bUrl);
+    await app.evaluateIn(pageA, "(() => { document.title = 'Attention A'; return true; })()");
+    const marked = await step(app, 'attention: /a retitled in the background', `${marks}
+        await until(() => dotOf(S.a) && byId(S.a).title.label === 'Attention A', 10000);
+        return read(S.a);
+    `);
+    expect(marked.dot && marked.flag, `attention: /a showed no attention dot after its title changed in the background (${JSON.stringify(marked)})`);
+    expect(marked.tip === copyRow('updatedTabTooltip', marked.label), `attention: /a's tooltip is ${JSON.stringify(marked.tip)}, not the Updated addition`);
+    expect(marked.name === copyRow('updatedTabLabel', marked.label), `attention: /a's accessible name is ${JSON.stringify(marked.name)}`);
+    await app.evaluateIn(pageB, "(() => { document.title = 'Attention B'; return true; })()");
+    const own = await step(app, 'attention: the current /b retitled', `${marks}
+        const seen = await until(() => byId(S.b).title.label === 'Attention B', 10000);
+        return { seen, b: read(S.b) };
+    `);
+    expect(own.seen, 'attention: NOT SCORED -- /b\'s new title never reached the strip');
+    expect(!own.b.dot && !own.b.flag, 'attention: a title change in the current tab marked it');
+    const cleared = await step(app, 'attention: activate /a, then /b again', `${marks}
+        shell.activateWidget(S.a);
+        await until(() => current() && current().id === S.a, 5000);
+        const hidden = !dotOf(S.a);
+        const flagCleared = await until(() => byId(S.a).titleChanged === false, 5000);
+        shell.activateWidget(S.b);
+        await until(() => current() && current().id === S.b, 5000);
+        await sleep(500);
+        return { hidden, flagCleared, after: read(S.a) };
+    `);
+    expect(cleared.hidden && cleared.flagCleared, `attention: activating /a did not clear its attention mark (${JSON.stringify(cleared)})`);
+    expect(!cleared.after.dot && !cleared.after.flag, 'attention: the attention dot survived activation (/a is marked again in the background)');
+    const spoof = `(() => {
+        const detail = { kind: 'state', tabId: ${JSON.stringify(setup.aTab)}, titleChanged: true };
+        window.titleChanged = true;
+        window.dispatchEvent(new CustomEvent('PowerBrowserWebTabState', { detail }));
+        document.dispatchEvent(new CustomEvent('PowerBrowserWebTabState', { detail }));
+        return true;
+    })()`;
+    await app.evaluateIn(pageA, spoof);
+    await app.evaluateIn(pageB, spoof);
+    const spoofed = await step(app, 'attention: page-side writes', `${marks} await sleep(1000); return read(S.a);`);
+    expect(!spoofed.dot && !spoofed.flag, 'attention: a page-side titleChanged write marked /a (the flag must be chrome-minted only)');
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
@@ -899,6 +980,7 @@ const SCENARIOS = {
     'pin-restore': { run: pinRestore, own: true, plant: 'pin-not-stored', expect: 'was not pinned after the relaunch' },
     multi: { run: multi, plant: 'multi-touches-unselected', expect: 'touched an unselected tab' },
     preview: { run: preview, probe: true, plant: 'preview-never-opens', expect: 'opened no preview card' },
+    attention: { run: attention, probe: true, plant: 'attention-flag-dropped', expect: 'showed no attention dot' },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */

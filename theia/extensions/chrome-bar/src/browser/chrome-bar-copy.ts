@@ -212,6 +212,10 @@ export const CHROME_BAR_COPY = Object.freeze({
     listAllTabs: 'List All Tabs',
     // Phase 34 plan 03 (TAB-05): a pinned tab shows its icon only; its accessible name keeps the label and says so.
     pinnedTabLabel: (label: string) => `${label}, pinned`,
+    // Phase 34 plan 04 (TAB-09): a background tab whose title changed since it was last active: the tooltip addition
+    // and the accessible-name addition beside the attention dot.
+    updatedTabTooltip: (label: string) => `${label} — Updated`,
+    updatedTabLabel: (label: string) => `${label}, updated`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

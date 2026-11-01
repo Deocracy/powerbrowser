@@ -1041,7 +1041,8 @@ export class TabStripWidget extends ReactWidget {
     /**
      * TAB-04 (D-07): List All Tabs, a second per-request menu under the chevron: every strip tab in strip order (the
      * TabBar's, so pinned tabs lead once 34-03 pins them), the current one checked. Picking a row activates that
-     * tab and scrolls it into view. shortcut: no attention dot until 34-04 adds the attention state.
+     * tab and scrolls it into view. A row for a background tab whose title changed carries the Updated addition
+     * (TAB-09): a stock menu row has no slot for the dot itself.
      */
     protected openListAllMenu(event: React.MouseEvent<HTMLElement>): void {
         event.preventDefault();
@@ -1049,7 +1050,9 @@ export class TabStripWidget extends ReactWidget {
         const current = this.shell.mainPanel.currentTitle?.owner;
         const children: CommandMenu[] = this.stripTabs(current).map((widget, index) => ({
             id: `tab-list-${index}`,
-            label: widget.title.label || widget.id,
+            label: this.isUpdated(widget, widget === current)
+                ? CHROME_BAR_COPY.updatedTabTooltip(widget.title.label || widget.id)
+                : widget.title.label || widget.id,
             icon: widget instanceof WebTabWidget ? `codicon ${widget.crashed ? 'codicon-warning' : 'codicon-globe'}` : widget.title.iconClass || undefined,
             sortString: String(index).padStart(4, '0'),
             isVisible: () => true,
@@ -1558,9 +1561,16 @@ export class TabStripWidget extends ReactWidget {
             : <span className='codicon codicon-globe pb-tab-favicon' aria-hidden='true' />;
     }
 
+    /** TAB-09 (D-12): chrome's attention flag, shown only on a background tab; activating the tab hides it at once. */
+    protected isUpdated(widget: Widget, active: boolean): boolean {
+        return widget instanceof WebTabWidget && widget.titleChanged && !active;
+    }
+
     protected renderTab(widget: Widget, active: boolean, last: boolean): React.ReactNode {
         const label = widget.title.label || widget.id;
         const pinned = this.isPinned(widget);
+        const updated = this.isUpdated(widget, active);
+        const name = pinned ? CHROME_BAR_COPY.pinnedTabLabel(label) : label;
         const selected = this.selectedIds.has(this.tabKey(widget));
         // TAB-02: the reorder's dragged tab, and the 2px drop indicator before the target or after the last tab.
         const aim = this.reorder;
@@ -1570,8 +1580,8 @@ export class TabStripWidget extends ReactWidget {
             key={widget.id}
             role='tab'
             aria-selected={active || selected}
-            title={label}
-            aria-label={pinned ? CHROME_BAR_COPY.pinnedTabLabel(label) : undefined}
+            title={updated ? CHROME_BAR_COPY.updatedTabTooltip(label) : label}
+            aria-label={updated ? CHROME_BAR_COPY.updatedTabLabel(name) : pinned ? name : undefined}
             data-pb-tab={widget.id}
             className={'pb-tab' + (active ? ' is-active' : '') + (pinned ? ' is-pinned' : '') + (selected ? ' is-selected' : '') + drag + drop}
             onClick={event => this.onTabClick(widget, event)}
@@ -1586,6 +1596,8 @@ export class TabStripWidget extends ReactWidget {
                 ? this.renderTabIcon(widget)
                 : pinned && <span className={'pb-tab-favicon ' + (widget.title.iconClass || 'codicon codicon-file')} aria-hidden='true' />}
             <span className='pb-tab-title'>{label}</span>
+            {/* TAB-09: the 6px accent attention dot; its words are in the tooltip and the accessible name. */}
+            {updated && <span className='pb-tab-attention' aria-hidden='true' />}
             {/* Phase 32 plan 02 (PAGE-05): the audio mark. Muted-ink when muted; its click is the one tab mute affordance. */}
             {widget instanceof WebTabWidget && (widget.soundPlaying || widget.audioMuted) && <span
                 className={'pb-tab-audio' + (widget.audioMuted ? ' is-muted' : '')}

@@ -738,6 +738,8 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} can't open that link in a tab. Drop a link to a web page instead.",
   "List All Tabs",
   "${name}, pinned",
+  "${name} — Updated",
+  "${name}, updated",
 ]);
 
 /**

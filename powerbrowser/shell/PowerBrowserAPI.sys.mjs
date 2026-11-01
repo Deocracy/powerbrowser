@@ -3529,6 +3529,8 @@ export const PowerBrowserAPI = Object.freeze({
           crashed: pageFields.crashed,
           isReaderMode: pageFields.isReaderMode,
           isArticle: pageFields.isArticle,
+          // Phase 34 plan 04 (TAB-09, D-12): minted here from chrome's own overlay state, never from a frame field.
+          titleChanged: webTabTitleChanged(theiaBrowser, tabId, browser, loading),
         });
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] state push for ${tabId} failed: ${err && err.message ? err.message : err}`);
@@ -4715,6 +4717,11 @@ async function handleWebTabAction(data, actorRef) {
       // A null (the IDE has focus) changes no selection: D-04, the last web tab stays active.
       if (data.tabId !== null) {
         tabHostSelectById(actorRef.browsingContext.top.embedderElement, data.tabId);
+        // TAB-09 (34-04): the activated tab's next push rebases its seen title, so titleChanged clears.
+        const activated = webTabs.get(data.tabId);
+        if (activated) {
+          webTabPagePush(activated.browser);
+        }
       }
       return { ok: true, kind, where: "applied" };
     }
@@ -5077,6 +5084,21 @@ const lastPageFocusByFrame = new WeakMap();
 
 // The selected web tab per Theia frame <browser>, from webTabActivated.
 const activeTabByFrame = new WeakMap();
+
+// TAB-09 (34-04, D-12): the title each overlay showed while its tab was last
+// active, or while its page loaded, keyed by the overlay <browser>. A title
+// change in a settled background page differs from it, which is the
+// attention mark; activating the tab rebases it (webTabActivated pushes).
+// Computed from chrome's own state only: no frame field is read, nothing polls.
+const seenTitleByOverlay = new WeakMap();
+
+function webTabTitleChanged(frame, tabId, browser, loading) {
+  const title = browser.contentTitle;
+  if (loading || activeTabByFrame.get(frame) === tabId || !seenTitleByOverlay.has(browser)) {
+    seenTitleByOverlay.set(browser, title);
+  }
+  return seenTitleByOverlay.get(browser) !== title;
+}
 
 // The state-push coalescer: one pending record per tab (latest call wins),
 // flushed once per animation frame of the shell window. The flush reads

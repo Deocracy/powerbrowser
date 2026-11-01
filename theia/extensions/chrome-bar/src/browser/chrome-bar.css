@@ -961,6 +961,16 @@
     }
 }
 
+/* TAB-09 (34-04, D-12): the attention dot on a background tab whose title changed (accent use: attention). */
+.pb-tab-attention {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin-left: 4px;
+    border-radius: 50%;
+    background: var(--theia-focusBorder, var(--color-primary, #00a6f5));
+}
+
 }
 
 /* GUI-06 (13-UI-SPEC "Single chrome bar, full-bleed, 40px", ratified order
