@@ -174,7 +174,8 @@ export function parseUpdateXml(text) {
     const update = text.match(/<update\b([^>]*)>/);
     const patch = text.match(/<patch\b([^>]*)\/>/);
     if (!update || !patch) return null;
-    const attr = (tag, name) => (tag[1].match(new RegExp(`${name}="([^"]*)"`)) || [])[1];
+    // Anchored on whitespace, so data-URL= or XURL= is never read as URL=, the attribute Gecko reads.
+    const attr = (tag, name) => (tag[1].match(new RegExp(`(?:^|\\s)${name}="([^"]*)"`)) || [])[1];
     const appVersion = attr(update, 'appVersion');
     const buildID = attr(update, 'buildID');
     const platformVersion = attr(update, 'platformVersion');

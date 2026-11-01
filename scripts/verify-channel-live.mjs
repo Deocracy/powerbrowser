@@ -31,8 +31,9 @@
 //     scripts/build-update-xml.mjs writes into the descriptor.
 //
 // --form-only --manifest <path> --descriptors <dir> runs check 4 alone over a local descriptor
-// tree, with no network: the descriptor job's pre-commit gate. The descriptor XML carries one URL
-// per patch; the hop drill's servedMarUrl is the same emitted value, so this covers both.
+// tree, with no network: the descriptor job's pre-commit gate. The descriptor carries exactly one
+// patch, and the URL judged is the one parseUpdateXml returns, the value the live fetch and Gecko
+// read; the hop drill's servedMarUrl is the same emitted value, so this covers both.
 //
 // Fail closed. An unreadable endpoint, a missing Release, a missing descriptor or a non-200 answer
 // is a FAIL naming the endpoint. Until the first public release this row is red, by design.
@@ -179,13 +180,18 @@ export function patchUrlForm(url, manifest, asset) {
     return null;
 }
 
-/** Every patch URL of one descriptor text, checked by patchUrlForm. Pure. */
+/**
+ * The patch URL of one descriptor text, checked by patchUrlForm. The URL judged is the one parseUpdateXml returns,
+ * the value the live fetch uses, so the gate and the parser cannot read different attributes. The emitter writes
+ * exactly one complete patch, and parseUpdateXml reads the first, so any other patch count is refused. Pure.
+ */
 function descriptorFormProblems(label, text, manifest, asset) {
-    if (parseUpdateXml(text) === null) return [`${label} does not carry the descriptor shape. Next step: emit it with scripts/build-update-xml.mjs`];
-    return [...text.matchAll(/<patch\b[^>]*\bURL="([^"]*)"/g)]
-        .map(m => patchUrlForm(m[1].replace(/&amp;/g, '&'), manifest, asset))
-        .filter(r => r !== null)
-        .map(r => `${label} patchURL ${r}`);
+    const p = parseUpdateXml(text);
+    if (p === null) return [`${label} does not carry the descriptor shape. Next step: emit it with scripts/build-update-xml.mjs`];
+    const patches = (text.match(/<patch\b/g) ?? []).length;
+    if (patches !== 1) return [`${label} carries ${patches} patch elements, not the one complete patch the emitter writes, so a patch URL would go unjudged. Next step: emit it with scripts/build-update-xml.mjs`];
+    const r = patchUrlForm(p.url, manifest, asset);
+    return r === null ? [] : [`${label} patchURL ${r}`];
 }
 
 function listDescriptors(dir) {
@@ -500,6 +506,25 @@ async function selfTest() {
                 failed += 1;
             }
         }
+        // The gate judges the URL the parser returns: a decoy data-URL carrying the good URL beside an evil URL is red,
+        // and a second patch element (which the parser would not read) is refused.
+        const evil = 'https://evil.example.invalid/x.mar';
+        const decoys = [
+            ['decoy data-URL beside an evil URL', emit(evil).replace(/ URL="[^"]*"/, m => `${m} data-URL="${goodUrl}"`), evil],
+            ['decoy data-URL ahead of an evil URL', emit(evil).replace(/<patch /, `<patch data-URL="${goodUrl}" `), evil],
+            ['second patch element with an evil URL', emit().replace(/(<patch [^>]*\/>)/, `$1\n    <patch type="partial" URL="${evil}" hashFunction="sha512" hashValue="00" size="1"/>`), '2 patch elements'],
+        ];
+        for (const [name, xml, value] of decoys) {
+            if (!xml.includes(evil)) throw new Error(`self-test plant '${name}' did not apply`);
+            reset(xml);
+            const { failures } = await run();
+            const form = formOnly(REPO_ROOT, manifest, join(dir, 'tree'));
+            if (failures.some(f => f.includes(target) && f.includes(value)) && hits.mar === 0 && form.some(f => f.includes(value))) console.log(`  ok  ${name} -> red naming ${target} and ${value}, before any MAR fetch, live and --form-only`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${target} and ${value} before any MAR fetch (MAR reads ${hits.mar}); got: ${[...failures, ...form].join(' | ') || '(no failures)'}`);
+                failed += 1;
+            }
+        }
         for (const [name, url] of strings) {
             reset(emit(url));
             const { failures } = await run();
@@ -550,7 +575,7 @@ async function selfTest() {
             failed += 1;
         }
         if (failed > 0) return 1;
-        console.log(`${NAME}: --self-test PASS -- the clean fixture is green and ${network.length + strings.length + 2 + claims.length} planted faults each went red naming the target and the value`);
+        console.log(`${NAME}: --self-test PASS -- the clean fixture is green and ${network.length + strings.length + decoys.length + 2 + claims.length} planted faults each went red naming the target and the value`);
         return 0;
     } finally {
         server.close();
