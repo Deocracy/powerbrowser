@@ -445,9 +445,9 @@ export class ChromeBarCommandContribution implements CommandContribution {
             isVisible: () => true,
         });
         // MENU-03 (D-14/D-14b): the widget's handler sends the window-chrome kind; this id stays when Phase 35 lands.
+        // WR-07: always enabled -- it toggles the shell window, not a page, and the shell has no other way out of full screen.
         commands.registerCommand(CHROME_BAR_FULL_SCREEN, {
             execute: () => toggleFullScreen(),
-            isEnabled: () => !!currentWebTab(),
             isVisible: () => true,
         });
         // MENU-03 (D-13): the Phase 32 page tools, one tab method each -- the method the page relay's key runs.
