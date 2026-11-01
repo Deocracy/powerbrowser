@@ -32,7 +32,11 @@
 //                token or secret at job level, and names the signing secrets only in sign_mar.
 //  6. concurrency  One group, release, never cancelling a run.
 //  7. retention  Every actions/upload-artifact step sets retention-days to 1, and the
-//                file carries at least one upload step, so the rule is not vacuous.
+//                file carries at least one upload step, so the rule is not vacuous. One exception,
+//                derived from the YAML: an artifact downloaded by a job behind the descriptor
+//                environment (that job and every job needing it) must outlive the environment's
+//                wait_timer (.github/settings/environment-descriptor.json) plus two days of approval
+//                and re-run slack, and may carry no tarball and no MAR, so only small data lives longer.
 //  8. no-cache   No actions/cache step and no `cache` input anywhere in the file.
 //
 // Instrument: js-yaml from theia/ through createRequire, the same loader as the
@@ -60,6 +64,8 @@ const LEGION_LABEL = 'powerbrowser-release';
 const BUILD_JOB = 'build-linux';
 const SIGN_JOB = 'sign-publish';
 const PIN_REL = 'powerbrowser/packaging/signmar/SOURCES.sha256';
+const DESCRIPTOR_ENV = 'descriptor';
+const DESCRIPTOR_ENV_REL = `.github/settings/environment-${DESCRIPTOR_ENV}.json`;
 const RUN_NAME = 'Release ${{ inputs.sha }}';
 const KEY_IF = "steps.key_gate.outputs.build == 'true'";
 const UPLOAD = /^actions\/upload-artifact@/;
@@ -315,11 +321,36 @@ function runChecks(root, overrides = {}) {
     }
 
     // 7. retention and 8. no cache, over every job
+    // The late jobs: the descriptor-environment job and every job that needs one, to a fixpoint.
+    const late = new Set(Object.entries(wf.jobs).filter(([, j]) => (j?.environment?.name ?? j?.environment) === DESCRIPTOR_ENV).map(([id]) => id));
+    for (let grew = true; grew;) {
+        grew = false;
+        for (const [id, j] of Object.entries(wf.jobs)) {
+            if (!late.has(id) && [].concat(j?.needs ?? []).some(n => late.has(n))) { late.add(id); grew = true; }
+        }
+    }
+    const lateArtifacts = new Set([...late].flatMap(id => stepsOf(wf.jobs[id]).filter(s => /^actions\/download-artifact@/.test(String(s.uses ?? ''))).map(s => s.with?.name)));
+    let wait = null;
+    try {
+        wait = JSON.parse((overrides.read ?? (rel => readText(root, rel)))(DESCRIPTOR_ENV_REL)).wait_timer;
+    } catch { /* reported below */ }
+    const minLate = Number.isInteger(wait) && wait >= 0 ? Math.ceil(wait / 1440) + 2 : null;
     let uploads = 0;
     for (const [id, job] of Object.entries(wf.jobs)) {
         for (const s of stepsOf(job)) {
             const uses = typeof s.uses === 'string' ? s.uses : '';
-            if (UPLOAD.test(uses)) {
+            if (UPLOAD.test(uses) && lateArtifacts.has(s.with?.name)) {
+                uploads += 1;
+                const art = JSON.stringify(s.with.name);
+                if (/\.tar\.xz|\.mar\b/.test(String(s.with?.path ?? ''))) {
+                    fail(id, 'retention', `upload-artifact step '${s.name ?? uses}' puts a tarball or a MAR in artifact ${art}, which a job behind the ${DESCRIPTOR_ENV} wait downloads, so release bytes would outlive the one-day cap. Next step: upload only the data files that job reads in a separate artifact.`);
+                }
+                if (minLate === null) {
+                    fail(id, 'retention', `artifact ${art} is read behind the ${DESCRIPTOR_ENV} wait, but ${DESCRIPTOR_ENV_REL} carries no integer wait_timer, so its minimum retention cannot be derived. Next step: restore the environment settings file.`);
+                } else if (!(Number(s.with?.['retention-days']) >= minLate)) {
+                    fail(id, 'retention', `artifact ${art} is read behind the ${wait}-minute ${DESCRIPTOR_ENV} wait but keeps retention-days ${JSON.stringify(s.with?.['retention-days'])}, under ${minLate} (the wait plus two days of approval slack), so it expires before that job starts. Next step: set retention-days to at least ${minLate}.`);
+                }
+            } else if (UPLOAD.test(uses)) {
                 uploads += 1;
                 if (Number(s.with?.['retention-days']) !== 1) {
                     fail(id, 'retention', `upload-artifact step '${s.name ?? uses}' sets retention-days ${JSON.stringify(s.with?.['retention-days'])}, not 1. Next step: set retention-days: 1 so the artifact cap holds.`);
@@ -356,7 +387,7 @@ function main() {
         failures.forEach(f => console.error(`  ${fmt(f)}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${RELEASE_REL} dispatches on workflow_dispatch only with a required sha input; build-linux runs on ${LEGION_LABEL} with no environment and no secret; the SHA-ancestor and key>tag gates precede the build and every later step is gated on the key; legion permissions are exactly contents: read with no secrets reference; sign-publish takes its commit from inputs.sha, re-gates, derives the key and builds signmar from the pinned source; ${uploads} upload-artifact step(s) keep retention-days 1; no cache step or cache input.`);
+    console.log(`${NAME}: PASS -- ${RELEASE_REL} dispatches on workflow_dispatch only with a required sha input; build-linux runs on ${LEGION_LABEL} with no environment and no secret; the SHA-ancestor and key>tag gates precede the build and every later step is gated on the key; legion permissions are exactly contents: read with no secrets reference; sign-publish takes its commit from inputs.sha, re-gates, derives the key and builds signmar from the pinned source; ${uploads} upload-artifact step(s) keep retention-days 1, except the data-only artifacts the jobs behind the ${DESCRIPTOR_ENV} wait read, which outlive it; no cache step or cache input.`);
     return 0;
 }
 
@@ -406,6 +437,8 @@ function selfTest() {
         ['legion checkout handed a token', edit('          persist-credentials: false\n', '          persist-credentials: false\n          token: ${{ github.token }}\n'), 'legion', 'token input'],
         ['legion mounting a second host directory', edit(MOUNT_TAIL, `-v "$HOME/.config/powerbrowser-release:/keys2:ro" ${MOUNT_TAIL}`), 'legion', 'mounts'],
         ['upload-artifact with retention-days 5', edit('          retention-days: 1\n', '          retention-days: 5\n'), 'retention', 'retention-days 5'],
+        ['descriptor-read identity artifact back to retention-days 1', edit('          retention-days: 7\n', '          retention-days: 1\n'), 'retention', '"release-linux-identity" is read behind'],
+        ['descriptor downloading the tarball and MAR artifact', edit('          name: release-linux-manifest\n          path: release\n', '          name: release-linux\n          path: release\n'), 'retention', 'tarball or a MAR in artifact "release-linux"'],
         ['actions/cache step added to build-linux', edit(CHECKOUT_RUN, `      - uses: actions/cache@0000000000000000000000000000000000000000 # probe\n        with:\n          path: probe\n          key: probe\n${CHECKOUT_RUN}`), 'no-cache', 'actions/cache'],
         ['key>tag gate removed', edit('        id: key_gate\n', '        id: key_gate_removed\n'), 'gates', 'no key>tag gate'],
         ['SHA-ancestor gate removed', edit('        id: sha_gate\n', '        id: sha_gate_removed\n'), 'gates', 'no SHA-ancestor gate'],
@@ -431,6 +464,7 @@ function selfTest() {
         ['sign-publish exporting LD_LIBRARY_PATH', edit('"$SIGNMAR" -d "$WORK/db"', 'LD_LIBRARY_PATH="$PWD/lib" "$SIGNMAR" -d "$WORK/db"'), 'sign-trust', 'LD_LIBRARY_PATH'],
         ['sign-publish holding GH_TOKEN at job level', editLast('    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n', '    env:\n      GH_TOKEN: ${{ github.token }}\n      RELEASE_SHA: ${{ inputs.sha }}\n'), 'sign-trust', 'job-level env'],
         ['signing secret named outside sign_mar', edit('      - name: Verify the signed MAR', '      - name: Probe\n        env:\n          P: ${{ secrets.MAR_SIGNING_P12_B64 }}\n        run: "true"\n\n      - name: Verify the signed MAR'), 'sign-trust', 'signing or bot secret'],
+        ['descriptor environment with no wait_timer', { read: rel => (rel === DESCRIPTOR_ENV_REL ? '{}' : readText(REPO_ROOT, rel)) }, 'retention', 'carries no integer wait_timer'],
         ['signmar pin for another ESR tag', { read: rel => (rel === PIN_REL ? readText(REPO_ROOT, PIN_REL).replace(/^# tag .*$/m, '# tag wrong-tag') : readText(REPO_ROOT, rel)) }, 'sign-pin', 'wrong-tag'],
     ];
 

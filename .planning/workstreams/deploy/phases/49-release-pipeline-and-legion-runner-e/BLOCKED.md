@@ -183,8 +183,11 @@ Not verified (owner checks at apply, `nixos-rebuild dry-build` does not catch ei
 
 Nothing below was run. No descriptor was committed, no token was minted, no environment was approved.
 
-1. **Artifact retention against the descriptor wait.** `release-linux` and `release-linux-identity` keep
-   `retention-days: 1` (the `release-shape` row requires it). The `descriptor` environment waits 1440
+1. **Artifact retention against the descriptor wait.** Resolved by the 49-04 code review fix (CR-03): the
+   descriptor and channel-live jobs now read the data-only artifacts `release-linux-manifest` and
+   `release-linux-identity`, both kept 7 days, and `release-shape` derives that minimum from the wait.
+   The text below is the original gap. `release-linux` and `release-linux-identity` kept
+   `retention-days: 1` (the `release-shape` row required it). The `descriptor` environment waits 1440
    minutes after `sign-publish`, so both artifacts have usually expired before `descriptor` and
    `channel-live` run. Both jobs then fail closed at the download step. This works only if the owner
    bypasses the wait after the own N-1 to N hop, within a day of the build. Durable fix (owner decision):
