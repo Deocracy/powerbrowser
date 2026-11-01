@@ -622,6 +622,15 @@ plus any `Cargo.*` file — reading each patch's own `+++ b/` header lines, neve
 grepping the patch body (a body-grep would false-match a string that merely
 appears inside changed content).
 
+**One exception, by exact path (amends D-72/D-73, owner ruling 2026-10-31,
+Phase 57 B1 option (a)).** `ALLOWED_COMPILED_PATHS` in the script accepts
+exactly `toolkit/crashreporter/client/app/src/glean.rs` and
+`toolkit/crashreporter/client/app/src/send_ping.rs`, because the Glean
+crash-ping consent read (TEL-09) exists only in Rust. The match is the whole
+repo-relative path: the same basename under another directory, any other
+`.rs`, and every other compiled suffix stay offenses, and `--self-test` plants
+each of those cases. A patch touching either file makes every rebuild tier 3.
+
 Two invocations:
 
 ```

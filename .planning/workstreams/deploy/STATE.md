@@ -93,6 +93,7 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 - [Phase 41]: 41-02: environment controls own an explicit file list; names derive from file names and the settings-set equality keeps the list equal to the tree
 - [Phase 41]: 41-02: environment branch-policy POST is planned only when the environment is absent or lacks main/branch, so a re-apply never duplicates it
 - [Phase 41]: 41-02: App permission maps compare exactly; any Workflows key on any org installation is red; owner UI steps print from the bodies and --yes never acts on them
+- [Phase 57]: D-72/D-73 amended 2026-10-31 (owner ruling on 57 BLOCKED B1, option (a)): check-patch-surface.sh accepts a compiled target only at the exact paths toolkit/crashreporter/client/app/src/glean.rs and send_ping.rs (ALLOWED_COMPILED_PATHS); every other compiled path, any other .rs included, stays an offense
 
 ### Pending Todos
 

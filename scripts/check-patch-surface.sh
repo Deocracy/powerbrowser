@@ -22,8 +22,21 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Compiled-suffix set, from upstream/python/mozbuild/mozbuild/frontend/emitter.py:1126-1133.
 COMPILED_SUFFIXES=(.c .cc .cxx .cpp .h .hh .hpp .inc .m .mm .rs .s .S .asm .webidl .idl .ipdl .ipdlh)
 
+# The only compiled paths a patch may touch, matched as the exact repo-relative
+# path (never a basename or a suffix). Owner ruling 2026-10-31, Phase 57 B1
+# option (a), amending D-72/D-73: the Glean crash-ping consent read lives only
+# in Rust, so TEL-09's fail-closed default needs these two files. Every other
+# compiled path, any other .rs included, stays an offense.
+ALLOWED_COMPILED_PATHS=(
+  toolkit/crashreporter/client/app/src/glean.rs
+  toolkit/crashreporter/client/app/src/send_ping.rs
+)
+
 is_compiled_path() {
-  local path="$1" suffix base
+  local path="$1" suffix base allowed
+  for allowed in "${ALLOWED_COMPILED_PATHS[@]}"; do
+    [ "$path" = "$allowed" ] && return 1
+  done
   base="$(basename -- "$path")"
   case "$base" in
     Cargo.*) return 0 ;;
@@ -290,14 +303,54 @@ EOF
     return 1
   fi
 
-  if grep -q 'nsGlobalWindowInner.cpp' "$tmp/self-test.err"; then
-    echo "check-patch-surface: --self-test PASS -- planted compiled-file patch (900-bad.patch, nsGlobalWindowInner.cpp) was correctly rejected"
-    return 0
+  if ! grep -q 'nsGlobalWindowInner.cpp' "$tmp/self-test.err"; then
+    echo "check-patch-surface: --self-test FAIL -- rejected, but message doesn't name the planted path" >&2
+    cat "$tmp/self-test.err" >&2
+    return 1
   fi
+  echo "check-patch-surface: --self-test PASS -- planted compiled-file patch (900-bad.patch, nsGlobalWindowInner.cpp) was correctly rejected"
 
-  echo "check-patch-surface: --self-test FAIL -- rejected, but message doesn't name the planted path" >&2
-  cat "$tmp/self-test.err" >&2
-  return 1
+  run_self_test_allowlist "$tmp"
+}
+
+# The ALLOWED_COMPILED_PATHS plants (B1 ruling, 2026-10-31). Each allowed
+# path alone is green; the same basename under another directory, a
+# different .rs path, and a .cpp path are each red, named.
+plant_patch() {
+  printf -- '--- a/%s\n+++ b/%s\n@@ -1 +1 @@\n-old\n+new\n' "$2" "$2" > "$1"
+}
+
+run_self_test_allowlist() {
+  local tmp="$1" allowed dir red
+  for allowed in "${ALLOWED_COMPILED_PATHS[@]}"; do
+    dir="$tmp/allow-$(basename -- "$allowed")"
+    mkdir -p "$dir"
+    plant_patch "$dir/050-allowed.patch" "$allowed"
+    if ! scan_patch_surface "$dir" >/dev/null 2>"$dir/err"; then
+      echo "check-patch-surface: --self-test FAIL -- allowed path $allowed was rejected" >&2
+      cat "$dir/err" >&2
+      return 1
+    fi
+    echo "check-patch-surface: --self-test PASS -- allowed path $allowed stays green"
+  done
+  for red in \
+    "toolkit/crashreporter/client/app/src/other/$(basename -- "${ALLOWED_COMPILED_PATHS[0]}")" \
+    "toolkit/crashreporter/crashping/src/lib.rs" \
+    "toolkit/crashreporter/client/app/src/glean.cpp"; do
+    dir="$tmp/red-$(echo "$red" | tr '/.' '__')"
+    mkdir -p "$dir"
+    plant_patch "$dir/050-red.patch" "$red"
+    if scan_patch_surface "$dir" >/dev/null 2>"$dir/err"; then
+      echo "check-patch-surface: --self-test FAIL -- $red was NOT rejected, so the allowlist is wider than its exact paths" >&2
+      return 1
+    fi
+    if ! grep -qF "compiled path: $red" "$dir/err"; then
+      echo "check-patch-surface: --self-test FAIL -- $red rejected, but the message does not name it" >&2
+      cat "$dir/err" >&2
+      return 1
+    fi
+    echo "check-patch-surface: --self-test PASS -- $red stays an offense"
+  done
 }
 
 if [ "${1:-}" = "--self-test" ]; then
