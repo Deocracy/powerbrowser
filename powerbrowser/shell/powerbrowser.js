@@ -19,7 +19,7 @@ document.addEventListener(
   () => {
     dump("POWERBROWSER_SHELL_READY chrome://powerbrowser/content/powerbrowser.xhtml\n");
 
-    const { PowerBrowserAPI, PowerBrowserWebTabs, PowerBrowserTabHost, installPermissionPromptFurniture, updateWebTabSharing } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
+    const { PowerBrowserAPI, PowerBrowserWebTabs, PowerBrowserTabHost, updateWebTabSharing } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
 
     const browserElement = document.getElementById("powerbrowser-content");
     const loadingElement = document.getElementById("powerbrowser-loading");
@@ -143,9 +143,6 @@ document.addEventListener(
       },
     };
     document.documentElement.setAttribute("extensiontabhost", "true");
-    // Phase 37: the permission-prompt furniture (#notification-popup), after the tab host it reads. At merge this call
-    // folds into Phase 35's installShellFurniture.
-    installPermissionPromptFurniture(window);
 
     // Exposed for plan 04-04's TheiaService.sys.mjs to call once the
     // backend is ready: navigates the content browser to the Theia
@@ -170,7 +167,8 @@ document.addEventListener(
     // window (GUI-01). The link-click companion is plain JS, not part of the
     // Gecko interface. Adopted tabs do not yet enter the Phase 31.1 tab host.
     PowerBrowserAPI.installNewWindowReceivers(window);
-    // Phase 35 (D-01): page tooltips, link status and the rest of the shell furniture, wired once.
+    // Phase 35 (D-01): page tooltips, link status, Phase 37's prompt furniture and the rest of the shell furniture,
+    // wired once, after the tab host the prompt furniture reads.
     PowerBrowserAPI.installShellFurniture(window);
 
     // SHELL-03 (05-02): the error layer, reached by TheiaService exactly

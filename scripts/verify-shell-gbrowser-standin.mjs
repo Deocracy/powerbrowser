@@ -109,6 +109,8 @@
 //   (l) a staged IDL with one more method against a staged XULBrowserWindow implementing the three;
 //   (m) two staged definitions of one shim (broken instrument);
 //   (n) a staged XULBrowserWindow without QueryInterface (MISSING DATA MEMBER).
+//   (p) a staged PopupNotifications prototype without show (UNIMPLEMENTED, a stock-instance shim);
+//   (q) the boundary file's browserDOMWindow without canClose (UNIMPLEMENTED browserDOMWindow.canClose).
 
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -192,10 +194,19 @@ const IDL_SHIMS = new Map([
       reason: 'Gecko C++ calls window.XULBrowserWindow through nsIAppWindow (BrowserParent.cpp:2520-2566, nsContentTreeOwner.cpp:298-309), so its members are the IDL method declarations',
     },
   ],
+  [
+    'browserDOMWindow',
+    {
+      idl: 'upstream/dom/interfaces/base/nsIBrowserDOMWindow.idl',
+      iface: 'nsIBrowserDOMWindow',
+      reason: 'Gecko C++ calls the chrome window\'s browserDOMWindow when a page opens a new window (ContentParent.cpp:5430, 5451, 5490; nsContentTreeOwner.cpp:524, 550), so its members are the nsIBrowserDOMWindow methods and attributes (Phase 36 receiver)',
+    },
+  ],
 ]);
 // Data members held out of the comparison and asserted present on a defined shim.
 const SHIM_DATA_MEMBERS = new Map([
   ['XULBrowserWindow', new Map([['QueryInterface', 'XPConnect wraps a JS object as an interface only through its QueryInterface']])],
+  ['browserDOMWindow', new Map([['QueryInterface', 'XPConnect wraps a JS object as an interface only through its QueryInterface']])],
 ]);
 // `<Name>.<member>` -> reason: members upstream uses that a defined shim must not implement. Empty today.
 const SHIM_ABSENT = new Map();
@@ -620,11 +631,23 @@ function phase27ShimNames(scriptFile = BOUNDARY_SCRIPT) {
 }
 
 // The method names an XPIDL file declares (block and line comments stripped). null when unreadable.
-function idlMethods(idlFile) {
+// The members an XPIDL interface declares: methods (the return type may sit on the line before the name) and
+// attributes (block and line comments stripped). With `iface`, only that interface's body is read, since one .idl
+// can declare several. null when unreadable; an empty set when the interface is absent.
+function idlMethods(idlFile, iface) {
   const src = readSource(idlFile);
   if (src === null) return null;
-  const code = stripCommentLines(src.replace(/\/\*[\s\S]*?\*\//g, ''));
-  return new Set([...code.matchAll(/^\s*(?:\[[^\]]*\]\s*)?[A-Za-z_][\w:<>]*\s+([A-Za-z_]\w*)\s*\(/gm)].map(m => m[1]));
+  let code = stripCommentLines(src.replace(/\/\*[\s\S]*?\*\//g, ''));
+  if (iface) {
+    const at = code.search(new RegExp(`\\binterface\\s+${iface}\\b[^{;]*\\{`));
+    if (at === -1) return new Set();
+    const open = code.indexOf('{', at);
+    const close = code.indexOf('\n};', open);
+    code = code.slice(open + 1, close === -1 ? undefined : close);
+  }
+  const methods = [...code.matchAll(/^\s*(?:\[[^\]]*\]\s*)?(?:[A-Za-z_][\w:<>]*\s+)?([A-Za-z_]\w*)\s*\(/gm)].map(m => m[1]);
+  const attributes = [...code.matchAll(/^\s*(?:\[[^\]]*\]\s*)?(?:readonly\s+)?attribute\s+[^;]*?([A-Za-z_]\w*)\s*;/gm)].map(m => m[1]);
+  return new Set([...methods, ...attributes]);
 }
 
 // Every member called (`name.m(`) or assigned (`name.m =`, not `==`) on a receiver `name` over the files.
@@ -663,7 +686,7 @@ function comparePhase27Shims(files, inputs) {
     const required = deriveCalledOrAssigned(name, files);
     const idl = idlShims.get(name);
     if (idl) {
-      const declared = idlMethods(idl.idl);
+      const declared = idlMethods(idl.idl, idl.iface);
       if (declared === null || declared.size === 0) return { broken: `${name}: no method declarations read from ${idl.idl}` };
       for (const m of declared) required.add(m);
     }
@@ -1432,6 +1455,20 @@ function selfTest() {
       } else ok(`staged nsIXULBrowserWindow.idl with one more method -> red, naming 'XULBrowserWindow.zzzPlantedIdlMethod' UNIMPLEMENTED (the three-method control matched)`);
     }
 
+    // (q) the boundary file's browserDOMWindow receiver (Phase 36) without canClose: an IDL member Gecko calls.
+    {
+      const boundaryText = readSource(BOUNDARY_FILE) ?? '';
+      const withoutCanClose = boundaryText.replace(/\n\s*canClose\(\) \{\n\s*return true;\n\s*\},/, '');
+      const path = join(stage, 'boundary-bdw-nocanclose.mjs');
+      writeFileSync(path, withoutCanClose);
+      const r = runScan({ ...real, boundaryFile: path });
+      const shim = shimOf(r, 'browserDOMWindow');
+      if (!shim?.defined || withoutCanClose === boundaryText) fail(`'no canClose' plant did not land`);
+      else if (r.ok || !shim.unimplemented.includes('canClose') || shim.surplus.length) {
+        fail(`a browserDOMWindow without canClose did not go red naming it alone; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim.unimplemented, surplus: shim.surplus })}`);
+      } else ok(`staged browserDOMWindow without canClose -> red, naming 'browserDOMWindow.canClose' UNIMPLEMENTED`);
+    }
+
     // (p) the stock PopupNotifications class without show: the instance shim's implemented set is its prototype.
     {
       const stock = STOCK_INSTANCE_SHIMS.get('PopupNotifications');
@@ -1474,7 +1511,7 @@ function selfTest() {
 
   if (failed) process.exit(1);
   console.log(
-    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site, FullScreen member, nsContextMenu surplus, IDL method, XULBrowserWindow QueryInterface, stock PopupNotifications without show, facade missing tabContainer / surplus getNotificationBox); the empty file list, an unresolvable registry URI and a duplicate shim definition failed distinctly`
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site, FullScreen member, nsContextMenu surplus, IDL method, XULBrowserWindow QueryInterface, stock PopupNotifications without show, browserDOMWindow without canClose, facade missing tabContainer / surplus getNotificationBox); the empty file list, an unresolvable registry URI and a duplicate shim definition failed distinctly`
   );
 }
 

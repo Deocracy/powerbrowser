@@ -8,12 +8,11 @@
  * display-only `doorhanger` push) and never what the answer is. This gate holds
  * the static half of that contract:
  *
- *   (a) panel: powerbrowser.xhtml carries #notification-popup with exactly the
- *       attributes upstream's popup-notifications.inc.xhtml gives it (remote
- *       included), and the anchor id the boundary names exists in the markup;
+ *   (a) moved to verify-shell-furniture.mjs rule 13 at the Phase 35 merge.
  *   (b) construction: exactly one PopupNotifications construction site in the
  *       boundary file, inside installPermissionPromptFurniture, importing the
- *       module from the URL upstream's moz.build ships it at; one bootstrap call;
+ *       module from the URL upstream's moz.build ships it at (its one call, from
+ *       installShellFurnitureReceivers, is verify-shell-furniture.mjs rule 3);
  *   (c) principal: the prompt section reads no principal but the overlay's own
  *       contentPrincipal, reads no sender-supplied field, and its push carries
  *       no principal, URL, origin or callback;
@@ -31,13 +30,8 @@
  *       truth (setActiveTabOfFrame) refreshes the stock module on a focus move.
  *   (i) queue scope (post-review): the D-04 cap counts and evicts the
  *       requesting tab's waiting records only.
- *   (j) WebRTC template (37-02, B2): powerbrowser.xhtml carries upstream's
- *       webRTC-shareDevices-notification verbatim. Its ids are derived from
- *       popup-notifications.inc.xhtml and compared as a set, and every element
- *       (tag and attributes) is compared in order. This gate holds no id list of
- *       its own (a hand-kept array of template ids in this file goes red).
- *   (k) preview callback (37-02, N4): the installer registers the webrtc-preview
- *       creation callback on the module URL upstream's browser.js imports.
+ *   (j) moved to verify-shell-furniture.mjs rule 13 at the Phase 35 merge.
+ *   (k) moved to verify-shell-furniture.mjs rule 13 at the Phase 35 merge.
  *   (l) single writer (37-02, D-02, D-11): no SitePermissions or permission
  *       manager write call appears in any file under powerbrowser/shell
  *       (derived by listing the directory), except inside the Phase 31 site
@@ -66,14 +60,8 @@
  *       probe) is accepted and named in the output; it must claim no evidence.
  *       A live verdict must carry its screenshots, push log and build, and the
  *       evidence paths must exist.
- *   (q) password template (37-04, D-07): powerbrowser.xhtml carries upstream's
- *       password-notification verbatim (id set and element by element, derived
- *       from popup-notifications.inc.xhtml), with no hidden input, plus the
- *       PopupAutoComplete panel its username field names, attribute for
- *       attribute against main-popupset.inc.xhtml.
- *   (r) login callback (37-04, N3): the installer registers the
- *       login-doorhanger-username-field creation callback on the module URL
- *       upstream's browser.js imports.
+ *   (q) moved to verify-shell-furniture.mjs rule 13 at the Phase 35 merge.
+ *   (r) moved to verify-shell-furniture.mjs rule 13 at the Phase 35 merge.
  *   (s) prompter ownership (D-07): upstream LoginManagerPrompter fills
  *       (writeDataToUI) and reads back (readDataFromUI) each template field, and
  *       no shell or frontend source names a field id, so no second value path
@@ -110,8 +98,9 @@
  *       powerbrowser/shell (a fabricated tabbrowser is the rejected widening).
  * The prompt section ends where the '// Phase 37: notification bars.' section
  * starts; rules (c), (f) and (h) read the prompt section only.
- * Rules (j), (k), (q) and (r) are the furniture-gate rows for plans 02 and 04; at
- * the Phase 35 merge they move to verify-shell-furniture.mjs with rule (a).
+ * Rules (a), (j), (k), (q) and (r), the furniture rows, moved to
+ * verify-shell-furniture.mjs (rule 13, plants (z)-(ai)) at the Phase 35 merge,
+ * when installPermissionPromptFurniture folded into installShellFurniture.
  *
  * Every expectation is derived from the tree at check time. --self-test runs
  * the unmodified fixture green first (the same-session positive control), then
@@ -133,11 +122,8 @@ const XHTML = 'powerbrowser/shell/powerbrowser.xhtml';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const UPSTREAM_PANEL = 'upstream/browser/base/content/popup-notifications.inc.xhtml';
 const UPSTREAM_MOZBUILD = 'upstream/toolkit/modules/moz.build';
-const UPSTREAM_BROWSER_JS = 'upstream/browser/base/content/browser.js';
-const UPSTREAM_POPUPSET = 'upstream/browser/base/content/main-popupset.inc.xhtml';
 const UPSTREAM_REGISTRAR_CONF = 'upstream/browser/components/protocolhandler/components.conf';
 const UPSTREAM_PROMPTER = 'upstream/toolkit/components/passwordmgr/LoginManagerPrompter.sys.mjs';
-const GATE = 'scripts/verify-permission-prompts.mjs';
 const VERDICT = '.planning/probes/prompt-probe-verdict.json';
 const OUTCOMES = ['stock-keeps-ide-usable', 'stock-blocks-ide'];
 /** A getTabDialogBox member, method, property or assignment on the stand-in. */
@@ -158,12 +144,7 @@ function barSectionEnd(text, barAt) {
     return m ? m.index : text.length;
 }
 const INSTALLER = 'installPermissionPromptFurniture';
-const PANEL_ID = 'notification-popup';
-const TEMPLATE_ID = 'webRTC-shareDevices-notification';
-const PREVIEW_ELEMENT = 'webrtc-preview';
 const PASSWORD_TEMPLATE_ID = 'password-notification';
-const LOGIN_ELEMENT = 'login-doorhanger-username-field';
-const AUTOCOMPLETE_ID = 'PopupAutoComplete';
 /** A credential-shaped key or argument (D-07). */
 const CREDENTIAL = /passw|credential|username|login/i;
 /** Every log call a shell source can make. */
@@ -207,24 +188,14 @@ function braceBlock(text, from) {
     return text.slice(open);
 }
 
-/** `name="value"` pairs of one tag's attribute text, as a set of strings. */
-function attrSet(attrText) {
-    return new Set([...attrText.matchAll(/([\w:-]+)="([^"]*)"/g)].map(m => `${m[1]}="${m[2]}"`));
-}
-
 /** The `<popupnotification id="…">` element's text up to its close tag (either prefix), comments out; '' when absent. */
-function templateBlock(text, id = TEMPLATE_ID) {
+function templateBlock(text, id) {
     const open = new RegExp(`<((?:xul:)?popupnotification)\\s[^>]*?\\bid="${id}"`).exec(text);
     if (!open) {
         return '';
     }
     const end = text.indexOf(`</${open[1]}>`, open.index);
     return (end === -1 ? text.slice(open.index) : text.slice(open.index, end)).replace(/<!--[\s\S]*?-->/g, '');
-}
-
-/** Each start tag of a block as `tag attr="v" ...` (attributes sorted, namespace declarations dropped), in document order. */
-function startTags(block) {
-    return [...block.matchAll(/<([\w:-]+)((?:\s+[\w:-]+="[^"]*")*)\s*\/?>/g)].map(m => [m[1], ...[...attrSet(m[2])].filter(a => !/^xmlns(?::|=)/.test(a)).sort()].join(' '));
 }
 
 /** Each sendWebTabPush payload object literal of `text`, nested braces included, with the call text before it. */
@@ -275,7 +246,7 @@ function moduleUrl(mozbuild) {
 }
 
 function readSources() {
-    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_BROWSER_JS, UPSTREAM_POPUPSET, UPSTREAM_PROMPTER, UPSTREAM_REGISTRAR_CONF, GATE]);
+    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_PROMPTER, UPSTREAM_REGISTRAR_CONF]);
     for (const name of readdirSync(join(REPO_ROOT, SHELL_DIR))) {
         if (/\.m?js$/.test(name)) {
             files.add(`${SHELL_DIR}/${name}`);
@@ -349,40 +320,16 @@ function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, fil
 function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = undefined) {
     const failures = [];
     const api = stripComments(raw[API]);
-    const markup = raw[XHTML].replace(/<!--[\s\S]*?-->/g, '');
     const sectionAt = raw[API].indexOf(SECTION_MARKER);
     const barAt = raw[API].indexOf(BAR_SECTION_MARKER);
     const section = sectionAt === -1 ? '' : stripComments(raw[API].slice(sectionAt, barAt > sectionAt ? barAt : undefined));
     const bars = barAt === -1 ? '' : stripComments(raw[API].slice(barAt, barSectionEnd(raw[API], barAt)));
     if (sectionAt === -1) {
-        failures.push(`section: ${API} has no '${SECTION_MARKER}' end-of-file section -- the prompt code has no home, so rules (a), (c) and (f) prove nothing`);
+        failures.push(`section: ${API} has no '${SECTION_MARKER}' end-of-file section -- the prompt code has no home, so rules (c) and (f) prove nothing`);
     }
 
-    // (a) The panel, attribute for attribute against upstream's own markup.
-    const upstream = /<panel\s+id="notification-popup"([^>]*?)\/?>/.exec(raw[UPSTREAM_PANEL]);
-    const upstreamAttrs = upstream ? attrSet(upstream[1]) : new Set();
-    if (upstreamAttrs.size === 0) {
-        failures.push(`panel: derived ZERO attributes of <panel id="${PANEL_ID}"> from ${UPSTREAM_PANEL} -- the comparison proves nothing (broken instrument)`);
-    }
-    const ours = /<xul:panel\s+id="notification-popup"([^>]*?)\/?>/.exec(markup);
-    if (!ours) {
-        failures.push(`panel: ${XHTML} has no <xul:panel id="${PANEL_ID}"> -- PopupNotifications has no panel to show a prompt in`);
-    } else if (upstreamAttrs.size) {
-        const mine = attrSet(ours[1]);
-        const missing = [...upstreamAttrs].filter(a => !mine.has(a));
-        const surplus = [...mine].filter(a => !upstreamAttrs.has(a));
-        if (missing.length || surplus.length) {
-            failures.push(`panel: ${XHTML}'s #${PANEL_ID} is not upstream's verbatim -- missing ${missing.join(' ') || '(none)'}; surplus ${surplus.join(' ') || '(none)'}`);
-        }
-    }
-    const anchorId = /const PROMPT_ANCHOR_ID = "([\w-]+)"/.exec(section)?.[1];
-    if (sectionAt !== -1 && !anchorId) {
-        failures.push(`panel: the prompt section names no PROMPT_ANCHOR_ID -- the panel has no anchor to open against`);
-    } else if (anchorId && !markup.includes(`id="${anchorId}"`)) {
-        failures.push(`panel: the anchor id ${anchorId} the boundary names is not an element id in ${XHTML}`);
-    }
-
-    // (b) One construction site, inside the installer, on upstream's module URL; one bootstrap call.
+    // (b) One construction site, inside the installer, on upstream's module URL. Its one call (from installShellFurnitureReceivers)
+    // is verify-shell-furniture.mjs rule 3.
     const sites = [...api.matchAll(CONSTRUCTION)];
     if (sites.length !== 1) {
         failures.push(`construction: ${API} has ${sites.length} PopupNotifications construction sites -- exactly one is allowed, inside ${INSTALLER}`);
@@ -398,10 +345,6 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
         failures.push(`construction: ${UPSTREAM_MOZBUILD} does not list ${MODULE_FILE} in a MOZ_SRC_FILES or EXTRA_JS_MODULES block (broken instrument)`);
     } else if (installer && !installer.includes(`importESModule("${url}")`)) {
         failures.push(`construction: ${INSTALLER} does not import ${url}, the URL upstream's moz.build ships ${MODULE_FILE} at`);
-    }
-    const calls = derive(stripComments(raw[SHELL]), new RegExp(`(${INSTALLER})\\s*\\(`, 'g')).length;
-    if (calls !== 1) {
-        failures.push(`construction: ${SHELL} calls ${INSTALLER} ${calls} times -- the furniture has exactly one bootstrap line`);
     }
 
     // (c) The overlay's own principal only; no sender field read; a display-only push.
@@ -496,92 +439,8 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
             failures.push(`queue-scope: the queue cap filters ${cap[1].trim()} -- not the requesting tab alone, so one page's requests can evict another tab's prompt`);
         }
     }
-    // (j) The WebRTC template, derived from upstream and compared id set and element by element.
-    const upstreamTags = startTags(templateBlock(raw[UPSTREAM_PANEL]));
-    const upstreamIds = new Set(derive(templateBlock(raw[UPSTREAM_PANEL]), /\sid="([^"]+)"/g));
-    if (upstreamTags.length === 0 || upstreamIds.size === 0) {
-        failures.push(`template: derived ZERO elements of #${TEMPLATE_ID} from ${UPSTREAM_PANEL} -- the comparison proves nothing (broken instrument)`);
-    } else {
-        const ourBlock = templateBlock(markup);
-        if (!ourBlock) {
-            failures.push(`template: ${XHTML} has no #${TEMPLATE_ID} -- WebRTCParent finds no template, so a camera or microphone request never resolves`);
-        } else {
-            const ourIds = new Set(derive(ourBlock, /\sid="([^"]+)"/g));
-            const missing = [...upstreamIds].filter(id => !ourIds.has(id));
-            const surplus = [...ourIds].filter(id => !upstreamIds.has(id));
-            if (missing.length || surplus.length) {
-                failures.push(`template: #${TEMPLATE_ID} ids differ from upstream -- missing ids ${missing.join(' ') || '(none)'}; surplus ids ${surplus.join(' ') || '(none)'}`);
-            }
-            const ourTags = startTags(ourBlock);
-            const drift = upstreamTags.findIndex((tag, i) => ourTags[i] !== tag);
-            if (drift !== -1 || ourTags.length !== upstreamTags.length) {
-                const at = drift === -1 ? upstreamTags.length : drift;
-                failures.push(`template: #${TEMPLATE_ID} element drift at element ${at + 1} -- upstream <${upstreamTags[at] ?? '(end)'}>, ours <${ourTags[at] ?? '(end)'}>`);
-            }
-        }
-    }
-    const ownSource = stripComments(raw[GATE] ?? '');
-    if (/\[\s*['"`](?:webRTC|password-notification)-[\w-]+['"`]\s*,/.test(ownSource)) {
-        failures.push(`template: ${GATE} holds a hand-kept array of template ids -- the expectation must be derived from ${UPSTREAM_PANEL} (CLAUDE.md verification rule 2)`);
-    }
-
-    // (k) The webrtc-preview creation callback, on the module URL upstream's browser.js imports.
-    const previewUrl = new RegExp(`setElementCreationCallback\\(\\s*"${PREVIEW_ELEMENT}"[\\s\\S]*?importESModule\\(\\s*"([^"]+)"`).exec(raw[UPSTREAM_BROWSER_JS])?.[1];
-    if (!previewUrl) {
-        failures.push(`preview-callback: ${UPSTREAM_BROWSER_JS} registers no ${PREVIEW_ELEMENT} creation callback (broken instrument)`);
-    } else if (!new RegExp(`setElementCreationCallback\\(\\s*"${PREVIEW_ELEMENT}"[^;]*importESModule\\(\\s*"${previewUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(installer)) {
-        failures.push(`preview-callback: ${INSTALLER} registers no ${PREVIEW_ELEMENT} creation callback importing ${previewUrl} -- WebRTCParent's lazy preview insert would throw`);
-    }
-
-    // (q) The password template, derived from upstream and compared id set and element by element; no hidden input.
-    const upstreamPassword = templateBlock(raw[UPSTREAM_PANEL], PASSWORD_TEMPLATE_ID);
-    const upstreamPasswordIds = new Set(derive(upstreamPassword, /\sid="([^"]+)"/g));
-    const ourPassword = templateBlock(markup, PASSWORD_TEMPLATE_ID);
-    if (!upstreamPassword || upstreamPasswordIds.size === 0) {
-        failures.push(`password-template: derived ZERO elements of #${PASSWORD_TEMPLATE_ID} from ${UPSTREAM_PANEL} -- the comparison proves nothing (broken instrument)`);
-    } else if (!ourPassword) {
-        failures.push(`password-template: ${XHTML} has no #${PASSWORD_TEMPLATE_ID} -- LoginManagerPrompter finds no template, so a login is never offered for saving`);
-    } else {
-        const ourIds = new Set(derive(ourPassword, /\sid="([^"]+)"/g));
-        const missing = [...upstreamPasswordIds].filter(id => !ourIds.has(id));
-        const surplus = [...ourIds].filter(id => !upstreamPasswordIds.has(id));
-        if (missing.length || surplus.length) {
-            failures.push(`password-template: #${PASSWORD_TEMPLATE_ID} ids differ from upstream -- missing ids ${missing.join(' ') || '(none)'}; surplus ids ${surplus.join(' ') || '(none)'}`);
-        }
-        if (/<(?:html:)?input\b|\btype="hidden"/.test(ourPassword)) {
-            failures.push(`password-template: hidden credential input present in #${PASSWORD_TEMPLATE_ID} -- a second value path beside the prompter's own fields (D-07)`);
-        }
-        const upstreamTags = startTags(upstreamPassword);
-        const ourTags = startTags(ourPassword);
-        const drift = upstreamTags.findIndex((tag, i) => ourTags[i] !== tag);
-        if (drift !== -1 || ourTags.length !== upstreamTags.length) {
-            const at = drift === -1 ? upstreamTags.length : drift;
-            failures.push(`password-template: #${PASSWORD_TEMPLATE_ID} element drift at element ${at + 1} -- upstream <${upstreamTags[at] ?? '(end)'}>, ours <${ourTags[at] ?? '(end)'}>`);
-        }
-    }
-    const upstreamPopup = new RegExp(`<panel\\s([^>]*?\\bid="${AUTOCOMPLETE_ID}"[^>]*?)\\/?>`).exec(raw[UPSTREAM_POPUPSET]);
-    const ourPopup = new RegExp(`<xul:panel\\s([^>]*?\\bid="${AUTOCOMPLETE_ID}"[^>]*?)\\/?>`).exec(markup);
-    if (!upstreamPopup) {
-        failures.push(`password-template: ${UPSTREAM_POPUPSET} has no #${AUTOCOMPLETE_ID} (broken instrument)`);
-    } else if (!ourPopup) {
-        failures.push(`password-template: ${XHTML} has no #${AUTOCOMPLETE_ID} -- the prompter's showing callback writes its select hooks and would throw`);
-    } else {
-        const want = [...attrSet(upstreamPopup[1])].sort().join(' ');
-        const got = [...attrSet(ourPopup[1])].sort().join(' ');
-        if (want !== got) {
-            failures.push(`password-template: #${AUTOCOMPLETE_ID} is not upstream's verbatim -- upstream ${want}; ours ${got}`);
-        }
-    }
-
-    // (r) The login-doorhanger-username-field creation callback, on the module URL upstream's browser.js imports.
-    const loginUrl = new RegExp(`setElementCreationCallback\\(\\s*"${LOGIN_ELEMENT}"[\\s\\S]*?importESModule\\(\\s*"([^"]+)"`).exec(raw[UPSTREAM_BROWSER_JS])?.[1];
-    if (!loginUrl) {
-        failures.push(`login-callback: ${UPSTREAM_BROWSER_JS} registers no ${LOGIN_ELEMENT} creation callback (broken instrument)`);
-    } else if (!new RegExp(`setElementCreationCallback\\(\\s*"${LOGIN_ELEMENT}"[^;]*importESModule\\(\\s*"${loginUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(installer)) {
-        failures.push(`login-callback: ${LOGIN_ELEMENT} callback missing from ${INSTALLER} (importing ${loginUrl}) -- the username field never upgrades and the password template is inert`);
-    }
-
     // (s) The stock prompter owns the fields: it fills and reads back each one, and nothing in the tree names them.
+    const upstreamPassword = templateBlock(raw[UPSTREAM_PANEL], PASSWORD_TEMPLATE_ID);
     const fieldIds = derive(upstreamPassword, /<html:[\w-]+\s[^>]*?\bid="([^"]+)"/g);
     const prompter = raw[UPSTREAM_PROMPTER] ?? '';
     const writeAt = prompter.indexOf('const writeDataToUI');
@@ -870,11 +729,6 @@ function selfTest() {
     const inBars = text => `${clean[API].slice(0, barEnd)}\n${text}\n${clean[API].slice(barEnd)}`;
     const cases = [
         {
-            name: 'missing panel',
-            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<xul:panel\s+id="notification-popup"[^>]*\/>/, '') },
-            expect: `has no <xul:panel id="${PANEL_ID}">`,
-        },
-        {
             name: 'second construction site',
             sources: { ...clean, [API]: inSection('const extraNotifications = new PopupNotifications(promptTabbrowser, null, null);') },
             expect: '2 PopupNotifications construction sites',
@@ -932,32 +786,6 @@ function selfTest() {
             name: 'window-wide queue cap',
             sources: { ...clean, [API]: clean[API].replace('.filter(r => r.tabId === tabId && r.queued);', '.filter(r => r.window === window && r.queued);') },
             expect: 'not the requesting tab alone',
-        },
-        {
-            name: 'template section removed (camera device list)',
-            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<popupnotificationcontent id="webRTC-selectCamera"[\s\S]*?<\/popupnotificationcontent>/, '') },
-            expect: 'missing ids webRTC-selectCamera',
-        },
-        {
-            name: 'template id renamed (camera menulist)',
-            sources: { ...clean, [XHTML]: clean[XHTML].replace('<menulist id="webRTC-selectCamera-menulist"', '<menulist id="powerbrowser-camera-menulist"') },
-            expect: 'surplus ids powerbrowser-camera-menulist',
-        },
-        {
-            name: 'template menulist swapped for a custom widget',
-            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<menulist id="webRTC-selectWindow-menulist"\s+size="large">/, '<html:select id="webRTC-selectWindow-menulist" size="large">') },
-            expect: 'element drift',
-        },
-        {
-            name: 'preview callback removed',
-            sources: { ...clean, [API]: clean[API].replace(/^.*setElementCreationCallback\("webrtc-preview".*\n/m, '') },
-            expect: `registers no ${PREVIEW_ELEMENT} creation callback importing`,
-        },
-        {
-            // Built from parts, so this file's own text holds no such array.
-            name: 'hand-kept id array in the gate',
-            sources: { ...clean, [GATE]: `${clean[GATE]}\nconst KEPT = [${"'"}webRTC-selectCamera${"'"}, ${"'"}webRTC-selectMicrophone${"'"}];\n` },
-            expect: 'hand-kept array of template ids',
         },
         {
             name: 'second permission writer in the boundary',
@@ -1069,29 +897,9 @@ function selfTest() {
             expect: 'credential field in a Theia message',
         },
         {
-            name: 'hidden-input-variant',
-            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<html:moz-input-password id="password-notification-password"[^>]*\/>/, '<html:input type="hidden" id="password-notification-password"/>') },
-            expect: 'hidden credential input present',
-        },
-        {
             name: 'credential-in-log',
             sources: { ...clean, [API]: inSection('function plantedLog(login) { PowerBrowserAPI.log("error", `[pw] saved ${login.username}`); }') },
             expect: 'credential value in log',
-        },
-        {
-            name: 'template-id-renamed',
-            sources: { ...clean, [XHTML]: clean[XHTML].replace('id="password-notification-username"', 'id="powerbrowser-username"') },
-            expect: 'missing ids password-notification-username',
-        },
-        {
-            name: 'login-callback-missing',
-            sources: { ...clean, [API]: clean[API].replace(/^.*setElementCreationCallback\("login-doorhanger-username-field".*\n/m, '') },
-            expect: 'login-doorhanger-username-field callback missing',
-        },
-        {
-            name: 'autocomplete popup removed',
-            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<xul:panel is="autocomplete-richlistbox-popup"[\s\S]*?\/>/, '') },
-            expect: `has no #${AUTOCOMPLETE_ID}`,
         },
         {
             name: 'second reader of a credential field',
@@ -1179,7 +987,7 @@ function main() {
     }
     const dialog = checkDialogOutcome(sources);
     console.log(`${NAME}: dialog outcome ${dialog.outcome}${dialog.provisional ? ' (PROVISIONAL: the owner default pending live probe 1; the live dialog-probe run overwrites it with evidence)' : ' (live probe-1 verdict)'}; getTabDialogBox ${dialog.outcome === 'stock-keeps-ide-usable' ? 'absent, the stock window-modal fallback' : 'present, the audited relay member'}`);
-    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, the ${PREVIEW_ELEMENT} callback is registered, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, the sharing indicator follows chrome-observed webrtcUI state only, #${PASSWORD_TEMPLATE_ID} and #${AUTOCOMPLETE_ID} match upstream, the ${LOGIN_ELEMENT} callback is registered, the stock prompter alone owns the credential fields, no credential reaches a push, a Theia message or a log, the notification bars sit outside the blocking layer and shrink the page rect, each bar answer resolves a chrome-held record of the sender's own tab, the bar action enum matches between sender and arm, openAdoptedWebTab has one call site, and no stock notification box is reached`);
+    console.log(`${NAME}: PASS -- one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, the sharing indicator follows chrome-observed webrtcUI state only, the stock prompter alone owns the credential fields, no credential reaches a push, a Theia message or a log, the notification bars sit outside the blocking layer and shrink the page rect, each bar answer resolves a chrome-held record of the sender's own tab, the bar action enum matches between sender and arm, openAdoptedWebTab has one call site, and no stock notification box is reached (the furniture rows (a), (j), (k), (q), (r) are verify-shell-furniture.mjs rule 13)`);
     return 0;
 }
 

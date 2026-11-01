@@ -922,7 +922,7 @@ function selfTest() {
         },
         {
             name: 'planted webTabBarAction dropped from WEB_TAB_ACTION_KINDS',
-            sources: { ...clean, [API]: clean[API].replace(/,\s*"webTabBarAction"(\]\);)/, '$1') },
+            sources: { ...clean, [API]: clean[API].replace(/(const WEB_TAB_ACTION_KINDS = new Set\(\[[^\]]*?),\s*"webTabBarAction"/, '$1') },
             expect: 'handleWebTabAction has case arms WEB_TAB_ACTION_KINDS does not route: webTabBarAction',
         },
         {

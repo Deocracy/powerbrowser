@@ -224,4 +224,4 @@ A security review of the first three commits flagged two MEDIUM findings in the 
 
 ## Merge into main
 
-- Phase 35 fold still pending: `installPermissionPromptFurniture(window)` and gate rules (a), (j), (k), (q), (r) in `verify-permission-prompts.mjs` stay until the Phase 35 merge folds them into `installShellFurniture` and `verify-shell-furniture.mjs`.
+- Phase 35 fold done (the commit after the Phase 35 merge): `installPermissionPromptFurniture(window)` is no longer exported or called from `powerbrowser.js`; `installShellFurnitureReceivers` calls it once, so the one bootstrap call is `PowerBrowserAPI.installShellFurniture(window)`. Gate rules (a), (j), (k), (q), (r) and their 10 plants moved to `verify-shell-furniture.mjs` (rule 13, plants (z)-(ai)), with plants (x) and (y) guarding the single call. `verify-permission-prompts.mjs` keeps 42 plants and `verify-shell-furniture.mjs` has 35, against 52 and 23 before.

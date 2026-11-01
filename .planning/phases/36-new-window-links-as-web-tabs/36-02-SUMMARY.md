@@ -160,3 +160,7 @@ None. No new endpoint, kind or trust boundary. The change removes a route (the p
 
 - Commits `93da6b93`, `2cd01c82`, `34ddf2c6` (and 36-01's `049fe84f`) are each an ancestor of HEAD (`git merge-base --is-ancestor`).
 - All three modified files are present; no file was created.
+
+## Merge into main
+
+- Phase 35 IDL_SHIMS entry done (the commit after the Phase 35 merge): `scripts/verify-shell-gbrowser-standin.mjs` lists `browserDOMWindow` → `upstream/dom/interfaces/base/nsIBrowserDOMWindow.idl` (interface `nsIBrowserDOMWindow`; Gecko calls it at ContentParent.cpp:5430, 5451, 5490 and nsContentTreeOwner.cpp:524, 550), with `QueryInterface` as its data member. `idlMethods` now reads only the named interface's body, accepts a return type on the line before the method name, and counts attributes (`tabCount`). The receiver compares equal to {canClose, createContentWindow, createContentWindowInFrame, openURI, openURIInFrame, tabCount}. Self-test plant (q) drops `canClose` and goes red as UNIMPLEMENTED `browserDOMWindow.canClose`. The member parser already skips value-position names such as `generateQI`.

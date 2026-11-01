@@ -73,6 +73,18 @@
 //      it is not reserved: a reserved row would fire with the IDE focused (KEY-04). The
 //      row names no `firefox` id because that id carries an internals-boundary pattern.
 //
+//  13. Prompt furniture (Phase 37 rules (a), (j), (k), (q), (r), moved here when its
+//      installer folded into this one at the Phase 35 merge). #notification-popup is
+//      upstream's popup-notifications.inc.xhtml panel attribute for attribute and the
+//      anchor the boundary names exists; webRTC-shareDevices-notification and
+//      password-notification are upstream's (id set and element by element, no hidden
+//      input), with #PopupAutoComplete attribute for attribute against
+//      main-popupset.inc.xhtml; installPermissionPromptFurniture registers the
+//      webrtc-preview and login-doorhanger-username-field creation callbacks on the
+//      module URLs upstream's browser.js imports; this file holds no hand-kept array of
+//      template ids. Rule 3 also requires that installer to be called once, from
+//      installShellFurnitureReceivers, and never named in powerbrowser.js.
+//
 // A section, block or selector that cannot be found, or empty A and B, is a BROKEN
 // INSTRUMENT, never a clean pass. `--self-test` asserts the clean tree green,
 // then plants one fault per rule into staged copies; each must land and go red
@@ -101,6 +113,10 @@ const FILES = {
   nsContextMenu: 'upstream/browser/base/content/nsContextMenu.sys.mjs',
   clipboardMenu: 'upstream/toolkit/modules/ClipboardContextMenu.sys.mjs',
   browserSets: 'upstream/browser/base/content/browser-sets.inc.xhtml',
+  // Rule 13 (Phase 37's furniture rows, folded at the Phase 35 merge).
+  upstreamPanel: 'upstream/browser/base/content/popup-notifications.inc.xhtml',
+  upstreamBrowserJs: 'upstream/browser/base/content/browser.js',
+  gate: 'scripts/verify-shell-furniture.mjs',
 };
 const ACTOR_DIRS = ['upstream/browser/actors', 'upstream/toolkit/actors'];
 const L10N_ROOTS = ['upstream/browser/locales/en-US', 'upstream/toolkit/locales/en-US'];
@@ -122,6 +138,168 @@ const DYNAMIC_KINDS = new Map([
   ['spell-suggestion', 'spelling suggestions are dictionary words the spell checker returns; upstream inserts them as unnamed menuitems (InlineSpellChecker.sys.mjs _addSuggestionsToMenu), so no upstream id exists'],
   ['extension-entry', 'extension entries are built by ext-menus into the stub from each extension\'s menus.create calls (ext-menus.js buildSingleElement); their labels and element ids come from the extension, so no upstream id exists'],
 ]);
+
+// Rule 13: the Phase 37 prompt furniture, installed from installShellFurnitureReceivers.
+const PROMPT_INSTALLER = 'installPermissionPromptFurniture';
+const PANEL_ID = 'notification-popup';
+const TEMPLATE_ID = 'webRTC-shareDevices-notification';
+const PREVIEW_ELEMENT = 'webrtc-preview';
+const PASSWORD_TEMPLATE_ID = 'password-notification';
+const LOGIN_ELEMENT = 'login-doorhanger-username-field';
+const AUTOCOMPLETE_ID = 'PopupAutoComplete';
+
+/** `/* … *\/` blocks and `//` line comments out (a `//` only at line start or after whitespace, so URLs survive). */
+function stripComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+}
+
+function derive(text, re) {
+  return [...text.matchAll(re)].map(m => m[1]);
+}
+
+/** The body of a top-level `[export] [async] function name(`, up to its column-0 `}`; '' when absent. */
+function functionBody(text, name) {
+  const start = text.search(new RegExp(`^(?:export )?(?:async )?function ${name}\\(`, 'm'));
+  if (start === -1) return '';
+  const end = text.indexOf('\n}', start);
+  return end === -1 ? text.slice(start) : text.slice(start, end);
+}
+
+/** `name="value"` pairs of one tag's attribute text, as a set of strings. */
+function attrSet(attrText) {
+  return new Set([...attrText.matchAll(/([\w:-]+)="([^"]*)"/g)].map(m => `${m[1]}="${m[2]}"`));
+}
+
+/** The `<popupnotification id="…">` element's text up to its close tag (either prefix), comments out; '' when absent. */
+function templateBlock(text, id = TEMPLATE_ID) {
+  const open = new RegExp(`<((?:xul:)?popupnotification)\\s[^>]*?\\bid="${id}"`).exec(text);
+  if (!open) return '';
+  const end = text.indexOf(`</${open[1]}>`, open.index);
+  return (end === -1 ? text.slice(open.index) : text.slice(open.index, end)).replace(/<!--[\s\S]*?-->/g, '');
+}
+
+/** Each start tag of a block as `tag attr="v" ...` (attributes sorted, namespace declarations dropped), in document order. */
+function startTags(block) {
+  return [...block.matchAll(/<([\w:-]+)((?:\s+[\w:-]+="[^"]*")*)\s*\/?>/g)].map(m => [m[1], ...[...attrSet(m[2])].filter(a => !/^xmlns(?::|=)/.test(a)).sort()].join(' '));
+}
+
+// Rule 13: Phase 37's rules (a), (j), (k), (q) and (r), moved here verbatim when its installer folded into this one.
+function checkPromptFurniture(inputs) {
+  const failures = [];
+  const api = stripComments(inputs.api);
+  const markup = inputs.xhtml.replace(/<!--[\s\S]*?-->/g, '');
+  const installer = functionBody(api, PROMPT_INSTALLER);
+  if (!installer) failures.push(`PROMPTS: ${FILES.api} has no top-level function ${PROMPT_INSTALLER}`);
+  // (a) The panel, attribute for attribute against upstream's own markup.
+  const upstream = /<panel\s+id="notification-popup"([^>]*?)\/?>/.exec(inputs.upstreamPanel);
+  const upstreamAttrs = upstream ? attrSet(upstream[1]) : new Set();
+  if (upstreamAttrs.size === 0) {
+    failures.push(`panel: derived ZERO attributes of <panel id="${PANEL_ID}"> from ${FILES.upstreamPanel} -- the comparison proves nothing (broken instrument)`);
+  }
+  const ours = /<xul:panel\s+id="notification-popup"([^>]*?)\/?>/.exec(markup);
+  if (!ours) {
+    failures.push(`panel: ${FILES.xhtml} has no <xul:panel id="${PANEL_ID}"> -- PopupNotifications has no panel to show a prompt in`);
+  } else if (upstreamAttrs.size) {
+    const mine = attrSet(ours[1]);
+    const missing = [...upstreamAttrs].filter(a => !mine.has(a));
+    const surplus = [...mine].filter(a => !upstreamAttrs.has(a));
+    if (missing.length || surplus.length) {
+      failures.push(`panel: ${FILES.xhtml}'s #${PANEL_ID} is not upstream's verbatim -- missing ${missing.join(' ') || '(none)'}; surplus ${surplus.join(' ') || '(none)'}`);
+    }
+  }
+  const anchorId = /const PROMPT_ANCHOR_ID = "([\w-]+)"/.exec(api)?.[1];
+  if (!anchorId) {
+    failures.push(`panel: the prompt section names no PROMPT_ANCHOR_ID -- the panel has no anchor to open against`);
+  } else if (anchorId && !markup.includes(`id="${anchorId}"`)) {
+    failures.push(`panel: the anchor id ${anchorId} the boundary names is not an element id in ${FILES.xhtml}`);
+  }
+
+  // (j) The WebRTC template, derived from upstream and compared id set and element by element.
+  const upstreamTags = startTags(templateBlock(inputs.upstreamPanel));
+  const upstreamIds = new Set(derive(templateBlock(inputs.upstreamPanel), /\sid="([^"]+)"/g));
+  if (upstreamTags.length === 0 || upstreamIds.size === 0) {
+    failures.push(`template: derived ZERO elements of #${TEMPLATE_ID} from ${FILES.upstreamPanel} -- the comparison proves nothing (broken instrument)`);
+  } else {
+    const ourBlock = templateBlock(markup);
+    if (!ourBlock) {
+      failures.push(`template: ${FILES.xhtml} has no #${TEMPLATE_ID} -- WebRTCParent finds no template, so a camera or microphone request never resolves`);
+    } else {
+      const ourIds = new Set(derive(ourBlock, /\sid="([^"]+)"/g));
+      const missing = [...upstreamIds].filter(id => !ourIds.has(id));
+      const surplus = [...ourIds].filter(id => !upstreamIds.has(id));
+      if (missing.length || surplus.length) {
+        failures.push(`template: #${TEMPLATE_ID} ids differ from upstream -- missing ids ${missing.join(' ') || '(none)'}; surplus ids ${surplus.join(' ') || '(none)'}`);
+      }
+      const ourTags = startTags(ourBlock);
+      const drift = upstreamTags.findIndex((tag, i) => ourTags[i] !== tag);
+      if (drift !== -1 || ourTags.length !== upstreamTags.length) {
+        const at = drift === -1 ? upstreamTags.length : drift;
+        failures.push(`template: #${TEMPLATE_ID} element drift at element ${at + 1} -- upstream <${upstreamTags[at] ?? '(end)'}>, ours <${ourTags[at] ?? '(end)'}>`);
+      }
+    }
+  }
+  const ownSource = stripComments(inputs.gate);
+  if (/\[\s*['"`](?:webRTC|password-notification)-[\w-]+['"`]\s*,/.test(ownSource)) {
+    failures.push(`template: ${FILES.gate} holds a hand-kept array of template ids -- the expectation must be derived from ${FILES.upstreamPanel} (CLAUDE.md verification rule 2)`);
+  }
+
+  // (k) The webrtc-preview creation callback, on the module URL upstream's browser.js imports.
+  const previewUrl = new RegExp(`setElementCreationCallback\\(\\s*"${PREVIEW_ELEMENT}"[\\s\\S]*?importESModule\\(\\s*"([^"]+)"`).exec(inputs.upstreamBrowserJs)?.[1];
+  if (!previewUrl) {
+    failures.push(`preview-callback: ${FILES.upstreamBrowserJs} registers no ${PREVIEW_ELEMENT} creation callback (broken instrument)`);
+  } else if (!new RegExp(`setElementCreationCallback\\(\\s*"${PREVIEW_ELEMENT}"[^;]*importESModule\\(\\s*"${previewUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(installer)) {
+    failures.push(`preview-callback: ${PROMPT_INSTALLER} registers no ${PREVIEW_ELEMENT} creation callback importing ${previewUrl} -- WebRTCParent's lazy preview insert would throw`);
+  }
+
+  // (q) The password template, derived from upstream and compared id set and element by element; no hidden input.
+  const upstreamPassword = templateBlock(inputs.upstreamPanel, PASSWORD_TEMPLATE_ID);
+  const upstreamPasswordIds = new Set(derive(upstreamPassword, /\sid="([^"]+)"/g));
+  const ourPassword = templateBlock(markup, PASSWORD_TEMPLATE_ID);
+  if (!upstreamPassword || upstreamPasswordIds.size === 0) {
+    failures.push(`password-template: derived ZERO elements of #${PASSWORD_TEMPLATE_ID} from ${FILES.upstreamPanel} -- the comparison proves nothing (broken instrument)`);
+  } else if (!ourPassword) {
+    failures.push(`password-template: ${FILES.xhtml} has no #${PASSWORD_TEMPLATE_ID} -- LoginManagerPrompter finds no template, so a login is never offered for saving`);
+  } else {
+    const ourIds = new Set(derive(ourPassword, /\sid="([^"]+)"/g));
+    const missing = [...upstreamPasswordIds].filter(id => !ourIds.has(id));
+    const surplus = [...ourIds].filter(id => !upstreamPasswordIds.has(id));
+    if (missing.length || surplus.length) {
+      failures.push(`password-template: #${PASSWORD_TEMPLATE_ID} ids differ from upstream -- missing ids ${missing.join(' ') || '(none)'}; surplus ids ${surplus.join(' ') || '(none)'}`);
+    }
+    if (/<(?:html:)?input\b|\btype="hidden"/.test(ourPassword)) {
+      failures.push(`password-template: hidden credential input present in #${PASSWORD_TEMPLATE_ID} -- a second value path beside the prompter's own fields (D-07)`);
+    }
+    const upstreamTags = startTags(upstreamPassword);
+    const ourTags = startTags(ourPassword);
+    const drift = upstreamTags.findIndex((tag, i) => ourTags[i] !== tag);
+    if (drift !== -1 || ourTags.length !== upstreamTags.length) {
+      const at = drift === -1 ? upstreamTags.length : drift;
+      failures.push(`password-template: #${PASSWORD_TEMPLATE_ID} element drift at element ${at + 1} -- upstream <${upstreamTags[at] ?? '(end)'}>, ours <${ourTags[at] ?? '(end)'}>`);
+    }
+  }
+  const upstreamPopup = new RegExp(`<panel\\s([^>]*?\\bid="${AUTOCOMPLETE_ID}"[^>]*?)\\/?>`).exec(inputs.popupset);
+  const ourPopup = new RegExp(`<xul:panel\\s([^>]*?\\bid="${AUTOCOMPLETE_ID}"[^>]*?)\\/?>`).exec(markup);
+  if (!upstreamPopup) {
+    failures.push(`password-template: ${FILES.popupset} has no #${AUTOCOMPLETE_ID} (broken instrument)`);
+  } else if (!ourPopup) {
+    failures.push(`password-template: ${FILES.xhtml} has no #${AUTOCOMPLETE_ID} -- the prompter's showing callback writes its select hooks and would throw`);
+  } else {
+    const want = [...attrSet(upstreamPopup[1])].sort().join(' ');
+    const got = [...attrSet(ourPopup[1])].sort().join(' ');
+    if (want !== got) {
+      failures.push(`password-template: #${AUTOCOMPLETE_ID} is not upstream's verbatim -- upstream ${want}; ours ${got}`);
+    }
+  }
+
+  // (r) The login-doorhanger-username-field creation callback, on the module URL upstream's browser.js imports.
+  const loginUrl = new RegExp(`setElementCreationCallback\\(\\s*"${LOGIN_ELEMENT}"[\\s\\S]*?importESModule\\(\\s*"([^"]+)"`).exec(inputs.upstreamBrowserJs)?.[1];
+  if (!loginUrl) {
+    failures.push(`login-callback: ${FILES.upstreamBrowserJs} registers no ${LOGIN_ELEMENT} creation callback (broken instrument)`);
+  } else if (!new RegExp(`setElementCreationCallback\\(\\s*"${LOGIN_ELEMENT}"[^;]*importESModule\\(\\s*"${loginUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(installer)) {
+    failures.push(`login-callback: ${LOGIN_ELEMENT} callback missing from ${PROMPT_INSTALLER} (importing ${loginUrl}) -- the username field never upgrades and the password template is inert`);
+  }
+  return failures;
+}
 
 function readInputs() {
   const inputs = {};
@@ -348,6 +526,13 @@ function check(inputs) {
   if (receivers !== 1 || receiversAnywhere !== 1) failures.push(`INSTALLER: installShellFurnitureReceivers( must be defined once, in the Phase 35 section; found ${receivers} there, ${receiversAnywhere} in the file`);
   const calls = codeLines(inputs.shellJs).filter(line => line.includes('PowerBrowserAPI.installShellFurniture(window)')).length;
   if (calls !== 1) failures.push(`INSTALLER: ${FILES.shellJs} must call PowerBrowserAPI.installShellFurniture(window) exactly once; found ${calls}`);
+  // Rule 3 (Phase 35 merge): the Phase 37 prompt installer is called once, from installShellFurnitureReceivers, and never at bootstrap.
+  const promptCall = new RegExp(`(?<![\\w$])${PROMPT_INSTALLER}\\(window\\)`, 'g');
+  const fromReceivers = (functionBody(stripComments(sectionCode), 'installShellFurnitureReceivers').match(promptCall) || []).length;
+  const promptCalls = (stripComments(inputs.api).match(new RegExp(`(?<![\\w$]|function )${PROMPT_INSTALLER}\\(`, 'g')) || []).length;
+  const promptBootstrap = (stripComments(inputs.shellJs).match(new RegExp(`(?<![\\w$])${PROMPT_INSTALLER}\\b`, 'g')) || []).length;
+  if (fromReceivers !== 1 || promptCalls !== 1) failures.push(`INSTALLER: ${PROMPT_INSTALLER}(window) must be called exactly once, inside installShellFurnitureReceivers; found ${fromReceivers} there, ${promptCalls} in the file`);
+  if (promptBootstrap) failures.push(`INSTALLER: ${FILES.shellJs} names ${PROMPT_INSTALLER} ${promptBootstrap} time(s); the prompt furniture is installed only through installShellFurniture`);
 
   // Rule 4: policy.
   const windowtype = (inputs.xhtml.match(/windowtype="powerbrowser:main"/g) || []).length;
@@ -465,7 +650,10 @@ function check(inputs) {
     if (!/\breserved: false\b/.test(f11Row)) failures.push('F11: the fullscreen row is not reserved: false (a reserved row fires with the IDE focused, KEY-04)');
   }
 
-  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}} (section, overlay attribute and ${ADOPTED_ACTORS.size} adopted actor parents of ${actorFiles.length}), each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys; overlays name the autocomplete panel #${acPanels[0]}; ${hrefs.length} localization link(s) carry the ${l10nIds.length} id(s) the shell needs; the section sets and removes inDOMFullscreen; the F11 row is upstream's Linux key_enterFullScreen, unreserved` };
+  // Rule 13: the Phase 37 prompt furniture.
+  failures.push(...checkPromptFurniture(inputs));
+
+  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}} (section, overlay attribute and ${ADOPTED_ACTORS.size} adopted actor parents of ${actorFiles.length}), each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys; overlays name the autocomplete panel #${acPanels[0]}; ${hrefs.length} localization link(s) carry the ${l10nIds.length} id(s) the shell needs; the section sets and removes inDOMFullscreen; the F11 row is upstream's Linux key_enterFullScreen, unreserved; the prompt installer runs once from installShellFurnitureReceivers, and #${PANEL_ID}, #${TEMPLATE_ID}, #${PASSWORD_TEMPLATE_ID} and #${AUTOCOMPLETE_ID} match upstream with the ${PREVIEW_ELEMENT} and ${LOGIN_ELEMENT} callbacks registered` };
 }
 
 function report(result) {
@@ -507,6 +695,20 @@ function selfTest() {
     { name: '(u) the exit button removed from the fullscreen warning', key: 'xhtml', mutate: t => t.replace(/^\s*<button id="fullscreen-exit-button">\s*<\/button>\n/m, ''), expect: 'PARITY: #fullscreen-warning: children differ from upstream\'s' },
     { name: '(v) the inDOMFullscreen remove call deleted', key: 'api', mutate: t => t.replace('document.documentElement.removeAttribute("inDOMFullscreen");', ''), expect: 'FULLSCREEN: the Phase 35 section never calls removeAttribute("inDOMFullscreen")' },
     { name: '(w) a modifier on the F11 row', key: 'shellJs', mutate: t => t.replace('{ id: "fullscreen", keycode: "VK_F11", modifiers: ""', '{ id: "fullscreen", keycode: "VK_F11", modifiers: "accel"'), expect: 'F11: the fullscreen row\'s modifiers is "accel", upstream key_enterFullScreen\'s (Linux) is ""' },
+    // Rule 3 (fold) and rule 13: Phase 37's furniture rows (a), (j), (k), (q), (r) and their plants, moved at the Phase 35 merge.
+    { name: '(x) the prompt installer call dropped from installShellFurnitureReceivers', key: 'api', mutate: t => t.replace(/^ {2}installPermissionPromptFurniture\(window\);\n/m, ''), expect: 'INSTALLER: installPermissionPromptFurniture(window) must be called exactly once, inside installShellFurnitureReceivers; found 0 there' },
+    { name: '(y) a bootstrap call of the prompt installer', key: 'shellJs', mutate: t => t.replace('PowerBrowserAPI.installShellFurniture(window);', 'PowerBrowserAPI.installShellFurniture(window);\n    installPermissionPromptFurniture(window);'), expect: `INSTALLER: ${FILES.shellJs} names installPermissionPromptFurniture 1 time(s)` },
+    { name: '(z) missing panel (37 rule a)', key: 'xhtml', mutate: t => t.replace(/<xul:panel\s+id="notification-popup"[^>]*\/>/, ''), expect: `has no <xul:panel id="${PANEL_ID}">` },
+    { name: '(aa) template section removed, camera device list (37 rule j)', key: 'xhtml', mutate: t => t.replace(/<popupnotificationcontent id="webRTC-selectCamera"[\s\S]*?<\/popupnotificationcontent>/, ''), expect: 'missing ids webRTC-selectCamera' },
+    { name: '(ab) template id renamed, camera menulist (37 rule j)', key: 'xhtml', mutate: t => t.replace('<menulist id="webRTC-selectCamera-menulist"', '<menulist id="powerbrowser-camera-menulist"'), expect: 'surplus ids powerbrowser-camera-menulist' },
+    { name: '(ac) template menulist swapped for a custom widget (37 rule j)', key: 'xhtml', mutate: t => t.replace(/<menulist id="webRTC-selectWindow-menulist"\s+size="large">/, '<html:select id="webRTC-selectWindow-menulist" size="large">'), expect: 'element drift' },
+    // Built from parts, so this file's own text holds no such array.
+    { name: '(ad) hand-kept id array in the gate (37 rule j)', key: 'gate', mutate: t => `${t}\nconst KEPT = [${"'"}webRTC-selectCamera${"'"}, ${"'"}webRTC-selectMicrophone${"'"}];\n`, expect: 'hand-kept array of template ids' },
+    { name: '(ae) preview callback removed (37 rule k)', key: 'api', mutate: t => t.replace(/^.*setElementCreationCallback\("webrtc-preview".*\n/m, ''), expect: `registers no ${PREVIEW_ELEMENT} creation callback importing` },
+    { name: '(af) hidden-input variant of the password field (37 rule q)', key: 'xhtml', mutate: t => t.replace(/<html:moz-input-password id="password-notification-password"[^>]*\/>/, '<html:input type="hidden" id="password-notification-password"/>'), expect: 'hidden credential input present' },
+    { name: '(ag) password template id renamed (37 rule q)', key: 'xhtml', mutate: t => t.replace('id="password-notification-username"', 'id="powerbrowser-username"'), expect: 'missing ids password-notification-username' },
+    { name: '(ah) autocomplete popup removed (37 rule q)', key: 'xhtml', mutate: t => t.replace(/<xul:panel is="autocomplete-richlistbox-popup"[\s\S]*?\/>/, ''), expect: `has no #${AUTOCOMPLETE_ID}` },
+    { name: '(ai) login callback missing (37 rule r)', key: 'api', mutate: t => t.replace(/^.*setElementCreationCallback\("login-doorhanger-username-field".*\n/m, ''), expect: 'login-doorhanger-username-field callback missing' },
   ];
   let failed = false;
   for (const plant of plants) {
@@ -529,7 +731,7 @@ function selfTest() {
     console.error(`${NAME} --self-test: FAIL`);
     process.exit(1);
   }
-  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (w) each landed and went red naming their drift`);
+  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (ai) each landed and went red naming their drift`);
 }
 
 if (process.argv.includes('--self-test')) {

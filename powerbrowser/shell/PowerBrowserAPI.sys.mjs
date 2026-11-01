@@ -7086,8 +7086,9 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
 // buttons and checkbox, so the stock click delay applies; this section adds no
 // answer path and writes no permission. Theia hears only where a prompt is: the
 // display-only `doorhanger` push. The tabbrowser facade is compared member by
-// member by scripts/verify-shell-gbrowser-standin.mjs (FACADES). At merge the
-// one bootstrap call folds into Phase 35's installShellFurniture.
+// member by scripts/verify-shell-gbrowser-standin.mjs (FACADES). Since the
+// Phase 35 merge it is installed from installShellFurnitureReceivers, the one
+// installShellFurniture entry, never from a bootstrap line of its own.
 // ---------------------------------------------------------------------------
 
 // The shell element the panel opens against (powerbrowser.xhtml). With iconBox null, the stock module finds an anchor
@@ -7102,7 +7103,7 @@ const promptWindows = new WeakSet();
 const promptInstances = new WeakMap();
 let promptTokenCounter = 0;
 
-export function installPermissionPromptFurniture(window) {
+function installPermissionPromptFurniture(window) {
   const host = tabHosts.get(window);
   const panel = window.document.getElementById("notification-popup");
   if (!host || !panel || promptWindows.has(window)) {
@@ -7650,6 +7651,8 @@ ChromeUtils.defineESModuleGetters(furnitureLazy, {
 });
 
 function installShellFurnitureReceivers(window) {
+  // Phase 37's doorhangers and notification bars (the Phase 37 section above); it reads the tab host, installed earlier.
+  installPermissionPromptFurniture(window);
   installTooltipsAndLinkStatus(window);
   installPageContextMenu(window);
   installFullscreen(window);
