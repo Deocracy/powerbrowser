@@ -355,7 +355,9 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             }
             if (!/pending\.pushed = true;\s*sendWebTabPush\(theiaBrowser, \{ kind: "adoptTab"/.test(stripComments(src[API]))) failures.push(`click-path: createPendingOverlay does not mark pending.pushed as its adoptTab push goes`);
             if (!/entry\.activateOnAttach = Boolean\(pending\.activateOnAck\);/.test(src[API])) failures.push(`click-path: adoptPendingOverlay does not carry a deferred activation (activateOnAck) to the adopted entry`);
-            if (!/if \(webTabs\.get\(tabId\)\.activateOnAttach\) \{\s*webTabs\.get\(tabId\)\.activateOnAttach = false;\s*sendWebTabPush\(theiaBrowser, \{ kind: "selectTab", tabId \}\);/.test(src[API])) failures.push(`click-path: webTabOpen's already-open branch does not show a deferred activation (selectTab) once the widget attaches`);
+            const show = span(apiLines, /^function showActivationOnAttach\(/);
+            const showBody = show ? apiLines.slice(show.start, show.end + 1).join('\n') : '';
+            if (!/if \(webTabs\.has\(tabId\)\) \{\s*showActivationOnAttach\(theiaBrowser, tabId\);/.test(src[API]) || !/if \(entry\.activateOnAttach\) \{\s*entry\.activateOnAttach = false;\s*sendWebTabPush\(theiaBrowser, \{ kind: "selectTab", tabId \}\);/.test(showBody)) failures.push(`click-path: webTabOpen's already-open branch does not show a deferred activation (selectTab) once the widget attaches`);
         }
     }
 
@@ -557,7 +559,7 @@ function selfTest() {
         { name: 'private check without effect', run: () => check({ ...clean, [API]: clean[API].replace('      win = Services.wm.getMostRecentNonPBWindow("navigator:browser");\n', '      Services.wm.getMostRecentNonPBWindow("navigator:browser");\n') }), expect: "extensionOpenTabPage's canAccessWindow check does not guard" },
         { name: 'private check after its sink', run: () => check({ ...clean, [API]: clean[API].replace('function extensionClick(win, named, anchorRect) {\n', 'function extensionClick(win, named, anchorRect) {\n  named.action.triggerClickOrPopup(tabHosts.get(win)?.selected);\n') }), expect: "extensionClick's canAccessWindow check does not guard" },
         { name: 'activate ahead of ack', run: () => check({ ...clean, [API]: clean[API].replace('      pending.activateOnAck = true;\n', '      pending.activateOnAck = true;\n      selectNode(host, tab);\n') }), expect: 'tabsBridgeActivate moves the host selection ahead of the frontend' },
-        { name: 'deferred activation never shown', run: () => check({ ...clean, [API]: clean[API].replace('        webTabs.get(tabId).activateOnAttach = false;\n        sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });\n', '        webTabs.get(tabId).activateOnAttach = false;\n') }), expect: "already-open branch does not show a deferred activation" },
+        { name: 'deferred activation never shown', run: () => check({ ...clean, [API]: clean[API].replace('    entry.activateOnAttach = false;\n    sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });\n', '    entry.activateOnAttach = false;\n') }), expect: "already-open branch does not show a deferred activation" },
         { name: 'signal unheard', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('new window.Event("TabHostActionUpdate")', 'new window.Event("TabHostPlanted")') }), expect: 'dispatches TabHostPlanted, which EXTENSION_TAB_EVENTS does not listen for' },
         { name: 'popup-dom', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <iframe src={popupUrl} />;\n` }), expect: `${EXTENSIONS_WIDGET}:` },
         { name: 'inlined svg icon', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <span dangerouslySetInnerHTML={{ __html: row.icon }} />;\n` }), expect: '(dangerouslySetInnerHTML)' },

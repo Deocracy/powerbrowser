@@ -3297,12 +3297,8 @@ export const PowerBrowserAPI = Object.freeze({
       return "refused-scheme";
     }
     if (webTabs.has(tabId)) {
+      showActivationOnAttach(theiaBrowser, tabId);
       resendWebTabSharing(tabId);
-      // 38-REVIEW CR-03: the widget's own open on attach; only now can the frontend show the tab an extension activated.
-      if (webTabs.get(tabId).activateOnAttach) {
-        webTabs.get(tabId).activateOnAttach = false;
-        sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });
-      }
       return "already-open";
     }
     const doc = theiaBrowser.ownerDocument;
@@ -10176,6 +10172,16 @@ function tabsBridgeActivate(host, tab) {
       selectNode(host, tab);
       pending.background = false;
     }
+  }
+}
+
+// 38-REVIEW CR-03: webTabOpen's already-open branch is the widget's own open on attach, the first point at which the
+// frontend can show a tab an extension activated while it awaited its ack; webTabActivated then selects its node.
+function showActivationOnAttach(theiaBrowser, tabId) {
+  const entry = webTabs.get(tabId);
+  if (entry.activateOnAttach) {
+    entry.activateOnAttach = false;
+    sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });
   }
 }
 
