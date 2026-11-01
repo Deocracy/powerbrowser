@@ -1,6 +1,7 @@
 import * as React from '@theia/core/shared/react';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
-import { ApplicationShell, ReactWidget, Widget } from '@theia/core/lib/browser';
+import { ApplicationShell, ContextMenuRenderer, ReactWidget, Widget } from '@theia/core/lib/browser';
+import { CommandMenu, CompoundMenuNode, MenuPath } from '@theia/core/lib/common';
 import { DisposableCollection } from '@theia/core/lib/common/disposable';
 import { Drag } from '@theia/core/shared/@lumino/dragdrop';
 import { MimeData } from '@theia/core/shared/@lumino/coreutils';
@@ -14,6 +15,23 @@ import { safeIcon } from './address-bar/address-bar-rows';
 
 /** Marks a home-pane tab that the strip lists, so the pane's own bar does not. */
 const STRIP_ONLY_CLASS = 'pb-strip-only';
+
+/** TAB-01 (34-01): the tab menu's path; the menu itself is built fresh per right-click (D-03). */
+const TAB_MENU_PATH: MenuPath = ['powerbrowser-tab-strip-menu'];
+
+/**
+ * TAB-01 (34-01, D-04): one tab-menu row, built per request for the right-clicked tab. `contract` names the
+ * ROADMAP Phase 34 criterion-1 item the row satisfies (scripts/verify-tab-strip.mjs compares that set as set
+ * equality); `group` is the separator group; `enabled` is the predicate, evaluated when the menu opens.
+ */
+interface TabMenuRow {
+    id: string;
+    contract?: string;
+    label: string;
+    group: number;
+    enabled: boolean;
+    run(): Promise<void>;
+}
 
 /** PAN-04 (A3): a tab of a group in its undo window, hidden in every tab bar. */
 const GROUP_CLOSING_CLASS = 'pb-group-closing';
@@ -92,6 +110,10 @@ export class TabStripWidget extends ReactWidget {
 
     @inject(WebTabChannel)
     protected readonly channel: WebTabChannel;
+
+    /** TAB-01 (34-01): renders the tab menu as a stock `.lm-Menu`, which the overlay's blocking-layer selector already lists. */
+    @inject(ContextMenuRenderer)
+    protected readonly menus: ContextMenuRenderer;
 
     protected readonly toDispose = new DisposableCollection();
 
@@ -451,6 +473,78 @@ export class TabStripWidget extends ReactWidget {
     }
 
     /**
+     * TAB-01 (34-01, D-04): the tab menu's rows for `widget`, the right-clicked tab and the only tab any row
+     * acts on (never the current widget). Built per request, so every predicate is read when the menu opens.
+     */
+    protected tabMenuRows(widget: Widget): TabMenuRow[] {
+        const web = widget instanceof WebTabWidget ? widget : undefined;
+        return [
+            {
+                id: 'reload', contract: 'Reload', label: CHROME_BAR_COPY.tabMenu.reload, group: 0,
+                enabled: !!web?.canReload,
+                run: async () => { await web?.reload(); },
+            },
+        ];
+    }
+
+    /**
+     * TAB-01 (34-01, D-03): right-click on a tab opens its menu at the pointer: one fresh CompoundMenuNode per
+     * request, through the same ContextMenuRenderer path as the NAV-03 history menu. Theia draws a separator
+     * around every group node, so the first group's rows sit at the root (the app-menu shape).
+     */
+    protected openTabMenu(widget: Widget, event: React.MouseEvent): void {
+        event.preventDefault();
+        event.stopPropagation();
+        const groups: CommandMenu[][] = [];
+        for (const row of this.tabMenuRows(widget)) {
+            (groups[row.group] ??= []).push({
+                id: `tab-menu-${row.id}`,
+                label: row.label,
+                sortString: String(groups[row.group].length).padStart(2, '0'),
+                isVisible: () => true,
+                isEnabled: () => row.enabled,
+                isToggled: () => false,
+                run: async () => {
+                    if (row.enabled) {
+                        await row.run();
+                    }
+                },
+            });
+        }
+        const [first = [], ...rest] = groups.filter(group => group);
+        const menu: CompoundMenuNode = {
+            id: 'tab-menu',
+            sortString: '0',
+            isVisible: () => true,
+            isEmpty: () => false,
+            children: [
+                ...first,
+                ...rest.map((children, index): CompoundMenuNode => ({
+                    id: `tab-menu-group-${index + 1}`,
+                    sortString: String(index + 1).padStart(2, '0'),
+                    isVisible: () => true,
+                    isEmpty: () => children.length === 0,
+                    children,
+                })),
+            ],
+        };
+        const before = new Set(Array.from(document.querySelectorAll('.lm-Menu')));
+        this.menus.render({
+            menuPath: TAB_MENU_PATH,
+            menu,
+            anchor: { x: event.clientX, y: event.clientY },
+            context: event.currentTarget as HTMLElement,
+            includeAnchorArg: false,
+        });
+        // The renderer takes no class; the menu it just drew is marked so the sheet can size its rows.
+        for (const element of Array.from(document.querySelectorAll('.lm-Menu'))) {
+            if (!before.has(element)) {
+                element.classList.add('pb-tab-menu');
+            }
+        }
+    }
+
+    /**
      * Press-and-move on a tab, up to the moment it becomes a drag.
      *
      * The gesture is pointer events rather than HTML5 drag-and-drop for the
@@ -657,6 +751,7 @@ export class TabStripWidget extends ReactWidget {
             className={'pb-tab' + (active ? ' is-active' : '')}
             onClick={() => this.activateTab(widget)}
             onPointerDown={event => this.beginDrag(widget, event)}
+            onContextMenu={event => this.openTabMenu(widget, event)}
         >
             {widget instanceof WebTabWidget && this.renderTabIcon(widget)}
             <span className='pb-tab-title'>{label}</span>

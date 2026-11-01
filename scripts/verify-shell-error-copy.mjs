@@ -708,6 +708,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Help",
   "Quit ${name} (Ctrl+Q)",
   "${name} (Coming soon)",
+  "Reload",
 ]);
 
 /**

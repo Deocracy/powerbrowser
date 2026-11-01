@@ -174,6 +174,10 @@ export const CHROME_BAR_COPY = Object.freeze({
     // Phase 31 plan 05: a text badge, not a Theia accelerator: the Ctrl+Q key is chrome's reserved <key> row (powerbrowser.js).
     menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,
     comingSoonRow: (label: string) => `${label} (Coming soon)`,
+    // Phase 34 plan 01 (TAB-01, BMK-07): the tab menu's rows (34-UI-SPEC Copywriting Contract). Keyed by row.
+    tabMenu: Object.freeze({
+        reload: 'Reload',
+    }),
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */
