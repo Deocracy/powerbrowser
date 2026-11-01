@@ -89,6 +89,10 @@ FORBIDDEN_PATTERNS=(
   # browser.js registers (webrtc-preview; login-doorhanger-username-field from plan 04) are registered only in
   # PowerBrowserAPI.sys.mjs, each line catalogued.
   'setElementCreationCallback'
+  # 37-REVIEW WR-06: two Phase 37 reaches that are not Services/Cc/Ci-shaped -- the write of the AppWindow-owned
+  # chromehidden attribute and the direct call of the stock module's anchorVisibilityChange -- so the next unrecorded
+  # reach of either needs a row or goes red.
+  'setAttribute("chromehidden"' 'anchorVisibilityChange'
 )
 
 is_conditional_pattern() {
