@@ -62,7 +62,13 @@
  *   remoteness-repro (32-07 Task 1, D-25a/D-25f): the shared-process blank reload, record-only. Eight
  *           sessions (reload and activation, four each), five same-origin tabs per session. Writes the
  *           verdict key only when named on the command line; the default run and --self-test never do.
- *   favicon  PAGE-04 (32-08): the page's data: icon reaches a state push, and a strip row draws it as an <img> with that URL.
+ *           The isolation log is written with `sync` and must hold at least five navigation lines before the trigger (else NOT
+ *           SCORED); a legacy-open control (the pre-afda7df1 open order) must read the phantom about:blank entry, so the
+ *           product path's not-reproduced is read by an instrument that can see the defect.
+ *   remoteness-activeness-probe (32-07 gap closure): record-only, own session, writes its verdict key only when named. One cross-site
+ *           switch of a visible overlay; reads docShellIsActive, renderLayers, the browsing context's isActive and visibility.
+ *   favicon  PAGE-04 (32-08, pill rows added in the gap closure): the page's data: icon reaches a state push, a strip row draws
+ *            it as an <img> with that URL, and so does the tab's row in the Tabs-mode pill list.
  *   reader   PAGE-10 (32-08, 32-07 gap closure): an article page pushes isArticle true, the toggle enables, a click enters the
  *            reader in the same tab (about:reader? in chrome's read) and a click leaves it with Back and Forward as before; a
  *            short page never pushes isArticle true and keeps the toggle disabled. Plant: the signal never reaches a push.
@@ -443,11 +449,43 @@ async function scenarioFavicon(app, origin, plant = false) {
     if (!drawn.includes(favicon)) {
         return 'no strip row renders the pushed favicon as an img (the tab shows the globe instead)';
     }
-    if (plant) {
+    if (plant === true) {
         await probe(app, "document.querySelectorAll('img.pb-tab-favicon').forEach(img => img.setAttribute('src', 'http://127.0.0.1/planted.png')); return true;");
     }
     const after = await settleValue(rowSources, v => Array.isArray(v) && v.includes(favicon));
-    return Array.isArray(after) && after.includes(favicon) ? null : 'no strip row carries the pushed favicon as its img src (a non-data URL is shown in its place)';
+    if (!Array.isArray(after) || !after.includes(favicon)) {
+        return 'no strip row carries the pushed favicon as its img src (a non-data URL is shown in its place)';
+    }
+    // The Tabs-mode pill rows: another tab becomes current, `% ` puts the pill in Tabs mode, and the icon tab is listed
+    // with the pushed icon. The row is found by its title, so a list without the tab cannot pass (the positive control).
+    const other = await openLoaded(app, `${origin}/find`, '/find');
+    await makeCurrent(app, other.tabId);
+    if (await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} the Theia frame could not be focused to type into the pill`);
+    }
+    const typed = await probe(app, `const input = document.querySelector('.pb-chrome-bar-input');
+        if (!input) return false;
+        input.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '% ');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;`);
+    if (typed !== true) {
+        throw new Error(`${BROKEN} the pill is not in the chrome bar`);
+    }
+    const pillRow = () => probe(app, `const row = [...document.querySelectorAll('.pb-chrome-bar-dropdown .pb-chrome-bar-row:not(.is-shimmer)')]
+            .find(r => ((r.querySelector('.pb-chrome-bar-row-title') || {}).textContent || '') === 'Icon fixture');
+        if (!row) return null;
+        const img = row.querySelector('img.pb-chrome-bar-row-icon');
+        return { img: img ? img.getAttribute('src') : null };`);
+    const listed = await settleValue(pillRow, v => v !== null);
+    if (listed === null) {
+        throw new Error(`${BROKEN} Tabs mode lists no row for the icon tab, so its icon cannot be read`);
+    }
+    if (plant === 'pill') {
+        await probe(app, "document.querySelectorAll('.pb-chrome-bar-dropdown img.pb-chrome-bar-row-icon').forEach(img => img.setAttribute('src', 'http://127.0.0.1/planted.png')); return true;");
+    }
+    const row = await settleValue(pillRow, v => v !== null && v.img === favicon);
+    return row && row.img === favicon ? null : `the Tabs-mode pill row for the icon tab does not carry the pushed favicon (img ${JSON.stringify(row && row.img && row.img.slice(0, 40))})`;
 }
 
 /**
@@ -1191,26 +1229,46 @@ async function isolationSince(path, offset) {
     return `current=${m[1]},target=${m[2]},replace=${m[3]}${compatible ? ' compatible=1' : ''}`;
 }
 
-/** The session body: positive controls first, then the trigger, then the reads. Returns { notScored } or { run, logOffset }. */
-async function reproBody(app, pages, trigger, blind, dir, plantBlank = false) {
+/** The CheckIsolationForNavigation lines in the parent log so far (the log is written with `sync`, so a live read sees them). */
+async function isolationLineCount(path) {
+    return path ? (await readFile(path, 'utf8')).split('\n').filter(line => line.includes('CheckIsolationForNavigation ->')).length : 0;
+}
+
+/** Five navigations (the five tabs' loads) must be in the parent log before the trigger, else the isolation read means nothing. */
+const ISOLATION_LINES_MIN = 5;
+
+/** A page load's wait in the repro sessions: a loaded host (the sessions share a machine with builds) can take well over 30 s. */
+const REPRO_LOAD_MS = 90000;
+
+/**
+ * The session body: positive controls first, then the trigger, then the reads. Returns { notScored } or { run, logOffset }.
+ * `legacy` opens the fifth tab the way the pre-afda7df1 first load did: about:blank, then at once a plain navigation that
+ * supersedes the replace-history first load. That is the phantom-about:blank-entry defect, the control the product path is read against.
+ */
+async function reproBody(app, pages, trigger, blind, dir, plantBlank = false, legacy = false) {
     // The blind plant disconnects the request log, so the observer behind getSeen and the initial-GET control cannot see anything.
     const observed = () => (blind ? [] : pages.requests);
     const tabs = [];
     for (let n = 1; n <= 4; n += 1) {
         const tabId = await openWebTab(app, pages.url(`/rr${n}`));
-        if (await waitForPush(app, sameTitled(tabId, `/rr${n}`, `RR ${n}`), { timeoutMs: 30000 }) < 0) {
-            throw new Error(`${BROKEN} page /rr${n} never reached a loaded push with its title`);
+        await armReproOverlay(app, tabId);
+        if (await waitForPush(app, sameTitled(tabId, `/rr${n}`, `RR ${n}`), { timeoutMs: REPRO_LOAD_MS }) < 0) {
+            // What chrome reads for the overlay, so a lost load is told apart from a lost push.
+            throw new Error(`${BROKEN} page /rr${n} never reached a loaded push with its title (${JSON.stringify(await readReproState(app, tabId))}, GETs ${pages.requests.filter(r => r.path === `/rr${n}`).length})`);
         }
         tabs.push(tabId);
         if (trigger === 'activate') {
             await makeCurrent(app, tabId);
         }
     }
-    const fifth = await openWebTab(app, pages.url('/rr5'));
+    const fifth = await openWebTab(app, legacy ? 'about:blank' : pages.url('/rr5'));
     if (!await armReproOverlay(app, fifth)) {
         throw new Error(`${BROKEN} the fifth overlay is missing before the trigger`);
     }
-    const loaded = await waitForPush(app, sameTitled(fifth, '/rr5', 'RR 5'), { timeoutMs: 30000 });
+    if (legacy) {
+        await channelRequest(app, { kind: 'webTabNavigate', tabId: fifth, url: pages.url('/rr5') });
+    }
+    const loaded = await waitForPush(app, sameTitled(fifth, '/rr5', 'RR 5'), { timeoutMs: REPRO_LOAD_MS });
     if (!observed().some(r => r.path === '/rr5')) {
         return { notScored: 'no initial GET for the fifth tab' };
     }
@@ -1226,6 +1284,10 @@ async function reproBody(app, pages, trigger, blind, dir, plantBlank = false) {
         throw new Error(`${BROKEN} the fifth overlay is missing before the trigger`);
     }
     const path = await parentLogOf(dir);
+    const lines = await isolationLineCount(path);
+    if (lines < ISOLATION_LINES_MIN) {
+        return { notScored: `the isolation log holds ${lines} navigation line(s) before the trigger, fewer than ${ISOLATION_LINES_MIN}: the capture is not working` };
+    }
     const logOffset = await logBytes(path);
     const mark = (await pushes(app)).length;
     const start = Date.now();
@@ -1245,7 +1307,7 @@ async function reproBody(app, pages, trigger, blind, dir, plantBlank = false) {
     if (!post) {
         throw new Error(`${BROKEN} the fifth overlay is missing after the trigger`);
     }
-    return { run: { trigger, pre, post, getSeen: observed().some(r => r.path === '/rr5' && r.at >= start) }, logOffset };
+    return { run: { trigger, pre, post, legacy, getSeen: observed().some(r => r.path === '/rr5' && r.at >= start) }, logOffset };
 }
 
 /** True when a page's history holds an about:blank entry after an http entry (a page replaced by about:blank). */
@@ -1255,9 +1317,12 @@ function blankAfterPage(history) {
 }
 
 /** One run's verdict record: blank, and the field list the verdict string quotes. */
-function reproRecord({ trigger, pre, post, getSeen }, isolation) {
+function reproRecord({ trigger, pre, post, getSeen, legacy }, isolation) {
     const historyGained = blankAfterPage(post.history) && !blankAfterPage(pre.history);
-    const blank = post.url === 'about:blank' || historyGained || (trigger === 'reload' && !getSeen);
+    // The legacy control's symptom is the phantom about:blank entry the old open order leaves (live: `about:blank,http@1`,
+    // the entry before the page, not after it), so it is read on the final history alone.
+    const phantom = post.history.split('@')[0].split(',').includes('about:blank');
+    const blank = legacy ? phantom : post.url === 'about:blank' || historyGained || (trigger === 'reload' && !getSeen);
     const pairs = [
         ['url', post.url],
         ['remoteType', post.remoteType],
@@ -1279,19 +1344,24 @@ function reproRecord({ trigger, pre, post, getSeen }, isolation) {
  * One record-only run in its own session. Returns { notScored } when the observers did not prove themselves
  * (a harness fault, never a verdict), else { run } with the primitives the verdict is built from.
  */
-async function reproSession(trigger, blind, plantBlank = false) {
+async function reproSession(trigger, blind, plantBlank = false, { legacy = false, unsynced = false } = {}) {
     const dir = await mkdtemp(join(tmpdir(), 'pb-32-07-iso-'));
     const previous = { log: process.env.MOZ_LOG, file: process.env.MOZ_LOG_FILE };
-    process.env.MOZ_LOG = 'ProcessIsolation:5';
+    // `sync` writes each line as it is logged: without it the lines sit in a buffer a fast shutdown (_exit) or a kill never flushes.
+    process.env.MOZ_LOG = unsynced ? 'ProcessIsolation:5' : 'sync,ProcessIsolation:5';
     process.env.MOZ_LOG_FILE = join(dir, 'iso-%PID.moz_log');
     const pages = await serveNavPages(reproPages());
     try {
-        const outcome = await withProbeShell(app => reproBody(app, pages, trigger, blind, dir, plantBlank));
+        const outcome = await withProbeShell(app => reproBody(app, pages, trigger, blind, dir, plantBlank, legacy));
         if (outcome.notScored) {
             return { notScored: outcome.notScored };
         }
         // The browser has exited, so the parent log is complete.
         const isolation = await isolationSince(await parentLogOf(dir), outcome.logOffset);
+        // A reload navigates, so its own line must be in the log: a missing tail is what an unsynced, killed browser loses.
+        if (trigger === 'reload' && isolation === null) {
+            return { notScored: 'the reload\'s own navigation line is not in the isolation log: the capture is not working' };
+        }
         return { run: reproRecord(outcome.run, isolation) };
     } finally {
         if (previous.log === undefined) {
@@ -1322,7 +1392,21 @@ function reproVerdict(runs) {
         + first('R', runs.reload) + first('A', runs.activate);
 }
 
-/** Eight sessions, four per trigger. Writes the verdict key; a run that cannot score is a NOT SCORED failure, no verdict. */
+/**
+ * The legacy-open control: the pre-fix open order must read `reproduced` (a phantom about:blank entry after the page), or
+ * this harness cannot show the defect it records as absent on the product path. Null when it does; else the reason.
+ * `legacy` false is the plant: the product open order, which leaves no phantom entry, so the control must fail.
+ */
+async function legacyOpenControl(legacy) {
+    const outcome = await reproSession('reload', false, false, { legacy });
+    if (outcome.notScored) {
+        return outcome.notScored;
+    }
+    console.log(`  legacy-open control (${legacy ? 'legacy order' : 'product order'}): blank=${outcome.run.blank ? 1 : 0} ${outcome.run.fields}`);
+    return outcome.run.blank ? null : `the legacy-open control did not reproduce the phantom about:blank entry (${outcome.run.fields})`;
+}
+
+/** Eight sessions, four per trigger, then the legacy-open control. Writes the verdict key; a run that cannot score is a NOT SCORED failure, no verdict. */
 async function scenarioRemotenessRepro() {
     const runs = { reload: [], activate: [] };
     for (const trigger of REPRO_TRIGGERS) {
@@ -1336,6 +1420,11 @@ async function scenarioRemotenessRepro() {
             // Every run's fields, blank or clean: a clean verdict must show what the observers read, not only that nothing matched.
             console.log(`  run ${trigger} ${i + 1}/${REPRO_RUNS}: blank=${outcome.run.blank ? 1 : 0} ${outcome.run.fields}`);
         }
+    }
+    const control = await legacyOpenControl(true);
+    if (control) {
+        console.log(`harness: ${control}`);
+        return `NOT SCORED: ${control}`;
     }
     const verdict = reproVerdict(runs);
     await recordVerdict('remoteness-repro', verdict);
@@ -1445,12 +1534,55 @@ async function scenarioRemotenessRegression(plant = false) {
     return null;
 }
 
+/**
+ * remoteness-activeness-probe (32-07 gap closure, record-only): task 3 (f)'s separate hypothesis, that a process switch
+ * leaves the new docShell inactive while the overlay is visible. One visible overlay navigates cross-site (a second
+ * host that network.dns.localDomains resolves to loopback). The positive control is didChange above 0 (a remoteness switch
+ * happened); the read is docShellIsActive, renderLayers, the browsing context's own isActive and the overlay's visibility.
+ * Verdict `inactive-after-switch` only when active=0 with visible=1, else `active-after-switch`. Writes the key only when named.
+ */
+async function scenarioActivenessProbe() {
+    const pages = await serveNavPages(reproPages());
+    const port = new URL(pages.origin).port;
+    try {
+        return await withProbeShell(async app => {
+            const tabId = await openWebTab(app, pages.url('/rr1'));
+            if (await waitForPush(app, sameTitled(tabId, '/rr1', 'RR 1'), { timeoutMs: 30000 }) < 0) {
+                throw new Error(`${BROKEN} the first page never loaded`);
+            }
+            await armReproOverlay(app, tabId);
+            await makeCurrent(app, tabId);
+            const before = await readReproState(app, tabId);
+            const mark = (await pushes(app)).length;
+            await channelRequest(app, { kind: 'webTabNavigate', tabId, url: `http://pb-other.test:${port}/rr2` });
+            if (await waitForPush(app, sameTitled(tabId, '/rr2', 'RR 2'), { from: mark, timeoutMs: 30000 }) < 0) {
+                return `NOT SCORED: the cross-site page never loaded (the second host did not resolve)`;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            const after = await readReproState(app, tabId);
+            const bcActive = await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o && o.browsingContext ? o.browsingContext.isActive === true : null;`);
+            const switched = after.didChange - before.didChange;
+            if (switched < 1) {
+                return `NOT SCORED: no process switch happened (didChange=${switched}), so activeness after a switch was not read`;
+            }
+            const verdict = after.active === 0 && after.visible === 1 ? 'inactive-after-switch' : 'active-after-switch';
+            const fields = `didChange=${switched} remoteType=${after.remoteType} active=${after.active} renderLayers=${after.renderLayers} bcActive=${bcActive === true ? 1 : 0} visible=${after.visible}`;
+            await recordVerdict('remoteness-activeness-probe', `${verdict} ${fields}`);
+            console.log(`  verdict remoteness-activeness-probe: ${verdict} ${fields}`);
+            return null;
+        }, { extraPrefs: { 'network.dns.localDomains': 'pb-other.test' } });
+    } finally {
+        await pages.close();
+    }
+}
+
 /** Scenarios that open their own sessions, so main runs them without the shared runSession wrapper. */
-const SELF_SESSIONED = new Set(['remoteness-repro', 'remoteness-regression']);
+const SELF_SESSIONED = new Set(['remoteness-repro', 'remoteness-regression', 'remoteness-activeness-probe']);
 
 const SCENARIOS = {
     'remoteness-repro': () => scenarioRemotenessRepro(),
     'remoteness-regression': () => scenarioRemotenessRegression(false),
+    'remoteness-activeness-probe': () => scenarioActivenessProbe(),
     find: (app, fx) => scenarioFind(app, fx.origin),
     zoom: (app, fx) => scenarioZoom(app, fx.origin),
     audio: (app, fx) => scenarioAudio(app, fx.origin),
@@ -1537,6 +1669,12 @@ const PLANTS = [
         expect: 'no strip row carries the pushed favicon',
     },
     {
+        plant: 'favicon-pill-http-src',
+        target: 'favicon',
+        run: (app, fx) => scenarioFavicon(app, fx.origin, 'pill'),
+        expect: 'pill row for the icon tab does not carry the pushed favicon',
+    },
+    {
         plant: 'reader-signal-dropped',
         target: 'reader',
         run: (app, fx) => scenarioReader(app, fx.origin, true),
@@ -1581,6 +1719,22 @@ const PLANTS = [
         control: async () => (await reproSession('reload', false)).notScored ?? null,
         session: async () => (await reproSession('reload', true)).notScored ?? null,
         expect: 'no initial GET for the fifth tab',
+    },
+    {
+        // The isolation log written without `sync` is lost buffered: the capture control must refuse to score it.
+        plant: 'repro-log-unsynced',
+        target: 'remoteness-repro',
+        control: async () => (await reproSession('reload', false)).notScored ?? null,
+        session: async () => (await reproSession('reload', false, false, { unsynced: true })).notScored ?? null,
+        expect: 'the capture is not working',
+    },
+    {
+        // The product open order leaves no phantom entry, so run as the control it must fail.
+        plant: 'legacy-control-clean',
+        target: 'remoteness-repro',
+        control: async () => legacyOpenControl(true),
+        session: async () => legacyOpenControl(false),
+        expect: 'did not reproduce the phantom',
     },
 ];
 
