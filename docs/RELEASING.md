@@ -1279,16 +1279,58 @@ reverses D-77 and both `rebase-upstream.yml` and this section change together.
 
 ### Key rotation
 
-One key fills both updater slots (R12), so a rotation needs a client rebuild:
-create the new store in a new directory (never reuse the live directory; the
-ceremony block refuses to run over an existing store), ship the transition release
-signed with the **old** key whose updater embeds the new certificate
-`powerbrowser/packaging/mar/mar-primary.der`, and only then switch signing to the
-new store. The row that proves signing is `ng065-mar-signature-enforced` (a
-fork-signed MAR applies; unsigned and foreign-key MARs are refused with
-`CERT_VERIFY_ERROR`; a wrong-channel MAR is refused with
-`MAR_CHANNEL_MISMATCH_ERROR`). There is no rotation runbook beyond this paragraph
-today; writing one is open work.
+PowerBrowser's updater trusts two keys, one per certificate slot: the primary signs
+every release, and the offline secondary signs nothing until it is needed (see
+[The MAR key ceremony and custody](#the-mar-key-ceremony-and-custody)). Installed
+copies trust only the certificates their own updater was built with, so a new key
+reaches users only through a release that the key they already trust has signed. The
+row that proves the updater's trust is `ng065-mar-signature-enforced`: a fork-signed
+MAR applies; unsigned and foreign-key MARs are refused with `CERT_VERIFY_ERROR`; a
+wrong-channel MAR is refused with `MAR_CHANNEL_MISMATCH_ERROR`; and its fifth case, a
+MAR signed by the secondary key only, must be accepted. The fifth case lands with the
+tracked `mar-secondary.der`; until then the row runs the first four.
+
+Runbook for replacing the primary key:
+
+1. **New store.** Run the primary ceremony block into a new directory, never the live
+   `mar-key/` one (the guard line refuses an existing store), with the two mandatory
+   offline `.p12` copies, and record the date in the ceremony record. Next step: confirm
+   both copies exist, then continue.
+2. **Transition release.** Commit the new certificate as the primary slot's DER and
+   regenerate patch `030` as in the ceremony section, so the transition build's updater
+   embeds the new certificate. Sign that release with the **old** key: every installed
+   copy still trusts only the old key and the secondary. Next step: open the `release`
+   environment approval for the transition release.
+3. **Descriptor gate.** `descriptor-monotonic` must be green on the transition
+   release's descriptors: its buildID is strictly newer than every published buildID
+   for the same version, so no client is offered an older build. Next step: run
+   `scripts/verify-platform.sh --only descriptor-monotonic` and require PASS before
+   publishing.
+4. **Secret switch.** After the transition release is published, replace
+   `MAR_SIGNING_P12_B64` and `MAR_SIGNING_P12_PASSWORD` with the new `.p12` and its
+   password, using the procedure in [Secrets inventory](#secrets-inventory). Next step:
+   cut the next release, the first one signed with the new key.
+5. **Retire the old store.** Only after that next release has applied over the
+   transition release (the N to N+1 hop that `mar-update-hop` drills) is the old key
+   retired. Next step: run the hop drill, then retire the old store and its two
+   offline media.
+
+If the primary key is lost or compromised, the secondary key is the reason PowerBrowser
+installs are not stranded: every build that embeds `mar-secondary.der` already trusts it,
+so the transition release in step 2 is signed with the secondary key instead of the
+old primary.
+
+**Open: the signing job pins the primary key.** `release.yml`'s signing step names the
+nickname `powerbrowser-mar`, and its verify step imports
+`powerbrowser/packaging/mar/mar-primary.der`. Step 2 needs a run signed with a key whose
+certificate is no longer that file (the old primary), and the secondary path needs the
+nickname `powerbrowser-mar-secondary`. Neither run is possible until the workflow can
+name the signing key and its certificate for one run; that change is not built. Next
+step: plan that workflow change before the first rotation.
+
+**Rollback is a separate path.** A deliberate downgrade is possible only through the
+owner-dispatched `--rollback-to` flag on the withdraw and descriptor path, which Phase
+49/50 owns; Phase 44 built only the refusal, `descriptor-monotonic`.
 
 ### Runner upkeep
 
