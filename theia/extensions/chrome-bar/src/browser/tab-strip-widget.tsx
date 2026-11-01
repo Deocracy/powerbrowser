@@ -664,11 +664,20 @@ export class TabStripWidget extends ReactWidget {
             {widget instanceof WebTabWidget && (widget.soundPlaying || widget.audioMuted) && <span
                 className={'pb-tab-audio' + (widget.audioMuted ? ' is-muted' : '')}
                 role='button'
+                tabIndex={0}
                 aria-label={widget.audioMuted ? CHROME_BAR_COPY.unmuteTab : CHROME_BAR_COPY.muteTab}
                 title={widget.audioMuted ? CHROME_BAR_COPY.unmuteTab : CHROME_BAR_COPY.muteTab}
                 onClick={event => {
                     event.stopPropagation();
                     void widget.setMuted(!widget.audioMuted);
+                }}
+                onKeyDown={event => {
+                    // 32-REVIEW WR-11: the mark is a button for the keyboard too.
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void widget.setMuted(!widget.audioMuted);
+                    }
                 }}
                 onPointerDown={event => event.stopPropagation()}
             >

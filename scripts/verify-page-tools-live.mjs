@@ -458,7 +458,25 @@ async function scenarioAudio(app, origin, page = '/media') {
         return 'Ctrl+M in a focused page produced no shortcut push: the muteToggle row did not relay';
     }
     const keyMuted = await waitForPush(app, stateOf(tabId, p => p.audioMuted === true), { from: toggled, timeoutMs: 10000 });
-    return keyMuted < 0 ? 'Ctrl+M relayed, but no audioMuted push followed' : null;
+    if (keyMuted < 0) {
+        return 'Ctrl+M relayed, but no audioMuted push followed';
+    }
+    // 32-REVIEW WR-11: the strip's audio mark takes keyboard focus, and Enter on it unmutes the tab.
+    await makeCurrent(app, tabId);
+    if (await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} the Theia frame could not be focused to reach the audio mark`);
+    }
+    const focused = await settleValue(() => probe(app, "const m = document.querySelector('.pb-tab-audio.is-muted'); if (!m) return null; m.focus(); return document.activeElement === m;"), v => v !== null);
+    if (focused === null) {
+        throw new Error(`${BROKEN} the strip shows no muted audio mark for the muted tab`);
+    }
+    if (focused !== true) {
+        return 'the tab audio mark cannot take keyboard focus';
+    }
+    const enterMark = (await pushes(app)).length;
+    await pressKey(app, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    const keyUnmuted = await waitForPush(app, stateOf(tabId, p => p.audioMuted === false), { from: enterMark, timeoutMs: 10000 });
+    return keyUnmuted < 0 ? 'Enter on the focused tab audio mark did not unmute the tab' : null;
 }
 
 /**

@@ -390,6 +390,8 @@ export class WebTabChannel {
             }
             const iconBefore = widget.favicon;
             const crashedBefore = widget.crashed;
+            // 32-REVIEW WR-11: the strip's audio mark follows the mute and playback state too.
+            const audioBefore = `${widget.audioMuted}/${widget.soundPlaying}`;
             widget.applyState({
                 url: typeof detail.url === 'string' ? detail.url : widget.url,
                 title: typeof detail.title === 'string' ? detail.title : '',
@@ -421,7 +423,7 @@ export class WebTabChannel {
                 isReaderMode: typeof detail.isReaderMode === 'boolean' ? detail.isReaderMode : widget.isReaderMode,
                 isArticle: typeof detail.isArticle === 'boolean' ? detail.isArticle : widget.isArticle,
             });
-            if (iconBefore !== widget.favicon || crashedBefore !== widget.crashed) {
+            if (iconBefore !== widget.favicon || crashedBefore !== widget.crashed || audioBefore !== `${widget.audioMuted}/${widget.soundPlaying}`) {
                 this.tabStatusEmitter.fire(widget);
             }
         });
