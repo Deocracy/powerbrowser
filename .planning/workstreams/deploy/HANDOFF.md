@@ -75,8 +75,10 @@ Haiku/Sonnet default for this run).
   then passed. Pre-existing.
 - `descriptor-monotonic` prints SKIP with zero candidates, but the driver summary shows PASS because
   its verdict is the exit code.
-- The default `nix develop` / direnv shell fails: it fetches a release tarball from GitHub that 404s
-  because no release exists yet. `.#theia` and `.#firefox` are unaffected.
+- RESOLVED in 67e2abe6: the default `nix develop` / direnv shell failed because the flake had no
+  `devShells.default`, so nix fell back to `packages.default`, whose Release tarball fetch 404s before
+  a Release exists. `devShells.default` is now the theia shell; the `nix-default-shell` quick row and
+  its self-test guard it.
 - The untracked `.planning/workstreams/deploy/config.json` and `.planning/research/.cache/*` were
   present at session start and were left untouched.
 

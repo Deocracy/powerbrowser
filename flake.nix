@@ -145,6 +145,12 @@
               echo "PowerBrowser firefox-macos shell ready. Cross-build with MOZCONFIG=powerbrowser/packaging/mozconfig-macos-<arch> from the repo root; signing and notarization are owner actions." >&2
             '';
           };
+
+        # Plain `nix develop` and .envrc's `use flake` look up devShells.default first and, when it
+        # is absent, fall back to packages.default -- the repacked Release tarball, whose fetchurl
+        # 404s until a Release is published. The theia shell is the cheap one the generator and the
+        # quick tier need, so it is the default.
+        default = self.devShells.${system}.theia;
       };
 
       # PKG-19: the repacked Release tarball. The sidecar takes the same nodejs_24 binding as the shells.
