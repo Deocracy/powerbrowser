@@ -712,6 +712,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Mute Tab",
   "Unmute Tab",
   "Pin Tab",
+  "Unpin Tab",
   "Duplicate Tab",
   "Bookmark Tab",
   "Bookmark All Tabs",
@@ -730,6 +731,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Double-click to open a new tab",
   "${name} can't open that link in a tab. Drop a link to a web page instead.",
   "List All Tabs",
+  "${name}, pinned",
 ]);
 
 /**

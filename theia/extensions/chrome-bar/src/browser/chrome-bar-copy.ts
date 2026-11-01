@@ -180,6 +180,7 @@ export const CHROME_BAR_COPY = Object.freeze({
         mute: 'Mute Tab',
         unmute: 'Unmute Tab',
         pin: 'Pin Tab',
+        unpin: 'Unpin Tab',
         duplicate: 'Duplicate Tab',
         bookmark: 'Bookmark Tab',
         bookmarkAll: 'Bookmark All Tabs',
@@ -202,6 +203,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     dropTabFailed: (subject: string) => `${subject} can't open that link in a tab. Drop a link to a web page instead.`,
     // Phase 34 plan 02 (TAB-04): the overflow chevron's tooltip and label.
     listAllTabs: 'List All Tabs',
+    // Phase 34 plan 03 (TAB-05): a pinned tab shows its icon only; its accessible name keeps the label and says so.
+    pinnedTabLabel: (label: string) => `${label}, pinned`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

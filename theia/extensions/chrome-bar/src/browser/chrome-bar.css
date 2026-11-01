@@ -888,6 +888,23 @@
     outline-offset: 2px;
 }
 
+/* TAB-05 (34-03, D-08): the pinned block leads the row and stays put while the row scrolls under it; a 1px
+   separator follows the last pinned tab. */
+.pb-tab-pinned-block {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    display: flex;
+    flex: none;
+    align-self: stretch;
+    align-items: flex-end;
+    gap: 2px;
+    padding-right: 4px;
+    margin-right: 2px;
+    border-right: 1px solid var(--color-border, #3f3e4a);
+    background: var(--color-bg, #1c1b22);
+}
+
 }
 
 /* GUI-06 (13-UI-SPEC "Single chrome bar, full-bleed, 40px", ratified order
@@ -1049,6 +1066,23 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
 .pb-tab-close:focus-visible {
     outline: 2px solid var(--color-primary, #00a6f5);
     outline-offset: 2px;
+}
+
+/* TAB-05 (34-03): a pinned tab is its icon only, 32px wide; its tooltip and accessible name keep the label.
+   Unlayered beside the .pb-tab rules it narrows: a layered rule loses to an unlayered one whatever its
+   specificity, so min-width and padding would not move from inside the layer. */
+.pb-tab.is-pinned {
+    justify-content: center;
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    padding: 0;
+    gap: 0;
+}
+
+.pb-tab.is-pinned .pb-tab-title,
+.pb-tab.is-pinned .pb-tab-audio {
+    display: none;
 }
 
 /*-----------------------------------------------------------------------------

@@ -46,6 +46,22 @@ export const SHELL_STATE_WILL_FLUSH_TIMEOUT_MS = 2000;
 export const SHELL_FLUSH_KIND = 'flushShellState';
 /** The only host the actor child loads on: its `matches` pin, GROUP_ACTOR_THEIA_ORIGIN in PowerBrowserAPI.sys.mjs. */
 export const SHELL_FRAME_HOST = '127.0.0.1';
+/**
+ * TAB-05 (34-03, D-08): the shell-state map key holding the strip's pinned tabs, in strip order. It rides the
+ * existing shellStateSave write (debounced save, quit flush, unload write); no store kind and no tabs.sqlite column.
+ */
+export const PINNED_TABS_STORAGE_KEY = 'powerbrowser.tab-strip.pinnedIds';
+/** T-34-05: the most pins read back; the strip writes only open tabs, so a longer list is not one it wrote. */
+const PINNED_TABS_MAX = 500;
+
+/**
+ * One pinned tab: its GroupModel.keyOf key (the only identity) and, for a web tab, the page to reopen it on when
+ * the launch restore did not bring it back. The URL is never the key: two tabs on one URL pin independently.
+ */
+export interface PinnedTab {
+    key: string;
+    url?: string;
+}
 
 interface ShellStateReply {
     ok: boolean;
@@ -170,6 +186,22 @@ export class ProfileStorageService extends LocalStorageService {
     /** Tells chrome the flush it asked for is done (PowerBrowserAPI.flushShellState waits on it). */
     async acknowledgeFlush(flushId: string): Promise<void> {
         await this.request({ kind: 'shellFlushed', flushId });
+    }
+
+    /** TAB-05 (34-03): the stored pins, validated: a malformed entry is dropped, never trusted (the map is a profile file). */
+    async readPinnedIds(): Promise<PinnedTab[]> {
+        const pinnedIds = await this.getData<unknown>(PINNED_TABS_STORAGE_KEY);
+        return (Array.isArray(pinnedIds) ? pinnedIds : []).slice(0, PINNED_TABS_MAX).flatMap(item => {
+            const entry = typeof item === 'object' && item !== null ? item as Record<string, unknown> : {};
+            return typeof entry.key === 'string' && entry.key
+                ? [{ key: entry.key, ...(typeof entry.url === 'string' ? { url: entry.url } : {}) }]
+                : [];
+        });
+    }
+
+    /** TAB-05 (34-03): replaces the stored pins; an empty list removes the key. Saved by the map's debounced save. */
+    writePinnedIds(pinnedIds: PinnedTab[]): Promise<void> {
+        return this.setData(PINNED_TABS_STORAGE_KEY, pinnedIds.length ? pinnedIds : undefined);
     }
 
     /** NG-034: asks chrome to restore `rowKey`'s saved back/forward history on that tab's next open. */

@@ -9,6 +9,8 @@ import { Message } from '@theia/core/shared/@lumino/messaging';
 import { DockPanel, TabBar } from '@theia/core/shared/@lumino/widgets';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
+import { SetupsService } from '@powerbrowser/modes/lib/browser/setups-service';
+import { PinnedTab, ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profile-storage';
 import { CRASHED_COPY, WebTabChannel, WebTabOpenHandler, WebTabReply, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { CHROME_BAR_COPY, appSubject } from './chrome-bar-copy';
 import {
@@ -160,6 +162,14 @@ export class TabStripWidget extends ReactWidget {
     @inject(WebTabOpenHandler)
     protected readonly opener: WebTabOpenHandler;
 
+    /** TAB-05 (34-03): the shell-state map the pins persist in. */
+    @inject(ProfileStorageService)
+    protected readonly storage: ProfileStorageService;
+
+    /** TAB-05: the launch restore, which the pin restore waits for so it reopens only what that restore did not. */
+    @inject(SetupsService)
+    protected readonly setups: SetupsService;
+
     /**
      * BMK-07 (34-01): set at startup by the chrome-bar contribution to the one Phase 33 bookmarkPage call site in
      * chrome-bar-widget.tsx; undefined while that store method is absent, which renders both Bookmark rows disabled.
@@ -184,6 +194,18 @@ export class TabStripWidget extends ReactWidget {
 
     /** TAB-04: re-measures the overflow when the strip's width changes (window resize, mode switch showing the strip). */
     protected readonly resizes = new ResizeObserver(() => this.measureOverflow());
+
+    /**
+     * TAB-05 (D-08): the pinned tabs, by GroupModel.keyOf and nothing else (never a tab id, never a URL), so two
+     * tabs on one URL pin independently. Strip-local state, persisted in the shell-state map by savePins.
+     */
+    protected readonly pinnedIds = new Set<string>();
+
+    /** TAB-05: false until the stored pins are restored; before then nothing may overwrite the stored list. */
+    protected pinsRestored = false;
+
+    /** TAB-05: the pin restore, settled when the stored pins are back (the live pin-restore scenario awaits it). */
+    pinRestore: Promise<void> = Promise.resolve();
 
     protected readonly toDispose = new DisposableCollection();
 
@@ -215,6 +237,9 @@ export class TabStripWidget extends ReactWidget {
                 }
             },
         });
+        // TAB-05: pins come back after the launch restore, and the quit flush writes them with each tab's last URL.
+        this.pinRestore = this.setups.sessionRestored.then(() => this.restorePins());
+        this.toDispose.push(this.storage.onWillFlush(event => event.waitUntil(this.savePins())));
         this.shell.mainPanel.onDidChangeCurrent(() => this.update());
         // A split moves a tab between panes without adding or removing it,
         // and which pane a tab is in is exactly what this strip now shows.
@@ -565,9 +590,15 @@ export class TabStripWidget extends ReactWidget {
         const tabs = this.shownTabs();
         const at = tabs.indexOf(widget);
         const closable = (list: Widget[]) => list.filter(tab => tab.title.closable);
-        const others = closable(tabs.filter(tab => tab !== widget));
-        const left = closable(at < 0 ? [] : tabs.slice(0, at));
-        const right = closable(at < 0 ? [] : tabs.slice(at + 1));
+        // TAB-05 (D-08): the range closes leave pinned tabs open.
+        const ranged = (list: Widget[]) => closable(list).filter(tab => !this.isPinned(tab));
+        const others = ranged(tabs.filter(tab => tab !== widget));
+        const left = ranged(at < 0 ? [] : tabs.slice(0, at));
+        const right = ranged(at < 0 ? [] : tabs.slice(at + 1));
+        // TAB-05: pinned and unpinned tabs each move within their own block; the pinned block leads.
+        const pinned = this.isPinned(widget);
+        const block = tabs.filter(tab => this.isPinned(tab) === pinned);
+        const place = block.indexOf(widget);
         const duplicates = closable(tabs.filter(tab => tab !== widget && tab instanceof WebTabWidget && tab.url === web?.url));
         const pages = tabs.filter((tab): tab is WebTabWidget => tab instanceof WebTabWidget && isHttp(tab.url));
         const bookmark = this.bookmarkTabs;
@@ -586,10 +617,11 @@ export class TabStripWidget extends ReactWidget {
                 run: async () => settled(await web!.setMuted(!web!.audioMuted)),
             },
             {
-                // shortcut: disabled until 34-03 lands the pin state (pinnedIds keyed by GroupModel.keyOf) it toggles.
-                id: 'pin', contract: 'Pin', label: COPY.pin, icon: 'codicon codicon-pin', group: 0,
-                enabled: false,
-                run: async () => undefined,
+                // TAB-05 (34-03): toggles the tab's keyOf key in pinnedIds; strip-local, so no command and no kind.
+                id: 'pin', contract: 'Pin', label: pinned ? COPY.unpin : COPY.pin,
+                icon: pinned ? 'codicon codicon-pinned' : 'codicon codicon-pin', group: 0,
+                enabled: at >= 0,
+                run: async () => this.togglePin(widget),
             },
             {
                 id: 'duplicate', contract: 'Duplicate', label: COPY.duplicate, group: 0,
@@ -611,13 +643,13 @@ export class TabStripWidget extends ReactWidget {
             },
             {
                 id: 'move-start', contract: 'Move', label: COPY.moveToStart, icon: 'codicon codicon-arrow-left', group: 2,
-                command: CHROME_BAR_TAB_MOVE_START_COMMAND_ID, enabled: at > 0,
-                run: async () => this.moveInBar(widget, 0),
+                command: CHROME_BAR_TAB_MOVE_START_COMMAND_ID, enabled: place > 0,
+                run: async () => this.reorderTo(widget, block[0]),
             },
             {
                 id: 'move-end', contract: 'Move', label: COPY.moveToEnd, icon: 'codicon codicon-arrow-right', group: 2,
-                command: CHROME_BAR_TAB_MOVE_END_COMMAND_ID, enabled: at >= 0 && at < tabs.length - 1,
-                run: async () => this.moveInBar(widget, Infinity),
+                command: CHROME_BAR_TAB_MOVE_END_COMMAND_ID, enabled: place >= 0 && place < block.length - 1,
+                run: async () => this.reorderTo(widget, pinned ? tabs.find(tab => !this.isPinned(tab)) : undefined),
             },
             {
                 id: 'close-others', contract: 'Close Others', label: COPY.closeOthers, group: 3,
@@ -667,6 +699,98 @@ export class TabStripWidget extends ReactWidget {
         const bar = this.primaryBar();
         if (bar && bar.titles.includes(widget.title)) {
             bar.insertTab(index, widget.title);
+            this.update();
+        }
+    }
+
+    /** TAB-05 (D-08, C-01): a tab's identity in strip state. GroupModel.keyOf only: never a tab id, never a URL. */
+    protected tabKey(widget: Widget): string {
+        return this.groups.keyOf(widget);
+    }
+
+    /** TAB-05: whether `widget` is pinned. */
+    isPinned(widget: Widget): boolean {
+        return this.pinnedIds.has(this.tabKey(widget));
+    }
+
+    /** Every open main-area tab, including those folded into a collapsed stack (detached, not closed). */
+    protected openTabs(): Widget[] {
+        const folded = this.collapsed?.widgets.filter(widget => !widget.isDisposed) ?? [];
+        return [...this.shell.mainPanel.widgets(), ...folded]
+            .filter(widget => !TabStripWidget.MODE_SURFACES.includes(widget.id));
+    }
+
+    /** A closed tab leaves the strip state: its pin (the pin store stays bounded by open tabs, T-34-05). */
+    protected readonly forgetTab = (widget: Widget): void => {
+        this.pinnedIds.delete(this.tabKey(widget));
+        void this.savePins();
+        this.update();
+    };
+
+    /** Forgets `widget` when it closes. Lumino connects a slot once, so watching twice is harmless. */
+    protected watch(widget: Widget): void {
+        widget.disposed.connect(this.forgetTab);
+    }
+
+    /**
+     * TAB-05 (34-UI-SPEC): Pin puts the tab last in the pinned block, Unpin puts it first after the block (Firefox).
+     * The block's order is the home pane TabBar's, so the pins lead the bar and List All Tabs and reorder see them first.
+     */
+    protected togglePin(widget: Widget): void {
+        if (this.pinnedIds.delete(this.tabKey(widget))) {
+            this.reorderTo(widget, this.shownTabs().find(tab => tab !== widget && !this.isPinned(tab)));
+        } else {
+            this.pinnedIds.add(this.tabKey(widget));
+            this.watch(widget);
+            this.reorderTo(widget, this.shownTabs().find(tab => !this.isPinned(tab)));
+        }
+        void this.savePins();
+        this.update();
+    }
+
+    /**
+     * TAB-05 (D-08): writes the pins, in strip order, to the shell-state map. Built from the open tabs, never from
+     * pinnedIds alone, so the store holds only open tabs (T-34-05); a web tab carries its current page for reopening.
+     */
+    protected async savePins(): Promise<void> {
+        if (!this.pinsRestored) {
+            return;
+        }
+        const pinnedIds: PinnedTab[] = this.openTabs().filter(widget => this.pinnedIds.has(this.tabKey(widget)))
+            .map(widget => ({ key: this.tabKey(widget), ...(widget instanceof WebTabWidget ? { url: widget.url } : {}) }));
+        await this.storage.writePinnedIds(pinnedIds);
+    }
+
+    /**
+     * TAB-05 (D-08, W1): after the launch restore, each stored pin re-pins the open tab whose own key it is. A web
+     * tab that restore did not bring back reopens on its stored row key (WebTabOpenHandler.openUrl(url, rowKey), so
+     * its rowKey and keyOf equal the stored key). A stored key no open tab carries is dropped. The pins then lead
+     * the bar in stored order, and the tab that was current stays current.
+     */
+    protected async restorePins(): Promise<void> {
+        const current = this.shell.mainPanel.currentTitle?.owner;
+        const restored: Widget[] = [];
+        try {
+            for (const entry of await this.storage.readPinnedIds()) {
+                let widget = this.openTabs().find(tab => this.tabKey(tab) === entry.key);
+                if (!widget && entry.url && isHttp(entry.url)) {
+                    widget = await this.opener.openUrl(entry.url, entry.key).catch(() => undefined);
+                }
+                if (widget && this.tabKey(widget) === entry.key && !restored.includes(widget)) {
+                    this.pinnedIds.add(this.tabKey(widget));
+                    this.watch(widget);
+                    restored.push(widget);
+                }
+            }
+            restored.forEach((widget, index) => this.moveInBar(widget, index));
+            if (current && !current.isDisposed && restored.length) {
+                await this.shell.activateWidget(current.id);
+            }
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] restoring pinned tabs failed:', error instanceof Error ? error.name : typeof error);
+        } finally {
+            this.pinsRestored = true;
+            void this.savePins();
             this.update();
         }
     }
@@ -1071,7 +1195,9 @@ export class TabStripWidget extends ReactWidget {
 
     /** The tabs the strip shows, in order, given the current widget. */
     protected stripTabs(current: Widget | undefined): Widget[] {
-        return this.mainTabs().filter(widget => this.groups.showsInStrip(widget, current));
+        const tabs = this.mainTabs().filter(widget => this.groups.showsInStrip(widget, current));
+        // TAB-05: the pinned block leads, whatever a drag did to the bar order.
+        return [...tabs.filter(tab => this.isPinned(tab)), ...tabs.filter(tab => !this.isPinned(tab))];
     }
 
     /** The tabs the strip shows right now. The current widget decides membership (PAN-03), never a menu's target. */
@@ -1129,7 +1255,11 @@ export class TabStripWidget extends ReactWidget {
             onDragOver={event => this.onStripDragOver(event)}
             onDrop={event => { void this.onStripDrop(event); }}
         >
-            {tabs.map((widget, index) => this.renderTab(widget, widget === current, index === tabs.length - 1))}
+            {/* TAB-05: the pinned block, sticky at the row's start with a separator after it, so pins never scroll away. */}
+            {tabs.some(tab => this.isPinned(tab)) && <div className='pb-tab-pinned-block' role='presentation'>
+                {tabs.filter(tab => this.isPinned(tab)).map(widget => this.renderTab(widget, widget === current, widget === tabs[tabs.length - 1]))}
+            </div>}
+            {tabs.filter(tab => !this.isPinned(tab)).map(widget => this.renderTab(widget, widget === current, widget === tabs[tabs.length - 1]))}
             {stack.length > 0 && <div
                 role='tab'
                 aria-selected={!this.collapsed}
@@ -1183,6 +1313,7 @@ export class TabStripWidget extends ReactWidget {
 
     protected renderTab(widget: Widget, active: boolean, last: boolean): React.ReactNode {
         const label = widget.title.label || widget.id;
+        const pinned = this.isPinned(widget);
         // TAB-02: the reorder's dragged tab, and the 2px drop indicator before the target or after the last tab.
         const aim = this.reorder;
         const drag = aim?.widget === widget ? ' is-dragging' : '';
@@ -1192,15 +1323,18 @@ export class TabStripWidget extends ReactWidget {
             role='tab'
             aria-selected={active}
             title={label}
+            aria-label={pinned ? CHROME_BAR_COPY.pinnedTabLabel(label) : undefined}
             data-pb-tab={widget.id}
-            className={'pb-tab' + (active ? ' is-active' : '') + drag + drop}
+            className={'pb-tab' + (active ? ' is-active' : '') + (pinned ? ' is-pinned' : '') + drag + drop}
             onClick={() => this.activateTab(widget)}
             onPointerDown={event => this.beginDrag(widget, event)}
             onMouseDown={event => { if (event.button === 1) { event.preventDefault(); } }}
             onAuxClick={event => this.onTabAuxClick(widget, event)}
             onContextMenu={event => this.openTabMenu(widget, event)}
         >
-            {widget instanceof WebTabWidget && this.renderTabIcon(widget)}
+            {widget instanceof WebTabWidget
+                ? this.renderTabIcon(widget)
+                : pinned && <span className={'pb-tab-favicon ' + (widget.title.iconClass || 'codicon codicon-file')} aria-hidden='true' />}
             <span className='pb-tab-title'>{label}</span>
             {/* Phase 32 plan 02 (PAGE-05): the audio mark. Muted-ink when muted; its click is the one tab mute affordance. */}
             {widget instanceof WebTabWidget && (widget.soundPlaying || widget.audioMuted) && <span
@@ -1216,7 +1350,7 @@ export class TabStripWidget extends ReactWidget {
             >
                 <span className={'codicon ' + (widget.audioMuted ? 'codicon-mute' : 'codicon-unmute')} />
             </span>}
-            {widget.title.closable && <span
+            {widget.title.closable && !pinned && <span
                 className='pb-tab-close'
                 role='button'
                 aria-label={`Close ${label}`}

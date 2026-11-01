@@ -49,6 +49,13 @@
 //     width in the same session, the row no longer overflows and the chevron
 //     is gone while the strip order still reads.
 //
+//   pin-restore (TAB-05, 34-03): on one kept profile, Pin Tab on /b makes it
+//     pinned, first in the strip, 32px wide, and stored in the shell-state
+//     map under its GroupModel.keyOf key only. The app's own quit
+//     (withShellQuit), then a relaunch on the same profile with purged caches:
+//     after the strip's pin restore a tab carries the stored key, its rowKey
+//     equals that key (W1 continuity), and it is pinned and first.
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
@@ -61,11 +68,11 @@
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
-import { newProfile, runCheck, withShell } from './lib/ng-a-live.mjs';
+import { newProfile, runCheck, withShell, withShellQuit } from './lib/ng-a-live.mjs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/ng-a-live.mjs';
@@ -573,6 +580,56 @@ async function overflow({ app, pages, expect, plant }) {
     expect(control.strip.length === 3 && control.strip.every(id => control.bar.includes(id)), `overflow: the control session read no strip order (${JSON.stringify(control)})`);
 }
 
+/**
+ * pin-restore: TAB-05 across the app's own quit and a relaunch on the same profile (two launches, so the scenario
+ * runs its own shells). The plant stubs the strip's pin writer in the running page, so nothing is stored.
+ */
+async function pinRestore({ pages, expect, plant, profileName }) {
+    const profile = newProfile(`tab-strip-${profileName}`);
+    const urls = { a: pages.url('/a'), b: pages.url('/b') };
+    // -purgecaches in its environment form: chrome-side shell scripts must run as built (pb-live-probe.mjs).
+    process.env.MOZ_PURGE_CACHES = '1';
+    const first = await withShellQuit(profile, ({ run }) => run(`
+        ${PROBES}
+        await strip().pinRestore;
+        await A.get('ModeService').activateMode('browsing');
+        const urls = ${JSON.stringify(urls)};
+        for (const name of Object.keys(urls)) S[name] = await A.open(urls[name]);
+        await settle(() => ['a', 'b'].every(n => /^page /.test(labelOf(S[n]))));
+        A.shell().activateWidget(S.a.id);
+        await settle(() => current() === S.a && !!tabNode(S.b));
+        if (${JSON.stringify(plant)} === 'pin-not-stored') strip().savePins = async () => undefined;
+        await openMenu(S.b);
+        await choose('Pin Tab');
+        await settle(() => strip().isPinned(S.b));
+        await A.sleep(1000);
+        const stored = await A.get('ProfileStorageService').readPinnedIds();
+        const order = strip().stripTabs(current()).map(w => w.id);
+        const node = tabNode(S.b);
+        return {
+            pinned: strip().isPinned(S.b), key: strip().groups.keyOf(S.b), rowKey: S.b.rowKey, stored,
+            first: order[0] === S.b.id, width: node ? Math.round(node.getBoundingClientRect().width) : 0,
+        };
+    `));
+    expect(first.pinned, 'pin-restore: Pin Tab did not pin /b');
+    expect(first.first, 'pin-restore: the pinned tab /b is not first in the strip');
+    expect(first.width === 32, `pin-restore: the pinned tab is ${first.width}px wide, want 32`);
+    expect(first.key === first.rowKey, `pin-restore: /b's keyOf key ${first.key} is not its rowKey ${first.rowKey}`);
+    expect(first.stored.some(entry => entry.key === first.key), `pin-restore: the shell-state map holds no pin under /b's keyOf key (stored ${JSON.stringify(first.stored)})`);
+    const second = await withShell(profile, ({ run }) => run(`
+        ${PROBES}
+        await strip().pinRestore;
+        const want = ${JSON.stringify(first.key)};
+        const tab = A.mainWidgets().find(w => strip().groups.keyOf(w) === want);
+        const order = strip().stripTabs(current()).map(w => w.id);
+        return { found: !!tab, rowKey: tab ? tab.rowKey : null, pinned: !!tab && strip().isPinned(tab), first: !!tab && order[0] === tab.id };
+    `));
+    expect(second.found, `pin-restore: after the relaunch no tab carries the stored key ${first.key}`);
+    expect(!second.found || second.rowKey === first.key, `pin-restore: the reopened tab's rowKey ${second.rowKey} is not the stored key ${first.key} (W1 continuity)`);
+    expect(second.pinned, 'pin-restore: /b was not pinned after the relaunch');
+    expect(!second.pinned || second.first, 'pin-restore: the restored pin is not first in the strip');
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
@@ -581,10 +638,14 @@ const SCENARIOS = {
     double: { run: double, probe: true, plant: 'double-noop', expect: 'opened no new tab' },
     drop: { run: drop, probe: true, plant: 'drop-link-noop', expect: 'did not open /d' },
     overflow: { run: overflow, probe: true, plant: 'overflow-unmeasured', expect: 'shows no List All Tabs chevron' },
+    'pin-restore': { run: pinRestore, own: true, plant: 'pin-not-stored', expect: 'was not pinned after the relaunch' },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */
 function launch(scenario, profileName, context) {
+    if (scenario.own) {
+        return scenario.run({ ...context, profileName });
+    }
     return scenario.probe
         ? withProbeShell(app => scenario.run({ app, ...context }), { extraPrefs: scenario.prefs ?? {} })
         : withShell(newProfile(`tab-strip-${profileName}`), ({ run }) => scenario.run({ run, ...context }));
