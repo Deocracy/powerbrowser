@@ -3622,7 +3622,7 @@ export const PowerBrowserAPI = Object.freeze({
     let displaySpec = "";
     let baseDomain = null;
     try {
-      const uri = browser.currentURI;
+      const uri = webTabIdentityURI(browser);
       if (uri && typeof uri.host === "string" && uri.host) {
         try {
           displaySpec = Cc["@mozilla.org/network/idn-service;1"].getService(Ci.nsIIDNService).convertToDisplayIDN(uri.host);
@@ -7011,6 +7011,14 @@ function adoptFallback(pcKey, pending) {
   PowerBrowserAPI.openStockTab(url === "about:blank" ? "" : url).catch(err => {
     PowerBrowserAPI.log("error", `[web-tab] adoptTab fallback failed: ${err && err.message ? err.message : err}`);
   });
+}
+
+// 36-REVIEW WR-04: an adopted about:blank runs as its opener's origin (it inherits the principal), so the identity
+// box names that origin instead of nothing. webTabIdentity reads its host through here; any other page, its own URI.
+function webTabIdentityURI(browser) {
+  const uri = browser.currentURI;
+  const principal = uri?.spec === "about:blank" ? browser.browsingContext?.currentWindowGlobal?.documentPrincipal : null;
+  return principal?.isContentPrincipal && /^https?$/.test(principal.URI.scheme) ? principal.URI : uri;
 }
 
 // The webTabAdopt arm's body. A key chrome no longer holds (the fallback ran) or one another shell window

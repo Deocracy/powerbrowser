@@ -52,6 +52,12 @@
  *       WebTabChannel.register; and F's value -- derived from init's
  *       assignment and createWidget's id template -- passes the regex
  *       derived from chrome's webTabIdIsValid. Neither end is hand-kept.
+ *   (h) adopted blank is page content (36-REVIEW WR-04): hasPage includes
+ *       the adopted flag, publish()'s showable reads hasPage (no second
+ *       visibility test that the title and identity paths would not share),
+ *       adopt() calls markAdopted() before addWidget, markAdopted re-renders
+ *       the title, and webTabIdentity reads its host through
+ *       webTabIdentityURI, which takes an about:blank's documentPrincipal.
  *
  * Honestly --quick: text reads plus one git grep over the pinned upstream. No
  * build, no browser, no display, no network.
@@ -357,6 +363,23 @@ function checkAdopt(sources, callSites) {
             else if (!validId.test(value)) fail('ack-id', `adopt() sends tabId: ${expr}, whose value (e.g. "${value}") fails chrome's webTabIdIsValid /${shape[1]}/ -- chrome refuses every adopt`);
         }
     }
+
+    // (h) an adopted about:blank is shown, titled and identified as the content it is.
+    if (wtText && adoptFn) {
+        const hasPage = /\n {4}get hasPage\(\): boolean \{([\s\S]*?)\n {4}\}/.exec(wtText);
+        const mark = /\n {4}markAdopted\(\): void \{([\s\S]*?)\n {4}\}/.exec(wtText);
+        const showable = /const showable = ([^;\n]*);/.exec(wtText);
+        if (!hasPage || !/\|\| this\.adopted\b/.test(hasPage[1])) fail('adopted-blank', 'hasPage does not include the adopted flag -- an adopted about:blank would show as a trusted New Tab with no identity');
+        if (!showable || !/\bthis\.hasPage\b/.test(showable[1]) || /\bthis\.adopted\b/.test(showable[1])) fail('adopted-blank', "publish()'s showable does not read hasPage alone -- visibility and the title/identity paths must share one test");
+        if (!mark || !/this\.refreshTitle\(\)/.test(mark[1])) fail('adopted-blank', 'markAdopted() does not re-render the title, so the tab keeps the New Tab label');
+        const markAt = adoptFn[0].indexOf('widget.markAdopted()');
+        const addAt = adoptFn[0].indexOf('this.shell.addWidget(');
+        if (markAt === -1 || addAt === -1 || markAt > addAt) fail('adopted-blank', 'adopt() does not call widget.markAdopted() before addWidget');
+    }
+    const identity = member(api, 'webTabIdentity');
+    const identityUri = moduleFn(api, 'webTabIdentityURI');
+    if (!identity || !/const uri = webTabIdentityURI\(browser\);/.test(identity)) fail('adopted-blank', 'webTabIdentity does not read its host through webTabIdentityURI -- an adopted about:blank would show no origin');
+    if (!identityUri || !/documentPrincipal/.test(identityUri)) fail('adopted-blank', "webTabIdentityURI does not read the about:blank's inherited documentPrincipal");
     return failures;
 }
 
@@ -392,6 +415,10 @@ function selfTest() {
         { name: 'pc- key in frontend copy', sources: { [WT]: clean[WT] === undefined ? null : `${clean[WT]}\nexport const plantedCopy = (w: { title: { label: string } }, pcKey: string) => { w.title.label = pcKey; };\n` }, expect: 'puts a pending key in copy' },
         { name: 'the ack sends the widget id', sources: { [WT]: plant(clean[WT], "kind: 'webTabAdopt', tabId: widget.tabId", "kind: 'webTabAdopt', tabId: widget.id") }, expect: "tabId: widget.id, whose value (e.g. \"powerbrowser.web-tab:wt-a1b2c3-1\") fails chrome's webTabIdIsValid" },
         { name: 'the failure-branch close sends the widget id', sources: { [WT]: plant(clean[WT], "kind: 'webTabClose', tabId: widget.tabId", "kind: 'webTabClose', tabId: widget.id") }, expect: 'sends tabId: widget.id, not widget.tabId' },
+        { name: 'hasPage ignores the adopted flag', sources: { [WT]: plant(clean[WT], 'return this.url !== EMPTY_PAGE_URL || this.adopted;', 'return this.url !== EMPTY_PAGE_URL;') }, expect: 'hasPage does not include the adopted flag' },
+        { name: 'showable gets its own adopted test', sources: { [WT]: plant(clean[WT], 'this.isVisible && this.hasPage && !this.crashed', 'this.isVisible && (this.hasPage || this.adopted) && !this.crashed') }, expect: "showable does not read hasPage alone" },
+        { name: 'adopt() never marks the widget adopted', sources: { [WT]: plant(clean[WT], '        widget.markAdopted();\n', '') }, expect: 'does not call widget.markAdopted() before addWidget' },
+        { name: 'identity reads currentURI directly', sources: { [API]: plant(clean[API], 'const uri = webTabIdentityURI(browser);', 'const uri = browser.currentURI;') }, expect: 'webTabIdentity does not read its host through webTabIdentityURI' },
         { name: 'adopt log line carries the URL', sources: { [API]: plant(clean[API], '`[web-tab] adoptTab fallback failed: ${err && err.message ? err.message : err}`', '`[web-tab] adoptTab fallback failed for ${url}`') }, expect: 'log line carries a key, URL or title' },
     ];
     let failed = 0;

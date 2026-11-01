@@ -556,8 +556,8 @@ export class WebTabWidget extends BaseWidget {
     canGoBack = false;
     canGoForward = false;
     lostView = false;
-    /** 36-REVIEW WR-04: a page's new window chrome adopted. Shown on about:blank too, where its script may write the content. Never restored. */
-    adopted = false;
+    /** 36-REVIEW WR-04: a page's new window chrome adopted; set by markAdopted() only. Never restored. */
+    protected adopted = false;
     /** Phase 31 (D-31-01): the last pushed connection state; undefined before the first push. */
     securityState: string | undefined;
     /** Phase 31 (D-31-03): the last pushed display host. */
@@ -614,8 +614,19 @@ export class WebTabWidget extends BaseWidget {
     protected listening = false;
     protected stateNode: HTMLDivElement;
 
+    /**
+     * An adopted about:blank counts as a page (36-REVIEW WR-04): its opener's script may write it, so it is shown,
+     * titled and captioned "about:blank" and given the pushed identity, never presented as a trusted New Tab.
+     */
     get hasPage(): boolean {
-        return this.url !== EMPTY_PAGE_URL;
+        return this.url !== EMPTY_PAGE_URL || this.adopted;
+    }
+
+    /** 36-REVIEW WR-04: the ack landed; from here on this tab is page content, on about:blank included. */
+    markAdopted(): void {
+        this.adopted = true;
+        this.refreshTitle();
+        this.renderState();
     }
 
     /** Reload enablement (UI-SPEC A7 + A10): a page to reload, or a lost view whose open Reload re-issues. */
@@ -802,7 +813,7 @@ export class WebTabWidget extends BaseWidget {
             }
             const r = this.node.getBoundingClientRect();
             // A crashed tab is not showable: the overlay hides and the placeholder carries the crash UI (PAGE-11, 32-08).
-            const showable = this.isAttached && this.isVisible && (this.hasPage || this.adopted) && !this.crashed;
+            const showable = this.isAttached && this.isVisible && this.hasPage && !this.crashed;
             const msg: WebTabMessage = {
                 kind: 'webTabGeometry',
                 tabId: this.tabId,
@@ -1359,7 +1370,7 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
             dropUnshown();
             return;
         }
-        widget.adopted = true;
+        widget.markAdopted();
         // An opener closed meanwhile: the tab still lands, at the end, rather than being dropped.
         const opener = this.channel.widgetOf(openerTabId);
         try {
