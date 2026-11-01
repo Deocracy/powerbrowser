@@ -22,7 +22,12 @@
  *      evidence: removeVisitsByFilter with beginDate/endDate (never Sanitizer,
  *      D-09b), a DELETE on the table, every closed-row DELETE fenced by
  *      `closed_at IS NOT NULL`, the thumbnail reset, the file write, a
- *      SessionStore.forgetClosedTab* call.
+ *      SessionStore.forgetClosedTab* call. And each must stay inside the
+ *      range (WR-08, the data-loss direction): every closed-row statement
+ *      binds :begin and :end, the thumbnail reset binds :begin, every other
+ *      table statement binds :begin and :end or a chosen row's `= :uri` key
+ *      (and one binds the range), and the sessionstore forget compares
+ *      closedAt to span.begin and span.end.
  *   2. TOKEN EXEMPT: no fan-out function (nor clearHistory) names a cookie,
  *      the token cookie's name or literal, 127.0.0.1, Sanitizer,
  *      SiteDataManager or a clearData service. Positive control in the same
@@ -112,6 +117,12 @@ function deriveTables(src) {
     return { blocks: blocks.length, tables };
 }
 
+/** Every SQL statement in `body` that reads, deletes or updates `table`, as its string-literal text. */
+const statementsOn = (body, table) => [...body.matchAll(new RegExp(`(?:SELECT [^"\`]*?FROM|DELETE FROM|UPDATE) ${table}\\b[^"\`]*`, 'g'))].map(m => m[0]);
+const bindsRange = statement => /:begin\b/.test(statement) && /:end\b/.test(statement);
+const ignoresRange = (target, fn, table, statement, bound) =>
+    `fan-out: ${target}: ${fn} has a statement on ${table} that ignores the range (${bound}): ${statement.trim()}`;
+
 function checkFanout(src, failures) {
     const fanoutLiteral = /\nconst CLEAR_HISTORY_FANOUT = Object\.freeze\(\[([\s\S]*?)\n\]\);/.exec(src)?.[1];
     const fanout = fanoutLiteral ? [...stripLineComments(fanoutLiteral).matchAll(/\[\s*"([^"]+)"\s*,\s*([A-Za-z_$][\w$]*)\s*\]/g)].map(m => ({ target: m[1], fn: m[2] })) : [];
@@ -194,9 +205,13 @@ function checkFanout(src, failures) {
             if (!/SessionStore\.forgetClosedTab(?:ById)?\(/.test(body)) {
                 failures.push(`fan-out: ${target}: ${fn} does not forget sessionstore's closed tabs, so the sweep re-imports them`);
             }
+            if (!/closedAt >= span\.begin/.test(body) || !/closedAt <= span\.end/.test(body)) {
+                failures.push(`fan-out: ${target}: ${fn} forgets closed tabs without comparing closedAt to span.begin and span.end, so it ignores the range`);
+            }
         } else if (/^\w+\.closed_at$/.test(target)) {
             const table = target.split('.')[0];
-            const deletes = [...body.matchAll(new RegExp(`DELETE FROM ${table}\\b[^"\`]*`, 'g'))].map(m => m[0]);
+            const statements = statementsOn(body, table);
+            const deletes = statements.filter(statement => statement.startsWith('DELETE'));
             if (deletes.length === 0) {
                 failures.push(`fan-out: ${target}: ${fn} deletes nothing from ${table}`);
             }
@@ -205,17 +220,34 @@ function checkFanout(src, failures) {
                     failures.push(`fan-out: ${target}: ${fn} has a DELETE without closed_at IS NOT NULL, so an open row (closed_at NULL) can be deleted`);
                 }
             }
+            // WR-08: the SELECT feeds the deleted keys to the later targets, so it is bound like the DELETE.
+            for (const statement of statements.filter(statement => !bindsRange(statement))) {
+                failures.push(ignoresRange(target, fn, table, statement, 'no :begin and :end bound'));
+            }
         } else if (/^\w+\.thumbnail$/.test(target)) {
-            if (!new RegExp(`UPDATE ${target.split('.')[0]} SET thumbnail = NULL`).test(body)) {
+            const table = target.split('.')[0];
+            const updates = statementsOn(body, table).filter(statement => /^UPDATE \w+ SET thumbnail = NULL\b/.test(statement));
+            if (updates.length === 0) {
                 failures.push(`fan-out: ${target}: ${fn} does not reset the thumbnail column`);
+            }
+            for (const statement of updates.filter(statement => !/:begin\b/.test(statement))) {
+                failures.push(ignoresRange(target, fn, table, statement, 'no :begin bound'));
             }
         } else if (/_FILE_NAME$/.test(target)) {
             if (!body.includes(target) || !/IOUtils\.writeJSON\(/.test(body)) {
                 failures.push(`fan-out: ${target}: ${fn} does not rewrite the ${target} file`);
             }
         } else if (tables.has(target)) {
-            if (!new RegExp(`DELETE FROM ${target}\\b`).test(body)) {
+            const statements = statementsOn(body, target);
+            if (!statements.some(statement => statement.startsWith('DELETE'))) {
                 failures.push(`fan-out: ${target}: ${fn} deletes nothing from ${target}`);
+            }
+            // A row is chosen by the range, or by the key of a row a range-bound statement chose.
+            for (const statement of statements.filter(statement => !bindsRange(statement) && !/\bWHERE \w+ = :uri\b/.test(statement))) {
+                failures.push(ignoresRange(target, fn, target, statement, 'binds neither :begin and :end nor a chosen row\'s key'));
+            }
+            if (statements.length && !statements.some(bindsRange)) {
+                failures.push(`fan-out: ${target}: ${fn} never binds :begin and :end, so nothing it removes is chosen by the range`);
             }
         } else {
             failures.push(`fan-out: ${target}: no evidence rule knows this target's shape`);
@@ -384,6 +416,36 @@ function selfTest() {
             name: 'open rows deleted by the closed-row target',
             mutate: src => src.replace('await conn.execute("DELETE FROM tabs WHERE closed_at IS NOT NULL AND closed_at >= :begin', 'await conn.execute("DELETE FROM tabs WHERE closed_at >= :begin'),
             expect: 'fan-out: tabs.closed_at: clearClosedTabRows has a DELETE without closed_at IS NOT NULL',
+        },
+        {
+            name: 'closed-row DELETE ignores the range',
+            mutate: src => src.replace('"DELETE FROM tabs WHERE closed_at IS NOT NULL AND closed_at >= :begin AND closed_at <= :end"', '"DELETE FROM tabs WHERE closed_at IS NOT NULL"'),
+            expect: 'fan-out: tabs.closed_at: clearClosedTabRows has a statement on tabs that ignores the range',
+        },
+        {
+            name: 'saved-page SELECT ignores the range',
+            mutate: src => src.replace('"SELECT tab_uri, dir FROM saved_pages WHERE saved_at >= :begin AND saved_at <= :end"', '"SELECT tab_uri, dir FROM saved_pages"'),
+            expect: 'fan-out: saved_pages: clearSavedPages has a statement on saved_pages that ignores the range',
+        },
+        {
+            name: 'thumbnail reset ignores the range',
+            mutate: src => src.replace(' AND MAX(last_active, COALESCE(last_accessed, 0)) >= :begin",', '",'),
+            expect: 'fan-out: tabs.thumbnail: clearTabThumbnails has a statement on tabs that ignores the range',
+        },
+        {
+            name: 'fan-out missing the sessionstore target',
+            mutate: src => src.replace('  ["sessionstore._closedTabs", clearSessionStoreClosedTabs],\n', ''),
+            expect: 'fan-out: browsing-history stores clearHistory does not clear (missing target): sessionstore._closedTabs',
+        },
+        {
+            name: 'sessionstore forget ignores the range',
+            mutate: src => src.replace('if (span.everything || (tab.closedAt >= span.begin && tab.closedAt <= span.end)) {', 'if (tab.closedAt) {'),
+            expect: 'fan-out: sessionstore._closedTabs: clearSessionStoreClosedTabs forgets closed tabs without comparing closedAt',
+        },
+        {
+            name: 'sessionstore target after the closed-row target',
+            mutate: src => src.replace('  ["sessionstore._closedTabs", clearSessionStoreClosedTabs],\n  ["tabs.closed_at", clearClosedTabRows],\n', '  ["tabs.closed_at", clearClosedTabRows],\n  ["sessionstore._closedTabs", clearSessionStoreClosedTabs],\n'),
+            expect: 'fan-out: sessionstore._closedTabs runs after tabs.closed_at',
         },
         {
             name: 'places cleared through Sanitizer',
