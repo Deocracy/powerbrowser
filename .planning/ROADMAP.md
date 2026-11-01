@@ -531,11 +531,11 @@ Plans:
 **Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
-- [ ] 38-01-PLAN.md (wave 1) — Build the chrome-side extension bridge on the Phase 31.1 tab host: action-state
-- [ ] 38-02-PLAN.md (wave 2) — Render the EXT-06/07 surface on the 38-01 bridge: buttons row, puzzle menu,
-- [ ] 38-03-PLAN.md (wave 3) — Prove EXT-08 on the stack that already exists: content scripts + messaging on the
-- [ ] 38-04-PLAN.md (wave 4) — Implement Chris's B5 ruling (2026-10-22, verbatim in 38-CONTEXT.md): sidebar
-- [ ] 38-05-PLAN.md (wave 5) — Close the phase's AMO + fixtures surface: AMO install over the stock prompt path
+- [x] 38-01-PLAN.md (wave 1) — Build the chrome-side extension bridge on the Phase 31.1 tab host: action-state
+- [x] 38-02-PLAN.md (wave 2) — Render the EXT-06/07 surface on the 38-01 bridge: buttons row, puzzle menu,
+- [x] 38-03-PLAN.md (wave 3) — Prove EXT-08 on the stack that already exists: content scripts + messaging on the
+- [x] 38-04-PLAN.md (wave 4) — Implement Chris's B5 ruling (2026-10-22, verbatim in 38-CONTEXT.md): sidebar
+- [x] 38-05-PLAN.md (wave 5) — Close the phase's AMO + fixtures surface: AMO install over the stock prompt path
 
 **UI hint**: yes
 
@@ -556,7 +556,7 @@ Plans:
 | 35. Shell Furniture and Page Context Menu | 7/7 | Executed, verification deferred | - |
 | 36. New-Window Links as Web Tabs | 3/3 | Executed, verification deferred | - |
 | 37. Permission Prompts and Dialogs | 4/4 | Executed, verification deferred | - |
-| 38. WebExtensions | 0/TBD | Not started | - |
+| 38. WebExtensions | 5/5 | Executed, verification deferred | - |
 
 ## Hard constraints (every phase)
 
