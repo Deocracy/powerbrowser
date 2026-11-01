@@ -248,3 +248,23 @@ A user who enters full screen and then activates an editor, a terminal or Panora
 _Reviewed: 2026-11-01T07:01:20Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+
+## Fixes applied (CR-01, WR-08)
+
+Applied 2026-11-01 on `workspace/p33` by gsd-code-fixer. The other findings are handled separately and are not covered here.
+
+### CR-01: fixed, live confirmation deferred (commit `c61ed0d6`)
+
+- New fan-out target `sessionstore._closedTabs` → `clearSessionStoreClosedTabs`, placed before `tabs.closed_at` in `CLEAR_HISTORY_FANOUT`. It reads `SessionStore.getClosedTabData({closedTabsFromAllWindows: true, private: false})` and calls `SessionStore.forgetClosedTabById(closedId, {includePrivate: false})` for each closed tab whose `closedAt` is in range (every one, for Everything). Signatures were confirmed in `upstream/browser/components/sessionstore/SessionStore.sys.mjs` (`:440`, `:590`). `forgetClosedTabById` was used instead of the review's `forgetClosedTab(win, i)`: `getClosedTabDataForWindow` returns the merged list of closed tabs and closed-group tabs, so its indices do not match `_closedTabs`.
+- Scope matches the projection: the closed tabs of open non-private windows, which is exactly what `parseSessionStoreClosedRows` reads. Closed windows (`_closedWindows`) are not projected into the tab store and are not forgotten. `browser:purge-session-history` was not used for Everything because it purges far more than history.
+- Both calls are catalogued in `powerbrowser/INTERNAL-APIS.md` at the end of the Touchpoints table (`:7233`, `:7236`). The one-line insertion shifted six catalogue rows. `verify-ng-040 --fix` moved only `:7206→7207`; `:7072, 7110, 7139, 7145, 7186` were shifted by hand and each one was checked against its target line. Those five rows sit in the table under `## Deliberately not touched`, not under `## Touchpoints`, so ng-040's direction-2 parser never reads them. This misplacement predates this fix and is left for a separate cleanup.
+- Residual race: a sweep that started *before* the clear holds a pre-forget snapshot. If its `writeClosedTabRow` calls land after the DELETE, they can re-insert rows once. Later sweeps see nothing, but the row stays until the next clear. The window is a few milliseconds.
+- **Deferred live check:** in a stock window, close a tab, run Clear Recent History (Last hour), wait for one `sessionstore-state-write-complete`, then assert that the `stock:*` row is still absent from `tabs.sqlite`, the History submenu and `listClosedTabs`, and that the stock window's Ctrl+Shift+T no longer restores it. The natural home is the clear-history scenario in `scripts/verify-address-bar-live.mjs`.
+
+### WR-08: fixed (commit `42252cbd`)
+
+- `scripts/verify-clear-history.mjs` derives `sessionstore.<list>` targets from the tree: every `win._closed*` list that a `parseSessionStore*Rows` projection called by `sweepTabStoreFromSessionStore` iterates. It requires the forget evidence for that target and requires it to run before any `<table>.closed_at` target. These checks landed with CR-01 so the gate stayed set-equal.
+- Range binding, which covers the data-loss direction: every closed-row statement (the DELETE and the SELECT that feeds the deleted keys onward) binds `:begin` and `:end`. The thumbnail reset binds `:begin`. Every `saved_pages` statement binds the range or a chosen row's `= :uri` key, and at least one binds the range. The sessionstore forget compares `closedAt` to `span.begin` and `span.end`.
+- Six new `--self-test` plants, each red naming its drift: closed-row DELETE ignores the range, saved-page SELECT ignores the range, thumbnail reset ignores the range, fan-out missing the sessionstore target, sessionstore forget ignores the range, and sessionstore target after the closed-row target. 16/16 plants go red.
+
+Verification ran in the `workspace/p33` worktree (no separate fixer worktree): `nix develop .#theia --command scripts/verify-platform.sh --quick` exited 0 after each fix, with changes staged. No Gecko build or live run is available here.
