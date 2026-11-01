@@ -136,7 +136,10 @@ const ZOOM_SHIM_ABSENT = new Map([
 // is compared like a shim: REQUIRED is every member that module accesses on its tabbrowser (`receiver`), derived from
 // the `consumer` file; IMPLEMENTED is the members of the one `<name> = {` literal in the boundary file. Each new facade
 // is one row here, and scripts/verify-permission-prompts.mjs requires the facade its construction passes to be a row.
-const FACADES = [];
+const FACADES = [
+  // PopupNotifications(tabbrowser, panel, iconBox) reads documentGlobal, selectedBrowser, selectedTab and tabContainer.
+  { name: 'promptTabbrowser', consumer: 'upstream/toolkit/modules/PopupNotifications.sys.mjs', receiver: '(?<![\\w$])tabbrowser' },
+];
 const ID = '[A-Za-z_$][\\w$]*';
 
 // The upstream call-site files for the actor scope: the scope's widget files plus

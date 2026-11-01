@@ -3831,6 +3831,7 @@ run_own_checks() {
     # (no allow/grant/permit/doorhanger/prompt webTab or store kind), the
     # facade audit link and the display-only doorhanger subscriber. Honestly
     # --quick: text reads only. The live proof is prompts-live.
+    "permission-prompts|node $REPO_ROOT/scripts/verify-permission-prompts.mjs"
     "permission-prompts-self-test|node $REPO_ROOT/scripts/verify-permission-prompts.mjs --self-test"
 
     # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the

@@ -6774,3 +6774,156 @@ function webTabPushedSpec(spec) {
   }
   return spec;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 37: permission prompts.
+//
+// PROMPT-01 (D-01..D-04, D-11). The stock PopupNotifications object lives on the
+// shell window, so PermissionUI (and, in later plans, WebRTCParent and the
+// password prompter) shows its stock doorhanger on the native
+// #notification-popup panel. A prompt is answered only by that panel's own
+// buttons and checkbox, so the stock click delay applies; this section adds no
+// answer path and writes no permission. Theia hears only where a prompt is: the
+// display-only `doorhanger` push. The tabbrowser facade is compared member by
+// member by scripts/verify-shell-gbrowser-standin.mjs (FACADES). At merge the
+// one bootstrap call folds into Phase 35's installShellFurniture.
+// ---------------------------------------------------------------------------
+
+// The shell element the panel opens against (powerbrowser.xhtml). With iconBox null, the stock module finds an anchor
+// only through the browser's popupnotificationanchor attribute, so every overlay that asks names this id.
+const PROMPT_ANCHOR_ID = "powerbrowser-notification-anchor";
+// D-04: background requests waiting for their tab, per shell window, oldest first. A fourth evicts the oldest.
+const PROMPT_QUEUE_CAP = 3;
+// token -> the display record of one stock notification. Nothing reads a record to answer a prompt.
+const promptRecords = new Map();
+const promptWindows = new WeakSet();
+let promptTokenCounter = 0;
+
+export function installPermissionPromptFurniture(window) {
+  const host = tabHosts.get(window);
+  const panel = window.document.getElementById("notification-popup");
+  if (!host || !panel || promptWindows.has(window)) {
+    return;
+  }
+  promptWindows.add(window);
+  // The constructor reads chromehidden as a string; AppWindow writes it at first layout, which may follow DOMContentLoaded.
+  if (!window.document.documentElement.hasAttribute("chromehidden")) {
+    window.document.documentElement.setAttribute("chromehidden", "");
+  }
+  // The selected overlay is the tab host's selection; with none, the Theia frame stands in, so every overlay is a
+  // background tab. The host strip fires TabSelect and TabClose, so the stock module shows a waiting prompt when its
+  // tab is selected (webTabActivated) and drops a closed tab's prompts itself.
+  const promptTabbrowser = {
+    documentGlobal: window,
+    get selectedBrowser() {
+      return host.selected ? host.selected.linkedBrowser : host.theiaBrowser;
+    },
+    get selectedTab() {
+      return host.selected;
+    },
+    tabContainer: host.strip,
+  };
+  const { PopupNotifications } = ChromeUtils.importESModule("resource://gre/modules/PopupNotifications.sys.mjs");
+  const notifications = new PopupNotifications(promptTabbrowser, panel, null);
+  const stockShow = notifications.show;
+  notifications.show = function (browser, id, message, anchorID, mainAction, secondaryActions, options) {
+    const tabId = tabIdOfBrowser(browser);
+    // Every stock prompt passes options; a request from the Theia frame (no tab id) takes the stock path unchanged.
+    if (tabId === null || !options) {
+      return stockShow.apply(this, arguments);
+    }
+    browser.setAttribute("popupnotificationanchor", PROMPT_ANCHOR_ID);
+    const record = {
+      token: `prompt-${++promptTokenCounter}`,
+      window,
+      theiaBrowser: host.theiaBrowser,
+      browser,
+      tabId,
+      permission: String(id),
+      displayHost: promptDisplayHost(browser),
+      seen: false,
+      queued: false,
+      notification: null,
+    };
+    const stockCallback = options.eventCallback;
+    options.eventCallback = function (topic, ...rest) {
+      promptTopic(record, topic);
+      return stockCallback ? stockCallback.call(this, topic, ...rest) : undefined;
+    };
+    promptRecords.set(record.token, record);
+    try {
+      record.notification = stockShow.call(this, browser, id, message, anchorID, mainAction, secondaryActions, options);
+    } catch (err) {
+      promptRecords.delete(record.token);
+      throw err;
+    }
+    // Not shown at once: the tab is in the background (or the window is), so the record waits for its tab (D-04).
+    if (promptRecords.has(record.token) && !record.seen) {
+      record.queued = true;
+      pushDoorhanger(record, true);
+      const queued = [...promptRecords.values()].filter(r => r.window === window && r.queued);
+      if (queued.length > PROMPT_QUEUE_CAP) {
+        // The stock removal without a user response runs PermissionUI's cancel(), so the page sees a denial, never a hang.
+        notifications.remove(queued[0].notification, true);
+      }
+    }
+    return record.notification;
+  };
+  // browser.js onLocationChange: a new top-level document drops the previous page's prompts.
+  host.progressListeners.add({
+    onLocationChange(browser, webProgress, _request, _location, flags) {
+      if (webProgress.isTopLevel && !(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT)) {
+        notifications.locationChange(browser);
+      }
+    },
+  });
+  window.PopupNotifications = notifications;
+}
+
+// The stock eventCallback topics, observed for display only (PopupNotifications.sys.mjs show options). A dismissed
+// prompt still waits for its answer (a persistent prompt re-shows when its tab is selected), so only removal clears it.
+function promptTopic(record, topic) {
+  if (topic === "showing") {
+    record.seen = true;
+    record.queued = false;
+    placePromptAnchor(record.browser);
+    pushDoorhanger(record, true);
+  } else if (topic === "shown") {
+    pushDoorhanger(record, true);
+  } else if (topic === "removed") {
+    promptRecords.delete(record.token);
+    pushDoorhanger(record, false);
+  }
+}
+
+// Display-only: where a prompt is and whether it still waits. The token names the chrome-held record; nothing consumes it.
+function pushDoorhanger(record, pending) {
+  sendWebTabPush(record.theiaBrowser, { kind: "doorhanger", token: record.token, tabId: record.tabId, permission: record.permission, displayHost: record.displayHost, pending });
+}
+
+// The overlay's own contentPrincipal, never a sender field (D-02).
+function promptDisplayHost(browser) {
+  try {
+    return browser.contentPrincipal.asciiHost || "";
+  } catch (err) {
+    return "";
+  }
+}
+
+// The anchor sits in the 8px strip directly above the page, the chrome bar's bottom edge, so the stock panel
+// ("bottomleft topleft") opens over the page's top-left corner.
+function placePromptAnchor(browser) {
+  const anchor = browser.ownerDocument.getElementById(PROMPT_ANCHOR_ID);
+  if (!anchor) {
+    return;
+  }
+  const rect = browser.getBoundingClientRect();
+  Object.assign(anchor.style, {
+    position: "fixed",
+    left: `${rect.left + 8}px`,
+    top: `${Math.max(0, rect.top - 8)}px`,
+    width: "16px",
+    height: "8px",
+    pointerEvents: "none",
+  });
+}

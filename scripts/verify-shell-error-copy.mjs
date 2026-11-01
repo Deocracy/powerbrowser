@@ -596,6 +596,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Reset zoom (Ctrl+0)",
   "Mute tab",
   "Unmute tab",
+  "This page asked for a permission. Open the tab to answer it.",
   "Reader view",
   "Exit reader view",
   "Reader view isn't available for this page",

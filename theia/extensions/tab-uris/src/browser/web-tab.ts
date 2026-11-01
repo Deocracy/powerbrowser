@@ -430,6 +430,23 @@ export class WebTabChannel {
             this.downloadRows = downloadRowsOf(detail);
             this.downloadsEmitter.fire(this.downloadRows);
         });
+        // Phase 37 plan 01 (D-11): where a stock prompt is, never its answer. Display-only: the strip marks the tab while
+        // any of its prompts waits, and nothing here sends a message back.
+        this.onPush('doorhanger', detail => {
+            const widget = typeof detail.tabId === 'string' ? this.widgets.get(detail.tabId) : undefined;
+            if (!widget || typeof detail.token !== 'string') {
+                return;
+            }
+            const before = widget.pendingPrompt;
+            if (detail.pending === true) {
+                widget.pendingPrompts.add(detail.token);
+            } else {
+                widget.pendingPrompts.delete(detail.token);
+            }
+            if (before !== widget.pendingPrompt) {
+                this.tabStatusEmitter.fire(widget);
+            }
+        });
     }
 
     /** Phase 32 plan 04 (PAGE-06): the last Downloads rows chrome pushed, newest first. */
@@ -581,6 +598,13 @@ export class WebTabWidget extends BaseWidget {
     permissionLabels: string[] = [];
     /** Phase 31 plan 03 (SITE-08): the last pushed or replied exception state; the identity box's shield. */
     shieldExcepted = false;
+    /** Phase 37 plan 01 (D-11): the tokens of this tab's waiting stock prompts, from the display-only doorhanger push. */
+    readonly pendingPrompts = new Set<string>();
+
+    /** Phase 37 plan 01: true while any stock prompt of this tab waits for its answer; the strip's pending mark. */
+    get pendingPrompt(): boolean {
+        return this.pendingPrompts.size > 0;
+    }
 
     protected readonly stateEmitter = new Emitter<WebTabState>();
     readonly onDidChangeState: TheiaEvent<WebTabState> = this.stateEmitter.event;

@@ -660,6 +660,13 @@ export class TabStripWidget extends ReactWidget {
         >
             {widget instanceof WebTabWidget && this.renderTabIcon(widget)}
             <span className='pb-tab-title'>{label}</span>
+            {/* Phase 37 plan 01 (D-11): the pending-prompt mark. Display-only, no handler: the stock prompt is the only answer. */}
+            {widget instanceof WebTabWidget && widget.pendingPrompt && <span
+                className='codicon codicon-bell pb-tab-prompt-pending'
+                role='img'
+                aria-label={CHROME_BAR_COPY.pendingPrompt}
+                title={CHROME_BAR_COPY.pendingPrompt}
+            />}
             {/* Phase 32 plan 02 (PAGE-05): the audio mark. Muted-ink when muted; its click is the one tab mute affordance. */}
             {widget instanceof WebTabWidget && (widget.soundPlaying || widget.audioMuted) && <span
                 className={'pb-tab-audio' + (widget.audioMuted ? ' is-muted' : '')}

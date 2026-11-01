@@ -255,36 +255,10 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name)) {
     return failures;
 }
 
-/**
- * shortcut: until plan 37-01 Task 2 lands the furniture, the fixture adds a minimal correct copy of each absent
- * piece in memory (the panel from upstream's own attributes); Task 2 deletes this, so the control is the real tree.
- */
-function seedFixture(sources) {
-    const out = { ...sources };
-    const url = moduleUrl(out[UPSTREAM_MOZBUILD]);
-    if (!out[XHTML].includes(`id="${PANEL_ID}"`)) {
-        const attrs = /<panel\s+id="notification-popup"([^>]*?)\/?>/.exec(out[UPSTREAM_PANEL])[1].replace(/\s+/g, ' ').trim();
-        out[XHTML] = out[XHTML].replace('</body>', `<xul:panel id="${PANEL_ID}" ${attrs}/><div id="powerbrowser-notification-anchor"/></body>`);
-    }
-    if (!out[API].includes(SECTION_MARKER)) {
-        out[API] += `\n${SECTION_MARKER}\nconst PROMPT_ANCHOR_ID = "powerbrowser-notification-anchor";\n` +
-            `export function ${INSTALLER}(window) {\n  const { PopupNotifications } = ChromeUtils.importESModule("${url}");\n` +
-            '  const promptTabbrowser = { documentGlobal: window };\n  window.PopupNotifications = new PopupNotifications(promptTabbrowser, null, null);\n' +
-            '  return window.document.contentPrincipal;\n}\n';
-    }
-    if (!out[SHELL].includes(`${INSTALLER}(`)) {
-        out[SHELL] += `\n${INSTALLER}(window);\n`;
-    }
-    if (!/onPush\(\s*'doorhanger'/.test(out[WEB_TAB])) {
-        out[WEB_TAB] += "\nexport const seeded = (c: WebTabChannel) => c.onPush('doorhanger', detail => { void detail; });\n";
-    }
-    return out;
-}
-
 /** Proves every rule discriminates on in-memory copies of the real sources, after the same-session green control. */
 function selfTest() {
-    const clean = seedFixture(readSources());
-    const facadeNames = FACADES.length ? FACADES.map(f => f.name) : ['promptTabbrowser'];
+    const clean = readSources();
+    const facadeNames = FACADES.map(f => f.name);
     const baseline = checkPrompts(clean, facadeNames);
     if (baseline.length) {
         console.error(`${NAME} --self-test: FAIL -- the unmodified fixture is red, so the planted results below would be meaningless:`);

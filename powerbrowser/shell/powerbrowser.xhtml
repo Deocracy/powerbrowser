@@ -55,6 +55,21 @@
       <pre id="powerbrowser-diagnostics-log"></pre>
       <button id="powerbrowser-diagnostics-close" type="button">Close</button>
     </div>
+    <!-- Phase 37 (PROMPT-01): stock furniture, no custom chrome. The doorhanger
+         panel verbatim from upstream/browser/base/content/popup-notifications.inc.xhtml,
+         and the element it opens against, placed above the asking page by
+         PowerBrowserAPI.sys.mjs. -->
+    <xul:popupset id="powerbrowser-popupset">
+      <xul:panel id="notification-popup"
+                 type="arrow"
+                 position="after_start"
+                 hidden="true"
+                 orient="vertical"
+                 noautofocus="true"
+                 role="alert"
+                 remote="true"/>
+    </xul:popupset>
+    <div id="powerbrowser-notification-anchor"></div>
     <xul:browser id="powerbrowser-content" type="content" primary="true" remote="true" remoteType="web" src="about:blank" tabindex="-1"/>
   </body>
 </html>

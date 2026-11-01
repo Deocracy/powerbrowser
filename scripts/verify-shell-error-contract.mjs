@@ -442,7 +442,8 @@ async function loadShippedSources(supervisorPath, shellPath, tag, overrides = {}
             throw new Error("tab host is not under test in the error contract");
           },
         };
-        return { PowerBrowserAPI: api, PowerBrowserTabHost: { install: () => tabHost } };
+        // Phase 37: the bootstrap also installs the prompt furniture; prompts are not under test here (prompts-live is).
+        return { PowerBrowserAPI: api, PowerBrowserTabHost: { install: () => tabHost }, installPermissionPromptFurniture: () => {} };
       }
       if (url.includes("TheiaService.sys.mjs")) {
         return { TheiaService };
