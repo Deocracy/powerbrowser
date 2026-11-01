@@ -96,6 +96,10 @@
  *       that contract; installProtocolBars wraps the prototype's
  *       registerProtocolHandler; no getTabBrowser member or call exists under
  *       powerbrowser/shell (a fabricated tabbrowser is the rejected widening).
+ *   (ab) sharing behaviour (37-REVIEW CR-02): updateWebTabSharing and
+ *       pushWebTabSharing, cut from the tree and run against stub maps, keep
+ *       the camera mark on when a { geo } or { xr } report follows a camera
+ *       report (PermissionUI reports through the same updateBrowserSharing).
  * The prompt section ends where the '// Phase 37: notification bars.' section
  * starts; rules (c), (f) and (h) read the prompt section only.
  * Rules (a), (j), (k), (q) and (r), the furniture rows, moved to
@@ -317,6 +321,54 @@ function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, fil
  * @param facadeNames the facade names verify-shell-gbrowser-standin.mjs audits
  * @returns {string[]} failures; empty means the contract holds
  */
+/**
+ * Rule (ab): the sharing functions, cut from the tree and run with every module-level Map and WeakMap of the file
+ * declared fresh, against stub hosts. The scenarios name what each push must mean, so a fault in the merge, the
+ * pending-overlay record or the navigation reset goes red here rather than only on a built binary.
+ */
+const SHARING_FUNCTIONS = ['updateWebTabSharing', 'pushWebTabSharing'];
+function checkSharingBehaviour(api) {
+    const bodies = SHARING_FUNCTIONS.map(name => functionBody(api, name));
+    const missing = SHARING_FUNCTIONS.filter((_, i) => !bodies[i]);
+    if (missing.length) {
+        return [`sharing-behaviour: ${API} defines no ${missing.join(', ')} (broken instrument)`];
+    }
+    const maps = [...api.matchAll(/^const ([\w$]+) = new (?:Weak)?Map\(\);/gm)].map(m => m[1]);
+    const source = `${maps.map(n => `const ${n} = new Map();`).join('\n')}\n${bodies.map(b => `${b.replace(/^export /, '')}\n}`).join('\n')}\nreturn { ${SHARING_FUNCTIONS.join(', ')}, tabHosts, webTabs };`;
+    const pushes = [];
+    const ids = new Map();
+    let fns;
+    try {
+        fns = new Function('tabIdOfBrowser', 'sendWebTabPush', 'resendWebTabBars', source)(b => ids.get(b) ?? null, (_frame, payload) => pushes.push(payload), () => {});
+    } catch (err) {
+        return [`sharing-behaviour: the sharing functions do not evaluate (${err.message}) (broken instrument)`];
+    }
+    const failures = [];
+    const win = {};
+    const browser = { ownerGlobal: win };
+    fns.tabHosts.set(win, { theiaBrowser: { browsingContext: { currentWindowGlobal: {} } } });
+    ids.set(browser, 'wt-a');
+    const run = (label, step) => {
+        try {
+            step();
+        } catch (err) {
+            failures.push(`sharing-behaviour: ${label} threw (${err.message})`);
+        }
+    };
+    // CR-02: a location or XR grant while the camera is live leaves the camera mark on.
+    run('camera push', () => fns.updateWebTabSharing(browser, { webRTC: { camera: 1, sharing: 'camera' } }));
+    if (!pushes.some(p => p.kind === 'sharingChanged' && p.camera === true)) {
+        failures.push('sharing-behaviour: a camera report produced no camera-on sharingChanged push (broken instrument)');
+    }
+    const afterCamera = pushes.length;
+    run('geo report', () => fns.updateWebTabSharing(browser, { geo: true }));
+    run('xr report', () => fns.updateWebTabSharing(browser, { xr: true }));
+    if (pushes.slice(afterCamera).some(p => p.camera !== true)) {
+        failures.push('sharing-behaviour: location-grant-while-camera-shared -- a { geo } or { xr } report after a camera report pushed the camera mark off while the track is live (37-REVIEW CR-02)');
+    }
+    return failures;
+}
+
 function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = undefined) {
     const failures = [];
     const api = stripComments(raw[API]);
@@ -588,6 +640,9 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
         }
     }
 
+    // (ab) The sharing functions run against stub maps: each scenario's pushes must match what the state means.
+    failures.push(...checkSharingBehaviour(api));
+
     // (u) The bar host is page furniture inside the widget, outside the blocking layer, and the page rect starts below it.
     const webTab = stripComments(raw[WEB_TAB]);
     const hostClass = /const BAR_HOST_CLASS = '([\w-]+)'/.exec(webTab)?.[1];
@@ -806,6 +861,12 @@ function selfTest() {
             name: 'indicator honours a frame flag',
             sources: { ...clean, [WEB_TAB]: `${clean[WEB_TAB]}\nexport function plantedFlag(w: WebTabWidget): void { window.addEventListener('message', e => { w.sharing = e.data.sharing; }); }\n` },
             expect: 'indicator driven from a frame flag',
+        },
+        {
+            // 37-REVIEW CR-02 reverted: a partial { geo } report replaces the state, so the camera mark goes off.
+            name: 'geo report replaces the camera state',
+            sources: { ...clean, [API]: clean[API].replace('if (!host || !("webRTC" in sharingState)) {', 'if (!host) {').replace('const webRTC = merged.webRTC || {};', 'const webRTC = sharingState.webRTC || {};') },
+            expect: 'location-grant-while-camera-shared',
         },
         {
             // Post-review fix reverted: the duplicate check is keyed on the overlay only.

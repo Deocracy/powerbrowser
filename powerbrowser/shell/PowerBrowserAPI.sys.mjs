@@ -7316,17 +7316,26 @@ function placePromptAnchor(browser) {
 
 // D-05: per overlay, the sharing state last observed and the frontend WindowGlobal it was pushed to.
 const sharingSent = new WeakMap();
+// 37-REVIEW CR-02: per overlay, the merged state of every kind reported (tabbrowser.js:2193-2196, _sharingState).
+const sharingStateOf = new WeakMap();
 
 // The shell gBrowser's updateBrowserSharing (powerbrowser.js). WebRTCParent.updateIndicators calls it with webrtcUI's own
 // per-tab state (webrtcUI.updateIndicators), so the state is observed chrome-side and never comes from a page or a
-// frame message. Theia gets one boolean per kind; device labels and the browsing context stay here.
+// frame message. Theia gets one boolean per kind; device labels and the browsing context stay here. PermissionUI reports
+// { geo } and { xr } through the same call, so a partial state merges, and only a webRTC part moves the marks
+// (tabbrowser.js:2198).
 export function updateWebTabSharing(browser, sharingState) {
-  const tabId = tabIdOfBrowser(browser);
-  const host = tabId === null ? null : tabHosts.get(browser.ownerGlobal);
-  if (!host) {
+  if (!sharingState) {
     return;
   }
-  const webRTC = (sharingState && sharingState.webRTC) || {};
+  const merged = Object.assign(sharingStateOf.get(browser) ?? {}, sharingState);
+  sharingStateOf.set(browser, merged);
+  const tabId = tabIdOfBrowser(browser);
+  const host = tabId === null ? null : tabHosts.get(browser.ownerGlobal);
+  if (!host || !("webRTC" in sharingState)) {
+    return;
+  }
+  const webRTC = merged.webRTC || {};
   // Paused still counts as shared, as tabbrowser's getTabSharingState reads it.
   pushWebTabSharing(browser, tabId, host, { camera: Boolean(webRTC.camera), microphone: Boolean(webRTC.microphone), screen: Boolean(webRTC.screen) }, false);
 }
