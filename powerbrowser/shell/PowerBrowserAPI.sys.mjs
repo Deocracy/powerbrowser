@@ -2825,7 +2825,7 @@ export const PowerBrowserAPI = Object.freeze({
           if (!entry || !entry.url || !Number.isFinite(closed.closedAt)) {
             continue;
           }
-          const uri = tab.extData?.[STOCK_TAB_KEY_VALUE] || `stock:closed-${closed.closedAt.toString(36)}-${stringHash(entry.url)}`;
+          const uri = stockClosedTabUri(closed, entry);
           rows.push({ uri, url: entry.url, title: entry.title ?? closed.title ?? "", last_active: closed.closedAt, closed_at: closed.closedAt });
         }
       }
@@ -6825,7 +6825,7 @@ function webTabPushedSpec(spec) {
 // raw SQL, never a second writer. bookmarkPage, updateBookmark, removeBookmark
 // and clearHistory are privileged store kinds (rule 12): sent only from the
 // pill's and the chrome bar widget's event handlers, never a command, a key
-// row or the backend relay. listClosedTabs and reopenClosedTab are reads.
+// row or the backend relay. listClosedTabs is a read; reopenClosedTab claims the row it answers.
 // Replies carry plain strings; no log line carries a URL, title, guid or path.
 // It sits at the end of the file so no catalogued line above moves.
 // ---------------------------------------------------------------------------
@@ -7019,11 +7019,10 @@ async function listClosedTabs(limit) {
   return rows.map(closedTabRow);
 }
 
-// BMK-03: the closed row to reopen -- the one named, or the newest. Read only:
-// the frontend reopens it through webTabOpen on the same row key (`key`, web
-// rows only) and arms the history through shellArmWebTabHistory when
-// `withHistory` says one was kept. Nothing is fabricated: no kept history,
-// withHistory false. A row already pruned answers null, a no-op.
+// BMK-03: the closed row to reopen -- the one named, or the newest. The row is
+// claimed here (claimClosedTabRow), so an overlapping or later call answers null.
+// The frontend reopens it through webTabOpen on the same row key (`key`, web rows
+// only) and arms the history through shellArmWebTabHistory when `withHistory` says one was kept.
 async function reopenClosedTab(uri) {
   if (uri !== undefined && (typeof uri !== "string" || uri.length > 2048 || !/^(web|stock):./.test(uri))) {
     throw new Error("reopenClosedTab: refusing a malformed tab key");
@@ -7036,7 +7035,7 @@ async function reopenClosedTab(uri) {
     const rows = await conn.execute(`${CLOSED_TABS_SQL} AND uri = :uri`, { uri });
     row = rows.length ? closedTabRow(rows[0]) : undefined;
   }
-  if (!row) {
+  if (!row || !(await claimClosedTabRow(row.uri))) {
     return null;
   }
   const key = WEB_TAB_ROW_KEY_RE.test(row.uri) ? row.uri : null;
@@ -7236,4 +7235,43 @@ async function clearSessionStoreClosedTabs(span) {
       lazy.SessionStore.forgetClosedTabById(tab.closedId, { includePrivate: false });
     }
   }
+}
+
+// Phase 33 WR-01/WR-02 (33-REVIEW): the row a reopen answers is claimed in the same call, so a held or doubled
+// Ctrl+Shift+T cannot hand one row to two opens. A web row opens again (webTabOpen's write would do the same); a
+// stock row is used up (its tabs row and its SessionStore record go, so the sweep does not re-import it). The Set
+// check and add run with no await between them; the closed-row check after it fails an overlapping or later call.
+const claimedClosedRows = new Set();
+async function claimClosedTabRow(uri) {
+  if (claimedClosedRows.has(uri)) {
+    return false;
+  }
+  claimedClosedRows.add(uri);
+  try {
+    const conn = await PowerBrowserAPI.openTabStore();
+    const stillClosed = await conn.execute("SELECT 1 FROM tabs WHERE uri = :uri AND closed_at IS NOT NULL", { uri });
+    if (!stillClosed.length) {
+      return false;
+    }
+    if (uri.startsWith("stock:")) {
+      for (const tab of lazy.SessionStore.getClosedTabData({ closedTabsFromAllWindows: true, private: false })) {
+        const entry = tab.state?.entries?.[(tab.state.index ?? tab.state.entries.length) - 1];
+        if (entry?.url && Number.isFinite(tab.closedAt) && stockClosedTabUri(tab, entry) === uri) {
+          lazy.SessionStore.forgetClosedTabById(tab.closedId, { includePrivate: false });
+        }
+      }
+      await conn.execute("DELETE FROM tabs WHERE uri = :uri AND closed_at IS NOT NULL", { uri });
+    } else {
+      await conn.execute("UPDATE tabs SET closed_at = NULL WHERE uri = :uri AND closed_at IS NOT NULL", { uri });
+    }
+    return true;
+  } finally {
+    claimedClosedRows.delete(uri);
+  }
+}
+
+// The stock:* row key of one SessionStore closed tab: the key the store gave it, else one derived from when it
+// closed and its address, so the same record projects to the same row on every sweep.
+function stockClosedTabUri(closed, entry) {
+  return closed.state?.extData?.[STOCK_TAB_KEY_VALUE] || `stock:closed-${closed.closedAt.toString(36)}-${stringHash(entry.url)}`;
 }

@@ -168,9 +168,11 @@ const STORE_KIND_CLASSES = new Map([
     ['updateBookmark', 'privileged'],
     ['removeBookmark', 'privileged'],
     ['clearHistory', 'privileged'],
-    // Phase 33 (BMK-03/06): the closed-tab list and the reopen lookup read tabs.sqlite and write nothing.
+    // Phase 33 (BMK-03/06): the closed-tab list reads tabs.sqlite and writes nothing. The reopen claims the row it
+    // answers (WR-01/WR-02: the tabs row, and a stock row's sessionstore record) so one row opens once; the
+    // Ctrl+Shift+T command reaches it, so it is a store-write, never privileged.
     ['listClosedTabs', 'read'],
-    ['reopenClosedTab', 'read'],
+    ['reopenClosedTab', 'store-write'],
     // Phase 33 plan 05 (MENU-03, D-14b): the Full Screen toggle, window chrome state the full-screen command may reach.
     ['fullScreen', 'window-chrome'],
 ]);
