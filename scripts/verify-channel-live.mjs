@@ -412,7 +412,7 @@ async function selfTest() {
     };
     const mar = Buffer.from('channel-live self-test MAR bytes\n');
     const goodUrl = `${origin}/${tag}/${asset}`;
-    const emit = (marUrl = goodUrl) => buildUpdateXml({ marBytes: mar, marUrl, appVersion: manifest.version, platformVersion: manifest.version, buildID: manifest.build_id, displayVersion: tag.slice(1), detailsURL: config.urls.release_notes });
+    const emit = (marUrl = goodUrl, o = {}) => buildUpdateXml({ marBytes: mar, marUrl, appVersion: manifest.version, platformVersion: manifest.version, buildID: manifest.build_id, displayVersion: tag.slice(1), detailsURL: config.urls.release_notes, ...o });
 
     const dir = mkdtempSync(join(tmpdir(), 'channel-live-'));
     const xmlFile = join(dir, 'tree', manifest.update_channel, target, 'update.xml');
@@ -442,18 +442,23 @@ async function selfTest() {
         const u = new URL(url);
         return mapped.has(u.host) ? `${loop}${u.pathname}${u.search}` : url;
     };
+    const latestPath = `repos/${slug.owner}/${slug.repo}/releases/latest`;
+    // Plantable answers: the latest Release, and the updates repo copy (null serves the same file the loopback serves).
+    const state = { latest: null, repoXml: null };
     const get = path => {
-        if (path === `repos/${slug.owner}/${slug.repo}/releases/latest`) return { ok: true, body: { tag_name: tag, draft: false, assets: [] } };
+        if (path === latestPath) return state.latest ?? { ok: true, body: { tag_name: tag, draft: false, assets: [] } };
         if (path === `repos/${slug.owner}/${slug.repo}${UPDATES_SUFFIX}/contents/${manifest.update_channel}/${target}/update.xml?ref=main`) {
             try {
-                return { ok: true, body: { content: readFileSync(xmlFile).toString('base64') } };
+                return { ok: true, body: { content: (state.repoXml === null ? readFileSync(xmlFile) : Buffer.from(state.repoXml)).toString('base64') } };
             } catch {
                 return { ok: false, status: 404, why: `GET ${path} could not be read (HTTP 404)` };
             }
         }
         return { ok: false, status: null, why: `GET ${path} is not a fixture` };
     };
-    const reset = (xml = emit(), withMar = true) => {
+    const reset = (xml = emit(), withMar = true, planted = {}) => {
+        state.latest = planted.latest ?? null;
+        state.repoXml = planted.repoXml ?? null;
         rmSync(join(dir, 'tree'), { recursive: true, force: true });
         rmSync(join(dir, 'origin'), { recursive: true, force: true });
         if (xml !== null) {
@@ -483,11 +488,23 @@ async function selfTest() {
         const wrongHash = emit().replace(/hashValue="[0-9a-f]+"/, `hashValue="${digest}"`);
         const wrongSize = emit().replace(/size="\d+"/, `size="${mar.length + 1}"`);
         const ghHost = ['github', 'com'].join('.');
+        const otherTag = 'v0.0.0-1';
         const network = [
             ['wrong hashValue', () => reset(wrongHash), digest],
             ['missing target file', () => reset(null), 'answered 404, so the descriptor is missing'],
             ['404 MAR', () => reset(emit(), false), `HEAD ${goodUrl} answered 404`],
             ['size mismatch', () => reset(wrongSize), `"${mar.length + 1}"`],
+            // The repo copy differs from the public bytes by one byte (the trailing newline).
+            ['public descriptor not byte-equal to the repo copy', () => reset(emit(), true, { repoXml: `${emit()}\n` }), 'is not byte-equal to the updates repo copy'],
+            ['descriptor appVersion off the manifest', () => reset(emit(goodUrl, { appVersion: '0.0.1' })), 'appVersion "0.0.1"'],
+            ['descriptor buildID off the manifest', () => reset(emit(goodUrl, { buildID: '20000101000000' })), 'buildID "20000101000000"'],
+            ['offered version off the latest Release', () => reset(emit(goodUrl, { displayVersion: '0.0.1' })), 'offered version "0.0.1"'],
+            ['latest Release tag off the manifest release_key', () => reset(emit(), true, { latest: { ok: true, body: { tag_name: otherTag, draft: false, assets: [] } } }), `offered version ${show(tag.slice(1))} is not the latest Release ${show(otherTag)}`],
+        ];
+        // Checks that name the endpoint or the release key rather than a target.
+        const release = [
+            ['no published Release (404)', { latest: { ok: false, status: 404, why: 'HTTP 404' } }, `GET ${latestPath} found no published Release`],
+            ['latest Release tag disagreeing with release_key', { latest: { ok: true, body: { tag_name: otherTag, draft: false, assets: [] } } }, `offers ${tag} but the latest published Release is ${show(otherTag)}`],
         ];
         const strings = [
             ['github.com Releases download patch URL', `https://${ghHost}/${slug.owner}/${slug.repo}/releases/download/${tag}/${asset}`],
@@ -522,6 +539,15 @@ async function selfTest() {
             if (failures.some(f => f.includes(target) && f.includes(value)) && hits.mar === 0 && form.some(f => f.includes(value))) console.log(`  ok  ${name} -> red naming ${target} and ${value}, before any MAR fetch, live and --form-only`);
             else {
                 console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${target} and ${value} before any MAR fetch (MAR reads ${hits.mar}); got: ${[...failures, ...form].join(' | ') || '(no failures)'}`);
+                failed += 1;
+            }
+        }
+        for (const [name, planted, value] of release) {
+            reset(emit(), true, planted);
+            const { failures } = await run();
+            if (failures.some(f => f.includes(value))) console.log(`  ok  ${name} -> red naming ${value}`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${value}; got: ${failures.join(' | ') || '(no failures)'}`);
                 failed += 1;
             }
         }
@@ -575,7 +601,7 @@ async function selfTest() {
             failed += 1;
         }
         if (failed > 0) return 1;
-        console.log(`${NAME}: --self-test PASS -- the clean fixture is green and ${network.length + strings.length + decoys.length + 2 + claims.length} planted faults each went red naming the target and the value`);
+        console.log(`${NAME}: --self-test PASS -- the clean fixture is green and ${network.length + release.length + strings.length + decoys.length + 2 + claims.length} planted faults each went red naming the target and the value`);
         return 0;
     } finally {
         server.close();
