@@ -5261,6 +5261,19 @@ run_own_checks() {
     # target, workflow or URL. The fresh scheduled sweep, an idle event-triggered workflow and the
     # matching set stay green.
     "upptime-config-self-test|node $REPO_ROOT/scripts/verify-upptime.mjs --self-test"
+    # NEW (Phase 53, DOC-07 and GH-17): the support-operations section of docs/RELEASING.md. Derives
+    # every documented workflow trigger, job id, environment, model and template id from the workflow
+    # files, the private-reporting, Discussions, code-scanning and fork-approval values from the tracked
+    # settings bodies, and the acknowledgement-window sentence from SECURITY.md, and compares each with
+    # the section as set equality; a missing SECURITY.md fails closed. Honestly --quick: text reads and
+    # js-yaml from theia/ only; no network, gh, build or display.
+    "releasing-support-ops|node $REPO_ROOT/scripts/verify-releasing-support-ops.mjs"
+    # releasing-support-ops-self-test runs the unmutated tree green first, then plants in memory a removed
+    # trigger, a renamed job id, a deleted and an added template id, a changed environment and model, a
+    # missing workflow file, a missing window sentence, moderation rule, CodeQL rule and fork approval
+    # rule, a private-reporting flag turned off, a changed fork policy, an added scanned language, an
+    # absent SECURITY.md and a removed subsection; each goes red naming the drift. It writes nothing.
+    "releasing-support-ops-self-test|node $REPO_ROOT/scripts/verify-releasing-support-ops.mjs --self-test"
     # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
     # workflow issue-label writer names must be declared in .github/settings/labels.json, and
     # config.yml keeps blank issues off with security-policy and Discussions links. Honestly

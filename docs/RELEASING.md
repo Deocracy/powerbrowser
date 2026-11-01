@@ -1405,6 +1405,67 @@ container image and the date beside the new baseline.
 
 ---
 
+## Support operations
+
+How the project is supported once it is public: who reads what, what is automated, and which rules are never skipped. The workflow facts below are derived from `.github/workflows/` and the settings bodies under `.github/settings/` by the quick row `releasing-support-ops` (`scripts/verify-releasing-support-ops.mjs`), which compares them with this section as set equality, so a renamed job, a removed trigger or a deleted template id turns it red. The repository is the one `urls.release_notes` names in `configuration.toml`.
+
+The workflows this section describes, one line each. A reader who changes one of these lines changes the workflow in the same pull request:
+
+- `triage.yml` trigger `issues.opened`; job ids `classify`, `apply`; environment `triage`; model `claude-haiku-5-5`; template ids `bug-report`, `feature-request`, `other`.
+- `notify-drill.yml` trigger `workflow_dispatch`; job ids `pending-deployment`; environment `release`.
+
+### Issue triage
+
+`triage.yml` runs once for every opened issue. Its two jobs split the trust. The `classify` job reads the title and body as fenced data and holds the model, with a token that can only read; it returns a label list and a template id as structured output and nothing else. The `apply` job holds the one write permission, runs no model, keeps only labels that are in `.github/settings/labels.json` under the type, os, format and area families, and posts one fixed comment chosen by template id. If `classify` fails, `apply` does not run and the issue gets no comment.
+
+- Triage never closes an issue, never edits an issue body, and never posts text the model wrote. An issue whose text carries instructions (publish this, apply that label, mark this resolved) receives only the fixed comment for its template id.
+- Triage runs in the `triage` environment, whose branch policy admits `main` only and which holds the Anthropic key. The model is set in the workflow's `claude_args`. The debug posture is the one the fixer follows: full output off, no secret echoed, and no `ACTIONS_STEP_DEBUG` anywhere in the repository. The `workflows` row keeps that shape.
+- Triage spend runs in its own Anthropic Console workspace with its own monthly limit, separate from the fixer workspace. The owner records the limit and the authentication outcome in the record below.
+- A maintainer still reads every new issue. The fixed comment says so. Labels are a first sort, not a decision: change a wrong label by hand, and add `needs-info` when the report lacks what the bug form asks for.
+- The re-runnable phone drill is `notify-drill.yml`: dispatch it from `main` on the second account, and reject the pending deployment from the phone.
+
+### Discussions moderation
+
+Discussions is the place for questions and general talk; the issue forms send support questions there.
+
+- Discussions: `enabled`
+- Discussions moderation rule: a maintainer reads every new Discussion, answers it or points to the right place, and moves a defect report to the bug form. A suspected vulnerability posted in a Discussion is hidden at once, and its author is asked to use private reporting.
+
+### Private vulnerability reports
+
+Private vulnerability reporting is the first route and `security@powerbrowser.org` is the second; both are named in `SECURITY.md`, which owns the policy text. Both routes must reach the owner as GitHub Mobile and phone notifications inside the acknowledgement window, which `SECURITY.md` states as:
+
+> We acknowledge your report within 5 business days.
+
+- Private vulnerability reporting: `enabled`
+- The proof is one private-report-equivalent filed from the second account and one test message to the security mailbox, each received on the owner phone inside the window. The received times go in the record below. A push that did not arrive, or arrived late, is a defect to fix before the support path is called live.
+- Triage a report in the Security tab, not in a public issue. Move nothing from a private report into a public issue until a fix has shipped.
+
+### CodeQL alerts after each rebase
+
+Code scanning runs as GitHub's default setup.
+
+- Default setup state: `configured`
+- Default setup languages: `actions`, `javascript-typescript`
+- CodeQL rule: after each rebase onto a new ESR tag, open the Code scanning alerts in the Security tab and triage every alert that rebase introduced before the release tag is cut. A rebase that touches only `upstream/` introduces none for the scanned languages, so a new alert after one points at the patch stack or the Theia side.
+
+### Fork pull request approval
+
+- Approval policy: `all_external_contributors`
+- Fork approval rule: no fork pull request workflow run is approved without reading its diff. Open the diff on the pull request, read every changed workflow, script and lockfile, and only then use the Approve and run button.
+
+### Support operations owner record
+
+The owner fills these at the support-operations checkpoint; each stays TODO until then, and the live rows (`repo-controls`, `codeberg-mirror-live`, `upptime-sweep-live`) are the proof.
+
+- Triage workspace name and monthly limit: TODO
+- Authentication outcome, OIDC or static key, and where the credential lives: TODO
+- Status repository, template head and Pages address: TODO
+- Codeberg mirror repository, token holder and timer apply date: TODO
+- Phone proofs, received times for the private report and the security mailbox: TODO
+
+---
+
 ## Verification map
 
 One driver, `scripts/verify-platform.sh`, one registry. Most rows below are one
@@ -1438,6 +1499,7 @@ on the absence of a log line.
 | `tel06-error-delivery-live` | 8 | One real POST from a running sidecar reaches a loopback endpoint, which the earlier drill never observed | Analyzer self-test |
 | `listing-manifests` | 9 | App id, licence form, desktop and icon agreement, the updater-disable split, token presence and the winget identifier, all derived | Listing self-test |
 | `releasing-maintenance` | 9 | This document's maintenance section agrees with the automation by derivation | A schedule key planted into a fixture workflow; a documented trigger removed; a job id removed from the doc; the fixture job order changed so the documented liveness job is no longer last; a DER basename removed; a listing row removed; a deferred row stripped of its pointer; a row removed from `## Deferred signing items`; one of the seven original consequences deleted; a sibling deferrals table added; a required command removed |
+| `releasing-support-ops` | 9 | This document's support-operations section agrees with the workflows and settings bodies by derivation: every trigger, job id, environment, model and template id, the private-reporting and Discussions flags, the code-scanning setup, the fork approval policy and the `SECURITY.md` acknowledgement window | A trigger removed; a job id renamed; a template id deleted or added; a workflow the section names that does not exist; a missing window sentence, moderation rule, CodeQL rule or fork approval rule; a private-reporting flag turned off; an absent `SECURITY.md` |
 
 Two rules govern every row above and are worth restating because both were earned by
 shipping the mistake first. Never assert on the absence of a log line unless the line
