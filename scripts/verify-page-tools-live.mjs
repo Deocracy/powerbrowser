@@ -79,6 +79,8 @@
  *   crash-reader  32-REVIEW CR-01, WR-01: the same crash with the tab in reader view. Theia holds the page URL, not the
  *            reader URL, and Reload tab brings the page back with its history, reader entry included. Plant: the widget
  *            holds the reader URL, which the reopen refuses.
+ *   crash-switching  32-REVIEW WR-04: the same crash while the overlay is mid process switch (DidChangeBrowserRemoteness
+ *            dispatched, nothing settled); the crashed push must still arrive and Reload tab must recover the tab.
  *   remoteness-regression  (32-08, D-25a): five same-site tabs, the fifth reloaded and then activated; each must end on its
  *            page with docShellIsActive. Self-sessioned; writes no verdict.
  *   devtools  PAGE-10 (32-07 gap closure): F12 from a page opens one stock toolbox window for that tab; a second open keeps one;
@@ -1465,9 +1467,9 @@ async function scenarioRemotenessRepro() {
  * `plant` true removes the crash copy from the placeholder, so no crash UI is shown, which must go red; `plant` 'history'
  * recreates the overlay under another row key, so the history is not restored, which must go red.
  */
-async function scenarioCrash(app, origin, plant = false, inReader = false) {
+async function scenarioCrash(app, origin, plant = false, variant = null) {
     const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
-    const second = inReader ? '/article' : '/edit';
+    const second = variant === 'reader' ? '/article' : '/edit';
     const moved = await channelRequest(app, { kind: 'webTabNavigate', tabId, url: `${origin}${second}` });
     if (moved?.ok !== true) {
         return `the navigation to ${second} was refused (${JSON.stringify(moved)})`;
@@ -1475,7 +1477,7 @@ async function scenarioCrash(app, origin, plant = false, inReader = false) {
     if (await waitForPush(app, loadedAt(tabId, second), { from, timeoutMs: 30000 }) < 0) {
         return 'the second page never loaded, so the history has no entry to keep';
     }
-    if (inReader) {
+    if (variant === 'reader') {
         // crash-reader (32-REVIEW CR-01, WR-01): the tab crashes in reader view, so its URL and its kept history hold
         // about:reader. Positive control: chrome's own read of the overlay URI is the reader page before the crash.
         if (await waitForPush(app, stateOf(tabId, p => p.isArticle === true), { from, timeoutMs: 20000 }) < 0) {
@@ -1501,7 +1503,11 @@ async function scenarioCrash(app, origin, plant = false, inReader = false) {
     };
     const entriesBefore = await historyOf();
     const mark = (await pushes(app)).length;
-    await inChrome(app, `overlayOf(${JSON.stringify(tabId)}).fixupAndLoadURIString('about:crashcontent', { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() }); return true;`);
+    // crash-switching (32-REVIEW WR-04): the overlay is mid process switch (DidChangeBrowserRemoteness, no settle yet) when
+    // its process dies. A dead process sends no location change or network stop, so the crash itself must push.
+    const switching = variant === 'switching' ? "o.dispatchEvent(new Event('DidChangeBrowserRemoteness'));" : '';
+    await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); ${switching}
+        o.fixupAndLoadURIString('about:crashcontent', { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() }); return true;`);
     if (await waitForPush(app, stateOf(tabId, p => p.crashed === true), { from: mark, timeoutMs: 30000 }) < 0) {
         return 'no crashed push: about:crashcontent did not crash the scratch tab';
     }
@@ -1641,7 +1647,8 @@ const SCENARIOS = {
     reader: (app, fx) => scenarioReader(app, fx.origin),
     source: (app, fx) => scenarioSource(app, fx.origin),
     crash: (app, fx) => scenarioCrash(app, fx.origin),
-    'crash-reader': (app, fx) => scenarioCrash(app, fx.origin, false, true),
+    'crash-reader': (app, fx) => scenarioCrash(app, fx.origin, false, 'reader'),
+    'crash-switching': (app, fx) => scenarioCrash(app, fx.origin, false, 'switching'),
     devtools: (app, fx) => scenarioDevtools(app, fx.origin),
     downloads: (app, fx) => scenarioDownloads(app, fx),
     'downloads-today': async (app, fx, downloadDir) => {
@@ -1764,7 +1771,7 @@ const PLANTS = [
     {
         plant: 'crash-reader-url-held',
         target: 'crash-reader',
-        run: (app, fx) => scenarioCrash(app, fx.origin, 'reader-url', true),
+        run: (app, fx) => scenarioCrash(app, fx.origin, 'reader-url', 'reader'),
         expect: 'Reload tab did not bring the page back',
     },
     {

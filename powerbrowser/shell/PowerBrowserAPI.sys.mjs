@@ -5188,6 +5188,8 @@ function attachWebTabPageListeners(frame, tabId, browser) {
   // never read here: it is null on a crashed remote overlay. The contracted crash UI is Theia's (plan 32-08).
   state.crashedListener = () => {
     state.crashed = true;
+    // 32-REVIEW WR-04: a dead process never settles a pending process switch, so the crash push must not wait for it.
+    switchingOverlays.delete(browser);
     webTabPagePush(browser);
   };
   browser.addEventListener("oop-browser-crashed", state.crashedListener);
