@@ -422,7 +422,7 @@ jobs:
           DERIVED="$(node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(releaseIdentity(config).releaseKey);" | tail -n 1)"
           [[ "$DERIVED" =~ ^v[0-9]+(\.[0-9]+)*-[0-9]+$ ]] || { echo "::error::derived release key '$DERIVED' is not v<esr>-<revision>" >&2; exit 1; }
           MANIFEST_KEY="$(jq -r .release_key release/release-manifest.json)"
-          [ "$MANIFEST_KEY" = "$DERIVED" ] || { echo "::error::manifest release_key '$MANIFEST_KEY' differs from the key '$DERIVED' derived from $RELEASE_SHA; nothing is signed" >&2; exit 1; }
+          [ "$MANIFEST_KEY" = "$DERIVED" ] || { echo "::error::manifest release_key $(jq -c .release_key release/release-manifest.json) differs from the key '$DERIVED' derived from $RELEASE_SHA; nothing is signed" >&2; exit 1; }
           echo "tag=$DERIVED" >> "$GITHUB_OUTPUT"
 
       - name: Install the NSS tools and the signmar build dependencies
@@ -465,7 +465,7 @@ jobs:
           UPDATE_CHANNEL_MOZCONFIG="$(sed -n 's/^ac_add_options --enable-update-channel=//p' powerbrowser/packaging/mozconfig.release | tr -d '[:space:]')"
           UPDATE_CHANNEL_MANIFEST="$(jq -r .update_channel release/release-manifest.json)"
           if [ "$UPDATE_CHANNEL_MANIFEST" != "$UPDATE_CHANNEL_MOZCONFIG" ]; then
-            echo "::error::--channel $UPDATE_CHANNEL_MANIFEST disagrees with MOZ_UPDATE_CHANNEL $UPDATE_CHANNEL_MOZCONFIG; nothing is signed" >&2
+            echo "::error::--channel $(jq -c .update_channel release/release-manifest.json) disagrees with MOZ_UPDATE_CHANNEL $UPDATE_CHANNEL_MOZCONFIG; nothing is signed" >&2
             exit 1
           fi
           MAR_CHANNEL="$("$SIGNMAR" -T "$MAR" | sed -n 's/.*[Cc]hannel[^:]*: *//p' | awk 'NR==1{print}' | tr -d '[:space:]')"
@@ -648,7 +648,7 @@ jobs:
           DERIVED="$(node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(releaseIdentity(config).releaseKey);" | tail -n 1)"
           [[ "$DERIVED" =~ ^v[0-9]+(\.[0-9]+)*-[0-9]+$ ]] || { echo "::error::derived release key '$DERIVED' is not v<esr>-<revision>" >&2; exit 1; }
           MANIFEST_KEY="$(jq -r .release_key release/release-manifest.json)"
-          [ "$MANIFEST_KEY" = "$DERIVED" ] || { echo "::error::manifest release_key '$MANIFEST_KEY' differs from the key '$DERIVED' derived from the dispatched commit; no descriptor is written" >&2; exit 1; }
+          [ "$MANIFEST_KEY" = "$DERIVED" ] || { echo "::error::manifest release_key $(jq -c .release_key release/release-manifest.json) differs from the key '$DERIVED' derived from the dispatched commit; no descriptor is written" >&2; exit 1; }
           echo "tag=$DERIVED" >> "$GITHUB_OUTPUT"
 
       # The descriptor pins the signed bytes the Release published, never the unsigned MAR legion built.
@@ -689,8 +689,8 @@ jobs:
           [[ "$ORIGIN" == https://* ]] || { echo "::error::configuration.toml [urls] mar_origin is $ORIGIN; no descriptor may name a MAR origin" >&2; exit 1; }
           M_ORIGIN="$(jq -r '.mar_origin // "null"' release/release-manifest.json)"
           M_CHANNEL="$(jq -r '.update_channel // "null"' release/release-manifest.json)"
-          [ "$M_ORIGIN" = "$ORIGIN" ] || { echo "::error::manifest mar_origin '$M_ORIGIN' differs from '$ORIGIN' derived from the dispatched commit; the tree decides" >&2; exit 1; }
-          [ "$M_CHANNEL" = "$CHANNEL" ] || { echo "::error::manifest update_channel '$M_CHANNEL' differs from '$CHANNEL' derived from the dispatched commit; the tree decides" >&2; exit 1; }
+          [ "$M_ORIGIN" = "$ORIGIN" ] || { echo "::error::manifest mar_origin $(jq -c .mar_origin release/release-manifest.json) differs from '$ORIGIN' derived from the dispatched commit; the tree decides" >&2; exit 1; }
+          [ "$M_CHANNEL" = "$CHANNEL" ] || { echo "::error::manifest update_channel $(jq -c .update_channel release/release-manifest.json) differs from '$CHANNEL' derived from the dispatched commit; the tree decides" >&2; exit 1; }
           echo "manifest agrees with the tree: MAR origin $ORIGIN, update channel $CHANNEL"
 
       # DIST-08. Every patchURL and servedMarUrl must be https on the tree's mar_origin with path
@@ -797,8 +797,8 @@ jobs:
           [[ "$ORIGIN" == https://* ]] || { echo "::error::configuration.toml [urls] mar_origin is $ORIGIN; no descriptor may name a MAR origin" >&2; exit 1; }
           M_ORIGIN="$(jq -r '.mar_origin // "null"' release/release-manifest.json)"
           M_CHANNEL="$(jq -r '.update_channel // "null"' release/release-manifest.json)"
-          [ "$M_ORIGIN" = "$ORIGIN" ] || { echo "::error::manifest mar_origin '$M_ORIGIN' differs from '$ORIGIN' derived from the dispatched commit; the tree decides" >&2; exit 1; }
-          [ "$M_CHANNEL" = "$CHANNEL" ] || { echo "::error::manifest update_channel '$M_CHANNEL' differs from '$CHANNEL' derived from the dispatched commit; the tree decides" >&2; exit 1; }
+          [ "$M_ORIGIN" = "$ORIGIN" ] || { echo "::error::manifest mar_origin $(jq -c .mar_origin release/release-manifest.json) differs from '$ORIGIN' derived from the dispatched commit; the tree decides" >&2; exit 1; }
+          [ "$M_CHANNEL" = "$CHANNEL" ] || { echo "::error::manifest update_channel $(jq -c .update_channel release/release-manifest.json) differs from '$CHANNEL' derived from the dispatched commit; the tree decides" >&2; exit 1; }
           echo "manifest agrees with the tree: MAR origin $ORIGIN, update channel $CHANNEL"
 
       # The updates host deploys from the push the descriptor job just made, and its edge can serve the
