@@ -4985,8 +4985,10 @@ run_own_checks() {
     # the live draft list is compared by the release job, never here.
     "release-asset-set|node $REPO_ROOT/scripts/verify-release-asset-set.mjs"
     # release-asset-set-self-test plants a dropped asset (a notice and the manifest), an extra asset,
-    # a stable-name drift, a versioned-name drift, an assemble step missing the manifest or notice arm, a publish-before-equality order, a fail-open publish chain, a missing R2
-    # gate, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
+    # a stable-name drift, a versioned-name drift, an assemble step missing the manifest or notice arm, a publish-before-equality order, a fail-open publish chain, an R2
+    # copy that is missing, after the publish, failing open, local (no --remote), without its read-back or
+    # its overwrite refusal (DIST-08, plan 49-05), a Cloudflare credential in another step or another
+    # workflow, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
     # step. It writes nothing.
     "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
     # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A

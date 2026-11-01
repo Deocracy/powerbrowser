@@ -36,11 +36,12 @@
 # binary, not a signing or publishing credential, and it is the single explicit exception to
 # "legion holds no secret"; the release-shape row allows exactly that mount and nothing else.
 #
-# sign-publish ends in a deliberate failure BEFORE the bot token is minted, until plan 49-05 adds
-# the R2 copy of each signed MAR (DIST-08: the origin is populated before any Release is public)
-# and replaces that step. Until then a dispatch leaves a verified draft and publishes nothing,
-# and descriptor and channel-live never start (each needs the job before it to succeed). A release
-# therefore cannot publish a partial result, and a failed run can be re-dispatched at the same key.
+# sign-publish copies each signed MAR to the R2 primary origin at <tag>/<asset> (DIST-08) BEFORE the
+# bot token is minted, so the origin holds the bytes before any Release is public. Without the R2
+# bucket, account and token in the release environment that step fails closed: a dispatch leaves a
+# verified draft and publishes nothing, and descriptor and channel-live never start (each needs the
+# job before it to succeed). A release therefore cannot publish a partial result, and a failed run can
+# be re-dispatched at the same key (an R2 key already holding the same bytes is a no-op).
 # Artifact names are unique per run: a re-run of one job conflicts with the stale artifact unless
 # upload-artifact overwrites it (it does), but start a fresh dispatch after a late failure.
 
@@ -570,12 +571,87 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name]' > "$RUNNER_TEMP/draft.json"
           node scripts/verify-release-asset-set.mjs --manifest release/release-manifest.json --draft "$RUNNER_TEMP/draft.json"
 
-      # Replaced by plan 49-05's R2 copy of each signed MAR (DIST-08); remove this step in the same commit.
-      - name: Fail closed until the R2 copy is wired (the verified draft stays unpublished)
-        id: r2_gate
+      # DIST-08 (owner ruling 2026-10-29): R2 is the primary MAR origin, served on the bucket's own custom
+      # domain (the mar_origin host of configuration.toml), and each descriptor's patch URL names <tag>/<asset>
+      # there. The copy runs before the single publish, so the origin holds the signed bytes before any
+      # Release is public, and a failed copy is rerun at the same key (no Release exists yet). wrangler comes
+      # from the committed lockfile in .github/r2/wrangler, installed with every package script off and with
+      # no credential in the step.
+      - name: Set up Node 24 for the pinned wrangler (it requires Node 22 or later)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install the pinned wrangler from the committed lockfile (scripts off, no credential in this step)
+        id: wrangler
         run: |
-          echo "::error::the R2 copy of each signed MAR (plan 49-05) is not wired; the draft is verified and left unpublished." >&2
-          exit 1
+          set -euo pipefail
+          W="$RUNNER_TEMP/wrangler"
+          mkdir -p "$W"
+          cp .github/r2/wrangler/package.json .github/r2/wrangler/package-lock.json "$W/"
+          (cd "$W" && npm ci --ignore-scripts --no-audit --no-fund)
+          "$W/node_modules/.bin/wrangler" --version
+          echo "dir=$W" >> "$GITHUB_OUTPUT"
+
+      # Write-once keys: an existing key holding the same sha512 is a no-op, one holding other bytes is refused
+      # and never overwritten, and every put is read back and compared before the step passes. The token is an
+      # R2 object read-and-write token scoped to the MAR bucket only (docs/RELEASING.md, secrets inventory). It
+      # lives in the release environment and reaches wrangler through this env block, the only place in this
+      # file a Cloudflare credential appears. The bucket name and the account id are release-environment
+      # variables, not secrets. Without them the step fails closed and nothing is published. Two runs never
+      # race on a key: the release concurrency group admits one run at a time.
+      - name: Copy each signed MAR to the R2 primary origin at <tag>/<asset> (write-once, read back, before the publish)
+        id: r2_copy
+        env:
+          TAG: ${{ steps.derive_key.outputs.tag }}
+          WRANGLER_DIR: ${{ steps.wrangler.outputs.dir }}
+          R2_MAR_BUCKET: ${{ vars.R2_MAR_BUCKET }}
+          WRANGLER_SEND_METRICS: "false"
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.R2_MAR_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$R2_MAR_BUCKET" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::the release environment holds no R2 bucket, account or token, so the primary MAR origin cannot be filled and nothing is published. Next step: finish the owner setup in docs/RELEASING.md, section 'R2 primary MAR origin', then start a fresh dispatch" >&2
+            exit 1
+          fi
+          [[ "$R2_MAR_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || { echo "::error::the R2 bucket name in the release environment is not a valid bucket name; nothing is copied or published. Next step: correct it as docs/RELEASING.md describes, then start a fresh dispatch" >&2; exit 1; }
+          # The pinned wrangler only: the lockfile install comes first on PATH.
+          export PATH="$WRANGLER_DIR/node_modules/.bin:$PATH"
+          ASSETS="$GITHUB_WORKSPACE/assets"
+          # An empty directory outside the checkout, so wrangler reads no configuration file from the tree.
+          mkdir -p "$RUNNER_TEMP/r2"
+          cd "$RUNNER_TEMP/r2"
+          COPIED=0
+          while IFS=$'\t' read -r KIND NAME; do
+            [ "$KIND" = "versioned-mar" ] || continue
+            KEY="$TAG/$NAME"
+            WANT="$(sha512sum "$ASSETS/$NAME" | cut -d' ' -f1)"
+            rm -f existing.bin readback.bin
+            RC=0
+            wrangler r2 object get "$R2_MAR_BUCKET/$KEY" --remote --file existing.bin > get.log 2>&1 || RC=$?
+            if [ "$RC" -eq 0 ]; then
+              if [ "$(sha512sum existing.bin | cut -d' ' -f1)" = "$WANT" ]; then
+                echo "$KEY already holds these signed bytes; nothing to copy"
+                COPIED=$((COPIED + 1))
+                continue
+              fi
+              echo "::error::refusing to overwrite $KEY: the primary MAR origin already holds other bytes at that key, and its keys are write-once. Nothing is published. Next step: release a new revision, which gets a new tag and so a new key" >&2
+              exit 1
+            fi
+            # wrangler 4.94.0 exits 1 for every failure; only this message means the key is free.
+            grep -q 'The specified key does not exist' get.log \
+              || { cat get.log >&2; echo "::error::could not read $KEY from the primary MAR origin, so the copy cannot prove the key is free; nothing is published. Next step: check the R2 setup in docs/RELEASING.md, then start a fresh dispatch" >&2; exit 1; }
+            wrangler r2 object put "$R2_MAR_BUCKET/$KEY" --remote --file "$ASSETS/$NAME" --content-type application/octet-stream
+            wrangler r2 object get "$R2_MAR_BUCKET/$KEY" --remote --file readback.bin
+            GOT="$(sha512sum readback.bin | cut -d' ' -f1)"
+            [ "$GOT" = "$WANT" ] \
+              || { echo "::error::$KEY read back from the primary MAR origin with other bytes than the signed MAR (sha512 $GOT, expected $WANT); nothing is published. Next step: check the bucket, then release a new revision" >&2; exit 1; }
+            echo "copied $KEY (sha512 $WANT)"
+            COPIED=$((COPIED + 1))
+          done < "$RUNNER_TEMP/expected.tsv"
+          [ "$COPIED" -ge 1 ] || { echo "::error::the expected asset set names no versioned MAR, so nothing reached the primary MAR origin; nothing is published. Next step: check the asset table in docs/RELEASING.md" >&2; exit 1; }
 
       - name: Re-check that no newer Release appeared while this run was waiting (directly before the token mint)
         id: newer_guard_final

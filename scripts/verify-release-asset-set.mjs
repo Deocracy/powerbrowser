@@ -21,6 +21,10 @@
 //  - the set equality step runs after attestation and before the bot App token is minted;
 //  - the bot App token is minted immediately before the single publish;
 //  - the publish is the only step with --draft=false, and it runs after the equality step;
+//  - the R2 copy (r2_copy, DIST-08) runs between the equality step and the bot token mint, fails
+//    closed, calls wrangler with --remote, reads each key before the put, refuses to overwrite other
+//    bytes and reads the object back and compares sha512; a Cloudflare credential appears in no other
+//    step of this workflow and in no other workflow file;
 //  - the assemble step (the one that reads --expected) copies every expected kind but sums, which
 //    the step writes itself over every file of assets/ (so the manifest is hashed too).
 //
@@ -35,7 +39,7 @@
 // Honestly --quick: the row and the self-test read the tree and parse YAML (js-yaml from theia/).
 // No network and no gh call. The live mode reads files the release job already wrote.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -279,18 +283,47 @@ function runChecks(root, overrides = {}) {
         for (const f of failOpenFaults(steps[i])) fail(RELEASE_REL, 'fail-open', `${id} step ${f}, so the draft, the equality check or the publish can pass without doing its work. Next step: remove it.`);
     }
     for (const f of failOpenFaults(steps[botAt])) fail(RELEASE_REL, 'fail-open', `bot step ${f}. Next step: remove it.`);
-    // Until the R2 copy (plan 49-05) exists, a deliberate failure sits between the equality check and the publish.
-    const r2At = Math.max(at('r2_gate'), at('r2_copy'));
+    // DIST-08: the R2 copy of each signed MAR sits between the equality check and the bot token mint, so the
+    // primary MAR origin holds the signed bytes before any Release is public.
+    const r2At = at('r2_copy');
     if (r2At < 0 || r2At < equalAt || r2At > botAt) {
-        fail(RELEASE_REL, 'order', `sign-publish has neither a fail-closed r2_gate step nor an r2_copy step between the equality check and the bot token mint, so a Release could publish before the origin copy exists (DIST-08). Next step: restore the r2_gate step until plan 49-05 adds the R2 copy.`);
-    } else if (steps[r2At].id === 'r2_gate') {
-        const g = steps[r2At];
-        if (!/\bexit 1\b/.test(String(g.run ?? '')) || g.if !== undefined || g['continue-on-error'] !== undefined) {
-            fail(RELEASE_REL, 'fail-open', `the r2_gate step does not exit 1 unconditionally. Next step: restore the deliberate failure.`);
+        fail(RELEASE_REL, 'order', `sign-publish has no r2_copy step between the equality check and the bot token mint, so a Release could publish before the primary MAR origin holds its bytes (DIST-08). Next step: restore the R2 copy step before the token mint.`);
+    } else {
+        const r2 = steps[r2At];
+        const run = String(r2.run ?? '');
+        for (const f of failOpenFaults(r2)) fail(RELEASE_REL, 'fail-open', `r2_copy step ${f}, so a Release could publish with the origin unfilled. Next step: remove it.`);
+        for (const l of run.split('\n').filter(x => /\bwrangler r2 object (get|put)\b/.test(x) && !/\s--remote(\s|$)/.test(x))) {
+            fail(RELEASE_REL, 'r2-copy', `r2_copy runs '${l.trim()}' without --remote, so wrangler uses local storage and the origin is never read or written. Next step: add --remote.`);
+        }
+        const putAt = run.indexOf('wrangler r2 object put');
+        const getAt = run.indexOf('wrangler r2 object get');
+        const backAt = putAt < 0 ? -1 : run.indexOf('wrangler r2 object get', putAt);
+        if (putAt < 0 || getAt < 0 || getAt > putAt || !/refusing to overwrite/.test(run) || backAt < 0 || !/sha512sum/.test(run.slice(backAt))) {
+            fail(RELEASE_REL, 'r2-copy', `r2_copy does not read each key before the put, refuse to overwrite other bytes, and read the object back and compare sha512 after the put, so the write-once origin is not proven. Next step: restore the write-once copy.`);
         }
     }
+    // A Cloudflare credential reaches the R2 copy step and nothing else, in this workflow or any other.
+    const r2Secret = /secrets\.([A-Za-z0-9_]+)/.exec(String(steps[r2At]?.env?.CLOUDFLARE_API_TOKEN ?? ''))?.[1];
+    const cf = new RegExp(`CLOUDFLARE_${r2Secret === undefined ? '' : `|\\b${r2Secret}\\b`}`);
+    const scopes = [['(workflow)', { env: wf?.env, defaults: wf?.defaults }]];
+    for (const [jobId, job] of Object.entries(wf?.jobs ?? {})) {
+        const { steps: jobSteps, ...rest } = job ?? {};
+        scopes.push([jobId, rest]);
+        stepsOf(job).forEach((s, i) => {
+            if (!(jobId === 'sign-publish' && s.id === 'r2_copy')) scopes.push([`${jobId} step '${s.name ?? s.id ?? i}'`, s]);
+        });
+    }
+    for (const [where, v] of scopes) {
+        if (cf.test(JSON.stringify(v ?? {}))) fail(RELEASE_REL, 'cloudflare-scope', `${where} names a Cloudflare credential; only the r2_copy step may. Next step: remove it.`);
+    }
+    const others = overrides.otherWorkflows ?? Object.fromEntries(readdirSync(join(root, '.github/workflows'))
+        .filter(n => /\.ya?ml$/.test(n) && `.github/workflows/${n}` !== RELEASE_REL)
+        .map(n => [`.github/workflows/${n}`, read(`.github/workflows/${n}`) ?? '']));
+    for (const [rel, t] of Object.entries(others)) {
+        if (cf.test(t)) fail(rel, 'cloudflare-scope', `names a Cloudflare credential; only release.yml's r2_copy step may hold one, and the sweep writes download counts through the telemetry Worker. Next step: remove it.`);
+    }
     // The tag and the manifest-free names: every gh call uses the tree-derived tag.
-    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['publish', publishAt], ['newer_guard', guardAt], ['newer_guard_final', finalAt]]) {
+    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['publish', publishAt], ['newer_guard', guardAt], ['newer_guard_final', finalAt], ['r2_copy', r2At]]) {
         if (i >= 0 && steps[i].env?.TAG !== '${{ steps.derive_key.outputs.tag }}') {
             fail(RELEASE_REL, 'order', `${id} step takes its tag from ${JSON.stringify(steps[i].env?.TAG ?? null)}, not steps.derive_key.outputs.tag, so the runner-written manifest could choose the public tag. Next step: use the tree-derived tag.`);
         }
@@ -420,8 +453,14 @@ function selfTest() {
         ['continue-on-error on the publish', { text: edit('        id: publish\n', '        id: publish\n        continue-on-error: true\n') }, 'continue-on-error'],
         ['|| true after the equality check', { text: edit('--draft "$RUNNER_TEMP/draft.json"', '--draft "$RUNNER_TEMP/draft.json" || true') }, '|| true'],
         ['if: always() on the draft step', { text: edit('        id: draft_release\n', "        id: draft_release\n        if: always()\n") }, 'if:'],
-        ['R2 gate removed with no R2 copy', { text: edit('        id: r2_gate\n', '        id: r2_gate_x\n') }, 'r2_gate'],
-        ['R2 gate no longer fails', { text: edit('          exit 1\n\n      - name: Re-check that no newer', '          true\n\n      - name: Re-check that no newer') }, 'exit 1 unconditionally'],
+        ['R2 copy removed', { text: edit('        id: r2_copy\n', '        id: r2_copy_x\n') }, 'no r2_copy step'],
+        ['R2 copy moved after the publish', { text: swapStepBlocks('r2_copy', 'publish') }, 'no r2_copy step'],
+        ['continue-on-error on the R2 copy', { text: edit('        id: r2_copy\n', '        id: r2_copy\n        continue-on-error: true\n') }, 'r2_copy step carries continue-on-error'],
+        ['R2 put without --remote', { text: edit('wrangler r2 object put "$R2_MAR_BUCKET/$KEY" --remote ', 'wrangler r2 object put "$R2_MAR_BUCKET/$KEY" ') }, 'without --remote'],
+        ['R2 read-back removed', { text: edit('            wrangler r2 object get "$R2_MAR_BUCKET/$KEY" --remote --file readback.bin\n', '') }, 'write-once origin is not proven'],
+        ['R2 overwrite refusal removed', { text: edit('refusing to overwrite', 'declining') }, 'write-once origin is not proven'],
+        ['R2 token in another step', { text: edit('        id: newer_guard_final\n        env:\n', '        id: newer_guard_final\n        env:\n          CF: ${{ secrets.R2_MAR_WRITE_TOKEN }}\n') }, "Re-check that no newer Release"],
+        ['Cloudflare credential in another workflow', { otherWorkflows: { '.github/workflows/sweep-probe.yml': 'env:\n  CLOUDFLARE_API_TOKEN: x\n' } }, 'Cloudflare credential; only'],
         ['publish takes the tag from the manifest', { text: edit('        id: publish\n        env:\n          GH_TOKEN: ${{ steps.bot.outputs.token }}\n          TAG: ${{ steps.derive_key.outputs.tag }}', '        id: publish\n        env:\n          GH_TOKEN: ${{ steps.bot.outputs.token }}\n          TAG: ${{ fromJSON(needs.build-linux.outputs.tag) }}') }, 'tree-derived tag'],
         ['stale-approval re-check removed', { text: edit('        id: newer_guard_final\n', '        id: newer_guard_final_x\n') }, 'newer_guard_final'],
         ['stale-approval guard removed from before the signing steps', { text: edit('        id: newer_guard\n', '        id: newer_guard_x\n') }, 'the stale-approval guard (newer_guard) is missing or runs after'],
