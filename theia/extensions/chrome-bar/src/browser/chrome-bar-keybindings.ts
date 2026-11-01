@@ -1,6 +1,12 @@
 import { injectable } from '@theia/core/shared/inversify';
 import { KeybindingContribution, KeybindingRegistry } from '@theia/core/lib/browser';
-import { CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID } from './chrome-bar-commands';
+import {
+    CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID,
+    CHROME_BAR_CLEAR_HISTORY_COMMAND_ID,
+    CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,
+    CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID,
+    CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID,
+} from './chrome-bar-commands';
 
 /**
  * Set on the address pill's input element only (an element-scoped context
@@ -37,6 +43,32 @@ export class ChromeBarKeybindingContribution implements KeybindingContribution {
             command: CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,
             keybinding: 'alt+d',
             when: '!editorFocus && !terminalFocus',
+        });
+        // BMK-01 (D-15, KEY-04): Ctrl+D opens the star path with Theia focused; in an editor Monaco keeps
+        // add-selection-to-next-match and the terminal keeps its key. The page-focused half is the relay row.
+        keybindings.registerKeybinding({
+            command: CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID,
+            keybinding: 'ctrlcmd+d',
+            when: '!editorFocus && !terminalFocus',
+        });
+        // BMK-03 (D-15): Ctrl+Shift+T reopens a closed tab from anywhere in Theia, editors and terminals included.
+        // No when-clause: in the browser build Theia binds its own reopen-closed-editor to Alt+Shift+T, and no
+        // installed package binds Ctrl+Shift+T, so there is no meaning to leave alone (33-UI-SPEC Keys).
+        keybindings.registerKeybinding({
+            command: CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID,
+            keybinding: 'ctrlcmd+shift+t',
+        });
+        // BMK-04 (D-15, KEY-04): Ctrl+Shift+B toggles the toolbar; editors and terminals keep the key.
+        keybindings.registerKeybinding({
+            command: CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID,
+            keybinding: 'ctrlcmd+shift+b',
+            when: '!editorFocus && !terminalFocus',
+        });
+        // BMK-05 (D-15): Ctrl+Shift+Del opens the clear-history picker from anywhere in Theia. No when-clause:
+        // no installed Theia or Monaco keybinding uses Ctrl+Shift+Delete, so editors and terminals lose nothing.
+        keybindings.registerKeybinding({
+            command: CHROME_BAR_CLEAR_HISTORY_COMMAND_ID,
+            keybinding: 'ctrlcmd+shift+delete',
         });
         // WR-02: F6/Shift+F6 in the pill go to the page (the pill's own keydown
         // handler). Theia's capture-phase dispatch would otherwise run

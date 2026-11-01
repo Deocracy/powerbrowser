@@ -19,10 +19,16 @@ export const APP_MENU_ID = 'powerbrowser-app-menu';
 
 /**
  * The rows whose action this tree wires: the new-tab command, the stock pages and
- * Quit (plan 05, MENU-04: the `quitRequest` store kind). The static gate derives
- * this set from chrome-bar-commands.ts, STOCK_PAGES and the client's quitRequest.
+ * Quit (plan 05, MENU-04: the `quitRequest` store kind), and History (Phase 33
+ * plan 03, BMK-06: the widget's History submenu). Phase 33 plan 05 (MENU-03): the
+ * command rows (each runs the Browser command id its Actions row runs) and the
+ * Bookmarks, Zoom and More Tools submenus. The static gate derives this set from
+ * chrome-bar-commands.ts, STOCK_PAGES, the client's quitRequest and the widget.
  */
-export const WIRED_MENU_IDS: readonly string[] = Object.freeze(['new-tab', 'settings', 'passwords', 'addons', 'help', 'quit']);
+export const WIRED_MENU_IDS: readonly string[] = Object.freeze([
+    'new-tab', 'new-window', 'bookmarks', 'history', 'downloads', 'print', 'save-page', 'find-in-page', 'zoom', 'edit', 'full-screen',
+    'settings', 'passwords', 'addons', 'more-tools', 'help', 'quit',
+]);
 
 /** A table row, structurally (MenuEntry in site-identity-table.ts). */
 export interface AppMenuRow {
@@ -52,6 +58,16 @@ export function applyMenuOrder(rows: readonly AppMenuRow[], wired: readonly stri
 export interface AppMenuView {
     label(menuId: string, enabled: boolean): string;
     run(row: AppMenuRow): void;
+    /** Phase 33 (MENU-03): a wired row that needs a web tab dims without one, keeping its place; absent: always enabled. */
+    isEnabled?(menuId: string): boolean;
+    /** Phase 33 (BMK-06): an enabled row drawn as a submenu instead, with these children; undefined keeps it a row. */
+    submenu?(menuId: string): AppMenuSubmenu | undefined;
+}
+
+/** A row's submenu: its children, and the menu path Theia gives them (absent: under the root's path). */
+export interface AppMenuSubmenu {
+    readonly menuPath?: string[];
+    readonly children: (AppMenuLeaf | AppMenuGroup)[];
 }
 
 /** A row in Theia's CommandMenu shape (structural). */
@@ -72,6 +88,9 @@ export interface AppMenuGroup {
     isVisible(): boolean;
     isEmpty(): boolean;
     children: (AppMenuLeaf | AppMenuGroup)[];
+    /** Set on a submenu (a labelled group, which Theia draws as a flyout); absent on a separator group. */
+    label?: string;
+    effectiveMenuPath?: string[];
 }
 
 /**
@@ -80,22 +99,39 @@ export interface AppMenuGroup {
  * caption and runs nothing.
  */
 export function buildAppMenu(rows: readonly AppMenuRow[], wired: readonly string[], phase: number, view: AppMenuView): AppMenuGroup {
-    const groups: { group: number; leaves: AppMenuLeaf[] }[] = [];
+    const groups: { group: number; leaves: (AppMenuLeaf | AppMenuGroup)[] }[] = [];
     for (const { row, enabled } of applyMenuOrder(rows, wired, phase)) {
         let current = groups[groups.length - 1];
         if (!current || current.group !== row.group) {
             current = { group: row.group, leaves: [] };
             groups.push(current);
         }
+        const id = `${APP_MENU_ID}.${row.menuId}`;
+        const label = view.label(row.menuId, enabled);
+        const sortString = String(current.leaves.length).padStart(2, '0');
+        const submenu = enabled ? view.submenu?.(row.menuId) : undefined;
+        if (submenu) {
+            const children = submenu.children;
+            current.leaves.push({
+                id,
+                label,
+                sortString,
+                isVisible: () => true,
+                isEmpty: () => children.length === 0,
+                children,
+                ...(submenu.menuPath ? { effectiveMenuPath: submenu.menuPath } : {}),
+            });
+            continue;
+        }
         current.leaves.push({
-            id: `${APP_MENU_ID}.${row.menuId}`,
-            label: view.label(row.menuId, enabled),
-            sortString: String(current.leaves.length).padStart(2, '0'),
+            id,
+            label,
+            sortString,
             isVisible: () => true,
-            isEnabled: () => enabled,
+            isEnabled: () => enabled && (view.isEnabled?.(row.menuId) ?? true),
             isToggled: () => false,
             run: async () => {
-                if (enabled) {
+                if (enabled && (view.isEnabled?.(row.menuId) ?? true)) {
                     view.run(row);
                 }
             },
@@ -120,4 +156,16 @@ export function buildAppMenu(rows: readonly AppMenuRow[], wired: readonly string
             })),
         ],
     };
+}
+
+/** WR-06: how long a menu open waits on a store or page read before it draws without it (the store's own ack timeout is 8 s). */
+export const MENU_READ_BUDGET_MS = 1000;
+
+/** `read`'s answer, or `fallback` when it rejects or takes longer than MENU_READ_BUDGET_MS. */
+export function withinBudget<T, F extends string | object>(read: Promise<T>, fallback: F): Promise<T | F> {
+    return new Promise(resolve => {
+        const timer = setTimeout(() => resolve(fallback), MENU_READ_BUDGET_MS);
+        const settle = (value: T | F): void => { clearTimeout(timer); resolve(value); };
+        read.then(settle, () => settle(fallback));
+    });
 }

@@ -802,8 +802,11 @@ export const PowerBrowserAPI = Object.freeze({
     return Object.keys(histories).length;
   },
 
-  /** PAGE-11: arms the crashed overlay's own history under its row key, so the reopen restores it. Never throws. */
-  keepCrashedWebTabHistory(entry) {
+  /**
+   * PAGE-11: arms the crashed overlay's own history under its row key, so the reopen restores it. Never throws.
+   * Phase 33 (BMK-03): `arm` false keeps a closed overlay's history unarmed, for a later reopen to arm.
+   */
+  keepCrashedWebTabHistory(entry, arm = true) {
     try {
       const sessionHistory = entry.browser.browsingContext?.sessionHistory;
       if (!sessionHistory || sessionHistory.count === 0) {
@@ -811,8 +814,11 @@ export const PowerBrowserAPI = Object.freeze({
       }
       const { SessionHistory } = ChromeUtils.importESModule("resource://gre/modules/sessionstore/SessionHistory.sys.mjs");
       const kept = SessionHistory.collectFromParent(entry.browser.currentURI?.spec ?? "about:blank", true, sessionHistory);
-      savedWebTabHistories[entry.rowKey] = { ...kept, crashKept: true };
-      armedWebTabHistories.add(entry.rowKey);
+      // 32-REVIEW WR-08 marks a crash-kept history; a closed overlay kept unarmed (BMK-03) is not one.
+      savedWebTabHistories[entry.rowKey] = { ...kept, crashKept: arm };
+      if (arm) {
+        armedWebTabHistories.add(entry.rowKey);
+      }
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] crashed history not kept (${err && err.name ? err.name : "error"})`);
     }
@@ -2200,8 +2206,8 @@ export const PowerBrowserAPI = Object.freeze({
 
   /**
    * GUI-08 (15-01): registers the PowerBrowserGroup actor pair -- the SOLE
-   * actor-registration caller in this tree (the guard fails any second one
-   * by design). The child loads only in documents matching the Theia local
+   * actor-registration method in this tree (33-05 adds the edit-state pair
+   * from inside it; the guard fails any registration outside this file). The child loads only in documents matching the Theia local
    * origin; the parent class below lives in this same boundary file so no
    * second file reaches a privileged surface. Called once from
    * TheiaService.start beside the tab-store wiring, through PowerBrowserAPI
@@ -2239,6 +2245,7 @@ export const PowerBrowserAPI = Object.freeze({
       },
       matches: [`${GROUP_ACTOR_THEIA_ORIGIN}/*`],
     });
+    registerEditStateActor();
   },
 
   /**
@@ -2246,11 +2253,13 @@ export const PowerBrowserAPI = Object.freeze({
    * TheiaService._swap before the Theia frame is navigated, and only there. A
    * non-positive or non-integer port clears it, which refuses every sender.
    * A valid port also installs the token-cookie strip (BAR-02), right after
-   * the cookie is minted, so it covers every load in the process.
+   * the cookie is minted, so it covers every load in the process, and
+   * (Phase 33, BMK-04) the Places bookmark observer beside it.
    */
   setGroupSenderPort(port) {
     groupSenderPort = Number.isInteger(port) && port > 0 ? port : null;
     if (groupSenderPort !== null) installTokenCookieStrip();
+    if (groupSenderPort !== null) installBookmarkObserver();
   },
 
   /**
@@ -2649,7 +2658,7 @@ export const PowerBrowserAPI = Object.freeze({
       return {
         guid: item.guid ?? "",
         title: item.title ?? "",
-        url: item.url ?? url,
+        url: item.url ?? url, folder: bookmarkFolderName(item.parentGuid),
       };
     } catch {
       return null;
@@ -2822,7 +2831,7 @@ export const PowerBrowserAPI = Object.freeze({
           if (!entry || !entry.url || !Number.isFinite(closed.closedAt)) {
             continue;
           }
-          const uri = tab.extData?.[STOCK_TAB_KEY_VALUE] || `stock:closed-${closed.closedAt.toString(36)}-${stringHash(entry.url)}`;
+          const uri = stockClosedTabUri(closed, entry);
           rows.push({ uri, url: entry.url, title: entry.title ?? closed.title ?? "", last_active: closed.closedAt, closed_at: closed.closedAt });
         }
       }
@@ -3916,6 +3925,8 @@ export const PowerBrowserAPI = Object.freeze({
     // the content process, so the open that follows restores it through the NG-034 armed-history path.
     if (webTabPageState.get(browser)?.crashed && entry.rowKey) {
       PowerBrowserAPI.keepCrashedWebTabHistory(entry);
+    } else {
+      keepClosedWebTabHistory(entry);
     }
     // Listener removal is best-effort on teardown (the startTabStoreTriggers
     // idiom): a frameloader already torn down throws here, and the element
@@ -4206,6 +4217,13 @@ const STORE_REQUEST_KINDS = new Set([
   "readClipboardText",
   "openStockPage",
   "quitRequest",
+  "bookmarkPage",
+  "updateBookmark",
+  "removeBookmark",
+  "listClosedTabs",
+  "reopenClosedTab",
+  "clearHistory",
+  "fullScreen",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -4252,13 +4270,10 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "readBookmarkByUrl": {
         const bookmark = await PowerBrowserAPI.readBookmarkByUrl(storeUrlArg(data.url));
-        return { ok: true, kind, bookmark: bookmark && { guid: bookmark.guid, title: bookmark.title, url: String(bookmark.url) } };
+        return { ok: true, kind, bookmark: bookmark && { guid: bookmark.guid, title: bookmark.title, url: String(bookmark.url), folder: bookmark.folder } };
       }
       case "listBookmarkFolder": {
-        if (typeof data.folderGuid !== "string" || !/^[A-Za-z0-9_-]{12}$/.test(data.folderGuid)) {
-          throw new Error("handleStoreRequest: refusing a malformed folderGuid");
-        }
-        const rows = PowerBrowserAPI.listBookmarkFolder(data.folderGuid).map(row => ({ guid: row.guid, title: row.title, url: String(row.url) }));
+        const rows = PowerBrowserAPI.listBookmarkFolder(resolveBookmarkFolder(data.folderGuid)).map(row => ({ guid: row.guid, title: row.title, url: String(row.url) }));
         return { ok: true, kind, rows };
       }
       case "projectSessionStoreTabs": {
@@ -4318,6 +4333,29 @@ async function handleStoreRequest(data, actorRef) {
           return { ok: false, kind, reason: "cancelled" };
         }
         return { ok: true, kind, where: "applied" };
+      }
+      // Phase 33: the bookmark writes and the history clear are privileged (rule 12); the closed-tab reads are reads.
+      case "bookmarkPage": {
+        return { ok: true, kind, bookmark: await bookmarkPage(data.url, data.title, data.folderGuid) };
+      }
+      case "updateBookmark": {
+        return { ok: true, kind, bookmark: await updateBookmark(data.guid, data.title, data.folderGuid) };
+      }
+      case "removeBookmark": {
+        return { ok: true, kind, removed: await removeBookmark(data.target) };
+      }
+      case "listClosedTabs": {
+        return { ok: true, kind, rows: await listClosedTabs(data.limit) };
+      }
+      case "reopenClosedTab": {
+        return { ok: true, kind, tab: await reopenClosedTab(data.uri) };
+      }
+      case "clearHistory": {
+        return { ok: true, kind, cleared: await clearHistory(data.range) };
+      }
+      // Phase 33 (MENU-03, D-14/D-14b): window chrome state, classed window-chrome; the full-screen command reaches it.
+      case "fullScreen": {
+        return { ok: true, kind, where: toggleShellFullscreen(actorRef) };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -6204,6 +6242,7 @@ async function openStockPageFromMenu(page) {
     case "passwords":
     case "processes":
     case "support":
+    case "about":
       break;
     default:
       throw new Error("openStockPage: refusing an unknown page");
@@ -6220,6 +6259,9 @@ async function openStockPageFromMenu(page) {
     Promise.resolve(win.openPreferences()).catch(failed);
   } else if (page === "addons") {
     Promise.resolve(win.BrowserAddonUI.openAddonsMgr()).catch(failed);
+  } else if (page === "about") {
+    // Phase 33 (MENU-03): the Help submenu's About row, through upstream's own openAboutDialog (the stock About dialog).
+    Promise.resolve(win.openAboutDialog()).catch(failed);
   } else {
     const tab = win.gBrowser.addTrustedTab(STOCK_PAGE_TRUSTED_URLS[page]);
     win.gBrowser.selectedTab = tab;
@@ -6651,7 +6693,7 @@ async function webTabEditReply(kind, tabId, cmd, checkOnly) {
   }
   const enabled = controller.isCommandEnabled(cmd) === true;
   if (checkOnly) {
-    return { ok: true, kind, where: "checked", enabled };
+    return { ok: true, kind, where: "checked", enabled: await webTabEditEnabled(entry, cmd, enabled) };
   }
   controller.doCommand(cmd);
   return { ok: true, kind, where: "applied", enabled };
@@ -8913,4 +8955,480 @@ function fullscreenNextRecipient(aActor, aUseCache) {
     return [null, null];
   }
   return [target, inProcessBC];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 33: bookmarks and clear-history.
+//
+// The star, its editor, the bookmarks toolbar, reopen closed tab and Clear
+// Recent History (BMK-01..06). Places writes go only through
+// PlacesUtils.bookmarks.insert/update/remove and PlacesUtils.history -- never
+// raw SQL, never a second writer. bookmarkPage, updateBookmark, removeBookmark
+// and clearHistory are privileged store kinds (rule 12): sent only from the
+// pill's and the chrome bar widget's event handlers, never a command, a key
+// row or the backend relay. listClosedTabs is a read; reopenClosedTab claims the row it answers.
+// Replies carry plain strings; no log line carries a URL, title, guid or path.
+// It sits at the end of the file so no catalogued line above moves.
+// ---------------------------------------------------------------------------
+
+const BOOKMARK_GUID_RE = /^[A-Za-z0-9_-]{12}$/;
+const BOOKMARK_TITLE_MAX_CHARS = 512;
+// The names the toolbar, the History submenu and the editor send, mapped to
+// Places' own root GUID constants (Bookmarks.sys.mjs toolbarGuid/menuGuid/unfiledGuid).
+const BOOKMARK_FOLDER_ROOTS = Object.freeze({ toolbar: "toolbarGuid", menu: "menuGuid", unfiled: "unfiledGuid" });
+
+// A root name or a 12-character Places GUID; anything else is refused with fixed text.
+function resolveBookmarkFolder(value) {
+  if (typeof value === "string" && Object.prototype.hasOwnProperty.call(BOOKMARK_FOLDER_ROOTS, value)) {
+    return lazy.PlacesUtils.bookmarks[BOOKMARK_FOLDER_ROOTS[value]];
+  }
+  if (typeof value === "string" && BOOKMARK_GUID_RE.test(value)) {
+    return value;
+  }
+  throw new Error("resolveBookmarkFolder: refusing a malformed folder");
+}
+
+// Firefox's own default location for a new bookmark (browser.bookmarks.defaultLocation, "toolbar").
+function defaultBookmarkFolder() {
+  try {
+    return resolveBookmarkFolder(PowerBrowserAPI.getStringPref("browser.bookmarks.defaultLocation", "toolbar"));
+  } catch {
+    return lazy.PlacesUtils.bookmarks.toolbarGuid;
+  }
+}
+
+function bookmarkUrlArg(method, url) {
+  const target = storeUrlArg(url);
+  if (!/^https?:\/\//i.test(target)) {
+    throw new Error(`${method}: refusing a non-http(s) url`);
+  }
+  return target;
+}
+
+function bookmarkTitleArg(method, title) {
+  if (typeof title !== "string") {
+    throw new Error(`${method}: refusing a non-string title`);
+  }
+  return title.slice(0, BOOKMARK_TITLE_MAX_CHARS);
+}
+
+// Places hands back URL objects, which do not structured-clone: strings only.
+function bookmarkReply(item, fallbackUrl = "") {
+  return { guid: String(item.guid ?? ""), title: String(item.title ?? ""), url: String(item.url ?? fallbackUrl), folder: bookmarkFolderName(item.parentGuid) };
+}
+
+// BMK-01: bookmarks the page. Idempotent: a page already bookmarked answers its
+// most recently modified bookmark instead of a duplicate. Calls for one url run
+// one at a time (WR-03): the fetch and the insert are separate awaits, so two
+// overlapping calls would both see no bookmark and both insert.
+const bookmarkPageQueue = new Map();
+async function bookmarkPage(url, title, folderGuid) {
+  const target = bookmarkUrlArg("bookmarkPage", url);
+  const name = title === undefined ? "" : bookmarkTitleArg("bookmarkPage", title);
+  const parentGuid = folderGuid === undefined ? defaultBookmarkFolder() : resolveBookmarkFolder(folderGuid);
+  const run = (bookmarkPageQueue.get(target) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    const existing = await lazy.PlacesUtils.bookmarks.fetch({ url: target });
+    if (existing) {
+      return bookmarkReply(existing, target);
+    }
+    const item = await lazy.PlacesUtils.bookmarks.insert({ type: lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK, parentGuid, url: target, title: name });
+    return bookmarkReply(item, target);
+  });
+  bookmarkPageQueue.set(target, run);
+  try {
+    return await run;
+  } finally {
+    if (bookmarkPageQueue.get(target) === run) {
+      bookmarkPageQueue.delete(target);
+    }
+  }
+}
+
+// BMK-02: the editor's name and folder. Bookmarks.update requires the guid and,
+// with a parentGuid, an index (DEFAULT_INDEX appends). A folder or separator
+// guid is refused: this kind edits bookmarks only.
+async function updateBookmark(guid, title, folderGuid) {
+  if (typeof guid !== "string" || !BOOKMARK_GUID_RE.test(guid)) {
+    throw new Error("updateBookmark: refusing a malformed guid");
+  }
+  const info = { guid };
+  if (title !== undefined) {
+    info.title = bookmarkTitleArg("updateBookmark", title);
+  }
+  if (folderGuid !== undefined) {
+    info.parentGuid = resolveBookmarkFolder(folderGuid);
+    info.index = lazy.PlacesUtils.bookmarks.DEFAULT_INDEX;
+  }
+  if (Object.keys(info).length === 1) {
+    throw new Error("updateBookmark: refusing an update with no title or folder");
+  }
+  const existing = await lazy.PlacesUtils.bookmarks.fetch(guid);
+  if (!existing || existing.type !== lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK) {
+    throw new Error("updateBookmark: refusing an unknown bookmark");
+  }
+  const item = await lazy.PlacesUtils.bookmarks.update(info);
+  return bookmarkReply({ ...existing, ...item });
+}
+
+// BMK-02: Remove in the editor. A guid removes that one bookmark; an http(s)
+// url removes every bookmark of the page, as Firefox's star does. Answers how
+// many were removed; an unknown guid or an unbookmarked page is 0, not an error.
+async function removeBookmark(target) {
+  const guids = [];
+  if (typeof target === "string" && BOOKMARK_GUID_RE.test(target)) {
+    const found = await lazy.PlacesUtils.bookmarks.fetch(target);
+    if (found && found.type === lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK) {
+      guids.push(found.guid);
+    }
+  } else {
+    const url = bookmarkUrlArg("removeBookmark", target);
+    await lazy.PlacesUtils.bookmarks.fetch({ url }, item => guids.push(item.guid));
+  }
+  if (guids.length) {
+    await lazy.PlacesUtils.bookmarks.remove(guids.map(guid => ({ guid })));
+  }
+  return guids.length;
+}
+
+// BMK-04: one Places observer, installed once beside the token-cookie strip
+// (setGroupSenderPort), on the exact event quartet stock chrome registers
+// (browser-places.js). It fires chrome-side with no actor sender, so the push
+// goes to the shell window's own Theia frame, found by window type. The push
+// carries the kind only: Theia re-reads the star and the toolbar folder. A
+// PlacesObservers batch arrives as one call, so a bulk edit pushes once.
+const BOOKMARK_OBSERVER_EVENTS = Object.freeze(["bookmark-added", "bookmark-removed", "bookmark-moved", "bookmark-url-changed"]);
+
+function pushBookmarksChanged() {
+  const frame = PowerBrowserAPI.findShellWindow()?.document.getElementById(SHELL_CONTENT_BROWSER_ID);
+  if (!frame) {
+    return;
+  }
+  sendWebTabPush(frame, { kind: "bookmarks-changed" });
+}
+
+// setGroupSenderPort sets the sender wall, so a failed install is logged and
+// retried at the next call, never thrown into it.
+let bookmarkObserverInstalled = false;
+function installBookmarkObserver() {
+  if (bookmarkObserverInstalled) {
+    return;
+  }
+  try {
+    lazy.PlacesUtils.observers.addListener([...BOOKMARK_OBSERVER_EVENTS], pushBookmarksChanged);
+    bookmarkObserverInstalled = true;
+  } catch (err) {
+    PowerBrowserAPI.log("warn", `[bookmark-observer] install failed (${err && err.name ? err.name : "error"})`);
+  }
+}
+
+// BMK-03: a closed overlay's back/forward history, kept unarmed under its row
+// key so reopenClosedTab can offer it. At most 25 (Firefox's
+// browser.sessionstore.max_tabs_undo); the oldest kept history is dropped.
+const CLOSED_WEB_TAB_HISTORY_MAX = 25;
+const keptClosedWebTabHistories = [];
+
+function keepClosedWebTabHistory(entry) {
+  if (!entry.rowKey || !WEB_TAB_ROW_KEY_RE.test(entry.rowKey)) {
+    return;
+  }
+  PowerBrowserAPI.keepCrashedWebTabHistory(entry, false);
+  if (!Object.prototype.hasOwnProperty.call(savedWebTabHistories, entry.rowKey)) {
+    return;
+  }
+  const at = keptClosedWebTabHistories.indexOf(entry.rowKey);
+  if (at >= 0) {
+    keptClosedWebTabHistories.splice(at, 1);
+  }
+  keptClosedWebTabHistories.push(entry.rowKey);
+  while (keptClosedWebTabHistories.length > CLOSED_WEB_TAB_HISTORY_MAX) {
+    const dropped = keptClosedWebTabHistories.shift();
+    if (!armedWebTabHistories.has(dropped)) {
+      delete savedWebTabHistories[dropped];
+    }
+  }
+}
+
+// BMK-03/BMK-06: closed tabs.sqlite rows, newest first. Web and stock rows
+// with an http(s) address only -- a closed Theia editor's key is a file path
+// and is never listed. Rows older than the retention window may already be
+// pruned; they are simply absent.
+const CLOSED_TABS_MAX = 25;
+const CLOSED_TABS_SQL = `SELECT uri, url, title, closed_at FROM tabs
+  WHERE closed_at IS NOT NULL AND (uri GLOB 'web:*' OR uri GLOB 'stock:*')
+    AND (url GLOB 'http://*' OR url GLOB 'https://*')`;
+
+function closedTabRow(row) {
+  return {
+    uri: String(row.getResultByName("uri")),
+    url: String(row.getResultByName("url")),
+    title: String(row.getResultByName("title") ?? ""),
+    closedAt: Number(row.getResultByName("closed_at")),
+  };
+}
+
+async function listClosedTabs(limit) {
+  const cap = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), CLOSED_TABS_MAX) : 10;
+  const conn = await PowerBrowserAPI.openTabStore();
+  const rows = await conn.execute(`${CLOSED_TABS_SQL} ORDER BY closed_at DESC LIMIT :cap`, { cap });
+  return rows.map(closedTabRow);
+}
+
+// BMK-03: the closed row to reopen -- the one named, or the newest. The row is
+// claimed here (claimClosedTabRow), so an overlapping or later call answers null.
+// The frontend reopens it through webTabOpen on the same row key (`key`, web rows
+// only) and arms the history through shellArmWebTabHistory when `withHistory` says one was kept.
+async function reopenClosedTab(uri) {
+  if (uri !== undefined && (typeof uri !== "string" || uri.length > 2048 || !/^(web|stock):./.test(uri))) {
+    throw new Error("reopenClosedTab: refusing a malformed tab key");
+  }
+  let row;
+  if (uri === undefined) {
+    [row] = await listClosedTabs(1);
+  } else {
+    const conn = await PowerBrowserAPI.openTabStore();
+    const rows = await conn.execute(`${CLOSED_TABS_SQL} AND uri = :uri`, { uri });
+    row = rows.length ? closedTabRow(rows[0]) : undefined;
+  }
+  if (!row || !(await claimClosedTabRow(row.uri))) {
+    return null;
+  }
+  const key = WEB_TAB_ROW_KEY_RE.test(row.uri) ? row.uri : null;
+  const withHistory = key !== null && Object.prototype.hasOwnProperty.call(savedWebTabHistories, key);
+  return { uri: row.uri, url: row.url, title: row.title, key, withHistory };
+}
+
+// BMK-05: Clear Recent History. One kind, one range from Firefox's set minus
+// the site-specific rows; each range is a begin time, the end is now.
+const CLEAR_HISTORY_RANGES = Object.freeze({
+  "last-hour": now => now - 60 * 60 * 1000,
+  "last-2-hours": now => now - 2 * 60 * 60 * 1000,
+  "last-4-hours": now => now - 4 * 60 * 60 * 1000,
+  today: now => new Date(now).setHours(0, 0, 0, 0),
+  everything: () => 0,
+});
+
+// The fan-out: every PowerBrowser store that holds browsing history, by name.
+// Places goes through History.removeVisitsByFilter, never Sanitizer (D-09b:
+// Sanitizer needs browser.xhtml furniture the shell does not load). No target
+// reaches a cookie: the 127.0.0.1 token cookie is exempt by construction.
+// scripts/verify-clear-history.mjs derives the expected targets from the
+// store declarations and the sweep's sessionstore imports, and compares.
+const CLEAR_HISTORY_FANOUT = Object.freeze([
+  ["places", clearPlacesHistory],
+  ["sessionstore._closedTabs", clearSessionStoreClosedTabs],
+  ["tabs.closed_at", clearClosedTabRows],
+  ["tabs.thumbnail", clearTabThumbnails],
+  ["saved_pages", clearSavedPages],
+  ["WEB_TAB_HISTORY_FILE_NAME", clearWebTabHistories],
+]);
+
+async function clearPlacesHistory(span) {
+  await lazy.PlacesUtils.history.removeVisitsByFilter({ beginDate: new Date(span.begin), endDate: new Date(span.end) });
+}
+
+// Closed rows in range only: an open row (closed_at NULL) is never deleted. The
+// deleted keys go on to the web-tab history target.
+async function clearClosedTabRows(span) {
+  const conn = await PowerBrowserAPI.openTabStore();
+  const params = { begin: span.begin, end: span.end };
+  const rows = await conn.execute("SELECT uri FROM tabs WHERE closed_at IS NOT NULL AND closed_at >= :begin AND closed_at <= :end", params);
+  rows.forEach(row => span.closedKeys.add(String(row.getResultByName("uri"))));
+  await conn.execute("DELETE FROM tabs WHERE closed_at IS NOT NULL AND closed_at >= :begin AND closed_at <= :end", params);
+}
+
+// A card image is a picture of the page: dropped for every row seen in range. An open tab captures a new one.
+async function clearTabThumbnails(span) {
+  const conn = await PowerBrowserAPI.openTabStore();
+  await conn.execute(
+    "UPDATE tabs SET thumbnail = NULL WHERE thumbnail IS NOT NULL AND MAX(last_active, COALESCE(last_accessed, 0)) >= :begin",
+    { begin: span.begin }
+  );
+}
+
+// Copies saved in range, and every copy of a closed row this clear deleted. Only
+// a directory savePageCopy minted under saved-pages/ is ever removed.
+async function clearSavedPages(span) {
+  const conn = await PowerBrowserAPI.openTabStore();
+  const params = { begin: span.begin, end: span.end };
+  const rows = await conn.execute("SELECT tab_uri, dir FROM saved_pages WHERE saved_at >= :begin AND saved_at <= :end", params);
+  const doomed = rows.map(row => ({ uri: String(row.getResultByName("tab_uri")), dir: String(row.getResultByName("dir")) }));
+  for (const uri of span.closedKeys) {
+    const extra = await conn.execute("SELECT tab_uri, dir FROM saved_pages WHERE tab_uri = :uri", { uri });
+    extra.forEach(row => doomed.push({ uri, dir: String(row.getResultByName("dir")) }));
+  }
+  const profile = PowerBrowserAPI.getProfileDir();
+  const root = profile ? PathUtils.join(profile, SAVED_PAGES_DIR) : "";
+  for (const { uri, dir } of doomed) {
+    await conn.execute("DELETE FROM saved_pages WHERE tab_uri = :uri", { uri });
+    if (root && isMintedSavedPageDir(dir, root)) {
+      await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
+    }
+  }
+}
+
+// Saved back/forward histories carry no time, so a history goes with its row:
+// the keys of the closed rows this clear deleted, or every saved one for
+// everything. Memory and the history file alike; an open overlay's live
+// history is the open tab's own and is not touched.
+async function clearWebTabHistories(span) {
+  const dropped = key => span.everything || span.closedKeys.has(key);
+  for (const key of Object.keys(savedWebTabHistories)) {
+    if (dropped(key)) {
+      delete savedWebTabHistories[key];
+      armedWebTabHistories.delete(key);
+    }
+  }
+  for (let i = keptClosedWebTabHistories.length - 1; i >= 0; i -= 1) {
+    if (dropped(keptClosedWebTabHistories[i])) {
+      keptClosedWebTabHistories.splice(i, 1);
+    }
+  }
+  const profile = PowerBrowserAPI.getProfileDir();
+  if (!profile) {
+    return;
+  }
+  const path = `${profile}/${WEB_TAB_HISTORY_FILE_NAME}`;
+  let onDisk = {};
+  try {
+    const value = await IOUtils.readJSON(path);
+    onDisk = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    // Absent or unreadable: nothing on disk to keep.
+  }
+  const kept = Object.fromEntries(Object.entries(onDisk).filter(([key]) => !dropped(key)));
+  await IOUtils.writeJSON(path, kept, { tmpPath: `${path}.tmp` });
+}
+
+// Every target runs even when one fails, so one broken store never leaves the
+// others uncleared; a failure is logged by target name only and then fails the kind.
+async function clearHistory(range) {
+  if (typeof range !== "string" || !Object.prototype.hasOwnProperty.call(CLEAR_HISTORY_RANGES, range)) {
+    throw new Error("clearHistory: refusing an unknown range");
+  }
+  const end = Date.now();
+  const span = { begin: CLEAR_HISTORY_RANGES[range](end), end, everything: range === "everything", closedKeys: new Set() };
+  const failed = [];
+  for (const [target, clear] of CLEAR_HISTORY_FANOUT) {
+    try {
+      await clear(span);
+    } catch (err) {
+      failed.push(target);
+      PowerBrowserAPI.log("warn", `[clearHistory] ${target} failed (${err && err.name ? err.name : "error"})`);
+    }
+  }
+  if (failed.length) {
+    throw new Error(`clearHistory failed for ${failed.join(", ")}`);
+  }
+  return range;
+}
+
+// Phase 33 (33-02, BMK-02): the root a bookmark sits in, by the names the editor
+// sends ('toolbar' | 'menu' | 'unfiled'), or "" for any other folder, so the
+// editor's folder radios show where the bookmark is. Appended last so no
+// catalogued line moves.
+function bookmarkFolderName(parentGuid) {
+  return Object.keys(BOOKMARK_FOLDER_ROOTS).find(name => resolveBookmarkFolder(name) === parentGuid) ?? "";
+}
+
+// Phase 33 (MENU-03, D-14/D-14b): the Full Screen row and its command. The toggle body is upstream's
+// (browser-commands.js:567-569, `window.fullScreen = !window.fullScreen`) on the shell window that holds the
+// sender's Theia frame; Phase 35's fullscreen path replaces this behind the same command id. Window chrome
+// state only: no Places write, no clipboard read, nothing sent off the machine. Appended last so no
+// catalogued line moves.
+function toggleShellFullscreen(actorRef) {
+  const win = actorRef.browsingContext.top.embedderElement.ownerDocument.defaultView;
+  win.fullScreen = !win.fullScreen;
+  return win.fullScreen ? "entered" : "left";
+}
+
+// ---------------------------------------------------------------------------
+// Phase 33 plan 05 (PAGE-09): the Edit submenu greys from the page's live enablement. ControllersParent caches the
+// enabled flag from the child's command updates, and TextInputListener::OnSelectionChange issues one only for a
+// non-empty selection (dom/html/TextControlState.cpp), so after a collapse the cache still reads true. The
+// PowerBrowserEditState pair asks the child's own docShell.isCommandEnabled, the guard ControllersChild runs
+// before every command. Registered by registerGroupActor (the one registration method) beside the group pair:
+// the parent class is here, the child class is in GroupActorChild.sys.mjs (the one actor-child file). No events
+// and no matches: the child is created only when webTabEditEnabled asks a web-tab overlay (messageManagerGroups
+// "browsers"), and it answers one boolean for one frozen command. Appended last so no catalogued line moves.
+// ---------------------------------------------------------------------------
+const EDIT_STATE_ACTOR_NAME = "PowerBrowserEditState";
+const EDIT_STATE_QUERY = "PowerBrowserEditState:Query";
+
+export class PowerBrowserEditStateParent extends GroupActorBase {}
+
+function registerEditStateActor() {
+  ChromeUtils.registerWindowActor(EDIT_STATE_ACTOR_NAME, {
+    parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
+    child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE },
+    messageManagerGroups: ["browsers"],
+    allFrames: false,
+  });
+}
+
+// The live answer for `cmd` (already checked against WEB_TAB_EDIT_CMDS); a failed query (the page navigating away,
+// the actor gone) or one a hung page leaves unanswered for EDIT_STATE_BUDGET_MS (WR-06: the hamburger waits on this)
+// falls back to the cached flag, so the row stays usable rather than greyed by an error.
+const EDIT_STATE_BUDGET_MS = 250;
+async function webTabEditEnabled(entry, cmd, cached) {
+  try {
+    const actor = entry.browser.browsingContext.currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
+    const query = actor.sendQuery(EDIT_STATE_QUERY, { cmd }).then(answer => answer === true);
+    return await Promise.race([query, PowerBrowserAPI.sleep(EDIT_STATE_BUDGET_MS).then(() => cached)]);
+  } catch {
+    return cached;
+  }
+}
+
+// Phase 33 CR-01 (33-REVIEW): the stock:* closed rows are a projection of SessionStore's closed tabs, and
+// sweepTabStoreFromSessionStore re-imports them on every sessionstore write, so a clear that deleted only the
+// rows was undone within seconds. This target forgets the source in range; it runs before tabs.closed_at so a
+// sweep between the two finds nothing to re-import. Open non-private windows only, which is exactly what
+// parseSessionStoreClosedRows reads. Synchronous, so no closed tab moves between the read and the forget.
+// Appended last so no catalogued line moves.
+async function clearSessionStoreClosedTabs(span) {
+  const closed = lazy.SessionStore.getClosedTabData({ closedTabsFromAllWindows: true, private: false });
+  for (const tab of closed) {
+    if (span.everything || (tab.closedAt >= span.begin && tab.closedAt <= span.end)) {
+      lazy.SessionStore.forgetClosedTabById(tab.closedId, { includePrivate: false });
+    }
+  }
+}
+
+// Phase 33 WR-01/WR-02 (33-REVIEW): the row a reopen answers is claimed in the same call, so a held or doubled
+// Ctrl+Shift+T cannot hand one row to two opens. A web row opens again (webTabOpen's write would do the same); a
+// stock row is used up (its tabs row and its SessionStore record go, so the sweep does not re-import it). The Set
+// check and add run with no await between them; the closed-row check after it fails an overlapping or later call.
+const claimedClosedRows = new Set();
+async function claimClosedTabRow(uri) {
+  if (claimedClosedRows.has(uri)) {
+    return false;
+  }
+  claimedClosedRows.add(uri);
+  try {
+    const conn = await PowerBrowserAPI.openTabStore();
+    const stillClosed = await conn.execute("SELECT 1 FROM tabs WHERE uri = :uri AND closed_at IS NOT NULL", { uri });
+    if (!stillClosed.length) {
+      return false;
+    }
+    if (uri.startsWith("stock:")) {
+      for (const tab of lazy.SessionStore.getClosedTabData({ closedTabsFromAllWindows: true, private: false })) {
+        const entry = tab.state?.entries?.[(tab.state.index ?? tab.state.entries.length) - 1];
+        if (entry?.url && Number.isFinite(tab.closedAt) && stockClosedTabUri(tab, entry) === uri) {
+          lazy.SessionStore.forgetClosedTabById(tab.closedId, { includePrivate: false });
+        }
+      }
+      await conn.execute("DELETE FROM tabs WHERE uri = :uri AND closed_at IS NOT NULL", { uri });
+    } else {
+      await conn.execute("UPDATE tabs SET closed_at = NULL WHERE uri = :uri AND closed_at IS NOT NULL", { uri });
+    }
+    return true;
+  } finally {
+    claimedClosedRows.delete(uri);
+  }
+}
+
+// The stock:* row key of one SessionStore closed tab: the key the store gave it, else one derived from when it
+// closed and its address, so the same record projects to the same row on every sweep.
+function stockClosedTabUri(closed, entry) {
+  return closed.state?.extData?.[STOCK_TAB_KEY_VALUE] || `stock:closed-${closed.closedAt.toString(36)}-${stringHash(entry.url)}`;
 }

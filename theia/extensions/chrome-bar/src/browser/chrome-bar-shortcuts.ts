@@ -18,7 +18,16 @@ import { CommandRegistry } from '@theia/core/lib/common/command';
 import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
-import { CHROME_BAR_NEW_TAB_COMMAND_ID, chooseSaveDestination, focusAddressPill, openFindBarFor } from './chrome-bar-commands';
+import {
+    CHROME_BAR_NEW_TAB_COMMAND_ID,
+    chooseSaveDestination,
+    focusAddressPill,
+    openBookmarkStar,
+    openClearHistory,
+    openFindBarFor,
+    reopenLastClosedTab,
+    toggleBookmarksToolbar,
+} from './chrome-bar-commands';
 import { AddressBar } from './address-bar/address-bar';
 import { TabStripWidget } from './tab-strip-widget';
 
@@ -79,6 +88,13 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'devtoolsOpen', keycode: 'VK_F12', modifiers: '', label: 'F12', macLabel: 'F12' },
     // PAGE-07 (35-07, D-07): F11 on a page toggles window full screen; with the IDE focused F11 stays Theia's.
     { id: 'fullscreen', keycode: 'VK_F11', modifiers: '', label: 'F11', macLabel: 'F11' },
+    // Phase 33 plan 02 (BMK-01, D-15): Ctrl+D with a page focused; the Theia-focused twin is chrome-bar-keybindings.ts.
+    { id: 'bookmarkPage', key: 'D', modifiers: 'accel', label: 'Ctrl+D', macLabel: '⌘D' },
+    // Phase 33 plan 03 (BMK-03, BMK-04, D-15): the page-focused halves; the Theia-focused twins are chrome-bar-keybindings.ts.
+    { id: 'reopenClosedTab', key: 'T', modifiers: 'accel,shift', label: 'Ctrl+Shift+T', macLabel: '⇧⌘T' },
+    { id: 'toggleBookmarksToolbar', key: 'B', modifiers: 'accel,shift', label: 'Ctrl+Shift+B', macLabel: '⇧⌘B' },
+    // Phase 33 plan 04 (BMK-05, D-15): opens the clear-history picker; the Theia-focused twin is chrome-bar-keybindings.ts.
+    { id: 'clearHistory', keycode: 'VK_DELETE', modifiers: 'accel,shift', label: 'Ctrl+Shift+Del', macLabel: '⇧⌘⌦' },
 ];
 
 export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
@@ -119,6 +135,11 @@ export function tooltipFor(button: NavButton): string {
  * shortcut: spelled here until Phase 33 lands its exported `CHROME_BAR_FULL_SCREEN_COMMAND` const; import that instead then.
  */
 const FULL_SCREEN_COMMAND_ID = 'powerbrowser.chrome-bar.full-screen';
+/** Phase 33 (MENU-03): a page row's key label as a menu row's shortcut hint (macOS: its macLabel); none for an unknown row. */
+export function pageKeyLabel(id: string): string[] {
+    const row = PAGE_SHORTCUTS.find(r => r.id === id);
+    return row ? [isOSX ? row.macLabel : row.label] : [];
+}
 
 /** True while a web page (an overlay) has keyboard focus. */
 export const PAGE_FOCUS_CONTEXT_KEY = 'powerbrowser.webPageFocused';
@@ -200,6 +221,13 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['devtoolsOpen', tab => tab.openDevtools()],
         // PAGE-07 (35-07): the one Full Screen command, as newTab runs its command; the top panel stays (D-05 amended).
         ['fullscreen', () => this.commands.executeCommand(FULL_SCREEN_COMMAND_ID)],
+        // BMK-01 (T-27-19): the star's own path, which owns the editor and the write; never the store kind.
+        ['bookmarkPage', () => openBookmarkStar()],
+        // BMK-03/BMK-04 (T-27-19): the widget's reopen path and the toolbar toggle (a setting), never a store kind.
+        ['reopenClosedTab', () => reopenLastClosedTab()],
+        ['toggleBookmarksToolbar', () => toggleBookmarksToolbar()],
+        // BMK-05 (T-27-19): opens the picker only; the clear runs from the picker's confirm, never from the relay.
+        ['clearHistory', () => openClearHistory()],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */
@@ -239,6 +267,9 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
     }
 
     onStart(): void {
+        // BMK-01: the star's tooltip names only the key this table binds (the pill cannot import this module).
+        const star = PAGE_SHORTCUTS.find(row => row.id === 'bookmarkPage');
+        this.addressBar.starShortcut = star ? (isOSX ? star.macLabel : star.label) : '';
         this.pageFocused = this.contextKeys.createKey<boolean>(PAGE_FOCUS_CONTEXT_KEY, false);
         this.channel.onPush('pageFocus', detail => {
             const tabId = typeof detail.tabId === 'string' ? detail.tabId : null;

@@ -63,7 +63,7 @@ const FRONTEND_ROWS: Readonly<Record<string, FrontendRow>> = Object.freeze({
     'context-forward': { run: widget => widget.forward(), enabled: widget => widget.canGoForward },
     'context-reload': { run: widget => widget.reload() },
     'context-stop': { run: widget => widget.stop() },
-    'context-bookmarkpage': { run: (widget, menu) => menu.bookmarkPage(widget), keepsFocus: true },
+    'context-bookmarkpage': { run: (widget, menu) => menu.bookmarkThisPage(widget), keepsFocus: true },
     'context-copyimage-contents': { run: widget => widget.edit('cmd_copyImage') },
     'context-savepage': { run: widget => widget.savePage(chooseSaveDestination) },
     'context-undo': { run: widget => widget.edit('cmd_undo') },
@@ -211,8 +211,8 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
         return this.channel.request({ kind: 'webTabContextMenuAction', tabId, menuId, itemId, ...(path !== undefined ? { path } : {}) });
     }
 
-    /** Bookmark Page: the right-clicked tab becomes current, then Phase 33's bookmark path runs for it. */
-    async bookmarkPage(widget: WebTabWidget): Promise<void> {
+    /** Bookmark Page: the right-clicked tab becomes current, then Phase 33's bookmark path runs for it. Not named bookmarkPage: verify-web-tab-bridge rule 12 fences that store call. */
+    async bookmarkThisPage(widget: WebTabWidget): Promise<void> {
         await this.shell.activateWidget(widget.id);
         await this.commands.executeCommand(BOOKMARK_PAGE_COMMAND_ID);
     }

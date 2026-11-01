@@ -347,6 +347,46 @@
  *               Ctrl+L and Alt+D leave the pill unfocused and its mode
  *               unchanged. Scored only after search passed.
  *
+ *   bookmark-star  BMK-01: the star is the pill's last element (24x24, the
+ *               outline glyph, the bound-key tooltip); a click bookmarks the
+ *               page once in Places (read back chrome-side, the independent
+ *               observer) and opens the 320px editor, Name selected; Esc
+ *               returns focus to the star, which is filled. A bookmark removed
+ *               and then added chrome-side flips the star with no navigation
+ *               (the bookmarks-changed push). The filled star shows in Coding,
+ *               Browsing and Organising. Ctrl+D with the pill focused and with
+ *               the page focused each bookmark the page once and open the
+ *               editor. about:blank dims the star, disabled, with the
+ *               can't-bookmark tooltip.
+ *   bookmark-editor  BMK-02: on a seeded bookmark the star opens the editor
+ *               directly (Edit bookmark, the title selected, three folders);
+ *               Esc after typing saves nothing; a rename plus a move to the
+ *               Bookmarks Menu with Enter lands in Places and the reopened
+ *               editor shows that folder; a refused write shows the failure
+ *               row naming the application with the typed text kept; Remove
+ *               removes at once (no second confirm) and the star unfills.
+ *   bookmark-keys  D-15 (KEY ruling): in the fixture workspace, Ctrl+D with
+ *               the pill focused (no page-key row fires) and with the page
+ *               focused (the bookmarkPage row fires) each bookmark the page
+ *               in Places and open the editor; in the README.md editor Ctrl+D
+ *               keeps Monaco's meaning (a second selection appears) and opens
+ *               no editor and makes no bookmark. Scored only after
+ *               bookmark-star passed.
+ *   clear-history  BMK-05 (D-09, D-10, T-33-04): for each of the picker's five
+ *               ranges, marker rows are planted chrome-side in Places, the
+ *               tabs.sqlite closed rows and thumbnails, saved_pages and the
+ *               web-tab history file, in range and out of range. The picker
+ *               opens from the History submenu row, Ctrl+Shift+Del (pill and
+ *               page focused) and the command, with the contracted heading,
+ *               ranges (Last hour checked), footnote and buttons; Clear or
+ *               Enter clears exactly the in-range rows of every store, keeps
+ *               the out-of-range rows and every open row, and the token
+ *               cookie stays in the jar with the frame still signed in (the
+ *               positive control the clear-the-token fault must break). Esc
+ *               closes with nothing cleared; a refused clear shows the failure
+ *               row and Enter retries. The History submenu and the pill's
+ *               history rows stop listing a cleared page.
+ *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
 
@@ -360,6 +400,7 @@ import {
     focusOverlay,
     focusTheiaFrame,
     inChrome,
+    firedRows,
     installFireRecorder,
     installPushRecorder,
     loadedAt,
@@ -444,6 +485,18 @@ const PAGES = {
     '/lt-b': { title: 'Lifetime Beta', body: '<p>beta</p>' },
     '/lm-act': { title: 'Local Actions', body: '<p>actions</p>' },
     '/md-web': { title: 'Mode Defaults Web', body: '<p>web</p>' },
+    '/bm-a': { title: 'Bookmark Alpha', body: '<p>alpha</p>' },
+    '/bm-b': { title: 'Bookmark Beta', body: '<p>beta</p>' },
+    '/bm-keys': { title: 'Bookmark Keys', body: '<p>keys</p>' },
+    // Phase 33 plan 03: the toolbar, reopen and History submenu pages.
+    '/tb-a': { title: 'Toolbar Alpha', body: '<p>alpha</p>' },
+    '/tb-b': { title: 'Toolbar Beta', body: '<p>beta</p>' },
+    '/tb-c': { title: 'Toolbar Gamma', body: '<p>gamma</p>' },
+    '/rc-a': { title: 'Reopen Alpha', body: '<p>alpha</p>' },
+    '/rc-b': { title: 'Reopen Beta', body: '<p>beta</p>' },
+    '/rc-c': { title: 'Reopen Gamma', body: '<p>gamma</p>' },
+    '/hm-b': { title: 'History Back Page', body: '<p>back</p>' },
+    ...Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`/hm-c${i + 1}`, { title: `Closed Page ${i + 1}`, body: '<p>closed</p>' }])),
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -3661,6 +3714,8 @@ async function commandCentreHandoff(ctx) {
 const TYPED_TEXT_KINDS = ['resolveTypedAddress', 'searchSuggestions', 'autofillOrigin', 'searchPlaces'];
 const ENGINE_PATHS = ['/one/search', '/one/suggest', '/two/search', '/two/suggest'];
 const PRIVACY_TEXTS = ['hello', 'README', 'localhost:4000'];
+/** SMODE-07 (33-05): the type shapes a search engine would take -- a bare domain, a full URL, a multi-word query, a file:line pick. */
+const PRIVACY_SHAPES = ['example.com', 'https://example.org/a?b=c', 'what is power browser', 'README.md:12'];
 
 /** Wraps the page realm's ChromeStoreClient.request, the one method every store kind goes through, to record each kind. */
 const recordStoreKinds = app => probe(app, `const client = get('ChromeStoreClient');
@@ -3758,13 +3813,18 @@ async function commandCentrePrivacy(ctx) {
             await enterMode(app, mode.id);
             const kindMark = (await storeKinds(app)).length;
             const getMark = pages.requests.length;
-            for (const text of PRIVACY_TEXTS) {
+            for (const text of [...PRIVACY_TEXTS, ...PRIVACY_SHAPES]) {
                 await typeInPill(app, text);
                 await sleep(600);
             }
             const sent = (await storeKinds(app)).slice(kindMark).filter(kind => TYPED_TEXT_KINDS.includes(kind));
             for (const kind of [...new Set(sent)]) {
-                fail(`sent ${kind} from ${mode.label} while typing ${JSON.stringify(PRIVACY_TEXTS)}`);
+                fail(`sent ${kind} from ${mode.label} while typing ${JSON.stringify([...PRIVACY_TEXTS, ...PRIVACY_SHAPES])}`);
+            }
+            // SMODE-07: the live row this mode answers with stays all false while it holds typed text (no exception added).
+            const sends = await probe(app, `return get('AddressBar').modeSends();`);
+            if (!sends || Object.values(sends).some(v => v !== false)) {
+                fail(`${mode.label} holds typed text with a modeSends() row that is not all false: ${JSON.stringify(sends)}`);
             }
             const gets = pages.requests.slice(getMark).filter(r => ENGINE_PATHS.includes(r.path));
             if (gets.length) {
@@ -4529,6 +4589,1673 @@ async function enterMode(app, id) {
     return pickLocalMode(app, id);
 }
 
+// Phase 33 plan 02 (BMK-01, BMK-02, D-15): the star, its editor and Ctrl+D on both focus paths.
+const CHROME_BAR_COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
+const BOOKMARK_PAGE_COMMAND = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID');
+const copyPrefix = key => sourceMatch(CHROME_BAR_COPY_REL, new RegExp(`\\b${key}: \\([^)]*\\) => \`([^$\`]*)\\$\\{`));
+const STAR_KEY = sourceMatch('theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts', /id: 'bookmarkPage'[^}]*\blabel: '([^']+)'/);
+const CANT_BOOKMARK = sourceMatch(CHROME_BAR_COPY_REL, /\bcantBookmark: "([^"]+)"/);
+const NEW_BOOKMARK_HEADING = sourceMatch(CHROME_BAR_COPY_REL, /\bbookmarkPageHeading: '([^']+)'/);
+const EDIT_BOOKMARK_HEADING = sourceMatch(CHROME_BAR_COPY_REL, /\beditBookmarkHeading: '([^']+)'/);
+const FOLDER_MENU_LABEL = sourceMatch(CHROME_BAR_COPY_REL, /\bbookmarkFolderMenu: '([^']+)'/);
+const FOLDER_TOOLBAR_LABEL = sourceMatch(CHROME_BAR_COPY_REL, /\bbookmarkFolderToolbar: '([^']+)'/);
+const CTRL_D = { key: 'd', code: 'KeyD', keyCode: 68, modifiers: ['accel'] };
+
+/** The star and its editor as the user sees them. */
+const readStar = app => app.evaluate(`JSON.stringify((() => {
+    const pill = document.querySelector('.pb-chrome-bar-pill');
+    const star = pill && pill.querySelector('.pb-address-star');
+    const editor = document.querySelector('.pb-chrome-bar-dropdown.pb-bookmark-editor');
+    const name = editor && editor.querySelector('.pb-bookmark-editor-name');
+    const folders = editor ? [...editor.querySelectorAll('.pb-bookmark-editor-folder')] : [];
+    return {
+        present: !!star,
+        last: !!star && pill.lastElementChild === star,
+        filled: !!star && !!star.querySelector('.codicon-star-full'),
+        outline: !!star && !!star.querySelector('.codicon-star-empty'),
+        disabled: !!star && star.disabled,
+        dimmed: !!star && Number(getComputedStyle(star).opacity) < 1,
+        label: star ? star.getAttribute('aria-label') : null,
+        size: star ? [Math.round(star.getBoundingClientRect().width), Math.round(star.getBoundingClientRect().height)] : null,
+        focused: !!star && document.activeElement === star,
+        editor: editor ? {
+            heading: (editor.querySelector('.pb-bookmark-editor-heading') || {}).textContent || '',
+            name: name ? name.value : null,
+            nameFocused: !!name && document.activeElement === name,
+            nameSelected: !!name && name.value.length > 0 && name.selectionStart === 0 && name.selectionEnd === name.value.length,
+            folder: (folders.find(l => l.querySelector('input').checked) || {}).textContent || '',
+            folders: folders.map(l => l.textContent),
+            failure: (editor.querySelector('.pb-bookmark-editor-failure') || {}).textContent || '',
+            width: Math.round(editor.getBoundingClientRect().width),
+        } : null,
+    };
+})())`).then(JSON.parse);
+
+/** Chrome scope, Places' own read (the independent observer): every bookmark of `url` as { guid, title, folder }. */
+const bookmarksOf = (app, url) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const B = PlacesUtils.bookmarks;
+        const rows = [];
+        await B.fetch({ url: ${JSON.stringify(url)} }, b => rows.push({ guid: b.guid, title: b.title,
+            folder: b.parentGuid === B.toolbarGuid ? 'toolbar' : b.parentGuid === B.menuGuid ? 'menu' : b.parentGuid === B.unfiledGuid ? 'unfiled' : b.parentGuid }));
+        return JSON.stringify(rows);
+    } catch (e) {
+        return JSON.stringify({ error: String(e) });
+    }
+})();`).then(JSON.parse);
+
+/** Chrome scope: removes every bookmark of `url` ('ok' or 'error: ...'), as another window would. */
+const unbookmark = (app, url) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const guids = [];
+        await PlacesUtils.bookmarks.fetch({ url: ${JSON.stringify(url)} }, b => guids.push({ guid: b.guid }));
+        if (guids.length) await PlacesUtils.bookmarks.remove(guids);
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+const clickStar = app => app.evaluate(`(() => { const s = document.querySelector('.pb-address-star'); if (!s || s.disabled) return false; s.click(); return true; })()`);
+
+/** Navigates the session tab to `path`, clears its bookmarks chrome-side, and waits for the outline star. */
+async function bookmarkPageOf(ctx, tabId, path) {
+    const { app, pages } = ctx;
+    const url = pages.url(path);
+    if (await unbookmark(app, url) !== 'ok') {
+        throw new Error(`${BROKEN} the bookmarks of ${path} could not be cleared chrome-side`);
+    }
+    const from = (await pushes(app)).length;
+    await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).navigate(${JSON.stringify(url)}); return true;`);
+    if (await waitForPush(app, loadedAt(tabId, path), { from }) < 0) {
+        throw new Error(`${BROKEN} no loaded state push arrived for ${path}`);
+    }
+    if (!(await settle(() => readStar(app), v => v.present && v.outline && !v.disabled)).outline) {
+        throw new Error(`${BROKEN} the star never showed the enabled outline form on ${path}: ${JSON.stringify(await readStar(app))}`);
+    }
+    return url;
+}
+
+/** Waits for the editor; Esc closes it and the star must take focus back. Returns the editor seen. */
+async function expectEditorThenEsc(app, fail, label) {
+    const seen = await settle(() => readStar(app), v => !!v.editor);
+    if (!seen.editor) {
+        fail(`${label} opened no bookmark editor; star ${JSON.stringify(seen)}`);
+        return null;
+    }
+    await pressKey(app, ESCAPE);
+    const closed = await settle(() => readStar(app), v => !v.editor && v.focused);
+    if (closed.editor || !closed.focused) {
+        fail(`Esc in the editor opened by ${label} must close it and return focus to the star; saw ${JSON.stringify(closed)}`);
+    }
+    return seen.editor;
+}
+
+/**
+ * BMK-01: the star is the pill's last element, the outline form with the
+ * bound-key tooltip on an unbookmarked page; a click bookmarks the page in
+ * Places (read back chrome-side) and opens the editor; a bookmark removed or
+ * added chrome-side flips the star with no navigation (the bookmarks-changed
+ * push); Ctrl+D bookmarks with the pill focused and with the page focused;
+ * the filled star shows in Coding, Browsing and Organising; a page with no
+ * http(s) address dims the star with the can't-bookmark tooltip.
+ */
+async function bookmarkStar(ctx) {
+    const { app, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const url = await bookmarkPageOf(ctx, tabId, '/bm-a');
+    if (plant === 'star-ignores-push' && await probe(app, `const bar = get('AddressBar'); const read = Object.getPrototypeOf(bar).refreshStar;
+        bar.refreshStar = function (force) { if (!force) { read.call(this, false); } }; return true;`) === true) {
+        note('PLANT star-ignores-push applied');
+    }
+    const uiMode = await bodyMode(app);
+    try {
+        let star = await readStar(app);
+        const tip = `${copyPrefix('bookmarkStarTip')}${STAR_KEY})`;
+        if (!star.last || star.label !== tip || String(star.size) !== '24,24') {
+            fail(`the unbookmarked star must be the pill's last element, 24x24, labelled ${JSON.stringify(tip)}; saw ${JSON.stringify(star)}`);
+        }
+        if (await clickStar(app) !== true) {
+            return fail(`${BROKEN} the star could not be clicked`);
+        }
+        const made = await settle(() => bookmarksOf(app, url), v => Array.isArray(v) && v.length === 1, 8000);
+        if (!Array.isArray(made) || made.length !== 1) {
+            return fail(`a click on the star must bookmark the page once in Places; Places holds ${JSON.stringify(made)}`);
+        }
+        const editor = await expectEditorThenEsc(app, fail, 'the star click');
+        if (editor && (editor.heading !== NEW_BOOKMARK_HEADING || !editor.nameSelected || editor.width !== 320)) {
+            fail(`the editor after a first bookmark must be 320px, headed ${JSON.stringify(NEW_BOOKMARK_HEADING)}, with the Name field focused and selected; saw ${JSON.stringify(editor)}`);
+        }
+        star = await settle(() => readStar(app), v => v.filled);
+        const editTip = `${copyPrefix('editBookmarkTip')}${STAR_KEY})`;
+        if (!star.filled || star.label !== editTip) {
+            fail(`a bookmarked page must show the filled star labelled ${JSON.stringify(editTip)}; saw ${JSON.stringify(star)}`);
+        }
+
+        // BMK-04's push: chrome-side changes flip the star with no navigation.
+        if (await unbookmark(app, url) !== 'ok') {
+            return fail(`${BROKEN} the bookmark could not be removed chrome-side`);
+        }
+        if (!(await settle(() => readStar(app), v => v.outline, 5000)).outline) {
+            fail('the star did not unfill after the bookmark was removed in chrome (the bookmarks-changed push)');
+        }
+        if (await seedPlaces(app, [], [[url, 'Seeded elsewhere']]) !== 'ok') {
+            return fail(`${BROKEN} a bookmark could not be added chrome-side`);
+        }
+        if (!(await settle(() => readStar(app), v => v.filled, 5000)).filled) {
+            fail('the star did not fill after a bookmark was added in chrome (the bookmarks-changed push)');
+        }
+
+        // The filled star in every PowerBrowser mode.
+        for (const id of ['coding', 'browsing', 'organising']) {
+            await switchUiMode(app, id);
+            await showTab(app, tabId, `bookmark-star in ${id}`);
+            if (!(await settle(() => readStar(app), v => v.filled)).filled) {
+                fail(`the filled star is not shown in ${id}: ${JSON.stringify(await readStar(app))}`);
+            }
+        }
+
+        // Ctrl+D, Theia-focused (the pill) and page-focused (the relay row).
+        for (const [label, focus] of [['Ctrl+D in the pill', () => focusPill(app)], ['Ctrl+D in the page', () => focusOverlay(app, tabId)]]) {
+            if (await unbookmark(app, url) !== 'ok' || !(await settle(() => readStar(app), v => v.outline)).outline) {
+                return fail(`${BROKEN} the page could not be unbookmarked before ${label}`);
+            }
+            if (await focus() === false) {
+                return fail(`${BROKEN} focus could not be placed for ${label}`);
+            }
+            await pressKey(app, CTRL_D);
+            const rows = await settle(() => bookmarksOf(app, url), v => Array.isArray(v) && v.length === 1, 8000);
+            if (!Array.isArray(rows) || rows.length !== 1) {
+                fail(`${label} must bookmark the page once in Places; Places holds ${JSON.stringify(rows)}`);
+            }
+            await expectEditorThenEsc(app, fail, label);
+        }
+
+        // No http(s) page: dimmed, never removed.
+        const from = (await pushes(app)).length;
+        await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).navigate('about:blank'); return true;`);
+        await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && p.url === 'about:blank' && !p.loading, { from });
+        star = await settle(() => readStar(app), v => v.disabled);
+        if (!star.present || !star.disabled || !star.dimmed || star.label !== CANT_BOOKMARK) {
+            fail(`a page with no http(s) address must keep a dimmed, disabled star labelled ${JSON.stringify(CANT_BOOKMARK)}; saw ${JSON.stringify(star)}`);
+        }
+    } finally {
+        await probe(app, `delete get('AddressBar').refreshStar; return true;`);
+        await unbookmark(app, url);
+        if (uiMode) {
+            await switchUiMode(app, uiMode).catch(() => undefined);
+        }
+    }
+}
+
+/**
+ * BMK-02: on a bookmarked page the star opens the editor directly, headed
+ * Edit bookmark, Name prefilled and selected, the folder radio on the
+ * bookmark's folder. A rename plus a move to the Bookmarks Menu with Enter
+ * lands in Places; Esc after typing saves nothing; Remove removes at once
+ * with no second confirm; a refused write shows the failure row naming the
+ * application and keeps the panel open with the typed text.
+ */
+async function bookmarkEditor(ctx) {
+    const { app, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const url = await bookmarkPageOf(ctx, tabId, '/bm-b');
+    if (plant === 'remove-needs-confirm' && await probe(app, `const bar = get('AddressBar');
+        bar.removeFromBookmarkEditor = async function () { this.pendingConfirm = true; this.update(); }; return true;`) === true) {
+        note('PLANT remove-needs-confirm applied');
+    }
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    const setName = text => app.evaluate(`(() => {
+        const input = document.querySelector('.pb-bookmark-editor-name');
+        if (!input) return false;
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        set.call(input, ${JSON.stringify(text)});
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+        return true;
+    })()`);
+    const pickFolder = label => app.evaluate(`(() => {
+        const row = [...document.querySelectorAll('.pb-bookmark-editor-folder')].find(l => l.textContent === ${JSON.stringify(label)});
+        if (!row) return false;
+        row.querySelector('input').click();
+        document.querySelector('.pb-bookmark-editor-name').focus();
+        return true;
+    })()`);
+    try {
+        if (await seedPlaces(app, [], [[url, 'Editor Seed']]) !== 'ok' || !(await settle(() => readStar(app), v => v.filled)).filled) {
+            return fail(`${BROKEN} the page could not be bookmarked chrome-side before the editor checks`);
+        }
+        const [seed] = await bookmarksOf(app, url);
+        if (!seed || seed.folder !== 'unfiled') {
+            return fail(`${BROKEN} the seeded bookmark is not in Other Bookmarks: ${JSON.stringify(seed)}`);
+        }
+        await clickStar(app);
+        let view = await settle(() => readStar(app), v => !!v.editor);
+        if (!view.editor || view.editor.heading !== EDIT_BOOKMARK_HEADING || view.editor.name !== 'Editor Seed' || !view.editor.nameSelected
+            || view.editor.folders.length !== 3) {
+            return fail(`the star on a bookmarked page must open the editor headed ${JSON.stringify(EDIT_BOOKMARK_HEADING)} with Name "Editor Seed" selected and three folders; saw ${JSON.stringify(view.editor)}`);
+        }
+        if ((await bookmarksOf(app, url)).length !== 1) {
+            fail('opening the editor on a bookmarked page made a second bookmark');
+        }
+
+        // Esc after typing saves nothing.
+        await setName('Discarded Name');
+        await pressKey(app, ESCAPE);
+        await settle(() => readStar(app), v => !v.editor);
+        await sleep(500);
+        if ((await bookmarksOf(app, url))[0]?.title !== 'Editor Seed') {
+            fail(`Esc saved the typed name: Places holds ${JSON.stringify(await bookmarksOf(app, url))}`);
+        }
+
+        // Rename and move with Enter.
+        await clickStar(app);
+        await settle(() => readStar(app), v => !!v.editor);
+        await setName('Renamed Bookmark');
+        if (await pickFolder(FOLDER_MENU_LABEL) !== true) {
+            return fail(`${BROKEN} the ${FOLDER_MENU_LABEL} radio was not found`);
+        }
+        await pressKey(app, ENTER);
+        const moved = await settle(() => bookmarksOf(app, url), v => v[0]?.title === 'Renamed Bookmark' && v[0]?.folder === 'menu', 8000);
+        if (moved[0]?.title !== 'Renamed Bookmark' || moved[0]?.folder !== 'menu') {
+            fail(`Enter in the editor must save the name and move the bookmark to the menu folder; Places holds ${JSON.stringify(moved)}`);
+        }
+        view = await settle(() => readStar(app), v => !v.editor && v.focused);
+        if (view.editor || !view.focused) {
+            fail(`Done must close the editor and return focus to the star; saw ${JSON.stringify(view)}`);
+        }
+        await clickStar(app);
+        view = await settle(() => readStar(app), v => v.editor?.folder === FOLDER_MENU_LABEL);
+        if (view.editor?.folder !== FOLDER_MENU_LABEL) {
+            fail(`reopening the editor must show the bookmark's folder ${JSON.stringify(FOLDER_MENU_LABEL)} checked; saw ${JSON.stringify(view.editor)}`);
+        }
+        await pressKey(app, ESCAPE);
+
+        // A refused write: the failure row, the panel and the typed text stay.
+        if (await probe(app, `get('ChromeStoreClient').updateBookmark = async () => { throw new Error('stubbed refusal'); }; return true;`) !== true) {
+            return fail(`${BROKEN} the client's updateBookmark could not be stubbed to refuse`);
+        }
+        try {
+            await clickStar(app);
+            await settle(() => readStar(app), v => !!v.editor);
+            await setName('Refused Name');
+            await pickFolder(FOLDER_TOOLBAR_LABEL);
+            await pressKey(app, ENTER);
+            view = await settle(() => readStar(app), v => !!v.editor?.failure);
+            if (!view.editor || !view.editor.failure.startsWith(subject) || !view.editor.failure.includes("couldn't save that bookmark") || view.editor.name !== 'Refused Name') {
+                fail(`a refused save must keep the editor open with "Refused Name" and a failure row starting ${JSON.stringify(subject)}; saw ${JSON.stringify(view.editor)}`);
+            }
+        } finally {
+            await probe(app, `delete get('ChromeStoreClient').updateBookmark; return true;`);
+        }
+        await pressKey(app, ESCAPE);
+        await settle(() => readStar(app), v => !v.editor);
+
+        // Remove runs at once: one click, no second confirm, the star unfills.
+        await clickStar(app);
+        await settle(() => readStar(app), v => !!v.editor);
+        await app.evaluate(`(() => { const b = document.querySelector('.pb-bookmark-editor-remove'); if (b) b.click(); return !!b; })()`);
+        const gone = await settle(() => bookmarksOf(app, url), v => Array.isArray(v) && v.length === 0, 5000);
+        if (!Array.isArray(gone) || gone.length !== 0) {
+            fail(`Remove did not remove the bookmark at once (no second confirm): Places holds ${JSON.stringify(gone)}`);
+        }
+        view = await settle(() => readStar(app), v => !v.editor && v.outline);
+        if (view.editor || !view.outline) {
+            fail(`after Remove the editor must close and the star unfill; saw ${JSON.stringify(view)}`);
+        }
+    } finally {
+        await probe(app, `const bar = get('AddressBar'); delete bar.removeFromBookmarkEditor; bar.closeBookmarkEditor(false); return true;`);
+        await unbookmark(app, url);
+    }
+}
+
+/**
+ * D-15 / KEY ruling, both focus paths: Ctrl+D runs the bookmark-page command
+ * with the Theia frame focused (the pill) and the page-key row with the page
+ * focused, each opening the editor on a new Places bookmark; in the README.md
+ * editor Ctrl+D keeps Monaco's meaning (a second selection appears on the
+ * repeated word) and opens no editor.
+ */
+async function bookmarkKeys(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'bookmark-keys')) {
+        return 'not-scored';
+    }
+    const dir = await openWorkspace(ctx);
+    const tabId = await openLocalTab(app, pages, '/bm-keys');
+    await showTab(app, tabId, 'bookmark-keys');
+    const url = localUrl(pages, '/bm-keys');
+    await installFireRecorder(app);
+    if (plant === 'ctrl-d-everywhere' && await probe(app, `window.__pbCtrlDPlant = get('KeybindingRegistry').registerKeybinding({ command: ${JSON.stringify(BOOKMARK_PAGE_COMMAND)}, keybinding: 'ctrlcmd+d' }); return true;`) === true) {
+        note('PLANT ctrl-d-everywhere applied');
+    }
+    try {
+        for (const [label, focus, row] of [['Ctrl+D with the pill focused', () => focusPill(app), false], ['Ctrl+D with the page focused', () => focusOverlay(app, tabId), true]]) {
+            if (await unbookmark(app, url) !== 'ok' || !(await settle(() => readStar(app), v => v.outline)).outline) {
+                return fail(`${BROKEN} the page could not be unbookmarked before ${label}`);
+            }
+            const fired = (await app.evaluateIn(app.chrome, 'JSON.stringify(window.__pbFired || [])').then(JSON.parse)).length;
+            if (await focus() === false) {
+                return fail(`${BROKEN} focus could not be placed for ${label}`);
+            }
+            await pressKey(app, CTRL_D);
+            const rows = await settle(() => bookmarksOf(app, url), v => Array.isArray(v) && v.length === 1, 8000);
+            if (!Array.isArray(rows) || rows.length !== 1) {
+                fail(`${label} must bookmark the page once in Places; Places holds ${JSON.stringify(rows)}`);
+            }
+            const firedNow = (await app.evaluateIn(app.chrome, 'JSON.stringify(window.__pbFired || [])').then(JSON.parse)).slice(fired);
+            if (row !== firedNow.includes('bookmarkPage')) {
+                fail(`${label} must ${row ? '' : 'not '}fire the bookmarkPage page-key row; rows fired ${JSON.stringify(firedNow)}`);
+            }
+            await expectEditorThenEsc(app, fail, label);
+        }
+
+        // KEY-04: in an editor Monaco keeps Ctrl+D (add the next occurrence to the selection).
+        await unbookmark(app, url);
+        if (await focusTheiaFrame(app) !== true || await focusReadmeEditor(app, dir) !== true) {
+            return fail(`${BROKEN} the README.md editor could not be opened and focused`);
+        }
+        await probe(app, `const c = get('EditorManager').currentEditor.editor.getControl();
+            c.setSelection({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 6 }); return true;`);
+        await pressKey(app, CTRL_D);
+        const selections = await settle(() => probe(app, `return get('EditorManager').currentEditor?.editor.getControl().getSelections().length ?? 0;`), n => n >= 2, 3000);
+        if (selections < 2) {
+            fail(`Ctrl+D in the README.md editor must keep Monaco's meaning (a second "probe" selected); the editor has ${selections} selection(s)`);
+        }
+        const after = await readStar(app);
+        if (after.editor) {
+            fail('Ctrl+D in the README.md editor opened the bookmark editor');
+        }
+        if ((await bookmarksOf(app, url)).length) {
+            fail('Ctrl+D in the README.md editor bookmarked the page');
+        }
+    } finally {
+        await probe(app, `get('AddressBar').closeBookmarkEditor(false);
+            if (window.__pbCtrlDPlant) { window.__pbCtrlDPlant.dispose(); delete window.__pbCtrlDPlant; }
+            const ed = get('EditorManager').currentEditor;
+            if (ed && ed.editor.document && ed.editor.document.revert) { await ed.editor.document.revert(); }
+            return true;`);
+        await unbookmark(app, url);
+    }
+}
+
+// Phase 33 plan 03 (BMK-03, BMK-04, BMK-06, D-15): the bookmarks toolbar, reopen closed tab and the History submenu.
+const SHORTCUTS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts';
+const TOOLBAR_PREFERENCE = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-preferences.ts', 'SHOW_BOOKMARKS_TOOLBAR_PREFERENCE');
+const HISTORY_MENU_ROWS = Number(sourceMatch('theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx', /const HISTORY_MENU_ROWS = (\d+);/));
+const copyPlain = key => sourceMatch(CHROME_BAR_COPY_REL, new RegExp(`\\b${key}: '([^']+)'`));
+const APP_MENU_LABEL = copyPlain('appMenu');
+const HISTORY_ROW = copyPlain('menuHistory');
+const REOPEN_ROW = copyPlain('reopenClosedTab');
+const CLOSED_HEADER = copyPlain('recentlyClosedTabs');
+const RECENT_HEADER = copyPlain('recentPages');
+const NO_CLOSED = copyPlain('noClosedTabs');
+const NO_RECENT = copyPlain('noRecentPages');
+const TOOLBAR_MORE = copyPlain('bookmarksToolbarMore');
+
+/** A PAGE_SHORTCUTS row's key as a pressKey event, derived from the table (letter keys only). */
+function rowKey(id) {
+    const key = sourceMatch(SHORTCUTS_REL, new RegExp(`id: '${id}', key: '([A-Z])'`));
+    const modifiers = sourceMatch(SHORTCUTS_REL, new RegExp(`id: '${id}', key: '[A-Z]', modifiers: '([^']+)'`)).split(',');
+    return { key, code: `Key${key}`, keyCode: key.charCodeAt(0), modifiers };
+}
+const REOPEN_KEY = rowKey('reopenClosedTab');
+const TOOLBAR_KEY = rowKey('toggleBookmarksToolbar');
+
+/** The toolbar as drawn, with the geometry it must keep: one 28px row above the main area, never scrolled. */
+const readToolbar = app => app.evaluate(`JSON.stringify((() => {
+    const row = document.querySelector('.pb-bookmarks-toolbar');
+    const panel = document.getElementById('theia-top-panel');
+    const main = document.getElementById('theia-main-content-panel');
+    const box = e => { const r = e.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), height: Math.round(r.height) }; };
+    const chevron = row && row.querySelector('.pb-bookmarks-toolbar-chevron');
+    return {
+        shown: !!row,
+        height: row ? box(row).height : 0,
+        bottom: row ? box(row).bottom : 0,
+        scrollLeft: row ? row.scrollLeft : 0,
+        items: row ? [...row.querySelectorAll('.pb-bookmarks-toolbar-item')].map(i => ({
+            label: (i.querySelector('.pb-bookmarks-toolbar-label') || {}).textContent || '',
+            hidden: i.classList.contains('is-overflow'),
+            top: box(i).top,
+            right: box(i).right,
+        })) : [],
+        chevron: chevron ? { ...box(chevron), label: chevron.getAttribute('aria-label') } : null,
+        failure: row ? ((row.querySelector('.pb-bookmarks-toolbar-failed') || {}).textContent || '') : '',
+        panel: panel ? box(panel).height : 0,
+        mainTop: main ? box(main).top : null,
+    };
+})())`).then(JSON.parse);
+
+/** Chrome scope, Places' own read (the independent observer): the toolbar folder's web bookmarks, title or address, in order. */
+const toolbarFolder = app => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const tree = await PlacesUtils.promiseBookmarksTree(PlacesUtils.bookmarks.toolbarGuid);
+        return JSON.stringify((tree.children || []).filter(c => /^https?:/.test(c.uri || '')).map(c => c.title || c.uri));
+    } catch (e) {
+        return JSON.stringify({ error: String(e) });
+    }
+})();`).then(JSON.parse);
+
+/** Chrome scope: a toolbar bookmark on each `[url, title]`, appended in order, as another window would add it. */
+const seedToolbar = (app, rows) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        for (const [url, title] of ${JSON.stringify(rows)}) {
+            await PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.toolbarGuid, url, title });
+        }
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/** The visible .lm-Menu elements in order, each as its drawn items (collapsed separators dropped). */
+const readOpenMenus = app => app.evaluate(`JSON.stringify([...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0).map(m =>
+    [...m.querySelectorAll('.lm-Menu-item')].filter(i => !i.classList.contains('lm-mod-collapsed')).map(i => ({
+        separator: i.getAttribute('data-type') === 'separator',
+        label: (i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '',
+        shortcut: (i.querySelector('.lm-Menu-itemShortcut') || {}).textContent || '',
+        disabled: i.classList.contains('lm-mod-disabled'),
+    }))))`).then(JSON.parse);
+
+/** Points at the row `label` of visible menu `index` as a pointer does (move, then mouse-up unless `hover`); `mods` such as { ctrlKey: true }. */
+const pointMenuRow = (app, index, label, { hover = false, mods = {} } = {}) => app.evaluate(`(() => {
+    const menu = [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0)[${index}];
+    const item = menu && [...menu.querySelectorAll('.lm-Menu-item')].find(i => ((i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '') === ${JSON.stringify(label)});
+    if (!item) return false;
+    const r = item.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, ...${JSON.stringify(mods)} };
+    item.dispatchEvent(new MouseEvent('mousemove', at));
+    if (!${hover}) item.dispatchEvent(new MouseEvent('mouseup', { ...at, button: 0 }));
+    return true;
+})()`);
+
+/** Closes every open menu, innermost first (Esc on each). */
+const closeOpenMenus = app => app.evaluate(`(() => {
+    for (const m of [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0).reverse()) {
+        m.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+    }
+    return true;
+})()`);
+
+/** The main-area web tabs as { tabId, url }, in shell order. */
+const webTabsNow = app => probe(app, `return get('ApplicationShell').getWidgets('main').filter(w => typeof w.tabId === 'string').map(w => ({ tabId: w.tabId, url: w.url || '' }));`);
+
+/** The one web tab in `after` not in `before`, once it has an http(s) address; null when none appeared. */
+async function newWebTab(app, before) {
+    const known = new Set(before.map(t => t.tabId));
+    const after = await settle(() => webTabsNow(app), v => Array.isArray(v) && v.some(t => !known.has(t.tabId) && /^https?:/.test(t.url)), 8000);
+    return (Array.isArray(after) ? after : []).find(t => !known.has(t.tabId) && /^https?:/.test(t.url)) ?? null;
+}
+
+const closeWebTab = (app, tabId) => probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); if (w) { await get('ApplicationShell').closeWidget(w.id); } return true;`);
+
+/** A web tab's own session history, as paths, or [] when it cannot be read. */
+const historyPaths = (app, tabId) => probe(app, `const r = await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).history();
+    return r && r.ok && r.where === 'done' ? (r.entries || []).map(e => e.url) : [];`).then(urls => (Array.isArray(urls) ? urls.map(pathOf) : []));
+
+/** Opens the hamburger and hovers its History row; returns the submenu's items, or throws a broken instrument. */
+async function openHistorySubmenu(app) {
+    const opened = await app.evaluate(`(() => { const b = document.querySelector('.pb-chrome-bar button[aria-label=${JSON.stringify(APP_MENU_LABEL)}]'); if (!b) return false; b.click(); return true; })()`);
+    const root = opened === true ? await settle(() => readOpenMenus(app), m => m.length === 1 && m[0].some(i => i.label === HISTORY_ROW), 10000) : [];
+    if (root.length !== 1) {
+        throw new Error(`${BROKEN} the hamburger did not open with a ${HISTORY_ROW} row (${JSON.stringify(root)})`);
+    }
+    await pointMenuRow(app, 0, HISTORY_ROW, { hover: true });
+    const menus = await settle(() => readOpenMenus(app), m => m.length === 2 && m[1].length > 0, 5000);
+    if (menus.length !== 2) {
+        throw new Error(`${BROKEN} hovering ${HISTORY_ROW} opened no submenu (${JSON.stringify(menus)})`);
+    }
+    return menus[1];
+}
+
+/** The History submenu cut at its separators: the rows before the first, then each section. */
+function historySections(items) {
+    const sections = [[]];
+    for (const item of items) {
+        if (item.separator) {
+            sections.push([]);
+        } else {
+            sections[sections.length - 1].push(item);
+        }
+    }
+    return sections.filter((section, i) => i === 0 || section.length);
+}
+
+/**
+ * BMK-04 (D-04, D-05): Ctrl+Shift+B with the pill focused shows the 28px
+ * toolbar row, growing the top panel by exactly 28px with the main area below
+ * it, in every PowerBrowser mode; its items are the toolbar folder in Places
+ * order (read back chrome-side); a bookmark added or removed in chrome appears
+ * or vanishes with no reload (the bookmarks-changed push); an overflowing row
+ * stays one unscrolled row and its chevron lists exactly the hidden items; a
+ * refused read shows the failure row and no items; Ctrl+Shift+B with the page
+ * focused (its relay row) hides it and gives the 28px back.
+ */
+async function bookmarksToolbar(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const uiMode = await bodyMode(app);
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    const seeded = ['/tb-a', '/tb-b'].map(path => [pages.url(path), PAGES[path].title]);
+    const added = [pages.url('/tb-c'), PAGES['/tb-c'].title];
+    const many = Array.from({ length: 30 }, (_, i) => [pages.url(`/tb-a?n=${i}`), `Overflow bookmark ${i} with a long title`]);
+    const refusedTrigger = [pages.url('/tb-b?refused'), 'Refused read trigger'];
+    await installFireRecorder(app);
+    try {
+        if (await setPref(app, TOOLBAR_PREFERENCE, false) !== true) {
+            return fail(`${BROKEN} the toolbar setting could not be turned off`);
+        }
+        const before = await settle(() => readToolbar(app), v => !v.shown);
+        if (before.shown) {
+            return fail(`${BROKEN} the toolbar is still shown with its setting off`);
+        }
+        if (await seedToolbar(app, seeded) !== 'ok') {
+            return fail(`${BROKEN} the toolbar bookmarks could not be seeded chrome-side`);
+        }
+
+        // Theia-focused Ctrl+Shift+B (the keybinding).
+        await focusPill(app);
+        await pressKey(app, TOOLBAR_KEY);
+        let view = await settle(() => readToolbar(app), v => v.shown && v.items.length >= seeded.length);
+        if (!view.shown || view.height !== 28) {
+            return fail(`Ctrl+Shift+B with the pill focused must show the 28px bookmarks toolbar; saw ${JSON.stringify(view)}`);
+        }
+        if (view.panel - before.panel !== 28) {
+            fail(`the top panel must grow by exactly 28px while the toolbar shows; it went from ${before.panel}px to ${view.panel}px`);
+        }
+        if (view.mainTop !== null && view.bottom > view.mainTop) {
+            fail(`the toolbar overlays the main area (toolbar bottom ${view.bottom}, main area top ${view.mainTop})`);
+        }
+        const folder = await toolbarFolder(app);
+        if (!Array.isArray(folder) || JSON.stringify(view.items.map(i => i.label)) !== JSON.stringify(folder)) {
+            fail(`the toolbar items must be the toolbar folder in Places order ${JSON.stringify(folder)}; saw ${JSON.stringify(view.items.map(i => i.label))}`);
+        }
+
+        // Every PowerBrowser mode (D-04).
+        for (const id of ['coding', 'browsing', 'organising']) {
+            await switchUiMode(app, id);
+            await showTab(app, tabId, `bookmarks-toolbar in ${id}`);
+            const inMode = await settle(() => readToolbar(app), v => v.shown && v.height === 28);
+            if (!inMode.shown || inMode.height !== 28 || (inMode.mainTop !== null && inMode.bottom > inMode.mainTop)) {
+                fail(`the toolbar must show as a 28px row above the main area in ${id}; saw ${JSON.stringify(inMode)}`);
+            }
+        }
+        if (uiMode) {
+            await switchUiMode(app, uiMode);
+        }
+        await showTab(app, tabId, 'bookmarks-toolbar');
+
+        if (plant === 'toolbar-ignores-push' && await probe(app, `get('ChromeBarWidget').refreshBookmarksToolbar = async function () {}; return true;`) === true) {
+            note('PLANT toolbar-ignores-push applied');
+        }
+        // D-05: chrome-side changes appear and vanish with no reload.
+        if (await seedToolbar(app, [added]) !== 'ok') {
+            return fail(`${BROKEN} a toolbar bookmark could not be added chrome-side`);
+        }
+        view = await settle(() => readToolbar(app), v => v.items.some(i => i.label === added[1]));
+        if (!view.items.some(i => i.label === added[1])) {
+            fail(`the toolbar did not show a bookmark added in chrome (the bookmarks-changed push); items ${JSON.stringify(view.items.map(i => i.label))}`);
+        }
+        if (await unbookmark(app, seeded[0][0]) !== 'ok') {
+            return fail(`${BROKEN} a toolbar bookmark could not be removed chrome-side`);
+        }
+        view = await settle(() => readToolbar(app), v => !v.items.some(i => i.label === seeded[0][1]));
+        if (view.items.some(i => i.label === seeded[0][1])) {
+            fail(`the toolbar still shows a bookmark removed in chrome (the bookmarks-changed push)`);
+        }
+        await probe(app, `delete get('ChromeBarWidget').refreshBookmarksToolbar; return true;`);
+
+        // Overflow: one row that never wraps or scrolls; the chevron lists exactly the hidden items.
+        if (await seedToolbar(app, many) !== 'ok') {
+            return fail(`${BROKEN} the overflow bookmarks could not be seeded chrome-side`);
+        }
+        view = await settle(() => readToolbar(app), v => !!v.chevron && v.items.some(i => i.hidden));
+        const hidden = view.items.filter(i => i.hidden).map(i => i.label);
+        if (!view.chevron || !hidden.length || view.chevron.label !== TOOLBAR_MORE) {
+            fail(`an overflowing toolbar must show the chevron labelled ${JSON.stringify(TOOLBAR_MORE)} with items hidden behind it; saw ${JSON.stringify({ chevron: view.chevron, hidden: hidden.length })}`);
+        } else {
+            if (view.height !== 28 || new Set(view.items.map(i => i.top)).size !== 1 || view.scrollLeft !== 0) {
+                fail(`the overflowing toolbar must stay one 28px row that never scrolls; height ${view.height}, item rows ${new Set(view.items.map(i => i.top)).size}, scrollLeft ${view.scrollLeft}`);
+            }
+            if (view.items.some(i => !i.hidden && i.right > view.chevron.left)) {
+                fail('a shown toolbar item runs under the chevron');
+            }
+            await app.evaluate(`(() => { const c = document.querySelector('.pb-bookmarks-toolbar-chevron'); if (c) c.click(); return !!c; })()`);
+            const menus = await settle(() => readOpenMenus(app), m => m.length === 1);
+            const listed = (menus[0] ?? []).filter(i => !i.separator).map(i => i.label);
+            if (listed.length !== hidden.length || hidden.some(label => !listed.includes(label))) {
+                fail(`the chevron menu must list exactly the hidden items ${JSON.stringify(hidden)}; saw ${JSON.stringify(listed)}`);
+            }
+            await closeOpenMenus(app);
+        }
+
+        // A refused read: the failure row, never stale items.
+        if (await probe(app, `get('ChromeStoreClient').listBookmarkFolder = async () => { throw new Error('stubbed refusal'); }; return true;`) !== true) {
+            return fail(`${BROKEN} the client's listBookmarkFolder could not be stubbed to refuse`);
+        }
+        try {
+            if (await seedToolbar(app, [refusedTrigger]) !== 'ok') {
+                return fail(`${BROKEN} the refusal trigger bookmark could not be added chrome-side`);
+            }
+            view = await settle(() => readToolbar(app), v => !!v.failure);
+            if (!view.failure.startsWith(subject) || view.items.length) {
+                fail(`a refused toolbar read must show only the failure row starting ${JSON.stringify(subject)}; saw ${JSON.stringify({ failure: view.failure, items: view.items.length })}`);
+            }
+        } finally {
+            await probe(app, `delete get('ChromeStoreClient').listBookmarkFolder; return true;`);
+        }
+
+        // Page-focused Ctrl+Shift+B (the relay row) hides it and gives the 28px back.
+        if (await focusOverlay(app, tabId) !== true) {
+            return fail(`${BROKEN} the session tab's page could not be focused`);
+        }
+        const fired = (await firedRows(app)).length;
+        await pressKey(app, TOOLBAR_KEY);
+        view = await settle(() => readToolbar(app), v => !v.shown);
+        if (view.shown) {
+            fail('Ctrl+Shift+B with the page focused must hide the toolbar');
+        }
+        if (!(await firedRows(app)).slice(fired).includes('toggleBookmarksToolbar')) {
+            fail('Ctrl+Shift+B with the page focused must fire the toggleBookmarksToolbar page-key row');
+        }
+        if (!view.shown && view.panel !== before.panel) {
+            fail(`hiding the toolbar must give the 28px back; the top panel is ${view.panel}px, it was ${before.panel}px`);
+        }
+    } finally {
+        await probe(app, `delete get('ChromeStoreClient').listBookmarkFolder; delete get('ChromeBarWidget').refreshBookmarksToolbar; return true;`);
+        await closeOpenMenus(app).catch(() => undefined);
+        for (const [url] of [...seeded, added, ...many, refusedTrigger]) {
+            await unbookmark(app, url);
+        }
+        await setPref(app, TOOLBAR_PREFERENCE, false).catch(() => undefined);
+        if (uiMode) {
+            await switchUiMode(app, uiMode).catch(() => undefined);
+        }
+    }
+}
+
+/**
+ * BMK-03 (D-07, T-33-02): two closed tabs, the older one having walked
+ * /rc-a -> /rc-b. Ctrl+Shift+T with the pill focused reopens the newest
+ * (/rc-c) first; Ctrl+Shift+T with the page focused (its relay row) reopens
+ * the next one WITH its own back/forward history (/rc-a then /rc-b, and Back
+ * walks to /rc-a); with nothing closed the key opens no tab.
+ */
+async function reopenClosed(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    await sessionTab(ctx);
+    const opened = [];
+    const closedUrls = () => probe(app, `return (await get('ChromeStoreClient').listClosedTabs(25)).map(r => r.url);`);
+    if (plant === 'reopen-no-history' && await probe(app, `get('ProfileStorageService').armWebTabHistory = async () => true; return true;`) === true) {
+        note('PLANT reopen-no-history applied');
+    }
+    try {
+        const walked = await openWebTab(app, pages.url('/rc-a'));
+        if (await waitForPush(app, loadedAt(walked, '/rc-a')) < 0) {
+            return fail(`${BROKEN} no loaded state push arrived for /rc-a`);
+        }
+        const from = (await pushes(app)).length;
+        await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(walked)}).navigate(${JSON.stringify(pages.url('/rc-b'))}); return true;`);
+        if (await waitForPush(app, loadedAt(walked, '/rc-b'), { from }) < 0) {
+            return fail(`${BROKEN} no loaded state push arrived for /rc-b`);
+        }
+        await closeWebTab(app, walked);
+        const single = await openWebTab(app, pages.url('/rc-c'));
+        if (await waitForPush(app, loadedAt(single, '/rc-c')) < 0) {
+            return fail(`${BROKEN} no loaded state push arrived for /rc-c`);
+        }
+        await closeWebTab(app, single);
+        const closed = await settle(closedUrls, v => Array.isArray(v) && pathOf(v[0]) === '/rc-c' && pathOf(v[1]) === '/rc-b', 8000);
+        if (!Array.isArray(closed) || pathOf(closed[0]) !== '/rc-c' || pathOf(closed[1]) !== '/rc-b') {
+            return fail(`${BROKEN} the two closed tabs are not the newest closed rows: ${JSON.stringify(closed)}`);
+        }
+
+        // Theia-focused: the newest closed tab first.
+        let tabs = await webTabsNow(app);
+        await focusPill(app);
+        await pressKey(app, REOPEN_KEY);
+        const first = await newWebTab(app, tabs);
+        if (!first || pathOf(first.url) !== '/rc-c') {
+            return fail(`Ctrl+Shift+T with the pill focused must reopen the most recently closed tab (/rc-c) first; the new tab is ${JSON.stringify(first)}`);
+        }
+        opened.push(first.tabId);
+
+        // Page-focused (the relay row): the next one, with its own history.
+        await installFireRecorder(app);
+        if (await focusOverlay(app, first.tabId) !== true) {
+            return fail(`${BROKEN} the reopened tab's page could not be focused`);
+        }
+        const fired = (await firedRows(app)).length;
+        tabs = await webTabsNow(app);
+        await pressKey(app, REOPEN_KEY);
+        const second = await newWebTab(app, tabs);
+        if (!(await firedRows(app)).slice(fired).includes('reopenClosedTab')) {
+            fail('Ctrl+Shift+T with the page focused must fire the reopenClosedTab page-key row');
+        }
+        if (!second || pathOf(second.url) !== '/rc-b') {
+            return fail(`Ctrl+Shift+T with the page focused must reopen the next closed tab (/rc-b); the new tab is ${JSON.stringify(second)}`);
+        }
+        opened.push(second.tabId);
+        const paths = await settle(() => historyPaths(app, second.tabId), v => v.includes('/rc-a') && v.includes('/rc-b'), 8000);
+        if (!paths.includes('/rc-a') || !paths.includes('/rc-b')) {
+            fail(`the reopened tab has no back/forward history: its entries are ${JSON.stringify(paths)}, expected /rc-a then /rc-b`);
+        } else {
+            const mark = (await pushes(app)).length;
+            await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(second.tabId)}).back(); return true;`);
+            if (await waitForPush(app, loadedAt(second.tabId, '/rc-a'), { from: mark }) < 0) {
+                fail('Back in the reopened tab did not walk to /rc-a');
+            }
+        }
+
+        // Nothing closed (chrome answers null): the same key that just opened two tabs opens none.
+        await probe(app, `get('ChromeStoreClient').reopenClosedTab = async () => null; return true;`);
+        tabs = await webTabsNow(app);
+        await focusPill(app);
+        await pressKey(app, REOPEN_KEY);
+        await sleep(1500);
+        if ((await webTabsNow(app)).length !== tabs.length) {
+            fail('Ctrl+Shift+T with nothing closed opened a tab');
+        }
+    } finally {
+        await probe(app, `delete get('ChromeStoreClient').reopenClosedTab; delete get('ProfileStorageService').armWebTabHistory; return true;`);
+        for (const id of opened) {
+            await closeWebTab(app, id).catch(() => undefined);
+        }
+    }
+}
+
+/**
+ * BMK-06 (D-08): the History submenu of the hamburger (no chrome-bar button
+ * of its own) opens on an enabled Reopen Closed Tab row with its key, then the
+ * Recently closed tabs section (the newest HISTORY_MENU_ROWS closed tabs,
+ * newest first), then the Recent pages section (capped, the newest visit
+ * first). A closed row reopens with its history; a recent page loads in the
+ * current tab, and in a new background tab with Ctrl; empty reads show the
+ * disabled "No ..." rows and disable the reopen row.
+ */
+async function historyMenu(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const opened = [];
+    if (plant === 'recent-opens-new-tab' && await probe(app, `const w = get('ChromeBarWidget'); const open = Object.getPrototypeOf(w).openPlace;
+        w.openPlace = function (url) { return open.call(this, url, 'background'); }; return true;`) === true) {
+        note('PLANT recent-opens-new-tab applied');
+    }
+    try {
+        const buttons = await app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-chrome-bar > button')].map(b => b.getAttribute('aria-label')))`).then(JSON.parse);
+        if (buttons.includes(HISTORY_ROW)) {
+            fail(`History must be a hamburger submenu, not a chrome-bar button; the bar's buttons are ${JSON.stringify(buttons)}`);
+        }
+        // HISTORY_MENU_ROWS + 1 closed tabs; the newest walked /hm-c<last> -> /hm-b, so its row carries history.
+        const last = HISTORY_MENU_ROWS + 1;
+        for (let i = 1; i <= last; i++) {
+            const path = `/hm-c${i}`;
+            const id = await openWebTab(app, pages.url(path));
+            if (await waitForPush(app, loadedAt(id, path)) < 0) {
+                return fail(`${BROKEN} no loaded state push arrived for ${path}`);
+            }
+            if (i === last) {
+                const from = (await pushes(app)).length;
+                await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(id)}).navigate(${JSON.stringify(pages.url('/hm-b'))}); return true;`);
+                if (await waitForPush(app, loadedAt(id, '/hm-b'), { from }) < 0) {
+                    return fail(`${BROKEN} no loaded state push arrived for /hm-b`);
+                }
+            }
+            await closeWebTab(app, id);
+        }
+        const wantClosed = [PAGES['/hm-b'].title, ...Array.from({ length: HISTORY_MENU_ROWS - 1 }, (_, i) => PAGES[`/hm-c${last - 1 - i}`].title)];
+        await showTab(app, tabId, 'history-menu');
+
+        let [top, closedSection, recentSection] = historySections(await openHistorySubmenu(app));
+        const reopenRow = top?.[0];
+        if (top?.length !== 1 || reopenRow.label !== REOPEN_ROW || reopenRow.disabled || !reopenRow.shortcut) {
+            fail(`the History submenu must open on one enabled ${JSON.stringify(REOPEN_ROW)} row showing its key; saw ${JSON.stringify(top)}`);
+        }
+        if (closedSection?.[0]?.label !== CLOSED_HEADER || !closedSection[0].disabled) {
+            fail(`the second section must open on the disabled ${JSON.stringify(CLOSED_HEADER)} header; saw ${JSON.stringify(closedSection?.[0])}`);
+        }
+        const closedLabels = (closedSection ?? []).slice(1).map(i => i.label);
+        if (JSON.stringify(closedLabels) !== JSON.stringify(wantClosed)) {
+            fail(`the closed tabs section must list the ${HISTORY_MENU_ROWS} newest closed tabs, newest first, ${JSON.stringify(wantClosed)}; saw ${JSON.stringify(closedLabels)}`);
+        }
+        if (recentSection?.[0]?.label !== RECENT_HEADER || !recentSection[0].disabled) {
+            fail(`the third section must open on the disabled ${JSON.stringify(RECENT_HEADER)} header; saw ${JSON.stringify(recentSection?.[0])}`);
+        }
+        const recentLabels = (recentSection ?? []).slice(1).map(i => i.label);
+        if (recentLabels.length !== HISTORY_MENU_ROWS || recentLabels[0] !== PAGES['/hm-b'].title) {
+            fail(`the recent pages section must hold ${HISTORY_MENU_ROWS} rows (more were visited), the newest visit (${PAGES['/hm-b'].title}) first; saw ${JSON.stringify(recentLabels)}`);
+        }
+
+        // A closed row reopens with its history.
+        let tabs = await webTabsNow(app);
+        await pointMenuRow(app, 1, wantClosed[0]);
+        const reopened = await newWebTab(app, tabs);
+        if (!reopened || pathOf(reopened.url) !== '/hm-b') {
+            fail(`choosing the newest closed row must reopen /hm-b; the new tab is ${JSON.stringify(reopened)}`);
+        } else {
+            opened.push(reopened.tabId);
+            const paths = await settle(() => historyPaths(app, reopened.tabId), v => v.includes(`/hm-c${last}`), 8000);
+            if (!paths.includes(`/hm-c${last}`) || !paths.includes('/hm-b')) {
+                fail(`the closed row reopened without its history: entries ${JSON.stringify(paths)}`);
+            }
+        }
+
+        // A recent page loads in the current tab; Ctrl opens it in a new background tab.
+        const target = PAGES[`/hm-c${last - 1}`].title;
+        await showTab(app, tabId, 'history-menu');
+        [, , recentSection] = historySections(await openHistorySubmenu(app));
+        if (!(recentSection ?? []).some(i => i.label === target)) {
+            await closeOpenMenus(app);
+            return fail(`${BROKEN} the recent pages section does not list ${target}`);
+        }
+        tabs = await webTabsNow(app);
+        let mark = (await pushes(app)).length;
+        await pointMenuRow(app, 1, target);
+        if (await waitForPush(app, loadedAt(tabId, `/hm-c${last - 1}`), { from: mark }) < 0 || (await webTabsNow(app)).length !== tabs.length) {
+            fail(`a recent page must load in the current tab: no load of /hm-c${last - 1} in the session tab, or a tab was opened (${(await webTabsNow(app)).length} tabs, ${tabs.length} before)`);
+        }
+        [, , recentSection] = historySections(await openHistorySubmenu(app));
+        const other = (recentSection ?? []).slice(1).find(i => i.label !== target && !i.disabled);
+        if (other) {
+            tabs = await webTabsNow(app);
+            await pointMenuRow(app, 1, other.label, { mods: { ctrlKey: true } });
+            const background = await newWebTab(app, tabs);
+            const current = await probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null;`);
+            if (!background || current !== tabId) {
+                fail(`Ctrl on a recent page must open it in a new background tab and keep the session tab current; new ${JSON.stringify(background)}, current ${JSON.stringify(current)}`);
+            }
+            if (background) {
+                opened.push(background.tabId);
+            }
+        } else {
+            await closeOpenMenus(app);
+        }
+
+        // Empty reads: the disabled "No ..." rows, and the reopen row disabled.
+        await probe(app, `const c = get('ChromeStoreClient'); c.listClosedTabs = async () => []; c.searchPlaces = async () => []; return true;`);
+        try {
+            [top, closedSection, recentSection] = historySections(await openHistorySubmenu(app));
+            const empty = { reopen: top?.[0], closed: closedSection?.slice(1), recent: recentSection?.slice(1) };
+            if (!empty.reopen?.disabled || empty.closed?.length !== 1 || empty.closed[0].label !== NO_CLOSED || !empty.closed[0].disabled
+                || empty.recent?.length !== 1 || empty.recent[0].label !== NO_RECENT || !empty.recent[0].disabled) {
+                fail(`with nothing closed and no history the submenu must disable ${JSON.stringify(REOPEN_ROW)} and show the disabled ${JSON.stringify(NO_CLOSED)} and ${JSON.stringify(NO_RECENT)} rows; saw ${JSON.stringify(empty)}`);
+            }
+            await closeOpenMenus(app);
+        } finally {
+            await probe(app, `const c = get('ChromeStoreClient'); delete c.listClosedTabs; delete c.searchPlaces; return true;`);
+        }
+    } finally {
+        await closeOpenMenus(app).catch(() => undefined);
+        await probe(app, `delete get('ChromeBarWidget').openPlace;
+            await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).navigate(${JSON.stringify(pages.url('/start'))}); return true;`);
+        for (const id of opened) {
+            await closeWebTab(app, id).catch(() => undefined);
+        }
+    }
+}
+
+// Phase 33 plan 04 (BMK-05, D-09, D-10, T-33-04): the Clear Recent History picker and its fan-out.
+const CHROME_BAR_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+const BOUNDARY_REL = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
+/** The picker's ranges in its order, with their labels: [{ range, label }], from the widget's own table and CHROME_BAR_COPY. */
+const CLEAR_RANGES = [...sourceMatch(CHROME_BAR_WIDGET_REL, /const CLEAR_HISTORY_RANGES\b[^\n]*= \[\n([\s\S]*?)\n\];/)
+    .matchAll(/range: '([^']+)', label: \(\) => CHROME_BAR_COPY\.(\w+)/g)]
+    .map(m => ({ range: m[1], label: copyPlain(m[2]) }));
+const CLEAR_ROW = copyPlain('clearRecentHistoryRow');
+const CLEAR_HEADING = copyPlain('clearHistoryHeading');
+const CLEAR_CONFIRM = copyPlain('clearHistoryConfirm');
+const CLEAR_CANCEL = copyPlain('clearHistoryCancel');
+const copyTemplate = key => sourceMatch(CHROME_BAR_COPY_REL, new RegExp(`\\b${key}: \\(subject: string\\) => \`([^\`]+)\``));
+const CLEAR_FOOTNOTE = copyTemplate('clearHistoryFootnote');
+const CLEAR_FAILED = copyTemplate('clearHistoryFailed');
+const CLEAR_HISTORY_COMMAND = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_CLEAR_HISTORY_COMMAND_ID');
+const WEB_TAB_HISTORY_FILE = sourceMatch(BOUNDARY_REL, /const WEB_TAB_HISTORY_FILE_NAME = "([^"]+)"/);
+/** The clearHistory PAGE_SHORTCUTS row's key (a keycode row) as a pressKey event. */
+const CLEAR_KEY = (() => {
+    const keycode = sourceMatch(SHORTCUTS_REL, /id: 'clearHistory', keycode: '(VK_[A-Z_]+)'/);
+    const modifiers = sourceMatch(SHORTCUTS_REL, /id: 'clearHistory', keycode: '[^']+', modifiers: '([^']+)'/).split(',');
+    if (keycode !== 'VK_DELETE') {
+        throw new Error(`${BROKEN} the clearHistory row's keycode ${keycode} has no key event in this harness`);
+    }
+    return { key: 'Delete', code: 'Delete', keyCode: 46, modifiers };
+})();
+/** A planted card image; any non-null thumbnail would do. */
+const PLANTED_THUMB = 'data:image/png;base64,cGJjaA==';
+
+/** A range's begin as the picker's names say it (last N hours, today from local midnight); null for everything. */
+function clearRangeBegin(range, now) {
+    if (range === 'everything') {
+        return null;
+    }
+    if (range === 'today') {
+        return new Date(now).setHours(0, 0, 0, 0);
+    }
+    const hours = range === 'last-hour' ? 1 : Number(/^last-(\d+)-hours$/.exec(range)?.[1]);
+    if (!Number.isInteger(hours) || hours < 1) {
+        throw new Error(`${BROKEN} the range ${range} names no span this harness can plant around`);
+    }
+    return now - hours * 60 * 60 * 1000;
+}
+
+/** The picker as drawn: heading, range labels, the checked one, footnote, failure row, buttons, and whether it holds focus. */
+const readPicker = app => app.evaluate(`JSON.stringify((() => {
+    const panel = document.querySelector('.pb-clear-history');
+    if (!panel) return { open: false };
+    const text = sel => ((panel.querySelector(sel) || {}).textContent || '').trim();
+    const ranges = [...panel.querySelectorAll('.pb-clear-history-range')];
+    return {
+        open: true,
+        heading: text('.pb-clear-history-heading'),
+        ranges: ranges.map(r => r.textContent.trim()),
+        checked: ranges.filter(r => r.querySelector('input').checked).map(r => r.textContent.trim()),
+        footnote: text('.pb-clear-history-footnote'),
+        failure: text('.pb-clear-history-failure'),
+        buttons: [...panel.querySelectorAll('.pb-clear-history-footer button')].map(b => b.textContent.trim()),
+        focused: panel.contains(document.activeElement),
+    };
+})())`).then(JSON.parse);
+/** Focuses and clicks the range radio labelled `label`; true when it is then checked. */
+const choosePickerRange = (app, label) => app.evaluate(`(() => {
+    const row = [...document.querySelectorAll('.pb-clear-history-range')].find(r => r.textContent.trim() === ${JSON.stringify(label)});
+    const input = row && row.querySelector('input');
+    if (!input) return false;
+    input.focus();
+    input.click();
+    return input.checked;
+})()`);
+const clickPickerButton = (app, label) => app.evaluate(`(() => {
+    const b = [...document.querySelectorAll('.pb-clear-history-footer button')].find(b => b.textContent.trim() === ${JSON.stringify(label)});
+    if (!b) return false;
+    b.click();
+    return true;
+})()`);
+
+/** Chrome scope: plants Places visits, tabs rows, saved_pages rows and web-tab history keys, as `plan` lists them. */
+const plantClearRows = (app, plan) => inChrome(app, `return (async () => {
+    try {
+        const { PowerBrowserAPI } = ChromeUtils.importESModule(${JSON.stringify(API_URL)});
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const plan = ${JSON.stringify(plan)};
+        for (const v of plan.visits) {
+            await PlacesUtils.history.insert({ url: v.url, title: v.title, visits: [{ date: new Date(v.at) }] });
+        }
+        const conn = await PowerBrowserAPI.openTabStore();
+        for (const t of plan.tabs) {
+            await conn.execute('INSERT OR REPLACE INTO tabs (uri, url, title, last_active, last_accessed, closed_at, thumbnail) VALUES (:uri, :url, :title, :last_active, :last_accessed, :closed_at, :thumbnail)', t);
+        }
+        for (const s of plan.saved) {
+            await conn.execute('INSERT OR REPLACE INTO saved_pages (tab_uri, dir, url, title, saved_at, bytes) VALUES (:tab_uri, :dir, :url, :title, :saved_at, 0)', s);
+        }
+        const path = PowerBrowserAPI.getProfileDir() + '/' + ${JSON.stringify(WEB_TAB_HISTORY_FILE)};
+        let onDisk = {};
+        try { onDisk = await IOUtils.readJSON(path); } catch (e) { onDisk = {}; }
+        for (const key of plan.histories) {
+            onDisk[key] = { entries: [], index: 0 };
+        }
+        await IOUtils.writeJSON(path, onDisk, { tmpPath: path + '.tmp' });
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/**
+ * Chrome scope, each store read directly (the independent observer): visit
+ * counts per url, the planted tabs rows with their thumbnails, the open rows
+ * (closed_at NULL), the planted saved_pages rows, the history file's planted
+ * keys, and whether the token cookie is in the 127.0.0.1 jar. JSON text.
+ */
+const readClearStores = (app, urls, prefix) => inChrome(app, `return (async () => {
+    try {
+        const { PowerBrowserAPI } = ChromeUtils.importESModule(${JSON.stringify(API_URL)});
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const out = { visits: {}, tabs: {}, open: [], saved: [], histories: [] };
+        for (const url of ${JSON.stringify(urls)}) {
+            const info = await PlacesUtils.history.fetch(url, { includeVisits: true });
+            out.visits[url] = info ? info.visits.length : 0;
+        }
+        const conn = await PowerBrowserAPI.openTabStore();
+        for (const row of await conn.execute('SELECT uri, thumbnail, closed_at FROM tabs')) {
+            const uri = String(row.getResultByName('uri'));
+            if (row.getResultByName('closed_at') === null) out.open.push(uri);
+            if (uri.startsWith(${JSON.stringify(prefix)})) out.tabs[uri] = { thumbnail: row.getResultByName('thumbnail') };
+        }
+        out.open.sort();
+        for (const row of await conn.execute('SELECT tab_uri FROM saved_pages')) {
+            const uri = String(row.getResultByName('tab_uri'));
+            if (uri.startsWith(${JSON.stringify(prefix)})) out.saved.push(uri);
+        }
+        try {
+            const onDisk = await IOUtils.readJSON(PowerBrowserAPI.getProfileDir() + '/' + ${JSON.stringify(WEB_TAB_HISTORY_FILE)});
+            out.histories = Object.keys(onDisk || {}).filter(k => k.startsWith(${JSON.stringify(prefix)}));
+        } catch (e) { out.histories = []; }
+        out.token = Services.cookies.getCookiesFromHost('127.0.0.1', {}).some(c => c.name === ${JSON.stringify(TOKEN_COOKIE)});
+        return JSON.stringify(out);
+    } catch (e) {
+        return JSON.stringify({ error: String(e) });
+    }
+})();`).then(JSON.parse);
+
+/** Chrome scope: removes every planted row, key and visit (the `prefix` keys, the planted urls). */
+const unplantClearRows = (app, urls, prefix) => inChrome(app, `return (async () => {
+    try {
+        const { PowerBrowserAPI } = ChromeUtils.importESModule(${JSON.stringify(API_URL)});
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const conn = await PowerBrowserAPI.openTabStore();
+        await conn.execute('DELETE FROM tabs WHERE uri GLOB :glob', { glob: ${JSON.stringify(prefix)} + '*' });
+        await conn.execute('DELETE FROM saved_pages WHERE tab_uri GLOB :glob', { glob: ${JSON.stringify(prefix)} + '*' });
+        const path = PowerBrowserAPI.getProfileDir() + '/' + ${JSON.stringify(WEB_TAB_HISTORY_FILE)};
+        try {
+            const onDisk = await IOUtils.readJSON(path);
+            for (const key of Object.keys(onDisk || {})) if (key.startsWith(${JSON.stringify(prefix)})) delete onDisk[key];
+            await IOUtils.writeJSON(path, onDisk, { tmpPath: path + '.tmp' });
+        } catch (e) { /* no file: nothing planted there */ }
+        for (const url of ${JSON.stringify(urls)}) await PlacesUtils.history.remove(url).catch(() => false);
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/** The status of a same-origin request from the Theia frame: 200 only while the frame is signed in. */
+const signedInStatus = app => probe(app, `const r = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin' }); return r.status;`);
+
+/**
+ * Opens the picker one way: 'menu' (the History submenu's clear row), 'pill'
+ * (Ctrl+Shift+Del with the pill focused), 'page' (the same key with the page
+ * focused, its relay row) or 'command'. Returns the picker as drawn.
+ */
+async function openClearPicker(app, how, tabId) {
+    if (how === 'menu') {
+        await pointMenuRow(app, 1, CLEAR_ROW);
+    } else if (how === 'page') {
+        if (await focusOverlay(app, tabId) !== true) {
+            throw new Error(`${BROKEN} the session tab's page could not be focused`);
+        }
+        await pressKey(app, CLEAR_KEY);
+    } else if (how === 'command') {
+        await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(CLEAR_HISTORY_COMMAND)}); return true;`);
+    } else {
+        await focusPill(app);
+        await pressKey(app, CLEAR_KEY);
+    }
+    return settle(() => readPicker(app), p => p.open && p.focused, 8000);
+}
+
+/** The labels of a History submenu read, by section (closed tabs, recent pages). */
+function historyMenuLabels(items) {
+    const [, closed, recent] = historySections(items);
+    return { closed: (closed ?? []).map(i => i.label), recent: (recent ?? []).map(i => i.label) };
+}
+
+/** The pill's history rows for `text`, once the dropdown has had time to compose them. */
+async function pillHistoryTitles(app, text) {
+    await typeInPill(app, text);
+    await sleep(1500);
+    const read = await readRows(app);
+    await pressKey(app, ESCAPE);
+    return read.rows.filter(r => r.type === 'codicon-history').map(r => r.title);
+}
+
+/**
+ * BMK-05 (D-09, D-10, T-33-04): see the header. Every expectation is derived:
+ * ranges and labels from the widget table and CHROME_BAR_COPY, the key from
+ * PAGE_SHORTCUTS, the command id from its const, the history file name from
+ * the boundary. Each store is read back chrome-side, before (the positive
+ * control: every planted row is there) and after the clear.
+ */
+async function clearHistoryLive(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    const footnote = CLEAR_FOOTNOTE.replace('${subject}', subject);
+    const failureRow = CLEAR_FAILED.replace('${subject}', subject);
+    const labels = CLEAR_RANGES.map(r => r.label);
+    const prefix = 'web:pbch';
+    const planted = [];
+    if (CLEAR_RANGES.length !== 5) {
+        return fail(`${BROKEN} derived ${CLEAR_RANGES.length} picker ranges from the widget, want the five of D-09`);
+    }
+    await installFireRecorder(app);
+    const checkShape = (picker, how) => {
+        if (!picker.open) {
+            fail(`opening the picker by ${how} showed no .pb-clear-history panel with focus inside it`);
+            return false;
+        }
+        if (picker.heading !== CLEAR_HEADING || JSON.stringify(picker.ranges) !== JSON.stringify(labels) || JSON.stringify(picker.checked) !== JSON.stringify([labels[0]])
+            || picker.footnote !== footnote || JSON.stringify(picker.buttons) !== JSON.stringify([CLEAR_CANCEL, CLEAR_CONFIRM])) {
+            fail(`the picker opened by ${how} must show ${JSON.stringify(CLEAR_HEADING)}, the ranges ${JSON.stringify(labels)} with ${JSON.stringify(labels[0])} checked, the footnote and ${JSON.stringify([CLEAR_CANCEL, CLEAR_CONFIRM])}; saw ${JSON.stringify(picker)}`);
+        }
+        return true;
+    };
+    try {
+        // Positive controls for the exemption: the token is in the jar and the frame is signed in.
+        const before = await readClearStores(app, [], prefix);
+        if (before.error || before.token !== true) {
+            return fail(`${BROKEN} the token cookie is not in the 127.0.0.1 jar before any clear (${JSON.stringify(before)}), so nothing proves the exemption`);
+        }
+        if (await signedInStatus(app) !== 200) {
+            return fail(`${BROKEN} the Theia frame is not signed in before any clear, so signed-in after it would prove nothing`);
+        }
+
+        // Esc closes with nothing cleared; focus returns to the pill.
+        const escUrl = pages.url('/ch-esc');
+        planted.push(escUrl);
+        if (await plantClearRows(app, { visits: [{ url: escUrl, title: 'Clear Probe Esc', at: Date.now() - 1000 }], tabs: [], saved: [], histories: [] }) !== 'ok') {
+            return fail(`${BROKEN} the Esc marker visit could not be planted`);
+        }
+        if (checkShape(await openClearPicker(app, 'pill', tabId), 'Ctrl+Shift+Del with the pill focused')) {
+            await pressKey(app, ESCAPE);
+            const closed = await settle(() => readPicker(app), p => !p.open, 5000);
+            const pill = await readPill(app);
+            if (closed.open || !pill.focused) {
+                fail(`Esc must close the picker with focus back on the pill; open ${closed.open}, pill ${JSON.stringify(pill)}`);
+            }
+            if ((await readClearStores(app, [escUrl], prefix)).visits[escUrl] < 1) {
+                fail('Esc on the picker cleared history: the planted visit is gone');
+            }
+        }
+
+        // A refused clear shows the failure row in the panel; Enter tries again and the retry closes it.
+        await probe(app, `get('ChromeStoreClient').clearHistory = async () => { throw new Error('refused'); }; return true;`);
+        try {
+            if (checkShape(await openClearPicker(app, 'command', tabId), 'the command')) {
+                await pressKey(app, ENTER);
+                const refused = await settle(() => readPicker(app), p => p.open && p.failure !== '', 5000);
+                if (!refused.open || refused.failure !== failureRow) {
+                    fail(`a refused clear must keep the picker open with the row ${JSON.stringify(failureRow)}; saw ${JSON.stringify(refused)}`);
+                }
+                await probe(app, `delete get('ChromeStoreClient').clearHistory; return true;`);
+                await pressKey(app, ENTER);
+                if ((await settle(() => readPicker(app), p => !p.open, 8000)).open) {
+                    fail('Enter on the failure row did not retry the clear and close the picker');
+                }
+            }
+        } finally {
+            await probe(app, `delete get('ChromeStoreClient').clearHistory; return true;`);
+        }
+
+        const ways = ['menu', 'pill', 'page', 'command', 'pill'];
+        for (const [i, { range, label }] of CLEAR_RANGES.entries()) {
+            const now = Date.now();
+            const midnight = new Date(now).setHours(0, 0, 0, 0);
+            const inAt = Math.max(now - 1000, midnight + 1);
+            const begin = clearRangeBegin(range, now);
+            const outAt = begin === null ? null : begin - 30 * 60 * 1000;
+            const key = part => `${prefix}${i}-${part}`;
+            const urls = { in: pages.url(`/ch-in-${i}`), out: pages.url(`/ch-out-${i}`) };
+            const inTitle = `Clear Probe In ${i}`;
+            planted.push(urls.in, urls.out);
+            const tab = (part, url, lastActive, lastAccessed, closedAt) => ({ uri: key(part), url, title: '', last_active: lastActive, last_accessed: lastAccessed, closed_at: closedAt, thumbnail: PLANTED_THUMB });
+            const saved = (part, savedAt) => ({ tab_uri: key(part), dir: '/nonexistent/pb-probe-not-minted', url: urls.in, title: inTitle, saved_at: savedAt });
+            const plan = {
+                visits: [{ url: urls.in, title: inTitle, at: inAt }, ...(outAt === null ? [] : [{ url: urls.out, title: `Clear Probe Out ${i}`, at: outAt }])],
+                tabs: [tab('in', urls.in, inAt, inAt, inAt), ...(outAt === null ? [] : [
+                    tab('out', urls.out, outAt, outAt, outAt),
+                    // Closed out of range but seen in range: the row stays, its picture of the page goes.
+                    tab('thumb', urls.out, outAt, inAt, outAt),
+                ])],
+                // The in-range copy, the copy of the in-range closed row (saved earlier), and the out-of-range copy.
+                saved: [saved('savedin', inAt), saved('in', outAt ?? inAt), ...(outAt === null ? [] : [saved('savedout', outAt)])],
+                histories: [key('in'), ...(outAt === null ? [] : [key('out')])],
+            };
+            if (await plantClearRows(app, plan) !== 'ok') {
+                return fail(`${BROKEN} ${range}: the marker rows could not be planted`);
+            }
+            const pre = await readClearStores(app, [urls.in, urls.out], prefix);
+            const want = { tabs: plan.tabs.map(t => t.uri), saved: plan.saved.map(s => s.tab_uri), histories: plan.histories };
+            if (pre.error || pre.visits[urls.in] < 1 || (outAt !== null && pre.visits[urls.out] < 1)
+                || want.tabs.some(u => !pre.tabs[u] || pre.tabs[u].thumbnail === null) || want.saved.some(u => !pre.saved.includes(u))
+                || want.histories.some(k => !pre.histories.includes(k))) {
+                return fail(`${BROKEN} ${range}: the planted rows are not all in their stores before the clear (${JSON.stringify(pre)}), so their absence after it would prove nothing`);
+            }
+
+            // The first range also proves the History submenu and the pill drop a cleared page (each listed it first).
+            let menuBefore;
+            let pillBefore;
+            if (i === 0) {
+                pillBefore = await pillHistoryTitles(app, inTitle);
+                await showTab(app, tabId, 'clear-history');
+                const items = await openHistorySubmenu(app);
+                menuBefore = historyMenuLabels(items);
+                const clearSection = historySections(items)[3];
+                if (clearSection?.length !== 1 || clearSection[0].label !== CLEAR_ROW || clearSection[0].disabled || !clearSection[0].shortcut) {
+                    fail(`the History submenu must end with one enabled ${JSON.stringify(CLEAR_ROW)} row showing its key; saw ${JSON.stringify(clearSection)}`);
+                }
+            }
+            const how = ways[i];
+            const fired = (await firedRows(app)).length;
+            const picker = await openClearPicker(app, how, tabId);
+            if (how === 'page' && !(await firedRows(app)).slice(fired).includes('clearHistory')) {
+                fail('Ctrl+Shift+Del with the page focused must fire the clearHistory page-key row');
+            }
+            if (!checkShape(picker, how)) {
+                await closeOpenMenus(app).catch(() => undefined);
+                continue;
+            }
+            if (await choosePickerRange(app, label) !== true) {
+                fail(`${range}: the ${JSON.stringify(label)} range could not be chosen`);
+                continue;
+            }
+            if (i % 2 === 0) {
+                await clickPickerButton(app, CLEAR_CONFIRM);
+            } else {
+                await pressKey(app, ENTER);
+            }
+            const after = await settle(() => readPicker(app), p => !p.open, 10000);
+            if (after.open) {
+                fail(`${range}: the picker did not close after ${i % 2 === 0 ? CLEAR_CONFIRM : 'Enter'} (${JSON.stringify(after)})`);
+                continue;
+            }
+            if (plant === 'clear-drops-store') {
+                // As if the saved_pages target had dropped out of the fan-out: its in-range row is back after the clear.
+                await plantClearRows(app, { visits: [], tabs: [], saved: [saved('savedin', inAt)], histories: [] });
+                note(`PLANT clear-drops-store applied (${range})`);
+            }
+            if (plant === 'clear-takes-token') {
+                // As a fan-out enumerating cookies would: the token goes with the clear.
+                await inChrome(app, `for (const c of Services.cookies.getCookiesFromHost('127.0.0.1', {})) {
+                    if (c.name === ${JSON.stringify(TOKEN_COOKIE)}) Services.cookies.remove(c.host, c.name, c.path, c.originAttributes);
+                }
+                return true;`);
+                note(`PLANT clear-takes-token applied (${range})`);
+            }
+            const post = await readClearStores(app, [urls.in, urls.out], prefix);
+            if (post.error) {
+                return fail(`${BROKEN} ${range}: the stores could not be read after the clear (${post.error})`);
+            }
+            if (post.visits[urls.in] !== 0) {
+                fail(`${range}: places still holds the planted in-range visit`);
+            }
+            if (post.tabs[key('in')]) {
+                fail(`${range}: tabs.closed_at still holds the planted in-range closed row`);
+            }
+            if (post.saved.includes(key('savedin'))) {
+                fail(`${range}: saved_pages still holds the planted in-range copy`);
+            }
+            if (post.saved.includes(key('in'))) {
+                fail(`${range}: saved_pages kept the copy of a closed row the clear deleted`);
+            }
+            if (post.histories.includes(key('in'))) {
+                fail(`${range}: ${WEB_TAB_HISTORY_FILE} still holds the history of a closed row the clear deleted`);
+            }
+            if (outAt !== null) {
+                if (post.visits[urls.out] < 1) {
+                    fail(`${range}: places lost the out-of-range visit`);
+                }
+                if (!post.tabs[key('out')] || post.tabs[key('out')].thumbnail === null) {
+                    fail(`${range}: tabs.closed_at or tabs.thumbnail lost the out-of-range closed row or its thumbnail`);
+                }
+                if (!post.tabs[key('thumb')]) {
+                    fail(`${range}: tabs.closed_at deleted a row closed out of range`);
+                } else if (post.tabs[key('thumb')].thumbnail !== null) {
+                    fail(`${range}: tabs.thumbnail kept the thumbnail of a row seen in range`);
+                }
+                if (!post.saved.includes(key('savedout'))) {
+                    fail(`${range}: saved_pages lost the out-of-range copy`);
+                }
+                if (!post.histories.includes(key('out'))) {
+                    fail(`${range}: ${WEB_TAB_HISTORY_FILE} lost the history of an out-of-range closed row`);
+                }
+            }
+            if (JSON.stringify(post.open) !== JSON.stringify(pre.open)) {
+                fail(`${range}: an open tab row (closed_at NULL) changed: ${JSON.stringify(pre.open)} before, ${JSON.stringify(post.open)} after`);
+            }
+            const status = await signedInStatus(app);
+            if (post.token !== true || status !== 200) {
+                fail(`${range}: the IDE was signed out by the clear: token cookie in the jar ${post.token}, a same-origin frame request returned ${JSON.stringify(status)}`);
+                if (plant === 'clear-takes-token') {
+                    return undefined;
+                }
+            }
+
+            if (i === 0) {
+                if (!menuBefore.recent.includes(inTitle) || !menuBefore.closed.includes(urls.in)) {
+                    fail(`${BROKEN} before the clear the History submenu did not list the planted page and closed row (${JSON.stringify(menuBefore)}), so its later read proves nothing`);
+                } else {
+                    await showTab(app, tabId, 'clear-history');
+                    const menuAfter = historyMenuLabels(await openHistorySubmenu(app));
+                    await closeOpenMenus(app);
+                    if (menuAfter.recent.includes(inTitle) || menuAfter.closed.includes(urls.in)) {
+                        fail(`after the clear the History submenu still lists the cleared page or closed row: ${JSON.stringify(menuAfter)}`);
+                    }
+                }
+                if (!pillBefore.includes(inTitle)) {
+                    fail(`${BROKEN} before the clear the pill showed no history row for ${JSON.stringify(inTitle)} (${JSON.stringify(pillBefore)}), so its later read proves nothing`);
+                } else if ((await pillHistoryTitles(app, inTitle)).includes(inTitle)) {
+                    fail(`after the clear the pill still shows the cleared page ${JSON.stringify(inTitle)} as a history row`);
+                }
+            }
+        }
+    } finally {
+        await closeOpenMenus(app).catch(() => undefined);
+        await probe(app, `delete get('ChromeStoreClient').clearHistory; return true;`).catch(() => undefined);
+        await unplantClearRows(app, planted, prefix).catch(() => undefined);
+    }
+    return undefined;
+}
+
+// Phase 33 plan 05 (MENU-03, SMODE-07): the full hamburger, the Actions list and one implementation per action.
+// Every expectation is derived from the tree: the table and its builder (imported under type stripping, as the static
+// gate does), row labels from the widget's appMenuLabel switch and CHROME_BAR_COPY, command ids from the command file,
+// the app-menu entry list from ROADMAP.md's Phase 33 success criterion 5.
+const MENU_TABLE = await import(new URL('../theia/extensions/chrome-bar/src/browser/site-identity/site-identity-table.ts', import.meta.url).href);
+const APP_MENU_BUILDER = await import(new URL('../theia/extensions/chrome-bar/src/browser/site-identity/app-menu.ts', import.meta.url).href);
+const MENU_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+const MENU_COMMANDS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
+const STOCK_WINDOW_COMMAND_ID = sourceConst('theia/extensions/tab-uris/src/browser/browser-window-command.ts', 'OPEN_BROWSER_WINDOW_COMMAND_ID');
+const ROADMAP_MENU = sourceMatch('.planning/ROADMAP.md', /### Phase 33:[\s\S]*?The app menu reaches (.+?); Actions mode runs/).split(/,\s*|\s+and\s+/).map(x => x.trim()).filter(Boolean);
+
+/** A hamburger row's label as drawn: CHROME_BAR_COPY through the widget's switch; a template's fixed prefix (`Quit `) as a RegExp. */
+function menuRowLabel(menuId) {
+    const key = sourceMatch(MENU_WIDGET_REL, new RegExp(`case '${menuId}': return CHROME_BAR_COPY\\.([A-Za-z]+)`));
+    try {
+        return copyPlain(key);
+    } catch {
+        const prefix = sourceMatch(CHROME_BAR_COPY_REL, new RegExp(`\\b${key}: \\([^)]*\\) => \`([^$\`]*)`));
+        return new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+    }
+}
+/** The rows this tree renders, in table order, each with its label. */
+const MENU_ROWS = APP_MENU_BUILDER.applyMenuOrder(MENU_TABLE.MENU_ORDER, APP_MENU_BUILDER.WIRED_MENU_IDS, MENU_TABLE.MENU_PHASE)
+    .map(({ row, enabled }) => ({ id: row.menuId, enabled, label: menuRowLabel(row.menuId) }));
+/** menuId -> the Browser command id its row runs (the widget's APP_MENU_COMMANDS), the id its Actions twin runs. */
+const MENU_ROW_COMMANDS = Object.fromEntries([...sourceMatch(MENU_WIDGET_REL, /const APP_MENU_COMMANDS[^=]*= Object\.freeze\(\{([\s\S]*?)\}\);/)
+    .matchAll(/'([a-z-]+)': (CHROME_BAR_[A-Z_]+_COMMAND_ID)/g)].map(m => [m[1], sourceConst(MENU_COMMANDS_REL, m[2])]));
+const ZOOM_IN_ID = sourceConst(MENU_COMMANDS_REL, 'CHROME_BAR_ZOOM_IN_COMMAND_ID');
+const FULL_SCREEN_ID = sourceConst(MENU_COMMANDS_REL, 'CHROME_BAR_FULL_SCREEN_COMMAND_ID');
+const labelOf = id => { const l = MENU_ROWS.find(r => r.id === id)?.label; return typeof l === 'string' ? l : null; };
+const sameLabel = (want, got) => (want instanceof RegExp ? want.test(got) : want === got);
+
+/** Wraps the page realm's CommandRegistry.executeCommand (an own property over the prototype's) to record each id run. */
+const recordCommands = app => probe(app, `const r = get('CommandRegistry');
+    const run = Object.getPrototypeOf(r).executeCommand;
+    window.__pbCommands = [];
+    r.executeCommand = function (id, ...rest) { window.__pbCommands.push(id); return run.call(this, id, ...rest); };
+    return true;`);
+const commandsRun = app => app.evaluate('JSON.stringify(window.__pbCommands || [])').then(JSON.parse);
+const restoreCommands = app => probe(app, `delete get('CommandRegistry').executeCommand; return true;`);
+
+/** Opens the hamburger with a trusted-shaped click on its button; returns the root menu's items, or [] when it did not open. */
+async function openAppMenuRoot(app) {
+    await closeOpenMenus(app);
+    const opened = await app.evaluate(`(() => { const b = document.querySelector('.pb-chrome-bar button[aria-label=${JSON.stringify(APP_MENU_LABEL)}]'); if (!b) return false; b.click(); return true; })()`);
+    const menus = opened === true ? await settle(() => readOpenMenus(app), m => m.length === 1 && m[0].length > 3, 10000) : [];
+    return menus.length === 1 ? menus[0] : [];
+}
+
+/** Opens the hamburger and hovers the submenu row `label`; returns the submenu's items, or [] when none opened. */
+async function openAppSubmenu(app, label) {
+    if (!(await openAppMenuRoot(app)).some(i => i.label === label)) {
+        return [];
+    }
+    await pointMenuRow(app, 0, label, { hover: true });
+    const menus = await settle(() => readOpenMenus(app), m => m.length === 2 && m[1].length > 0, 5000);
+    return menus.length === 2 ? menus[1] : [];
+}
+
+/** Chrome scope: the shell window's full-screen flag. */
+const shellFullScreen = app => inChrome(app, `const w = Services.wm.getMostRecentWindow('powerbrowser:main'); return w ? w.fullScreen : null;`);
+
+/**
+ * MENU-03 (D-11..D-14), ROADMAP Phase 33 criterion 5. The hamburger draws the table's rows in order with no
+ * "Coming soon" row, and holds every ROADMAP app-menu entry in ROADMAP order. Each command row runs the Browser
+ * command id its Actions twin runs (recorded at CommandRegistry.executeCommand): Print and Save Page As reach the
+ * tab method the page relay's key runs (stubbed so no modal opens), New Window runs GUI-01's stock-window command,
+ * Full Screen toggles the shell window both ways through the fullScreen store kind. The Bookmarks, Zoom, More
+ * Tools and Help submenus draw their rows; Zoom In changes the pushed zoom; Esc steps back one menu level;
+ * About opens the stock About dialog.
+ */
+async function appMenu(ctx) {
+    const { app, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    await recordCommands(app);
+    await recordStoreKinds(app);
+    await probe(app, `const proto = Object.getPrototypeOf(get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}));
+        window.__pbTabCalls = [];
+        window.__pbTabStubs = { print: proto.print, savePage: proto.savePage };
+        proto.print = function () { window.__pbTabCalls.push('print'); return Promise.resolve({ ok: true, where: 'stubbed' }); };
+        proto.savePage = function () { window.__pbTabCalls.push('savePage'); return Promise.resolve({ ok: true, where: 'stubbed' }); };
+        return true;`);
+    if (plant === 'menu-twin-diverges' && await probe(app, `const w = get('ChromeBarWidget'); const run = Object.getPrototypeOf(w).runAppMenuRow;
+        w.runAppMenuRow = function (row) {
+            if (row.menuId === 'print') { void get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).print(); return; }
+            return run.call(this, row);
+        };
+        return true;`) === true) {
+        note('PLANT menu-twin-diverges applied');
+    }
+    try {
+        const root = await openAppMenuRoot(app);
+        const drawn = root.filter(i => !i.separator);
+        if (!drawn.length) {
+            return fail(`${BROKEN} the hamburger did not open`);
+        }
+        if (drawn.length !== MENU_ROWS.length || !MENU_ROWS.every((row, i) => sameLabel(row.label, drawn[i]?.label ?? ''))) {
+            fail(`the hamburger must draw the table's rows in order ${JSON.stringify(MENU_ROWS.map(r => String(r.label)))}; drew ${JSON.stringify(drawn.map(i => i.label))}`);
+        }
+        const comingSoon = drawn.filter(i => /\(Coming soon\)$/.test(i.label));
+        if (comingSoon.length) {
+            fail(`a MENU-03 row rendered as a stub: ${JSON.stringify(comingSoon.map(i => i.label))}`);
+        }
+        const names = drawn.map(i => i.label.replace(/…$/, ''));
+        const missing = ROADMAP_MENU.filter(name => !names.includes(name));
+        const order = names.filter(name => ROADMAP_MENU.includes(name));
+        if (missing.length || JSON.stringify(order) !== JSON.stringify(ROADMAP_MENU)) {
+            fail(`the hamburger must hold the ROADMAP Phase 33 entries ${JSON.stringify(ROADMAP_MENU)} in that order; missing ${JSON.stringify(missing)}, drawn order ${JSON.stringify(order)}`);
+        }
+        await closeOpenMenus(app);
+
+        // One implementation per action: each command row runs its Actions twin's id.
+        for (const menuId of ['print', 'save-page', 'find-in-page', 'downloads', 'new-window']) {
+            const label = labelOf(menuId);
+            const id = MENU_ROW_COMMANDS[menuId];
+            if (!label || !id) {
+                fail(`${BROKEN} the ${menuId} row has no label or command id in the tree`);
+                continue;
+            }
+            await openAppMenuRoot(app);
+            const mark = (await commandsRun(app)).length;
+            const tabMark = (await app.evaluate('JSON.stringify(window.__pbTabCalls || [])').then(JSON.parse)).length;
+            await pointMenuRow(app, 0, label);
+            const ran = (await settle(() => commandsRun(app), v => v.slice(mark).includes(id), 5000)).slice(mark);
+            if (!ran.includes(id)) {
+                fail(`the ${label} row ran no Browser command id: its Actions twin runs ${id}; the row ran ${JSON.stringify(ran)}`);
+            }
+            const tabCalls = (await app.evaluate('JSON.stringify(window.__pbTabCalls || [])').then(JSON.parse)).slice(tabMark);
+            if (menuId === 'print' && !tabCalls.includes('print')) {
+                fail(`the ${label} row never reached the tab's print(), the method the Ctrl+P relay row runs`);
+            }
+            if (menuId === 'save-page' && !tabCalls.includes('savePage')) {
+                fail(`the ${label} row never reached the tab's savePage(), the method the Ctrl+S relay row runs`);
+            }
+            if (menuId === 'new-window' && !ran.includes(STOCK_WINDOW_COMMAND_ID)) {
+                fail(`New Window must open the stock window through ${STOCK_WINDOW_COMMAND_ID} (D-12); it ran ${JSON.stringify(ran)}`);
+            }
+            await closeOpenMenus(app);
+            await makeCurrent(app, tabId);
+        }
+
+        // Full Screen toggles the shell window both ways through the window-chrome kind.
+        const before = await shellFullScreen(app);
+        for (const step of ['enter', 'leave']) {
+            await openAppMenuRoot(app);
+            const kindMark = (await storeKinds(app)).length;
+            await pointMenuRow(app, 0, labelOf('full-screen'));
+            const now = await settle(() => shellFullScreen(app), v => v === (step === 'enter' ? !before : before), 5000);
+            if (now !== (step === 'enter' ? !before : before)) {
+                fail(`Full Screen (${step}) did not toggle the shell window: fullScreen is ${JSON.stringify(now)}, was ${JSON.stringify(before)}`);
+            }
+            if (!(await storeKinds(app)).slice(kindMark).includes('fullScreen')) {
+                fail(`Full Screen (${step}) sent no fullScreen store kind`);
+            }
+            await makeCurrent(app, tabId);
+        }
+
+        // Submenus: Bookmarks, Zoom, More Tools, Help; Esc steps back one level.
+        const bookmarks = await openAppSubmenu(app, labelOf('bookmarks'));
+        if (bookmarks[0]?.label !== copyPlain('bookmarkThisPageRow') || !bookmarks[0].shortcut
+            || !bookmarks.some(i => i.label === copyPlain('showBookmarksToolbarRow'))) {
+            fail(`the Bookmarks submenu must open on ${JSON.stringify(copyPlain('bookmarkThisPageRow'))} with its key, then ${JSON.stringify(copyPlain('showBookmarksToolbarRow'))}; saw ${JSON.stringify(bookmarks)}`);
+        }
+        await app.evaluate(`(() => { const m = [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0).pop();
+            m.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true })); return true; })()`);
+        const afterEsc = await settle(() => readOpenMenus(app), m => m.length === 1, 3000);
+        if (afterEsc.length !== 1) {
+            fail(`Esc in the Bookmarks submenu must step back to the hamburger alone; ${afterEsc.length} menus are open`);
+        }
+        await closeOpenMenus(app);
+        const zoomRows = (await openAppSubmenu(app, labelOf('zoom'))).filter(i => !i.separator);
+        const wantZoom = [copyPlain('zoomInRow'), copyPlain('zoomOutRow'), copyPlain('zoomResetRow')];
+        if (JSON.stringify(zoomRows.slice(0, 3).map(i => i.label)) !== JSON.stringify(wantZoom) || !/^Zoom: \d+%$/.test(zoomRows[3]?.label ?? '') || !zoomRows[3]?.disabled) {
+            fail(`the Zoom submenu must list ${JSON.stringify(wantZoom)} then a disabled "Zoom: {percent}" row; saw ${JSON.stringify(zoomRows)}`);
+        } else {
+            const mark = (await commandsRun(app)).length;
+            const pushMark = (await pushes(app)).length;
+            await pointMenuRow(app, 1, wantZoom[0]);
+            if (!(await settle(() => commandsRun(app), v => v.slice(mark).includes(ZOOM_IN_ID), 5000)).slice(mark).includes(ZOOM_IN_ID)) {
+                fail(`Zoom In ran no ${ZOOM_IN_ID}`);
+            }
+            const zoomed = await waitForPush(app, p => p.tabId === tabId && typeof p.zoom === 'number' && p.zoom > 1, { from: pushMark });
+            if (zoomed < 0) {
+                fail('Zoom In did not raise the tab zoom (no state push with zoom above 1)');
+            }
+            await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).zoomReset(); return true;`);
+        }
+        await closeOpenMenus(app);
+        const tools = (await openAppSubmenu(app, labelOf('more-tools'))).map(i => i.label);
+        const wantTools = [copyPlain('pageSourceRow'), copyPlain('readerViewRow'), copyPlain('pageDevToolsRow')];
+        if (JSON.stringify(tools) !== JSON.stringify(wantTools)) {
+            fail(`the More Tools submenu must list ${JSON.stringify(wantTools)}; saw ${JSON.stringify(tools)}`);
+        }
+        await closeOpenMenus(app);
+        const help = (await openAppSubmenu(app, labelOf('help'))).filter(i => !i.separator);
+        const aboutLabel = help[1]?.label ?? '';
+        if (help[0]?.label !== copyPlain('getHelpRow') || !/^About /.test(aboutLabel)) {
+            fail(`the Help submenu must list ${JSON.stringify(copyPlain('getHelpRow'))} then "About {App}"; saw ${JSON.stringify(help)}`);
+        } else {
+            await pointMenuRow(app, 1, aboutLabel);
+            const about = await settle(() => inChrome(app, `return !!Services.wm.getMostRecentWindow('Browser:About');`), v => v === true, 15000);
+            if (about !== true) {
+                fail('About {App} did not open the stock About dialog');
+            }
+            await inChrome(app, `const w = Services.wm.getMostRecentWindow('Browser:About'); if (w) w.close(); return true;`);
+        }
+    } finally {
+        await closeOpenMenus(app).catch(() => null);
+        await probe(app, `const proto = Object.getPrototypeOf(get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}));
+            if (window.__pbTabStubs) { proto.print = window.__pbTabStubs.print; proto.savePage = window.__pbTabStubs.savePage; }
+            delete get('ChromeBarWidget').runAppMenuRow;
+            delete get('ChromeStoreClient').request;
+            return true;`).catch(() => null);
+        await restoreCommands(app).catch(() => null);
+        await makeCurrent(app, tabId).catch(() => null);
+    }
+}
+
+/** The Actions rows as drawn: title and keybinding badges. */
+const readActionRows = app => app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-chrome-bar-dropdown .pb-chrome-bar-row:not(.is-shimmer)')]
+    .filter(r => r.querySelector('.pb-chrome-bar-row-title'))
+    .map(r => ({ title: r.querySelector('.pb-chrome-bar-row-title').textContent || '', badges: [...r.querySelectorAll('.pb-chrome-bar-row-badge')].map(b => b.textContent) })))`).then(JSON.parse);
+
+/** Derived now from the page realm: the labels of the listed Browser commands that carry a keybinding. */
+const boundCategoryLabels = app => probe(app, `const registry = get('CommandRegistry'); const keys = get('KeybindingRegistry');
+    return registry.commands.filter(c => c.category === ${JSON.stringify(COMMAND_CATEGORY)} && c.label && registry.isVisible(c.id) && registry.isEnabled(c.id)
+        && keys.getKeybindingsForCommand(c.id).length > 0).map(c => c.label);`);
+
+/** Runs the Actions row titled `title`: Actions mode, the title typed, the row highlighted, Enter. Returns whether it was highlighted. */
+async function runActionRow(app, title) {
+    await restoreDefaultMode(app);
+    await pickLocalMode(app, 'actions');
+    await typeInPill(app, title);
+    const view = await settle(() => readRows(app), v => v.rows.some(r => r.title === title && r.selected));
+    if (!view.rows.some(r => r.title === title && r.selected)) {
+        return false;
+    }
+    await pressKey(app, ENTER);
+    return true;
+}
+
+/**
+ * SMODE-07 (D-13). Actions lists exactly the visible, enabled Browser-category commands the registry holds now --
+ * the MENU-03 commands among them -- and each one with a keybinding shows its badge. Enter on a row runs its command
+ * id and nothing else: Full Screen, whose command's handler sends the fullScreen kind, is the positive control that
+ * the same store recorder catches a kind (B3); Zoom In then must reach no store kind at all.
+ */
+async function actionsList(ctx) {
+    const { app, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const want = await settle(() => categoryLabels(app), v => !!v && v.listed.length > 0);
+    const menuLabels = Object.values(MENU_ROW_COMMANDS).length;
+    if (!want?.listed.length || !menuLabels) {
+        return fail(`${BROKEN} no listed ${COMMAND_CATEGORY} commands or no menu command rows derived (${JSON.stringify(want)})`);
+    }
+    await restoreDefaultMode(app);
+    await pickLocalMode(app, 'actions');
+    const rowsNow = await settle(() => readActionRows(app), v => v.length >= want.listed.length);
+    const titles = rowsNow.map(r => r.title);
+    if (JSON.stringify([...titles].sort()) !== JSON.stringify([...want.listed].sort())) {
+        fail(`Actions must list exactly the visible, enabled ${COMMAND_CATEGORY} commands ${JSON.stringify(want.listed)}; saw ${JSON.stringify(titles)}`);
+    }
+    const bound = await boundCategoryLabels(app);
+    const unbadged = rowsNow.filter(r => bound.includes(r.title) && !r.badges.length).map(r => r.title);
+    if (!bound.length || unbadged.length) {
+        fail(`every Actions row whose command has a keybinding must show its badge; bound ${JSON.stringify(bound)}, unbadged ${JSON.stringify(unbadged)}`);
+    }
+    await restoreDefaultMode(app);
+    if (plant === 'actions-reach-store' && await probe(app, `const m = get('ActionsAddressBarMode'); const provide = Object.getPrototypeOf(m).provide;
+        m.provide = async function (text) {
+            return (await provide.call(this, text)).map(row => ({ ...row, run: async () => { await row.run(); await get('ChromeStoreClient').searchPlaces(text || 'x', 1).catch(() => null); } }));
+        };
+        return true;`) === true) {
+        note('PLANT actions-reach-store applied');
+    }
+    await recordCommands(app);
+    await recordStoreKinds(app);
+    try {
+        const fullScreenLabel = sourceMatch(MENU_COMMANDS_REL, /CHROME_BAR_FULL_SCREEN: Command = \{[^}]*label: '([^']+)'/);
+        const before = await shellFullScreen(app);
+        let mark = (await storeKinds(app)).length;
+        if (!(await runActionRow(app, fullScreenLabel))) {
+            return fail(`${BROKEN} the ${fullScreenLabel} Actions row could not be highlighted`);
+        }
+        const control = await settle(() => storeKinds(app), v => v.slice(mark).includes('fullScreen'), 5000);
+        if (!control.slice(mark).includes('fullScreen') || !(await commandsRun(app)).includes(FULL_SCREEN_ID)) {
+            return fail(`${BROKEN} the ${fullScreenLabel} Actions row must run ${FULL_SCREEN_ID} and the recorder must see its fullScreen kind, else "no store kind" below proves nothing (kinds ${JSON.stringify(control.slice(mark))})`);
+        }
+        await settle(() => shellFullScreen(app), v => v !== before, 5000);
+        await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(FULL_SCREEN_ID)}); return true;`);
+        await settle(() => shellFullScreen(app), v => v === before, 5000);
+        await makeCurrent(app, tabId);
+
+        const zoomLabel = sourceMatch(MENU_COMMANDS_REL, /CHROME_BAR_ZOOM_IN: Command = \{[^}]*label: '([^']+)'/);
+        mark = (await storeKinds(app)).length;
+        const commandMark = (await commandsRun(app)).length;
+        if (!(await runActionRow(app, zoomLabel))) {
+            return fail(`${BROKEN} the ${zoomLabel} Actions row could not be highlighted`);
+        }
+        const ran = (await settle(() => commandsRun(app), v => v.slice(commandMark).includes(ZOOM_IN_ID), 5000)).slice(commandMark);
+        await sleep(800);
+        if (JSON.stringify(ran) !== JSON.stringify([ZOOM_IN_ID])) {
+            fail(`the ${zoomLabel} Actions row must run ${ZOOM_IN_ID} and nothing else; it ran ${JSON.stringify(ran)}`);
+        }
+        const reached = (await storeKinds(app)).slice(mark);
+        if (reached.length) {
+            fail(`the ${zoomLabel} Actions row reached the store kind ${[...new Set(reached)].join(', ')}`);
+        }
+        await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).zoomReset(); return true;`);
+    } finally {
+        await probe(app, `delete get('ActionsAddressBarMode').provide; delete get('ChromeStoreClient').request; return true;`).catch(() => null);
+        await restoreCommands(app).catch(() => null);
+        await restoreDefaultMode(app).catch(() => null);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -4555,6 +6282,14 @@ const SCENARIOS = {
     'local-modes': localModes,
     'mode-defaults': modeDefaults,
     'mode-tokens': modeTokens,
+    'bookmark-star': bookmarkStar,
+    'bookmark-editor': bookmarkEditor,
+    'bookmarks-toolbar': bookmarksToolbar,
+    'reopen-closed': reopenClosed,
+    'history-menu': historyMenu,
+    'clear-history': clearHistoryLive,
+    'app-menu': appMenu,
+    'actions-list': actionsList,
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
@@ -4562,13 +6297,14 @@ const SCENARIOS = {
     'mode-keys': modeKeys,
     'go-to': goTo,
     'address-keys': addressKeys,
+    'bookmark-keys': bookmarkKeys,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
     'command-centre': 'search', 'command-centre-handoff': 'command-centre',
     'command-centre-privacy': 'search', 'mode-defaults': 'search', 'mode-tokens': 'search', 'mode-keys': 'search',
-    'go-to': 'search', 'address-keys': 'search' };
+    'go-to': 'search', 'address-keys': 'search', 'bookmark-keys': 'bookmark-star' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -4675,6 +6411,16 @@ const PLANTS = [
     { plant: 'cycle-off', target: 'mode-keys', run: ['search', 'mode-keys'], expect: 'Ctrl+Down did not move to the next mode' },
     { plant: 'visit-only-off', target: 'go-to', run: ['search', 'go-to'], expect: 'Command centre opened a search' },
     { plant: 'focus-keeps-mode', target: 'address-keys', run: ['search', 'address-keys'], expect: 'Ctrl+L left the pill in Command centre' },
+    { plant: 'star-ignores-push', target: 'bookmark-star', run: ['bookmark-star'], expect: 'the star did not unfill after the bookmark was removed in chrome' },
+    { plant: 'remove-needs-confirm', target: 'bookmark-editor', run: ['bookmark-editor'], expect: 'Remove did not remove the bookmark at once' },
+    { plant: 'toolbar-ignores-push', target: 'bookmarks-toolbar', run: ['bookmarks-toolbar'], expect: 'the toolbar did not show a bookmark added in chrome' },
+    { plant: 'reopen-no-history', target: 'reopen-closed', run: ['reopen-closed'], expect: 'the reopened tab has no back/forward history' },
+    { plant: 'recent-opens-new-tab', target: 'history-menu', run: ['history-menu'], expect: 'a recent page must load in the current tab' },
+    { plant: 'clear-drops-store', target: 'clear-history', run: ['clear-history'], expect: 'saved_pages still holds the planted in-range copy' },
+    { plant: 'clear-takes-token', target: 'clear-history', run: ['clear-history'], expect: 'the IDE was signed out by the clear' },
+    { plant: 'ctrl-d-everywhere', target: 'bookmark-keys', run: ['bookmark-star', 'bookmark-keys'], expect: 'Ctrl+D in the README.md editor' },
+    { plant: 'menu-twin-diverges', target: 'app-menu', run: ['app-menu'], expect: 'row ran no Browser command id' },
+    { plant: 'actions-reach-store', target: 'actions-list', run: ['actions-list'], expect: 'Actions row reached the store kind' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 

@@ -376,6 +376,8 @@ export interface WebTabReply {
     grantId?: string;
     url?: string;
     background?: boolean;
+    /** `webTabEdit`: whether the page has the command enabled; with checkOnly, the page's live answer (33-05, PAGE-09). */
+    enabled?: boolean;
 }
 
 /** Phase 31 plan 02: one managed permission on this tab's principal, in table order. */
@@ -544,6 +546,8 @@ export class WebTabChannel {
                 this.widgets.get(tabId)?.showStill(menuId, dataUrl);
             }
         });
+        // Phase 33 (BMK-01, BMK-04): chrome's Places bookmark observer. The push carries no data; the star and the toolbar re-read.
+        this.onPush('bookmarks-changed', () => this.bookmarksEmitter.fire());
     }
 
     /** Phase 37 plan 04: the bar copy, supplied by chrome-bar (which owns CHROME_BAR_COPY and depends on this package). */
@@ -553,6 +557,10 @@ export class WebTabChannel {
         this.barCopy = copy;
         this.widgets.forEach(widget => widget.renderBars());
     }
+
+    /** Phase 33 (BMK-01, BMK-04): fires when a bookmark is added, removed, moved or re-pointed anywhere, so the star and the toolbar re-read. */
+    private readonly bookmarksEmitter = new Emitter<void>();
+    readonly onDidChangeBookmarks: TheiaEvent<void> = this.bookmarksEmitter.event;
 
     /** Phase 32 plan 04 (PAGE-06): the last Downloads rows chrome pushed, newest first. */
     downloadRows: WebTabDownloadRow[] = [];

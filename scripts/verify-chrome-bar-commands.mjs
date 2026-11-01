@@ -69,7 +69,7 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.edit-cut',
     'powerbrowser.chrome-bar.edit-copy',
     'powerbrowser.chrome-bar.edit-paste',
-    // Phase 32 plan 08 (PAGE-10): labelless and uncategorised; the palette rows are Phase 33's.
+    // Phase 32 plan 08 (PAGE-10); Phase 33 plan 05 gives them the More Tools labels and the Browser category.
     'powerbrowser.chrome-bar.view-source',
     'powerbrowser.chrome-bar.reader-toggle',
     // Phase 34 plan 01 (TAB-01): the tab menu's single-tab actions, labelless and uncategorised (each needs its tab).
@@ -83,10 +83,34 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.tab-close-right',
     'powerbrowser.chrome-bar.tab-close-duplicates',
     'powerbrowser.chrome-bar.tab-close',
+    // Phase 33 plan 02 (BMK-01): the star path's command, label from 33-UI-SPEC.md.
+    'powerbrowser.chrome-bar.bookmark-page',
+    // Phase 33 plan 03 (BMK-03, BMK-04): reopen and the toolbar toggle, labels from 33-UI-SPEC.md.
+    'powerbrowser.chrome-bar.reopen-closed-tab',
+    'powerbrowser.chrome-bar.toggle-bookmarks-toolbar',
+    // Phase 33 plan 04 (BMK-05): opens the clear-history picker only, label from 33-UI-SPEC.md.
+    'powerbrowser.chrome-bar.clear-history',
+    // Phase 33 plan 05 (MENU-03, D-12/D-13/D-14): the hamburger rows' commands, each an Actions row too.
+    'powerbrowser.chrome-bar.new-window',
+    'powerbrowser.chrome-bar.full-screen',
+    'powerbrowser.chrome-bar.print',
+    'powerbrowser.chrome-bar.save-page',
+    'powerbrowser.chrome-bar.find-in-page',
+    'powerbrowser.chrome-bar.zoom-in',
+    'powerbrowser.chrome-bar.zoom-out',
+    'powerbrowser.chrome-bar.zoom-reset',
+    'powerbrowser.chrome-bar.devtools',
+    'powerbrowser.chrome-bar.settings',
+    // Phase 33 plan 05 (PAGE-09): the Edit submenu's Redo and Select All, stock labels.
+    'powerbrowser.chrome-bar.edit-redo',
+    'powerbrowser.chrome-bar.edit-select-all',
 ]);
 
 /** The contracted visible labels: four verbatim from 13-UI-SPEC.md, Downloads from 32-UI-SPEC.md (plan 04), and the Edit items (plan 06). */
-const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste']);
+const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste', 'Bookmark This Page', 'Reopen Closed Tab', 'Show Bookmarks Toolbar', 'Clear Recent History…',
+    // Phase 33 plan 05 (MENU-03): 33-UI-SPEC's hamburger and More Tools rows, Firefox's casing; the zoom reset reads "Reset Zoom" out of its submenu.
+    'Page Source', 'Reader View', 'New Window', 'Full Screen', 'Print…', 'Save Page As…', 'Find in Page…', 'Zoom In', 'Zoom Out', 'Reset Zoom',
+    'Page Developer Tools', 'Settings', 'Redo', 'Select All']);
 
 function diff(actual, expected) {
     const a = new Set(actual);
@@ -265,6 +289,17 @@ function selfTest() {
             ),
             expect: 'powerbrowser.chrome-bar.back',
         },
+        {
+            name: 'planted full-screen id removal (Phase 35 runs it by this id)',
+            mutate: src => src.replace("export const CHROME_BAR_FULL_SCREEN_COMMAND_ID = 'powerbrowser.chrome-bar.full-screen';", '// planted removal'),
+            expect: 'powerbrowser.chrome-bar.full-screen',
+        },
+        {
+            name: 'planted surplus menu command',
+            mutate: src => src.replace("export const CHROME_BAR_SETTINGS_COMMAND_ID = 'powerbrowser.chrome-bar.settings';",
+                "export const CHROME_BAR_SETTINGS_COMMAND_ID = 'powerbrowser.chrome-bar.settings';\nexport const CHROME_BAR_PLANTED_COMMAND_ID = 'powerbrowser.chrome-bar.planted';"),
+            expect: 'powerbrowser.chrome-bar.planted',
+        },
     ];
 
     let failed = 0;
@@ -296,10 +331,20 @@ function selfTest() {
         console.log(`  ok  planted re-spelled id in ${nestedRel} -> red, naming 'powerbrowser.chrome-bar.new-tab'`);
     }
 
+    // Phase 33 plan 02: the pill re-spelling the bookmark-page id instead of importing the const goes red naming it.
+    const pillRel = `${ADDRESS_BAR_DIR_REL}/address-bar.tsx`;
+    const pillFailures = checkCommands({ ...clean, [pillRel]: `${clean[pillRel] ?? ''}\nvoid this.commands.executeCommand('powerbrowser.chrome-bar.bookmark-page');\n` });
+    if (!pillFailures.some(f => f.includes(pillRel) && f.includes('powerbrowser.chrome-bar.bookmark-page'))) {
+        console.error(`${NAME} --self-test: FAIL -- 'planted re-spelled bookmark-page id in ${pillRel}' did not go red naming it; got: ${pillFailures.join(' | ') || '(no failures at all)'}`);
+        failed++;
+    } else {
+        console.log(`  ok  planted re-spelled bookmark-page id in ${pillRel} -> red, naming 'powerbrowser.chrome-bar.bookmark-page'`);
+    }
+
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- ${cases.length + 1} planted faults all went red`);
+    console.log(`${NAME} --self-test: PASS -- ${cases.length + 2} planted faults all went red`);
     return 0;
 }
 

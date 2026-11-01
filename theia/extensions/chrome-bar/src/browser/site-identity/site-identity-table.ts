@@ -41,7 +41,7 @@ export const PERMISSION_IDS: readonly string[] = Object.freeze([
 ]);
 
 /** D-31-07: the stock pages the menu may open, by enum value (never a URL). */
-export type StockPage = 'settings' | 'passwords' | 'addons' | 'processes' | 'support';
+export type StockPage = 'settings' | 'passwords' | 'addons' | 'processes' | 'support' | 'about';
 
 /** The stock pages, in the order the hamburger lists them. */
 export const STOCK_PAGES: readonly StockPage[] = Object.freeze([
@@ -50,6 +50,8 @@ export const STOCK_PAGES: readonly StockPage[] = Object.freeze([
     'addons',
     'processes',
     'support',
+    // Phase 33 plan 05 (MENU-03): the Help submenu's About row, the stock About dialog.
+    'about',
 ]);
 
 /**
@@ -65,21 +67,42 @@ export interface MenuEntry {
     group: number;
 }
 
-/** The phase this phase lands: rows with a higher `minPhase` are MENU-03 slots, reserved and absent. */
-export const MENU_PHASE = 31;
+/**
+ * The phase this tree lands: rows with a higher `minPhase` are MENU-03 slots,
+ * reserved and absent. Phase 33 plan 03 lands the History row (BMK-06).
+ */
+export const MENU_PHASE = 33;
 
 /**
  * D-31-08/D-31-11: the hamburger in Firefox order (UI-SPEC: New Tab, History,
  * Downloads, separator, Settings, Passwords, Add-ons, separator, Help,
  * separator, Quit). History is a MENU-03 row (REQUIREMENTS MENU-03, Phase 33),
- * so its slot is reserved at `minPhase` 33 and not rendered in this phase.
+ * landed by Phase 33 plan 03 as the History submenu (BMK-06).
+ *
+ * Phase 33 plan 05 (MENU-03, D-11, 33-UI-SPEC "Full menu"): the remaining
+ * MENU-03 rows are appended around the Phase 31 rows, none of which moves:
+ * New Tab, New Window | Bookmarks, History, Downloads | Print, Save Page As,
+ * Find in Page, Zoom, Edit, Full Screen | Settings, Passwords, Add-ons | More Tools,
+ * Help | Quit. History joins Bookmarks' group (33-UI-SPEC separator after New
+ * Window); Help keeps its row and becomes a submenu. Edit (PAGE-09, carried
+ * from Phase 32) sits after Zoom, where Firefox's hamburger last had it.
  */
 export const MENU_ORDER: readonly MenuEntry[] = Object.freeze([
     { menuId: 'new-tab', minPhase: 27, group: 1 },
-    { menuId: 'history', minPhase: 33, group: 1 },
+    { menuId: 'new-window', minPhase: 33, group: 1 },
+    { menuId: 'bookmarks', minPhase: 33, group: 5 },
+    { menuId: 'history', minPhase: 33, group: 5 },
+    { menuId: 'downloads', minPhase: 33, group: 5 },
+    { menuId: 'print', minPhase: 33, group: 6 },
+    { menuId: 'save-page', minPhase: 33, group: 6 },
+    { menuId: 'find-in-page', minPhase: 33, group: 6 },
+    { menuId: 'zoom', minPhase: 33, group: 6 },
+    { menuId: 'edit', minPhase: 33, group: 6 },
+    { menuId: 'full-screen', minPhase: 33, group: 6 },
     { menuId: 'settings', stockPage: 'settings', minPhase: 31, group: 2 },
     { menuId: 'passwords', stockPage: 'passwords', minPhase: 31, group: 2 },
     { menuId: 'addons', stockPage: 'addons', minPhase: 31, group: 2 },
+    { menuId: 'more-tools', minPhase: 33, group: 3 },
     { menuId: 'help', stockPage: 'support', minPhase: 31, group: 3 },
     { menuId: 'quit', minPhase: 31, group: 4 },
 ]);
