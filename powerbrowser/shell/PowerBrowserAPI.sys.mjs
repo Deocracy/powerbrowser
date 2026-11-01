@@ -10270,13 +10270,29 @@ function extensionSidebarRequest(win, kind, data) {
 // the shell window's switchToTabHavingURI.
 // ---------------------------------------------------------------------------
 
-// A stock tab loading `url` with the extension's own principal, selected in the most recent stock window the extension
-// may use (a private one only if it is allowed in private windows). Only the calling extension's own pages: another
-// extension's page is refused.
+// Resolves when a stock window has finished its delayed startup (browser-init.js notifies with the window as subject).
+function stockWindowStarted(win) {
+  return new Promise(resolve => {
+    const observer = {
+      observe(subject) {
+        if (subject === win) {
+          Services.obs.removeObserver(observer, "browser-delayed-startup-finished");
+          resolve();
+        }
+      },
+    };
+    Services.obs.addObserver(observer, "browser-delayed-startup-finished");
+  });
+}
+
+// A stock tab loading `url` with the caller's principal, selected in the most recent stock window the extension may use
+// (a private one only if it is allowed in private windows). 38-REVIEW WR-01: no "own pages only" check. Stock tabs.create
+// replaces the principal with a content principal made from the URL itself, so a caller-versus-page comparison could
+// never fail; as in stock Firefox, an extension may open another extension's page.
 function extensionOpenTabPage(url, principal) {
   const policy = WebExtensionPolicy.getByURI(Services.io.newURI(url));
-  if (!policy || principal?.addonId !== policy.id) {
-    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: an extension may open only its own pages.");
+  if (!policy) {
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: no extension owns it.");
   }
   // As stock tabs.create's getTopNormalWindow (private: false unless the extension is allowed in private windows).
   let win = Services.wm.getMostRecentWindow("navigator:browser");
@@ -10292,11 +10308,22 @@ function extensionOpenTabPage(url, principal) {
     if (!policy.privateBrowsingAllowed && lazy.PrivateBrowsingUtils.permanentPrivateBrowsing) {
       throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: this extension is not allowed in private windows.");
     }
-    // shortcut: with no started stock window the page opens in a new one and the caller gets no tab back; hand back its
-    // tab once an extension needs it (tabs.create would have to wait for that window's delayed startup).
-    PowerBrowserAPI.openBrowserWindow(url);
+    // 38-REVIEW WR-01: the page itself never goes through openBrowserWindow (its window argument loads with the system
+    // principal). An empty window, or the one still starting, takes the tab with the caller's principal once it has
+    // started. shortcut: the caller gets no tab back (tabs.create needs one synchronously); hand it back once an
+    // extension needs it.
+    const starting = win ?? PowerBrowserAPI.openBrowserWindow("");
+    stockWindowStarted(starting).then(() => {
+      if (!starting.closed) {
+        extensionSelectTabPage(starting, url, principal);
+      }
+    });
     throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser opened that page in a new browser window.");
   }
+  return extensionSelectTabPage(win, url, principal);
+}
+
+function extensionSelectTabPage(win, url, principal) {
   const tab = win.gBrowser.addTab(url, { triggeringPrincipal: principal });
   win.gBrowser.selectedTab = tab;
   PowerBrowserAPI.focusWindow(win);

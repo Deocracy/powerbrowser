@@ -74,8 +74,9 @@
  *  12. tab pages  -- (38-04, B5) tabsBridgeCreate sends an extension page to
  *                    extensionOpenTabPage (the stock window) before any overlay
  *                    exists, and still refuses every other non-http(s) URL;
- *                    extensionOpenTabPage opens no overlay and admits only the
- *                    caller's own pages; a container request (userContextId)
+ *                    extensionOpenTabPage opens no overlay and never passes the
+ *                    page through openBrowserWindow (system principal, WR-01);
+ *                    a container request (userContextId)
  *                    is refused before either branch (38-REVIEW CR-02); the overlay location wall
  *                    (OVERLAY_LOCATION) names no extension scheme.
  *  13. commands   -- (38-04, B5 + the 2026-10-20 keys ruling) the section's
@@ -472,7 +473,8 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
         const opener = span(apiLines, /^function extensionOpenTabPage\(/);
         const openerBody = opener ? apiLines.slice(opener.start, opener.end + 1).join('\n') : '';
         if (!opener) failures.push(`tab-pages: ${API} has no extensionOpenTabPage (broken instrument)`);
-        if (opener && !openerBody.includes('principal?.addonId !== policy.id')) failures.push(`tab-pages: extensionOpenTabPage admits another extension's page (no principal?.addonId !== policy.id check)`);
+        // 38-REVIEW WR-01: openBrowserWindow's window argument loads with the system principal; the page goes through addTab with the caller's.
+        if (opener && /openBrowserWindow\(\s*url\b/.test(openerBody)) failures.push(`tab-pages: extensionOpenTabPage passes the page through openBrowserWindow, which loads it with the system principal`);
         for (const o of OVERLAY_OPENERS) {
             if (openerBody.includes(o)) failures.push(`tab-pages: extensionOpenTabPage opens an overlay (${o})`);
         }
@@ -571,7 +573,7 @@ function selfTest() {
         { name: 'sidebar-as-tab', run: () => check({ ...clean, [API]: clean[API].replace('  win.document.body.appendChild(frame);\n  extensionSidebars.set(', '  createPendingOverlay(null, panel, true, null);\n  extensionSidebars.set(') }), expect: 'extensionSidebarOpen puts the sidebar page in an overlay (createPendingOverlay(' },
         { name: 'tabpage-in-overlay', run: () => check({ ...clean, [API]: clean[API].replace('    return extensionOpenTabPage(url, options?.triggeringPrincipal);', '    return createPendingOverlay(options.openerBrowser, url, true, null);') }), expect: 'tabsBridgeCreate puts an extension page in an overlay (createPendingOverlay(' },
         { name: 'container dropped', run: () => check({ ...clean, [API]: clean[API].replace('  if (options?.userContextId) {\n', '  if (false) {\n') }), expect: 'tabsBridgeCreate does not refuse a container' },
-        { name: 'foreign extension page', run: () => check({ ...clean, [API]: clean[API].replace('principal?.addonId !== policy.id', 'false') }), expect: "extensionOpenTabPage admits another extension's page" },
+        { name: 'page via window argument', run: () => check({ ...clean, [API]: clean[API].replace('win ?? PowerBrowserAPI.openBrowserWindow("")', 'win ?? PowerBrowserAPI.openBrowserWindow(url)') }), expect: 'extensionOpenTabPage passes the page through openBrowserWindow' },
         { name: 'execute name drift', run: () => check({ ...clean, [API]: clean[API].replace(', "_execute_sidebar_action"];', '];') }), expect: 'missing _execute_sidebar_action' },
         { name: 'commands-always-fire', run: () => check({ ...clean, [API]: clean[API].replace('    extensionKeysFollowPageFocus(theiaBrowser.ownerDocument.defaultView, tabId !== null);', '   ') }), expect: 'pushPageFocus does not scope the extension keys' },
         { name: 'key collision', run: () => check(apiWith('const key = document.createXULElement("key"); key.id = "powerbrowser-page-key-newTab";')), expect: '(key collision)' },
