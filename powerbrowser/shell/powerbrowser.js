@@ -427,6 +427,9 @@ document.addEventListener(
       { id: "devtoolsOpen", keycode: "VK_F12", modifiers: "", reserved: false, landsInTheia: false },
       // Phase 33 plan 02 (BMK-01, D-15): Ctrl+D with a page focused; the editor opens in Theia, so it lands there.
       { id: "bookmarkPage", key: "D", modifiers: "accel", reserved: false, landsInTheia: true, firefox: "addBookmarkAsKb" },
+      // Phase 33 plan 03 (BMK-03, BMK-04, D-15): the reopened tab takes focus, so reopen lands in Theia; the toolbar toggle leaves focus in the page.
+      { id: "reopenClosedTab", key: "T", modifiers: "accel,shift", reserved: false, landsInTheia: true, firefox: "key_restoreLastClosedTabOrWindowOrSession" },
+      { id: "toggleBookmarksToolbar", key: "B", modifiers: "accel,shift", reserved: false, landsInTheia: false, firefox: "viewBookmarksToolbarKb" },
       // No upstream <key>: content's document navigation consumes F6, so these ride the reply listener below.
       { id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false, landsInTheia: true, via: "replyListener" },
       { id: "focusAddressShiftF6", keycode: "VK_F6", modifiers: "shift", reserved: false, landsInTheia: true, via: "replyListener" },

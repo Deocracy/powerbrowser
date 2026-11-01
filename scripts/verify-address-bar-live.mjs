@@ -386,6 +386,7 @@ import {
     focusOverlay,
     focusTheiaFrame,
     inChrome,
+    firedRows,
     installFireRecorder,
     installPushRecorder,
     loadedAt,
@@ -473,6 +474,15 @@ const PAGES = {
     '/bm-a': { title: 'Bookmark Alpha', body: '<p>alpha</p>' },
     '/bm-b': { title: 'Bookmark Beta', body: '<p>beta</p>' },
     '/bm-keys': { title: 'Bookmark Keys', body: '<p>keys</p>' },
+    // Phase 33 plan 03: the toolbar, reopen and History submenu pages.
+    '/tb-a': { title: 'Toolbar Alpha', body: '<p>alpha</p>' },
+    '/tb-b': { title: 'Toolbar Beta', body: '<p>beta</p>' },
+    '/tb-c': { title: 'Toolbar Gamma', body: '<p>gamma</p>' },
+    '/rc-a': { title: 'Reopen Alpha', body: '<p>alpha</p>' },
+    '/rc-b': { title: 'Reopen Beta', body: '<p>beta</p>' },
+    '/rc-c': { title: 'Reopen Gamma', body: '<p>gamma</p>' },
+    '/hm-b': { title: 'History Back Page', body: '<p>back</p>' },
+    ...Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`/hm-c${i + 1}`, { title: `Closed Page ${i + 1}`, body: '<p>closed</p>' }])),
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -4950,6 +4960,524 @@ async function bookmarkKeys(ctx) {
     }
 }
 
+// Phase 33 plan 03 (BMK-03, BMK-04, BMK-06, D-15): the bookmarks toolbar, reopen closed tab and the History submenu.
+const SHORTCUTS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts';
+const TOOLBAR_PREFERENCE = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-preferences.ts', 'SHOW_BOOKMARKS_TOOLBAR_PREFERENCE');
+const HISTORY_MENU_ROWS = Number(sourceMatch('theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx', /const HISTORY_MENU_ROWS = (\d+);/));
+const copyPlain = key => sourceMatch(CHROME_BAR_COPY_REL, new RegExp(`\\b${key}: '([^']+)'`));
+const APP_MENU_LABEL = copyPlain('appMenu');
+const HISTORY_ROW = copyPlain('menuHistory');
+const REOPEN_ROW = copyPlain('reopenClosedTab');
+const CLOSED_HEADER = copyPlain('recentlyClosedTabs');
+const RECENT_HEADER = copyPlain('recentPages');
+const NO_CLOSED = copyPlain('noClosedTabs');
+const NO_RECENT = copyPlain('noRecentPages');
+const TOOLBAR_MORE = copyPlain('bookmarksToolbarMore');
+
+/** A PAGE_SHORTCUTS row's key as a pressKey event, derived from the table (letter keys only). */
+function rowKey(id) {
+    const key = sourceMatch(SHORTCUTS_REL, new RegExp(`id: '${id}', key: '([A-Z])'`));
+    const modifiers = sourceMatch(SHORTCUTS_REL, new RegExp(`id: '${id}', key: '[A-Z]', modifiers: '([^']+)'`)).split(',');
+    return { key, code: `Key${key}`, keyCode: key.charCodeAt(0), modifiers };
+}
+const REOPEN_KEY = rowKey('reopenClosedTab');
+const TOOLBAR_KEY = rowKey('toggleBookmarksToolbar');
+
+/** The toolbar as drawn, with the geometry it must keep: one 28px row above the main area, never scrolled. */
+const readToolbar = app => app.evaluate(`JSON.stringify((() => {
+    const row = document.querySelector('.pb-bookmarks-toolbar');
+    const panel = document.getElementById('theia-top-panel');
+    const main = document.getElementById('theia-main-content-panel');
+    const box = e => { const r = e.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), height: Math.round(r.height) }; };
+    const chevron = row && row.querySelector('.pb-bookmarks-toolbar-chevron');
+    return {
+        shown: !!row,
+        height: row ? box(row).height : 0,
+        bottom: row ? box(row).bottom : 0,
+        scrollLeft: row ? row.scrollLeft : 0,
+        items: row ? [...row.querySelectorAll('.pb-bookmarks-toolbar-item')].map(i => ({
+            label: (i.querySelector('.pb-bookmarks-toolbar-label') || {}).textContent || '',
+            hidden: i.classList.contains('is-overflow'),
+            top: box(i).top,
+            right: box(i).right,
+        })) : [],
+        chevron: chevron ? { ...box(chevron), label: chevron.getAttribute('aria-label') } : null,
+        failure: row ? ((row.querySelector('.pb-bookmarks-toolbar-failed') || {}).textContent || '') : '',
+        panel: panel ? box(panel).height : 0,
+        mainTop: main ? box(main).top : null,
+    };
+})())`).then(JSON.parse);
+
+/** Chrome scope, Places' own read (the independent observer): the toolbar folder's web bookmarks, title or address, in order. */
+const toolbarFolder = app => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const tree = await PlacesUtils.promiseBookmarksTree(PlacesUtils.bookmarks.toolbarGuid);
+        return JSON.stringify((tree.children || []).filter(c => /^https?:/.test(c.uri || '')).map(c => c.title || c.uri));
+    } catch (e) {
+        return JSON.stringify({ error: String(e) });
+    }
+})();`).then(JSON.parse);
+
+/** Chrome scope: a toolbar bookmark on each `[url, title]`, appended in order, as another window would add it. */
+const seedToolbar = (app, rows) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        for (const [url, title] of ${JSON.stringify(rows)}) {
+            await PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.toolbarGuid, url, title });
+        }
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/** The visible .lm-Menu elements in order, each as its drawn items (collapsed separators dropped). */
+const readOpenMenus = app => app.evaluate(`JSON.stringify([...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0).map(m =>
+    [...m.querySelectorAll('.lm-Menu-item')].filter(i => !i.classList.contains('lm-mod-collapsed')).map(i => ({
+        separator: i.getAttribute('data-type') === 'separator',
+        label: (i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '',
+        shortcut: (i.querySelector('.lm-Menu-itemShortcut') || {}).textContent || '',
+        disabled: i.classList.contains('lm-mod-disabled'),
+    }))))`).then(JSON.parse);
+
+/** Points at the row `label` of visible menu `index` as a pointer does (move, then mouse-up unless `hover`); `mods` such as { ctrlKey: true }. */
+const pointMenuRow = (app, index, label, { hover = false, mods = {} } = {}) => app.evaluate(`(() => {
+    const menu = [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0)[${index}];
+    const item = menu && [...menu.querySelectorAll('.lm-Menu-item')].find(i => ((i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '') === ${JSON.stringify(label)});
+    if (!item) return false;
+    const r = item.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, ...${JSON.stringify(mods)} };
+    item.dispatchEvent(new MouseEvent('mousemove', at));
+    if (!${hover}) item.dispatchEvent(new MouseEvent('mouseup', { ...at, button: 0 }));
+    return true;
+})()`);
+
+/** Closes every open menu, innermost first (Esc on each). */
+const closeOpenMenus = app => app.evaluate(`(() => {
+    for (const m of [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0).reverse()) {
+        m.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+    }
+    return true;
+})()`);
+
+/** The main-area web tabs as { tabId, url }, in shell order. */
+const webTabsNow = app => probe(app, `return get('ApplicationShell').getWidgets('main').filter(w => typeof w.tabId === 'string').map(w => ({ tabId: w.tabId, url: w.url || '' }));`);
+
+/** The one web tab in `after` not in `before`, once it has an http(s) address; null when none appeared. */
+async function newWebTab(app, before) {
+    const known = new Set(before.map(t => t.tabId));
+    const after = await settle(() => webTabsNow(app), v => Array.isArray(v) && v.some(t => !known.has(t.tabId) && /^https?:/.test(t.url)), 8000);
+    return (Array.isArray(after) ? after : []).find(t => !known.has(t.tabId) && /^https?:/.test(t.url)) ?? null;
+}
+
+const closeWebTab = (app, tabId) => probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); if (w) { await get('ApplicationShell').closeWidget(w.id); } return true;`);
+
+/** A web tab's own session history, as paths, or [] when it cannot be read. */
+const historyPaths = (app, tabId) => probe(app, `const r = await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).history();
+    return r && r.ok && r.where === 'done' ? (r.entries || []).map(e => e.url) : [];`).then(urls => (Array.isArray(urls) ? urls.map(pathOf) : []));
+
+/** Opens the hamburger and hovers its History row; returns the submenu's items, or throws a broken instrument. */
+async function openHistorySubmenu(app) {
+    const opened = await app.evaluate(`(() => { const b = document.querySelector('.pb-chrome-bar button[aria-label=${JSON.stringify(APP_MENU_LABEL)}]'); if (!b) return false; b.click(); return true; })()`);
+    const root = opened === true ? await settle(() => readOpenMenus(app), m => m.length === 1 && m[0].some(i => i.label === HISTORY_ROW), 10000) : [];
+    if (root.length !== 1) {
+        throw new Error(`${BROKEN} the hamburger did not open with a ${HISTORY_ROW} row (${JSON.stringify(root)})`);
+    }
+    await pointMenuRow(app, 0, HISTORY_ROW, { hover: true });
+    const menus = await settle(() => readOpenMenus(app), m => m.length === 2 && m[1].length > 0, 5000);
+    if (menus.length !== 2) {
+        throw new Error(`${BROKEN} hovering ${HISTORY_ROW} opened no submenu (${JSON.stringify(menus)})`);
+    }
+    return menus[1];
+}
+
+/** The History submenu cut at its separators: the rows before the first, then each section. */
+function historySections(items) {
+    const sections = [[]];
+    for (const item of items) {
+        if (item.separator) {
+            sections.push([]);
+        } else {
+            sections[sections.length - 1].push(item);
+        }
+    }
+    return sections.filter((section, i) => i === 0 || section.length);
+}
+
+/**
+ * BMK-04 (D-04, D-05): Ctrl+Shift+B with the pill focused shows the 28px
+ * toolbar row, growing the top panel by exactly 28px with the main area below
+ * it, in every PowerBrowser mode; its items are the toolbar folder in Places
+ * order (read back chrome-side); a bookmark added or removed in chrome appears
+ * or vanishes with no reload (the bookmarks-changed push); an overflowing row
+ * stays one unscrolled row and its chevron lists exactly the hidden items; a
+ * refused read shows the failure row and no items; Ctrl+Shift+B with the page
+ * focused (its relay row) hides it and gives the 28px back.
+ */
+async function bookmarksToolbar(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const uiMode = await bodyMode(app);
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    const seeded = ['/tb-a', '/tb-b'].map(path => [pages.url(path), PAGES[path].title]);
+    const added = [pages.url('/tb-c'), PAGES['/tb-c'].title];
+    const many = Array.from({ length: 30 }, (_, i) => [pages.url(`/tb-a?n=${i}`), `Overflow bookmark ${i} with a long title`]);
+    const refusedTrigger = [pages.url('/tb-b?refused'), 'Refused read trigger'];
+    await installFireRecorder(app);
+    try {
+        if (await setPref(app, TOOLBAR_PREFERENCE, false) !== true) {
+            return fail(`${BROKEN} the toolbar setting could not be turned off`);
+        }
+        const before = await settle(() => readToolbar(app), v => !v.shown);
+        if (before.shown) {
+            return fail(`${BROKEN} the toolbar is still shown with its setting off`);
+        }
+        if (await seedToolbar(app, seeded) !== 'ok') {
+            return fail(`${BROKEN} the toolbar bookmarks could not be seeded chrome-side`);
+        }
+
+        // Theia-focused Ctrl+Shift+B (the keybinding).
+        await focusPill(app);
+        await pressKey(app, TOOLBAR_KEY);
+        let view = await settle(() => readToolbar(app), v => v.shown && v.items.length >= seeded.length);
+        if (!view.shown || view.height !== 28) {
+            return fail(`Ctrl+Shift+B with the pill focused must show the 28px bookmarks toolbar; saw ${JSON.stringify(view)}`);
+        }
+        if (view.panel - before.panel !== 28) {
+            fail(`the top panel must grow by exactly 28px while the toolbar shows; it went from ${before.panel}px to ${view.panel}px`);
+        }
+        if (view.mainTop !== null && view.bottom > view.mainTop) {
+            fail(`the toolbar overlays the main area (toolbar bottom ${view.bottom}, main area top ${view.mainTop})`);
+        }
+        const folder = await toolbarFolder(app);
+        if (!Array.isArray(folder) || JSON.stringify(view.items.map(i => i.label)) !== JSON.stringify(folder)) {
+            fail(`the toolbar items must be the toolbar folder in Places order ${JSON.stringify(folder)}; saw ${JSON.stringify(view.items.map(i => i.label))}`);
+        }
+
+        // Every PowerBrowser mode (D-04).
+        for (const id of ['coding', 'browsing', 'organising']) {
+            await switchUiMode(app, id);
+            await showTab(app, tabId, `bookmarks-toolbar in ${id}`);
+            const inMode = await settle(() => readToolbar(app), v => v.shown && v.height === 28);
+            if (!inMode.shown || inMode.height !== 28 || (inMode.mainTop !== null && inMode.bottom > inMode.mainTop)) {
+                fail(`the toolbar must show as a 28px row above the main area in ${id}; saw ${JSON.stringify(inMode)}`);
+            }
+        }
+        if (uiMode) {
+            await switchUiMode(app, uiMode);
+        }
+        await showTab(app, tabId, 'bookmarks-toolbar');
+
+        if (plant === 'toolbar-ignores-push' && await probe(app, `get('ChromeBarWidget').refreshBookmarksToolbar = async function () {}; return true;`) === true) {
+            note('PLANT toolbar-ignores-push applied');
+        }
+        // D-05: chrome-side changes appear and vanish with no reload.
+        if (await seedToolbar(app, [added]) !== 'ok') {
+            return fail(`${BROKEN} a toolbar bookmark could not be added chrome-side`);
+        }
+        view = await settle(() => readToolbar(app), v => v.items.some(i => i.label === added[1]));
+        if (!view.items.some(i => i.label === added[1])) {
+            fail(`the toolbar did not show a bookmark added in chrome (the bookmarks-changed push); items ${JSON.stringify(view.items.map(i => i.label))}`);
+        }
+        if (await unbookmark(app, seeded[0][0]) !== 'ok') {
+            return fail(`${BROKEN} a toolbar bookmark could not be removed chrome-side`);
+        }
+        view = await settle(() => readToolbar(app), v => !v.items.some(i => i.label === seeded[0][1]));
+        if (view.items.some(i => i.label === seeded[0][1])) {
+            fail(`the toolbar still shows a bookmark removed in chrome (the bookmarks-changed push)`);
+        }
+        await probe(app, `delete get('ChromeBarWidget').refreshBookmarksToolbar; return true;`);
+
+        // Overflow: one row that never wraps or scrolls; the chevron lists exactly the hidden items.
+        if (await seedToolbar(app, many) !== 'ok') {
+            return fail(`${BROKEN} the overflow bookmarks could not be seeded chrome-side`);
+        }
+        view = await settle(() => readToolbar(app), v => !!v.chevron && v.items.some(i => i.hidden));
+        const hidden = view.items.filter(i => i.hidden).map(i => i.label);
+        if (!view.chevron || !hidden.length || view.chevron.label !== TOOLBAR_MORE) {
+            fail(`an overflowing toolbar must show the chevron labelled ${JSON.stringify(TOOLBAR_MORE)} with items hidden behind it; saw ${JSON.stringify({ chevron: view.chevron, hidden: hidden.length })}`);
+        } else {
+            if (view.height !== 28 || new Set(view.items.map(i => i.top)).size !== 1 || view.scrollLeft !== 0) {
+                fail(`the overflowing toolbar must stay one 28px row that never scrolls; height ${view.height}, item rows ${new Set(view.items.map(i => i.top)).size}, scrollLeft ${view.scrollLeft}`);
+            }
+            if (view.items.some(i => !i.hidden && i.right > view.chevron.left)) {
+                fail('a shown toolbar item runs under the chevron');
+            }
+            await app.evaluate(`(() => { const c = document.querySelector('.pb-bookmarks-toolbar-chevron'); if (c) c.click(); return !!c; })()`);
+            const menus = await settle(() => readOpenMenus(app), m => m.length === 1);
+            const listed = (menus[0] ?? []).filter(i => !i.separator).map(i => i.label);
+            if (listed.length !== hidden.length || hidden.some(label => !listed.includes(label))) {
+                fail(`the chevron menu must list exactly the hidden items ${JSON.stringify(hidden)}; saw ${JSON.stringify(listed)}`);
+            }
+            await closeOpenMenus(app);
+        }
+
+        // A refused read: the failure row, never stale items.
+        if (await probe(app, `get('ChromeStoreClient').listBookmarkFolder = async () => { throw new Error('stubbed refusal'); }; return true;`) !== true) {
+            return fail(`${BROKEN} the client's listBookmarkFolder could not be stubbed to refuse`);
+        }
+        try {
+            if (await seedToolbar(app, [refusedTrigger]) !== 'ok') {
+                return fail(`${BROKEN} the refusal trigger bookmark could not be added chrome-side`);
+            }
+            view = await settle(() => readToolbar(app), v => !!v.failure);
+            if (!view.failure.startsWith(subject) || view.items.length) {
+                fail(`a refused toolbar read must show only the failure row starting ${JSON.stringify(subject)}; saw ${JSON.stringify({ failure: view.failure, items: view.items.length })}`);
+            }
+        } finally {
+            await probe(app, `delete get('ChromeStoreClient').listBookmarkFolder; return true;`);
+        }
+
+        // Page-focused Ctrl+Shift+B (the relay row) hides it and gives the 28px back.
+        if (await focusOverlay(app, tabId) !== true) {
+            return fail(`${BROKEN} the session tab's page could not be focused`);
+        }
+        const fired = (await firedRows(app)).length;
+        await pressKey(app, TOOLBAR_KEY);
+        view = await settle(() => readToolbar(app), v => !v.shown);
+        if (view.shown) {
+            fail('Ctrl+Shift+B with the page focused must hide the toolbar');
+        }
+        if (!(await firedRows(app)).slice(fired).includes('toggleBookmarksToolbar')) {
+            fail('Ctrl+Shift+B with the page focused must fire the toggleBookmarksToolbar page-key row');
+        }
+        if (!view.shown && view.panel !== before.panel) {
+            fail(`hiding the toolbar must give the 28px back; the top panel is ${view.panel}px, it was ${before.panel}px`);
+        }
+    } finally {
+        await probe(app, `delete get('ChromeStoreClient').listBookmarkFolder; delete get('ChromeBarWidget').refreshBookmarksToolbar; return true;`);
+        await closeOpenMenus(app).catch(() => undefined);
+        for (const [url] of [...seeded, added, ...many, refusedTrigger]) {
+            await unbookmark(app, url);
+        }
+        await setPref(app, TOOLBAR_PREFERENCE, false).catch(() => undefined);
+        if (uiMode) {
+            await switchUiMode(app, uiMode).catch(() => undefined);
+        }
+    }
+}
+
+/**
+ * BMK-03 (D-07, T-33-02): two closed tabs, the older one having walked
+ * /rc-a -> /rc-b. Ctrl+Shift+T with the pill focused reopens the newest
+ * (/rc-c) first; Ctrl+Shift+T with the page focused (its relay row) reopens
+ * the next one WITH its own back/forward history (/rc-a then /rc-b, and Back
+ * walks to /rc-a); with nothing closed the key opens no tab.
+ */
+async function reopenClosed(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    await sessionTab(ctx);
+    const opened = [];
+    const closedUrls = () => probe(app, `return (await get('ChromeStoreClient').listClosedTabs(25)).map(r => r.url);`);
+    if (plant === 'reopen-no-history' && await probe(app, `get('ProfileStorageService').armWebTabHistory = async () => true; return true;`) === true) {
+        note('PLANT reopen-no-history applied');
+    }
+    try {
+        const walked = await openWebTab(app, pages.url('/rc-a'));
+        if (await waitForPush(app, loadedAt(walked, '/rc-a')) < 0) {
+            return fail(`${BROKEN} no loaded state push arrived for /rc-a`);
+        }
+        const from = (await pushes(app)).length;
+        await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(walked)}).navigate(${JSON.stringify(pages.url('/rc-b'))}); return true;`);
+        if (await waitForPush(app, loadedAt(walked, '/rc-b'), { from }) < 0) {
+            return fail(`${BROKEN} no loaded state push arrived for /rc-b`);
+        }
+        await closeWebTab(app, walked);
+        const single = await openWebTab(app, pages.url('/rc-c'));
+        if (await waitForPush(app, loadedAt(single, '/rc-c')) < 0) {
+            return fail(`${BROKEN} no loaded state push arrived for /rc-c`);
+        }
+        await closeWebTab(app, single);
+        const closed = await settle(closedUrls, v => Array.isArray(v) && pathOf(v[0]) === '/rc-c' && pathOf(v[1]) === '/rc-b', 8000);
+        if (!Array.isArray(closed) || pathOf(closed[0]) !== '/rc-c' || pathOf(closed[1]) !== '/rc-b') {
+            return fail(`${BROKEN} the two closed tabs are not the newest closed rows: ${JSON.stringify(closed)}`);
+        }
+
+        // Theia-focused: the newest closed tab first.
+        let tabs = await webTabsNow(app);
+        await focusPill(app);
+        await pressKey(app, REOPEN_KEY);
+        const first = await newWebTab(app, tabs);
+        if (!first || pathOf(first.url) !== '/rc-c') {
+            return fail(`Ctrl+Shift+T with the pill focused must reopen the most recently closed tab (/rc-c) first; the new tab is ${JSON.stringify(first)}`);
+        }
+        opened.push(first.tabId);
+
+        // Page-focused (the relay row): the next one, with its own history.
+        await installFireRecorder(app);
+        if (await focusOverlay(app, first.tabId) !== true) {
+            return fail(`${BROKEN} the reopened tab's page could not be focused`);
+        }
+        const fired = (await firedRows(app)).length;
+        tabs = await webTabsNow(app);
+        await pressKey(app, REOPEN_KEY);
+        const second = await newWebTab(app, tabs);
+        if (!(await firedRows(app)).slice(fired).includes('reopenClosedTab')) {
+            fail('Ctrl+Shift+T with the page focused must fire the reopenClosedTab page-key row');
+        }
+        if (!second || pathOf(second.url) !== '/rc-b') {
+            return fail(`Ctrl+Shift+T with the page focused must reopen the next closed tab (/rc-b); the new tab is ${JSON.stringify(second)}`);
+        }
+        opened.push(second.tabId);
+        const paths = await settle(() => historyPaths(app, second.tabId), v => v.includes('/rc-a') && v.includes('/rc-b'), 8000);
+        if (!paths.includes('/rc-a') || !paths.includes('/rc-b')) {
+            fail(`the reopened tab has no back/forward history: its entries are ${JSON.stringify(paths)}, expected /rc-a then /rc-b`);
+        } else {
+            const mark = (await pushes(app)).length;
+            await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(second.tabId)}).back(); return true;`);
+            if (await waitForPush(app, loadedAt(second.tabId, '/rc-a'), { from: mark }) < 0) {
+                fail('Back in the reopened tab did not walk to /rc-a');
+            }
+        }
+
+        // Nothing closed (chrome answers null): the same key that just opened two tabs opens none.
+        await probe(app, `get('ChromeStoreClient').reopenClosedTab = async () => null; return true;`);
+        tabs = await webTabsNow(app);
+        await focusPill(app);
+        await pressKey(app, REOPEN_KEY);
+        await sleep(1500);
+        if ((await webTabsNow(app)).length !== tabs.length) {
+            fail('Ctrl+Shift+T with nothing closed opened a tab');
+        }
+    } finally {
+        await probe(app, `delete get('ChromeStoreClient').reopenClosedTab; delete get('ProfileStorageService').armWebTabHistory; return true;`);
+        for (const id of opened) {
+            await closeWebTab(app, id).catch(() => undefined);
+        }
+    }
+}
+
+/**
+ * BMK-06 (D-08): the History submenu of the hamburger (no chrome-bar button
+ * of its own) opens on an enabled Reopen Closed Tab row with its key, then the
+ * Recently closed tabs section (the newest HISTORY_MENU_ROWS closed tabs,
+ * newest first), then the Recent pages section (capped, the newest visit
+ * first). A closed row reopens with its history; a recent page loads in the
+ * current tab, and in a new background tab with Ctrl; empty reads show the
+ * disabled "No ..." rows and disable the reopen row.
+ */
+async function historyMenu(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const opened = [];
+    if (plant === 'recent-opens-new-tab' && await probe(app, `const w = get('ChromeBarWidget'); const open = Object.getPrototypeOf(w).openPlace;
+        w.openPlace = function (url) { return open.call(this, url, 'background'); }; return true;`) === true) {
+        note('PLANT recent-opens-new-tab applied');
+    }
+    try {
+        const buttons = await app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-chrome-bar > button')].map(b => b.getAttribute('aria-label')))`).then(JSON.parse);
+        if (buttons.includes(HISTORY_ROW)) {
+            fail(`History must be a hamburger submenu, not a chrome-bar button; the bar's buttons are ${JSON.stringify(buttons)}`);
+        }
+        // HISTORY_MENU_ROWS + 1 closed tabs; the newest walked /hm-c<last> -> /hm-b, so its row carries history.
+        const last = HISTORY_MENU_ROWS + 1;
+        for (let i = 1; i <= last; i++) {
+            const path = `/hm-c${i}`;
+            const id = await openWebTab(app, pages.url(path));
+            if (await waitForPush(app, loadedAt(id, path)) < 0) {
+                return fail(`${BROKEN} no loaded state push arrived for ${path}`);
+            }
+            if (i === last) {
+                const from = (await pushes(app)).length;
+                await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(id)}).navigate(${JSON.stringify(pages.url('/hm-b'))}); return true;`);
+                if (await waitForPush(app, loadedAt(id, '/hm-b'), { from }) < 0) {
+                    return fail(`${BROKEN} no loaded state push arrived for /hm-b`);
+                }
+            }
+            await closeWebTab(app, id);
+        }
+        const wantClosed = [PAGES['/hm-b'].title, ...Array.from({ length: HISTORY_MENU_ROWS - 1 }, (_, i) => PAGES[`/hm-c${last - 1 - i}`].title)];
+        await showTab(app, tabId, 'history-menu');
+
+        let [top, closedSection, recentSection] = historySections(await openHistorySubmenu(app));
+        const reopenRow = top?.[0];
+        if (top?.length !== 1 || reopenRow.label !== REOPEN_ROW || reopenRow.disabled || !reopenRow.shortcut) {
+            fail(`the History submenu must open on one enabled ${JSON.stringify(REOPEN_ROW)} row showing its key; saw ${JSON.stringify(top)}`);
+        }
+        if (closedSection?.[0]?.label !== CLOSED_HEADER || !closedSection[0].disabled) {
+            fail(`the second section must open on the disabled ${JSON.stringify(CLOSED_HEADER)} header; saw ${JSON.stringify(closedSection?.[0])}`);
+        }
+        const closedLabels = (closedSection ?? []).slice(1).map(i => i.label);
+        if (JSON.stringify(closedLabels) !== JSON.stringify(wantClosed)) {
+            fail(`the closed tabs section must list the ${HISTORY_MENU_ROWS} newest closed tabs, newest first, ${JSON.stringify(wantClosed)}; saw ${JSON.stringify(closedLabels)}`);
+        }
+        if (recentSection?.[0]?.label !== RECENT_HEADER || !recentSection[0].disabled) {
+            fail(`the third section must open on the disabled ${JSON.stringify(RECENT_HEADER)} header; saw ${JSON.stringify(recentSection?.[0])}`);
+        }
+        const recentLabels = (recentSection ?? []).slice(1).map(i => i.label);
+        if (recentLabels.length !== HISTORY_MENU_ROWS || recentLabels[0] !== PAGES['/hm-b'].title) {
+            fail(`the recent pages section must hold ${HISTORY_MENU_ROWS} rows (more were visited), the newest visit (${PAGES['/hm-b'].title}) first; saw ${JSON.stringify(recentLabels)}`);
+        }
+
+        // A closed row reopens with its history.
+        let tabs = await webTabsNow(app);
+        await pointMenuRow(app, 1, wantClosed[0]);
+        const reopened = await newWebTab(app, tabs);
+        if (!reopened || pathOf(reopened.url) !== '/hm-b') {
+            fail(`choosing the newest closed row must reopen /hm-b; the new tab is ${JSON.stringify(reopened)}`);
+        } else {
+            opened.push(reopened.tabId);
+            const paths = await settle(() => historyPaths(app, reopened.tabId), v => v.includes(`/hm-c${last}`), 8000);
+            if (!paths.includes(`/hm-c${last}`) || !paths.includes('/hm-b')) {
+                fail(`the closed row reopened without its history: entries ${JSON.stringify(paths)}`);
+            }
+        }
+
+        // A recent page loads in the current tab; Ctrl opens it in a new background tab.
+        const target = PAGES[`/hm-c${last - 1}`].title;
+        await showTab(app, tabId, 'history-menu');
+        [, , recentSection] = historySections(await openHistorySubmenu(app));
+        if (!(recentSection ?? []).some(i => i.label === target)) {
+            await closeOpenMenus(app);
+            return fail(`${BROKEN} the recent pages section does not list ${target}`);
+        }
+        tabs = await webTabsNow(app);
+        let mark = (await pushes(app)).length;
+        await pointMenuRow(app, 1, target);
+        if (await waitForPush(app, loadedAt(tabId, `/hm-c${last - 1}`), { from: mark }) < 0 || (await webTabsNow(app)).length !== tabs.length) {
+            fail(`a recent page must load in the current tab: no load of /hm-c${last - 1} in the session tab, or a tab was opened (${(await webTabsNow(app)).length} tabs, ${tabs.length} before)`);
+        }
+        [, , recentSection] = historySections(await openHistorySubmenu(app));
+        const other = (recentSection ?? []).slice(1).find(i => i.label !== target && !i.disabled);
+        if (other) {
+            tabs = await webTabsNow(app);
+            await pointMenuRow(app, 1, other.label, { mods: { ctrlKey: true } });
+            const background = await newWebTab(app, tabs);
+            const current = await probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null;`);
+            if (!background || current !== tabId) {
+                fail(`Ctrl on a recent page must open it in a new background tab and keep the session tab current; new ${JSON.stringify(background)}, current ${JSON.stringify(current)}`);
+            }
+            if (background) {
+                opened.push(background.tabId);
+            }
+        } else {
+            await closeOpenMenus(app);
+        }
+
+        // Empty reads: the disabled "No ..." rows, and the reopen row disabled.
+        await probe(app, `const c = get('ChromeStoreClient'); c.listClosedTabs = async () => []; c.searchPlaces = async () => []; return true;`);
+        try {
+            [top, closedSection, recentSection] = historySections(await openHistorySubmenu(app));
+            const empty = { reopen: top?.[0], closed: closedSection?.slice(1), recent: recentSection?.slice(1) };
+            if (!empty.reopen?.disabled || empty.closed?.length !== 1 || empty.closed[0].label !== NO_CLOSED || !empty.closed[0].disabled
+                || empty.recent?.length !== 1 || empty.recent[0].label !== NO_RECENT || !empty.recent[0].disabled) {
+                fail(`with nothing closed and no history the submenu must disable ${JSON.stringify(REOPEN_ROW)} and show the disabled ${JSON.stringify(NO_CLOSED)} and ${JSON.stringify(NO_RECENT)} rows; saw ${JSON.stringify(empty)}`);
+            }
+            await closeOpenMenus(app);
+        } finally {
+            await probe(app, `const c = get('ChromeStoreClient'); delete c.listClosedTabs; delete c.searchPlaces; return true;`);
+        }
+    } finally {
+        await closeOpenMenus(app).catch(() => undefined);
+        await probe(app, `delete get('ChromeBarWidget').openPlace;
+            await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).navigate(${JSON.stringify(pages.url('/start'))}); return true;`);
+        for (const id of opened) {
+            await closeWebTab(app, id).catch(() => undefined);
+        }
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -4978,6 +5506,9 @@ const SCENARIOS = {
     'mode-tokens': modeTokens,
     'bookmark-star': bookmarkStar,
     'bookmark-editor': bookmarkEditor,
+    'bookmarks-toolbar': bookmarksToolbar,
+    'reopen-closed': reopenClosed,
+    'history-menu': historyMenu,
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
@@ -5101,6 +5632,9 @@ const PLANTS = [
     { plant: 'focus-keeps-mode', target: 'address-keys', run: ['search', 'address-keys'], expect: 'Ctrl+L left the pill in Command centre' },
     { plant: 'star-ignores-push', target: 'bookmark-star', run: ['bookmark-star'], expect: 'the star did not unfill after the bookmark was removed in chrome' },
     { plant: 'remove-needs-confirm', target: 'bookmark-editor', run: ['bookmark-editor'], expect: 'Remove did not remove the bookmark at once' },
+    { plant: 'toolbar-ignores-push', target: 'bookmarks-toolbar', run: ['bookmarks-toolbar'], expect: 'the toolbar did not show a bookmark added in chrome' },
+    { plant: 'reopen-no-history', target: 'reopen-closed', run: ['reopen-closed'], expect: 'the reopened tab has no back/forward history' },
+    { plant: 'recent-opens-new-tab', target: 'history-menu', run: ['history-menu'], expect: 'a recent page must load in the current tab' },
     { plant: 'ctrl-d-everywhere', target: 'bookmark-keys', run: ['bookmark-star', 'bookmark-keys'], expect: 'Ctrl+D in the README.md editor' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];

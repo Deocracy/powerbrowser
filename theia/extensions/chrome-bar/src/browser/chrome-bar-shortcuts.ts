@@ -18,7 +18,15 @@ import { CommandRegistry } from '@theia/core/lib/common/command';
 import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
-import { CHROME_BAR_NEW_TAB_COMMAND_ID, chooseSaveDestination, focusAddressPill, openBookmarkStar, openFindBarFor } from './chrome-bar-commands';
+import {
+    CHROME_BAR_NEW_TAB_COMMAND_ID,
+    chooseSaveDestination,
+    focusAddressPill,
+    openBookmarkStar,
+    openFindBarFor,
+    reopenLastClosedTab,
+    toggleBookmarksToolbar,
+} from './chrome-bar-commands';
 import { AddressBar } from './address-bar/address-bar';
 import { TabStripWidget } from './tab-strip-widget';
 
@@ -79,6 +87,9 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'devtoolsOpen', keycode: 'VK_F12', modifiers: '', label: 'F12', macLabel: 'F12' },
     // Phase 33 plan 02 (BMK-01, D-15): Ctrl+D with a page focused; the Theia-focused twin is chrome-bar-keybindings.ts.
     { id: 'bookmarkPage', key: 'D', modifiers: 'accel', label: 'Ctrl+D', macLabel: '⌘D' },
+    // Phase 33 plan 03 (BMK-03, BMK-04, D-15): the page-focused halves; the Theia-focused twins are chrome-bar-keybindings.ts.
+    { id: 'reopenClosedTab', key: 'T', modifiers: 'accel,shift', label: 'Ctrl+Shift+T', macLabel: '⇧⌘T' },
+    { id: 'toggleBookmarksToolbar', key: 'B', modifiers: 'accel,shift', label: 'Ctrl+Shift+B', macLabel: '⇧⌘B' },
 ];
 
 export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
@@ -187,6 +198,9 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['devtoolsOpen', tab => tab.openDevtools()],
         // BMK-01 (T-27-19): the star's own path, which owns the editor and the write; never the store kind.
         ['bookmarkPage', () => openBookmarkStar()],
+        // BMK-03/BMK-04 (T-27-19): the widget's reopen path and the toolbar toggle (a setting), never a store kind.
+        ['reopenClosedTab', () => reopenLastClosedTab()],
+        ['toggleBookmarksToolbar', () => toggleBookmarksToolbar()],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */

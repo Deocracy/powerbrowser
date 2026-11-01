@@ -42,7 +42,10 @@
  * command has a Theia keybinding on the same key whose `when` excludes
  * editorFocus and terminalFocus (Monaco and the terminal keep the key), and
  * every literal chrome-bar Theia keybinding has a page row on the same key
- * (reply-listener rows are pill passthroughs and are not pairs).
+ * (reply-listener rows are pill passthroughs and are not pairs); a twin may
+ * stay bound in editors and terminals only through ALWAYS_ON_TWINS with its
+ * reason, and an entry whose twin excludes them, or that names no pair, is
+ * stale.
  *
  * Honestly --quick: reads text sources only. No build, no browser, no
  * display, no network.
@@ -76,6 +79,15 @@ export const RESERVED_EXCEPTIONS = new Map([
     ['prevTab', 'tabbox.js:120-168 handles Ctrl+Shift+Tab in keydown; no <key> row exists'],
     ['nextTabPage', 'tabbox.js:120-168 handles Ctrl+Page Down in keydown; no <key> row exists'],
     ['prevTabPage', 'tabbox.js:120-168 handles Ctrl+Page Up in keydown; no <key> row exists'],
+]);
+
+/**
+ * Rule (12)'s hand-kept exceptions: page rows whose Theia-focused twin stays
+ * bound in editors and terminals, each with the reason no Monaco or terminal
+ * meaning is taken. Editing it is how that decision is made; it shows in review.
+ */
+export const ALWAYS_ON_TWINS = new Map([
+    ['reopenClosedTab', "Theia's reopen-closed-editor is Alt+Shift+T in the browser build and no installed package binds Ctrl+Shift+T, so reopening a closed tab from an editor takes nothing (Phase 33 D-15)"],
 ]);
 
 const KEY_NAMES = {
@@ -673,6 +685,7 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
     }
     const replyIds = new Set(replyRows.map(r => r.id));
     const bodies = actionBodiesOf(frontendSrc);
+    const alwaysOn = new Set();
     let pairs = 0;
     for (const row of frontend) {
         const body = bodies.get(row.id);
@@ -685,8 +698,18 @@ export function check(sources, exceptions = RESERVED_EXCEPTIONS) {
         const twin = theia.find(t => t.command === command && t.row && sameKey(t.row, row) && sameMods(t.row, row));
         if (!twin) {
             failures.push(`${row.id}: the page-focused row of ${command} has no Theia-focused twin in ${KEYBINDINGS_REL} on ${describe(row)} (KEY ruling: the key must work on both focus paths)`);
+        } else if (ALWAYS_ON_TWINS.has(row.id)) {
+            alwaysOn.add(row.id);
+            if (/!editorFocus\b/.test(twin.when) || /!terminalFocus\b/.test(twin.when)) {
+                failures.push(`${row.id}: stale ALWAYS_ON_TWINS entry -- its Theia-focused twin '${twin.keybinding}' excludes editors or terminals after all`);
+            }
         } else if (!/!editorFocus\b/.test(twin.when) || !/!terminalFocus\b/.test(twin.when)) {
             failures.push(`${row.id}: the Theia-focused twin '${twin.keybinding}' has a when clause that does not exclude editorFocus and terminalFocus (KEY-04: Monaco and the terminal keep the key)`);
+        }
+    }
+    for (const id of ALWAYS_ON_TWINS.keys()) {
+        if (!alwaysOn.has(id)) {
+            failures.push(`${id}: stale ALWAYS_ON_TWINS entry -- no page row of that id has a Theia-focused twin`);
         }
     }
     for (const t of theia) {
@@ -746,6 +769,12 @@ const PLANTS = [
     { name: 'single-sided Ctrl+D: chrome row gone', rel: CHROME_REL, from: '      { id: "bookmarkPage", key: "D", modifiers: "accel", reserved: false, landsInTheia: true, firefox: "addBookmarkAsKb" },\n', to: '', expect: 'bookmarkPage: a PAGE_SHORTCUTS row with no chrome row' },
     { name: 'Ctrl+D twin takes the key from Monaco', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+d',\n            when: '!editorFocus && !terminalFocus',", to: "keybinding: 'ctrlcmd+d',\n            when: '!terminalFocus',", expect: "bookmarkPage: the Theia-focused twin 'ctrlcmd+d' has a when clause" },
     { name: 'Theia-only chrome-bar binding', rel: KEYBINDINGS_REL, from: '    registerKeybindings(keybindings: KeybindingRegistry): void {\n', to: "    registerKeybindings(keybindings: KeybindingRegistry): void {\n        keybindings.registerKeybinding({ command: CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, keybinding: 'ctrlcmd+j', when: '!editorFocus && !terminalFocus' });\n", expect: 'ctrlcmd+j: a Theia-focused chrome-bar binding' },
+    // Phase 33 plan 03 (D-15): Ctrl+Shift+T and Ctrl+Shift+B on one focus path only, the toolbar twin taking
+    // the key from Monaco, and the reopen exception kept after its twin turned editor-scoped.
+    { name: 'single-sided Ctrl+Shift+T: Theia binding gone', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+shift+t',", to: "keybinding: 'ctrlcmd+alt+shift+f8',", expect: 'reopenClosedTab: the page-focused row of CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID has no Theia-focused twin' },
+    { name: 'single-sided Ctrl+Shift+B: chrome row gone', rel: CHROME_REL, from: '      { id: "toggleBookmarksToolbar", key: "B", modifiers: "accel,shift", reserved: false, landsInTheia: false, firefox: "viewBookmarksToolbarKb" },\n', to: '', expect: 'toggleBookmarksToolbar: a PAGE_SHORTCUTS row with no chrome row' },
+    { name: 'Ctrl+Shift+B twin takes the key from Monaco', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+shift+b',\n            when: '!editorFocus && !terminalFocus',", to: "keybinding: 'ctrlcmd+shift+b',", expect: "toggleBookmarksToolbar: the Theia-focused twin 'ctrlcmd+shift+b' has a when clause" },
+    { name: 'stale always-on twin', rel: KEYBINDINGS_REL, from: "keybinding: 'ctrlcmd+shift+t',", to: "keybinding: 'ctrlcmd+shift+t', when: '!editorFocus && !terminalFocus',", expect: 'reopenClosedTab: stale ALWAYS_ON_TWINS entry' },
     { name: 'quit-badge-drift', rel: COPY_REL, from: 'menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,', to: 'menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Alt+Q)`,', expect: 'quit key: the Quit row badge' },
 ];
 
