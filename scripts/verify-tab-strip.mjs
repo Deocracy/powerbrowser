@@ -61,6 +61,13 @@
  *      scanned for a write to titleChanged; the only writes allowed are
  *      web-tab.ts reading the push (detail.titleChanged === true) and
  *      applyState copying it, plus its two declarations.
+ *  15. registry (34-05): the rows of verify-platform.sh's quick block and its
+ *      live block, derived at check time. Each gate script has exactly two
+ *      rows, its gate and then its --self-test, adjacent and in that order,
+ *      labelled from the script's file name: verify-tab-strip.mjs in the
+ *      quick block, verify-tab-strip-live.mjs in the live block. A row
+ *      running either script anywhere else, or any other tracked shell
+ *      script or workflow running either one (a sibling driver), goes red.
  *
  * --self-test: the unmodified tree must be green first (the positive control
  * every plant preserves), then each named plant edits one source in memory
@@ -93,6 +100,11 @@ const ROADMAP_KEY = 'roadmap';
 const FRAME_KEY = 'frame-sources';
 const FRAME_DIR = 'theia/extensions';
 const FRAME_CHILD = 'powerbrowser/shell/GroupActorChild.sys.mjs';
+const REGISTRY = 'scripts/verify-platform.sh';
+// Every other shell script and workflow, as { rel, text }: none may run a tab-strip gate.
+const DRIVERS_KEY = 'drivers';
+// Each gate script and the registry block its two rows live in.
+const GATE_HOMES = [['verify-tab-strip.mjs', 'quick'], ['verify-tab-strip-live.mjs', 'live']];
 // The four titleChanged writes the frame may hold, all in web-tab.ts: the WebTabState and widget declarations, the
 // read of chrome's push, and applyState's copy of it. Anything else writing the flag is a frame-minted mark.
 const FRAME_WRITES_ALLOWED = new Set([
@@ -445,7 +457,78 @@ function check(src) {
     if (reads !== 1) {
         failures.push(`frame write: ${WEB_TAB}: the push read of titleChanged (detail.titleChanged === true) was found ${reads} times, want 1`);
     }
+
+    // 15. registry
+    failures.push(...registryFailures(src[REGISTRY] ?? '', src[DRIVERS_KEY] ?? []));
     return failures;
+}
+
+/** Check 15: each tab-strip gate's two rows sit once, in order, in their own registry block; no other driver runs them. */
+function registryFailures(registry, drivers) {
+    const failures = [];
+    const quickAt = registry.indexOf('local -a CHECKS=(');
+    const quickEnd = quickAt < 0 ? -1 : registry.indexOf('\n  )\n', quickAt);
+    const liveAt = quickEnd < 0 ? -1 : registry.indexOf('CHECKS+=(', quickEnd);
+    const liveEnd = liveAt < 0 ? -1 : registry.indexOf('\n    )\n', liveAt);
+    if ([quickAt, quickEnd, liveAt, liveEnd].some(at => at < 0)) {
+        return [`registry: ${REGISTRY}: the quick block (local -a CHECKS=( ... )) or the live block (CHECKS+=( ... )) was not found (broken instrument)`];
+    }
+    const rowsOf = text => [...text.matchAll(/^\s*"([^|"\s]+)\|([^"]*)"\s*$/gm)].map(m => `${m[1]}|${m[2]}`);
+    const blocks = { quick: rowsOf(registry.slice(quickAt, quickEnd)), live: rowsOf(registry.slice(liveAt, liveEnd)) };
+    const everywhere = rowsOf(registry);
+    for (const [script, home] of GATE_HOMES) {
+        const runs = row => row.split('|').slice(1).join('|').split(/\s+/).includes(`$REPO_ROOT/scripts/${script}`);
+        const label = script.replace(/^verify-/, '').replace(/\.mjs$/, '');
+        const gate = `${label}|node $REPO_ROOT/scripts/${script}`;
+        const selfTest = `${label}-self-test|node $REPO_ROOT/scripts/${script} --self-test`;
+        const homeRows = blocks[home].filter(runs);
+        const elsewhere = everywhere.filter(runs).length - homeRows.length;
+        if (elsewhere > 0) {
+            failures.push(`registry: ${elsewhere} row(s) run ${script} outside the ${home} block`);
+        }
+        for (const want of [gate, selfTest]) {
+            const count = homeRows.filter(row => row === want).length;
+            if (count !== 1) {
+                failures.push(`registry: "${want.split('|')[0]}" appears ${count} times in the ${home} block, want exactly once`);
+            }
+        }
+        for (const extra of homeRows.filter(row => row !== gate && row !== selfTest)) {
+            failures.push(`registry: "${extra.split('|')[0]}" is an extra row running ${script} in the ${home} block`);
+        }
+        const at = blocks[home].indexOf(gate);
+        if (at >= 0 && blocks[home].indexOf(selfTest) >= 0 && blocks[home][at + 1] !== selfTest) {
+            failures.push(`registry: "${label}-self-test" does not run right after "${label}" in the ${home} block (documented order: the gate, then its --self-test)`);
+        }
+    }
+    for (const { rel, text } of drivers) {
+        if (/verify-tab-strip(?:-live)?\.mjs/.test(text)) {
+            failures.push(`registry: ${rel} runs a tab-strip gate: a sibling driver (one driver, one registry: ${REGISTRY})`);
+        }
+    }
+    return failures;
+}
+
+/** Every tracked-looking shell script under scripts/ and every workflow, except the registry itself. */
+function driverFiles() {
+    const out = [];
+    const walk = (rel, keep) => {
+        if (!existsSync(join(REPO_ROOT, rel))) {
+            return;
+        }
+        for (const entry of readdirSync(join(REPO_ROOT, rel), { withFileTypes: true })) {
+            const next = `${rel}/${entry.name}`;
+            if (entry.isDirectory()) {
+                if (entry.name !== 'node_modules') {
+                    walk(next, keep);
+                }
+            } else if (keep(entry.name) && next !== REGISTRY) {
+                out.push({ rel: next, text: readFileSync(join(REPO_ROOT, next), 'utf8') });
+            }
+        }
+    };
+    walk('scripts', name => name.endsWith('.sh'));
+    walk('.github/workflows', name => /\.ya?ml$/.test(name));
+    return out;
 }
 
 /** The frame-side sources: tracked .ts/.tsx under the extensions' src trees (tests excluded), plus the child actor. */
@@ -474,7 +557,8 @@ function frameFiles() {
 function readSources() {
     const out = {};
     out[FRAME_KEY] = frameFiles();
-    for (const rel of new Set([STRIP, COPY, WEB_TAB, API, BRIDGE_GATE, CODICONS, ...out[FRAME_KEY]])) {
+    out[DRIVERS_KEY] = driverFiles();
+    for (const rel of new Set([STRIP, COPY, WEB_TAB, API, BRIDGE_GATE, CODICONS, REGISTRY, ...out[FRAME_KEY]])) {
         out[rel] = existsSync(join(REPO_ROOT, rel)) ? readFileSync(join(REPO_ROOT, rel), 'utf8') : '';
     }
     const archived = existsSync(join(REPO_ROOT, MILESTONES))
@@ -609,6 +693,30 @@ const PLANTS = [
         mutate: s => s.replace(/(protected isUpdated\(widget: Widget, active: boolean\): boolean \{\n)/, '$1        (widget as WebTabWidget).titleChanged = true;\n'),
         expect: STRIP,
     },
+    {
+        name: 'registry-row-duplicated',
+        file: REGISTRY,
+        mutate: s => s.replace(/\n( *"tab-strip-self-test\|[^\n]*)/, (m, row) => `\n${row}\n${row}`),
+        expect: '"tab-strip-self-test" appears 2 times in the quick block',
+    },
+    {
+        name: 'registry-live-row-in-quick',
+        file: REGISTRY,
+        mutate: s => s.replace(/\n( *)("tab-strip-self-test\|[^\n]*)/, (m, pad, row) => `\n${pad}${row}\n${pad}"tab-strip-live|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs"`),
+        expect: 'run verify-tab-strip-live.mjs outside the live block',
+    },
+    {
+        name: 'registry-self-test-first',
+        file: REGISTRY,
+        mutate: s => s.replace(/\n( *"tab-strip-live\|[^\n]*)\n( *"tab-strip-live-self-test\|[^\n]*)/, (m, gate, test) => `\n${test}\n${gate}`),
+        expect: 'does not run right after "tab-strip-live"',
+    },
+    {
+        name: 'sibling-driver',
+        file: DRIVERS_KEY,
+        mutate: drivers => [...drivers, { rel: 'scripts/verify-phase-34.sh', text: 'node "$REPO_ROOT/scripts/verify-tab-strip-live.mjs"\n' }],
+        expect: 'scripts/verify-phase-34.sh runs a tab-strip gate',
+    },
 ];
 
 function selfTest() {
@@ -654,7 +762,7 @@ function main() {
         failures.forEach(f => console.error(`  - ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- tab menu matches ROADMAP criterion 1, copy, occlusion, kinds, codicons, target, overflow, keys, delegation, pin store, preview occlusion/anchor/source, push field and no frame write hold`);
+    console.log(`${NAME}: PASS -- tab menu matches ROADMAP criterion 1, copy, occlusion, kinds, codicons, target, overflow, keys, delegation, pin store, preview occlusion/anchor/source, push field, no frame write and registry rows hold`);
     return 0;
 }
 

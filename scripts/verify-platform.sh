@@ -3850,8 +3850,10 @@ run_own_checks() {
     # single-tab rows, and the open-tabs bound on the pin store. 34-04 adds the
     # preview card's occlusion membership, below-tab anchor and capture-free
     # source, titleChanged riding webTabPush's existing state literal, and no
-    # frame-side write of it. Honestly --quick: text reads only. The live proof
-    # is tab-strip-live.
+    # frame-side write of it. 34-05 adds the registry proof: these two rows here
+    # and tab-strip-live's two in the live block, each once, gate before its
+    # self-test, and no sibling driver. Honestly --quick: text reads only. The
+    # live proof is tab-strip-live.
     "tab-strip|node $REPO_ROOT/scripts/verify-tab-strip.mjs"
     "tab-strip-self-test|node $REPO_ROOT/scripts/verify-tab-strip.mjs --self-test"
 
@@ -5124,7 +5126,9 @@ run_own_checks() {
       "page-tools-live|node $REPO_ROOT/scripts/verify-page-tools-live.mjs"
       "page-tools-live-self-test|node $REPO_ROOT/scripts/verify-page-tools-live.mjs --self-test"
       # NEW (Phase 34 plan 01): the tab strip on the built binary, every scenario
-      # in scripts/verify-tab-strip-live.mjs (34-01 lands menu; 34-02..05 add theirs).
+      # in scripts/verify-tab-strip-live.mjs (34-01 lands menu; 34-02..05 add theirs:
+      # twelve, ending with bookmark-all and modes). Needs the built binary and the
+      # last Theia app build; bookmark-all is NOT SCORED until Phase 33's bookmarkPage lands.
       "tab-strip-live|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs"
       "tab-strip-live-self-test|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs --self-test"
 
