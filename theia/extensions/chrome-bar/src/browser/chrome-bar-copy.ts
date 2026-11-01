@@ -330,6 +330,14 @@ export const CHROME_BAR_COPY = Object.freeze({
     manageExtensionRow: 'Manage Extension',
     extensionBridgeFailed: (subject: string) => `${subject} could not reach the extension. Restart ${subject} and try again.`,
     extensionPopupFailed: "This extension's popup could not be shown. Reload the tab and try again.",
+    pinToToolbarRow: 'Pin to Toolbar',
+    unpinFromToolbarRow: 'Unpin from Toolbar',
+    removeExtensionRow: 'Remove Extension',
+    removeExtensionHeading: (name: string) => `Remove ${name}?`,
+    removeExtensionBody: 'The extension and its data stay in the profile until the browser restarts.',
+    removeExtensionConfirm: 'Remove',
+    removeExtensionCancel: 'Cancel',
+    extensionRemoveRefused: (name: string) => `${name} can't be removed here. Choose Manage Extension to see it in Add-ons.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

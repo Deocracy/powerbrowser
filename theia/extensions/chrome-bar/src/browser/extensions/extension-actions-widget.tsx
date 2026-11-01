@@ -31,7 +31,10 @@ const BADGE_CAP = 4;
 
 function ExtensionIcon({ row }: { row: ExtensionActionRow }): React.ReactElement {
     // An icon is a data:image/ URL chrome read, shown only through <img src>: SVG text is never inlined.
-    return row.icon ? <img className='pb-ext-icon' src={row.icon} alt='' /> : <span className='pb-ext-icon codicon codicon-extensions' />;
+    if (row.icon) {
+        return <img className='pb-ext-icon' src={row.icon} alt='' />;
+    }
+    return <span className='pb-ext-icon codicon codicon-extensions' />;
 }
 
 function ExtensionBadge({ row }: { row: ExtensionActionRow }): React.ReactElement | null {
@@ -43,6 +46,10 @@ interface ExtensionsMenuProps {
     rows: ExtensionActionRow[];
     /** A failure sentence shown above the rows (copy only, never an id). */
     notice: string | undefined;
+    /** D-08: the extension the Remove confirm row asks about, while it is showing. */
+    confirm: ExtensionActionRow | undefined;
+    onRemove: (row: ExtensionActionRow) => void;
+    onCancelRemove: () => void;
     top: number;
     right: number;
     puzzle: HTMLButtonElement | null;
@@ -57,7 +64,7 @@ interface ExtensionsMenuProps {
  * pattern). Esc closes it with focus back on the puzzle button; focus leaving it closes it where focus went.
  */
 function ExtensionsMenu(props: ExtensionsMenuProps): React.ReactElement {
-    const { rows, notice, top, right, puzzle, onRun, onRowMenu, onInstall, onClose } = props;
+    const { rows, notice, confirm, top, right, puzzle, onRun, onRowMenu, onInstall, onClose } = props;
     const panelRef = React.useRef<HTMLDivElement>(null);
     React.useEffect(() => {
         panelRef.current?.focus();
@@ -84,7 +91,16 @@ function ExtensionsMenu(props: ExtensionsMenuProps): React.ReactElement {
     const pinned = rows.filter(r => r.pinned);
     const others = rows.filter(r => !r.pinned);
     let body: React.ReactNode;
-    if (rows.length === 0) {
+    if (confirm) {
+        body = <>
+            <div className='pb-ext-menu-heading'>{CHROME_BAR_COPY.removeExtensionHeading(confirm.title)}</div>
+            <div className='pb-ext-menu-body'>{CHROME_BAR_COPY.removeExtensionBody}</div>
+            <div className='pb-ext-confirm-footer'>
+                <button type='button' className='pb-ext-confirm-remove' onClick={() => props.onRemove(confirm)}>{CHROME_BAR_COPY.removeExtensionConfirm}</button>
+                <button type='button' className='pb-ext-confirm-cancel' onClick={props.onCancelRemove}>{CHROME_BAR_COPY.removeExtensionCancel}</button>
+            </div>
+        </>;
+    } else if (rows.length === 0) {
         body = <>
             <div className='pb-ext-menu-heading'>{CHROME_BAR_COPY.extensionsEmptyHeading}</div>
             <div className='pb-ext-menu-body'>{CHROME_BAR_COPY.extensionsEmptyBody(appSubject())}</div>
@@ -95,10 +111,10 @@ function ExtensionsMenu(props: ExtensionsMenuProps): React.ReactElement {
         body = row(rows[0]);
     } else {
         body = <>
-            {pinned.length > 0 && <div className='pb-ext-menu-heading'>{CHROME_BAR_COPY.extensionsPinnedHeading}</div>}
+            {pinned.length !== 0 && <div className='pb-ext-menu-heading'>{CHROME_BAR_COPY.extensionsPinnedHeading}</div>}
             {pinned.map(row)}
-            {pinned.length > 0 && others.length > 0 && <div className='pb-ext-menu-separator' />}
-            {others.length > 0 && <div className='pb-ext-menu-heading'>{CHROME_BAR_COPY.extensionsHeading}</div>}
+            {pinned.length !== 0 && others.length !== 0 && <div className='pb-ext-menu-separator' />}
+            {others.length !== 0 && <div className='pb-ext-menu-heading'>{CHROME_BAR_COPY.extensionsHeading}</div>}
             {others.map(row)}
         </>;
     }
@@ -151,6 +167,8 @@ export class ExtensionActionsWidget {
     protected menuOpen = false;
     /** The last bridge failure, shown at the top of the puzzle menu until the next request succeeds. */
     protected notice: string | undefined;
+    /** D-08: the extension whose Remove is waiting for the confirm row. */
+    protected confirm: ExtensionActionRow | undefined;
     protected puzzle: HTMLButtonElement | null = null;
     /** Stable, so React calls it only on mount and unmount. */
     protected puzzleRef = (el: HTMLButtonElement | null): void => {
@@ -207,6 +225,40 @@ export class ExtensionActionsWidget {
         }
     }
 
+    /** D-08: Pin to Toolbar and its undo; chrome persists the pinned set and pushes it back. */
+    protected async pin(row: ExtensionActionRow): Promise<void> {
+        try {
+            await this.store.extensionPin(row.extensionId, !row.pinned);
+            this.notice = undefined;
+        } catch (error) {
+            this.failed('pin', error);
+        }
+    }
+
+    /** D-08: the Remove row opens the confirm row in the puzzle menu; nothing is removed until Remove is chosen there. */
+    protected askRemove(row: ExtensionActionRow): void {
+        this.confirm = row;
+        this.menuOpen = true;
+        this.update();
+    }
+
+    /** D-08: the confirm row's Remove; chrome uninstalls and the extension's shutdown pushes the set without it. */
+    protected async remove(row: ExtensionActionRow): Promise<void> {
+        this.confirm = undefined;
+        try {
+            const where = await this.store.extensionRemove(row.extensionId);
+            this.notice = where === 'refused' ? CHROME_BAR_COPY.extensionRemoveRefused(row.title) : undefined;
+            this.menuOpen = where === 'refused';
+        } catch (error) {
+            this.failed('remove', error);
+            return;
+        }
+        this.update();
+        if (!this.menuOpen) {
+            this.puzzle?.focus();
+        }
+    }
+
     protected openRowMenu(row: ExtensionActionRow, anchor: HTMLElement): void {
         const rect = anchor.getBoundingClientRect();
         const leaf = (id: string, label: string, run: () => unknown): CommandMenu => ({
@@ -218,7 +270,9 @@ export class ExtensionActionsWidget {
             isVisible: () => true,
             isEmpty: () => false,
             children: [
+                leaf('0-pin', row.pinned ? CHROME_BAR_COPY.unpinFromToolbarRow : CHROME_BAR_COPY.pinToToolbarRow, () => this.pin(row)),
                 leaf('1-manage', CHROME_BAR_COPY.manageExtensionRow, () => openStockPage('addons')),
+                leaf('2-remove', CHROME_BAR_COPY.removeExtensionRow, () => this.askRemove(row)),
             ],
         };
         this.menus.render({ menuPath: EXTENSIONS_MENU_PATH, menu, anchor: { x: rect.left, y: rect.bottom }, context: anchor, includeAnchorArg: false });
@@ -226,6 +280,7 @@ export class ExtensionActionsWidget {
 
     protected closeMenu(restoreFocus: boolean): void {
         this.menuOpen = false;
+        this.confirm = undefined;
         this.update();
         if (restoreFocus) {
             this.puzzle?.focus();
@@ -234,6 +289,7 @@ export class ExtensionActionsWidget {
 
     protected onPuzzleClick = (): void => {
         this.menuOpen = !this.menuOpen;
+        this.confirm = undefined;
         this.update();
     };
 
@@ -266,6 +322,9 @@ export class ExtensionActionsWidget {
         return <ExtensionsMenu
             rows={this.rows}
             notice={this.notice}
+            confirm={this.confirm}
+            onRemove={row => void this.remove(row)}
+            onCancelRemove={() => this.closeMenu(true)}
             top={rect.bottom + 4}
             right={Math.max(0, window.innerWidth - rect.right)}
             puzzle={this.puzzle}

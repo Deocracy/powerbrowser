@@ -1068,6 +1068,17 @@ function selfTest() {
             expect: `the privileged kind bookmarkPage is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${COMMANDS}`,
         },
         {
+            // Phase 38 plan 02 (D-11): pin and remove stay with the extension widget's handlers.
+            name: 'planted extensionRemove called from chrome-bar-commands.ts',
+            sources: { ...clean, [COMMANDS]: clean[COMMANDS] + "\nvoid this.store.extensionRemove(id);\n" },
+            expect: `the privileged kind extensionRemove is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${COMMANDS}`,
+        },
+        {
+            name: 'planted extensionPin named in chrome-bar-keybindings.ts',
+            sources: { ...clean, [KEYBINDINGS]: clean[KEYBINDINGS] + "\nconst plantedRow = 'extensionPin';\n" },
+            expect: `the privileged kind extensionPin is named by a command or keybinding file, ${KEYBINDINGS}`,
+        },
+        {
             name: 'planted clearHistory named in chrome-bar-keybindings.ts',
             sources: { ...clean, [KEYBINDINGS]: clean[KEYBINDINGS] + "\nconst plantedRow = 'clearHistory';\n" },
             expect: `the privileged kind clearHistory is named by a command or keybinding file, ${KEYBINDINGS}`,

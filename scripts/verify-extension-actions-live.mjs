@@ -35,6 +35,13 @@
 //                   carries is drawn on the button. Plant buttons-stale freezes the
 //                   frame's extensionAction pushes after the first render and must go
 //                   red naming the stale badge.
+//   manage       -- (38-02, D-08) Pin to Toolbar on the action fixture's puzzle row adds
+//                   its button, and the pin survives a frontend reload; Manage Extension
+//                   opens the Add-ons Manager; Remove Extension and the confirm row's
+//                   Remove uninstall the popup fixture (its row leaves the menu, the
+//                   add-on is gone); with the action fixture removed too the menu shows
+//                   the empty heading and the install footer. Plant pin-lost clears the
+//                   pinned pref before the reload and must go red naming the lost pin.
 //   tabs-bridge  -- the action fixture's tabs.create opens /b adopted, selected and
 //                   next to /a; a background create of /c then tabs.update({active})
 //                   shows it; tabs.remove closes it; an extension-page create is
@@ -207,6 +214,53 @@ async function scenarioButtons({ app, plant }) {
   return verdict(true, `the bar showed buttons ${JSON.stringify(wantButtons)} and puzzle rows ${JSON.stringify(menuRows.map(m => m.name))} equal to the push; the action button's click ran in /a and its pushed badge 'ok' was drawn`, null);
 }
 
+// 38-02 (D-08): Pin to Toolbar persists, Manage opens the Add-ons Manager, Remove uninstalls, and the empty state renders.
+async function scenarioManage({ app, plant }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await setPinned(app, []);
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await clickInFrame(app, '.pb-ext-puzzle');
+  if (!(await pollUntil(() => puzzleRows(app), r => r.length === 2, 10000))) {
+    return verdict(false, null, `the puzzle menu does not list both fixtures before any pin: ${JSON.stringify(await puzzleRows(app))}`);
+  }
+  await puzzleRowMenu(app, 'action', 'Pin to Toolbar');
+  if (!(await pollUntil(() => barButtons(app), b => b.some(x => x.id === fixtureId('action')), 10000))) {
+    return verdict(false, null, `Pin to Toolbar did not add the action fixture's button: ${JSON.stringify(await barButtons(app))}`);
+  }
+  if (plant?.name === 'pin-lost') {
+    await setPinned(app, []);
+  }
+  await app.evaluateIn(app.chrome, "(() => { document.getElementById('powerbrowser-content').reload(); return true; })()");
+  const kept = await pollUntil(() => barButtons(app).catch(() => []), b => b.some(x => x.id === fixtureId('action')), 45000);
+  if (!kept) {
+    return verdict(false, null, 'the pin did not persist across the frontend reload: no action fixture button after it');
+  }
+  await clickInFrame(app, '.pb-ext-puzzle');
+  await puzzleRowMenu(app, 'action', 'Manage Extension');
+  if (!(await live.stockTabOn(app, 'about:addons', 30000).catch(() => null))) {
+    return verdict(false, null, 'Manage Extension did not open the Add-ons Manager in a stock tab');
+  }
+  for (const name of ['popup', 'action']) {
+    await clickInFrame(app, '.pb-ext-puzzle');
+    await puzzleRowMenu(app, name, 'Remove Extension');
+    await clickInFrame(app, '.pb-ext-menu .pb-ext-confirm-remove');
+    const gone = await pollUntil(() => addonGone(app, fixtureId(name)), g => g, 15000);
+    if (!gone) {
+      return verdict(false, null, `the confirm row's Remove did not uninstall the ${name} fixture`);
+    }
+  }
+  await clickInFrame(app, '.pb-ext-puzzle');
+  const empty = await pollUntil(() => app.evaluate(`JSON.stringify({ heading: document.querySelector('.pb-ext-menu .pb-ext-menu-heading')?.textContent ?? null,
+    footer: !!document.querySelector('.pb-ext-menu .pb-ext-menu-footer'), rows: document.querySelectorAll('.pb-ext-menu .pb-ext-row').length })`).then(JSON.parse),
+    e => e.rows === 0 && e.footer && e.heading === 'No extensions installed', 10000);
+  if (!empty) {
+    return verdict(false, null, 'the puzzle menu with no extension left does not show the empty heading and the install footer');
+  }
+  return verdict(true, 'Pin to Toolbar added the action button and it survived the frontend reload; Manage Extension opened about:addons; Remove with its confirm row uninstalled both fixtures; the empty menu showed its heading and install footer', null);
+}
+
 // tabs.create (active, next to its opener, adopted), tabs.create in the background then tabs.update({active}),
 // tabs.remove, a refused extension-page create, and no orphan overlay once the frontend reloads.
 async function scenarioTabsBridge({ app, plant, command }) {
@@ -262,6 +316,7 @@ async function scenarioTabsBridge({ app, plant, command }) {
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
+  manage: scenarioManage,
   'tabs-bridge': scenarioTabsBridge,
 };
 
@@ -272,6 +327,7 @@ const PLANTS_TABLE = {
   'popup-dom': { scenario: 'popup-action', expect: 'the occluded overlay' },
   'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
   'buttons-stale': { scenario: 'buttons', expect: 'the button shows a stale badge' },
+  'pin-lost': { scenario: 'manage', expect: 'the pin did not persist' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -458,6 +514,29 @@ async function popupState(app) {
     inTheiaDom: !!document.querySelector('iframe, .pb-chrome-bar-dropdown:not(.pb-ext-menu)'),
     pill: document.activeElement && document.activeElement.classList.contains('pb-chrome-bar-input') })`));
   return { panel: chrome.panel, url: chrome.url, pressed: frame.pressed, inTheiaDom: frame.inTheiaDom, pillFocused: chrome.frameFocused && frame.pill };
+}
+
+// Opens a puzzle row's gear menu and activates the row labelled `label` the way a pointer does (move, then mouse-up).
+async function puzzleRowMenu(app, name, label) {
+  await clickInFrame(app, `.pb-ext-menu .pb-ext-row[data-extension-id=${JSON.stringify(fixtureId(name))}] .pb-ext-row-menu`);
+  const done = await pollUntil(() => app.evaluate(`(() => {
+    const item = [...document.querySelectorAll('.lm-Menu .lm-Menu-item')].find(i => i.querySelector('.lm-Menu-itemLabel')?.textContent.trim() === ${JSON.stringify(label)});
+    if (!item) return false;
+    const r = item.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    item.dispatchEvent(new MouseEvent('mousemove', at));
+    item.dispatchEvent(new MouseEvent('mouseup', { ...at, button: 0 }));
+    return true;
+  })()`), hit => hit === true, 5000);
+  if (!done) throw new Error(`BROKEN INSTRUMENT: no ${label} row in the ${name} fixture's menu`);
+}
+
+// Whether the add-on is no longer installed, read in chrome.
+async function addonGone(app, id) {
+  return (await app.evaluateIn(app.chrome, `(async () => {
+    const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+    return !(await AddonManager.getAddonByID(${JSON.stringify(id)}));
+  })()`)) === true;
 }
 
 // The open puzzle menu's extension rows: id and shown name.

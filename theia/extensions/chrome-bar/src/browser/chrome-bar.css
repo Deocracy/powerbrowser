@@ -1997,3 +1997,28 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     outline: 2px solid var(--color-primary, #00a6f5);
     outline-offset: -2px;
 }
+
+/* D-08: the Remove confirm row's choices; the destructive token on Remove only. */
+.pb-ext-confirm-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 4px 12px 8px;
+}
+
+.pb-ext-confirm-remove,
+.pb-ext-confirm-cancel {
+    height: 32px;
+    padding: 0 12px;
+    font-size: 14px;
+    color: var(--color-text, #fbfbfe);
+    background: transparent;
+    border: 1px solid var(--color-border, #3f3e4a);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.pb-ext-confirm-remove {
+    color: var(--color-danger, #ff848b);
+    border-color: var(--color-danger, #ff848b);
+}
