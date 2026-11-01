@@ -53,6 +53,10 @@
 // The fork-server access log is not demanded (Pages and R2 produce none). An absent or unknown served
 // value fails naming the key; nothing defaults.
 //
+// UPD-14 (Phase 44): buildUpdateXml carries detailsURL (the release-notes link). The hop gate
+// regenerates with hop.detailsURL, falling back to [urls] release_notes; a descriptor with no
+// detailsURL attribute stays byte-identical to its pre-UPD-14 emission.
+//
 // Honestly --quick (self-test only): node:crypto plus text files in mkdtemp, and a fake gh, signmar and
 // certutil that drive the real attestation, signature and channel wiring. No build, no browser, no display, no network.
 //
@@ -90,7 +94,16 @@ const RELEASE_WORKFLOW_REL = '.github/workflows/release.yml';
 const PRIMARY_DER_REL = 'powerbrowser/packaging/mar/mar-primary.der';
 const MOZCONFIG_REL = 'powerbrowser/packaging/mozconfig.release';
 
-const args = process.argv.slice(2);
+// Argument handling runs on direct invocation only: build-update-xml.mjs imports buildUpdateXml
+// and carries its own flags, which must not reach this gate's unknown-argument refusal.
+const DIRECT_RUN = (() => {
+    try {
+        return process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+    } catch {
+        return false;
+    }
+})();
+const args = DIRECT_RUN ? process.argv.slice(2) : [];
 const SELF_TEST = args.includes('--self-test');
 for (const a of args) {
     if (a !== '--self-test') {
@@ -139,11 +152,13 @@ function xmlEscape(s) {
  * random boundary. PKG-02/idempotency (regenerating from identical MAR
  * bytes is byte-identical) is asserted by emitting twice in runChecks.
  */
-export function buildUpdateXml({ marBytes, marUrl, appVersion, platformVersion, buildID, displayVersion, updateType = 'minor' }) {
+export function buildUpdateXml({ marBytes, marUrl, appVersion, platformVersion, buildID, displayVersion, detailsURL, updateType = 'minor' }) {
     const { hashValue, size } = marDigest(marBytes);
+    // detailsURL is the attribute the updater reads for the release-notes link (UpdateService.sys.mjs:2384). Omitted when not given.
+    const detailsAttr = detailsURL == null ? '' : ` detailsURL="${xmlEscape(detailsURL)}"`;
     return `<?xml version="1.0" encoding="UTF-8"?>\n`
         + `<updates>\n`
-        + `  <update type="${xmlEscape(updateType)}" displayVersion="${xmlEscape(displayVersion)}" appVersion="${xmlEscape(appVersion)}" platformVersion="${xmlEscape(platformVersion)}" buildID="${xmlEscape(buildID)}">\n`
+        + `  <update type="${xmlEscape(updateType)}" displayVersion="${xmlEscape(displayVersion)}" appVersion="${xmlEscape(appVersion)}" platformVersion="${xmlEscape(platformVersion)}" buildID="${xmlEscape(buildID)}"${detailsAttr}>\n`
         + `    <patch type="complete" URL="${xmlEscape(marUrl)}" hashFunction="sha512" hashValue="${hashValue}" size="${size}"/>\n`
         + `  </update>\n`
         + `</updates>\n`;
@@ -159,6 +174,7 @@ export function parseUpdateXml(text) {
     const buildID = attr(update, 'buildID');
     const platformVersion = attr(update, 'platformVersion');
     const displayVersion = attr(update, 'displayVersion');
+    const detailsURL = attr(update, 'detailsURL');
     const url = attr(patch, 'URL');
     const hashFunction = attr(patch, 'hashFunction');
     const hashValue = attr(patch, 'hashValue');
@@ -170,6 +186,7 @@ export function parseUpdateXml(text) {
         buildID: unescape(buildID),
         platformVersion: platformVersion ? unescape(platformVersion) : platformVersion,
         displayVersion: displayVersion ? unescape(displayVersion) : displayVersion,
+        detailsURL: detailsURL === undefined ? null : unescape(detailsURL),
         url: unescape(url),
         hashFunction,
         hashValue,
@@ -245,6 +262,24 @@ function readManifestUpdateUrl(root) {
     const url = resolved.config.urls?.update;
     if (typeof url !== 'string' || url.trim() === '') {
         return { error: `${URL_KEY} is not set, so a self-updating client is impossible. Next step: point it at the fork update descriptor` };
+    }
+    return { url };
+}
+
+/** [urls] release_notes, the descriptor's detailsURL when hop.json carries none (UPD-14). Returns { url } or { error }. */
+function readReleaseNotesUrl(root) {
+    let resolved;
+    try {
+        resolved = resolveConfig(join(root, MANIFEST_REL));
+    } catch (e) {
+        return { error: `${MANIFEST_REL} could not be read (${e.message}). Next step: run node scripts/generate.mjs -- it reports the faulty line` };
+    }
+    if (resolved.failures.length > 0 || resolved.config === undefined) {
+        return { error: `${MANIFEST_REL} does not resolve, so no release notes URL is configured. Next step: run node scripts/generate.mjs -- it reports the faulty key` };
+    }
+    const url = resolved.config.urls?.release_notes;
+    if (typeof url !== 'string' || url.trim() === '') {
+        return { error: `${MANIFEST_REL} [urls] release_notes is not set, so the descriptor has no detailsURL. Next step: set it to the Releases page of the repository` };
     }
     return { url };
 }
@@ -363,6 +398,7 @@ function runReleaseChecks(root, evDir, hop, deps, r) {
     const gen = buildUpdateXml({
         marBytes,
         marUrl: typeof marUrl === 'string' ? marUrl : '',
+        detailsURL: hop.detailsURL ?? readReleaseNotesUrl(root).url,
         appVersion: hop.nplus1.version,
         platformVersion: hop.nplus1.platformVersion ?? hop.nplus1.version,
         buildID: hop.nplus1.buildID,
@@ -479,6 +515,9 @@ export function realDeps(root, { gh = process.env.GH_BIN ?? 'gh', signer = proce
 function runChecks(root, deps = realDeps(root)) {
     const r = makeReporter();
     const evDir = root === REPO_ROOT ? EVIDENCE_DIR : join(root, '.mozbuild', 'mar-hop');
+
+    const notes = readReleaseNotesUrl(root);
+    if (notes.error) r.fail(notes.error);
 
     // Static half: the manifest must carry a shippable fork URL. An
     // http URL would ship MARs over cleartext (T-08-04a tampering vector);
@@ -614,6 +653,7 @@ function runChecks(root, deps = realDeps(root)) {
     const genArgs = {
         marBytes,
         marUrl: hop.servedMarUrl ?? hop.servedUrl,
+        detailsURL: hop.detailsURL ?? notes.url,
         appVersion: hop.nplus1.version,
         platformVersion: hop.nplus1.platformVersion ?? hop.nplus1.version,
         buildID: hop.nplus1.buildID,
@@ -681,6 +721,7 @@ function runChecks(root, deps = realDeps(root)) {
 // required to go red naming the file and the values. Everything lives in
 // mkdtemp -- no network, no builds, no browser.
 function selfTest() {
+    const FIXTURE_DETAILS = readReleaseNotesUrl(REPO_ROOT).url;
     const dir = mkdtempSync(join(tmpdir(), 'verify-mar-update-hop-selftest-'));
     let ok = true;
     try {
@@ -695,7 +736,7 @@ function selfTest() {
             const marBytes = randomBytes(65536);
             writeFileSync(join(evDir, 'nplus1.mar'), staleMar ? Buffer.concat([marBytes, Buffer.from('x')]) : marBytes);
             const servedUrl = `http://${servedHost}:8000/update.xml`;
-            const xml = buildUpdateXml({
+            const xml = buildUpdateXml({ detailsURL: FIXTURE_DETAILS,
                 marBytes,
                 marUrl: `http://${servedHost}:8000/nplus1.mar`,
                 appVersion: version,
@@ -778,7 +819,7 @@ function selfTest() {
                 hop.postHop = { version: hop.n.version, buildID: hop.n.buildID };
                 writeFileSync(hopPath, JSON.stringify(hop));
                 const marBytes = readFileSync(join(evDir, 'nplus1.mar'));
-                writeFileSync(join(evDir, 'update.xml'), buildUpdateXml({
+                writeFileSync(join(evDir, 'update.xml'), buildUpdateXml({ detailsURL: FIXTURE_DETAILS,
                     marBytes,
                     marUrl: 'http://updates.powerbrowser.org:8000/nplus1.mar',
                     appVersion: hop.n.version,
@@ -979,7 +1020,7 @@ function selfTest() {
             writeFileSync(join(dir, 'scripts', 'verify-mar-signature.mjs'), "if (process.env.FAKE_NODE_SIG_BAD === '1') { console.error('signature does not verify'); process.exit(1); }\n");
             const marBytes = randomBytes(65536);
             writeFileSync(join(evDir, 'nplus1.mar'), marBytes);
-            writeFileSync(join(evDir, 'update.xml'), buildUpdateXml({
+            writeFileSync(join(evDir, 'update.xml'), buildUpdateXml({ detailsURL: FIXTURE_DETAILS,
                 marBytes,
                 marUrl: RELEASE_MAR_URL,
                 appVersion: '153.1.1',
