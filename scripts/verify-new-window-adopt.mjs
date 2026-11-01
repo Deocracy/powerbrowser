@@ -46,6 +46,12 @@
  *       names pcKey or a pc- literal, the ack attaches under tabId with a null
  *       key, no adopt-section log line carries pcKey, a URL or a title, and no
  *       frontend source (tab-uris, chrome-bar) puts a pc- value in copy.
+ *   (g) ack id (36-REVIEW CR-01/WR-08): every `tabId:` the frontend's
+ *       adopt() sends (the webTabAdopt ack and its webTabClose) is
+ *       `widget.<F>`, where F is the field WebTabWidget.init registers with
+ *       WebTabChannel.register; and F's value -- derived from init's
+ *       assignment and createWidget's id template -- passes the regex
+ *       derived from chrome's webTabIdIsValid. Neither end is hand-kept.
  *
  * Honestly --quick: text reads plus one git grep over the pinned upstream. No
  * build, no browser, no display, no network.
@@ -71,6 +77,7 @@ const CREATES = /createXULElement|appendChild|webTabOpen\(|createPendingOverlay\
 const REPLY_WORDS = ['opened', 'unknown-tab', 'validation'];
 const ADOPT_PUSH_KEYS = ['background', 'openerTabId', 'pcKey', 'url'];
 const DROP_PUSH_KEYS = ['tabId'];
+const WEB_TAB_TS = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 
 function stripComments(text) {
     return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
@@ -315,6 +322,41 @@ function checkAdopt(sources, callSites) {
             }
         }
     }
+
+    // (g) ack id: both ends derived, then compared.
+    const wtText = sources[WEB_TAB_TS] ? stripComments(sources[WEB_TAB_TS]) : null;
+    const shape = /function webTabIdIsValid\(tabId\) \{\n[^\n]*\/(\^[^\n]*?\$)\/\.test\(tabId\)/.exec(api);
+    const adoptFn = wtText && /\n {4}async adopt\([\s\S]*?\n {4}\}\n/.exec(wtText);
+    const init = wtText && /\n {4}init\(options: WebTabOptions\): void \{[\s\S]*?\n {4}\}\n/.exec(wtText);
+    const registered = wtText && /this\.channel\.register\(this\.(\w+), this\)/.exec(wtText);
+    const mint = wtText && /\bid: `(wt-[^`]*)`/.exec(wtText);
+    if (!shape || !adoptFn || !init || !registered || !mint) {
+        fail('ack-id', `broken instrument: could not derive ${!shape ? "chrome's webTabIdIsValid pattern" : !adoptFn ? 'WebTabOpenHandler.adopt' : !init ? 'WebTabWidget.init' : !registered ? 'the WebTabChannel.register field' : "createWidget's id template"}`);
+    } else {
+        const validId = new RegExp(shape[1]);
+        // A concrete minted id: the session is a base36 slice, the counter a positive integer.
+        const minted = mint[1].replace(/\$\{WEB_TAB_SESSION\}/g, 'a1b2c3').replace(/\$\{\+\+\w+\}/g, '1');
+        const consts = Object.fromEntries([...wtText.matchAll(/export const (\w+) = '([^']*)';/g)].map(m => [m[1], m[2]]));
+        const valueOf = rhs => {
+            if (rhs === 'options.id') return minted;
+            const tpl = /^`([^`]*)`$/.exec(rhs);
+            if (!tpl) return null;
+            const out = tpl[1].replace(/\$\{options\.id\}/g, minted).replace(/\$\{(\w+)\}/g, (all, name) => consts[name] ?? all);
+            return out.includes('${') ? null : out;
+        };
+        const assigned = Object.fromEntries([...init[0].matchAll(/\bthis\.(\w+) = ([^;\n]+);/g)].map(m => [m[1], m[2].trim()]));
+        const sends = [...adoptFn[0].matchAll(/\btabId: ([\w$.]+)/g)].map(m => m[1]);
+        if (!/kind: 'webTabAdopt', tabId: /.test(adoptFn[0])) fail('ack-id', 'adopt() sends no webTabAdopt ack with a tabId');
+        for (const expr of new Set(sends)) {
+            if (expr !== `widget.${registered[1]}`) {
+                fail('ack-id', `adopt() sends tabId: ${expr}, not widget.${registered[1]} (the field WebTabChannel.register keys on)`);
+            }
+            const field = /^widget\.(\w+)$/.exec(expr);
+            const value = field && assigned[field[1]] ? valueOf(assigned[field[1]]) : null;
+            if (value === null) fail('ack-id', `broken instrument: cannot derive the value adopt() sends as tabId: ${expr}`);
+            else if (!validId.test(value)) fail('ack-id', `adopt() sends tabId: ${expr}, whose value (e.g. "${value}") fails chrome's webTabIdIsValid /${shape[1]}/ -- chrome refuses every adopt`);
+        }
+    }
     return failures;
 }
 
@@ -348,6 +390,8 @@ function selfTest() {
         { name: 'adoptTab push drops a payload key', sources: { [API]: plant(clean[API], '{ kind: "adoptTab", pcKey, openerTabId, url: spec, background }', '{ kind: "adoptTab", pcKey, url: spec, background }') }, expect: 'the adoptTab push carries' },
         { name: 'pc- key written to the store', sources: { [API]: plant(clean[API], 'webTabAttach(theiaBrowser, actorRef, tabId, pending.browser, null,', 'webTabAttach(theiaBrowser, actorRef, pcKey, pending.browser, null,') }, expect: 'a store write names the pending key' },
         { name: 'pc- key in frontend copy', sources: { [WT]: clean[WT] === undefined ? null : `${clean[WT]}\nexport const plantedCopy = (w: { title: { label: string } }, pcKey: string) => { w.title.label = pcKey; };\n` }, expect: 'puts a pending key in copy' },
+        { name: 'the ack sends the widget id', sources: { [WT]: plant(clean[WT], "kind: 'webTabAdopt', tabId: widget.tabId", "kind: 'webTabAdopt', tabId: widget.id") }, expect: "tabId: widget.id, whose value (e.g. \"powerbrowser.web-tab:wt-a1b2c3-1\") fails chrome's webTabIdIsValid" },
+        { name: 'the failure-branch close sends the widget id', sources: { [WT]: plant(clean[WT], "kind: 'webTabClose', tabId: widget.tabId", "kind: 'webTabClose', tabId: widget.id") }, expect: 'sends tabId: widget.id, not widget.tabId' },
         { name: 'adopt log line carries the URL', sources: { [API]: plant(clean[API], '`[web-tab] adoptTab fallback failed: ${err && err.message ? err.message : err}`', '`[web-tab] adoptTab fallback failed for ${url}`') }, expect: 'log line carries a key, URL or title' },
     ];
     let failed = 0;
@@ -385,7 +429,7 @@ function main() {
         return 1;
     }
     const idl = idlMembers(sources[IDL]);
-    console.log(`${NAME}: PASS -- the receiver implements exactly the nsIBrowserDOMWindow set {${[...idl.keys()].sort().join(', ')}} (call sites included), Theia and print openers fall through to null, the InFrame path never loads, openLinkIn loads, and no pending key reaches a store row, a log or copy`);
+    console.log(`${NAME}: PASS -- the receiver implements exactly the nsIBrowserDOMWindow set {${[...idl.keys()].sort().join(', ')}} (call sites included), Theia and print openers fall through to null, the InFrame path never loads, openLinkIn loads, the ack sends the registered tab id that webTabIdIsValid admits, and no pending key reaches a store row, a log or copy`);
     return 0;
 }
 

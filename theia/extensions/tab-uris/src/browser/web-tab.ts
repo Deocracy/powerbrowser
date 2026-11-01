@@ -1336,10 +1336,11 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
             return;
         }
         const widget = await this.createWidget(url);
-        const reply = await this.channel.request({ kind: 'webTabAdopt', tabId: widget.id, pcKey });
+        // tabId, never widget.id: chrome's webTabIdIsValid refuses the factory-prefixed widget id.
+        const reply = await this.channel.request({ kind: 'webTabAdopt', tabId: widget.tabId, pcKey });
         if (reply.ok !== true) {
             // A late ack chrome did act on must not leave a hidden overlay; chrome answers unknown-tab otherwise.
-            this.channel.send({ kind: 'webTabClose', tabId: widget.id });
+            this.channel.send({ kind: 'webTabClose', tabId: widget.tabId });
             widget.dispose();
             return;
         }
