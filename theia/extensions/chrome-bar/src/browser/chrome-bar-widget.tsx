@@ -1464,6 +1464,8 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
 
     async onStart(): Promise<void> {
         this.tabStrip.bookmarkTabs = this.barWidget.tabBookmarker();
+        // TAB-08 (34-02): text dropped on the strip goes through the pill's drop path, never a new tab.
+        this.tabStrip.searchDropped = payload => this.addressBar.openDropped(payload);
         this.armDragRelease();
         window.addEventListener('resize', () => this.scheduleDragRegions());
         new MutationObserver(() => this.scheduleDragRegions())

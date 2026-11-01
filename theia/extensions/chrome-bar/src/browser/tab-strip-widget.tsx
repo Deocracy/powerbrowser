@@ -15,9 +15,9 @@ import {
     CHROME_BAR_TAB_CLOSE_COMMAND_ID, CHROME_BAR_TAB_CLOSE_DUPLICATES_COMMAND_ID, CHROME_BAR_TAB_CLOSE_LEFT_COMMAND_ID,
     CHROME_BAR_TAB_CLOSE_OTHERS_COMMAND_ID, CHROME_BAR_TAB_CLOSE_RIGHT_COMMAND_ID, CHROME_BAR_TAB_DUPLICATE_COMMAND_ID,
     CHROME_BAR_TAB_MOVE_END_COMMAND_ID, CHROME_BAR_TAB_MOVE_START_COMMAND_ID, CHROME_BAR_TAB_MUTE_COMMAND_ID,
-    CHROME_BAR_TAB_RELOAD_COMMAND_ID, setTabActions,
+    CHROME_BAR_NEW_TAB_COMMAND_ID, CHROME_BAR_TAB_RELOAD_COMMAND_ID, setTabActions,
 } from './chrome-bar-commands';
-import { safeIcon } from './address-bar/address-bar-rows';
+import { LINK_DRAG_TYPES, droppedTextOf, safeIcon } from './address-bar/address-bar-rows';
 
 /** Marks a home-pane tab that the strip lists, so the pane's own bar does not. */
 const STRIP_ONLY_CLASS = 'pb-strip-only';
@@ -52,6 +52,15 @@ function settled(reply: WebTabReply): void {
 }
 
 const isHttp = (url: string): boolean => /^https?:\/\//i.test(url);
+
+/** TAB-08: drag types the strip takes from outside: a link, a file, or plain text. */
+const DROP_TYPES = [...LINK_DRAG_TYPES, 'Files', 'text/plain'];
+
+/**
+ * TAB-08: plain text that is one address with a scheme (javascript:, file:, mailto: ...) is a link, refused unless
+ * http(s); a host and port (localhost:3000) is not a scheme and goes to the pill like other text.
+ */
+const SCHEME_ADDRESS = /^[a-z][a-z0-9+.-]*:(?!\d)\S*$/i;
 
 /** PAN-04 (A3): a tab of a group in its undo window, hidden in every tab bar. */
 const GROUP_CLOSING_CLASS = 'pb-group-closing';
@@ -150,6 +159,9 @@ export class TabStripWidget extends ReactWidget {
      * chrome-bar-widget.tsx; undefined while that store method is absent, which renders both Bookmark rows disabled.
      */
     bookmarkTabs: ((tabs: WebTabWidget[]) => Promise<void>) | undefined;
+
+    /** TAB-08 (34-02): set at startup to the pill's drop path (AddressBar.openDropped); non-URL text dropped here searches there. */
+    searchDropped: ((text: string) => Promise<void>) | undefined;
 
     /** A failed tab action's sentence, shown at the strip's end until the next tab menu opens. */
     protected notice: string | undefined;
@@ -718,6 +730,86 @@ export class TabStripWidget extends ReactWidget {
     }
 
     /**
+     * TAB-03 (D-06): middle-click closes the tab through its close row (the shell's close path, with the close
+     * failure sentence). Consumed: an unconsumed middle click runs Gecko's middle-click paste on the mouseup
+     * (upstream EventStateManager::PostHandleMouseUp, dom/events/EventStateManager.cpp:6375-6407). The pill does the
+     * same on its own middle press.
+     */
+    protected onTabAuxClick(widget: Widget, event: React.MouseEvent): void {
+        if (event.button !== 1) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const close = this.tabMenuRows(widget).find(row => row.id === 'close');
+        if (close?.enabled) {
+            void this.runRow(close);
+        }
+    }
+
+    /** TAB-03 (D-06): a double-click on the strip's empty space opens a new tab; the New Tab command focuses the pill. */
+    protected onStripDoubleClick(event: React.MouseEvent): void {
+        if (event.target instanceof Element && event.target.closest('.pb-tab, .pb-tab-strip-notice')) {
+            return;
+        }
+        void this.commands.executeCommand(CHROME_BAR_NEW_TAB_COMMAND_ID);
+    }
+
+    /** TAB-08: a link, file or text over the strip is taken; stopping here keeps Theia's document listener from refusing it. */
+    protected onStripDragOver(event: React.DragEvent<HTMLElement>): void {
+        if (!Array.from(event.dataTransfer.types).some(type => DROP_TYPES.includes(type))) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = 'copy';
+    }
+
+    /**
+     * TAB-08 (D-06): an http(s) link dropped on the strip opens as a background tab at the drop position (the
+     * midpoint rule). Other text searches through the pill, never a new tab. A file, or any other scheme
+     * (javascript: included), is refused with the strip's failure sentence before anything loads.
+     */
+    protected async onStripDrop(event: React.DragEvent<HTMLElement>): Promise<void> {
+        const types = Array.from(event.dataTransfer.types);
+        if (!types.some(type => DROP_TYPES.includes(type))) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        this.notice = undefined;
+        const payload = droppedTextOf(event.dataTransfer);
+        const before = this.dropBefore(event.clientX);
+        const link = types.includes('Files') || LINK_DRAG_TYPES.some(type => types.includes(type)) || SCHEME_ADDRESS.test(payload);
+        if (isHttp(payload)) {
+            await this.openDroppedLink(payload, before);
+        } else if (!link && payload && this.searchDropped) {
+            await this.searchDropped(payload);
+        } else if (payload || link) {
+            this.refuseDrop();
+        }
+    }
+
+    /** TAB-08: the dropped http(s) link as a background tab, then moved to land before `before` (or last). */
+    protected async openDroppedLink(url: string, before: Widget | undefined): Promise<void> {
+        const tabs = this.shownTabs();
+        const ref = before ?? tabs[tabs.length - 1];
+        try {
+            const widget = ref ? await this.opener.openInBackground(url, ref) : await this.opener.openUrl(url);
+            await this.groups.joinActiveGroup(widget);
+            this.reorderTo(widget, before);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening a dropped link failed:', error instanceof Error ? error.name : typeof error);
+            this.refuseDrop();
+        }
+    }
+
+    protected refuseDrop(): void {
+        this.notice = CHROME_BAR_COPY.dropTabFailed(appSubject());
+        this.update();
+    }
+
+    /**
      * Press-and-move on a tab, up to the moment it becomes a drag.
      *
      * The gesture is pointer events rather than HTML5 drag-and-drop for the
@@ -975,7 +1067,15 @@ export class TabStripWidget extends ReactWidget {
             }
             widget.title.className = kept.join(' ');
         }
-        return <div className='pb-tab-strip-row' role='tablist'>
+        return <div
+            className='pb-tab-strip-row'
+            role='tablist'
+            title={CHROME_BAR_COPY.emptyStripTooltip}
+            onDoubleClick={event => this.onStripDoubleClick(event)}
+            onDragEnter={event => this.onStripDragOver(event)}
+            onDragOver={event => this.onStripDragOver(event)}
+            onDrop={event => { void this.onStripDrop(event); }}
+        >
             {tabs.map((widget, index) => this.renderTab(widget, widget === current, index === tabs.length - 1))}
             {stack.length > 0 && <div
                 role='tab'
@@ -1033,6 +1133,8 @@ export class TabStripWidget extends ReactWidget {
             className={'pb-tab' + (active ? ' is-active' : '') + drag + drop}
             onClick={() => this.activateTab(widget)}
             onPointerDown={event => this.beginDrag(widget, event)}
+            onMouseDown={event => { if (event.button === 1) { event.preventDefault(); } }}
+            onAuxClick={event => this.onTabAuxClick(widget, event)}
             onContextMenu={event => this.openTabMenu(widget, event)}
         >
             {widget instanceof WebTabWidget && this.renderTabIcon(widget)}

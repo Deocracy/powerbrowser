@@ -727,6 +727,8 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} couldn't duplicate that tab. Try again.",
   "${name} couldn't bookmark that tab. Try again.",
   "${name} couldn't close that tab. Try again.",
+  "Double-click to open a new tab",
+  "${name} can't open that link in a tab. Drop a link to a web page instead.",
 ]);
 
 /**

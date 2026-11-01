@@ -197,6 +197,9 @@ export const CHROME_BAR_COPY = Object.freeze({
     duplicateTabFailed: (subject: string) => `${subject} couldn't duplicate that tab. Try again.`,
     bookmarkTabFailed: (subject: string) => `${subject} couldn't bookmark that tab. Try again.`,
     closeTabFailed: (subject: string) => `${subject} couldn't close that tab. Try again.`,
+    // Phase 34 plan 02 (TAB-03, TAB-08): the empty strip's tooltip, and the sentence for a dropped link the strip refuses.
+    emptyStripTooltip: 'Double-click to open a new tab',
+    dropTabFailed: (subject: string) => `${subject} can't open that link in a tab. Drop a link to a web page instead.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

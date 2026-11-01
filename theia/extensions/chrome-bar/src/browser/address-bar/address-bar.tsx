@@ -28,7 +28,9 @@ import { ChromeStoreClient, ResolvedAddress, SearchEngineList } from '@powerbrow
 import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, currentWebTab, focusAddressPill, setAddressFocus } from '../chrome-bar-commands';
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
-import { PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
+import {
+    LINK_DRAG_TYPES, PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, droppedTextOf, iconFor, isCanonizable, nextHighlight, safeIcon,
+} from './address-bar-rows';
 import { LOCAL_MODES, MODE_SENDS, ModeId, cycleOrder, defaultModeFor, engineModeId, engineNameOf, modeKindOf, nextMode, tokenise } from './address-bar-mode-table';
 import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes';
 // Type only: command-centre.ts imports the shortcut table, which imports this file.
@@ -105,15 +107,6 @@ interface ModeMenuItem {
     icon: React.ReactNode;
     mode?: ModeId;
     engine?: string;
-}
-
-/** NAV-06: drag types that are links, as distinct from plain text. */
-const LINK_DRAG_TYPES = ['text/uri-list', 'text/x-moz-url'];
-
-/** The dropped payload: first non-comment uri-list line, else x-moz-url's first line, else plain text, trimmed. */
-function droppedTextOf(data: DataTransfer): string {
-    const uriList = data.getData('text/uri-list').split(/\r?\n/).find(line => line.trim() && !line.startsWith('#'));
-    return (uriList || data.getData('text/x-moz-url').split(/\r?\n/)[0] || data.getData('text/plain')).trim();
 }
 
 /** The dropped http(s) URL, else undefined. */
@@ -908,8 +901,8 @@ export class AddressBar {
         }
     };
 
-    /** BAR-13: the dropped payload's load; a failure's retry drops the same payload again. */
-    protected async openDropped(payload: string): Promise<void> {
+    /** BAR-13: the dropped payload's load; a failure's retry drops the same payload again. Also TAB-08's text drop on the strip. */
+    async openDropped(payload: string): Promise<void> {
         let resolved: ResolvedAddress | undefined;
         try {
             // Over 2048 characters chrome refuses it; it is never cut short into another address.

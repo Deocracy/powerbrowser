@@ -18,6 +18,29 @@
 //     the strip narrowed until it overflows, resting the drag in the right 8px
 //     edge zone scrolls the row.
 //
+//   middle (TAB-03, 34-02): N2. Two seeded contenteditable detectors record
+//     input/paste: one in the Theia frame (the document a strip click lands
+//     in, focused before the click) and one in the visible page's realm. A
+//     sentinel goes on the selection clipboard. Positive controls first, same
+//     session, same recorders: a trusted middle-click into each editable must
+//     paste (else NOT SCORED, never a pass), and the push recorder must hold
+//     /b's state push. Then a trusted middle-click on /a's strip tab closes /a
+//     (gone from the strip, the TabBar and the shell) while both detectors
+//     stay silent and /b stays current.
+//
+//   double (TAB-03): a trusted double-click on the strip's empty space opens
+//     a new tab on the empty page and focuses the pill; the row carries the
+//     empty-strip tooltip. BiDi input is dispatched inside the frame, so it
+//     cannot see chrome's window-drag handles laid over that space
+//     (powerbrowser.js custom title bar); a real double-click there is the
+//     desktop's title-bar action, which the end-of-milestone pass checks.
+//
+//   drop (TAB-08): an http(s) link dropped on /a's right half opens /d as a
+//     background tab right after /a; text drops reach the pill's drop path
+//     (AddressBar.openDropped) and open no tab; a javascript: link, and the
+//     same as plain text, are refused with the strip's failure sentence,
+//     nothing loads and the current page keeps its title.
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
@@ -30,12 +53,15 @@
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
 import { newProfile, runCheck, withShell } from './lib/ng-a-live.mjs';
-import { probe, withProbeShell } from './lib/pb-live-probe.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { REPO_ROOT } from './lib/ng-a-live.mjs';
+import { appNameExpr, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'tab-strip-live';
 
@@ -279,10 +305,210 @@ async function reorder({ app, pages, expect, plant }) {
     await step(app, 'reorder: restore the strip width', "strip.node.style.maxWidth = ''; return true;");
 }
 
+/** A copy row's text, derived from chrome-bar-copy.ts at check time; a function row's `${subject}` becomes `subject`. */
+function copyRow(key, subject = '') {
+    const source = readFileSync(join(REPO_ROOT, 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts'), 'utf8');
+    const match = new RegExp(`\\b${key}: (?:'([^']+)'|\\(subject: string\\) => \`([^\`]+)\`)`).exec(source);
+    if (!match) {
+        throw new Error(`chrome-bar-copy.ts has no ${key} row, so the expected text cannot be derived`);
+    }
+    return match[1] ?? match[2].replace('${subject}', subject);
+}
+
+/** The sentence subject the copy uses: the configured application name, else the copy's noAppName. */
+async function subjectOf(app) {
+    return (await app.evaluate(appNameExpr)) || copyRow('noAppName');
+}
+
+/** Chrome scope: puts `text` on the selection clipboard (the middle-click paste source); 'ok' or 'error: ...'. */
+const setSelection = (app, text) => app.evaluateIn(app.chrome, `(() => {
+    try {
+        Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper)
+            .copyStringToClipboard(${JSON.stringify(text)}, Ci.nsIClipboard.kSelectionClipboard);
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})()`);
+
+const middleClick = (x, y) => [moveTo(x, y), { type: 'pointerDown', button: 1 }, { type: 'pointerUp', button: 1 }, { type: 'pause', duration: 300 }];
+
+/** middle: TAB-03 middle-click close with the N2 paste detectors. */
+async function middle({ app, pages, expect, plant }) {
+    const urls = { a: pages.url('/a'), b: pages.url('/b') };
+    const setup = await step(app, 'middle: setup', `
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify(urls)});
+        shell.activateWidget(S.b);
+        await until(() => current() && current().id === S.b && current().isVisible, 5000);
+        if (${JSON.stringify(plant)} === 'middle-not-closing') strip.onTabAuxClick = () => undefined;
+        const ed = document.createElement('div');
+        ed.id = 'pb-paste-frame';
+        ed.contentEditable = 'true';
+        Object.assign(ed.style, { position: 'fixed', left: '40%', top: '60%', width: '200px', height: '40px', zIndex: '99999', background: '#fff' });
+        document.body.appendChild(ed);
+        S.framePaste = [];
+        for (const type of ['input', 'paste']) ed.addEventListener(type, () => S.framePaste.push(type));
+        return { painted, a: rect(tabEl(S.a)), editable: rect(ed), bTab: byId(S.b).tabId };
+    `);
+    expect(setup.painted, 'middle: setup: /a and /b are not both painted in the strip');
+    // The recorder's own positive control: it saw /b's state push.
+    expect(await waitForPush(app, push => push && push.tabId === setup.bTab) >= 0, 'middle: NOT SCORED -- the push recorder holds no push for /b, so it is not recording');
+    const overlay = (await app.contexts()).find(c => c.url === urls.b)?.context;
+    expect(!!overlay, `middle: NOT SCORED -- no BiDi context carries /b's page (${urls.b})`);
+    if (!overlay) {
+        return;
+    }
+    const pageEditable = JSON.parse(await app.evaluateIn(overlay, `(() => {
+        const ed = document.createElement('div');
+        ed.contentEditable = 'true';
+        Object.assign(ed.style, { position: 'fixed', left: '20px', top: '20px', width: '200px', height: '40px', background: '#fff' });
+        document.body.appendChild(ed);
+        window.__pbPaste = [];
+        for (const type of ['input', 'paste']) ed.addEventListener(type, () => window.__pbPaste.push(type));
+        const r = ed.getBoundingClientRect();
+        return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+    })()`));
+    const pagePaste = async () => JSON.parse(await app.evaluateIn(overlay, 'JSON.stringify(window.__pbPaste || [])'));
+    const theia = await theiaContext(app);
+
+    // Positive controls: a real middle-click paste into each seeded editable is caught.
+    const sentinel = `pb-strip-sentinel-${Date.now()}`;
+    const clip = await setSelection(app, sentinel);
+    expect(clip === 'ok', `middle: NOT SCORED -- the selection clipboard could not be written (${clip})`);
+    await pointer(app, theia, middleClick(setup.editable.x, setup.editable.y));
+    await pointer(app, overlay, middleClick(pageEditable.x, pageEditable.y));
+    const controls = await step(app, 'middle: positive controls', 'return { frame: S.framePaste.slice() };');
+    const pageControl = await pagePaste();
+    expect(controls.frame.length > 0, 'middle: NOT SCORED -- the Theia-frame detector caught no paste from a real middle-click into its editable');
+    expect(pageControl.length > 0, 'middle: NOT SCORED -- the page-realm detector caught no paste from a real middle-click into its editable');
+
+    // The claim: middle-click on /a's strip tab closes /a and pastes nowhere.
+    await setSelection(app, sentinel);
+    await app.evaluateIn(overlay, 'window.__pbPaste = []; true');
+    await step(app, 'middle: reset', "S.framePaste = []; document.getElementById('pb-paste-frame').focus(); return true;");
+    await pointer(app, theia, middleClick(setup.a.x, setup.a.y));
+    const closed = await step(app, 'middle: after the tab middle-click', `
+        await until(() => !byId(S.a), 5000);
+        return {
+            closed: !byId(S.a) && !stripIds().includes(S.a) && !barIds().includes(S.a),
+            frame: S.framePaste.slice(),
+            current: !!current() && current().id === S.b,
+        };
+    `);
+    const pageAfter = await pagePaste();
+    expect(closed.closed, 'middle: a middle-click on /a\'s strip tab did not close /a (still in the shell, strip or TabBar)');
+    if (controls.frame.length > 0 && pageControl.length > 0) {
+        expect(closed.frame.length === 0, `middle: the tab middle-click pasted into the Theia frame (${closed.frame.join(', ')})`);
+        expect(pageAfter.length === 0, `middle: the tab middle-click pasted into the page (${pageAfter.join(', ')})`);
+    }
+    expect(closed.current, 'middle: closing /a by middle-click changed the current tab away from /b');
+}
+
+/** double: TAB-03 double-click on the empty strip. */
+async function double({ app, pages, expect, plant }) {
+    const setup = await step(app, 'double: setup', `
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs({ a: ${JSON.stringify(pages.url('/a'))} });
+        if (${JSON.stringify(plant)} === 'double-noop') strip.onStripDoubleClick = () => undefined;
+        const ids = stripIds();
+        const last = rect(tabEl(ids[ids.length - 1]));
+        const r = rect(row());
+        return { painted, x: Math.min(last.right + 40, r.right - 12), y: r.y, tooltip: row().getAttribute('title'), count: webTabs().length };
+    `);
+    expect(setup.painted, 'double: setup: /a is not painted in the strip');
+    expect(setup.tooltip === copyRow('emptyStripTooltip'), `double: the empty strip's tooltip is ${JSON.stringify(setup.tooltip)}`);
+    const theia = await theiaContext(app);
+    await pointer(app, theia, [moveTo(setup.x, setup.y), { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 },
+        { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }]);
+    const opened = await step(app, 'double: after the double-click', `
+        const grew = await until(() => webTabs().length === ${setup.count} + 1, 5000);
+        await until(() => document.activeElement && document.activeElement.classList.contains('pb-chrome-bar-input'), 3000);
+        const now = current();
+        return {
+            grew,
+            emptyPage: !!now && now.url === ${JSON.stringify('about:blank')} && now.id !== S.a,
+            pillFocused: !!document.activeElement && document.activeElement.classList.contains('pb-chrome-bar-input'),
+        };
+    `);
+    expect(opened.grew && opened.emptyPage, `double: a double-click on the empty strip opened no new tab on the empty page (${JSON.stringify(opened)})`);
+    expect(opened.pillFocused, 'double: the new tab from the empty strip did not focus the pill');
+}
+
+/** drop: TAB-08 link, text and refused drops on the strip. */
+async function drop({ app, pages, expect, plant }) {
+    const urls = { a: pages.url('/a'), b: pages.url('/b') };
+    const linkUrl = pages.url('/d');
+    const evil = 'javascript:document.title="pb-pwned"';
+    const setup = await step(app, 'drop: setup', `
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify(urls)});
+        shell.activateWidget(S.b);
+        await until(() => current() && current().id === S.b, 5000);
+        // The pill's drop path, recorded and not followed: a real search would leave the fixture host.
+        S.searched = [];
+        get('AddressBar').openDropped = async text => { S.searched.push(text); };
+        if (${JSON.stringify(plant)} === 'drop-link-noop') strip.openDroppedLink = async () => undefined;
+        return { painted, a: rect(tabEl(S.a)), b: rect(tabEl(S.b)) };
+    `);
+    expect(setup.painted, 'drop: setup: /a and /b are not both painted in the strip');
+    const drops = `
+        const dropAt = (x, y, data) => {
+            const dt = new DataTransfer();
+            for (const type of Object.keys(data)) dt.setData(type, data[type]);
+            const target = document.elementFromPoint(x, y) || row();
+            for (const type of ['dragenter', 'dragover', 'drop']) {
+                target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }));
+            }
+        };
+        const notice = () => { const n = document.querySelector('.pb-tab-strip-notice'); return n ? n.textContent : ''; };
+        const page = () => ({ count: webTabs().length, current: current() && current().id, url: byId(S.b).url, title: byId(S.b).title.label });
+    `;
+    const link = await step(app, 'drop: link', `${drops}
+        const before = webTabs().length;
+        dropAt(${Math.round(setup.a.right - 3)}, ${Math.round(setup.a.y)}, { 'text/uri-list': ${JSON.stringify(linkUrl)} });
+        await until(() => webTabs().some(w => w.url === ${JSON.stringify(linkUrl)}), 5000);
+        await sleep(300);
+        const opened = webTabs().find(w => w.url === ${JSON.stringify(linkUrl)});
+        const ids = barIds();
+        return { grew: webTabs().length === before + 1, opened: !!opened, afterA: !!opened && ids.indexOf(opened.id) === ids.indexOf(S.a) + 1, current: current() && current().id === S.b };
+    `);
+    expect(link.grew && link.opened, `drop: an http(s) link dropped on the strip did not open /d as a new tab (${JSON.stringify(link)})`);
+    expect(link.afterA, 'drop: the dropped link did not open next to the drop position (right after /a)');
+    expect(link.current, 'drop: the dropped link did not open in the background (the current tab changed)');
+
+    const text = await step(app, 'drop: text', `${drops}
+        const before = page();
+        dropAt(${Math.round(setup.b.x)}, ${Math.round(setup.b.y)}, { 'text/plain': 'pb strip drop words' });
+        await until(() => S.searched.length > 0, 3000);
+        return { searched: S.searched.slice(), same: page().count === before.count };
+    `);
+    expect(text.searched.length === 1 && text.searched[0] === 'pb strip drop words', `drop: text dropped on the strip did not reach the pill's drop path (${JSON.stringify(text.searched)})`);
+    expect(text.same, 'drop: text dropped on the strip opened a tab');
+
+    const sentence = copyRow('dropTabFailed', await subjectOf(app));
+    for (const [label, data] of [['a javascript: link', { 'text/uri-list': evil }], ['javascript: as plain text', { 'text/plain': evil }]]) {
+        const refused = await step(app, `drop: ${label}`, `${drops}
+            const before = page();
+            S.searched = [];
+            dropAt(${Math.round(setup.b.x)}, ${Math.round(setup.b.y)}, ${JSON.stringify(data)});
+            await until(() => notice() !== '', 3000);
+            await sleep(500);
+            const after = page();
+            return { notice: notice(), same: after.count === before.count && after.url === before.url && after.current === before.current, title: after.title, searched: S.searched.length };
+        `);
+        expect(refused.notice === sentence, `drop: ${label} was not refused with the failure sentence (notice ${JSON.stringify(refused.notice)}, want ${JSON.stringify(sentence)})`);
+        expect(refused.same && refused.title !== 'pb-pwned' && refused.searched === 0, `drop: ${label} loaded, opened or searched something (${JSON.stringify(refused)})`);
+    }
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
     reorder: { run: reorder, probe: true, plant: 'reorder-noop', expect: 'did not land after /b' },
+    middle: { run: middle, probe: true, prefs: { 'middlemouse.paste': true }, plant: 'middle-not-closing', expect: 'did not close /a' },
+    double: { run: double, probe: true, plant: 'double-noop', expect: 'opened no new tab' },
+    drop: { run: drop, probe: true, plant: 'drop-link-noop', expect: 'did not open /d' },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */
