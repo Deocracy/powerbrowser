@@ -98,6 +98,10 @@
  *                    ext-browserAction.js and ext-tabs.js create do;
  *                    the function set is derived from the section, and a
  *                    guarded function taking `win` is called with `win`.
+ *                    38-REVIEW WR-09: the check must guard the sink: it comes
+ *                    before it (unless the sink line resolves the window the
+ *                    check tests), and within three lines it returns, throws,
+ *                    continues or replaces that window.
  *                    The self-test derives one plant per guarded function.
  *
  * Everything is derived at check time and compared; a derivation that finds
@@ -337,6 +341,10 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             for (const word of ['tabTracker', 'getTabForBrowser(']) {
                 if (section.includes(word)) failures.push(`click-path: the extension section names ${word}; tab identity comes only from the 31.1 host (D-05)`);
             }
+            // 38-REVIEW WR-09: the clicked tab is the host's current selection, bound in extensionClick itself.
+            const click = span(apiLines, /^function extensionClick\(/);
+            const clickBody = click ? apiLines.slice(click.start, click.end + 1).join('\n') : '';
+            if (!/const selectedTab = tabHosts\.get\(win\)\?\.selected\b/.test(clickBody) || !clickBody.includes('triggerClickOrPopup(selectedTab)')) failures.push(`click-path: extensionClick does not bind selectedTab to the host's selection (const selectedTab = tabHosts.get(win)?.selected) and click it`);
             // 38-REVIEW CR-03: the host selection follows only a tab the frontend shows. tabsBridgeActivate selects an
             // adopted tab, or a pending one whose adoptTab push has not gone; after the push it defers to the attach.
             const act = span(apiLines, /^function tabsBridgeActivate\(/);
@@ -503,7 +511,19 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
         const { guarded, unreached } = privateBrowsingSinks(apiLines, src[API]);
         for (const marker of unreached) failures.push(`private-browsing: no function in the extension section reaches ${marker} (broken instrument)`);
         for (const [name, fn] of guarded) {
-            if (!apiLines.slice(fn.start + 1, fn.end + 1).join('\n').includes('.canAccessWindow(')) failures.push(`private-browsing: ${name} reaches ${fn.marker} with no extension canAccessWindow check; an extension not allowed in private windows would reach a private window`);
+            const body = apiLines.slice(fn.start + 1, fn.end + 1);
+            const check = body.findIndex(l => l.includes('.canAccessWindow('));
+            const sink = body.findIndex(l => l.includes(fn.marker));
+            if (check < 0) {
+                failures.push(`private-browsing: ${name} reaches ${fn.marker} with no extension canAccessWindow check; an extension not allowed in private windows would reach a private window`);
+            } else {
+                // 38-REVIEW WR-09: the check guards the sink. It comes first, unless the sink line resolves the very window
+                // the check tests, and within three lines it leaves (return, throw, continue) or replaces that window.
+                const arg = (/\.canAccessWindow\(([\w$.]+)\)/.exec(body[check])?.[1] ?? '').replace(/[.$]/g, '\\$&');
+                const resolves = arg !== '' && new RegExp(`\\b${arg}\\s*=[^=]`).test(body[sink]);
+                const acts = new RegExp(`\\b(?:return|throw|continue)\\b${arg ? `|\\b${arg}\\s*=[^=]` : ''}`).test(body.slice(check, check + 4).join('\n'));
+                if ((check > sink && !resolves) || !acts) failures.push(`private-browsing: ${name}'s canAccessWindow check does not guard ${fn.marker} (it must come before it and leave or replace the window it tests)`);
+            }
             if (!/^(?:async )?function \w+\(win[,)]/.test(apiLines[fn.start])) continue;
             apiLines.forEach((line, i) => {
                 if (i !== fn.start && new RegExp(`\\b${name}\\((?!win\\b)`).test(line)) failures.push(`private-browsing: ${API}:${i + 1} calls ${name} without the window it checks (win)`);
@@ -533,6 +553,9 @@ function selfTest() {
         { name: 'planted messagemanagergroup', run: () => check(apiWith('frame.setAttribute("messagemanagergroup", "browsers");')), expect: 'names messagemanagergroup outside the 31.1 host sites' },
         { name: 'unclassified kind', run: () => check({ ...clean, [API]: clean[API].replace('const STORE_REQUEST_KINDS = new Set([', 'const STORE_REQUEST_KINDS = new Set([\n  "extensionPlanted",') }), expect: 'the store kind extensionPlanted has no STORE_KIND_CLASSES entry' },
         { name: 'click path re-targeted', run: () => check({ ...clean, [API]: clean[API].replace('triggerClickOrPopup(selectedTab)', 'triggerClickOrPopup(host.selected)') }), expect: 'spelled triggerClickOrPopup(selectedTab)' },
+        { name: 'click selection unbound', run: () => check({ ...clean, [API]: clean[API].replace('const selectedTab = tabHosts.get(win)?.selected', 'const selectedTab = [...tabHosts.get(win).strip.children][0]') }), expect: 'extensionClick does not bind selectedTab' },
+        { name: 'private check without effect', run: () => check({ ...clean, [API]: clean[API].replace('      win = Services.wm.getMostRecentNonPBWindow("navigator:browser");\n', '      Services.wm.getMostRecentNonPBWindow("navigator:browser");\n') }), expect: "extensionOpenTabPage's canAccessWindow check does not guard" },
+        { name: 'private check after its sink', run: () => check({ ...clean, [API]: clean[API].replace('function extensionClick(win, named, anchorRect) {\n', 'function extensionClick(win, named, anchorRect) {\n  named.action.triggerClickOrPopup(tabHosts.get(win)?.selected);\n') }), expect: "extensionClick's canAccessWindow check does not guard" },
         { name: 'activate ahead of ack', run: () => check({ ...clean, [API]: clean[API].replace('      pending.activateOnAck = true;\n', '      pending.activateOnAck = true;\n      selectNode(host, tab);\n') }), expect: 'tabsBridgeActivate moves the host selection ahead of the frontend' },
         { name: 'deferred activation never shown', run: () => check({ ...clean, [API]: clean[API].replace('        webTabs.get(tabId).activateOnAttach = false;\n        sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });\n', '        webTabs.get(tabId).activateOnAttach = false;\n') }), expect: "already-open branch does not show a deferred activation" },
         { name: 'signal unheard', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('new window.Event("TabHostActionUpdate")', 'new window.Event("TabHostPlanted")') }), expect: 'dispatches TabHostPlanted, which EXTENSION_TAB_EVENTS does not listen for' },
