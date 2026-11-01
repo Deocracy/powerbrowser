@@ -3661,6 +3661,17 @@ run_own_checks() {
     # stack as the clean control proving the red is plant-caused.
     "check-patch-surface-brand-values|bash $REPO_ROOT/scripts/check-patch-surface.sh --brand-values"
     "check-patch-surface-brand-values-self-test|bash $REPO_ROOT/scripts/check-patch-surface.sh --self-test-brand"
+    # NEW (Phase 57, TEL-09): the Glean crash-ping consent read fails closed. The host is
+    # derived from TELEMETRY_SERVER in upstream's crashping/src/lib.rs at check time; patch 050
+    # equals its regeneration; the applied determine_telemetry_enabled carries no true literal;
+    # both branding variants pin uploadEnabled false; the allowlist denies the derived host.
+    # Honestly --quick: text reads and git plumbing over the existing upstream/ checkout.
+    "crash-ping-consent|node $REPO_ROOT/scripts/verify-crash-ping-consent.mjs"
+    # Its self-test row rides alongside for the reason every other self-test row in
+    # this array gives: green first, then seven in-memory plants (derivation moved and removed,
+    # fail-open default, patch missing, hand-edited hunk, branding default true, allowlist
+    # widened), each red naming the drifted file.
+    "crash-ping-consent-self-test|node $REPO_ROOT/scripts/verify-crash-ping-consent.mjs --self-test"
     "fetch-upstream-self-test|bash $REPO_ROOT/scripts/fetch-upstream.sh --self-test"
     # NEW (05-02): the ESR pin-agreement gate -- configuration.toml's
     # [upstreams] tag equals the generated shell fragment, the workflow

@@ -1,0 +1,78 @@
+diff --git a/toolkit/crashreporter/client/app/src/glean.rs b/toolkit/crashreporter/client/app/src/glean.rs
+index b8879964ec..fdd4d5bf09 100644
+--- a/toolkit/crashreporter/client/app/src/glean.rs
++++ b/toolkit/crashreporter/client/app/src/glean.rs
+@@ -32,36 +32,29 @@ fn parse_telemetry_enabled_pref(prefs_content: &str) -> Option<bool> {
+ }
+ 
+ /// Determine whether telemetry should be enabled based on the profile.
++///
++/// TEL-09: consent fails closed. Only an explicit `true` in the profile's prefs.js
++/// enables upload; an absent profile dir, an absent prefs.js, an absent pref and an unreadable
++/// prefs.js each disable it, because none of them is consent.
+ pub fn determine_telemetry_enabled(profile_dir: Option<&Path>) -> bool {
+-    // If there is no profile dir, we cannot determine whether telemetry is enabled or not. However,
+-    // disabling telemetry in this case will cause us to entirely miss the class of crashes that
+-    // occur before the profile is set up, so we leave it enabled.
+     let Some(profile_dir) = profile_dir else {
+-        return true;
++        return false;
+     };
+ 
+     let prefs = profile_dir.join("prefs.js");
+ 
+-    // If there is no pref file, default to true.
+     if !prefs.exists() {
+-        return true;
++        return false;
+     }
+ 
+     match crate::std::fs::read_to_string(&prefs) {
+-        Ok(prefs_contents) => {
+-            parse_telemetry_enabled_pref(&prefs_contents)
+-                // If there is no pref, default to true
+-                .unwrap_or(true)
+-        }
++        Ok(prefs_contents) => parse_telemetry_enabled_pref(&prefs_contents).unwrap_or(false),
+         Err(e) => {
+-            // Like the no-profile-dir case, if we can't read the prefs file, this might be the
+-            // cause of some crash that we are trying to report. So disabling telemetry in this case
+-            // would make us blind to the issue.
+             log::error!(
+                 "failed to read prefs file at {} for disabling telemetry: {e}",
+                 prefs.display()
+             );
+-            true
++            false
+         }
+     }
+ }
+@@ -241,6 +234,28 @@ mod test {
+             assert_eq!(result, pref_value);
+         }
+     }
++
++    #[test]
++    fn test_telemetry_enable_pref_fails_closed() {
++        use crate::std::{
++            fs::{MockFS, MockFiles},
++            mock,
++            path::Path,
++        };
++
++        assert!(!determine_telemetry_enabled(None));
++        for prefs_js in [None, Some(r#"user_pref("some.other.pref", true);"#)] {
++            let files = MockFiles::new();
++            files.add_dir("profile_dir");
++            if let Some(content) = prefs_js {
++                files.add_file("profile_dir/prefs.js", content);
++            }
++            let result = mock::builder()
++                .set(MockFS, files)
++                .run(|| determine_telemetry_enabled(Some(Path::new("profile_dir"))));
++            assert!(!result);
++        }
++    }
+ }
+ 
+ #[cfg(test)]
