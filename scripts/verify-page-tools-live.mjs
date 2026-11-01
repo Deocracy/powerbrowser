@@ -675,7 +675,10 @@ async function scenarioDevtools(app, origin, plant = false) {
     if (reply?.ok !== true || await until(windowOpen, true) !== true) {
         return `DevTools did not open on the second tab to quit over (${JSON.stringify(reply)})`;
     }
-    return await app.quit({ how: 'desktop-close', timeoutMs: 25000 }) === 'exited' ? null : 'the browser did not exit with a DevTools toolbox open';
+    const quitAt = Date.now();
+    const exited = await app.quit({ how: 'desktop-close', timeoutMs: 25000 });
+    console.log(`  quit with a toolbox open: ${exited} after ${Date.now() - quitAt} ms`);
+    return exited === 'exited' ? null : 'the browser did not exit with a DevTools toolbox open';
 }
 
 /**
