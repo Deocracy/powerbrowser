@@ -372,6 +372,20 @@
  *               keeps Monaco's meaning (a second selection appears) and opens
  *               no editor and makes no bookmark. Scored only after
  *               bookmark-star passed.
+ *   clear-history  BMK-05 (D-09, D-10, T-33-04): for each of the picker's five
+ *               ranges, marker rows are planted chrome-side in Places, the
+ *               tabs.sqlite closed rows and thumbnails, saved_pages and the
+ *               web-tab history file, in range and out of range. The picker
+ *               opens from the History submenu row, Ctrl+Shift+Del (pill and
+ *               page focused) and the command, with the contracted heading,
+ *               ranges (Last hour checked), footnote and buttons; Clear or
+ *               Enter clears exactly the in-range rows of every store, keeps
+ *               the out-of-range rows and every open row, and the token
+ *               cookie stays in the jar with the frame still signed in (the
+ *               positive control the clear-the-token fault must break). Esc
+ *               closes with nothing cleared; a refused clear shows the failure
+ *               row and Enter retries. The History submenu and the pill's
+ *               history rows stop listing a cleared page.
  *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
@@ -5478,6 +5492,447 @@ async function historyMenu(ctx) {
     }
 }
 
+// Phase 33 plan 04 (BMK-05, D-09, D-10, T-33-04): the Clear Recent History picker and its fan-out.
+const CHROME_BAR_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+const BOUNDARY_REL = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
+/** The picker's ranges in its order, with their labels: [{ range, label }], from the widget's own table and CHROME_BAR_COPY. */
+const CLEAR_RANGES = [...sourceMatch(CHROME_BAR_WIDGET_REL, /const CLEAR_HISTORY_RANGES\b[^\n]*= \[\n([\s\S]*?)\n\];/)
+    .matchAll(/range: '([^']+)', label: \(\) => CHROME_BAR_COPY\.(\w+)/g)]
+    .map(m => ({ range: m[1], label: copyPlain(m[2]) }));
+const CLEAR_ROW = copyPlain('clearRecentHistoryRow');
+const CLEAR_HEADING = copyPlain('clearHistoryHeading');
+const CLEAR_CONFIRM = copyPlain('clearHistoryConfirm');
+const CLEAR_CANCEL = copyPlain('clearHistoryCancel');
+const copyTemplate = key => sourceMatch(CHROME_BAR_COPY_REL, new RegExp(`\\b${key}: \\(subject: string\\) => \`([^\`]+)\``));
+const CLEAR_FOOTNOTE = copyTemplate('clearHistoryFootnote');
+const CLEAR_FAILED = copyTemplate('clearHistoryFailed');
+const CLEAR_HISTORY_COMMAND = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_CLEAR_HISTORY_COMMAND_ID');
+const WEB_TAB_HISTORY_FILE = sourceMatch(BOUNDARY_REL, /const WEB_TAB_HISTORY_FILE_NAME = "([^"]+)"/);
+/** The clearHistory PAGE_SHORTCUTS row's key (a keycode row) as a pressKey event. */
+const CLEAR_KEY = (() => {
+    const keycode = sourceMatch(SHORTCUTS_REL, /id: 'clearHistory', keycode: '(VK_[A-Z_]+)'/);
+    const modifiers = sourceMatch(SHORTCUTS_REL, /id: 'clearHistory', keycode: '[^']+', modifiers: '([^']+)'/).split(',');
+    if (keycode !== 'VK_DELETE') {
+        throw new Error(`${BROKEN} the clearHistory row's keycode ${keycode} has no key event in this harness`);
+    }
+    return { key: 'Delete', code: 'Delete', keyCode: 46, modifiers };
+})();
+/** A planted card image; any non-null thumbnail would do. */
+const PLANTED_THUMB = 'data:image/png;base64,cGJjaA==';
+
+/** A range's begin as the picker's names say it (last N hours, today from local midnight); null for everything. */
+function clearRangeBegin(range, now) {
+    if (range === 'everything') {
+        return null;
+    }
+    if (range === 'today') {
+        return new Date(now).setHours(0, 0, 0, 0);
+    }
+    const hours = range === 'last-hour' ? 1 : Number(/^last-(\d+)-hours$/.exec(range)?.[1]);
+    if (!Number.isInteger(hours) || hours < 1) {
+        throw new Error(`${BROKEN} the range ${range} names no span this harness can plant around`);
+    }
+    return now - hours * 60 * 60 * 1000;
+}
+
+/** The picker as drawn: heading, range labels, the checked one, footnote, failure row, buttons, and whether it holds focus. */
+const readPicker = app => app.evaluate(`JSON.stringify((() => {
+    const panel = document.querySelector('.pb-clear-history');
+    if (!panel) return { open: false };
+    const text = sel => ((panel.querySelector(sel) || {}).textContent || '').trim();
+    const ranges = [...panel.querySelectorAll('.pb-clear-history-range')];
+    return {
+        open: true,
+        heading: text('.pb-clear-history-heading'),
+        ranges: ranges.map(r => r.textContent.trim()),
+        checked: ranges.filter(r => r.querySelector('input').checked).map(r => r.textContent.trim()),
+        footnote: text('.pb-clear-history-footnote'),
+        failure: text('.pb-clear-history-failure'),
+        buttons: [...panel.querySelectorAll('.pb-clear-history-footer button')].map(b => b.textContent.trim()),
+        focused: panel.contains(document.activeElement),
+    };
+})())`).then(JSON.parse);
+/** Focuses and clicks the range radio labelled `label`; true when it is then checked. */
+const choosePickerRange = (app, label) => app.evaluate(`(() => {
+    const row = [...document.querySelectorAll('.pb-clear-history-range')].find(r => r.textContent.trim() === ${JSON.stringify(label)});
+    const input = row && row.querySelector('input');
+    if (!input) return false;
+    input.focus();
+    input.click();
+    return input.checked;
+})()`);
+const clickPickerButton = (app, label) => app.evaluate(`(() => {
+    const b = [...document.querySelectorAll('.pb-clear-history-footer button')].find(b => b.textContent.trim() === ${JSON.stringify(label)});
+    if (!b) return false;
+    b.click();
+    return true;
+})()`);
+
+/** Chrome scope: plants Places visits, tabs rows, saved_pages rows and web-tab history keys, as `plan` lists them. */
+const plantClearRows = (app, plan) => inChrome(app, `return (async () => {
+    try {
+        const { PowerBrowserAPI } = ChromeUtils.importESModule(${JSON.stringify(API_URL)});
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const plan = ${JSON.stringify(plan)};
+        for (const v of plan.visits) {
+            await PlacesUtils.history.insert({ url: v.url, title: v.title, visits: [{ date: new Date(v.at) }] });
+        }
+        const conn = await PowerBrowserAPI.openTabStore();
+        for (const t of plan.tabs) {
+            await conn.execute('INSERT OR REPLACE INTO tabs (uri, url, title, last_active, last_accessed, closed_at, thumbnail) VALUES (:uri, :url, :title, :last_active, :last_accessed, :closed_at, :thumbnail)', t);
+        }
+        for (const s of plan.saved) {
+            await conn.execute('INSERT OR REPLACE INTO saved_pages (tab_uri, dir, url, title, saved_at, bytes) VALUES (:tab_uri, :dir, :url, :title, :saved_at, 0)', s);
+        }
+        const path = PowerBrowserAPI.getProfileDir() + '/' + ${JSON.stringify(WEB_TAB_HISTORY_FILE)};
+        let onDisk = {};
+        try { onDisk = await IOUtils.readJSON(path); } catch (e) { onDisk = {}; }
+        for (const key of plan.histories) {
+            onDisk[key] = { entries: [], index: 0 };
+        }
+        await IOUtils.writeJSON(path, onDisk, { tmpPath: path + '.tmp' });
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/**
+ * Chrome scope, each store read directly (the independent observer): visit
+ * counts per url, the planted tabs rows with their thumbnails, the open rows
+ * (closed_at NULL), the planted saved_pages rows, the history file's planted
+ * keys, and whether the token cookie is in the 127.0.0.1 jar. JSON text.
+ */
+const readClearStores = (app, urls, prefix) => inChrome(app, `return (async () => {
+    try {
+        const { PowerBrowserAPI } = ChromeUtils.importESModule(${JSON.stringify(API_URL)});
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const out = { visits: {}, tabs: {}, open: [], saved: [], histories: [] };
+        for (const url of ${JSON.stringify(urls)}) {
+            const info = await PlacesUtils.history.fetch(url, { includeVisits: true });
+            out.visits[url] = info ? info.visits.length : 0;
+        }
+        const conn = await PowerBrowserAPI.openTabStore();
+        for (const row of await conn.execute('SELECT uri, thumbnail, closed_at FROM tabs')) {
+            const uri = String(row.getResultByName('uri'));
+            if (row.getResultByName('closed_at') === null) out.open.push(uri);
+            if (uri.startsWith(${JSON.stringify(prefix)})) out.tabs[uri] = { thumbnail: row.getResultByName('thumbnail') };
+        }
+        out.open.sort();
+        for (const row of await conn.execute('SELECT tab_uri FROM saved_pages')) {
+            const uri = String(row.getResultByName('tab_uri'));
+            if (uri.startsWith(${JSON.stringify(prefix)})) out.saved.push(uri);
+        }
+        try {
+            const onDisk = await IOUtils.readJSON(PowerBrowserAPI.getProfileDir() + '/' + ${JSON.stringify(WEB_TAB_HISTORY_FILE)});
+            out.histories = Object.keys(onDisk || {}).filter(k => k.startsWith(${JSON.stringify(prefix)}));
+        } catch (e) { out.histories = []; }
+        out.token = Services.cookies.getCookiesFromHost('127.0.0.1', {}).some(c => c.name === ${JSON.stringify(TOKEN_COOKIE)});
+        return JSON.stringify(out);
+    } catch (e) {
+        return JSON.stringify({ error: String(e) });
+    }
+})();`).then(JSON.parse);
+
+/** Chrome scope: removes every planted row, key and visit (the `prefix` keys, the planted urls). */
+const unplantClearRows = (app, urls, prefix) => inChrome(app, `return (async () => {
+    try {
+        const { PowerBrowserAPI } = ChromeUtils.importESModule(${JSON.stringify(API_URL)});
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const conn = await PowerBrowserAPI.openTabStore();
+        await conn.execute('DELETE FROM tabs WHERE uri GLOB :glob', { glob: ${JSON.stringify(prefix)} + '*' });
+        await conn.execute('DELETE FROM saved_pages WHERE tab_uri GLOB :glob', { glob: ${JSON.stringify(prefix)} + '*' });
+        const path = PowerBrowserAPI.getProfileDir() + '/' + ${JSON.stringify(WEB_TAB_HISTORY_FILE)};
+        try {
+            const onDisk = await IOUtils.readJSON(path);
+            for (const key of Object.keys(onDisk || {})) if (key.startsWith(${JSON.stringify(prefix)})) delete onDisk[key];
+            await IOUtils.writeJSON(path, onDisk, { tmpPath: path + '.tmp' });
+        } catch (e) { /* no file: nothing planted there */ }
+        for (const url of ${JSON.stringify(urls)}) await PlacesUtils.history.remove(url).catch(() => false);
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+/** The status of a same-origin request from the Theia frame: 200 only while the frame is signed in. */
+const signedInStatus = app => probe(app, `const r = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin' }); return r.status;`);
+
+/**
+ * Opens the picker one way: 'menu' (the History submenu's clear row), 'pill'
+ * (Ctrl+Shift+Del with the pill focused), 'page' (the same key with the page
+ * focused, its relay row) or 'command'. Returns the picker as drawn.
+ */
+async function openClearPicker(app, how, tabId) {
+    if (how === 'menu') {
+        await pointMenuRow(app, 1, CLEAR_ROW);
+    } else if (how === 'page') {
+        if (await focusOverlay(app, tabId) !== true) {
+            throw new Error(`${BROKEN} the session tab's page could not be focused`);
+        }
+        await pressKey(app, CLEAR_KEY);
+    } else if (how === 'command') {
+        await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(CLEAR_HISTORY_COMMAND)}); return true;`);
+    } else {
+        await focusPill(app);
+        await pressKey(app, CLEAR_KEY);
+    }
+    return settle(() => readPicker(app), p => p.open && p.focused, 8000);
+}
+
+/** The labels of a History submenu read, by section (closed tabs, recent pages). */
+function historyMenuLabels(items) {
+    const [, closed, recent] = historySections(items);
+    return { closed: (closed ?? []).map(i => i.label), recent: (recent ?? []).map(i => i.label) };
+}
+
+/** The pill's history rows for `text`, once the dropdown has had time to compose them. */
+async function pillHistoryTitles(app, text) {
+    await typeInPill(app, text);
+    await sleep(1500);
+    const read = await readRows(app);
+    await pressKey(app, ESCAPE);
+    return read.rows.filter(r => r.type === 'codicon-history').map(r => r.title);
+}
+
+/**
+ * BMK-05 (D-09, D-10, T-33-04): see the header. Every expectation is derived:
+ * ranges and labels from the widget table and CHROME_BAR_COPY, the key from
+ * PAGE_SHORTCUTS, the command id from its const, the history file name from
+ * the boundary. Each store is read back chrome-side, before (the positive
+ * control: every planted row is there) and after the clear.
+ */
+async function clearHistoryLive(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    const footnote = CLEAR_FOOTNOTE.replace('${subject}', subject);
+    const failureRow = CLEAR_FAILED.replace('${subject}', subject);
+    const labels = CLEAR_RANGES.map(r => r.label);
+    const prefix = 'web:pbch';
+    const planted = [];
+    if (CLEAR_RANGES.length !== 5) {
+        return fail(`${BROKEN} derived ${CLEAR_RANGES.length} picker ranges from the widget, want the five of D-09`);
+    }
+    await installFireRecorder(app);
+    const checkShape = (picker, how) => {
+        if (!picker.open) {
+            fail(`opening the picker by ${how} showed no .pb-clear-history panel with focus inside it`);
+            return false;
+        }
+        if (picker.heading !== CLEAR_HEADING || JSON.stringify(picker.ranges) !== JSON.stringify(labels) || JSON.stringify(picker.checked) !== JSON.stringify([labels[0]])
+            || picker.footnote !== footnote || JSON.stringify(picker.buttons) !== JSON.stringify([CLEAR_CANCEL, CLEAR_CONFIRM])) {
+            fail(`the picker opened by ${how} must show ${JSON.stringify(CLEAR_HEADING)}, the ranges ${JSON.stringify(labels)} with ${JSON.stringify(labels[0])} checked, the footnote and ${JSON.stringify([CLEAR_CANCEL, CLEAR_CONFIRM])}; saw ${JSON.stringify(picker)}`);
+        }
+        return true;
+    };
+    try {
+        // Positive controls for the exemption: the token is in the jar and the frame is signed in.
+        const before = await readClearStores(app, [], prefix);
+        if (before.error || before.token !== true) {
+            return fail(`${BROKEN} the token cookie is not in the 127.0.0.1 jar before any clear (${JSON.stringify(before)}), so nothing proves the exemption`);
+        }
+        if (await signedInStatus(app) !== 200) {
+            return fail(`${BROKEN} the Theia frame is not signed in before any clear, so signed-in after it would prove nothing`);
+        }
+
+        // Esc closes with nothing cleared; focus returns to the pill.
+        const escUrl = pages.url('/ch-esc');
+        planted.push(escUrl);
+        if (await plantClearRows(app, { visits: [{ url: escUrl, title: 'Clear Probe Esc', at: Date.now() - 1000 }], tabs: [], saved: [], histories: [] }) !== 'ok') {
+            return fail(`${BROKEN} the Esc marker visit could not be planted`);
+        }
+        if (checkShape(await openClearPicker(app, 'pill', tabId), 'Ctrl+Shift+Del with the pill focused')) {
+            await pressKey(app, ESCAPE);
+            const closed = await settle(() => readPicker(app), p => !p.open, 5000);
+            const pill = await readPill(app);
+            if (closed.open || !pill.focused) {
+                fail(`Esc must close the picker with focus back on the pill; open ${closed.open}, pill ${JSON.stringify(pill)}`);
+            }
+            if ((await readClearStores(app, [escUrl], prefix)).visits[escUrl] < 1) {
+                fail('Esc on the picker cleared history: the planted visit is gone');
+            }
+        }
+
+        // A refused clear shows the failure row in the panel; Enter tries again and the retry closes it.
+        await probe(app, `get('ChromeStoreClient').clearHistory = async () => { throw new Error('refused'); }; return true;`);
+        try {
+            if (checkShape(await openClearPicker(app, 'command', tabId), 'the command')) {
+                await pressKey(app, ENTER);
+                const refused = await settle(() => readPicker(app), p => p.open && p.failure !== '', 5000);
+                if (!refused.open || refused.failure !== failureRow) {
+                    fail(`a refused clear must keep the picker open with the row ${JSON.stringify(failureRow)}; saw ${JSON.stringify(refused)}`);
+                }
+                await probe(app, `delete get('ChromeStoreClient').clearHistory; return true;`);
+                await pressKey(app, ENTER);
+                if ((await settle(() => readPicker(app), p => !p.open, 8000)).open) {
+                    fail('Enter on the failure row did not retry the clear and close the picker');
+                }
+            }
+        } finally {
+            await probe(app, `delete get('ChromeStoreClient').clearHistory; return true;`);
+        }
+
+        const ways = ['menu', 'pill', 'page', 'command', 'pill'];
+        for (const [i, { range, label }] of CLEAR_RANGES.entries()) {
+            const now = Date.now();
+            const midnight = new Date(now).setHours(0, 0, 0, 0);
+            const inAt = Math.max(now - 1000, midnight + 1);
+            const begin = clearRangeBegin(range, now);
+            const outAt = begin === null ? null : begin - 30 * 60 * 1000;
+            const key = part => `${prefix}${i}-${part}`;
+            const urls = { in: pages.url(`/ch-in-${i}`), out: pages.url(`/ch-out-${i}`) };
+            const inTitle = `Clear Probe In ${i}`;
+            planted.push(urls.in, urls.out);
+            const tab = (part, url, lastActive, lastAccessed, closedAt) => ({ uri: key(part), url, title: '', last_active: lastActive, last_accessed: lastAccessed, closed_at: closedAt, thumbnail: PLANTED_THUMB });
+            const saved = (part, savedAt) => ({ tab_uri: key(part), dir: '/nonexistent/pb-probe-not-minted', url: urls.in, title: inTitle, saved_at: savedAt });
+            const plan = {
+                visits: [{ url: urls.in, title: inTitle, at: inAt }, ...(outAt === null ? [] : [{ url: urls.out, title: `Clear Probe Out ${i}`, at: outAt }])],
+                tabs: [tab('in', urls.in, inAt, inAt, inAt), ...(outAt === null ? [] : [
+                    tab('out', urls.out, outAt, outAt, outAt),
+                    // Closed out of range but seen in range: the row stays, its picture of the page goes.
+                    tab('thumb', urls.out, outAt, inAt, outAt),
+                ])],
+                // The in-range copy, the copy of the in-range closed row (saved earlier), and the out-of-range copy.
+                saved: [saved('savedin', inAt), saved('in', outAt ?? inAt), ...(outAt === null ? [] : [saved('savedout', outAt)])],
+                histories: [key('in'), ...(outAt === null ? [] : [key('out')])],
+            };
+            if (await plantClearRows(app, plan) !== 'ok') {
+                return fail(`${BROKEN} ${range}: the marker rows could not be planted`);
+            }
+            const pre = await readClearStores(app, [urls.in, urls.out], prefix);
+            const want = { tabs: plan.tabs.map(t => t.uri), saved: plan.saved.map(s => s.tab_uri), histories: plan.histories };
+            if (pre.error || pre.visits[urls.in] < 1 || (outAt !== null && pre.visits[urls.out] < 1)
+                || want.tabs.some(u => !pre.tabs[u] || pre.tabs[u].thumbnail === null) || want.saved.some(u => !pre.saved.includes(u))
+                || want.histories.some(k => !pre.histories.includes(k))) {
+                return fail(`${BROKEN} ${range}: the planted rows are not all in their stores before the clear (${JSON.stringify(pre)}), so their absence after it would prove nothing`);
+            }
+
+            // The first range also proves the History submenu and the pill drop a cleared page (each listed it first).
+            let menuBefore;
+            let pillBefore;
+            if (i === 0) {
+                pillBefore = await pillHistoryTitles(app, inTitle);
+                await showTab(app, tabId, 'clear-history');
+                const items = await openHistorySubmenu(app);
+                menuBefore = historyMenuLabels(items);
+                const clearSection = historySections(items)[3];
+                if (clearSection?.length !== 1 || clearSection[0].label !== CLEAR_ROW || clearSection[0].disabled || !clearSection[0].shortcut) {
+                    fail(`the History submenu must end with one enabled ${JSON.stringify(CLEAR_ROW)} row showing its key; saw ${JSON.stringify(clearSection)}`);
+                }
+            }
+            const how = ways[i];
+            const fired = (await firedRows(app)).length;
+            const picker = await openClearPicker(app, how, tabId);
+            if (how === 'page' && !(await firedRows(app)).slice(fired).includes('clearHistory')) {
+                fail('Ctrl+Shift+Del with the page focused must fire the clearHistory page-key row');
+            }
+            if (!checkShape(picker, how)) {
+                await closeOpenMenus(app).catch(() => undefined);
+                continue;
+            }
+            if (await choosePickerRange(app, label) !== true) {
+                fail(`${range}: the ${JSON.stringify(label)} range could not be chosen`);
+                continue;
+            }
+            if (i % 2 === 0) {
+                await clickPickerButton(app, CLEAR_CONFIRM);
+            } else {
+                await pressKey(app, ENTER);
+            }
+            const after = await settle(() => readPicker(app), p => !p.open, 10000);
+            if (after.open) {
+                fail(`${range}: the picker did not close after ${i % 2 === 0 ? CLEAR_CONFIRM : 'Enter'} (${JSON.stringify(after)})`);
+                continue;
+            }
+            if (plant === 'clear-drops-store') {
+                // As if the saved_pages target had dropped out of the fan-out: its in-range row is back after the clear.
+                await plantClearRows(app, { visits: [], tabs: [], saved: [saved('savedin', inAt)], histories: [] });
+                note(`PLANT clear-drops-store applied (${range})`);
+            }
+            if (plant === 'clear-takes-token') {
+                // As a fan-out enumerating cookies would: the token goes with the clear.
+                await inChrome(app, `for (const c of Services.cookies.getCookiesFromHost('127.0.0.1', {})) {
+                    if (c.name === ${JSON.stringify(TOKEN_COOKIE)}) Services.cookies.remove(c.host, c.name, c.path, c.originAttributes);
+                }
+                return true;`);
+                note(`PLANT clear-takes-token applied (${range})`);
+            }
+            const post = await readClearStores(app, [urls.in, urls.out], prefix);
+            if (post.error) {
+                return fail(`${BROKEN} ${range}: the stores could not be read after the clear (${post.error})`);
+            }
+            if (post.visits[urls.in] !== 0) {
+                fail(`${range}: places still holds the planted in-range visit`);
+            }
+            if (post.tabs[key('in')]) {
+                fail(`${range}: tabs.closed_at still holds the planted in-range closed row`);
+            }
+            if (post.saved.includes(key('savedin'))) {
+                fail(`${range}: saved_pages still holds the planted in-range copy`);
+            }
+            if (post.saved.includes(key('in'))) {
+                fail(`${range}: saved_pages kept the copy of a closed row the clear deleted`);
+            }
+            if (post.histories.includes(key('in'))) {
+                fail(`${range}: ${WEB_TAB_HISTORY_FILE} still holds the history of a closed row the clear deleted`);
+            }
+            if (outAt !== null) {
+                if (post.visits[urls.out] < 1) {
+                    fail(`${range}: places lost the out-of-range visit`);
+                }
+                if (!post.tabs[key('out')] || post.tabs[key('out')].thumbnail === null) {
+                    fail(`${range}: tabs.closed_at or tabs.thumbnail lost the out-of-range closed row or its thumbnail`);
+                }
+                if (!post.tabs[key('thumb')]) {
+                    fail(`${range}: tabs.closed_at deleted a row closed out of range`);
+                } else if (post.tabs[key('thumb')].thumbnail !== null) {
+                    fail(`${range}: tabs.thumbnail kept the thumbnail of a row seen in range`);
+                }
+                if (!post.saved.includes(key('savedout'))) {
+                    fail(`${range}: saved_pages lost the out-of-range copy`);
+                }
+                if (!post.histories.includes(key('out'))) {
+                    fail(`${range}: ${WEB_TAB_HISTORY_FILE} lost the history of an out-of-range closed row`);
+                }
+            }
+            if (JSON.stringify(post.open) !== JSON.stringify(pre.open)) {
+                fail(`${range}: an open tab row (closed_at NULL) changed: ${JSON.stringify(pre.open)} before, ${JSON.stringify(post.open)} after`);
+            }
+            const status = await signedInStatus(app);
+            if (post.token !== true || status !== 200) {
+                fail(`${range}: the IDE was signed out by the clear: token cookie in the jar ${post.token}, a same-origin frame request returned ${JSON.stringify(status)}`);
+                if (plant === 'clear-takes-token') {
+                    return undefined;
+                }
+            }
+
+            if (i === 0) {
+                if (!menuBefore.recent.includes(inTitle) || !menuBefore.closed.includes(urls.in)) {
+                    fail(`${BROKEN} before the clear the History submenu did not list the planted page and closed row (${JSON.stringify(menuBefore)}), so its later read proves nothing`);
+                } else {
+                    await showTab(app, tabId, 'clear-history');
+                    const menuAfter = historyMenuLabels(await openHistorySubmenu(app));
+                    await closeOpenMenus(app);
+                    if (menuAfter.recent.includes(inTitle) || menuAfter.closed.includes(urls.in)) {
+                        fail(`after the clear the History submenu still lists the cleared page or closed row: ${JSON.stringify(menuAfter)}`);
+                    }
+                }
+                if (!pillBefore.includes(inTitle)) {
+                    fail(`${BROKEN} before the clear the pill showed no history row for ${JSON.stringify(inTitle)} (${JSON.stringify(pillBefore)}), so its later read proves nothing`);
+                } else if ((await pillHistoryTitles(app, inTitle)).includes(inTitle)) {
+                    fail(`after the clear the pill still shows the cleared page ${JSON.stringify(inTitle)} as a history row`);
+                }
+            }
+        }
+    } finally {
+        await closeOpenMenus(app).catch(() => undefined);
+        await probe(app, `delete get('ChromeStoreClient').clearHistory; return true;`).catch(() => undefined);
+        await unplantClearRows(app, planted, prefix).catch(() => undefined);
+    }
+    return undefined;
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -5509,6 +5964,7 @@ const SCENARIOS = {
     'bookmarks-toolbar': bookmarksToolbar,
     'reopen-closed': reopenClosed,
     'history-menu': historyMenu,
+    'clear-history': clearHistoryLive,
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
@@ -5635,6 +6091,8 @@ const PLANTS = [
     { plant: 'toolbar-ignores-push', target: 'bookmarks-toolbar', run: ['bookmarks-toolbar'], expect: 'the toolbar did not show a bookmark added in chrome' },
     { plant: 'reopen-no-history', target: 'reopen-closed', run: ['reopen-closed'], expect: 'the reopened tab has no back/forward history' },
     { plant: 'recent-opens-new-tab', target: 'history-menu', run: ['history-menu'], expect: 'a recent page must load in the current tab' },
+    { plant: 'clear-drops-store', target: 'clear-history', run: ['clear-history'], expect: 'saved_pages still holds the planted in-range copy' },
+    { plant: 'clear-takes-token', target: 'clear-history', run: ['clear-history'], expect: 'the IDE was signed out by the clear' },
     { plant: 'ctrl-d-everywhere', target: 'bookmark-keys', run: ['bookmark-star', 'bookmark-keys'], expect: 'Ctrl+D in the README.md editor' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
