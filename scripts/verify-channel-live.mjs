@@ -65,6 +65,8 @@ const SELF_REL = 'scripts/verify-channel-live.mjs';
 const MANIFEST_ASSET = 'release-manifest.json';
 const UPDATES_SUFFIX = '-updates';
 const NEXT_AUTH = 'Next step: run gh auth status; the row needs read access to the repository and the updates repo.';
+// Publishing the manifest as a Release asset is an open owner decision (its host field names the build machine).
+const MANIFEST_DECISION = '.planning/workstreams/deploy/phases/49-release-pipeline-and-legion-runner-e/BLOCKED.md, section "49-04", item 2';
 const show = v => JSON.stringify(v ?? null);
 // The Gecko [AppUpdate] URL path (upstream/build/application.ini.in, URL=https://@MOZ_APPUPDATE_HOST@/...), the
 // 11-segment shape the updates host's _redirects rule (updates-staging/_redirects) rewrites. The host comes from
@@ -298,7 +300,7 @@ export async function runChecks(root, overrides = {}) {
         if (!latest?.ok) return { failures, targets: 0 };
         const a = (latest.body?.assets ?? []).find(x => x?.name === MANIFEST_ASSET);
         if (a === undefined) {
-            fail(`the latest Release ${show(latestTag)} carries no ${MANIFEST_ASSET} asset, so the channel values cannot be derived. Next step: pass --manifest <path>, or attach the manifest to the Release`);
+            fail(`the latest Release ${show(latestTag)} carries no ${MANIFEST_ASSET} asset, so the channel values cannot be derived and this row stays red. Next step: the owner decides whether ${MANIFEST_ASSET} is published as a Release asset, and whether without its host field (${MANIFEST_DECISION}); until then run the row with --manifest <path>`);
             return { failures, targets: 0 };
         }
         const r = get(`repos/${slug.owner}/${slug.repo}/releases/assets/${a.id}`, { accept: 'application/octet-stream' });
@@ -535,8 +537,20 @@ async function selfTest() {
                 failed += 1;
             }
         }
+        // The full-tier row without --manifest reads the manifest asset; its absence is red naming the open decision.
+        reset();
+        const noAsset = (await runChecks(REPO_ROOT, { get, transport })).failures;
+        let decision = '';
+        try {
+            decision = readFileSync(join(REPO_ROOT, MANIFEST_DECISION.split(',')[0]), 'utf8');
+        } catch { /* reported below */ }
+        if (noAsset.some(f => f.includes(MANIFEST_ASSET) && f.includes('BLOCKED.md')) && decision.includes('## 49-04') && hits.all === 0) console.log(`  ok  latest Release without the ${MANIFEST_ASSET} asset -> red naming the asset and BLOCKED.md, before any request`);
+        else {
+            console.error(`${NAME}: --self-test FAIL -- a latest Release without ${MANIFEST_ASSET} did not go red naming it and BLOCKED.md, or BLOCKED.md lacks its 49-04 section; got: ${noAsset.join(' | ') || '(no failures)'}`);
+            failed += 1;
+        }
         if (failed > 0) return 1;
-        console.log(`${NAME}: --self-test PASS -- the clean fixture is green and ${network.length + strings.length + 1 + claims.length} planted faults each went red naming the target and the value`);
+        console.log(`${NAME}: --self-test PASS -- the clean fixture is green and ${network.length + strings.length + 2 + claims.length} planted faults each went red naming the target and the value`);
         return 0;
     } finally {
         server.close();
