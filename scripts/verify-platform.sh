@@ -4618,6 +4618,17 @@ run_own_checks() {
     # NEW (Phase 45, CR-05): the drift comparator behind the container baseline.
     # Planted mismatched sysroot and UNMEASURED lines must go red; no host state read.
     "toolchain-baseline-self-test|bash $REPO_ROOT/scripts/toolchain-baseline.sh --self-test"
+    # NEW (Phase 49, AUTO-05): toolchain-container. build-linux measures the container toolchain in the
+    # build container and refuses drift from toolchain-baseline.txt before packaging (the same script with
+    # --measured); the baseline's lines match the keys and forms the emitter's --container block prints;
+    # its base image pin and apt snapshot equal the Containerfile's; no build-date pin in the workflow, the
+    # Containerfile, the baseline or the measured output. Honestly --quick: text reads and YAML parsing.
+    "toolchain-container|node $REPO_ROOT/scripts/verify-toolchain-container.mjs"
+    # toolchain-container-self-test: the green tree plus a fully measured fixture, then three families of
+    # plants, each red naming the drift: a drifted rustc line (measured, unprintable in the baseline, the
+    # drift step removed, moved after packaging, or failing open), a drifted image digest (either side) or
+    # apt snapshot, and a pinned build date (build env, Containerfile, measured output). In memory only.
+    "toolchain-container-self-test|node $REPO_ROOT/scripts/verify-toolchain-container.mjs --self-test"
     # NEW (Phase 45, CR-03): the release objdir name is read from mozconfig.release,
     # so the packager and the release rows share one value. Planted mozconfig text only.
     "release-objdir-self-test|node $REPO_ROOT/scripts/lib/release-objdir.mjs --self-test"

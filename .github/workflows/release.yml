@@ -165,7 +165,14 @@ jobs:
         run: |
           set -euo pipefail
           podman run --rm -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
-            pb-gecko-build bash -c 'MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container'
+            pb-gecko-build bash -c 'MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container > /src/objdir-release/toolchain-measured.txt'
+
+      # AUTO-05: the toolchain the container measured must equal toolchain-baseline.txt line for line, before
+      # anything is packaged or uploaded. The measurement runs inside the build container (the bootstrap state
+      # does not outlive it); the comparison and the toolchain-container row are the same code.
+      - name: Refuse a toolchain that drifted from toolchain-baseline.txt (before packaging)
+        if: steps.key_gate.outputs.build == 'true'
+        run: nix develop .#theia --command node scripts/verify-toolchain-container.mjs --measured objdir-release/toolchain-measured.txt
 
       - name: Package the tarball and the release manifest
         if: steps.key_gate.outputs.build == 'true'
