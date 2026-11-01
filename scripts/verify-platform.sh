@@ -5094,6 +5094,13 @@ run_own_checks() {
       "nav-keys-live|node $REPO_ROOT/scripts/verify-nav-keys-live.mjs"
       "nav-keys-live-self-test|node $REPO_ROOT/scripts/verify-nav-keys-live.mjs --self-test"
 
+      # NEW (Phase 35): the shell furniture -- page tooltips and the in-bar link
+      # status first; the scenarios grow in 35-03 to 35-07. Needs the built
+      # binary and the last Theia build, so never --quick. The self-test runs a
+      # clean control session, then one session per planted runtime fault.
+      "page-furniture-live|node $REPO_ROOT/scripts/verify-page-furniture-live.mjs"
+      "page-furniture-live-self-test|node $REPO_ROOT/scripts/verify-page-furniture-live.mjs --self-test"
+
       # NEW (Phase 29): the address bar's search and URI fixup, driven in the
       # built shell against a hermetic engine chrome adds per session (its
       # search path is a page the check serves), with the startup cache purged
