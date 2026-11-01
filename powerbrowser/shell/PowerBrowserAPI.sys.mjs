@@ -3419,6 +3419,7 @@ export const PowerBrowserAPI = Object.freeze({
         if (!webProgress.isTopLevel) {
           return;
         }
+        linkStatusClearers.get(win)?.(tabId); // WR-04 (35-REVIEW)
         const locationSpec = location.spec;
         const sameDocument = !!(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT);
         // Phase 31 (D-31-01/D-31-02): a top-level, non-same-document location
@@ -4843,6 +4844,7 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
       setActiveTabOfFrame(actorRef.browsingContext.top.embedderElement, data.tabId);
+      linkStatusClearers.get(actorRef.browsingContext.top.embedderElement.ownerGlobal)?.(); // WR-04 (35-REVIEW)
       // A null (the IDE has focus) changes no selection: D-04, the last web tab stays active.
       if (data.tabId !== null) {
         tabHostSelectById(actorRef.browsingContext.top.embedderElement, data.tabId);
@@ -7811,6 +7813,8 @@ function linkStatusText(url) {
   return Services.prefs.getBoolPref("browser.urlbar.trimURLs", true) ? furnitureLazy.BrowserUIUtils.trimURL(text) : text;
 }
 
+const linkStatusClearers = new WeakMap(); // shell window -> clear(tabId?), installed by installTooltipsAndLinkStatus
+
 // PROMPT-08: remote content reaches tooltips and link status only through the
 // AppWindow's nsIXULBrowserWindow (BrowserParent.cpp:2520-2566). Gecko looks the
 // object up on every call (BrowserParent.cpp:512-536), so registering it after
@@ -7848,6 +7852,13 @@ function installTooltipsAndLinkStatus(window) {
       queue(statusTabId, "");
     }
   };
+  // WR-04 (35-REVIEW): the line names one tab's link; a tab switch, or that tab's top-level location change
+  // (XULBrowserWindow.onLocationChange, browser.js), clears it even when the pointer has not moved.
+  linkStatusClearers.set(window, tabId => {
+    if (tabId === undefined || tabId === statusTabId) {
+      clearStatus();
+    }
+  });
 
   document.addEventListener(
     "mouseover",
