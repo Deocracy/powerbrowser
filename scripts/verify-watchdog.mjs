@@ -32,6 +32,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { repoSlug } from './verify-repo-controls.mjs';
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'watchdog';
 const SELF_REL = 'scripts/verify-watchdog.mjs';
@@ -43,7 +45,6 @@ export const LABEL = 'release-train-watchdog';
 export const AUTHOR = 'app/github-actions';
 export const CRON = '17 6 * * *';
 export const RUNS_PATH = 'actions/workflows/release-train.yml/runs?per_page=1';
-const OWNER = 'DeBIOS-Foundation';
 const HOUR_S = 3600;
 const ALLOWED_TRIGGERS = Object.freeze(['schedule', 'workflow_dispatch']);
 const SHA_USE = /@[0-9a-f]{40}$/;
@@ -53,6 +54,15 @@ try {
     yaml = createRequire(join(REPO_ROOT, 'theia', 'package.json'))('js-yaml');
 } catch {
     console.error(`${NAME}: FAIL -- broken instrument: js-yaml is not installed in theia/ (run yarn install in theia/ first)`);
+    process.exit(1);
+}
+
+// The owner and the product repository come from configuration.toml, through the same repoSlug the repo-controls row uses.
+let OWNER, REPO;
+try {
+    ({ owner: OWNER, repo: REPO } = repoSlug(REPO_ROOT));
+} catch (e) {
+    console.error(`${NAME}: FAIL -- broken instrument: ${e.message}`);
     process.exit(1);
 }
 
@@ -185,7 +195,7 @@ export function runWatchdog(text, scenario) {
         const nowS = Math.floor(Date.now() / 1000);
         const run = scenario.runHoursAgo === null ? '' : JSON.stringify({
             run_started_at: new Date((nowS - scenario.runHoursAgo * HOUR_S) * 1000).toISOString().replace('.000', ''),
-            html_url: 'https://github.com/DeBIOS-Foundation/powerbrowser/actions/runs/42',
+            html_url: `https://github.com/${OWNER}/${REPO}/actions/runs/42`,
         });
         const ctx = { outputs: {} };
         const calls = [];
@@ -240,7 +250,7 @@ export function decisionFailures(text) {
         if (unclean(r)) failures.push(`the 25-hour scenario did not run clean: ${unclean(r)}`);
         if (r.created.length > 0) failures.push(`a 25-hour silence opened an issue (${r.created.length} gh issue create call(s)). Next step: the window is 26 hours.`);
         const latest = r.argv.find(l => l.startsWith('api '));
-        const want = `api repos/${OWNER}/powerbrowser/${RUNS_PATH} `;
+        const want = `api repos/${OWNER}/${REPO}/${RUNS_PATH} `;
         if (latest === undefined || !latest.startsWith(want)) failures.push(`the runs read was ${JSON.stringify(latest)}, not ${want.trim()}: the watchdog must read the product repository's newest release-train run. Next step: restore the runs path.`);
 
         r = runWatchdog(text, { runHoursAgo: 27 });

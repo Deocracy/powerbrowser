@@ -3593,6 +3593,14 @@ run_own_checks() {
     # and requires this exact un-flagged invocation's decision function to
     # reject it, with a clean control proving the red is plant-caused.
     "scan-brand-residue-self-test|node $REPO_ROOT/scripts/scan-brand-residue.mjs --self-test"
+    # NEW (deploy, 2026-10-31): two GitHub organisations each hold a powerbrowser repository,
+    # so a hand-typed owner points at the wrong one without failing anything else. Every
+    # github.com/<owner>/<repo> reference in tracked code, workflows and generated output must
+    # name the owner configuration.toml derives (prose, the brand inventory and the historical
+    # records are exempt). The self-test plants a wrong-owner literal per surface and a manifest
+    # naming the other owner, and requires each to go red naming the file and the literal.
+    "repo-slug-derived|node $REPO_ROOT/scripts/verify-repo-slug-derived.mjs"
+    "repo-slug-derived-self-test|node $REPO_ROOT/scripts/verify-repo-slug-derived.mjs --self-test"
     "branding-preflight|node $REPO_ROOT/scripts/verify-branding-preflight.mjs"
     "branding-preflight-self-test|node $REPO_ROOT/scripts/verify-branding-preflight.mjs --self-test"
     # NEW (06-01): VER-01's static layer -- the manifest's own display
