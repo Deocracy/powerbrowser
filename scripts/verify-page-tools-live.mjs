@@ -347,6 +347,26 @@ async function scenarioFind(app, origin, kind = 'webTabFind') {
     if (bar !== true) {
         return 'Ctrl+F relayed, but the Theia find bar did not open (no #pb-chrome-bar-find-input in the Theia frame)';
     }
+    // 32-REVIEW WR-05: highlight-all on, then off. The page's Finder reports each highlight pass (onHighlightFinished,
+    // FinderParent); the off pass must report highlight false, or the highlights stay on the page. A notification without
+    // a highlight flag (another find's pass) is recorded as null and counts for neither.
+    await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)});
+        window.__pbHighlights = [];
+        const noop = () => {};
+        o.finder.addResultListener({ onFindResult: noop, onMatchesCountResult: noop, onCurrentSelection: noop,
+            onHighlightFinished: r => window.__pbHighlights.push(typeof r.highlight === 'boolean' ? r.highlight : null) });
+        return true;`);
+    const highlights = async () => JSON.parse(await inChrome(app, 'return JSON.stringify(window.__pbHighlights);'));
+    await channelRequest(app, { kind, tabId, query: 'needle', highlightAll: true });
+    if (!(await settleValue(highlights, v => Array.isArray(v) && v.includes(true))).includes(true)) {
+        return 'highlight-all on never reported a highlight pass from the page';
+    }
+    const onCount = (await highlights()).length;
+    await channelRequest(app, { kind, tabId, query: 'needle', highlightAll: false });
+    const off = await settleValue(highlights, v => v.slice(onCount).includes(false));
+    if (!off.slice(onCount).includes(false)) {
+        return 'highlight-all off did not clear the highlights (no highlight-false pass from the page)';
+    }
     await channelRequest(app, { kind: 'webTabFindClose', tabId });
     const closed = await waitForPush(app, stateOf(tabId, p => p.findTotal === 0 && p.findStatus === null), { from: stepped, timeoutMs: 10000 });
     return closed < 0 ? 'FindClose did not reset the counts and status in a state push' : null;

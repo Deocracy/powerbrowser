@@ -4868,9 +4868,8 @@ async function handleWebTabAction(data, actorRef) {
       finder.fastFind(data.query, false, false);
       // A remote finder (FinderParent) counts matches only when asked; the findbar asks, and so does this arm.
       finder.requestMatchesCount(data.query, { linksOnly: false });
-      if (data.highlightAll === true) {
-        finder.highlight(true, data.query, false);
-      }
+      // Every find sets the highlight both ways (32-REVIEW WR-05): turning the toggle off must clear it.
+      finder.highlight(data.highlightAll === true, data.query, false);
       return { ok: true, kind, where: "done" };
     }
     case "webTabFindNext": {
