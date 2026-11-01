@@ -39,6 +39,19 @@
  *   camera-doorhanger -- (37-02) a camera request shows the stock
  *                       webRTC-shareDevices doorhanger with its device menulist
  *                       populated, and the stock Allow resolves the page promise.
+ *   dialog-probe     -- (37-03, probe 1, D-06) alert, confirm, prompt, leave-page
+ *                       and HTTP-auth, each shown by the stock window-modal
+ *                       commonDialog (the shell has no getTabDialogBox). While
+ *                       each is open: an IDE edit is typed into the Theia
+ *                       editor, the shell window's input-enabled state is read
+ *                       (the modal loop disables the parent widget, so a typed
+ *                       edit that BiDi delivers is not enough on its own), a
+ *                       traffic tab navigates and the push sequence must
+ *                       advance, and a KWin screenshot is taken. Run alone
+ *                       (--scenario dialog-probe) it writes
+ *                       .planning/probes/prompt-probe-verdict.json and its
+ *                       evidence directory, replacing a provisional verdict.
+ *                       Red when the stock dialog blocks the IDE.
  *
  * --self-test runs a clean control session per target scenario, then one
  * session per planted fault, each required to go red naming its drift.
@@ -49,12 +62,15 @@
  * Usage: verify-prompts-live.mjs [--scenario a,b] [--self-test [--static]] [--help]
  */
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
-import { inChrome, loadedAt, makeCurrent, openWebTab, pollFor, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { BROKEN, inChrome, loadedAt, makeCurrent, openWebTab, pollFor, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'prompts-live';
 const SELF = fileURLToPath(import.meta.url);
@@ -71,6 +87,20 @@ const CHROME_BAR = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.ts
 /** The chrome bar's sharing indicator and its codicon per kind, as chrome-bar-widget.tsx renders them (staticAudit derives both). */
 const SHARING_CLASS = 'pb-chrome-bar-sharing';
 const SHARING_ICONS = { 'device-camera-video': 'camera', mic: 'microphone', 'device-desktop': 'screen' };
+/** 37-03: the stock dialog path. staticAudit derives each name below from upstream. */
+const UPSTREAM_PROMPT_PARENT = 'upstream/browser/actors/PromptParent.sys.mjs';
+const UPSTREAM_COMMON_DIALOG = 'upstream/toolkit/components/prompts/content/commonDialog.xhtml';
+const UPSTREAM_PREFS = 'upstream/modules/libpref/init/StaticPrefList.yaml';
+const COMMON_DIALOG_URL = 'chrome://global/content/commonDialog.xhtml';
+const DIALOG_IDS = ['commonDialog', 'infoBody', 'loginContainer', 'loginTextbox', 'password1Container', 'password1Textbox', 'checkboxContainer', 'checkbox'];
+const BEFOREUNLOAD_PREF = 'dom.require_user_interaction_for_beforeunload';
+const VERDICT = '.planning/probes/prompt-probe-verdict.json';
+const EVIDENCE_DIR = '.planning/probes/prompt-probe';
+const DIALOG_KINDS = ['alert', 'confirm', 'prompt', 'leave', 'auth'];
+/** Test-only Basic credentials for the harness's own 401 server; never a real account. */
+const AUTH = { user: 'pb-probe', pass: 'pb-probe-pass' };
+/** Set by main() for a live `--scenario dialog-probe` run only; self-test sessions never write the verdict. */
+let writeVerdict = false;
 
 /** A geolocation provider that answers from a data: URL, so a granted request resolves without the network. */
 const PREFS = {
@@ -84,6 +114,8 @@ const PREFS = {
     'dom.webnotifications.requireuserinteraction': false,
     'media.navigator.streams.fake': true,
     'media.navigator.permission.disabled': false,
+    // 37-03: a page's beforeunload shows the leave dialog without a prior user gesture, so the leave kind is reproducible.
+    [BEFOREUNLOAD_PREF]: false,
 };
 
 /** Page-side requests: each lands on window.__pbOut[kind] ('pending', 'granted', 'denied'); `id` is its stock notification id. */
@@ -526,6 +558,230 @@ async function scenarioCameraDoorhanger(app, fx, plant) {
     return await outcome(app, page, 'camera') === 'granted' ? null : 'stock Allow on the camera doorhanger did not resolve the page promise';
 }
 
+// ---- 37-03: the stock dialog path (PromptParent's window-modal fallback, PromptParent.sys.mjs:295-307) ----
+
+/** Chrome-scope expression: the open stock commonDialog window, or null. It is XUL and BiDi cannot see it. */
+const DIALOG_WINDOW = `(() => { const en = Services.wm.getEnumerator(null); while (en.hasMoreElements()) { const w = en.getNext(); if (!w.closed && String(w.location && w.location.href) === ${JSON.stringify(COMMON_DIALOG_URL)} && w.document.readyState === 'complete') return w; } return null; })()`;
+
+/** What the open dialog shows, or null when none is open. */
+function dialogState(app) {
+    return inChrome(app, `const w = ${DIALOG_WINDOW};
+        if (!w) return null;
+        const d = w.document;
+        const shown = id => { const e = d.getElementById(id); return !!e && !e.closest('[hidden]'); };
+        return { body: (d.getElementById('infoBody')?.textContent ?? '').trim().slice(0, 200), login: shown('loginContainer'), password: shown('password1Container'), checkbox: shown('checkboxContainer') };`);
+}
+
+async function waitDialog(app, timeoutMs = 10000) {
+    try {
+        return await pollFor(() => dialogState(app), timeoutMs, 'a stock commonDialog');
+    } catch {
+        return null;
+    }
+}
+
+/** Answers the open stock dialog through its own controls: text fields, the stock stop checkbox, then accept or cancel. */
+function answerDialog(app, { accept = true, text = null, user = null, pass = null, stop = false } = {}) {
+    return inChrome(app, `const w = ${DIALOG_WINDOW};
+        if (!w) return 'no dialog window';
+        const d = w.document;
+        const fill = (id, v) => { if (v === null) return; const e = d.getElementById(id); e.value = v; e.dispatchEvent(new w.Event('input', { bubbles: true })); };
+        fill('loginTextbox', ${JSON.stringify(user ?? text)});
+        fill('password1Textbox', ${JSON.stringify(pass)});
+        if (${stop}) { const c = d.getElementById('checkbox'); if (!c.checked) c.click(); }
+        const dlg = d.getElementById('commonDialog');
+        if (${accept}) dlg.acceptDialog(); else dlg.cancelDialog();
+        return 'answered';`);
+}
+
+/** The shell window's widget enabled state. AppWindow::ShowModal disables the parent widget (EnableParent(false)). */
+function shellInputEnabled(app) {
+    return inChrome(app, `const I = typeof Ci !== 'undefined' ? Ci : Components.interfaces;
+        return window.docShell.treeOwner.QueryInterface(I.nsIBaseWindow).enabled;`);
+}
+
+/** The PromptParent tab branch's other gBrowser reads (:224-260) exist on the stand-in; getTabDialogBox itself is the open question. */
+function tabBranchReachable(app) {
+    return inChrome(app, `const g = window.gBrowser; return !!g && typeof g.getTabForBrowser === 'function' && 'selectedBrowser' in g;`);
+}
+
+/** Opens an untitled editor in the Theia frame; returns the Theia document's BiDi context id, or a BROKEN reason. */
+async function openIdeEditor(app, fx) {
+    const tree = await app.send('browsingContext.getTree', {});
+    const theia = (tree.contexts || []).find(c => /^http:\/\/127\.0\.0\.1:\d+\/$/.test(c.url) && !c.url.startsWith(fx.origin));
+    if (!theia) {
+        return `${BROKEN} no Theia browsing context in the tree`;
+    }
+    const opened = await probe(app, `await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile');
+        return get('EditorManager').currentEditor ? 'opened' : 'no-editor';`);
+    return opened === 'opened' ? theia.context : `${BROKEN} the untitled editor did not open (${JSON.stringify(opened)})`;
+}
+
+/** Types `marker` into the IDE editor through the Theia frame; true when the editor's text then holds it. */
+async function ideEdit(app, theiaCtx, marker) {
+    await probe(app, `const w = get('EditorManager').currentEditor; if (w) w.editor.focus(); return true;`);
+    await app.send('input.performActions', { context: theiaCtx, actions: [{ type: 'key', id: 'pb-type', actions: [...marker].flatMap(ch => [{ type: 'keyDown', value: ch }, { type: 'keyUp', value: ch }]) }] });
+    const text = await probe(app, `await new Promise(resolve => setTimeout(resolve, 400));
+        const w = get('EditorManager').currentEditor;
+        return w ? w.editor.document.getText() : null;`);
+    return typeof text === 'string' && text.includes(marker);
+}
+
+/** Raises the shell with a KWin script and captures the screen with spectacle; the path, or null when either step fails. */
+function kwinShot(out) {
+    try {
+        const dir = mkdtempSync(join(tmpdir(), 'pb-kwin-'));
+        const script = join(dir, 'raise.js');
+        writeFileSync(script, "for (const w of workspace.windowList()) { if (String(w.resourceClass).toLowerCase().includes('powerbrowser')) workspace.activeWindow = w; }\n");
+        const id = execFileSync('qdbus', ['org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting.loadScript', script], { encoding: 'utf8', timeout: 10000 }).trim();
+        execFileSync('qdbus', ['org.kde.KWin', `/Scripting/Script${id}`, 'org.kde.kwin.Script.run'], { timeout: 10000 });
+        execFileSync('spectacle', ['-b', '-n', '-f', '-o', out], { timeout: 20000 });
+        return existsSync(out) ? out : null;
+    } catch {
+        return null;
+    }
+}
+
+/** A 401 Basic challenge until the request carries AUTH; then a page titled "authed". */
+async function serveAuth() {
+    const want = `Basic ${Buffer.from(`${AUTH.user}:${AUTH.pass}`).toString('base64')}`;
+    const server = createServer((request, response) => {
+        if (request.headers.authorization === want) {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end('<!doctype html><html><head><title>authed</title></head><body>authed</body></html>');
+            return;
+        }
+        response.writeHead(401, { 'www-authenticate': 'Basic realm="pb-probe"', 'content-type': 'text/html; charset=utf-8' });
+        response.end('<!doctype html><html><head><title>denied</title></head><body>denied</body></html>');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    return {
+        url: `http://127.0.0.1:${server.address().port}/auth`,
+        close: () => new Promise(resolve => { server.closeAllConnections?.(); server.close(() => resolve()); }),
+    };
+}
+
+/** Page-side starts, each deferred so the BiDi evaluate returns before the dialog blocks the page. */
+const DIALOG_START = {
+    alert: "window.__pbDlg.alert = (alert('pb alert'), 'answered')",
+    confirm: "window.__pbDlg.confirm = confirm('pb confirm')",
+    prompt: "window.__pbDlg.prompt = prompt('pb prompt', '')",
+    leave: "window.onbeforeunload = e => { e.preventDefault(); e.returnValue = ''; }; location.href = '/b'",
+};
+const DIALOG_ANSWER = { alert: {}, confirm: {}, prompt: { text: 'pb-answer' }, leave: {}, auth: { user: AUTH.user, pass: AUTH.pass } };
+
+/** Whether the answered dialog resolved the page: its return value, the leave navigation, or the authenticated load. */
+async function dialogResolved(app, page, kind) {
+    const want = { alert: 'answered', confirm: true, prompt: 'pb-answer' };
+    try {
+        if (kind in want) {
+            return await pollFor(async () => (await app.evaluateIn(page.ctx, `(window.__pbDlg || {})[${JSON.stringify(kind)}]`)) === want[kind] || null, 5000, `the ${kind} return value`);
+        }
+        if (kind === 'leave') {
+            return await waitForPush(app, loadedAt(page.tabId, '/b'), { timeoutMs: 8000 }) >= 0;
+        }
+        return await pollFor(async () => (await app.evaluateIn(page.ctx, 'document.title')) === 'authed' || null, 8000, 'the authenticated load');
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Probe 1's measurement, shared by dialog-probe and dialog. For each kind in order: start it, wait for the stock dialog,
+ * then while it is open type an IDE edit, read the shell's input-enabled state, navigate the traffic tab and require
+ * the push sequence to advance on the same recorder, and take a KWin screenshot into `shotDir`; then answer it and read
+ * the page's resolution. Returns { rows } or { broken } (a dialog never appeared, or the IDE could not be set up).
+ */
+async function driveDialogs(app, fx, plant, shotDir) {
+    const auth = await serveAuth();
+    try {
+        const theiaCtx = await openIdeEditor(app, fx);
+        if (theiaCtx.startsWith(BROKEN)) {
+            return { broken: theiaCtx };
+        }
+        const traffic = await openPage(app, fx, '/c');
+        const page = await openPage(app, fx, '/a');
+        mkdirSync(shotDir, { recursive: true });
+        const rows = [];
+        for (const [i, kind] of DIALOG_KINDS.entries()) {
+            const start = kind === 'auth' ? `location.href = ${JSON.stringify(auth.url)}` : DIALOG_START[kind];
+            await app.evaluateIn(page.ctx, `(() => { window.__pbDlg = window.__pbDlg || {}; setTimeout(() => { ${start}; }, 0); return true; })()`);
+            const shown = await waitDialog(app);
+            if (!shown) {
+                return { broken: `${BROKEN} the ${kind} dialog never appeared as a stock commonDialog (if a WebDriver BiDi prompt handler closed it, the session needs unhandledPromptBehavior ignore)` };
+            }
+            const marker = `pb${kind}${i}`;
+            const landed = plant === 'probe-edit-blocked' ? false : await ideEdit(app, theiaCtx, marker);
+            const inputEnabled = await shellInputEnabled(app);
+            if (plant === 'push-traffic-frozen' && i === 0) {
+                // What a stalled push path looks like from the recorder: nothing new is recorded while the dialog is open.
+                await app.evaluate('(window.__pbPushes.push = () => 0, true)');
+            }
+            const from = (await pushes(app)).length;
+            const next = `/d?n=${i}`;
+            await app.send('browsingContext.navigate', { context: traffic.ctx, url: fx.url(next), wait: 'none' });
+            const at = await waitForPush(app, loadedAt(traffic.tabId, next), { from, timeoutMs: 8000 });
+            const shot = kwinShot(join(shotDir, `dialog-${kind}.png`));
+            const answered = await answerDialog(app, DIALOG_ANSWER[kind]);
+            const resolved = answered === 'answered' && await dialogResolved(app, page, kind);
+            rows.push({ kind, body: shown.body, landed, inputEnabled, pushFrom: from, pushAt: at, advanced: at >= from, shot, resolved });
+        }
+        return { rows };
+    } finally {
+        await auth.close();
+    }
+}
+
+/** The kinds a row set shows the IDE blocked for, with why. Empty means the stock dialog kept the IDE usable. */
+function blockedKinds(rows) {
+    return rows.flatMap(r => {
+        const why = [!r.landed && 'edit did not land', r.inputEnabled !== true && 'shell input disabled', !r.advanced && 'pushes stalled'].filter(Boolean);
+        return why.length ? [`${r.kind} (${why.join(', ')})`] : [];
+    });
+}
+
+const STOCK_BLOCKS = 'stock dialog blocks the IDE';
+
+/** Probe 1 (Task 1). Writes the verdict only on a live `--scenario dialog-probe` run. */
+async function scenarioDialogProbe(app, fx, plant) {
+    const shotDir = writeVerdict ? join(REPO_ROOT, EVIDENCE_DIR) : mkdtempSync(join(tmpdir(), 'pb-dialog-probe-'));
+    const run = await driveDialogs(app, fx, plant, shotDir);
+    if (run.broken) {
+        return run.broken;
+    }
+    const missingShots = run.rows.filter(r => !r.shot).map(r => r.kind);
+    if (missingShots.length) {
+        return `${BROKEN} no KWin screenshot for ${missingShots.join(', ')} (run with the sandbox off: spectacle needs the session DBus); no verdict written`;
+    }
+    const blocked = blockedKinds(run.rows);
+    if (writeVerdict) {
+        const pushLog = join(EVIDENCE_DIR, 'push-log.json');
+        writeFileSync(join(REPO_ROOT, pushLog), `${JSON.stringify({ rows: run.rows, pushes: await pushes(app) }, null, 2)}\n`);
+        const bundle = join(REPO_ROOT, 'theia/applications/browser/lib/frontend/bundle.js');
+        const binary = join(REPO_ROOT, 'objdir/dist/bin/powerbrowser');
+        const verdict = {
+            outcome: blocked.length ? 'stock-blocks-ide' : 'stock-keeps-ide-usable',
+            provisional: false,
+            source: 'live probe 1 (verify-prompts-live.mjs --scenario dialog-probe)',
+            relayFeasible: blocked.length ? await tabBranchReachable(app) : null,
+            evidence: {
+                screenshots: run.rows.map(r => r.shot.slice(REPO_ROOT.length + 1)),
+                pushLog,
+                ideEditOk: run.rows.every(r => r.landed && r.inputEnabled === true),
+                blocked,
+            },
+            date: new Date().toISOString().slice(0, 10),
+            build: {
+                theiaBundleSha256: existsSync(bundle) ? createHash('sha256').update(readFileSync(bundle)).digest('hex') : null,
+                binaryMtime: existsSync(binary) ? statSync(binary).mtime.toISOString() : null,
+            },
+        };
+        writeFileSync(join(REPO_ROOT, VERDICT), `${JSON.stringify(verdict, null, 2)}\n`);
+        console.log(`dialog-probe: wrote ${VERDICT} (outcome ${verdict.outcome}); stage it and ${EVIDENCE_DIR}/ by explicit path`);
+    }
+    return blocked.length ? `${STOCK_BLOCKS}: ${blocked.join('; ')}` : null;
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
@@ -534,6 +790,7 @@ const SCENARIOS = {
     remember: scenarioRemember,
     sharing: scenarioSharing,
     'camera-doorhanger': scenarioCameraDoorhanger,
+    'dialog-probe': scenarioDialogProbe,
 };
 
 /** Each plant runs its target scenario with one thing wrong and must go red naming `expect`. */
@@ -548,6 +805,7 @@ const PLANTS = [
     { plant: 'sharing-stuck-on', target: 'sharing', expect: 'indicator still shown after track end' },
     { plant: 'frame-flag-accepted', target: 'sharing', expect: 'indicator driven from a frame flag' },
     { plant: 'camera-template-missing', target: 'camera-doorhanger', expect: 'camera template missing: request never resolved' },
+    { plant: 'probe-edit-blocked', target: 'dialog-probe', expect: 'stock dialog blocks the IDE' },
 ];
 
 async function runSession(name, plant) {
@@ -608,6 +866,26 @@ function staticAudit() {
         if (!bar.includes(`'${icon}'`)) {
             failures.push(`${CHROME_BAR} has no '${icon}' codicon; the sharing scenario cannot name that kind`);
         }
+    }
+    // 37-03: the stock dialog path the dialog scenarios drive, derived from upstream.
+    const promptParent = readFileSync(join(REPO_ROOT, UPSTREAM_PROMPT_PARENT), 'utf8');
+    if (!promptParent.includes(`const COMMON_DIALOG = "${COMMON_DIALOG_URL}"`)) {
+        failures.push(`${UPSTREAM_PROMPT_PARENT} no longer opens ${COMMON_DIALOG_URL}; the dialog scenarios look for a window upstream does not open`);
+    }
+    if (!promptParent.includes('win?.gBrowser?.getTabDialogBox') || !promptParent.includes('"centerscreen,chrome,modal,titlebar"')) {
+        failures.push(`${UPSTREAM_PROMPT_PARENT} no longer feature-detects getTabDialogBox with a window-modal fallback; probe 1 measures a path upstream does not take`);
+    }
+    const dialogMarkup = readFileSync(join(REPO_ROOT, UPSTREAM_COMMON_DIALOG), 'utf8');
+    for (const id of DIALOG_IDS) {
+        if (!dialogMarkup.includes(`id="${id}"`)) {
+            failures.push(`${UPSTREAM_COMMON_DIALOG} has no #${id}; the dialog scenarios read or answer an element upstream lacks`);
+        }
+    }
+    if (!readFileSync(join(REPO_ROOT, UPSTREAM_PREFS), 'utf8').includes(`- name: ${BEFOREUNLOAD_PREF}\n`)) {
+        failures.push(`${UPSTREAM_PREFS} has no ${BEFOREUNLOAD_PREF}; the leave kind sets a pref upstream does not read`);
+    }
+    if (!(PREFS[BEFOREUNLOAD_PREF] === false)) {
+        failures.push(`PREFS does not turn ${BEFOREUNLOAD_PREF} off; the leave kind needs a gesture the harness never gives`);
     }
     return failures;
 }
@@ -673,6 +951,8 @@ async function main() {
         console.error(`${NAME}: unknown scenario(s): ${unknown.join(', ')}`);
         return 1;
     }
+    // Probe 1's verdict is written only by its own live run, never by a self-test session.
+    writeVerdict = selected.includes('dialog-probe');
     let failed = 0;
     for (const name of selected) {
         try {
