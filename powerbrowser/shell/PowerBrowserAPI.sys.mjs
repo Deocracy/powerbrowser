@@ -10302,21 +10302,6 @@ function extensionSidebarRequest(win, kind, data) {
 // the shell window's switchToTabHavingURI.
 // ---------------------------------------------------------------------------
 
-// Resolves when a stock window has finished its delayed startup (browser-init.js notifies with the window as subject).
-function stockWindowStarted(win) {
-  return new Promise(resolve => {
-    const observer = {
-      observe(subject) {
-        if (subject === win) {
-          Services.obs.removeObserver(observer, "browser-delayed-startup-finished");
-          resolve();
-        }
-      },
-    };
-    Services.obs.addObserver(observer, "browser-delayed-startup-finished");
-  });
-}
-
 // A stock tab loading `url` with the caller's principal, selected in the most recent stock window the extension may use
 // (a private one only if it is allowed in private windows). 38-REVIEW WR-01: no "own pages only" check. Stock tabs.create
 // replaces the principal with a content principal made from the URL itself, so a caller-versus-page comparison could
@@ -10346,10 +10331,8 @@ function extensionOpenTabPage(url, principal, reuse = false) {
     // new window); hand it back once an extension needs it. 38-REVIEW WR-06: a switch-to caller (reuse) has no use for
     // a tab, so it gets no error for a page that opened.
     const starting = win ?? PowerBrowserAPI.openBrowserWindow("");
-    stockWindowStarted(starting).then(() => {
-      if (!starting.closed) {
-        extensionSelectTabPage(starting, url, principal, reuse);
-      }
+    stockWindowStarted(starting).then(() => extensionSelectTabPage(starting, url, principal, reuse), () => {
+      // the window closed or never finished starting: nothing to open the page in
     });
     if (reuse) {
       return null;
