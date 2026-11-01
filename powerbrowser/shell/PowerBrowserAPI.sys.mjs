@@ -4018,6 +4018,7 @@ export const PowerBrowserAPI = Object.freeze({
         PowerBrowserAPI.webTabClose(tabId);
       }
     }
+    extensionFrontendGone(actorRef);
   },
 
   /**
@@ -9845,7 +9846,7 @@ async function pushExtensionActions(win) {
 
 // The subscribing frame becomes the push target and gets the whole set at once. The listeners are added once per
 // window: the host's tab events, and an extension starting or stopping (install, enable, disable, remove).
-function extensionActionsSubscribe(win, theiaBrowser) {
+function extensionActionsSubscribe(win, theiaBrowser, actorRef) {
   const host = tabHosts.get(win);
   if (!host || host.theiaBrowser !== theiaBrowser) {
     return "unknown-window";
@@ -9870,8 +9871,25 @@ function extensionActionsSubscribe(win, theiaBrowser) {
   }
   // A reloaded frontend has none of the earlier pushes.
   bridge.last = null;
+  bridge.actor = actorRef; // the frontend that owns the popup and sidebar view (extensionFrontendGone)
   pushExtensionActions(win);
   return "subscribed";
+}
+
+// 38-REVIEW WR-05: the subscribed frontend's WindowGlobal died (reload, sidecar swap), the same moment its overlays go
+// (webTabDropOwnedBy). An open popup closes, and the sidebar browser is hidden so it does not stay painted over the
+// reloading frame; chrome keeps it open, and the next frontend's subscribe push has it show the view again. A frontend
+// that has already re-subscribed owns the bridge now and is left alone.
+function extensionFrontendGone(actorRef) {
+  const win = PowerBrowserAPI.findShellWindow();
+  if (!win || extensionBridges.get(win)?.actor !== actorRef) {
+    return;
+  }
+  extensionPopups.get(win)?.popup.closePopup();
+  const sidebar = extensionSidebars.get(win);
+  if (sidebar) {
+    sidebar.frame.style.visibility = "hidden";
+  }
 }
 
 // The extension a store kind names, when the running set holds it with an action: its page action when the click
@@ -10063,7 +10081,7 @@ async function extensionStoreRequest(kind, data, actorRef) {
   const theiaBrowser = actorRef.browsingContext.top.embedderElement;
   const win = theiaBrowser.ownerDocument.defaultView;
   if (kind === "extensionActionsSubscribe") {
-    return { ok: true, kind, where: extensionActionsSubscribe(win, theiaBrowser) };
+    return { ok: true, kind, where: extensionActionsSubscribe(win, theiaBrowser, actorRef) };
   }
   if (kind === "extensionSidebar" || kind === "extensionSidebarGeometry") {
     const where = extensionSidebarRequest(win, kind, data);

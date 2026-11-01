@@ -77,6 +77,9 @@
  *                    document's loadPanel in a chrome browser, never through an
  *                    overlay opener; the row validator requires sidebarOpen,
  *                    and only the extensions/ widget shows the sidebar view.
+ *  11b. frontend gone -- (38-REVIEW WR-05) webTabDropOwnedBy also closes the open
+ *                    popup and hides the sidebar browser of the window whose
+ *                    subscribed frontend (bridge.actor) died.
  *  12. tab pages  -- (38-04, B5) tabsBridgeCreate sends an extension page to
  *                    extensionOpenTabPage (the stock window) before any overlay
  *                    exists, and still refuses every other non-http(s) URL;
@@ -478,6 +481,18 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             if (stripComments(src[file]).includes('ExtensionSidebarView')) failures.push(`sidebar: ${file} shows the sidebar view outside ${EXTENSIONS_WIDGET}`);
         }
     }
+    // 11b. WR-05: the frontend's death takes its popup and sidebar view down with its overlays.
+    if (bridgeLanded) {
+        const drop = span(apiLines, /^ {2}webTabDropOwnedBy\(actorRef\) \{/);
+        const gone = span(apiLines, /^function extensionFrontendGone\(/);
+        const goneBody = gone ? apiLines.slice(gone.start, gone.end + 1).join('\n') : '';
+        if (!drop || !gone) failures.push(`frontend-gone: ${API} has no ${!drop ? 'webTabDropOwnedBy' : 'extensionFrontendGone'} (broken instrument)`);
+        else {
+            if (!apiLines.slice(drop.start, drop.end + 1).join('\n').includes('extensionFrontendGone(actorRef)')) failures.push(`frontend-gone: webTabDropOwnedBy does not call extensionFrontendGone; a reload leaves the extension sidebar painted over the frame and a popup open`);
+            if (!/\.popup\.closePopup\(\)/.test(goneBody) || !/frame\.style\.visibility = "hidden"/.test(goneBody)) failures.push(`frontend-gone: extensionFrontendGone does not both close the open popup and hide the sidebar browser`);
+            if (!apiLines.join('\n').includes('bridge.actor = actorRef')) failures.push(`frontend-gone: extensionActionsSubscribe does not record the subscribing actor (bridge.actor), so extensionFrontendGone matches no frontend`);
+        }
+    }
     // 12. tab pages
     if (bridgeLanded) {
         const create = span(apiLines, /^function tabsBridgeCreate\(/);
@@ -611,6 +626,8 @@ function selfTest() {
         { name: 'sidebar-as-tab', run: () => check({ ...clean, [API]: clean[API].replace('  win.document.body.appendChild(frame);\n  extensionSidebars.set(', '  createPendingOverlay(null, panel, true, null);\n  extensionSidebars.set(') }), expect: 'extensionSidebarOpen puts the sidebar page in an overlay (createPendingOverlay(' },
         { name: 'tabpage-in-overlay', run: () => check({ ...clean, [API]: clean[API].replace('    return extensionOpenTabPage(url, options?.triggeringPrincipal);', '    return createPendingOverlay(options.openerBrowser, url, true, null);') }), expect: 'tabsBridgeCreate puts an extension page in an overlay (createPendingOverlay(' },
         { name: 'remove resolves early', run: () => check({ ...clean, [API]: clean[API].replace('    PowerBrowserAPI.webTabClose(tabId);\n    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });', '    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });') }), expect: 'tabsBridgeRemove pushes closeAdoptedTab without closing' },
+        { name: 'sidebar left painted', run: () => check({ ...clean, [API]: clean[API].replace('    extensionFrontendGone(actorRef);\n', '') }), expect: 'webTabDropOwnedBy does not call extensionFrontendGone' },
+        { name: 'sidebar not hidden', run: () => check({ ...clean, [API]: clean[API].replace('sidebar.frame.style.visibility = "hidden";', 'sidebar.frame.style.visibility = "visible";') }), expect: 'does not both close the open popup and hide the sidebar browser' },
         { name: 'container dropped', run: () => check({ ...clean, [API]: clean[API].replace('  if (options?.userContextId) {\n', '  if (false) {\n') }), expect: 'tabsBridgeCreate does not refuse a container' },
         { name: 'page via window argument', run: () => check({ ...clean, [API]: clean[API].replace('win ?? PowerBrowserAPI.openBrowserWindow("")', 'win ?? PowerBrowserAPI.openBrowserWindow(url)') }), expect: 'extensionOpenTabPage passes the page through openBrowserWindow' },
         { name: 'execute name drift', run: () => check({ ...clean, [API]: clean[API].replace(', "_execute_sidebar_action"];', '];') }), expect: 'missing _execute_sidebar_action' },
