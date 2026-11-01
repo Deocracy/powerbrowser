@@ -233,8 +233,15 @@ const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/address-bar/address-bar.tsx`;
 const CHROME_BAR_WIDGET_FILE = `${CHROME_BAR_DIR}/chrome-bar-widget.tsx`;
 /** Phase 38 plan 02 (D-11): the extension buttons and puzzle menu, which send extensionClick/Pin/Remove from their handlers. */
 const EXTENSION_ACTIONS_WIDGET_FILE = `${CHROME_BAR_DIR}/extensions/extension-actions-widget.tsx`;
-/** Phase 33: the sanctioned privileged callers -- the pill, the chrome bar widget and (38-02) the extension buttons -- and nothing else. */
-const PRIVILEGED_CALLERS = [CHROME_BAR_WIDGET, CHROME_BAR_WIDGET_FILE, EXTENSION_ACTIONS_WIDGET_FILE];
+/** Phase 33: the sanctioned privileged callers -- the pill and the chrome bar widget -- and nothing else. */
+const PRIVILEGED_CALLERS = [CHROME_BAR_WIDGET, CHROME_BAR_WIDGET_FILE];
+/**
+ * 38-REVIEW WR-08: the extension kinds (every privileged kind named extension*) are sent by the extension buttons widget
+ * alone, and the earlier privileged kinds are never sent from it: one fence per group, so adding the widget to one list
+ * cannot widen the other.
+ */
+const EXTENSION_CALLERS = [EXTENSION_ACTIONS_WIDGET_FILE];
+const privilegedCallersOf = kind => (/^extension/.test(kind) ? EXTENSION_CALLERS : PRIVILEGED_CALLERS);
 
 /** Stock `HttpOpenHandler`'s priority; the web-tab handler must exceed it. */
 const STOCK_HTTP_HANDLER_PRIORITY = 500;
@@ -724,9 +731,9 @@ function checkStoreKinds(src, storeClasses) {
         if (kindClass !== 'privileged' && kindClass !== 'lifecycle' && kindClass !== 'window-chrome') {
             continue;
         }
-        // A privileged kind is sent from the pill or the chrome bar widget; a lifecycle or window-chrome kind from the
+        // A privileged kind is sent from the pill or the chrome bar widget (an extension kind from the extension widget alone); a lifecycle or window-chrome kind from the
         // widget alone (its Quit row; its Full Screen handler, which the command reaches through an opener).
-        const homes = kindClass === 'privileged' ? PRIVILEGED_CALLERS : [CHROME_BAR_WIDGET_FILE];
+        const homes = kindClass === 'privileged' ? privilegedCallersOf(kind) : [CHROME_BAR_WIDGET_FILE];
         const home = homes.join(' or ');
         const callers = new Set([STORE_CLIENT, ...homes]);
         if (!new RegExp(`^\\s+(?:async\\s+)?${kind}\\(`, 'm').test(src[STORE_CLIENT] ?? '')) {
@@ -1079,7 +1086,23 @@ function selfTest() {
             // Phase 38 plan 02 (D-11): pin and remove stay with the extension widget's handlers.
             name: 'planted extensionRemove called from chrome-bar-commands.ts',
             sources: { ...clean, [COMMANDS]: clean[COMMANDS] + "\nvoid this.store.extensionRemove(id);\n" },
-            expect: `the privileged kind extensionRemove is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${COMMANDS}`,
+            expect: `the privileged kind extensionRemove is called outside ${EXTENSION_CALLERS.join(' or ')}, in ${COMMANDS}`,
+        },
+        {
+            // 38-REVIEW WR-08: one fence per group. An earlier privileged kind from the extension widget, an extension kind from the pill or the chrome bar widget.
+            name: 'planted readClipboardText called from the extension widget',
+            sources: { ...clean, [EXTENSION_ACTIONS_WIDGET_FILE]: clean[EXTENSION_ACTIONS_WIDGET_FILE] + "\nvoid this.store.readClipboardText();\n" },
+            expect: `the privileged kind readClipboardText is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${EXTENSION_ACTIONS_WIDGET_FILE}`,
+        },
+        {
+            name: 'planted extensionRemove called from the pill',
+            sources: { ...clean, [CHROME_BAR_WIDGET]: clean[CHROME_BAR_WIDGET] + "\nvoid this.store.extensionRemove(id);\n" },
+            expect: `the privileged kind extensionRemove is called outside ${EXTENSION_CALLERS.join(' or ')}, in ${CHROME_BAR_WIDGET}`,
+        },
+        {
+            name: 'planted extensionClick called from the chrome bar widget',
+            sources: { ...clean, [CHROME_BAR_WIDGET_FILE]: clean[CHROME_BAR_WIDGET_FILE] + "\nvoid this.store.extensionClick(id);\n" },
+            expect: `the privileged kind extensionClick is called outside ${EXTENSION_CALLERS.join(' or ')}, in ${CHROME_BAR_WIDGET_FILE}`,
         },
         {
             name: 'planted extensionPin named in chrome-bar-keybindings.ts',
