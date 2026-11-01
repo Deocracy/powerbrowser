@@ -257,6 +257,9 @@ function runChecks(root, overrides = {}) {
     const tag = tagText === null ? null : tagText.trim();
     if (tag === null || !RELEASE_TAG.test(tag)) {
         fail(`${RELEASE_TXT_REL} must hold one release tag such as v153.5.1-1 (got ${JSON.stringify(tag)}). Next step: restore the file`);
+    } else if (version !== null && tag.slice(1, tag.lastIndexOf('-')) !== version) {
+        // A stale objdir would otherwise emit appVersion from the old build under the new tag's URL.
+        fail(`${RELEASE_TXT_REL} tag ${JSON.stringify(tag)} names ESR version ${tag.slice(1, tag.lastIndexOf('-'))} but ${shown(paths.appIni)} Version is ${JSON.stringify(version)}. Next step: rebuild the tree at the tag's version, or run node scripts/generate.mjs if release.txt is stale`);
     }
     const docsText = readText(join(root, DOCS_REL));
     const assetToken = targetTokenOf(docsText);
@@ -450,6 +453,7 @@ function selfTest() {
             ['TARGET_XPCOM_ABI disagreeing with the table', { texts: { [CONFIG_STATUS_REL]: statusFixture({ abi: 'i686-gcc3', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'i686-gcc3'],
             ['channel flag given the MAR channel id', { texts: green, channel: marId }, CONFIG_STATUS_REL, marId],
             ['docs/RELEASING.md without the asset table (no target token)', { texts: { ...green, [DOCS_REL]: '' } }, DOCS_REL, 'Release asset names'],
+            ['release.txt tag disagreeing with the built Version', { texts: { ...green, [RELEASE_TXT_REL]: 'v153.6.0-1\n' } }, RELEASE_TXT_REL, '153.6.0'],
             ['--details-url not https', { texts: green, detailsURL: 'http://example.invalid/releases' }, '--details-url', 'http://example.invalid/releases'],
         ];
         for (const [name, overrides, file, value] of plants) {
