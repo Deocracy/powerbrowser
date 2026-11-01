@@ -624,6 +624,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Save video as",
   "Save audio as",
   "${name} couldn't save that file. Choose a different place and try again.",
+  "${name} didn't save that file because its menu had already closed. Right-click it again and choose the save option.",
   "${name} couldn't read this tab's history. Use Back and Forward to move one page at a time.",
   "Show the Home button next to Reload.",
   "${name} can't open your home page. Press Enter to change it in Settings.",

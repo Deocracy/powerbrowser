@@ -8037,7 +8037,7 @@ let pageMenuBundle = null;
 function pageMenuState(window) {
   let state = pageMenus.get(window);
   if (!state) {
-    state = { captured: null, kept: false, pending: null, nextMenuId: 0, grants: new Map(), nextGrant: 0 };
+    state = { captured: null, kept: false, pending: null, nextMenuId: 0, grants: new Map(), nextGrant: 0, saves: new Map() };
     pageMenus.set(window, state);
   }
   return state;
@@ -8245,6 +8245,28 @@ async function handlePageMenuAction(data, actorRef) {
     return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed page menu pick" };
   }
   const state = pageMenuState(actorRef.browsingContext.top.embedderElement.ownerGlobal);
+  // CR-01 (35-REVIEW): a save's path reply answers the save slot its pick filled, which neither
+  // the menu's minute nor a newer right-click ends, so the dialog may stay open as long as the user needs.
+  const save = state.saves.get(data.menuId);
+  if (save && save.tabId === data.tabId) {
+    state.saves.delete(data.menuId);
+    if (data.itemId === null) {
+      return { ok: true, kind, where: "dismissed" };
+    }
+    // T-35-14: a path answers only this menu's save pick; the target stays the URL captured at the pick.
+    if (save.itemId !== data.itemId || !pageMenuSavePathOk(data.path)) {
+      return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a save path this menu did not ask for" };
+    }
+    try {
+      return { ok: true, kind, ...(await pageMenuSave(save, data.path)) };
+    } catch (err) {
+      PowerBrowserAPI.log("error", `[web-tab] ${kind} failed: ${err && err.message ? err.message : err}`);
+      return { ok: false, reason: "failed", message: "handleWebTabAction: the page menu row failed" };
+    }
+  }
+  if (data.path !== undefined) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a save path this menu did not ask for" };
+  }
   const pending = state.pending;
   if (!pending || pending.menuId !== data.menuId || pending.tabId !== data.tabId) {
     return { ok: true, kind, where: "stale" };
@@ -8257,13 +8279,6 @@ async function handlePageMenuAction(data, actorRef) {
     if (data.itemId === null) {
       return { ok: true, kind, where: "dismissed" };
     }
-    if (pending.savePick !== undefined || data.path !== undefined) {
-      // T-35-14: a path answers only this menu's pending save pick; the target stays the captured URL.
-      if (pending.savePick !== data.itemId || !pageMenuSavePathOk(data.path)) {
-        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a save path this menu did not ask for" };
-      }
-      return { ok: true, kind, ...(await pageMenuSave(pending, data.path)) };
-    }
     if (!pending.offered.has(data.itemId)) {
       return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a row this menu did not offer" };
     }
@@ -8273,8 +8288,12 @@ async function handlePageMenuAction(data, actorRef) {
     }
     const result = await runPageMenuRow(row.id ?? row.dynamic, pending, state, data.itemId);
     if (result.where === "save-pick") {
-      pending.savePick = data.itemId; // kept for the one path reply (T-35-14)
-      state.pending = pending;
+      // The one path reply (T-35-14) finds the target bound here, at the pick. A slot whose
+      // reply never comes (the frontend reloaded) is the oldest one dropped at the ninth.
+      state.saves.set(pending.menuId, { tabId: pending.tabId, itemId: data.itemId, ...pending.save });
+      if (state.saves.size > 8) {
+        state.saves.delete(state.saves.keys().next().value);
+      }
     }
     return { ok: true, kind, ...result };
   } catch (err) {
@@ -8530,7 +8549,7 @@ function pageMenuSavePick(id, pending) {
   if (!pageMenuTargetAllowed(data.principal, url)) {
     return { where: "refused" };
   }
-  pending.save = { url, referrerInfo: link && data.context.onLink ? data.linkReferrerInfo : data.referrerInfo };
+  pending.save = { url, referrerInfo: link && data.context.onLink ? data.linkReferrerInfo : data.referrerInfo, principal: data.principal, cookieJarSettings: data.cookieJarSettings };
   let name = "";
   try {
     name = pageToolsLazy.DownloadPaths.sanitize(decodeURIComponent(new URL(url).pathname.split("/").pop()));
@@ -8546,11 +8565,11 @@ function pageMenuSavePathOk(path) {
 // Save step two: a Downloads download of the captured target with the page's
 // referrer, principal and cookie jar, added to the public list Phase 32's
 // downloads panel reads, so no save is silent (T-35-15).
-async function pageMenuSave(pending, path) {
+async function pageMenuSave(save, path) {
   const { Downloads } = downloadsLazy;
-  const { url, referrerInfo } = pending.save;
+  const { url, referrerInfo, principal, cookieJarSettings } = save;
   const download = await Downloads.createDownload({
-    source: { url, referrerInfo, loadingPrincipal: pending.data.principal, cookieJarSettings: pending.data.cookieJarSettings, isPrivate: false },
+    source: { url, referrerInfo, loadingPrincipal: principal, cookieJarSettings, isPrivate: false },
     target: path,
   });
   await (await Downloads.getList(Downloads.PUBLIC)).add(download);

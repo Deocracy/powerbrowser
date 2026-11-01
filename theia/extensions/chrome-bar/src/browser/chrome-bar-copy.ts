@@ -241,6 +241,7 @@ export const CHROME_BAR_COPY = Object.freeze({
     saveVideoTitle: 'Save video as',
     saveAudioTitle: 'Save audio as',
     saveTargetFailed: (subject: string) => `${subject} couldn't save that file. Choose a different place and try again.`,
+    saveTargetExpired: (subject: string) => `${subject} didn't save that file because its menu had already closed. Right-click it again and choose the save option.`,
     // Phase 33 plan 02 (BMK-01, BMK-02): the star and its editor (33-UI-SPEC Copywriting Contract); {shortcut} is the bound key's label.
     bookmarkStarTip: (shortcut: string) => `Bookmark this page (${shortcut})`,
     editBookmarkTip: (shortcut: string) => `Edit this bookmark (${shortcut})`,

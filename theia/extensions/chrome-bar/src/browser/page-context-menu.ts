@@ -224,7 +224,10 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
             path = undefined;
         }
         const reply = await this.send(tabId, menuId, path === undefined ? null : itemId, path);
-        if (path !== undefined && reply.ok !== true) {
+        // CR-01 (35-REVIEW): only `saved` wrote the download; a `stale` or any other answer lost the save, and says so.
+        if (path !== undefined && reply.ok === true && reply.where === 'stale') {
+            this.messages.error(CHROME_BAR_COPY.saveTargetExpired(appSubject()));
+        } else if (path !== undefined && (reply.ok !== true || reply.where !== 'saved')) {
             this.messages.error(CHROME_BAR_COPY.saveTargetFailed(appSubject()));
         }
     }
