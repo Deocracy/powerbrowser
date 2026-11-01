@@ -245,7 +245,7 @@ here owns.
 | `prerequisites-and-hardening` | Create and install both GitHub Apps, require org 2FA, add the second owner, store both recovery-code sets offline, run the apply script, and run the runner-group probe and the notification drills (Phase 41 plan 41-04) | App creation, org 2FA and ownership are UI-only; `--yes` writes to the live org and runs only from the owner's terminal |
 | `mar-signing-and-update-integrity` | Confirm `gh auth status` shows the owner and the `release` environment exists | Account |
 | `mar-signing-and-update-integrity` | The MAR key ceremony (below) | Private key custody |
-| `mar-signing-and-update-integrity` | The MAR key ceremony (key store lives on `legion` at `~/.config/powerbrowser-release/mar-key/`; optional `.p12` backup to the offline medium) and one MAR signed with that store's key for the loopback proof | Private key custody |
+| `mar-signing-and-update-integrity` | The MAR key ceremonies, primary and secondary (key stores live on `legion` at `~/.config/powerbrowser-release/mar-key/` and `~/.config/powerbrowser-release/mar-secondary/`; two mandatory `.p12` copies of each key on two separately stored offline media) and one MAR signed with that store's key for the loopback proof | Private key custody |
 | `packaged-product-correctness-linux` | Node provenance: the release train's detect-node job selects the newest Node 24 line, fetches `SHASUMS256.txt` with its `.sig` from `nodejs.org/dist/<version>/`, verifies the signature with `gpgv` against the nodejs/release-keys keyring, and asserts the tarball sha256 equals the signed entry before it opens `chore/node-v24.x`; the owner reviews that PR, and the shipped-licences and provenance section of `docs/BUILD.md` is written from it | Key trust decision |
 | `linux-release-pipeline-and-update-channel` | Mint a one-time registration token for `Deocracy/powerbrowser` (no PAT, no App key), write it root-owned mode 0600 to `/var/lib/secrets/github-runner-registration` immediately before the runner registration, and leave that file in place afterwards (the unit reads it as a credential on every start) | Secret custody plus `pkexec` |
 | `linux-release-pipeline-and-update-channel` | Add the `services.github-runners` block to `/etc/nixos/configuration.nix` and apply it | Root on `legion` |
@@ -674,8 +674,14 @@ What is live and what is a contract that nothing runs yet:
 
 ### The MAR key ceremony and custody
 
-Run the ceremony once, on `legion`, at the repository root, with nobody else at the
-console and an offline medium mounted. The shape is:
+PowerBrowser's updater carries two certificate slots, and each slot holds its own key.
+The **primary** key signs every release. The **secondary** key signs nothing until a
+rotation and stays offline, so that losing or rotating the primary key does not strand
+installed copies of PowerBrowser. Run each ceremony once, on `legion`, at the repository
+root, with nobody else at the console and two separately stored offline media mounted.
+
+**Primary key.** NSS database `~/.config/powerbrowser-release/mar-key/`, nickname
+`powerbrowser-mar`. The shape is:
 
 ```
 PB=$HOME/coding/Power-Browser; D=$HOME/.config/powerbrowser-release/mar-key
@@ -689,18 +695,80 @@ $PB/objdir/dist/bin/certutil -S -d "sql:$D" -f "$D/password.txt" -z "$D/noise" -
   -s "CN=PowerBrowser MAR signing,O=$(sed -n 's/^vendor_display *= *"\(.*\)"/\1/p' configuration.toml)" -x -t ",," -k rsa -g 4096 -Z SHA384 -v 240
 shred -u "$D/noise"
 $PB/objdir/dist/bin/certutil -L -d "sql:$D" -n powerbrowser-mar -r > powerbrowser/packaging/mar/mar-primary.der
-# Optional, the owner's call: a .p12 backup of the key to the offline medium.
-$PB/objdir/dist/bin/pk12util -o <medium>/powerbrowser-mar.p12 -d "sql:$D" -n powerbrowser-mar -k "$D/password.txt" -w "$D/password.txt"
+# Mandatory (SEC-05, SEC-09): two .p12 copies, one on each separately stored offline medium.
+$PB/objdir/dist/bin/pk12util -o <medium-1>/powerbrowser-mar.p12 -d "sql:$D" -n powerbrowser-mar -k "$D/password.txt" -w "$D/password.txt"
+$PB/objdir/dist/bin/pk12util -o <medium-2>/powerbrowser-mar.p12 -d "sql:$D" -n powerbrowser-mar -k "$D/password.txt" -w "$D/password.txt"
 ls -l "$D"    # cert9.db key4.db pkcs11.txt password.txt -- nothing from this directory ever enters the repo
 ```
 
-The key store and `password.txt` live on `legion` at
-`~/.config/powerbrowser-release/mar-key/`, outside the repo. One key fills both
-updater slots (R12): a compromised key needs a client rebuild. Only the public
-certificate, `powerbrowser/packaging/mar/mar-primary.der`, is tracked. The
-`.p12` backup on the offline medium comes from the optional `pk12util` line in
-the ceremony block above. Loading the key into the `release` environment secrets
-is part of the deferred release pipeline row.
+The primary ceremony ran while the `.p12` copy was still the owner's call. If either
+primary copy is missing, set `PB` and `D` as above and run the two `pk12util` lines
+alone against the existing store; the guard line refuses only a new store.
+
+**Secondary key.** Same machine, `legion`. A new NSS database,
+`~/.config/powerbrowser-release/mar-secondary/`, never the `mar-key/` store: reusing
+that directory would destroy the primary key, which is why the guard line refuses it.
+Nickname `powerbrowser-mar-secondary`, its own password file. The shape is:
+
+```
+PB=$HOME/coding/Power-Browser; D=$HOME/.config/powerbrowser-release/mar-secondary
+[ -e "$D/key4.db" ] && { echo "a key store already exists at $D; rotate into a new directory"; exit 1; }
+mkdir -p "$D" && chmod 700 "$D"
+( umask 077 && head -c 32 /dev/urandom | base64 > "$D/password.txt" )    # its own password, never the primary's, never empty
+export LD_LIBRARY_PATH=$PB/objdir/dist/bin
+$PB/objdir/dist/bin/certutil -N -d "sql:$D" -f "$D/password.txt"
+head -c 4096 /dev/urandom > "$D/noise"
+$PB/objdir/dist/bin/certutil -S -d "sql:$D" -f "$D/password.txt" -z "$D/noise" -n powerbrowser-mar-secondary \
+  -s "CN=PowerBrowser MAR secondary,O=$(sed -n 's/^vendor_display *= *"\(.*\)"/\1/p' configuration.toml)" -x -t ",," -k rsa -g 4096 -Z SHA384 -v 240
+shred -u "$D/noise"
+$PB/objdir/dist/bin/certutil -L -d "sql:$D" -n powerbrowser-mar-secondary -r > powerbrowser/packaging/mar/mar-secondary.der
+sha256sum powerbrowser/packaging/mar/mar-secondary.der    # copy this line into the ceremony record below
+# Mandatory (SEC-05, SEC-09): two .p12 copies, one on each separately stored offline medium.
+$PB/objdir/dist/bin/pk12util -o <medium-1>/powerbrowser-mar-secondary.p12 -d "sql:$D" -n powerbrowser-mar-secondary -k "$D/password.txt" -w "$D/password.txt"
+$PB/objdir/dist/bin/pk12util -o <medium-2>/powerbrowser-mar-secondary.p12 -d "sql:$D" -n powerbrowser-mar-secondary -k "$D/password.txt" -w "$D/password.txt"
+ls -l "$D"    # cert9.db key4.db pkcs11.txt password.txt -- nothing from this directory ever enters the repo
+```
+
+**Ceremony record.** This document records that each copy exists and when it was
+made, never where a medium is kept and never a password or key byte.
+
+- Primary key, `powerbrowser-mar`: ceremony date _recorded at the ceremony_; two
+  offline `.p12` copies, dates _recorded at the ceremony_.
+- Secondary key, `powerbrowser-mar-secondary`: ceremony date _recorded at the
+  ceremony_; two offline `.p12` copies, dates _recorded at the ceremony_.
+- `mar-secondary.der` SHA256: _recorded at the ceremony_ (the 64-hex line the
+  `sha256sum` step prints). If a later `sha256sum` of the tracked file differs from
+  this line, re-run the `certutil -L` export from the secondary store and compare the
+  SHA256 line again before any commit.
+
+**How the secondary DER reaches patch `030`.** Patch `030` sets the updater's two
+certificate slots, and a patch is regenerated, never text-edited. From the repository
+root, with the patch stack applied to `upstream/`:
+
+1. `git add powerbrowser/packaging/mar/mar-secondary.der`. The brand scan reads only
+   tracked files, so stage before trusting it.
+2. In the applied `upstream/toolkit/mozapps/update/updater/moz.build`, point the
+   `secondary_cert.inputs` line at `"/powerbrowser/packaging/mar/mar-secondary.der"`
+   and update its comment. Touch no other line.
+3. Run `bash scripts/regenerate-patches.sh`, then
+   `bash scripts/regenerate-patches.sh --check`. If the check names a drift, run the
+   write mode again, then the check again.
+4. Rebuild. The updater embeds both certificates at build time, so PowerBrowser
+   trusts the secondary key from the next build on, never retroactively.
+
+Until these four steps run, patch `030` points both slots at `mar-primary.der` and
+`mar-secondary.der` is not tracked.
+
+Both key stores and their `password.txt` files live on `legion` at
+`~/.config/powerbrowser-release/mar-key/` and
+`~/.config/powerbrowser-release/mar-secondary/`, outside the repo. Nothing from
+either directory ever enters the repo: only the two public certificates,
+`powerbrowser/packaging/mar/mar-primary.der` and
+`powerbrowser/packaging/mar/mar-secondary.der`, are tracked. If `git status` shows any
+other file under `powerbrowser/packaging/mar/`, delete it before the next commit and
+re-run the `ls -l` line to confirm the store still holds its four files. How the
+primary `.p12` reaches the `release` environment is the procedure in
+[Secrets inventory](#secrets-inventory).
 
 ### Cloudflare Pages
 
