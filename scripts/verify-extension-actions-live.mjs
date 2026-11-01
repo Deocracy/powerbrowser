@@ -28,9 +28,10 @@
 //                   by focus moving into page /a, by a tab switch to /b and by a second
 //                   click, each time with focus back in the pill. Plant wrong-page fires
 //                   the stock delegate path in a GUI-01 stock window on /c instead, and
-//                   must go red naming the stock tab. Plant popup-dom keeps the native
-//                   panel from showing and draws the popup in Theia DOM, and must go red
-//                   naming the occluded overlay.
+//                   must go red naming the stock tab. Plant popup-native-blocked cancels the native
+//                   panel's popupshowing (the product's panel never shows) and must go red
+//                   at the scenario's own assertion that the button opened its page in the panel.
+//                   (The Theia-DOM popup is covered by static rule 8, which forbids it in source.)
 //   buttons      -- (38-02) with the action fixture pinned, the chrome bar shows one
 //                   button per pinned row of the push (at most three) and the puzzle
 //                   menu one row per pushed extension, named by its pushed title (set
@@ -82,15 +83,16 @@
 //                   holds the panel page (its own title read in the page) and is shown over the
 //                   view's rect; Hide Sidebar closes the view and removes the panel browser. Plant
 //                   sidebar-in-shell sends the open to the stock sidebar path for the shell window
-//                   and must go red naming the shell window. Plant sidebar-as-tab loads the panel
-//                   page in a web tab instead and must go red naming the refused scheme.
+//                   and Plant sidebar-as-tab sends the open to a web tab instead (the shell refuses the
+//                   scheme); both must go red at the scenario's own assertion that the Theia view opened.
+//                   38-REVIEW WR-07: a plant changes what the product does; the scenario's assertions fail it.
 //   tab-pages    -- (38-04, B5) with a GUI-01 stock window open on a localhost page, the surfaces
 //                   fixture's runtime.openOptionsPage (options_ui open_in_tab) and its tabs.create
 //                   of its dashboard page each open the page as a tab of the stock window, while
 //                   the shell's overlay set, read by the same reader before and after, is
 //                   unchanged; its tabs.update of the web tab /a to its dashboard page is refused.
 //                   Plant tabpage-in-overlay sends the dashboard page to a web tab instead and
-//                   must go red naming the refused scheme.
+//                   must go red at the assertion that tabs.create opened it in the stock window.
 //   commands     -- (38-04, B5 + the 2026-10-20 keys ruling) with page /a focused, the surfaces
 //                   fixture's Alt+Shift+U fires its command on /a (onCommand's tab retitles
 //                   /a); with the IDE focused, the same key lands in the Theia frame (a keydown
@@ -176,13 +178,9 @@ async function scenarioPopupAction({ app, plant }) {
   if (badgeAt < 0) {
     return verdict(false, null, "no extensionAction push carried the badge 'ok' the action fixture set on /a");
   }
-  if (plant?.name === 'popup-dom') {
-    // The native panel never shows; the popup is drawn in Theia DOM under the button instead.
+  if (plant?.name === 'popup-native-blocked') {
+    // The product's native panel never shows (its popupshowing is cancelled); the normal assertions below then read the result.
     await live.inChrome(app, "document.addEventListener('popupshowing', e => { if (e.target.classList.contains('browser-extension-panel')) e.preventDefault(); }, true); return true;");
-    await app.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(actionButton('popup'))}).getBoundingClientRect();
-      const d = document.createElement('div'); d.className = 'pb-chrome-bar-dropdown pb-ext-popup-dom'; d.textContent = 'popup';
-      Object.assign(d.style, { position: 'fixed', top: b.bottom + 'px', left: b.left + 'px', width: '320px', height: '400px' });
-      document.body.appendChild(d); return true; })()`);
   }
   // Each close way: [name, how, pill]. A popup is opened by a real click on the popup fixture's button first. Focus returns to
   // the pill only for a close the user made in the popup or on the button (38-REVIEW WR-02); a close because focus moved
@@ -518,8 +516,8 @@ async function scenarioSidebar({ app, plant, command }) {
       const ext = ExtensionParent.GlobalManager.extensionMap.get(${JSON.stringify(fixtureId('surfaces'))});
       ExtensionParent.apiManager.global.sidebarActionFor(ext).open(window); return true;`);
   } else if (plant?.name === 'sidebar-as-tab') {
-    const where = await live.probe(app, `const w = await get('WebTabOpenHandler').openUrl(${JSON.stringify(panelUrl)}); return { lost: !!(w && w.lostView) };`).catch(e => ({ error: String(e) }));
-    return verdict(false, null, `the panel page was sent to a web tab, where the shell refuses its scheme (refused-scheme): ${JSON.stringify(where)}`);
+    // The open goes to a web tab instead (the shell refuses the scheme); the normal assertions below read the result.
+    await live.probe(app, `await get('WebTabOpenHandler').openUrl(${JSON.stringify(panelUrl)}); return true;`).catch(() => null);
   } else {
     await clickInFrame(app, '.pb-ext-puzzle');
     if (!(await pollUntil(() => puzzleRows(app), r => r.some(x => x.id === fixtureId('surfaces') && x.name === 'PB sidebar probe'), 10000))) {
@@ -534,7 +532,7 @@ async function scenarioSidebar({ app, plant, command }) {
     const now = { view: await sidebarView(app), frame: await sidebarFrame(app) };
     return verdict(false, null, now.view.attached
       ? `the Theia sidebar view opened but chrome's panel browser does not show the panel page over it: ${JSON.stringify(now)}`
-      : `no Theia side-panel view opened: the sidebar went to the shell window, which shows none (${JSON.stringify(now)})`);
+      : `no Theia side-panel view opened: the sidebar went to the shell window or a web tab, neither of which shows it (${JSON.stringify(now)})`);
   }
   await clickInFrame(app, '.pb-ext-puzzle');
   await puzzleRowMenu(app, 'surfaces', 'Hide Sidebar');
@@ -558,16 +556,15 @@ async function scenarioTabPages({ app, plant, command }) {
     return verdict(false, null, `BROKEN INSTRUMENT: the overlay reader does not see /a (${JSON.stringify(before)})`);
   }
   const dashboardUrl = (await command('url', { path: 'dashboard.html' })).result;
-  if (plant?.name === 'tabpage-in-overlay') {
-    const where = await live.probe(app, `const w = await get('WebTabOpenHandler').openUrl(${JSON.stringify(dashboardUrl)}); return { lost: !!(w && w.lostView) };`).catch(e => ({ error: String(e) }));
-    return verdict(false, null, `the tab page was sent to a web tab, where the shell refuses its scheme (refused-scheme): ${JSON.stringify(where)}`);
-  }
   const optionsUrl = (await command('url', { path: 'options.html' })).result;
   const options = await command('options');
   if (!options.ok || !(await live.stockTabOn(app, optionsUrl, 20000).catch(() => null))) {
     return verdict(false, null, `runtime.openOptionsPage did not open the options page in the stock window: ${JSON.stringify(options)}`);
   }
-  const dashboard = await command('dashboard');
+  // Plant tabpage-in-overlay: the dashboard page goes to a web tab instead (the shell refuses its scheme); the assertions below read the result.
+  const dashboard = plant?.name === 'tabpage-in-overlay'
+    ? await live.probe(app, `await get('WebTabOpenHandler').openUrl(${JSON.stringify(dashboardUrl)}); return true;`).then(() => ({ ok: true }), error => ({ ok: false, error: String(error) }))
+    : await command('dashboard');
   if (!dashboard.ok || !(await live.stockTabOn(app, dashboardUrl, 20000).catch(() => null))) {
     return verdict(false, null, `tabs.create of the dashboard page did not open it in the stock window: ${JSON.stringify(dashboard)}`);
   }
@@ -654,16 +651,16 @@ const B5_SCENARIOS = new Set(['sidebar', 'tab-pages', 'commands']);
 // patched product: the scenario reads `plant.name`.
 const PLANTS_TABLE = {
   'wrong-page': { scenario: 'popup-action', expect: 'the action ran in the stock tab' },
-  'popup-dom': { scenario: 'popup-action', expect: 'the occluded overlay' },
+  'popup-native-blocked': { scenario: 'popup-action', expect: 'did not open its page in the native panel' },
   'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
   'buttons-stale': { scenario: 'buttons', expect: 'the button shows a stale badge' },
   'pin-lost': { scenario: 'manage', expect: 'the pin did not persist' },
   'sender-tab-null': { scenario: 'content', expect: 'the hello from /a carried sender.tab -1' },
   'pageaction-zero-tab': { scenario: 'content', expect: 'the zero-overlay startup threw' },
   'pageaction-pill-stale': { scenario: 'page-action', expect: 'the stale icon: the pill still shows' },
-  'sidebar-in-shell': { scenario: 'sidebar', expect: 'no Theia side-panel view opened: the sidebar went to the shell window' },
-  'sidebar-as-tab': { scenario: 'sidebar', expect: 'the panel page was sent to a web tab, where the shell refuses its scheme (refused-scheme)' },
-  'tabpage-in-overlay': { scenario: 'tab-pages', expect: 'the tab page was sent to a web tab, where the shell refuses its scheme (refused-scheme)' },
+  'sidebar-in-shell': { scenario: 'sidebar', expect: 'no Theia side-panel view opened' },
+  'sidebar-as-tab': { scenario: 'sidebar', expect: 'no Theia side-panel view opened' },
+  'tabpage-in-overlay': { scenario: 'tab-pages', expect: 'tabs.create of the dashboard page did not open it in the stock window' },
   'commands-always-fire': { scenario: 'commands', expect: 'the extension command fired with the IDE focused' },
   'commands-never-fire': { scenario: 'commands', expect: 'the shortcut did not fire with the page /a focused' },
 };
@@ -674,6 +671,7 @@ const PLANTS = PLANTS_TABLE;
 const AUDIT_PLANTS = [
   { name: 'unknown scenario', plants: { stray: { scenario: 'no-such-scenario', expect: 'x' } }, expect: 'targets the unknown scenario no-such-scenario' },
   { name: 'unemitted expect', plants: { ...PLANTS_TABLE, 'wrong-page': { ...PLANTS_TABLE['wrong-page'], expect: 'zz never printed' } }, expect: "emits no text starting 'zz never printed'" },
+  { name: 'plant returns red itself', scenarios: { ...SCENARIOS_TABLE, sidebar: async function ({ plant }) { if (plant?.name === 'sidebar-as-tab') { return verdict(false, null, 'no Theia side-panel view opened'); } } }, expect: "returns a verdict from the plant's own branch" },
   { name: 'scenario without a plant', plants: {}, expect: 'has no plant' },
 ];
 
@@ -694,6 +692,19 @@ function staticAudit(PLANTS = PLANTS_TABLE, SCENARIOS = SCENARIOS_TABLE) {
     }
     if (!fn.toString().includes(`'${name}'`)) {
       failures.push(`plant ${name}: scenario ${plant.scenario} never reads it, so the plant would not apply`);
+    }
+    // 38-REVIEW WR-07: a plant changes what the product does and the scenario's own assertions go red; its branch never returns a verdict.
+    const text = fn.toString();
+    const at = text.indexOf(`plant?.name === '${name}'`);
+    const open = at < 0 ? -1 : text.indexOf('{', at);
+    let depth = 0;
+    let end = open;
+    for (let i = open; open >= 0 && i < text.length; i++) {
+      depth += text[i] === '{' ? 1 : text[i] === '}' ? -1 : 0;
+      if (depth === 0) { end = i; break; }
+    }
+    if (open >= 0 && text.slice(open, end + 1).includes('return verdict(')) {
+      failures.push(`plant ${name}: scenario ${plant.scenario} returns a verdict from the plant's own branch, so it is red whatever the product does`);
     }
   }
   for (const name of Object.keys(SCENARIOS)) {
@@ -1112,7 +1123,7 @@ async function main() {
     if (JSON.stringify(zipRoundTrip(files)) !== JSON.stringify(files)) failures.push('the XPI writer (storedZip) does not round-trip its files');
     if (argv.includes('--self-test')) {
       for (const plant of AUDIT_PLANTS) {
-        const hit = staticAudit(plant.plants).find(f => f.includes(plant.expect));
+        const hit = staticAudit(plant.plants ?? PLANTS_TABLE, plant.scenarios ?? SCENARIOS_TABLE).find(f => f.includes(plant.expect));
         if (hit) console.log(`  ok  audit plant ${plant.name} -> red: ${hit}`);
         else failures.push(`audit plant ${plant.name} did not go red naming '${plant.expect}'`);
       }
