@@ -457,6 +457,7 @@ Recent decisions affecting current work:
 - [Phase 32]: PAGE-09 edit set is the edit-today chrome-help subset (7 commands); cmd_pasteNoFormatting has no kind
 - [Phase 32]: Edit route is the Controllers actor (remote overlays have no parent docShell); keys stay content-native with no relay rows
 - [Phase 32]: D-23 amended: F12 opens the stock toolbox window through DevToolsShim.showToolboxForTab with a window host; reader toggle goes through the AboutReader actor; a crashed tab's history is kept across Reload tab; the shared-process blank reload is obsolete (afda7df1)
+- [Phase 36]: PROMPT-05 executed in 36-01..03 (workspace/p36): nsIBrowserDOMWindow receiver behind the boundary adopts overlay-opener windows as web tabs; Theia opener and print return null so GUI-01 falls through; Phase 37 opens a blocked popup via PowerBrowserAPI.openAdoptedWebTab; live checks, the Phase 35 IDL_SHIMS entry and the CLAUDE.md rule-5 wording are deferred
 
 ### Pending Todos
 
