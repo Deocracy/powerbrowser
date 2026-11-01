@@ -3824,6 +3824,15 @@ run_own_checks() {
     "gui02-web-tab-bridge|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs"
     "gui02-web-tab-bridge-self-test|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs --self-test"
 
+    # NEW (Phase 37 plan 01, PROMPT-01, D-01..D-04, D-11): the permission-prompt
+    # gate. Derives the #notification-popup attributes from upstream's markup,
+    # the single PopupNotifications construction and its module URL from
+    # upstream's moz.build, the own-principal rule, the forbidden kind family
+    # (no allow/grant/permit/doorhanger/prompt webTab or store kind), the
+    # facade audit link and the display-only doorhanger subscriber. Honestly
+    # --quick: text reads only. The live proof is prompts-live.
+    "permission-prompts-self-test|node $REPO_ROOT/scripts/verify-permission-prompts.mjs --self-test"
+
     # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the
     # WebTabMessage union, the routed set and the state fields agree (derive and
     # compare, set equality). The find gate also pins the Finder listener and the

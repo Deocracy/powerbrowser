@@ -359,6 +359,27 @@ EOF
     overall=1
   fi
 
+  # Phase 37 plan 01 plant: the PopupNotifications reach-through (the module import plus the
+  # construction) is legal only inside PowerBrowserAPI.sys.mjs, where --catalogue rows cover it.
+  # The same two lines in any other shell file must be rejected naming both patterns.
+  mkdir -p "$tmp/prompts"
+  cat > "$tmp/prompts/planted-prompt-reach.js" <<'EOF'
+// planted-prompt-reach.js -- the Phase 37 furniture reach-through outside the boundary file.
+const { PopupNotifications } = ChromeUtils.importESModule("resource://gre/modules/PopupNotifications.sys.mjs");
+window.PopupNotifications = new PopupNotifications({ documentGlobal: window }, null, null);
+EOF
+  if scan_internals_boundary "$tmp/prompts" >/dev/null 2>"$tmp/self-test-prompts.err"; then
+    echo "check-internals-boundary: --self-test FAIL -- the PopupNotifications reach-through outside the boundary file was NOT rejected" >&2
+    overall=1
+  elif grep -q 'planted-prompt-reach.js:2: ChromeUtils.import' "$tmp/self-test-prompts.err" \
+    && grep -q 'planted-prompt-reach.js:3: PopupNotifications' "$tmp/self-test-prompts.err"; then
+    echo "check-internals-boundary: --self-test PASS -- the PopupNotifications reach-through outside the boundary file was correctly rejected"
+  else
+    echo "check-internals-boundary: --self-test FAIL -- the reach-through rejection doesn't name the import and the construction" >&2
+    cat "$tmp/self-test-prompts.err" >&2
+    overall=1
+  fi
+
   # NG-039 plants: each new pattern is rejected outside the boundary file, and
   # an actor-child waiver with no catalogue row is rejected even in the one
   # file that may carry it.

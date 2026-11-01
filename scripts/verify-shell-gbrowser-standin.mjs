@@ -79,7 +79,9 @@
 //   (p) a staged extension-scope copy that only READS gBrowser.zzzPlantedRead;
 //   (q) a staged actor parent that calls a member through a bound getTabBrowser() receiver;
 //   (r) a staged gBrowserInit literal without isAdoptingTab;
-//   (s) staged patch text without the TabManager hunk (STALE DATA MEMBER webDriverTabs).
+//   (s) staged patch text without the TabManager hunk (STALE DATA MEMBER webDriverTabs);
+//   (x) a staged tabbrowser facade without tabContainer (Phase 37, FACADES);
+//   (y) a staged tabbrowser facade with a surplus member.
 
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -130,6 +132,11 @@ const ZOOM_SHIM_ABSENT = new Map([
   ['FullZoom.reset', "KNOWN GAP: reached only by tabs.setZoom (ext-tabs.js:1266-1283), an extension zoom write; the shell's zoom is chrome-driven through the 32-01 webTabZoom arms, and the call keeps failing with a TypeError as it does today"],
   ['FullZoom.setZoom', "KNOWN GAP: reached only by tabs.setZoom (ext-tabs.js:1266-1283), an extension zoom write; see FullZoom.reset"],
 ]);
+// Phase 37 plan 01 (Pitfall 2): tabbrowser facades. A boundary object handed to an upstream module AS its tabbrowser
+// is compared like a shim: REQUIRED is every member that module accesses on its tabbrowser (`receiver`), derived from
+// the `consumer` file; IMPLEMENTED is the members of the one `<name> = {` literal in the boundary file. Each new facade
+// is one row here, and scripts/verify-permission-prompts.mjs requires the facade its construction passes to be a row.
+const FACADES = [];
 const ID = '[A-Za-z_$][\\w$]*';
 
 // The upstream call-site files for the actor scope: the scope's widget files plus
@@ -537,6 +544,32 @@ function runScan(inputs) {
     shim => shim.unimplemented.length === 0 && shim.staleAbsent.length === 0 && shim.contradiction.length === 0 && shim.surplus.length === 0
   );
 
+  // Phase 37 plan 01: the tabbrowser facades, each compared against the module it is handed to.
+  const facades = [];
+  for (const facade of inputs.facades ?? FACADES) {
+    const consumer = readSource(facade.consumer);
+    if (consumer === null) {
+      return { ok: false, reason: 'facade-unreadable', detail: facade.consumer };
+    }
+    const req = accessesOn(stripCommentLines(consumer), facade.receiver, false);
+    if (req.size === 0) {
+      return { ok: false, reason: 'empty-facade-required', detail: `derived zero ${facade.name} member accesses from ${facade.consumer}` };
+    }
+    const code = stripCommentLines(readSource(boundaryFile) ?? '');
+    const count = (code.match(new RegExp(`\\b${facade.name}\\s*=\\s*\\{`, 'g')) || []).length;
+    const members = count === 1 ? objectLiteralMembers(code, `${facade.name} = {`) : null;
+    if (members === null) {
+      return { ok: false, reason: 'facade-definitions', detail: `${boundaryFile} (${facade.name}: ${count} definitions)` };
+    }
+    facades.push({
+      name: facade.name,
+      implemented: sorted(members),
+      unimplemented: sorted([...req].filter(m => !members.has(m))),
+      surplus: sorted([...members].filter(m => !req.has(m))),
+    });
+  }
+  const facadesClean = facades.every(f => f.unimplemented.length === 0 && f.surplus.length === 0);
+
   return {
     ok:
       unimplemented.length === 0 &&
@@ -547,8 +580,10 @@ function runScan(inputs) {
       staleData.length === 0 &&
       shimUnimplemented.length === 0 &&
       shimSurplus.length === 0 &&
-      zoomClean,
+      zoomClean &&
+      facadesClean,
     zoomShims,
+    facades,
     reason: '',
     fileCount: actorFiles.length,
     extensionFileCount: extensionFiles.length,
@@ -618,7 +653,14 @@ function reportFailure(result) {
       console.error(`${NAME}: FAIL -- broken instrument: no balanced 'win.<zoom shim> = { ... }' literal found in ${result.detail}`);
       return;
     case 'zoom-shim-unreadable':
+    case 'facade-unreadable':
       console.error(`${NAME}: FAIL -- broken instrument: cannot read ${result.detail}`);
+      return;
+    case 'empty-facade-required':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. An empty facade set is a broken derivation.`);
+      return;
+    case 'facade-definitions':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. Exactly one definition of each tabbrowser facade is allowed, in the boundary file.`);
       return;
     default:
       break;
@@ -663,6 +705,14 @@ function reportFailure(result) {
     }
     for (const m of shim.surplus) {
       console.error(`  DEAD SURFACE: '${shim.name}.${m}' is implemented on the zoom shim but nothing upstream reads it -- remove it rather than carry it`);
+    }
+  }
+  for (const facade of result.facades ?? []) {
+    for (const m of facade.unimplemented) {
+      console.error(`  UNIMPLEMENTED: '${facade.name}.${m}' is accessed on its tabbrowser by the module the facade is handed to, but the ${facade.name} literal in ${BOUNDARY_FILE} does not define it`);
+    }
+    for (const m of facade.surplus) {
+      console.error(`  DEAD SURFACE: '${facade.name}.${m}' is defined on the facade but the module it is handed to never accesses it -- remove it rather than carry it`);
     }
   }
 }
@@ -710,7 +760,7 @@ function main() {
   console.log(
     `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}; zoom shims ${result.zoomShims
       .map(shim => `${shim.name} {${shim.implemented.join(', ')}}${shim.absent.length ? ` with ${shim.absent.join(', ')} absent with reasons` : ''}`)
-      .join('; ')}`
+      .join('; ')}; tabbrowser facades ${result.facades.map(f => `${f.name} {${f.implemented.join(', ')}}`).join('; ') || '(none)'}`
   );
 }
 
@@ -952,19 +1002,45 @@ function selfTest() {
         fail(`two ZoomUI definitions did not fail as a broken instrument naming ZoomUI; got: ${JSON.stringify({ reason: r.reason, detail: r.detail })}`);
       } else ok(`two staged 'win.ZoomUI = {' definitions -> broken instrument naming ZoomUI`);
     }
+
+    // (x)/(y) Phase 37: a staged tabbrowser facade, compared against the real PopupNotifications module it is handed to.
+    {
+      const facade = { name: 'zzzPlantedFacade', consumer: 'upstream/toolkit/modules/PopupNotifications.sys.mjs', receiver: '(?<![\\w$])tabbrowser' };
+      const src = readSource(BOUNDARY_FILE) ?? '';
+      const stagedFacade = (path, members) => {
+        writeFileSync(path, `${src}\nconst ${facade.name} = {\n${members.map(m => `  get ${m}() { return null; },`).join('\n')}\n};\n`);
+        return runScan({ ...real, boundaryFile: path, facades: [facade] });
+      };
+      const full = ['documentGlobal', 'selectedBrowser', 'selectedTab', 'tabContainer'];
+      const control = stagedFacade(join(stage, 'boundary-facade-full.mjs'), full);
+      if (!control.ok) {
+        fail(`the staged complete facade {${full.join(', ')}} is not green, so the facade plants would be meaningless; got: ${JSON.stringify({ reason: control.reason, facades: control.facades })}`);
+      } else {
+        const missing = stagedFacade(join(stage, 'boundary-facade-missing.mjs'), full.filter(m => m !== 'tabContainer'));
+        const f = missing.facades?.find(x => x.name === facade.name);
+        if (missing.ok || !f?.unimplemented.includes('tabContainer')) {
+          fail(`a facade without tabContainer did not go red naming '${facade.name}.tabContainer'; got: ${JSON.stringify({ reason: missing.reason, facades: missing.facades })}`);
+        } else ok(`staged facade without tabContainer -> red, naming '${facade.name}.tabContainer' UNIMPLEMENTED`);
+        const surplus = stagedFacade(join(stage, 'boundary-facade-surplus.mjs'), [...full, 'getNotificationBox']);
+        const g = surplus.facades?.find(x => x.name === facade.name);
+        if (surplus.ok || !g?.surplus.includes('getNotificationBox')) {
+          fail(`a facade with surplus getNotificationBox did not go red naming it; got: ${JSON.stringify({ reason: surplus.reason, facades: surplus.facades })}`);
+        } else ok(`staged facade with surplus getNotificationBox -> red, naming '${facade.name}.getNotificationBox' DEAD SURFACE`);
+      }
+    }
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
 
   if (failed) process.exit(1);
   console.log(
-    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI); the empty file list failed distinctly`
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, facade missing tabContainer / surplus getNotificationBox); the empty file list failed distinctly`
   );
 }
 
 // deriveImplemented and deriveZoomShimImplemented are exported for verify-ext-tab-host-scope.mjs (its host:
 // claims run these same literal parsers). Importing the module runs nothing.
-export { deriveImplemented, deriveZoomShimImplemented };
+export { deriveImplemented, deriveZoomShimImplemented, FACADES };
 
 const IS_ENTRY = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (IS_ENTRY) {
