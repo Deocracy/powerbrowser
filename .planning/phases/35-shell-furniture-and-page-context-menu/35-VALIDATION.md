@@ -69,6 +69,11 @@ after the plan's Theia build; the built binary needs no Gecko rebuild (symlinked
 
 **G4b record (D-08):** budgets 50 ms capture deadline, 200 ms p95 right-click to menu over 20
 opens. Verdict line from 35-05-T3: `freeze-frame timing: …` (to be filled at execution).
+**35-05 execution (2026-10-31, lane p35):** verdict **deferred**. The lane has no objdir, so the
+live run stopped at `harness: … objdir/dist/bin/powerbrowser does not exist` after the
+`purgecaches:` line, and no `freeze-frame timing:` line exists. The 50 ms deadline is enforced in
+code (`PAGE_STILL_DEADLINE_MS`, a late capture is never pushed); the 200 ms p95 budget, the on-time
+fraction and the still-arrival p50/p95 wait for the end-of-milestone live pass.
 
 ---
 
