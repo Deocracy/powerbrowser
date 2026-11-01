@@ -279,7 +279,9 @@ export type WebTabMessage =
     // source URL is minted chrome-side, never sent by the frame) and DevTools (the stock toolbox window for this tab, minted chrome-side).
     | { kind: 'webTabReader'; tabId: string; enter: boolean }
     | { kind: 'webTabViewSource'; tabId: string; inNewTab?: boolean }
-    | { kind: 'webTabDevtools'; tabId: string };
+    | { kind: 'webTabDevtools'; tabId: string }
+    // Phase 36 (PROMPT-05): the ack for a page's new window chrome adopted; pcKey is chrome's correlator, never shown.
+    | { kind: 'webTabAdopt'; tabId: string; pcKey: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -1263,7 +1265,7 @@ export interface WebTabOpenerOptions extends OpenerOptions {
  * `OpenerService`; none of them needs to know a web tab exists.
  */
 @injectable()
-export class WebTabOpenHandler implements OpenHandler {
+export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContribution {
 
     readonly id = WEB_TAB_OPEN_HANDLER_ID;
 
@@ -1272,6 +1274,52 @@ export class WebTabOpenHandler implements OpenHandler {
 
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
+
+    @inject(WebTabChannel)
+    protected readonly channel: WebTabChannel;
+
+    /** Phase 36 (PROMPT-05): a page's new window, which chrome already holds, lands as a web tab next to its opener. */
+    onStart(): void {
+        this.channel.onPush('adoptTab', detail => void this.adopt(detail));
+        this.channel.onPush('dropAdoptedTab', detail => this.dropAdopted(detail.tabId));
+    }
+
+    /**
+     * The ack goes BEFORE the widget attaches: chrome moves its pending overlay
+     * to this widget's id, so the widget's own webTabOpen on attach finds it
+     * "already-open" instead of building a second overlay. Any other reply
+     * means chrome no longer holds it (its 5 s fallback opened the page in the
+     * stock window), so the widget is dropped unshown.
+     */
+    async adopt(detail: Record<string, unknown>): Promise<void> {
+        const { pcKey, openerTabId, url, background } = detail;
+        if (typeof pcKey !== 'string' || typeof openerTabId !== 'string' || typeof url !== 'string' || typeof background !== 'boolean') {
+            console.warn('[@powerbrowser/tab-uris] adopt dropped:', 'adoptTab');
+            return;
+        }
+        const widget = await this.createWidget(url);
+        const reply = await this.channel.request({ kind: 'webTabAdopt', tabId: widget.id, pcKey });
+        if (reply.ok !== true) {
+            // A late ack chrome did act on must not leave a hidden overlay; chrome answers unknown-tab otherwise.
+            this.channel.send({ kind: 'webTabClose', tabId: widget.id });
+            widget.dispose();
+            return;
+        }
+        // An opener closed meanwhile: the tab still lands, at the end, rather than being dropped.
+        const opener = this.channel.widgetOf(openerTabId);
+        this.shell.addWidget(widget, opener ? { area: 'main', ref: opener, mode: 'tab-after' } : { area: 'main' });
+        if (!background) {
+            await this.shell.activateWidget(widget.id);
+        }
+    }
+
+    /** Chrome's sweep for a widget whose overlay it no longer holds (an ack that arrived after the fallback). */
+    dropAdopted(tabId: unknown): void {
+        const widget = typeof tabId === 'string' ? this.channel.widgetOf(tabId) : undefined;
+        if (widget) {
+            widget.dispose();
+        }
+    }
 
     canHandle(uri: URI): number {
         return /^https?$/.test(uri.scheme) || uri.toString(true) === EMPTY_PAGE_URL ? 1000 : 0;
