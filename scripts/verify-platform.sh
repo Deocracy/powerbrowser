@@ -4967,19 +4967,21 @@ run_own_checks() {
     # file and the fault. It writes nothing.
     "mar-channel-gate-self-test|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs --self-test"
     # NEW (Phase 49, DIST-07): the draft asset set equals the manifest-derived set (versioned and
-    # stable tarball and MAR, SHA256SUMS, the notices and the source tarball) as set equality, and
-    # the equality runs before the single publish, the bot App token is minted immediately before
-    # the publish, and no --generate-notes appears. Honestly --quick: file reads and YAML parsing;
+    # stable tarball and MAR, SHA256SUMS, release-manifest.json, the notices and the source tarball)
+    # as set equality, the assemble step has a case arm for every expected kind, and the equality runs
+    # before the single publish, the bot App token is minted immediately before the publish, and no
+    # --generate-notes appears. Honestly --quick: file reads and YAML parsing;
     # the live draft list is compared by the release job, never here.
     "release-asset-set|node $REPO_ROOT/scripts/verify-release-asset-set.mjs"
-    # release-asset-set-self-test plants a dropped asset, an extra asset, a stable-name drift, a
-    # versioned-name drift, a publish-before-equality order, a fail-open publish chain, a missing R2
+    # release-asset-set-self-test plants a dropped asset (a notice and the manifest), an extra asset,
+    # a stable-name drift, a versioned-name drift, an assemble step missing the manifest or notice arm, a publish-before-equality order, a fail-open publish chain, a missing R2
     # gate, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
     # step. It writes nothing.
     "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
     # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A
     # mkdtemp manifest (mar_origin from configuration.toml) and descriptor tree served by one loopback
-    # server through an injected transport go green first, then twenty-four plants each go red naming
+    # server through an injected transport go green first (with --manifest, from the latest Release's
+    # release-manifest.json asset, and through --manifest-agrees), then thirty plants each go red naming
     # the target and the value: a wrong hashValue, a missing target file, a 404 MAR, a size mismatch, a
     # public descriptor not byte-equal to the repo copy, an appVersion, buildID or offered version off
     # the manifest or the latest Release, a latest tag off release_key, no published Release (404),
@@ -4988,8 +4990,10 @@ run_own_checks() {
     # github.com Releases download, a release-assets or objects.githubusercontent.com signed URL,
     # another host, a path other than /<tag>/<asset>, a non-https scheme), a manifest mar_origin or
     # update_url that disagrees with the tree (red naming both values; the tree decides), a
-    # build_target carrying a path separator and ../ (red before any request), and a latest Release
-    # without the manifest asset (red naming BLOCKED.md's open owner decision). Honestly
+    # build_target carrying a path separator and ../ (red before any request), a latest Release
+    # without the manifest asset, with an unreadable one, or with one whose mar_origin disagrees (each
+    # red naming the Release or the values, before any request), and four --manifest-agrees faults
+    # (update_channel, mar_origin or update_url off the tree, a null mar_origin). Honestly
     # --quick: node:crypto, text files in mkdtemp and loopback HTTP; no build, browser, display or
     # public network. It writes nothing in the repo.
     "channel-live-self-test|node $REPO_ROOT/scripts/verify-channel-live.mjs --self-test"

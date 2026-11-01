@@ -26,6 +26,8 @@ export const MANIFEST_REL = 'configuration.toml';
 export const DOCS_REL = 'docs/RELEASING.md';
 export const RELEASE_HASH_REL = 'nix/pkg/release-hash.json';
 export const RELEASE_KEY_RE = /^v\d+(?:\.\d+)*-\d+$/;
+// The stable name of the build manifest asset that sign-publish attaches to every Release (owner decision 2026-10-31).
+export const MANIFEST_ASSET = 'release-manifest.json';
 
 // The sentinel is 32 ASCII bytes, so its base64 is a valid SRI sha256 that Nix evaluates, and its
 // decoded text names the step that replaces it. No real digest is ever written for a release that
