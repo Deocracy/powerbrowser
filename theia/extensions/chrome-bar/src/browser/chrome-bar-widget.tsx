@@ -208,7 +208,7 @@ export class ChromeBarWidget extends ReactWidget {
     protected init(): void {
         this.addressBar.attach(this);
         setOpenDownloadsPanel(() => this.toggleDownloads());
-        setOpenFindBar(tab => this.openFind(tab));
+        setOpenFindBar((tab, focus) => this.openFind(tab, focus));
         setChooseSaveDestination(suggestedName => this.chooseSaveDestination(suggestedName));
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
@@ -662,13 +662,16 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
     }
 
-    /** PAGE-01: opens the find bar for `tab` (the page relay's find key) and focuses its field. */
-    protected openFind(tab: WebTabWidget): void {
+    /** PAGE-01: opens the find bar for `tab` (the page relay's find key) and focuses its field; F3 opens it without focus. */
+    protected openFind(tab: WebTabWidget, focus = true): void {
         if (currentWebTab() !== tab) {
             return;
         }
         this.findOpen = true;
         this.update();
+        if (!focus) {
+            return;
+        }
         setTimeout(() => {
             const input = document.getElementById('pb-chrome-bar-find-input') as HTMLInputElement | null;
             input?.focus();

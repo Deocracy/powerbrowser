@@ -317,8 +317,8 @@ async function settleValue(read, pred) {
 }
 
 /**
- * find: a count, FindNext (channel, then F3 from a focused page), Ctrl+F opens
- * the Theia find bar, and a reset on close. Returns a failure reason, or null.
+ * find: a count, FindNext (channel, then F3 from a focused page, which also opens the closed bar),
+ * Ctrl+F opens the Theia find bar, and a reset on close. Returns a failure reason, or null.
  */
 async function scenarioFind(app, origin, kind = 'webTabFind', plant = false) {
     const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
@@ -342,6 +342,18 @@ async function scenarioFind(app, origin, kind = 'webTabFind', plant = false) {
         return `FindNext did not move the current match off ${hitCurrent} in a state push`;
     }
     const nextCurrent = (await pushes(app))[next].findCurrent;
+    if (plant === 'f3-bar-closed') {
+        // The planted fault: the pre-fix F3 row, which steps but never opens the bar (only Ctrl+F's focusing open runs).
+        const planted = await probe(app, `const bar = get('ChromeBarWidget');
+            const open = bar.openFind.bind(bar); bar.openFind = (tab, focus = true) => focus && open(tab, focus); return true;`);
+        if (planted !== true) {
+            throw new Error(`${BROKEN} the f3-bar-closed plant did not install: ${JSON.stringify(planted)}`);
+        }
+    }
+    const barOpen = () => probe(app, "return !!document.getElementById('pb-chrome-bar-find-input');");
+    if (await barOpen()) {
+        throw new Error(`${BROKEN} the find bar was already open before F3, so F3's open cannot be read`);
+    }
     const f3 = await pressPageKey(app, tabId, 'findNext', { key: 'F3', code: 'F3', keyCode: 114 });
     if (f3 < 0) {
         return 'F3 in a focused page produced no shortcut push: the findNext row did not relay';
@@ -349,6 +361,14 @@ async function scenarioFind(app, origin, kind = 'webTabFind', plant = false) {
     const stepped = await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findCurrent >= 1 && p.findCurrent !== nextCurrent && p.findStatus !== null), { from: f3 + 1, timeoutMs: 10000 });
     if (stepped < 0) {
         return `F3 relayed, but no state push moved the current match off ${nextCurrent}`;
+    }
+    // 32-UI-SPEC: F3 reopens a closed bar. Close it again (Esc in its field) so the Ctrl+F check below opens a closed bar.
+    if (await settleValue(barOpen, v => v === true) !== true) {
+        return 'F3 with the find bar closed stepped the page but did not open the find bar';
+    }
+    await probe(app, `document.getElementById('pb-chrome-bar-find-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true;`);
+    if (await settleValue(barOpen, v => v === false) !== false) {
+        throw new Error(`${BROKEN} Esc in the find field did not close the bar, so the Ctrl+F open cannot be read`);
     }
     const ctrlF = await pressPageKey(app, tabId, 'findOpen', { key: 'f', code: 'KeyF', keyCode: 70, modifiers: ['accel'] });
     if (ctrlF < 0) {
@@ -1780,6 +1800,12 @@ const PLANTS = [
         target: 'find',
         run: (app, fx) => scenarioFind(app, fx.origin, 'webTabFind', 'step-noop'),
         expect: 'FindNext did not move the current match',
+    },
+    {
+        plant: 'find-f3-bar-closed',
+        target: 'find',
+        run: (app, fx) => scenarioFind(app, fx.origin, 'webTabFind', 'f3-bar-closed'),
+        expect: 'did not open the find bar',
     },
     {
         plant: 'audio-page-silent',

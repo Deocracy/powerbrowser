@@ -111,16 +111,16 @@ export function setOpenDownloadsPanel(open: (() => void) | undefined): void {
     openDownloadsPanel = open;
 }
 
-let openFindBar: ((tab: WebTabWidget) => void) | undefined;
+let openFindBar: ((tab: WebTabWidget, focus: boolean) => void) | undefined;
 
 /** Set by the chrome bar widget, which owns the find bar; the page relay's find key opens it for the pushed tab through this. */
-export function setOpenFindBar(open: ((tab: WebTabWidget) => void) | undefined): void {
+export function setOpenFindBar(open: ((tab: WebTabWidget, focus: boolean) => void) | undefined): void {
     openFindBar = open;
 }
 
-/** Opens the find bar for `tab`. A no-op until the widget registers its opener. */
-export function openFindBarFor(tab: WebTabWidget): void {
-    openFindBar?.(tab);
+/** Opens the find bar for `tab`; `focus` false (F3) shows it and leaves focus on the page. A no-op until the widget registers its opener. */
+export function openFindBarFor(tab: WebTabWidget, focus = true): void {
+    openFindBar?.(tab, focus);
 }
 
 let chooseSaveDestinationDialog: ((suggestedName: string) => Promise<string | undefined>) | undefined;

@@ -170,8 +170,15 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         }],
         // Phase 32 plan 02: each action is a widget method on the pushed tab, never a bare command id (T-32-06b).
         ['findOpen', tab => openFindBarFor(tab)],
-        ['findNext', tab => tab.findNext(false)],
-        ['findPrevious', tab => tab.findNext(true)],
+        // 32-UI-SPEC: F3 reopens a closed bar (focus stays on the page) and steps the stored query.
+        ['findNext', tab => {
+            openFindBarFor(tab, false);
+            return tab.findNext(false);
+        }],
+        ['findPrevious', tab => {
+            openFindBarFor(tab, false);
+            return tab.findNext(true);
+        }],
         ['zoomIn', tab => tab.zoomIn()],
         ['zoomInPlus', tab => tab.zoomIn()],
         ['zoomOut', tab => tab.zoomOut()],
