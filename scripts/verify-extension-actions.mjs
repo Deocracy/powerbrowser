@@ -72,6 +72,16 @@
  *                    extensionOpenTabPage opens no overlay and admits only the
  *                    caller's own pages; the overlay location wall
  *                    (OVERLAY_LOCATION) names no extension scheme.
+ *  13. commands   -- (38-04, B5 + the 2026-10-20 keys ruling) the section's
+ *                    EXTENSION_EXECUTE_COMMANDS equals the _execute_* names
+ *                    upstream ExtensionShortcuts.buildKey dispatches, and its
+ *                    keyset prefix equals the id registerKeysToDocument gives
+ *                    each keyset (both derived from upstream); pushPageFocus
+ *                    scopes the extension keys before its early return; the
+ *                    tab host install installs the receivers once, whose
+ *                    capture command listener stops the stock _execute_* path;
+ *                    and the boundary creates no <key> of its own and names no
+ *                    Phase 27 row id (the key table owns Theia's keys).
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -92,6 +102,7 @@ const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const BRIDGE_GATE = 'scripts/verify-web-tab-bridge.mjs';
 const LIVE = 'scripts/verify-extension-actions-live.mjs';
 const PATCH_050 = 'patches/050-extension-tab-host.patch';
+const UPSTREAM_SHORTCUTS = 'upstream/toolkit/components/extensions/ExtensionShortcuts.sys.mjs';
 const PRODUCT_DIRS = ['powerbrowser', 'theia/extensions'];
 const SECTION_MARK = '// Phase 38 (EXT-06, EXT-07): the extension bridge.';
 const CHROME_BAR_SRC = 'theia/extensions/chrome-bar/src/';
@@ -154,6 +165,7 @@ function productFiles() {
 function readSources() {
     const src = {};
     for (const file of [...productFiles(), BRIDGE_GATE, PATCH_050]) src[file] = readFileSync(join(REPO_ROOT, file), 'utf8');
+    if (existsSync(join(REPO_ROOT, UPSTREAM_SHORTCUTS))) src[UPSTREAM_SHORTCUTS] = readFileSync(join(REPO_ROOT, UPSTREAM_SHORTCUTS), 'utf8');
     if (existsSync(join(REPO_ROOT, LIVE))) src[LIVE] = readFileSync(join(REPO_ROOT, LIVE), 'utf8');
     return src;
 }
@@ -404,6 +416,34 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
         if (!wall) failures.push(`tab-pages: ${API} has no OVERLAY_LOCATION (broken instrument)`);
         else if (/moz-extension|extension:/i.test(wall)) failures.push(`tab-pages: OVERLAY_LOCATION admits an extension page into an overlay (${wall})`);
     }
+    // 13. commands
+    if (bridgeLanded) {
+        const upstream = (src[UPSTREAM_SHORTCUTS] ?? '').split('\n');
+        const build = span(upstream, /^ {2}buildKey\(doc, name, shortcut\) \{/);
+        const derived = build ? new Set(upstream.slice(build.start, build.end + 1).join('\n').match(/_execute_[a-z_]+/g) ?? []) : new Set();
+        const prefix = /keyset\.id = `([a-z-]+)\$\{/.exec(src[UPSTREAM_SHORTCUTS] ?? '')?.[1];
+        const ours = JSON.parse(/^const EXTENSION_EXECUTE_COMMANDS = (\[[^\]]*\]);$/m.exec(src[API])?.[1] ?? 'null');
+        const ourPrefix = /^const EXTENSION_KEYSET_PREFIX = "([^"]*)";$/m.exec(src[API])?.[1];
+        if (derived.size === 0 || !prefix) {
+            failures.push(`commands: derived no _execute_* name or keyset prefix from ${UPSTREAM_SHORTCUTS} (broken instrument)`);
+        } else {
+            const { surplus, missing } = diff(ours ?? [], [...derived]);
+            if (!ours || surplus.length || missing.length) failures.push(`commands: EXTENSION_EXECUTE_COMMANDS drifted from upstream buildKey's _execute_* names (surplus ${surplus.join(', ') || 'none'}; missing ${missing.join(', ') || 'none'})`);
+            if (ourPrefix !== prefix) failures.push(`commands: EXTENSION_KEYSET_PREFIX ${ourPrefix} is not the keyset id prefix upstream registerKeysToDocument uses (${prefix})`);
+        }
+        const focus = span(apiLines, /^ {2}pushPageFocus\(theiaBrowser, tabId\) \{/);
+        const focusLines = focus ? apiLines.slice(focus.start, focus.end + 1) : [];
+        const scoped = focusLines.findIndex(l => l.includes('extensionKeysFollowPageFocus('));
+        const early = focusLines.findIndex(l => l.includes('return;'));
+        if (scoped < 0 || (early >= 0 && scoped > early)) failures.push(`commands: pushPageFocus does not scope the extension keys (extensionKeysFollowPageFocus) before its early return; an extension key would fire with the IDE focused`);
+        const installs = apiLines.filter(l => /\binstallExtensionReceivers\(win\);/.test(l)).length;
+        if (installs !== 1) failures.push(`commands: installExtensionReceivers(win) is called ${installs} time(s); the rule is once, from the tab host install`);
+        const receivers = span(apiLines, /^function installExtensionReceivers\(/);
+        const receiversText = receivers ? apiLines.slice(receivers.start, receivers.end + 1).join('\n') : '';
+        if (!/addEventListener\("command"[\s\S]*stopPropagation\(\)[\s\S]*\}, true\)/.test(receiversText)) failures.push(`commands: installExtensionReceivers has no capture command listener that stops the stock _execute_* path`);
+        if (/createXULElement\("key"\)/.test(stripComments(src[API]))) failures.push(`commands: ${API} creates a <key> of its own; the Phase 27 key table owns key rows (key collision)`);
+        if (stripComments(src[API]).includes('powerbrowser-page-key-')) failures.push(`commands: ${API} names a Phase 27 row id (powerbrowser-page-key-); an extension key must not take a Theia key's row (key collision)`);
+    }
     return failures;
 }
 
@@ -438,6 +478,9 @@ function selfTest() {
         { name: 'sidebar-as-tab', run: () => check({ ...clean, [API]: clean[API].replace('  win.document.body.appendChild(frame);\n  extensionSidebars.set(', '  createPendingOverlay(null, panel, true, null);\n  extensionSidebars.set(') }), expect: 'extensionSidebarOpen puts the sidebar page in an overlay (createPendingOverlay(' },
         { name: 'tabpage-in-overlay', run: () => check({ ...clean, [API]: clean[API].replace('    return extensionOpenTabPage(url, options?.triggeringPrincipal);', '    return createPendingOverlay(options.openerBrowser, url, true, null);') }), expect: 'tabsBridgeCreate puts an extension page in an overlay (createPendingOverlay(' },
         { name: 'foreign extension page', run: () => check({ ...clean, [API]: clean[API].replace('principal?.addonId !== policy.id', 'false') }), expect: "extensionOpenTabPage admits another extension's page" },
+        { name: 'execute name drift', run: () => check({ ...clean, [API]: clean[API].replace(', "_execute_sidebar_action"];', '];') }), expect: 'missing _execute_sidebar_action' },
+        { name: 'commands-always-fire', run: () => check({ ...clean, [API]: clean[API].replace('    extensionKeysFollowPageFocus(theiaBrowser.ownerDocument.defaultView, tabId !== null);', '   ') }), expect: 'pushPageFocus does not scope the extension keys' },
+        { name: 'key collision', run: () => check(apiWith('const key = document.createXULElement("key"); key.id = "powerbrowser-page-key-newTab";')), expect: '(key collision)' },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
     let failed = 0;
@@ -465,7 +508,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows; the sidebar stays off in the shell window and loads only in the stock panel document; extension tab pages go to the stock window, never an overlay' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows; the sidebar stays off in the shell window and loads only in the stock panel document; extension tab pages go to the stock window, never an overlay; extension shortcuts follow page focus and _execute_* runs on the bridge' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();

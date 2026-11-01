@@ -853,6 +853,7 @@ const EXPECTED_NAV_COPY = new Set([
   // Phase 38 plan 04 (B5): the gear menu's sidebar toggle.
   "Show Sidebar",
   "Hide Sidebar",
+  "${name} (${name})",
 ]);
 
 /**

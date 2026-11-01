@@ -5640,6 +5640,7 @@ export const PowerBrowserWebTabs = Object.freeze({
 
   /** Tells the Theia frame which page has focus (`tabId`) or that none has (`null`). */
   pushPageFocus(theiaBrowser, tabId) {
+    extensionKeysFollowPageFocus(theiaBrowser.ownerDocument.defaultView, tabId !== null); // 38-04: extension keys need a page
     // Page focus selects its tab (D-13): the overlay the user types in is the one an extension sees as active.
     if (tabId !== null) {
       tabHostSelectById(theiaBrowser, tabId);
@@ -9811,6 +9812,8 @@ async function pushExtensionActions(win) {
       const named = row.pageActionShown ? undefined : sidebars.get(row.extensionId);
       row.sidebarTitle = named ? String(named.sidebar.getContextData(host.selected).title || named.extension.name || "") : null;
       row.sidebarOpen = Boolean(named) && row.extensionId === openSidebar;
+      // 38-04 (B5): the key bound to the row's own action, for the button's tooltip.
+      row.shortcut = await extensionShortcutOf(row, toolbar);
     }
   } catch (err) {
     PowerBrowserAPI.log("error", `[extensions] extensionAction read failed: ${err && err.message ? err.message : err}`);
@@ -10041,6 +10044,10 @@ async function extensionStoreRequest(kind, data, actorRef) {
   }
   switch (kind) {
     case "extensionClick":
+      // 38-04: a shortcut that opens this action's popup later anchors it where the button last was.
+      if (named.action) {
+        extensionAnchors.set(named.action, data.anchorRect);
+      }
       return { ok: true, kind, where: extensionClick(win, named, data.anchorRect) };
     case "extensionPin":
       if (typeof data.pinned !== "boolean") {
@@ -10237,4 +10244,121 @@ function installExtensionReceivers(win) {
     extensionOpenTabPage(uri instanceof Ci.nsIURI ? uri.spec : String(uri), params?.triggeringPrincipal);
     return true;
   };
+  // Commands (below): every extension keyset starts disabled, as the Phase 27 rows do, until a page has focus.
+  const doc = win.document;
+  extensionPageFocus.set(win, false);
+  new win.MutationObserver(records => {
+    for (const node of records.flatMap(record => [...record.addedNodes])) {
+      if (node.localName === "keyset" && node.id.startsWith(EXTENSION_KEYSET_PREFIX)) {
+        extensionKeysetArrived(win, node);
+      }
+    }
+  }).observe(doc.documentElement, { childList: true });
+  for (const keyset of doc.querySelectorAll(`keyset[id^="${EXTENSION_KEYSET_PREFIX}"]`)) {
+    extensionKeysetArrived(win, keyset);
+  }
+  // Ahead of the key's own listener (capture, at the document): an _execute_* key runs on the bridge instead.
+  doc.addEventListener("command", event => {
+    const bound = extensionExecuteKeys.get(event.target);
+    if (bound) {
+      event.stopPropagation();
+      extensionExecute(win, bound.extension, bound.name);
+    }
+  }, true);
+}
+
+// ---------------------------------------------------------------------------
+// 38-04 (B5 and the 2026-10-20 keys ruling): extension keyboard shortcuts (the commands API). ExtensionShortcuts
+// already appends one keyset per extension to the shell window (registerKeysToDocument; patch 050 skips only its
+// sidebar call). Its keys fire only while a web page has focus: pushPageFocus, which the Phase 27 focus tracker calls on
+// every focus change, disables them otherwise, so with the IDE focused the key goes to Theia. A custom command then
+// reaches commands.onCommand with the focused page's tab (the host's selected tab). The _execute_* keys run on the
+// bridge instead of upstream's listener, which reads a window's selected tab and draws stock popups the shell has no
+// host for.
+// ---------------------------------------------------------------------------
+
+// The command names ExtensionShortcuts.buildKey sends to an action instead of onCommand.
+const EXTENSION_EXECUTE_COMMANDS = ["_execute_action", "_execute_browser_action", "_execute_page_action", "_execute_sidebar_action"];
+// The id prefix of the keyset ExtensionShortcuts.registerKeysToDocument appends for each extension.
+const EXTENSION_KEYSET_PREFIX = "ext-keyset-id-";
+// With no button rect reported yet, a shortcut's popup hangs from the frame's top-right corner (the rect clamps there).
+const EXTENSION_SHORTCUT_ANCHOR = { left: Number.MAX_SAFE_INTEGER, top: 0, width: 0, height: 0 };
+// Shell window -> whether a web page has focus (the last pushPageFocus).
+const extensionPageFocus = new WeakMap();
+// An _execute_* key element -> { extension, name }, recorded when its keyset arrives.
+const extensionExecuteKeys = new WeakMap();
+// An action -> the anchor rect its button last reported (extensionClick).
+const extensionAnchors = new WeakMap();
+
+function extensionKeysScope(keyset, pageFocused) {
+  for (const key of keyset.children) {
+    if (pageFocused) {
+      key.removeAttribute("disabled");
+    } else {
+      key.setAttribute("disabled", "true");
+    }
+  }
+}
+
+// GlobalKeyListener reads `disabled` live on every key event, as it does for the Phase 27 rows.
+function extensionKeysFollowPageFocus(win, pageFocused) {
+  extensionPageFocus.set(win, pageFocused);
+  for (const keyset of win.document.querySelectorAll(`keyset[id^="${EXTENSION_KEYSET_PREFIX}"]`)) {
+    extensionKeysScope(keyset, pageFocused);
+  }
+}
+
+// A keyset arrived (an extension started or changed a shortcut): it takes the current focus state, and its _execute_*
+// keys are matched to their commands by building each command's key the way upstream builds it.
+async function extensionKeysetArrived(win, keyset) {
+  extensionKeysScope(keyset, extensionPageFocus.get(win) === true);
+  const { GlobalManager } = extensionLazy.ExtensionParent;
+  const extension = [...GlobalManager.extensionMap.values()].find(e => e.shortcuts?.keysetsMap?.get(win) === keyset);
+  const commands = await extension?.shortcuts.commands;
+  for (const [name, command] of commands ?? []) {
+    if (!EXTENSION_EXECUTE_COMMANDS.includes(name) || !command.shortcut) {
+      continue;
+    }
+    for (const shortcut of new Set([command.shortcut, command.shortcut.replace(/[0-9]$/, "Numpad$&")])) {
+      const reference = extension.shortcuts.buildKeyFromShortcut(win.document, name, shortcut);
+      for (const key of keyset.children) {
+        if (["key", "keycode", "modifiers"].every(attr => key.getAttribute(attr) === reference.getAttribute(attr))) {
+          extensionExecuteKeys.set(key, { extension, name });
+        }
+      }
+    }
+  }
+}
+
+// An _execute_* shortcut: the toolbar or page action runs through extensionClick on the host's selected tab (a page
+// action only while shown there), the sidebar toggles in its Theia view.
+function extensionExecute(win, extension, name) {
+  if (name === "_execute_sidebar_action") {
+    const named = extensionSidebarsById().get(extension.id);
+    if (named) {
+      extensionSidebarToggle(win, named);
+    }
+    return;
+  }
+  const page = name === "_execute_page_action";
+  const named = extensionActionsById(page).get(extension.id);
+  const selected = tabHosts.get(win)?.selected ?? null;
+  if (named && (!page || (selected && named.action.isShownForTab(selected)))) {
+    extensionClick(win, named, extensionAnchors.get(named.action) ?? EXTENSION_SHORTCUT_ANCHOR);
+  }
+}
+
+// The key bound to a row's own action: a page action's, a toolbar action's (by manifest version), or for a sidebar-only
+// row its sidebar's. The manifest's or the user's text (for example "Alt+Shift+U"); null when none is bound.
+async function extensionShortcutOf(row, toolbar) {
+  const { GlobalManager } = extensionLazy.ExtensionParent;
+  const extension = GlobalManager.extensionMap.get(row.extensionId);
+  let name = "_execute_sidebar_action";
+  if (row.pageActionShown) {
+    name = "_execute_page_action";
+  } else if (toolbar.has(row.extensionId)) {
+    name = extension.manifestVersion < 3 ? "_execute_browser_action" : "_execute_action";
+  }
+  const commands = await extension?.shortcuts?.commands;
+  return commands?.get(name)?.shortcut || null;
 }

@@ -38,6 +38,11 @@ function ExtensionIcon({ row }: { row: ExtensionActionRow }): React.ReactElement
     return <span className='pb-ext-icon codicon codicon-extensions' />;
 }
 
+/** 38-04 (B5): a button's tooltip, which names the shortcut bound to its action. */
+function tooltipOf(row: ExtensionActionRow): string {
+    return row.shortcut ? CHROME_BAR_COPY.extensionWithShortcut(row.title, row.shortcut) : row.title;
+}
+
 function ExtensionBadge({ row }: { row: ExtensionActionRow }): React.ReactElement | null {
     // An empty badge renders nothing, not an empty pill.
     return row.badgeText ? <span className='pb-ext-badge'>{row.badgeText.slice(0, BADGE_CAP)}</span> : null;
@@ -343,7 +348,7 @@ export class ExtensionActionsWidget {
             className={'pb-chrome-bar-button pb-ext-action' + (row.popupOpen ? ' is-open' : '')}
             data-extension-id={row.extensionId}
             aria-label={row.title}
-            title={row.title}
+            title={tooltipOf(row)}
             aria-disabled={!row.enabled}
             aria-pressed={row.popupOpen}
             onClick={e => void this.run(row, e.currentTarget)}
@@ -369,7 +374,7 @@ export class ExtensionActionsWidget {
             className={'pb-chrome-bar-button pb-page-action' + (row.popupOpen ? ' is-open' : '')}
             data-extension-id={row.extensionId}
             aria-label={row.title}
-            title={row.title}
+            title={tooltipOf(row)}
             aria-pressed={row.popupOpen}
             onClick={e => void this.run(row, e.currentTarget)}
         >

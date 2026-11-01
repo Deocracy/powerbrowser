@@ -89,6 +89,15 @@
 //                   unchanged; its tabs.update of the web tab /a to its dashboard page is refused.
 //                   Plant tabpage-in-overlay sends the dashboard page to a web tab instead and
 //                   must go red naming the refused scheme.
+//   commands     -- (38-04, B5 + the 2026-10-20 keys ruling) with page /a focused, the surfaces
+//                   fixture's Alt+Shift+U fires its command on /a (onCommand's tab retitles
+//                   /a); with the IDE focused, the same key lands in the Theia frame (a keydown
+//                   recorder there sees it) and the command does not fire, scored on the same
+//                   command recorder that saw the page-side fire; with /a focused again, its
+//                   _execute_sidebar_action key Alt+Shift+I opens the sidebar view through the
+//                   bridge. Plant commands-always-fire enables the extension keys while the IDE has
+//                   focus and must go red naming the IDE focus. Plant commands-never-fire disables
+//                   them while the page has focus and must go red naming the page.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -555,6 +564,58 @@ async function scenarioTabPages({ app, plant, command }) {
   return verdict(true, `runtime.openOptionsPage and tabs.create opened ${pathOf(optionsUrl)} and ${pathOf(dashboardUrl)} as stock-window tabs; the overlay set stayed ${JSON.stringify(before)}; tabs.update of /a to an extension page was refused (${nav.error})`, null);
 }
 
+// 38-04 (B5): commands shortcuts with page focus, Theia's keys otherwise. One session, surfaces fixture only.
+async function scenarioCommands({ app, plant }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await app.evaluate("(() => { window.__pbKeys = 0; window.addEventListener('keydown', e => { if (e.code === 'KeyU' && e.altKey && e.shiftKey) window.__pbKeys++; }, true); return true; })()");
+  const altShiftU = { key: 'U', code: 'KeyU', keyCode: 85, modifiers: ['alt', 'shift'] };
+  const setExtensionKeys = enabled => live.inChrome(app, `document.querySelectorAll('keyset[id^="ext-keyset-id-"] key').forEach(k => ${enabled} ? k.removeAttribute('disabled') : k.setAttribute('disabled', 'true')); return true;`);
+  if (!(await live.focusOverlay(app, A))) {
+    return verdict(false, null, 'BROKEN INSTRUMENT: page /a could not be focused');
+  }
+  if (plant?.name === 'commands-never-fire') {
+    await setExtensionKeys(false);
+  }
+  const from = session.logs.length;
+  await live.pressKey(app, altShiftU);
+  const fired = await waitSince(from, r => r.kind === 'command' && r.name === 'pb-probe', 10000);
+  if (!fired) {
+    return verdict(false, null, `the shortcut did not fire with the page /a focused (key route ${live.keyRoute.last})`);
+  }
+  if (pathOf(fired.url) !== '/a' || fired.title !== 'pb-command /a') {
+    return verdict(false, null, `the shortcut fired on the wrong tab: ${JSON.stringify(fired)}`);
+  }
+  if (!(await live.focusTheiaFrame(app))) {
+    return verdict(false, null, 'BROKEN INSTRUMENT: the Theia frame could not be focused');
+  }
+  if (plant?.name === 'commands-always-fire') {
+    await setExtensionKeys(true);
+  }
+  const keysBefore = await app.evaluate('window.__pbKeys');
+  const fromIde = session.logs.length;
+  await live.pressKey(app, altShiftU);
+  await sleep(1500);
+  const keysAfter = await app.evaluate('window.__pbKeys');
+  const ideFired = session.logs.slice(fromIde).find(r => r.kind === 'command');
+  if (ideFired) {
+    return verdict(false, null, `the extension command fired with the IDE focused: ${JSON.stringify(ideFired)}`);
+  }
+  if (keysAfter !== keysBefore + 1) {
+    return verdict(false, null, `with the IDE focused the key did not reach the Theia frame (${keysBefore} -> ${keysAfter})`);
+  }
+  if (!(await live.focusOverlay(app, A))) {
+    return verdict(false, null, 'BROKEN INSTRUMENT: page /a could not be focused again');
+  }
+  await live.pressKey(app, { key: 'I', code: 'KeyI', keyCode: 73, modifiers: ['alt', 'shift'] });
+  if (!(await pollUntil(() => sidebarView(app), v => v.attached && v.label === 'PB sidebar probe', 10000))) {
+    return verdict(false, null, `the _execute_sidebar_action key did not open the sidebar view: ${JSON.stringify(await sidebarView(app))}`);
+  }
+  return verdict(true, `Alt+Shift+U fired pb-probe on /a (title ${fired.title}); with the IDE focused it reached the Theia frame and fired nothing; Alt+Shift+I opened the sidebar view`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
@@ -564,11 +625,12 @@ const SCENARIOS_TABLE = {
   'page-action': scenarioPageAction,
   sidebar: scenarioSidebar,
   'tab-pages': scenarioTabPages,
+  commands: scenarioCommands,
 };
 // Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
 const RELAUNCH_SCENARIOS = new Set(['content', 'page-action']);
 // 38-04 (B5): scenarios that install the surfaces fixture alone, so its background is the only reader of /cmd.
-const B5_SCENARIOS = new Set(['sidebar', 'tab-pages']);
+const B5_SCENARIOS = new Set(['sidebar', 'tab-pages', 'commands']);
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
 // patched product: the scenario reads `plant.name`.
@@ -584,6 +646,8 @@ const PLANTS_TABLE = {
   'sidebar-in-shell': { scenario: 'sidebar', expect: 'no Theia side-panel view opened: the sidebar went to the shell window' },
   'sidebar-as-tab': { scenario: 'sidebar', expect: 'the panel page was sent to a web tab, where the shell refuses its scheme (refused-scheme)' },
   'tabpage-in-overlay': { scenario: 'tab-pages', expect: 'the tab page was sent to a web tab, where the shell refuses its scheme (refused-scheme)' },
+  'commands-always-fire': { scenario: 'commands', expect: 'the extension command fired with the IDE focused' },
+  'commands-never-fire': { scenario: 'commands', expect: 'the shortcut did not fire with the page /a focused' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;

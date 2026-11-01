@@ -127,6 +127,17 @@ browser.runtime.onMessage.addListener(msg => {
 // sidebar action. Its background answers the harness's commands on /cmd; it is the only fixture in a B5 session.
 const SURFACES_BACKGROUND = `${POST}
 post({ kind: 'surfaces-started', id: browser.runtime.id });
+// The commands probe: the custom command retitles the tab it was given, so the page-side effect names that tab.
+browser.commands.onCommand.addListener(async (name, tab) => {
+  let title = null;
+  let err = null;
+  try {
+    title = (await browser.tabs.executeScript(tab.id, { code: "document.title = 'pb-command ' + location.pathname; document.title" }))[0];
+  } catch (e) {
+    err = String((e && e.message) || e);
+  }
+  post({ kind: 'command', name, tabId: tab ? tab.id : null, url: tab ? tab.url : null, title, err });
+});
 async function run(cmd) {
   try {
     let result;
@@ -212,6 +223,10 @@ export const EXTENSION_FIXTURES = Object.freeze({
       background: { scripts: ['background.js'] },
       sidebar_action: { default_panel: 'panel.html', default_title: 'PB sidebar probe' },
       options_ui: { page: 'options.html', open_in_tab: true },
+      commands: {
+        'pb-probe': { suggested_key: { default: 'Alt+Shift+U' }, description: 'PB probe command' },
+        _execute_sidebar_action: { suggested_key: { default: 'Alt+Shift+I' } },
+      },
     },
     files: {
       'background.js': SURFACES_BACKGROUND,

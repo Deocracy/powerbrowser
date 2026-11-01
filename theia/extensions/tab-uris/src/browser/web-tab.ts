@@ -315,6 +315,8 @@ export interface ExtensionActionRow {
     sidebarTitle: string | null;
     /** Phase 38 plan 04 (B5): the extension's sidebar is the one open (the Theia side-panel view shows it). */
     sidebarOpen: boolean;
+    /** Phase 38 plan 04 (B5): the key bound to this row's action (the commands API), as written, or null when none. */
+    shortcut: string | null;
 }
 
 /** Phase 38 plan 01: the rows of one extensionAction push; a malformed row is dropped, never rendered. */
@@ -328,7 +330,8 @@ export function extensionActionRowsOf(detail: Record<string, unknown>): Extensio
             && (r.icon === null || (typeof r.icon === 'string' && r.icon.startsWith('data:image/')))
             && typeof r.badgeText === 'string' && typeof r.enabled === 'boolean' && typeof r.hasPopup === 'boolean' && typeof r.pinned === 'boolean'
             && typeof r.popupOpen === 'boolean' && typeof r.pageActionShown === 'boolean'
-            && (r.sidebarTitle === null || typeof r.sidebarTitle === 'string') && typeof r.sidebarOpen === 'boolean';
+            && (r.sidebarTitle === null || typeof r.sidebarTitle === 'string') && typeof r.sidebarOpen === 'boolean'
+            && (r.shortcut === null || typeof r.shortcut === 'string');
     });
 }
 
