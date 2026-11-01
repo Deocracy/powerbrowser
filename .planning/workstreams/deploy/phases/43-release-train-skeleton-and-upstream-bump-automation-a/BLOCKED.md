@@ -5,6 +5,10 @@ the executor did instead. Plans continue around them where the plan allows.
 
 ## 1. The workflow_run wake of the release train is held out
 
+**Settled: B** (clock-only wake stays). Settled by the autonomous run on 2026-10-31 under the
+owner's instruction to decide items not needing owner input. REQUIREMENTS.md TRAIN-01 marks the
+`workflow_run` clause out of scope for v1.6. No workflow file changes.
+
 **Plan:** 43-02, Task 1 (the `on:` block of `.github/workflows/release-train.yml`).
 
 **Blocked piece:** the trigger `workflow_run: { workflows: ['Verify static layers'], types: [completed] }`.
