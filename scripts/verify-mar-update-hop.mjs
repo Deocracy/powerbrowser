@@ -66,7 +66,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 
 // WR-08: the shell's stdout capture of the N+1 run. PowerBrowserAPI's update
 // observer logs one line per appUpdate push, which is the logged event the
@@ -96,9 +96,12 @@ const MOZCONFIG_REL = 'powerbrowser/packaging/mozconfig.release';
 
 // Argument handling runs on direct invocation only: build-update-xml.mjs imports buildUpdateXml
 // and carries its own flags, which must not reach this gate's unknown-argument refusal.
+// realpath on both sides, as scripts/generate.mjs isEntryPoint() documents: import.meta.url is already
+// resolved, so an un-resolved argv[1] made a symlinked invocation run nothing and exit 0.
 const DIRECT_RUN = (() => {
     try {
-        return process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+        return process.argv[1] !== undefined
+            && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
     } catch {
         return false;
     }
@@ -1231,6 +1234,17 @@ function selfTest() {
         } else {
             console.log(`${NAME}: --self-test -- same appVersion with a distinct buildID is accepted as an upgrade (GREEN)`);
         }
+
+        // Symlinked invocation (WR-02): the argument refusal must still run, not silently exit 0.
+        const link = join(dir, 'linked-hop.mjs');
+        symlinkSync(fileURLToPath(import.meta.url), link);
+        const linked = spawnSync(process.execPath, [link, '--planted-unknown-flag'], { encoding: 'utf8' });
+        if (linked.status === 2 && linked.stderr.includes("unknown argument '--planted-unknown-flag'")) {
+            console.log(`${NAME}: --self-test -- a symlinked invocation still refuses an unknown argument (exit 2)`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- a symlinked invocation with an unknown flag exited ${linked.status} without refusing it; stderr: ${linked.stderr.trim() || '(empty)'}`);
+            ok = false;
+        }
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
@@ -1248,14 +1262,7 @@ if (SELF_TEST) selfTest();
 // Import guard: importing this module (to reuse buildUpdateXml as the
 // descriptor's single source) must not run the gate's main. Direct
 // invocation still does.
-const INVOKED_DIRECTLY = (() => {
-    try {
-        return process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-    } catch {
-        return false;
-    }
-})();
-if (INVOKED_DIRECTLY) {
+if (DIRECT_RUN) {
 const result = runChecks(REPO_ROOT);
 if (result.failures.length > 0) {
     console.error(`${NAME}: FAIL -- ${result.failures.length} MAR-hop problem(s)`);
