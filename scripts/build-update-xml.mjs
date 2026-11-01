@@ -461,8 +461,25 @@ function selfTest() {
         console.log('  ok  platformVersion follows application.ini MaxVersion, not Version');
 
         let failed = 0;
+        const noOriginRoot = makeFixture();
+        dirs.push(noOriginRoot);
+        const toml = readFileSync(join(noOriginRoot, MANIFEST_REL), 'utf8');
+        if (!/^mar_origin = .*$/m.test(toml)) {
+            console.error(`${NAME}: --self-test FAIL -- ${MANIFEST_REL} has no mar_origin line to unset, so the unset plant cannot be built`);
+            return 1;
+        }
+        writeFileSync(join(noOriginRoot, MANIFEST_REL), toml.replace(/^mar_origin = .*$/m, '# mar_origin unset'));
         const plants = [
             ['unknown target token (OS_TARGET Plan9)', { texts: { [CONFIG_STATUS_REL]: statusFixture({ os: 'Plan9', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'Plan9'],
+            // Fail-closed inputs: each absent or unsupported input is red naming its file, never a skip or an empty emission.
+            ['config.status absent', { texts: { ...green, [CONFIG_STATUS_REL]: null } }, CONFIG_STATUS_REL, 'absent'],
+            ['application.ini absent', { texts: { ...green, [APP_INI_REL]: null } }, APP_INI_REL, 'absent'],
+            ['MAR absent', { texts: green, mar: join(root, '.mozbuild/mar-hop/absent.mar') }, '.mozbuild/mar-hop/absent.mar', 'absent'],
+            ['release.txt absent', { texts: { ...green, [RELEASE_TXT_REL]: null } }, RELEASE_TXT_REL, 'null'],
+            ['release.txt not a tag', { texts: { ...green, [RELEASE_TXT_REL]: 'garbage\n' } }, RELEASE_TXT_REL, 'garbage'],
+            ['pending OS_TARGET Darwin', { texts: { [CONFIG_STATUS_REL]: statusFixture({ os: 'Darwin', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'pending'],
+            ['pending OS_TARGET WINNT', { texts: { [CONFIG_STATUS_REL]: statusFixture({ os: 'WINNT', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'pending'],
+            ['[urls] mar_origin unset', { texts: green }, MANIFEST_REL, 'mar_origin', noOriginRoot],
             ['application.ini with no BuildID', { texts: { ...green, [APP_INI_REL]: iniFixture({ buildID: null }) } }, APP_INI_REL, 'BuildID'],
             ['application.ini with no MaxVersion', { texts: { ...green, [APP_INI_REL]: iniFixture({ maxVersion: null }) } }, APP_INI_REL, 'MaxVersion'],
             ['TARGET_XPCOM_ABI disagreeing with the table', { texts: { [CONFIG_STATUS_REL]: statusFixture({ abi: 'i686-gcc3', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'i686-gcc3'],
@@ -471,9 +488,12 @@ function selfTest() {
             ['release.txt tag disagreeing with the built Version', { texts: { ...green, [RELEASE_TXT_REL]: 'v153.6.0-1\n' } }, RELEASE_TXT_REL, '153.6.0'],
             ['--details-url not https', { texts: green, detailsURL: 'http://example.invalid/releases' }, '--details-url', 'http://example.invalid/releases'],
         ];
-        for (const [name, overrides, file, value] of plants) {
-            const { failures } = runChecks(root, overrides);
-            if (failures.some(f => f.includes(file) && f.includes(value))) {
+        for (const [name, overrides, file, value, plantRoot = root] of plants) {
+            const { failures, outputs } = runChecks(plantRoot, overrides);
+            if (outputs.length > 0) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' still emitted ${outputs.map(o => o.rel).join(', ')}; a red input must emit nothing`);
+                failed += 1;
+            } else if (failures.some(f => f.includes(file) && f.includes(value))) {
                 console.log(`  ok  ${name} -> red, naming '${file}' and '${value}'`);
             } else {
                 console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${file}' and '${value}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
