@@ -981,7 +981,7 @@
 
 #theia-top-panel {
     flex-wrap: wrap;
-    min-height: calc(var(--theia-private-menubar-height) + 40px);
+    min-height: calc(var(--theia-private-menubar-height) + 40px + var(--pb-bookmarks-toolbar-height, 0px));
 }
 
 /* GUI-07: the top panel is as tall as the mode needs, and no taller.
@@ -1001,16 +1001,23 @@
    carry a strip it did not want just to fill the gap, and hiding a row moved
    the URL row without moving the shell below it. */
 body[data-pb-mode] #theia-top-panel {
-    min-height: 40px;
+    min-height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px));
 }
 
 body[data-pb-mode="coding"] #theia-top-panel {
-    min-height: calc(var(--theia-private-menubar-height) + 40px);
+    min-height: calc(var(--theia-private-menubar-height) + 40px + var(--pb-bookmarks-toolbar-height, 0px));
 }
 
 body[data-pb-mode="browsing"] #theia-top-panel,
 body[data-pb-mode="organising"] #theia-top-panel {
-    min-height: calc(33px + 40px);
+    min-height: calc(33px + 40px + var(--pb-bookmarks-toolbar-height, 0px));
+}
+
+/* Phase 33 (BMK-04, D-04): the bookmarks toolbar row, in every mode. One variable, added to
+   each mode's height above, so the panel grows by exactly 28px while the toolbar shows and the
+   page rect shrinks by that much (nothing overlays it). Unset, every height is unchanged. */
+body[data-pb-bookmarks-toolbar="shown"] {
+    --pb-bookmarks-toolbar-height: 28px;
 }
 
 /* Custom title bar: chrome's window buttons overlay the top-right corner of
@@ -1025,7 +1032,7 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
 
 #theia-top-panel > [id="powerbrowser.chrome-bar"] {
     flex: 0 0 100%;
-    height: 40px;
+    height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px));
     overflow: visible;
 }
 
@@ -1471,4 +1478,89 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
 
 .pb-tab-audio.is-muted {
     color: var(--color-text-muted, #9a99a8);
+}
+
+/* Phase 33 (BMK-04): the bookmarks toolbar, a 28px pill-ground row under the 40px bar. Items
+   never wrap and the row never scrolls; the chevron pins to the right end and lists the items
+   past it. Toolbar items and the chevron never take accent ink (33-UI-SPEC Color). */
+.pb-bookmarks-toolbar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 4px;
+    height: 28px;
+    width: 100%;
+    padding: 0 8px;
+    box-sizing: border-box;
+    overflow: hidden;
+    background: var(--color-bg, #1c1b22);
+    color: var(--color-text, #fbfbfe);
+    border-bottom: 1px solid var(--color-border, #3f3e4a);
+    font-size: 14px;
+}
+
+.pb-bookmarks-toolbar-item {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.pb-bookmarks-toolbar-item:hover,
+.pb-bookmarks-toolbar-chevron:hover {
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-bookmarks-toolbar-item.is-overflow {
+    visibility: hidden;
+}
+
+.pb-bookmarks-toolbar-icon,
+.pb-bookmarks-toolbar-item .codicon {
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+}
+
+.pb-bookmarks-toolbar-label {
+    max-width: 160px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.pb-bookmarks-toolbar-chevron {
+    position: absolute;
+    top: 2px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: var(--color-bg, #1c1b22);
+    color: var(--color-text-muted, #9a99a8);
+    font: inherit;
+    cursor: pointer;
+}
+
+.pb-bookmarks-toolbar-item:focus-visible,
+.pb-bookmarks-toolbar-chevron:focus-visible {
+    outline: 1px solid var(--color-text-muted, #9a99a8);
+    outline-offset: -1px;
+}
+
+.pb-bookmarks-toolbar-failed {
+    font-size: 12px;
+    color: var(--color-text-muted, #9a99a8);
+    white-space: nowrap;
 }

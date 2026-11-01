@@ -722,6 +722,12 @@ const EXPECTED_NAV_COPY = new Set([
   "Done",
   "${name} couldn't save that bookmark. Press Enter to try again.",
   "${name} couldn't remove that bookmark. Press Enter to try again.",
+  // Phase 33 plan 03 (BMK-04): the bookmarks toolbar, its chevron, its item menu and its setting.
+  "Show the bookmarks toolbar below the address bar.",
+  "Bookmarks toolbar",
+  "More bookmarks",
+  "${name} couldn't load your bookmarks toolbar. Press Ctrl+Shift+B twice to try again.",
+  "Open in New Tab",
 ]);
 
 /**

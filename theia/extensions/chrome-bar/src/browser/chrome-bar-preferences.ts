@@ -15,6 +15,8 @@ export const SHOW_HOME_BUTTON_PREFERENCE = 'browser.showHomeButton';
 export const HOME_PAGE_PREFERENCE = 'browser.homePage';
 export const DEFAULT_SEARCH_ENGINE_PREFERENCE = 'browser.defaultSearchEngine';
 export const SEARCH_SUGGESTIONS_PREFERENCE = 'browser.searchSuggestions';
+/** Phase 33 (BMK-04): Firefox's own key name and default (off). */
+export const SHOW_BOOKMARKS_TOOLBAR_PREFERENCE = 'browser.showBookmarksToolbar';
 
 /**
  * Phase 29 (BAR-04): "" means the default configuration.toml supplies. The
@@ -53,6 +55,13 @@ export const ChromeBarPreferenceSchema: PreferenceSchema = {
             default: true,
             scope: PreferenceScope.User,
             description: CHROME_BAR_COPY.searchSuggestionsDescription,
+        },
+        // Phase 33 (BMK-04): off by default, as in Firefox; User scope only.
+        [SHOW_BOOKMARKS_TOOLBAR_PREFERENCE]: {
+            type: 'boolean',
+            default: false,
+            scope: PreferenceScope.User,
+            description: CHROME_BAR_COPY.showBookmarksToolbarDescription,
         },
     },
 };

@@ -190,6 +190,13 @@ export const CHROME_BAR_COPY = Object.freeze({
     bookmarkDone: 'Done',
     bookmarkSaveFailed: (subject: string) => `${subject} couldn't save that bookmark. Press Enter to try again.`,
     bookmarkRemoveFailed: (subject: string) => `${subject} couldn't remove that bookmark. Press Enter to try again.`,
+    // Phase 33 plan 03 (BMK-04): the bookmarks toolbar row, its overflow chevron, its item menu and its setting.
+    showBookmarksToolbarDescription: 'Show the bookmarks toolbar below the address bar.',
+    bookmarksToolbar: 'Bookmarks toolbar',
+    bookmarksToolbarMore: 'More bookmarks',
+    bookmarksToolbarFailed: (subject: string) => `${subject} couldn't load your bookmarks toolbar. Press Ctrl+Shift+B twice to try again.`,
+    bookmarkOpen: 'Open',
+    bookmarkOpenInNewTab: 'Open in New Tab',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

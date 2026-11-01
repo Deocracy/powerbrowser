@@ -27,7 +27,7 @@ import {
     setOpenFindBar,
 } from './chrome-bar-commands';
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel } from './chrome-bar-copy';
-import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
+import { HOME_PAGE_PREFERENCE, SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
 import { AddressBar, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
 import { BUTTON_SHORTCUTS, NavButton, tooltipFor } from './chrome-bar-shortcuts';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
@@ -39,7 +39,7 @@ import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 import { OrganisingWidget } from '@powerbrowser/modes/lib/browser/organising-widget';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
-import { ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
+import { BookmarkEntry, ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import { MENU_ORDER, MENU_PHASE } from './site-identity/site-identity-table';
 import { APP_MENU_ID, AppMenuRow, WIRED_MENU_IDS, buildAppMenu } from './site-identity/app-menu';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
@@ -79,6 +79,100 @@ type FindOptionKey = 'highlightAll' | 'caseSensitive' | 'entireWord';
 
 type NavGesture = 'back' | 'forward' | 'reload';
 type ButtonEvent = React.MouseEvent<HTMLButtonElement>;
+
+/** Phase 33 (BMK-04, D-04): the body attribute the mode-independent top-panel rule keys on; 'shown' adds the 28px row. */
+const BOOKMARKS_TOOLBAR_ATTRIBUTE = 'data-pb-bookmarks-toolbar';
+
+/** Phase 33 (BMK-04): the toolbar's per-request menus (overflow chevron, item right-click). Built on each open, never registered. */
+const BOOKMARKS_TOOLBAR_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-bookmarks-toolbar'];
+
+/** Where a bookmark or a recent page opens (the Phase 29 targets): the current tab, or a new background or foreground tab. */
+type OpenTarget = 'current' | 'background' | 'foreground';
+
+interface BookmarksToolbarProps {
+    items: BookmarkEntry[] | 'failed';
+    icons: Readonly<Record<string, string>>;
+    onOpen(item: BookmarkEntry, target: OpenTarget): void;
+    onItemMenu(item: BookmarkEntry, anchor: HTMLElement): void;
+    onItemHover(item: BookmarkEntry, anchor: HTMLElement): void;
+    onOverflow(hidden: BookmarkEntry[], anchor: HTMLElement): void;
+}
+
+/** The chevron's 24px plus the 4px gap before it, kept clear at the row's right end once anything overflows. */
+const TOOLBAR_CHEVRON_ROOM = 28;
+
+/**
+ * BMK-04: the 28px bookmarks toolbar row. Items never wrap and the row never
+ * scrolls: an item past the right edge stays in place, hidden, and the
+ * pinned-right chevron lists it. Measured after every layout and on every
+ * resize; the row is the items' offset parent (position: relative).
+ */
+function BookmarksToolbar(props: BookmarksToolbarProps): React.ReactElement {
+    const rowRef = React.useRef<HTMLDivElement>(null);
+    const [fits, setFits] = React.useState(Number.MAX_SAFE_INTEGER);
+    const items = props.items === 'failed' ? [] : props.items;
+    React.useLayoutEffect(() => {
+        const row = rowRef.current;
+        if (!row) {
+            return undefined;
+        }
+        const measure = (): void => {
+            const nodes = Array.from(row.querySelectorAll<HTMLElement>('.pb-bookmarks-toolbar-item'));
+            const edge = row.clientWidth - parseFloat(getComputedStyle(row).paddingRight || '0');
+            const past = (limit: number): number => nodes.findIndex(node => node.offsetLeft + node.offsetWidth > limit);
+            const first = past(edge) < 0 ? -1 : past(edge - TOOLBAR_CHEVRON_ROOM);
+            setFits(first < 0 ? nodes.length : first);
+        };
+        measure();
+        const observer = new ResizeObserver(measure);
+        observer.observe(row);
+        return () => observer.disconnect();
+    }, [props.items]);
+    return <div ref={rowRef} className='pb-bookmarks-toolbar' role='toolbar' aria-label={CHROME_BAR_COPY.bookmarksToolbar}>
+        {props.items === 'failed' && <div className='pb-bookmarks-toolbar-failed' aria-disabled='true'>{CHROME_BAR_COPY.bookmarksToolbarFailed(appSubject())}</div>}
+        {items.map((item, index) => {
+            const hidden = index >= fits;
+            const icon = props.icons[item.url];
+            return <button
+                key={item.guid || `${index}`}
+                type='button'
+                className={'pb-bookmarks-toolbar-item' + (hidden ? ' is-overflow' : '')}
+                tabIndex={hidden ? -1 : undefined}
+                aria-hidden={hidden || undefined}
+                onClick={e => props.onOpen(item, e.ctrlKey || e.metaKey ? 'background' : 'current')}
+                onAuxClick={e => {
+                    if (e.button === 1) {
+                        e.preventDefault();
+                        props.onOpen(item, 'background');
+                    }
+                }}
+                onKeyDown={e => {
+                    if (e.key === 'Enter' && e.altKey) {
+                        e.preventDefault();
+                        props.onOpen(item, 'foreground');
+                    }
+                }}
+                onContextMenu={e => {
+                    e.preventDefault();
+                    props.onItemMenu(item, e.currentTarget);
+                }}
+                onPointerEnter={e => props.onItemHover(item, e.currentTarget)}
+            >
+                {icon
+                    ? <img className='pb-bookmarks-toolbar-icon' src={icon} alt='' />
+                    : <span className='codicon codicon-globe' />}
+                <span className='pb-bookmarks-toolbar-label'>{item.title || item.url}</span>
+            </button>;
+        })}
+        {fits < items.length && <button
+            type='button'
+            className='pb-bookmarks-toolbar-chevron'
+            aria-label={CHROME_BAR_COPY.bookmarksToolbarMore}
+            aria-haspopup='menu'
+            onClick={e => props.onOverflow(items.slice(fits), e.currentTarget)}
+        ><span aria-hidden='true'>{'»'}</span></button>}
+    </div>;
+}
 
 /**
  * GUI-06 (13-03): the chrome bar widget -- nav buttons, address pill with
@@ -204,6 +298,15 @@ export class ChromeBarWidget extends ReactWidget {
 
     protected mode = ChromeBarWidget.MODES[0];
 
+    /** BMK-04: the toolbar folder's web bookmarks in Places order, or 'failed' after a refused read (never stale rows). */
+    protected toolbarItems: BookmarkEntry[] | 'failed' = [];
+    /** BMK-04: cached favicons of the toolbar items, by url; an item without one shows the globe. */
+    protected toolbarIcons: Record<string, string> = {};
+    /** Drops a toolbar read that a newer one overtook. */
+    protected toolbarSeq = 0;
+    /** How the last key or click inside an open bar menu asked a row to open: Alt foreground, Ctrl background. */
+    protected menuTarget: OpenTarget = 'current';
+
     @postConstruct()
     protected init(): void {
         this.addressBar.attach(this);
@@ -219,7 +322,203 @@ export class ChromeBarWidget extends ReactWidget {
             if (change.preferenceName === SHOW_HOME_BUTTON_PREFERENCE || change.preferenceName === HOME_PAGE_PREFERENCE) {
                 this.update();
             }
+            if (change.preferenceName === SHOW_BOOKMARKS_TOOLBAR_PREFERENCE) {
+                this.syncBookmarksToolbar();
+            }
         }));
+        // BMK-04 (D-05): chrome's Places observer sends the `bookmarks-changed` push; the toolbar re-reads its folder.
+        this.toDispose.push(this.webTabs.onDidChangeBookmarks(() => void this.refreshBookmarksToolbar()));
+        void this.preferences.ready.then(() => this.syncBookmarksToolbar());
+    }
+
+    /** BMK-04: the toolbar setting, read from user settings only (the Home settings rule). */
+    protected bookmarksToolbarShown(): boolean {
+        return this.addressBar.userPreference<boolean>(SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, false) === true;
+    }
+
+    /**
+     * BMK-04 (D-04): shows or hides the toolbar in every mode from the setting.
+     * The body attribute grows the top panel by the 28px row, and the shell
+     * re-measures it so the page rect shrinks rather than being covered.
+     * Turning the toolbar on always re-reads it.
+     */
+    protected syncBookmarksToolbar(): void {
+        const shown = this.bookmarksToolbarShown();
+        if ((document.body.getAttribute(BOOKMARKS_TOOLBAR_ATTRIBUTE) === 'shown') !== shown) {
+            document.body.setAttribute(BOOKMARKS_TOOLBAR_ATTRIBUTE, shown ? 'shown' : 'hidden');
+            this.shell.fit();
+        }
+        if (shown) {
+            void this.refreshBookmarksToolbar();
+        } else {
+            this.toolbarSeq++;
+            this.toolbarItems = [];
+            this.toolbarIcons = {};
+        }
+        this.update();
+    }
+
+    /**
+     * BMK-04 (D-05, T-33-03): re-reads listBookmarkFolder('toolbar'). Rows come
+     * from the read only, never from the push. A refused read replaces the items
+     * with the failure row. Only web bookmarks are items: folders and other
+     * schemes are skipped.
+     */
+    protected async refreshBookmarksToolbar(): Promise<void> {
+        if (!this.bookmarksToolbarShown()) {
+            return;
+        }
+        const seq = ++this.toolbarSeq;
+        let items: BookmarkEntry[] | 'failed';
+        try {
+            items = (await this.store.listBookmarkFolder('toolbar')).filter(row => /^https?:\/\//i.test(row.url));
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] reading the bookmarks toolbar failed:', error instanceof Error ? error.name : typeof error);
+            items = 'failed';
+        }
+        if (seq !== this.toolbarSeq) {
+            return;
+        }
+        this.toolbarItems = items;
+        this.update();
+        if (items === 'failed') {
+            return;
+        }
+        // placesFavicons takes at most 10 urls per request.
+        const icons: Record<string, string> = {};
+        for (let at = 0; at < items.length; at += 10) {
+            Object.assign(icons, await this.store.placesFavicons(items.slice(at, at + 10).map(row => row.url)).catch(() => ({})));
+        }
+        if (seq === this.toolbarSeq) {
+            this.toolbarIcons = icons;
+            this.update();
+        }
+    }
+
+    /**
+     * BMK-04 / BMK-06: opens a bookmark or a recent page. 'current' navigates the
+     * active web tab (a new foreground tab without one); a new tab opens after the
+     * current one, joined to the active group, and only a foreground one is selected.
+     */
+    protected async openPlace(url: string, target: OpenTarget): Promise<void> {
+        if (!/^https?:\/\//i.test(url)) {
+            return;
+        }
+        const tab = currentWebTab();
+        try {
+            if (target === 'current' && tab) {
+                await tab.navigate(url);
+                tab.focusPage();
+                return;
+            }
+            const ref = tab ?? this.shell.currentWidget;
+            const widget = ref ? await this.webTabOpener.openInBackground(url, ref) : await this.webTabOpener.openUrl(url);
+            await this.addressBar.joinActiveGroup(widget);
+            if (target !== 'background') {
+                await this.shell.activateWidget(widget.id);
+                widget.focusPage();
+            }
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] opening a page failed:', error instanceof Error ? error.name : typeof error);
+        }
+    }
+
+    /** One per-request menu row; a disabled row runs nothing. */
+    protected menuLeaf(id: string, label: string, run: () => unknown, enabled = true, accelerator: string[] = []): CommandMenu {
+        return {
+            id,
+            label,
+            sortString: '',
+            isVisible: () => true,
+            isEnabled: () => enabled,
+            isToggled: () => false,
+            run: async () => {
+                if (enabled) {
+                    await run();
+                }
+            },
+            ...(accelerator.length ? { getAccelerator: () => accelerator } : {}),
+        } as CommandMenu;
+    }
+
+    /** An unlabelled group (Theia draws a separator on either side), children ordered as given. */
+    protected menuGroup(id: string, children: (CommandMenu | CompoundMenuNode)[]): CompoundMenuNode {
+        return {
+            id,
+            sortString: '',
+            isVisible: () => true,
+            isEmpty: () => children.length === 0,
+            children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })),
+        };
+    }
+
+    /**
+     * A per-request stock `.lm-Menu` under `anchor`. While it is open the last
+     * key or click records its modifiers, so a row's run can follow the Phase
+     * 29 targets (Alt+Enter foreground, Ctrl+click background).
+     */
+    protected renderBarMenu(menuPath: MenuPath, menu: CompoundMenuNode, anchor: HTMLElement): void {
+        this.menuTarget = 'current';
+        const track = (e: KeyboardEvent | MouseEvent): void => {
+            this.menuTarget = e.altKey ? 'foreground' : e.ctrlKey || e.metaKey ? 'background' : 'current';
+        };
+        document.addEventListener('keydown', track, true);
+        document.addEventListener('mouseup', track, true);
+        const rect = anchor.getBoundingClientRect();
+        this.menus.render({
+            menuPath,
+            menu,
+            anchor: { x: rect.left, y: rect.bottom },
+            context: anchor,
+            includeAnchorArg: false,
+            onHide: () => {
+                document.removeEventListener('keydown', track, true);
+                document.removeEventListener('mouseup', track, true);
+            },
+        });
+    }
+
+    /** BMK-04: the hidden toolbar items, in order, as menu rows. */
+    protected openBookmarksOverflow = (hidden: BookmarkEntry[], anchor: HTMLElement): void => {
+        const rows = hidden.map((item, index) =>
+            this.menuLeaf(`bookmark-${index}`, historyLabel({ index, url: item.url, title: item.title }), () => this.openPlace(item.url, this.menuTarget)));
+        this.renderBarMenu(BOOKMARKS_TOOLBAR_MENU_PATH, this.menuGroup('bookmarks-overflow', rows), anchor);
+    };
+
+    /** BMK-04: an item's right-click menu. Remove is the editor's remove path: removeBookmark from this handler, then the push re-reads. */
+    protected openBookmarkItemMenu = (item: BookmarkEntry, anchor: HTMLElement): void => {
+        this.renderBarMenu(BOOKMARKS_TOOLBAR_MENU_PATH, this.menuGroup('bookmark-item', [
+            this.menuLeaf('open', CHROME_BAR_COPY.bookmarkOpen, () => this.openPlace(item.url, 'current')),
+            this.menuLeaf('open-new-tab', CHROME_BAR_COPY.bookmarkOpenInNewTab, () => this.openPlace(item.url, 'foreground')),
+            this.menuLeaf('remove', CHROME_BAR_COPY.removeBookmark, () => this.removeToolbarBookmark(item)),
+        ]), anchor);
+    };
+
+    protected async removeToolbarBookmark(item: BookmarkEntry): Promise<void> {
+        try {
+            await this.store.removeBookmark(item.guid || item.url);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] removing a bookmark failed:', error instanceof Error ? error.name : typeof error);
+        }
+    }
+
+    /** BMK-04: an item's tooltip is its title, or its address when it has none (above the row, like the nav buttons). */
+    protected onBookmarkHover = (item: BookmarkEntry, anchor: HTMLElement): void => {
+        this.hover.requestHover({ content: item.title || item.url, target: anchor, position: 'top', cssClasses: ['pb-chrome-bar-hover'] });
+    };
+
+    protected renderBookmarksToolbar(): React.ReactNode {
+        if (!this.bookmarksToolbarShown()) {
+            return undefined;
+        }
+        return <BookmarksToolbar
+            items={this.toolbarItems}
+            icons={this.toolbarIcons}
+            onOpen={(item, target) => void this.openPlace(item.url, target)}
+            onItemMenu={this.openBookmarkItemMenu}
+            onItemHover={this.onBookmarkHover}
+            onOverflow={this.openBookmarksOverflow}
+        />;
     }
 
     constructor() {
@@ -967,6 +1266,7 @@ export class ChromeBarWidget extends ReactWidget {
         const tab = currentWebTab();
         const stopping = !!tab?.loading;
         // Phase 32 plan 02: the find strip sits under the 40px bar inside a host, so the page rect shrinks by its height.
+        // Phase 33 (BMK-04): the 28px bookmarks toolbar sits between them while the setting is on.
         return <div className='pb-chrome-bar-host'>
         <div className='pb-chrome-bar'>
             <button
@@ -1081,6 +1381,7 @@ export class ChromeBarWidget extends ReactWidget {
                 )}
             </div>
         </div>
+        {this.renderBookmarksToolbar()}
         {this.renderFind()}
         {this.renderPrintNotice()}
         {this.renderSaveNotice()}
