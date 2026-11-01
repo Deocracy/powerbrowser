@@ -3845,7 +3845,9 @@ run_own_checks() {
     # NEW (Phase 34 plan 01, TAB-01/BMK-07): the tab strip's static gate. The tab
     # menu's ROADMAP items (criterion 1 parsed at check time), its copy keys, the
     # occlusion selector, the no-uncatalogued-kind rule, the codicons it names and
-    # the right-clicked-tab target, all derived and compared. Honestly --quick:
+    # the right-clicked-tab target, all derived and compared. 34-03 adds the
+    # keyOf origin of every pin/selection key, bulk-arm delegation to the
+    # single-tab rows, and the open-tabs bound on the pin store. Honestly --quick:
     # text reads only. The live proof is tab-strip-live.
     "tab-strip|node $REPO_ROOT/scripts/verify-tab-strip.mjs"
     "tab-strip-self-test|node $REPO_ROOT/scripts/verify-tab-strip.mjs --self-test"

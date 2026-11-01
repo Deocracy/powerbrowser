@@ -29,6 +29,18 @@
  *   7. overflow (34-02, TAB-04): measureOverflow derives the overflow as
  *      scrollWidth > clientWidth and is the only writer of `overflowing`, and
  *      render shows the List All Tabs chevron only under `this.overflowing`.
+ *   8. keys (34-03, D-08/D-09, C-01): every pinnedIds / selectedIds key and
+ *      the Shift anchor, derived from every add/has/delete call and Set build
+ *      in the strip, is `this.tabKey(...)`, and tabKey is GroupModel.keyOf;
+ *      no `web:` key shape is assumed anywhere in the strip.
+ *   9. delegation (34-03, C-03): every bulk arm in bulkMenuRows is exactly
+ *      `this.runOnEach(<tabs>, '<id>')` naming a single-tab row in
+ *      tabMenuRows that runs through its tab command, or through the one
+ *      bookmarkTabs callback; runOnEach reaches rows only through runTabRow.
+ *  10. pin store (34-03, T-34-05, W1): savePins builds the stored list from
+ *      the open tabs filtered by pinnedIds (bounded by open tabs) and is the
+ *      only writer; restorePins re-pins a tab only when its own key equals
+ *      the stored key.
  *
  * --self-test: the unmodified tree must be green first (the positive control
  * every plant preserves), then each named plant edits one source in memory
@@ -202,7 +214,7 @@ function check(src) {
     }
 
     // 6. target
-    for (const [label, body] of [['tabMenuRows', rows], ['openTabMenu', opener]]) {
+    for (const [label, body] of [['tabMenuRows', rows], ['openTabMenu', opener], ['bulkMenuRows', bulk]]) {
         const hit = body && /\b(currentTitle|currentWidget|currentWebTab|activeWidget)\b/.exec(body);
         if (hit) {
             failures.push(`target: ${label} reads ${hit[1]} -- a menu row acts on the right-clicked tab only, never the current widget`);
@@ -221,6 +233,96 @@ function check(src) {
     }
     if (!render || !/\{this\.overflowing && <button\s+className='pb-tab-strip-chevron\b/.test(render)) {
         failures.push(`overflow: ${STRIP}: render does not show the List All Tabs chevron (pb-tab-strip-chevron) only under this.overflowing -- the chevron can show without overflow`);
+    }
+
+    // 8. keys
+    const tabKey = methodBody(strip, 'protected tabKey(');
+    if (!tabKey || !/^\s*return this\.groups\.keyOf\(widget\);\s*$/.test(tabKey)) {
+        failures.push(`keys: ${STRIP}: tabKey is not \`return this.groups.keyOf(widget);\` -- strip state is not keyed by GroupModel.keyOf`);
+    }
+    // Each call's argument up to its balanced close paren (a lazy match would stop inside this.tabKey(...)).
+    const keyUses = [...strip.matchAll(/this\.(pinnedIds|selectedIds)\.(add|has|delete)\(/g)].map(m => {
+        let depth = 1;
+        let i = m.index + m[0].length;
+        for (; i < strip.length && depth; i++) {
+            depth += strip[i] === '(' ? 1 : strip[i] === ')' ? -1 : 0;
+        }
+        return [m[0], m[1], m[2], strip.slice(m.index + m[0].length, i - 1)];
+    });
+    const builds = [...strip.matchAll(/this\.(selectedIds|pinnedIds|anchorKey)\s*=\s*([^;]+);/g)];
+    if (keyUses.length === 0) {
+        failures.push(`keys: ${STRIP}: derived ZERO pinnedIds/selectedIds key uses -- the comparison proves nothing`);
+    }
+    for (const [, set, verb, arg] of keyUses) {
+        if (!/^this\.tabKey\(\w+\)$/.test(arg.trim())) {
+            failures.push(`keys: ${set}.${verb}(${arg.trim()}) is not keyed by this.tabKey(...) (GroupModel.keyOf) -- a tab id or URL key breaks duplicates and restarts`);
+        }
+    }
+    for (const [, field, value] of builds) {
+        const v = value.trim();
+        const ok = field === 'anchorKey'
+            ? /^(undefined|this\.tabKey\(\w+\)|\w+\[\w+\] \? this\.tabKey\(\w+\[\w+\]\) : undefined)$/.test(v)
+            : /^new Set\((\w+)\.map\((\w+) => this\.tabKey\(\2\)\)\)$/.test(v) || /^new Set(<string>)?\(\)$/.test(v);
+        if (!ok) {
+            failures.push(`keys: this.${field} = ${v} is not built from this.tabKey(...) (GroupModel.keyOf)`);
+        }
+    }
+    if (/['"`]web:/.test(strip)) {
+        failures.push(`keys: ${STRIP} spells a web: key shape -- pin and selection assume no key format (NG-001: keyOf only)`);
+    }
+
+    // 9. delegation
+    const bulkBody = bulk ?? '';
+    const singleIds = rows ? derive(rows, /\bid: '([\w-]+)'/g) : [];
+    const arms = [...bulkBody.matchAll(/\bid: '([\w-]+)'[\s\S]*?\brun: (.+?),?\n/g)];
+    if (!bulk || arms.length === 0) {
+        failures.push(`delegation: ${STRIP}: derived ZERO bulk arms from bulkMenuRows -- the comparison proves nothing`);
+    }
+    const rowBody = id => {
+        const at = rows ? rows.indexOf(`id: '${id}'`) : -1;
+        return at < 0 ? '' : rows.slice(at, rows.indexOf('\n            },', at));
+    };
+    for (const [, arm, run] of arms) {
+        const call = /^\(\) => this\.runOnEach\((\w+), '([\w-]+)'\)$/.exec(run.trim());
+        if (!call) {
+            failures.push(`delegation: bulk arm ${arm} runs \`${run.trim()}\`, not this.runOnEach(<tabs>, '<single-tab row>') -- a second path beside the single-tab one`);
+            continue;
+        }
+        const single = call[2];
+        const body = rowBody(single);
+        if (!singleIds.includes(single)) {
+            failures.push(`delegation: bulk arm ${arm} names '${single}', which no single-tab row in tabMenuRows has`);
+        } else if (!/command: CHROME_BAR_TAB_\w+_COMMAND_ID/.test(body) && !/run: \(\) => bookmark!\(\[page!\]\)/.test(body)) {
+            failures.push(`delegation: bulk arm ${arm} reaches row '${single}', which runs through neither a tab command nor the one bookmarkTabs callback`);
+        }
+    }
+    const direct = /\b(closeWidget|closeTabs|setMuted|moveInBar|reorderTo|bookmarkTabs|bookmarkPage|executeCommand)\b|\bbookmark!/.exec(bulkBody);
+    if (direct) {
+        const arm = arms.find(m => m[0].includes(direct[0]))?.[1] ?? 'bulkMenuRows';
+        failures.push(`delegation: ${arm} calls ${direct[0]} directly -- every bulk action goes through runOnEach to the single-tab row`);
+    }
+    const onEach = methodBody(strip, 'protected async runOnEach(') ?? '';
+    const runTab = methodBody(strip, 'protected async runTabRow(') ?? '';
+    if (!/this\.runTabRow\(row, tab\)/.test(onEach) || /\b(closeWidget|setMuted|moveInBar|executeCommand)\b/.test(onEach)) {
+        failures.push(`delegation: ${STRIP}: runOnEach does not run each tab's row through runTabRow alone`);
+    }
+    if (!/this\.commands\.executeCommand\(row\.command, widget\)/.test(runTab) || !/this\.runRow\(row\)/.test(runTab)) {
+        failures.push(`delegation: ${STRIP}: runTabRow does not run the row's command (or the row itself when it has none)`);
+    }
+
+    // 10. pin store
+    const save = methodBody(strip, 'protected async savePins(') ?? '';
+    const restore = methodBody(strip, 'protected async restorePins(') ?? '';
+    if (!/this\.openTabs\(\)\.filter\((\w+) => this\.pinnedIds\.has\(this\.tabKey\(\1\)\)\)/.test(save)
+        || /\[\.\.\.this\.pinnedIds\]|Array\.from\(this\.pinnedIds\)|this\.pinnedIds\.(forEach|values|keys|entries)\b/.test(save)) {
+        failures.push(`pin store: savePins does not build the stored list from the open tabs filtered by pinnedIds -- the store is not bounded by open tabs (T-34-05)`);
+    }
+    if ((strip.match(/\.writePinnedIds\(/g) ?? []).length !== 1 || !/\.writePinnedIds\(/.test(save)) {
+        failures.push(`pin store: writePinnedIds is called outside savePins (or not at all) -- savePins is the one bounded writer`);
+    }
+    // The guard on the re-pin itself, not the lookup above it: the reopened tab's own key must be the stored one.
+    if (!/if \((\w+) && this\.tabKey\(\1\) === entry\.key[^{]*\{\s*this\.pinnedIds\.add\(this\.tabKey\(\1\)\)/.test(restore)) {
+        failures.push(`pin store: restorePins does not require the reopened tab's own key to equal entry.key -- a stale key could re-pin another tab (W1)`);
     }
     return failures;
 }
@@ -284,6 +386,36 @@ const PLANTS = [
         expect: 'chevron',
     },
     {
+        name: 'url-keyed-pin',
+        file: STRIP,
+        mutate: s => s.replace('this.pinnedIds.add(this.tabKey(widget));', 'this.pinnedIds.add(widget.url);'),
+        expect: 'pinnedIds.add(widget.url)',
+    },
+    {
+        name: 'tabid-keyed-selection',
+        file: STRIP,
+        mutate: s => s.replace('this.selectedIds.add(this.tabKey(widget));', 'this.selectedIds.add(widget.id);'),
+        expect: 'selectedIds.add(widget.id)',
+    },
+    {
+        name: 'second-close-path',
+        file: STRIP,
+        mutate: s => s.replace("run: () => this.runOnEach(selected, 'close'),", 'run: () => this.closeTabs(selected),'),
+        expect: 'close-n',
+    },
+    {
+        name: 'unbounded-pin-store',
+        file: STRIP,
+        mutate: s => s.replace(/(const pinnedIds: PinnedTab\[\] = )[\s\S]*?;\n/, '$1[...this.pinnedIds].map(key => ({ key }));\n'),
+        expect: 'savePins',
+    },
+    {
+        name: 'stale-key-repinned',
+        file: STRIP,
+        mutate: s => s.replace(' && this.tabKey(widget) === entry.key', ''),
+        expect: 'entry.key',
+    },
+    {
         name: 'current-widget-fallback',
         file: STRIP,
         mutate: s => s.replace(/(protected tabMenuRows\(widget: Widget\): TabMenuRow\[\] \{)/, '$1\n        widget = this.shell.currentWidget ?? widget;'),
@@ -334,7 +466,7 @@ function main() {
         failures.forEach(f => console.error(`  - ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- tab menu matches ROADMAP criterion 1, copy, occlusion, kinds, codicons, target and overflow hold`);
+    console.log(`${NAME}: PASS -- tab menu matches ROADMAP criterion 1, copy, occlusion, kinds, codicons, target, overflow, keys, delegation and pin store hold`);
     return 0;
 }
 

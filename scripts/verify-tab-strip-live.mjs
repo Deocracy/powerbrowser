@@ -49,12 +49,15 @@
 //     width in the same session, the row no longer overflows and the chevron
 //     is gone while the strip order still reads.
 //
-//   pin-restore (TAB-05, 34-03): on one kept profile, Pin Tab on /b makes it
-//     pinned, first in the strip, 32px wide, and stored in the shell-state
-//     map under its GroupModel.keyOf key only. The app's own quit
-//     (withShellQuit), then a relaunch on the same profile with purged caches:
-//     after the strip's pin restore a tab carries the stored key, its rowKey
-//     equals that key (W1 continuity), and it is pinned and first.
+//   pin-restore (TAB-05, 34-03): on one kept profile with /a, /b and /b2 (a
+//     second tab on /b's URL), Pin Tab on /b then /a pins both, the pinned
+//     block leads the strip as /b, /a, a pinned tab is 32px wide, /b2 stays
+//     unpinned under its own key, and the shell-state map holds exactly the
+//     keyOf keys of /b, /a in that order. The app's own quit (withShellQuit),
+//     then a relaunch on the same profile with purged caches: after the
+//     strip's pin restore a tab carries each stored key, its rowKey equals
+//     that key (W1 continuity), both are pinned and lead in the stored order,
+//     and /b2, if restored, is not pinned.
 //
 //   multi (TAB-06, 34-03): with /a current, Ctrl-click /b and /d selects
 //     exactly those two (is-selected) and leaves /a current; Shift-click /b
@@ -594,11 +597,12 @@ async function overflow({ app, pages, expect, plant }) {
 
 /**
  * pin-restore: TAB-05 across the app's own quit and a relaunch on the same profile (two launches, so the scenario
- * runs its own shells). The plant stubs the strip's pin writer in the running page, so nothing is stored.
+ * runs its own shells). /b and a second tab on /b's URL (/b2) prove that duplicates pin independently; pinning /b
+ * then /a proves the pinned order is kept. The plant stubs the strip's pin writer in the running page.
  */
 async function pinRestore({ pages, expect, plant, profileName }) {
     const profile = newProfile(`tab-strip-${profileName}`);
-    const urls = { a: pages.url('/a'), b: pages.url('/b') };
+    const urls = { a: pages.url('/a'), b: pages.url('/b'), b2: pages.url('/b') };
     // -purgecaches in its environment form: chrome-side shell scripts must run as built (pb-live-probe.mjs).
     process.env.MOZ_PURGE_CACHES = '1';
     const first = await withShellQuit(profile, ({ run }) => run(`
@@ -607,39 +611,58 @@ async function pinRestore({ pages, expect, plant, profileName }) {
         await A.get('ModeService').activateMode('browsing');
         const urls = ${JSON.stringify(urls)};
         for (const name of Object.keys(urls)) S[name] = await A.open(urls[name]);
-        await settle(() => ['a', 'b'].every(n => /^page /.test(labelOf(S[n]))));
+        await settle(() => ['a', 'b', 'b2'].every(n => /^page /.test(labelOf(S[n]))));
         A.shell().activateWidget(S.a.id);
         await settle(() => current() === S.a && !!tabNode(S.b));
         if (${JSON.stringify(plant)} === 'pin-not-stored') strip().savePins = async () => undefined;
-        await openMenu(S.b);
-        await choose('Pin Tab');
-        await settle(() => strip().isPinned(S.b));
+        // tabNode finds a tab by its title, which /b and /b2 share; the strip's own node lookup tells them apart.
+        const pin = async w => {
+            const node = strip().tabNode(w);
+            const r = node.getBoundingClientRect();
+            node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: r.left + 8, clientY: r.top + 8 }));
+            await settle(() => menuRows().length > 0);
+            await choose('Pin Tab');
+            await settle(() => strip().isPinned(w));
+        };
+        await pin(S.b);
+        await pin(S.a);
         await A.sleep(1000);
+        const keyOf = w => strip().groups.keyOf(w);
         const stored = await A.get('ProfileStorageService').readPinnedIds();
         const order = strip().stripTabs(current()).map(w => w.id);
-        const node = tabNode(S.b);
+        const node = strip().tabNode(S.b);
         return {
-            pinned: strip().isPinned(S.b), key: strip().groups.keyOf(S.b), rowKey: S.b.rowKey, stored,
-            first: order[0] === S.b.id, width: node ? Math.round(node.getBoundingClientRect().width) : 0,
+            pinnedB: strip().isPinned(S.b), pinnedA: strip().isPinned(S.a), pinnedB2: strip().isPinned(S.b2),
+            keys: { a: keyOf(S.a), b: keyOf(S.b), b2: keyOf(S.b2) }, rowKeys: { a: S.a.rowKey, b: S.b.rowKey },
+            stored, lead: order.slice(0, 2).join(',') === [S.b.id, S.a.id].join(','),
+            width: node ? Math.round(node.getBoundingClientRect().width) : 0,
         };
     `));
-    expect(first.pinned, 'pin-restore: Pin Tab did not pin /b');
-    expect(first.first, 'pin-restore: the pinned tab /b is not first in the strip');
+    expect(first.pinnedB && first.pinnedA, `pin-restore: Pin Tab did not pin /b and /a (b ${first.pinnedB}, a ${first.pinnedA})`);
+    expect(first.keys.b !== first.keys.b2 && !first.pinnedB2, `pin-restore: /b2, on /b's URL, did not stay unpinned under its own key (keys ${JSON.stringify(first.keys)}, b2 pinned ${first.pinnedB2})`);
+    expect(first.lead, 'pin-restore: the pinned tabs /b, /a do not lead the strip in pin order');
     expect(first.width === 32, `pin-restore: the pinned tab is ${first.width}px wide, want 32`);
-    expect(first.key === first.rowKey, `pin-restore: /b's keyOf key ${first.key} is not its rowKey ${first.rowKey}`);
-    expect(first.stored.some(entry => entry.key === first.key), `pin-restore: the shell-state map holds no pin under /b's keyOf key (stored ${JSON.stringify(first.stored)})`);
+    expect(first.keys.b === first.rowKeys.b && first.keys.a === first.rowKeys.a, `pin-restore: a pinned web tab's keyOf key is not its rowKey (${JSON.stringify(first)})`);
+    expect(first.stored.map(entry => entry.key).join(',') === [first.keys.b, first.keys.a].join(','),
+        `pin-restore: the shell-state map holds [${first.stored.map(entry => entry.key)}], want the keyOf keys of /b, /a in pin order`);
     const second = await withShell(profile, ({ run }) => run(`
         ${PROBES}
         await strip().pinRestore;
-        const want = ${JSON.stringify(first.key)};
-        const tab = A.mainWidgets().find(w => strip().groups.keyOf(w) === want);
+        const keys = ${JSON.stringify(first.keys)};
+        const find = key => A.mainWidgets().find(w => strip().groups.keyOf(w) === key);
+        const tabs = { a: find(keys.a), b: find(keys.b), b2: find(keys.b2) };
         const order = strip().stripTabs(current()).map(w => w.id);
-        return { found: !!tab, rowKey: tab ? tab.rowKey : null, pinned: !!tab && strip().isPinned(tab), first: !!tab && order[0] === tab.id };
+        const read = t => (t ? { rowKey: t.rowKey, pinned: strip().isPinned(t) } : null);
+        return { a: read(tabs.a), b: read(tabs.b), b2: read(tabs.b2), lead: !!tabs.a && !!tabs.b && order.slice(0, 2).join(',') === [tabs.b.id, tabs.a.id].join(',') };
     `));
-    expect(second.found, `pin-restore: after the relaunch no tab carries the stored key ${first.key}`);
-    expect(!second.found || second.rowKey === first.key, `pin-restore: the reopened tab's rowKey ${second.rowKey} is not the stored key ${first.key} (W1 continuity)`);
-    expect(second.pinned, 'pin-restore: /b was not pinned after the relaunch');
-    expect(!second.pinned || second.first, 'pin-restore: the restored pin is not first in the strip');
+    for (const name of ['b', 'a']) {
+        const tab = second[name];
+        expect(!!tab, `pin-restore: after the relaunch no tab carries /${name}'s stored key ${first.keys[name]}`);
+        expect(!tab || tab.rowKey === first.keys[name], `pin-restore: the reopened /${name}'s rowKey ${tab?.rowKey} is not the stored key ${first.keys[name]} (W1 continuity)`);
+        expect(!!tab?.pinned, `pin-restore: /${name} was not pinned after the relaunch`);
+    }
+    expect(second.lead, 'pin-restore: the restored pins do not lead the strip in their stored order /b, /a');
+    expect(!second.b2 || !second.b2.pinned, 'pin-restore: /b2, never pinned, came back pinned (a URL-keyed restore)');
 }
 
 /**
