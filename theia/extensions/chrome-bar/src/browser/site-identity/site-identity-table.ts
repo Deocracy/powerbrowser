@@ -65,14 +65,17 @@ export interface MenuEntry {
     group: number;
 }
 
-/** The phase this phase lands: rows with a higher `minPhase` are MENU-03 slots, reserved and absent. */
-export const MENU_PHASE = 31;
+/**
+ * The phase this tree lands: rows with a higher `minPhase` are MENU-03 slots,
+ * reserved and absent. Phase 33 plan 03 lands the History row (BMK-06).
+ */
+export const MENU_PHASE = 33;
 
 /**
  * D-31-08/D-31-11: the hamburger in Firefox order (UI-SPEC: New Tab, History,
  * Downloads, separator, Settings, Passwords, Add-ons, separator, Help,
  * separator, Quit). History is a MENU-03 row (REQUIREMENTS MENU-03, Phase 33),
- * so its slot is reserved at `minPhase` 33 and not rendered in this phase.
+ * landed by Phase 33 plan 03 as the History submenu (BMK-06).
  */
 export const MENU_ORDER: readonly MenuEntry[] = Object.freeze([
     { menuId: 'new-tab', minPhase: 27, group: 1 },

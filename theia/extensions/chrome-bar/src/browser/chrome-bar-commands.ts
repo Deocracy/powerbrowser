@@ -4,6 +4,8 @@ import { OpenerService, Widget } from '@theia/core/lib/browser';
 import URI from '@theia/core/lib/common/uri';
 import { EMPTY_PAGE_URL, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
+import { PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
+import { SHOW_BOOKMARKS_TOOLBAR_PREFERENCE } from './chrome-bar-preferences';
 
 /**
  * GUI-06 (13-03): the chrome bar's five commands -- back, forward, reload,
@@ -31,6 +33,9 @@ export const CHROME_BAR_VIEW_SOURCE_COMMAND_ID = 'powerbrowser.chrome-bar.view-s
 export const CHROME_BAR_READER_TOGGLE_COMMAND_ID = 'powerbrowser.chrome-bar.reader-toggle';
 // Phase 33 plan 02 (BMK-01): opens the star path; the pill's handler does the bookmark write, never this command.
 export const CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.bookmark-page';
+// Phase 33 plan 03 (BMK-03, BMK-04): reopen runs the widget's reopen path; the toggle flips the toolbar setting only.
+export const CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID = 'powerbrowser.chrome-bar.reopen-closed-tab';
+export const CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID = 'powerbrowser.chrome-bar.toggle-bookmarks-toolbar';
 
 /**
  * D-11 (30-03): the palette category of the four visible commands ("Browser:
@@ -77,6 +82,8 @@ export const CHROME_BAR_EDIT_PASTE: Command = { id: CHROME_BAR_EDIT_PASTE_COMMAN
 
 // 33-UI-SPEC command table: Firefox's casing.
 export const CHROME_BAR_BOOKMARK_PAGE: Command = { id: CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Bookmark This Page' };
+export const CHROME_BAR_REOPEN_CLOSED_TAB: Command = { id: CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Reopen Closed Tab' };
+export const CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR: Command = { id: CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Show Bookmarks Toolbar' };
 
 // PAGE-10 (32-08): labelless and categorised by neither, like Focus Address; Phase 33 owns the palette and menu rows.
 // Each one acts on the active web tab.
@@ -161,6 +168,30 @@ export function openBookmarkStar(): void {
     openBookmarkStarPath?.();
 }
 
+let reopenClosedTabPath: (() => void) | undefined;
+
+/** Set by the chrome bar widget, which owns the closed-tab read and the reopen; the command and the page relay reach it here. */
+export function setReopenLastClosedTab(open: (() => void) | undefined): void {
+    reopenClosedTabPath = open;
+}
+
+/** BMK-03: reopens the most recently closed tab with its history; a no-op with none closed or before the widget registers. */
+export function reopenLastClosedTab(): void {
+    reopenClosedTabPath?.();
+}
+
+let toggleBookmarksToolbarPath: (() => void) | undefined;
+
+/** Set by the chrome bar widget, which owns the toolbar; it flips the setting and the toolbar follows the setting. */
+export function setToggleBookmarksToolbar(toggle: (() => void) | undefined): void {
+    toggleBookmarksToolbarPath = toggle;
+}
+
+/** BMK-04: shows or hides the bookmarks toolbar (the command, the page relay's key and the menu rows). */
+export function toggleBookmarksToolbar(): void {
+    toggleBookmarksToolbarPath?.();
+}
+
 /**
  * GUI-02-owned navigable-tab predicate (13-04, flipped in 14.1-02): back,
  * forward, and reload all read enablement from this one export, and so do
@@ -217,6 +248,9 @@ export class ChromeBarCommandContribution implements CommandContribution {
 
     @inject(GroupModel)
     protected readonly groups: GroupModel;
+
+    @inject(PreferenceService)
+    protected readonly preferences: PreferenceService;
 
     registerCommands(commands: CommandRegistry): void {
         // Disabled-not-removed (13-UI-SPEC.md): visibility stays true while
@@ -304,6 +338,17 @@ export class ChromeBarCommandContribution implements CommandContribution {
         commands.registerCommand(CHROME_BAR_BOOKMARK_PAGE, {
             execute: () => openBookmarkStar(),
             isEnabled: () => bookmarkablePageUrl() !== '',
+            isVisible: () => true,
+        });
+        // BMK-03 (D-07): needs no web tab; with nothing closed the widget's reopen is a no-op.
+        commands.registerCommand(CHROME_BAR_REOPEN_CLOSED_TAB, {
+            execute: () => reopenLastClosedTab(),
+            isVisible: () => true,
+        });
+        // BMK-04: one setting behind the key, the menu check row and the Actions row; checked while the toolbar shows.
+        commands.registerCommand(CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR, {
+            execute: () => toggleBookmarksToolbar(),
+            isToggled: () => this.preferences.inspectInScope<boolean>(SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, PreferenceScope.User) === true,
             isVisible: () => true,
         });
         commands.registerCommand(CHROME_BAR_FOCUS_ADDRESS, {

@@ -691,12 +691,18 @@ function cases(m, srcs, mm) {
             const newTab = /commands\.registerCommand\(CHROME_BAR_NEW_TAB,/.test(commands) && widget.includes('this.runCommand(CHROME_BAR_NEW_TAB_COMMAND_ID)');
             const stockSent = widget.includes('this.store.openStockPage(');
             const quit = /\bquitRequest\(/.test(stripComments(srcs[STORE_CLIENT_REL] ?? ''));
+            // Phase 33 plan 03 (BMK-06): History is wired once the widget builds its submenu from the closed-tab read.
+            const history = /menuId === 'history' \? \{ menuPath: BOOKMARKS_HISTORY_MENU_PATH, children: this\.historyMenuChildren\(/.test(widget)
+                && widget.includes('this.store.listClosedTabs(');
             const expected = m.MENU_ORDER.filter(entry => entry.minPhase <= m.MENU_PHASE).filter(row => {
                 if (row.menuId === 'new-tab') {
                     return newTab;
                 }
                 if (row.menuId === 'quit') {
                     return quit;
+                }
+                if (row.menuId === 'history') {
+                    return history;
                 }
                 return !!row.stockPage && m.STOCK_PAGES.includes(row.stockPage) && stockSent;
             }).map(row => row.menuId);
@@ -1435,11 +1441,20 @@ const PLANTS = [
         expect: 'the rendered app menu equals the table rows of this phase',
     },
     {
+        // Phase 33 plan 03 landed the last reserved row (History), so the plant also reserves a later slot.
         name: 'menu-extra: a MENU-03 slot rendered',
         rel: APP_MENU_REL,
         from: '.filter(row => row.minPhase <= phase)',
         to: '.filter(row => row.minPhase <= phase || row.minPhase > 0)',
+        also: { rel: TABLE_REL, from: "    { menuId: 'quit', minPhase: 31, group: 4 },\n", to: "    { menuId: 'quit', minPhase: 31, group: 4 },\n    { menuId: 'planted-slot', minPhase: 99, group: 4 },\n" },
         expect: 'the rendered app menu equals the table rows of this phase',
+    },
+    {
+        name: 'history wired without its submenu build',
+        rel: WIDGET_REL,
+        from: 'this.store.listClosedTabs(',
+        to: 'this.store.listClosedTabsGone(',
+        expect: 'the wired rows are the rows this tree acts on',
     },
     {
         name: 'stock-url: a settings URL in the menu module',
@@ -1526,6 +1541,15 @@ async function selfTest() {
                 continue;
             }
             let planted = { ...sources, [plant.rel]: mutated };
+            if (plant.also) {
+                const alsoMutated = planted[plant.also.rel].split(plant.also.from).join(plant.also.to);
+                if (alsoMutated === planted[plant.also.rel]) {
+                    failed++;
+                    console.error(`${NAME} --self-test: FAIL -- '${plant.name}': second edit did not apply (its anchor drifted)`);
+                    continue;
+                }
+                planted = { ...planted, [plant.also.rel]: alsoMutated };
+            }
             // The both-ways drop plant removes the ID from chrome's array
             // too: with both lists agreeing, only the upstream comparison
             // (in both directions) can catch it -- a same-set check of the

@@ -728,6 +728,13 @@ const EXPECTED_NAV_COPY = new Set([
   "More bookmarks",
   "${name} couldn't load your bookmarks toolbar. Press Ctrl+Shift+B twice to try again.",
   "Open in New Tab",
+  // Phase 33 plan 03 (BMK-03, BMK-06): the hamburger's History submenu.
+  "Reopen Closed Tab",
+  "Recently closed tabs",
+  "Recent pages",
+  "No recently closed tabs.",
+  "No recent pages.",
+  "${name} couldn't read your history. Open this menu again to try again.",
 ]);
 
 /**

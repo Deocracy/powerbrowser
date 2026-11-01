@@ -74,10 +74,13 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.reader-toggle',
     // Phase 33 plan 02 (BMK-01): the star path's command, label from 33-UI-SPEC.md.
     'powerbrowser.chrome-bar.bookmark-page',
+    // Phase 33 plan 03 (BMK-03, BMK-04): reopen and the toolbar toggle, labels from 33-UI-SPEC.md.
+    'powerbrowser.chrome-bar.reopen-closed-tab',
+    'powerbrowser.chrome-bar.toggle-bookmarks-toolbar',
 ]);
 
 /** The contracted visible labels: four verbatim from 13-UI-SPEC.md, Downloads from 32-UI-SPEC.md (plan 04), and the Edit items (plan 06). */
-const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste', 'Bookmark This Page']);
+const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste', 'Bookmark This Page', 'Reopen Closed Tab', 'Show Bookmarks Toolbar']);
 
 function diff(actual, expected) {
     const a = new Set(actual);

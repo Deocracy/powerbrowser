@@ -197,6 +197,14 @@ export const CHROME_BAR_COPY = Object.freeze({
     bookmarksToolbarFailed: (subject: string) => `${subject} couldn't load your bookmarks toolbar. Press Ctrl+Shift+B twice to try again.`,
     bookmarkOpen: 'Open',
     bookmarkOpenInNewTab: 'Open in New Tab',
+    // Phase 33 plan 03 (BMK-03, BMK-06): the hamburger's History submenu.
+    menuHistory: 'History',
+    reopenClosedTab: 'Reopen Closed Tab',
+    recentlyClosedTabs: 'Recently closed tabs',
+    recentPages: 'Recent pages',
+    noClosedTabs: 'No recently closed tabs.',
+    noRecentPages: 'No recent pages.',
+    historyMenuFailed: (subject: string) => `${subject} couldn't read your history. Open this menu again to try again.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

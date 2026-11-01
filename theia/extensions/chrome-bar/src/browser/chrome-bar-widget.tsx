@@ -9,7 +9,8 @@ import {
     Widget,
 } from '@theia/core/lib/browser';
 import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
-import { PreferenceService } from '@theia/core/lib/common/preferences';
+import { PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
+import { KeybindingRegistry } from '@theia/core/lib/browser/keybinding';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -19,12 +20,15 @@ import {
     CHROME_BAR_DOWNLOADS_COMMAND_ID,
     CHROME_BAR_NEW_TAB_COMMAND_ID,
     CHROME_BAR_RELOAD_COMMAND_ID,
+    CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID,
     chromeBarHasNavigableTab,
     currentWebTab,
     setCurrentWebTab,
     setChooseSaveDestination,
     setOpenDownloadsPanel,
     setOpenFindBar,
+    setReopenLastClosedTab,
+    setToggleBookmarksToolbar,
 } from './chrome-bar-commands';
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
@@ -39,9 +43,10 @@ import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 import { OrganisingWidget } from '@powerbrowser/modes/lib/browser/organising-widget';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
-import { BookmarkEntry, ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
+import { BookmarkEntry, ChromeStoreClient, ClosedTabRow, PlaceMatch, ReopenableTab } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
+import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profile-storage';
 import { MENU_ORDER, MENU_PHASE } from './site-identity/site-identity-table';
-import { APP_MENU_ID, AppMenuRow, WIRED_MENU_IDS, buildAppMenu } from './site-identity/app-menu';
+import { APP_MENU_ID, AppMenuRow, AppMenuSubmenu, WIRED_MENU_IDS, buildAppMenu } from './site-identity/app-menu';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
 import '../../src/browser/chrome-bar.css';
 
@@ -59,6 +64,7 @@ const APP_MENU_PATH: MenuPath = [APP_MENU_ID];
 function appMenuLabel(menuId: string): string {
     switch (menuId) {
         case 'new-tab': return CHROME_BAR_COPY.menuNewTab;
+        case 'history': return CHROME_BAR_COPY.menuHistory;
         case 'settings': return CHROME_BAR_COPY.menuSettings;
         case 'passwords': return CHROME_BAR_COPY.menuPasswords;
         case 'addons': return CHROME_BAR_COPY.menuAddons;
@@ -85,6 +91,21 @@ const BOOKMARKS_TOOLBAR_ATTRIBUTE = 'data-pb-bookmarks-toolbar';
 
 /** Phase 33 (BMK-04): the toolbar's per-request menus (overflow chevron, item right-click). Built on each open, never registered. */
 const BOOKMARKS_TOOLBAR_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-bookmarks-toolbar'];
+
+/**
+ * Phase 33 (BMK-06, D-08): the hamburger History submenu's own path, distinct from
+ * NAV-03's HISTORY_MENU_PATH. Built per request, never registered.
+ */
+const BOOKMARKS_HISTORY_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-bookmarks-history'];
+
+/** BMK-06: each History section lists at most this many rows (closed tabs, recent pages). */
+const HISTORY_MENU_ROWS = 10;
+
+/** BMK-06: one section's read, or 'failed' when chrome refused it. */
+interface HistoryMenuReads {
+    closed: ClosedTabRow[] | 'failed';
+    recent: PlaceMatch[] | 'failed';
+}
 
 /** Where a bookmark or a recent page opens (the Phase 29 targets): the current tab, or a new background or foreground tab. */
 type OpenTarget = 'current' | 'background' | 'foreground';
@@ -271,6 +292,14 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(WebTabChannel)
     protected readonly webTabs: WebTabChannel;
 
+    /** BMK-03 (D-07): arms a closed tab's saved back/forward history before its reopen. */
+    @inject(ProfileStorageService)
+    protected readonly profileStorage: ProfileStorageService;
+
+    /** BMK-06: the History submenu's reopen row shows the command's own key. */
+    @inject(KeybindingRegistry)
+    protected readonly keybindings: KeybindingRegistry;
+
     /** PAGE-08: the Theia file dialog that picks where a saved page goes. */
     @inject(FileDialogService)
     protected readonly fileDialogs: FileDialogService;
@@ -313,6 +342,8 @@ export class ChromeBarWidget extends ReactWidget {
         setOpenDownloadsPanel(() => this.toggleDownloads());
         setOpenFindBar(tab => this.openFind(tab));
         setChooseSaveDestination(suggestedName => this.chooseSaveDestination(suggestedName));
+        setReopenLastClosedTab(() => void this.reopenClosedTabRow());
+        setToggleBookmarksToolbar(() => void this.toggleBookmarksToolbar());
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
@@ -329,6 +360,94 @@ export class ChromeBarWidget extends ReactWidget {
         // BMK-04 (D-05): chrome's Places observer sends the `bookmarks-changed` push; the toolbar re-reads its folder.
         this.toDispose.push(this.webTabs.onDidChangeBookmarks(() => void this.refreshBookmarksToolbar()));
         void this.preferences.ready.then(() => this.syncBookmarksToolbar());
+    }
+
+    /** BMK-04: flips the setting; syncBookmarksToolbar follows the change, so every toggle path shows the same toolbar. */
+    protected async toggleBookmarksToolbar(): Promise<void> {
+        try {
+            await this.preferences.set(SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, !this.bookmarksToolbarShown(), PreferenceScope.User);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] toggling the bookmarks toolbar failed:', error instanceof Error ? error.name : typeof error);
+        }
+    }
+
+    /**
+     * BMK-03 (D-07, T-33-02): reopens a closed tabs.sqlite row (the most recent
+     * one without `uri`) in a new web tab on its own row key. When chrome kept
+     * the row's back/forward history, it is armed first, so webTabOpen restores
+     * that history instead of loading the address: the 27-02 restore path, never
+     * a fabricated history. Nothing closed is a no-op.
+     */
+    protected async reopenClosedTabRow(uri?: string): Promise<void> {
+        let tab: ReopenableTab | null;
+        try {
+            tab = await this.store.reopenClosedTab(uri);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] reading the closed tab failed:', error instanceof Error ? error.name : typeof error);
+            return;
+        }
+        if (!tab || !/^https?:\/\//i.test(tab.url)) {
+            return;
+        }
+        try {
+            if (tab.withHistory && tab.key) {
+                await this.profileStorage.armWebTabHistory(tab.key);
+            }
+            const widget = await this.webTabOpener.openUrl(tab.url, tab.key ?? undefined);
+            await this.addressBar.joinActiveGroup(widget);
+            widget.focusPage();
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] reopening a closed tab failed:', error instanceof Error ? error.name : typeof error);
+        }
+    }
+
+    /** BMK-06: both History sections' reads, in parallel; one refused read fails only its own section. */
+    protected async readHistoryMenu(): Promise<HistoryMenuReads> {
+        const [closed, recent] = await Promise.all([
+            this.store.listClosedTabs(HISTORY_MENU_ROWS).catch((): 'failed' => 'failed'),
+            this.store.searchPlaces('', HISTORY_MENU_ROWS, 'history').catch((): 'failed' => 'failed'),
+        ]);
+        return { closed, recent };
+    }
+
+    /** The first key bound to `command`, as the menu's shortcut hint (Theia's own accelerator form). */
+    protected acceleratorOf(command: string): string[] {
+        const binding = this.keybindings.getKeybindingsForCommand(command)[0];
+        return binding ? this.keybindings.acceleratorFor(binding, '+') : [];
+    }
+
+    /**
+     * BMK-06 (D-08, 33-UI-SPEC order): Reopen Closed Tab with its key, then the
+     * Recently closed tabs section (newest first), then the Recent pages section,
+     * each behind a separator with a header row. A closed row reopens with its
+     * history; a recent page loads in the current tab, or a new tab with Ctrl or
+     * Alt. An empty section shows its disabled "No ..." row, a refused read the
+     * failure row. Nothing closed disables the reopen row.
+     */
+    protected historyMenuChildren(reads: HistoryMenuReads): (CommandMenu | CompoundMenuNode)[] {
+        const failed = (id: string): CommandMenu => this.menuLeaf(id, CHROME_BAR_COPY.historyMenuFailed(appSubject()), () => undefined, false);
+        const section = (id: string, header: string, rows: CommandMenu[]): CompoundMenuNode =>
+            this.menuGroup(id, [this.menuLeaf(`${id}-header`, header, () => undefined, false), ...rows]);
+        const { closed, recent } = reads;
+        const closedRows = closed === 'failed'
+            ? [failed('closed-failed')]
+            : closed.length
+                ? closed.map((closedTab, index) => this.menuLeaf(`closed-${index}`, historyLabel({ index, url: closedTab.url, title: closedTab.title }),
+                    // The closed row's key is the reopen lookup chrome resolves; the tab opens on the url chrome returns.
+                    () => this.reopenClosedTabRow(closedTab.uri)))
+                : [this.menuLeaf('closed-empty', CHROME_BAR_COPY.noClosedTabs, () => undefined, false)];
+        const recentRows = recent === 'failed'
+            ? [failed('recent-failed')]
+            : recent.length
+                ? recent.map((page, index) => this.menuLeaf(`recent-${index}`, historyLabel({ index, url: page.url, title: page.title }), () => this.openPlace(page.url, this.menuTarget)))
+                : [this.menuLeaf('recent-empty', CHROME_BAR_COPY.noRecentPages, () => undefined, false)];
+        const children: (CommandMenu | CompoundMenuNode)[] = [
+            this.menuLeaf('reopen', CHROME_BAR_COPY.reopenClosedTab, () => this.reopenClosedTabRow(), closed !== 'failed' && closed.length > 0,
+                this.acceleratorOf(CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID)),
+            section('closed', CHROME_BAR_COPY.recentlyClosedTabs, closedRows),
+            section('recent', CHROME_BAR_COPY.recentPages, recentRows),
+        ];
+        return children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') }));
     }
 
     /** BMK-04: the toolbar setting, read from user settings only (the Home settings rule). */
@@ -748,23 +867,23 @@ export class ChromeBarWidget extends ReactWidget {
 
     /** Phase 31 plan 04 (MENU-01): the hamburger opens the per-request application menu under the button. */
     protected onAppMenuClick = (e: ButtonEvent): void => {
-        this.openAppMenu(e.currentTarget);
+        void this.openAppMenu(e.currentTarget);
     };
 
-    protected openAppMenu(button: HTMLElement): void {
+    /**
+     * Phase 33 plan 03 (BMK-06): the History row is a submenu built from this
+     * open's reads, so the menu opens when both replies arrive (no spinner, the
+     * NAV-03 rule).
+     */
+    protected async openAppMenu(button: HTMLElement): Promise<void> {
+        const history = await this.readHistoryMenu();
         const menu = buildAppMenu(MENU_ORDER, WIRED_MENU_IDS, MENU_PHASE, {
             label: (menuId, enabled) => (enabled ? appMenuLabel(menuId) : CHROME_BAR_COPY.comingSoonRow(appMenuLabel(menuId))),
             run: row => this.runAppMenuRow(row),
+            submenu: menuId => (menuId === 'history' ? { menuPath: BOOKMARKS_HISTORY_MENU_PATH, children: this.historyMenuChildren(history) as unknown as AppMenuSubmenu['children'] } : undefined),
         });
-        const rect = button.getBoundingClientRect();
         const before = new Set(Array.from(document.querySelectorAll('.lm-Menu')));
-        this.menus.render({
-            menuPath: APP_MENU_PATH,
-            menu,
-            anchor: { x: rect.left, y: rect.bottom },
-            context: button,
-            includeAnchorArg: false,
-        });
+        this.renderBarMenu(APP_MENU_PATH, menu as CompoundMenuNode, button);
         // The renderer takes no class; the menu it just drew is marked so the sheet can size it (MENU-01, UI-SPEC 280px).
         for (const element of Array.from(document.querySelectorAll('.lm-Menu'))) {
             if (!before.has(element)) {
