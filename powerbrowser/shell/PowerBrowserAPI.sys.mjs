@@ -3294,9 +3294,9 @@ export const PowerBrowserAPI = Object.freeze({
     // manualactiveness: activeness then follows docShellIsActive below
     // rather than the shell window (BrowsingContext.cpp:821-830), which is
     // what lets a hidden tab stop painting and stop running foreground
-    // timers. No primary (that is the Theia frame), no contextmenu/tooltip/
-    // autocompletepopup (they name browser.xhtml elements this shell lacks),
-    // and no src (the load is the null-principal call below).
+    // timers. No primary (that is the Theia frame), no contextmenu/tooltip
+    // (D-02, D-04), and no src (the load is the null-principal call below).
+    // autocompletepopup names the shell's stock PopupAutoComplete (D-03).
     for (const [name, value] of Object.entries({
       type: "content",
       remote: "true",
@@ -3304,6 +3304,7 @@ export const PowerBrowserAPI = Object.freeze({
       maychangeremoteness: "true",
       manualactiveness: "true",
       messagemanagergroup: "browsers",
+      autocompletepopup: "PopupAutoComplete",
       tabindex: "-1",
     })) {
       browser.setAttribute(name, value);

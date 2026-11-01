@@ -347,7 +347,7 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES, kindClasses = KIND_
         failures.push(`${API}: webTabOpen method body not found -- the overlay contract cannot be asserted`);
     } else {
         let lastAttr = -1;
-        for (const attr of ['type', 'remote', 'remoteType', 'maychangeremoteness', 'manualactiveness']) {
+        for (const attr of ['type', 'remote', 'remoteType', 'maychangeremoteness', 'manualactiveness', 'autocompletepopup']) {
             const at = openBody.search(new RegExp(`\\b${attr}\\s*:`));
             if (at === -1) {
                 failures.push(`${API}: webTabOpen no longer sets the ${attr} attribute on the overlay`);
@@ -795,6 +795,12 @@ function selfTest() {
             name: 'planted overlay without maychangeremoteness',
             sources: { ...clean, [API]: clean[API].replace(/^\s*maychangeremoteness: "true",\n/m, '') },
             expect: 'maychangeremoteness',
+        },
+        {
+            // 35-06 (D-03): AutoCompleteParent reads browser.autoCompletePopup from this attribute.
+            name: 'planted overlay without autocompletepopup',
+            sources: { ...clean, [API]: clean[API].replace(/^\s*autocompletepopup: "PopupAutoComplete",\n/m, '\n') },
+            expect: 'autocompletepopup attribute',
         },
         {
             name: 'planted wall without the primary check',

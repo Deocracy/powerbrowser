@@ -62,6 +62,9 @@
     <!-- PROMPT-04 (D-02): the stub ContextMenuParent opens; its popupshowing is
          cancelled and the rows render in Theia. No children. -->
     <xul:menupopup id="contentAreaContextMenu" showservicesmenu="true"/>
+    <!-- PROMPT-06 (D-03, W6): the popup FormHistory and LoginManager drive through
+         every overlay's autocompletepopup attribute. -->
+    <xul:panel is="autocomplete-richlistbox-popup" type="autocomplete-richlistbox" id="PopupAutoComplete" role="group" noautofocus="true" hidden="true" overflowpadding="4" norolluponanchor="true" nomaxresults="true" locationspecific="true"/>
     <!-- shell furniture: end -->
     <xul:browser id="powerbrowser-content" type="content" primary="true" remote="true" remoteType="web" src="about:blank" tabindex="-1" disablecontextmenu="true"/>
   </body>
