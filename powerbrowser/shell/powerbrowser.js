@@ -60,9 +60,12 @@ document.addEventListener(
     // so the Theia frame never appears to them (D-06 as amended).
     //
     // The member set is derived by scripts/verify-shell-gbrowser-standin.mjs
-    // from the actor scope and the extension scope, and compared as set
-    // equality, so an upstream rebase adding a call and a member deleted or
-    // added here each go red by name.
+    // and compared as set equality, so an upstream rebase adding a call and a
+    // member deleted or added here each go red by name. Its scope is
+    // browser-custom-element.mjs, every *Parent.sys.mjs under
+    // upstream/browser/actors and upstream/toolkit/actors, every parent module
+    // the two actor registries name (DesktopActorRegistry.sys.mjs,
+    // ActorManagerParent.sys.mjs), and the extension scope.
     //
     // The never-synthesise rule is reversed for the tab host only (Phase 28
     // sign-off, 2026-10-21): each host node stands for one live overlay that
@@ -101,6 +104,9 @@ document.addEventListener(
       tabGroups: [],
       getTabForBrowser(browser) {
         return host.getTabForBrowser(browser);
+      },
+      shouldActivateDocShell(b) {
+        return host.shouldActivateDocShell(b);
       },
       getBrowserForTab(tab) {
         return host.getBrowserForTab(tab);

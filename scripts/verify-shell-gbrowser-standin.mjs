@@ -18,9 +18,14 @@
 // Both sides are DERIVED at check time (CLAUDE.md `## Verification` rule 2):
 //
 //   REQUIRED (gBrowser)
-//     actor scope     -- UPSTREAM_SCOPE: the widget file plus every
+//     actor scope     -- UPSTREAM_SCOPE: the widget file, every
 //                        *Parent.sys.mjs under upstream/browser/actors and
-//                        upstream/toolkit/actors. Calls only, as before.
+//                        upstream/toolkit/actors, and every parent module the two
+//                        actor registries name (Phase 35 plan 01, T-27-11): each
+//                        `parent:` esModuleURI/moduleURI in DesktopActorRegistry.sys.mjs
+//                        and ActorManagerParent.sys.mjs, resolved to an upstream
+//                        file (moz-src:///X -> upstream/X; any other URI by its
+//                        unique non-test basename). Calls only, as before.
 //     extension scope -- every non-test *.js/*.mjs under
 //                        upstream/browser/components/extensions/ and
 //                        upstream/toolkit/components/extensions/, listed by
@@ -48,7 +53,8 @@
 // the shell must NOT implement, each with its verified reason. Failure kinds,
 // each named: UNIMPLEMENTED (required, neither implemented nor absent), STALE
 // ABSENCE (absent, no longer used), CONTRADICTION (implemented and absent), DEAD
-// SURFACE (implemented, nobody uses it), MISSING DATA MEMBER, STALE DATA MEMBER,
+// SURFACE (implemented, nobody uses it), UNCOVERED CALL SITE (an absence reason
+// that does not name a file the member is used in), MISSING DATA MEMBER, STALE DATA MEMBER,
 // and for gBrowserInit the same four shapes named `gBrowserInit.<member>`.
 //
 // DATA_MEMBERS are data properties, held out of the comparison and asserted on
@@ -79,9 +85,13 @@
 //   (p) a staged extension-scope copy that only READS gBrowser.zzzPlantedRead;
 //   (q) a staged actor parent that calls a member through a bound getTabBrowser() receiver;
 //   (r) a staged gBrowserInit literal without isAdoptingTab;
-//   (s) staged patch text without the TabManager hunk (STALE DATA MEMBER webDriverTabs).
+//   (s) staged patch text without the TabManager hunk (STALE DATA MEMBER webDriverTabs);
+//   (h) a staged registry entry whose parent module sits outside the scanned
+//       directories and calls a new gBrowser member (registry derivation);
+//   (i) a staged registry entry whose basename resolves to no file (broken instrument);
+//   (o) an absence reason naming only one of the member's call-site files.
 
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -111,6 +121,17 @@ const UPSTREAM_SCOPE = {
       'toolkit-level JSWindowActor parents run for the same browsers; scanned so a rebase that adds a gBrowser call there is caught at check time',
     ],
   ],
+  // The directory scan stays: an actor registered from code outside these two registries is still covered.
+  registries: [
+    [
+      'upstream/browser/components/DesktopActorRegistry.sys.mjs',
+      'names every browser-level JSWindowActor and JSProcessActor parent module Gecko loads, wherever in the tree it lives (ProfilesParent, ScreenshotsUtils, PdfjsParent are outside the two directories)',
+    ],
+    [
+      'upstream/toolkit/modules/ActorManagerParent.sys.mjs',
+      'names every toolkit-level JSWindowActor and JSProcessActor parent module (LoginManagerParent, TranslationsParent, PictureInPicture are outside the two directories)',
+    ],
+  ],
 };
 const PARENT_SUFFIX = 'Parent.sys.mjs';
 
@@ -132,12 +153,79 @@ const ZOOM_SHIM_ABSENT = new Map([
 ]);
 const ID = '[A-Za-z_$][\\w$]*';
 
-// The upstream call-site files for the actor scope: the scope's widget files plus
-// every *Parent.sys.mjs directly under each scope directory, sorted. An
-// unreadable directory is reported as unreadable, never as an empty clean list.
-function deriveCallSiteFiles(scope = UPSTREAM_SCOPE) {
+// The pinned tree's non-test file list as `upstream/<path>`, read once per run
+// (read-only). null when git cannot list it.
+let upstreamListing;
+function upstreamFileList() {
+  if (upstreamListing !== undefined) return upstreamListing;
+  try {
+    upstreamListing = execFileSync('git', ['-C', join(REPO_ROOT, 'upstream'), 'ls-tree', '-r', '--name-only', 'HEAD'], {
+      encoding: 'utf8',
+      maxBuffer: 1 << 28,
+    })
+      .split('\n')
+      .filter(p => p && !p.split('/').some(seg => seg === 'test' || seg === 'tests'))
+      .map(p => `upstream/${p}`);
+  } catch {
+    upstreamListing = null;
+  }
+  return upstreamListing;
+}
+
+// Every `parent:` object's esModuleURI or moduleURI in one registry, comment lines
+// stripped. null when the registry is unreadable.
+const REGISTRY_PARENT_RE = /\bparent\s*:\s*\{[^}]*?\b(?:esModuleURI|moduleURI)\s*:\s*["'`]([^"'`]+)["'`]/g;
+function registryParentURIs(path) {
+  const src = readSource(path);
+  if (src === null) return null;
+  return [...stripCommentLines(src).matchAll(REGISTRY_PARENT_RE)].map(m => m[1]);
+}
+
+// A module URI to one file of `fileList`: moz-src:///X is upstream/X; any other
+// URI matches by basename, exactly once. Returns { path } or { error }.
+function resolveModuleURI(uri, fileList) {
+  if (uri.startsWith('moz-src:///')) {
+    const path = `upstream/${uri.slice('moz-src:///'.length)}`;
+    return fileList.includes(path) ? { path } : { error: `${uri} (no file ${path})` };
+  }
+  const base = uri.split('/').pop();
+  const matches = fileList.filter(p => p.split('/').pop() === base);
+  if (matches.length !== 1) return { error: `${uri} (${matches.length} files named ${base})` };
+  return { path: matches[0] };
+}
+
+// The upstream call-site files for the actor scope: the scope's widget files,
+// every *Parent.sys.mjs directly under each scope directory, and every parent
+// module the scope's registries name, de-duplicated and sorted. An unreadable
+// directory or registry, a registry yielding no URI, and an unresolvable URI are
+// each reported, never an empty clean list. `fileList` is the resolver's file list.
+function deriveCallSiteFiles(scope = UPSTREAM_SCOPE, fileList = upstreamFileList()) {
   const files = scope.files.map(([p]) => p);
   const unreadable = [];
+  const broken = [];
+  const uriCounts = { entries: 0, distinct: new Set() };
+  for (const [registry] of scope.registries ?? []) {
+    const uris = registryParentURIs(registry);
+    if (uris === null) {
+      unreadable.push(registry);
+      continue;
+    }
+    if (uris.length === 0) {
+      broken.push(`${registry} yielded zero parent module URIs`);
+      continue;
+    }
+    if (fileList === null) {
+      broken.push('git -C upstream ls-tree -r HEAD (no file list to resolve registry URIs against)');
+      break;
+    }
+    uriCounts.entries += uris.length;
+    for (const uri of uris) {
+      uriCounts.distinct.add(uri);
+      const r = resolveModuleURI(uri, fileList);
+      if (r.error) broken.push(`unresolvable parent module URI in ${registry.split('/').pop()}: ${r.error}`);
+      else files.push(r.path);
+    }
+  }
   for (const [dir] of scope.dirs) {
     const abs = dir.startsWith('/') ? dir : join(REPO_ROOT, dir);
     let names;
@@ -151,26 +239,16 @@ function deriveCallSiteFiles(scope = UPSTREAM_SCOPE) {
       if (d.isFile() && d.name.endsWith(PARENT_SUFFIX)) files.push(`${dir}/${d.name}`);
     }
   }
-  return { files: files.sort(), unreadable };
+  return { files: [...new Set(files)].sort(), unreadable, broken, uriEntries: uriCounts.entries, uriDistinct: uriCounts.distinct.size };
 }
 
 // The extension scope, from the pinned tree's file list (read-only).
 function deriveExtensionFiles() {
-  let listing;
-  try {
-    listing = execFileSync('git', ['-C', join(REPO_ROOT, 'upstream'), 'ls-tree', '-r', '--name-only', 'HEAD'], {
-      encoding: 'utf8',
-      maxBuffer: 1 << 28,
-    });
-  } catch {
-    return { files: [], unreadable: ['git -C upstream ls-tree -r HEAD'] };
-  }
+  const listing = upstreamFileList();
+  if (listing === null) return { files: [], unreadable: ['git -C upstream ls-tree -r HEAD'] };
   const files = listing
-    .split('\n')
-    .filter(p => EXTENSION_PREFIXES.some(prefix => p.startsWith(prefix)))
-    .filter(p => /\.m?js$/.test(p))
-    .filter(p => !p.split('/').some(seg => seg === 'test' || seg === 'tests'))
-    .map(p => `upstream/${p}`);
+    .filter(p => EXTENSION_PREFIXES.some(prefix => p.startsWith(`upstream/${prefix}`)))
+    .filter(p => /\.m?js$/.test(p));
   return { files: files.sort(), unreadable: [] };
 }
 
@@ -197,7 +275,7 @@ const DATA_MEMBERS = new Map([
 const DELIBERATELY_ABSENT = new Map([
   [
     'getTabDialogBox',
-    'PromptParent feature-detects it (`win?.gBrowser?.getTabDialogBox &&`) before calling it; absent keeps the window-modal prompt path, which needs no tab',
+    'PromptParent feature-detects it (`win?.gBrowser?.getTabDialogBox &&`) before calling it; absent keeps the window-modal prompt path, which needs no tab. ScreenshotsUtils (:803, openPreviewDialog from takeScreenshot :1185) calls it unguarded, but only inside a screenshot session that ScreenshotsUtils.start opens; the shell has no screenshot entry point (the browser-sets.js key, the toolbar button and the context-take-screenshot row are browser.xhtml furniture, and 35 D-12 omits that row)',
   ],
   [
     'setTabLabelForAuthPrompts',
@@ -205,7 +283,23 @@ const DELIBERATELY_ABSENT = new Map([
   ],
   [
     'getNotificationBox',
-    'BlockedSiteParent (:39, :78), DecoderDoctorParent (:102), EncryptedMediaParent (:152, :188), PluginParent (:131) and SpeechDispatcherParent (:61) call it on a getTabBrowser() receiver, which the Phase 31.1 host makes non-null for overlays. The shell has no notification box (Phase 37 furniture), so each call throws a TypeError on the missing member, the outcome the old null receiver gave',
+    'BlockedSiteParent (:39, :78), DecoderDoctorParent (:102), EncryptedMediaParent (:152, :188), PluginParent (:131) and SpeechDispatcherParent (:61) call it on a getTabBrowser() receiver, which the Phase 31.1 host makes non-null for overlays. The shell has no notification box (Phase 37 furniture), so each call throws a TypeError on the missing member, the outcome the old null receiver gave. AboutLoginsParent (:713, :746) calls it on gBrowser directly, but serves only about:logins, which an overlay never loads: the webTabOpen and webTabNavigate scheme walls refuse it and web content cannot link to it (AboutRedirector.cpp:71-75 has no MAKE_LINKABLE)',
+  ],
+  [
+    'addTrustedTab',
+    'ProfilesParent (:95, :258) calls it on topChromeWindow.gBrowser while handling Profiles:CancelDelete. The Profiles actor matches only about:editprofile, about:deleteprofile and about:newprofile in the privilegedabout process (DesktopActorRegistry.sys.mjs:703-715); overlays load only http(s) or the empty page through the webTabOpen and webTabNavigate scheme walls, and web content cannot link to those pages because their about modules lack MAKE_LINKABLE (AboutRedirector.cpp:152-169, nsAboutProtocolHandler.cpp:66-72). Its removeTab (:97, :260) is the stand-in refusal',
+  ],
+  [
+    'getPanel',
+    'ScreenshotsUtils.openPanel (:881-882) calls it when ScreenshotsComponentParent receives Screenshots:ShowPanel (:145-147), which ScreenshotsComponentChild sends only for a trusted event (:88, :155-156) that the screenshots overlay dispatches after ScreenshotsUtils.start. The shell has no screenshot entry point (the browser-sets.js:275 key, the toolbar button and the context-take-screenshot row are browser.xhtml furniture, and 35 D-12 omits that row)',
+  ],
+  [
+    'getFindBar',
+    "PdfjsParent's find-bar hookups (_updateControlState :601, _updateMatchesCount :670) call it on browser.getTabBrowser(). Before the 31.1 host that receiver was null and the next line threw a TypeError; now getTabForBrowser answers and this call throws the same TypeError, so the outcome is unchanged. The shell has no find bar: Phase 32 find drives overlay.finder and never loads findbar.js (32 D-07)",
+  ],
+  [
+    'getCachedFindBar',
+    "PdfjsParent (_hookupEventListeners :772) and TranslationsParent's #registerFindBarEventListeners (:1575, :3763; called from actor creation :610 and on TabFindInitialized) call it on browser.getTabBrowser(). The old null receiver threw a TypeError on the line before; now getTabForBrowser answers and this call throws the same TypeError, so the outcome is unchanged. The shell has no find bar (32 D-07: Phase 32 find drives overlay.finder)",
   ],
   [
     'swapBrowsers',
@@ -332,6 +426,7 @@ function gBrowserMembersOf(code, callsOnly) {
 // the whole list (actor scope true, extension scope false).
 function deriveRequired(files, callsOnly) {
   const members = new Set();
+  const sites = new Map(); // member -> Set of call-site file paths
   const unreadable = [];
   for (const path of files) {
     if (path.split('/').pop() === SELF_BASENAME) continue;
@@ -340,9 +435,20 @@ function deriveRequired(files, callsOnly) {
       unreadable.push(path);
       continue;
     }
-    for (const n of gBrowserMembersOf(stripCommentLines(src), callsOnly)) members.add(n);
+    for (const n of gBrowserMembersOf(stripCommentLines(src), callsOnly)) {
+      members.add(n);
+      if (!sites.has(n)) sites.set(n, new Set());
+      sites.get(n).add(path);
+    }
   }
-  return { members, unreadable };
+  return { members, sites, unreadable };
+}
+
+// A call-site file as an absence reason names it: the basename without its extension.
+// shortcut: coverage is checked per file, not per line, because line numbers drift on every rebase; a new call
+// inside an already-named file is not caught here.
+function fileStem(path) {
+  return path.split('/').pop().replace(/(\.sys)?\.m?js$/, '');
 }
 
 // Every member accessed on `gBrowserInit` over a list of files (reads and calls).
@@ -496,6 +602,12 @@ function runScan(inputs) {
   const staleAbsent = sorted(new Set([...absent.keys()].filter(m => !requiredMethods.has(m))));
   const contradiction = sorted(new Set([...absent.keys()].filter(m => methods.has(m))));
   const surplus = sorted(new Set([...methods].filter(m => !requiredMethods.has(m))));
+  // Every absence reason names every file its member is used in (T-27-11: a widened scope must re-check old reasons).
+  const uncovered = [];
+  for (const [m, reason] of absent) {
+    const files = new Set([...(actor.sites.get(m) ?? []), ...(ext.sites.get(m) ?? [])]);
+    for (const f of sorted(files)) if (!reason.includes(fileStem(f))) uncovered.push(`${m} @ ${fileStem(f)}`);
+  }
 
   // gBrowserInit: the second comparison.
   const shellRequired = new Set([...deriveShimRequired([...actorFiles, ...extensionFiles])]);
@@ -543,6 +655,7 @@ function runScan(inputs) {
       staleAbsent.length === 0 &&
       contradiction.length === 0 &&
       surplus.length === 0 &&
+      uncovered.length === 0 &&
       missingData.length === 0 &&
       staleData.length === 0 &&
       shimUnimplemented.length === 0 &&
@@ -560,6 +673,7 @@ function runScan(inputs) {
     staleAbsent,
     contradiction,
     surplus,
+    uncovered,
     missingData,
     staleData,
     shellRequired: sorted(shellRequired),
@@ -639,6 +753,9 @@ function reportFailure(result) {
   for (const m of result.surplus) {
     console.error(`  DEAD SURFACE: '${m}' is implemented on the stand-in but nothing upstream uses it -- remove it rather than carry it`);
   }
+  for (const m of result.uncovered ?? []) {
+    console.error(`  UNCOVERED CALL SITE: '${m}' -- the DELIBERATELY_ABSENT reason does not name this call-site file; verify the outcome there and name it in the reason`);
+  }
   for (const m of result.missingData) {
     console.error(`  MISSING DATA MEMBER: '${m}' -- ${DATA_MEMBERS.get(m).reason}`);
   }
@@ -673,13 +790,19 @@ function patchLineReason(name) {
 
 // Resolve the actor scope to files, failing distinctly on an unreadable directory.
 function actorFilesOrExit(scope, label) {
-  const { files, unreadable } = deriveCallSiteFiles(scope);
+  const { files, unreadable, broken, uriEntries, uriDistinct } = deriveCallSiteFiles(scope);
   if (unreadable.length) {
-    console.error(`${NAME}${label}: FAIL -- broken instrument: unreadable upstream actor director${unreadable.length > 1 ? 'ies' : 'y'}: ${unreadable.join(', ')}`);
+    console.error(`${NAME}${label}: FAIL -- broken instrument: unreadable upstream actor director${unreadable.length > 1 ? 'ies' : 'y'} or registr${unreadable.length > 1 ? 'ies' : 'y'}: ${unreadable.join(', ')}`);
     process.exit(1);
   }
+  if (broken.length) {
+    console.error(`${NAME}${label}: FAIL -- broken instrument: ${broken.join('; ')}`);
+    process.exit(1);
+  }
+  registryCounts = { uriEntries, uriDistinct };
   return files;
 }
+let registryCounts = { uriEntries: 0, uriDistinct: 0 };
 
 function extensionFilesOrExit(label) {
   const { files, unreadable } = deriveExtensionFiles();
@@ -708,7 +831,7 @@ function main() {
     process.exit(1);
   }
   console.log(
-    `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}; zoom shims ${result.zoomShims
+    `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls; ${registryCounts.uriEntries} registry parent entries, ${registryCounts.uriDistinct} distinct URIs) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}; zoom shims ${result.zoomShims
       .map(shim => `${shim.name} {${shim.implemented.join(', ')}}${shim.absent.length ? ` with ${shim.absent.join(', ')} absent with reasons` : ''}`)
       .join('; ')}`
   );
@@ -952,13 +1075,74 @@ function selfTest() {
         fail(`two ZoomUI definitions did not fail as a broken instrument naming ZoomUI; got: ${JSON.stringify({ reason: r.reason, detail: r.detail })}`);
       } else ok(`two staged 'win.ZoomUI = {' definitions -> broken instrument naming ZoomUI`);
     }
+
+    // (h) a component-parent plant: a staged DesktopActorRegistry copy names a module outside the scanned directories.
+    {
+      const planted = 'zzzPlantedComponentMember';
+      const [registry, why] = UPSTREAM_SCOPE.registries[0];
+      const regCopy = join(stage, 'DesktopActorRegistry.sys.mjs');
+      const moduleFile = join(stage, 'components', 'zzzplanted', 'ZzzPlantedComponentModule.sys.mjs');
+      const entry = `  ZzzPlanted: {\n    parent: {\n      esModuleURI: "resource:///modules/ZzzPlantedComponentModule.sys.mjs",\n    },\n  },\n`;
+      const regText = readSource(registry) ?? '';
+      writeFileSync(regCopy, regText.replace(/^  Profiles: \{$/m, `${entry}  Profiles: {`));
+      mkdirSync(dirname(moduleFile), { recursive: true });
+      writeFileSync(moduleFile, `export const ZzzPlanted = {\n  open(win) {\n    win.gBrowser.${planted}(win);\n  },\n};\n`);
+      const scope = { ...UPSTREAM_SCOPE, registries: [[regCopy, why], ...UPSTREAM_SCOPE.registries.slice(1)] };
+      const fileList = [...upstreamFileList(), moduleFile];
+      const derived = deriveCallSiteFiles(scope, fileList);
+      const dirsOnly = deriveCallSiteFiles({ ...scope, registries: [] }, fileList);
+      if (!derived.files.includes(moduleFile) || dirsOnly.files.includes(moduleFile) || derived.broken.length) {
+        fail(`'component parent' plant did not land (in registry scope: ${derived.files.includes(moduleFile)}, reachable by the directory scan: ${dirsOnly.files.includes(moduleFile)}, broken: ${derived.broken.join('; ')})`);
+      } else {
+        const r = runScan({ ...real, actorFiles: derived.files });
+        if (r.ok || !r.unimplemented?.includes(planted)) {
+          fail(`a registry-named parent module calling '${planted}' did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
+        } else ok(`registry entry naming a module outside the scanned directories -> red, naming '${planted}' UNIMPLEMENTED (registry derivation only)`);
+      }
+    }
+
+    // (i) a staged registry entry whose basename matches no file: a broken instrument naming the URI.
+    {
+      const uri = 'resource:///modules/ZzzNoSuchParent.sys.mjs';
+      const [registry, why] = UPSTREAM_SCOPE.registries[1];
+      const regCopy = join(stage, 'ActorManagerParent.sys.mjs');
+      const regText = readSource(registry) ?? '';
+      const at = regText.indexOf('parent: {');
+      writeFileSync(regCopy, at === -1 ? regText : `${regText.slice(0, at)}parent: { esModuleURI: "${uri}" },\n    unusedParent: {${regText.slice(at + 'parent: {'.length)}`);
+      if (!(registryParentURIs(regCopy) ?? []).includes(uri)) {
+        fail(`'unresolvable URI' plant did not land (${uri} not parsed from the staged registry)`);
+      } else {
+        const derived = deriveCallSiteFiles({ ...UPSTREAM_SCOPE, registries: [UPSTREAM_SCOPE.registries[0], [regCopy, why]] });
+        if (!derived.broken.some(b => b.includes(uri))) {
+          fail(`a registry URI resolving to no file did not fail as a broken instrument naming it; got: ${JSON.stringify(derived.broken)}`);
+        } else ok(`registry URI ${uri} resolving to no file -> broken instrument naming the URI`);
+      }
+    }
+
+    // (o) an absence reason naming only one of its member's call-site files.
+    {
+      const victimAbsent = baseline.absent.find(m => {
+        const reason = DELIBERATELY_ABSENT.get(m);
+        return (reason.match(/[A-Za-z][\w-]*Parent\b/g) ?? []).length >= 2;
+      });
+      const first = (DELIBERATELY_ABSENT.get(victimAbsent) ?? '').match(/[A-Za-z][\w-]*Parent\b/)?.[0];
+      if (!victimAbsent || !first) {
+        fail(`'uncovered call site' plant did not land (no absence reason names two call-site files)`);
+      } else {
+        const absent = new Map([...DELIBERATELY_ABSENT, [victimAbsent, `${first} calls it (self-test reason naming one call site)`]]);
+        const r = runScan({ ...real, absent });
+        if (r.ok || !r.uncovered?.some(u => u.startsWith(`${victimAbsent} @ `))) {
+          fail(`a '${victimAbsent}' reason naming only ${first} did not go red; got: ${JSON.stringify({ reason: r.reason, uncovered: r.uncovered })}`);
+        } else ok(`'${victimAbsent}' reason naming only ${first} -> red, naming UNCOVERED CALL SITE ${r.uncovered.filter(u => u.startsWith(`${victimAbsent} @ `)).join(', ')}`);
+      }
+    }
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
 
   if (failed) process.exit(1);
   console.log(
-    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI); the empty file list failed distinctly`
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site); the empty file list and an unresolvable registry URI failed distinctly`
   );
 }
 

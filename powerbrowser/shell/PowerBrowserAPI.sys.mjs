@@ -6451,6 +6451,9 @@ export const PowerBrowserTabHost = Object.freeze({
       selectedBrowser: () => (host.selected ? host.selected.linkedBrowser : null),
       currentURI: () => (host.selected ? host.selected.linkedBrowser.currentURI : null),
       getTabForBrowser: browser => host.byBrowser.get(browser) ?? null,
+      // Phase 35 plan 01 (T-35-28): PictureInPicture.removePiPBrowserFromWeakMap asks this before closing; stock keeps only
+      // the visible browser active (tabbrowser.js:8031-8041), and webTabGeometry writes visibility with docShellIsActive.
+      shouldActivateDocShell: browser => host.byBrowser.has(browser) && browser.style.visibility === "visible",
       getBrowserForTab: tab => (isHostTab(host, tab) ? tab.linkedBrowser : null),
       isTab: tab => isHostTab(host, tab),
       getIcon: tab => (isHostTab(host, tab) ? tab.image : null),
