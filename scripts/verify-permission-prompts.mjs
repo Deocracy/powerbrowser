@@ -112,6 +112,10 @@
  *       adoption's resend (37-REVIEW WR-01), and resetWebTabSharing, which the
  *       navigation listener calls after locationChange, pushes every mark off
  *       (37-REVIEW WR-02).
+ *   (ae) adopted prompt (37-REVIEW CR-01, WR-07): adoptPendingOverlay adds
+ *       the adopted overlay to the tab host, and promptVisibleTab requires the
+ *       host selection to be the node of the tab the frame names current.
+ *       The location-grant-while-camera-shared case is rule (ab).
  *   (ad) dismissed prompt (37-REVIEW WR-03): the show wrapper returns through
  *       the stock path for options.dismissed before it creates a record, so a
  *       notification only an anchor icon could open is never queued, counted
@@ -684,6 +688,15 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
 
     // (ab) The sharing functions run against stub maps: each scenario's pushes must match what the state means.
     failures.push(...checkSharingBehaviour(api));
+    // (ae) 37-REVIEW CR-01 / WR-07: an adopted tab's prompts follow its own visibility. The facade's selection is a host
+    // node, so adoptPendingOverlay must add one, and promptVisibleTab must require the selection to be the node of the tab
+    // the frame names current (otherwise an adopted tab with no node shows another tab's prompt over its page).
+    if (!/\btabHostAddTab\([^)]*pending\.browser/.test(functionBody(api, 'adoptPendingOverlay'))) {
+        failures.push('adopted-prompt: adoptPendingOverlay adds no tab-host node, so an adopted tab is never the prompt facade\'s selectedBrowser -- its prompts never show and another tab\'s prompt shows over it (37-REVIEW CR-01)');
+    }
+    if (!/host\.byTabId\.get\(tabId\)\s*===\s*host\.selected/.test(functionBody(api, 'promptVisibleTab'))) {
+        failures.push('adopted-prompt: promptVisibleTab does not require the host selection to be the current tab\'s node -- a current tab with no node shows the previous tab\'s prompt (37-REVIEW CR-01)');
+    }
     // (ad) WR-03: a dismissed show takes the stock path before any record exists, so it is never queued or marked.
     {
         const wrapper = /notifications\.show = function \(browser, id, message, anchorID, mainAction, secondaryActions, options\) \{([\s\S]*?)\n  \};/.exec(api)?.[1] ?? '';
@@ -941,6 +954,18 @@ function selfTest() {
             name: 'geo report replaces the camera state',
             sources: { ...clean, [API]: clean[API].replace('if (!host || !("webRTC" in sharingState)) {', 'if (!host) {').replace('const webRTC = merged.webRTC || {};', 'const webRTC = sharingState.webRTC || {};') },
             expect: 'location-grant-while-camera-shared',
+        },
+        {
+            // 37-REVIEW CR-01 reverted: adopted tabs never join the tab host.
+            name: 'adopted tab without a host node',
+            sources: { ...clean, [API]: clean[API].replace('  tabHostAddTab(theiaBrowser.ownerGlobal, tabId, pending.browser, pending.opener);\n', '') },
+            expect: 'adoptPendingOverlay adds no tab-host node',
+        },
+        {
+            // 37-REVIEW CR-01 reverted: any web tab current counts, so a node-less current tab shows the previous selection's prompt.
+            name: 'visible tab ignores which tab is current',
+            sources: { ...clean, [API]: clean[API].replace('&& host.byTabId.get(tabId) === host.selected', '') },
+            expect: 'promptVisibleTab does not require the host selection',
         },
         {
             // 37-REVIEW WR-03 reverted: a dismissed show is queued and marked like a waiting prompt.

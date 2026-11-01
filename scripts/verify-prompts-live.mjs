@@ -94,6 +94,15 @@
  *                       through the handler service); Don't allow on a second
  *                       scheme stores nothing.
  *
+ * 37-REVIEW fixes held statically (verify-permission-prompts rules (ab), (ac),
+ * (ae)) and not yet a scenario here; the end-of-milestone live pass checks
+ * them by hand on a built binary: an adopted tab's geolocation prompt shows
+ * while that tab is current and not while a host tab is (CR-01); a bar on an
+ * adopted tab clears when it navigates, and closing it drops its prompts and
+ * bars (CR-01); camera live, then a location grant, and the camera mark stays
+ * (CR-02); a camera report before the adoption ack lights the mark at the ack
+ * (WR-01); share the camera, navigate, and every mark goes off (WR-02).
+ *
  * --self-test runs a clean control session per target scenario, then one
  * session per planted fault, each required to go red naming its drift.
  * --self-test --static runs only the offline half: every plant targets a real
@@ -1171,26 +1180,37 @@ async function scenarioPopupBlock(app, fx, plant) {
     if (!before.ids.includes(GEO_ID)) {
         return `${BROKEN} the permission reader does not see a stock location grant, so an empty popup entry would prove nothing`;
     }
+    if (plant === 'allow-loads-frame-url') {
+        // 37-REVIEW WR-07: a fault in the path the Allow runs. The opener's own blocker answers the replay by opening another
+        // URL in a fresh tab instead of re-running the page's window.open, as an Allow that took a URL of its own would.
+        await inChrome(app, `const o = overlayOf(${JSON.stringify(opener.tabId)});
+            o.popupAndRedirectBlocker.unblockPopup = () => window.openLinkIn(${JSON.stringify(fx.url('/e'))}, 'tab', { openerBrowser: o, triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}) });
+            return true;`);
+    }
+    if (plant === 'adopt-next-to-opener-failed') {
+        // 37-REVIEW WR-07: a fault in the adoption's placement. The frontend's addWidget drops the tab-after reference
+        // the adopt path passes, with another tab already after the opener, so the adopted tab lands at the end.
+        await openWebTab(app, fx.url('/c'));
+        await probe(app, `const shell = get('ApplicationShell'); const add = shell.addWidget.bind(shell);
+            shell.addWidget = (w, o) => add(w, o && o.mode === 'tab-after' ? { area: 'main' } : o);
+            return true;`);
+    }
     const clicked = await clickBar(app, opener.tabId, 'blocked-popup', 'allow-popup');
     if (clicked !== 'clicked') {
         return clicked;
     }
-    if (plant === 'allow-loads-frame-url') {
-        // Simulated symptom: what an Allow that took a frame-supplied URL would leave behind (a tab at the frame's URL).
-        await openWebTab(app, fx.url('/e'));
-    }
-    const adopted = await pollFor(async () => ((await mainOrder(app)).find(w => String(w.url).endsWith('/b')) ? true : null), 8000, 'the adopted popup').catch(() => false);
-    if (!adopted) {
+    const opened = await pollFor(async () => ((await mainOrder(app)).find(w => /\/(?:b|e)$/.test(String(w.url))) ? true : null), 8000, 'the adopted popup').catch(() => false);
+    if (!opened) {
         return 'the bar Allow opened no web tab for the stored popup';
-    }
-    if (plant === 'adopt-next-to-opener-failed') {
-        // Simulated symptom: the adopted tab moved to the end of the main area, away from its opener.
-        await probe(app, `const shell = get('ApplicationShell'); const ws = shell.getWidgets('main'); const t = ws.find(w => String(w.url).endsWith('/b')); shell.addWidget(t, { area: 'main', mode: 'tab-after', ref: ws[ws.length - 1] }); return true;`);
-        await openWebTab(app, fx.url('/c'));
     }
     const order = await mainOrder(app);
     if (order.some(w => String(w.url).endsWith('/e'))) {
         return FRAME_URL_OPENED;
+    }
+    // WR-04: the replay keeps window.opener, which a fresh load would drop.
+    const popupTab = order.find(w => String(w.url).endsWith('/b'));
+    if (popupTab && !(await inChrome(app, `const o = overlayOf(${JSON.stringify(popupTab.tabId)}); return !!o && !!o.browsingContext && !!o.browsingContext.opener;`))) {
+        return 'the allowed popup has no window.opener';
     }
     const at = order.findIndex(w => w.tabId === opener.tabId);
     if (!String(order[at + 1]?.url ?? '').endsWith('/b')) {
