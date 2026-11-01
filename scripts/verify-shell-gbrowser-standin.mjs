@@ -105,6 +105,7 @@
 //   (i) a staged registry entry whose basename resolves to no file (broken instrument);
 //   (o) an absence reason naming only one of the member's call-site files;
 //   (j) a staged window.FullScreen with only enterDomFullscreen (UNIMPLEMENTED cleanupDomFullscreen);
+//   (j2) a staged window.PointerLock with only entered (UNIMPLEMENTED exited; 35-REVIEW WR-03);
 //   (k) a staged window.nsContextMenu with a surplus method (DEAD SURFACE);
 //   (l) a staged IDL with one more method against a staged XULBrowserWindow implementing the three;
 //   (m) two staged definitions of one shim (broken instrument);
@@ -1424,6 +1425,19 @@ function selfTest() {
       } else ok(`staged window.FullScreen with only enterDomFullscreen -> red, naming 'FullScreen.cleanupDomFullscreen' UNIMPLEMENTED`);
     }
 
+    // (j2) 35-REVIEW WR-03: window.PointerLock with only entered, replacing the boundary file's own definition.
+    {
+      const realText = readSource(BOUNDARY_FILE) ?? '';
+      const path = join(stage, 'boundary-pointerlock.mjs');
+      writeFileSync(path, `${realText.replace(/^(\s*)window\.PointerLock = \{$/m, '$1window.zzzStagedAwayPointerLockShim = {')}\nwindow.PointerLock = {\n  entered(origin) { return null; },\n};\n`);
+      const r = runScan({ ...real, boundaryFile: path });
+      const shim = shimOf(r, 'PointerLock');
+      if (!shim?.defined) fail(`'PointerLock' plant did not land (the staged definition was not parsed)`);
+      else if (r.ok || !shim.unimplemented.includes('exited')) {
+        fail(`a PointerLock shim without exited did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim.unimplemented })}`);
+      } else ok(`staged window.PointerLock with only entered -> red, naming 'PointerLock.exited' UNIMPLEMENTED`);
+    }
+
     // (k) window.nsContextMenu with a surplus method, added to the boundary file's own definition (35-03 defines it).
     {
       const realText = readSource(BOUNDARY_FILE) ?? '';
@@ -1511,7 +1525,7 @@ function selfTest() {
 
   if (failed) process.exit(1);
   console.log(
-    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site, FullScreen member, nsContextMenu surplus, IDL method, XULBrowserWindow QueryInterface, stock PopupNotifications without show, browserDOMWindow without canClose, facade missing tabContainer / surplus getNotificationBox); the empty file list, an unresolvable registry URI and a duplicate shim definition failed distinctly`
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site, FullScreen member, PointerLock member, nsContextMenu surplus, IDL method, XULBrowserWindow QueryInterface, stock PopupNotifications without show, browserDOMWindow without canClose, facade missing tabContainer / surplus getNotificationBox); the empty file list, an unresolvable registry URI and a duplicate shim definition failed distinctly`
   );
 }
 

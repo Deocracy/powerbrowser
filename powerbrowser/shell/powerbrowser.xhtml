@@ -198,6 +198,14 @@
       <button id="fullscreen-exit-button">
       </button>
     </div>
+    <!-- WR-03 (35-REVIEW): the stock warning shown while a page holds pointer lock. -->
+    <div id="pointerlock-warning" class="pointerlockfswarning" popover="manual" hidden="">
+      <div class="pointerlockfswarning-domain-text">
+        <span class="pointerlockfswarning-domain" data-l10n-name="domain"/>
+      </div>
+      <div class="pointerlockfswarning-generic-text"
+           data-l10n-id="pointerlock-warning-no-domain"></div>
+    </div>
     <!-- shell furniture: end -->
     <xul:browser id="powerbrowser-content" type="content" primary="true" remote="true" remoteType="web" src="about:blank" tabindex="-1" disablecontextmenu="true"/>
   </body>

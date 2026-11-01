@@ -8798,9 +8798,10 @@ async function pageMenuStill(window, browser) {
 // (verify-shell-gbrowser-standin.mjs); their state lives in this closure. The
 // overlay covers the window through the :fullscreen top layer, so no geometry
 // is written. The stock warning shows the page's domain on every entry and
-// nothing here suppresses it (T-35-24). Not ported (D-11, D-05): permission
-// doorhangers, the find bar, add-on install prompts, the pointer-lock warning,
-// and the TabSelect listener (webTabGeometry's hide branch exits instead).
+// nothing here suppresses it (T-35-24). window.PointerLock (35-REVIEW WR-03)
+// shows #pointerlock-warning through the same state machine. Not ported (D-11,
+// D-05): permission doorhangers, the find bar, add-on install prompts, and the
+// TabSelect listener (webTabGeometry's hide branch exits instead).
 function installFullscreen(window) {
   const document = window.document;
   // The overlay that entered fullscreen: closing the warning returns focus to it (upstream: gBrowser.selectedBrowser, :211).
@@ -8898,7 +8899,7 @@ function installFullscreen(window) {
     setState("hidden");
     doHide();
     element.querySelector(".pointerlockfswarning-domain-text").removeAttribute("data-l10n-id");
-    document.getElementById("fullscreen-exit-button").removeAttribute("data-l10n-id");
+    element.querySelector("#fullscreen-exit-button")?.removeAttribute("data-l10n-id");
     element.removeEventListener("transitionend", listener);
     element.removeEventListener("transitioncancel", listener);
     window.removeEventListener("mousemove", listener, true);
@@ -8912,11 +8913,11 @@ function installFullscreen(window) {
       fullscreenBrowser.focus();
     }
   };
-  const showWarning = (browsingContext, keyboardLockEnabled) => {
-    const timeout = Services.prefs.getIntPref(keyboardLockEnabled ? "full-screen-api.keyboardlock-warning.timeout" : "full-screen-api.warning.timeout");
-    const delay = Services.prefs.getIntPref("full-screen-api.warning.delay");
+  // PointerlockFsWarning.show (:76-165): one warning element at a time, the fullscreen or the pointer-lock one.
+  const warnings = { "fullscreen-warning": document.getElementById("fullscreen-warning"), "pointerlock-warning": document.getElementById("pointerlock-warning") };
+  const showWarning = (aOrigin, elementId, timeout, delay, keyboardLockEnabled, browser) => {
     if (!element) {
-      element = document.getElementById("fullscreen-warning");
+      element = warnings[elementId];
       element.addEventListener("transitionend", listener);
       element.addEventListener("transitioncancel", listener);
       window.addEventListener("mousemove", listener, true);
@@ -8934,8 +8935,9 @@ function installFullscreen(window) {
         timeoutHide.start();
       }, delay);
     }
-    // The top level's origin: ancestors control what is on screen (:57-61).
-    origin = browsingContext.top.currentWindowGlobal.documentPrincipal.originNoSuffix || origin;
+    if (aOrigin) {
+      origin = aOrigin;
+    }
     const uri = Services.io.newURI(origin);
     let host = null;
     if (origin != "resource://pdf.js") {
@@ -8948,10 +8950,14 @@ function installFullscreen(window) {
       textElem.hidden = true;
     } else {
       textElem.removeAttribute("hidden");
-      document.l10n.setAttributes(textElem, "fullscreen-warning-domain", { domain: pageToolsLazy.BrowserUtils.formatURIForDisplay(uri, { onlyBaseDomain: true }) });
+      const l10nId = { "fullscreen-warning": "fullscreen-warning-domain", "pointerlock-warning": "pointerlock-warning-domain" }[elementId];
+      document.l10n.setAttributes(textElem, l10nId, { domain: pageToolsLazy.BrowserUtils.formatURIForDisplay(uri, { onlyBaseDomain: true }) });
     }
-    document.l10n.setAttributes(document.getElementById("fullscreen-exit-button"), keyboardLockEnabled ? "fullscreen-keyboardlock-exit-button" : "fullscreen-exit-button");
-    element.dataset.identity = fullscreenWarningIdentity(browsingContext.top.embedderElement);
+    const button = element.querySelector("#fullscreen-exit-button");
+    if (button) {
+      document.l10n.setAttributes(button, keyboardLockEnabled ? "fullscreen-keyboardlock-exit-button" : "fullscreen-exit-button");
+    }
+    element.dataset.identity = fullscreenWarningIdentity(browser);
     // Upstream's own opt-out: a timeout of 0 or less leaves the warning as set.
     if (timeoutHide.delay <= 0) {
       return;
@@ -9014,11 +9020,31 @@ function installFullscreen(window) {
     },
   };
   window.PointerlockFsWarning = {
+    // PointerlockFsWarning.showFullScreen (:57-73): the top level's origin, since ancestors control what is on screen.
     showFullScreen(browsingContext, keyboardLockEnabled) {
-      showWarning(browsingContext, keyboardLockEnabled);
+      const timeout = Services.prefs.getIntPref(keyboardLockEnabled ? "full-screen-api.keyboardlock-warning.timeout" : "full-screen-api.warning.timeout");
+      const delay = Services.prefs.getIntPref("full-screen-api.warning.delay");
+      showWarning(browsingContext.top.currentWindowGlobal.documentPrincipal.originNoSuffix, "fullscreen-warning", timeout, delay, keyboardLockEnabled, browsingContext.top.embedderElement);
     },
     close(elementId) {
       closeWarning(elementId);
+    },
+  };
+  // WR-03 (35-REVIEW): PointerLock (:312-332). PointerLockParent calls entered/exited on the overlay's
+  // documentGlobal (PointerLockParent.sys.mjs:10-17); without it a page could hide the cursor and draw
+  // its own with no "<domain> has control of your pointer" warning, Firefox's spoofing mitigation.
+  window.PointerLock = {
+    entered(originNoSuffix) {
+      // PopupNotifications extends an open doorhanger's security delay on this topic (PopupNotifications.sys.mjs:417-428).
+      Services.obs.notifyObservers(null, "pointer-lock-entered");
+      // PointerlockFsWarning.showPointerLock (:39-46): none while fullscreen, whose warning already covers the page.
+      if (!document.fullscreen) {
+        const browser = [...webTabs.values()].find(entry => entry.browser.ownerGlobal === window && entry.browser.style.visibility === "visible")?.browser;
+        showWarning(originNoSuffix, "pointerlock-warning", Services.prefs.getIntPref("pointer-lock-api.warning.timeout"), 0, false, browser);
+      }
+    },
+    exited() {
+      closeWarning("pointerlock-warning");
     },
   };
 }
