@@ -526,6 +526,9 @@ const MODES_WIDGET_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-wid
 /** The pill's sources (30-01 D-04 move); their copy is pinned with the widget's. */
 const ADDRESS_BAR_DIR_REL = "theia/extensions/chrome-bar/src/browser/address-bar/";
 const ADDRESS_BAR_REL = `${ADDRESS_BAR_DIR_REL}address-bar.tsx`;
+/** Phase 38 plan 02: the extension buttons and puzzle menu; their copy is pinned with the widget's, like the pill's. */
+const EXTENSIONS_DIR_REL = "theia/extensions/chrome-bar/src/browser/extensions/";
+const EXTENSIONS_WIDGET_REL = `${EXTENSIONS_DIR_REL}extension-actions-widget.tsx`;
 const NAV_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts";
 const SHORTCUT_COPY_REL = "theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts";
 
@@ -829,6 +832,24 @@ const EXPECTED_NAV_COPY = new Set([
   "Copy",
   "Paste",
   "Select All",
+  // Phase 38 plan 02 (EXT-06): the extension buttons and the puzzle menu (38-UI-SPEC Copywriting Contract).
+  "Extensions",
+  "Pinned",
+  "No extensions installed",
+  "Install one from ${name} Add-ons.",
+  "Install from add-ons site",
+  "Disabled for this page",
+  "Options for ${name}",
+  "Manage Extension",
+  "${name} could not reach the extension. Restart ${name} and try again.",
+  "This extension's popup could not be shown. Reload the tab and try again.",
+  "Pin to Toolbar",
+  "Unpin from Toolbar",
+  "Remove Extension",
+  "Remove ${name}?",
+  "The extension and its data stay in the profile until the browser restarts.",
+  "Remove",
+  "${name} can't be removed here. Choose Manage Extension to see it in Add-ons.",
 ]);
 
 /**
@@ -1134,15 +1155,24 @@ function checkModesCopy(sources) {
   return copyFailures;
 }
 
-/** The widget plus every .tsx under address-bar/, from the sources read (so an absent directory adds nothing). */
+/** The widget plus every .tsx under address-bar/ and (38-02) extensions/, from the sources read (so an absent directory adds nothing). */
 function widgetCopySourceRels(sources) {
   return [
     MODES_WIDGET_REL,
-    ...Object.keys(sources).filter((rel) => rel.startsWith(ADDRESS_BAR_DIR_REL) && rel.endsWith(".tsx")).sort(),
+    ...Object.keys(sources).filter((rel) => (rel.startsWith(ADDRESS_BAR_DIR_REL) || rel.startsWith(EXTENSIONS_DIR_REL)) && rel.endsWith(".tsx")).sort(),
   ];
 }
 
 const MODES_COPY_FAULTS = [
+  {
+    // Phase 38 plan 02: the puzzle menu's copy lives in CHROME_BAR_COPY; a literal in the extension widget bypasses the pin.
+    name: `a literal title in ${EXTENSIONS_WIDGET_REL} instead of CHROME_BAR_COPY`,
+    apply: (sources) => ({
+      ...sources,
+      [EXTENSIONS_WIDGET_REL]: `${sources[EXTENSIONS_WIDGET_REL] ?? ""}\nconst planted = <button title='Planted extension copy' />;\n`,
+    }),
+    expect: "Planted extension copy",
+  },
   {
     name: "a literal aria string in a nested address-bar source bypasses the pinned copy",
     apply: (sources) => ({

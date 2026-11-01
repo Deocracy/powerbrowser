@@ -84,12 +84,10 @@ document.addEventListener(
       get selectedTab() {
         return host.selectedTab();
       },
-      // Switching tabs is Phase 34/36/38 routing; a silent switch would answer wrongly. Re-selecting the tab that
-      // is already selected changes nothing, so tabs.update({ active: true }) on it does not throw after a navigation.
+      // Phase 38 (D-06): an extension's selection write goes through the host, which pushes it to Theia. Re-selecting
+      // the tab that is already selected changes nothing, so tabs.update({ active: true }) on it never throws.
       set selectedTab(tab) {
-        if (tab !== host.selectedTab()) {
-          host.refuse("switch tabs");
-        }
+        host.selectTab(tab);
       },
       get selectedTabs() {
         return host.selectedTab() ? [host.selectedTab()] : [];
@@ -134,12 +132,18 @@ document.addEventListener(
       removeTabsProgressListener(listener) {
         host.removeTabsProgressListener(listener);
       },
-      // Opening and closing a tab for an extension is routed to Theia in a later phase (36/38).
-      addTab() {
-        host.refuse("open a tab");
+      // Phase 38 (D-06): an extension's tabs.create and tabs.remove. The host makes or closes the overlay and Theia
+      // claims or closes its tab; a non-web page is refused.
+      addTab(url, options) {
+        return host.addTab(url, options);
       },
-      removeTab(_tab) {
-        host.refuse("close a tab");
+      removeTab(tab) {
+        host.removeTab(tab);
+      },
+      removeTabs(tabs) {
+        for (const tab of tabs) {
+          host.removeTab(tab);
+        }
       },
     };
     document.documentElement.setAttribute("extensiontabhost", "true");

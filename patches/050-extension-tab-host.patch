@@ -67,15 +67,17 @@ index 91adc6bc36..68dcbdc696 100644
  
    getTabAtIndex(index) {
 diff --git a/browser/components/extensions/parent/ext-browserAction.js b/browser/components/extensions/parent/ext-browserAction.js
-index 45ce82b3ef..a64819cd8f 100644
+index 45ce82b3ef..e29a955b3b 100644
 --- a/browser/components/extensions/parent/ext-browserAction.js
 +++ b/browser/components/extensions/parent/ext-browserAction.js
-@@ -979,6 +979,10 @@ this.browserAction = class extends ExtensionAPIPersistent {
+@@ -979,6 +979,12 @@ this.browserAction = class extends ExtensionAPIPersistent {
     *        Browser chrome window.
     */
    updateWindow(window) {
-+    // A tab host window has no CustomizableUI toolbar; its button is the embedder's.
++    // A tab host window has no CustomizableUI toolbar; its button is the embedder's,
++    // which its tab strip tells to re-read the action state.
 +    if (windowTracker.isTabHostWindow(window)) {
++      window.gBrowser.tabContainer.dispatchEvent(new window.Event("TabHostActionUpdate"));
 +      return;
 +    }
      let node = this.widget.forWindow(window).node;
@@ -106,7 +108,7 @@ index fbce863cb2..f7a06fcfcd 100644
        const menu = window.document.getElementById(id);
        menu.removeEventListener("popupshowing", this);
 diff --git a/browser/components/extensions/parent/ext-pageAction.js b/browser/components/extensions/parent/ext-pageAction.js
-index 35bbf828c6..aa1bed3c9a 100644
+index 35bbf828c6..ed97310a12 100644
 --- a/browser/components/extensions/parent/ext-pageAction.js
 +++ b/browser/components/extensions/parent/ext-pageAction.js
 @@ -168,7 +168,7 @@ this.pageAction = class extends ExtensionAPIPersistent {
@@ -118,12 +120,14 @@ index 35bbf828c6..aa1bed3c9a 100644
              this.updateButton(window);
            }
          }
-@@ -197,6 +197,10 @@ this.pageAction = class extends ExtensionAPIPersistent {
+@@ -197,6 +197,12 @@ this.pageAction = class extends ExtensionAPIPersistent {
    // Updates "image" to match the "icon" property.
    // Enables or disables the icon, based on the "enabled" and "patternMatching" properties.
    updateButton(window) {
-+    // A tab host window has no page-action UI; its page actions are the embedder's.
++    // A tab host window has no page-action UI; its page actions are the embedder's,
++    // which its tab strip tells to re-read the page-action state.
 +    if (windowTracker.isTabHostWindow(window)) {
++      window.gBrowser.tabContainer.dispatchEvent(new window.Event("TabHostActionUpdate"));
 +      return;
 +    }
      let tab = window.gBrowser.selectedTab;
@@ -217,24 +221,44 @@ index ec06766887..ed2be4a747 100644
    }
  
 diff --git a/browser/components/extensions/parent/ext-tabs.js b/browser/components/extensions/parent/ext-tabs.js
-index f342748d4b..8cfe59ad40 100644
+index f342748d4b..a437c5d6a0 100644
 --- a/browser/components/extensions/parent/ext-tabs.js
 +++ b/browser/components/extensions/parent/ext-tabs.js
-@@ -872,8 +872,31 @@ this.tabs = class extends ExtensionAPIPersistent {
+@@ -751,11 +751,15 @@ this.tabs = class extends ExtensionAPIPersistent {
+             }
+ 
+             const currentTab = window.gBrowser.selectedTab;
+-            const { frameLoader } = currentTab.linkedBrowser;
+-            const currentTabSize = {
+-              width: frameLoader.lazyWidth,
+-              height: frameLoader.lazyHeight,
+-            };
++            // A tab host window with no tab has no frame loader to measure.
++            const frameLoader = currentTab?.linkedBrowser?.frameLoader;
++            let currentTabSize;
++            if (frameLoader) {
++              currentTabSize = {
++                width: frameLoader.lazyWidth,
++                height: frameLoader.lazyHeight,
++              };
++            }
+ 
+             if (createProperties.openerTabId !== null) {
+               options.ownerTab = tabTracker.getTab(
+@@ -872,8 +876,30 @@ this.tabs = class extends ExtensionAPIPersistent {
  
            let tabbrowser = nativeTab.documentGlobal.gBrowser;
  
 +          // WR-07: a tab host window refuses the writes it cannot make before any write runs, so a refusal applies
-+          // nothing. The checks follow upstream order: navigation, then active, highlighted and pinned. Muted is not
-+          // refused: a tab host node carries toggleMuteAudio (Phase 32 plan 09).
++          // nothing. Active is not refused: the host's selectedTab setter selects the tab in the embedder. Muted is
++          // not refused: a tab host node carries toggleMuteAudio (Phase 32 plan 09).
 +          if (windowTracker.isTabHostWindow(nativeTab.documentGlobal)) {
 +            if (
 +              updateProperties.pinned !== null ||
-+              updateProperties.highlighted !== null ||
-+              (updateProperties.active && tabbrowser.selectedTab !== nativeTab)
++              updateProperties.highlighted !== null
 +            ) {
 +              return Promise.reject({
-+                message: "Changing the pinned, highlighted or active state of this tab is not supported yet.",
++                message: "Changing the pinned or highlighted state of this tab is not supported yet.",
 +              });
 +            }
 +          }

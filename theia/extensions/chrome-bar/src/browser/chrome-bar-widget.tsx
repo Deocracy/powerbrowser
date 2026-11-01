@@ -68,6 +68,7 @@ import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 import { OrganisingWidget } from '@powerbrowser/modes/lib/browser/organising-widget';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
+import { ExtensionActionsWidget } from './extensions/extension-actions-widget';
 import { BookmarkEntry, ChromeStoreClient, ClearHistoryRange, ClosedTabRow, PlaceMatch, ReopenableTab } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profile-storage';
 import { MENU_ORDER, MENU_PHASE } from './site-identity/site-identity-table';
@@ -437,6 +438,10 @@ export class ChromeBarWidget extends ReactWidget {
     @inject(WebTabChannel)
     protected readonly webTabs: WebTabChannel;
 
+    /** Phase 38 plan 02 (EXT-06): the extension buttons and puzzle menu, rendered between the pill and New Tab. */
+    @inject(ExtensionActionsWidget)
+    protected readonly extensionActions: ExtensionActionsWidget;
+
     /** BMK-03 (D-07): arms a closed tab's saved back/forward history before its reopen. */
     @inject(ProfileStorageService)
     protected readonly profileStorage: ProfileStorageService;
@@ -496,6 +501,8 @@ export class ChromeBarWidget extends ReactWidget {
     @postConstruct()
     protected init(): void {
         this.addressBar.attach(this);
+        this.extensionActions.attach(this);
+        this.addressBar.pageActions = () => this.extensionActions.renderPageActions();
         setOpenDownloadsPanel(() => this.toggleDownloads());
         setOpenFindBar((tab, focus) => this.openFind(tab, focus));
         setChooseSaveDestination(suggestedName => this.chooseSaveDestination(suggestedName));
@@ -1853,6 +1860,7 @@ export class ChromeBarWidget extends ReactWidget {
             {this.renderReaderToggle()}
             {this.renderSharing()}
             {this.renderZoomChip()}
+            {this.extensionActions.render()}
             <button
                 className='pb-chrome-bar-button'
                 aria-label='New Tab'

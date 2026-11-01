@@ -391,8 +391,8 @@ const DELIBERATELY_ABSENT = new Map([
     'a tab or group moved into another window is adopted through these (ext-tabs.js:1193, :1207; ext-tabGroups.js:243). Window adoption is Phase 36, so the call throws a TypeError on the missing member'
   ),
   ...absentGroup(
-    ['discardBrowser', 'prepareDiscardBrowser', 'duplicateTab', 'warmupTab', 'removeTabs', 'setSuccessor', 'replaceInSuccession', 'addTabGroup', 'getTabGroupById', 'isSplitViewWrapper'],
-    'tabs.discard, tabs.duplicate, tabs.warmup, tabs.remove and tabs.group writes reach it (ext-tabs.js:851, :862, :866, :970, :992, :1246, :1637, :1780, :1788, :1839). They are Phase 38 extension API writes, so the call throws a TypeError on the missing member'
+    ['discardBrowser', 'prepareDiscardBrowser', 'duplicateTab', 'warmupTab', 'setSuccessor', 'replaceInSuccession', 'addTabGroup', 'getTabGroupById', 'isSplitViewWrapper'],
+    'tabs.discard, tabs.duplicate, tabs.warmup and tabs.group writes reach it (ext-tabs.js:851, :862, :866, :970, :992, :1246, :1637, :1780, :1788, :1839). They are extension API writes Phase 38 plan 01 does not serve (it serves tabs.create and tabs.remove, removeTabs included), so the call throws a TypeError on the missing member'
   ),
   [
     'hideTab',

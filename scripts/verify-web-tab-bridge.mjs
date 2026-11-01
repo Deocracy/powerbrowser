@@ -203,6 +203,14 @@ const STORE_KIND_CLASSES = new Map([
     ['reopenClosedTab', 'store-write'],
     // Phase 33 plan 05 (MENU-03, D-14b): the Full Screen toggle, window chrome state the full-screen command may reach.
     ['fullScreen', 'window-chrome'],
+    // Phase 38 plan 01 (EXT-06/07, D-11): the subscribe only makes the frame the extensionAction push target and reads
+    // the action set, so it is a read. Click (it grants activeTab and runs the extension), pin (a persisted pref) and
+    // remove (an uninstall) change chrome state outside any tab, so they are privileged: same-named ChromeStoreClient
+    // methods, widget-handler callers only (38-02), no command id, no key row, never relayed.
+    ['extensionActionsSubscribe', 'read'],
+    ['extensionClick', 'privileged'],
+    ['extensionPin', 'privileged'],
+    ['extensionRemove', 'privileged'],
 ]);
 /**
  * Phase 31 plan 04: store kinds the app menu sends straight from the Theia window to chrome. Each
@@ -215,8 +223,10 @@ const STORE_CLIENT = `${TAB_URIS_DIR}/chrome-store-client.ts`;
 const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/address-bar/address-bar.tsx`;
 /** Phase 31 plan 05: the chrome bar widget, which sends the Quit row's `quitRequest` (the lifecycle caller). */
 const CHROME_BAR_WIDGET_FILE = `${CHROME_BAR_DIR}/chrome-bar-widget.tsx`;
-/** Phase 33: the two sanctioned privileged callers -- the pill and the chrome bar widget -- and nothing else. */
-const PRIVILEGED_CALLERS = [CHROME_BAR_WIDGET, CHROME_BAR_WIDGET_FILE];
+/** Phase 38 plan 02 (D-11): the extension buttons and puzzle menu, which send extensionClick/Pin/Remove from their handlers. */
+const EXTENSION_ACTIONS_WIDGET_FILE = `${CHROME_BAR_DIR}/extensions/extension-actions-widget.tsx`;
+/** Phase 33: the sanctioned privileged callers -- the pill, the chrome bar widget and (38-02) the extension buttons -- and nothing else. */
+const PRIVILEGED_CALLERS = [CHROME_BAR_WIDGET, CHROME_BAR_WIDGET_FILE, EXTENSION_ACTIONS_WIDGET_FILE];
 
 /** Stock `HttpOpenHandler`'s priority; the web-tab handler must exceed it. */
 const STOCK_HTTP_HANDLER_PRIORITY = 500;
@@ -1056,6 +1066,17 @@ function selfTest() {
             name: 'planted bookmarkPage called from chrome-bar-commands.ts',
             sources: { ...clean, [COMMANDS]: clean[COMMANDS] + "\nvoid this.store.bookmarkPage('https://example.com/', '');\n" },
             expect: `the privileged kind bookmarkPage is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${COMMANDS}`,
+        },
+        {
+            // Phase 38 plan 02 (D-11): pin and remove stay with the extension widget's handlers.
+            name: 'planted extensionRemove called from chrome-bar-commands.ts',
+            sources: { ...clean, [COMMANDS]: clean[COMMANDS] + "\nvoid this.store.extensionRemove(id);\n" },
+            expect: `the privileged kind extensionRemove is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${COMMANDS}`,
+        },
+        {
+            name: 'planted extensionPin named in chrome-bar-keybindings.ts',
+            sources: { ...clean, [KEYBINDINGS]: clean[KEYBINDINGS] + "\nconst plantedRow = 'extensionPin';\n" },
+            expect: `the privileged kind extensionPin is named by a command or keybinding file, ${KEYBINDINGS}`,
         },
         {
             name: 'planted clearHistory named in chrome-bar-keybindings.ts',

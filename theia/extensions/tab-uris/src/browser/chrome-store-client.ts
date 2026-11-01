@@ -31,6 +31,14 @@ export interface BookmarkEntry {
     folder?: string;
 }
 
+/** Phase 38 plan 02 (D-02): the clicked button's rect in Theia-frame CSS pixels; chrome anchors the native popup panel to it. */
+export interface ExtensionAnchorRect {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+}
+
 export interface SessionTabRow {
     uri: string;
     url: string;
@@ -320,6 +328,48 @@ export class ChromeStoreClient {
         const reply = await this.request({ kind: 'fullScreen' });
         if (!reply.ok) {
             throw new Error(reply.message ?? `fullScreen failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply.where);
+    }
+
+    /**
+     * Phase 38 plan 01 (EXT-06, D-03): makes this frame the target of chrome's extensionAction pushes and asks for the
+     * current set, which arrives as a push (WebTabChannel.onDidChangeExtensionActions). A read.
+     */
+    async extensionActionsSubscribe(): Promise<void> {
+        const reply = await this.request({ kind: 'extensionActionsSubscribe' });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `extensionActionsSubscribe failed (${reply.reason ?? 'store'})`);
+        }
+    }
+
+    /**
+     * Phase 38 plan 01 (EXT-07, D-11): a toolbar button's click, run by chrome on the selected web tab. Resolves
+     * 'popup', 'action', 'disabled' or 'no-tab'. Privileged: only the button's click handler calls it. `pageAction`
+     * (38-03) runs the extension's page action instead, for the pill icon.
+     */
+    async extensionClick(extensionId: string, anchorRect: ExtensionAnchorRect, pageAction = false): Promise<string> {
+        const reply = await this.request({ kind: 'extensionClick', extensionId, anchorRect, ...(pageAction ? { pageAction: true } : {}) });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `extensionClick failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply.where);
+    }
+
+    /** Phase 38 plan 01 (D-08, D-11): Pin to Toolbar and its undo; resolves 'pinned' or 'unpinned'. Privileged: only the menu row's handler calls it. */
+    async extensionPin(extensionId: string, pinned: boolean): Promise<string> {
+        const reply = await this.request({ kind: 'extensionPin', extensionId, pinned });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `extensionPin failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply.where);
+    }
+
+    /** Phase 38 plan 01 (D-08, D-11): uninstalls an extension; resolves 'removed' or 'refused'. Privileged: only the confirm row's handler calls it. */
+    async extensionRemove(extensionId: string): Promise<string> {
+        const reply = await this.request({ kind: 'extensionRemove', extensionId });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `extensionRemove failed (${reply.reason ?? 'store'})`);
         }
         return String(reply.where);
     }

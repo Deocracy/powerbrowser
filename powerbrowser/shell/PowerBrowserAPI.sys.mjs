@@ -4545,6 +4545,7 @@ const STORE_REQUEST_KINDS = new Set([
   "listClosedTabs",
   "reopenClosedTab",
   "clearHistory",
+  "extensionActionsSubscribe", "extensionClick", "extensionPin", "extensionRemove",
   "fullScreen",
 ]);
 
@@ -4679,6 +4680,7 @@ async function handleStoreRequest(data, actorRef) {
       case "fullScreen": {
         return { ok: true, kind, where: toggleShellFullscreen(actorRef) };
       }
+      case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": return extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11)
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
       }
@@ -6712,11 +6714,22 @@ function tabHostAddTab(win, tabId, browser, openerBrowser = null) {
   if (!host || browser.getAttribute("messagemanagergroup") !== "browsers") {
     return;
   }
+  // 38-01 (D-06): an extension's tabs.create built this overlay's node already (tabsBridgeCreate); the ack names it.
+  const built = host.byBrowser.get(browser);
+  if (built) {
+    host.byTabId.set(tabId, built);
+    if (activeTabByFrame.get(host.theiaBrowser) === tabId) {
+      selectNode(host, built);
+    }
+    return;
+  }
   const node = makeTabNode(host, browser);
   node.openerTab = (openerBrowser && host.byBrowser.get(openerBrowser)) ?? null;
   host.strip.appendChild(node);
   host.byBrowser.set(browser, node);
-  host.byTabId.set(tabId, node);
+  if (tabId !== null) {
+    host.byTabId.set(tabId, node);
+  }
   attachProgress(host, browser, node);
   const becameSelected = host.selected === null;
   if (becameSelected) {
@@ -6726,7 +6739,7 @@ function tabHostAddTab(win, tabId, browser, openerBrowser = null) {
   if (becameSelected) {
     fireTabEvent(node, "TabSelect", { previousTab: null });
   }
-  if (activeTabByFrame.get(host.theiaBrowser) === tabId) {
+  if (tabId !== null && activeTabByFrame.get(host.theiaBrowser) === tabId) {
     selectNode(host, node);
   }
 }
@@ -6996,9 +7009,9 @@ export const PowerBrowserTabHost = Object.freeze({
       getTabSharingState: () => ({ camera: undefined, microphone: undefined, screen: undefined }),
       addTabsProgressListener: listener => host.progressListeners.add(listener),
       removeTabsProgressListener: listener => host.progressListeners.delete(listener),
-      refuse(action) {
-        throw new Error(`PowerBrowser cannot ${action} for an extension yet.`);
-      },
+      addTab: (url, options) => tabsBridgeCreate(host, url, options),
+      removeTab: tab => tabsBridgeRemove(host, tab),
+      selectTab: tab => tabsBridgeActivate(host, tab),
     });
   },
 });
@@ -7417,9 +7430,13 @@ function createPendingOverlay(opener, spec, background, openWindowInfo) {
   const theiaBrowser = opener.ownerDocument.getElementById(SHELL_CONTENT_BROWSER_ID);
   const pcKey = mintPendingKey();
   const browser = PowerBrowserAPI.webTabOpen(theiaBrowser, null, pcKey, spec, null, undefined, { remoteType: opener.remoteType, openWindowInfo });
-  const pending = { browser, theiaBrowser, url: spec, opener };
+  const pending = { browser, theiaBrowser, url: spec, opener, background };
   pendingContent.set(pcKey, pending);
-  sendWebTabPush(theiaBrowser, { kind: "adoptTab", pcKey, openerTabId, url: spec, background });
+  // 38-01: one microtask later, so the selectedTab write tabs.create makes right after addTab can still foreground it.
+  Promise.resolve().then(() => {
+    const { background } = pending;
+    sendWebTabPush(theiaBrowser, { kind: "adoptTab", pcKey, openerTabId, url: spec, background });
+  });
   PowerBrowserAPI.sleep(ADOPT_ACK_TIMEOUT_MS).then(() => adoptFallback(pcKey, pending));
   return browser;
 }
@@ -7441,6 +7458,7 @@ function adoptFallback(pcKey, pending) {
     }
   }
   hideBars(pending.browser);
+  tabHostDropTab(win, pending.browser);
   pending.browser.remove();
   if (!win || win.closed) {
     return;
@@ -9961,4 +9979,426 @@ async function claimClosedTabRow(uri) {
 // closed and its address, so the same record projects to the same row on every sweep.
 function stockClosedTabUri(closed, entry) {
   return closed.state?.extData?.[STOCK_TAB_KEY_VALUE] || `stock:closed-${closed.closedAt.toString(36)}-${stringHash(entry.url)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 38 (EXT-06, EXT-07): the extension bridge.
+//
+// Theia renders the toolbar buttons and the puzzle menu; chrome reads every
+// action's state and runs every click. State is read from each running
+// extension's browser action for the 31.1 host's selected tab (patch 050 skips
+// the stock button update for the shell window, so nothing else draws it) and
+// pushed whole, as one extensionAction push, to the Theia frame that
+// subscribed. A click runs triggerClickOrPopup on that same selected tab: the
+// stock delegate path re-reads the selected tab of whatever window it is handed,
+// which is the wrong-page bug (Pitfall 12). Tab identity is the host's, never
+// derived here (D-05).
+//
+// This section sits at the end of the file on purpose: nothing above the last
+// catalogued internals line moves when it grows.
+// ---------------------------------------------------------------------------
+
+const extensionLazy = {};
+ChromeUtils.defineESModuleGetters(extensionLazy, { AddonManager: "resource://gre/modules/AddonManager.sys.mjs", ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs", ExtensionUtils: "resource://gre/modules/ExtensionUtils.sys.mjs" });
+// 38-02 (D-02): the stock popup base the shell's popup panel extends, kept off the line above so no catalogued line moves.
+ChromeUtils.defineESModuleGetters(extensionLazy, { BasePopup: "resource:///modules/ExtensionPopups.sys.mjs" });
+
+// D-08: the ids pinned to the toolbar, persisted across restarts.
+const EXTENSION_PINNED_PREF = "powerbrowser.extensions.pinned";
+// The 31.1 host's tab events after which the selected tab's action state may differ; patch 050's updateWindow fires the last on a setBadgeText/setIcon.
+const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModified", "TabHostActionUpdate"];
+// Source icon URL -> promise of its data: URL (or null); each icon is read once.
+const extensionIconData = new Map();
+// Shell window -> { theiaBrowser, last, seq }: the subscribed frame, the last set pushed (JSON) and the newest read.
+const extensionBridges = new WeakMap();
+// Shell window -> { extension, action, popup }: the one extension popup open in it, as in Firefox.
+const extensionPopups = new WeakMap();
+
+function extensionPinnedIds() {
+  try {
+    const ids = JSON.parse(Services.prefs.getStringPref(EXTENSION_PINNED_PREF, "[]"));
+    return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function extensionSetPinnedIds(ids) {
+  Services.prefs.setStringPref(EXTENSION_PINNED_PREF, JSON.stringify([...ids]));
+}
+
+// Each running extension with a browser action (or, 38-03, a page action), by id. ext-browserAction.js and
+// ext-pageAction.js define browserActionFor and pageActionFor when the first such extension starts, so before that no
+// extension has an action.
+function extensionActionsById(page = false) {
+  const { apiManager, GlobalManager } = extensionLazy.ExtensionParent;
+  const actionFor = page ? apiManager.global.pageActionFor : apiManager.global.browserActionFor;
+  const byId = new Map();
+  if (typeof actionFor !== "function") {
+    return byId;
+  }
+  for (const extension of GlobalManager.extensionMap.values()) {
+    const browserAction = actionFor(extension);
+    if (browserAction?.action) {
+      byId.set(extension.id, { extension, action: browserAction.action, browserStyle: browserAction.browserStyle });
+    }
+  }
+  return byId;
+}
+
+// The 16px icon as a data: URL, since the Theia frame cannot load moz-extension: images; null when it cannot be read.
+function extensionIconOf(extension, icons) {
+  const { ExtensionParent, ExtensionUtils } = extensionLazy;
+  let url = ExtensionParent.IconDetails.getPreferredIcon(icons ?? {}, extension, 16).icon;
+  if (url && typeof url === "object") {
+    url = url.light; // theme_icons: the light variant, as the stock toolbar's default
+  }
+  if (typeof url !== "string") {
+    return Promise.resolve(null);
+  }
+  if (!extensionIconData.has(url)) {
+    extensionIconData.set(url, ExtensionUtils.makeDataURI(url).then(data => (typeof data === "string" && data.startsWith("data:image/") ? data : null), () => null));
+  }
+  return extensionIconData.get(url);
+}
+
+// One extension's row for the selected tab; with no web tab, the action's own defaults. Every field is chrome-chosen.
+// pageActionShown marks a page action's row, which is only built while the page action is shown (38-03).
+async function extensionActionRow(extension, action, selectedTab, pinned, popupAction, pageActionShown = false) {
+  const data = action.getContextData(selectedTab);
+  return {
+    extensionId: extension.id,
+    title: String(data.title ?? extension.name ?? ""),
+    icon: await extensionIconOf(extension, data.icon),
+    badgeText: String(data.badgeText ?? ""),
+    enabled: data.enabled !== false,
+    hasPopup: Boolean(data.popup),
+    pinned: !pageActionShown && pinned.has(extension.id),
+    popupOpen: action === popupAction,
+    pageActionShown,
+  };
+}
+
+// Re-reads every action for the host's selected tab and pushes the set to the subscribed frame when it changed. The
+// newest read wins, so a slow icon read never overwrites a later push.
+async function pushExtensionActions(win) {
+  const bridge = extensionBridges.get(win);
+  const host = tabHosts.get(win);
+  if (!bridge || !host) {
+    return;
+  }
+  bridge.seq += 1;
+  const seq = bridge.seq;
+  const pinned = extensionPinnedIds();
+  const popupAction = extensionPopups.get(win)?.action ?? null;
+  let actions;
+  try {
+    const rows = [...extensionActionsById().values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned, popupAction));
+    // 38-03 (EXT-08): a page action is sent only while shown for the selected tab (show_matches, show()/hide()); with
+    // no web tab none is. Patch 050's updateButton signal re-pushes on show(), hide() and a navigation.
+    for (const { extension, action } of extensionActionsById(true).values()) {
+      if (host.selected && action.isShownForTab(host.selected)) {
+        rows.push(extensionActionRow(extension, action, host.selected, pinned, popupAction, true));
+      }
+    }
+    actions = await Promise.all(rows);
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[extensions] extensionAction read failed: ${err && err.message ? err.message : err}`);
+    return;
+  }
+  const text = JSON.stringify(actions);
+  if (seq !== bridge.seq || text === bridge.last) {
+    return;
+  }
+  bridge.last = text;
+  sendWebTabPush(bridge.theiaBrowser, { kind: "extensionAction", actions });
+}
+
+// The subscribing frame becomes the push target and gets the whole set at once. The listeners are added once per
+// window: the host's tab events, and an extension starting or stopping (install, enable, disable, remove).
+function extensionActionsSubscribe(win, theiaBrowser) {
+  const host = tabHosts.get(win);
+  if (!host || host.theiaBrowser !== theiaBrowser) {
+    return "unknown-window";
+  }
+  let bridge = extensionBridges.get(win);
+  if (!bridge) {
+    bridge = { theiaBrowser, last: null, seq: 0 };
+    extensionBridges.set(win, bridge);
+    const update = () => {
+      pushExtensionActions(win);
+    };
+    for (const type of EXTENSION_TAB_EVENTS) {
+      host.strip.addEventListener(type, update);
+    }
+    const { apiManager } = extensionLazy.ExtensionParent;
+    apiManager.on("ready", update);
+    apiManager.on("shutdown", update);
+    win.addEventListener("unload", () => {
+      apiManager.off("ready", update);
+      apiManager.off("shutdown", update);
+    }, { once: true });
+  }
+  // A reloaded frontend has none of the earlier pushes.
+  bridge.last = null;
+  pushExtensionActions(win);
+  return "subscribed";
+}
+
+// The extension a store kind names, when the running set holds it with an action: its page action when the click
+// came from the pill icon (38-03), else its browser action.
+function extensionNamed(data) {
+  const id = data?.extensionId;
+  return typeof id === "string" && id.length <= 256 ? extensionActionsById(data.pageAction === true).get(id) ?? null : null;
+}
+
+// D-02: the stock PanelPopup (ExtensionPopups.sys.mjs:484-518) parented to the shell's popupset, since the shell has no
+// mainPopupSet. BasePopup builds the popup <browser> and its extension context as it does in Firefox. destroy() runs on
+// every close path (popuphidden, window unload, a close before the panel showed) and reports it through onDestroy.
+let ShellPanelPopup = null;
+function shellPanelPopup(extension, document, popupUrl, browserStyle) {
+  ShellPanelPopup ??= class extends extensionLazy.BasePopup {
+    constructor(ext, doc, url, style) {
+      const panel = doc.createXULElement("panel");
+      panel.setAttribute("class", "browser-extension-panel panel-no-padding");
+      panel.setAttribute("type", "arrow");
+      panel.setAttribute("role", "group");
+      if (ext.remote) {
+        panel.setAttribute("remote", "true");
+      }
+      panel.setAttribute("neverhidden", "true");
+      doc.getElementById("powerbrowser-popupset").appendChild(panel);
+      super(ext, panel, url, style);
+    }
+
+    get DESTROY_EVENT() {
+      return "popuphidden";
+    }
+
+    destroy() {
+      this.onDestroy?.();
+      super.destroy();
+      this.viewNode.remove();
+      this.viewNode = null;
+    }
+
+    closePopup() {
+      const panel = this.viewNode;
+      if (panel && (panel.state === "open" || panel.state === "showing")) {
+        panel.hidePopup();
+      } else if (!this.destroyed) {
+        this.destroy();
+      }
+    }
+  };
+  return new ShellPanelPopup(extension, document, popupUrl, browserStyle);
+}
+
+// T-38-08: the rect Theia reported (Theia-frame CSS pixels), clamped to the frame, in screen CSS pixels.
+function extensionPopupRect(win, theiaBrowser, rect) {
+  const frame = theiaBrowser.getBoundingClientRect();
+  const clamp = (value, max) => Math.min(Math.max(Number.isFinite(value) ? value : 0, 0), Math.max(0, max));
+  const left = clamp(rect?.left, frame.width);
+  const top = clamp(rect?.top, frame.height);
+  return {
+    x: Math.round(win.mozInnerScreenX + frame.left + left),
+    y: Math.round(win.mozInnerScreenY + frame.top + top),
+    width: Math.round(clamp(rect?.width, frame.width - left)),
+    height: Math.round(clamp(rect?.height, frame.height - top)),
+  };
+}
+
+// EXT-07 (D-02): the popup in a native panel under the button. It closes on Esc and a click outside (the panel's own
+// rollup), focus moving into a page, a tab switch, or a second click (extensionClick). On close, focus goes back to the
+// Theia frame and the push shows no popup open, which is the widget's cue to focus the pill.
+function extensionOpenPopup(win, named, popupUrl, anchorRect) {
+  const bridge = extensionBridges.get(win);
+  const host = tabHosts.get(win);
+  const popup = shellPanelPopup(named.extension, win.document, popupUrl, named.browserStyle);
+  const at = extensionPopupRect(win, bridge.theiaBrowser, anchorRect);
+  const close = () => popup.closePopup();
+  const pageFocus = event => {
+    if (tabIdOfBrowser(event.target) !== null) {
+      close();
+    }
+  };
+  popup.onDestroy = () => {
+    popup.onDestroy = null;
+    host.strip.removeEventListener("TabSelect", close);
+    win.document.removeEventListener("focus", pageFocus, true);
+    if (extensionPopups.get(win)?.popup === popup) {
+      extensionPopups.delete(win);
+    }
+    if (!win.closed) {
+      bridge.theiaBrowser.focus();
+      pushExtensionActions(win);
+    }
+  };
+  extensionPopups.set(win, { extension: named.extension, action: named.action, popup });
+  host.strip.addEventListener("TabSelect", close);
+  win.document.addEventListener("focus", pageFocus, true);
+  pushExtensionActions(win);
+  // As stock (ext-pageAction.js): the panel opens once the popup has painted its size.
+  popup.contentReady.then(() => {
+    if (!popup.destroyed) {
+      popup.panel.openPopupAtScreenRect("bottomright topright", at.x, at.y, at.width, at.height, false, false);
+    }
+  });
+}
+
+// EXT-07: a button's click. It runs on the host's selected tab, which stays the last web tab while the IDE has focus
+// (sub-ruling 1). A popup opens in the native panel at `anchorRect`; its URL never crosses to the frame. A click on the
+// button of the popup already open closes it, as in Firefox.
+function extensionClick(win, named, anchorRect) {
+  const open = extensionPopups.get(win);
+  if (open) {
+    open.popup.closePopup();
+    if (open.action === named.action) {
+      return "closed";
+    }
+  }
+  const selectedTab = tabHosts.get(win)?.selected ?? null;
+  if (!selectedTab) {
+    return "no-tab";
+  }
+  const popupUrl = named.action.triggerClickOrPopup(selectedTab);
+  pushExtensionActions(win);
+  if (popupUrl === null) {
+    return "disabled";
+  }
+  if (!popupUrl) {
+    return "action";
+  }
+  try {
+    extensionOpenPopup(win, named, popupUrl, anchorRect);
+    return "popup";
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[extensions] popup panel failed (${err && err.name ? err.name : "error"})`);
+    return "popup-failed";
+  }
+}
+
+// D-08: Pin to Toolbar and its undo.
+function extensionPin(win, named, pinned) {
+  const ids = extensionPinnedIds();
+  if (pinned) {
+    ids.add(named.extension.id);
+  } else {
+    ids.delete(named.extension.id);
+  }
+  extensionSetPinnedIds(ids);
+  pushExtensionActions(win);
+  return pinned ? "pinned" : "unpinned";
+}
+
+// D-08: Remove, after the menu's confirm row. Only an add-on the user may uninstall; a built-in or locked one is refused.
+async function extensionRemove(named) {
+  const { AddonManager } = extensionLazy;
+  const addon = await AddonManager.getAddonByID(named.extension.id);
+  if (!addon || addon.isBuiltin || !(addon.permissions & AddonManager.PERM_CAN_UNINSTALL)) {
+    return "refused";
+  }
+  const ids = extensionPinnedIds();
+  if (ids.delete(addon.id)) {
+    extensionSetPinnedIds(ids);
+  }
+  // The extension's shutdown pushes the set without it.
+  await addon.uninstall();
+  return "removed";
+}
+
+// handleStoreRequest's one line for the extension kinds; its walls (Theia sender, shell window) have already run.
+async function extensionStoreRequest(kind, data, actorRef) {
+  const theiaBrowser = actorRef.browsingContext.top.embedderElement;
+  const win = theiaBrowser.ownerDocument.defaultView;
+  if (kind === "extensionActionsSubscribe") {
+    return { ok: true, kind, where: extensionActionsSubscribe(win, theiaBrowser) };
+  }
+  const named = extensionNamed(data);
+  if (!named) {
+    return { ok: false, kind, reason: "validation", message: "handleStoreRequest: refusing an extension that is not running with a toolbar action" };
+  }
+  switch (kind) {
+    case "extensionClick":
+      return { ok: true, kind, where: extensionClick(win, named, data.anchorRect) };
+    case "extensionPin":
+      if (typeof data.pinned !== "boolean") {
+        return { ok: false, kind, reason: "validation", message: "handleStoreRequest: refusing a pin without a boolean pinned" };
+      }
+      return { ok: true, kind, where: extensionPin(win, named, data.pinned) };
+    default:
+      return { ok: true, kind, where: await extensionRemove(named) };
+  }
+}
+
+// D-06: an extension's tabs.create, tabs.remove and selection writes reach the host's addTab, removeTab and selectTab
+// members. Chrome makes, closes or selects the overlay and pushes; the frontend claims it as it claims a page's new
+// window (Phase 36), so a tab an extension made has an owner and does not leak on reload.
+
+// tabs.create: an http(s) page in a new overlay next to the opener, never an extension page (sub-ruling 2). Its node
+// exists at once, because the caller reads the new tab back synchronously; the frontend's ack gives it its tab id.
+function tabsBridgeCreate(host, url, options) {
+  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+    throw new Error("PowerBrowser refused to open that page: an extension may open only web pages in a tab.");
+  }
+  const opener = options?.openerBrowser ?? host.selected?.linkedBrowser ?? null;
+  if (tabIdOfBrowser(opener) === null) {
+    throw new Error("PowerBrowser refused to open that page: there is no web tab to open it next to.");
+  }
+  // In the background unless the caller's selectedTab write brings it to the front before the adoptTab push.
+  const browser = createPendingOverlay(opener, url, true, null);
+  tabHostAddTab(host.win, null, browser, opener);
+  const principal = options?.triggeringPrincipal;
+  browser.loadURI(Services.io.newURI(url), { triggeringPrincipal: principal && !principal.isSystemPrincipal ? principal : Services.scriptSecurityManager.createNullPrincipal({}) });
+  return host.byBrowser.get(browser);
+}
+
+// tabs.remove: an adopted tab closes in the frontend as a user's close does (its close releases the overlay and the
+// row). A tab still waiting for its ack goes here, and the late ack is answered unknown-tab.
+function tabsBridgeRemove(host, tab) {
+  if (!isHostTab(host, tab)) {
+    throw new Error("PowerBrowser refused to close that tab: it is not one of this window's web tabs.");
+  }
+  const tabId = tabIdOfBrowser(tab.linkedBrowser);
+  if (tabId !== null) {
+    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });
+    return;
+  }
+  for (const [pcKey, pending] of pendingContent) {
+    if (pending.browser === tab.linkedBrowser) {
+      pendingContent.delete(pcKey);
+      // As adoptFallback: what was kept for it while it was pending (37-REVIEW WR-01) goes with it.
+      for (const [token, record] of promptRecords) {
+        if (record.browser === pending.browser) {
+          promptRecords.delete(token);
+        }
+      }
+      hideBars(pending.browser);
+      tabHostDropTab(host.win, pending.browser);
+      pending.browser.remove();
+    }
+  }
+}
+
+// A selection write. The selected tab stays selected; there is always a web tab selected, never none (sub-ruling 1).
+// A tab still waiting for its ack is foregrounded by its adoptTab push; an adopted one is shown by the selectTab push,
+// and the frontend's webTabActivated that follows finds it already selected.
+function tabsBridgeActivate(host, tab) {
+  if (tab === host.selected) {
+    return;
+  }
+  if (!isHostTab(host, tab)) {
+    throw new Error("PowerBrowser refused to switch to that tab: it is not one of this window's web tabs.");
+  }
+  selectNode(host, tab);
+  const tabId = tabIdOfBrowser(tab.linkedBrowser);
+  if (tabId !== null) {
+    sendWebTabPush(host.theiaBrowser, { kind: "selectTab", tabId });
+    return;
+  }
+  for (const pending of pendingContent.values()) {
+    if (pending.browser === tab.linkedBrowser) {
+      pending.background = false;
+    }
+  }
 }

@@ -34,6 +34,7 @@ import {
 import { CommandCentreAddressBarMode } from './address-bar/command-centre';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
+import { ExtensionActionsWidget } from './extensions/extension-actions-widget';
 import { TopTabsSidePanelHandler } from './side-panel-top-tabs';
 import { SidePanelHandler } from '@theia/core/lib/browser/shell/side-panel-handler';
 import '../../src/browser/side-panel-top-tabs.css';
@@ -83,6 +84,8 @@ export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     bind(ChromeBarWidget).toSelf().inSingletonScope();
     // 30-01 (D-04): the address pill the widget renders, static like every bind here (D-50).
     bind(AddressBar).toSelf().inSingletonScope();
+    // Phase 38 plan 02 (EXT-06): the extension buttons and puzzle menu the widget renders, static like the pill (D-50).
+    bind(ExtensionActionsWidget).toSelf().inSingletonScope();
     // 30-02 (D-06): the address-bar modes contribution point, bound at load (D-50); the built-in modes bind to it in 30-03 and 30-04.
     bindContributionProvider(bind, AddressBarModeContribution);
     // 30-03 (SMODE-01): the local modes, each a singleton bound to the contribution point at load (D-50).

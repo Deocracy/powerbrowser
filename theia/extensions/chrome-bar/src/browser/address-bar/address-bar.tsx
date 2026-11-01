@@ -2501,6 +2501,12 @@ export class AddressBar {
     }
 
     /** The pill and its portalled dropdown, rendered by the bar widget between Home and New Tab. */
+    /**
+     * Phase 38 plan 03 (B2): the page-action icons for the pill's leading slot, set by the chrome bar widget from
+     * ExtensionActionsWidget (this file must not import it: that module imports this one). Nothing when none is shown.
+     */
+    pageActions: () => React.ReactNode = () => undefined;
+
     render(): React.ReactNode {
         const engine = this.effectiveEngine();
         const modeEngine = this.modeEngine();
@@ -2523,6 +2529,7 @@ export class AddressBar {
                 onDragLeave={this.onDropTargetDragLeave}
                 onDrop={this.onPillDrop}
             >
+                {this.pageActions()}
                 {this.renderIdentityBox()}
                 {this.renderModeButton()}
                 <input

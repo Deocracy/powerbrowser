@@ -71,8 +71,8 @@ const GUARDS = [
     why: 'a zero-tab page_action show_matches loop must not pass a null tab' },
   { id: 'G2', file: PAGE_ACTION, mode: 'after',
     anchor: 'updateButton(window) {', site: 'updateButton',
-    regexes: [/^\s*if \(windowTracker\.isTabHostWindow\(window\)\) \{\s*$/, /^\s*return;\s*$/, /^\s*\}\s*$/],
-    why: 'a tab host window has no page-action UI (PageActions throws for it)' },
+    regexes: [/^\s*if \(windowTracker\.isTabHostWindow\(window\)\) \{\s*$/, /^\s*window\.gBrowser\.tabContainer\.dispatchEvent\(new window\.Event\("TabHostActionUpdate"\)\);\s*$/, /^\s*return;\s*$/, /^\s*\}\s*$/],
+    why: 'a tab host window has no page-action UI (PageActions throws for it); 38-03: its strip is told to re-read page actions' },
   { id: 'G3', file: BROWSER, mode: 'replace',
     anchor: 'const { frameLoader } = currentTab.linkedBrowser;', site: 'TabTracker.handleEvent',
     regexes: [/^\s*const frameLoader = currentTab\?\.linkedBrowser\?\.frameLoader;\s*$/],
@@ -98,10 +98,14 @@ const GUARDS = [
     regexes: [
       /^\s*if \(windowTracker\.isTabHostWindow\(nativeTab\.documentGlobal\)\) \{\s*$/,
       /^\s*updateProperties\.pinned !== null \|\|\s*$/,
-      /^\s*updateProperties\.highlighted !== null \|\|\s*$/,
-      /^\s*\(updateProperties\.active && tabbrowser\.selectedTab !== nativeTab\)\s*$/,
+      // No `||` after highlighted: a refusal of active (a switch to another tab) must not come back.
+      /^\s*updateProperties\.highlighted !== null\s*$/,
     ],
-    why: 'a tab host window refuses pinned, highlighted and a switch to another tab before any write runs (WR-07); muted is not refused (Phase 32 plan 09)' },
+    why: 'a tab host window refuses pinned and highlighted before any write runs (WR-07); active goes to the host selectedTab setter (38-01) and muted to toggleMuteAudio (Phase 32 plan 09), so neither is refused' },
+  { id: 'G11', file: TABS, mode: 'replace',
+    anchor: 'const { frameLoader } = currentTab.linkedBrowser;', site: 'getAPI.create',
+    regexes: [/^\s*const frameLoader = currentTab\?\.linkedBrowser\?\.frameLoader;\s*$/, /^\s*if \(frameLoader\) \{\s*$/],
+    why: 'a tabs.create in a tab host window with no tab must not throw before the host can refuse it (38-01)' },
   { id: 'G9', file: TABS, mode: 'after',
     anchor: 'let url = context.uri.resolve(updateProperties.url);', site: 'getAPI.update',
     regexes: [
@@ -125,6 +129,7 @@ const WEAKEN = {
   G7: { drop: /^\s*try \{\s*$/ },
   G10: { find: 'updateProperties.pinned !== null ||', replace: 'updateProperties.pinned !== null &&' },
   G9: { find: 'url !== "about:blank" &&', replace: 'url !== "about:blank" ||' },
+  G11: { find: 'currentTab?.linkedBrowser?.frameLoader', replace: 'currentTab.linkedBrowser?.frameLoader' },
 };
 
 // Hunks of 050 that no GUARDS row carries. An entry names one needle found in an added line of one file, and why
@@ -692,6 +697,24 @@ function selfTest() {
     if (landedOk('G9 scheme regex negation dropped', g9Regex !== clean)) {
       expectRed('G9 scheme regex negation dropped', check({ patchPath: withPatch('G9-regex-negation.patch', g9Regex) }),
         f => f.id === 'G9' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G9' });
+    }
+
+    // G10: the active refusal brought back on the highlighted line (38-01 lets tabs.update select through the host).
+    const g10Active = clean.replace('+              updateProperties.highlighted !== null\n', '+              updateProperties.highlighted !== null || updateProperties.active\n');
+    if (landedOk('G10 active refusal restored', g10Active !== clean)) {
+      expectRed('G10 active refusal restored', check({ patchPath: withPatch('G10-active.patch', g10Active) }),
+        f => f.id === 'G10' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G10' });
+    }
+
+    // G2: the page-action signal dropped (38-03), so show(), hide() and a navigation would wait for a tab event.
+    const silent = parsePatch(clean);
+    const g2b = findBlock(silent, GUARDS.find(g => g.id === 'G2'));
+    const g2j = g2b && findPlusIndex(g2b, line => line.includes('TabHostActionUpdate'));
+    if (g2j !== undefined && g2b) g2b.hunk.body.splice(g2j, 1);
+    const g2Silent = serialize(silent, clean.endsWith('\n'));
+    if (landedOk('G2 page-action signal dropped', g2Silent !== clean)) {
+      expectRed('G2 page-action signal dropped', check({ patchPath: withPatch('G2-silent.patch', g2Silent) }),
+        f => f.id === 'G2' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G2' });
     }
 
     // A second logic patch staged under another name.

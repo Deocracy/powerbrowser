@@ -283,6 +283,41 @@ export function downloadRowsOf(detail: Record<string, unknown>): WebTabDownloadR
 }
 
 /**
+ * Phase 38 plan 01 (EXT-06, D-03): one extension's toolbar action as chrome read it for the selected web tab. Every
+ * field is chrome-chosen; `icon` is a `data:image/` URL or null (the frame cannot load extension-scheme images).
+ */
+export interface ExtensionActionRow {
+    extensionId: string;
+    title: string;
+    icon: string | null;
+    badgeText: string;
+    enabled: boolean;
+    hasPopup: boolean;
+    pinned: boolean;
+    /** Phase 38 plan 02 (D-02): this extension's popup is open in chrome's native panel (the button draws pressed). */
+    popupOpen: boolean;
+    /**
+     * Phase 38 plan 03 (EXT-08 SC3): the row is the extension's page action, which chrome sends only while it is shown
+     * on the selected tab (the pill icon); false on a toolbar action's row.
+     */
+    pageActionShown: boolean;
+}
+
+/** Phase 38 plan 01: the rows of one extensionAction push; a malformed row is dropped, never rendered. */
+export function extensionActionRowsOf(detail: Record<string, unknown>): ExtensionActionRow[] {
+    if (!Array.isArray(detail.actions)) {
+        return [];
+    }
+    return detail.actions.filter((row): row is ExtensionActionRow => {
+        const r = row as ExtensionActionRow;
+        return !!row && typeof row === 'object' && typeof r.extensionId === 'string' && typeof r.title === 'string'
+            && (r.icon === null || (typeof r.icon === 'string' && r.icon.startsWith('data:image/')))
+            && typeof r.badgeText === 'string' && typeof r.enabled === 'boolean' && typeof r.hasPopup === 'boolean' && typeof r.pinned === 'boolean'
+            && typeof r.popupOpen === 'boolean' && typeof r.pageActionShown === 'boolean';
+    });
+}
+
+/**
  * The web-tab kinds chrome serves: eight in `handleGroupMutation`, and the
  * Phase 27 kinds in `handleWebTabAction` (the boundary file's end-of-file
  * section). One stable set for the bridge gate.
@@ -548,6 +583,12 @@ export class WebTabChannel {
         });
         // Phase 33 (BMK-01, BMK-04): chrome's Places bookmark observer. The push carries no data; the star and the toolbar re-read.
         this.onPush('bookmarks-changed', () => this.bookmarksEmitter.fire());
+        // Phase 38 plan 01 (EXT-06, D-03): every extension's toolbar action arrives whole in each push, after the frame
+        // subscribes (ChromeStoreClient.extensionActionsSubscribe); the buttons and puzzle menu read onDidChangeExtensionActions.
+        this.onPush('extensionAction', detail => {
+            this.extensionActions = extensionActionRowsOf(detail);
+            this.extensionActionsEmitter.fire(this.extensionActions);
+        });
     }
 
     /** Phase 37 plan 04: the bar copy, supplied by chrome-bar (which owns CHROME_BAR_COPY and depends on this package). */
@@ -566,6 +607,11 @@ export class WebTabChannel {
     downloadRows: WebTabDownloadRow[] = [];
     private readonly downloadsEmitter = new Emitter<WebTabDownloadRow[]>();
     readonly onDidChangeDownloads: TheiaEvent<WebTabDownloadRow[]> = this.downloadsEmitter.event;
+
+    /** Phase 38 plan 01 (EXT-06): the last extension action rows chrome pushed. */
+    extensionActions: ExtensionActionRow[] = [];
+    private readonly extensionActionsEmitter = new Emitter<ExtensionActionRow[]>();
+    readonly onDidChangeExtensionActions: TheiaEvent<ExtensionActionRow[]> = this.extensionActionsEmitter.event;
 
     /** Phase 32 plan 08 (PAGE-04, PAGE-11): fires when a web tab's pushed favicon, crash flag or (34-04) attention flag changes, so the strip redraws. */
     private readonly tabStatusEmitter = new Emitter<WebTabWidget>();
@@ -1559,6 +1605,13 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
         this.channel.onPush('adoptTab', detail => void this.adopt(detail).catch(() => console.error('[@powerbrowser/tab-uris] adopt failed:', 'adoptTab')));
         this.channel.onPush('dropAdoptedTab', detail => this.dropAdopted(detail.tabId));
         this.channel.onPush('closeAdoptedTab', detail => this.closeAdopted(detail.tabId));
+        // Phase 38 plan 01 (D-06): an extension selected a web tab; chrome selected it already, so this only shows it.
+        this.channel.onPush('selectTab', detail => {
+            const widget = typeof detail.tabId === 'string' ? this.channel.widgetOf(detail.tabId) : undefined;
+            if (widget) {
+                void this.shell.activateWidget(widget.id);
+            }
+        });
     }
 
     /**
