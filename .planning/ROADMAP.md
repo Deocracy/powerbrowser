@@ -500,7 +500,7 @@ Plans:
 **Plans**: 4 plans (strictly sequential waves; DSH codes, Claude checks; prompts answer only via Firefox's own buttons, Chris 2026-10-25)
 
 Plans:
-- [ ] 37-01-PLAN.md (wave 1) — Wave 0 gates plus the first end-to-end tracer.
+- [x] 37-01-PLAN.md (wave 1) — Wave 0 gates plus the first end-to-end tracer.
 - [ ] 37-02-PLAN.md (wave 2) — Remember, the WebRTC device template and the sharing indicator, on top of the 37-01
 - [ ] 37-03-PLAN.md (wave 3) — Dialogs, with the Chris gate.
 - [ ] 37-04-PLAN.md (wave 4) — Password save and update, and the three per-tab notification bars.
