@@ -7001,6 +7001,17 @@ let pendingContentSeq = 0;
 // The frontend's own ack deadline (web-tab.ts WEB_TAB_ACK_TIMEOUT_MS).
 const ADOPT_ACK_TIMEOUT_MS = 5000;
 
+// 37-REVIEW WR-01: an overlay built for an adoption whose ack has not arrived yet. Prompts, bars and sharing reports for
+// it are kept chrome-side with no tab id and pushed by adoptPendingOverlay once the tab id exists.
+function isPendingOverlay(browser) {
+  for (const pending of pendingContent.values()) {
+    if (pending.browser === browser) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function mintPendingKey() {
   pendingContentSeq += 1;
   return `pc-${pendingContentSeq}`;
@@ -7086,6 +7097,13 @@ function adoptFallback(pcKey, pending) {
   const live = pending.browser.currentURI?.spec ?? "";
   const url = /^https?:\/\//i.test(live) ? live : pending.url;
   const win = pending.theiaBrowser.ownerGlobal;
+  // Records kept while it was pending (37-REVIEW WR-01) go with it; none was ever pushed.
+  for (const [token, record] of promptRecords) {
+    if (record.browser === pending.browser) {
+      promptRecords.delete(token);
+    }
+  }
+  hideBars(pending.browser);
   pending.browser.remove();
   if (!win || win.closed) {
     return;
@@ -7120,6 +7138,8 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
   PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, pending.browser, null, /^https?:\/\//i.test(live) ? live : pending.url);
   // 37-REVIEW CR-01: an adopted tab is a tab-host node like any other, so prompts, bars, favicon, F12 and extensions see it.
   tabHostAddTab(theiaBrowser.ownerGlobal, tabId, pending.browser, pending.opener);
+  // 37-REVIEW WR-01: what arrived while the overlay was pending gets its tab id now and is pushed.
+  adoptPendingPushes(pending.browser, tabId, theiaBrowser.ownerGlobal);
   // 36-REVIEW WR-03: a page-opened context may close itself; BrowserElementParent re-dispatches that window.close()
   // on the overlay (BrowserElementParent.sys.mjs:12-30), and the frontend closes the tab as a user's close would.
   pending.browser.addEventListener("DOMWindowClose", () => sendWebTabPush(theiaBrowser, { kind: "closeAdoptedTab", tabId }));
@@ -7186,8 +7206,9 @@ function installPermissionPromptFurniture(window) {
   const stockShow = notifications.show;
   notifications.show = function (browser, id, message, anchorID, mainAction, secondaryActions, options) {
     const tabId = tabIdOfBrowser(browser);
-    // Every stock prompt passes options; a request from the Theia frame (no tab id) takes the stock path unchanged.
-    if (tabId === null || !options) {
+    // Every stock prompt passes options; a request from the Theia frame (no tab id) takes the stock path unchanged. An
+    // overlay awaiting its adoption ack is a background tab whose tab id comes at the ack (adoptPendingPushes).
+    if ((tabId === null && !isPendingOverlay(browser)) || !options) {
       return stockShow.apply(this, arguments);
     }
     browser.setAttribute("popupnotificationanchor", PROMPT_ANCHOR_ID);
@@ -7220,7 +7241,7 @@ function installPermissionPromptFurniture(window) {
       record.queued = true;
       pushDoorhanger(record, true);
       // Per tab, so a page that floods requests can evict only its own oldest, never another tab's prompt.
-      const queued = [...promptRecords.values()].filter(r => r.tabId === tabId && r.queued);
+      const queued = [...promptRecords.values()].filter(r => r.browser === browser && r.queued);
       if (queued.length > PROMPT_QUEUE_CAP) {
         // The stock removal without a user response runs PermissionUI's cancel(), so the page sees a denial, never a hang.
         notifications.remove(queued[0].notification, true);
@@ -7283,7 +7304,11 @@ function promptTopic(record, topic) {
 }
 
 // Display-only: where a prompt is and whether it still waits. The token names the chrome-held record; nothing consumes it.
+// A record of a pending overlay has no tab id yet and is pushed at the ack.
 function pushDoorhanger(record, pending) {
+  if (record.tabId === null) {
+    return;
+  }
   sendWebTabPush(record.theiaBrowser, { kind: "doorhanger", token: record.token, tabId: record.tabId, permission: record.permission, displayHost: record.displayHost, pending });
 }
 
@@ -7341,14 +7366,35 @@ export function updateWebTabSharing(browser, sharingState) {
 }
 
 // webTabOpen of an overlay chrome already holds (a reloaded frontend registering it again): the frontend's widget is new,
-// so the last observed state is pushed again. Phase 36 adoption has no hook in this tree yet; adoptTab calls this too.
+// so the last observed state is pushed again. adoptPendingPushes calls this too, for a state reported while the overlay
+// was pending: it was merged but never pushed, so it is read from the merged state (37-REVIEW WR-01).
 function resendWebTabSharing(tabId) {
   resendWebTabBars(tabId);
   const entry = webTabs.get(tabId);
-  const last = entry ? sharingSent.get(entry.browser) : undefined;
-  const host = last ? tabHosts.get(entry.browser.ownerGlobal) : null;
+  const webRTC = entry ? sharingStateOf.get(entry.browser)?.webRTC : undefined;
+  const state = entry ? sharingSent.get(entry.browser)?.state ?? (webRTC && { camera: Boolean(webRTC.camera), microphone: Boolean(webRTC.microphone), screen: Boolean(webRTC.screen) }) : undefined;
+  const host = state ? tabHosts.get(entry.browser.ownerGlobal) : null;
   if (host) {
-    pushWebTabSharing(entry.browser, tabId, host, last.state, true);
+    pushWebTabSharing(entry.browser, tabId, host, state, true);
+  }
+}
+
+// 37-REVIEW WR-01: at the adoption ack, the prompt and bar records kept for the pending overlay take the tab id and are
+// pushed, its sharing state is pushed, and a blocked-popup state the blocker already holds is read again.
+function adoptPendingPushes(browser, tabId, win) {
+  for (const record of promptRecords.values()) {
+    if (record.browser === browser && record.tabId === null) {
+      record.tabId = tabId;
+      pushDoorhanger(record, true);
+    }
+  }
+  for (const record of barsOfBrowser.get(browser)?.values() ?? []) {
+    record.tabId = tabId;
+  }
+  resendWebTabSharing(tabId);
+  const host = tabHosts.get(win);
+  if (host) {
+    void showBlockedPopupBar(host, browser);
   }
 }
 
@@ -7415,7 +7461,8 @@ function installNotificationBars(window, host) {
 // Shows, updates or hides one tab's bar of `barKind`. `stored` is chrome-only data the bar's answers act on.
 function setBar(browser, barKind, displayFields, stored) {
   const tabId = tabIdOfBrowser(browser);
-  const host = tabId === null ? null : tabHosts.get(browser.ownerGlobal);
+  // A pending overlay's bar is kept with no tab id and pushed at the ack (37-REVIEW WR-01).
+  const host = tabId === null && !isPendingOverlay(browser) ? null : tabHosts.get(browser.ownerGlobal);
   const bars = barsOfBrowser.get(browser) ?? new Map();
   const previous = bars.get(barKind);
   if (previous) {
@@ -7442,8 +7489,12 @@ function hideBars(browser) {
   }
 }
 
-// The one notificationBar push: display fields and a token, never a URL, principal or callback.
+// The one notificationBar push: display fields and a token, never a URL, principal or callback. A pending overlay's
+// record has no tab id yet and is pushed at the ack.
 function pushNotificationBar(record, visible) {
+  if (record.tabId === null) {
+    return;
+  }
   sendWebTabPush(record.theiaBrowser, { kind: "notificationBar", token: record.token, tabId: record.tabId, barKind: record.barKind, displayFields: visible ? record.displayFields : {}, visible });
 }
 
@@ -7459,7 +7510,7 @@ function resendWebTabBars(tabId) {
 // gPermissionPanel parts (one overlay per tab) and without getNotificationBox. The popups are read here, chrome-side, and
 // kept on the record; Theia sees only the counts.
 async function showBlockedPopupBar(host, browser) {
-  if (tabIdOfBrowser(browser) === null || !Services.prefs.getBoolPref("privacy.popups.showBrowserMessage", true)) {
+  if ((tabIdOfBrowser(browser) === null && !isPendingOverlay(browser)) || !Services.prefs.getBoolPref("privacy.popups.showBrowserMessage", true)) {
     return;
   }
   try {
@@ -7631,11 +7682,12 @@ function onHangTopic(subject, topic) {
 }
 
 // The overlay whose frame tree the report is for (ProcessHangMonitor.findActiveReport's own test).
+// A pending overlay counts too: its bar is kept and pushed at the ack (37-REVIEW WR-01).
 function hungOverlay(report) {
-  for (const entry of webTabs.values()) {
-    const frameLoader = entry.browser.frameLoader;
+  for (const { browser } of [...webTabs.values(), ...pendingContent.values()]) {
+    const frameLoader = browser.frameLoader;
     if (frameLoader && report.isReportForBrowserOrChildren(frameLoader)) {
-      return entry.browser;
+      return browser;
     }
   }
   return null;
@@ -7661,7 +7713,7 @@ function installProtocolBars() {
   const proto = ChromeUtils.importESModule(PROTOCOL_REGISTRAR_MODULE).WebProtocolHandlerRegistrar.prototype;
   const stock = proto.registerProtocolHandler;
   const wrapped = function (aProtocol, aURI, aTitle, aDocumentURI, aBrowserOrWindow) {
-    if (tabIdOfBrowser(aBrowserOrWindow) === null) {
+    if (tabIdOfBrowser(aBrowserOrWindow) === null && !isPendingOverlay(aBrowserOrWindow)) {
       return stock.apply(this, arguments);
     }
     return showProtocolHandlerBar(this, aProtocol, aURI, aTitle, aDocumentURI, aBrowserOrWindow);

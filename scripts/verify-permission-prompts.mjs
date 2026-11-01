@@ -99,7 +99,13 @@
  *   (ab) sharing behaviour (37-REVIEW CR-02): updateWebTabSharing and
  *       pushWebTabSharing, cut from the tree and run against stub maps, keep
  *       the camera mark on when a { geo } or { xr } report follows a camera
- *       report (PermissionUI reports through the same updateBrowserSharing).
+ *       report (PermissionUI reports through the same updateBrowserSharing),
+ *       and a camera report made before an adoption ack is pushed by the
+ *       adoption's resend (37-REVIEW WR-01).
+ *   (ac) pending overlay (37-REVIEW WR-01): adoptPendingOverlay calls
+ *       adoptPendingPushes, which pushes the kept prompts, sharing and blocked
+ *       popups; setBar, hungOverlay and showBlockedPopupBar keep a pending
+ *       overlay's report instead of dropping it.
  * The prompt section ends where the '// Phase 37: notification bars.' section
  * starts; rules (c), (f) and (h) read the prompt section only.
  * Rules (a), (j), (k), (q) and (r), the furniture rows, moved to
@@ -326,7 +332,7 @@ function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, fil
  * declared fresh, against stub hosts. The scenarios name what each push must mean, so a fault in the merge, the
  * pending-overlay record or the navigation reset goes red here rather than only on a built binary.
  */
-const SHARING_FUNCTIONS = ['updateWebTabSharing', 'pushWebTabSharing'];
+const SHARING_FUNCTIONS = ['updateWebTabSharing', 'pushWebTabSharing', 'resendWebTabSharing'];
 function checkSharingBehaviour(api) {
     const bodies = SHARING_FUNCTIONS.map(name => functionBody(api, name));
     const missing = SHARING_FUNCTIONS.filter((_, i) => !bodies[i]);
@@ -365,6 +371,19 @@ function checkSharingBehaviour(api) {
     run('xr report', () => fns.updateWebTabSharing(browser, { xr: true }));
     if (pushes.slice(afterCamera).some(p => p.camera !== true)) {
         failures.push('sharing-behaviour: location-grant-while-camera-shared -- a { geo } or { xr } report after a camera report pushed the camera mark off while the track is live (37-REVIEW CR-02)');
+    }
+    // WR-01: a camera report while the overlay is pending (no tab id) is pushed when the adoption resends.
+    const pendingBrowser = { ownerGlobal: win };
+    const beforePending = pushes.length;
+    run('pending camera report', () => fns.updateWebTabSharing(pendingBrowser, { webRTC: { camera: 1, sharing: 'camera' } }));
+    if (pushes.length !== beforePending) {
+        failures.push('sharing-behaviour: a report for an overlay with no tab id was pushed with no tab to name (broken instrument)');
+    }
+    ids.set(pendingBrowser, 'wt-p');
+    fns.webTabs.set('wt-p', { browser: pendingBrowser });
+    run('adoption resend', () => fns.resendWebTabSharing('wt-p'));
+    if (!pushes.slice(beforePending).some(p => p.tabId === 'wt-p' && p.camera === true)) {
+        failures.push('sharing-behaviour: pending-overlay-sharing -- a camera report that arrived before the adoption ack is not pushed when the tab id exists (37-REVIEW WR-01)');
     }
     return failures;
 }
@@ -487,7 +506,7 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
         const cap = /\.filter\(([^;]*)\);\s*if \(queued\.length > PROMPT_QUEUE_CAP\)/.exec(section);
         if (!cap) {
             failures.push(`queue-scope: the prompt section has no PROMPT_QUEUE_CAP eviction over a filtered queue -- the D-04 cap cannot be read`);
-        } else if (!/\br\.tabId === tabId\b/.test(cap[1]) || /\br\.window\b/.test(cap[1])) {
+        } else if (!/\br\.(?:tabId === tabId|browser === browser)\b/.test(cap[1]) || /\br\.window\b/.test(cap[1])) {
             failures.push(`queue-scope: the queue cap filters ${cap[1].trim()} -- not the requesting tab alone, so one page's requests can evict another tab's prompt`);
         }
     }
@@ -642,6 +661,22 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
 
     // (ab) The sharing functions run against stub maps: each scenario's pushes must match what the state means.
     failures.push(...checkSharingBehaviour(api));
+    // (ac) WR-01: the adoption ack pushes what was kept for the pending overlay, and each kept kind is kept.
+    const adoptPushes = functionBody(api, 'adoptPendingPushes');
+    if (!functionBody(api, 'adoptPendingOverlay').includes('adoptPendingPushes(')) {
+        failures.push('pending-overlay: adoptPendingOverlay does not call adoptPendingPushes -- prompts, bars and sharing reported before the ack are never pushed (37-REVIEW WR-01)');
+    }
+    for (const [need, what] of [['resendWebTabSharing(', 'sharing'], ['showBlockedPopupBar(', 'blocked popups'], ['pushDoorhanger(', 'prompts']]) {
+        if (!adoptPushes.includes(need)) {
+            failures.push(`pending-overlay: adoptPendingPushes does not push ${what} kept while the overlay was pending (37-REVIEW WR-01)`);
+        }
+    }
+    for (const fn of ['setBar', 'hungOverlay', 'showBlockedPopupBar']) {
+        const body = functionBody(api, fn);
+        if (!/isPendingOverlay\(|pendingContent\.values\(\)/.test(body)) {
+            failures.push(`pending-overlay: ${fn} drops a pending overlay -- its report is lost before the adoption ack (37-REVIEW WR-01)`);
+        }
+    }
 
     // (u) The bar host is page furniture inside the widget, outside the blocking layer, and the page rect starts below it.
     const webTab = stripComments(raw[WEB_TAB]);
@@ -839,7 +874,7 @@ function selfTest() {
         {
             // Post-review fix 2 reverted: the cap counts every queued record in the window.
             name: 'window-wide queue cap',
-            sources: { ...clean, [API]: clean[API].replace('.filter(r => r.tabId === tabId && r.queued);', '.filter(r => r.window === window && r.queued);') },
+            sources: { ...clean, [API]: clean[API].replace('.filter(r => r.browser === browser && r.queued);', '.filter(r => r.window === window && r.queued);') },
             expect: 'not the requesting tab alone',
         },
         {
@@ -867,6 +902,18 @@ function selfTest() {
             name: 'geo report replaces the camera state',
             sources: { ...clean, [API]: clean[API].replace('if (!host || !("webRTC" in sharingState)) {', 'if (!host) {').replace('const webRTC = merged.webRTC || {};', 'const webRTC = sharingState.webRTC || {};') },
             expect: 'location-grant-while-camera-shared',
+        },
+        {
+            // 37-REVIEW WR-01 reverted: the resend reads only the last pushed state, so a pending overlay's report is lost.
+            name: 'adoption resend ignores the pending state',
+            sources: { ...clean, [API]: clean[API].replace('sharingSent.get(entry.browser)?.state ?? (webRTC && ', 'sharingSent.get(entry.browser)?.state ?? (false && ') },
+            expect: 'pending-overlay-sharing',
+        },
+        {
+            // 37-REVIEW WR-01 reverted: the adoption ack pushes nothing kept for the pending overlay.
+            name: 'adoption pushes nothing kept while pending',
+            sources: { ...clean, [API]: clean[API].replace('  adoptPendingPushes(pending.browser, tabId, theiaBrowser.ownerGlobal);\n', '') },
+            expect: 'adoptPendingOverlay does not call adoptPendingPushes',
         },
         {
             // Post-review fix reverted: the duplicate check is keyed on the overlay only.
