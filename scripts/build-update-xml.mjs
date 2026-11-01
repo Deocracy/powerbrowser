@@ -23,8 +23,11 @@
 //  4. detailsURL. [urls] release_notes from configuration.toml. --details-url
 //     overrides it and must be https:.
 //  5. Patch URL. [urls] mar_origin, the release tag from
-//     powerbrowser/packaging/version/release.txt, and the MAR file name, joined as
-//     <mar_origin>/<tag>/<asset> (the form generate.mjs documents for marOrigin).
+//     powerbrowser/packaging/version/release.txt, and the PUBLISHED asset name, joined as
+//     <mar_origin>/<tag>/<asset> (the form generate.mjs documents for marOrigin). The asset is
+//     <app_basename>-<tag minus v>.<target token>.complete.mar, the versioned-mar name
+//     scripts/verify-release-asset-set.mjs derives; the token is the first Target key of the
+//     docs/RELEASING.md asset table. The local MAR file name never reaches the URL.
 //  6. Digest. The MAR bytes are read from disk. The sha512 and size come from
 //     buildUpdateXml, never typed.
 //
@@ -50,14 +53,16 @@
 //   node scripts/build-update-xml.mjs --check [--outdir <dir>]
 //   node scripts/build-update-xml.mjs --self-test
 
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildUpdateXml, parseUpdateXml } from './verify-mar-update-hop.mjs';
 import { UPDATE_CHANNEL, marOrigin, resolveConfig, updateChannel } from './generate.mjs';
+import { DOCS_REL, targetTokenOf } from './lib/channel-identity.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'build-update-xml';
@@ -67,6 +72,7 @@ const APP_INI_REL = 'objdir/dist/bin/application.ini';
 const CONFIG_STATUS_REL = 'objdir/config.status';
 const MAR_REL = '.mozbuild/mar-hop/nplus1.mar';
 const RELEASE_TXT_REL = 'powerbrowser/packaging/version/release.txt';
+const ASSET_SET_REL = 'scripts/verify-release-asset-set.mjs';
 const REQUIRED_SUBSTS = Object.freeze(['OS_TARGET', 'TARGET_XPCOM_ABI', 'MOZ_UPDATE_CHANNEL', 'MAR_CHANNEL_ID']);
 // The observed BUILD_TARGET rows. Each token is OS_TARGET + "_" + TARGET_XPCOM_ABI.
 const TARGETS = Object.freeze([Object.freeze({ os: 'Linux', abi: 'x86_64-gcc3' })]);
@@ -252,6 +258,11 @@ function runChecks(root, overrides = {}) {
     if (tag === null || !RELEASE_TAG.test(tag)) {
         fail(`${RELEASE_TXT_REL} must hold one release tag such as v153.5.1-1 (got ${JSON.stringify(tag)}). Next step: restore the file`);
     }
+    const docsText = readText(join(root, DOCS_REL));
+    const assetToken = targetTokenOf(docsText);
+    if (assetToken === null) {
+        fail(`${DOCS_REL} carries no Target key in its "Release asset names" table, so the published MAR asset name cannot be derived. Next step: restore the table`);
+    }
     const marBytes = existsSync(paths.mar) ? readFileSync(paths.mar) : null;
     if (marBytes === null) {
         fail(`${shown(paths.mar)} is absent, so the descriptor has no digest. Next step: produce the N-plus-1 MAR per the docs/BUILD.md packaging procedure, or pass --mar <path>`);
@@ -259,7 +270,9 @@ function runChecks(root, overrides = {}) {
     if (failures.length > 0) return none();
 
     // 6. Emit through the one shared emitter.
-    const marUrl = `${origin}/${tag}/${basename(paths.mar)}`;
+    // The published versioned-mar name (verify-release-asset-set.mjs expectedAssets), not the local file name.
+    const marAsset = `${config.identity.app_basename}-${tag.slice(1)}.${assetToken}.complete.mar`;
+    const marUrl = `${origin}/${tag}/${marAsset}`;
     const args = {
         marBytes,
         marUrl,
@@ -353,6 +366,8 @@ function iniFixture({ buildID = FIXTURE_BUILD_ID } = {}) {
 function makeFixture() {
     const dir = mkdtempSync(join(tmpdir(), 'build-update-xml-'));
     writeFileSync(join(dir, MANIFEST_REL), readFileSync(join(REPO_ROOT, MANIFEST_REL)));
+    mkdirSync(dirname(join(dir, DOCS_REL)), { recursive: true });
+    writeFileSync(join(dir, DOCS_REL), readFileSync(join(REPO_ROOT, DOCS_REL)));
     mkdirSync(dirname(join(dir, RELEASE_TXT_REL)), { recursive: true });
     writeFileSync(join(dir, RELEASE_TXT_REL), 'v153.5.1-1\n');
     mkdirSync(dirname(join(dir, MAR_REL)), { recursive: true });
@@ -399,6 +414,22 @@ function selfTest() {
         }
         console.log(`  ok  control: one descriptor, ${rel}, green`);
 
+        // The patch URL names the published asset: compared with what the release job's own derivation
+        // (verify-release-asset-set.mjs --expected) lists as versioned-mar, whatever the local MAR is called.
+        const manifest = join(scratch('build-update-xml-manifest-'), 'release-manifest.json');
+        writeFileSync(manifest, JSON.stringify({ release_key: 'v153.5.1-1' }));
+        const listed = spawnSync(process.execPath, [join(REPO_ROOT, ASSET_SET_REL), '--expected', '--manifest', manifest], { encoding: 'utf8' });
+        const published = listed.status === 0 ? listed.stdout.split('\n').map(l => l.split('\t')).find(([kind]) => kind === 'versioned-mar')?.[1] : undefined;
+        const renamed = join(scratch('build-update-xml-mar-'), 'some-other-name.mar');
+        writeFileSync(renamed, FIXTURE_MAR);
+        const other = runChecks(root, { texts: green, mar: renamed });
+        const wantUrl = `${marOrigin(resolved.config)}/v153.5.1-1/${published}`;
+        if (published === undefined || baseline.outputs[0].expect.url !== wantUrl || other.outputs[0]?.expect.url !== wantUrl) {
+            console.error(`${NAME}: --self-test FAIL -- the patch URL is ${baseline.outputs[0].expect.url} (local MAR renamed: ${other.outputs[0]?.expect.url}) but ${ASSET_SET_REL} lists versioned-mar ${published}, so it should be ${wantUrl}`);
+            return 1;
+        }
+        console.log(`  ok  patch URL names the published asset ${published}, whatever the local MAR is called`);
+
         // Byte-identity control: two independent runs write identical trees.
         const again = runChecks(root, { texts: green });
         const outA = scratch('build-update-xml-out-');
@@ -418,6 +449,7 @@ function selfTest() {
             ['application.ini with no BuildID', { texts: { ...green, [APP_INI_REL]: iniFixture({ buildID: null }) } }, APP_INI_REL, 'BuildID'],
             ['TARGET_XPCOM_ABI disagreeing with the table', { texts: { [CONFIG_STATUS_REL]: statusFixture({ abi: 'i686-gcc3', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'i686-gcc3'],
             ['channel flag given the MAR channel id', { texts: green, channel: marId }, CONFIG_STATUS_REL, marId],
+            ['docs/RELEASING.md without the asset table (no target token)', { texts: { ...green, [DOCS_REL]: '' } }, DOCS_REL, 'Release asset names'],
             ['--details-url not https', { texts: green, detailsURL: 'http://example.invalid/releases' }, '--details-url', 'http://example.invalid/releases'],
         ];
         for (const [name, overrides, file, value] of plants) {
@@ -441,7 +473,7 @@ function selfTest() {
         }
 
         if (failed > 0) return 1;
-        console.log(`${NAME}: --self-test PASS -- control green first, then five planted faults went red naming their file and value`);
+        console.log(`${NAME}: --self-test PASS -- control green first, then planted faults went red naming their file and value`);
         return 0;
     } finally {
         for (const d of dirs) rmSync(d, { recursive: true, force: true });
