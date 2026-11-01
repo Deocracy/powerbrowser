@@ -66,6 +66,27 @@
  *                       stock dialog (the control); the Theia frame's own
  *                       dirty-editor beforeunload shows the stock leave dialog
  *                       and no dialogRequest push is recorded for it.
+ *   password-save    -- (37-04, D-07) a login form submit shows the stock save
+ *                       doorhanger with its fields filled by the prompter (read
+ *                       chrome-side); the stock Save stores the login (read back
+ *                       through Services.logins); no credential reaches a log;
+ *   password-update  -- (37-04) a changed password shows the stock doorhanger and
+ *                       its stock Update replaces the stored password;
+ *   popup-block      -- (37-04, D-08, D-12) a gesture-less window.open is blocked
+ *                       and the tab's notificationBar (blocked-popup) shows
+ *                       inside the web tab widget with the page rect shrunk below
+ *                       it; the bar's Allow opens the stored popup as a web tab
+ *                       right after its opener (the Phase 36 openAdoptedWebTab
+ *                       path; a binary without it is a broken instrument), and no
+ *                       popup permission is written, read back through the same
+ *                       reader that sees a stock location grant (the control);
+ *   hung-script      -- (37-04) a page loop past dom.max_script_run_time shows the
+ *                       hung-script bar; Keep waiting hides it and it comes back
+ *                       after the wait period; Stop script ends the loop;
+ *   protocol-handler -- (37-04, N2) registerProtocolHandler shows the
+ *                       protocol-handler bar; Add stores the handler (read back
+ *                       through the handler service); Don't allow on a second
+ *                       scheme stores nothing.
  *
  * --self-test runs a clean control session per target scenario, then one
  * session per planted fault, each required to go red naming its drift.
@@ -112,6 +133,25 @@ const BEFOREUNLOAD_PREF = 'dom.require_user_interaction_for_beforeunload';
 const VERDICT = '.planning/probes/prompt-probe-verdict.json';
 const EVIDENCE_DIR = '.planning/probes/prompt-probe';
 const DIALOG_KINDS = ['alert', 'confirm', 'prompt', 'leave', 'auth'];
+/** 37-04 prefs the bar and password scenarios set; staticAudit derives each from upstream. */
+const CAPTURE_PREF = 'signon.userInputRequiredToCapture.enabled';
+const HANG_PREF = 'dom.max_script_run_time';
+const WAIT_PREF = 'browser.hangNotification.waitPeriod';
+/** Test-only login values; never a real account. The log scans look for these exact strings. */
+const LOGIN = { user: 'pb-login-user', pass: 'pb-login-pass-1', pass2: 'pb-login-pass-2' };
+const PASSWORD_ID = 'password';
+const UPSTREAM_PROMPTER = 'upstream/toolkit/components/passwordmgr/LoginManagerPrompter.sys.mjs';
+const UPSTREAM_ALL_JS = 'upstream/modules/libpref/init/all.js';
+const UPSTREAM_HANG_MONITOR = 'upstream/browser/modules/ProcessHangMonitor.sys.mjs';
+const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
+const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
+const CREDENTIAL_LOGGED = 'credential value in log';
+const FRAME_URL_OPENED = 'Allow opened a frame-supplied URL';
+const BAR_COVERS = 'bar covers page content';
+const NOT_NEXT = 'popup not adopted next to its opener';
+const STOP_IGNORED = 'Stop script did not terminate the loop';
+const STOCK_PROTOCOL = 'stock protocol bar path reached: getNotificationBox TypeError';
+
 /** Test-only Basic credentials for the harness's own 401 server; never a real account. */
 const AUTH = { user: 'pb-probe', pass: 'pb-probe-pass' };
 /** Set by main() for a live `--scenario dialog-probe` run only; self-test sessions never write the verdict. */
@@ -131,6 +171,15 @@ const PREFS = {
     'media.navigator.permission.disabled': false,
     // 37-03: a page's beforeunload shows the leave dialog without a prior user gesture, so the leave kind is reproducible.
     [BEFOREUNLOAD_PREF]: false,
+    // 37-04: a scripted submit is captured (no typed input), a gesture-less window.open is blocked and announced, a loop
+    // is reported hung after three seconds without waiting for input, and Keep waiting holds for three seconds.
+    'signon.rememberSignons': true,
+    [CAPTURE_PREF]: false,
+    'dom.disable_open_during_load': true,
+    'privacy.popups.showBrowserMessage': true,
+    [HANG_PREF]: 3,
+    'dom.max_script_run_time.require_critical_input': false,
+    [WAIT_PREF]: 3000,
 };
 
 /** Page-side requests: each lands on window.__pbOut[kind] ('pending', 'granted', 'denied'); `id` is its stock notification id. */
@@ -144,7 +193,15 @@ const REQUESTS = {
     screen: { id: WEBRTC_ID, start: "navigator.mediaDevices.getDisplayMedia({ video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
 };
 
-const PAGES = Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map(p => [`/${p}`, { title: `Prompt ${p}`, body: `<p>prompt page ${p}</p>` }]));
+const PAGES = {
+    ...Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map(p => [`/${p}`, { title: `Prompt ${p}`, body: `<p>prompt page ${p}</p>` }])),
+    // 37-04: a login form (GET, so the fixture server serves the submit target) and plain pages the bar scenarios drive.
+    '/login': { title: 'Login', body: '<form id="f" action="/a" method="get"><input id="u" name="u" autocomplete="username"><input id="p" name="p" type="password" autocomplete="current-password"><button>Sign in</button></form>' },
+    '/opener': { title: 'Opener', body: '<p>popup opener</p>' },
+    '/hang': { title: 'Hang', body: '<p>hang page</p>' },
+    '/proto': { title: 'Protocol', body: '<p>protocol page</p>' },
+    '/handler': { title: 'Handler', body: '<p>handler</p>' },
+};
 
 /** BROKEN INSTRUMENT when there is no built binary carrying the current patch 050; null when there is. */
 function preflight() {
@@ -905,6 +962,289 @@ async function scenarioBeforeunloadScope(app, fx, plant) {
     return relayed.length ? `${THEIA_RELAYED}: ${JSON.stringify(relayed[0])}` : null;
 }
 
+/** The action order each bar kind renders its buttons in, derived from web-tab.ts at load (never hand-kept). */
+const BAR_ACTIONS = Object.fromEntries([...(/export const NOTIFICATION_BAR_ACTIONS = \{([\s\S]*?)\} as const;/.exec(readFileSync(join(REPO_ROOT, WEB_TAB), 'utf8'))?.[1] ?? '')
+    .matchAll(/'([\w-]+)':\s*\[([^\]]*)\]/g)].map(m => [m[1], [...m[2].matchAll(/'([\w-]+)'/g)].map(a => a[1])]));
+
+const isBar = (tabId, barKind, visible) => p => p && p.kind === 'notificationBar' && p.tabId === tabId && p.barKind === barKind && p.visible === visible;
+
+/** Theia's view of tab `tabId`'s bars: kind, fields and button labels, from the widget the frontend renders. */
+function barView(app, tabId) {
+    return probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+        if (!w) return null;
+        return [...w.node.querySelectorAll('.pb-web-tab-bar')].map((row, i) => ({ barKind: [...w.notificationBars.values()][i]?.barKind ?? null, buttons: [...row.querySelectorAll('button')].map(b => b.textContent) }));`);
+}
+
+/** Clicks the button for `action` on tab `tabId`'s `barKind` bar: the real widget path, which sends webTabBarAction. */
+function clickBar(app, tabId, barKind, action) {
+    return probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+        const bars = w ? [...w.notificationBars.values()] : [];
+        const at = bars.findIndex(b => b.barKind === ${JSON.stringify(barKind)});
+        const row = at === -1 ? null : w.node.querySelectorAll('.pb-web-tab-bar')[at];
+        const labels = ${JSON.stringify(BAR_ACTIONS[barKind] ?? [])};
+        const shown = row ? [...row.querySelectorAll('button')] : [];
+        // Buttons render in table order, skipping an action the copy leaves unlabelled (Allow with no popup left).
+        const offered = labels.filter((a, i) => a !== 'allow-popup' || shown.length === labels.length);
+        const button = shown[offered.indexOf(${JSON.stringify(action)})];
+        if (!button) return 'no ' + ${JSON.stringify(action)} + ' button on the ' + ${JSON.stringify(barKind)} + ' bar';
+        button.click();
+        return 'clicked';`);
+}
+
+/** The bar host height and how far below the widget's top the overlay starts (both shell-window CSS pixels). */
+async function barGeometry(app, tabId) {
+    const theia = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+        if (!w) return null;
+        const host = w.node.querySelector('.pb-web-tab-bars');
+        return { nodeTop: w.node.getBoundingClientRect().top, bars: host ? host.offsetHeight : 0 };`);
+    const overlay = await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); const f = document.getElementById('powerbrowser-content');
+        if (!o || !f) return null;
+        return { top: o.getBoundingClientRect().top - f.getBoundingClientRect().top };`);
+    return theia && overlay ? { bars: theia.bars, delta: Math.round(overlay.top - theia.nodeTop) } : null;
+}
+
+/** Any console message carrying a test credential: a credential reached a log. */
+function credentialLogged(app) {
+    return inChrome(app, `return Services.console.getMessageArray().some(m => { const t = String(m.message || m.errorMessage || ''); return ${JSON.stringify([LOGIN.user, LOGIN.pass, LOGIN.pass2])}.some(v => t.includes(v)); });`);
+}
+
+/** The stored logins for the fixture origin, username and password per row (harness-side read-back only). */
+function storedLogins(app, origin) {
+    return inChrome(app, `return Services.logins.getAllLogins().then(all => all.filter(l => l.origin === ${JSON.stringify(origin)}).map(l => ({ u: l.username, p: l.password })));`);
+}
+
+/** Harness-side teardown: the fixture origin's logins go, so the next run starts clean. */
+function forgetLogins(app, origin) {
+    return inChrome(app, `return Services.logins.getAllLogins().then(all => { for (const l of all) { if (l.origin === ${JSON.stringify(origin)}) Services.logins.removeLogin(l); } return true; });`).catch(() => false);
+}
+
+/** Fills the fixture form page-side and submits it with a script submit (the capture pref allows it without typing). */
+function submitLogin(app, page, pass) {
+    return app.evaluateIn(page.ctx, `(() => { document.getElementById('u').value = ${JSON.stringify(LOGIN.user)}; document.getElementById('p').value = ${JSON.stringify(pass)}; document.getElementById('f').requestSubmit(); return true; })()`);
+}
+
+/** The stock password template's field values as the prompter wrote them, read chrome-side; only whether they match. */
+function templateFilled(app, pass) {
+    return inChrome(app, `const u = document.getElementById('password-notification-username'); const p = document.getElementById('password-notification-password');
+        return { user: !!u && u.value === ${JSON.stringify(LOGIN.user)}, pass: !!p && p.value === ${JSON.stringify(pass)}, editable: !!u && !u.hasAttribute('readonly') && !!p && !p.hasAttribute('readonly') };`);
+}
+
+async function scenarioPasswordSave(app, fx, plant) {
+    const origin = fx.origin;
+    try {
+        const page = await openPage(app, fx, '/login');
+        await submitLogin(app, page, LOGIN.pass);
+        if (!await waitInPanel(app, page.tabId, PASSWORD_ID)) {
+            return 'no stock password doorhanger after the login submit';
+        }
+        const filled = await templateFilled(app, LOGIN.pass);
+        if (!filled.user || !filled.pass || !filled.editable) {
+            return `the stock template fields are not prefilled and editable (${JSON.stringify(filled)})`;
+        }
+        if (plant === 'credential-leak') {
+            // The plant: a username reaching the chrome log, as a leaking log call would.
+            await inChrome(app, `Services.console.logStringMessage('[pw] saved ' + ${JSON.stringify(LOGIN.user)}); return true;`);
+        }
+        await answerStock(app, page.tabId, { id: PASSWORD_ID });
+        const stored = await pollFor(async () => ((await storedLogins(app, origin)).some(l => l.u === LOGIN.user && l.p === LOGIN.pass) ? true : null), 8000, 'the saved login').catch(() => false);
+        if (!stored) {
+            return 'stock Save did not store the login (Services.logins read-back)';
+        }
+        return await credentialLogged(app) ? CREDENTIAL_LOGGED : null;
+    } finally {
+        await forgetLogins(app, origin);
+    }
+}
+
+async function scenarioPasswordUpdate(app, fx, plant) {
+    const origin = fx.origin;
+    try {
+        // The stored login the update replaces, written harness-side.
+        await inChrome(app, `const info = Cc['@mozilla.org/login-manager/loginInfo;1'].createInstance(Ci.nsILoginInfo);
+            info.init(${JSON.stringify(origin)}, ${JSON.stringify(origin)}, null, ${JSON.stringify(LOGIN.user)}, ${JSON.stringify(LOGIN.pass)}, 'u', 'p');
+            return Services.logins.addLoginAsync(info).then(() => true);`);
+        const page = await openPage(app, fx, '/login');
+        await submitLogin(app, page, LOGIN.pass2);
+        if (!await waitInPanel(app, page.tabId, PASSWORD_ID)) {
+            return 'no stock password doorhanger after a changed password';
+        }
+        await answerStock(app, page.tabId, { id: PASSWORD_ID, skip: plant === 'update-dropped' });
+        const updated = await pollFor(async () => {
+            const rows = await storedLogins(app, origin);
+            return rows.length === 1 && rows[0].p === LOGIN.pass2 ? true : null;
+        }, 8000, 'the updated login').catch(() => false);
+        if (!updated) {
+            return 'stock Update did not replace the stored password';
+        }
+        return await credentialLogged(app) ? CREDENTIAL_LOGGED : null;
+    } finally {
+        await forgetLogins(app, origin);
+    }
+}
+
+/** Index of each web tab widget in the main area, by tab id, in the order the user sees them. */
+function mainOrder(app) {
+    return probe(app, `return get('ApplicationShell').getWidgets('main').filter(w => typeof w.tabId === 'string').map(w => ({ tabId: w.tabId, url: w.url }));`);
+}
+
+async function scenarioPopupBlock(app, fx, plant) {
+    if (!await inChrome(app, `return typeof ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs').PowerBrowserAPI.openAdoptedWebTab === 'function';`)) {
+        return `${BROKEN} this binary has no PowerBrowserAPI.openAdoptedWebTab (Phase 36 not merged); the Allow falls back to a stock tab and the adoption cannot be scored`;
+    }
+    const opener = await openPage(app, fx, '/opener');
+    const from = (await pushes(app)).length;
+    await app.evaluateIn(opener.ctx, `(() => { window.__pbPopup = window.open(${JSON.stringify(fx.url('/b'))}); return true; })()`);
+    if (await waitForPush(app, isBar(opener.tabId, 'blocked-popup', true), { from }) < 0) {
+        return 'no notificationBar push (blocked-popup) for a blocked window.open';
+    }
+    const view = await pollFor(async () => ((await barView(app, opener.tabId)) ?? []).find(b => b.barKind === 'blocked-popup') ?? null, 5000, 'the blocked-popup bar').catch(() => null);
+    if (!view) {
+        return 'the blocked-popup bar is not rendered inside the web tab widget';
+    }
+    if (plant === 'bar-covers-page') {
+        // The plant: an unmeasured bar host (display: contents has no box), so publish() cannot shrink the page rect.
+        await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(opener.tabId)}); w.node.querySelector('.pb-web-tab-bars').style.display = 'contents'; w.publish(); return true;`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const geometry = await barGeometry(app, opener.tabId);
+    if (!geometry || geometry.delta <= 0 || Math.abs(geometry.delta - geometry.bars) > 1) {
+        return `${BAR_COVERS} (${JSON.stringify(geometry)})`;
+    }
+    // The control for the D-12 reader: a stock location grant written through the stock doorhanger is visible to it.
+    await startGeo(app, opener);
+    if (!await waitInPanel(app, opener.tabId)) {
+        return 'no stock location doorhanger (the permission reader control)';
+    }
+    await answerStock(app, opener.tabId, { remember: true });
+    const reader = `const { SitePermissions } = ChromeUtils.importESModule('resource:///modules/SitePermissions.sys.mjs');
+        const o = overlayOf(${JSON.stringify(opener.tabId)});
+        return { ids: SitePermissions.getAllForBrowser(o).map(p => p.id), popup: Services.perms.testPermissionFromPrincipal(o.contentPrincipal, 'popup') === Services.perms.ALLOW_ACTION };`;
+    const before = await inChrome(app, reader);
+    if (!before.ids.includes(GEO_ID)) {
+        return `${BROKEN} the permission reader does not see a stock location grant, so an empty popup entry would prove nothing`;
+    }
+    const clicked = await clickBar(app, opener.tabId, 'blocked-popup', 'allow-popup');
+    if (clicked !== 'clicked') {
+        return clicked;
+    }
+    if (plant === 'allow-loads-frame-url') {
+        // Simulated symptom: what an Allow that took a frame-supplied URL would leave behind (a tab at the frame's URL).
+        await openWebTab(app, fx.url('/e'));
+    }
+    const adopted = await pollFor(async () => ((await mainOrder(app)).find(w => String(w.url).endsWith('/b')) ? true : null), 8000, 'the adopted popup').catch(() => false);
+    if (!adopted) {
+        return 'the bar Allow opened no web tab for the stored popup';
+    }
+    if (plant === 'adopt-next-to-opener-failed') {
+        // Simulated symptom: the adopted tab moved to the end of the main area, away from its opener.
+        await probe(app, `const shell = get('ApplicationShell'); const ws = shell.getWidgets('main'); const t = ws.find(w => String(w.url).endsWith('/b')); shell.addWidget(t, { area: 'main', mode: 'tab-after', ref: ws[ws.length - 1] }); return true;`);
+        await openWebTab(app, fx.url('/c'));
+    }
+    const order = await mainOrder(app);
+    if (order.some(w => String(w.url).endsWith('/e'))) {
+        return FRAME_URL_OPENED;
+    }
+    const at = order.findIndex(w => w.tabId === opener.tabId);
+    if (!String(order[at + 1]?.url ?? '').endsWith('/b')) {
+        return `${NOT_NEXT} (${order.map(w => w.url).join(', ')})`;
+    }
+    const after = await inChrome(app, reader);
+    try {
+        await forgetGrant(app, opener.tabId);
+    } catch { /* teardown */ }
+    return after.popup || after.ids.includes('popup') ? 'the bar Allow wrote a popup permission' : null;
+}
+
+/** Starts a page loop past the hang threshold; it ends on its own after 60 s or when its script is terminated. */
+function startHang(app, page) {
+    return app.evaluateIn(page.ctx, `(() => { setTimeout(() => { window.__pbHang = 'running'; const end = Date.now() + 60000; while (Date.now() < end) { /* hung */ } window.__pbHang = 'finished'; }, 0); return true; })()`);
+}
+
+async function scenarioHungScript(app, fx, plant) {
+    const page = await openPage(app, fx, '/hang');
+    let from = (await pushes(app)).length;
+    await startHang(app, page);
+    if (await waitForPush(app, isBar(page.tabId, 'hung-script', true), { from, timeoutMs: 30000 }) < 0) {
+        return 'no notificationBar push (hung-script) for a page past the hang threshold';
+    }
+    from = (await pushes(app)).length;
+    if (await clickBar(app, page.tabId, 'hung-script', 'wait-longer') !== 'clicked') {
+        return 'no Keep waiting button on the hung-script bar';
+    }
+    if (await waitForPush(app, isBar(page.tabId, 'hung-script', false), { from }) < 0) {
+        return 'Keep waiting did not hide the hung-script bar';
+    }
+    if (await waitForPush(app, isBar(page.tabId, 'hung-script', true), { from, timeoutMs: 20000 }) < 0) {
+        return 'the hung-script bar did not come back after the wait period (Keep waiting did not re-arm)';
+    }
+    if (plant === 'hung-stop-ignored') {
+        // Simulated symptom: a Stop whose terminateScript never runs (a stale token chrome answers unknown-bar for).
+        await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(page.tabId)}); await w.barAction('bar-0', 'stop-script'); return true;`);
+    } else if (await clickBar(app, page.tabId, 'hung-script', 'stop-script') !== 'clicked') {
+        return 'no Stop script button on the hung-script bar';
+    }
+    const ended = await pollFor(async () => {
+        // A still-hung page never answers, so each read gives up after a second instead of blocking the poll.
+        const v = await Promise.race([app.evaluateIn(page.ctx, 'window.__pbHang').catch(() => null), new Promise(resolve => setTimeout(() => resolve(null), 1000))]);
+        return v === 'running' ? true : null;
+    }, 8000, 'a responsive page after Stop').catch(() => false);
+    return ended ? null : STOP_IGNORED;
+}
+
+/** The web handlers stored for `scheme` (uriTemplate per row), read through the stock handler service. */
+function storedHandlers(app, scheme) {
+    return inChrome(app, `const info = Cc['@mozilla.org/uriloader/external-protocol-service;1'].getService(Ci.nsIExternalProtocolService).getProtocolHandlerInfo(${JSON.stringify(scheme)});
+        const out = []; const apps = info.possibleApplicationHandlers;
+        for (let i = 0; i < apps.length; i++) { const a = apps.queryElementAt(i, Ci.nsIHandlerApp); if (a instanceof Ci.nsIWebHandlerApp) out.push(a.uriTemplate); }
+        return out;`);
+}
+
+/** Harness-side teardown: the fixture's handlers go from the handler service. */
+function forgetHandlers(app, schemes) {
+    return inChrome(app, `const eps = Cc['@mozilla.org/uriloader/external-protocol-service;1'].getService(Ci.nsIExternalProtocolService);
+        const hs = Cc['@mozilla.org/uriloader/handler-service;1'].getService(Ci.nsIHandlerService);
+        for (const s of ${JSON.stringify(schemes)}) { const info = eps.getProtocolHandlerInfo(s); if (hs.exists(info)) hs.remove(info); }
+        return true;`).catch(() => false);
+}
+
+async function scenarioProtocolHandler(app, fx, plant) {
+    const schemes = ['web+pbadd', 'web+pbdeny'];
+    try {
+        const page = await openPage(app, fx, '/proto');
+        if (plant === 'protocol-stock-path-unhooked') {
+            // The plant: the registrar wrap is put back to the stock method, so the stock notification-box path runs.
+            await inChrome(app, `const proto = ChromeUtils.importESModule('resource:///modules/WebProtocolHandlerRegistrar.sys.mjs').WebProtocolHandlerRegistrar.prototype;
+                if (proto.registerProtocolHandler.stock) proto.registerProtocolHandler = proto.registerProtocolHandler.stock; return true;`);
+        }
+        const register = scheme => app.evaluateIn(page.ctx, `(() => { navigator.registerProtocolHandler(${JSON.stringify(scheme)}, location.origin + '/handler?u=%s'); return true; })()`);
+        let from = (await pushes(app)).length;
+        await register(schemes[0]);
+        if (await waitForPush(app, isBar(page.tabId, 'protocol-handler', true), { from, timeoutMs: plant ? 4000 : 15000 }) < 0) {
+            if (await consoleHas(app, 'getNotificationBox')) {
+                return STOCK_PROTOCOL;
+            }
+            return 'no notificationBar push (protocol-handler) for registerProtocolHandler';
+        }
+        if (await clickBar(app, page.tabId, 'protocol-handler', 'add-handler') !== 'clicked') {
+            return 'no Add button on the protocol-handler bar';
+        }
+        const added = await pollFor(async () => ((await storedHandlers(app, schemes[0])).some(t => t.startsWith(fx.origin)) ? true : null), 5000, 'the stored handler').catch(() => false);
+        if (!added) {
+            return 'Add did not store the handler (handler service read-back)';
+        }
+        from = (await pushes(app)).length;
+        await register(schemes[1]);
+        if (await waitForPush(app, isBar(page.tabId, 'protocol-handler', true), { from }) < 0) {
+            return 'no protocol-handler bar for the second scheme';
+        }
+        await clickBar(app, page.tabId, 'protocol-handler', 'deny-handler');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return (await storedHandlers(app, schemes[1])).length ? "Don't allow stored a handler" : null;
+    } finally {
+        await forgetHandlers(app, schemes);
+    }
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
@@ -917,6 +1257,11 @@ const SCENARIOS = {
     dialog: scenarioDialog,
     'stop-repeat': scenarioStopRepeat,
     'beforeunload-scope': scenarioBeforeunloadScope,
+    'password-save': scenarioPasswordSave,
+    'password-update': scenarioPasswordUpdate,
+    'popup-block': scenarioPopupBlock,
+    'hung-script': scenarioHungScript,
+    'protocol-handler': scenarioProtocolHandler,
 };
 
 /** Each plant runs its target scenario with one thing wrong and must go red naming `expect`. */
@@ -935,6 +1280,13 @@ const PLANTS = [
     { plant: 'push-traffic-frozen', target: 'dialog', expect: 'IDE push traffic stopped while dialog open' },
     { plant: 'cross-tab-leak', target: 'stop-repeat', expect: 'suppression leaked across tabs' },
     { plant: 'theia-beforeunload-relayed', target: 'beforeunload-scope', expect: 'Theia-frame beforeunload relayed' },
+    { plant: 'credential-leak', target: 'password-save', expect: 'credential value in log' },
+    { plant: 'update-dropped', target: 'password-update', expect: 'stock Update did not replace the stored password' },
+    { plant: 'allow-loads-frame-url', target: 'popup-block', expect: 'Allow opened a frame-supplied URL' },
+    { plant: 'bar-covers-page', target: 'popup-block', expect: 'bar covers page content' },
+    { plant: 'adopt-next-to-opener-failed', target: 'popup-block', expect: 'popup not adopted next to its opener' },
+    { plant: 'hung-stop-ignored', target: 'hung-script', expect: 'Stop script did not terminate the loop' },
+    { plant: 'protocol-stock-path-unhooked', target: 'protocol-handler', expect: 'stock protocol bar path reached: getNotificationBox TypeError' },
 ];
 
 async function runSession(name, plant) {
@@ -1020,6 +1372,40 @@ function staticAudit() {
     }
     if (!/group->SetAreDialogsEnabled\(false\)/.test(outer)) {
         failures.push(`${UPSTREAM_OUTER_WINDOW} no longer disables dialogs per browsing-context group; stop-repeat's new-group control assumes a scope upstream does not use`);
+    }
+    // 37-04: the names the password and bar scenarios read, derived from the tree and upstream.
+    const prompter = readFileSync(join(REPO_ROOT, UPSTREAM_PROMPTER), 'utf8');
+    if (!prompter.includes(`const notificationID = "${PASSWORD_ID}";`)) {
+        failures.push(`${UPSTREAM_PROMPTER} no longer shows its doorhanger as "${PASSWORD_ID}"; the password scenarios wait for a notification upstream does not show`);
+    }
+    for (const id of ['password-notification-username', 'password-notification-password']) {
+        if (!markup.includes(`id="${id}"`) || !prompter.includes(`"${id}"`)) {
+            failures.push(`#${id} is missing from ${XHTML} or no longer read by ${UPSTREAM_PROMPTER}; templateFilled reads a field the prompter does not fill`);
+        }
+    }
+    if (!readFileSync(join(REPO_ROOT, UPSTREAM_ALL_JS), 'utf8').includes(`pref("${CAPTURE_PREF}", true);`)) {
+        failures.push(`${UPSTREAM_ALL_JS} no longer defaults ${CAPTURE_PREF}; the scripted login submit relies on turning it off`);
+    }
+    const prefList = readFileSync(join(REPO_ROOT, UPSTREAM_PREFS), 'utf8');
+    for (const name of [HANG_PREF, 'dom.max_script_run_time.require_critical_input', 'dom.disable_open_during_load']) {
+        if (!prefList.includes(`- name: ${name}\n`)) {
+            failures.push(`${UPSTREAM_PREFS} has no ${name}; a bar scenario sets a pref upstream does not read`);
+        }
+    }
+    if (!readFileSync(join(REPO_ROOT, UPSTREAM_HANG_MONITOR), 'utf8').includes(`"${WAIT_PREF}"`)) {
+        failures.push(`${UPSTREAM_HANG_MONITOR} no longer reads ${WAIT_PREF}; the Keep waiting re-arm timing is not the stock one`);
+    }
+    const api = readFileSync(join(REPO_ROOT, API), 'utf8');
+    if (!api.includes(`"${WAIT_PREF}"`)) {
+        failures.push(`${API} does not read ${WAIT_PREF}; Keep waiting does not use the stock wait period`);
+    }
+    if (!/wrapped\.stock = stock;/.test(api)) {
+        failures.push(`${API} no longer keeps the stock registrar method on the wrap; the protocol-stock-path-unhooked plant cannot apply`);
+    }
+    for (const barKind of ['blocked-popup', 'hung-script', 'protocol-handler']) {
+        if (!BAR_ACTIONS[barKind]) {
+            failures.push(`${WEB_TAB} NOTIFICATION_BAR_ACTIONS has no ${barKind}; clickBar cannot find that bar's buttons`);
+        }
     }
     if (!(PREFS[BEFOREUNLOAD_PREF] === false)) {
         failures.push(`PREFS does not turn ${BEFOREUNLOAD_PREF} off; the leave kind needs a gesture the harness never gives`);
