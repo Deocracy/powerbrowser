@@ -382,6 +382,9 @@ jobs:
   # the mar tool `mach repackage mar` calls). Without the Azure variables it fails closed before anything is minted
   # and hands nothing off. It does not publish: joining the Windows assets to the one Release publish and the
   # descriptor commit waits on the Windows row of the docs/RELEASING.md asset table (stage windows-unsigned).
+  # It attests nothing: the bytes it signs were built on legion, and actions/attest-build-provenance would name
+  # this hosted job as their builder, a claim this job cannot make. Compromising legion is therefore equivalent
+  # to compromising the Windows signing identity (docs/RELEASING.md, "Windows signing (SEC-12)").
   sign-windows:
     needs: build-windows
     if: needs.build-windows.outputs.build == 'true'
@@ -390,8 +393,7 @@ jobs:
     environment: release
     permissions:
       contents: read # checkout and read-only gh api; this job publishes nothing
-      id-token: write # the Azure OIDC sign-in and the provenance attestation
-      attestations: write # the provenance attestation of the signed Windows files
+      id-token: write # the Azure OIDC sign-in, nothing else
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
@@ -481,33 +483,41 @@ jobs:
           name: release-windows
           path: windows
 
-      # Zip entries are refused when absolute, when they climb out with .., when they are symlinks, or when the
-      # zip has more than one top directory (the installer's package name).
-      - name: Admit the staged zip and the setup stub, and unpack the zip
+      # The zip name and its top directory are DERIVED from this tree (scripts/win-sign-list.mjs --expected-base:
+      # configuration.toml's app basename and ESR version) and the artifact must match them; nothing the artifact
+      # names reaches GITHUB_OUTPUT. Zip entries are refused unless every name matches ^[A-Za-z0-9._/-]+$ with no
+      # .. segment and no leading slash, when they are symlinks, or when the top directory is not the derived one.
+      - name: Admit the staged zip and the setup stub against the tree-derived names, and unpack the zip
         id: inputs
         run: |
           set -euo pipefail
+          IFS=$'\t' read -r WANT_BASE WANT_TOP < <(node scripts/win-sign-list.mjs --expected-base)
+          [[ "$WANT_BASE" =~ ^[A-Za-z0-9._-]+$ && "$WANT_TOP" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::the tree did not yield a plain package name; nothing is signed" >&2; exit 1; }
           shopt -s nullglob
           ZIPS=(windows/*.zip)
-          [ "${#ZIPS[@]}" -eq 1 ] && [ -s windows/setup.exe ] || { echo "::error::the Windows artifact does not hold exactly one staged zip and a setup.exe stub; nothing is signed. Next step: re-dispatch so build-windows uploads both" >&2; exit 1; }
+          if [ "${#ZIPS[@]}" -ne 1 ] || [ "${ZIPS[0]}" != "windows/$WANT_BASE.zip" ] || [ ! -s windows/setup.exe ]; then
+            FOUND="$(for z in "${ZIPS[@]}"; do printf '%q ' "$(basename "$z")"; done)"
+            echo "::error::the Windows artifact holds the zip(s) ${FOUND:-none} and the setup stub $( [ -s windows/setup.exe ] && echo present || echo absent ), where this tree expects exactly $WANT_BASE.zip and a setup.exe; nothing is signed. Next step: re-dispatch from the commit whose build-windows produced this artifact" >&2
+            exit 1
+          fi
           PKG="$RUNNER_TEMP/pkg"
           rm -rf "$PKG"; mkdir -p "$PKG"
-          TOP="$(python3 - "${ZIPS[0]}" "$PKG" <<'PY'
-          import stat, sys, zipfile
+          python3 - "windows/$WANT_BASE.zip" "$PKG" "$WANT_TOP" <<'PY'
+          import re, stat, sys, zipfile
           z = zipfile.ZipFile(sys.argv[1])
-          tops = set()
+          want_top = sys.argv[3]
+          ok_name = re.compile(r'^[A-Za-z0-9._/-]+$')
+          ok_top = re.compile(r'^[A-Za-z0-9._-]+$')
           for i in z.infolist():
               n = i.filename
-              if n.startswith('/') or '\\' in n or '..' in n.split('/') or stat.S_ISLNK(i.external_attr >> 16):
-                  sys.exit(f"refused zip entry {n!r}")
-              tops.add(n.split('/')[0])
-          if len(tops) != 1:
-              sys.exit(f"the zip has {len(tops)} top directories, not one")
+              if not ok_name.match(n) or n.startswith('/') or '..' in n.split('/') or stat.S_ISLNK(i.external_attr >> 16):
+                  sys.exit(f"refused zip entry {n!r}: only [A-Za-z0-9._/-] names, no .. segment, no leading slash and no symlink")
+              top = n.split('/')[0]
+              if not ok_top.match(top) or top != want_top:
+                  sys.exit(f"refused zip entry {n!r}: its top directory is not {want_top!r}")
           z.extractall(sys.argv[2])
-          print(tops.pop())
           PY
-          )"
-          { echo "zip=${ZIPS[0]}"; echo "base=$(basename "${ZIPS[0]}" .zip)"; echo "top=$TOP"; echo "pkg=$PKG"; } >> "$GITHUB_OUTPUT"
+          { echo "base=$WANT_BASE"; echo "top=$WANT_TOP"; echo "pkg=$PKG"; } >> "$GITHUB_OUTPUT"
 
       - name: Install the NSS tools, the signmar build dependencies, the Java runtime for jsign and 7-Zip for the installer
         run: |
@@ -544,6 +554,19 @@ jobs:
           bash scripts/fetch-upstream.sh
           bash scripts/apply-patches.sh
 
+      # The files to sign are the PE files of the staged tree that the pinned package manifest names (set
+      # comparison: an extra PE file or a missing unconditional one stops the job naming it); never a find over
+      # whatever legion produced. The list stays in a file; nothing from it reaches GITHUB_OUTPUT.
+      - name: Derive the inner PE files to sign from the pinned package manifest and compare them with the staged tree
+        id: sign_list
+        env:
+          PKG: ${{ steps.inputs.outputs.pkg }}
+          TOP: ${{ steps.inputs.outputs.top }}
+        run: |
+          set -euo pipefail
+          node scripts/win-sign-list.mjs --list --pkg "$PKG/$TOP" --manifest upstream/browser/installer/package-manifest.in > "$RUNNER_TEMP/sign-list.txt"
+          wc -l < "$RUNNER_TEMP/sign-list.txt"
+
       # Directly before the first signature, after every gate above has passed.
       - name: Sign in to Azure over OIDC (no stored secret)
         id: azure_login
@@ -553,13 +576,14 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # The inner PE files: every .exe and .dll of the staged tree except the vendor-signed Node runtime, plus the
-      # setup.exe stub the installer wraps. The access token lives in this step's shell only.
+      # The inner PE files: the derived list (sign_list), plus the setup.exe stub the installer wraps. The access
+      # token lives in this step's shell only.
       - name: Sign the inner PE files with jsign (Azure Artifact Signing), then rezip the staged tree
         id: inner_sign
         env:
           JSIGN: ${{ steps.jsign.outputs.jar }}
           PKG: ${{ steps.inputs.outputs.pkg }}
+          TOP: ${{ steps.inputs.outputs.top }}
           BASE: ${{ steps.inputs.outputs.base }}
           AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
@@ -569,8 +593,10 @@ jobs:
           AZURE_SIGNING_TOKEN="$(az account get-access-token --resource https://codesigning.azure.net --query accessToken -o tsv)"
           echo "::add-mask::$AZURE_SIGNING_TOKEN"
           export AZURE_SIGNING_TOKEN
-          mapfile -t INNER < <(find "$PKG" -type f \( -iname '*.exe' -o -iname '*.dll' \) ! -path '*/node/*' | sort)
-          [ "${#INNER[@]}" -gt 0 ] || { echo "::error::the staged zip holds no .exe or .dll to sign; nothing is signed" >&2; exit 1; }
+          mapfile -t REL < "$RUNNER_TEMP/sign-list.txt"
+          [ "${#REL[@]}" -gt 0 ] || { echo "::error::the derived signing list is empty; nothing is signed" >&2; exit 1; }
+          INNER=()
+          for R in "${REL[@]}"; do INNER+=("$PKG/$TOP/$R"); done
           java -jar "$JSIGN" --storetype TRUSTEDSIGNING --keystore "$AZURE_SIGNING_ENDPOINT" --storepass env:AZURE_SIGNING_TOKEN \
             --alias "$AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE" "${INNER[@]}" windows/setup.exe
           mkdir -p "$RUNNER_TEMP/signed"
@@ -693,11 +719,6 @@ jobs:
           cp "$RUNNER_TEMP/out/$BASE.installer.exe" "$RUNNER_TEMP/handoff/"
           (cd "$RUNNER_TEMP/handoff" && sha256sum -- "$BASE.complete.mar" "$BASE.installer.exe" > SHA256SUMS)
           cat "$RUNNER_TEMP/handoff/SHA256SUMS"
-
-      - name: Attest the build provenance of the signed Windows files
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: '${{ runner.temp }}/handoff/*'
 
       - name: Upload the signed Windows files (data for the publish step)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

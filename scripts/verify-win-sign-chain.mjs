@@ -9,7 +9,7 @@
 // Each step of sign-windows is CLASSIFIED from its own text at check time (never by a typed list of step
 // ids), and the classified sequence is compared with the chain as ordered equality, each stage exactly once:
 //
-//   inner-sign           jsign over the .exe and .dll files of the staged tree
+//   inner-sign           jsign over the derived list of .exe and .dll files of the staged tree
 //   repackage-installer  mach repackage installer
 //   setup-sign           jsign over the repackaged .installer.exe
 //   repackage-mar        mach repackage mar
@@ -27,6 +27,15 @@
 //               grants no id-token.
 //   trust       sign-windows builds signmar from the pinned source and exports no LD_LIBRARY_PATH; the jsign
 //               jar is checked against a 64-hex sha256 before use.
+//   inputs      the artifact is matched against tree-derived names: the admission step derives the zip base name
+//               and top directory with scripts/win-sign-list.mjs --expected-base, compares the zip with it, and
+//               refuses any entry name outside ^[A-Za-z0-9._/-]+$ and any other top directory; from the
+//               artifact download on, a value written to GITHUB_OUTPUT is a tree-derived $WANT_* or a path
+//               under $RUNNER_TEMP or $PKG, never an artifact-derived name.
+//   sign-list   the inner files come from scripts/win-sign-list.mjs --list (the pinned package manifest compared
+//               with the staged tree) in a step before the Azure sign-in; no find over the build output.
+//   attest      sign-windows attests nothing and holds no attestations permission: its bytes were built on
+//               legion, and a hosted provenance attestation would misname their builder.
 //   schedule    no schedule event in the file.
 //   legion      a job on the release runner label carries no environment and no secrets reference.
 //   status      docs/RELEASING.md's "Azure Artifact Signing identity validation:" line decides the signing
@@ -57,7 +66,7 @@ const JOB = 'sign-windows';
 const DER_REL = 'powerbrowser/packaging/mar/mar-primary.der';
 const LEGION_LABELS = ['legion', 'powerbrowser-release'];
 const CHAIN = ['inner-sign', 'repackage-installer', 'setup-sign', 'repackage-mar', 'signmar-sign', 'signmar-verify'];
-const GATES = ['sha_gate', 'stale_guard', 'azure_config'];
+const GATES = ['sha_gate', 'stale_guard', 'azure_config', 'inputs', 'sign_list'];
 const LOGIN = /^azure\/login@/i;
 const LOGIN_INPUTS = ['client-id', 'tenant-id', 'subscription-id'];
 
@@ -81,7 +90,7 @@ for (const a of args) {
 export function stageOf(step) {
     const run = String(step.run ?? '');
     if (/\bjsign\b|\$JSIGN\b/.test(run) && /\.installer\.exe/.test(run)) return 'setup-sign';
-    if (/\bjsign\b|\$JSIGN\b/.test(run) && /\.dll\b/.test(run)) return 'inner-sign';
+    if (/\bjsign\b|\$JSIGN\b/.test(run) && /\.dll\b|sign-list\.txt/.test(run)) return 'inner-sign';
     if (/mach repackage installer\b/.test(run)) return 'repackage-installer';
     if (/mach repackage mar\b/.test(run)) return 'repackage-mar';
     if (/"\$SIGNMAR"[^\n]*\s-s\s/.test(run)) return 'signmar-sign';
@@ -196,6 +205,38 @@ export function runChecks({ wf, releasing, page, live, liveUrl = 'the published 
         fail(jsignFetch === undefined ? JOB : stepName(jsignFetch), 'trust', `does not check the jsign jar against a pinned 64-hex sha256 before use. Next step: pin JSIGN_SHA256 and check it with sha256sum -c.`);
     }
 
+    // inputs: tree-derived names only, validated entries, no artifact name in GITHUB_OUTPUT
+    const adm = steps.find(s => s.id === 'inputs');
+    const admRun = String(adm?.run ?? '');
+    if (adm === undefined || !/win-sign-list\.mjs --expected-base/.test(admRun) || !admRun.includes('"windows/$WANT_BASE.zip"')) {
+        fail('inputs', 'inputs', `does not compare the artifact's zip with the name derived from this tree (win-sign-list.mjs --expected-base), so legion would choose the package name. Next step: derive it and require equality.`);
+    }
+    if (adm !== undefined && (!admRun.includes("r'^[A-Za-z0-9._/-]+$'") || !admRun.includes("r'^[A-Za-z0-9._-]+$'") || !admRun.includes('want_top'))) {
+        fail('inputs', 'inputs', `does not refuse zip entry names outside ^[A-Za-z0-9._/-]+$ or a top directory other than the derived one. Next step: restore both checks.`);
+    }
+    const dl = steps.findIndex(s => /^actions\/download-artifact@/.test(String(s.uses ?? '')));
+    for (const s of steps.slice(Math.max(dl, 0))) {
+        const run = String(s.run ?? '');
+        if (!run.includes('GITHUB_OUTPUT')) continue;
+        for (const m of run.matchAll(/echo "([a-z_]+)=([^"]*)"/g)) {
+            if (!/^(\$WANT_[A-Z_]+|\$PKG|\$RUNNER_TEMP\/[A-Za-z0-9._/-]+|\$DERIVED)$/.test(m[2])) {
+                fail(stepName(s), 'inputs', `writes ${m[1]}=${m[2]} to GITHUB_OUTPUT, a value that is not derived from the tree; an artifact-chosen name could inject into later steps. Next step: write only the tree-derived names.`);
+            }
+        }
+    }
+
+    // sign-list: derived from the manifest, before the sign-in; never a find over legion's output
+    const inner = steps.find(s => stageOf(s) === 'inner-sign');
+    const listAt = steps.findIndex(s => s.id === 'sign_list');
+    if (listAt < 0 || !/win-sign-list\.mjs --list/.test(String(steps[listAt].run ?? ''))) fail(JOB, 'sign-list', `has no sign_list step deriving the files to sign from the package manifest (win-sign-list.mjs --list). Next step: restore it before the Azure sign-in.`);
+    if (inner !== undefined && (/\bfind\b/.test(String(inner.run ?? '')) || !String(inner.run ?? '').includes('sign-list.txt'))) {
+        fail(stepName(inner), 'sign-list', `chooses the files to sign itself (a find over the build output) instead of reading the derived sign-list.txt, so legion decides what is signed. Next step: sign only the derived list.`);
+    }
+
+    // attest: the hosted job cannot claim to have built legion's bytes
+    for (const s of steps) if (/^actions\/attest/.test(String(s.uses ?? ''))) fail(stepName(s), 'attest', `attests the signed Windows files as built by this hosted job, but they were built on legion. Next step: remove the attestation.`);
+    if (perms.attestations !== undefined) fail(JOB, 'attest', `holds attestations ${JSON.stringify(perms.attestations)}; the job attests nothing. Next step: remove the permission.`);
+
     // status: the posture decides what the Windows line may say
     const posture = signingPosture(releasing);
     if (posture === null) {
@@ -290,6 +331,12 @@ function selfTest(yaml) {
         ['contents write on the sign job', edit(c => { c.jobs[JOB].permissions.contents = 'write'; }), JOB, 'permissions', 'contents'],
         ['LD_LIBRARY_PATH in the sign job', edit((c, st) => { st[idx(st, 'signmar-sign')].run = String(st[idx(st, 'signmar-sign')].run).replace('"$SIGNMAR" -d', 'LD_LIBRARY_PATH=windows "$SIGNMAR" -d'); }), JOB, 'trust', 'LD_LIBRARY_PATH'],
         ['MAR verified against an untracked DER', edit((c, st) => { const v = st[idx(st, 'signmar-verify')]; v.run = String(v.run).split(DER_REL).join('scratch/other.der'); }), 'win_verify_mar', 'trust', DER_REL],
+        ['artifact-derived zip name written to GITHUB_OUTPUT', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).replace('echo "base=$WANT_BASE"', 'echo "base=$(basename "${ZIPS[0]}" .zip)"'); }), 'inputs', 'inputs', 'base='],
+        ['zip not compared with the tree-derived name', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).split('"windows/$WANT_BASE.zip"').join('"${ZIPS[0]}"'); }), 'inputs', 'inputs', 'derived from this tree'],
+        ['zip entry name check removed', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).replace("r'^[A-Za-z0-9._/-]+$'", "r'^.*$'"); }), 'inputs', 'inputs', 'A-Za-z0-9._/-'],
+        ['inner files chosen by a find over the build output', edit((c, st) => { const v = st[idx(st, 'inner-sign')]; v.run = String(v.run).replace('mapfile -t REL < "$RUNNER_TEMP/sign-list.txt"', 'mapfile -t REL < <(find "$PKG" -iname "*.dll")'); }), 'inner_sign', 'sign-list', 'find'],
+        ['derived sign list removed', edit((c, st) => { st.splice(st.findIndex(s => s.id === 'sign_list'), 1); c.jobs[JOB].steps = st; }), JOB, 'sign-list', 'sign_list'],
+        ['hosted attestation of legion-built bytes', edit((c, st) => { st.push({ name: 'Attest', uses: 'actions/attest-build-provenance@' + '0'.repeat(40), with: { 'subject-path': 'x' } }); c.jobs[JOB].steps = st; c.jobs[JOB].permissions.attestations = 'write'; }), 'Attest', 'attest', 'legion'],
         ['jsign jar not checked against its pin', edit((c, st) => { delete st.find(s => s.id === 'jsign').env.JSIGN_SHA256; }), 'jsign', 'trust', 'sha256'],
         ['stale unsigned status after the signing validation', { releasing: signedReleasing }, PAGE_REL, 'status', 'unsigned'],
         ['stale unsigned status on the published page', { releasing: signedReleasing, page: signedPage }, liveUrl, 'status', 'unsigned'],

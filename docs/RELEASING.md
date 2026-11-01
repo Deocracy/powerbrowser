@@ -900,7 +900,13 @@ staged zip (the vendor-signed Node runtime excepted) and the `setup.exe` stub, `
 installer` from the pinned source, jsign over the installer, `mach repackage mar` (signmar, built from
 the pinned source, is the mar tool), then signmar sign and verify against the tracked DER. It
 hands the signed installer, the signed complete MAR and their `SHA256SUMS` off as the one-day
-`release-windows-signed` artifact with a provenance attestation. It does not publish.
+`release-windows-signed` artifact. It does not publish, and it attests nothing: the bytes it signs
+were built on `legion`, and a hosted provenance attestation would name the hosted job as their
+builder. The files it signs are the PE files of the staged zip that the pinned package manifest
+names (`scripts/win-sign-list.mjs`, an extra or a missing file stops the job), and the zip name and
+its top directory are derived from `configuration.toml`, never read from the artifact. The
+signature still covers whatever `legion` compiled into those files: compromising `legion` is
+equivalent to compromising the Windows signing identity, so `legion` is inside this trust boundary.
 
 Azure is reached over OIDC only: `Azure/login` v3.1.0 (commit
 `a641126d1b8aa4d1fa005f4f92df94a3a4c4c906`, admitted in `.github/settings/actions-selected.json`)

@@ -5898,6 +5898,11 @@ run_own_checks() {
       # controls, then an out-of-order step, a stored secret, a schedule key, a legion secret and a stale unsigned
       # status among others), each red naming its step or key. Hermetic; writes nothing.
       "win-sign-chain-self-test|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs --self-test"
+      # win-sign-list-self-test: the list of inner PE files sign-windows signs, derived from the pinned package manifest
+      # (upstream/browser/installer/package-manifest.in) and compared with a staged tree; the zip name derived from
+      # configuration.toml and checked against package-windows.sh's glob. Plants an extra PE file, a missing
+      # unconditional one, an unsafe name, an empty tree and an unreadable manifest over mkdtemp fixtures; hermetic.
+      "win-sign-list-self-test|node $REPO_ROOT/scripts/win-sign-list.mjs --self-test"
     )
   fi
 
