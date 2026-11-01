@@ -118,6 +118,13 @@ track_temp() { TEMP_PATHS+=("$1"); }
 REAL_XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}"
 HARNESS_CONFIG_HOME="$(mktemp -d)"; track_temp "$HARNESS_CONFIG_HOME"
 export XDG_CONFIG_HOME="$HARNESS_CONFIG_HOME"
+# gh resolves its config (and so its auth) from XDG_CONFIG_HOME/gh, which the export above
+# points at an empty dir: every full-tier gh api row (repo-controls, descriptor-monotonic) would
+# fail as unauthenticated. Point gh at the caller's real config dir instead, only when it exists
+# and the caller did not set GH_CONFIG_DIR. Only the path is exported; no token is read or copied.
+if [ -z "${GH_CONFIG_DIR:-}" ] && [ -d "${REAL_XDG_CONFIG_HOME:-$HOME/.config}/gh" ]; then
+  export GH_CONFIG_DIR="${REAL_XDG_CONFIG_HOME:-$HOME/.config}/gh"
+fi
 
 # The merged teardown. This is the UNION of the four deleted drivers' cleanup()
 # bodies, not a rewrite: verify-phase-05.sh's was already a superset of 03's and
