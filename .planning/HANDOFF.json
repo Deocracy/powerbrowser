@@ -1,0 +1,52 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-11-01T04:13:13.402Z",
+  "phase": "32",
+  "phase_name": "page-tools",
+  "phase_dir": ".planning/phases/32-page-tools",
+  "plan": null,
+  "task": "code-review fix close-out",
+  "total_tasks": 9,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": "32-01..32-09", "name": "all nine plans", "status": "done", "commit": "253e6bce"},
+    {"id": "review", "name": "Phase 32 code review", "status": "done", "commit": "82b0d3ee"},
+    {"id": "fix", "name": "review fixes CR-01, WR-01..06, WR-08, WR-09, WR-11 (WR-07, WR-10 skipped)", "status": "in_progress", "progress": "all fixes committed 23c08bb5..1cf10615, outcomes in 32-REVIEW.md 3b135a74; gate and full self-test not re-run at HEAD", "commit": "3b135a74"}
+  ],
+  "remaining_tasks": [
+    {"id": 1, "name": "verify-platform.sh --quick inside nix develop .#theia at HEAD", "status": "not_started"},
+    {"id": 2, "name": "verify-page-tools-live.mjs --scenario crash-navigate re-run", "status": "not_started"},
+    {"id": 3, "name": "verify-page-tools-live.mjs --self-test (full)", "status": "not_started"},
+    {"id": 4, "name": "record results in 32-REVIEW.md and commit", "status": "not_started"},
+    {"id": 5, "name": "Phase 32 gsd-verifier (Opus); defer human items to 32-UAT.md + STATE.md", "status": "not_started"},
+    {"id": 6, "name": "phase.complete 32, transition, then Phases 33-38 autonomous (33 takes PAGE-09 Edit menu + greying)", "status": "not_started"}
+  ],
+  "blockers": [
+    {"description": "WINDOWS.md table disagrees with fenced JSON (rows 10, 11, 19); windows append refuses", "type": "human_action", "workaround": "defer to end-of-milestone owner repair; never hand-edit"}
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {"action": "check WR-08 navigate-after-crash-restore behaviour on screen", "context": "0cbb77b6 changes chrome behaviour", "blocking": false},
+    {"action": "end-of-milestone combined verification pass and queued owner decisions", "context": "Chris 2026-10-31: verification at the end", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "all subagents on Opus", "rationale": "Chris 2026-10-31", "phase": "32"},
+    {"decision": "defer all human verification to end of milestone", "rationale": "Chris 2026-10-31: put verifying work at the very end", "phase": "32"},
+    {"decision": "D-23 amended: F12 opens stock DevTools toolbox window via DevToolsShim", "rationale": "research showed no XUL tab needed", "phase": "32"},
+    {"decision": "WR-10 libpulse is release packaging, follow-up", "rationale": "not product code", "phase": "32"}
+  ],
+  "uncommitted_files": [
+    " M .claude/settings.json (foreign)",
+    " M .planning/state.json (foreign)",
+    "?? .claude/settings.bak-hooks-20261031.json (foreign)",
+    "?? .planning/HANDOFF-plan-reorg.md (foreign)",
+    "?? .planning/milestone.lock (foreign)",
+    "?? .planning/milestones/v1.3-phases/13-chrome-bar-strip-relocation-spike/13-VERIFICATION.md (foreign)",
+    "?? .planning/milestones/v1.4-phases/21-panorama-spec-and-gui08-checks/logs/ (foreign)",
+    "?? .planning/milestones/v1.4-phases/22-panorama-worklist/logs/ (foreign)",
+    "?? .planning/research/.cache/341f7869e3c97b3330626cacb51a98fa9e434062fabc1dd9585d23f8524bf6ab.json (foreign)",
+    "?? .planning/research/.cache/a45ee6d0d4c31289d1c48f7d00facc30c3f74788c78e9069f38ddc33b2cc9b9e.json (foreign)"
+  ],
+  "next_action": "check /proc/loadavg, then nix develop .#theia --command scripts/verify-platform.sh --quick at HEAD",
+  "context_notes": "Read .planning/phases/32-page-tools/.continue-here.md first. Never stage the foreign files listed above."
+}
