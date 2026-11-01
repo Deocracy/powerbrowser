@@ -380,6 +380,16 @@ function check(src) {
         }
     }
 
+    // 10c. keyboard path (WR-04): a tab is focusable and a keyboard-raised contextmenu anchors at the tab, not at 0,0.
+    const tabBody = methodBody(strip, 'protected renderTab(') ?? '';
+    const tabRoot = /key=\{widget\.id\}[\s\S]*?\n {8}>/.exec(tabBody)?.[0] ?? '';
+    if (!/role='tab'/.test(tabRoot) || !/\btabIndex=\{/.test(tabRoot) || !/onKeyDown=\{/.test(tabRoot)) {
+        failures.push(`keyboard: renderTab's role='tab' element lacks tabIndex or onKeyDown -- Shift+F10 and the context-menu key cannot reach the tab menu (WR-04)`);
+    }
+    if (!/getBoundingClientRect\(\)/.test(opener ?? '') || !/const fromKeyboard =/.test(opener ?? '')) {
+        failures.push(`keyboard: openTabMenu does not anchor a keyboard-raised contextmenu at the tab's rect -- the menu would open at 0,0 (WR-04)`);
+    }
+
     // 11. preview occlusion and anchor
     const members = selector ? selector.split(',').map(member => member.trim()) : [];
     const renderPreview = methodBody(strip, 'protected renderPreview(');
@@ -642,6 +652,18 @@ const PLANTS = [
         file: STRIP,
         mutate: s => s.replace('const before = this.clampDrop(widget, requested);', 'const before = requested;'),
         expect: 'reorderTo does not clamp',
+    },
+    {
+        name: 'tab-not-focusable',
+        file: STRIP,
+        mutate: s => s.replace(/\n\s*tabIndex=\{widget === this\.tabStop \? 0 : -1\}/, ''),
+        expect: 'lacks tabIndex',
+    },
+    {
+        name: 'keyboard-menu-at-origin',
+        file: STRIP,
+        mutate: s => s.replace('const fromKeyboard =', 'const keyboardUnused ='),
+        expect: 'anchor a keyboard-raised contextmenu',
     },
     {
         name: 'url-keyed-pin',

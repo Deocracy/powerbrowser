@@ -222,6 +222,8 @@ export class TabStripWidget extends ReactWidget {
      * plus 4px), whether its image is still resolving, and the page to refocus on close (set only when that page
      * had focus when the card hid it).
      */
+    /** WR-04: the one tab in the Tab order; the current tab, or the first when the current widget is not in the strip. */
+    protected tabStop: Widget | undefined;
     protected preview: { widget: Widget; left: number; top: number; resolving: boolean; refocus: WebTabWidget | undefined } | undefined;
     protected previewTimer: number | undefined;
 
@@ -1011,7 +1013,10 @@ export class TabStripWidget extends ReactWidget {
                 })),
             ],
         };
-        this.showMenu(menu, { x: event.clientX, y: event.clientY }, event.currentTarget as HTMLElement);
+        // The context-menu key and Shift+F10 raise `contextmenu` with no pointer (button 0, and 0,0 in some builds): anchor at the tab.
+        const tabBox = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        const fromKeyboard = event.button !== 2 || (event.clientX === 0 && event.clientY === 0);
+        this.showMenu(menu, fromKeyboard ? { x: tabBox.left, y: tabBox.bottom } : { x: event.clientX, y: event.clientY }, event.currentTarget as HTMLElement);
     }
 
     /**
@@ -1486,6 +1491,9 @@ export class TabStripWidget extends ReactWidget {
     protected render(): React.ReactNode {
         const current = this.shell.mainPanel.currentTitle?.owner;
         const tabs = this.stripTabs(current);
+        if (!this.tabStop || !tabs.includes(this.tabStop) || !this.node.contains(document.activeElement)) {
+            this.tabStop = tabs.includes(current as Widget) ? current : tabs[0];
+        }
         const stack = this.stackWidgets();
         // The home bar shows only stacked tabs; the rest are the strip's.
         // Said on the title, which the bar renders as a class on its tab.
@@ -1580,6 +1588,30 @@ export class TabStripWidget extends ReactWidget {
         return widget instanceof WebTabWidget && widget.titleChanged && !active;
     }
 
+    /**
+     * WR-04: the tabs take keyboard focus (one tab stop, roving). Left/Right move between tabs, Enter or Space
+     * activates the focused tab; the context-menu key and Shift+F10 reach openTabMenu as `contextmenu`.
+     */
+    protected onTabKeyDown(widget: Widget, event: React.KeyboardEvent<HTMLElement>): void {
+        if (event.target !== event.currentTarget) {
+            return;
+        }
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            this.activateTab(widget);
+            return;
+        }
+        const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+        const tabs = this.shownTabs();
+        const next = step ? tabs[tabs.indexOf(widget) + step] : undefined;
+        if (next) {
+            event.preventDefault();
+            this.tabStop = next;
+            this.update();
+            this.tabNode(next)?.focus();
+        }
+    }
+
     protected renderTab(widget: Widget, active: boolean, last: boolean): React.ReactNode {
         const label = widget.title.label || widget.id;
         const pinned = this.isPinned(widget);
@@ -1605,6 +1637,8 @@ export class TabStripWidget extends ReactWidget {
             onMouseDown={event => { if (event.button === 1) { event.preventDefault(); } }}
             onAuxClick={event => this.onTabAuxClick(widget, event)}
             onContextMenu={event => this.openTabMenu(widget, event)}
+            tabIndex={widget === this.tabStop ? 0 : -1}
+            onKeyDown={event => this.onTabKeyDown(widget, event)}
         >
             {widget instanceof WebTabWidget
                 ? this.renderTabIcon(widget)
