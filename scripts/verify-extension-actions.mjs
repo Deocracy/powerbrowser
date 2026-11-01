@@ -49,6 +49,16 @@
  *                    pageActionShown, the widget's renderPageActions filters
  *                    on it and reads no page URL or pattern, and no other
  *                    chrome-bar source draws a page-action icon.
+ *  10. menus      -- (38-03, EXT-08, D-05) extension menus entries reach the
+ *                    menu only through the Phase 35 relay: the one
+ *                    on-build-contextmenu notify in the product is in
+ *                    pageMenuExtensionEntries, whose one caller is
+ *                    openPageMenu, reached only from the #contentAreaContextMenu
+ *                    stub's popupshowing listener; and the only Theia source
+ *                    that takes the page menu's rows (the pageContextMenu push,
+ *                    an extension-entry id) is page-context-menu.ts, never an
+ *                    IDE menu contribution. The live proof is Phase 35's
+ *                    verify-page-furniture-live.mjs --scenario extension-entry.
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -76,6 +86,7 @@ const EXTENSIONS_DIR = `${CHROME_BAR_SRC}browser/extensions/`;
 const EXTENSIONS_WIDGET = `${EXTENSIONS_DIR}extension-actions-widget.tsx`;
 const EXTENSIONS_ANCHOR = `${EXTENSIONS_DIR}extension-popup-anchor.ts`;
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
+const PAGE_MENU = 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts';
 // Rule 9: what computing a page action's visibility Theia-side would read (the page's address or the extension's patterns).
 const PAGE_MATCH = /url|uri\b|href|location|match/i;
 // D-02: what drawing extension content in Theia DOM looks like; the first two would host a popup page, the last names one.
@@ -140,6 +151,17 @@ function span(lines, header) {
             else if (ch === '}') depth--;
         }
         if (depth === 0 && i > start) return { start, end: i };
+    }
+    return null;
+}
+
+/** The top-level function enclosing 0-based line `index`, by header and brace span; null when none does. */
+function enclosingFunction(lines, index) {
+    for (let i = index; i >= 0; i--) {
+        const m = /^(?:async )?function ([A-Za-z_$][\w$]*)\(/.exec(lines[i]);
+        if (!m) continue;
+        const s = span(lines, new RegExp(`^(?:async )?function ${m[1]}\\(`));
+        return s && index <= s.end ? { name: m[1], ...s } : null;
     }
     return null;
 }
@@ -287,6 +309,31 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             if (stripComments(src[file]).includes('pb-page-action')) failures.push(`page-action: ${file} draws a page-action icon outside ${EXTENSIONS_WIDGET}'s renderPageActions`);
         }
     }
+    // 10. menus
+    const callLines = (lines, name) => lines.flatMap((l, i) => (l.includes(`${name}(`) && !new RegExp(`function ${name}\\(`).test(l) ? [i] : []));
+    const notifies = products.flatMap(file => stripComments(src[file]).split('\n').flatMap((l, i) => (l.includes('"on-build-contextmenu"') && l.includes('notifyObservers') ? [{ file, i }] : [])));
+    const builder = notifies.length === 1 && notifies[0].file === API ? enclosingFunction(apiLines, notifies[0].i) : null;
+    if (builder?.name !== 'pageMenuExtensionEntries') {
+        failures.push(`menus: the product notifies on-build-contextmenu at ${notifies.map(n => `${n.file}:${n.i + 1}`).join(', ') || 'no site'}; the rule is one site, in ${API}'s pageMenuExtensionEntries`);
+    } else {
+        const callers = callLines(apiLines, 'pageMenuExtensionEntries').map(i => enclosingFunction(apiLines, i)?.name);
+        if (callers.length !== 1 || callers[0] !== 'openPageMenu') failures.push(`menus: pageMenuExtensionEntries is called from ${callers.join(', ') || 'nowhere'}; the rule is once, from openPageMenu`);
+        const opens = callLines(apiLines, 'openPageMenu');
+        if (opens.length === 0) failures.push(`menus: derived no openPageMenu caller in ${API} (broken instrument)`);
+        for (const i of opens) {
+            const fn = enclosingFunction(apiLines, i);
+            const text = fn ? apiLines.slice(fn.start, fn.end + 1).join('\n') : '';
+            if (!text.includes('getElementById("contentAreaContextMenu").addEventListener(') || !text.includes('"popupshowing"')) failures.push(`menus: ${API}:${i + 1} opens the page menu outside the #contentAreaContextMenu stub's popupshowing path (${fn?.name ?? 'top level'})`);
+        }
+    }
+    const theiaSources = products.filter(f => f.startsWith('theia/extensions/'));
+    if (!stripComments(src[PAGE_MENU] ?? '').includes("onPush('pageContextMenu'")) failures.push(`menus: ${PAGE_MENU} no longer subscribes to the pageContextMenu push (broken instrument)`);
+    for (const file of theiaSources.filter(f => f !== PAGE_MENU)) {
+        stripComments(src[file]).split('\n').forEach((line, i) => {
+            const what = line.includes('extension-entry') ? 'extension-entry' : line.includes("'pageContextMenu'") ? 'pageContextMenu' : null;
+            if (what) failures.push(`menus: ${file}:${i + 1} takes the page menu's rows (${what}) outside the relay's one consumer ${PAGE_MENU}`);
+        });
+    }
     return failures;
 }
 
@@ -315,6 +362,8 @@ function selfTest() {
         { name: 'inlined svg icon', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <span dangerouslySetInnerHTML={{ __html: row.icon }} />;\n` }), expect: '(dangerouslySetInnerHTML)' },
         { name: 'anchor reporter gone', run: () => check(Object.fromEntries(Object.entries(clean).filter(([f]) => f !== EXTENSIONS_ANCHOR))), expect: `${EXTENSIONS_ANCHOR} is missing` },
         { name: 'pill-icon-local-match', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: clean[EXTENSIONS_WIDGET].replace('.filter(row => row.pageActionShown)', ".filter(row => window.location.href.startsWith('http'))") }), expect: `${EXTENSIONS_WIDGET} renderPageActions decides visibility from the page` },
+        { name: 'menus-bypass', run: () => check({ ...clean, 'theia/extensions/chrome-bar/src/browser/ide-extension-menus.ts': "this.channel.onPush('pageContextMenu', d => d.items.filter(i => String(i.id).startsWith('extension-entry-')).forEach(i => this.menus.registerMenuAction(MAIN_MENU_BAR, { commandId: i.id, label: i.label })));\n" }), expect: "ide-extension-menus.ts:1 takes the page menu's rows (extension-entry)" },
+        { name: 'second on-build-contextmenu notify', run: () => check(apiWith('Services.obs.notifyObservers(subject, "on-build-contextmenu");')), expect: 'the rule is one site' },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
     let failed = 0;
@@ -342,7 +391,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();
