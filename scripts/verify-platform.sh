@@ -4777,6 +4777,15 @@ run_own_checks() {
     # trees (empty or absent --descriptors, a stray file, a hollow target). Honestly --quick: fixtures in memory
     # and under mkdtemp (removed), no network, no gh.
     "descriptor-monotonic-self-test|node $REPO_ROOT/scripts/verify-descriptor-monotonic.mjs --self-test"
+    # NEW (Phase 44, UPD-26, T-44-13): no build-date pin. Neither the Gecko build-date variable nor the
+    # reproducible-builds source epoch may appear in any tracked file outside .planning/ (git ls-files at
+    # check time) or under generated/: a pinned date freezes the BuildID and descriptor-monotonic then refuses
+    # every later descriptor. Each required surface (the emitter, the descriptor CLI, .mozconfig,
+    # configuration.toml, powerbrowser/, .github/, patches/, brand/, scripts/*.sh, generated/) must contribute
+    # a scanned file, else FAIL; an absent generated/ (fresh clone) is a named note. The self-test plants a
+    # hit per surface kind and each missing surface. Honestly --quick: text reads, no build or network.
+    "no-build-date-pin|node $REPO_ROOT/scripts/verify-no-build-date-pin.mjs"
+    "no-build-date-pin-self-test|node $REPO_ROOT/scripts/verify-no-build-date-pin.mjs --self-test"
     # NEW (Phase 40, UPD-33): layer 3's real `Resolving host [...]` extraction and the shared
     # verdict (scripts/lib/endpoint-verdict.mjs) over fixture logs. An unattended user-initiated
     # host goes red naming it, passes after a user action; deny fails in both modes; allow passes;
