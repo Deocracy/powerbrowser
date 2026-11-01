@@ -81,6 +81,8 @@
  *            holds the reader URL, which the reopen refuses.
  *   crash-switching  32-REVIEW WR-04: the same crash while the overlay is mid process switch (DidChangeBrowserRemoteness
  *            dispatched, nothing settled); the crashed push must still arrive and Reload tab must recover the tab.
+ *   crash-navigate  32-REVIEW WR-08: Back and Forward are disabled on a crashed tab, and a URL sent to it loads there
+ *            with the kept history behind it.
  *   remoteness-regression  (32-08, D-25a): five same-site tabs, the fifth reloaded and then activated; each must end on its
  *            page with docShellIsActive. Self-sessioned; writes no verdict.
  *   devtools  PAGE-10 (32-07 gap closure): F12 from a page opens one stock toolbox window for that tab; a second open keeps one;
@@ -1567,6 +1569,9 @@ async function scenarioCrash(app, origin, plant = false, variant = null) {
         // The CR-01 symptom: the widget holds the reader URL, which webTabOpen refuses, so the reopen can never succeed.
         await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).url = ${JSON.stringify(`about:reader?url=${encodeURIComponent(`${origin}/article`)}`)}; return true;`);
     }
+    if (variant === 'navigate') {
+        return crashNavigate(app, origin, tabId, entriesBefore, historyOf);
+    }
     const clickMark = (await pushes(app)).length;
     // The history plant recreates the overlay under another row key, so the kept history is never taken (the loss the row exists to catch).
     const clicked = plant === 'history'
@@ -1598,6 +1603,25 @@ async function scenarioCrash(app, origin, plant = false, variant = null) {
     return await waitForPush(app, loadedAt(tabId, '/find'), { from: backMark, timeoutMs: 30000 }) < 0
         ? 'gotoIndex after Reload tab did not load /find'
         : null;
+}
+
+/**
+ * crash-navigate (32-REVIEW WR-08): with the tab crashed, Back and Forward are disabled, and a URL sent through the
+ * widget's navigate (the pill's path) recreates the overlay there: the page loads with crashed false, and the kept
+ * history is still behind it (one more entry than before the crash).
+ */
+async function crashNavigate(app, origin, tabId, entriesBefore, historyOf) {
+    const nav = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); return { back: w.canGoBack, forward: w.canGoForward };`);
+    if (nav.back !== false || nav.forward !== false) {
+        return `Back or Forward stays enabled on a crashed tab (${JSON.stringify(nav)})`;
+    }
+    const mark = (await pushes(app)).length;
+    await probe(app, `void get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).navigate(${JSON.stringify(`${origin}/article`)}); return true;`);
+    if (await waitForPush(app, stateOf(tabId, p => p.crashed === false && p.loading === false && String(p.url).endsWith('/article')), { from: mark, timeoutMs: 30000 }) < 0) {
+        return 'a URL sent to a crashed tab did not load it (no loaded push with crashed false)';
+    }
+    const entriesAfter = await settleValue(historyOf, n => n > entriesBefore);
+    return entriesAfter > entriesBefore ? null : `the crashed tab's history was not kept behind the new page (${entriesBefore} entries before, ${entriesAfter} after)`;
 }
 
 /**
@@ -1682,6 +1706,7 @@ const SCENARIOS = {
     crash: (app, fx) => scenarioCrash(app, fx.origin),
     'crash-reader': (app, fx) => scenarioCrash(app, fx.origin, false, 'reader'),
     'crash-switching': (app, fx) => scenarioCrash(app, fx.origin, false, 'switching'),
+    'crash-navigate': (app, fx) => scenarioCrash(app, fx.origin, false, 'navigate'),
     devtools: (app, fx) => scenarioDevtools(app, fx.origin),
     downloads: (app, fx) => scenarioDownloads(app, fx),
     'downloads-today': async (app, fx, downloadDir) => {

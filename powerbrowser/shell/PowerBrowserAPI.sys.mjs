@@ -810,7 +810,8 @@ export const PowerBrowserAPI = Object.freeze({
         return;
       }
       const { SessionHistory } = ChromeUtils.importESModule("resource://gre/modules/sessionstore/SessionHistory.sys.mjs");
-      savedWebTabHistories[entry.rowKey] = SessionHistory.collectFromParent(entry.browser.currentURI?.spec ?? "about:blank", true, sessionHistory);
+      const kept = SessionHistory.collectFromParent(entry.browser.currentURI?.spec ?? "about:blank", true, sessionHistory);
+      savedWebTabHistories[entry.rowKey] = { ...kept, crashKept: true };
       armedWebTabHistories.add(entry.rowKey);
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] crashed history not kept (${err && err.name ? err.name : "error"})`);
@@ -3437,7 +3438,12 @@ export const PowerBrowserAPI = Object.freeze({
     // loads its URL through the null-principal navigate below.
     const history = PowerBrowserAPI.takeWebTabHistory(entry.rowKey);
     if (history) {
-      PowerBrowserAPI.restoreWebTabHistory(browser, history).catch(err => {
+      PowerBrowserAPI.restoreWebTabHistory(browser, history).then(() => {
+        // 32-REVIEW WR-08: a crashed tab recreated for another URL (typed into its pill) goes there after its history is back.
+        if (history.crashKept && spec !== webTabPushedSpec(history.entries[history.index - 1].url)) {
+          PowerBrowserAPI.webTabNavigate(tabId, spec);
+        }
+      }, err => {
         // Final-review M3: the restore failure can carry XPCOM/IOUtils text
         // with the profile path -- fixed string plus err.name only.
         PowerBrowserAPI.log("error", `[web-tab] history restore failed (${err && err.name ? err.name : "error"})`);

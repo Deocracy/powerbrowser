@@ -825,16 +825,27 @@ export class WebTabWidget extends BaseWidget {
         this.url = url;
         this.refreshTitle();
         this.renderState();
+        // 32-REVIEW WR-08: a crashed overlay cannot load, so it is recreated at the new URL; chrome restores its kept
+        // history first and then goes there.
+        if (this.crashed) {
+            return this.recreate();
+        }
         // The tab now has a page, so the overlay becomes visible.
         this.publish();
         return this.settle(await this.channel.request({ kind: 'webTabNavigate', tabId: this.tabId, url }));
     }
 
     async back(): Promise<WebTabReply> {
+        if (this.crashed) {
+            return this.recreate();
+        }
         return this.settle(await this.channel.request({ kind: 'webTabBack', tabId: this.tabId }));
     }
 
     async forward(): Promise<WebTabReply> {
+        if (this.crashed) {
+            return this.recreate();
+        }
         return this.settle(await this.channel.request({ kind: 'webTabForward', tabId: this.tabId }));
     }
 
@@ -855,6 +866,9 @@ export class WebTabWidget extends BaseWidget {
 
     /** NAV-03: moves the tab to session-history entry `index`; chrome refuses an out-of-range one. */
     async gotoIndex(index: number): Promise<WebTabReply> {
+        if (this.crashed) {
+            return this.recreate();
+        }
         return this.settleUnknownTab(await this.channel.request({ kind: 'webTabGotoIndex', tabId: this.tabId, index }));
     }
 
@@ -1150,8 +1164,9 @@ export class WebTabWidget extends BaseWidget {
         this.url = state.url;
         this.pageTitle = state.title;
         this.loading = state.loading;
-        this.canGoBack = state.canGoBack;
-        this.canGoForward = state.canGoForward;
+        // A crashed overlay has no remote tab to step (32-REVIEW WR-08); Reload tab is the affordance.
+        this.canGoBack = state.canGoBack && !state.crashed;
+        this.canGoForward = state.canGoForward && !state.crashed;
         if (state.securityState !== undefined) {
             this.securityState = state.securityState;
         }
