@@ -146,10 +146,10 @@ if (pending.activateOnAck) {
 
 Stock `create`'s synchronous `selectedTab` write must still select the node at once, because `tabs.create` returns `active: true`. Restrict the deferred path to calls made after the push has been sent, using a `pending.pushed` flag set inside the microtask. Add a live row: background create, immediate `tabs.update({active})`, and the tab must be the frontend's current widget and `host.selected`.
 
-**Outcome:** Fixed in `4bc15671`, by deferring. `createPendingOverlay` sets `pending.pushed` when the adoptTab push goes:
+**Outcome:** Fixed in `4bc15671` (follow-up `99005488`: the attach-time push moved into `showActivationOnAttach` to keep the sharing gate's branch shape), by deferring. `createPendingOverlay` sets `pending.pushed` when the adoptTab push goes:
 
 - **Push not yet sent** (stock create's synchronous write): `tabsBridgeActivate` selects the node and clears `background`, as before.
-- **Push already sent:** it only records `activateOnAck`. `adoptPendingOverlay` copies that onto the adopted entry (`activateOnAttach`). `webTabOpen`'s already-open branch is the widget's own open on attach. There, chrome pushes `selectTab`, and `webTabActivated` then selects the node. The push is not sent from the ack itself because the frontend acks before `addWidget`, so a `selectTab` sent at the ack would find no attached widget.
+- **Push already sent:** it only records `activateOnAck`. `adoptPendingOverlay` copies that onto the adopted entry (`activateOnAttach`). `webTabOpen`'s already-open branch is the widget's own open on attach. There, `showActivationOnAttach` pushes `selectTab`, and `webTabActivated` then selects the node. The push is not sent from the ack itself because the frontend acks before `addWidget`, so a `selectTab` sent at the ack would find no attached widget.
 
 `verify-extension-actions` rule 6 requires this shape. Plants `activate ahead of ack` and `deferred activation never shown` go red. The live `tabs-bridge` scenario gains a step on `/d`: fixture op `create-activate`, which creates in the background and activates at once. It requires `/d` to end both current in the frontend and `host.selected`. Live run deferred. Until the attach, `tabs.update` returns the tab with `active: false`.
 
