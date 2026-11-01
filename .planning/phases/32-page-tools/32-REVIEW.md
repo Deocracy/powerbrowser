@@ -73,6 +73,32 @@ Other problems:
 - highlight-all cannot be turned off;
 - the live checks for find steps and audio cannot catch the failures they are meant to catch.
 
+## Fix outcome (2026-10-31, fix run paused before close-out)
+
+Scope: CR-01 and WR-01 to WR-11. Info findings were not in scope. Every live row below ran on `objdir/dist/bin/powerbrowser` through `scripts/verify-page-tools-live.mjs`. Every "red pre-fix" result came from running the same row against the HEAD module or the HEAD frontend before the fix.
+
+| Finding | Outcome | Commit | Proof |
+|---|---|---|---|
+| CR-01 | fixed | `23c08bb5` | New live row `crash-reader`: crash in reader view, then Reload tab, and the page comes back. Red pre-fix ("Theia holds about:reader?url=..."). Plant `crash-reader-url-held` goes red. |
+| WR-01 | fixed (with CR-01) | `23c08bb5` | `crash-reader` history check: 3 entries before, 3 after. Red with only the wall reverted (3 entries, then 1). |
+| WR-02 | fixed (defensive) | `644033fd` | The `source` row now also reads `webTabHistory`. Plant `source-history-title` goes red. Live read: on this build a view-source entry's title is already the page URL, so the row was green before the fix and no leak was observable. |
+| WR-03 | fixed | `c2a9261b` | The `favicon` row's `/icon` page now adds its icon from a timer after load. Red pre-fix (no favicon push), green after. |
+| WR-04 | fixed (inference confirmed) | `c0386506` | New row `crash-switching` dispatches `DidChangeBrowserRemoteness`, then crashes the tab. Red pre-fix (no crashed push in 30 s), green after. |
+| WR-05 | fixed | `f580f7e4` | The `find` row listens for FinderParent `onHighlightFinished` and requires an explicit `highlight:false` after the toggle is turned off. Red pre-fix, green after. |
+| WR-06 | fixed | `18b825d1` | The `find` row navigates, then steps from the widget, and must see `findTotal` 3. Red on the pre-fix frontend, green after the rebuild. |
+| WR-07 | skipped | none | The stand-in cannot satisfy `updateReaderButton` with a no-op. The method belongs to the AboutReaderParent actor. It returns early only when `browser.getTabBrowser()` is null or the overlay is not `selectedBrowser`, and getting either result means changing `getTabForBrowser` or `selectedBrowser` for every consumer (tabs.*). Hidden stub elements in the shell document would then reach `doc.l10n.setAttributes` and `PageActions.sendPlacedInUrlbarTrigger`. That needs its own Pitfall-2 record. Follow-up. |
+| WR-08 | fixed, needs human verification | `0cbb77b6` | New row `crash-navigate`: Back and Forward are disabled while crashed; navigating loads the new URL with the kept history behind it. Red pre-fix, green 3 times in a row in single-scenario runs. In the final combined run it hit a harness BiDi WebSocket error; this is not a product verdict, but it should be re-run. The fix also changes chrome: `webTabOpen` loads the requested URL after restoring a history it kept at a crash (`crashKept`), and only then. |
+| WR-09 | fixed | `1bdbfdf8` | FindNext and F3 now require `findCurrent` to change. Plant `find-step-noop` (the Finder's `findAgain` stubbed out) goes red; `--self-test --only find` passes. |
+| WR-10 | skipped | none | Release packaging must put libpulse on the loader path; tracked as a follow-up. |
+| WR-11 | fixed | `1cf10615` | The `audio` row focuses the muted tab's mark and presses Enter; the tab must unmute. Red with the pre-fix strip ("cannot take keyboard focus"). Also fixed: the strip did not re-render on mute or playback changes, so the mark did not appear. |
+
+Verification so far:
+
+- Live, last combined run: `find`, `reader`, `source`, `crash`, `crash-reader`, `crash-switching`, `favicon` and `audio` passed. `crash-navigate` hit a harness BiDi WebSocket error.
+- Self-tests: `--self-test --only crash-reader`, `--only source` and `--only find` all passed.
+- `ng-040-internals-catalogue-lines` is green after each module edit. Catalogue rows were remapped by git hunk, not with `--fix`.
+- `scripts/verify-platform.sh --quick` exit 0 inside `nix develop .#theia` at `23c08bb5` only. It has not been re-run on the later commits.
+
 ## Critical Issues
 
 ### CR-01: Reload tab cannot recover a tab that crashed in reader view
