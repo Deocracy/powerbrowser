@@ -203,6 +203,14 @@ const STORE_KIND_CLASSES = new Map([
     ['reopenClosedTab', 'store-write'],
     // Phase 33 plan 05 (MENU-03, D-14b): the Full Screen toggle, window chrome state the full-screen command may reach.
     ['fullScreen', 'window-chrome'],
+    // Phase 38 plan 01 (EXT-06/07, D-11): the subscribe only makes the frame the extensionAction push target and reads
+    // the action set, so it is a read. Click (it grants activeTab and runs the extension), pin (a persisted pref) and
+    // remove (an uninstall) change chrome state outside any tab, so they are privileged: same-named ChromeStoreClient
+    // methods, widget-handler callers only (38-02), no command id, no key row, never relayed.
+    ['extensionActionsSubscribe', 'read'],
+    ['extensionClick', 'privileged'],
+    ['extensionPin', 'privileged'],
+    ['extensionRemove', 'privileged'],
 ]);
 /**
  * Phase 31 plan 04: store kinds the app menu sends straight from the Theia window to chrome. Each

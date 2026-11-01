@@ -3860,6 +3860,9 @@ run_own_checks() {
     # remove privileged store kinds). Honestly --quick: text reads only.
     "extension-actions|node $REPO_ROOT/scripts/verify-extension-actions.mjs"
     "extension-actions-self-test|node $REPO_ROOT/scripts/verify-extension-actions.mjs --self-test"
+    # The live file's static half: every plant targets a scenario, names text it emits and is read by it, with the
+    # audit's own plants red. No browser; the live sessions are extension-actions-live below.
+    "extension-actions-live-static|node $REPO_ROOT/scripts/verify-extension-actions-live.mjs --self-test"
 
     # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the
     # WebTabMessage union, the routed set and the state fields agree (derive and
@@ -5213,6 +5216,12 @@ run_own_checks() {
       # 37-REVIEW WR-05: the probe-1 verdict must be live by the end-of-milestone pass. Text only, but full-set only,
       # because the provisional owner default is expected to stand until that pass's dialog-probe run supersedes it.
       "prompt-probe-verdict-live|node $REPO_ROOT/scripts/verify-permission-prompts.mjs --require-live-verdict"
+      # NEW (Phase 38 plan 01, EXT-06/07): the extension bridge live -- the action-state push and the one click path
+      # run on the page on screen (popup-action), then the tabs bridge (tabs-bridge). Needs the binary with patch 050
+      # (stamp checked first) and the last Theia build, so never --quick. The plant run boots a clean control per
+      # target scenario, then one session per plant.
+      "extension-actions-live|node $REPO_ROOT/scripts/verify-extension-actions-live.mjs"
+      "extension-actions-live-self-test|node $REPO_ROOT/scripts/verify-extension-actions-live.mjs --self-test --live"
 
       # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
       # and identity-local (31-01), site-panel (31-02: certificate, six tri-state

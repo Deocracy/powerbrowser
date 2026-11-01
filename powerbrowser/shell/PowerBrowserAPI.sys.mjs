@@ -4212,6 +4212,7 @@ const STORE_REQUEST_KINDS = new Set([
   "listClosedTabs",
   "reopenClosedTab",
   "clearHistory",
+  "extensionActionsSubscribe", "extensionClick", "extensionPin", "extensionRemove",
   "fullScreen",
 ]);
 
@@ -4346,6 +4347,7 @@ async function handleStoreRequest(data, actorRef) {
       case "fullScreen": {
         return { ok: true, kind, where: toggleShellFullscreen(actorRef) };
       }
+      case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": return extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11)
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
       }
@@ -9628,4 +9630,225 @@ async function claimClosedTabRow(uri) {
 // closed and its address, so the same record projects to the same row on every sweep.
 function stockClosedTabUri(closed, entry) {
   return closed.state?.extData?.[STOCK_TAB_KEY_VALUE] || `stock:closed-${closed.closedAt.toString(36)}-${stringHash(entry.url)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 38 (EXT-06, EXT-07): the extension bridge.
+//
+// Theia renders the toolbar buttons and the puzzle menu; chrome reads every
+// action's state and runs every click. State is read from each running
+// extension's browser action for the 31.1 host's selected tab (patch 050 skips
+// the stock button update for the shell window, so nothing else draws it) and
+// pushed whole, as one extensionAction push, to the Theia frame that
+// subscribed. A click runs triggerClickOrPopup on that same selected tab: the
+// stock delegate path re-reads the selected tab of whatever window it is handed,
+// which is the wrong-page bug (Pitfall 12). Tab identity is the host's, never
+// derived here (D-05).
+//
+// This section sits at the end of the file on purpose: nothing above the last
+// catalogued internals line moves when it grows.
+// ---------------------------------------------------------------------------
+
+const extensionLazy = {};
+ChromeUtils.defineESModuleGetters(extensionLazy, { AddonManager: "resource://gre/modules/AddonManager.sys.mjs", ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs", ExtensionUtils: "resource://gre/modules/ExtensionUtils.sys.mjs" });
+
+// D-08: the ids pinned to the toolbar, persisted across restarts.
+const EXTENSION_PINNED_PREF = "powerbrowser.extensions.pinned";
+// The 31.1 host's tab events after which the selected tab's action state may differ.
+const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModified"];
+// Source icon URL -> promise of its data: URL (or null); each icon is read once.
+const extensionIconData = new Map();
+// Shell window -> { theiaBrowser, last, seq }: the subscribed frame, the last set pushed (JSON) and the newest read.
+const extensionBridges = new WeakMap();
+
+function extensionPinnedIds() {
+  try {
+    const ids = JSON.parse(Services.prefs.getStringPref(EXTENSION_PINNED_PREF, "[]"));
+    return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function extensionSetPinnedIds(ids) {
+  Services.prefs.setStringPref(EXTENSION_PINNED_PREF, JSON.stringify([...ids]));
+}
+
+// Each running extension with a browser action, by id. ext-browserAction.js defines browserActionFor when the first
+// such extension starts, so before that no extension has an action.
+function extensionActionsById() {
+  const { apiManager, GlobalManager } = extensionLazy.ExtensionParent;
+  const actionFor = apiManager.global.browserActionFor;
+  const byId = new Map();
+  if (typeof actionFor !== "function") {
+    return byId;
+  }
+  for (const extension of GlobalManager.extensionMap.values()) {
+    const action = actionFor(extension)?.action;
+    if (action) {
+      byId.set(extension.id, { extension, action });
+    }
+  }
+  return byId;
+}
+
+// The 16px icon as a data: URL, since the Theia frame cannot load moz-extension: images; null when it cannot be read.
+function extensionIconOf(extension, icons) {
+  const { ExtensionParent, ExtensionUtils } = extensionLazy;
+  let url = ExtensionParent.IconDetails.getPreferredIcon(icons ?? {}, extension, 16).icon;
+  if (url && typeof url === "object") {
+    url = url.light; // theme_icons: the light variant, as the stock toolbar's default
+  }
+  if (typeof url !== "string") {
+    return Promise.resolve(null);
+  }
+  if (!extensionIconData.has(url)) {
+    extensionIconData.set(url, ExtensionUtils.makeDataURI(url).then(data => (typeof data === "string" && data.startsWith("data:image/") ? data : null), () => null));
+  }
+  return extensionIconData.get(url);
+}
+
+// One extension's row for the selected tab; with no web tab, the action's own defaults. Every field is chrome-chosen.
+async function extensionActionRow(extension, action, selectedTab, pinned) {
+  const data = action.getContextData(selectedTab);
+  return {
+    extensionId: extension.id,
+    title: String(data.title ?? extension.name ?? ""),
+    icon: await extensionIconOf(extension, data.icon),
+    badgeText: String(data.badgeText ?? ""),
+    enabled: data.enabled !== false,
+    hasPopup: Boolean(data.popup),
+    pinned: pinned.has(extension.id),
+  };
+}
+
+// Re-reads every action for the host's selected tab and pushes the set to the subscribed frame when it changed. The
+// newest read wins, so a slow icon read never overwrites a later push.
+async function pushExtensionActions(win) {
+  const bridge = extensionBridges.get(win);
+  const host = tabHosts.get(win);
+  if (!bridge || !host) {
+    return;
+  }
+  bridge.seq += 1;
+  const seq = bridge.seq;
+  const pinned = extensionPinnedIds();
+  let actions;
+  try {
+    actions = await Promise.all([...extensionActionsById().values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned)));
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[extensions] extensionAction read failed: ${err && err.message ? err.message : err}`);
+    return;
+  }
+  const text = JSON.stringify(actions);
+  if (seq !== bridge.seq || text === bridge.last) {
+    return;
+  }
+  bridge.last = text;
+  sendWebTabPush(bridge.theiaBrowser, { kind: "extensionAction", actions });
+}
+
+// The subscribing frame becomes the push target and gets the whole set at once. The listeners are added once per
+// window: the host's tab events, and an extension starting or stopping (install, enable, disable, remove).
+function extensionActionsSubscribe(win, theiaBrowser) {
+  const host = tabHosts.get(win);
+  if (!host || host.theiaBrowser !== theiaBrowser) {
+    return "unknown-window";
+  }
+  let bridge = extensionBridges.get(win);
+  if (!bridge) {
+    bridge = { theiaBrowser, last: null, seq: 0 };
+    extensionBridges.set(win, bridge);
+    const update = () => {
+      pushExtensionActions(win);
+    };
+    for (const type of EXTENSION_TAB_EVENTS) {
+      host.strip.addEventListener(type, update);
+    }
+    const { apiManager } = extensionLazy.ExtensionParent;
+    apiManager.on("ready", update);
+    apiManager.on("shutdown", update);
+    win.addEventListener("unload", () => {
+      apiManager.off("ready", update);
+      apiManager.off("shutdown", update);
+    }, { once: true });
+  }
+  // A reloaded frontend has none of the earlier pushes.
+  bridge.last = null;
+  pushExtensionActions(win);
+  return "subscribed";
+}
+
+// The extension a store kind names, when the running set holds it with an action.
+function extensionNamed(data) {
+  const id = data?.extensionId;
+  return typeof id === "string" && id.length <= 256 ? extensionActionsById().get(id) ?? null : null;
+}
+
+// EXT-07: a button's click. It runs on the host's selected tab, which stays the last web tab while the IDE has focus
+// (sub-ruling 1). A popup URL stays in chrome for the popup panel (38-02); it never crosses to the frame.
+function extensionClick(win, named) {
+  const selectedTab = tabHosts.get(win)?.selected ?? null;
+  if (!selectedTab) {
+    return "no-tab";
+  }
+  const popupUrl = named.action.triggerClickOrPopup(selectedTab);
+  pushExtensionActions(win);
+  if (popupUrl === null) {
+    return "disabled";
+  }
+  return popupUrl ? "popup" : "action";
+}
+
+// D-08: Pin to Toolbar and its undo.
+function extensionPin(win, named, pinned) {
+  const ids = extensionPinnedIds();
+  if (pinned) {
+    ids.add(named.extension.id);
+  } else {
+    ids.delete(named.extension.id);
+  }
+  extensionSetPinnedIds(ids);
+  pushExtensionActions(win);
+  return pinned ? "pinned" : "unpinned";
+}
+
+// D-08: Remove, after the menu's confirm row. Only an add-on the user may uninstall; a built-in or locked one is refused.
+async function extensionRemove(named) {
+  const { AddonManager } = extensionLazy;
+  const addon = await AddonManager.getAddonByID(named.extension.id);
+  if (!addon || addon.isBuiltin || !(addon.permissions & AddonManager.PERM_CAN_UNINSTALL)) {
+    return "refused";
+  }
+  const ids = extensionPinnedIds();
+  if (ids.delete(addon.id)) {
+    extensionSetPinnedIds(ids);
+  }
+  // The extension's shutdown pushes the set without it.
+  await addon.uninstall();
+  return "removed";
+}
+
+// handleStoreRequest's one line for the extension kinds; its walls (Theia sender, shell window) have already run.
+async function extensionStoreRequest(kind, data, actorRef) {
+  const theiaBrowser = actorRef.browsingContext.top.embedderElement;
+  const win = theiaBrowser.ownerDocument.defaultView;
+  if (kind === "extensionActionsSubscribe") {
+    return { ok: true, kind, where: extensionActionsSubscribe(win, theiaBrowser) };
+  }
+  const named = extensionNamed(data);
+  if (!named) {
+    return { ok: false, kind, reason: "validation", message: "handleStoreRequest: refusing an extension that is not running with a toolbar action" };
+  }
+  switch (kind) {
+    case "extensionClick":
+      return { ok: true, kind, where: extensionClick(win, named) };
+    case "extensionPin":
+      if (typeof data.pinned !== "boolean") {
+        return { ok: false, kind, reason: "validation", message: "handleStoreRequest: refusing a pin without a boolean pinned" };
+      }
+      return { ok: true, kind, where: extensionPin(win, named, data.pinned) };
+    default:
+      return { ok: true, kind, where: await extensionRemove(named) };
+  }
 }

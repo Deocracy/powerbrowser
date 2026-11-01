@@ -65,9 +65,9 @@ const REQUIRED_STORE_CLASS = new Map([
     ['extensionRemove', 'privileged'],
 ]);
 
-// PRESENCE_ASSERTION_TODO (38-01 Task 2 flips this in the commit that lands the bridge): once true, rule 6 requires
-// the sanctioned click call and rule 1 requires the live file.
-const BRIDGE_LANDED = false;
+// 38-01 Task 2 landed the bridge (the PRESENCE_ASSERTION_TODO point): rule 6 requires the sanctioned click call and
+// rule 1 the live file. Kept as a constant so the self-test can still run the pre-bridge shape.
+const BRIDGE_LANDED = true;
 
 function stripComments(text) {
     // Block comments keep their newlines, so a reported line number is the file's own.
@@ -243,6 +243,7 @@ function selfTest() {
         { name: `${STOCK_TRIGGER}shell)`, run: () => check(apiWith(`browserActionFor(extension).${STOCK_TRIGGER}shell);`)), expect: "calls the stock delegate's" },
         { name: 'planted messagemanagergroup', run: () => check(apiWith('frame.setAttribute("messagemanagergroup", "browsers");')), expect: 'names messagemanagergroup outside the 31.1 host sites' },
         { name: 'unclassified kind', run: () => check({ ...clean, [API]: clean[API].replace('const STORE_REQUEST_KINDS = new Set([', 'const STORE_REQUEST_KINDS = new Set([\n  "extensionPlanted",') }), expect: 'the store kind extensionPlanted has no STORE_KIND_CLASSES entry' },
+        { name: 'click path re-targeted', run: () => check({ ...clean, [API]: clean[API].replace('triggerClickOrPopup(selectedTab)', 'triggerClickOrPopup(host.selected)') }), expect: 'spelled triggerClickOrPopup(selectedTab)' },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
     let failed = 0;
