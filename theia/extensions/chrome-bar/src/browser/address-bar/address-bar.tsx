@@ -53,7 +53,7 @@ const HEURISTIC_KEY = 'heuristic';
 const ONE_OFF_KEY = 'oneoff:';
 
 /** BAR-11: the dropdown's tallest size (29-UI-SPEC Spacing Scale); a short window caps it at its bottom less 8px. */
-const DROPDOWN_MAX_HEIGHT = 432;
+export const DROPDOWN_MAX_HEIGHT = 432;
 
 /** SMODE-01: the trailing "Search with {engine}" row's key in Bookmarks, Tabs and History. */
 const SEARCH_ROW_KEY = 'search-row';
@@ -938,6 +938,19 @@ export class AddressBar {
         } catch {
             this.showCommitFailure(() => this.openDropped(payload));
         }
+    }
+
+    /**
+     * BMK-05: after Clear Recent History succeeds, history rows and their cached
+     * favicons are dropped at once; the next query re-reads both from chrome.
+     */
+    forgetHistoryRows(): void {
+        this.placeRows = this.placeRows.filter(row => row.source !== 'history');
+        this.icons = {};
+        if (this.dropdownOpen) {
+            this.rows = this.composeVisibleRows();
+        }
+        this.update();
     }
 
     async joinActiveGroup(widget: Widget): Promise<void> {

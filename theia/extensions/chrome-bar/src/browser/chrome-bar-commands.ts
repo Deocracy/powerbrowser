@@ -36,6 +36,8 @@ export const CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.book
 // Phase 33 plan 03 (BMK-03, BMK-04): reopen runs the widget's reopen path; the toggle flips the toolbar setting only.
 export const CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID = 'powerbrowser.chrome-bar.reopen-closed-tab';
 export const CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID = 'powerbrowser.chrome-bar.toggle-bookmarks-toolbar';
+// Phase 33 plan 04 (BMK-05, D-10): opens the range picker only; the clear runs from the picker's confirm, never from a command.
+export const CHROME_BAR_CLEAR_HISTORY_COMMAND_ID = 'powerbrowser.chrome-bar.clear-history';
 
 /**
  * D-11 (30-03): the palette category of the four visible commands ("Browser:
@@ -84,6 +86,7 @@ export const CHROME_BAR_EDIT_PASTE: Command = { id: CHROME_BAR_EDIT_PASTE_COMMAN
 export const CHROME_BAR_BOOKMARK_PAGE: Command = { id: CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Bookmark This Page' };
 export const CHROME_BAR_REOPEN_CLOSED_TAB: Command = { id: CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Reopen Closed Tab' };
 export const CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR: Command = { id: CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Show Bookmarks Toolbar' };
+export const CHROME_BAR_CLEAR_HISTORY: Command = { id: CHROME_BAR_CLEAR_HISTORY_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Clear Recent History…' };
 
 // PAGE-10 (32-08): labelless and categorised by neither, like Focus Address; Phase 33 owns the palette and menu rows.
 // Each one acts on the active web tab.
@@ -190,6 +193,18 @@ export function setToggleBookmarksToolbar(toggle: (() => void) | undefined): voi
 /** BMK-04: shows or hides the bookmarks toolbar (the command, the page relay's key and the menu rows). */
 export function toggleBookmarksToolbar(): void {
     toggleBookmarksToolbarPath?.();
+}
+
+let openClearHistoryPath: (() => void) | undefined;
+
+/** Set by the chrome bar widget, which owns the range picker and its confirm handler. */
+export function setOpenClearHistory(open: (() => void) | undefined): void {
+    openClearHistoryPath = open;
+}
+
+/** BMK-05: opens the Clear Recent History picker; never clears (the picker is the confirmation). */
+export function openClearHistory(): void {
+    openClearHistoryPath?.();
 }
 
 /**
@@ -349,6 +364,11 @@ export class ChromeBarCommandContribution implements CommandContribution {
         commands.registerCommand(CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR, {
             execute: () => toggleBookmarksToolbar(),
             isToggled: () => this.preferences.inspectInScope<boolean>(SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, PreferenceScope.User) === true,
+            isVisible: () => true,
+        });
+        // BMK-05 (rule 12): opens the range picker only; needs no web tab, so it is always enabled.
+        commands.registerCommand(CHROME_BAR_CLEAR_HISTORY, {
+            execute: () => openClearHistory(),
             isVisible: () => true,
         });
         commands.registerCommand(CHROME_BAR_FOCUS_ADDRESS, {

@@ -333,8 +333,9 @@
     line-height: 1.5;
 }
 
-/* BMK-02 (33-UI-SPEC): the star's editor, anchored under the star. */
-.pb-chrome-bar-dropdown.pb-bookmark-editor {
+/* BMK-02 (33-UI-SPEC): the star's editor, anchored under the star; BMK-05's clear-history picker, anchored under the hamburger. */
+.pb-chrome-bar-dropdown.pb-bookmark-editor,
+.pb-chrome-bar-dropdown.pb-clear-history {
     left: auto;
     width: 320px;
     padding: 16px;
@@ -343,21 +344,24 @@
     gap: 4px;
 }
 
-.pb-bookmark-editor-heading {
+.pb-bookmark-editor-heading,
+.pb-clear-history-heading {
     height: 24px;
     font-size: 13px;
     line-height: 24px;
     color: var(--color-text, #fbfbfe);
 }
 
-.pb-bookmark-editor-failure {
+.pb-bookmark-editor-failure,
+.pb-clear-history-failure {
     font-size: 12px;
     line-height: 1.5;
     color: var(--color-text, #fbfbfe);
 }
 
 .pb-bookmark-editor-field,
-.pb-bookmark-editor-folders {
+.pb-bookmark-editor-folders,
+.pb-clear-history-ranges {
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -380,7 +384,8 @@
     border-radius: 4px;
 }
 
-.pb-bookmark-editor-folder {
+.pb-bookmark-editor-folder,
+.pb-clear-history-range {
     height: 32px;
     padding: 0 8px;
     display: flex;
@@ -392,23 +397,28 @@
     cursor: pointer;
 }
 
-.pb-bookmark-editor-folder:hover {
+.pb-bookmark-editor-folder:hover,
+.pb-clear-history-range:hover {
     background: var(--color-surface-raised, #35343f);
 }
 
-.pb-bookmark-editor-footer {
+.pb-bookmark-editor-footer,
+.pb-clear-history-footer {
     display: flex;
     align-items: center;
     gap: 8px;
     margin-top: 4px;
 }
 
-.pb-bookmark-editor-spacer {
+.pb-bookmark-editor-spacer,
+.pb-clear-history-spacer {
     flex: 1 1 auto;
 }
 
 .pb-bookmark-editor-remove,
-.pb-bookmark-editor-button {
+.pb-bookmark-editor-button,
+.pb-clear-history-clear,
+.pb-clear-history-button {
     height: 32px;
     padding: 0 12px;
     font-size: 14px;
@@ -420,7 +430,8 @@
 }
 
 /* The destructive token, on exactly this button and the clear-history Clear button. */
-.pb-bookmark-editor-remove {
+.pb-bookmark-editor-remove,
+.pb-clear-history-clear {
     color: var(--color-danger, #ff848b);
     border-color: var(--color-danger, #ff848b);
 }
@@ -433,6 +444,13 @@
 .pb-bookmark-editor-button:disabled {
     opacity: 0.4;
     cursor: default;
+}
+
+/* BMK-05: the fan-out footnote, Caption in muted ink. */
+.pb-clear-history-footnote {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted, #9a99a8);
 }
 
 /* SITE-01: the plan-01 panel fallback keeps the panel geometry. */

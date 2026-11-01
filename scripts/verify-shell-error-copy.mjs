@@ -735,6 +735,16 @@ const EXPECTED_NAV_COPY = new Set([
   "No recently closed tabs.",
   "No recent pages.",
   "${name} couldn't read your history. Open this menu again to try again.",
+  // Phase 33 plan 04 (BMK-05): the History submenu's clear row and the range picker ("Clear" and "Cancel" are pinned above).
+  "Clear Recent History…",
+  "Clear Recent History",
+  "Last hour",
+  "Last 2 hours",
+  "Last 4 hours",
+  "Today",
+  "Everything",
+  "This also clears ${name}'s closed tabs, thumbnails, saved pages and web-tab history. Your open tabs stay open.",
+  "${name} couldn't clear that history. Press Enter to try again.",
 ]);
 
 /**

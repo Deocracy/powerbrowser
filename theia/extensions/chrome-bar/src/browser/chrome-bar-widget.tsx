@@ -1,4 +1,5 @@
 import * as React from '@theia/core/shared/react';
+import { createPortal } from '@theia/core/shared/react-dom';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import {
     ApplicationShell,
@@ -16,6 +17,7 @@ import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import {
     CHROME_BAR_BACK_COMMAND_ID,
+    CHROME_BAR_CLEAR_HISTORY_COMMAND_ID,
     CHROME_BAR_FORWARD_COMMAND_ID,
     CHROME_BAR_DOWNLOADS_COMMAND_ID,
     CHROME_BAR_NEW_TAB_COMMAND_ID,
@@ -25,6 +27,7 @@ import {
     currentWebTab,
     setCurrentWebTab,
     setChooseSaveDestination,
+    setOpenClearHistory,
     setOpenDownloadsPanel,
     setOpenFindBar,
     setReopenLastClosedTab,
@@ -32,7 +35,7 @@ import {
 } from './chrome-bar-commands';
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
-import { AddressBar, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
+import { AddressBar, DROPDOWN_MAX_HEIGHT, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
 import { BUTTON_SHORTCUTS, NavButton, tooltipFor } from './chrome-bar-shortcuts';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
@@ -43,7 +46,7 @@ import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
 import { OrganisingWidget } from '@powerbrowser/modes/lib/browser/organising-widget';
 import { TabStripWidget } from './tab-strip-widget';
 import { LayoutControlsWidget } from './layout-controls-widget';
-import { BookmarkEntry, ChromeStoreClient, ClosedTabRow, PlaceMatch, ReopenableTab } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
+import { BookmarkEntry, ChromeStoreClient, ClearHistoryRange, ClosedTabRow, PlaceMatch, ReopenableTab } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profile-storage';
 import { MENU_ORDER, MENU_PHASE } from './site-identity/site-identity-table';
 import { APP_MENU_ID, AppMenuRow, AppMenuSubmenu, WIRED_MENU_IDS, buildAppMenu } from './site-identity/app-menu';
@@ -105,6 +108,87 @@ const HISTORY_MENU_ROWS = 10;
 interface HistoryMenuReads {
     closed: ClosedTabRow[] | 'failed';
     recent: PlaceMatch[] | 'failed';
+}
+
+/** BMK-05 (D-09): the picker's five ranges in 33-UI-SPEC order, keyed by the names chrome's clearHistory accepts. */
+const CLEAR_HISTORY_RANGES: ReadonlyArray<{ range: ClearHistoryRange; label: () => string }> = [
+    { range: 'last-hour', label: () => CHROME_BAR_COPY.clearHistoryLastHour },
+    { range: 'last-2-hours', label: () => CHROME_BAR_COPY.clearHistoryLast2Hours },
+    { range: 'last-4-hours', label: () => CHROME_BAR_COPY.clearHistoryLast4Hours },
+    { range: 'today', label: () => CHROME_BAR_COPY.clearHistoryToday },
+    { range: 'everything', label: () => CHROME_BAR_COPY.clearHistoryEverything },
+];
+
+/** BMK-05: the open picker. `opener` is where focus returns; none returns it to the current web tab's page. */
+interface ClearHistoryPickerState {
+    range: ClearHistoryRange;
+    failed: boolean;
+    busy: boolean;
+    opener: HTMLElement | undefined;
+}
+
+interface ClearHistoryPickerProps {
+    picker: ClearHistoryPickerState;
+    top: number;
+    right: number;
+    onRange(range: ClearHistoryRange): void;
+    onClear(): void;
+    onClose(restoreFocus: boolean): void;
+}
+
+/**
+ * BMK-05 (D-10): the Clear Recent History picker, the star editor's portal
+ * pattern anchored under the hamburger. The panel is the confirmation: Clear
+ * (and Enter) calls back to the widget's confirm handler, the only place the
+ * clear is sent (rule 12). Esc and Cancel close it with focus back on the
+ * opener; focus leaving the panel closes it where focus went.
+ */
+function ClearHistoryPicker(props: ClearHistoryPickerProps): React.ReactElement {
+    const { picker, top, right, onRange, onClear, onClose } = props;
+    const panelRef = React.useRef<HTMLDivElement>(null);
+    // Mount only: focus the chosen range, so arrows move between ranges and Enter clears.
+    React.useEffect(() => {
+        panelRef.current?.querySelector<HTMLInputElement>('input:checked')?.focus();
+    }, []);
+    const heading = CHROME_BAR_COPY.clearHistoryHeading;
+    return createPortal(
+        <div
+            ref={panelRef}
+            className='pb-chrome-bar-dropdown pb-clear-history'
+            role='dialog'
+            aria-label={heading}
+            tabIndex={-1}
+            style={{ position: 'fixed', top, right, maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)) }}
+            onKeyDown={e => {
+                if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    onClose(true);
+                } else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
+                    e.preventDefault();
+                    onClear();
+                }
+            }}
+            onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) { onClose(false); } }}
+        >
+            <div className='pb-clear-history-heading'>{heading}</div>
+            {picker.failed && <div className='pb-clear-history-failure' role='alert'>{CHROME_BAR_COPY.clearHistoryFailed(appSubject())}</div>}
+            <div className='pb-clear-history-ranges' role='radiogroup' aria-label={heading}>
+                {CLEAR_HISTORY_RANGES.map(({ range, label }) => <label key={range} className='pb-clear-history-range'>
+                    <input type='radio' name='pb-clear-history-range' checked={picker.range === range} onChange={() => onRange(range)} />
+                    <span>{label()}</span>
+                </label>)}
+            </div>
+            <div className='pb-clear-history-footnote'>{CHROME_BAR_COPY.clearHistoryFootnote(appSubject())}</div>
+            <div className='pb-clear-history-footer'>
+                <span className='pb-clear-history-spacer' />
+                <button type='button' className='pb-clear-history-button' onClick={() => onClose(true)}>{CHROME_BAR_COPY.clearHistoryCancel}</button>
+                {/* Never disabled while busy: disabling the focused button would blur the panel and close it. */}
+                <button type='button' className='pb-clear-history-clear' onClick={onClear}>{CHROME_BAR_COPY.clearHistoryConfirm}</button>
+            </div>
+        </div>,
+        document.body
+    );
 }
 
 /** Where a bookmark or a recent page opens (the Phase 29 targets): the current tab, or a new background or foreground tab. */
@@ -335,6 +419,14 @@ export class ChromeBarWidget extends ReactWidget {
     protected toolbarSeq = 0;
     /** How the last key or click inside an open bar menu asked a row to open: Alt foreground, Ctrl background. */
     protected menuTarget: OpenTarget = 'current';
+    /** BMK-05: the Clear Recent History picker while it is open. */
+    protected clearHistoryPicker: ClearHistoryPickerState | undefined;
+    /** The Phase 31 hamburger button: the picker's anchor and the History row's focus return. */
+    protected appMenuButton: HTMLButtonElement | null = null;
+    /** Stable, so React calls it only on mount and unmount. */
+    protected appMenuButtonRef = (el: HTMLButtonElement | null): void => {
+        this.appMenuButton = el;
+    };
 
     @postConstruct()
     protected init(): void {
@@ -344,6 +436,7 @@ export class ChromeBarWidget extends ReactWidget {
         setChooseSaveDestination(suggestedName => this.chooseSaveDestination(suggestedName));
         setReopenLastClosedTab(() => void this.reopenClosedTabRow());
         setToggleBookmarksToolbar(() => void this.toggleBookmarksToolbar());
+        setOpenClearHistory(() => this.openClearHistoryPicker());
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
@@ -446,8 +539,84 @@ export class ChromeBarWidget extends ReactWidget {
                 this.acceleratorOf(CHROME_BAR_REOPEN_CLOSED_TAB_COMMAND_ID)),
             section('closed', CHROME_BAR_COPY.recentlyClosedTabs, closedRows),
             section('recent', CHROME_BAR_COPY.recentPages, recentRows),
+            // BMK-05 (D-10): opens the picker anchored to the hamburger; the row never clears.
+            this.menuGroup('clear', [this.menuLeaf('clear-history', CHROME_BAR_COPY.clearRecentHistoryRow,
+                () => this.openClearHistoryPicker(this.appMenuButton ?? undefined), true, this.acceleratorOf(CHROME_BAR_CLEAR_HISTORY_COMMAND_ID))]),
         ];
         return children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') }));
+    }
+
+    /**
+     * BMK-05 (D-10): opens the Clear Recent History picker with Last hour chosen.
+     * Focus returns to `opener`, else to the element focused now, else (a page
+     * had focus) to the current web tab's page. Never clears.
+     */
+    protected openClearHistoryPicker(opener?: HTMLElement): void {
+        if (this.clearHistoryPicker) {
+            return;
+        }
+        const active = document.activeElement;
+        const focused = active instanceof HTMLElement && active !== document.body && !active.closest('.lm-Menu') ? active : undefined;
+        this.clearHistoryPicker = { range: 'last-hour', failed: false, busy: false, opener: opener ?? focused };
+        this.update();
+    }
+
+    protected closeClearHistoryPicker = (restoreFocus: boolean): void => {
+        const picker = this.clearHistoryPicker;
+        if (!picker) {
+            return;
+        }
+        this.clearHistoryPicker = undefined;
+        this.update();
+        if (restoreFocus) {
+            setTimeout(() => (picker.opener?.isConnected ? picker.opener.focus() : currentWebTab()?.focusPage()));
+        }
+    };
+
+    /**
+     * BMK-05 (D-09, T-33-04, rule 12): the one place the clear is sent, from the
+     * picker's Clear or Enter with the chosen range. Success closes the panel and
+     * drops what the clear removed: the History submenu re-reads on every open,
+     * the toolbar and the pill's history rows re-read now. A refusal keeps the
+     * panel with the failure row; Enter tries again.
+     */
+    protected async confirmClearHistory(): Promise<void> {
+        const picker = this.clearHistoryPicker;
+        if (!picker || picker.busy) {
+            return;
+        }
+        picker.busy = true;
+        try {
+            await this.store.clearHistory(picker.range);
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] clearing history failed:', error instanceof Error ? error.name : typeof error);
+            picker.busy = false;
+            picker.failed = true;
+            this.update();
+            return;
+        }
+        if (this.clearHistoryPicker === picker) {
+            this.closeClearHistoryPicker(true);
+        }
+        this.addressBar.forgetHistoryRows();
+        void this.refreshBookmarksToolbar();
+    }
+
+    /** BMK-05 (33-UI-SPEC geometry): 4px under the hamburger, the panel's right edge on the button's. */
+    protected renderClearHistoryPicker(): React.ReactNode {
+        const picker = this.clearHistoryPicker;
+        if (!picker) {
+            return undefined;
+        }
+        const anchor = this.appMenuButton?.getBoundingClientRect();
+        return <ClearHistoryPicker
+            picker={picker}
+            top={Math.round((anchor?.bottom ?? 0) + 4)}
+            right={Math.round(window.innerWidth - (anchor?.right ?? window.innerWidth))}
+            onRange={range => { picker.range = range; this.update(); }}
+            onClear={() => void this.confirmClearHistory()}
+            onClose={this.closeClearHistoryPicker}
+        />;
     }
 
     /** BMK-04: the toolbar setting, read from user settings only (the Home settings rule). */
@@ -1461,6 +1630,7 @@ export class ChromeBarWidget extends ReactWidget {
                 <span className='codicon codicon-plus' />
             </button>
             <button
+                ref={this.appMenuButtonRef}
                 className='pb-chrome-bar-button'
                 aria-label={CHROME_BAR_COPY.appMenu}
                 title={CHROME_BAR_COPY.appMenu}
@@ -1504,6 +1674,7 @@ export class ChromeBarWidget extends ReactWidget {
         {this.renderFind()}
         {this.renderPrintNotice()}
         {this.renderSaveNotice()}
+        {this.renderClearHistoryPicker()}
         </div>;
     }
 }

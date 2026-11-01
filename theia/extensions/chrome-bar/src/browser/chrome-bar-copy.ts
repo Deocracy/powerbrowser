@@ -205,6 +205,18 @@ export const CHROME_BAR_COPY = Object.freeze({
     noClosedTabs: 'No recently closed tabs.',
     noRecentPages: 'No recent pages.',
     historyMenuFailed: (subject: string) => `${subject} couldn't read your history. Open this menu again to try again.`,
+    // Phase 33 plan 04 (BMK-05, D-10): the History submenu's clear row and the range picker it opens.
+    clearRecentHistoryRow: 'Clear Recent History…',
+    clearHistoryHeading: 'Clear Recent History',
+    clearHistoryLastHour: 'Last hour',
+    clearHistoryLast2Hours: 'Last 2 hours',
+    clearHistoryLast4Hours: 'Last 4 hours',
+    clearHistoryToday: 'Today',
+    clearHistoryEverything: 'Everything',
+    clearHistoryFootnote: (subject: string) => `This also clears ${subject}'s closed tabs, thumbnails, saved pages and web-tab history. Your open tabs stay open.`,
+    clearHistoryConfirm: 'Clear',
+    clearHistoryCancel: 'Cancel',
+    clearHistoryFailed: (subject: string) => `${subject} couldn't clear that history. Press Enter to try again.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */
