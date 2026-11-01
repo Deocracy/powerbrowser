@@ -345,10 +345,11 @@ export class ChromeStoreClient {
 
     /**
      * Phase 38 plan 01 (EXT-07, D-11): a toolbar button's click, run by chrome on the selected web tab. Resolves
-     * 'popup', 'action', 'disabled' or 'no-tab'. Privileged: only the button's click handler calls it.
+     * 'popup', 'action', 'disabled' or 'no-tab'. Privileged: only the button's click handler calls it. `pageAction`
+     * (38-03) runs the extension's page action instead, for the pill icon.
      */
-    async extensionClick(extensionId: string, anchorRect: ExtensionAnchorRect): Promise<string> {
-        const reply = await this.request({ kind: 'extensionClick', extensionId, anchorRect });
+    async extensionClick(extensionId: string, anchorRect: ExtensionAnchorRect, pageAction = false): Promise<string> {
+        const reply = await this.request({ kind: 'extensionClick', extensionId, anchorRect, ...(pageAction ? { pageAction: true } : {}) });
         if (!reply.ok) {
             throw new Error(reply.message ?? `extensionClick failed (${reply.reason ?? 'store'})`);
         }

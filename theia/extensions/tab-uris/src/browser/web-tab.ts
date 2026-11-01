@@ -296,6 +296,11 @@ export interface ExtensionActionRow {
     pinned: boolean;
     /** Phase 38 plan 02 (D-02): this extension's popup is open in chrome's native panel (the button draws pressed). */
     popupOpen: boolean;
+    /**
+     * Phase 38 plan 03 (EXT-08 SC3): the row is the extension's page action, which chrome sends only while it is shown
+     * on the selected tab (the pill icon); false on a toolbar action's row.
+     */
+    pageActionShown: boolean;
 }
 
 /** Phase 38 plan 01: the rows of one extensionAction push; a malformed row is dropped, never rendered. */
@@ -308,7 +313,7 @@ export function extensionActionRowsOf(detail: Record<string, unknown>): Extensio
         return !!row && typeof row === 'object' && typeof r.extensionId === 'string' && typeof r.title === 'string'
             && (r.icon === null || (typeof r.icon === 'string' && r.icon.startsWith('data:image/')))
             && typeof r.badgeText === 'string' && typeof r.enabled === 'boolean' && typeof r.hasPopup === 'boolean' && typeof r.pinned === 'boolean'
-            && typeof r.popupOpen === 'boolean';
+            && typeof r.popupOpen === 'boolean' && typeof r.pageActionShown === 'boolean';
     });
 }
 

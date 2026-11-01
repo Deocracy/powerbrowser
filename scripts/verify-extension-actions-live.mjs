@@ -64,6 +64,15 @@
 //                   naming the hello from /a. Plant pageaction-zero-tab runs upstream's
 //                   unguarded show_matches loop at the zero-overlay boot and must go red
 //                   naming the throw.
+//   page-action  -- (38-03, EXT-08 SC3, B2) on the same relaunch: the subscribe at the
+//                   zero-overlay boot pushes no page-action row and the pill draws no icon
+//                   (scored once the icon was seen on /a); /a's push carries the page
+//                   action (pageActionShown) and the pill shows its icon with the pushed
+//                   title; on the localhost page /n chrome reports it hidden and the icon
+//                   goes; back on /a it returns, and a real click on it runs in /a (the
+//                   content script retitles the page and onClicked names /a's tab id).
+//                   Plant pageaction-pill-stale freezes the frame's extensionAction pushes
+//                   once the icon is drawn and must go red naming the stale icon.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -392,15 +401,75 @@ async function scenarioContent({ app, plant, command }) {
   return verdict(true, `zero-overlay boot with no throw (the control throw was seen); the first overlay opened clean; the content script ran in /a and /b; sender.tab was ${ids['/a']} and ${ids['/b']}; tabs.sendMessage reached each page; /a's image request carried tab ${ids['/a']}; the page action is shown on /a and hidden on /n (tab ${ids['/n']})`, null);
 }
 
+// 38-03 (EXT-08 SC3, B2): the pill's page-action icon follows the pushed shown state per tab, and its click runs in the
+// overlay on screen through the toolbar buttons' path.
+async function scenarioPageAction({ app, plant, command }) {
+  const id = fixtureId('content');
+  const isPage = r => r.extensionId === id && r.pageActionShown === true;
+  const pillIcons = async () => JSON.parse(await app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-chrome-bar-pill .pb-page-action')].map(b => ({ id: b.dataset.extensionId, title: b.title })))`));
+  const from = (await live.pushes(app)).length;
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  const bootAt = await live.waitForPush(app, p => p.kind === 'extensionAction', { from });
+  if (bootAt < 0) {
+    return verdict(false, null, 'no extensionAction push answered the subscribe at the zero-overlay boot');
+  }
+  const bootRows = (await live.pushes(app))[bootAt].actions;
+  const bootIcons = await pillIcons();
+  const A = await openTab(app, '/a');
+  await waitForSelected(app, A, '/a');
+  const shownAt = await live.waitForPush(app, p => p.kind === 'extensionAction' && p.actions.some(isPage), { from });
+  if (shownAt < 0) {
+    return verdict(false, null, 'no extensionAction push carried the page action shown on /a');
+  }
+  const row = (await live.pushes(app))[shownAt].actions.find(isPage);
+  const shown = await pollUntil(pillIcons, icons => icons.some(i => i.id === id), 10000);
+  if (!shown || shown.find(i => i.id === id).title !== row.title) {
+    return verdict(false, null, `the pill does not show the page action pushed for /a (${JSON.stringify(row.title)}): ${JSON.stringify(shown ?? await pillIcons())}`);
+  }
+  // The icon reader has now seen an icon, so the boot reading taken before it is scored.
+  if (bootRows.some(isPage) || bootIcons.length) {
+    return verdict(false, null, `the zero-overlay boot showed a page action: push ${JSON.stringify(bootRows.filter(isPage))}, pill ${JSON.stringify(bootIcons)}`);
+  }
+  if (plant?.name === 'pageaction-pill-stale') {
+    // The frame stops hearing extensionAction pushes after the icon was drawn.
+    await app.evaluate(`(() => { window.addEventListener(${JSON.stringify(live.WEB_TAB_STATE_EVENT)}, e => { if (e.detail && e.detail.kind === 'extensionAction') e.stopImmediatePropagation(); }, true); return true; })()`);
+  }
+  const N = await live.openWebTab(app, `${STOCK_ORIGIN}/n`);
+  await waitForSelected(app, N, '/n');
+  const hiddenN = await command('isShown', { tabId: await extTabIdOf(app, N) });
+  if (hiddenN.result !== false) throw new Error(`BROKEN INSTRUMENT: the page action is not hidden on /n in chrome: ${JSON.stringify(hiddenN)}`);
+  if (!(await pollUntil(pillIcons, icons => !icons.some(i => i.id === id), 5000))) {
+    return verdict(false, null, 'the stale icon: the pill still shows the page action on /n, where chrome reports it hidden');
+  }
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  if (!(await pollUntil(pillIcons, icons => icons.some(i => i.id === id), 10000))) {
+    return verdict(false, null, 'the pill did not show the page action again back on /a');
+  }
+  const logFrom = session.logs.length;
+  await clickInFrame(app, `.pb-page-action[data-extension-id=${JSON.stringify(id)}]`);
+  const clicked = await waitSince(logFrom, r => r.kind === 'page-clicked');
+  const tabA = await extTabIdOf(app, A);
+  if (!clicked || clicked.tabId !== tabA || clicked.title !== 'pb-page-acted /a') {
+    return verdict(false, null, `the pill icon's click did not run in /a (tab ${tabA}): ${JSON.stringify(clicked ?? null)}`);
+  }
+  const overlayTitle = await live.inChrome(app, `const o = overlayOf(${JSON.stringify(A)}); return o ? o.contentTitle : null;`);
+  if (overlayTitle !== 'pb-page-acted /a') {
+    return verdict(false, null, `overlay /a shows ${JSON.stringify(overlayTitle)} after the pill icon's click, not the extension's title`);
+  }
+  return verdict(true, `the zero-overlay boot pushed and drew no page action; /a's push carried it and the pill drew ${JSON.stringify(row.title)}; on /n it was hidden and the icon went; back on /a its click ran in tab ${tabA} (retitled to ${overlayTitle})`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
   manage: scenarioManage,
   'tabs-bridge': scenarioTabsBridge,
   content: scenarioContent,
+  'page-action': scenarioPageAction,
 };
 // Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
-const RELAUNCH_SCENARIOS = new Set(['content']);
+const RELAUNCH_SCENARIOS = new Set(['content', 'page-action']);
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
 // patched product: the scenario reads `plant.name`.
@@ -412,6 +481,7 @@ const PLANTS_TABLE = {
   'pin-lost': { scenario: 'manage', expect: 'the pin did not persist' },
   'sender-tab-null': { scenario: 'content', expect: 'the hello from /a carried sender.tab -1' },
   'pageaction-zero-tab': { scenario: 'content', expect: 'the zero-overlay startup threw' },
+  'pageaction-pill-stale': { scenario: 'page-action', expect: 'the stale icon: the pill still shows' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;

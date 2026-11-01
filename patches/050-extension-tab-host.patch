@@ -108,7 +108,7 @@ index fbce863cb2..f7a06fcfcd 100644
        const menu = window.document.getElementById(id);
        menu.removeEventListener("popupshowing", this);
 diff --git a/browser/components/extensions/parent/ext-pageAction.js b/browser/components/extensions/parent/ext-pageAction.js
-index 35bbf828c6..aa1bed3c9a 100644
+index 35bbf828c6..ed97310a12 100644
 --- a/browser/components/extensions/parent/ext-pageAction.js
 +++ b/browser/components/extensions/parent/ext-pageAction.js
 @@ -168,7 +168,7 @@ this.pageAction = class extends ExtensionAPIPersistent {
@@ -120,12 +120,14 @@ index 35bbf828c6..aa1bed3c9a 100644
              this.updateButton(window);
            }
          }
-@@ -197,6 +197,10 @@ this.pageAction = class extends ExtensionAPIPersistent {
+@@ -197,6 +197,12 @@ this.pageAction = class extends ExtensionAPIPersistent {
    // Updates "image" to match the "icon" property.
    // Enables or disables the icon, based on the "enabled" and "patternMatching" properties.
    updateButton(window) {
-+    // A tab host window has no page-action UI; its page actions are the embedder's.
++    // A tab host window has no page-action UI; its page actions are the embedder's,
++    // which its tab strip tells to re-read the page-action state.
 +    if (windowTracker.isTabHostWindow(window)) {
++      window.gBrowser.tabContainer.dispatchEvent(new window.Event("TabHostActionUpdate"));
 +      return;
 +    }
      let tab = window.gBrowser.selectedTab;

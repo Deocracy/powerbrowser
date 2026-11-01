@@ -43,6 +43,12 @@
  *                    extension content in Theia DOM: no <iframe, no
  *                    dangerouslySetInnerHTML (an icon is an <img src> only) and
  *                    no moz-extension: string. The popup is the native panel.
+ *   9. page action -- (38-03, EXT-08 SC3, B2) the pill icon shows what chrome
+ *                    pushed: the extension section reads isShownForTab on the
+ *                    host's selected tab, the row validator requires
+ *                    pageActionShown, the widget's renderPageActions filters
+ *                    on it and reads no page URL or pattern, and no other
+ *                    chrome-bar source draws a page-action icon.
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -69,6 +75,9 @@ const CHROME_BAR_SRC = 'theia/extensions/chrome-bar/src/';
 const EXTENSIONS_DIR = `${CHROME_BAR_SRC}browser/extensions/`;
 const EXTENSIONS_WIDGET = `${EXTENSIONS_DIR}extension-actions-widget.tsx`;
 const EXTENSIONS_ANCHOR = `${EXTENSIONS_DIR}extension-popup-anchor.ts`;
+const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
+// Rule 9: what computing a page action's visibility Theia-side would read (the page's address or the extension's patterns).
+const PAGE_MATCH = /url|uri\b|href|location|match/i;
 // D-02: what drawing extension content in Theia DOM looks like; the first two would host a popup page, the last names one.
 const THEIA_DOM_POPUP = [['<iframe', 'an <iframe'], ['dangerouslySetInnerHTML', 'dangerouslySetInnerHTML'], [['moz', 'extension:'].join('-'), 'an extension-scheme URL']];
 // The stock delegate's call, assembled so this file's own text never matches rule 3's scan of the tree.
@@ -259,6 +268,25 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             }
         });
     }
+    // 9. page action
+    if (bridgeLanded) {
+        const section = stripComments(src[API].slice(Math.max(0, src[API].indexOf(SECTION_MARK))));
+        if (!section.includes('action.isShownForTab(host.selected)')) failures.push(`page-action: the extension section of ${API} does not read action.isShownForTab(host.selected); the pill icon's shown state is chrome's (B2)`);
+        if (!/typeof r\.pageActionShown === 'boolean'/.test(src[WEB_TAB] ?? '')) failures.push(`page-action: ${WEB_TAB}'s extensionActionRowsOf does not require pageActionShown`);
+        const widgetLines = stripComments(src[EXTENSIONS_WIDGET] ?? '').split('\n');
+        const body = span(widgetLines, /^ {4}renderPageActions\(\)/);
+        if (!body) {
+            failures.push(`page-action: ${EXTENSIONS_WIDGET} has no renderPageActions() (broken instrument)`);
+        } else {
+            const text = widgetLines.slice(body.start + 1, body.end).join('\n');
+            if (!text.includes('.filter(row => row.pageActionShown)')) failures.push(`page-action: ${EXTENSIONS_WIDGET} renderPageActions does not show exactly the rows chrome pushed with pageActionShown`);
+            const local = PAGE_MATCH.exec(text);
+            if (local) failures.push(`page-action: ${EXTENSIONS_WIDGET} renderPageActions decides visibility from the page (${local[0]}) instead of the pushed pageActionShown`);
+        }
+        for (const file of products.filter(f => f.startsWith(CHROME_BAR_SRC) && f !== EXTENSIONS_WIDGET)) {
+            if (stripComments(src[file]).includes('pb-page-action')) failures.push(`page-action: ${file} draws a page-action icon outside ${EXTENSIONS_WIDGET}'s renderPageActions`);
+        }
+    }
     return failures;
 }
 
@@ -286,6 +314,7 @@ function selfTest() {
         { name: 'popup-dom', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <iframe src={popupUrl} />;\n` }), expect: `${EXTENSIONS_WIDGET}:` },
         { name: 'inlined svg icon', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <span dangerouslySetInnerHTML={{ __html: row.icon }} />;\n` }), expect: '(dangerouslySetInnerHTML)' },
         { name: 'anchor reporter gone', run: () => check(Object.fromEntries(Object.entries(clean).filter(([f]) => f !== EXTENSIONS_ANCHOR))), expect: `${EXTENSIONS_ANCHOR} is missing` },
+        { name: 'pill-icon-local-match', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: clean[EXTENSIONS_WIDGET].replace('.filter(row => row.pageActionShown)', ".filter(row => window.location.href.startsWith('http'))") }), expect: `${EXTENSIONS_WIDGET} renderPageActions decides visibility from the page` },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
     let failed = 0;
@@ -313,7 +342,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();

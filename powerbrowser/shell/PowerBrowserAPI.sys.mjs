@@ -9678,7 +9678,7 @@ const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModifi
 const extensionIconData = new Map();
 // Shell window -> { theiaBrowser, last, seq }: the subscribed frame, the last set pushed (JSON) and the newest read.
 const extensionBridges = new WeakMap();
-// Shell window -> { extension, popup }: the one extension popup open in it, as in Firefox.
+// Shell window -> { extension, action, popup }: the one extension popup open in it, as in Firefox.
 const extensionPopups = new WeakMap();
 
 function extensionPinnedIds() {
@@ -9694,11 +9694,12 @@ function extensionSetPinnedIds(ids) {
   Services.prefs.setStringPref(EXTENSION_PINNED_PREF, JSON.stringify([...ids]));
 }
 
-// Each running extension with a browser action, by id. ext-browserAction.js defines browserActionFor when the first
-// such extension starts, so before that no extension has an action.
-function extensionActionsById() {
+// Each running extension with a browser action (or, 38-03, a page action), by id. ext-browserAction.js and
+// ext-pageAction.js define browserActionFor and pageActionFor when the first such extension starts, so before that no
+// extension has an action.
+function extensionActionsById(page = false) {
   const { apiManager, GlobalManager } = extensionLazy.ExtensionParent;
-  const actionFor = apiManager.global.browserActionFor;
+  const actionFor = page ? apiManager.global.pageActionFor : apiManager.global.browserActionFor;
   const byId = new Map();
   if (typeof actionFor !== "function") {
     return byId;
@@ -9729,7 +9730,8 @@ function extensionIconOf(extension, icons) {
 }
 
 // One extension's row for the selected tab; with no web tab, the action's own defaults. Every field is chrome-chosen.
-async function extensionActionRow(extension, action, selectedTab, pinned, popupExtension) {
+// pageActionShown marks a page action's row, which is only built while the page action is shown (38-03).
+async function extensionActionRow(extension, action, selectedTab, pinned, popupAction, pageActionShown = false) {
   const data = action.getContextData(selectedTab);
   return {
     extensionId: extension.id,
@@ -9738,8 +9740,9 @@ async function extensionActionRow(extension, action, selectedTab, pinned, popupE
     badgeText: String(data.badgeText ?? ""),
     enabled: data.enabled !== false,
     hasPopup: Boolean(data.popup),
-    pinned: pinned.has(extension.id),
-    popupOpen: extension === popupExtension,
+    pinned: !pageActionShown && pinned.has(extension.id),
+    popupOpen: action === popupAction,
+    pageActionShown,
   };
 }
 
@@ -9754,10 +9757,18 @@ async function pushExtensionActions(win) {
   bridge.seq += 1;
   const seq = bridge.seq;
   const pinned = extensionPinnedIds();
-  const popupExtension = extensionPopups.get(win)?.extension ?? null;
+  const popupAction = extensionPopups.get(win)?.action ?? null;
   let actions;
   try {
-    actions = await Promise.all([...extensionActionsById().values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned, popupExtension)));
+    const rows = [...extensionActionsById().values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned, popupAction));
+    // 38-03 (EXT-08): a page action is sent only while shown for the selected tab (show_matches, show()/hide()); with
+    // no web tab none is. Patch 050's updateButton signal re-pushes on show(), hide() and a navigation.
+    for (const { extension, action } of extensionActionsById(true).values()) {
+      if (host.selected && action.isShownForTab(host.selected)) {
+        rows.push(extensionActionRow(extension, action, host.selected, pinned, popupAction, true));
+      }
+    }
+    actions = await Promise.all(rows);
   } catch (err) {
     PowerBrowserAPI.log("error", `[extensions] extensionAction read failed: ${err && err.message ? err.message : err}`);
     return;
@@ -9801,10 +9812,11 @@ function extensionActionsSubscribe(win, theiaBrowser) {
   return "subscribed";
 }
 
-// The extension a store kind names, when the running set holds it with an action.
+// The extension a store kind names, when the running set holds it with an action: its page action when the click
+// came from the pill icon (38-03), else its browser action.
 function extensionNamed(data) {
   const id = data?.extensionId;
-  return typeof id === "string" && id.length <= 256 ? extensionActionsById().get(id) ?? null : null;
+  return typeof id === "string" && id.length <= 256 ? extensionActionsById(data.pageAction === true).get(id) ?? null : null;
 }
 
 // D-02: the stock PanelPopup (ExtensionPopups.sys.mjs:484-518) parented to the shell's popupset, since the shell has no
@@ -9889,7 +9901,7 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
       pushExtensionActions(win);
     }
   };
-  extensionPopups.set(win, { extension: named.extension, popup });
+  extensionPopups.set(win, { extension: named.extension, action: named.action, popup });
   host.strip.addEventListener("TabSelect", close);
   win.document.addEventListener("focus", pageFocus, true);
   pushExtensionActions(win);
@@ -9908,7 +9920,7 @@ function extensionClick(win, named, anchorRect) {
   const open = extensionPopups.get(win);
   if (open) {
     open.popup.closePopup();
-    if (open.extension === named.extension) {
+    if (open.action === named.action) {
       return "closed";
     }
   }

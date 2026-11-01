@@ -216,7 +216,7 @@ export class ExtensionActionsWidget {
         this.menuOpen = false;
         this.update();
         try {
-            const where = await this.store.extensionClick(row.extensionId, anchorRect);
+            const where = await this.store.extensionClick(row.extensionId, anchorRect, row.pageActionShown);
             this.notice = where === 'popup-failed' ? CHROME_BAR_COPY.extensionPopupFailed : undefined;
             this.menuOpen = where === 'popup-failed';
             this.update();
@@ -314,13 +314,33 @@ export class ExtensionActionsWidget {
         </button>;
     }
 
+    /**
+     * Phase 38 plan 03 (EXT-08 SC3, B2): the page actions shown on the selected tab, as icons in the address pill's
+     * leading slot. Shown exactly when chrome sent the row (pageActionShown, isShownForTab chrome-side); nothing here
+     * matches a page against the extension's patterns. A click is the toolbar buttons' run.
+     */
+    renderPageActions(): React.ReactNode {
+        return this.rows.filter(row => row.pageActionShown).map(row => <button
+            key={row.extensionId}
+            type='button'
+            className={'pb-chrome-bar-button pb-page-action' + (row.popupOpen ? ' is-open' : '')}
+            data-extension-id={row.extensionId}
+            aria-label={row.title}
+            title={row.title}
+            aria-pressed={row.popupOpen}
+            onClick={e => void this.run(row, e.currentTarget)}
+        >
+            <ExtensionIcon row={row} />
+        </button>);
+    }
+
     protected renderMenu(): React.ReactNode {
         if (!this.menuOpen || !this.puzzle) {
             return undefined;
         }
         const rect = this.puzzle.getBoundingClientRect();
         return <ExtensionsMenu
-            rows={this.rows}
+            rows={this.rows.filter(row => !row.pageActionShown)}
             notice={this.notice}
             confirm={this.confirm}
             onRemove={row => void this.remove(row)}

@@ -502,6 +502,7 @@ export class ChromeBarWidget extends ReactWidget {
     protected init(): void {
         this.addressBar.attach(this);
         this.extensionActions.attach(this);
+        this.addressBar.pageActions = () => this.extensionActions.renderPageActions();
         setOpenDownloadsPanel(() => this.toggleDownloads());
         setOpenFindBar((tab, focus) => this.openFind(tab, focus));
         setChooseSaveDestination(suggestedName => this.chooseSaveDestination(suggestedName));

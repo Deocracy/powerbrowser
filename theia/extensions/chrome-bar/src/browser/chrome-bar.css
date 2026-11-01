@@ -1842,6 +1842,17 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     background: var(--color-surface-raised, #35343f);
 }
 
+/* 38-03 (B2): a page-action icon in the pill's leading slot; absent, not empty, when no page action is shown. */
+.pb-chrome-bar-button.pb-page-action {
+    flex: none;
+    width: 28px;
+    height: 28px;
+}
+
+.pb-chrome-bar-button.pb-page-action.is-open {
+    background: var(--color-surface-raised, #35343f);
+}
+
 .pb-ext-icon {
     width: 16px;
     height: 16px;

@@ -71,8 +71,8 @@ const GUARDS = [
     why: 'a zero-tab page_action show_matches loop must not pass a null tab' },
   { id: 'G2', file: PAGE_ACTION, mode: 'after',
     anchor: 'updateButton(window) {', site: 'updateButton',
-    regexes: [/^\s*if \(windowTracker\.isTabHostWindow\(window\)\) \{\s*$/, /^\s*return;\s*$/, /^\s*\}\s*$/],
-    why: 'a tab host window has no page-action UI (PageActions throws for it)' },
+    regexes: [/^\s*if \(windowTracker\.isTabHostWindow\(window\)\) \{\s*$/, /^\s*window\.gBrowser\.tabContainer\.dispatchEvent\(new window\.Event\("TabHostActionUpdate"\)\);\s*$/, /^\s*return;\s*$/, /^\s*\}\s*$/],
+    why: 'a tab host window has no page-action UI (PageActions throws for it); 38-03: its strip is told to re-read page actions' },
   { id: 'G3', file: BROWSER, mode: 'replace',
     anchor: 'const { frameLoader } = currentTab.linkedBrowser;', site: 'TabTracker.handleEvent',
     regexes: [/^\s*const frameLoader = currentTab\?\.linkedBrowser\?\.frameLoader;\s*$/],
@@ -704,6 +704,17 @@ function selfTest() {
     if (landedOk('G10 active refusal restored', g10Active !== clean)) {
       expectRed('G10 active refusal restored', check({ patchPath: withPatch('G10-active.patch', g10Active) }),
         f => f.id === 'G10' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G10' });
+    }
+
+    // G2: the page-action signal dropped (38-03), so show(), hide() and a navigation would wait for a tab event.
+    const silent = parsePatch(clean);
+    const g2b = findBlock(silent, GUARDS.find(g => g.id === 'G2'));
+    const g2j = g2b && findPlusIndex(g2b, line => line.includes('TabHostActionUpdate'));
+    if (g2j !== undefined && g2b) g2b.hunk.body.splice(g2j, 1);
+    const g2Silent = serialize(silent, clean.endsWith('\n'));
+    if (landedOk('G2 page-action signal dropped', g2Silent !== clean)) {
+      expectRed('G2 page-action signal dropped', check({ patchPath: withPatch('G2-silent.patch', g2Silent) }),
+        f => f.id === 'G2' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G2' });
     }
 
     // A second logic patch staged under another name.
