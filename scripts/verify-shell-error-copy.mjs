@@ -829,6 +829,16 @@ const EXPECTED_NAV_COPY = new Set([
   "Copy",
   "Paste",
   "Select All",
+  // Phase 38 plan 02 (EXT-06): the extension buttons and the puzzle menu (38-UI-SPEC Copywriting Contract).
+  "Extensions",
+  "Pinned",
+  "No extensions installed",
+  "Install one from ${name} Add-ons.",
+  "Install from add-ons site",
+  "Disabled for this page",
+  "Options for ${name}",
+  "Manage Extension",
+  "${name} could not reach the extension. Restart ${name} and try again.",
 ]);
 
 /**

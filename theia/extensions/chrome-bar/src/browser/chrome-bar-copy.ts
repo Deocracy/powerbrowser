@@ -317,6 +317,18 @@ export const CHROME_BAR_COPY = Object.freeze({
     editCopyRow: 'Copy',
     editPasteRow: 'Paste',
     editSelectAllRow: 'Select All',
+    // Phase 38 plan 02 (EXT-06, 38-UI-SPEC Copywriting): the extension buttons and the puzzle menu. An extension is named
+    // by the title chrome pushes, never by its id.
+    extensionsButton: 'Extensions',
+    extensionsPinnedHeading: 'Pinned',
+    extensionsHeading: 'Extensions',
+    extensionsEmptyHeading: 'No extensions installed',
+    extensionsEmptyBody: (subject: string) => `Install one from ${subject} Add-ons.`,
+    extensionsInstallFooter: 'Install from add-ons site',
+    extensionDisabledCaption: 'Disabled for this page',
+    extensionOptions: (name: string) => `Options for ${name}`,
+    manageExtensionRow: 'Manage Extension',
+    extensionBridgeFailed: (subject: string) => `${subject} could not reach the extension. Restart ${subject} and try again.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

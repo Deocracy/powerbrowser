@@ -37,6 +37,12 @@
  *                    fires one on setBadgeText/setIcon) is one the extension
  *                    section listens for in EXTENSION_TAB_EVENTS, so a badge
  *                    change reaches Theia without waiting for a tab event.
+ *   8. widget     -- (38-02, D-02) the chrome-bar extensions/ sources exist
+ *                    (derived from the tree: the buttons widget and the anchor
+ *                    reporter among them), and no chrome-bar source draws
+ *                    extension content in Theia DOM: no <iframe, no
+ *                    dangerouslySetInnerHTML (an icon is an <img src> only) and
+ *                    no moz-extension: string. The popup is the native panel.
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -59,6 +65,12 @@ const LIVE = 'scripts/verify-extension-actions-live.mjs';
 const PATCH_050 = 'patches/050-extension-tab-host.patch';
 const PRODUCT_DIRS = ['powerbrowser', 'theia/extensions'];
 const SECTION_MARK = '// Phase 38 (EXT-06, EXT-07): the extension bridge.';
+const CHROME_BAR_SRC = 'theia/extensions/chrome-bar/src/';
+const EXTENSIONS_DIR = `${CHROME_BAR_SRC}browser/extensions/`;
+const EXTENSIONS_WIDGET = `${EXTENSIONS_DIR}extension-actions-widget.tsx`;
+const EXTENSIONS_ANCHOR = `${EXTENSIONS_DIR}extension-popup-anchor.ts`;
+// D-02: what drawing extension content in Theia DOM looks like; the first two would host a popup page, the last names one.
+const THEIA_DOM_POPUP = [['<iframe', 'an <iframe'], ['dangerouslySetInnerHTML', 'dangerouslySetInnerHTML'], [['moz', 'extension:'].join('-'), 'an extension-scheme URL']];
 // The stock delegate's call, assembled so this file's own text never matches rule 3's scan of the tree.
 const STOCK_TRIGGER = ['trigger', 'Action('].join('');
 const FIXTURE_NAMESPACE = /@powerbrowser\.test$/;
@@ -234,6 +246,19 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
         if (fired.length === 0 || !heard) failures.push(`signal: derived no event ${PATCH_050} dispatches, or no EXTENSION_TAB_EVENTS in ${API} (broken instrument)`);
         else for (const type of fired) if (!heard[1].includes(`"${type}"`)) failures.push(`signal: ${PATCH_050} dispatches ${type}, which EXTENSION_TAB_EVENTS does not listen for (a badge change would wait for a tab event)`);
     }
+
+    // 8. widget
+    const extensionSources = products.filter(f => f.startsWith(EXTENSIONS_DIR));
+    for (const file of [EXTENSIONS_WIDGET, EXTENSIONS_ANCHOR]) {
+        if (!extensionSources.includes(file)) failures.push(`widget: ${file} is missing from the chrome-bar extensions/ sources (derived ${extensionSources.length})`);
+    }
+    for (const file of products.filter(f => f.startsWith(CHROME_BAR_SRC))) {
+        stripComments(src[file]).split('\n').forEach((line, i) => {
+            for (const [needle, what] of THEIA_DOM_POPUP) {
+                if (line.includes(needle)) failures.push(`widget: ${file}:${i + 1} renders extension content in Theia DOM (${what}); the popup is the native XUL panel (D-02)`);
+            }
+        });
+    }
     return failures;
 }
 
@@ -258,6 +283,9 @@ function selfTest() {
         { name: 'unclassified kind', run: () => check({ ...clean, [API]: clean[API].replace('const STORE_REQUEST_KINDS = new Set([', 'const STORE_REQUEST_KINDS = new Set([\n  "extensionPlanted",') }), expect: 'the store kind extensionPlanted has no STORE_KIND_CLASSES entry' },
         { name: 'click path re-targeted', run: () => check({ ...clean, [API]: clean[API].replace('triggerClickOrPopup(selectedTab)', 'triggerClickOrPopup(host.selected)') }), expect: 'spelled triggerClickOrPopup(selectedTab)' },
         { name: 'signal unheard', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('new window.Event("TabHostActionUpdate")', 'new window.Event("TabHostPlanted")') }), expect: 'dispatches TabHostPlanted, which EXTENSION_TAB_EVENTS does not listen for' },
+        { name: 'popup-dom', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <iframe src={popupUrl} />;\n` }), expect: `${EXTENSIONS_WIDGET}:` },
+        { name: 'inlined svg icon', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <span dangerouslySetInnerHTML={{ __html: row.icon }} />;\n` }), expect: '(dangerouslySetInnerHTML)' },
+        { name: 'anchor reporter gone', run: () => check(Object.fromEntries(Object.entries(clean).filter(([f]) => f !== EXTENSIONS_ANCHOR))), expect: `${EXTENSIONS_ANCHOR} is missing` },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
     let failed = 0;
@@ -285,7 +313,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();

@@ -223,8 +223,10 @@ const STORE_CLIENT = `${TAB_URIS_DIR}/chrome-store-client.ts`;
 const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/address-bar/address-bar.tsx`;
 /** Phase 31 plan 05: the chrome bar widget, which sends the Quit row's `quitRequest` (the lifecycle caller). */
 const CHROME_BAR_WIDGET_FILE = `${CHROME_BAR_DIR}/chrome-bar-widget.tsx`;
-/** Phase 33: the two sanctioned privileged callers -- the pill and the chrome bar widget -- and nothing else. */
-const PRIVILEGED_CALLERS = [CHROME_BAR_WIDGET, CHROME_BAR_WIDGET_FILE];
+/** Phase 38 plan 02 (D-11): the extension buttons and puzzle menu, which send extensionClick/Pin/Remove from their handlers. */
+const EXTENSION_ACTIONS_WIDGET_FILE = `${CHROME_BAR_DIR}/extensions/extension-actions-widget.tsx`;
+/** Phase 33: the sanctioned privileged callers -- the pill, the chrome bar widget and (38-02) the extension buttons -- and nothing else. */
+const PRIVILEGED_CALLERS = [CHROME_BAR_WIDGET, CHROME_BAR_WIDGET_FILE, EXTENSION_ACTIONS_WIDGET_FILE];
 
 /** Stock `HttpOpenHandler`'s priority; the web-tab handler must exceed it. */
 const STOCK_HTTP_HANDLER_PRIORITY = 500;

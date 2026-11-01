@@ -31,6 +31,14 @@ export interface BookmarkEntry {
     folder?: string;
 }
 
+/** Phase 38 plan 02 (D-02): the clicked button's rect in Theia-frame CSS pixels; chrome anchors the native popup panel to it. */
+export interface ExtensionAnchorRect {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+}
+
 export interface SessionTabRow {
     uri: string;
     url: string;
@@ -339,8 +347,8 @@ export class ChromeStoreClient {
      * Phase 38 plan 01 (EXT-07, D-11): a toolbar button's click, run by chrome on the selected web tab. Resolves
      * 'popup', 'action', 'disabled' or 'no-tab'. Privileged: only the button's click handler calls it.
      */
-    async extensionClick(extensionId: string): Promise<string> {
-        const reply = await this.request({ kind: 'extensionClick', extensionId });
+    async extensionClick(extensionId: string, anchorRect: ExtensionAnchorRect): Promise<string> {
+        const reply = await this.request({ kind: 'extensionClick', extensionId, anchorRect });
         if (!reply.ok) {
             throw new Error(reply.message ?? `extensionClick failed (${reply.reason ?? 'store'})`);
         }

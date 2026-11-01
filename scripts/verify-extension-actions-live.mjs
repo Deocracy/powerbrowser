@@ -22,6 +22,14 @@
 //                   fixture answers 'popup'. Plant wrong-page fires the stock
 //                   delegate path in a GUI-01 stock window on /c instead, and must
 //                   go red naming the stock tab.
+//   buttons      -- (38-02) with the action fixture pinned, the chrome bar shows one
+//                   button per pinned row of the push (at most three) and the puzzle
+//                   menu one row per pushed extension, named by its pushed title (set
+//                   equality with the push, which carries both fixtures). A real click
+//                   on the action button runs in /a and the badge 'ok' the push then
+//                   carries is drawn on the button. Plant buttons-stale freezes the
+//                   frame's extensionAction pushes after the first render and must go
+//                   red naming the stale badge.
 //   tabs-bridge  -- the action fixture's tabs.create opens /b adopted, selected and
 //                   next to /a; a background create of /c then tabs.update({active})
 //                   shows it; tabs.remove closes it; an extension-page create is
@@ -111,6 +119,54 @@ async function scenarioPopupAction({ app, plant }) {
   return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup click answered 'popup'`, null);
 }
 
+// 38-02 (EXT-06): the buttons and puzzle rows equal the set the push carries, and a pushed badge reaches the button.
+async function scenarioButtons({ app, plant }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await setPinned(app, [fixtureId('action')]);
+  const from = (await live.pushes(app)).length;
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  const ids = Object.keys(EXTENSION_FIXTURES).map(fixtureId);
+  const pushAt = await live.waitForPush(app, p => p.kind === 'extensionAction' && ids.every(id => p.actions.some(r => r.extensionId === id)) && p.actions.some(r => r.pinned), { from });
+  if (pushAt < 0) {
+    return verdict(false, null, 'no extensionAction push carried both fixtures with the action fixture pinned');
+  }
+  const rows = (await live.pushes(app))[pushAt].actions;
+  const wantButtons = rows.filter(r => r.pinned).slice(0, 3).map(r => r.extensionId);
+  const buttons = await pollUntil(() => barButtons(app), b => sameSet(b.map(x => x.id), wantButtons), 10000);
+  if (!buttons) {
+    return verdict(false, null, `the bar's extension buttons ${JSON.stringify(await barButtons(app))} differ from the pushed pinned set ${JSON.stringify(wantButtons)}`);
+  }
+  await clickInFrame(app, '.pb-ext-puzzle');
+  const menuRows = await pollUntil(() => puzzleRows(app), r => sameSet(r.map(x => x.id), rows.map(x => x.extensionId)), 10000);
+  if (!menuRows || menuRows.some(m => m.name !== rows.find(r => r.extensionId === m.id).title)) {
+    return verdict(false, null, `the puzzle rows ${JSON.stringify(menuRows ?? await puzzleRows(app))} differ from the pushed set ${JSON.stringify(rows.map(r => ({ id: r.extensionId, name: r.title })))}`);
+  }
+  await clickInFrame(app, '.pb-ext-puzzle');
+  if (plant?.name === 'buttons-stale') {
+    // The frame stops hearing extensionAction pushes; the recorder, installed first, still records them.
+    await app.evaluate(`(() => { window.addEventListener(${JSON.stringify(live.WEB_TAB_STATE_EVENT)}, e => { if (e.detail && e.detail.kind === 'extensionAction') e.stopImmediatePropagation(); }, true); return true; })()`);
+  }
+  const logFrom = session.logs.length;
+  const pushFrom = (await live.pushes(app)).length;
+  await clickInFrame(app, `.pb-ext-action[data-extension-id=${JSON.stringify(fixtureId('action'))}]`);
+  const clicked = await waitSince(logFrom, r => r.kind === 'clicked');
+  if (!clicked || pathOf(clicked.url) !== '/a') {
+    return verdict(false, null, `the action button's click did not run in /a: ${JSON.stringify(clicked ?? null)}`);
+  }
+  const badgeAt = await live.waitForPush(app, p => p.kind === 'extensionAction' && p.actions.some(r => r.extensionId === fixtureId('action') && r.badgeText === 'ok'), { from: pushFrom });
+  if (badgeAt < 0) {
+    return verdict(false, null, "no extensionAction push carried the badge 'ok' after the button's click");
+  }
+  const drawn = await pollUntil(() => barButtons(app), b => b.some(x => x.id === fixtureId('action') && x.badge === 'ok'), 5000);
+  if (!drawn) {
+    const shown = (await barButtons(app)).find(x => x.id === fixtureId('action'));
+    return verdict(false, null, `the button shows a stale badge ${JSON.stringify(shown ? shown.badge : null)} where the push carried 'ok'`);
+  }
+  return verdict(true, `the bar showed buttons ${JSON.stringify(wantButtons)} and puzzle rows ${JSON.stringify(menuRows.map(m => m.name))} equal to the push; the action button's click ran in /a and its pushed badge 'ok' was drawn`, null);
+}
+
 // tabs.create (active, next to its opener, adopted), tabs.create in the background then tabs.update({active}),
 // tabs.remove, a refused extension-page create, and no orphan overlay once the frontend reloads.
 async function scenarioTabsBridge({ app, plant, command }) {
@@ -165,6 +221,7 @@ async function scenarioTabsBridge({ app, plant, command }) {
 
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
+  buttons: scenarioButtons,
   'tabs-bridge': scenarioTabsBridge,
 };
 
@@ -173,6 +230,7 @@ const SCENARIOS_TABLE = {
 const PLANTS_TABLE = {
   'wrong-page': { scenario: 'popup-action', expect: 'the action ran in the stock tab' },
   'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
+  'buttons-stale': { scenario: 'buttons', expect: 'the button shows a stale badge' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -325,6 +383,31 @@ async function overlayOfExtTab(app, extTabId) {
 async function orphanCount(app) {
   return Number(await live.inChrome(app, `const overlays = [...document.querySelectorAll('browser[messagemanagergroup="browsers"]')];
     return overlays.filter(o => W.tabIdOfBrowser(o) === null).length + Math.abs(window.gBrowser.tabs.length - overlays.length);`));
+}
+
+const sameSet = (a, b) => a.length === b.length && new Set(a).size === a.length && b.every(x => a.includes(x));
+
+// D-08: the pinned set is chrome's pref; a scenario that is not about pinning sets it directly.
+async function setPinned(app, ids) {
+  await live.inChrome(app, `Services.prefs.setStringPref('powerbrowser.extensions.pinned', ${JSON.stringify(JSON.stringify(ids))}); return true;`);
+}
+
+// A click on the first element matching `selector` in the Theia frame; a missing element is a broken instrument.
+async function clickInFrame(app, selector) {
+  const hit = await app.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true; })()`);
+  if (hit !== true) throw new Error(`BROKEN INSTRUMENT: no ${selector} in the Theia frame`);
+}
+
+// The chrome bar's extension buttons: id, badge text (null when none) and whether the popup is shown as open.
+async function barButtons(app) {
+  return JSON.parse(await app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-ext-action')].map(b => ({
+    id: b.dataset.extensionId, badge: b.querySelector('.pb-ext-badge')?.textContent ?? null, open: b.classList.contains('is-open') })))`));
+}
+
+// The open puzzle menu's extension rows: id and shown name.
+async function puzzleRows(app) {
+  return JSON.parse(await app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-ext-menu .pb-ext-row')].map(r => ({
+    id: r.dataset.extensionId, name: r.querySelector('.pb-ext-row-name')?.textContent ?? null })))`));
 }
 
 // Writes a fixture into a fresh directory and installs it as a temporary add-on.

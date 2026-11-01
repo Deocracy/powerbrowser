@@ -1812,3 +1812,188 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     color: var(--color-text-muted, #9a99a8);
     white-space: nowrap;
 }
+
+/* Phase 38 plan 02 (EXT-06, 38-UI-SPEC Spacing): the extension buttons, between the pill and New Tab, and the puzzle
+   menu. Theme tokens only; the accent fills the badge and nothing else. */
+.pb-ext-actions {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pb-chrome-bar-button.pb-ext-action {
+    position: relative;
+    width: 28px;
+    height: 28px;
+}
+
+.pb-chrome-bar-button.pb-ext-action[aria-disabled='true'] {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.pb-chrome-bar-button.pb-ext-action[aria-disabled='true']:hover {
+    background: transparent;
+}
+
+.pb-chrome-bar-button.pb-ext-action.is-open,
+.pb-chrome-bar-button.pb-ext-puzzle.is-open {
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-ext-icon {
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+    flex: none;
+}
+
+/* Bottom-right of the icon; 11px is the one type exception (38-UI-SPEC Typography). */
+.pb-ext-badge {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 16px;
+    text-align: center;
+    color: var(--color-text, #fbfbfe);
+    background: var(--color-primary, #00a6f5);
+    pointer-events: none;
+}
+
+.pb-chrome-bar-dropdown.pb-ext-menu {
+    left: auto;
+    width: 300px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+}
+
+.pb-ext-menu-heading {
+    height: 24px;
+    padding: 0 12px;
+    font-size: 13px;
+    line-height: 24px;
+    color: var(--color-text-muted, #9a99a8);
+}
+
+.pb-ext-menu-body,
+.pb-ext-menu-notice {
+    padding: 4px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text, #fbfbfe);
+}
+
+.pb-ext-menu-separator {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--color-border, #3f3e4a);
+}
+
+.pb-ext-row {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    border-radius: 4px;
+}
+
+.pb-ext-row:hover {
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-ext-row-main,
+.pb-ext-menu-footer {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 32px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--color-text, #fbfbfe);
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.pb-ext-row-main[aria-disabled='true'] {
+    cursor: default;
+}
+
+.pb-ext-row-main[aria-disabled='true'] .pb-ext-row-icon {
+    opacity: 0.4;
+}
+
+.pb-ext-menu-footer:hover {
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-ext-row-icon {
+    position: relative;
+    flex: none;
+    width: 16px;
+    height: 16px;
+}
+
+.pb-ext-row-icon .pb-ext-badge {
+    right: -8px;
+    bottom: -6px;
+}
+
+.pb-ext-row-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+/* Long names stop at 160px like the mode chip; the full name is the row's tooltip. */
+.pb-ext-row-name {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pb-ext-row-caption {
+    font-size: 12px;
+    line-height: 1.2;
+    color: var(--color-text-muted, #9a99a8);
+}
+
+.pb-ext-row-menu {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    margin-right: 2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted, #9a99a8);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.pb-ext-row-menu:hover {
+    color: var(--color-text, #fbfbfe);
+    background: var(--color-surface, #2b2a33);
+}
+
+.pb-ext-row-main:focus-visible,
+.pb-ext-row-menu:focus-visible,
+.pb-ext-menu-footer:focus-visible {
+    outline: 2px solid var(--color-primary, #00a6f5);
+    outline-offset: -2px;
+}
