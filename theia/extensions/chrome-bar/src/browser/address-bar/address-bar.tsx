@@ -2600,6 +2600,8 @@ export class AddressBar {
     starShortcut = '';
     /** Phase 33 (BMK-02): the open editor, or undefined. */
     protected bookmarkEditor: BookmarkEditorState | undefined;
+    /** WR-03: a bookmarkPage request from the star is in flight. */
+    protected bookmarkStarPending = false;
 
     /**
      * BMK-01: re-reads the active page's bookmark through the readBookmarkByUrl
@@ -2678,7 +2680,8 @@ export class AddressBar {
         if (!tab || !url) {
             return;
         }
-        if (this.bookmarkEditor) {
+        // WR-03: a held Ctrl+D or a click then a key must not send a second bookmarkPage while the first is in flight.
+        if (this.bookmarkEditor || this.bookmarkStarPending) {
             return;
         }
         this.closeDropdown();
@@ -2688,11 +2691,14 @@ export class AddressBar {
         let created = false;
         let failure: string | undefined;
         if (!bookmark) {
+            this.bookmarkStarPending = true;
             try {
                 bookmark = await this.store.bookmarkPage(url, tab.pageTitle);
                 created = true;
             } catch {
                 failure = CHROME_BAR_COPY.bookmarkSaveFailed(appSubject());
+            } finally {
+                this.bookmarkStarPending = false;
             }
         }
         // The tab or its page changed while chrome answered: the editor would describe the wrong page.

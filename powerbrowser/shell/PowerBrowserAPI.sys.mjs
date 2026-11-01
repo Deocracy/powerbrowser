@@ -6877,17 +6877,30 @@ function bookmarkReply(item, fallbackUrl = "") {
 }
 
 // BMK-01: bookmarks the page. Idempotent: a page already bookmarked answers its
-// first bookmark instead of a duplicate, so a double click never makes two.
+// most recently modified bookmark instead of a duplicate. Calls for one url run
+// one at a time (WR-03): the fetch and the insert are separate awaits, so two
+// overlapping calls would both see no bookmark and both insert.
+const bookmarkPageQueue = new Map();
 async function bookmarkPage(url, title, folderGuid) {
   const target = bookmarkUrlArg("bookmarkPage", url);
   const name = title === undefined ? "" : bookmarkTitleArg("bookmarkPage", title);
   const parentGuid = folderGuid === undefined ? defaultBookmarkFolder() : resolveBookmarkFolder(folderGuid);
-  const existing = await lazy.PlacesUtils.bookmarks.fetch({ url: target });
-  if (existing) {
-    return bookmarkReply(existing, target);
+  const run = (bookmarkPageQueue.get(target) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    const existing = await lazy.PlacesUtils.bookmarks.fetch({ url: target });
+    if (existing) {
+      return bookmarkReply(existing, target);
+    }
+    const item = await lazy.PlacesUtils.bookmarks.insert({ type: lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK, parentGuid, url: target, title: name });
+    return bookmarkReply(item, target);
+  });
+  bookmarkPageQueue.set(target, run);
+  try {
+    return await run;
+  } finally {
+    if (bookmarkPageQueue.get(target) === run) {
+      bookmarkPageQueue.delete(target);
+    }
   }
-  const item = await lazy.PlacesUtils.bookmarks.insert({ type: lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK, parentGuid, url: target, title: name });
-  return bookmarkReply(item, target);
 }
 
 // BMK-02: the editor's name and folder. Bookmarks.update requires the guid and,
