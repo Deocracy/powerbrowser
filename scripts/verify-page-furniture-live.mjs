@@ -86,6 +86,26 @@
  *                       and the overlay hidden, and gone once the menu closes. Prints
  *                       `freeze-frame timing: menu p50 <ms> p95 <ms>, still <k>/20 within 50 ms`
  *                       (chrome pushes only stills that made the 50 ms deadline).
+ *   autocomplete        (35-06, PROMPT-06, D-03) A form-history entry seeded in chrome
+ *                       scope for field name q; typing its first three characters into
+ *                       a served q field with BiDi keys opens #PopupAutoComplete with a
+ *                       row, anchored inside the overlay; ArrowDown and Enter commit the
+ *                       entry; retyped, Escape closes the popup, leaves the value and
+ *                       keeps focus in the page. Values are compared page-side only.
+ *   saved-login         (35-06) One synthetic login (probe-user, a chrome-generated
+ *                       password) for the served 127.0.0.1 origin in the disposable
+ *                       profile; focusing the username field opens the popup with that
+ *                       login's row; ArrowDown and Enter fill both fields (checked
+ *                       page-side, never printed).
+ *   form-validation     (35-06, D-14) Submitting a form whose required field is empty
+ *                       opens #invalid-form-popup with a non-empty message (needs
+ *                       31.1's getTabForBrowser: FormValidationParent shows only for the
+ *                       selected browser).
+ *   paste-popup         (35-06, D-15, research probe 12) A page's
+ *                       navigator.clipboard.readText() opens #clipboardReadPasteMenuPopup
+ *                       whose item reads upstream's en-US text-action-paste label; once
+ *                       security.dialog_enable_delay passes, doCommand on it resolves the
+ *                       page's promise with the 15-character clipboard text.
  *
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
@@ -99,6 +119,7 @@ import { join } from 'node:path';
 import {
     BROKEN,
     WEB_TAB_STATE_EVENT,
+    focusOverlay,
     appNameExpr,
     inChrome,
     loadedAt,
@@ -170,6 +191,19 @@ const PAGES = {
     '/still': {
         title: 'Still',
         body: '<style>body { margin: 0; } #art { width: 1280px; height: 720px; background: linear-gradient(135deg, #c33, #36c); }</style><div id="art"></div>',
+    },
+    // 35-06: the form furniture targets.
+    '/form': { title: 'Form', body: '<form action="/target"><input id="q" name="q" autocomplete="on"></form>' },
+    '/login': {
+        title: 'Login',
+        body: '<form action="/target" method="post"><input id="user" name="username" autocomplete="username"> <input id="pass" type="password" name="password" autocomplete="current-password"> <button type="submit">Sign in</button></form>',
+    },
+    '/validate': { title: 'Validate', body: '<form action="/target"><input id="need" name="need" required> <button id="send" type="submit">Send</button></form>' },
+    '/paste': {
+        title: 'Paste',
+        body: '<p><button id="read" type="button">Read clipboard</button></p>'
+            + '<script>document.getElementById("read").addEventListener("click", () => navigator.clipboard.readText()'
+            + '.then(text => { document.title = String(text.length); }, error => { document.title = "rejected: " + error.name; }));</script>',
     },
     '/pip': {
         title: 'Picture in Picture',
@@ -979,22 +1013,23 @@ async function backgroundMenu({ app, pages, results, fail }) {
 // ---------------------------------------------------------------------------
 
 /** Opens /tools in a new current web tab; returns { tabId, page, theia, url } or a failure string. */
-async function openTools(app, pages) {
-    const url = pages.url('/tools');
+async function openPage(app, pages, path) {
+    const url = pages.url(path);
     const tabId = await openWebTab(app, url);
-    if (await waitForPush(app, loadedAt(tabId, '/tools')) < 0) {
-        return 'no loaded state push arrived for /tools';
+    if (await waitForPush(app, loadedAt(tabId, path)) < 0) {
+        return `no loaded state push arrived for ${path}`;
     }
     await makeCurrent(app, tabId);
     if (await settle(() => overlayVisibility(app, tabId), v => v === 'visible') !== 'visible') {
-        return `${BROKEN} the /tools page is not shown`;
+        return `${BROKEN} the ${path} page is not shown`;
     }
     const page = (await app.contexts()).filter(c => c.url === url).at(-1)?.context;
     if (!page) {
-        return `${BROKEN} no BiDi context for the /tools page`;
+        return `${BROKEN} no BiDi context for the ${path} page`;
     }
     return { tabId, page, theia: await contextOf(app, await app.evaluate('location.href')), url };
 }
+const openTools = (app, pages) => openPage(app, pages, '/tools');
 
 /** Right-clicks `selector` in the page and picks the row labelled `label` (a submenu row when `parent` names one). */
 async function pickFromMenu(app, tools, selector, label, parent) {
@@ -1537,6 +1572,186 @@ async function freezeFrame({ app, pages, plant, fail, note }) {
     }
 }
 
+// 35-06 (PROMPT-06): the form furniture. No field value, seeded entry or password is ever printed.
+const AC_SEED = 'probe history entry';
+const PROBE_USER = 'probe-user';
+const PASTE_TEXT = 'pb-paste-probe!'; // 15 characters
+// WebDriver key codes (written as escapes: editing tools must not turn them into literal characters).
+const KEY = { down: '\uE015', enter: '\uE007', escape: '\uE00C' };
+
+/** Trusted key presses of each of `values` in `context` (a page, so the content-side form fill controller sees them). */
+async function keysIn(app, context, values) {
+    await app.send('input.performActions', { context, actions: [{ type: 'key', id: 'pb-furniture-keys', actions: values.flatMap(value => [{ type: 'keyDown', value }, { type: 'keyUp', value }]) }] });
+    await app.send('input.releaseActions', { context });
+}
+
+/** #PopupAutoComplete: open, its visible row count, whether its top-left lies inside the overlay, and whether a row names `needle`. Booleans and a count only. */
+const autocompleteState = (app, tabId, needle = '') => inChrome(app, `const p = document.getElementById('PopupAutoComplete');
+    const o = overlayOf(${JSON.stringify(tabId)});
+    if (!p || !o) return JSON.stringify({ popup: !!p, open: false, rows: 0, inside: false, match: false });
+    const items = [...p.querySelectorAll('richlistitem')].filter(i => !i.collapsed && !i.hidden);
+    const r = p.getOuterScreenRect();
+    const b = o.getBoundingClientRect();
+    const left = window.mozInnerScreenX + b.left;
+    const top = window.mozInnerScreenY + b.top;
+    const needle = ${JSON.stringify(needle)};
+    return JSON.stringify({
+        popup: true,
+        open: p.state === 'open',
+        rows: items.length,
+        inside: r.left >= left && r.left <= left + b.width && r.top >= top && r.top <= top + b.height,
+        match: !!needle && items.some(i => [i.getAttribute('ac-value'), i.getAttribute('ac-label'), i.textContent].some(t => (t || '').includes(needle))),
+    });`).then(JSON.parse);
+
+async function applyFormPlants(app, plant, note, tabId) {
+    const plants = {
+        // W5: the element AutoCompleteParent resolves is gone before the field is focused.
+        'autocomplete-element-removed': `document.getElementById('PopupAutoComplete')?.remove(); return document.getElementById('PopupAutoComplete') === null;`,
+        'autocomplete-attr-removed': `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return false; o.removeAttribute('autocompletepopup'); return !o.hasAttribute('autocompletepopup') && o.autoCompletePopup === null;`,
+        'validation-template-removed': `document.getElementById('invalidFormTemplate')?.remove(); return document.getElementById('invalidFormTemplate') === null && document.getElementById('invalid-form-popup') === null;`,
+        // removeResourceIds returns how many resource ids remain: the shell links only textActions.ftl.
+        'paste-l10n-removed': `return !!document.l10n && document.l10n.removeResourceIds(['toolkit/global/textActions.ftl']) === 0;`,
+    };
+    if (plants[plant] && await inChrome(app, plants[plant]) === true) {
+        note(`PLANT ${plant} applied`);
+    }
+}
+
+async function autocomplete({ app, pages, plant, fail, note }) {
+    const seeded = await inChrome(app, `const { FormHistory } = ChromeUtils.importESModule('resource://gre/modules/FormHistory.sys.mjs');
+        return FormHistory.update({ op: 'add', fieldname: 'q', value: ${JSON.stringify(AC_SEED)} })
+            .then(() => FormHistory.count({ fieldname: 'q' })).then(n => n > 0);`);
+    if (seeded !== true) {
+        return fail(`${BROKEN} the form-history entry for field q could not be seeded`);
+    }
+    const tab = await openPage(app, pages, '/form');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    await applyFormPlants(app, plant, note, tab.tabId);
+    await focusOverlay(app, tab.tabId);
+    const typeStart = async () => {
+        await app.evaluateIn(tab.page, `const f = document.getElementById('q'); f.value = ''; f.focus(); true`);
+        await keysIn(app, tab.page, [...AC_SEED.slice(0, 3)]);
+        return settle(() => autocompleteState(app, tab.tabId), st => st.open && st.rows > 0, 5000);
+    };
+    const shown = await typeStart();
+    if (!shown?.open || !shown.rows) {
+        return fail(`no autocomplete popup under the field after typing (element present: ${shown?.popup ?? false}, open: ${shown?.open ?? false}, rows: ${shown?.rows ?? 0})`);
+    }
+    if (!shown.inside) {
+        return fail('the autocomplete popup is not anchored inside the page');
+    }
+    await keysIn(app, tab.page, [KEY.down, KEY.enter]);
+    const committed = () => app.evaluateIn(tab.page, `document.getElementById('q').value === ${JSON.stringify(AC_SEED)}`);
+    if (await settle(committed, v => v === true, 3000) !== true) {
+        return fail('ArrowDown and Enter did not commit the form-history entry');
+    }
+    const again = await typeStart();
+    if (!again?.open) {
+        return fail('retyping did not reopen the autocomplete popup');
+    }
+    await app.evaluateIn(tab.page, `window.__pbBefore = document.getElementById('q').value; true`);
+    await keysIn(app, tab.page, [KEY.escape]);
+    const closed = await settle(() => autocompleteState(app, tab.tabId), st => !st.open, 3000);
+    if (closed?.open) {
+        return fail('Escape did not dismiss the autocomplete popup');
+    }
+    const kept = await app.evaluateIn(tab.page, `const f = document.getElementById('q'); f.value === window.__pbBefore && document.activeElement === f && document.hasFocus()`);
+    if (kept !== true) {
+        return fail('Escape changed the field value or took focus out of the page');
+    }
+}
+
+async function savedLogin({ app, pages, fail }) {
+    const origin = new URL(pages.url('/')).origin;
+    // The password is generated in chrome scope and never leaves it; the profile is disposed with the session.
+    // Autofill off and no insecure-field row, so the popup on focus lists exactly the saved login first.
+    const saved = await inChrome(app, `Services.prefs.setBoolPref('signon.autofillForms', false);
+        Services.prefs.setBoolPref('security.insecure_field_warning.contextual.enabled', false);
+        const info = Cc['@mozilla.org/login-manager/loginInfo;1'].createInstance(Ci.nsILoginInfo);
+        info.init(${JSON.stringify(origin)}, ${JSON.stringify(origin)}, null, ${JSON.stringify(PROBE_USER)}, Services.uuid.generateUUID().toString(), 'username', 'password');
+        return Services.logins.addLoginAsync(info)
+            .then(() => Services.logins.getAllLogins())
+            .then(all => all.filter(l => l.origin === ${JSON.stringify(origin)}).length === 1);`);
+    if (saved !== true) {
+        return fail(`${BROKEN} the synthetic login could not be saved for the served origin`);
+    }
+    const tab = await openPage(app, pages, '/login');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    await focusOverlay(app, tab.tabId);
+    await sleep(500); // LoginManagerChild marks the form's fields once the page's form is processed
+    await app.evaluateIn(tab.page, `document.getElementById('user').focus(); true`);
+    const shown = await settle(() => autocompleteState(app, tab.tabId, PROBE_USER), st => st.open && st.match, 5000);
+    if (!shown?.open) {
+        return fail('no autocomplete popup opened on the username field');
+    }
+    if (!shown.match) {
+        return fail(`the login popup has no row for ${PROBE_USER}`);
+    }
+    await keysIn(app, tab.page, [KEY.down, KEY.enter]);
+    const filled = () => app.evaluateIn(tab.page, `document.getElementById('user').value === ${JSON.stringify(PROBE_USER)} && document.getElementById('pass').value.length > 0`);
+    if (await settle(filled, v => v === true, 3000) !== true) {
+        return fail('picking the saved login did not fill the username and password fields');
+    }
+}
+
+async function formValidation({ app, pages, plant, fail, note }) {
+    const tab = await openPage(app, pages, '/validate');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    await applyFormPlants(app, plant, note, tab.tabId);
+    const send = await centreOf(app, tab.page, '#send');
+    await clickAt(app, tab.page, send.x, send.y);
+    const bubble = await settle(() => inChrome(app, `const p = document.getElementById('invalid-form-popup');
+        return JSON.stringify({ open: !!p && p.state === 'open', message: !!p && !!(p.querySelector('description')?.textContent || '').trim() });`).then(JSON.parse), st => st.open && st.message, 5000);
+    if (!bubble?.open) {
+        return fail('no validation bubble opened for the required empty field');
+    }
+    if (!bubble.message) {
+        return fail('the validation bubble carries no message');
+    }
+}
+
+async function pastePopup({ app, pages, plant, fail, note }) {
+    await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString(${JSON.stringify(PASTE_TEXT)}); return true;`);
+    const tab = await openPage(app, pages, '/paste');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    await applyFormPlants(app, plant, note, tab.tabId);
+    const read = await centreOf(app, tab.page, '#read');
+    await clickAt(app, tab.page, read.x, read.y);
+    const state = () => inChrome(app, `const p = document.getElementById('clipboardReadPasteMenuPopup');
+        const i = document.getElementById('clipboardReadPasteMenuItem');
+        return JSON.stringify({ open: !!p && p.state === 'open', label: i ? i.getAttribute('label') : null, disabled: !!i && i.disabled });`).then(JSON.parse);
+    const shown = await settle(state, st => st.open, 5000);
+    if (!shown?.open) {
+        const title = await app.evaluateIn(tab.page, 'document.title');
+        return fail(`no paste popup opened for navigator.clipboard.readText() (page title ${JSON.stringify(title)})`);
+    }
+    const want = ftlLabel('text-action-paste');
+    const labelled = await settle(state, st => st.label === want, 3000);
+    if (labelled?.label !== want) {
+        return fail(`paste label not translated: the item reads ${JSON.stringify(labelled?.label ?? null)}, upstream's en-US label is ${JSON.stringify(want)}`);
+    }
+    const delay = await inChrome(app, `return Services.prefs.getIntPref('security.dialog_enable_delay');`);
+    const enabled = await settle(state, st => st.open && !st.disabled, Number(delay) + 3000);
+    if (!enabled?.open || enabled.disabled) {
+        return fail(`the Paste item did not enable within security.dialog_enable_delay (${delay} ms) plus 3 s`);
+    }
+    await inChrome(app, `document.getElementById('clipboardReadPasteMenuItem').doCommand(); return true;`);
+    const want15 = String(PASTE_TEXT.length);
+    const title = await settle(() => app.evaluateIn(tab.page, 'document.title'), t => t === want15, 5000);
+    if (title !== want15) {
+        return fail(`the page's readText() did not resolve with the ${want15}-character clipboard text after Paste (page title ${JSON.stringify(title)})`);
+    }
+    note(`research probe 12: the paste popup opened labelled ${JSON.stringify(want)} and readText() resolved with ${want15} characters after Paste`);
+}
+
 const SCENARIOS = {
     'tooltip-status': tooltipStatus,
     'theia-hover-silent': theiaHoverSilent,
@@ -1550,6 +1765,10 @@ const SCENARIOS = {
     'menu-save': menuSave,
     'extension-entry': extensionEntry,
     'freeze-frame': freezeFrame,
+    'autocomplete': autocomplete,
+    'saved-login': savedLogin,
+    'form-validation': formValidation,
+    'paste-popup': pastePopup,
 };
 
 /** The scenario each absence scenario takes as its positive control. */
@@ -1643,6 +1862,11 @@ const PLANTS = [
     { plant: 'ext-cleanup-skipped', target: 'extension-entry', run: ['extension-entry'], expect: 'duplicate extension row' },
     { plant: 'ext-command-dropped', target: 'extension-entry', run: ['extension-entry'], expect: 'no onClicked request' },
     { plant: 'still-not-painted', target: 'freeze-frame', run: ['freeze-frame'], expect: 'a still arrived but was not painted' },
+    // 35-06 (PROMPT-06, D-03, D-14, D-15).
+    { plant: 'autocomplete-element-removed', target: 'autocomplete', run: ['autocomplete'], expect: 'no autocomplete popup' },
+    { plant: 'autocomplete-attr-removed', target: 'autocomplete', run: ['autocomplete'], expect: 'no autocomplete popup' },
+    { plant: 'validation-template-removed', target: 'form-validation', run: ['form-validation'], expect: 'no validation bubble' },
+    { plant: 'paste-l10n-removed', target: 'paste-popup', run: ['paste-popup'], expect: 'paste label not translated' },
 ];
 
 async function selfTest() {
