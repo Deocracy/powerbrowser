@@ -2,13 +2,13 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 32
-current_phase_name: Page Tools
+current_phase: 33
+current_phase_name: Bookmarks, History and the Full Menu
 status: executing
-stopped_at: "32-07 and 32-08 gap closure complete: F12, reader signal, crash history, pill favicons delivered; blank reload closed as obsolete (afda7df1); D-25b four-tab cap still open"
+stopped_at: "Phase 32 plans 9/9 done, review fixes and F3 gap closure (59f61fd1) proven live; verification human_needed, deferred (32-UAT.md); PAGE-09 carried to Phase 33. Phases 33-37 run in parallel worktrees, merged later"
 last_updated: "2026-11-01T03:25:55.228Z"
-last_activity: 2026-10-31
-last_activity_desc: Phase 32 execution started
+last_activity: 2026-11-01
+last_activity_desc: Phase 32 verified (human_needed, deferred); Phase 33 next
 state_head: 4b332e170e413e5814fbba6551f017ef0f11bae6
 progress:
   total_phases: 13
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 32 — Page Tools
+**Current focus:** Phase 33 — Bookmarks, History and the Full Menu (executing in a parallel worktree; results merge into main later)
 
 ## Current Position
 
-Phase: 32 (Page Tools) — EXECUTING
-Plan: 5 of 9
-Status: Ready to execute
-Last activity: 2026-10-31 — Phase 32 execution started
+Phase: 33 (Bookmarks, History and the Full Menu) — not started on main (parallel worktree)
+Plan: —
+Status: Phase 32 closed with verification deferred to the end-of-milestone pass
+Last activity: 2026-11-01 — Phase 32 verified human_needed after the in-line F3 gap closure
 
 Progress: [█░░░░░░░░░] 8%
 
@@ -528,6 +528,7 @@ with "autonomous interactive".
 | 29 | verification_deferred_human (74/81 verified; review clean after 2 fix iterations, security SECURED 40/40; rebrand run, real IME, pill keyboard/mouse, visuals, OS drag, packaged engine list, 7 review fixes untested live, judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 29 |
 | 30 | verification_deferred_human (52/55 verified, no gaps; review 1 critical + 6 warnings fixed, security SECURED 24/24; real typing/IME, visuals vs 30-MOCKUPS.html, placeholder suffix IN-05, confirm D-34, WR-02 in Bookmarks/History, @alias default, 3 judgment-tier prohibitions — Chris at end of milestone) | /gsd-verify-work 30 |
 | 31 | verification_deferred_human (5/5 criteria, 11/11 requirements, no gaps; review 3 critical + 9 warnings fixed incl. WR-04 quit leave prompt, live 12/12 PASS, security SECURED 12/12 re-audited on the fixes; pixel review of identity box, site panel, hamburger and 280px sheet, real-keyboard menu/ConfirmDialog/shield, real Ctrl+Q incl. Monaco unsaved editor and Leave, OS session-end quit, confirm the registrable-domain clear scope (D-31-12, also wipes Theia frame storage on 127.0.0.1, O-31-D) — Chris at end of milestone) | /gsd-verify-work 31 |
+| 32 | verification_deferred_human (9/9 plans; 17/20 truths, 2 by override, 0 gaps after F3 closure 59f61fd1; review 1 critical + 11 warnings, 10 fixed, WR-07/WR-10 skipped; --quick PASS, live 16/16 PASS, self-test 21 plants red; crash UI look + WR-08 navigate-after-restore, reader toggle both themes, 16px favicons + dock-bar scope, DevTools toolbox window, downloads panel + Open/Show in folder (PAGE-06 Pending), find strip layout, print dialog, WR-10 audio on a hand-started binary, confirm 2 overrides, PAGE-09 owner — carried to Phase 33 but absent from its plans — Chris at end of milestone; 32-UAT.md) | /gsd-verify-work 32 |
 | focus-fix | verification_deferred_human (overlay focus race fixed c423f1a, 15/15 loops; on a real keyboard: F6 from the pill with suggestions open then type, Paste & Go then Down scrolls, same-site link then Down scrolls — Chris at end of milestone; record .planning/debug/overlay-focus-intermittent.md) | /gsd-debug overlay-focus-intermittent |
 
 ## Deferred Items

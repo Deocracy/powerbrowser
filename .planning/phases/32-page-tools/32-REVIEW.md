@@ -105,6 +105,7 @@ Close-out at `842d379c` (2026-11-01, load from /proc/loadavg, 1-minute value):
 - `verify-page-tools-live.mjs --scenario crash-navigate` alone: PASS, load 7.7.
 - `verify-page-tools-live.mjs --self-test` (full, every plant): PASS. 14 clean controls green, 20 planted faults red, each naming its drift. Load 7.5 at start, 3.2 at end.
 - Full live run `--scenario find,zoom,audio,keys-theia,favicon,reader,source,crash,crash-reader,crash-switching,crash-navigate,devtools,downloads,print,save,edit`: 16/16 PASS, load 3.0 at start, 12.5 at end. The record-only probes (`*-today`, `remoteness-*`) were not re-run so their verdict keys were not rewritten.
+- Verifier gap (not a review finding): F3 did not open a closed find bar. Fixed in `59f61fd1`; `--scenario find` PASS (load 19.4), `--self-test --only find` PASS with the new plant `find-f3-bar-closed` red (load 17.4), `--quick` exit 0.
 
 ## Critical Issues
 

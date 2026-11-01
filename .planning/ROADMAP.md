@@ -371,6 +371,7 @@ Plans:
   5. Reader view opens on article pages, Ctrl+U shows the page source, F12 opens the page's developer tools, and a crashed tab shows a reload button instead of a blank page
 
 **Plans**: 9/9 plans executed (strictly sequential waves; DSH codes, Claude checks)
+**Status**: plans done; verification human_needed, deferred to the end-of-milestone pass (32-VERIFICATION.md, 32-UAT.md). PAGE-09's Edit menu entries and greying are carried to Phase 33.
 
 Plans:
 - [x] 32-01-PLAN.md (wave 1) — Lead the phase with the three research probes plus the chrome half of the element-method tracers: find (PAGE-01), zoom (PAGE-02), mute/audio (PAGE-05).
