@@ -7788,11 +7788,20 @@ ChromeUtils.defineESModuleGetters(furnitureLazy, {
 });
 
 function installShellFurnitureReceivers(window) {
+  // WR-01 (35-REVIEW): powerbrowser.js calls this ahead of its error layer and TheiaService.start, so
+  // each installer is isolated: a throw logs a fixed line and the rest of the shell still comes up.
+  const step = (name, install) => {
+    try {
+      install();
+    } catch (err) {
+      PowerBrowserAPI.log("error", `[furniture] ${name} failed (${err && err.name ? err.name : "error"})`);
+    }
+  };
   // Phase 37's doorhangers and notification bars (the Phase 37 section above); it reads the tab host, installed earlier.
-  installPermissionPromptFurniture(window);
-  installTooltipsAndLinkStatus(window);
-  installPageContextMenu(window);
-  installFullscreen(window);
+  step("prompts", () => installPermissionPromptFurniture(window));
+  step("tooltips", () => installTooltipsAndLinkStatus(window));
+  step("page menu", () => installPageContextMenu(window));
+  step("fullscreen", () => installFullscreen(window));
 }
 
 // A hovered link as browser.js:1985-2005 shows it: unescaped for display, the
