@@ -1,0 +1,13 @@
+{
+  "outcome": "stock-keeps-ide-usable",
+  "provisional": true,
+  "source": "owner default pending live probe 1 (end-of-milestone pass); no built binary in the Phase 37 lane, so verify-prompts-live.mjs --scenario dialog-probe has not run",
+  "relayFeasible": null,
+  "evidence": {
+    "screenshots": [],
+    "pushLog": null,
+    "ideEditOk": null
+  },
+  "date": "2026-10-31",
+  "build": null
+}

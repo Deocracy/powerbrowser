@@ -12,7 +12,7 @@ import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } 
 import { PreferenceService } from '@theia/core/lib/common/preferences';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import { FileDialogService } from '@theia/filesystem/lib/browser';
-import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabSharing, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import {
     CHROME_BAR_BACK_COMMAND_ID,
     CHROME_BAR_FORWARD_COMMAND_ID,
@@ -26,7 +26,7 @@ import {
     setOpenDownloadsPanel,
     setOpenFindBar,
 } from './chrome-bar-commands';
-import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel } from './chrome-bar-copy';
+import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel, notificationBarCopy } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
 import { AddressBar, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
 import { BUTTON_SHORTCUTS, NavButton, tooltipFor } from './chrome-bar-shortcuts';
@@ -46,6 +46,13 @@ import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
 import '../../src/browser/chrome-bar.css';
 
 /** NAV-03: the session-history menu's path. The menu is built per request from the history reply, never registered. */
+/** Phase 37 plan 02 (D-05): the sharing indicator's kinds, in mark order, each with its codicon and tooltip row. */
+const SHARING_KINDS: ReadonlyArray<readonly [keyof WebTabSharing, string, (subject: string) => string]> = [
+    ['camera', 'device-camera-video', CHROME_BAR_COPY.sharingCamera],
+    ['microphone', 'mic', CHROME_BAR_COPY.sharingMicrophone],
+    ['screen', 'device-desktop', CHROME_BAR_COPY.sharingScreen],
+];
+
 const HISTORY_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-history'];
 
 /** Phase 31 plan 04 (MENU-01): the hamburger's per-request menu path. Built on each open, never registered. */
@@ -215,9 +222,17 @@ export class ChromeBarWidget extends ReactWidget {
         setOpenDownloadsPanel(() => this.toggleDownloads());
         setOpenFindBar((tab, focus) => this.openFind(tab, focus));
         setChooseSaveDestination(suggestedName => this.chooseSaveDestination(suggestedName));
+        // Phase 37 plan 04 (D-08): the web tab widgets draw their notification bars with this package's copy.
+        this.webTabs.setBarCopy(notificationBarCopy);
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
+        }));
+        // Phase 37 plan 02 (D-05): the sharing indicator follows the current tab's sharingChanged push.
+        this.toDispose.push(this.webTabs.onDidChangeTabStatus(tab => {
+            if (tab === currentWebTab()) {
+                this.update();
+            }
         }));
         // NAV-04: toggling either Home setting updates the bar live, with no reload.
         this.toDispose.push(this.preferences.onPreferenceChanged(change => {
@@ -845,6 +860,24 @@ export class ChromeBarWidget extends ReactWidget {
         </button>;
     }
 
+    /**
+     * Phase 37 plan 02 (D-05): one mark per kind the current web tab shares, read only from chrome's sharingChanged push
+     * (webrtcUI's state). Hidden while nothing is shared. It has no handler.
+     */
+    protected renderSharing(): React.ReactNode {
+        const sharing = currentWebTab()?.sharing;
+        const kinds = SHARING_KINDS.filter(([kind]) => sharing?.[kind]);
+        if (kinds.length === 0) {
+            return undefined;
+        }
+        return <span className='pb-chrome-bar-sharing'>
+            {kinds.map(([kind, icon, copy]) => {
+                const label = copy(appSubject());
+                return <span key={kind} className={`codicon codicon-${icon}`} role='img' aria-label={label} title={label} />;
+            })}
+        </span>;
+    }
+
     /** PAGE-02: the zoom chip, shown only while the pushed level is not 100%; one click resets it. */
     protected renderZoomChip(): React.ReactNode {
         const tab = currentWebTab();
@@ -1053,6 +1086,7 @@ export class ChromeBarWidget extends ReactWidget {
             )}
             {this.addressBar.render()}
             {this.renderReaderToggle()}
+            {this.renderSharing()}
             {this.renderZoomChip()}
             <button
                 className='pb-chrome-bar-button'

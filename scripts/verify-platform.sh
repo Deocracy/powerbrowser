@@ -3835,6 +3835,15 @@ run_own_checks() {
     # browser, no display, no network. The self-test rides alongside.
     "new-window-adopt|node $REPO_ROOT/scripts/verify-new-window-adopt.mjs"
     "new-window-adopt-self-test|node $REPO_ROOT/scripts/verify-new-window-adopt.mjs --self-test"
+    # NEW (Phase 37 plan 01, PROMPT-01, D-01..D-04, D-11): the permission-prompt
+    # gate. Derives the #notification-popup attributes from upstream's markup,
+    # the single PopupNotifications construction and its module URL from
+    # upstream's moz.build, the own-principal rule, the forbidden kind family
+    # (no allow/grant/permit/doorhanger/prompt webTab or store kind), the
+    # facade audit link and the display-only doorhanger subscriber. Honestly
+    # --quick: text reads only. The live proof is prompts-live.
+    "permission-prompts|node $REPO_ROOT/scripts/verify-permission-prompts.mjs"
+    "permission-prompts-self-test|node $REPO_ROOT/scripts/verify-permission-prompts.mjs --self-test"
 
     # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the
     # WebTabMessage union, the routed set and the state fields agree (derive and
@@ -5159,6 +5168,16 @@ run_own_checks() {
       # last Theia app build; bookmark-all is NOT SCORED until Phase 33's bookmarkPage lands.
       "tab-strip-live|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs"
       "tab-strip-live-self-test|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs --self-test"
+
+      # NEW (Phase 37 plan 01, PROMPT-01, D-01/D-04/D-11): the permission prompts in the built
+      # shell with the startup cache purged (MOZ_PURGE_CACHES=1). Prompts are answered by
+      # activating the stock popupnotification's own buttons in chrome after the stock delay;
+      # outcomes are page-side and chrome-side, never BiDi on the XUL panel. No --scenario
+      # filter, so the scenarios plans 37-02..37-04 add join this row. Needs the built binary
+      # and the last Theia app build, so never --quick. The self-test runs a clean control per
+      # target scenario, then one session per planted fault.
+      "prompts-live|node $REPO_ROOT/scripts/verify-prompts-live.mjs"
+      "prompts-live-self-test|node $REPO_ROOT/scripts/verify-prompts-live.mjs --self-test"
 
       # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
       # and identity-local (31-01), site-panel (31-02: certificate, six tri-state

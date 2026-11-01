@@ -3284,6 +3284,7 @@ export const PowerBrowserAPI = Object.freeze({
       return "refused-scheme";
     }
     if (webTabs.has(tabId)) {
+      resendWebTabSharing(tabId);
       return "already-open";
     }
     const doc = theiaBrowser.ownerDocument;
@@ -4615,7 +4616,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools", "webTabAdopt"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools", "webTabAdopt", "webTabBarAction"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -4799,7 +4800,7 @@ async function handleWebTabAction(data, actorRef) {
       if (data.tabId !== null && !webTabIdIsValid(data.tabId)) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
-      activeTabByFrame.set(actorRef.browsingContext.top.embedderElement, data.tabId);
+      setActiveTabOfFrame(actorRef.browsingContext.top.embedderElement, data.tabId);
       // A null (the IDE has focus) changes no selection: D-04, the last web tab stays active.
       if (data.tabId !== null) {
         tabHostSelectById(actorRef.browsingContext.top.embedderElement, data.tabId);
@@ -5136,6 +5137,13 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed tabId or pending key" };
       }
       return adoptPendingOverlay(kind, data.tabId, data.pcKey, actorRef);
+    }
+    // Phase 37 plan 04 (D-08, D-12): a notification bar's button. A token and a fixed action only; the bar it names is chrome-held.
+    case "webTabBarAction": {
+      if (!webTabIdIsValid(data.tabId) || typeof data.token !== "string" || typeof data.action !== "string") {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed bar action" };
+      }
+      return webTabBarActionReply(kind, data, actorRef.browsingContext.top.embedderElement);
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -7043,3 +7051,557 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
   return { ok: true, kind, where: "opened" };
 }
 // Phase 36: new-window adopt section end.
+
+// ---------------------------------------------------------------------------
+// Phase 37: permission prompts.
+//
+// PROMPT-01 (D-01..D-04, D-11). The stock PopupNotifications object lives on the
+// shell window, so PermissionUI (and, in later plans, WebRTCParent and the
+// password prompter) shows its stock doorhanger on the native
+// #notification-popup panel. A prompt is answered only by that panel's own
+// buttons and checkbox, so the stock click delay applies; this section adds no
+// answer path and writes no permission. Theia hears only where a prompt is: the
+// display-only `doorhanger` push. The tabbrowser facade is compared member by
+// member by scripts/verify-shell-gbrowser-standin.mjs (FACADES). At merge the
+// one bootstrap call folds into Phase 35's installShellFurniture.
+// ---------------------------------------------------------------------------
+
+// The shell element the panel opens against (powerbrowser.xhtml). With iconBox null, the stock module finds an anchor
+// only through the browser's popupnotificationanchor attribute, so every overlay that asks names this id.
+const PROMPT_ANCHOR_ID = "powerbrowser-notification-anchor";
+// D-04: background requests waiting for their tab, per tab, oldest first. A fourth from the same tab evicts that tab's oldest.
+const PROMPT_QUEUE_CAP = 3;
+// token -> the display record of one stock notification. Nothing reads a record to answer a prompt.
+const promptRecords = new Map();
+const promptWindows = new WeakSet();
+// shell window -> its stock notifications instance, for the focus refresh below.
+const promptInstances = new WeakMap();
+let promptTokenCounter = 0;
+
+export function installPermissionPromptFurniture(window) {
+  const host = tabHosts.get(window);
+  const panel = window.document.getElementById("notification-popup");
+  if (!host || !panel || promptWindows.has(window)) {
+    return;
+  }
+  promptWindows.add(window);
+  // The constructor reads chromehidden as a string; AppWindow writes it at first layout, which may follow DOMContentLoaded.
+  if (!window.document.documentElement.hasAttribute("chromehidden")) {
+    window.document.documentElement.setAttribute("chromehidden", "");
+  }
+  // The selected overlay is the tab host's selection while the Theia frame reports a web tab current; with none, or
+  // while the IDE is current (webTabActivated null), the Theia frame stands in, so every overlay is a background tab
+  // and no prompt shows over a page the user is not looking at. The host strip fires TabSelect and TabClose, so the stock module shows a waiting prompt when its
+  // tab is selected (webTabActivated) and drops a closed tab's prompts itself.
+  const promptTabbrowser = {
+    documentGlobal: window,
+    get selectedBrowser() {
+      return promptVisibleTab(host) ? host.selected.linkedBrowser : host.theiaBrowser;
+    },
+    get selectedTab() {
+      return promptVisibleTab(host) ? host.selected : null;
+    },
+    tabContainer: host.strip,
+  };
+  const { PopupNotifications } = ChromeUtils.importESModule("resource://gre/modules/PopupNotifications.sys.mjs");
+  const notifications = new PopupNotifications(promptTabbrowser, panel, null);
+  promptInstances.set(window, notifications);
+  const stockShow = notifications.show;
+  notifications.show = function (browser, id, message, anchorID, mainAction, secondaryActions, options) {
+    const tabId = tabIdOfBrowser(browser);
+    // Every stock prompt passes options; a request from the Theia frame (no tab id) takes the stock path unchanged.
+    if (tabId === null || !options) {
+      return stockShow.apply(this, arguments);
+    }
+    browser.setAttribute("popupnotificationanchor", PROMPT_ANCHOR_ID);
+    const record = {
+      token: `prompt-${++promptTokenCounter}`,
+      window,
+      theiaBrowser: host.theiaBrowser,
+      browser,
+      tabId,
+      permission: String(id),
+      displayHost: promptDisplayHost(browser),
+      seen: false,
+      queued: false,
+      notification: null,
+    };
+    const stockCallback = options.eventCallback;
+    options.eventCallback = function (topic, ...rest) {
+      promptTopic(record, topic);
+      return stockCallback ? stockCallback.call(this, topic, ...rest) : undefined;
+    };
+    promptRecords.set(record.token, record);
+    try {
+      record.notification = stockShow.call(this, browser, id, message, anchorID, mainAction, secondaryActions, options);
+    } catch (err) {
+      promptRecords.delete(record.token);
+      throw err;
+    }
+    // Not shown at once: the tab is in the background (or the window is), so the record waits for its tab (D-04).
+    if (promptRecords.has(record.token) && !record.seen) {
+      record.queued = true;
+      pushDoorhanger(record, true);
+      // Per tab, so a page that floods requests can evict only its own oldest, never another tab's prompt.
+      const queued = [...promptRecords.values()].filter(r => r.tabId === tabId && r.queued);
+      if (queued.length > PROMPT_QUEUE_CAP) {
+        // The stock removal without a user response runs PermissionUI's cancel(), so the page sees a denial, never a hang.
+        notifications.remove(queued[0].notification, true);
+      }
+    }
+    return record.notification;
+  };
+  // browser.js onLocationChange: a new top-level document drops the previous page's prompts.
+  host.progressListeners.add({
+    onLocationChange(browser, webProgress, _request, _location, flags) {
+      if (webProgress.isTopLevel && !(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT)) {
+        notifications.locationChange(browser);
+      }
+    },
+  });
+  // browser.js:623-625: WebRTCParent inserts <webrtc-preview> into the template's preview section on first use, and this
+  // imports its definition then. window.ChromeUtils, so "current" is the shell window and not this module's shared global.
+  window.customElements.setElementCreationCallback("webrtc-preview", () => window.ChromeUtils.importESModule("chrome://browser/content/webrtc/webrtc-preview.mjs", { global: "current" }));
+  // browser.js:631-634: the password template's username field upgrades on first use; LoginManagerPrompter fills and reads it.
+  window.customElements.setElementCreationCallback("login-doorhanger-username-field", () => window.ChromeUtils.importESModule("chrome://browser/content/passwordmgr/login-doorhanger-username-field.mjs", { global: "current" }));
+  window.PopupNotifications = notifications;
+  installNotificationBars(window, host);
+}
+
+// The web tab the user is looking at: the host's selection, only while the Theia frame reports a web tab current.
+function promptVisibleTab(host) {
+  return Boolean(host.selected) && (activeTabByFrame.get(host.theiaBrowser) ?? null) !== null;
+}
+
+// The webTabActivated arm's one write of activeTabByFrame. When focus moves between the IDE and a web tab the stock
+// module re-reads the facade, so a waiting prompt hides while the IDE is current and shows when its tab is back. This
+// is the stock TabSelect handler's own update (anchorVisibilityChange), called directly: a synthetic TabSelect on the
+// host strip would reach the extension trackers' TabSelect listeners with the strip, not a tab, as its target.
+function setActiveTabOfFrame(theiaBrowser, tabId) {
+  const wasWeb = (activeTabByFrame.get(theiaBrowser) ?? null) !== null;
+  activeTabByFrame.set(theiaBrowser, tabId);
+  const notifications = promptInstances.get(theiaBrowser.ownerDocument.defaultView);
+  if (notifications && wasWeb !== (tabId !== null)) {
+    // After the arm's own selection change, as the stock handler defers its update.
+    theiaBrowser.ownerDocument.defaultView.setTimeout(() => notifications.anchorVisibilityChange(), 0);
+  }
+}
+
+// The stock eventCallback topics, observed for display only (PopupNotifications.sys.mjs show options). A dismissed
+// prompt still waits for its answer (a persistent prompt re-shows when its tab is selected), so only removal clears it.
+function promptTopic(record, topic) {
+  if (topic === "showing") {
+    record.seen = true;
+    record.queued = false;
+    placePromptAnchor(record.browser);
+    pushDoorhanger(record, true);
+  } else if (topic === "shown") {
+    pushDoorhanger(record, true);
+  } else if (topic === "removed") {
+    promptRecords.delete(record.token);
+    pushDoorhanger(record, false);
+  }
+}
+
+// Display-only: where a prompt is and whether it still waits. The token names the chrome-held record; nothing consumes it.
+function pushDoorhanger(record, pending) {
+  sendWebTabPush(record.theiaBrowser, { kind: "doorhanger", token: record.token, tabId: record.tabId, permission: record.permission, displayHost: record.displayHost, pending });
+}
+
+// The overlay's own contentPrincipal, never a sender field (D-02).
+function promptDisplayHost(browser) {
+  try {
+    return browser.contentPrincipal.asciiHost || "";
+  } catch (err) {
+    return "";
+  }
+}
+
+// The anchor sits in the 8px strip directly above the page, the chrome bar's bottom edge, so the stock panel
+// ("bottomleft topleft") opens over the page's top-left corner.
+function placePromptAnchor(browser) {
+  const anchor = browser.ownerDocument.getElementById(PROMPT_ANCHOR_ID);
+  if (!anchor) {
+    return;
+  }
+  const rect = browser.getBoundingClientRect();
+  Object.assign(anchor.style, {
+    position: "fixed",
+    left: `${rect.left + 8}px`,
+    top: `${Math.max(0, rect.top - 8)}px`,
+    width: "16px",
+    height: "8px",
+    pointerEvents: "none",
+  });
+}
+
+// D-05: per overlay, the sharing state last observed and the frontend WindowGlobal it was pushed to.
+const sharingSent = new WeakMap();
+
+// The shell gBrowser's updateBrowserSharing (powerbrowser.js). WebRTCParent.updateIndicators calls it with webrtcUI's own
+// per-tab state (webrtcUI.updateIndicators), so the state is observed chrome-side and never comes from a page or a
+// frame message. Theia gets one boolean per kind; device labels and the browsing context stay here.
+export function updateWebTabSharing(browser, sharingState) {
+  const tabId = tabIdOfBrowser(browser);
+  const host = tabId === null ? null : tabHosts.get(browser.ownerGlobal);
+  if (!host) {
+    return;
+  }
+  const webRTC = (sharingState && sharingState.webRTC) || {};
+  // Paused still counts as shared, as tabbrowser's getTabSharingState reads it.
+  pushWebTabSharing(browser, tabId, host, { camera: Boolean(webRTC.camera), microphone: Boolean(webRTC.microphone), screen: Boolean(webRTC.screen) }, false);
+}
+
+// webTabOpen of an overlay chrome already holds (a reloaded frontend registering it again): the frontend's widget is new,
+// so the last observed state is pushed again. Phase 36 adoption has no hook in this tree yet; adoptTab calls this too.
+function resendWebTabSharing(tabId) {
+  resendWebTabBars(tabId);
+  const entry = webTabs.get(tabId);
+  const last = entry ? sharingSent.get(entry.browser) : undefined;
+  const host = last ? tabHosts.get(entry.browser.ownerGlobal) : null;
+  if (host) {
+    pushWebTabSharing(entry.browser, tabId, host, last.state, true);
+  }
+}
+
+// The one sharingChanged push. The duplicate check covers the destination too: a frontend in a new WindowGlobal has never
+// seen the state, and a skipped push there would leave the indicator stale or hidden while a track is live.
+function pushWebTabSharing(browser, tabId, host, state, force) {
+  const windowGlobal = host.theiaBrowser.browsingContext?.currentWindowGlobal ?? null;
+  const key = `${state.camera}/${state.microphone}/${state.screen}`;
+  const last = sharingSent.get(browser);
+  const unchanged = last ? last.key === key && last.windowGlobal === windowGlobal : key === "false/false/false";
+  if (unchanged && !force) {
+    return;
+  }
+  sharingSent.set(browser, { windowGlobal, key, state });
+  sendWebTabPush(host.theiaBrowser, { kind: "sharingChanged", tabId, camera: state.camera, microphone: state.microphone, screen: state.screen });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 37: notification bars.
+//
+// PROMPT-09 (D-08, D-12). Chrome-side event sources the shell never subscribed (browser.xhtml's scripts are not
+// loaded) become one per-tab bar that Theia renders inside the web tab widget, shrinking the page rect. A bar is not a
+// permission prompt: its answers are the fixed enum below on the one kind webTabBarAction, resolved against the
+// chrome-held record by token, and no answer writes a permission. Theia gets display fields and a token; every URL,
+// principal and report stays here. The stock bars go through getNotificationBox, which the shell does not have (N2
+// rejects a stand-in), so this section never calls it.
+// ---------------------------------------------------------------------------
+
+// barKind -> the actions its bar offers; verify-permission-prompts.mjs compares this with web-tab.ts's table.
+const WEB_TAB_BAR_ACTIONS = { "blocked-popup": ["allow-popup", "dismiss"], "hung-script": ["stop-script", "wait-longer"], "protocol-handler": ["add-handler", "deny-handler"] };
+// token -> the chrome-held record of one bar on screen.
+const barRecords = new Map();
+// overlay -> barKind -> its record: one bar of each kind per tab.
+const barsOfBrowser = new WeakMap();
+// overlay -> the blocked popups it already opened (innerWindowId:reportIndex), so a later block event does not offer one twice.
+const openedPopups = new WeakMap();
+const barWindows = new WeakSet();
+let barTokenCounter = 0;
+
+// Once per shell window, from the prompt furniture installer.
+function installNotificationBars(window, host) {
+  if (barWindows.has(window)) {
+    return;
+  }
+  barWindows.add(window);
+  // browser-init.js:312-317 subscribes these on gBrowser; PopupAndRedirectBlockingParent dispatches them on the overlay and they bubble.
+  for (const type of ["DOMUpdateBlockedPopups", "DOMUpdateBlockedRedirect"]) {
+    window.addEventListener(type, event => void showBlockedPopupBar(host, event.originalTarget));
+  }
+  // The stock notification box drops a page's bars with its document; a closed tab drops them too.
+  host.progressListeners.add({
+    onLocationChange(browser, webProgress, _request, _location, flags) {
+      if (webProgress.isTopLevel && !(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT)) {
+        hideBars(browser);
+        refusedHandlers.delete(browser);
+      }
+    },
+  });
+  host.strip.addEventListener("TabClose", event => hideBars(event.target.linkedBrowser));
+  installHangBars();
+  installProtocolBars();
+}
+
+// Shows, updates or hides one tab's bar of `barKind`. `stored` is chrome-only data the bar's answers act on.
+function setBar(browser, barKind, displayFields, stored) {
+  const tabId = tabIdOfBrowser(browser);
+  const host = tabId === null ? null : tabHosts.get(browser.ownerGlobal);
+  const bars = barsOfBrowser.get(browser) ?? new Map();
+  const previous = bars.get(barKind);
+  if (previous) {
+    barRecords.delete(previous.token);
+  }
+  if (!host || !displayFields) {
+    bars.delete(barKind);
+    if (previous) {
+      pushNotificationBar(previous, false);
+    }
+    return null;
+  }
+  const record = { token: `bar-${++barTokenCounter}`, barKind, browser, theiaBrowser: host.theiaBrowser, tabId, displayFields, stored };
+  bars.set(barKind, record);
+  barsOfBrowser.set(browser, bars);
+  barRecords.set(record.token, record);
+  pushNotificationBar(record, true);
+  return record;
+}
+
+function hideBars(browser) {
+  for (const barKind of [...(barsOfBrowser.get(browser)?.keys() ?? [])]) {
+    setBar(browser, barKind, null, null);
+  }
+}
+
+// The one notificationBar push: display fields and a token, never a URL, principal or callback.
+function pushNotificationBar(record, visible) {
+  sendWebTabPush(record.theiaBrowser, { kind: "notificationBar", token: record.token, tabId: record.tabId, barKind: record.barKind, displayFields: visible ? record.displayFields : {}, visible });
+}
+
+// webTabOpen of an overlay chrome already holds (a reloaded frontend): its widget is new, so each bar is pushed again.
+function resendWebTabBars(tabId) {
+  const entry = webTabs.get(tabId);
+  for (const record of (entry && barsOfBrowser.get(entry.browser)?.values()) ?? []) {
+    pushNotificationBar(record, true);
+  }
+}
+
+// PopupAndRedirectBlockerObserver.onDOMUpdateBlockedPopupsAndRedirect (:42-64) without the selectedBrowser and
+// gPermissionPanel parts (one overlay per tab) and without getNotificationBox. The popups are read here, chrome-side, and
+// kept on the record; Theia sees only the counts.
+async function showBlockedPopupBar(host, browser) {
+  if (tabIdOfBrowser(browser) === null || !Services.prefs.getBoolPref("privacy.popups.showBrowserMessage", true)) {
+    return;
+  }
+  try {
+    const blocker = browser.popupAndRedirectBlocker;
+    const redirectBlocked = blocker.isRedirectBlocked();
+    if ((!blocker.getBlockedPopupCount() && !redirectBlocked) || blocker.hasBeenDismissed()) {
+      setBar(browser, "blocked-popup", null, null);
+      return;
+    }
+    const opened = openedPopups.get(browser) ?? new Set();
+    const popups = (await blocker.getBlockedPopups())
+      .map(p => ({ key: `${p.innerWindowId}:${p.reportIndex}`, spec: String(p.popupWindowURISpec || ""), principal: p.browsingContext.currentWindowGlobal?.innerWindowId === p.innerWindowId ? p.browsingContext.currentWindowGlobal.documentPrincipal : null }))
+      .filter(p => !opened.has(p.key));
+    if (!popups.length && !redirectBlocked) {
+      setBar(browser, "blocked-popup", null, null);
+      return;
+    }
+    setBar(browser, "blocked-popup", { popupCount: popups.length, redirectBlocked }, { popups });
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[bar] blocked-popup bar failed (${err && err.name ? err.name : "error"})`);
+  }
+}
+
+// Theia's answer to one bar. The token must name a bar of the sending frame's own tab, and the action must be one its
+// bar offers; everything the answer acts on is the record chrome stored when the bar was shown.
+async function webTabBarActionReply(kind, data, sender) {
+  const record = barRecords.get(data.token);
+  if (!record || record.tabId !== data.tabId || record.theiaBrowser !== sender) {
+    return { ok: true, kind, where: "unknown-bar" };
+  }
+  if (!WEB_TAB_BAR_ACTIONS[record.barKind]?.includes(data.action)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an action this bar does not offer" };
+  }
+  try {
+    return { ok: true, kind, where: await BAR_ANSWERS[data.action](record) };
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[bar] ${record.barKind} answer failed (${err && err.name ? err.name : "error"})`);
+    setBar(record.browser, record.barKind, null, null);
+    return { ok: false, reason: "write-failed", message: "handleWebTabAction: the bar action failed" };
+  }
+}
+
+// action -> what it does to the stored record. Nothing here writes a permission.
+const BAR_ANSWERS = {
+  // D-12: the one stored popup, opened next to its opener. Not unblockPopup's site-wide sibling toggleAllowPopupsForSite.
+  async "allow-popup"(record) {
+    const popup = record.stored.popups.shift();
+    if (!popup) {
+      return "nothing-to-open";
+    }
+    const opened = openedPopups.get(record.browser) ?? new Set();
+    opened.add(popup.key);
+    openedPopups.set(record.browser, opened);
+    const left = record.stored.popups;
+    setBar(record.browser, record.barKind, left.length || record.displayFields.redirectBlocked ? { popupCount: left.length, redirectBlocked: record.displayFields.redirectBlocked } : null, { popups: left });
+    const tab = await openBlockedPopup(record.browser, popup.spec, popup.principal);
+    if (tab === "refused-scheme" || tab === null) {
+      PowerBrowserAPI.log("error", `[bar] blocked-popup allow opened no tab (${tab === null ? "no-opener" : tab})`);
+      return "not-opened";
+    }
+    return "opened";
+  },
+  // ProcessHangMonitor.terminateScript (:100-101): the report's own method (:145) ends the script.
+  "stop-script"(record) {
+    setBar(record.browser, record.barKind, null, null);
+    record.stored.report.terminateScript();
+    return "stopped";
+  },
+  // ProcessHangMonitor.waitLonger (:152-189): the report is paused for the stock wait period without userCanceled, and
+  // its bar comes back if no clear-hang-report has arrived when the period ends.
+  "wait-longer"(record) {
+    const { browser } = record;
+    const { report } = record.stored;
+    const win = browser.ownerGlobal;
+    setBar(browser, record.barKind, null, null);
+    const timer = win.setTimeout(() => {
+      if (pausedHangs.get(report)?.timer === timer) {
+        pausedHangs.delete(report);
+        setBar(browser, "hung-script", {}, { report });
+      }
+    }, Services.prefs.getIntPref("browser.hangNotification.waitPeriod", 10000));
+    pausedHangs.set(report, { win, timer });
+    return "waiting";
+  },
+  // WebProtocolHandlerRegistrar's Add button (:483-504) on the stored registration; the URI never comes from the frame.
+  "add-handler"(record) {
+    const { protocol, uri, name } = record.stored;
+    setBar(record.browser, record.barKind, null, null);
+    const handler = Cc["@mozilla.org/uriloader/web-handler-app;1"].createInstance(Ci.nsIWebHandlerApp);
+    handler.name = name;
+    handler.uriTemplate = uri;
+    const handlerInfo = Cc["@mozilla.org/uriloader/external-protocol-service;1"].getService(Ci.nsIExternalProtocolService).getProtocolHandlerInfo(protocol);
+    handlerInfo.possibleApplicationHandlers.appendElement(handler);
+    // As the stock Add: ask before the next use of this kind of link.
+    handlerInfo.alwaysAskBeforeHandling = true;
+    Cc["@mozilla.org/uriloader/handler-service;1"].getService(Ci.nsIHandlerService).store(handlerInfo);
+    return "added";
+  },
+  // The stock bar's close: nothing is stored. The refusal holds for this document, so the page cannot re-ask in a loop.
+  "deny-handler"(record) {
+    const { protocol, uri } = record.stored;
+    const refused = refusedHandlers.get(record.browser) ?? new Set();
+    refused.add(`${protocol} ${uri}`);
+    refusedHandlers.set(record.browser, refused);
+    setBar(record.browser, record.barKind, null, null);
+    return "refused";
+  },
+  // The stock bar's dismissal: the blocker remembers it for this document (hasBeenDismissed).
+  dismiss(record) {
+    record.browser.popupAndRedirectBlocker.eventCallback("dismissed");
+    setBar(record.browser, record.barKind, null, null);
+    return "dismissed";
+  },
+};
+
+// D-12: the one call site of the Phase 36 adoption path, on the stored popup's own spec and principal (never a frame
+// field), behind the http(s) wall.
+async function openBlockedPopup(opener, spec, principal) {
+  if (!/^https?:\/\//i.test(spec)) {
+    return "refused-scheme";
+  }
+  // Phase 36's openAdoptedWebTab is on its own branch; until the merge the popup opens as a stock tab. This guard goes away at merge.
+  if (typeof PowerBrowserAPI.openAdoptedWebTab !== "function") {
+    return PowerBrowserAPI.openStockTab(spec);
+  }
+  return PowerBrowserAPI.openAdoptedWebTab(opener, spec, { triggeringPrincipal: principal });
+}
+
+// D-08: hung scripts. ProcessHangMonitor draws its bar only in stock browser windows ("navigator:browser",
+// updateWindows :425-443) through win.gNotificationBox (:534, :564, :588-591), which the shell window does not have, so a
+// hung overlay script had no bar. This observer of the same two topics (:89-90, :227-232) gives the overlay's report a
+// per-tab bar; win.gNotificationBox is never reached from here. Add-on hangs stay with the stock monitor's own branch.
+const HANG_TOPICS = ["process-hang-report", "clear-hang-report"];
+// report -> { win, timer } while Keep waiting holds it (the stock _pausedReports).
+const pausedHangs = new Map();
+let hangObserverInstalled = false;
+
+function installHangBars() {
+  if (hangObserverInstalled) {
+    return;
+  }
+  hangObserverInstalled = true;
+  const observer = { observe: (subject, topic) => onHangTopic(subject, topic) };
+  for (const topic of HANG_TOPICS) {
+    Services.obs.addObserver(observer, topic);
+  }
+}
+
+function onHangTopic(subject, topic) {
+  try {
+    const report = subject.QueryInterface(Ci.nsIHangReport);
+    const browser = report.addonId ? null : hungOverlay(report);
+    if (!browser) {
+      return;
+    }
+    const shown = barsOfBrowser.get(browser)?.get("hung-script");
+    if (topic === "clear-hang-report") {
+      const paused = pausedHangs.get(report);
+      paused?.win.clearTimeout(paused.timer);
+      pausedHangs.delete(report);
+      if (shown?.stored.report === report) {
+        setBar(browser, "hung-script", null, null);
+      }
+      return;
+    }
+    // A repeat report of a hang already on screen, or one the user chose to wait for, shows nothing new (reportHang).
+    if (!pausedHangs.has(report) && shown?.stored.report !== report) {
+      setBar(browser, "hung-script", {}, { report });
+    }
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[bar] hung-script bar failed (${err && err.name ? err.name : "error"})`);
+  }
+}
+
+// The overlay whose frame tree the report is for (ProcessHangMonitor.findActiveReport's own test).
+function hungOverlay(report) {
+  for (const entry of webTabs.values()) {
+    const frameLoader = entry.browser.frameLoader;
+    if (frameLoader && report.isReportForBrowserOrChildren(frameLoader)) {
+      return entry.browser;
+    }
+  }
+  return null;
+}
+
+// D-08 (N2): protocol registration. WebProtocolHandlerRegistrar.registerProtocolHandler (:421-527) asks through
+// browser.getTabBrowser().getNotificationBox(browser) (:506, :582). The tab host gives an overlay a getTabBrowser()
+// receiver but no getNotificationBox (deliberately absent in verify-shell-gbrowser-standin.mjs), so for every overlay the
+// stock path throws a TypeError and the page's request is lost. The service is the module's own constructor
+// (components.conf:8), so its prototype method is wrapped: an overlay's call runs the stock checks and then asks through
+// the per-tab bar; every other caller takes the stock path unchanged. No tabbrowser or notification box is fabricated.
+const PROTOCOL_REGISTRAR_CONTRACT = "@mozilla.org/embeddor.implemented/web-protocol-handler-registrar;1";
+const PROTOCOL_REGISTRAR_MODULE = "resource:///modules/WebProtocolHandlerRegistrar.sys.mjs";
+// overlay -> "protocol uri" registrations the user refused on its current document.
+const refusedHandlers = new WeakMap();
+let protocolWrapInstalled = false;
+
+function installProtocolBars() {
+  if (protocolWrapInstalled) {
+    return;
+  }
+  protocolWrapInstalled = true;
+  const proto = ChromeUtils.importESModule(PROTOCOL_REGISTRAR_MODULE).WebProtocolHandlerRegistrar.prototype;
+  const stock = proto.registerProtocolHandler;
+  const wrapped = function (aProtocol, aURI, aTitle, aDocumentURI, aBrowserOrWindow) {
+    if (tabIdOfBrowser(aBrowserOrWindow) === null) {
+      return stock.apply(this, arguments);
+    }
+    return showProtocolHandlerBar(this, aProtocol, aURI, aTitle, aDocumentURI, aBrowserOrWindow);
+  };
+  // The live harness's protocol-stock-path-unhooked plant puts the stock method back to show the stock throw.
+  wrapped.stock = stock;
+  proto.registerProtocolHandler = wrapped;
+}
+
+// The stock method's own checks (:430-462) for one overlay, then the bar in place of the notification box. The
+// registration is stored chrome-side; Theia sees the handler's host and the scheme.
+function showProtocolHandlerBar(registrar, aProtocol, aURI, aTitle, aDocumentURI, browser) {
+  const protocol = (aProtocol || "").toLowerCase();
+  if (!aURI || !aDocumentURI) {
+    return;
+  }
+  try {
+    browser.documentGlobal.navigator.checkProtocolHandlerAllowed(protocol, aURI, aDocumentURI);
+  } catch {
+    // Refused: the platform has already reported it, as on the stock path.
+    return;
+  }
+  if (registrar._protocolHandlerRegistered(protocol, aURI.spec) || refusedHandlers.get(browser)?.has(`${protocol} ${aURI.spec}`)) {
+    return;
+  }
+  setBar(browser, "protocol-handler", { displayHost: aURI.host, scheme: protocol }, { protocol, uri: aURI.spec, name: String(aTitle || "") });
+}

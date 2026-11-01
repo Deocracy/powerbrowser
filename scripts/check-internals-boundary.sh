@@ -85,6 +85,10 @@ FORBIDDEN_PATTERNS=(
   'gBrowserInit'
   # Phase 32 zoom shims under the Phase 27 policy (plan 32-09): defined only in PowerBrowserAPI.sys.mjs (the host install), compared member by member by verify-shell-gbrowser-standin.mjs. A separate line, so 35-01's derivation from the Phase 27 line is unchanged.
   'ZoomManager' 'FullZoom' 'ZoomUI'
+  # Phase 37 plan 02 definition exemption under the Phase 27 policy: the stock custom-element creation callbacks
+  # browser.js registers (webrtc-preview; login-doorhanger-username-field from plan 04) are registered only in
+  # PowerBrowserAPI.sys.mjs, each line catalogued.
+  'setElementCreationCallback'
 )
 
 is_conditional_pattern() {
@@ -359,6 +363,45 @@ EOF
     overall=1
   fi
 
+  # Phase 37 plan 01 plant: the PopupNotifications reach-through (the module import plus the
+  # construction) is legal only inside PowerBrowserAPI.sys.mjs, where --catalogue rows cover it.
+  # The same two lines in any other shell file must be rejected naming both patterns.
+  mkdir -p "$tmp/prompts"
+  cat > "$tmp/prompts/planted-prompt-reach.js" <<'EOF'
+// planted-prompt-reach.js -- the Phase 37 furniture reach-through outside the boundary file.
+const { PopupNotifications } = ChromeUtils.importESModule("resource://gre/modules/PopupNotifications.sys.mjs");
+window.PopupNotifications = new PopupNotifications({ documentGlobal: window }, null, null);
+EOF
+  if scan_internals_boundary "$tmp/prompts" >/dev/null 2>"$tmp/self-test-prompts.err"; then
+    echo "check-internals-boundary: --self-test FAIL -- the PopupNotifications reach-through outside the boundary file was NOT rejected" >&2
+    overall=1
+  elif grep -q 'planted-prompt-reach.js:2: ChromeUtils.import' "$tmp/self-test-prompts.err" \
+    && grep -q 'planted-prompt-reach.js:3: PopupNotifications' "$tmp/self-test-prompts.err"; then
+    echo "check-internals-boundary: --self-test PASS -- the PopupNotifications reach-through outside the boundary file was correctly rejected"
+  else
+    echo "check-internals-boundary: --self-test FAIL -- the reach-through rejection doesn't name the import and the construction" >&2
+    cat "$tmp/self-test-prompts.err" >&2
+    overall=1
+  fi
+
+  # Phase 37 plan 04 plant: the password template's username-field callback (browser.js:631-634) is
+  # legal only inside PowerBrowserAPI.sys.mjs; the same line in any other shell file must be rejected.
+  mkdir -p "$tmp/login"
+  cat > "$tmp/login/planted-login-callback.js" <<'EOF2'
+// planted-login-callback.js -- the Phase 37 login callback outside the boundary file.
+customElements.setElementCreationCallback("login-doorhanger-username-field", () => ChromeUtils.importESModule("chrome://browser/content/passwordmgr/login-doorhanger-username-field.mjs", { global: "current" }));
+EOF2
+  if scan_internals_boundary "$tmp/login" >/dev/null 2>"$tmp/self-test-login.err"; then
+    echo "check-internals-boundary: --self-test FAIL -- the login-doorhanger-username-field callback outside the boundary file was NOT rejected" >&2
+    overall=1
+  elif grep -q 'planted-login-callback.js:2: setElementCreationCallback' "$tmp/self-test-login.err"; then
+    echo "check-internals-boundary: --self-test PASS -- the login-doorhanger-username-field callback outside the boundary file was correctly rejected"
+  else
+    echo "check-internals-boundary: --self-test FAIL -- the login callback rejection doesn't name setElementCreationCallback" >&2
+    cat "$tmp/self-test-login.err" >&2
+    overall=1
+  fi
+
   # NG-039 plants: each new pattern is rejected outside the boundary file, and
   # an actor-child waiver with no catalogue row is rejected even in the one
   # file that may carry it.
@@ -367,12 +410,14 @@ EOF
   local plant_name plant_body
   # The Phase 27 shim globals are each planted as a one-line shim assignment.
   for plant_name in wrappedJSObject drawSnapshot IOUtils gBrowser \
-      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow gBrowserInit ZoomManager FullZoom ZoomUI; do
+      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow gBrowserInit ZoomManager FullZoom ZoomUI \
+      setElementCreationCallback; do
     case "$plant_name" in
       wrappedJSObject) plant_body='  return win.wrappedJSObject.JSON.parse(text);' ;;
       drawSnapshot) plant_body='  return browser.drawSnapshot(0, 0, 1, 1, 1, "white");' ;;
       IOUtils) plant_body='  const { remove } = IOUtils; return remove(text);' ;;
       gBrowser) plant_body='  window.gBrowser = {' ;;
+      setElementCreationCallback) plant_body='  win.customElements.setElementCreationCallback("webrtc-preview", () => {});' ;;
       *) plant_body="  window.$plant_name = {};" ;;
     esac
     printf '// planted %s fixture\nexport function planted(win, browser, text) {\n%s\n}\n' "$plant_name" "$plant_body" > "$tmp/planted-$plant_name.sys.mjs"

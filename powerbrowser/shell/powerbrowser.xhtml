@@ -30,6 +30,11 @@
     <meta http-equiv="Content-Security-Policy" content="default-src chrome:"/>
     <title>PowerBrowser</title>
     <link rel="stylesheet" href="chrome://powerbrowser/content/powerbrowser.css"/>
+    <!-- Phase 37 plan 02: the stock strings the doorhanger templates name by data-l10n-id (as browser.xhtml links them). -->
+    <link rel="localization" href="branding/brand.ftl"/>
+    <link rel="localization" href="browser/browser.ftl"/>
+    <!-- Phase 37 plan 04: the password doorhanger's field style, as popup-notifications.inc.xhtml links it. -->
+    <link rel="stylesheet" href="chrome://browser/content/passwordmgr/login-doorhanger-username-field.css"/>
     <script src="chrome://powerbrowser/content/powerbrowser.js"></script>
   </head>
   <body>
@@ -55,6 +60,123 @@
       <pre id="powerbrowser-diagnostics-log"></pre>
       <button id="powerbrowser-diagnostics-close" type="button">Close</button>
     </div>
+    <!-- Phase 37 (PROMPT-01): stock furniture, no custom chrome. The doorhanger
+         panel verbatim from upstream/browser/base/content/popup-notifications.inc.xhtml,
+         and the element it opens against, placed above the asking page by
+         PowerBrowserAPI.sys.mjs. -->
+    <xul:popupset id="powerbrowser-popupset">
+      <xul:panel id="notification-popup"
+                 type="arrow"
+                 position="after_start"
+                 hidden="true"
+                 orient="vertical"
+                 noautofocus="true"
+                 role="alert"
+                 remote="true"/>
+      <!-- Phase 37 plan 02 (B2): the camera, microphone and screen doorhanger,
+           verbatim from popup-notifications.inc.xhtml. WebRTCParent finds it by
+           its id. The namespace declarations on its root let the upstream text
+           parse unchanged inside this HTML document. -->
+      <popupnotification xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+                         xmlns:html="http://www.w3.org/1999/xhtml"
+                         xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+                         id="webRTC-shareDevices-notification" hidden="true"
+                         descriptionid="webRTC-shareDevices-notification-description">
+        <popupnotificationcontent id="webRTC-selectCamera" orient="vertical">
+          <label id="webRTC-selectCamera-label"
+                 data-l10n-id="popup-select-camera-device"
+                 control="webRTC-selectCamera-menulist"/>
+          <html:div class="webRTC-selectDevice-selector-container">
+            <xul:image id="webRTC-selectCamera-icon" class="webRTC-selectDevice-icon" data-l10n-id="popup-select-camera-icon"/>
+            <menulist id="webRTC-selectCamera-menulist" aria-labelledby="webRTC-selectCamera-icon" size="large">
+              <menupopup id="webRTC-selectCamera-menupopup"/>
+            </menulist>
+            <label id="webRTC-selectCamera-single-device-label" class="webRTC-selectDevice-label"></label>
+          </html:div>
+        </popupnotificationcontent>
+
+        <popupnotificationcontent id="webRTC-selectWindowOrScreen" orient="vertical">
+          <label id="webRTC-selectWindow-label"
+                 data-l10n-id="popup-select-window-or-screen"
+                 control="webRTC-selectWindow-menulist"/>
+          <menulist id="webRTC-selectWindow-menulist"
+                    size="large">
+            <menupopup id="webRTC-selectWindow-menupopup"/>
+          </menulist>
+          <description id="webRTC-all-windows-shared" hidden="true" data-l10n-id="popup-all-windows-shared"></description>
+        </popupnotificationcontent>
+
+        <popupnotificationcontent id="webRTC-preview-section" orient="vertical">
+          <!-- <webrtc-preview> gets inserted here lazily by WebRTCParent.sys.mjs -->
+          <vbox id="webRTC-previewWarningBox">
+            <description id="webRTC-previewWarning"/>
+            <hbox>
+              <html:a id="webRTC-previewWarning-learnMore"
+                      is="moz-support-link"
+                      support-page="screenshare-safety"
+                      class="popup-notification-learnmore-link"
+            ></html:a>
+            </hbox>
+          </vbox>
+        </popupnotificationcontent>
+
+        <popupnotificationcontent id="webRTC-selectMicrophone" orient="vertical">
+          <label id="webRTC-selectMicrophone-label"
+                 data-l10n-id="popup-select-microphone-device"
+                 control="webRTC-selectMicrophone-menulist"/>
+          <html:div class="webRTC-selectDevice-selector-container">
+            <xul:image id="webRTC-selectMicrophone-icon" data-l10n-id="popup-select-microphone-icon" class="webRTC-selectDevice-icon"/>
+            <menulist id="webRTC-selectMicrophone-menulist" aria-labelledby="webRTC-selectMicrophone-icon" size="large">
+              <menupopup id="webRTC-selectMicrophone-menupopup"/>
+            </menulist>
+            <label id="webRTC-selectMicrophone-single-device-label" class="webRTC-selectDevice-label"></label>
+          </html:div>
+        </popupnotificationcontent>
+
+        <popupnotificationcontent id="webRTC-selectSpeaker" orient="vertical">
+          <html:div class="webRTC-selectDevice-selector-container">
+            <xul:image id="webRTC-selectSpeaker-icon" data-l10n-id="popup-select-speaker-icon" class="webRTC-selectDevice-icon"/>
+            <richlistbox id="webRTC-selectSpeaker-richlistbox" aria-labelledby="webRTC-selectSpeaker-icon" size="large">
+            </richlistbox>
+            <label id="webRTC-selectSpeaker-single-device-label" class="webRTC-selectDevice-label"></label>
+          </html:div>
+        </popupnotificationcontent>
+      </popupnotification>
+      <!-- Phase 37 plan 04 (D-07): the password save and update doorhanger, verbatim from
+           popup-notifications.inc.xhtml. LoginManagerPrompter fills these two fields and reads
+           the user's edits back from them; no credential reaches Theia. -->
+      <popupnotification xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+                         xmlns:html="http://www.w3.org/1999/xhtml"
+                         id="password-notification" hidden="true">
+        <popupnotificationcontent orient="vertical">
+          <html:login-doorhanger-username-field id="password-notification-username"
+                                   data-l10n-id="panel-save-update-username-2"
+                                   data-l10n-attrs="label"
+                                   class="login-doorhanger-field"
+                                   autocompletesearch="login-doorhanger-username"
+                                   autocompletepopup="PopupAutoComplete"
+                                   maxrows="10"
+                                   maxdropmarkerrows="10"></html:login-doorhanger-username-field>
+          <html:moz-input-password id="password-notification-password"
+                                   data-l10n-id="panel-save-update-password-2"
+                                   data-l10n-attrs="label"
+                                   class="login-doorhanger-field"/>
+        </popupnotificationcontent>
+      </popupnotification>
+      <!-- Phase 37 plan 04: the autocomplete popup the username field names, verbatim from
+           main-popupset.inc.xhtml. The prompter's "showing" callback sets its select hooks. -->
+      <xul:panel is="autocomplete-richlistbox-popup"
+                 type="autocomplete-richlistbox"
+                 id="PopupAutoComplete"
+                 role="group"
+                 noautofocus="true"
+                 hidden="true"
+                 overflowpadding="4"
+                 norolluponanchor="true"
+                 nomaxresults="true"
+                 locationspecific="true" />
+    </xul:popupset>
+    <div id="powerbrowser-notification-anchor"></div>
     <xul:browser id="powerbrowser-content" type="content" primary="true" remote="true" remoteType="web" src="about:blank" tabindex="-1"/>
   </body>
 </html>

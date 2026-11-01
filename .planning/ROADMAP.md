@@ -501,10 +501,10 @@ Plans:
 **Plans**: 4 plans (strictly sequential waves; DSH codes, Claude checks; prompts answer only via Firefox's own buttons, Chris 2026-10-25)
 
 Plans:
-- [ ] 37-01-PLAN.md (wave 1) — Wave 0 gates plus the first end-to-end tracer.
-- [ ] 37-02-PLAN.md (wave 2) — Remember, the WebRTC device template and the sharing indicator, on top of the 37-01
-- [ ] 37-03-PLAN.md (wave 3) — Dialogs, with the Chris gate.
-- [ ] 37-04-PLAN.md (wave 4) — Password save and update, and the three per-tab notification bars.
+- [x] 37-01-PLAN.md (wave 1) — Wave 0 gates plus the first end-to-end tracer.
+- [x] 37-02-PLAN.md (wave 2) — Remember, the WebRTC device template and the sharing indicator, on top of the 37-01
+- [x] 37-03-PLAN.md (wave 3) — Dialogs, with the Chris gate.
+- [x] 37-04-PLAN.md (wave 4) — Password save and update, and the three per-tab notification bars.
 
 **UI hint**: yes
 
@@ -550,7 +550,7 @@ Plans:
 | 34. Tab Strip | 5/5 | Executed, live verification deferred | - |
 | 35. Shell Furniture and Page Context Menu | 0/TBD | Not started | - |
 | 36. New-Window Links as Web Tabs | 3/3 | In Progress (live checks deferred) | - |
-| 37. Permission Prompts and Dialogs | 0/TBD | Not started | - |
+| 37. Permission Prompts and Dialogs | 4/4 | In Progress (live checks deferred) | - |
 | 38. WebExtensions | 0/TBD | Not started | - |
 
 ## Hard constraints (every phase)

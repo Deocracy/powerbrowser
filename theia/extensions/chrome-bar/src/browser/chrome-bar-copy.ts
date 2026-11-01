@@ -1,5 +1,5 @@
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
-import { EMPTY_PAGE_URL, NEW_TAB_LABEL, WebTabHistoryEntry } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { EMPTY_PAGE_URL, NEW_TAB_LABEL, NotificationBar, NotificationBarText, WebTabHistoryEntry } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 
 /** A byte count for a download caption: KB or MB, one decimal. Not copy: it formats a number. */
 export function downloadBytes(bytes: number): string {
@@ -67,6 +67,23 @@ export const CHROME_BAR_COPY = Object.freeze({
     zoomReset: 'Reset zoom (Ctrl+0)',
     muteTab: 'Mute tab',
     unmuteTab: 'Unmute tab',
+    // Phase 37 plan 01 (D-11): the tab strip's pending-prompt mark. The stock prompt's own strings are not copied here.
+    pendingPrompt: 'This page asked for a permission. Open the tab to answer it.',
+    // Phase 37 plan 02 (D-05): the sharing indicator's tooltip, one per kind (37-UI-SPEC copy row).
+    sharingCamera: (subject: string) => `${subject} is sharing your camera with this tab.`,
+    sharingMicrophone: (subject: string) => `${subject} is sharing your microphone with this tab.`,
+    sharingScreen: (subject: string) => `${subject} is sharing your screen with this tab.`,
+    // Phase 37 plan 04 (D-08, D-10): the notification bars (37-UI-SPEC copy rows). Counts are chrome-computed numbers.
+    barPopupBlocked: (subject: string, count: number) => count === 1 ? `${subject} blocked a popup from this page.` : `${subject} blocked ${count} popups from this page.`,
+    barRedirectBlocked: (subject: string) => `${subject} stopped this page from sending you to another page.`,
+    barAllow: 'Allow',
+    barDismiss: 'Dismiss',
+    barHungScript: 'A script on this page is taking too long.',
+    barStopScript: 'Stop script',
+    barKeepWaiting: 'Keep waiting',
+    barProtocolHandler: (host: string, scheme: string) => `Allow ${host} to open ${scheme} links?`,
+    barAddHandler: 'Add',
+    barDenyHandler: "Don't allow",
     // Phase 32 plan 08 (PAGE-10): the reader toggle and view source (32-UI-SPEC Copywriting Contract, Reader toggle and View source).
     readerView: 'Reader view',
     exitReaderView: 'Exit reader view',
@@ -221,6 +238,24 @@ export const CHROME_BAR_COPY = Object.freeze({
 /** The sentence subject naming the product: the configured application name, or "The browser". */
 export function appSubject(): string {
     return FrontendApplicationConfigProvider.get().applicationName?.trim() || CHROME_BAR_COPY.noAppName;
+}
+
+/** Phase 37 plan 04 (D-08): a notification bar's message and labels; an action left without a label is not offered. */
+export function notificationBarCopy(bar: NotificationBar): NotificationBarText | undefined {
+    const fields = bar.displayFields;
+    if (bar.barKind === 'blocked-popup') {
+        const count = typeof fields.popupCount === 'number' ? fields.popupCount : 0;
+        return count > 0
+            ? { message: CHROME_BAR_COPY.barPopupBlocked(appSubject(), count), labels: { 'allow-popup': CHROME_BAR_COPY.barAllow, dismiss: CHROME_BAR_COPY.barDismiss } }
+            : { message: CHROME_BAR_COPY.barRedirectBlocked(appSubject()), labels: { dismiss: CHROME_BAR_COPY.barDismiss } };
+    }
+    if (bar.barKind === 'hung-script') {
+        return { message: CHROME_BAR_COPY.barHungScript, labels: { 'stop-script': CHROME_BAR_COPY.barStopScript, 'wait-longer': CHROME_BAR_COPY.barKeepWaiting }, destructive: ['stop-script'] };
+    }
+    if (bar.barKind === 'protocol-handler' && typeof fields.displayHost === 'string' && typeof fields.scheme === 'string') {
+        return { message: CHROME_BAR_COPY.barProtocolHandler(fields.displayHost, fields.scheme), labels: { 'add-handler': CHROME_BAR_COPY.barAddHandler, 'deny-handler': CHROME_BAR_COPY.barDenyHandler } };
+    }
+    return undefined;
 }
 
 const HISTORY_LABEL_MAX = 60;

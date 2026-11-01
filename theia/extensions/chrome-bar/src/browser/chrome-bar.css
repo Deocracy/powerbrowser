@@ -1498,6 +1498,18 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     outline-offset: 2px;
 }
 
+/* Phase 37 plan 02 (D-05): the sharing indicator, one 16px codicon per shared kind, ringed in the accent (37-UI-SPEC). */
+.pb-chrome-bar-sharing {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid var(--theia-focusBorder);
+    border-radius: 12px;
+    color: var(--color-text, #fbfbfe);
+}
+
 /* PAGE-04 (32-08): the favicon or globe on a web tab, 16px; the crashed mark uses the muted ink, no new accent. */
 .pb-tab-favicon {
     flex: none;

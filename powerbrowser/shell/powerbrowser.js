@@ -19,7 +19,7 @@ document.addEventListener(
   () => {
     dump("POWERBROWSER_SHELL_READY chrome://powerbrowser/content/powerbrowser.xhtml\n");
 
-    const { PowerBrowserAPI, PowerBrowserWebTabs, PowerBrowserTabHost } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
+    const { PowerBrowserAPI, PowerBrowserWebTabs, PowerBrowserTabHost, installPermissionPromptFurniture, updateWebTabSharing } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
 
     const browserElement = document.getElementById("powerbrowser-content");
     const loadingElement = document.getElementById("powerbrowser-loading");
@@ -117,6 +117,11 @@ document.addEventListener(
       getTabSharingState(tab) {
         return host.getTabSharingState(tab);
       },
+      // Phase 37 (D-05): WebRTCParent.updateIndicators reports webrtcUI's state for an overlay here; chrome pushes the
+      // camera, microphone and screen booleans to the chrome bar's sharing indicator.
+      updateBrowserSharing(browser, state) {
+        updateWebTabSharing(browser, state);
+      },
       addTabsProgressListener(listener) {
         host.addTabsProgressListener(listener);
       },
@@ -132,6 +137,9 @@ document.addEventListener(
       },
     };
     document.documentElement.setAttribute("extensiontabhost", "true");
+    // Phase 37: the permission-prompt furniture (#notification-popup), after the tab host it reads. At merge this call
+    // folds into Phase 35's installShellFurniture.
+    installPermissionPromptFurniture(window);
 
     // Exposed for plan 04-04's TheiaService.sys.mjs to call once the
     // backend is ready: navigates the content browser to the Theia
