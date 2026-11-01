@@ -359,7 +359,8 @@ async function scenarioTabsBridge({ app, plant, command }) {
     return verdict(false, null, 'tabs.update({active}) on /c did not select it in chrome and show it in the frontend');
   }
   const rm = await command('remove', { tabId: bg.result.id });
-  const gone = rm.ok ? await pollUntil(() => overlayOfExtTab(app, bg.result.id), o => !o.present, 10000) : null;
+  // 38-REVIEW WR-03: one read right after the reply, no polling; stock removes the tab before tabs.remove resolves.
+  const gone = rm.ok ? await overlayOfExtTab(app, bg.result.id).then(o => (o.present ? null : o)) : null;
   if (!gone) {
     return verdict(false, null, `tabs.remove of /c did not close its overlay: ${rm.ok ? 'still present' : rm.error}`);
   }

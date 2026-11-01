@@ -83,6 +83,9 @@
  *                    a container request (userContextId)
  *                    is refused before either branch (38-REVIEW CR-02); the overlay location wall
  *                    (OVERLAY_LOCATION) names no extension scheme.
+ *  12b. tab remove -- (38-REVIEW WR-03) tabsBridgeRemove closes an adopted tab's
+ *                    node and overlay (webTabClose) before it pushes
+ *                    closeAdoptedTab, so tabs.remove resolves after the tab is gone.
  *  13. commands   -- (38-04, B5 + the 2026-10-20 keys ruling) the section's
  *                    EXTENSION_EXECUTE_COMMANDS equals the _execute_* names
  *                    upstream ExtensionShortcuts.buildKey dispatches, and its
@@ -496,6 +499,13 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
         if (!wall) failures.push(`tab-pages: ${API} has no OVERLAY_LOCATION (broken instrument)`);
         else if (/moz-extension|extension:/i.test(wall)) failures.push(`tab-pages: OVERLAY_LOCATION admits an extension page into an overlay (${wall})`);
     }
+    // 12b. WR-03: tabs.remove closes an adopted tab before its promise resolves (stock removes it synchronously).
+    if (bridgeLanded) {
+        const remove = span(apiLines, /^function tabsBridgeRemove\(/);
+        const body = remove ? apiLines.slice(remove.start, remove.end + 1).join('\n') : '';
+        if (!remove) failures.push(`tab-remove: ${API} has no tabsBridgeRemove (broken instrument)`);
+        else if (!/PowerBrowserAPI\.webTabClose\(tabId\);\s*sendWebTabPush\([^)]*closeAdoptedTab/.test(body)) failures.push(`tab-remove: tabsBridgeRemove pushes closeAdoptedTab without closing the adopted tab's node and overlay first; tabs.remove would resolve before the tab is gone`);
+    }
     // 13. commands
     if (bridgeLanded) {
         const upstream = (src[UPSTREAM_SHORTCUTS] ?? '').split('\n');
@@ -588,6 +598,7 @@ function selfTest() {
         { name: 'sidebar skip reverted', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('+    if (windowTracker.isTabHostWindow(window) || !this.extension.canAccessWindow(window)) {', '+    if (!this.extension.canAccessWindow(window)) {') }), expect: 'createMenuItem(window, details) no longer skips the shell window' },
         { name: 'sidebar-as-tab', run: () => check({ ...clean, [API]: clean[API].replace('  win.document.body.appendChild(frame);\n  extensionSidebars.set(', '  createPendingOverlay(null, panel, true, null);\n  extensionSidebars.set(') }), expect: 'extensionSidebarOpen puts the sidebar page in an overlay (createPendingOverlay(' },
         { name: 'tabpage-in-overlay', run: () => check({ ...clean, [API]: clean[API].replace('    return extensionOpenTabPage(url, options?.triggeringPrincipal);', '    return createPendingOverlay(options.openerBrowser, url, true, null);') }), expect: 'tabsBridgeCreate puts an extension page in an overlay (createPendingOverlay(' },
+        { name: 'remove resolves early', run: () => check({ ...clean, [API]: clean[API].replace('    PowerBrowserAPI.webTabClose(tabId);\n    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });', '    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });') }), expect: 'tabsBridgeRemove pushes closeAdoptedTab without closing' },
         { name: 'container dropped', run: () => check({ ...clean, [API]: clean[API].replace('  if (options?.userContextId) {\n', '  if (false) {\n') }), expect: 'tabsBridgeCreate does not refuse a container' },
         { name: 'page via window argument', run: () => check({ ...clean, [API]: clean[API].replace('win ?? PowerBrowserAPI.openBrowserWindow("")', 'win ?? PowerBrowserAPI.openBrowserWindow(url)') }), expect: 'extensionOpenTabPage passes the page through openBrowserWindow' },
         { name: 'execute name drift', run: () => check({ ...clean, [API]: clean[API].replace(', "_execute_sidebar_action"];', '];') }), expect: 'missing _execute_sidebar_action' },

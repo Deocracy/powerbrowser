@@ -10127,14 +10127,17 @@ function tabsBridgeCreate(host, url, options) {
   return host.byBrowser.get(browser);
 }
 
-// tabs.remove: an adopted tab closes in the frontend as a user's close does (its close releases the overlay and the
-// row). A tab still waiting for its ack goes here, and the late ack is answered unknown-tab.
+// tabs.remove: stock removes the tab before the promise resolves, so an adopted tab's node, overlay and row go here at
+// once (webTabClose fires TabClose, so onRemoved precedes the resolution; 38-REVIEW WR-03) and the push then has the
+// frontend drop its widget (its own webTabClose answers unknown-tab). A tab still waiting for its ack goes here too, and
+// the late ack is answered unknown-tab.
 function tabsBridgeRemove(host, tab) {
   if (!isHostTab(host, tab)) {
     throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to close that tab: it is not one of this window's web tabs.");
   }
   const tabId = tabIdOfBrowser(tab.linkedBrowser);
   if (tabId !== null) {
+    PowerBrowserAPI.webTabClose(tabId);
     sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });
     return;
   }
