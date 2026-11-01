@@ -69,7 +69,7 @@ completed: 2026-10-20
 
 # Phase 27 Plan 03: gBrowser Stand-in Policy and Shim-Global Boundary Summary
 
-**The gBrowser stand-in gate now derives its scope from all 47 upstream actor parents plus the browser widget, records five reasoned absences (refreshBlocked as a known gap), and the internals boundary forbids six browser.xhtml shim globals outside PowerBrowserAPI.sys.mjs.**
+**The gBrowser stand-in gate now derives its scope from the browser widget plus the `*Parent.sys.mjs` files of two directories (upstream/browser/actors and upstream/toolkit/actors; component-directory parents such as ProfilesParent were not scanned until 35-01-SUMMARY's registry widening), records five reasoned absences (refreshBlocked as a known gap), and the internals boundary forbids six browser.xhtml shim globals outside PowerBrowserAPI.sys.mjs.**
 
 ## Performance
 
@@ -133,7 +133,7 @@ None.
 
 ## Next Phase Readiness
 
-- A rebase that adds a gBrowser call in any actor parent now fails `--quick` as UNIMPLEMENTED. Fix it either by implementing the member or by adding a reasoned `DELIBERATELY_ABSENT` entry.
+- A rebase that adds a gBrowser call in a `*Parent.sys.mjs` under upstream/browser/actors or upstream/toolkit/actors (or the browser widget) now fails `--quick` as UNIMPLEMENTED. Parents registered from component directories were outside this scope until Phase 35 plan 01 derived the scope from the actor registries (see 35-01-SUMMARY). Fix it either by implementing the member or by adding a reasoned `DELIBERATELY_ABSENT` entry.
 - A later phase that shims PopupNotifications or a context menu must define the shim through `PowerBrowserAPI.sys.mjs` and catalogue it. Anywhere else, `internals-boundary` fails by name.
 - If a later phase adds one of the six names to `PowerBrowserAPI.sys.mjs`, it needs an `INTERNAL-APIS.md` row, or `internals-catalogue` goes red.
 

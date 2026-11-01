@@ -63,6 +63,18 @@
 // reads `webDriverTabs` through a local `tabBrowser` binding, and 050 adds that
 // read). `webDriverTabs` is therefore also asserted against the 050 patch text.
 //
+// Phase 27 shim globals (Phase 35 plan 01, D-17): the names are the quoted words of
+// the Phase 27 shim line of FORBIDDEN_PATTERNS in scripts/check-internals-boundary.sh
+// (gBrowserInit and the zoom shims have their own lines and comparisons). For each:
+// REQUIRED is every member called or assigned on a receiver of that name over the
+// actor and extension scopes, plus, for an IDL_SHIMS name, the methods its IDL
+// declares; IMPLEMENTED is the top-level members of the literal after
+// `window.<Name> = ` (or `win.<Name> = `) in the boundary file, a function value
+// comparing as an empty set. REQUIRED == IMPLEMENTED methods ∪ SHIM_ABSENT, with the
+// same four failure kinds named `<Name>.<member>`, and SHIM_DATA_MEMBERS asserted
+// present. A shim the boundary file does not define is listed on the PASS line as
+// not defined; two definitions of one shim are a broken instrument.
+//
 // An empty derivation on any side fails distinctly as a broken instrument. A
 // negated or set-equality assertion over a walk that found nothing is not a
 // clean tree.
@@ -89,7 +101,12 @@
 //   (h) a staged registry entry whose parent module sits outside the scanned
 //       directories and calls a new gBrowser member (registry derivation);
 //   (i) a staged registry entry whose basename resolves to no file (broken instrument);
-//   (o) an absence reason naming only one of the member's call-site files.
+//   (o) an absence reason naming only one of the member's call-site files;
+//   (j) a staged window.FullScreen with only enterDomFullscreen (UNIMPLEMENTED cleanupDomFullscreen);
+//   (k) a staged window.nsContextMenu with a surplus method (DEAD SURFACE);
+//   (l) a staged IDL with one more method against a staged XULBrowserWindow implementing the three;
+//   (m) two staged definitions of one shim (broken instrument);
+//   (n) a staged XULBrowserWindow without QueryInterface (MISSING DATA MEMBER).
 
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -152,6 +169,26 @@ const ZOOM_SHIM_ABSENT = new Map([
   ['FullZoom.setZoom', "KNOWN GAP: reached only by tabs.setZoom (ext-tabs.js:1266-1283), an extension zoom write; see FullZoom.reset"],
 ]);
 const ID = '[A-Za-z_$][\\w$]*';
+
+// Phase 35 plan 01 (D-17): the Phase 27 shim globals, compared member by member. The names are read from this file's line.
+const BOUNDARY_SCRIPT = 'scripts/check-internals-boundary.sh';
+const PHASE27_SHIM_COMMENT = '# Phase 27 gBrowser stand-in policy';
+// The one hand-kept map: a shim Gecko C++ calls through an XPCOM interface has no JS call site to derive from.
+const IDL_SHIMS = new Map([
+  [
+    'XULBrowserWindow',
+    {
+      idl: 'upstream/xpfe/appshell/nsIXULBrowserWindow.idl',
+      reason: 'Gecko C++ calls window.XULBrowserWindow through nsIAppWindow (BrowserParent.cpp:2520-2566, nsContentTreeOwner.cpp:298-309), so its members are the IDL method declarations',
+    },
+  ],
+]);
+// Data members held out of the comparison and asserted present on a defined shim.
+const SHIM_DATA_MEMBERS = new Map([
+  ['XULBrowserWindow', new Map([['QueryInterface', 'XPConnect wraps a JS object as an interface only through its QueryInterface']])],
+]);
+// `<Name>.<member>` -> reason: members upstream uses that a defined shim must not implement. Empty today.
+const SHIM_ABSENT = new Map();
 
 // The pinned tree's non-test file list as `upstream/<path>`, read once per run
 // (read-only). null when git cannot list it.
@@ -552,6 +589,91 @@ function deriveZoomShimImplemented(boundaryFile, name) {
   return { members, reason: '', count };
 }
 
+// The quoted words of the line after the Phase 27 shim comment. [] when absent (a broken instrument for the caller).
+function phase27ShimNames(scriptFile = BOUNDARY_SCRIPT) {
+  const lines = (readSource(scriptFile) ?? '').split('\n');
+  const at = lines.findIndex(line => line.trim().startsWith(PHASE27_SHIM_COMMENT));
+  if (at === -1 || at + 1 >= lines.length) return [];
+  return [...lines[at + 1].matchAll(/'([A-Za-z_$][\w$]*)'/g)].map(m => m[1]);
+}
+
+// The method names an XPIDL file declares (block and line comments stripped). null when unreadable.
+function idlMethods(idlFile) {
+  const src = readSource(idlFile);
+  if (src === null) return null;
+  const code = stripCommentLines(src.replace(/\/\*[\s\S]*?\*\//g, ''));
+  return new Set([...code.matchAll(/^\s*(?:\[[^\]]*\]\s*)?[A-Za-z_][\w:<>]*\s+([A-Za-z_]\w*)\s*\(/gm)].map(m => m[1]));
+}
+
+// Every member called (`name.m(`) or assigned (`name.m =`, not `==`) on a receiver `name` over the files.
+function deriveCalledOrAssigned(name, files) {
+  const members = new Set();
+  const re = new RegExp(`(?<![\\w$])${name}\\s*\\??\\.\\s*(${ID})\\s*(?:\\(|=(?!=))`, 'g');
+  for (const path of files) {
+    const src = readSource(path);
+    if (src === null || path.split('/').pop() === SELF_BASENAME) continue;
+    for (const m of stripCommentLines(src).matchAll(re)) members.add(m[1]);
+  }
+  return members;
+}
+
+// The `window.<name> = ` (or `win.<name> = `) definition in the boundary file: { count, members }. members is the
+// literal's top-level names, an empty set for a non-literal value, null for an unbalanced literal.
+function deriveShimDefinition(boundaryFile, name) {
+  const src = readSource(boundaryFile);
+  if (src === null) return { count: 0, members: null, unreadable: true };
+  const code = stripCommentLines(src);
+  const defs = [...code.matchAll(new RegExp(`\\b(?:win|window)\\.${name}\\s*=(?!=)`, 'g'))];
+  if (defs.length !== 1) return { count: defs.length, members: null };
+  const rest = code.slice(defs[0].index + defs[0][0].length).trimStart();
+  return { count: 1, members: rest.startsWith('{') ? objectLiteralMembers(rest, '{') : new Set() };
+}
+
+// The Phase 27 shim comparison. Returns { broken } or { shims, clean }.
+function comparePhase27Shims(files, inputs) {
+  const names = phase27ShimNames(inputs.shimScript ?? BOUNDARY_SCRIPT);
+  if (names.length === 0) return { broken: `no shim names on the line after '${PHASE27_SHIM_COMMENT}' in ${inputs.shimScript ?? BOUNDARY_SCRIPT}` };
+  const idlShims = inputs.idlShims ?? IDL_SHIMS;
+  const shimAbsent = inputs.shimAbsent ?? SHIM_ABSENT;
+  const shims = [];
+  let anyRequired = false;
+  for (const name of names) {
+    const required = deriveCalledOrAssigned(name, files);
+    const idl = idlShims.get(name);
+    if (idl) {
+      const declared = idlMethods(idl.idl);
+      if (declared === null || declared.size === 0) return { broken: `${name}: no method declarations read from ${idl.idl}` };
+      for (const m of declared) required.add(m);
+    }
+    if (required.size) anyRequired = true;
+    const def = deriveShimDefinition(inputs.boundaryFile, name);
+    if (def.unreadable) return { broken: `cannot read ${inputs.boundaryFile}` };
+    if (def.count > 1) return { broken: `${inputs.boundaryFile} defines ${name} ${def.count} times; a second definition is a second boundary` };
+    if (def.count === 0) {
+      shims.push({ name, defined: false, required: sorted(required) });
+      continue;
+    }
+    if (def.members === null) return { broken: `no balanced literal after the ${name} definition in ${inputs.boundaryFile}` };
+    const data = SHIM_DATA_MEMBERS.get(name) ?? new Map();
+    const methods = new Set([...def.members].filter(m => !data.has(m)));
+    const absentOf = new Set([...shimAbsent.keys()].filter(k => k.startsWith(`${name}.`)).map(k => k.slice(name.length + 1)));
+    shims.push({
+      name,
+      defined: true,
+      required: sorted(required),
+      implemented: sorted(methods),
+      unimplemented: sorted([...required].filter(m => !methods.has(m) && !absentOf.has(m))),
+      staleAbsent: sorted([...absentOf].filter(m => !required.has(m))),
+      contradiction: sorted([...absentOf].filter(m => methods.has(m))),
+      surplus: sorted([...methods].filter(m => !required.has(m))),
+      missingData: sorted([...data.keys()].filter(m => !def.members.has(m))),
+    });
+  }
+  if (!anyRequired) return { broken: `derived zero member uses for every Phase 27 shim (${names.join(', ')})` };
+  const clean = shims.every(x => !x.defined || ['unimplemented', 'staleAbsent', 'contradiction', 'surplus', 'missingData'].every(k => x[k].length === 0));
+  return { shims, clean };
+}
+
 function sorted(set) {
   return [...set].sort();
 }
@@ -645,6 +767,11 @@ function runScan(inputs) {
       surplus: sorted([...zoomImpl.members].filter(m => !req.has(m))),
     });
   }
+  const phase27 = comparePhase27Shims([...actorFiles, ...extensionFiles], inputs);
+  if (phase27.broken) {
+    return { ok: false, reason: 'phase27-shim-broken', detail: phase27.broken };
+  }
+
   const zoomClean = zoomShims.every(
     shim => shim.unimplemented.length === 0 && shim.staleAbsent.length === 0 && shim.contradiction.length === 0 && shim.surplus.length === 0
   );
@@ -660,8 +787,10 @@ function runScan(inputs) {
       staleData.length === 0 &&
       shimUnimplemented.length === 0 &&
       shimSurplus.length === 0 &&
-      zoomClean,
+      zoomClean &&
+      phase27.clean,
     zoomShims,
+    phase27Shims: phase27.shims,
     reason: '',
     fileCount: actorFiles.length,
     extensionFileCount: extensionFiles.length,
@@ -734,6 +863,9 @@ function reportFailure(result) {
     case 'zoom-shim-unreadable':
       console.error(`${NAME}: FAIL -- broken instrument: cannot read ${result.detail}`);
       return;
+    case 'phase27-shim-broken':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}`);
+      return;
     default:
       break;
   }
@@ -781,6 +913,17 @@ function reportFailure(result) {
     for (const m of shim.surplus) {
       console.error(`  DEAD SURFACE: '${shim.name}.${m}' is implemented on the zoom shim but nothing upstream reads it -- remove it rather than carry it`);
     }
+  }
+  reportPhase27(result);
+}
+
+function reportPhase27(result) {
+  for (const shim of (result.phase27Shims ?? []).filter(x => x.defined)) {
+    for (const m of shim.unimplemented) console.error(`  UNIMPLEMENTED: '${shim.name}.${m}' is used upstream on the shim, but the ${shim.name} definition in ${BOUNDARY_FILE} neither implements it nor records it in SHIM_ABSENT`);
+    for (const m of shim.staleAbsent) console.error(`  STALE ABSENCE: '${shim.name}.${m}' is in SHIM_ABSENT but nothing upstream uses it any more`);
+    for (const m of shim.contradiction) console.error(`  CONTRADICTION: '${shim.name}.${m}' is implemented on the shim AND listed in SHIM_ABSENT -- one of the two is wrong`);
+    for (const m of shim.surplus) console.error(`  DEAD SURFACE: '${shim.name}.${m}' is implemented on the shim but nothing upstream uses it -- remove it rather than carry it`);
+    for (const m of shim.missingData) console.error(`  MISSING DATA MEMBER: '${shim.name}.${m}' -- ${SHIM_DATA_MEMBERS.get(shim.name).get(m)}`);
   }
 }
 
@@ -833,7 +976,13 @@ function main() {
   console.log(
     `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls; ${registryCounts.uriEntries} registry parent entries, ${registryCounts.uriDistinct} distinct URIs) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}; zoom shims ${result.zoomShims
       .map(shim => `${shim.name} {${shim.implemented.join(', ')}}${shim.absent.length ? ` with ${shim.absent.join(', ')} absent with reasons` : ''}`)
-      .join('; ')}`
+      .join('; ')}; Phase 27 shims ${result.phase27Shims
+      .filter(x => x.defined)
+      .map(x => `${x.name} {${x.implemented.join(', ')}}`)
+      .join('; ') || 'none defined'}; not yet defined: ${result.phase27Shims
+      .filter(x => !x.defined)
+      .map(x => `${x.name} (upstream uses {${x.required.join(', ')}})`)
+      .join(', ')}`
   );
 }
 
@@ -1136,13 +1285,82 @@ function selfTest() {
         } else ok(`'${victimAbsent}' reason naming only ${first} -> red, naming UNCOVERED CALL SITE ${r.uncovered.filter(u => u.startsWith(`${victimAbsent} @ `)).join(', ')}`);
       }
     }
+
+    // Phase 27 shim plants (j)-(n): each stages a boundary copy with a shim definition appended.
+    const boundaryWith = (file, text) => {
+      writeFileSync(join(stage, file), `${readSource(BOUNDARY_FILE) ?? ''}\n${text}\n`);
+      return join(stage, file);
+    };
+    const shimOf = (r, name) => r.phase27Shims?.find(x => x.name === name);
+
+    // (j) window.FullScreen with only enterDomFullscreen.
+    {
+      const path = boundaryWith('boundary-fullscreen.mjs', 'window.FullScreen = {\n  enterDomFullscreen(browser, actor) { return null; },\n};');
+      const r = runScan({ ...real, boundaryFile: path });
+      const shim = shimOf(r, 'FullScreen');
+      if (!shim?.defined) fail(`'FullScreen' plant did not land (the staged definition was not parsed)`);
+      else if (r.ok || !shim.unimplemented.includes('cleanupDomFullscreen')) {
+        fail(`a FullScreen shim without cleanupDomFullscreen did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim.unimplemented })}`);
+      } else ok(`staged window.FullScreen with only enterDomFullscreen -> red, naming 'FullScreen.cleanupDomFullscreen' UNIMPLEMENTED`);
+    }
+
+    // (k) window.nsContextMenu with a surplus method.
+    {
+      const path = boundaryWith('boundary-contextmenu.mjs', 'window.nsContextMenu = {\n  get contentData() { return null; },\n  set contentData(v) {},\n  zzzSurplusMenuMethod() { return null; },\n};');
+      const r = runScan({ ...real, boundaryFile: path });
+      const shim = shimOf(r, 'nsContextMenu');
+      if (!shim?.defined) fail(`'nsContextMenu' plant did not land`);
+      else if (r.ok || !shim.surplus.includes('zzzSurplusMenuMethod') || shim.unimplemented.length) {
+        fail(`a surplus nsContextMenu method did not go red as DEAD SURFACE alone; got: ${JSON.stringify({ reason: r.reason, surplus: shim.surplus, unimplemented: shim.unimplemented })}`);
+      } else ok(`staged window.nsContextMenu with a surplus method -> red, naming 'nsContextMenu.zzzSurplusMenuMethod' DEAD SURFACE`);
+    }
+
+    // (l) a staged IDL with one more method against a XULBrowserWindow implementing the three.
+    {
+      const idl = IDL_SHIMS.get('XULBrowserWindow');
+      const idlCopy = join(stage, 'nsIXULBrowserWindow.idl');
+      const idlText = readSource(idl.idl) ?? '';
+      writeFileSync(idlCopy, idlText.replace(/(\n\s*void hideTooltip\(\);)/, '$1\n  void zzzPlantedIdlMethod(in AString x);'));
+      const path = boundaryWith(
+        'boundary-xulbw.mjs',
+        'window.XULBrowserWindow = {\n  QueryInterface: null,\n  setOverLink(link) {},\n  showTooltip(x, y, text, dir, browser) {},\n  hideTooltip() {},\n};'
+      );
+      const control = shimOf(runScan({ ...real, boundaryFile: path }), 'XULBrowserWindow');
+      const r = runScan({ ...real, boundaryFile: path, idlShims: new Map([['XULBrowserWindow', { ...idl, idl: idlCopy }]]) });
+      const shim = shimOf(r, 'XULBrowserWindow');
+      if (!control?.defined || control.unimplemented.length || control.surplus.length || !readFileSync(idlCopy, 'utf8').includes('zzzPlantedIdlMethod')) {
+        fail(`'IDL method' plant did not land (control: ${JSON.stringify(control)})`);
+      } else if (r.ok || !shim?.unimplemented.includes('zzzPlantedIdlMethod')) {
+        fail(`an IDL method the shim lacks did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim?.unimplemented })}`);
+      } else ok(`staged nsIXULBrowserWindow.idl with one more method -> red, naming 'XULBrowserWindow.zzzPlantedIdlMethod' UNIMPLEMENTED (the three-method control matched)`);
+    }
+
+    // (m) two staged definitions of one shim.
+    {
+      const path = boundaryWith('boundary-twice.mjs', 'window.PointerlockFsWarning = { close() {}, showFullScreen() {} };\nwin.PointerlockFsWarning = { close() {}, showFullScreen() {} };');
+      const r = runScan({ ...real, boundaryFile: path });
+      if (r.ok || r.reason !== 'phase27-shim-broken' || !String(r.detail).includes('PointerlockFsWarning')) {
+        fail(`two PointerlockFsWarning definitions did not fail as a broken instrument naming it; got: ${JSON.stringify({ reason: r.reason, detail: r.detail })}`);
+      } else ok(`two staged PointerlockFsWarning definitions -> broken instrument naming PointerlockFsWarning`);
+    }
+
+    // (n) a XULBrowserWindow definition without QueryInterface.
+    {
+      const path = boundaryWith('boundary-xulbw-noqi.mjs', 'window.XULBrowserWindow = {\n  setOverLink(link) {},\n  showTooltip(x, y, text, dir, browser) {},\n  hideTooltip() {},\n};');
+      const r = runScan({ ...real, boundaryFile: path });
+      const shim = shimOf(r, 'XULBrowserWindow');
+      if (!shim?.defined) fail(`'no QueryInterface' plant did not land`);
+      else if (r.ok || !shim.missingData.includes('QueryInterface')) {
+        fail(`a XULBrowserWindow without QueryInterface did not go red naming it; got: ${JSON.stringify({ reason: r.reason, missingData: shim.missingData })}`);
+      } else ok(`staged XULBrowserWindow without QueryInterface -> red, naming MISSING DATA MEMBER 'XULBrowserWindow.QueryInterface'`);
+    }
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
 
   if (failed) process.exit(1);
   console.log(
-    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site); the empty file list and an unresolvable registry URI failed distinctly`
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site, FullScreen member, nsContextMenu surplus, IDL method, XULBrowserWindow QueryInterface); the empty file list, an unresolvable registry URI and a duplicate shim definition failed distinctly`
   );
 }
 

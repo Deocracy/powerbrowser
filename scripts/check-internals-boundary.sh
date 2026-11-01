@@ -80,7 +80,7 @@ FORBIDDEN_PATTERNS=(
   'JSWindowActorChild'
   'gBrowser'
   # Phase 27 gBrowser stand-in policy: the browser.xhtml globals later v1.5 phases shim; a shim defined outside PowerBrowserAPI.sys.mjs would be a second boundary.
-  'PopupNotifications' 'nsContextMenu' 'browserDOMWindow' 'openLinkIn' 'FullScreen' 'XULBrowserWindow'
+  'PopupNotifications' 'nsContextMenu' 'browserDOMWindow' 'openLinkIn' 'FullScreen' 'XULBrowserWindow' 'PointerlockFsWarning'
   # Phase 31.1 tab-host shim under the Phase 27 policy: defined only in PowerBrowserAPI.sys.mjs (the host install), compared by verify-shell-gbrowser-standin.mjs.
   'gBrowserInit'
   # Phase 32 zoom shims under the Phase 27 policy (plan 32-09): defined only in PowerBrowserAPI.sys.mjs (the host install), compared member by member by verify-shell-gbrowser-standin.mjs. A separate line, so 35-01's derivation from the Phase 27 line is unchanged.
@@ -367,7 +367,7 @@ EOF
   local plant_name plant_body
   # The Phase 27 shim globals are each planted as a one-line shim assignment.
   for plant_name in wrappedJSObject drawSnapshot IOUtils gBrowser \
-      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow gBrowserInit ZoomManager FullZoom ZoomUI; do
+      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow PointerlockFsWarning gBrowserInit ZoomManager FullZoom ZoomUI; do
     case "$plant_name" in
       wrappedJSObject) plant_body='  return win.wrappedJSObject.JSON.parse(text);' ;;
       drawSnapshot) plant_body='  return browser.drawSnapshot(0, 0, 1, 1, 1, "white");' ;;

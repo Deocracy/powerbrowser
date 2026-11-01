@@ -46,7 +46,7 @@ created: "2026-10-21"
 | T-27-08 | Spoofing | webTabActivated | low | mitigate | keyed by the sender's embedder; tabId null or valid; sender wall first (API:4162-4167) | closed |
 | T-27-09 | DoS | state push volume | low | mitigate | per-window rAF batch, latest record per tab, stale overlays skipped (API:4216-4232) | closed |
 | T-27-10 | Elevation | shim globals outside the boundary | medium | mitigate | six names in FORBIDDEN_PATTERNS (BOUND:83), each planted and rejected by name | closed |
-| T-27-11 | Tampering | rebase adds a gBrowser call the stand-in lacks | medium | mitigate | call sites derived from browser/actors and toolkit/actors parents only (STANDIN:105-127); component-directory parents (e.g. ProfilesParent `addTrustedTab`) not scanned — see Open Items | open — below high threshold (non-blocking) |
+| T-27-11 | Tampering | rebase adds a gBrowser call the stand-in lacks | medium | mitigate | call sites derived from browser/actors and toolkit/actors parents plus every parent module the two actor registries name (DesktopActorRegistry.sys.mjs, ActorManagerParent.sys.mjs: 84 entries, 78 URIs, 36 outside the two directories), so ProfilesParent `addTrustedTab` and the other component-directory parents are in scope; self-test plant (h) proves a registry-named parent outside the directories goes red UNIMPLEMENTED | closed — Phase 35 plan 01 (35-01-SUMMARY) |
 | T-27-12 | DoS | refreshBlocked TypeError with accessibility.blockautorefresh | low | accept | recorded in DELIBERATELY_ABSENT (STANDIN:149-152) and the stand-in comment | closed (accepted) |
 | T-27-13 | Tampering | New Tab drop | medium | mitigate | ^https?:// check before any open (WIDGET:72-91, 417-442); chrome webTabOpen scheme wall (API:3231-3235); live javascript: drop refused | closed |
 | T-27-14 | Spoofing | history menu labels | low | mitigate | labels cut to 60 chars, plain-text label to the stock menu renderer (COPY:25-31, WIDGET:477-505) | closed |
@@ -70,7 +70,7 @@ created: "2026-10-21"
 
 ### Open Items
 
-- **T-27-11 (medium, non-blocking):** widen the stand-in call-site derivation to the actor registries (DesktopActorRegistry.sys.mjs / ActorManagerParent.sys.mjs) so component-directory parents are covered, or re-disposition those parents as accepted with a reason. Carried to Phase 35 (Shell Furniture), which changes the gBrowser stand-in. 27-03-SUMMARY's "any actor parent" claim overstates the current scope (REVIEW IN-15).
+- **T-27-11 (medium, non-blocking) — CLOSED in Phase 35 (plan 35-01):** the registry derivation and plant (h) landed in `verify-shell-gbrowser-standin.mjs`; 27-03-SUMMARY's wording is corrected. Original item: widen the stand-in call-site derivation to the actor registries (DesktopActorRegistry.sys.mjs / ActorManagerParent.sys.mjs) so component-directory parents are covered, or re-disposition those parents as accepted with a reason. Carried to Phase 35 (Shell Furniture), which changes the gBrowser stand-in. 27-03-SUMMARY's "any actor parent" claim overstates the current scope (REVIEW IN-15).
 
 ---
 
@@ -98,4 +98,4 @@ created: "2026-10-21"
 - [x] `threats_open: 0` confirmed
 - [x] `status: verified` set in frontmatter
 
-**Approval:** verified 2026-10-21 (autonomous run; open item T-27-11 carried to Phase 35)
+**Approval:** verified 2026-10-21 (autonomous run; open item T-27-11 carried to Phase 35; closed by plan 35-01)
