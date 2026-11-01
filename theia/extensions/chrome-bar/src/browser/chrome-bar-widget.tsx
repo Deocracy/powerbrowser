@@ -192,10 +192,13 @@ interface ClearHistoryPickerProps {
  * pattern anchored under the hamburger. The panel is the confirmation: Clear
  * (and Enter) calls back to the widget's confirm handler, the only place the
  * clear is sent (rule 12). Esc and Cancel close it with focus back on the
- * opener; focus leaving the panel closes it where focus went.
+ * opener; focus leaving the panel closes it where focus went. None of them
+ * closes it while the clear is running.
  */
 function ClearHistoryPicker(props: ClearHistoryPickerProps): React.ReactElement {
-    const { picker, top, right, onRange, onClear, onClose } = props;
+    const { picker, top, right, onRange, onClear } = props;
+    // WR-05: while a clear runs the panel stays up, so a refusal always reaches the failure row.
+    const onClose = (restoreFocus: boolean): void => { if (!picker.busy) { props.onClose(restoreFocus); } };
     const panelRef = React.useRef<HTMLDivElement>(null);
     // Mount only: focus the chosen range, so arrows move between ranges and Enter clears.
     React.useEffect(() => {
@@ -649,7 +652,9 @@ export class ChromeBarWidget extends ReactWidget {
             return;
         }
         if (this.clearHistoryPicker === picker) {
-            this.closeClearHistoryPicker(true);
+            // WR-05: focus the user moved elsewhere while the clear ran stays where it is.
+            const active = document.activeElement;
+            this.closeClearHistoryPicker(!active || active === document.body || !!active.closest('.pb-clear-history'));
         }
         this.addressBar.forgetHistoryRows();
         void this.refreshBookmarksToolbar();

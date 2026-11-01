@@ -47,6 +47,9 @@ export interface SavedPageCopy {
 /** A page capture writes files; it gets longer than a read. */
 export const SAVE_PAGE_ACK_TIMEOUT_MS = 120000;
 
+/** Clear Recent History (Everything) walks all of Places and deletes saved pages; on a large profile it outlasts a read. */
+export const CLEAR_HISTORY_ACK_TIMEOUT_MS = 120000;
+
 /** One history or bookmark match for the address bar (NG-023). */
 export interface PlaceMatch {
     url: string;
@@ -301,7 +304,7 @@ export class ChromeStoreClient {
      * chrome's reason. Privileged: only the range picker's confirm handler calls it.
      */
     async clearHistory(range: ClearHistoryRange): Promise<string> {
-        const reply = await this.request({ kind: 'clearHistory', range });
+        const reply = await this.request({ kind: 'clearHistory', range }, CLEAR_HISTORY_ACK_TIMEOUT_MS);
         if (!reply.ok) {
             throw new Error(reply.message ?? `clearHistory failed (${reply.reason ?? 'store'})`);
         }
