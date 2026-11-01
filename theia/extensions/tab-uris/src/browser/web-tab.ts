@@ -294,6 +294,8 @@ export interface ExtensionActionRow {
     enabled: boolean;
     hasPopup: boolean;
     pinned: boolean;
+    /** Phase 38 plan 02 (D-02): this extension's popup is open in chrome's native panel (the button draws pressed). */
+    popupOpen: boolean;
 }
 
 /** Phase 38 plan 01: the rows of one extensionAction push; a malformed row is dropped, never rendered. */
@@ -305,7 +307,8 @@ export function extensionActionRowsOf(detail: Record<string, unknown>): Extensio
         const r = row as ExtensionActionRow;
         return !!row && typeof row === 'object' && typeof r.extensionId === 'string' && typeof r.title === 'string'
             && (r.icon === null || (typeof r.icon === 'string' && r.icon.startsWith('data:image/')))
-            && typeof r.badgeText === 'string' && typeof r.enabled === 'boolean' && typeof r.hasPopup === 'boolean' && typeof r.pinned === 'boolean';
+            && typeof r.badgeText === 'string' && typeof r.enabled === 'boolean' && typeof r.hasPopup === 'boolean' && typeof r.pinned === 'boolean'
+            && typeof r.popupOpen === 'boolean';
     });
 }
 

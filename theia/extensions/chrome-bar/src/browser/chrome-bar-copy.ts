@@ -329,6 +329,7 @@ export const CHROME_BAR_COPY = Object.freeze({
     extensionOptions: (name: string) => `Options for ${name}`,
     manageExtensionRow: 'Manage Extension',
     extensionBridgeFailed: (subject: string) => `${subject} could not reach the extension. Restart ${subject} and try again.`,
+    extensionPopupFailed: "This extension's popup could not be shown. Reload the tab and try again.",
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

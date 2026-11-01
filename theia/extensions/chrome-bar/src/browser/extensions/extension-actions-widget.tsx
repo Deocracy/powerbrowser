@@ -17,7 +17,7 @@ import { CommandMenu, CompoundMenuNode, MenuPath } from '@theia/core/lib/common'
 import { ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import { ExtensionActionRow, WebTabChannel } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { CHROME_BAR_COPY, appSubject } from '../chrome-bar-copy';
-import { openStockPage } from '../chrome-bar-commands';
+import { focusAddressPill, openStockPage } from '../chrome-bar-commands';
 import { DROPDOWN_MAX_HEIGHT } from '../address-bar/address-bar';
 import { anchorRectOf } from './extension-popup-anchor';
 
@@ -162,8 +162,14 @@ export class ExtensionActionsWidget {
         this.host = host;
         this.rows = this.webTabs.extensionActions;
         this.webTabs.onDidChangeExtensionActions(rows => {
+            // A popup closed (Esc, a click outside, page focus, a tab switch, a second click): chrome has focused this
+            // frame, and focus goes back to the pill (38-UI-SPEC focus contract).
+            const popupClosed = this.rows.some(row => row.popupOpen) && !rows.some(row => row.popupOpen);
             this.rows = rows;
             this.update();
+            if (popupClosed) {
+                focusAddressPill();
+            }
         });
         this.store.extensionActionsSubscribe().catch(error => this.failed('subscribe', error, false));
     }
@@ -192,8 +198,10 @@ export class ExtensionActionsWidget {
         this.menuOpen = false;
         this.update();
         try {
-            await this.store.extensionClick(row.extensionId, anchorRect);
-            this.notice = undefined;
+            const where = await this.store.extensionClick(row.extensionId, anchorRect);
+            this.notice = where === 'popup-failed' ? CHROME_BAR_COPY.extensionPopupFailed : undefined;
+            this.menuOpen = where === 'popup-failed';
+            this.update();
         } catch (error) {
             this.failed('click', error);
         }
@@ -233,11 +241,12 @@ export class ExtensionActionsWidget {
         return <button
             key={row.extensionId}
             type='button'
-            className='pb-chrome-bar-button pb-ext-action'
+            className={'pb-chrome-bar-button pb-ext-action' + (row.popupOpen ? ' is-open' : '')}
             data-extension-id={row.extensionId}
             aria-label={row.title}
             title={row.title}
             aria-disabled={!row.enabled}
+            aria-pressed={row.popupOpen}
             onClick={e => void this.run(row, e.currentTarget)}
             onContextMenu={e => {
                 e.preventDefault();

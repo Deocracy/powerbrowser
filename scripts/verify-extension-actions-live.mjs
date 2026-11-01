@@ -13,15 +13,20 @@
 // the same recorder that showed the positive case in the clean session first.
 //
 // Scenarios:
-//   popup-action -- with tab /a on screen and /b open, the subscribe pushes both
-//                   fixtures' rows; a click on the action fixture (the store kind
-//                   the 38-02 button sends) runs in /a: the extension's script
+//   popup-action -- with tab /a on screen and /b open and both fixtures pinned, the
+//                   subscribe pushes both fixtures' rows; a real click on the action
+//                   fixture's chrome-bar button (38-02) runs in /a: the extension's script
 //                   retitles /a and its onClicked names /a, and the badge it sets
 //                   on /a is pushed (patch 050's updateWindow signal; a retitle
 //                   push may carry it first, so this is not a signal-only proof). A click on the popup
-//                   fixture answers 'popup'. Plant wrong-page fires the stock
-//                   delegate path in a GUI-01 stock window on /c instead, and must
-//                   go red naming the stock tab.
+//                   fixture's button opens its page in chrome's native panel (the button
+//                   pressed, no popup content in Theia DOM); the panel then closes by Esc,
+//                   by focus moving into page /a, by a tab switch to /b and by a second
+//                   click, each time with focus back in the pill. Plant wrong-page fires
+//                   the stock delegate path in a GUI-01 stock window on /c instead, and
+//                   must go red naming the stock tab. Plant popup-dom keeps the native
+//                   panel from showing and draws the popup in Theia DOM, and must go red
+//                   naming the occluded overlay.
 //   buttons      -- (38-02) with the action fixture pinned, the chrome bar shows one
 //                   button per pinned row of the push (at most three) and the puzzle
 //                   menu one row per pushed extension, named by its pushed title (set
@@ -71,9 +76,10 @@ const pathOf = u => {
 
 async function scenarioPopupAction({ app, plant }) {
   const A = await openTab(app, '/a');
-  await openTab(app, '/b');
+  const B = await openTab(app, '/b');
   await live.makeCurrent(app, A);
   await waitForSelected(app, A, '/a');
+  await setPinned(app, Object.keys(EXTENSION_FIXTURES).map(fixtureId));
   const from = (await live.pushes(app)).length;
   await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
   const ids = Object.keys(EXTENSION_FIXTURES).map(fixtureId);
@@ -91,10 +97,8 @@ async function scenarioPopupAction({ app, plant }) {
   if (plant?.name === 'wrong-page') {
     await stockActionClick(app, fixtureId('action'));
   } else {
-    const where = await live.probe(app, `return { where: await get('ChromeStoreClient').extensionClick(${JSON.stringify(fixtureId('action'))}) };`);
-    if (where.where !== 'action') {
-      return verdict(false, null, `the action fixture's click answered ${JSON.stringify(where)}, not 'action'`);
-    }
+    await pollUntil(() => barButtons(app), b => b.length === 2, 10000);
+    await clickInFrame(app, actionButton('action'));
   }
   const clicked = await waitSince(logFrom, r => r.kind === 'clicked');
   if (!clicked) {
@@ -112,11 +116,47 @@ async function scenarioPopupAction({ app, plant }) {
   if (badgeAt < 0) {
     return verdict(false, null, "no extensionAction push carried the badge 'ok' the action fixture set on /a");
   }
-  const popup = await live.probe(app, `return { where: await get('ChromeStoreClient').extensionClick(${JSON.stringify(fixtureId('popup'))}) };`);
-  if (popup.where !== 'popup') {
-    return verdict(false, null, `the popup fixture's click answered ${JSON.stringify(popup)}, not 'popup'`);
+  if (plant?.name === 'popup-dom') {
+    // The native panel never shows; the popup is drawn in Theia DOM under the button instead.
+    await live.inChrome(app, "document.addEventListener('popupshowing', e => { if (e.target.classList.contains('browser-extension-panel')) e.preventDefault(); }, true); return true;");
+    await app.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(actionButton('popup'))}).getBoundingClientRect();
+      const d = document.createElement('div'); d.className = 'pb-chrome-bar-dropdown pb-ext-popup-dom'; d.textContent = 'popup';
+      Object.assign(d.style, { position: 'fixed', top: b.bottom + 'px', left: b.left + 'px', width: '320px', height: '400px' });
+      document.body.appendChild(d); return true; })()`);
   }
-  return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup click answered 'popup'`, null);
+  // Each close way: [name, how]. A popup is opened by a real click on the popup fixture's button first.
+  const closeWays = [
+    ['Esc', () => live.pressKey(app, { key: 'Escape', code: 'Escape', keyCode: 27 })],
+    ['focus into page /a', () => live.focusOverlay(app, A)],
+    ['tab switch to /b', () => live.makeCurrent(app, B)],
+    ['second click', () => clickInFrame(app, actionButton('popup'))],
+  ];
+  const closed = [];
+  for (const [way, how] of closeWays) {
+    await clickInFrame(app, actionButton('popup'));
+    const shown = await pollUntil(() => popupState(app), p => p.panel === 'open' && p.pressed, 10000);
+    if (!shown) {
+      const state = await popupState(app);
+      if (state.inTheiaDom) {
+        return verdict(false, null, `the occluded overlay: the popup was drawn in Theia DOM, under the page overlay that covers it, and no native panel opened (${JSON.stringify(state)})`);
+      }
+      return verdict(false, null, `the popup fixture's button did not open its page in the native panel, pressed (before the ${way} close): ${JSON.stringify(state)}`);
+    }
+    if (!String(shown.url).endsWith('/popup.html') || shown.inTheiaDom) {
+      return verdict(false, null, `the native panel shows ${JSON.stringify(shown.url)} with Theia DOM popup content ${shown.inTheiaDom}, not the fixture's popup page alone`);
+    }
+    await how();
+    const after = await pollUntil(() => popupState(app), p => p.panel !== 'open' && !p.pressed && p.pillFocused, 10000);
+    if (!after) {
+      return verdict(false, null, `the ${way} close left ${JSON.stringify(await popupState(app))}; the panel must close with focus back in the pill`);
+    }
+    closed.push(way);
+    if (way === 'tab switch to /b') {
+      await live.makeCurrent(app, A);
+      await waitForSelected(app, A, '/a');
+    }
+  }
+  return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action button's click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup button opened its page in the native panel and it closed by ${closed.join(', ')}, focus back in the pill each time`, null);
 }
 
 // 38-02 (EXT-06): the buttons and puzzle rows equal the set the push carries, and a pushed badge reaches the button.
@@ -229,6 +269,7 @@ const SCENARIOS_TABLE = {
 // patched product: the scenario reads `plant.name`.
 const PLANTS_TABLE = {
   'wrong-page': { scenario: 'popup-action', expect: 'the action ran in the stock tab' },
+  'popup-dom': { scenario: 'popup-action', expect: 'the occluded overlay' },
   'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
   'buttons-stale': { scenario: 'buttons', expect: 'the button shows a stale badge' },
 };
@@ -402,6 +443,21 @@ async function clickInFrame(app, selector) {
 async function barButtons(app) {
   return JSON.parse(await app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-ext-action')].map(b => ({
     id: b.dataset.extensionId, badge: b.querySelector('.pb-ext-badge')?.textContent ?? null, open: b.classList.contains('is-open') })))`));
+}
+
+const actionButton = name => `.pb-ext-action[data-extension-id=${JSON.stringify(fixtureId(name))}]`;
+
+// The popup's state: chrome's native panel (state and loaded URL), the button's pressed class, whether a popup is drawn
+// in Theia DOM instead, and whether focus is in the pill (chrome focus on the Theia frame, frame focus on the pill input).
+async function popupState(app) {
+  const chrome = JSON.parse(await live.inChrome(app, `const p = document.querySelector('panel.browser-extension-panel');
+    const b = p && p.querySelector('browser');
+    return JSON.stringify({ panel: p ? p.state : 'none', url: b && b.currentURI ? b.currentURI.spec : null, frameFocused: document.activeElement === document.getElementById('powerbrowser-content') });`));
+  const frame = JSON.parse(await app.evaluate(`JSON.stringify({
+    pressed: !!document.querySelector(${JSON.stringify(actionButton('popup'))} + '.is-open'),
+    inTheiaDom: !!document.querySelector('iframe, .pb-chrome-bar-dropdown:not(.pb-ext-menu)'),
+    pill: document.activeElement && document.activeElement.classList.contains('pb-chrome-bar-input') })`));
+  return { panel: chrome.panel, url: chrome.url, pressed: frame.pressed, inTheiaDom: frame.inTheiaDom, pillFocused: chrome.frameFocused && frame.pill };
 }
 
 // The open puzzle menu's extension rows: id and shown name.

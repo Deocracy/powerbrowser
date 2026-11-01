@@ -839,6 +839,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Options for ${name}",
   "Manage Extension",
   "${name} could not reach the extension. Restart ${name} and try again.",
+  "This extension's popup could not be shown. Reload the tab and try again.",
 ]);
 
 /**

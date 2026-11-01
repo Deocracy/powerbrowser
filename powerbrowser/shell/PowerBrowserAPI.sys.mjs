@@ -9667,6 +9667,8 @@ function stockClosedTabUri(closed, entry) {
 
 const extensionLazy = {};
 ChromeUtils.defineESModuleGetters(extensionLazy, { AddonManager: "resource://gre/modules/AddonManager.sys.mjs", ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs", ExtensionUtils: "resource://gre/modules/ExtensionUtils.sys.mjs" });
+// 38-02 (D-02): the stock popup base the shell's popup panel extends, kept off the line above so no catalogued line moves.
+ChromeUtils.defineESModuleGetters(extensionLazy, { BasePopup: "resource:///modules/ExtensionPopups.sys.mjs" });
 
 // D-08: the ids pinned to the toolbar, persisted across restarts.
 const EXTENSION_PINNED_PREF = "powerbrowser.extensions.pinned";
@@ -9676,6 +9678,8 @@ const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModifi
 const extensionIconData = new Map();
 // Shell window -> { theiaBrowser, last, seq }: the subscribed frame, the last set pushed (JSON) and the newest read.
 const extensionBridges = new WeakMap();
+// Shell window -> { extension, popup }: the one extension popup open in it, as in Firefox.
+const extensionPopups = new WeakMap();
 
 function extensionPinnedIds() {
   try {
@@ -9700,9 +9704,9 @@ function extensionActionsById() {
     return byId;
   }
   for (const extension of GlobalManager.extensionMap.values()) {
-    const action = actionFor(extension)?.action;
-    if (action) {
-      byId.set(extension.id, { extension, action });
+    const browserAction = actionFor(extension);
+    if (browserAction?.action) {
+      byId.set(extension.id, { extension, action: browserAction.action, browserStyle: browserAction.browserStyle });
     }
   }
   return byId;
@@ -9725,7 +9729,7 @@ function extensionIconOf(extension, icons) {
 }
 
 // One extension's row for the selected tab; with no web tab, the action's own defaults. Every field is chrome-chosen.
-async function extensionActionRow(extension, action, selectedTab, pinned) {
+async function extensionActionRow(extension, action, selectedTab, pinned, popupExtension) {
   const data = action.getContextData(selectedTab);
   return {
     extensionId: extension.id,
@@ -9735,6 +9739,7 @@ async function extensionActionRow(extension, action, selectedTab, pinned) {
     enabled: data.enabled !== false,
     hasPopup: Boolean(data.popup),
     pinned: pinned.has(extension.id),
+    popupOpen: extension === popupExtension,
   };
 }
 
@@ -9749,9 +9754,10 @@ async function pushExtensionActions(win) {
   bridge.seq += 1;
   const seq = bridge.seq;
   const pinned = extensionPinnedIds();
+  const popupExtension = extensionPopups.get(win)?.extension ?? null;
   let actions;
   try {
-    actions = await Promise.all([...extensionActionsById().values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned)));
+    actions = await Promise.all([...extensionActionsById().values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned, popupExtension)));
   } catch (err) {
     PowerBrowserAPI.log("error", `[extensions] extensionAction read failed: ${err && err.message ? err.message : err}`);
     return;
@@ -9801,9 +9807,111 @@ function extensionNamed(data) {
   return typeof id === "string" && id.length <= 256 ? extensionActionsById().get(id) ?? null : null;
 }
 
+// D-02: the stock PanelPopup (ExtensionPopups.sys.mjs:484-518) parented to the shell's popupset, since the shell has no
+// mainPopupSet. BasePopup builds the popup <browser> and its extension context as it does in Firefox. destroy() runs on
+// every close path (popuphidden, window unload, a close before the panel showed) and reports it through onDestroy.
+let ShellPanelPopup = null;
+function shellPanelPopup(extension, document, popupUrl, browserStyle) {
+  ShellPanelPopup ??= class extends extensionLazy.BasePopup {
+    constructor(ext, doc, url, style) {
+      const panel = doc.createXULElement("panel");
+      panel.setAttribute("class", "browser-extension-panel panel-no-padding");
+      panel.setAttribute("type", "arrow");
+      panel.setAttribute("role", "group");
+      if (ext.remote) {
+        panel.setAttribute("remote", "true");
+      }
+      panel.setAttribute("neverhidden", "true");
+      doc.getElementById("powerbrowser-popupset").appendChild(panel);
+      super(ext, panel, url, style);
+    }
+
+    get DESTROY_EVENT() {
+      return "popuphidden";
+    }
+
+    destroy() {
+      this.onDestroy?.();
+      super.destroy();
+      this.viewNode.remove();
+      this.viewNode = null;
+    }
+
+    closePopup() {
+      const panel = this.viewNode;
+      if (panel && (panel.state === "open" || panel.state === "showing")) {
+        panel.hidePopup();
+      } else if (!this.destroyed) {
+        this.destroy();
+      }
+    }
+  };
+  return new ShellPanelPopup(extension, document, popupUrl, browserStyle);
+}
+
+// T-38-08: the rect Theia reported (Theia-frame CSS pixels), clamped to the frame, in screen CSS pixels.
+function extensionPopupRect(win, theiaBrowser, rect) {
+  const frame = theiaBrowser.getBoundingClientRect();
+  const clamp = (value, max) => Math.min(Math.max(Number.isFinite(value) ? value : 0, 0), Math.max(0, max));
+  const left = clamp(rect?.left, frame.width);
+  const top = clamp(rect?.top, frame.height);
+  return {
+    x: Math.round(win.mozInnerScreenX + frame.left + left),
+    y: Math.round(win.mozInnerScreenY + frame.top + top),
+    width: Math.round(clamp(rect?.width, frame.width - left)),
+    height: Math.round(clamp(rect?.height, frame.height - top)),
+  };
+}
+
+// EXT-07 (D-02): the popup in a native panel under the button. It closes on Esc and a click outside (the panel's own
+// rollup), focus moving into a page, a tab switch, or a second click (extensionClick). On close, focus goes back to the
+// Theia frame and the push shows no popup open, which is the widget's cue to focus the pill.
+function extensionOpenPopup(win, named, popupUrl, anchorRect) {
+  const bridge = extensionBridges.get(win);
+  const host = tabHosts.get(win);
+  const popup = shellPanelPopup(named.extension, win.document, popupUrl, named.browserStyle);
+  const at = extensionPopupRect(win, bridge.theiaBrowser, anchorRect);
+  const close = () => popup.closePopup();
+  const pageFocus = event => {
+    if (tabIdOfBrowser(event.target) !== null) {
+      close();
+    }
+  };
+  popup.onDestroy = () => {
+    popup.onDestroy = null;
+    host.strip.removeEventListener("TabSelect", close);
+    win.document.removeEventListener("focus", pageFocus, true);
+    if (extensionPopups.get(win)?.popup === popup) {
+      extensionPopups.delete(win);
+    }
+    if (!win.closed) {
+      bridge.theiaBrowser.focus();
+      pushExtensionActions(win);
+    }
+  };
+  extensionPopups.set(win, { extension: named.extension, popup });
+  host.strip.addEventListener("TabSelect", close);
+  win.document.addEventListener("focus", pageFocus, true);
+  pushExtensionActions(win);
+  // As stock (ext-pageAction.js): the panel opens once the popup has painted its size.
+  popup.contentReady.then(() => {
+    if (!popup.destroyed) {
+      popup.panel.openPopupAtScreenRect("bottomright topright", at.x, at.y, at.width, at.height, false, false);
+    }
+  });
+}
+
 // EXT-07: a button's click. It runs on the host's selected tab, which stays the last web tab while the IDE has focus
-// (sub-ruling 1). A popup URL stays in chrome for the popup panel (38-02); it never crosses to the frame.
-function extensionClick(win, named) {
+// (sub-ruling 1). A popup opens in the native panel at `anchorRect`; its URL never crosses to the frame. A click on the
+// button of the popup already open closes it, as in Firefox.
+function extensionClick(win, named, anchorRect) {
+  const open = extensionPopups.get(win);
+  if (open) {
+    open.popup.closePopup();
+    if (open.extension === named.extension) {
+      return "closed";
+    }
+  }
   const selectedTab = tabHosts.get(win)?.selected ?? null;
   if (!selectedTab) {
     return "no-tab";
@@ -9813,7 +9921,16 @@ function extensionClick(win, named) {
   if (popupUrl === null) {
     return "disabled";
   }
-  return popupUrl ? "popup" : "action";
+  if (!popupUrl) {
+    return "action";
+  }
+  try {
+    extensionOpenPopup(win, named, popupUrl, anchorRect);
+    return "popup";
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[extensions] popup panel failed (${err && err.name ? err.name : "error"})`);
+    return "popup-failed";
+  }
 }
 
 // D-08: Pin to Toolbar and its undo.
@@ -9858,7 +9975,7 @@ async function extensionStoreRequest(kind, data, actorRef) {
   }
   switch (kind) {
     case "extensionClick":
-      return { ok: true, kind, where: extensionClick(win, named) };
+      return { ok: true, kind, where: extensionClick(win, named, data.anchorRect) };
     case "extensionPin":
       if (typeof data.pinned !== "boolean") {
         return { ok: false, kind, reason: "validation", message: "handleStoreRequest: refusing a pin without a boolean pinned" };
