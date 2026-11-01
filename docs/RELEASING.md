@@ -1696,7 +1696,7 @@ placeholders; the dependency order below is what matters. Waves: 1, 2, 3, 3, 4, 
 |---|---|---|---|
 | 1 `prerequisites-and-hardening` | DIST-01, SEC-01 | Push main and milestone tags; 2FA, the second owner, the Apps and the repository controls; the ESR rebase push | The seven unsigned-posture consequences |
 | 2 `release-identity` | REL-01, UPD-01, UPD-02, UPD-03 | none (autonomous) | none |
-| 3 `mar-signing-and-update-integrity` | SEC-02, UPD-04 | The key ceremony (key store on `legion`); one MAR signed for the loopback proof | The key-rotation runbook |
+| 3 `mar-signing-and-update-integrity` | SEC-02, UPD-04 | The primary and secondary key ceremonies (key stores on `legion`, two offline `.p12` copies of each); one MAR signed for the loopback proof | none: the key-rotation runbook is in [Key rotation](#key-rotation), which names the one open signing-job change |
 | 4 `packaged-product-correctness-linux` | PKG-04 to PKG-09, UPD-08 | Node provenance and the licence position | The update-ready rows are gated on the probe verdict about whether the stock prompt can render |
 | 5 `linux-release-pipeline-and-update-channel` | DIST-02, DIST-03, UPD-05, UPD-06, UPD-07 | Runner registration; the update origin and download page; cutting the first release | Windows and macOS descriptor directories and asset pairs, until real builds observe their BUILD_TARGET strings |
 | 6 `windows-unsigned` | PKG-10 to PKG-13, SEC-03 | The `pkg-win11` guest; the five-cell matrix | Authenticode, the maintenance service, MSIX |
