@@ -630,7 +630,7 @@ export class TabStripWidget extends ReactWidget {
         const pinned = this.isPinned(widget);
         const block = tabs.filter(tab => this.isPinned(tab) === pinned);
         const place = block.indexOf(widget);
-        const duplicates = closable(tabs.filter(tab => tab !== widget && tab instanceof WebTabWidget && tab.url === web?.url));
+        const duplicates = ranged(tabs.filter(tab => tab !== widget && tab instanceof WebTabWidget && tab.url === web?.url));
         const pages = tabs.filter((tab): tab is WebTabWidget => tab instanceof WebTabWidget && isHttp(tab.url));
         const bookmark = this.bookmarkTabs;
         return [

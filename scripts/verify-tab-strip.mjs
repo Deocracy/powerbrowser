@@ -369,6 +369,11 @@ function check(src) {
         failures.push(`pin store: restorePins does not require the reopened tab's own key to equal entry.key -- a stale key could re-pin another tab (W1)`);
     }
 
+    // 10b. pinned block (WR-03): every multi-close selection goes through `ranged`.
+    const bypass = [...(rows ?? '').matchAll(/const (\w+) = closable\(/g)].map(m => m[1]);
+    if (bypass.length) {
+        failures.push(`pinned block: tabMenuRows selects ${bypass.join(', ')} through closable, not ranged -- that close row closes pinned tabs and forgetTab drops their pins (WR-03)`);
+    }
     // 11. preview occlusion and anchor
     const members = selector ? selector.split(',').map(member => member.trim()) : [];
     const renderPreview = methodBody(strip, 'protected renderPreview(');
@@ -619,6 +624,12 @@ const PLANTS = [
         file: STRIP,
         mutate: s => s.replace('{this.overflowing && <button', '{<button'),
         expect: 'chevron',
+    },
+    {
+        name: 'duplicates-close-pinned',
+        file: STRIP,
+        mutate: s => s.replace('const duplicates = ranged(', 'const duplicates = closable('),
+        expect: 'through closable, not ranged',
     },
     {
         name: 'url-keyed-pin',
