@@ -434,6 +434,10 @@ document.addEventListener(
       // Phase 32 plan 08 (PAGE-10): view source and (32-07 gap closure) F12 DevTools, page-focus only.
       { id: "viewSource", key: "U", modifiers: "accel", reserved: false, landsInTheia: false },
       { id: "devtoolsOpen", keycode: "VK_F12", modifiers: "", reserved: false, landsInTheia: false },
+      // Phase 35 plan 07 (PAGE-07, D-07): F11 toggles window full screen from a page only; the IDE keeps F11
+      // (KEY-04), so the row is never reserved. No `firefox` field: the upstream key id carries an internals-boundary
+      // pattern, so verify-shell-furniture.mjs rule 12 holds the row to the Linux key_enterFullScreen instead.
+      { id: "fullscreen", keycode: "VK_F11", modifiers: "", reserved: false, landsInTheia: false },
       // No upstream <key>: content's document navigation consumes F6, so these ride the reply listener below.
       { id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false, landsInTheia: true, via: "replyListener" },
       { id: "focusAddressShiftF6", keycode: "VK_F6", modifiers: "shift", reserved: false, landsInTheia: true, via: "replyListener" },

@@ -3848,6 +3848,10 @@ export const PowerBrowserAPI = Object.freeze({
     if (wasVisible && !visible && entry.uri) {
       PowerBrowserAPI.scheduleSettleCapture(entry.uri, win);
     }
+    // PAGE-07 (35-07, D-05): upstream exits element fullscreen on TabSelect (browser-fullScreenAndPointerLock.js:660, :478-483).
+    if (wasVisible && !visible && win.document.fullscreenElement === entry.browser) {
+      win.document.exitFullscreen().catch(() => {});
+    }
     Object.assign(entry.browser.style, {
       left: `${host.left + left}px`,
       top: `${host.top + top}px`,
@@ -6925,8 +6929,8 @@ function installTooltipsAndLinkStatus(window) {
 // browser.properties key), `when`, `off`, `on` and `refuse` name PAGE_MENU_WHEN
 // predicates (shown, disabled, checked, replaced by the refusal row), `runs`
 // says who performs it. verify-shell-furniture.mjs rules 5-6 compare every field
-// with upstream and with the two row dispatchers. The fullscreen media row lands
-// with the fullscreen stand-ins (35-07). A `dynamic` row has no upstream id: it
+// with upstream and with the two row dispatchers. The fullscreen media row enters
+// element fullscreen through the 35-07 stand-ins. A `dynamic` row has no upstream id: it
 // expands into one row per PAGE_MENU_DYNAMIC label (spelling suggestions are
 // dictionary words), ids `<kind>-<index>`; extension entries (D-16) arrive built.
 const PAGE_MENU_ROWS = Object.freeze([
@@ -6956,6 +6960,7 @@ const PAGE_MENU_ROWS = Object.freeze([
     { id: "context-media-playbackrate-200x", l10n: "main-context-menu-media-play-speed-fastest-2", when: "always", on: "rate200", off: "mediaError", runs: "chrome", group: "rate" },
   ] },
   { id: "context-media-loop", l10n: "main-context-menu-media-loop", when: "onMedia", on: "mediaLoops", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-video-fullscreen", l10n: "main-context-menu-media-video-fullscreen", when: "videoFullscreen", off: "mediaError", runs: "chrome", group: "media" },
   { id: "context-media-hidecontrols", l10n: "main-context-menu-media-hide-controls", when: "mediaHideControls", off: "mediaError", runs: "chrome", group: "media" },
   { id: "context-media-showcontrols", l10n: "main-context-menu-media-show-controls", when: "mediaShowControls", off: "mediaError", runs: "chrome", group: "media" },
   { id: "context-viewvideo", l10n: "main-context-menu-video-view-new-tab", when: "viewVideo", runs: "chrome", group: "media-view" },
@@ -7021,6 +7026,7 @@ const PAGE_MENU_WHEN = Object.freeze({
   mediaLoops: f => !!f.target?.loop,
   mediaHideControls: f => !!f.target?.controls && !!(f.onVideo || (f.onAudio && !f.inSyntheticDoc)),
   mediaShowControls: f => pageMenuOnMedia(f) && !f.target?.controls,
+  videoFullscreen: f => !!f.onVideo && !f.target?.ownerDocument?.fullscreen, // :1092-1095
   mediaError: f => f.target?.error != null || f.target?.networkState === f.target?.NETWORK_NO_SOURCE, // :1137-1139
   rate050: pageMenuRate(0.5),
   rate100: pageMenuRate(1),
@@ -7210,7 +7216,8 @@ function installPageContextMenu(window) {
     },
     set contentData(data) {
       state.captured = data;
-      state.kept = tabIdOfBrowser(data?.browser) !== null && data.browser.style.visibility === "visible";
+      // D-19 (35-07): no capture during element fullscreen; a Theia menu cannot draw over the fullscreen top layer.
+      state.kept = !document.fullscreenElement && tabIdOfBrowser(data?.browser) !== null && data.browser.style.visibility === "visible";
     },
   };
   document.getElementById("contentAreaContextMenu").addEventListener(
@@ -7362,6 +7369,9 @@ async function runPageMenuRow(id, pending, state, itemId) {
     case "context-media-playbackrate-150x":
     case "context-media-playbackrate-200x":
       actor.mediaCommand(context.targetIdentifier, "playbackRate", PAGE_MENU_RATES[id.slice(-4)]);
+      return { where: "done" };
+    case "context-video-fullscreen": // browser-context.js:112-113; the pick is the user's click on the row, carried as user input so the page's requestFullscreen is allowed
+      furnitureLazy.E10SUtils.wrapHandlingUserInput(data.browser.ownerGlobal, true, () => actor.mediaCommand(context.targetIdentifier, "fullscreen"));
       return { where: "done" };
     case "context-viewvideo":
     case "context-viewimage": // viewMedia (:1744-1778)

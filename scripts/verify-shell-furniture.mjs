@@ -67,6 +67,11 @@
 //      stuck in fullscreen state, and a remove without a set never arms the cleanup.
 //      The #fullscreen-warning subtree is held to upstream's by rule 2 and its
 //      fullscreen-warning-* ids by rule 10.
+//  12. F11 (35-07, D-07). The `fullscreen` row of PAGE_KEYS in powerbrowser.js has the
+//      keycode and modifiers of upstream's key_enterFullScreen in browser-sets.inc.xhtml
+//      as a Linux release build preprocesses it (#define and #expand lines dropped), and
+//      it is not reserved: a reserved row would fire with the IDE focused (KEY-04). The
+//      row names no `firefox` id because that id carries an internals-boundary pattern.
 //
 // A section, block or selector that cannot be found, or empty A and B, is a BROKEN
 // INSTRUMENT, never a clean pass. `--self-test` asserts the clean tree green,
@@ -95,6 +100,7 @@ const FILES = {
   pageMenu: 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts',
   nsContextMenu: 'upstream/browser/base/content/nsContextMenu.sys.mjs',
   clipboardMenu: 'upstream/toolkit/modules/ClipboardContextMenu.sys.mjs',
+  browserSets: 'upstream/browser/base/content/browser-sets.inc.xhtml',
 };
 const ACTOR_DIRS = ['upstream/browser/actors', 'upstream/toolkit/actors'];
 const L10N_ROOTS = ['upstream/browser/locales/en-US', 'upstream/toolkit/locales/en-US'];
@@ -180,7 +186,8 @@ function phase35Section(api) {
 
 // Evaluates the Linux release build's #ifdef/#ifndef/#else/#endif, drops every
 // other # line and keeps an #include as a marker, so a body that held one is known.
-function preprocess(text, rel, broken) {
+// `dropped` names further directives whose lines are dropped (browser-sets' #define and #expand).
+function preprocess(text, rel, broken, dropped = []) {
   const stack = [];
   const kept = [];
   for (const line of text.split('\n')) {
@@ -197,7 +204,7 @@ function preprocess(text, rel, broken) {
     else if (directive === 'endif') stack.pop();
     else if (directive === 'include') {
       if (active) kept.push(INCLUDE_MARK);
-    } else if (directive !== '' && directive !== 'filter' && directive !== 'unfilter') {
+    } else if (directive !== '' && directive !== 'filter' && directive !== 'unfilter' && !dropped.includes(directive)) {
       broken.push(`${rel}: unsupported preprocessor directive #${directive}`);
     }
   }
@@ -440,7 +447,23 @@ function check(inputs) {
     if (!new RegExp(`\\.${call}\\(\\s*["']inDOMFullscreen["']`).test(sectionCode)) failures.push(`FULLSCREEN: the Phase 35 section never calls ${call}("inDOMFullscreen") on the root (DOMFullscreenParent.sys.mjs:21, :107 read it)`);
   }
 
-  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}} (section, overlay attribute and ${ADOPTED_ACTORS.size} adopted actor parents of ${actorFiles.length}), each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys; overlays name the autocomplete panel #${acPanels[0]}; ${hrefs.length} localization link(s) carry the ${l10nIds.length} id(s) the shell needs; the section sets and removes inDOMFullscreen` };
+  // Rule 12: the F11 page row is upstream's Linux key_enterFullScreen, unreserved.
+  const setsTokens = tokenize(preprocess(inputs.browserSets, FILES.browserSets, broken, ['define', 'expand']));
+  if (broken.length) return { broken, failures };
+  const enterKey = elementById(setsTokens, 'key_enterFullScreen')?.start;
+  if (!enterKey) return { broken: [`no key_enterFullScreen in the Linux build of ${FILES.browserSets}: rule 12 would prove nothing`], failures };
+  const f11Row = codeLines(inputs.shellJs).find(line => /^\s*\{ id: "fullscreen",/.test(line));
+  if (!f11Row) failures.push(`F11: ${FILES.shellJs} has no PAGE_KEYS row with id "fullscreen"`);
+  else {
+    const rowField = name => new RegExp(`\\b${name}: "([^"]*)"`).exec(f11Row)?.[1] ?? '';
+    const want = { keycode: enterKey.attrs.get('keycode') ?? '', modifiers: enterKey.attrs.get('modifiers') ?? '' };
+    for (const name of ['keycode', 'modifiers']) {
+      if (rowField(name) !== want[name]) failures.push(`F11: the fullscreen row's ${name} is "${rowField(name)}", upstream key_enterFullScreen's (Linux) is "${want[name]}"`);
+    }
+    if (!/\breserved: false\b/.test(f11Row)) failures.push('F11: the fullscreen row is not reserved: false (a reserved row fires with the IDE focused, KEY-04)');
+  }
+
+  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}} (section, overlay attribute and ${ADOPTED_ACTORS.size} adopted actor parents of ${actorFiles.length}), each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys; overlays name the autocomplete panel #${acPanels[0]}; ${hrefs.length} localization link(s) carry the ${l10nIds.length} id(s) the shell needs; the section sets and removes inDOMFullscreen; the F11 row is upstream's Linux key_enterFullScreen, unreserved` };
 }
 
 function report(result) {
@@ -481,6 +504,7 @@ function selfTest() {
     { name: '(t) the validation template removed', key: 'xhtml', mutate: t => t.replace(/^\s*<template id="invalidFormTemplate">[\s\S]*?<\/template>\n/m, ''), expect: 'MISSING FURNITURE: #invalidFormTemplate' },
     { name: '(u) the exit button removed from the fullscreen warning', key: 'xhtml', mutate: t => t.replace(/^\s*<button id="fullscreen-exit-button">\s*<\/button>\n/m, ''), expect: 'PARITY: #fullscreen-warning: children differ from upstream\'s' },
     { name: '(v) the inDOMFullscreen remove call deleted', key: 'api', mutate: t => t.replace('document.documentElement.removeAttribute("inDOMFullscreen");', ''), expect: 'FULLSCREEN: the Phase 35 section never calls removeAttribute("inDOMFullscreen")' },
+    { name: '(w) a modifier on the F11 row', key: 'shellJs', mutate: t => t.replace('{ id: "fullscreen", keycode: "VK_F11", modifiers: ""', '{ id: "fullscreen", keycode: "VK_F11", modifiers: "accel"'), expect: 'F11: the fullscreen row\'s modifiers is "accel", upstream key_enterFullScreen\'s (Linux) is ""' },
   ];
   let failed = false;
   for (const plant of plants) {
@@ -503,7 +527,7 @@ function selfTest() {
     console.error(`${NAME} --self-test: FAIL`);
     process.exit(1);
   }
-  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (v) each landed and went red naming their drift`);
+  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (w) each landed and went red naming their drift`);
 }
 
 if (process.argv.includes('--self-test')) {
