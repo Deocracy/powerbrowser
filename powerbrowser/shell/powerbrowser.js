@@ -150,6 +150,13 @@ document.addEventListener(
       return browserElement;
     };
 
+    // Phase 36 (PROMPT-05): a page in a web tab that opens a new window gets a
+    // web tab next to it. The receivers live behind the boundary; a request
+    // from the Theia frame itself still falls through to the stock browser
+    // window (GUI-01). The link-click companion is plain JS, not part of the
+    // Gecko interface. Adopted tabs do not yet enter the Phase 31.1 tab host.
+    PowerBrowserAPI.installNewWindowReceivers(window);
+
     // SHELL-03 (05-02): the error layer, reached by TheiaService exactly
     // the same way powerbrowserSwapToUrl is -- through this window's exposed
     // globals, never by touching browserElement's own location (D-114).
