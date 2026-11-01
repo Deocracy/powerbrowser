@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1.6
-current_phase: 41
-current_phase_name: Repository controls and GitHub Apps (A)
-current_plan: 8
+current_phase: 49
+current_phase_name: Release pipeline and legion runner (E)
+current_plan: 5
 status: executing
-stopped_at: Completed 41-03-PLAN.md
-last_updated: "2026-10-22T17:05:54.891Z"
-last_activity: 2026-10-22
-last_activity_desc: 41-03 complete, workflows and zizmor quick rows, GH-18 drill workflow
-state_head: edc58f7e73c566b55830346d9dcfe571b469890a
+stopped_at: 49-04 built, reviewed and fixed; 2026-10-31 settlements recorded
+last_updated: "2026-11-01T05:25:00.000Z"
+last_activity: 2026-10-31
+last_activity_desc: 49-04 built, reviewed and fixed; six open items settled by the autonomous run
+state_head: 723372eaf17f3ab9b9f2599c30a94ad50da6793b
 progress:
   total_phases: 19
-  completed_phases: 1
-  total_plans: 12
-  completed_plans: 11
+  completed_phases: 4
+  total_plans: 84
+  completed_plans: 66
 milestone_name: Deployment setup
 ---
 
@@ -25,28 +25,52 @@ milestone_name: Deployment setup
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file, then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 40 — Release identity, ESR pin and patch regeneration (A)
+**Current focus:** pre-checkpoint tasks of the remaining plans (sibling worktrees), then the end-of-milestone owner pass
 
 ## Current Position
 
-Phase: 41 — Repository controls and GitHub Apps (A)
-Current Plan: 4
-Total Plans in Phase: 4
-Status: Executing (41-03 complete)
-Last activity: 2026-10-22 — 41-03 complete: workflows and zizmor quick rows, GH-18 drill workflow (commit ac6c7a2)
+Phase: all 19 phases (40–58) planned; 84 plans, 66 executed (a plan counts as executed when its `*-SUMMARY.md` exists, derived with `ls phases/*/*-SUMMARY.md` on 2026-10-31)
+Current Plan: none in this worktree; last built plan 49-04 (built, reviewed and fixed 2026-10-31, fixes af31517e..4de8a340)
+Total Plans in Phase: 4–8 per phase; see the per-phase list below
+Status: Executing. Remaining automatic work is the pre-checkpoint tasks of the unexecuted plans, now running in sibling worktrees. Everything else is owner-blocked: see HANDOFF.md "Blocked on the owner".
+Last activity: 2026-10-31 — 49-04 built, reviewed and fixed; six open items settled by the autonomous run under the owner's instruction to decide items not needing owner input (org Deocracy; 43 item 1 option B; 50 item 2 confirmed; 44-03 WR-03 exemption stays; 57 B1 option (a); 49-04 item 2 publish release-manifest.json)
 
-Progress: [█░░░░░░░░░] 5%
+Executed plans (have a SUMMARY):
+
+- 40: 40-01 .. 40-08 (all 8)
+- 41: 41-01, 41-02, 41-03 — not executed: 41-04
+- 42: 42-01, 42-02, 42-03 — not executed: 42-04
+- 43: 43-01 .. 43-04 — not executed: 43-05
+- 44: 44-02, 44-03 — not executed: 44-01, 44-04
+- 45: 45-01 .. 45-04 (all 4)
+- 46: 46-01 .. 46-04 (all 4)
+- 47: 47-01, 47-02, 47-03 — not executed: 47-04
+- 48: 48-01 .. 48-04 — not executed: 48-05
+- 49: 49-01 .. 49-04 — not executed: 49-05
+- 50: 50-01, 50-02 — not executed: 50-03, 50-04
+- 51: 51-01 .. 51-04 (all 4)
+- 52: 52-01 .. 52-04 — not executed: 52-05
+- 53: 53-01, 53-02, 53-03 — not executed: 53-04
+- 54: 54-01, 54-02, 54-03 — not executed: 54-04
+- 55: 55-01, 55-02 — not executed: 55-03, 55-04
+- 56: 56-01 .. 56-04 — not executed: 56-05
+- 57: 57-01, 57-02, 57-03 — not executed: 57-04
+- 58: 58-01, 58-02 — not executed: 58-03
+
+A SUMMARY can record a partial plan: 49-02 Task 3 (runner registration) and 57-01 Task 1 (B1) are open inside executed plans.
+
+Progress: [████████░░] 79% (66 of 84 plans)
 
 ## Progress
 
-**Phases Complete:** 0 of 19
-**Current Plan:** 8
+**Phases Complete:** 4 of 19 have a SUMMARY for every plan (40, 45, 46, 51); none is owner-verified
+**Current Plan:** none (see Current Position)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 66 (per-plan rows below were recorded only through 41-03)
 
 *Updated after each plan completion*
 **Per-Plan Metrics:**
@@ -105,9 +129,9 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 
 ## Session Continuity
 
-**Last session:** 2026-10-22T17:05:54.799Z
+**Last session:** 2026-10-31
 
-**Stopped At:** Completed 41-03-PLAN.md
+**Stopped At:** 49-04 built, reviewed and fixed; 2026-10-31 settlements recorded (see HANDOFF.md)
 **Resume File:** None
 
 ## Milestone Context

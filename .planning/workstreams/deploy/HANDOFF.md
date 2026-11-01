@@ -6,8 +6,8 @@ Nothing is running. Nothing was pushed. HEAD at pause: see `git log -1` (handoff
 
 ## Read this first
 
-- `STATE.md` in this directory is stale: it still says phase 41 (last updated 2026-10-22).
-  The real position is in git (`git log --merges`) and in the per-plan SUMMARY files.
+- `STATE.md` in this directory was stale (phase 41, 2026-10-22) and was rewritten on 2026-10-31
+  from the per-plan SUMMARY files; the per-plan SUMMARY files remain the source of truth.
 - `gsd-tools query init.manager --ws=deploy` reports every phase incomplete. That is because
   owner checkpoint plans are unfinished in almost every phase, not because work is missing.
 - Every phase 40-58 is planned. Most plans are built through `dsh/phase-NN` branches and merged.
