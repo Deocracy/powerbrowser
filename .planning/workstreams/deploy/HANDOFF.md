@@ -32,7 +32,8 @@ two doc-only commits that followed.
 | 49-04 descriptor job + channel-live | built, Opus-reviewed (3 CR, 5 WR, 4 IN), 10 of 12 fixed | c953d2f5..c7cff5d4, review f8b8f19b, fixes af31517e..4de8a340 |
 
 Not fixed: CR-02 (release-manifest.json is not a Release asset; its `host` field names the build
-machine, so publishing it is the owner's call — BLOCKED.md "49-04" item 2) and IN-03 (manifest-vs-tree
+machine, so publishing it is the owner's call — BLOCKED.md "49-04" item 2; settled 2026-10-31 by the
+autonomous run: publish it, a sibling run implements it) and IN-03 (manifest-vs-tree
 check duplicated across release.yml and verify-channel-live.mjs). The CR-03 retention gap is resolved
 (7-day `release-linux-manifest` artifact; release-shape derives the minimum from the descriptor wait).
 
