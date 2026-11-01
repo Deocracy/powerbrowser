@@ -1150,8 +1150,9 @@ async function scenarioTheiaNever({ app, theia, plant }) {
 }
 
 // tabs.update fields the shell cannot write are refused before the URL loads (WR-07), so a refused write applies
-// nothing. A pinned write and an active: true write to an unselected tab are both refused; the selected tab still
-// takes a URL and active: true together.
+// nothing. A pinned write and a highlighted write are both refused; the selected tab still takes a URL and active: true
+// together. active: true on an unselected tab is no longer refused: it selects the tab through the host (38-01, patch
+// 050), and verify-extension-actions-live.mjs's tabs-bridge scenario proves that.
 async function scenarioRefusedWrite({ app }) {
   const A = await openAndCommit(app, '/a');
   const B = await openAndCommit(app, '/b');
@@ -1166,8 +1167,8 @@ async function scenarioRefusedWrite({ app }) {
   };
   const pinned = await refuse({ url: url('/d'), pinned: true });
   if (pinned === null) return verdict(false, null, 'tabs.update with pinned: true was not refused');
-  const switched = await refuse({ url: url('/d'), active: true });
-  if (switched === null) return verdict(false, null, 'tabs.update with active: true on a tab that is not selected was not refused');
+  const highlighted = await refuse({ url: url('/d'), highlighted: true });
+  if (highlighted === null) return verdict(false, null, 'tabs.update with highlighted: true was not refused');
   await sleep(1500);
   const seen = await command('get', { tabId: A.extId });
   const navigated = session.logs.some(r => r.kind === 'committed' && r.tabId === A.extId && String(r.url).endsWith('/d'));
@@ -1178,7 +1179,7 @@ async function scenarioRefusedWrite({ app }) {
   await command('update', { tabId: B.extId, props: { url: url('/c'), active: true } });
   const loaded = await tryWait(r => r.kind === 'committed' && r.tabId === B.extId && String(r.url).endsWith('/c'), 30000);
   if (!loaded) return verdict(false, null, `positive control: tabs.update with url and active: true on the selected tab B (${B.extId}) did not load /c`);
-  return verdict(true, `tabs.update with pinned: true (${pinned}) and with active: true on an unselected tab (${switched}) were refused before any navigation: tab A stayed /a; the selected tab B took url and active: true together and loaded /c`, null);
+  return verdict(true, `tabs.update with pinned: true (${pinned}) and with highlighted: true (${highlighted}) were refused before any navigation: tab A stayed /a; the selected tab B took url and active: true together and loaded /c`, null);
 }
 
 // T-31.1-20 (D-05, D-17): a webRequest listener that redirects a top-level overlay load to a web-accessible extension

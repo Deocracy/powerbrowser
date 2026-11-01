@@ -98,10 +98,14 @@ const GUARDS = [
     regexes: [
       /^\s*if \(windowTracker\.isTabHostWindow\(nativeTab\.documentGlobal\)\) \{\s*$/,
       /^\s*updateProperties\.pinned !== null \|\|\s*$/,
-      /^\s*updateProperties\.highlighted !== null \|\|\s*$/,
-      /^\s*\(updateProperties\.active && tabbrowser\.selectedTab !== nativeTab\)\s*$/,
+      // No `||` after highlighted: a refusal of active (a switch to another tab) must not come back.
+      /^\s*updateProperties\.highlighted !== null\s*$/,
     ],
-    why: 'a tab host window refuses pinned, highlighted and a switch to another tab before any write runs (WR-07); muted is not refused (Phase 32 plan 09)' },
+    why: 'a tab host window refuses pinned and highlighted before any write runs (WR-07); active goes to the host selectedTab setter (38-01) and muted to toggleMuteAudio (Phase 32 plan 09), so neither is refused' },
+  { id: 'G11', file: TABS, mode: 'replace',
+    anchor: 'const { frameLoader } = currentTab.linkedBrowser;', site: 'getAPI.create',
+    regexes: [/^\s*const frameLoader = currentTab\?\.linkedBrowser\?\.frameLoader;\s*$/, /^\s*if \(frameLoader\) \{\s*$/],
+    why: 'a tabs.create in a tab host window with no tab must not throw before the host can refuse it (38-01)' },
   { id: 'G9', file: TABS, mode: 'after',
     anchor: 'let url = context.uri.resolve(updateProperties.url);', site: 'getAPI.update',
     regexes: [
@@ -125,6 +129,7 @@ const WEAKEN = {
   G7: { drop: /^\s*try \{\s*$/ },
   G10: { find: 'updateProperties.pinned !== null ||', replace: 'updateProperties.pinned !== null &&' },
   G9: { find: 'url !== "about:blank" &&', replace: 'url !== "about:blank" ||' },
+  G11: { find: 'currentTab?.linkedBrowser?.frameLoader', replace: 'currentTab.linkedBrowser?.frameLoader' },
 };
 
 // Hunks of 050 that no GUARDS row carries. An entry names one needle found in an added line of one file, and why
@@ -692,6 +697,13 @@ function selfTest() {
     if (landedOk('G9 scheme regex negation dropped', g9Regex !== clean)) {
       expectRed('G9 scheme regex negation dropped', check({ patchPath: withPatch('G9-regex-negation.patch', g9Regex) }),
         f => f.id === 'G9' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G9' });
+    }
+
+    // G10: the active refusal brought back on the highlighted line (38-01 lets tabs.update select through the host).
+    const g10Active = clean.replace('+              updateProperties.highlighted !== null\n', '+              updateProperties.highlighted !== null || updateProperties.active\n');
+    if (landedOk('G10 active refusal restored', g10Active !== clean)) {
+      expectRed('G10 active refusal restored', check({ patchPath: withPatch('G10-active.patch', g10Active) }),
+        f => f.id === 'G10' && f.kind === 'WEAKENED', { kind: 'WEAKENED', id: 'G10' });
     }
 
     // A second logic patch staged under another name.
