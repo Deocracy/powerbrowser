@@ -6642,6 +6642,7 @@ export const PowerBrowserTabHost = Object.freeze({
         return ChromeUtils.importESModule("resource:///modules/ZoomUI.sys.mjs").ZoomUI.getGlobalValue();
       },
     };
+    installExtensionReceivers(win); // Phase 38 plan 04 (B5): the extension section's per-window receivers
     return Object.freeze({
       tabs: () => [...strip.children],
       selectedTab: () => host.selected,
@@ -10052,18 +10053,22 @@ async function extensionStoreRequest(kind, data, actorRef) {
 }
 
 // D-06: an extension's tabs.create, tabs.remove and selection writes reach the host's addTab, removeTab and selectTab
-// members. Chrome makes, closes or selects the overlay and pushes; the frontend claims it as it claims a page's new
+// members. A refusal is an ExtensionError (38-04), the one error class whose message reaches the extension unchanged. Chrome makes, closes or selects the overlay and pushes; the frontend claims it as it claims a page's new
 // window (Phase 36), so a tab an extension made has an owner and does not leak on reload.
 
 // tabs.create: an http(s) page in a new overlay next to the opener, never an extension page (sub-ruling 2). Its node
 // exists at once, because the caller reads the new tab back synchronously; the frontend's ack gives it its tab id.
 function tabsBridgeCreate(host, url, options) {
+  // 38-04 (B5): an extension's own page goes to the stock browser window instead, never into an overlay.
+  if (typeof url === "string" && url.startsWith("moz-extension:")) {
+    return extensionOpenTabPage(url, options?.triggeringPrincipal);
+  }
   if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
-    throw new Error("PowerBrowser refused to open that page: an extension may open only web pages in a tab.");
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: an extension may open only web pages in a tab.");
   }
   const opener = options?.openerBrowser ?? host.selected?.linkedBrowser ?? null;
   if (tabIdOfBrowser(opener) === null) {
-    throw new Error("PowerBrowser refused to open that page: there is no web tab to open it next to.");
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: there is no web tab to open it next to.");
   }
   // In the background unless the caller's selectedTab write brings it to the front before the adoptTab push.
   const browser = createPendingOverlay(opener, url, true, null);
@@ -10077,7 +10082,7 @@ function tabsBridgeCreate(host, url, options) {
 // row). A tab still waiting for its ack goes here, and the late ack is answered unknown-tab.
 function tabsBridgeRemove(host, tab) {
   if (!isHostTab(host, tab)) {
-    throw new Error("PowerBrowser refused to close that tab: it is not one of this window's web tabs.");
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to close that tab: it is not one of this window's web tabs.");
   }
   const tabId = tabIdOfBrowser(tab.linkedBrowser);
   if (tabId !== null) {
@@ -10104,11 +10109,12 @@ function tabsBridgeRemove(host, tab) {
 // A tab still waiting for its ack is foregrounded by its adoptTab push; an adopted one is shown by the selectTab push,
 // and the frontend's webTabActivated that follows finds it already selected.
 function tabsBridgeActivate(host, tab) {
-  if (tab === host.selected) {
+  // 38-04 (B5): a tab page tabs.create put in the stock window is already selected there.
+  if (tab === host.selected || (tab?.ownerDocument && tab.ownerDocument !== host.win.document)) {
     return;
   }
   if (!isHostTab(host, tab)) {
-    throw new Error("PowerBrowser refused to switch to that tab: it is not one of this window's web tabs.");
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to switch to that tab: it is not one of this window's web tabs.");
   }
   selectNode(host, tab);
   const tabId = tabIdOfBrowser(tab.linkedBrowser);
@@ -10195,4 +10201,40 @@ function extensionSidebarRequest(win, kind, data) {
     return null;
   }
   return data.open ? extensionSidebarOpen(win, named) : extensionSidebarClose(win, named.extension.id);
+}
+
+// ---------------------------------------------------------------------------
+// 38-04 (B5, Chris 2026-10-22): extension pages that open in a tab (options_ui open_in_tab, welcome and onboarding
+// pages, dashboards) open in the stock browser window (GUI-01), never in a web tab: web tabs still never load an
+// extension page (sub-ruling 2). tabs.create reaches this through the host's addTab, runtime.openOptionsPage through
+// the shell window's switchToTabHavingURI.
+// ---------------------------------------------------------------------------
+
+// A stock tab loading `url` with the extension's own principal, selected in the most recent stock window. Only the
+// calling extension's own pages: another extension's page is refused.
+function extensionOpenTabPage(url, principal) {
+  const policy = WebExtensionPolicy.getByURI(Services.io.newURI(url));
+  if (!policy || principal?.addonId !== policy.id) {
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: an extension may open only its own pages.");
+  }
+  const win = Services.wm.getMostRecentWindow("navigator:browser");
+  if (!win?.gBrowserInit?.delayedStartupFinished) {
+    // shortcut: with no started stock window the page opens in a new one and the caller gets no tab back; hand back its
+    // tab once an extension needs it (tabs.create would have to wait for that window's delayed startup).
+    PowerBrowserAPI.openBrowserWindow(url);
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser opened that page in a new browser window.");
+  }
+  const tab = win.gBrowser.addTab(url, { triggeringPrincipal: principal });
+  win.gBrowser.selectedTab = tab;
+  PowerBrowserAPI.focusWindow(win);
+  return tab;
+}
+
+// The shell window's extension receivers, installed with the tab host. ext-browser.js openOptionsPage calls the top
+// window's switchToTabHavingURI for an open_in_tab options page; the shell has no tabbrowser, so the page goes stock.
+function installExtensionReceivers(win) {
+  win.switchToTabHavingURI = (uri, openNew, params) => {
+    extensionOpenTabPage(uri instanceof Ci.nsIURI ? uri.spec : String(uri), params?.triggeringPrincipal);
+    return true;
+  };
 }

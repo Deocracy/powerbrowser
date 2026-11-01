@@ -130,8 +130,18 @@ post({ kind: 'surfaces-started', id: browser.runtime.id });
 async function run(cmd) {
   try {
     let result;
-    if (cmd.op === 'panel-url') {
-      result = browser.runtime.getURL('panel.html');
+    if (cmd.op === 'url') {
+      result = browser.runtime.getURL(cmd.path);
+    } else if (cmd.op === 'options') {
+      await browser.runtime.openOptionsPage();
+      result = true;
+    } else if (cmd.op === 'dashboard') {
+      const t = await browser.tabs.create({ url: 'dashboard.html' });
+      result = { id: t.id, windowId: t.windowId };
+    } else if (cmd.op === 'overlay-nav') {
+      const [t] = await browser.tabs.query({ url: cmd.url });
+      await browser.tabs.update(t.id, { url: browser.runtime.getURL('dashboard.html') });
+      result = true;
     } else {
       throw new Error('unknown op ' + cmd.op);
     }
@@ -201,10 +211,13 @@ export const EXTENSION_FIXTURES = Object.freeze({
       permissions: ['tabs', 'activeTab'],
       background: { scripts: ['background.js'] },
       sidebar_action: { default_panel: 'panel.html', default_title: 'PB sidebar probe' },
+      options_ui: { page: 'options.html', open_in_tab: true },
     },
     files: {
       'background.js': SURFACES_BACKGROUND,
       'panel.html': '<!doctype html><title>pb-sidebar-panel</title><body>sidebar</body>',
+      'options.html': '<!doctype html><title>pb-options</title><body>options</body>',
+      'dashboard.html': '<!doctype html><title>pb-dashboard</title><body>dashboard</body>',
     },
   },
 });

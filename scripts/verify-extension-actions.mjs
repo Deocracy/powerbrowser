@@ -66,6 +66,12 @@
  *                    document's loadPanel in a chrome browser, never through an
  *                    overlay opener; the row validator requires sidebarOpen,
  *                    and only the extensions/ widget shows the sidebar view.
+ *  12. tab pages  -- (38-04, B5) tabsBridgeCreate sends an extension page to
+ *                    extensionOpenTabPage (the stock window) before any overlay
+ *                    exists, and still refuses every other non-http(s) URL;
+ *                    extensionOpenTabPage opens no overlay and admits only the
+ *                    caller's own pages; the overlay location wall
+ *                    (OVERLAY_LOCATION) names no extension scheme.
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -371,6 +377,33 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             if (stripComments(src[file]).includes('ExtensionSidebarView')) failures.push(`sidebar: ${file} shows the sidebar view outside ${EXTENSIONS_WIDGET}`);
         }
     }
+    // 12. tab pages
+    if (bridgeLanded) {
+        const create = span(apiLines, /^function tabsBridgeCreate\(/);
+        const route = create ? apiLines.slice(create.start, create.end + 1).findIndex(l => l.includes('startsWith("moz-extension:")')) : -1;
+        const block = route >= 0 ? span(apiLines.slice(create.start), /startsWith\("moz-extension:"\)/) : null;
+        if (!create || !block) {
+            failures.push(`tab-pages: tabsBridgeCreate does not route an extension page (startsWith("moz-extension:")) before its overlay`);
+        } else {
+            const body = apiLines.slice(create.start + block.start, create.start + block.end + 1).join('\n');
+            const rest = apiLines.slice(create.start + block.end + 1, create.end + 1).join('\n');
+            if (!body.includes('extensionOpenTabPage(')) failures.push(`tab-pages: tabsBridgeCreate's extension-page branch does not go to extensionOpenTabPage (the stock window)`);
+            for (const opener of OVERLAY_OPENERS) {
+                if (body.includes(opener)) failures.push(`tab-pages: tabsBridgeCreate puts an extension page in an overlay (${opener}); tab pages go to the stock window`);
+            }
+            if (!rest.includes('/^https?:\\/\\//i.test(url)')) failures.push(`tab-pages: tabsBridgeCreate no longer refuses every other non-http(s) URL`);
+        }
+        const opener = span(apiLines, /^function extensionOpenTabPage\(/);
+        const openerBody = opener ? apiLines.slice(opener.start, opener.end + 1).join('\n') : '';
+        if (!opener) failures.push(`tab-pages: ${API} has no extensionOpenTabPage (broken instrument)`);
+        if (opener && !openerBody.includes('principal?.addonId !== policy.id')) failures.push(`tab-pages: extensionOpenTabPage admits another extension's page (no principal?.addonId !== policy.id check)`);
+        for (const o of OVERLAY_OPENERS) {
+            if (openerBody.includes(o)) failures.push(`tab-pages: extensionOpenTabPage opens an overlay (${o})`);
+        }
+        const wall = /^const OVERLAY_LOCATION = (.*);$/m.exec(src[API])?.[1];
+        if (!wall) failures.push(`tab-pages: ${API} has no OVERLAY_LOCATION (broken instrument)`);
+        else if (/moz-extension|extension:/i.test(wall)) failures.push(`tab-pages: OVERLAY_LOCATION admits an extension page into an overlay (${wall})`);
+    }
     return failures;
 }
 
@@ -403,6 +436,8 @@ function selfTest() {
         { name: 'second on-build-contextmenu notify', run: () => check(apiWith('Services.obs.notifyObservers(subject, "on-build-contextmenu");')), expect: 'the rule is one site' },
         { name: 'sidebar skip reverted', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('+    if (windowTracker.isTabHostWindow(window) || !this.extension.canAccessWindow(window)) {', '+    if (!this.extension.canAccessWindow(window)) {') }), expect: 'createMenuItem(window, details) no longer skips the shell window' },
         { name: 'sidebar-as-tab', run: () => check({ ...clean, [API]: clean[API].replace('  win.document.body.appendChild(frame);\n  extensionSidebars.set(', '  createPendingOverlay(null, panel, true, null);\n  extensionSidebars.set(') }), expect: 'extensionSidebarOpen puts the sidebar page in an overlay (createPendingOverlay(' },
+        { name: 'tabpage-in-overlay', run: () => check({ ...clean, [API]: clean[API].replace('    return extensionOpenTabPage(url, options?.triggeringPrincipal);', '    return createPendingOverlay(options.openerBrowser, url, true, null);') }), expect: 'tabsBridgeCreate puts an extension page in an overlay (createPendingOverlay(' },
+        { name: 'foreign extension page', run: () => check({ ...clean, [API]: clean[API].replace('principal?.addonId !== policy.id', 'false') }), expect: "extensionOpenTabPage admits another extension's page" },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
     let failed = 0;
@@ -430,7 +465,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows; the sidebar stays off in the shell window and loads only in the stock panel document' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows; the sidebar stays off in the shell window and loads only in the stock panel document; extension tab pages go to the stock window, never an overlay' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();

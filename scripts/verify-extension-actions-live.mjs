@@ -48,8 +48,9 @@
 //                   pinned pref before the reload and must go red naming the lost pin.
 //   tabs-bridge  -- the action fixture's tabs.create opens /b adopted, selected and
 //                   next to /a; a background create of /c then tabs.update({active})
-//                   shows it; tabs.remove closes it; an extension-page create is
-//                   refused; after the frontend reloads no orphan overlay is left.
+//                   shows it; tabs.remove closes it; an extension-page create goes to a
+//                   new stock window (38-04, B5), never an overlay; after the frontend
+//                   reloads no orphan overlay is left.
 //                   Plant create-unadopted swallows the adoptTab push in the frame
 //                   and must go red naming the orphan overlay.
 //   content      -- (38-03, EXT-08) the relaunched shell boots with zero overlays and the IDE
@@ -81,6 +82,13 @@
 //                   sidebar-in-shell sends the open to the stock sidebar path for the shell window
 //                   and must go red naming the shell window. Plant sidebar-as-tab loads the panel
 //                   page in a web tab instead and must go red naming the refused scheme.
+//   tab-pages    -- (38-04, B5) with a GUI-01 stock window open on a localhost page, the surfaces
+//                   fixture's runtime.openOptionsPage (options_ui open_in_tab) and its tabs.create
+//                   of its dashboard page each open the page as a tab of the stock window, while
+//                   the shell's overlay set, read by the same reader before and after, is
+//                   unchanged; its tabs.update of the web tab /a to its dashboard page is refused.
+//                   Plant tabpage-in-overlay sends the dashboard page to a web tab instead and
+//                   must go red naming the refused scheme.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -296,7 +304,7 @@ async function scenarioManage({ app, plant }) {
 }
 
 // tabs.create (active, next to its opener, adopted), tabs.create in the background then tabs.update({active}),
-// tabs.remove, a refused extension-page create, and no orphan overlay once the frontend reloads.
+// tabs.remove, an extension-page create sent stock-side (38-04), and no orphan overlay once the frontend reloads.
 async function scenarioTabsBridge({ app, plant, command }) {
   const A = await openTab(app, '/a');
   await live.makeCurrent(app, A);
@@ -336,15 +344,17 @@ async function scenarioTabsBridge({ app, plant, command }) {
     return verdict(false, null, `tabs.remove of /c did not close its overlay: ${rm.ok ? 'still present' : rm.error}`);
   }
   const ext = await command('create', { props: { url: 'page.html' } });
-  if (ext.ok || !/refused/.test(String(ext.error))) {
-    return verdict(false, null, `tabs.create of an extension page was not refused: ${JSON.stringify(ext)}`);
+  // 38-04 (B5): with no stock window open the page opens in a new one and no tab comes back (the tab-pages scenario
+  // covers the stock window that is already open).
+  if (ext.ok || !/new browser window/.test(String(ext.error))) {
+    return verdict(false, null, `tabs.create of an extension page did not go to a new stock window: ${JSON.stringify(ext)}`);
   }
   await app.evaluateIn(app.chrome, "(() => { document.getElementById('powerbrowser-content').reload(); return true; })()");
   const settled = await pollUntil(() => orphanCount(app), n => n === 0, 45000, 3);
   if (settled === null) {
     return verdict(false, null, `an orphan overlay outlived the frontend reload (${await orphanCount(app)} overlay(s) with no frontend tab)`);
   }
-  return verdict(true, `tabs.create /b landed adopted, selected and next to /a; /c landed in the background, tabs.update({active}) showed it and tabs.remove closed it; an extension page was refused (${ext.error}); no orphan overlay after the frontend reload`, null);
+  return verdict(true, `tabs.create /b landed adopted, selected and next to /a; /c landed in the background, tabs.update({active}) showed it and tabs.remove closed it; an extension page went to a new stock window (${ext.error}); no orphan overlay after the frontend reload`, null);
 }
 
 // 38-03 (EXT-08): content scripts and the page action's show_matches on the 31.1 identity, after a zero-overlay boot.
@@ -474,7 +484,7 @@ async function scenarioSidebar({ app, plant, command }) {
   await live.makeCurrent(app, A);
   await waitForSelected(app, A, '/a');
   await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
-  const panelUrl = (await command('panel-url')).result;
+  const panelUrl = (await command('url', { path: 'panel.html' })).result;
   if (plant?.name === 'sidebar-in-shell') {
     // The stock route: the sidebar action asked to open in the shell window, which patch 050 keeps it out of.
     await live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
@@ -508,6 +518,43 @@ async function scenarioSidebar({ app, plant, command }) {
   return verdict(true, `Show Sidebar opened the Theia view 'PB sidebar probe' with chrome's panel browser on ${pathOf(panelUrl)} (page title pb-sidebar-panel) shown over its rect; Hide Sidebar closed both`, null);
 }
 
+// 38-04 (B5): extension tab pages open stock-side. One session, surfaces fixture only.
+async function scenarioTabPages({ app, plant, command }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  const stockUrl = `${STOCK_ORIGIN}/c`;
+  await live.probe(app, `await get('CommandRegistry').executeCommand('powerbrowser.open-browser-window', ${JSON.stringify(stockUrl)}); return true;`);
+  await live.stockTabOn(app, stockUrl, 30000);
+  const before = await overlayIds(app);
+  if (!before.includes(A)) {
+    return verdict(false, null, `BROKEN INSTRUMENT: the overlay reader does not see /a (${JSON.stringify(before)})`);
+  }
+  const dashboardUrl = (await command('url', { path: 'dashboard.html' })).result;
+  if (plant?.name === 'tabpage-in-overlay') {
+    const where = await live.probe(app, `const w = await get('WebTabOpenHandler').openUrl(${JSON.stringify(dashboardUrl)}); return { lost: !!(w && w.lostView) };`).catch(e => ({ error: String(e) }));
+    return verdict(false, null, `the tab page was sent to a web tab, where the shell refuses its scheme (refused-scheme): ${JSON.stringify(where)}`);
+  }
+  const optionsUrl = (await command('url', { path: 'options.html' })).result;
+  const options = await command('options');
+  if (!options.ok || !(await live.stockTabOn(app, optionsUrl, 20000).catch(() => null))) {
+    return verdict(false, null, `runtime.openOptionsPage did not open the options page in the stock window: ${JSON.stringify(options)}`);
+  }
+  const dashboard = await command('dashboard');
+  if (!dashboard.ok || !(await live.stockTabOn(app, dashboardUrl, 20000).catch(() => null))) {
+    return verdict(false, null, `tabs.create of the dashboard page did not open it in the stock window: ${JSON.stringify(dashboard)}`);
+  }
+  const after = await overlayIds(app);
+  if (!sameSet(after, before)) {
+    return verdict(false, null, `a tab page changed the shell's overlay set: ${JSON.stringify({ before, after })}`);
+  }
+  const nav = await command('overlay-nav', { url: `${ORIGIN}/a` });
+  if (nav.ok || !/Illegal URL/.test(String(nav.error))) {
+    return verdict(false, null, `tabs.update of the web tab /a to an extension page was not refused: ${JSON.stringify(nav)}`);
+  }
+  return verdict(true, `runtime.openOptionsPage and tabs.create opened ${pathOf(optionsUrl)} and ${pathOf(dashboardUrl)} as stock-window tabs; the overlay set stayed ${JSON.stringify(before)}; tabs.update of /a to an extension page was refused (${nav.error})`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
@@ -516,11 +563,12 @@ const SCENARIOS_TABLE = {
   content: scenarioContent,
   'page-action': scenarioPageAction,
   sidebar: scenarioSidebar,
+  'tab-pages': scenarioTabPages,
 };
 // Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
 const RELAUNCH_SCENARIOS = new Set(['content', 'page-action']);
 // 38-04 (B5): scenarios that install the surfaces fixture alone, so its background is the only reader of /cmd.
-const B5_SCENARIOS = new Set(['sidebar']);
+const B5_SCENARIOS = new Set(['sidebar', 'tab-pages']);
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
 // patched product: the scenario reads `plant.name`.
@@ -535,6 +583,7 @@ const PLANTS_TABLE = {
   'pageaction-pill-stale': { scenario: 'page-action', expect: 'the stale icon: the pill still shows' },
   'sidebar-in-shell': { scenario: 'sidebar', expect: 'no Theia side-panel view opened: the sidebar went to the shell window' },
   'sidebar-as-tab': { scenario: 'sidebar', expect: 'the panel page was sent to a web tab, where the shell refuses its scheme (refused-scheme)' },
+  'tabpage-in-overlay': { scenario: 'tab-pages', expect: 'the tab page was sent to a web tab, where the shell refuses its scheme (refused-scheme)' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -736,6 +785,11 @@ async function puzzleRowMenu(app, name, label) {
     return true;
   })()`), hit => hit === true, 5000);
   if (!done) throw new Error(`BROKEN INSTRUMENT: no ${label} row in the ${name} fixture's menu`);
+}
+
+// 38-04 (B5): the frontend tab ids of every overlay in the shell.
+async function overlayIds(app) {
+  return JSON.parse(await live.inChrome(app, `return JSON.stringify([...document.querySelectorAll('browser[messagemanagergroup="browsers"]')].map(o => W.tabIdOfBrowser(o)));`));
 }
 
 // 38-04 (B5): the Theia sidebar view, read in the frontend.
