@@ -31,6 +31,15 @@
  *       truth (setActiveTabOfFrame) refreshes the stock module on a focus move.
  *   (i) queue scope (post-review): the D-04 cap counts and evicts the
  *       requesting tab's waiting records only.
+ *   (j) WebRTC template (37-02, B2): powerbrowser.xhtml carries upstream's
+ *       webRTC-shareDevices-notification verbatim. Its ids are derived from
+ *       popup-notifications.inc.xhtml and compared as a set, and every element
+ *       (tag and attributes) is compared in order. This gate holds no id list of
+ *       its own (a hand-kept array of template ids in this file goes red).
+ *   (k) preview callback (37-02, N4): the installer registers the webrtc-preview
+ *       creation callback on the module URL upstream's browser.js imports.
+ * Rules (j) and (k) are the furniture-gate rows for this plan; at the Phase 35
+ * merge they move to verify-shell-furniture.mjs with rule (a).
  *
  * Every expectation is derived from the tree at check time. --self-test runs
  * the unmodified fixture green first (the same-session positive control), then
@@ -52,12 +61,16 @@ const XHTML = 'powerbrowser/shell/powerbrowser.xhtml';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const UPSTREAM_PANEL = 'upstream/browser/base/content/popup-notifications.inc.xhtml';
 const UPSTREAM_MOZBUILD = 'upstream/toolkit/modules/moz.build';
+const UPSTREAM_BROWSER_JS = 'upstream/browser/base/content/browser.js';
+const GATE = 'scripts/verify-permission-prompts.mjs';
 const FRONTEND_DIRS = ['theia/extensions/tab-uris/src/browser', 'theia/extensions/chrome-bar/src/browser'];
 
 const MODULE_FILE = 'PopupNotifications.sys.mjs';
 const SECTION_MARKER = '// Phase 37: permission prompts.';
 const INSTALLER = 'installPermissionPromptFurniture';
 const PANEL_ID = 'notification-popup';
+const TEMPLATE_ID = 'webRTC-shareDevices-notification';
+const PREVIEW_ELEMENT = 'webrtc-preview';
 const FORBIDDEN_FAMILY = /allow|grant|permit|doorhanger|prompt/i;
 const CONSTRUCTION = /new\s+(?:[\w$]+\.)*PopupNotifications\s*\(\s*([\w$]*)/g;
 
@@ -102,6 +115,21 @@ function attrSet(attrText) {
     return new Set([...attrText.matchAll(/([\w:-]+)="([^"]*)"/g)].map(m => `${m[1]}="${m[2]}"`));
 }
 
+/** The `<popupnotification id="TEMPLATE_ID">` element's text up to its close tag (either prefix), comments out; '' when absent. */
+function templateBlock(text) {
+    const open = new RegExp(`<((?:xul:)?popupnotification)\\s[^>]*?\\bid="${TEMPLATE_ID}"`).exec(text);
+    if (!open) {
+        return '';
+    }
+    const end = text.indexOf(`</${open[1]}>`, open.index);
+    return (end === -1 ? text.slice(open.index) : text.slice(open.index, end)).replace(/<!--[\s\S]*?-->/g, '');
+}
+
+/** Each start tag of a block as `tag attr="v" ...` (attributes sorted, namespace declarations dropped), in document order. */
+function startTags(block) {
+    return [...block.matchAll(/<([\w:-]+)((?:\s+[\w:-]+="[^"]*")*)\s*\/?>/g)].map(m => [m[1], ...[...attrSet(m[2])].filter(a => !/^xmlns(?::|=)/.test(a)).sort()].join(' '));
+}
+
 /** The URL upstream ships `MODULE_FILE` at, from the moz.build block that lists it (MOZ_SRC_FILES or EXTRA_JS_MODULES[.sub]). */
 function moduleUrl(mozbuild) {
     const lines = mozbuild.split('\n');
@@ -118,7 +146,7 @@ function moduleUrl(mozbuild) {
 }
 
 function readSources() {
-    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD]);
+    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_BROWSER_JS, GATE]);
     for (const dir of FRONTEND_DIRS) {
         for (const name of readdirSync(join(REPO_ROOT, dir), { recursive: true })) {
             if (/\.tsx?$/.test(name)) {
@@ -282,6 +310,43 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name)) {
             failures.push(`queue-scope: the queue cap filters ${cap[1].trim()} -- not the requesting tab alone, so one page's requests can evict another tab's prompt`);
         }
     }
+    // (j) The WebRTC template, derived from upstream and compared id set and element by element.
+    const upstreamTags = startTags(templateBlock(raw[UPSTREAM_PANEL]));
+    const upstreamIds = new Set(derive(templateBlock(raw[UPSTREAM_PANEL]), /\sid="([^"]+)"/g));
+    if (upstreamTags.length === 0 || upstreamIds.size === 0) {
+        failures.push(`template: derived ZERO elements of #${TEMPLATE_ID} from ${UPSTREAM_PANEL} -- the comparison proves nothing (broken instrument)`);
+    } else {
+        const ourBlock = templateBlock(markup);
+        if (!ourBlock) {
+            failures.push(`template: ${XHTML} has no #${TEMPLATE_ID} -- WebRTCParent finds no template, so a camera or microphone request never resolves`);
+        } else {
+            const ourIds = new Set(derive(ourBlock, /\sid="([^"]+)"/g));
+            const missing = [...upstreamIds].filter(id => !ourIds.has(id));
+            const surplus = [...ourIds].filter(id => !upstreamIds.has(id));
+            if (missing.length || surplus.length) {
+                failures.push(`template: #${TEMPLATE_ID} ids differ from upstream -- missing ids ${missing.join(' ') || '(none)'}; surplus ids ${surplus.join(' ') || '(none)'}`);
+            }
+            const ourTags = startTags(ourBlock);
+            const drift = upstreamTags.findIndex((tag, i) => ourTags[i] !== tag);
+            if (drift !== -1 || ourTags.length !== upstreamTags.length) {
+                const at = drift === -1 ? upstreamTags.length : drift;
+                failures.push(`template: #${TEMPLATE_ID} element drift at element ${at + 1} -- upstream <${upstreamTags[at] ?? '(end)'}>, ours <${ourTags[at] ?? '(end)'}>`);
+            }
+        }
+    }
+    const ownSource = stripComments(raw[GATE] ?? '');
+    if (/\[\s*['"`]webRTC-[\w-]+['"`]\s*,/.test(ownSource)) {
+        failures.push(`template: ${GATE} holds a hand-kept array of template ids -- the expectation must be derived from ${UPSTREAM_PANEL} (CLAUDE.md verification rule 2)`);
+    }
+
+    // (k) The webrtc-preview creation callback, on the module URL upstream's browser.js imports.
+    const previewUrl = new RegExp(`setElementCreationCallback\\(\\s*"${PREVIEW_ELEMENT}"[\\s\\S]*?importESModule\\(\\s*"([^"]+)"`).exec(raw[UPSTREAM_BROWSER_JS])?.[1];
+    if (!previewUrl) {
+        failures.push(`preview-callback: ${UPSTREAM_BROWSER_JS} registers no ${PREVIEW_ELEMENT} creation callback (broken instrument)`);
+    } else if (!new RegExp(`setElementCreationCallback\\(\\s*"${PREVIEW_ELEMENT}"[^;]*importESModule\\(\\s*"${previewUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(installer)) {
+        failures.push(`preview-callback: ${INSTALLER} registers no ${PREVIEW_ELEMENT} creation callback importing ${previewUrl} -- WebRTCParent's lazy preview insert would throw`);
+    }
+
     const writes = (api.match(/\bactiveTabByFrame\.set\(/g) ?? []).length;
     const setter = functionBody(api, 'setActiveTabOfFrame');
     if (writes !== 1 || !setter.includes('activeTabByFrame.set(')) {
@@ -370,6 +435,32 @@ function selfTest() {
             sources: { ...clean, [API]: clean[API].replace('.filter(r => r.tabId === tabId && r.queued);', '.filter(r => r.window === window && r.queued);') },
             expect: 'not the requesting tab alone',
         },
+        {
+            name: 'template section removed (camera device list)',
+            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<popupnotificationcontent id="webRTC-selectCamera"[\s\S]*?<\/popupnotificationcontent>/, '') },
+            expect: 'missing ids webRTC-selectCamera',
+        },
+        {
+            name: 'template id renamed (camera menulist)',
+            sources: { ...clean, [XHTML]: clean[XHTML].replace('<menulist id="webRTC-selectCamera-menulist"', '<menulist id="powerbrowser-camera-menulist"') },
+            expect: 'surplus ids powerbrowser-camera-menulist',
+        },
+        {
+            name: 'template menulist swapped for a custom widget',
+            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<menulist id="webRTC-selectWindow-menulist"\s+size="large">/, '<html:select id="webRTC-selectWindow-menulist" size="large">') },
+            expect: 'element drift',
+        },
+        {
+            name: 'preview callback removed',
+            sources: { ...clean, [API]: clean[API].replace(/^.*setElementCreationCallback\("webrtc-preview".*\n/m, '') },
+            expect: `registers no ${PREVIEW_ELEMENT} creation callback importing`,
+        },
+        {
+            // Built from parts, so this file's own text holds no such array.
+            name: 'hand-kept id array in the gate',
+            sources: { ...clean, [GATE]: `${clean[GATE]}\nconst KEPT = [${"'"}webRTC-selectCamera${"'"}, ${"'"}webRTC-selectMicrophone${"'"}];\n` },
+            expect: 'hand-kept array of template ids',
+        },
     ];
     let failed = 0;
     for (const testCase of cases) {
@@ -408,7 +499,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, and the doorhanger subscriber is display-only`);
+    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, and the ${PREVIEW_ELEMENT} callback is registered`);
     return 0;
 }
 

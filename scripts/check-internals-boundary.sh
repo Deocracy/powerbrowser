@@ -85,6 +85,9 @@ FORBIDDEN_PATTERNS=(
   'gBrowserInit'
   # Phase 32 zoom shims under the Phase 27 policy (plan 32-09): defined only in PowerBrowserAPI.sys.mjs (the host install), compared member by member by verify-shell-gbrowser-standin.mjs. A separate line, so 35-01's derivation from the Phase 27 line is unchanged.
   'ZoomManager' 'FullZoom' 'ZoomUI'
+  # Phase 37 plan 02 definition exemption under the Phase 27 policy: the stock custom-element creation callbacks
+  # browser.js registers (webrtc-preview) are registered only in PowerBrowserAPI.sys.mjs, each line catalogued.
+  'setElementCreationCallback'
 )
 
 is_conditional_pattern() {
@@ -388,12 +391,14 @@ EOF
   local plant_name plant_body
   # The Phase 27 shim globals are each planted as a one-line shim assignment.
   for plant_name in wrappedJSObject drawSnapshot IOUtils gBrowser \
-      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow gBrowserInit ZoomManager FullZoom ZoomUI; do
+      PopupNotifications nsContextMenu browserDOMWindow openLinkIn FullScreen XULBrowserWindow gBrowserInit ZoomManager FullZoom ZoomUI \
+      setElementCreationCallback; do
     case "$plant_name" in
       wrappedJSObject) plant_body='  return win.wrappedJSObject.JSON.parse(text);' ;;
       drawSnapshot) plant_body='  return browser.drawSnapshot(0, 0, 1, 1, 1, "white");' ;;
       IOUtils) plant_body='  const { remove } = IOUtils; return remove(text);' ;;
       gBrowser) plant_body='  window.gBrowser = {' ;;
+      setElementCreationCallback) plant_body='  win.customElements.setElementCreationCallback("webrtc-preview", () => {});' ;;
       *) plant_body="  window.$plant_name = {};" ;;
     esac
     printf '// planted %s fixture\nexport function planted(win, browser, text) {\n%s\n}\n' "$plant_name" "$plant_body" > "$tmp/planted-$plant_name.sys.mjs"
