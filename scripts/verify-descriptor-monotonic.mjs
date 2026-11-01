@@ -483,6 +483,17 @@ function selfTest() {
     }
     console.log('  ok  control: ghRead pages the Release list (--paginate --slurp, pinned API version) and reads it -> green');
 
+    // A draft Release is not published: its newer manifest must not be read or counted.
+    const drafted = run(world({
+        releases: [release('v153.5.1-1', 101), release('v153.5.1-3', 301, true)],
+        manifests: { 101: manifest('153.5.1', PUBLISHED_BUILD), 301: manifest('153.5.1', '20261031000000') },
+    }), [candidate('153.5.1', '20261021000000')]);
+    if (drafted.failures.length > 0 || drafted.published.length !== 1 || !drafted.notes[0].includes('1 non-draft Release(s)')) {
+        console.error(`${NAME}: --self-test FAIL -- a draft Release was read or counted: ${drafted.failures.join(' | ') || drafted.notes[0]}`);
+        return 1;
+    }
+    console.log('  ok  control: a draft Release with a newer manifest -> green, not counted');
+
     // Another target: an older buildID than the published Linux build, offered for a different target, is green.
     const otherTarget = run(baseWorld(), [candidate('153.5.1', '20260101000000', 'Darwin_aarch64-gcc3')]);
     if (otherTarget.failures.length > 0) {
@@ -591,6 +602,42 @@ function selfTest() {
             needles: [listPath, 'HTTP 401: Bad credentials', 'gh auth status'],
         },
         {
+            name: 'non-draft Release with no release-manifest.json asset',
+            w: world({ releases: [{ tag_name: 'v153.5.1-1', draft: false, assets: [{ name: 'fixture.mar', id: 5 }] }] }),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: ['v153.5.1-1', `carries no ${ASSET_NAME} asset`],
+        },
+        {
+            name: 'candidate that does not parse as a descriptor',
+            w: baseWorld(),
+            d: [{ rel: `${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, text: '<update>' }],
+            needles: [`${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, 'does not parse'],
+        },
+        {
+            name: 'candidate that could not be read',
+            w: baseWorld(),
+            d: [{ rel: `${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, text: null }],
+            needles: [`${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, 'does not parse'],
+        },
+        {
+            name: 'candidate buildID that is not fourteen digits',
+            w: baseWorld(),
+            d: [candidate('153.5.1', '2026')],
+            needles: [`${CANDIDATE_REL}/default/${TARGET_TOKEN}/update.xml`, '"2026"', 'not fourteen digits'],
+        },
+        {
+            name: 'getter that returns no result',
+            get: () => null,
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: [listPath, 'returned no result'],
+        },
+        {
+            name: 'getter that answers ok with no text',
+            get: () => ({ ok: true, text: 5 }),
+            d: [candidate('153.5.1', '20261021000000')],
+            needles: [listPath, 'returned no text'],
+        },
+        {
             name: 'throwing getter on the Releases endpoint',
             w: world({ releases: [], throwOn: listPath }),
             d: [candidate('153.5.1', '20261021000000')],
@@ -608,7 +655,8 @@ function selfTest() {
         }
     }
 
-    // The candidate tree on disk and the verdict over it (WR-01): mkdtemp only, removed in finally.
+    // The candidate tree on disk and the verdict over it: mkdtemp only, removed in finally.
+    let DISK_PLANTS = 0;
     const tmp = mkdtempSync(join(tmpdir(), 'descriptor-monotonic-'));
     try {
         const tree = join(tmp, 'tree');
@@ -656,6 +704,7 @@ function selfTest() {
             ['a file where a target directory belongs', { descriptorsDir: stray }, [`${stray}/default/notes.txt`, 'not a directory']],
             ['a target directory with no update.xml', { descriptorsDir: hollow }, [`${hollow}/default/Darwin_aarch64-gcc3/update.xml`, 'absent']],
         ];
+        DISK_PLANTS = diskPlants.length;
         for (const [name, o, needles] of diskPlants) {
             const r = runChecks(REPO_ROOT, { get: fakeGet(baseWorld()), now: FIXTURE_NOW, ...o });
             const v = verdict(r);
@@ -682,7 +731,7 @@ function selfTest() {
     }
 
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- control green first; zero published Releases green by count; ${plants.length} planted faults went red naming the drifted file, Release or endpoint`);
+    console.log(`${NAME}: --self-test PASS -- controls green first; zero published Releases green by count; ${plants.length} in-memory and ${DISK_PLANTS} on-disk planted faults went red naming the drifted file, Release or endpoint`);
     return 0;
 }
 

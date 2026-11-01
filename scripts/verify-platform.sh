@@ -4767,11 +4767,15 @@ run_own_checks() {
     # fixtures, node:crypto and text reads, no build, browser, display or network; it writes nothing
     # outside mkdtemp.
     "build-update-xml-self-test|node $REPO_ROOT/scripts/build-update-xml.mjs --self-test"
-    # NEW (Phase 44, UPD-26): the descriptor buildID order, proven in memory. A green control first (a
+    # NEW (Phase 44, UPD-26): the descriptor buildID order, proven in memory. Green controls first (a
     # candidate above the published buildID, zero published Releases green by named count, a different
-    # appVersion line), then planted faults each red naming the descriptor, Release or endpoint: a same-version
-    # older or equal buildID, a malformed release-manifest.json, a build_id that is not fourteen digits, a
-    # throwing getter. Honestly --quick: fixtures in memory, no network, no gh, no write.
+    # appVersion line, its own Release already published, a draft Release not counted, another BUILD_TARGET,
+    # ghRead paging through a stub exec), then planted faults each red naming the descriptor, Release or
+    # endpoint: same-version older or equal buildID, own Release disagreeing, a regression on page two, a
+    # Release with no or a malformed release-manifest.json, an implausible build_id, an unparsable, unreadable
+    # or misplaced candidate, a non-list Releases body, gh failing, a throwing or empty getter, and on-disk
+    # trees (empty or absent --descriptors, a stray file, a hollow target). Honestly --quick: fixtures in memory
+    # and under mkdtemp (removed), no network, no gh.
     "descriptor-monotonic-self-test|node $REPO_ROOT/scripts/verify-descriptor-monotonic.mjs --self-test"
     # NEW (Phase 40, UPD-33): layer 3's real `Resolving host [...]` extraction and the shared
     # verdict (scripts/lib/endpoint-verdict.mjs) over fixture logs. An unattended user-initiated
