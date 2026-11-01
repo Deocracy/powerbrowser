@@ -60,6 +60,13 @@
 //      each id ClipboardContextMenu.sys.mjs sets through setAttributes is a message
 //      in a linked file (without one, document.l10n is absent and the page's
 //      navigator.clipboard.readText() rejects).
+//  11. Fullscreen state (35-07, D-05). The Phase 35 section both sets and removes the
+//      root's inDOMFullscreen attribute (setAttribute("inDOMFullscreen" and
+//      removeAttribute("inDOMFullscreen") on code lines): DOMFullscreenParent reads it
+//      to clean up after a destroyed actor, so a set without a remove leaves the window
+//      stuck in fullscreen state, and a remove without a set never arms the cleanup.
+//      The #fullscreen-warning subtree is held to upstream's by rule 2 and its
+//      fullscreen-warning-* ids by rule 10.
 //
 // A section, block or selector that cannot be found, or empty A and B, is a BROKEN
 // INSTRUMENT, never a clean pass. `--self-test` asserts the clean tree green,
@@ -428,7 +435,12 @@ function check(inputs) {
     if (!linked.some(text => new RegExp(`^${id} =`, 'm').test(text))) failures.push(`LOCALIZATION: ${id} (set by ${from}) is a message in no linked localization file of ${FILES.xhtml}`);
   }
 
-  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}} (section, overlay attribute and ${ADOPTED_ACTORS.size} adopted actor parents of ${actorFiles.length}), each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys; overlays name the autocomplete panel #${acPanels[0]}; ${hrefs.length} localization link(s) carry the ${l10nIds.length} id(s) the shell needs` };
+  // Rule 11: the inDOMFullscreen root attribute is set and removed in the section.
+  for (const call of ['setAttribute', 'removeAttribute']) {
+    if (!new RegExp(`\\.${call}\\(\\s*["']inDOMFullscreen["']`).test(sectionCode)) failures.push(`FULLSCREEN: the Phase 35 section never calls ${call}("inDOMFullscreen") on the root (DOMFullscreenParent.sys.mjs:21, :107 read it)`);
+  }
+
+  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}} (section, overlay attribute and ${ADOPTED_ACTORS.size} adopted actor parents of ${actorFiles.length}), each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu; the on-build-contextmenu subject has upstream's ${upstreamSubject.length} keys; overlays name the autocomplete panel #${acPanels[0]}; ${hrefs.length} localization link(s) carry the ${l10nIds.length} id(s) the shell needs; the section sets and removes inDOMFullscreen` };
 }
 
 function report(result) {
@@ -467,6 +479,8 @@ function selfTest() {
     { name: '(r) the overlay attribute naming another id', key: 'api', mutate: t => t.replace('autocompletepopup: "PopupAutoComplete",', 'autocompletepopup: "contentAreaContextMenu",'), expect: 'AUTOCOMPLETE: webTabOpen\'s autocompletepopup is "contentAreaContextMenu", the furniture\'s autocomplete panel is #PopupAutoComplete' },
     { name: '(s) the textActions.ftl localization link removed', key: 'xhtml', mutate: t => t.replace(/^\s*<link rel="localization" href="toolkit\/global\/textActions\.ftl"\/>\n/m, ''), expect: 'LOCALIZATION: text-action-paste (set by ClipboardContextMenu.sys.mjs)' },
     { name: '(t) the validation template removed', key: 'xhtml', mutate: t => t.replace(/^\s*<template id="invalidFormTemplate">[\s\S]*?<\/template>\n/m, ''), expect: 'MISSING FURNITURE: #invalidFormTemplate' },
+    { name: '(u) the exit button removed from the fullscreen warning', key: 'xhtml', mutate: t => t.replace(/^\s*<button id="fullscreen-exit-button">\s*<\/button>\n/m, ''), expect: 'PARITY: #fullscreen-warning: children differ from upstream\'s' },
+    { name: '(v) the inDOMFullscreen remove call deleted', key: 'api', mutate: t => t.replace('document.documentElement.removeAttribute("inDOMFullscreen");', ''), expect: 'FULLSCREEN: the Phase 35 section never calls removeAttribute("inDOMFullscreen")' },
   ];
   let failed = false;
   for (const plant of plants) {
@@ -489,7 +503,7 @@ function selfTest() {
     console.error(`${NAME} --self-test: FAIL`);
     process.exit(1);
   }
-  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (t) each landed and went red naming their drift`);
+  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (v) each landed and went red naming their drift`);
 }
 
 if (process.argv.includes('--self-test')) {

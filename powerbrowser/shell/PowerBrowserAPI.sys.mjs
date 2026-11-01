@@ -6821,6 +6821,7 @@ ChromeUtils.defineESModuleGetters(furnitureLazy, {
 function installShellFurnitureReceivers(window) {
   installTooltipsAndLinkStatus(window);
   installPageContextMenu(window);
+  installFullscreen(window);
 }
 
 // A hovered link as browser.js:1985-2005 shows it: unescaped for display, the
@@ -7748,4 +7749,328 @@ async function pageMenuStill(window, browser) {
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+// 35-07 (PAGE-07, D-05): element fullscreen. DOMFullscreenParent calls
+// window.FullScreen and window.PointerlockFsWarning, which
+// browser-fullScreenAndPointerLock.js defines in Firefox and this shell does
+// not load. Both are ported here with exactly the members the actor calls
+// (verify-shell-gbrowser-standin.mjs); their state lives in this closure. The
+// overlay covers the window through the :fullscreen top layer, so no geometry
+// is written. The stock warning shows the page's domain on every entry and
+// nothing here suppresses it (T-35-24). Not ported (D-11, D-05): permission
+// doorhangers, the find bar, add-on install prompts, the pointer-lock warning,
+// and the TabSelect listener (webTabGeometry's hide branch exits instead).
+function installFullscreen(window) {
+  const document = window.document;
+  // The overlay that entered fullscreen: closing the warning returns focus to it (upstream: gBrowser.selectedBrowser, :211).
+  let fullscreenBrowser = null;
+  // PointerlockFsWarning's state (:5-310), for the fullscreen-warning element only.
+  let element = null;
+  let origin = null;
+  let timeoutHide = null;
+  let timeoutShow = null;
+  let lastState = null;
+  const getState = () => ["hidden", "ontop", "onscreen"].find(s => element.hasAttribute(s)) ?? "hiding";
+  const doHide = () => {
+    try {
+      element.hidePopover();
+    } catch (e) {}
+    element.hidden = true;
+  };
+  // "onscreen" and "ontop" take effect at once; "hidden" passes through "hiding" until the transition ends.
+  const setState = newState => {
+    const currentState = getState();
+    if (currentState == newState) {
+      return;
+    }
+    if (currentState != "hiding") {
+      lastState = currentState;
+      element.removeAttribute(currentState);
+    }
+    if (currentState == "hidden") {
+      element.showPopover();
+    }
+    if (newState != "hidden") {
+      element.setAttribute(newState, "");
+    }
+  };
+  const listener = {
+    handleEvent(event) {
+      switch (event.type) {
+        case "mousemove": {
+          const state = getState();
+          if (state == "hidden") {
+            // Hidden: show it again after a short delay while the pointer is at the top.
+            if (event.clientY != 0) {
+              timeoutShow.cancel();
+            } else if (timeoutShow.delay >= 0) {
+              timeoutShow.start();
+            }
+          } else if (state != "onscreen") {
+            const elemRect = element.getBoundingClientRect();
+            if (state == "hiding" && lastState != "hidden") {
+              if (event.clientY <= elemRect.bottom + 50) {
+                setState(lastState);
+                timeoutHide.start();
+              }
+            } else if (state == "ontop" || lastState != "hidden") {
+              if (event.clientY > elemRect.bottom + 50) {
+                setState("hidden");
+                timeoutHide.cancel();
+              }
+            }
+          }
+          break;
+        }
+        case "transitionend":
+        case "transitioncancel": {
+          if (getState() == "hiding") {
+            doHide();
+          }
+          if (getState() == "onscreen") {
+            window.dispatchEvent(new window.CustomEvent("FullscreenWarningOnScreen"));
+          }
+          break;
+        }
+        case "activate": {
+          setState("onscreen");
+          timeoutHide.start();
+          break;
+        }
+        case "deactivate": {
+          setState("hidden");
+          timeoutHide.cancel();
+          break;
+        }
+      }
+    },
+  };
+  const closeWarning = elementId => {
+    if (!elementId) {
+      throw new Error("Must pass id of warning element to close");
+    }
+    if (!element || element.id != elementId) {
+      return;
+    }
+    timeoutHide.cancel();
+    timeoutShow.cancel();
+    setState("hidden");
+    doHide();
+    element.querySelector(".pointerlockfswarning-domain-text").removeAttribute("data-l10n-id");
+    document.getElementById("fullscreen-exit-button").removeAttribute("data-l10n-id");
+    element.removeEventListener("transitionend", listener);
+    element.removeEventListener("transitioncancel", listener);
+    window.removeEventListener("mousemove", listener, true);
+    window.removeEventListener("activate", listener);
+    window.removeEventListener("deactivate", listener);
+    element = null;
+    timeoutHide = null;
+    timeoutShow = null;
+    // Focus leaves the hidden warning for the page, unless that overlay is gone or hidden (a tab switch).
+    if (fullscreenBrowser && tabIdOfBrowser(fullscreenBrowser) !== null && fullscreenBrowser.style.visibility === "visible") {
+      fullscreenBrowser.focus();
+    }
+  };
+  const showWarning = (browsingContext, keyboardLockEnabled) => {
+    const timeout = Services.prefs.getIntPref(keyboardLockEnabled ? "full-screen-api.keyboardlock-warning.timeout" : "full-screen-api.warning.timeout");
+    const delay = Services.prefs.getIntPref("full-screen-api.warning.delay");
+    if (!element) {
+      element = document.getElementById("fullscreen-warning");
+      element.addEventListener("transitionend", listener);
+      element.addEventListener("transitioncancel", listener);
+      window.addEventListener("mousemove", listener, true);
+      if (timeout > 0) {
+        window.addEventListener("activate", listener);
+        window.addEventListener("deactivate", listener);
+      }
+      timeoutHide = new FullscreenWarningTimeout(window, () => {
+        window.removeEventListener("activate", listener);
+        window.removeEventListener("deactivate", listener);
+        setState("hidden");
+      }, timeout);
+      timeoutShow = new FullscreenWarningTimeout(window, () => {
+        setState("ontop");
+        timeoutHide.start();
+      }, delay);
+    }
+    // The top level's origin: ancestors control what is on screen (:57-61).
+    origin = browsingContext.top.currentWindowGlobal.documentPrincipal.originNoSuffix || origin;
+    const uri = Services.io.newURI(origin);
+    let host = null;
+    if (origin != "resource://pdf.js") {
+      try {
+        host = uri.host;
+      } catch (e) {}
+    }
+    const textElem = element.querySelector(".pointerlockfswarning-domain-text");
+    if (!host) {
+      textElem.hidden = true;
+    } else {
+      textElem.removeAttribute("hidden");
+      document.l10n.setAttributes(textElem, "fullscreen-warning-domain", { domain: pageToolsLazy.BrowserUtils.formatURIForDisplay(uri, { onlyBaseDomain: true }) });
+    }
+    document.l10n.setAttributes(document.getElementById("fullscreen-exit-button"), keyboardLockEnabled ? "fullscreen-keyboardlock-exit-button" : "fullscreen-exit-button");
+    element.dataset.identity = fullscreenWarningIdentity(browsingContext.top.embedderElement);
+    // Upstream's own opt-out: a timeout of 0 or less leaves the warning as set.
+    if (timeoutHide.delay <= 0) {
+      return;
+    }
+    if (Services.focus.activeWindow == window) {
+      setState("onscreen");
+      timeoutHide.start();
+    }
+  };
+  // FullScreen.exitDomFullScreen (:478-483), wired as FullScreen.init does (:381-384).
+  document.getElementById("fullscreen-exit-button").addEventListener("click", () => {
+    if (document.fullscreen) {
+      document.exitFullscreen();
+    }
+  });
+
+  window.FullScreen = {
+    enterDomFullscreen(aBrowser, aActor) {
+      if (!document.fullscreenElement) {
+        aActor.requestOrigin = null;
+        return;
+      }
+      // A remote browser's content enters fullscreen state first, through any OOP ancestor frames (:586-623).
+      if (aBrowser?.hasAttribute("remote")) {
+        const [targetActor, inProcessBC] = fullscreenNextRecipient(aActor, false);
+        if (!targetActor) {
+          abortEnterFullscreen(window, aActor);
+          return;
+        }
+        targetActor.waitingForChildEnterFullscreen = true;
+        targetActor.sendAsyncMessage("DOMFullscreen:Entered", { remoteFrameBC: inProcessBC });
+        if (inProcessBC) {
+          return;
+        }
+      }
+      // T-35-25: only a visible overlay of the active window stays fullscreen (the selected-browser check, :628-634).
+      if (!aBrowser || tabIdOfBrowser(aBrowser) === null || aBrowser.style.visibility !== "visible" || Services.focus.activeWindow != window) {
+        abortEnterFullscreen(window, aActor);
+        return;
+      }
+      fullscreenBrowser = aBrowser;
+      document.documentElement.setAttribute("inDOMFullscreen", true);
+      // XULBrowserWindow.onEnterDOMFullscreen (browser.js:2009-2014): the link status clears.
+      window.XULBrowserWindow.setOverLink("");
+    },
+    cleanupDomFullscreen(aActor) {
+      let needToWaitForChildExit = false;
+      const [target, inProcessBC] = fullscreenNextRecipient(aActor, true);
+      if (target) {
+        needToWaitForChildExit = true;
+        target.waitingForChildExitFullscreen = true;
+        target.sendAsyncMessage("DOMFullscreen:CleanUp", { remoteFrameBC: inProcessBC });
+        if (inProcessBC) {
+          return needToWaitForChildExit;
+        }
+      }
+      closeWarning("fullscreen-warning");
+      document.documentElement.removeAttribute("inDOMFullscreen");
+      return needToWaitForChildExit;
+    },
+  };
+  window.PointerlockFsWarning = {
+    showFullScreen(browsingContext, keyboardLockEnabled) {
+      showWarning(browsingContext, keyboardLockEnabled);
+    },
+    close(elementId) {
+      closeWarning(elementId);
+    },
+  };
+}
+
+// PointerlockFsWarning.Timeout (:14-37): starting it again cancels the pending call.
+class FullscreenWarningTimeout {
+  constructor(window, func, delay) {
+    this._window = window;
+    this._id = 0;
+    this._func = func;
+    this._delay = delay;
+  }
+  start() {
+    this.cancel();
+    this._id = this._window.setTimeout(() => this._handle(), this._delay);
+  }
+  cancel() {
+    if (this._id) {
+      this._window.clearTimeout(this._id);
+      this._id = 0;
+    }
+  }
+  _handle() {
+    this._id = 0;
+    this._func();
+  }
+  get delay() {
+    return this._delay;
+  }
+}
+
+// gIdentityHandler.pointerlockFsWarningClassName (browser-siteIdentity.js:810-816):
+// the lock only for a page whose URI has a host and whose connection is secure.
+function fullscreenWarningIdentity(browser) {
+  let host = "";
+  try {
+    host = browser?.currentURI?.host ?? "";
+  } catch (e) {}
+  return host && PowerBrowserAPI.webTabIdentity(browser, browser.currentURI.spec).securityState === "secure" ? "verifiedDomain" : "unknownIdentity";
+}
+
+// FullScreen._abortEnterFullscreen (:755-768): exits on the next tick, never
+// synchronously inside the fullscreen change, and cancels the change timer.
+function abortEnterFullscreen(window, aActor) {
+  window.setTimeout(() => window.document.exitFullscreen().catch(() => {}), 0);
+  if (aActor.timerId) {
+    Glean.fullscreen.change.cancel(aActor.timerId);
+    aActor.timerId = null;
+  }
+}
+
+// FullScreen._getNextMsgRecipientActor (:788-849): the first ancestor of aActor
+// in another process and its in-process child browsing context, else
+// [request origin, null]; [null, null] when the target is destroyed or in BFCache.
+function fullscreenNextRecipient(aActor, aUseCache) {
+  if (aUseCache && aActor.nextMsgRecipient) {
+    let nextMsgRecipient = aActor.nextMsgRecipient;
+    while (nextMsgRecipient) {
+      const [actor] = nextMsgRecipient;
+      if (!actor.hasBeenDestroyed() && actor.windowContext && !actor.windowContext.isInBFCache) {
+        return nextMsgRecipient;
+      }
+      nextMsgRecipient = actor.nextMsgRecipient;
+    }
+  }
+  if (aActor.hasBeenDestroyed()) {
+    return [null, null];
+  }
+  let childBC = aActor.browsingContext;
+  let parentBC = childBC.parent;
+  while (parentBC) {
+    if (!childBC.currentWindowGlobal || !parentBC.currentWindowGlobal) {
+      break;
+    }
+    if (childBC.currentWindowGlobal.osPid == parentBC.currentWindowGlobal.osPid) {
+      childBC = parentBC;
+      parentBC = childBC.parent;
+    } else {
+      break;
+    }
+  }
+  let target = null;
+  let inProcessBC = null;
+  if (parentBC && parentBC.currentWindowGlobal) {
+    target = parentBC.currentWindowGlobal.getActor("DOMFullscreen");
+    inProcessBC = childBC;
+    aActor.nextMsgRecipient = [target, inProcessBC];
+  } else {
+    target = aActor.requestOrigin;
+  }
+  if (!target || target.hasBeenDestroyed() || target.windowContext?.isInBFCache) {
+    return [null, null];
+  }
+  return [target, inProcessBC];
 }

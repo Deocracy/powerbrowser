@@ -1303,9 +1303,11 @@ function selfTest() {
     };
     const shimOf = (r, name) => r.phase27Shims?.find(x => x.name === name);
 
-    // (j) window.FullScreen with only enterDomFullscreen.
+    // (j) window.FullScreen with only enterDomFullscreen, replacing the boundary file's own definition (35-07 defines it).
     {
-      const path = boundaryWith('boundary-fullscreen.mjs', 'window.FullScreen = {\n  enterDomFullscreen(browser, actor) { return null; },\n};');
+      const realText = readSource(BOUNDARY_FILE) ?? '';
+      const path = join(stage, 'boundary-fullscreen.mjs');
+      writeFileSync(path, `${realText.replace(/^(\s*)window\.FullScreen = \{$/m, '$1window.zzzStagedAwayFullScreenShim = {')}\nwindow.FullScreen = {\n  enterDomFullscreen(browser, actor) { return null; },\n};\n`);
       const r = runScan({ ...real, boundaryFile: path });
       const shim = shimOf(r, 'FullScreen');
       if (!shim?.defined) fail(`'FullScreen' plant did not land (the staged definition was not parsed)`);
