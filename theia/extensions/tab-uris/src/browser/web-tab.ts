@@ -1320,6 +1320,7 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
         // adopt() is async, so the router's synchronous try/catch cannot see its rejection; log the kind only.
         this.channel.onPush('adoptTab', detail => void this.adopt(detail).catch(() => console.error('[@powerbrowser/tab-uris] adopt failed:', 'adoptTab')));
         this.channel.onPush('dropAdoptedTab', detail => this.dropAdopted(detail.tabId));
+        this.channel.onPush('closeAdoptedTab', detail => this.closeAdopted(detail.tabId));
     }
 
     /**
@@ -1378,6 +1379,12 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
         if (widget) {
             widget.dispose();
         }
+    }
+
+    /** 36-REVIEW WR-03: the adopted page called window.close(); the tab closes as a user's close does (row closed, overlay released). */
+    closeAdopted(tabId: unknown): void {
+        const widget = typeof tabId === 'string' ? this.channel.widgetOf(tabId) : undefined;
+        widget?.close();
     }
 
     canHandle(uri: URI): number {

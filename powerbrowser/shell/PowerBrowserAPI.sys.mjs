@@ -7020,6 +7020,9 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
   pendingContent.delete(pcKey);
   const live = pending.browser.currentURI?.spec ?? "";
   PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, pending.browser, null, /^https?:\/\//i.test(live) ? live : pending.url);
+  // 36-REVIEW WR-03: a page-opened context may close itself; BrowserElementParent re-dispatches that window.close()
+  // on the overlay (BrowserElementParent.sys.mjs:12-30), and the frontend closes the tab as a user's close would.
+  pending.browser.addEventListener("DOMWindowClose", () => sendWebTabPush(theiaBrowser, { kind: "closeAdoptedTab", tabId }));
   scheduleWebTabState(theiaBrowser, tabId, pending.browser, pending.browser.webProgress?.isLoadingDocument ?? false, true);
   return { ok: true, kind, where: "opened" };
 }
