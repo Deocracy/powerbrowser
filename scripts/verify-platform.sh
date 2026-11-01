@@ -3824,6 +3824,18 @@ run_own_checks() {
     "gui02-web-tab-bridge|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs"
     "gui02-web-tab-bridge-self-test|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs --self-test"
 
+    # NEW (Phase 36 plan 01, PROMPT-05 chrome half): the shell window's
+    # new-window receivers. Derives the nsIBrowserDOMWindow member set from the
+    # pinned IDL plus upstream and shell call sites and compares it with the
+    # receiver literal as set equality, and checks the null fall-through for
+    # Theia and print openers, the one overlay factory, the split load rule
+    # (the InFrame path never loads, openLinkIn loads), the adopt arm's walls
+    # and reply words, the push payloads and pc-* hygiene. Honestly --quick:
+    # text reads plus one git grep over the pinned upstream, no build, no
+    # browser, no display, no network. The self-test rides alongside.
+    "new-window-adopt|node $REPO_ROOT/scripts/verify-new-window-adopt.mjs"
+    "new-window-adopt-self-test|node $REPO_ROOT/scripts/verify-new-window-adopt.mjs --self-test"
+
     # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the
     # WebTabMessage union, the routed set and the state fields agree (derive and
     # compare, set equality). The find gate also pins the Finder listener and the

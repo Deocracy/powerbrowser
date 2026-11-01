@@ -108,6 +108,9 @@ const KIND_CLASSES = new Map([
     ['webTabReader', 'tab-navigation'],
     ['webTabViewSource', 'tab-navigation'],
     ['webTabDevtools', 'tab-navigation'],
+    // Phase 36 plan 01 (PROMPT-05): the adopt ack binds one new overlay to one new widget, so tab-lifecycle. Its
+    // companions adoptTab and dropAdoptedTab are chrome->frontend push kinds, which push-kind parity covers, not this map.
+    ['webTabAdopt', 'tab-lifecycle'],
 ]);
 
 /**
@@ -797,6 +800,12 @@ function selfTest() {
                 [API]: replaceWithin(clean[API], 'async function handleWebTabAction(', '\n}', 'switch (kind) {', 'switch (kind) {\n    case "webTabPlantedArm": { break; }'),
             },
             expect: 'webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): webTabPlantedArm',
+        },
+        // Phase 36 plan 01: the adopt ack's arm renamed away leaves an unclassified arm and a stale entry, both by name.
+        {
+            name: 'webTabAdopt arm unclassified (renamed away from its KIND_CLASSES entry)',
+            sources: { ...clean, [API]: clean[API].replace('case "webTabAdopt": {', 'case "webTabAdoptUnclassified": {') },
+            expect: 'webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): webTabAdoptUnclassified',
         },
         // Phase 31 plan 02: the privileged webTab class is admitted only under its call-site rules.
         {
