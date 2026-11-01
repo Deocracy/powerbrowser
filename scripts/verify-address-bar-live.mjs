@@ -347,6 +347,32 @@
  *               Ctrl+L and Alt+D leave the pill unfocused and its mode
  *               unchanged. Scored only after search passed.
  *
+ *   bookmark-star  BMK-01: the star is the pill's last element (24x24, the
+ *               outline glyph, the bound-key tooltip); a click bookmarks the
+ *               page once in Places (read back chrome-side, the independent
+ *               observer) and opens the 320px editor, Name selected; Esc
+ *               returns focus to the star, which is filled. A bookmark removed
+ *               and then added chrome-side flips the star with no navigation
+ *               (the bookmarks-changed push). The filled star shows in Coding,
+ *               Browsing and Organising. Ctrl+D with the pill focused and with
+ *               the page focused each bookmark the page once and open the
+ *               editor. about:blank dims the star, disabled, with the
+ *               can't-bookmark tooltip.
+ *   bookmark-editor  BMK-02: on a seeded bookmark the star opens the editor
+ *               directly (Edit bookmark, the title selected, three folders);
+ *               Esc after typing saves nothing; a rename plus a move to the
+ *               Bookmarks Menu with Enter lands in Places and the reopened
+ *               editor shows that folder; a refused write shows the failure
+ *               row naming the application with the typed text kept; Remove
+ *               removes at once (no second confirm) and the star unfills.
+ *   bookmark-keys  D-15 (KEY ruling): in the fixture workspace, Ctrl+D with
+ *               the pill focused (no page-key row fires) and with the page
+ *               focused (the bookmarkPage row fires) each bookmark the page
+ *               in Places and open the editor; in the README.md editor Ctrl+D
+ *               keeps Monaco's meaning (a second selection appears) and opens
+ *               no editor and makes no bookmark. Scored only after
+ *               bookmark-star passed.
+ *
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
 
@@ -444,6 +470,9 @@ const PAGES = {
     '/lt-b': { title: 'Lifetime Beta', body: '<p>beta</p>' },
     '/lm-act': { title: 'Local Actions', body: '<p>actions</p>' },
     '/md-web': { title: 'Mode Defaults Web', body: '<p>web</p>' },
+    '/bm-a': { title: 'Bookmark Alpha', body: '<p>alpha</p>' },
+    '/bm-b': { title: 'Bookmark Beta', body: '<p>beta</p>' },
+    '/bm-keys': { title: 'Bookmark Keys', body: '<p>keys</p>' },
 };
 
 const SESSION_ENGINE = 'harness: the hermetic search engine could not be installed';
@@ -4529,6 +4558,398 @@ async function enterMode(app, id) {
     return pickLocalMode(app, id);
 }
 
+// Phase 33 plan 02 (BMK-01, BMK-02, D-15): the star, its editor and Ctrl+D on both focus paths.
+const CHROME_BAR_COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
+const BOOKMARK_PAGE_COMMAND = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID');
+const copyPrefix = key => sourceMatch(CHROME_BAR_COPY_REL, new RegExp(`\\b${key}: \\([^)]*\\) => \`([^$\`]*)\\$\\{`));
+const STAR_KEY = sourceMatch('theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts', /id: 'bookmarkPage'[^}]*\blabel: '([^']+)'/);
+const CANT_BOOKMARK = sourceMatch(CHROME_BAR_COPY_REL, /\bcantBookmark: "([^"]+)"/);
+const NEW_BOOKMARK_HEADING = sourceMatch(CHROME_BAR_COPY_REL, /\bbookmarkPageHeading: '([^']+)'/);
+const EDIT_BOOKMARK_HEADING = sourceMatch(CHROME_BAR_COPY_REL, /\beditBookmarkHeading: '([^']+)'/);
+const FOLDER_MENU_LABEL = sourceMatch(CHROME_BAR_COPY_REL, /\bbookmarkFolderMenu: '([^']+)'/);
+const FOLDER_TOOLBAR_LABEL = sourceMatch(CHROME_BAR_COPY_REL, /\bbookmarkFolderToolbar: '([^']+)'/);
+const CTRL_D = { key: 'd', code: 'KeyD', keyCode: 68, modifiers: ['accel'] };
+
+/** The star and its editor as the user sees them. */
+const readStar = app => app.evaluate(`JSON.stringify((() => {
+    const pill = document.querySelector('.pb-chrome-bar-pill');
+    const star = pill && pill.querySelector('.pb-address-star');
+    const editor = document.querySelector('.pb-chrome-bar-dropdown.pb-bookmark-editor');
+    const name = editor && editor.querySelector('.pb-bookmark-editor-name');
+    const folders = editor ? [...editor.querySelectorAll('.pb-bookmark-editor-folder')] : [];
+    return {
+        present: !!star,
+        last: !!star && pill.lastElementChild === star,
+        filled: !!star && !!star.querySelector('.codicon-star-full'),
+        outline: !!star && !!star.querySelector('.codicon-star-empty'),
+        disabled: !!star && star.disabled,
+        dimmed: !!star && Number(getComputedStyle(star).opacity) < 1,
+        label: star ? star.getAttribute('aria-label') : null,
+        size: star ? [Math.round(star.getBoundingClientRect().width), Math.round(star.getBoundingClientRect().height)] : null,
+        focused: !!star && document.activeElement === star,
+        editor: editor ? {
+            heading: (editor.querySelector('.pb-bookmark-editor-heading') || {}).textContent || '',
+            name: name ? name.value : null,
+            nameFocused: !!name && document.activeElement === name,
+            nameSelected: !!name && name.value.length > 0 && name.selectionStart === 0 && name.selectionEnd === name.value.length,
+            folder: (folders.find(l => l.querySelector('input').checked) || {}).textContent || '',
+            folders: folders.map(l => l.textContent),
+            failure: (editor.querySelector('.pb-bookmark-editor-failure') || {}).textContent || '',
+            width: Math.round(editor.getBoundingClientRect().width),
+        } : null,
+    };
+})())`).then(JSON.parse);
+
+/** Chrome scope, Places' own read (the independent observer): every bookmark of `url` as { guid, title, folder }. */
+const bookmarksOf = (app, url) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const B = PlacesUtils.bookmarks;
+        const rows = [];
+        await B.fetch({ url: ${JSON.stringify(url)} }, b => rows.push({ guid: b.guid, title: b.title,
+            folder: b.parentGuid === B.toolbarGuid ? 'toolbar' : b.parentGuid === B.menuGuid ? 'menu' : b.parentGuid === B.unfiledGuid ? 'unfiled' : b.parentGuid }));
+        return JSON.stringify(rows);
+    } catch (e) {
+        return JSON.stringify({ error: String(e) });
+    }
+})();`).then(JSON.parse);
+
+/** Chrome scope: removes every bookmark of `url` ('ok' or 'error: ...'), as another window would. */
+const unbookmark = (app, url) => inChrome(app, `return (async () => {
+    try {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        const guids = [];
+        await PlacesUtils.bookmarks.fetch({ url: ${JSON.stringify(url)} }, b => guids.push({ guid: b.guid }));
+        if (guids.length) await PlacesUtils.bookmarks.remove(guids);
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})();`);
+
+const clickStar = app => app.evaluate(`(() => { const s = document.querySelector('.pb-address-star'); if (!s || s.disabled) return false; s.click(); return true; })()`);
+
+/** Navigates the session tab to `path`, clears its bookmarks chrome-side, and waits for the outline star. */
+async function bookmarkPageOf(ctx, tabId, path) {
+    const { app, pages } = ctx;
+    const url = pages.url(path);
+    if (await unbookmark(app, url) !== 'ok') {
+        throw new Error(`${BROKEN} the bookmarks of ${path} could not be cleared chrome-side`);
+    }
+    const from = (await pushes(app)).length;
+    await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).navigate(${JSON.stringify(url)}); return true;`);
+    if (await waitForPush(app, loadedAt(tabId, path), { from }) < 0) {
+        throw new Error(`${BROKEN} no loaded state push arrived for ${path}`);
+    }
+    if (!(await settle(() => readStar(app), v => v.present && v.outline && !v.disabled)).outline) {
+        throw new Error(`${BROKEN} the star never showed the enabled outline form on ${path}: ${JSON.stringify(await readStar(app))}`);
+    }
+    return url;
+}
+
+/** Waits for the editor; Esc closes it and the star must take focus back. Returns the editor seen. */
+async function expectEditorThenEsc(app, fail, label) {
+    const seen = await settle(() => readStar(app), v => !!v.editor);
+    if (!seen.editor) {
+        fail(`${label} opened no bookmark editor; star ${JSON.stringify(seen)}`);
+        return null;
+    }
+    await pressKey(app, ESCAPE);
+    const closed = await settle(() => readStar(app), v => !v.editor && v.focused);
+    if (closed.editor || !closed.focused) {
+        fail(`Esc in the editor opened by ${label} must close it and return focus to the star; saw ${JSON.stringify(closed)}`);
+    }
+    return seen.editor;
+}
+
+/**
+ * BMK-01: the star is the pill's last element, the outline form with the
+ * bound-key tooltip on an unbookmarked page; a click bookmarks the page in
+ * Places (read back chrome-side) and opens the editor; a bookmark removed or
+ * added chrome-side flips the star with no navigation (the bookmarks-changed
+ * push); Ctrl+D bookmarks with the pill focused and with the page focused;
+ * the filled star shows in Coding, Browsing and Organising; a page with no
+ * http(s) address dims the star with the can't-bookmark tooltip.
+ */
+async function bookmarkStar(ctx) {
+    const { app, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const url = await bookmarkPageOf(ctx, tabId, '/bm-a');
+    if (plant === 'star-ignores-push' && await probe(app, `const bar = get('AddressBar'); const read = Object.getPrototypeOf(bar).refreshStar;
+        bar.refreshStar = function (force) { if (!force) { read.call(this, false); } }; return true;`) === true) {
+        note('PLANT star-ignores-push applied');
+    }
+    const uiMode = await bodyMode(app);
+    try {
+        let star = await readStar(app);
+        const tip = `${copyPrefix('bookmarkStarTip')}${STAR_KEY})`;
+        if (!star.last || star.label !== tip || String(star.size) !== '24,24') {
+            fail(`the unbookmarked star must be the pill's last element, 24x24, labelled ${JSON.stringify(tip)}; saw ${JSON.stringify(star)}`);
+        }
+        if (await clickStar(app) !== true) {
+            return fail(`${BROKEN} the star could not be clicked`);
+        }
+        const made = await settle(() => bookmarksOf(app, url), v => Array.isArray(v) && v.length === 1, 8000);
+        if (!Array.isArray(made) || made.length !== 1) {
+            return fail(`a click on the star must bookmark the page once in Places; Places holds ${JSON.stringify(made)}`);
+        }
+        const editor = await expectEditorThenEsc(app, fail, 'the star click');
+        if (editor && (editor.heading !== NEW_BOOKMARK_HEADING || !editor.nameSelected || editor.width !== 320)) {
+            fail(`the editor after a first bookmark must be 320px, headed ${JSON.stringify(NEW_BOOKMARK_HEADING)}, with the Name field focused and selected; saw ${JSON.stringify(editor)}`);
+        }
+        star = await settle(() => readStar(app), v => v.filled);
+        const editTip = `${copyPrefix('editBookmarkTip')}${STAR_KEY})`;
+        if (!star.filled || star.label !== editTip) {
+            fail(`a bookmarked page must show the filled star labelled ${JSON.stringify(editTip)}; saw ${JSON.stringify(star)}`);
+        }
+
+        // BMK-04's push: chrome-side changes flip the star with no navigation.
+        if (await unbookmark(app, url) !== 'ok') {
+            return fail(`${BROKEN} the bookmark could not be removed chrome-side`);
+        }
+        if (!(await settle(() => readStar(app), v => v.outline, 5000)).outline) {
+            fail('the star did not unfill after the bookmark was removed in chrome (the bookmarks-changed push)');
+        }
+        if (await seedPlaces(app, [], [[url, 'Seeded elsewhere']]) !== 'ok') {
+            return fail(`${BROKEN} a bookmark could not be added chrome-side`);
+        }
+        if (!(await settle(() => readStar(app), v => v.filled, 5000)).filled) {
+            fail('the star did not fill after a bookmark was added in chrome (the bookmarks-changed push)');
+        }
+
+        // The filled star in every PowerBrowser mode.
+        for (const id of ['coding', 'browsing', 'organising']) {
+            await switchUiMode(app, id);
+            await showTab(app, tabId, `bookmark-star in ${id}`);
+            if (!(await settle(() => readStar(app), v => v.filled)).filled) {
+                fail(`the filled star is not shown in ${id}: ${JSON.stringify(await readStar(app))}`);
+            }
+        }
+
+        // Ctrl+D, Theia-focused (the pill) and page-focused (the relay row).
+        for (const [label, focus] of [['Ctrl+D in the pill', () => focusPill(app)], ['Ctrl+D in the page', () => focusOverlay(app, tabId)]]) {
+            if (await unbookmark(app, url) !== 'ok' || !(await settle(() => readStar(app), v => v.outline)).outline) {
+                return fail(`${BROKEN} the page could not be unbookmarked before ${label}`);
+            }
+            if (await focus() === false) {
+                return fail(`${BROKEN} focus could not be placed for ${label}`);
+            }
+            await pressKey(app, CTRL_D);
+            const rows = await settle(() => bookmarksOf(app, url), v => Array.isArray(v) && v.length === 1, 8000);
+            if (!Array.isArray(rows) || rows.length !== 1) {
+                fail(`${label} must bookmark the page once in Places; Places holds ${JSON.stringify(rows)}`);
+            }
+            await expectEditorThenEsc(app, fail, label);
+        }
+
+        // No http(s) page: dimmed, never removed.
+        const from = (await pushes(app)).length;
+        await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).navigate('about:blank'); return true;`);
+        await waitForPush(app, p => p && p.kind === 'state' && p.tabId === tabId && p.url === 'about:blank' && !p.loading, { from });
+        star = await settle(() => readStar(app), v => v.disabled);
+        if (!star.present || !star.disabled || !star.dimmed || star.label !== CANT_BOOKMARK) {
+            fail(`a page with no http(s) address must keep a dimmed, disabled star labelled ${JSON.stringify(CANT_BOOKMARK)}; saw ${JSON.stringify(star)}`);
+        }
+    } finally {
+        await probe(app, `delete get('AddressBar').refreshStar; return true;`);
+        await unbookmark(app, url);
+        if (uiMode) {
+            await switchUiMode(app, uiMode).catch(() => undefined);
+        }
+    }
+}
+
+/**
+ * BMK-02: on a bookmarked page the star opens the editor directly, headed
+ * Edit bookmark, Name prefilled and selected, the folder radio on the
+ * bookmark's folder. A rename plus a move to the Bookmarks Menu with Enter
+ * lands in Places; Esc after typing saves nothing; Remove removes at once
+ * with no second confirm; a refused write shows the failure row naming the
+ * application and keeps the panel open with the typed text.
+ */
+async function bookmarkEditor(ctx) {
+    const { app, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const url = await bookmarkPageOf(ctx, tabId, '/bm-b');
+    if (plant === 'remove-needs-confirm' && await probe(app, `const bar = get('AddressBar');
+        bar.removeFromBookmarkEditor = async function () { this.pendingConfirm = true; this.update(); }; return true;`) === true) {
+        note('PLANT remove-needs-confirm applied');
+    }
+    const subject = (await app.evaluate(appNameExpr)) || 'The browser';
+    const setName = text => app.evaluate(`(() => {
+        const input = document.querySelector('.pb-bookmark-editor-name');
+        if (!input) return false;
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        set.call(input, ${JSON.stringify(text)});
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+        return true;
+    })()`);
+    const pickFolder = label => app.evaluate(`(() => {
+        const row = [...document.querySelectorAll('.pb-bookmark-editor-folder')].find(l => l.textContent === ${JSON.stringify(label)});
+        if (!row) return false;
+        row.querySelector('input').click();
+        document.querySelector('.pb-bookmark-editor-name').focus();
+        return true;
+    })()`);
+    try {
+        if (await seedPlaces(app, [], [[url, 'Editor Seed']]) !== 'ok' || !(await settle(() => readStar(app), v => v.filled)).filled) {
+            return fail(`${BROKEN} the page could not be bookmarked chrome-side before the editor checks`);
+        }
+        const [seed] = await bookmarksOf(app, url);
+        if (!seed || seed.folder !== 'unfiled') {
+            return fail(`${BROKEN} the seeded bookmark is not in Other Bookmarks: ${JSON.stringify(seed)}`);
+        }
+        await clickStar(app);
+        let view = await settle(() => readStar(app), v => !!v.editor);
+        if (!view.editor || view.editor.heading !== EDIT_BOOKMARK_HEADING || view.editor.name !== 'Editor Seed' || !view.editor.nameSelected
+            || view.editor.folders.length !== 3) {
+            return fail(`the star on a bookmarked page must open the editor headed ${JSON.stringify(EDIT_BOOKMARK_HEADING)} with Name "Editor Seed" selected and three folders; saw ${JSON.stringify(view.editor)}`);
+        }
+        if ((await bookmarksOf(app, url)).length !== 1) {
+            fail('opening the editor on a bookmarked page made a second bookmark');
+        }
+
+        // Esc after typing saves nothing.
+        await setName('Discarded Name');
+        await pressKey(app, ESCAPE);
+        await settle(() => readStar(app), v => !v.editor);
+        await sleep(500);
+        if ((await bookmarksOf(app, url))[0]?.title !== 'Editor Seed') {
+            fail(`Esc saved the typed name: Places holds ${JSON.stringify(await bookmarksOf(app, url))}`);
+        }
+
+        // Rename and move with Enter.
+        await clickStar(app);
+        await settle(() => readStar(app), v => !!v.editor);
+        await setName('Renamed Bookmark');
+        if (await pickFolder(FOLDER_MENU_LABEL) !== true) {
+            return fail(`${BROKEN} the ${FOLDER_MENU_LABEL} radio was not found`);
+        }
+        await pressKey(app, ENTER);
+        const moved = await settle(() => bookmarksOf(app, url), v => v[0]?.title === 'Renamed Bookmark' && v[0]?.folder === 'menu', 8000);
+        if (moved[0]?.title !== 'Renamed Bookmark' || moved[0]?.folder !== 'menu') {
+            fail(`Enter in the editor must save the name and move the bookmark to the menu folder; Places holds ${JSON.stringify(moved)}`);
+        }
+        view = await settle(() => readStar(app), v => !v.editor && v.focused);
+        if (view.editor || !view.focused) {
+            fail(`Done must close the editor and return focus to the star; saw ${JSON.stringify(view)}`);
+        }
+        await clickStar(app);
+        view = await settle(() => readStar(app), v => v.editor?.folder === FOLDER_MENU_LABEL);
+        if (view.editor?.folder !== FOLDER_MENU_LABEL) {
+            fail(`reopening the editor must show the bookmark's folder ${JSON.stringify(FOLDER_MENU_LABEL)} checked; saw ${JSON.stringify(view.editor)}`);
+        }
+        await pressKey(app, ESCAPE);
+
+        // A refused write: the failure row, the panel and the typed text stay.
+        if (await probe(app, `get('ChromeStoreClient').updateBookmark = async () => { throw new Error('stubbed refusal'); }; return true;`) !== true) {
+            return fail(`${BROKEN} the client's updateBookmark could not be stubbed to refuse`);
+        }
+        try {
+            await clickStar(app);
+            await settle(() => readStar(app), v => !!v.editor);
+            await setName('Refused Name');
+            await pickFolder(FOLDER_TOOLBAR_LABEL);
+            await pressKey(app, ENTER);
+            view = await settle(() => readStar(app), v => !!v.editor?.failure);
+            if (!view.editor || !view.editor.failure.startsWith(subject) || !view.editor.failure.includes("couldn't save that bookmark") || view.editor.name !== 'Refused Name') {
+                fail(`a refused save must keep the editor open with "Refused Name" and a failure row starting ${JSON.stringify(subject)}; saw ${JSON.stringify(view.editor)}`);
+            }
+        } finally {
+            await probe(app, `delete get('ChromeStoreClient').updateBookmark; return true;`);
+        }
+        await pressKey(app, ESCAPE);
+        await settle(() => readStar(app), v => !v.editor);
+
+        // Remove runs at once: one click, no second confirm, the star unfills.
+        await clickStar(app);
+        await settle(() => readStar(app), v => !!v.editor);
+        await app.evaluate(`(() => { const b = document.querySelector('.pb-bookmark-editor-remove'); if (b) b.click(); return !!b; })()`);
+        const gone = await settle(() => bookmarksOf(app, url), v => Array.isArray(v) && v.length === 0, 5000);
+        if (!Array.isArray(gone) || gone.length !== 0) {
+            fail(`Remove did not remove the bookmark at once (no second confirm): Places holds ${JSON.stringify(gone)}`);
+        }
+        view = await settle(() => readStar(app), v => !v.editor && v.outline);
+        if (view.editor || !view.outline) {
+            fail(`after Remove the editor must close and the star unfill; saw ${JSON.stringify(view)}`);
+        }
+    } finally {
+        await probe(app, `const bar = get('AddressBar'); delete bar.removeFromBookmarkEditor; bar.closeBookmarkEditor(false); return true;`);
+        await unbookmark(app, url);
+    }
+}
+
+/**
+ * D-15 / KEY ruling, both focus paths: Ctrl+D runs the bookmark-page command
+ * with the Theia frame focused (the pill) and the page-key row with the page
+ * focused, each opening the editor on a new Places bookmark; in the README.md
+ * editor Ctrl+D keeps Monaco's meaning (a second selection appears on the
+ * repeated word) and opens no editor.
+ */
+async function bookmarkKeys(ctx) {
+    const { app, pages, plant, fail, note } = ctx;
+    if (!controlPassed(ctx.results, 'bookmark-keys')) {
+        return 'not-scored';
+    }
+    const dir = await openWorkspace(ctx);
+    const tabId = await openLocalTab(app, pages, '/bm-keys');
+    await showTab(app, tabId, 'bookmark-keys');
+    const url = localUrl(pages, '/bm-keys');
+    await installFireRecorder(app);
+    if (plant === 'ctrl-d-everywhere' && await probe(app, `window.__pbCtrlDPlant = get('KeybindingRegistry').registerKeybinding({ command: ${JSON.stringify(BOOKMARK_PAGE_COMMAND)}, keybinding: 'ctrlcmd+d' }); return true;`) === true) {
+        note('PLANT ctrl-d-everywhere applied');
+    }
+    try {
+        for (const [label, focus, row] of [['Ctrl+D with the pill focused', () => focusPill(app), false], ['Ctrl+D with the page focused', () => focusOverlay(app, tabId), true]]) {
+            if (await unbookmark(app, url) !== 'ok' || !(await settle(() => readStar(app), v => v.outline)).outline) {
+                return fail(`${BROKEN} the page could not be unbookmarked before ${label}`);
+            }
+            const fired = (await app.evaluateIn(app.chrome, 'JSON.stringify(window.__pbFired || [])').then(JSON.parse)).length;
+            if (await focus() === false) {
+                return fail(`${BROKEN} focus could not be placed for ${label}`);
+            }
+            await pressKey(app, CTRL_D);
+            const rows = await settle(() => bookmarksOf(app, url), v => Array.isArray(v) && v.length === 1, 8000);
+            if (!Array.isArray(rows) || rows.length !== 1) {
+                fail(`${label} must bookmark the page once in Places; Places holds ${JSON.stringify(rows)}`);
+            }
+            const firedNow = (await app.evaluateIn(app.chrome, 'JSON.stringify(window.__pbFired || [])').then(JSON.parse)).slice(fired);
+            if (row !== firedNow.includes('bookmarkPage')) {
+                fail(`${label} must ${row ? '' : 'not '}fire the bookmarkPage page-key row; rows fired ${JSON.stringify(firedNow)}`);
+            }
+            await expectEditorThenEsc(app, fail, label);
+        }
+
+        // KEY-04: in an editor Monaco keeps Ctrl+D (add the next occurrence to the selection).
+        await unbookmark(app, url);
+        if (await focusTheiaFrame(app) !== true || await focusReadmeEditor(app, dir) !== true) {
+            return fail(`${BROKEN} the README.md editor could not be opened and focused`);
+        }
+        await probe(app, `const c = get('EditorManager').currentEditor.editor.getControl();
+            c.setSelection({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 6 }); return true;`);
+        await pressKey(app, CTRL_D);
+        const selections = await settle(() => probe(app, `return get('EditorManager').currentEditor?.editor.getControl().getSelections().length ?? 0;`), n => n >= 2, 3000);
+        if (selections < 2) {
+            fail(`Ctrl+D in the README.md editor must keep Monaco's meaning (a second "probe" selected); the editor has ${selections} selection(s)`);
+        }
+        const after = await readStar(app);
+        if (after.editor) {
+            fail('Ctrl+D in the README.md editor opened the bookmark editor');
+        }
+        if ((await bookmarksOf(app, url)).length) {
+            fail('Ctrl+D in the README.md editor bookmarked the page');
+        }
+    } finally {
+        await probe(app, `get('AddressBar').closeBookmarkEditor(false);
+            if (window.__pbCtrlDPlant) { window.__pbCtrlDPlant.dispose(); delete window.__pbCtrlDPlant; }
+            const ed = get('EditorManager').currentEditor;
+            if (ed && ed.editor.document && ed.editor.document.revert) { await ed.editor.document.revert(); }
+            return true;`);
+        await unbookmark(app, url);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -4555,6 +4976,8 @@ const SCENARIOS = {
     'local-modes': localModes,
     'mode-defaults': modeDefaults,
     'mode-tokens': modeTokens,
+    'bookmark-star': bookmarkStar,
+    'bookmark-editor': bookmarkEditor,
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
@@ -4562,13 +4985,14 @@ const SCENARIOS = {
     'mode-keys': modeKeys,
     'go-to': goTo,
     'address-keys': addressKeys,
+    'bookmark-keys': bookmarkKeys,
 };
 
 /** The scenario each not-scored-capable scenario takes as its positive control. */
 const CONTROL_OF = { refused: 'search', 'no-engine': 'search', 'dev-addresses': 'search', 'select-ime': 'suggestions', 'modes-dropdown': 'search', 'local-modes': 'search',
     'command-centre': 'search', 'command-centre-handoff': 'command-centre',
     'command-centre-privacy': 'search', 'mode-defaults': 'search', 'mode-tokens': 'search', 'mode-keys': 'search',
-    'go-to': 'search', 'address-keys': 'search' };
+    'go-to': 'search', 'address-keys': 'search', 'bookmark-keys': 'bookmark-star' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -4675,6 +5099,9 @@ const PLANTS = [
     { plant: 'cycle-off', target: 'mode-keys', run: ['search', 'mode-keys'], expect: 'Ctrl+Down did not move to the next mode' },
     { plant: 'visit-only-off', target: 'go-to', run: ['search', 'go-to'], expect: 'Command centre opened a search' },
     { plant: 'focus-keeps-mode', target: 'address-keys', run: ['search', 'address-keys'], expect: 'Ctrl+L left the pill in Command centre' },
+    { plant: 'star-ignores-push', target: 'bookmark-star', run: ['bookmark-star'], expect: 'the star did not unfill after the bookmark was removed in chrome' },
+    { plant: 'remove-needs-confirm', target: 'bookmark-editor', run: ['bookmark-editor'], expect: 'Remove did not remove the bookmark at once' },
+    { plant: 'ctrl-d-everywhere', target: 'bookmark-keys', run: ['bookmark-star', 'bookmark-keys'], expect: 'Ctrl+D in the README.md editor' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 
