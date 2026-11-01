@@ -68,6 +68,24 @@
  *                       dialog takes a path in a fresh temp directory; the file lands
  *                       with the served bytes, its GET carried the page's origin as
  *                       Referer, and a downloadsChanged row names it (Phase 32's panel).
+ *   extension-entry     (35-05, D-16) A test extension written to a fresh temp
+ *                       directory at run time (no fixture in the tree) and installed
+ *                       with BiDi webExtension.install creates "Furniture test entry"
+ *                       for the page and link contexts. A right-click on a served page
+ *                       pushes it as an extension-entry row after the stock rows;
+ *                       picking it makes the extension's menus.onClicked request
+ *                       /ext-clicked with that page's URL and a non-negative tab id
+ *                       within 5 s; the next menu shows exactly one such row (the
+ *                       last menu's items were cleaned up). Uninstalled at the end.
+ *   freeze-frame        (35-05, D-08, G4b) 20 right-click and Escape cycles on a
+ *                       1280x720 page, timed by this script's own recorder (Date.now
+ *                       at each pageStill and pageContextMenu push, and when a .lm-Menu
+ *                       becomes visible). FAIL above 200 ms p95 right-click to visible
+ *                       menu. Each still that arrived must be painted as
+ *                       img.pb-web-tab-still in that tab's widget while the menu is open
+ *                       and the overlay hidden, and gone once the menu closes. Prints
+ *                       `freeze-frame timing: menu p50 <ms> p95 <ms>, still <k>/20 within 50 ms`
+ *                       (chrome pushes only stills that made the 50 ms deadline).
  *
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
@@ -75,11 +93,12 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
     BROKEN,
+    WEB_TAB_STATE_EVENT,
     appNameExpr,
     inChrome,
     loadedAt,
@@ -146,6 +165,11 @@ const PAGES = {
             + '<iframe id="frame" src="/frame" width="200" height="80"></iframe>'
             + '<div id="blank" style="height: 80px"></div>',
         extra: () => (assets ? `<p><a id="filelink" href="${assets.url('/file.bin')}">File link</a> <img id="img" src="${assets.url('/pixel.png')}" width="64" height="64" alt="pixel"></p>` : ''),
+    },
+    // 35-05: the freeze-frame page, 1280x720 of colour so a still is never blank.
+    '/still': {
+        title: 'Still',
+        body: '<style>body { margin: 0; } #art { width: 1280px; height: 720px; background: linear-gradient(135deg, #c33, #36c); }</style><div id="art"></div>',
     },
     '/pip': {
         title: 'Picture in Picture',
@@ -440,7 +464,13 @@ const FILE_BYTES = Buffer.from('page menu save check\n');
 async function serveAssets() {
     const requests = [];
     const server = createServer((request, response) => {
-        requests.push({ path: new URL(request.url, 'http://127.0.0.1').pathname, at: Date.now(), referer: request.headers.referer ?? null });
+        const parsed = new URL(request.url, 'http://127.0.0.1');
+        requests.push({ path: parsed.pathname, search: parsed.search, at: Date.now(), referer: request.headers.referer ?? null });
+        if (parsed.pathname === '/ext-clicked') {
+            response.writeHead(204);
+            response.end();
+            return;
+        }
         if (request.url === '/file.bin') {
             response.writeHead(200, { 'content-type': 'application/octet-stream' });
             response.end(FILE_BYTES);
@@ -1274,6 +1304,239 @@ async function menuSave({ app, pages, plant, fail, note }) {
     }
 }
 
+// 35-05 (D-16): extension entries.
+const EXT_LABEL = 'Furniture test entry';
+const isExtRow = item => !!item && item.label === EXT_LABEL && String(item.id).startsWith('extension-entry-');
+
+async function applyExtensionPlants(app, plant, note) {
+    if (plant === 'ext-cleanup-skipped') {
+        // ext-menus never hears the close, so its items stay in the stub and the next build appends a second set.
+        if (await inChrome(app, `const stub = document.getElementById('contentAreaContextMenu');
+            stub.addEventListener('popuphidden', event => event.stopImmediatePropagation(), true);
+            let reached = false;
+            const after = () => { reached = true; };
+            stub.addEventListener('popuphidden', after);
+            stub.dispatchEvent(new Event('popuphidden'));
+            stub.removeEventListener('popuphidden', after);
+            return reached === false;`) === true) {
+            note('PLANT ext-cleanup-skipped applied');
+        }
+    }
+    if (plant === 'ext-command-dropped') {
+        // A pick reaches chrome, but doCommand on a stub item does nothing, so ext-menus never sees the command.
+        if (await inChrome(app, `const proto = window.XULElement.prototype;
+            const original = proto.doCommand;
+            const planted = function () { return this.closest && this.closest('#contentAreaContextMenu') ? undefined : original.call(this); };
+            planted.__pbPlanted = true;
+            proto.doCommand = planted;
+            const stub = document.getElementById('contentAreaContextMenu');
+            const item = document.createXULElement('menuitem');
+            stub.append(item);
+            const read = item.doCommand.__pbPlanted === true;
+            item.remove();
+            return read;`) === true) {
+            note('PLANT ext-command-dropped applied');
+        }
+    }
+}
+
+async function extensionEntry({ app, pages, plant, fail, note }) {
+    await applyExtensionPlants(app, plant, note);
+    const url = pages.url('/furniture');
+    const tabId = await openWebTab(app, url);
+    if (await waitForPush(app, loadedAt(tabId, '/furniture')) < 0) {
+        return fail('no loaded state push arrived for /furniture');
+    }
+    await makeCurrent(app, tabId);
+    if (await settle(() => overlayVisibility(app, tabId), v => v === 'visible') !== 'visible') {
+        return fail(`${BROKEN} the page is not shown`);
+    }
+    const page = await contextOf(app, url);
+    const theia = await contextOf(app, await app.evaluate('location.href'));
+    const dir = await mkdtemp(join(tmpdir(), 'pb-35-05-ext-'));
+    let extension = null;
+    try {
+        await writeFile(join(dir, 'manifest.json'), JSON.stringify({
+            manifest_version: 2,
+            name: 'Furniture test extension',
+            version: '1.0',
+            permissions: ['menus', 'http://127.0.0.1/*'],
+            background: { scripts: ['background.js'] },
+            browser_specific_settings: { gecko: { id: 'furniture-test@powerbrowser.invalid' } },
+        }));
+        await writeFile(join(dir, 'background.js'), `browser.menus.create({ id: 'furniture-test', title: ${JSON.stringify(EXT_LABEL)}, contexts: ['page', 'link'] });
+browser.menus.onClicked.addListener((info, tab) => {
+    fetch(${JSON.stringify(assets.url('/ext-clicked'))} + '?page=' + encodeURIComponent(info.pageUrl) + '&tab=' + (tab ? tab.id : -1));
+});
+`);
+        extension = (await app.send('webExtension.install', { extensionData: { type: 'path', path: dir } }))?.extension ?? null;
+        if (!extension) {
+            return fail(`${BROKEN} the test extension could not be installed over BiDi`);
+        }
+        const point = await centreOf(app, page, '#plain');
+        // The entry exists once the background script has run, which can be after the first menus.
+        let opened = null;
+        for (let attempt = 0; attempt < 10; attempt++) {
+            opened = await openMenuAt(app, page, tabId, point);
+            if (!opened.push || opened.push.items.some(isExtRow)) {
+                break;
+            }
+            await closeMenu(app);
+            await sleep(500);
+        }
+        if (!opened.push) {
+            return fail(`no pageContextMenu push for ${tabId} after a right-click on the page`);
+        }
+        const items = opened.push.items;
+        const at = items.findIndex(isExtRow);
+        if (at < 0) {
+            return fail(`the page menu shows no extension row labelled ${JSON.stringify(EXT_LABEL)}; rows ${JSON.stringify(items.map(item => item.label))}`);
+        }
+        if (items.filter(isExtRow).length > 1) {
+            return fail(`duplicate extension row: one menu shows ${items.filter(isExtRow).length}`);
+        }
+        if (at === 0 || items.slice(at + 1).some(item => !String(item.id).startsWith('extension-entry-'))) {
+            return fail(`the extension row is not after the stock rows: ${JSON.stringify(flatIds(items))}`);
+        }
+        const served = assets.requests.length;
+        if (!await pickRow(app, theia, EXT_LABEL)) {
+            return fail(`the open menu has no row reading ${JSON.stringify(EXT_LABEL)}`);
+        }
+        const clicked = await settle(async () => assets.requests.slice(served).find(r => r.path === '/ext-clicked') ?? null, r => r !== null, 5000);
+        if (!clicked) {
+            return fail('no onClicked request reached the server within 5 s of the pick');
+        }
+        const query = new URLSearchParams(clicked.search);
+        if (query.get('page') !== url) {
+            return fail(`menus.onClicked reported page ${JSON.stringify(query.get('page'))}, not ${url}`);
+        }
+        if (!(Number(query.get('tab')) >= 0)) {
+            return fail(`menus.onClicked reported tab id ${JSON.stringify(query.get('tab'))}, not a tab`);
+        }
+        await settle(() => overlayVisibility(app, tabId), v => v === 'visible');
+        const again = await openMenuAt(app, page, tabId, point);
+        const count = (again.push?.items ?? []).filter(isExtRow).length;
+        await closeMenu(app);
+        if (count !== 1) {
+            return fail(count > 1 ? `duplicate extension row: the next menu shows ${count}` : 'the next menu shows no extension row');
+        }
+    } finally {
+        await closeMenu(app).catch(() => {});
+        if (extension) {
+            await app.send('webExtension.uninstall', { extension }).catch(() => {});
+        }
+        await rm(dir, { recursive: true, force: true });
+    }
+}
+
+// 35-05 (D-08, G4b): the freeze-frame and its budgets.
+const FREEZE_OPENS = 20;
+const FREEZE_MENU_P95_MS = 200;
+
+/** Theia frame: Date.now at each pageStill and pageContextMenu push, and each time a .lm-Menu becomes visible. */
+const installFreezeRecorder = app => app.evaluate(`(() => {
+    window.__pbFreeze = { pushes: [], shown: [] };
+    window.addEventListener(${JSON.stringify(WEB_TAB_STATE_EVENT)}, event => {
+        const d = event.detail;
+        if (d && (d.kind === 'pageStill' || d.kind === 'pageContextMenu')) {
+            window.__pbFreeze.pushes.push({ kind: d.kind, tabId: d.tabId, menuId: d.menuId, dataUrl: d.kind === 'pageStill' ? d.dataUrl : null, at: Date.now() });
+        }
+    });
+    let open = false;
+    new MutationObserver(() => {
+        const now = [...document.querySelectorAll('.lm-Menu')].some(menu => menu.getClientRects().length > 0);
+        if (now && !open) {
+            window.__pbFreeze.shown.push(Date.now());
+        }
+        open = now;
+    }).observe(document.body, { childList: true, subtree: true, attributes: true });
+    return true;
+})()`);
+
+/** The recorder's state with each data URL replaced by its length. */
+const freezeState = app => app.evaluate(`JSON.stringify(window.__pbFreeze, (key, value) => key === 'dataUrl' ? (value ? value.length : null) : value)`).then(JSON.parse);
+
+/** True when the tab's widget shows img.pb-web-tab-still whose src is the still pushed for `menuId`. */
+const stillPainted = (app, tabId, menuId) => probe(app, `const widget = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+    const img = widget && widget.node.querySelector('img.pb-web-tab-still');
+    const pushed = window.__pbFreeze.pushes.filter(p => p.kind === 'pageStill' && p.menuId === ${JSON.stringify(menuId)}).pop();
+    return !!img && !!pushed && img.src === pushed.dataUrl;`);
+const stillShown = (app, tabId) => probe(app, `const widget = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+    return !!(widget && widget.node.querySelector('img.pb-web-tab-still'));`);
+
+async function freezeFrame({ app, pages, plant, fail, note }) {
+    const url = pages.url('/still');
+    const tabId = await openWebTab(app, url);
+    if (await waitForPush(app, loadedAt(tabId, '/still')) < 0) {
+        return fail('no loaded state push arrived for /still');
+    }
+    await makeCurrent(app, tabId);
+    if (await settle(() => overlayVisibility(app, tabId), v => v === 'visible') !== 'visible') {
+        return fail(`${BROKEN} the page is not shown`);
+    }
+    if (await installFreezeRecorder(app) !== true) {
+        return fail(`${BROKEN} the freeze-frame recorder could not be installed in the Theia frame`);
+    }
+    let planted = false;
+    if (plant === 'still-not-painted') {
+        // The widget never paints a still; applied only once a still made its deadline in this session (noted below).
+        planted = await probe(app, `let proto = Object.getPrototypeOf(get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}));
+            while (proto && !Object.prototype.hasOwnProperty.call(proto, 'showStill')) proto = Object.getPrototypeOf(proto);
+            if (!proto) return false;
+            const neutral = function () {};
+            neutral.__pbPlanted = true;
+            proto.showStill = neutral;
+            return get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).showStill.__pbPlanted === true;`) === true;
+    }
+    const page = await contextOf(app, url);
+    const point = await centreOf(app, page, '#art');
+    const menuMs = [];
+    const stillMs = [];
+    let noted = false;
+    for (let i = 1; i <= FREEZE_OPENS; i++) {
+        const where = `(open ${i} of ${FREEZE_OPENS})`;
+        await settle(() => overlayVisibility(app, tabId), v => v === 'visible', 3000);
+        const before = await freezeState(app);
+        const started = Date.now();
+        await clickAt(app, page, point.x, point.y, 2);
+        const after = await settle(() => freezeState(app), s => s.shown.length > before.shown.length && s.pushes.slice(before.pushes.length).some(p => p.kind === 'pageContextMenu' && p.tabId === tabId), 5000);
+        const menuPush = after?.pushes.slice(before.pushes.length).find(p => p.kind === 'pageContextMenu' && p.tabId === tabId);
+        if (!menuPush || !(after.shown.length > before.shown.length)) {
+            await closeMenu(app);
+            return fail(`no pageContextMenu push with a visible .lm-Menu within 5 s ${where}`);
+        }
+        menuMs.push(after.shown[before.shown.length] - started);
+        const still = after.pushes.slice(before.pushes.length).find(p => p.kind === 'pageStill' && p.tabId === tabId && p.menuId === menuPush.menuId);
+        if (still) {
+            stillMs.push(still.at - started);
+            if (planted && !noted) {
+                noted = true;
+                note('PLANT still-not-painted applied');
+            }
+            if (await settle(() => overlayVisibility(app, tabId), v => v === 'hidden', 2000) !== 'hidden') {
+                await closeMenu(app);
+                return fail(`the overlay did not hide under the menu ${where}`);
+            }
+            if (await settle(() => stillPainted(app, tabId, menuPush.menuId), v => v === true, 1000) !== true) {
+                await closeMenu(app);
+                return fail(`a still arrived but was not painted on the placeholder while the menu was open ${where}`);
+            }
+        }
+        await closeMenu(app);
+        if (still && await settle(() => stillShown(app, tabId), v => v === false, 3000) !== false) {
+            return fail(`the still stayed on the placeholder after the menu closed ${where}`);
+        }
+    }
+    const p95 = percentile(menuMs, 95);
+    console.log(`freeze-frame timing: menu p50 ${percentile(menuMs, 50)} p95 ${p95}, still ${stillMs.length}/${FREEZE_OPENS} within 50 ms`);
+    if (stillMs.length) {
+        note(`still arrival after the right-click: p50 ${percentile(stillMs, 50)} p95 ${percentile(stillMs, 95)} ms (n=${stillMs.length})`);
+    }
+    if (p95 > FREEZE_MENU_P95_MS) {
+        return fail(`right-click to visible menu is ${p95} ms at p95 over ${FREEZE_OPENS} opens, above the ${FREEZE_MENU_P95_MS} ms budget`);
+    }
+}
+
 const SCENARIOS = {
     'tooltip-status': tooltipStatus,
     'theia-hover-silent': theiaHoverSilent,
@@ -1285,6 +1548,8 @@ const SCENARIOS = {
     'menu-edit': menuEdit,
     'menu-spelling': menuSpelling,
     'menu-save': menuSave,
+    'extension-entry': extensionEntry,
+    'freeze-frame': freezeFrame,
 };
 
 /** The scenario each absence scenario takes as its positive control. */
@@ -1374,6 +1639,10 @@ const PLANTS = [
     { plant: 'copy-row-unwired', target: 'menu-edit', run: ['menu-edit'], expect: 'copy did not reach the clipboard' },
     { plant: 'spellcheck-off', target: 'menu-spelling', run: ['menu-spelling'], expect: 'no suggestion row' },
     { plant: 'save-dialog-cancelled', target: 'menu-save', run: ['menu-save'], expect: 'no file at the chosen path' },
+    // 35-05 (PROMPT-04, D-16, D-08).
+    { plant: 'ext-cleanup-skipped', target: 'extension-entry', run: ['extension-entry'], expect: 'duplicate extension row' },
+    { plant: 'ext-command-dropped', target: 'extension-entry', run: ['extension-entry'], expect: 'no onClicked request' },
+    { plant: 'still-not-painted', target: 'freeze-frame', run: ['freeze-frame'], expect: 'a still arrived but was not painted' },
 ];
 
 async function selfTest() {
