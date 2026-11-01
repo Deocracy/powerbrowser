@@ -76,6 +76,9 @@
  *            holds no view-source URL and no push carries one.
  *   crash    PAGE-11 (32-08): about:crashcontent in the scratch tab; the contracted crash copy and Reload tab button show,
  *            the overlay hides, Reload tab brings the page back with its history (kept by the shell, restored on the reopen).
+ *   crash-reader  32-REVIEW CR-01, WR-01: the same crash with the tab in reader view. Theia holds the page URL, not the
+ *            reader URL, and Reload tab brings the page back with its history, reader entry included. Plant: the widget
+ *            holds the reader URL, which the reopen refuses.
  *   remoteness-regression  (32-08, D-25a): five same-site tabs, the fifth reloaded and then activated; each must end on its
  *            page with docShellIsActive. Self-sessioned; writes no verdict.
  *   devtools  PAGE-10 (32-07 gap closure): F12 from a page opens one stock toolbox window for that tab; a second open keeps one;
@@ -1443,14 +1446,35 @@ async function scenarioRemotenessRepro() {
  * `plant` true removes the crash copy from the placeholder, so no crash UI is shown, which must go red; `plant` 'history'
  * recreates the overlay under another row key, so the history is not restored, which must go red.
  */
-async function scenarioCrash(app, origin, plant = false) {
+async function scenarioCrash(app, origin, plant = false, inReader = false) {
     const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
-    const moved = await channelRequest(app, { kind: 'webTabNavigate', tabId, url: `${origin}/edit` });
+    const second = inReader ? '/article' : '/edit';
+    const moved = await channelRequest(app, { kind: 'webTabNavigate', tabId, url: `${origin}${second}` });
     if (moved?.ok !== true) {
-        return `the navigation to /edit was refused (${JSON.stringify(moved)})`;
+        return `the navigation to ${second} was refused (${JSON.stringify(moved)})`;
     }
-    if (await waitForPush(app, loadedAt(tabId, '/edit'), { from, timeoutMs: 30000 }) < 0) {
+    if (await waitForPush(app, loadedAt(tabId, second), { from, timeoutMs: 30000 }) < 0) {
         return 'the second page never loaded, so the history has no entry to keep';
+    }
+    if (inReader) {
+        // crash-reader (32-REVIEW CR-01, WR-01): the tab crashes in reader view, so its URL and its kept history hold
+        // about:reader. Positive control: chrome's own read of the overlay URI is the reader page before the crash.
+        if (await waitForPush(app, stateOf(tabId, p => p.isArticle === true), { from, timeoutMs: 20000 }) < 0) {
+            return 'no isArticle push: the article page cannot enter reader view';
+        }
+        const readerMark = (await pushes(app)).length;
+        const entered = await channelRequest(app, { kind: 'webTabReader', tabId, enter: true });
+        if (entered?.where !== 'entered' || await waitForPush(app, stateOf(tabId, p => p.isReaderMode === true && p.loading === false), { from: readerMark, timeoutMs: 20000 }) < 0) {
+            return `entering reader view never pushed isReaderMode true (${JSON.stringify(entered)})`;
+        }
+        const uri = await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o && o.currentURI ? o.currentURI.spec : '';`);
+        if (!String(uri).startsWith('about:reader?')) {
+            throw new Error(`${BROKEN} the overlay is not on the reader page before the crash (${JSON.stringify(String(uri).slice(0, 40))})`);
+        }
+        const held = await probe(app, `return get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).url;`);
+        if (!String(held).endsWith('/article')) {
+            return `Theia holds ${JSON.stringify(String(held).slice(0, 40))} for a tab in reader view, not the page URL a reopen needs`;
+        }
     }
     const historyOf = async () => {
         const reply = await channelRequest(app, { kind: 'webTabHistory', tabId });
@@ -1481,17 +1505,21 @@ async function scenarioCrash(app, origin, plant = false) {
     if (await settleValue(() => overlayVisibility(app, tabId), v => v !== 'visible') === 'visible') {
         return 'the crashed overlay is still visible over the crash UI';
     }
+    if (plant === 'reader-url') {
+        // The CR-01 symptom: the widget holds the reader URL, which webTabOpen refuses, so the reopen can never succeed.
+        await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).url = ${JSON.stringify(`about:reader?url=${encodeURIComponent(`${origin}/article`)}`)}; return true;`);
+    }
     const clickMark = (await pushes(app)).length;
     // The history plant recreates the overlay under another row key, so the kept history is never taken (the loss the row exists to catch).
     const clicked = plant === 'history'
-        ? (await channelRequest(app, { kind: 'webTabClose', tabId }), (await channelRequest(app, { kind: 'webTabOpen', tabId, url: `${origin}/edit`, key: 'web:planted' })).ok === true)
+        ? (await channelRequest(app, { kind: 'webTabClose', tabId }), (await channelRequest(app, { kind: 'webTabOpen', tabId, url: `${origin}${second}`, key: 'web:planted' })).ok === true)
         : await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); const b = w.node.querySelector('button.pb-web-tab-reload'); if (!b) return false; b.click(); return true;`);
     if (clicked !== true) {
         return 'the crashed tab has no Reload tab button to click';
     }
     // A crashed overlay has no remote tab, so Reload recreates it at the same URL (the Theia side closes and reopens it).
     // The page must come back loaded with crashed cleared, and the history must still hold both entries.
-    if (await waitForPush(app, stateOf(tabId, p => p.crashed === false && p.loading === false && String(p.url).endsWith('/edit')), { from: clickMark, timeoutMs: 30000 }) < 0) {
+    if (await waitForPush(app, stateOf(tabId, p => p.crashed === false && p.loading === false && String(p.url).endsWith(second)), { from: clickMark, timeoutMs: 30000 }) < 0) {
         return 'Reload tab did not bring the page back (no loaded push with crashed false)';
     }
     const entriesAfter = await historyOf();
@@ -1594,6 +1622,7 @@ const SCENARIOS = {
     reader: (app, fx) => scenarioReader(app, fx.origin),
     source: (app, fx) => scenarioSource(app, fx.origin),
     crash: (app, fx) => scenarioCrash(app, fx.origin),
+    'crash-reader': (app, fx) => scenarioCrash(app, fx.origin, false, true),
     devtools: (app, fx) => scenarioDevtools(app, fx.origin),
     downloads: (app, fx) => scenarioDownloads(app, fx),
     'downloads-today': async (app, fx, downloadDir) => {
@@ -1706,6 +1735,12 @@ const PLANTS = [
         target: 'crash',
         run: (app, fx) => scenarioCrash(app, fx.origin, 'history'),
         expect: 'history lost across Reload tab',
+    },
+    {
+        plant: 'crash-reader-url-held',
+        target: 'crash-reader',
+        run: (app, fx) => scenarioCrash(app, fx.origin, 'reader-url', true),
+        expect: 'Reload tab did not bring the page back',
     },
     {
         // Self-sessioned regression row: its clean control is the two-session pass, its plant puts the fifth tab on about:blank.

@@ -819,7 +819,8 @@ export const PowerBrowserAPI = Object.freeze({
 
   /**
    * NG-034: the saved history for `rowKey` when the frontend armed it, once.
-   * Only http(s) entries are admitted, top-level and subframes alike -- the
+   * Only http(s) entries (and the reader or source view of an http(s) page)
+   * are admitted, top-level and subframes alike -- the
    * same scheme wall webTabOpen and webTabNavigate apply -- so a tampered file
    * cannot smuggle a file: or chrome: URL in through an entry's children.
    * The serialized triggering principals ride the entries untouched (SessionHistory
@@ -836,7 +837,9 @@ export const PowerBrowserAPI = Object.freeze({
     if (entries.length === 0 || !Number.isInteger(data.index) || data.index < 1 || data.index > entries.length) {
       return null;
     }
-    const entryUrlOk = item => item && typeof item.url === "string" && /^https?:\/\//i.test(item.url);
+    // A reader or view-source entry of an http(s) page is checked by its page (32-REVIEW WR-01): since Phase 32 those
+    // entries commit into overlay history (OVERLAY_LOCATION), and refusing them dropped the tab's whole history.
+    const entryUrlOk = item => item && typeof item.url === "string" && /^https?:\/\//i.test(webTabPushedSpec(item.url));
     const treeOk = items => Array.isArray(items) && items.every(item => entryUrlOk(item) && (!item.children || treeOk(item.children)));
     if (!entries.every(item => entryUrlOk(item) && (!item.children || treeOk(item.children)))) {
       return null;
@@ -6754,6 +6757,20 @@ function webTabCloseToolbox(browser) {
 
 // Phase 32 plan 08 (PAGE-10): a view-source overlay's URL and title are its own source string. Theia gets the page's
 // spec instead, so no view-source: string crosses the scheme wall in a push (the "view-source:" literal stays out of Theia).
+// A reader overlay (about:reader?url=<page>) is pushed as its page too (32-REVIEW CR-01): Theia's widget url is what a
+// crashed-tab Reload and a restart reopen through webTabOpen, which admits http(s) only; isReaderMode carries the mode.
 function webTabPushedSpec(spec) {
-  return typeof spec === "string" && spec.startsWith("view-source:") ? spec.slice("view-source:".length) : spec;
+  if (typeof spec !== "string") {
+    return spec;
+  }
+  if (spec.startsWith("view-source:")) {
+    return spec.slice("view-source:".length);
+  }
+  if (spec.startsWith("about:reader?")) {
+    const inner = new URLSearchParams(spec.slice("about:reader?".length)).get("url");
+    if (inner && /^https?:\/\//i.test(inner)) {
+      return inner;
+    }
+  }
+  return spec;
 }
