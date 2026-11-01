@@ -7,7 +7,7 @@
  *      one case arm in handleWebTabAction, and each is a member of the WebTabMessage union. Every kind in the set has an arm
  *      and a union member, and the other way round.
  *   2. no restore primitive: no webTab kind named for a crash or a restore. A crashed tab reloads through webTabReload.
- *   3. state: favicon, crashed and isReaderMode are WebTabState fields, and webTabPush and webTabPageFields carry them.
+ *   3. state: favicon, crashed, isReaderMode and isArticle are WebTabState fields, and webTabPush and webTabPageFields carry them.
  *   4. favicon bound: webTabFaviconOf admits only data:image/ and caps the length at WEB_TAB_FAVICON_MAX = 65536.
  *   5. crash signal: exactly one oop-browser-crashed addEventListener in the shell, and no displayLoadError call outside a
  *      comment (the overlay's docShell is null after a crash, so the stock call would throw).
@@ -27,7 +27,7 @@ const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const THEIA_EXTENSIONS = join(REPO_ROOT, 'theia/extensions');
 const NEW_KINDS = ['webTabReader', 'webTabViewSource', 'webTabDevtools'];
-const STATE_FIELDS = ['favicon', 'crashed', 'isReaderMode'];
+const STATE_FIELDS = ['favicon', 'crashed', 'isReaderMode', 'isArticle'];
 const FAVICON_CAP = 65536;
 
 /** Comments removed, so a literal in a comment is not a touchpoint. Good enough for these sources: no `//` follows a space inside a string. */

@@ -3525,6 +3525,7 @@ export const PowerBrowserAPI = Object.freeze({
           favicon: pageFields.favicon,
           crashed: pageFields.crashed,
           isReaderMode: pageFields.isReaderMode,
+          isArticle: pageFields.isArticle,
         });
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] state push for ${tabId} failed: ${err && err.message ? err.message : err}`);
@@ -5127,7 +5128,7 @@ const webTabPageState = new WeakMap();
 function webTabPageStateOf(browser) {
   let state = webTabPageState.get(browser);
   if (!state) {
-    state = { frame: null, tabId: null, findListener: null, findOn: null, findQuery: null, findCurrent: 0, findTotal: 0, findStatus: null, crashed: false };
+    state = { frame: null, tabId: null, findListener: null, findOn: null, findQuery: null, findCurrent: 0, findTotal: 0, findStatus: null, crashed: false, isArticle: false };
     webTabPageState.set(browser, state);
   }
   return state;
@@ -5187,6 +5188,20 @@ function attachWebTabPageListeners(frame, tabId, browser) {
     webTabPagePush(browser);
   };
   browser.addEventListener("oop-browser-crashed", state.crashedListener);
+  // PAGE-10: AboutReaderParent sets `browser.isArticle` on the overlay (the embedder) when the page's readability result
+  // arrives. Its follow-up button update throws in this shell (no #reader-mode-button), so that result is read here, as
+  // an own accessor on the overlay, and pushed with the state.
+  Object.defineProperty(browser, "isArticle", {
+    configurable: true,
+    get: () => state.isArticle,
+    set: value => {
+      const next = value === true;
+      if (next !== state.isArticle) {
+        state.isArticle = next;
+        webTabPagePush(browser);
+      }
+    },
+  });
 }
 
 function detachWebTabPageListeners(browser) {
@@ -5202,6 +5217,7 @@ function detachWebTabPageListeners(browser) {
   browser.removeEventListener("DOMAudioPlaybackStarted", state.audioStarted);
   browser.removeEventListener("DOMAudioPlaybackStopped", state.audioStopped);
   browser.removeEventListener("oop-browser-crashed", state.crashedListener);
+  delete browser.isArticle;
   state.frame = null;
   state.findOn = null;
 }
@@ -5243,6 +5259,7 @@ function webTabPageFields(browser) {
     favicon: webTabFaviconOf(browser),
     crashed: state.crashed === true,
     isReaderMode: webTabIsReaderUrl(browser),
+    isArticle: state.isArticle === true,
   };
 }
 
@@ -5253,6 +5270,7 @@ function resetWebTabPage(browser) {
   if (state) {
     state.soundPlaying = false;
     state.crashed = false;
+    state.isArticle = false;
     tabHostSetSoundPlaying(browser, false);
   }
 }
@@ -6648,39 +6666,31 @@ function webTabIsReaderUrl(browser) {
   return spec.startsWith("about:reader?");
 }
 
-// Reader (PAGE-10): enter moves this overlay to about:reader for its own page, a history entry Back leaves by; leave
-// returns to the page the reader URL names. The reader's readability signal is not built here: the check needs a
-// content-side actor (AboutReaderChild), so the toggle has no enablement source yet.
+// Reader (PAGE-10): enter and leave go through the page's own AboutReader actor, as upstream's reader button does
+// (ext-tabs.js sends the same message), so the reader reuses the cached article and its history entry and chrome mints no
+// about:reader load. Enter needs the readability signal (`isArticle`, pushed with the state); leave needs the reader URL.
+// The actor loads the reader page inside this overlay, which the redirect guard admits (OVERLAY_LOCATION).
 function webTabReaderReply(kind, tabId, enter) {
   const entry = webTabs.get(tabId);
   if (!entry) {
     return { ok: true, kind, where: "unknown-tab" };
   }
   const browser = entry.browser;
-  const current = browser.currentURI ? browser.currentURI.spec : "";
-  const inReader = current.startsWith("about:reader?");
-  if (enter) {
-    if (inReader) {
-      return { ok: true, kind, where: "already-reader" };
-    }
-    if (!/^https?:\/\//i.test(current)) {
-      return { ok: false, reason: "validation", message: "handleWebTabAction: reader needs a web page" };
-    }
-    entry.firstLoad = null;
-    const triggeringPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
-    browser.fixupAndLoadURIString(`about:reader?url=${encodeURIComponent(current)}`, { triggeringPrincipal });
-    return { ok: true, kind, where: "entered" };
+  const inReader = webTabIsReaderUrl(browser);
+  if (enter ? inReader : !inReader) {
+    return { ok: true, kind, where: enter ? "already-reader" : "not-reader" };
   }
-  if (!inReader) {
-    return { ok: true, kind, where: "not-reader" };
-  }
-  const original = new URL(current).searchParams.get("url") ?? "";
-  if (!/^https?:\/\//i.test(original)) {
-    return { ok: false, reason: "validation", message: "handleWebTabAction: the reader page names no web page" };
+  if (enter && webTabPageStateOf(browser).isArticle !== true) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: the page has no reader view" };
   }
   entry.firstLoad = null;
-  browser.fixupAndLoadURIString(original, { triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}) });
-  return { ok: true, kind, where: "left" };
+  try {
+    browser.sendMessageToActor("Reader:ToggleReaderMode", {}, "AboutReader");
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[web-tab] reader toggle failed (${err && err.name ? err.name : "error"})`);
+    return { ok: false, reason: "unavailable", message: "handleWebTabAction: the reader view is not available for this tab" };
+  }
+  return { ok: true, kind, where: enter ? "entered" : "left" };
 }
 
 // View source (PAGE-10): the inner URL is this overlay's own page, validated chrome-side. The view-source: load is minted

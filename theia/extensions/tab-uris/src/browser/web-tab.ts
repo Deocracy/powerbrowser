@@ -197,6 +197,8 @@ export interface WebTabState {
     crashed: boolean;
     /** Phase 32 plan 07 (PAGE-10): true while the overlay shows the reader (its URI is about:reader). */
     isReaderMode: boolean;
+    /** Phase 32 gap closure (PAGE-10): true while the page passed the reader's readability check; false on the next page. */
+    isArticle: boolean;
 }
 
 /** Phase 32 plan 04 (PAGE-06): a row action, the frozen set the chrome arm accepts. */
@@ -417,6 +419,7 @@ export class WebTabChannel {
                 favicon: typeof detail.favicon === 'string' || detail.favicon === null ? detail.favicon as string | null : widget.favicon,
                 crashed: typeof detail.crashed === 'boolean' ? detail.crashed : widget.crashed,
                 isReaderMode: typeof detail.isReaderMode === 'boolean' ? detail.isReaderMode : widget.isReaderMode,
+                isArticle: typeof detail.isArticle === 'boolean' ? detail.isArticle : widget.isArticle,
             });
             if (iconBefore !== widget.favicon || crashedBefore !== widget.crashed) {
                 this.tabStatusEmitter.fire(widget);
@@ -570,10 +573,7 @@ export class WebTabWidget extends BaseWidget {
     crashed = false;
     /** Phase 32 plan 07 (PAGE-10): the last pushed reader flag. */
     isReaderMode = false;
-    /**
-     * Phase 32 plan 08 (PAGE-10): the readability signal. No chrome push carries it yet (a 32-07 open item), so it stays
-     * false and the reader toggle is enabled only while the page is in reader view.
-     */
+    /** Phase 32 gap closure (PAGE-10): the last pushed readability signal; the reader toggle is enabled by it or by reader view. */
     isArticle = false;
     /** Phase 31 plan 02 (SITE-06): the non-default permission ids, table order; the identity box's icons. */
     permissionIcons: string[] = [];
@@ -993,8 +993,8 @@ export class WebTabWidget extends BaseWidget {
     }
 
     /**
-     * PAGE-10 (32-08): the reader toggle is enabled on an article page, or while the page is already in reader view
-     * (so Exit stays reachable). Without a readability signal, an ordinary page has the toggle disabled.
+     * PAGE-10 (32-08): the reader toggle is enabled on an article page (the pushed readability signal), or while the page
+     * is already in reader view (so Exit stays reachable). An ordinary page has the toggle disabled.
      */
     get canToggleReader(): boolean {
         return this.isReaderMode || this.isArticle;
@@ -1167,6 +1167,7 @@ export class WebTabWidget extends BaseWidget {
         const crashChanged = this.crashed !== state.crashed;
         this.crashed = state.crashed;
         this.isReaderMode = state.isReaderMode;
+        this.isArticle = state.isArticle;
         if (state.permissionIcons !== undefined) {
             this.permissionIcons = state.permissionIcons;
         }

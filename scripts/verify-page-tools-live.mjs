@@ -63,8 +63,9 @@
  *           sessions (reload and activation, four each), five same-origin tabs per session. Writes the
  *           verdict key only when named on the command line; the default run and --self-test never do.
  *   favicon  PAGE-04 (32-08): the page's data: icon reaches a state push, and a strip row draws it as an <img> with that URL.
- *   reader   PAGE-10 (32-08), non-article half: the reader toggle is in the bar, disabled, with the contracted tooltip.
- *            The readability signal is not built, so no page enables it (a 32-07 open item).
+ *   reader   PAGE-10 (32-08, 32-07 gap closure): an article page pushes isArticle true, the toggle enables, a click enters the
+ *            reader in the same tab (about:reader? in chrome's read) and a click leaves it with Back and Forward as before; a
+ *            short page never pushes isArticle true and keeps the toggle disabled. Plant: the signal never reaches a push.
  *   source   PAGE-10 (32-08): Ctrl+U loads the page's source in the same overlay (chrome-side positive control); Theia
  *            holds no view-source URL and no push carries one.
  *   crash    PAGE-11 (32-08): about:crashcontent in the scratch tab; the contracted crash copy and Reload tab button show,
@@ -111,6 +112,8 @@ function copyOf(rel, key) {
     return match[2];
 }
 const READER_UNAVAILABLE = copyOf(CHROME_BAR_COPY_REL, 'readerUnavailable');
+const READER_VIEW = copyOf(CHROME_BAR_COPY_REL, 'readerView');
+const READER_EXIT = copyOf(CHROME_BAR_COPY_REL, 'exitReaderView');
 
 /** A ~2 s 440 Hz tone, 8 kHz 16-bit mono, as a WAV (the audio fixture's source). */
 function toneWav() {
@@ -191,6 +194,11 @@ async function serveFixtures(downloadBody) {
             // favicon: the page's own icon as a data: URL, so no icon is fetched over the network.
             response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             response.end(`<!doctype html><html><head><title>Icon fixture</title><link rel="icon" href="${ICON_DATA}"></head><body><p>icon page</p></body></html>`);
+        } else if (path === '/article') {
+            // reader: four long paragraphs pass Readerable's check (each sqrt(length - 140) adds to a score that must pass 20).
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            const paragraph = `<p>${'The quick brown fox jumps over the lazy dog while the reader considers the article text at length. '.repeat(6)}</p>`;
+            response.end(html('Article fixture', `<h1>Article fixture</h1>${paragraph.repeat(4)}`));
         } else if (path === '/download') {
             response.writeHead(200, {
                 'content-type': 'application/octet-stream',
@@ -443,22 +451,87 @@ async function scenarioFavicon(app, origin, plant = false) {
 }
 
 /**
- * reader (PAGE-10, 32-08, the non-article half): the reader toggle is in the bar, disabled, with the contracted
- * non-article tooltip. The readability signal is not built, so no page is an article and the toggle stays disabled.
- * `plant` enables the toggle on the non-article page, which must go red.
+ * reader (PAGE-10, 32-08 and the 32-07 gap closure): the readability signal and the toggle.
+ * An article page (four long paragraphs) pushes isArticle true; the toggle enables with the contracted copy; a click
+ * enters the reader in the same tab (chrome's read of the overlay URI is about:reader?, not blank) and a click leaves it,
+ * with Back and Forward as they were. A short page never pushes isArticle true (the article page is its positive control)
+ * and its toggle stays disabled with the contracted non-article tooltip.
+ * `plant` replaces the overlay's isArticle accessor with a plain property and reloads the article page, so the signal
+ * never reaches a push, which must go red.
  */
 async function scenarioReader(app, origin, plant = false) {
-    const { tabId } = await openLoaded(app, `${origin}/find`, '/find');
-    await makeCurrent(app, tabId);
-    const read = () => probe(app, "const b = document.querySelector('.pb-chrome-bar-reader'); return b ? { disabled: b.disabled === true, title: b.getAttribute('title') } : null;");
-    const shown = await settleValue(read, v => v !== null);
-    if (shown === null) {
-        return 'no reader toggle in the chrome bar (the control is removed, not disabled)';
-    }
+    const article = await openLoaded(app, `${origin}/article`, '/article');
+    let signalFrom = 0;
     if (plant) {
-        await probe(app, "document.querySelector('.pb-chrome-bar-reader').removeAttribute('disabled'); return true;");
+        const reloadMark = (await pushes(app)).length;
+        const planted = await inChrome(app, `const o = overlayOf(${JSON.stringify(article.tabId)});
+            Object.defineProperty(o, 'isArticle', { configurable: true, writable: true, value: false });
+            o.reload(); return true;`);
+        if (planted !== true) {
+            throw new Error(`${BROKEN} the overlay of ${article.tabId} was not found to plant on`);
+        }
+        // Only pushes after the reloaded page settled count: one scheduled before the plant may still carry the old signal.
+        if (await waitForPush(app, loadedAt(article.tabId, '/article'), { from: reloadMark, timeoutMs: 20000 }) < 0) {
+            throw new Error(`${BROKEN} the planted reload never settled`);
+        }
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        signalFrom = (await pushes(app)).length;
     }
-    const state = await settleValue(read, v => v !== null && v.disabled === true);
+    const signal = await waitForPush(app, stateOf(article.tabId, p => p.isArticle === true), { from: signalFrom, timeoutMs: plant ? 8000 : 20000 });
+    if (signal < 0) {
+        return 'no isArticle push: the readability signal of an article page never reached Theia';
+    }
+    await makeCurrent(app, article.tabId);
+    const toggle = () => probe(app, "const b = document.querySelector('.pb-chrome-bar-reader'); return b ? { disabled: b.disabled === true, title: b.getAttribute('title') } : null;");
+    const enabled = await settleValue(toggle, v => v !== null && v.disabled === false);
+    if (enabled === null || enabled.disabled !== false || enabled.title !== READER_VIEW) {
+        return `the reader toggle is not enabled with the contracted copy on an article page (${JSON.stringify(enabled)})`;
+    }
+    const overlayUri = () => inChrome(app, `const o = overlayOf(${JSON.stringify(article.tabId)}); return o && o.currentURI ? o.currentURI.spec : '';`);
+    const history = () => channelRequest(app, { kind: 'webTabHistory', tabId: article.tabId });
+    const widgetNav = () => probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(article.tabId)}); return { back: w.canGoBack, forward: w.canGoForward };`);
+    const before = await widgetNav();
+    const click = () => probe(app, "const b = document.querySelector('.pb-chrome-bar-reader'); if (!b || b.disabled) return false; b.click(); return true;");
+    const enterMark = (await pushes(app)).length;
+    if (await click() !== true) {
+        return 'the reader toggle could not be clicked on an article page';
+    }
+    if (await waitForPush(app, stateOf(article.tabId, p => p.isReaderMode === true), { from: enterMark, timeoutMs: 20000 }) < 0) {
+        return 'entering reader view never pushed isReaderMode true';
+    }
+    const inReader = await overlayUri();
+    if (!inReader.startsWith('about:reader?')) {
+        return `the overlay is not on the reader page after entering (chrome reads ${JSON.stringify(inReader.slice(0, 40))})`;
+    }
+    const exitTitle = await settleValue(toggle, v => v !== null && v.title === READER_EXIT);
+    if (exitTitle === null || exitTitle.title !== READER_EXIT || exitTitle.disabled !== false) {
+        return `the toggle does not offer Exit reader view while in the reader (${JSON.stringify(exitTitle)})`;
+    }
+    const leaveMark = (await pushes(app)).length;
+    if (await click() !== true) {
+        return 'the reader toggle could not be clicked to leave the reader';
+    }
+    if (await waitForPush(app, stateOf(article.tabId, p => p.isReaderMode === false && p.loading === false && String(p.url).endsWith('/article')), { from: leaveMark, timeoutMs: 20000 }) < 0) {
+        return 'leaving reader view did not return to the article page';
+    }
+    const after = await settleValue(widgetNav, v => v.forward === true);
+    if (after.back !== before.back || after.forward !== true) {
+        return `Back and Forward are wrong after leaving the reader (before ${JSON.stringify(before)}, after ${JSON.stringify(after)})`;
+    }
+    const entries = (await history()).entries;
+    if (!Array.isArray(entries) || !entries.some(entry => String(entry.url).endsWith('/article'))) {
+        return 'the history after leaving the reader has no article entry';
+    }
+    // The non-article half: a short page never pushes isArticle true, and its toggle stays disabled with the non-article tooltip.
+    const short = await openLoaded(app, `${origin}/find`, '/find');
+    const shortMark = (await pushes(app)).length;
+    await makeCurrent(app, short.tabId);
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    const early = (await pushes(app)).slice(shortMark).filter(p => p && p.kind === 'state' && p.tabId === short.tabId && p.isArticle === true);
+    if (early.length > 0) {
+        return 'a short page pushed isArticle true';
+    }
+    const state = await settleValue(toggle, v => v !== null && v.disabled === true);
     if (state === null || state.disabled !== true) {
         return `the reader toggle is enabled on a non-article page (disabled=${state && state.disabled})`;
     }
@@ -1464,10 +1537,10 @@ const PLANTS = [
         expect: 'no strip row carries the pushed favicon',
     },
     {
-        plant: 'reader-enabled-non-article',
+        plant: 'reader-signal-dropped',
         target: 'reader',
         run: (app, fx) => scenarioReader(app, fx.origin, true),
-        expect: 'enabled on a non-article page',
+        expect: 'no isArticle push',
     },
     {
         plant: 'source-url-in-theia',
