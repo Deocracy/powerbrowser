@@ -16,7 +16,10 @@
  * (D-11, 30-03) and the focus-only one carries no category. Call
  * sites (the widget, the keybindings) must import the exported id consts
  * rather than retype the strings -- a re-spelled literal fails naming the
- * file, per the browser-window-command precedent.
+ * file, per the browser-window-command precedent. Since 35-REVIEW WR-05,
+ * every executeCommand in page-context-menu.ts and chrome-bar-shortcuts.ts
+ * (Bookmark Page, the F11 relay) must name an imported *_COMMAND_ID const
+ * whose id is contracted here and whose Command block is registered.
  *
  * Honestly --quick: reads text sources only. No build, no browser, no
  * display, no network.
@@ -36,6 +39,10 @@ const NAME = 'verify-chrome-bar-commands';
 const COMMANDS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
 const WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
 const KEYBINDINGS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-keybindings.ts';
+/** 35-REVIEW WR-05: the Phase 35 sources that run Phase 33 commands by id (Bookmark Page, the F11 relay). */
+const PAGE_MENU_REL = 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts';
+const SHORTCUTS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-shortcuts.ts';
+const PHASE35_RELS = Object.freeze([PAGE_MENU_REL, SHORTCUTS_REL]);
 /** The pill's sources (30-01 D-04 move): each is held to the no-re-spelled-id rule. */
 const ADDRESS_BAR_DIR_REL = 'theia/extensions/chrome-bar/src/browser/address-bar';
 
@@ -220,12 +227,39 @@ function checkCommands(sources) {
         }
     }
 
+    // 35-REVIEW WR-05: every executeCommand in the Phase 35 sources names a *_COMMAND_ID const imported from
+    // chrome-bar-commands.ts, whose value is a contracted id and whose Command block is registered there. A
+    // rename or an unregistered id would otherwise leave Bookmark Page and F11 dead with every other check green.
+    for (const rel of PHASE35_RELS) {
+        const src = sources[rel] ?? '';
+        const imported = new Set((/import \{([^}]*)\} from '\.\/chrome-bar-commands';/.exec(src)?.[1] ?? '').split(',').map(name => name.trim()).filter(Boolean));
+        const calls = [...src.matchAll(/executeCommand\(\s*([^),\s]+)/g)].map(m => m[1]);
+        if (calls.length === 0) {
+            failures.push(`${rel}: derived ZERO executeCommand calls -- the Phase 35 command-id rule proves nothing`);
+        }
+        for (const arg of calls) {
+            if (/^['"`]/.test(arg)) {
+                failures.push(`${rel}: executeCommand(${arg}) re-spells a command id instead of importing the exported const`);
+                continue;
+            }
+            if (!imported.has(arg)) {
+                failures.push(`${rel}: executeCommand(${arg}) does not name a const imported from chrome-bar-commands`);
+                continue;
+            }
+            const id = new RegExp(`export const ${arg}\\s*=\\s*'([^']+)'`).exec(commandsSrc)?.[1];
+            const block = new RegExp(`export const (CHROME_BAR_\\w+):\\s*Command\\s*=\\s*\\{\\s*id:\\s*${arg}\\b`).exec(commandsSrc)?.[1];
+            if (!id || !EXPECTED_IDS.includes(id) || !block || !commandsSrc.includes(`registerCommand(${block},`)) {
+                failures.push(`${rel}: executeCommand(${arg}) names no registered contracted command (id ${id ?? 'undeclared'}, Command ${block ?? 'none'})`);
+            }
+        }
+    }
+
     return failures;
 }
 
 function readSources() {
     const out = {};
-    for (const rel of [COMMANDS_REL, WIDGET_REL, KEYBINDINGS_REL, ...addressBarSourceRels()]) {
+    for (const rel of [COMMANDS_REL, WIDGET_REL, KEYBINDINGS_REL, ...PHASE35_RELS, ...addressBarSourceRels()]) {
         out[rel] = readFileSync(join(REPO_ROOT, rel), 'utf8');
     }
     return out;
@@ -341,10 +375,43 @@ function selfTest() {
         console.log(`  ok  planted re-spelled bookmark-page id in ${pillRel} -> red, naming 'powerbrowser.chrome-bar.bookmark-page'`);
     }
 
+    // 35-REVIEW WR-05: the Phase 35 command-id rule, one plant per way it breaks.
+    const phase35Plants = [
+        {
+            name: 'Bookmark Page registration renamed away (the page menu row would be dead)',
+            sources: { ...clean, [COMMANDS_REL]: cleanCommands.replace('registerCommand(CHROME_BAR_BOOKMARK_PAGE, {', 'registerCommand(CHROME_BAR_BOOKMARK_PAGE_PLANTED, {') },
+            expect: `${PAGE_MENU_REL}: executeCommand(CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID) names no registered contracted command`,
+        },
+        {
+            name: 'F11 relay re-spells the full-screen id',
+            sources: { ...clean, [SHORTCUTS_REL]: clean[SHORTCUTS_REL].replace('executeCommand(CHROME_BAR_FULL_SCREEN_COMMAND_ID)', "executeCommand('powerbrowser.chrome-bar.full-screen')") },
+            expect: `${SHORTCUTS_REL}: executeCommand('powerbrowser.chrome-bar.full-screen') re-spells a command id`,
+        },
+        {
+            name: 'F11 relay runs a const not imported from chrome-bar-commands',
+            sources: { ...clean, [SHORTCUTS_REL]: clean[SHORTCUTS_REL].replace('executeCommand(CHROME_BAR_FULL_SCREEN_COMMAND_ID)', 'executeCommand(PLANTED_FULL_SCREEN_ID)') },
+            expect: `${SHORTCUTS_REL}: executeCommand(PLANTED_FULL_SCREEN_ID) does not name a const imported from chrome-bar-commands`,
+        },
+    ];
+    for (const plant of phase35Plants) {
+        if (Object.keys(plant.sources).every(rel => plant.sources[rel] === clean[rel])) {
+            console.error(`${NAME} --self-test: FAIL -- '${plant.name}' did not modify any source; the anchor it edits has drifted`);
+            failed++;
+            continue;
+        }
+        const failures = checkCommands(plant.sources);
+        if (!failures.some(f => f.includes(plant.expect))) {
+            console.error(`${NAME} --self-test: FAIL -- '${plant.name}' did not go red naming '${plant.expect}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+            failed++;
+        } else {
+            console.log(`  ok  ${plant.name} -> red, naming '${plant.expect}'`);
+        }
+    }
+
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- ${cases.length + 2} planted faults all went red`);
+    console.log(`${NAME} --self-test: PASS -- ${cases.length + 2 + phase35Plants.length} planted faults all went red`);
     return 0;
 }
 
