@@ -130,12 +130,19 @@ The installer `.exe` ships **unsigned**. There is no Authenticode certificate an
 Azure Artifact Signing subscription. What the user sees:
 
 - SmartScreen shows an unrecognised-application warning. The user must open
-  **More info** and then **Run anyway**. The verbatim dialog title, body text and
-  button labels are captured in the `pkg-win11` guest during stage
-  `windows-unsigned`, written into tracked `docs/WINDOWS-DISTRIBUTION.md`, and
-  compared as set equality against the live download page by the `win-download-copy`
-  registry row. Do not paraphrase that text on the download page; a paraphrase is
-  what the gate exists to catch.
+  **More info** and then **Run anyway**. The download page carries the SEC-03 block word for word:
+
+  > Windows may show a 'Windows protected your PC' warning when you open the PowerBrowser installer, because this release is not yet code-signed. Check the download against SHA256SUMS, then choose More info and Run anyway.
+
+  The block is tracked in `docs/WINDOWS-DISTRIBUTION.md`. The `win-download-copy` row compares it in
+  that file, in this one, in `website-staging/download.html` and on the published page with the
+  requirement text, and its quoted dialog title with the title the `pkg-win11` guest observed
+  (`scripts/matrix/win-matrix-record.json`, the `launch` cell). Do not paraphrase that text on the
+  download page; a paraphrase is what the gate exists to catch.
+- Azure Artifact Signing identity validation: pending. The owner replaces `pending` with the
+  validation date (YYYY-MM-DD) at the 54-04 checkpoint, and only then. `win-download-copy` and
+  `win-sign-chain` read this line: while it is pending the download page must carry the block above
+  and state the build is unsigned; once it holds a date the page must drop both.
 - The Windows mozconfig carries `--disable-maintenance-service`. This is not a
   simplification. With the Authenticode check compiled out, the maintenance service
   would run `updater.exe` as `LocalSystem` on admin installs. Shipping the service

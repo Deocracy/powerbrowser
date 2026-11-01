@@ -5874,6 +5874,17 @@ run_own_checks() {
       # synthetic guest output and plants each fault (all-FAIL, a missing observation, a namespace mismatch, a drifted
       # guest script) over mkdtemp fixtures only; hermetic.
       "win-matrix-record-self-test|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs --self-test"
+
+      # NEW (Phase 54, SEC-03): the unsigned-first Windows warning, word for word. Full tier because it reads the
+      # published download page (one GET to the homepage origin's download.html) and the matrix record the owner's
+      # guest run writes; red until both exist. It compares every SEC-03 block in docs/WINDOWS-DISTRIBUTION.md,
+      # docs/RELEASING.md, website-staging/download.html and the published page with the requirement text, and the
+      # quoted dialog title with the record. Never called by a quick path.
+      "win-download-copy|node $REPO_ROOT/scripts/verify-win-download-copy.mjs"
+      # win-download-copy-self-test runs over in-memory copies of the real files plus a fixture record: two green
+      # controls (unsigned, signed), then a reworded word per source, an empty set, an unreadable source, an absent
+      # or disagreeing record and a stale block after signing, each red naming its file. Hermetic; writes nothing.
+      "win-download-copy-self-test|node $REPO_ROOT/scripts/verify-win-download-copy.mjs --self-test"
     )
   fi
 

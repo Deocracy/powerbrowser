@@ -13,8 +13,10 @@
 //     OS_TARGET paired with its TARGET_XPCOM_ABI, formatted the way
 //     UpdateUtils.sys.mjs:89-90 formats %BUILD_TARGET%. An OS outside the table is
 //     refused, naming the table. An OS inside the table with another ABI is refused
-//     as a disagreement. PENDING names the OS values whose rows wait for stages 6
-//     and 7 (docs/RELEASING.md) and are refused until observed.
+//     as a disagreement. PENDING names the OS values whose rows wait for a stage
+//     (docs/RELEASING.md) and are refused until observed. The WINNT row (Phase 54,
+//     DIST-10) is the cross build's: upstream/build/moz.configure/toolchain.configure
+//     target_xpcom_abi returns <cpu>-msvc for clang-cl, so x86_64-msvc.
 //  2. Build identity. objdir/dist/bin/application.ini gives Version, BuildID and the [Gecko]
 //     MaxVersion, which is the descriptor's platformVersion (never assumed equal to Version: a
 //     point release can sit on an older platform). BuildID is refused when absent or not
@@ -28,8 +30,9 @@
 //     powerbrowser/packaging/version/release.txt, and the PUBLISHED asset name, joined as
 //     <mar_origin>/<tag>/<asset> (the form generate.mjs documents for marOrigin). The asset is
 //     <app_basename>-<tag minus v>.<target token>.complete.mar, the versioned-mar name
-//     scripts/verify-release-asset-set.mjs derives; the token is the first Target key of the
-//     docs/RELEASING.md asset table. The local MAR file name never reaches the URL.
+//     scripts/verify-release-asset-set.mjs derives; the Linux token is the first Target key of the
+//     docs/RELEASING.md asset table, the Windows token is WINDOWS_TOKEN (scripts/lib/channel-identity.mjs,
+//     the token the winget payload names). The local MAR file name never reaches the URL.
 //  6. Digest. The MAR bytes are read from disk. The sha512 and size come from
 //     buildUpdateXml, never typed.
 //
@@ -46,7 +49,8 @@
 // and FAILs naming the first missing input; it never SKIPs.
 //
 // shortcut: one built tree and one MAR per run, so the target loop has one
-// iteration. Upgrade to a per-target MAR map when Darwin or Windows is observed.
+// iteration; the Windows descriptor is a second run over the Windows tree and MAR.
+// Upgrade to a per-target MAR map when one job emits both.
 //
 // Usage:
 //   node scripts/build-update-xml.mjs --emit --outdir <dir> [--channel <name>]
@@ -62,7 +66,7 @@ import { fileURLToPath } from 'node:url';
 
 import { buildUpdateXml, isCleanHttpsUrl, parseUpdateXml } from './verify-mar-update-hop.mjs';
 import { UPDATE_CHANNEL, marOrigin, resolveConfig, updateChannel } from './generate.mjs';
-import { DOCS_REL, targetTokenOf } from './lib/channel-identity.mjs';
+import { DOCS_REL, WINDOWS_TOKEN, targetTokenOf } from './lib/channel-identity.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'build-update-xml';
@@ -75,9 +79,11 @@ const RELEASE_TXT_REL = 'powerbrowser/packaging/version/release.txt';
 const ASSET_SET_REL = 'scripts/verify-release-asset-set.mjs';
 const REQUIRED_SUBSTS = Object.freeze(['OS_TARGET', 'TARGET_XPCOM_ABI', 'MOZ_UPDATE_CHANNEL', 'MAR_CHANNEL_ID']);
 // The observed BUILD_TARGET rows. Each token is OS_TARGET + "_" + TARGET_XPCOM_ABI.
-const TARGETS = Object.freeze([Object.freeze({ os: 'Linux', abi: 'x86_64-gcc3' })]);
-// OS values whose rows are not observed yet (docs/RELEASING.md stages 6 and 7).
-const PENDING = Object.freeze({ Darwin: 'stage 6', WINNT: 'stage 7' });
+const TARGETS = Object.freeze([Object.freeze({ os: 'Linux', abi: 'x86_64-gcc3' }), Object.freeze({ os: 'WINNT', abi: 'x86_64-msvc' })]);
+// OS values whose rows are not observed yet (docs/RELEASING.md stage 6).
+const PENDING = Object.freeze({ Darwin: 'stage 6' });
+// The published asset token per OS: the docs table for Linux, the shared Windows token for WINNT.
+const assetTokenOf = (os, docsText) => (os === 'WINNT' ? WINDOWS_TOKEN : targetTokenOf(docsText));
 const VALUE_FLAGS = Object.freeze(['--outdir', '--channel', '--details-url', '--config-status', '--application-ini', '--mar']);
 const MODE_FLAGS = Object.freeze(['--emit', '--check', '--self-test']);
 const DOTTED = /^\d+(\.\d+)*$/;
@@ -260,7 +266,7 @@ function runChecks(root, overrides = {}) {
         fail(`${RELEASE_TXT_REL} tag ${JSON.stringify(tag)} names ESR version ${tag.slice(1, tag.lastIndexOf('-'))} but ${shown(paths.appIni)} Version is ${JSON.stringify(version)}. Next step: rebuild the tree at the tag's version, or run node scripts/generate.mjs if release.txt is stale`);
     }
     const docsText = readText(join(root, DOCS_REL));
-    const assetToken = targetTokenOf(docsText);
+    const assetToken = assetTokenOf(os, docsText);
     if (assetToken === null) {
         fail(`${DOCS_REL} carries no Target key in its "Release asset names" table, so the published MAR asset name cannot be derived. Next step: restore the table`);
     }
@@ -454,6 +460,19 @@ function selfTest() {
         }
         console.log('  ok  platformVersion follows application.ini MaxVersion, not Version');
 
+        // DIST-10 control: the Windows tree emits its own descriptor, named by the built target, whose patch
+        // URL names the Windows asset token; it re-emits byte-identical.
+        const winGreen = { [CONFIG_STATUS_REL]: statusFixture({ os: 'WINNT', abi: 'x86_64-msvc', marId }), [APP_INI_REL]: iniFixture() };
+        const win = runChecks(root, { texts: winGreen });
+        const winRel = join(UPDATE_CHANNEL, 'WINNT_x86_64-msvc', 'update.xml');
+        const winUrl = `${marOrigin(resolved.config)}/v153.5.1-1/${resolved.config.identity.app_basename}-153.5.1-1.${WINDOWS_TOKEN}.complete.mar`;
+        if (win.failures.length > 0 || win.outputs.length !== 1 || win.outputs[0].rel !== winRel || win.outputs[0].expect.url !== winUrl
+            || checkOutputs(win.outputs).length > 0 || buildUpdateXml(win.outputs[0].args) !== buildUpdateXml(runChecks(root, { texts: winGreen }).outputs[0].args)) {
+            console.error(`${NAME}: --self-test FAIL -- the Windows control did not emit ${winRel} at ${winUrl} byte-identically: ${win.failures.join(' | ')} ${JSON.stringify(win.outputs.map(o => [o.rel, o.expect.url]))}`);
+            return 1;
+        }
+        console.log(`  ok  Windows control: one descriptor, ${winRel}, patch URL names the ${WINDOWS_TOKEN} asset, byte-identical on re-run`);
+
         let failed = 0;
         const noOriginRoot = makeFixture();
         dirs.push(noOriginRoot);
@@ -472,7 +491,10 @@ function selfTest() {
             ['release.txt absent', { texts: { ...green, [RELEASE_TXT_REL]: null } }, RELEASE_TXT_REL, 'null'],
             ['release.txt not a tag', { texts: { ...green, [RELEASE_TXT_REL]: 'garbage\n' } }, RELEASE_TXT_REL, 'garbage'],
             ['pending OS_TARGET Darwin', { texts: { [CONFIG_STATUS_REL]: statusFixture({ os: 'Darwin', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'pending'],
-            ['pending OS_TARGET WINNT', { texts: { [CONFIG_STATUS_REL]: statusFixture({ os: 'WINNT', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'pending'],
+            // DIST-10: the Windows pair. A wrong target and an older build are red naming the value.
+            ['wrong Windows target (TARGET_XPCOM_ABI x86-msvc)', { texts: { [CONFIG_STATUS_REL]: statusFixture({ os: 'WINNT', abi: 'x86-msvc', marId }), [APP_INI_REL]: iniFixture() } }, CONFIG_STATUS_REL, 'x86-msvc'],
+            ['stale Windows build (release tag newer than the built Version)', { texts: { ...winGreen, [RELEASE_TXT_REL]: 'v153.6.0-1\n' } }, RELEASE_TXT_REL, '153.6.0'],
+            ['empty descriptor set (config.status with no target)', { texts: { ...winGreen, [CONFIG_STATUS_REL]: 'substs = {\n}\n' } }, CONFIG_STATUS_REL, 'OS_TARGET'],
             ['[urls] mar_origin unset', { texts: green }, MANIFEST_REL, 'mar_origin', noOriginRoot],
             ['application.ini with no BuildID', { texts: { ...green, [APP_INI_REL]: iniFixture({ buildID: null }) } }, APP_INI_REL, 'BuildID'],
             ['application.ini with no MaxVersion', { texts: { ...green, [APP_INI_REL]: iniFixture({ maxVersion: null }) } }, APP_INI_REL, 'MaxVersion'],
