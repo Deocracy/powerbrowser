@@ -519,7 +519,7 @@ Plans:
 **Depends on**: Phase 37, and Phase 28's signed-off route (not planned without it)
 **Requirements**: EXT-06, EXT-07, EXT-08, EXT-09, EXT-10
 **Research**: yes — planned from the Phase 28 spike record
-**Notes**: if the signed-off route needs the GUI-05 bridge, the scope consequence recorded at sign-off governs this phase; EXT-09 adds addons.mozilla.org hosts to `powerbrowser/endpoint-allowlist.json`, and `allowlist-doc-consistency` then needs each allow-dispositioned Mozilla host named in this file and REQUIREMENTS.md in the same change; extension icon, name and badge are read chrome-side
+**Notes**: if the signed-off route needs the GUI-05 bridge, the scope consequence recorded at sign-off governs this phase; EXT-09 adds addons.mozilla.org hosts to `powerbrowser/endpoint-allowlist.json`, and `allowlist-doc-consistency` then needs each allow-dispositioned Mozilla host named in this file and REQUIREMENTS.md in the same change (38-05 allows exactly **addons.mozilla.org** for the add-ons site and its signed XPIs, and **versioncheck.addons.mozilla.org** and **versioncheck-bg.addons.mozilla.org** for the update checks of add-ons installed from it; services.addons.mozilla.org stays deny); extension icon, name and badge are read chrome-side
 **Success Criteria** (what must be TRUE):
 
   1. An installed extension's `tabs.query`, tab events and active tab report the web tabs as they would in Firefox

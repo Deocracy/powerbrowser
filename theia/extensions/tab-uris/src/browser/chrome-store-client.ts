@@ -375,6 +375,19 @@ export class ChromeStoreClient {
     }
 
     /**
+     * Phase 38 plan 05 (EXT-09, D-04, D-11): the puzzle menu's install footer. Chrome opens the add-ons site in the stock
+     * browser window, whose stock install prompt is the only install UI; resolves 'opened-tab' or 'opened-window'. A
+     * network kind: it sends the user off the machine, so it is never relayed.
+     */
+    async extensionInstallSite(): Promise<string> {
+        const reply = await this.request({ kind: 'extensionInstallSite' });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `extensionInstallSite failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply.where);
+    }
+
+    /**
      * Phase 38 plan 04 (B5): Show Sidebar (`open` true) or Hide Sidebar for an extension's sidebar page; resolves 'opened'
      * or 'closed'. Privileged: only the gear row and the sidebar view's close, through the extension buttons widget.
      */

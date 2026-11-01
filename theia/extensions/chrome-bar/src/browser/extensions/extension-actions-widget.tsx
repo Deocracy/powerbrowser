@@ -400,7 +400,7 @@ export class ExtensionActionsWidget {
             onRowMenu={(row, anchor) => this.openRowMenu(row, anchor)}
             onInstall={() => {
                 this.closeMenu(false);
-                openStockPage('addons');
+                this.store.extensionInstallSite().catch(error => this.failed('install', error));
             }}
             onClose={restoreFocus => this.closeMenu(restoreFocus)}
         />;

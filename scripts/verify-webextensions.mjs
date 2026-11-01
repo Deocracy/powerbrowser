@@ -26,6 +26,14 @@
 //     engine fetches updates from that origin at runtime, so an uncovered
 //     origin fails NAMING the host. file:/// entries carry no network
 //     origin and are out of this leg's scope.
+//  4. (38-05, EXT-09) The add-ons site hosts the stock install and update
+//     paths contact -- the host of each AMO_PREFS value, read from the
+//     pinned upstream browser/app/profile/firefox.js and overridden by each
+//     branding variant's pref file, as the build loads them -- EQUAL the
+//     allowlist's allow rows under addons.mozilla.org (set equality: a
+//     derived host with no allow row fails naming it; an allow row no pref
+//     names any more fails naming it as stale). Absent upstream/ SKIPS this
+//     leg only (a fresh clone before scripts/fetch-upstream.sh).
 //
 // Honestly --quick: it reads text files off disk only. No build, no
 // browser, no display, no network.
@@ -49,7 +57,7 @@
 //   node scripts/verify-webextensions.mjs
 //   node scripts/verify-webextensions.mjs --self-test
 //
-// The self-test plants six faults and requires each to go red: a drifted
+// The self-test plants nine faults and requires each to go red: a drifted
 // tracked key (naming the add-on id -- proves the check reads the tracked
 // file, not the fragment), a drifted fragment (naming the add-on id --
 // proves the check reads the fragment, not the tracked file), a tracked
@@ -57,8 +65,13 @@
 // install_url origin absent from the allowlist (naming the host), a
 // fragment missing a declared id (naming the id -- proves the
 // fragment-missing loop runs), and a fragment carrying an undeclared id
-// (naming the id -- proves the fragment-extra loop runs). Each
-// runs with the unmutated control green first, so a red is plant-caused.
+// (naming the id -- proves the fragment-extra loop runs). Since 38-05
+// three more plant the add-ons site leg: a derived host's allow row
+// removed (naming the host), a stale allow row under addons.mozilla.org
+// (naming it), and a branding pref file that blanks the background update
+// URL (naming that host's now-stale row -- proves the branding override is
+// read). Each runs with the unmutated control green first, so a red is
+// plant-caused.
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -84,6 +97,42 @@ const FRAGMENT_REL = 'generated/webextensions-settings.json';
 const POLICY_REL = 'powerbrowser/distribution/policies.json';
 const ALLOWLIST_REL = 'powerbrowser/endpoint-allowlist.json';
 const RERUN_GENERATE = 'node scripts/generate.mjs';
+// 38-05 (EXT-09): the prefs whose hosts the stock add-ons install (the site the puzzle menu's install footer opens,
+// which serves the signed XPIs) and update paths (XPIInstall.sys.mjs UpdateChecker) contact.
+const AMO_PREFS = ['extensions.getAddons.link.url', 'extensions.update.url', 'extensions.update.background.url'];
+const AMO_FAMILY = /(^|\.)addons\.mozilla\.org$/i;
+const UPSTREAM_PREFS_REL = 'upstream/browser/app/profile/firefox.js';
+const BRANDING_PREFS_REL = variant => `powerbrowser/branding/${variant}/pref/firefox-branding.js`;
+
+/** The last string value `name` is given in pref-file text, or undefined when the text never sets it. */
+function prefValue(text, name) {
+    const re = new RegExp(`pref\\(\\s*"${name.replace(/\./g, '\\.')}"\\s*,\\s*"([^"]*)"\\s*\\)`, 'g');
+    let value;
+    for (const m of text.matchAll(re)) value = m[1];
+    return value;
+}
+
+/** Every host an AMO_PREFS value names, across both branding variants; null when upstream/ is absent. */
+function amoHosts(root) {
+    const upstream = join(REPO_ROOT, UPSTREAM_PREFS_REL);
+    if (!existsSync(upstream)) return null;
+    const base = readFileSync(upstream, 'utf8');
+    const hosts = new Set();
+    for (const variant of ['release', 'dev']) {
+        const brandingPath = join(root, BRANDING_PREFS_REL(variant));
+        const branding = existsSync(brandingPath) ? readFileSync(brandingPath, 'utf8') : '';
+        for (const name of AMO_PREFS) {
+            const value = prefValue(branding, name) ?? prefValue(base, name) ?? '';
+            if (!value) continue;
+            try {
+                hosts.add(new URL(value).hostname);
+            } catch {
+                hosts.add(`(unparsable ${name})`);
+            }
+        }
+    }
+    return hosts;
+}
 
 function readJson(root, rel, failures) {
     const p = join(root, rel);
@@ -245,6 +294,34 @@ function runChecks(root) {
                     + `${JSON.stringify(entry?.id)} but present in no ${ALLOWLIST_REL} entry -- the policy engine would fetch an update source `
                     + `no gate tracks. Next step: add a hosts entry for it (with a hand-authored reason), then re-run this check.`,
                 );
+            }
+        }
+    }
+
+    // --- 4. the add-ons site hosts equal their allow rows (38-05) ------------
+    if (allowRead.value !== null && Array.isArray(allowRead.value.hosts)) {
+        const derived = amoHosts(root);
+        if (derived === null) {
+            skipped.push(`${UPSTREAM_PREFS_REL} is absent (upstream not fetched in this copy) -- add-ons site host coverage unchecked; run scripts/fetch-upstream.sh to cover it.`);
+        } else if (derived.size === 0) {
+            failures.push(`no add-ons site host derived from ${AMO_PREFS.join(', ')} (broken instrument: the pref read found nothing, so this comparison would prove nothing).`);
+        } else {
+            const allowed = new Set(allowRead.value.hosts.filter(h => h?.disposition === 'allow' && AMO_FAMILY.test(h?.host ?? '')).map(h => h.host));
+            for (const host of derived) {
+                if (!allowed.has(host)) {
+                    failures.push(
+                        `${host} is named by the add-ons install or update prefs (${AMO_PREFS.join(', ')}) but has no allow row in ${ALLOWLIST_REL} -- `
+                        + `the stock install or update path would contact a host no gate tracks. Next step: add an allow row for it (and name it in ROADMAP.md and REQUIREMENTS.md), then re-run this check.`,
+                    );
+                }
+            }
+            for (const host of allowed) {
+                if (!derived.has(host)) {
+                    failures.push(
+                        `${host} has an allow row in ${ALLOWLIST_REL} that no add-ons install or update pref names any more -- stale egress. `
+                        + `Next step: remove that row (or turn it to deny), then re-run this check.`,
+                    );
+                }
             }
         }
     }
@@ -504,8 +581,59 @@ function selfTest() {
         }
     }
 
+    // Plants 7-9 (38-05): the add-ons site leg. Each copies the real allowlist (and, for plant 9, the branding pref
+    // files) into a fixture whose manifest is the real one, so only leg 4 can fire. The hosts come from the tree.
+    const derivedAmo = [...(amoHosts(REPO_ROOT) ?? [])];
+    const amoPlant = (name, mutate, wantHost, wantText) => {
+        const dir = mkdtempSync(join(tmpdir(), 'webextensions-selftest-'));
+        try {
+            const setup = setupFixture(dir, fixtureManifest(''), []);
+            if (setup.error) {
+                complain(name, setup.error);
+                return;
+            }
+            mutate(dir);
+            const { failures } = runChecks(dir);
+            if (!failures.some(f => f.includes(wantHost) && f.includes(wantText))) {
+                complain(name, `did not go red naming '${wantHost}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+            } else {
+                console.log(`  ok  ${name} -> red, naming '${wantHost}'`);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    const editAllowlist = (dir, edit) => {
+        const target = join(dir, ALLOWLIST_REL);
+        const allow = JSON.parse(readFileSync(target, 'utf8'));
+        edit(allow);
+        writeFileSync(target, `${JSON.stringify(allow, null, 2)}\n`, 'utf8');
+    };
+    if (derivedAmo.length === 0) {
+        complain('add-ons site leg', 'derived no add-ons site host from the real tree (upstream/ absent?), so its plants would prove nothing');
+    } else {
+        // Plant 7: a derived host's allow row removed must go red naming the host.
+        const dropped = derivedAmo[derivedAmo.length - 1];
+        amoPlant('add-ons host uncovered', dir => editAllowlist(dir, a => {
+            a.hosts = a.hosts.filter(h => h.host !== dropped);
+        }), dropped, 'has no allow row');
+        // Plant 8: an allow row under addons.mozilla.org that no pref names must go red as stale.
+        amoPlant('add-ons host stale', dir => editAllowlist(dir, a => {
+            a.hosts.push({ host: 'planted-stale.addons.mozilla.org', disposition: 'allow', reason: 'Self-test plant only.' });
+        }), 'planted-stale.addons.mozilla.org', 'stale egress');
+        // Plant 9: a branding file that blanks the background update URL leaves its host's allow row stale -- proves
+        // the leg reads the branding override, not upstream alone.
+        const bgHost = new URL(prefValue(readFileSync(join(REPO_ROOT, UPSTREAM_PREFS_REL), 'utf8'), 'extensions.update.background.url')).hostname;
+        amoPlant('branding blanks an add-ons pref', dir => {
+            for (const variant of ['release', 'dev']) {
+                copyInto(dir, BRANDING_PREFS_REL(variant));
+                writeFileSync(join(dir, BRANDING_PREFS_REL(variant)), `${readFileSync(join(dir, BRANDING_PREFS_REL(variant)), 'utf8')}\npref("extensions.update.background.url", "");\n`, 'utf8');
+            }
+        }, bgHost, 'stale egress');
+    }
+
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 6 planted faults all behaved as pinned`);
+    console.log(`${NAME}: --self-test PASS -- 9 planted faults all behaved as pinned`);
     return 0;
 }
 

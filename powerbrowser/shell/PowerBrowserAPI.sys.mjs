@@ -4212,7 +4212,7 @@ const STORE_REQUEST_KINDS = new Set([
   "listClosedTabs",
   "reopenClosedTab",
   "clearHistory",
-  "extensionActionsSubscribe", "extensionClick", "extensionPin", "extensionRemove", "extensionSidebar", "extensionSidebarGeometry",
+  "extensionActionsSubscribe", "extensionClick", "extensionPin", "extensionRemove", "extensionSidebar", "extensionSidebarGeometry", "extensionInstallSite",
   "fullScreen",
 ]);
 
@@ -4347,7 +4347,7 @@ async function handleStoreRequest(data, actorRef) {
       case "fullScreen": {
         return { ok: true, kind, where: toggleShellFullscreen(actorRef) };
       }
-      case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": case "extensionSidebar": case "extensionSidebarGeometry": return extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11; 38-04 sidebar)
+      case "extensionInstallSite": return extensionInstallSite(); case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": case "extensionSidebar": case "extensionSidebarGeometry": return extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11; 38-04 sidebar); 38-05 install site
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
       }
@@ -10399,4 +10399,15 @@ async function extensionShortcutOf(row, toolbar) {
   }
   const commands = await extension?.shortcuts?.commands;
   return commands?.get(name)?.shortcut || null;
+}
+
+// 38-05 (EXT-09, D-04, D-11 network): the puzzle menu's install footer. The add-ons site (upstream's own
+// extensions.getAddons.link.url) opens in the stock browser window, whose stock install prompt is the only install UI:
+// Phase 37 sent add-on install prompts to the stock window, and the shell holds no add-on prompt of its own.
+async function extensionInstallSite() {
+  const url = Services.urlFormatter.formatURLPref("extensions.getAddons.link.url");
+  if (!/^https:\/\//i.test(url)) {
+    return { ok: false, kind: "extensionInstallSite", reason: "validation", message: "handleStoreRequest: the add-ons site pref names no https page" };
+  }
+  return { ok: true, kind: "extensionInstallSite", where: await PowerBrowserAPI.openStockTab(url) };
 }

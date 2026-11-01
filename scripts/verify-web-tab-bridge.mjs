@@ -216,6 +216,9 @@ const STORE_KIND_CLASSES = new Map([
     // extension buttons widget (its gear row and its sidebar view's callbacks), no command id, no key row, never relayed.
     ['extensionSidebar', 'privileged'],
     ['extensionSidebarGeometry', 'privileged'],
+    // Phase 38 plan 05 (EXT-09, D-11): the puzzle menu's install footer opens the add-ons site in the stock window. It
+    // sends the user off the machine, so it is network (never relayed); it writes nothing and reads no user data.
+    ['extensionInstallSite', 'network'],
 ]);
 /**
  * Phase 31 plan 04: store kinds the app menu sends straight from the Theia window to chrome. Each

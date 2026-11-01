@@ -142,6 +142,7 @@ const REQUIRED_STORE_CLASS = new Map([
     ['extensionRemove', 'privileged'],
     ['extensionSidebar', 'privileged'],
     ['extensionSidebarGeometry', 'privileged'],
+    ['extensionInstallSite', 'network'], // 38-05: D-11 makes the install trigger network
 ]);
 
 // 38-01 Task 2 landed the bridge (the PRESENCE_ASSERTION_TODO point): rule 6 requires the sanctioned click call and

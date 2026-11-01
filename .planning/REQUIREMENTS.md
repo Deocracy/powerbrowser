@@ -189,6 +189,13 @@ check requires every allow-dispositioned Mozilla host to be documented in
 the project's own planning record. BAR-03 search suggestions add the
 configured engines' suggest hosts to `powerbrowser/endpoint-allowlist.json`
 deliberately, in the phase that ships them.
+EXT-09 (Phase 38 plan 05) adds three add-ons site hosts deliberately:
+**addons.mozilla.org** (the site the puzzle menu's install footer opens in
+the stock browser window, which also serves the signed XPIs), and
+**versioncheck.addons.mozilla.org** and
+**versioncheck-bg.addons.mozilla.org** (the user-requested and periodic
+update checks of add-ons installed from it). They are contacted only after
+the user opens the site or installs from it.
 
 ## Traceability
 
