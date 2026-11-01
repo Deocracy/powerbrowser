@@ -1336,19 +1336,30 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
             return;
         }
         const widget = await this.createWidget(url);
+        // webTabClose releases the overlay and its row if chrome holds them, and answers unknown-tab otherwise.
+        const dropUnshown = (): void => {
+            this.channel.send({ kind: 'webTabClose', tabId: widget.tabId });
+            widget.dispose();
+        };
         // tabId, never widget.id: chrome's webTabIdIsValid refuses the factory-prefixed widget id.
         const reply = await this.channel.request({ kind: 'webTabAdopt', tabId: widget.tabId, pcKey });
         if (reply.ok !== true) {
-            // A late ack chrome did act on must not leave a hidden overlay; chrome answers unknown-tab otherwise.
-            this.channel.send({ kind: 'webTabClose', tabId: widget.tabId });
-            widget.dispose();
+            dropUnshown();
             return;
         }
         // An opener closed meanwhile: the tab still lands, at the end, rather than being dropped.
         const opener = this.channel.widgetOf(openerTabId);
-        this.shell.addWidget(widget, opener ? { area: 'main', ref: opener, mode: 'tab-after' } : { area: 'main' });
-        if (!background) {
-            await this.shell.activateWidget(widget.id);
+        try {
+            this.shell.addWidget(widget, opener ? { area: 'main', ref: opener, mode: 'tab-after' } : { area: 'main' });
+            if (!background) {
+                await this.shell.activateWidget(widget.id);
+            }
+        } catch (err) {
+            // 36-REVIEW WR-01: chrome holds the overlay and its row from the ack on, so a widget that never attached releases both.
+            if (!widget.isAttached) {
+                dropUnshown();
+            }
+            throw err;
         }
     }
 
