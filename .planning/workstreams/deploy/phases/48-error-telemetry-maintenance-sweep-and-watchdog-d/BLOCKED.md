@@ -3,6 +3,8 @@
 Everything below needs the owner. Each item names the skipped piece and the exact owner steps. Nothing here was written
 live; the plans built and gated every piece locally.
 
+**Organisation (settled 2026-10-31):** the live organisation is `Deocracy`; the `DeBIOS-Foundation/...` repository names in items 3 and 4 are superseded. Settled by the autonomous run on 2026-10-31 under the owner's instruction to decide items not needing owner input (HANDOFF.md, open item 1).
+
 ## 1. Pinned maintenance issue (plan 48-05, owner)
 
 - **Skipped:** the live pin of `release-train: maintenance`, and every live sweep write (PATCH, comment).

@@ -33,6 +33,10 @@ The bot App holds no Actions scope; a clock App was the alternative.
 **Owner step:** confirm the choice, or name the clock App for the dispatch. Nothing has been
 dispatched; the first live dispatch happens only after the first bump PR merges (plan 50-04).
 
+**Confirmed 2026-10-31:** `GITHUB_TOKEN` with `actions: write` on the `dispatch-release` job only,
+as recorded. Settled by the autonomous run on 2026-10-31 under the owner's instruction to decide
+items not needing owner input. No clock App is used for the dispatch.
+
 ## 3. Release path not yet able to publish (dependency on Phase 49-05)
 
 **Plans:** 50-01 (the release.yml gates are landed), 50-04 (the owner publish).

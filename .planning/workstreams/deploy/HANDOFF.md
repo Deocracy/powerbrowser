@@ -6,8 +6,8 @@ Nothing is running. Nothing was pushed. HEAD at pause: see `git log -1` (handoff
 
 ## Read this first
 
-- `STATE.md` in this directory is stale: it still says phase 41 (last updated 2026-10-22).
-  The real position is in git (`git log --merges`) and in the per-plan SUMMARY files.
+- `STATE.md` in this directory was stale (phase 41, 2026-10-22) and was rewritten on 2026-10-31
+  from the per-plan SUMMARY files; the per-plan SUMMARY files remain the source of truth.
 - `gsd-tools query init.manager --ws=deploy` reports every phase incomplete. That is because
   owner checkpoint plans are unfinished in almost every phase, not because work is missing.
 - Every phase 40-58 is planned. Most plans are built through `dsh/phase-NN` branches and merged.
@@ -32,7 +32,8 @@ two doc-only commits that followed.
 | 49-04 descriptor job + channel-live | built, Opus-reviewed (3 CR, 5 WR, 4 IN), 10 of 12 fixed | c953d2f5..c7cff5d4, review f8b8f19b, fixes af31517e..4de8a340 |
 
 Not fixed: CR-02 (release-manifest.json is not a Release asset; its `host` field names the build
-machine, so publishing it is the owner's call — BLOCKED.md "49-04" item 2) and IN-03 (manifest-vs-tree
+machine, so publishing it is the owner's call — BLOCKED.md "49-04" item 2; settled 2026-10-31 by the
+autonomous run: publish it, a sibling run implements it) and IN-03 (manifest-vs-tree
 check duplicated across release.yml and verify-channel-live.mjs). The CR-03 retention gap is resolved
 (7-day `release-linux-manifest` artifact; release-shape derives the minimum from the descriptor wait).
 
@@ -62,15 +63,25 @@ Haiku/Sonnet default for this run).
 1. **Release organisation.** Plans and research name `DeBIOS-Foundation/powerbrowser`;
    `configuration.toml` and the 2026-10-29 ruling name `Deocracy/powerbrowser`. Code follows
    `configuration.toml`. Confirm.
+   **Closed 2026-10-31: the live organisation is `Deocracy`.** Settled by the autonomous run on
+   2026-10-31 under the owner's instruction to decide items not needing owner input:
+   `configuration.toml [urls] release_notes` names `Deocracy`, and that organisation carries the
+   newer pushes. `DeBIOS-Foundation/...` as a live target in plans, research and BLOCKED.md files
+   is superseded. Scripts are not edited by this record; a sibling run derives the organisation in code.
 2. **44-03 WR-03 ordering.** A descriptor whose own Release is already published is exempt from the
    strict-order rule. If descriptors must always be committed while the Release is a draft, the
    exemption should become a FAIL. See `phases/44-trust-path-b/44-03-REVIEW-FIX.md`.
+   **Closed 2026-10-31: the exemption stays.** Settled by the autonomous run on 2026-10-31 under the
+   owner's instruction to decide items not needing owner input: `release.yml` publishes the Release in
+   `sign-publish` before the `descriptor` job runs, so a strict rule could never pass.
 
 ## Known issues found on the way
 
 - `.planning/WINDOWS.md` is out of sync with its fenced JSON (rows 10, 11, 19, 22, 23), so
   `gsd_run windows append` refuses. The unrun full-tier rows from 44-02/44-03 are not recorded there.
-  Regenerate the file, then append.
+  Regenerate the file, then append. **Fixed 2026-10-31 (7c6d311a):** the table was re-rendered from the
+  JSON and the 44-02 `build-update-xml` row appended as entry 24. 44-03's two named gaps (manifest
+  `build_id`/`build_target`, wrapper `GH_CONFIG_DIR`) were already fixed in the tree, so they were not appended.
 - `fixer-isolate-self-test` flaked once in `--quick` (socket mount race in `scripts/fixer-isolate.sh`),
   then passed. Pre-existing.
 - `descriptor-monotonic` prints SKIP with zero candidates, but the driver summary shows PASS because
