@@ -157,3 +157,15 @@ export function buildAppMenu(rows: readonly AppMenuRow[], wired: readonly string
         ],
     };
 }
+
+/** WR-06: how long a menu open waits on a store or page read before it draws without it (the store's own ack timeout is 8 s). */
+export const MENU_READ_BUDGET_MS = 1000;
+
+/** `read`'s answer, or `fallback` when it rejects or takes longer than MENU_READ_BUDGET_MS. */
+export function withinBudget<T, F extends string | object>(read: Promise<T>, fallback: F): Promise<T | F> {
+    return new Promise(resolve => {
+        const timer = setTimeout(() => resolve(fallback), MENU_READ_BUDGET_MS);
+        const settle = (value: T | F): void => { clearTimeout(timer); resolve(value); };
+        read.then(settle, () => settle(fallback));
+    });
+}

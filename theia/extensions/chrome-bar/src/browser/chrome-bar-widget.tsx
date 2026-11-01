@@ -71,7 +71,7 @@ import { LayoutControlsWidget } from './layout-controls-widget';
 import { BookmarkEntry, ChromeStoreClient, ClearHistoryRange, ClosedTabRow, PlaceMatch, ReopenableTab } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profile-storage';
 import { MENU_ORDER, MENU_PHASE } from './site-identity/site-identity-table';
-import { APP_MENU_ID, AppMenuRow, AppMenuSubmenu, WIRED_MENU_IDS, buildAppMenu } from './site-identity/app-menu';
+import { APP_MENU_ID, AppMenuRow, AppMenuSubmenu, WIRED_MENU_IDS, buildAppMenu, withinBudget } from './site-identity/app-menu';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
 import '../../src/browser/chrome-bar.css';
 
@@ -154,18 +154,6 @@ const BOOKMARKS_HISTORY_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-bookmark
 
 /** BMK-06: each History section lists at most this many rows (closed tabs, recent pages). */
 const HISTORY_MENU_ROWS = 10;
-
-/** WR-06: how long a menu open waits on a store or page read before it draws without it (the store's own ack timeout is 8 s). */
-const MENU_READ_BUDGET_MS = 1000;
-
-/** `read`'s answer, or `fallback` when it rejects or takes longer than MENU_READ_BUDGET_MS. */
-function withinBudget<T>(read: Promise<T>, fallback: T): Promise<T> {
-    return new Promise(resolve => {
-        const timer = setTimeout(() => resolve(fallback), MENU_READ_BUDGET_MS);
-        const settle = (value: T): void => { clearTimeout(timer); resolve(value); };
-        read.then(settle, () => settle(fallback));
-    });
-}
 
 /** BMK-06: one section's read, or 'failed' when chrome refused it. */
 interface HistoryMenuReads {
@@ -567,8 +555,8 @@ export class ChromeBarWidget extends ReactWidget {
     /** BMK-06: both History sections' reads, in parallel; one refused read fails only its own section. */
     protected async readHistoryMenu(): Promise<HistoryMenuReads> {
         const [closed, recent] = await Promise.all([
-            withinBudget<ClosedTabRow[] | 'failed'>(this.store.listClosedTabs(HISTORY_MENU_ROWS), 'failed'),
-            withinBudget<PlaceMatch[] | 'failed'>(this.store.searchPlaces('', HISTORY_MENU_ROWS, 'history'), 'failed'),
+            withinBudget(this.store.listClosedTabs(HISTORY_MENU_ROWS), 'failed'),
+            withinBudget(this.store.searchPlaces('', HISTORY_MENU_ROWS, 'history'), 'failed'),
         ]);
         return { closed, recent };
     }
@@ -1126,8 +1114,8 @@ export class ChromeBarWidget extends ReactWidget {
         try {
             reads = await Promise.all([
                 this.readHistoryMenu(),
-                withinBudget<PlaceMatch[] | 'failed'>(this.store.searchPlaces('', HISTORY_MENU_ROWS, 'bookmark'), 'failed'),
-                withinBudget<Partial<Record<EditCmd, boolean>>>(this.readEditState(), {}),
+                withinBudget(this.store.searchPlaces('', HISTORY_MENU_ROWS, 'bookmark'), 'failed'),
+                withinBudget(this.readEditState(), {}),
             ]);
         } finally {
             this.appMenuOpening = false;
