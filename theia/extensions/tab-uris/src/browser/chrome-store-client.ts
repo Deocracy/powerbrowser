@@ -97,6 +97,29 @@ export interface SearchEngineList {
     defaultName: string;
 }
 
+/** Phase 33 (BMK-03, BMK-06): one closed tabs.sqlite row, newest first; `closedAt` in ms since the epoch. */
+export interface ClosedTabRow {
+    uri: string;
+    url: string;
+    title: string;
+    closedAt: number;
+}
+
+/**
+ * Phase 33 (BMK-03): the closed row to reopen. `key` is the web row key to reopen it on (webTabOpen's key), null for a
+ * stock row; `withHistory` says chrome kept its back/forward history, which armWebTabHistory(key) restores.
+ */
+export interface ReopenableTab {
+    uri: string;
+    url: string;
+    title: string;
+    key: string | null;
+    withHistory: boolean;
+}
+
+/** Phase 33 (BMK-05): the Clear Recent History ranges, Firefox's set minus the site-specific rows. */
+export type ClearHistoryRange = 'last-hour' | 'last-2-hours' | 'last-4-hours' | 'today' | 'everything';
+
 export interface TabPlacesQuery {
     bookmarked?: boolean;
     open?: boolean;
@@ -229,6 +252,58 @@ export class ChromeStoreClient {
             return 'cancelled';
         }
         throw new Error(reply.message ?? `quitRequest failed (${reply.reason ?? 'store'})`);
+    }
+
+    /**
+     * Phase 33 (BMK-01): bookmarks an http(s) page; resolves its bookmark (the existing one when the page already has
+     * one). `folderGuid` is 'toolbar' | 'menu' | 'unfiled' or a Places GUID; absent, Firefox's default location.
+     * Privileged: only the pill's star and Ctrl+D handlers call it.
+     */
+    bookmarkPage(url: string, title: string, folderGuid?: string): Promise<BookmarkEntry> {
+        return this.field<BookmarkEntry>(folderGuid === undefined ? { kind: 'bookmarkPage', url, title } : { kind: 'bookmarkPage', url, title, folderGuid }, 'bookmark');
+    }
+
+    /** Phase 33 (BMK-02): renames and/or moves one bookmark. Privileged: only the editor's handlers call it. */
+    updateBookmark(guid: string, title?: string, folderGuid?: string): Promise<BookmarkEntry> {
+        const msg: { kind: string; guid: string; title?: string; folderGuid?: string } = { kind: 'updateBookmark', guid };
+        if (title !== undefined) {
+            msg.title = title;
+        }
+        if (folderGuid !== undefined) {
+            msg.folderGuid = folderGuid;
+        }
+        return this.field<BookmarkEntry>(msg, 'bookmark');
+    }
+
+    /**
+     * Phase 33 (BMK-02): removes one bookmark by GUID, or every bookmark of an http(s) page by its url; resolves how
+     * many were removed (0 when none). Privileged: only the editor's Remove handler calls it.
+     */
+    removeBookmark(guidOrUrl: string): Promise<number> {
+        return this.field<number>({ kind: 'removeBookmark', target: guidOrUrl }, 'removed');
+    }
+
+    /** Phase 33 (BMK-03, BMK-06): up to `limit` (1..25, default 10) closed web and stock tabs, newest first. */
+    listClosedTabs(limit?: number): Promise<ClosedTabRow[]> {
+        return this.field<ClosedTabRow[]>(limit === undefined ? { kind: 'listClosedTabs' } : { kind: 'listClosedTabs', limit }, 'rows');
+    }
+
+    /** Phase 33 (BMK-03): the closed row named by `uri`, or the newest; null when none is left (a no-op, not an error). */
+    reopenClosedTab(uri?: string): Promise<ReopenableTab | null> {
+        return this.field<ReopenableTab | null>(uri === undefined ? { kind: 'reopenClosedTab' } : { kind: 'reopenClosedTab', uri }, 'tab');
+    }
+
+    /**
+     * Phase 33 (BMK-05): clears history in `range` from every PowerBrowser store (Places, closed tabs, thumbnails,
+     * saved pages, web-tab histories); the sign-in cookie is never touched. Resolves the range cleared; rejects with
+     * chrome's reason. Privileged: only the range picker's confirm handler calls it.
+     */
+    async clearHistory(range: ClearHistoryRange): Promise<string> {
+        const reply = await this.request({ kind: 'clearHistory', range });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `clearHistory failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply['cleared']);
     }
 
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
