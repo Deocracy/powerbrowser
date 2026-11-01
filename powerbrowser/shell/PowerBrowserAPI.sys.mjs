@@ -4050,8 +4050,8 @@ export const PowerBrowserAPI = Object.freeze({
    * overlay `openerBrowser`, loaded with `triggeringPrincipal` (a null
    * principal when absent). The public entry for chrome code that must open a
    * page's window itself, such as allowing a blocked popup (Phase 37). Returns
-   * the pending overlay, "refused-scheme", or null when the opener is not an
-   * overlay this host holds (nothing is created then).
+   * the pending overlay; "refused-scheme" (a non-http(s) URL) and null (opener not
+   * an overlay this host holds) both mean NOTHING opened, and the caller must act.
    */
   openAdoptedWebTab(openerBrowser, url, { inBackground = false, triggeringPrincipal = null } = {}) {
     return adoptLinkIn(url, "tab", { openerBrowser, inBackground, triggeringPrincipal });
@@ -6925,7 +6925,8 @@ function mintPendingKey() {
 }
 
 // openLinkIn: middle-click, Ctrl+click and context-menu opens. The stock function opens AND loads
-// (URILoadingHelper.sys.mjs:465), so this one loads the new overlay through its own docshell.
+// (URILoadingHelper.sys.mjs:465), so this one loads the new overlay through its own docshell. Opens it cannot
+// place open nothing: no overlay opener (null), or a non-web scheme (logged by kind, never the URL).
 function adoptLinkIn(url, where, params) {
   const opener = params?.openerBrowser ?? null;
   if (tabIdOfBrowser(opener) === null) {
@@ -6933,8 +6934,13 @@ function adoptLinkIn(url, where, params) {
   }
   const spec = typeof url === "string" && url ? url : "about:blank";
   if (where !== "tab" && where !== "tabshifted") {
-    // "window" and anything else stock may send: the stock window, so a click is never swallowed.
-    PowerBrowserAPI.openStockTab(spec === "about:blank" ? "" : spec).catch(err => {
+    // "window", "current", "save" and anything else: the stock window (stock puts "current" in the opener's own tab
+    // and "save" in Save As). openStockTab takes http(s) only, so a refusal opens nothing and is logged by kind.
+    PowerBrowserAPI.openStockTab(spec === "about:blank" ? "" : spec).then(result => {
+      if (result === "refused-scheme") {
+        PowerBrowserAPI.log("warn", "[web-tab] link stock-window open dropped: refused-scheme");
+      }
+    }, err => {
       PowerBrowserAPI.log("error", `[web-tab] link stock-window open failed: ${err && err.message ? err.message : err}`);
     });
     return null;
@@ -6944,6 +6950,8 @@ function adoptLinkIn(url, where, params) {
     : Services.prefs.getBoolPref("browser.tabs.loadInBackground", true);
   const browser = createPendingOverlay(opener, spec, where === "tabshifted" ? !inBackground : inBackground, null);
   if (typeof browser === "string") {
+    // A non-web scheme (mailto:, data:, blob:) gets no overlay and opens nothing; logged by kind, returned to the caller.
+    PowerBrowserAPI.log("warn", "[web-tab] link tab open dropped: refused-scheme");
     return browser;
   }
   // The caller's principal, never the system principal on a page-chosen URL.
