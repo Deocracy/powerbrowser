@@ -4,11 +4,11 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 38
 current_phase_name: WebExtensions
-status: ready_to_execute
-stopped_at: "Phases 33-37 merged into main, reviewed, fixed, verified human_needed with 0 gaps; all live checks deferred to one end-of-milestone pass (.planning/v1.5-LIVE-PASS.md). Phase 38 not started; ready to execute (Phase 28 route signed off 2026-10-21)"
+status: verifying
+stopped_at: "All v1.5 phases executed; Phases 33-38 merged into main, reviewed, fixed, verified human_needed with 0 gaps; end-of-milestone live pass pending (owner, .planning/v1.5-LIVE-PASS.md)"
 last_updated: "2026-11-01T03:25:55.228Z"
 last_activity: 2026-11-01
-last_activity_desc: Phases 33-37 closed with verification deferred; Phase 38 ready to execute
+last_activity_desc: Phase 38 merged in full with verification deferred; end-of-milestone live pass pending (owner)
 state_head: 4b332e170e413e5814fbba6551f017ef0f11bae6
 progress:
   total_phases: 13
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 38 — WebExtensions (not started; ready to execute — Phase 28 route signed off 2026-10-21)
+**Current focus:** all v1.5 phases executed; end-of-milestone live pass pending (owner)
 
 ## Current Position
 
-Phase: 38 — not started; ready to execute (Phase 28 route signed off 2026-10-21, 28-SPIKE-DECISION.md)
+Phase: all v1.5 phases executed; end-of-milestone live pass pending (owner)
 Plan: —
-Status: Phases 32-37 closed with verification deferred to the end-of-milestone pass (.planning/v1.5-LIVE-PASS.md)
-Last activity: 2026-11-01 — Phases 33-37 closed by hand (verification human_needed, 0 gaps)
+Status: Phases 32-38 closed with verification deferred to the end-of-milestone pass (.planning/v1.5-LIVE-PASS.md)
+Last activity: 2026-11-01 — Phase 38 merged in full (50b664d3; verification human_needed, live checks deferred)
 
 **v1.5 parallel-lane run:** lanes p33..p37 were cut from 23c08bb5 and merged into main in order 36 (aa8989d9), 34 (8143fedd), 37 (14319419), 35 (68a38581), 33 (d6f9fcbb). Each was reviewed and fixed on main. All live checks are deferred to one end-of-milestone pass.
 
@@ -542,6 +542,8 @@ with "autonomous interactive".
 | 35 | verification_deferred_human (7/7 plans, 5/13 must-haves verified, 8 present and wired with behavior unverified, 0 gaps, merged 68a38581; review fixed on main; 22 UAT items: verify-page-furniture-live, shell-furniture visuals, Edit-submenu fallback owner call, WINDOWS.md ledger repair — Chris at end of milestone; 35-UAT.md) | /gsd-verify-work 35 |
 | 36 | verification_deferred_human (3/3 plans, 10/19 must-haves verified, 0 gaps, merged aa8989d9; review fixed on main; 18 UAT items: seven verify-new-window-adopt-live scenarios + self-test, GUI-01 rows and palette run, A-06 browserDOMWindow read-back, four 36-REVIEW live legs, VB-01 parity, CLAUDE.md rule 5 wording owner decision — Chris at end of milestone; 36-UAT.md) | /gsd-verify-work 36 |
 | 37 | verification_deferred_human (4/4 plans, 9/18 must-haves verified, 0 gaps, merged 14319419; review fixed on main; 41 UAT items: verify-prompts-live with --scenario dialog-probe first (writes the verdict that unblocks rule (p) and the prompt-probe-verdict-live row), live prompt, WebRTC, 37-03 dialog gate (both outcomes), password save/update, popup-block Allow, hung-script and protocol bars, doorhanger visuals — Chris at end of milestone; 37-UAT.md) | /gsd-verify-work 37 |
+| 38 | verification_deferred_human (5/5 plans, 10/25 must-haves verified, status human_needed, 0 gaps, merged f655d69d (38-01..03) and 50b664d3 (rest); review 3 critical + 9 warnings fixed, two private-browsing fixes; 40 UAT items: verify-extension-actions-live scenarios + live self-test, verify-extension-amo-live amo-install/fixtures (network to addons.mozilla.org) + live self-test, neighbour suites, private-browsing manual check, visuals, EXT-10 fill on a local Vaultwarden (Chris 2026-11-01, option b), owner decisions; patch 050 re-applied before the Gecko build — Chris at end of milestone; 38-UAT.md) | /gsd-verify-work 38 |
+| 38 | verification_deferred_human (5/5 plans, 10/25 must-haves verified, status human_needed, 0 gaps, merged f655d69d (38-01..03) and 50b664d3 (rest); review 3 critical + 9 warnings fixed, two private-browsing fixes; 40 UAT items: verify-extension-actions-live scenarios + live self-test, verify-extension-amo-live amo-install/fixtures (network to addons.mozilla.org) + live self-test, neighbour suites, private-browsing manual check, visuals, EXT-10 fill on a local Vaultwarden (Chris 2026-11-01, option b), owner decisions; patch 050 re-applied before the Gecko build — Chris at end of milestone; 38-UAT.md) | /gsd-verify-work 38 |
 | focus-fix | verification_deferred_human (overlay focus race fixed c423f1a, 15/15 loops; on a real keyboard: F6 from the pill with suggestions open then type, Paste & Go then Down scrolls, same-site link then Down scrolls — Chris at end of milestone; record .planning/debug/overlay-focus-intermittent.md) | /gsd-debug overlay-focus-intermittent |
 
 ## Deferred Items

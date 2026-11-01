@@ -193,6 +193,7 @@ expected: |
   - (b) A local Vaultwarden on 127.0.0.1 with the extension's self-hosted server URL pointed at it. No egress, adds a server to the harness. Recommended.
   - (c) Accept the offer-only proof and leave the fill to the manual backstop.
   Until a decision is made EXT-10 stays incomplete as written.
+  Decided 2026-11-01 (Chris): option (b). The fill is tested against a local Vaultwarden server on 127.0.0.1 with a test vault, driven by the Bitwarden extension. D-09's no-vault-account rule stays satisfied: no external account and no committed secret. The `fixtures` scenario needs a Vaultwarden mode added before the live run (.planning/v1.5-LIVE-PASS.md, Phase 38).
 result: [pending]
 
 ### 32. Owner decision: page-action icon placement

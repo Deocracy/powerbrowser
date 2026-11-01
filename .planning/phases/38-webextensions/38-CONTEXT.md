@@ -96,6 +96,11 @@ route (no planning without it — satisfied 2026-10-21).
   and secret-handling scope the requirement ("checked working live in web tabs",
   REQUIREMENTS.md:135) does not ask for. The scenario first shows the unfilled
   baseline in the same session (positive control), then the filled outcome.
+  **2026-11-01 (Chris, 38-UAT 31, option b):** the fill is tested against a local
+  Vaultwarden server on 127.0.0.1 with a test vault, driven by the Bitwarden
+  extension. D-09's no-vault-account rule stays satisfied: no external account, no
+  committed secret, no egress. The `fixtures` scenario needs a Vaultwarden mode
+  added before the live run.
 - **D-10 (W1, kept): task `type="tracer"` is valid.** Reason: it is the GSD plan
   vocabulary for the end-to-end proof task, as in the existing 38-01 T2 / 38-02 T2
   / 38-03 T1 / 38-05 T2 tasks.

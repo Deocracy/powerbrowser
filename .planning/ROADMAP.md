@@ -529,6 +529,7 @@ Plans:
   5. An ad blocker, a password manager and a dark-mode extension are each checked working live in web tabs
 
 **Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
+**Status**: plans done; verification human_needed, deferred to the end-of-milestone pass (see 38-VERIFICATION.md, 38-UAT.md).
 
 Plans:
 - [x] 38-01-PLAN.md (wave 1) — Build the chrome-side extension bridge on the Phase 31.1 tab host: action-state
