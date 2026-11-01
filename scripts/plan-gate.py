@@ -43,14 +43,19 @@ def effective_phase(args, data):
     return text if text else "unset"
 
 
-def due_ids(data, phase_text):
+def due_ids(data, phase_text, stream="default"):
     """Due set: open rows due under P5-1(a), every deferred-requested row, and
     deferred-approved rows whose target phase is at or below the planned phase
-    (ruling I2: the deferral ends there, so the plan must cite the ID)."""
+    (ruling I2: the deferral ends there, so the plan must cite the ID).
+    Only rows in the planned stream count: a GSD workstream numbers its phases
+    independently, so a row's phase compares only within its own stream (a row
+    with no "stream" field belongs to "default")."""
     cur_p = parse_phase(phase_text) if phase_text != "unset" else None
     due = []
     for row in data.get("items", []):
         if not isinstance(row, dict):
+            continue
+        if str(row.get("stream") or "default") != stream:
             continue
         status = row.get("status")
         rid = str(row.get("id", "?"))
@@ -90,7 +95,7 @@ def run_coverage(args, data):
         return [err]
     phase_text = effective_phase(args, data)
     out = []
-    for rid, kind in due_ids(data, phase_text):
+    for rid, kind in due_ids(data, phase_text, args.stream):
         if rid in cited and kind == "open":
             continue
         if kind == "deferred":
@@ -98,8 +103,9 @@ def run_coverage(args, data):
         else:
             out.append(f"{rid}: due but not cited in any plan (phase {phase_text})")
     if not out:
-        total = len(due_ids(data, phase_text))
-        out.append(f"plan gate passed: {total}/{total} IDs cited (phase {phase_text})")
+        total = len(due_ids(data, phase_text, args.stream))
+        scope = "" if args.stream == "default" else f", stream {args.stream}"
+        out.append(f"plan gate passed: {total}/{total} IDs cited (phase {phase_text}{scope})")
     return out
 
 
@@ -109,7 +115,14 @@ def main(argv=None):
     ap.add_argument("--phase", default=None)
     ap.add_argument("--plans", default=None)
     ap.add_argument("--check-scope", action="store_true")
+    ap.add_argument("--stream", default="default")
+    ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
+    if args.self_test:
+        return self_test()
+    if not args.stream.strip():
+        print("plan-gate.py: --stream needs a name")
+        return 2
     if args.plans is None and not args.check_scope:
         print("plan-gate.py: need --plans PLANDIR and/or --check-scope")
         return 2
@@ -219,6 +232,44 @@ def run_scope(args, data):
     if digest != lock["sha256"]:
         return [f"scope changed since lock: {source} (locked phase {phase})"], False
     return [f"scope check passed (phase {phase})"], True
+
+
+def self_test():
+    """Plant ledgers in a temp dir; each case must give its stated verdict."""
+    import contextlib
+    import io
+    import tempfile
+    rows = [
+        {"id": "AA-1", "status": "deferred-approved", "phase": "26"},
+        {"id": "BB-1", "status": "deferred-approved", "phase": "40", "stream": "ws"},
+    ]
+    cases = [  # (label, extra argv, plan text, expected exit, required output fragment)
+        ("default stream counts a stream-less row", [], "cites nothing", 1, "AA-1: due"),
+        ("default stream ignores another stream's row", [], "cites AA-1", 0, "plan gate passed"),
+        ("named stream ignores default rows", ["--stream", "ws"], "cites BB-1", 0, "stream ws"),
+        ("named stream counts its own row", ["--stream", "ws"], "cites AA-1", 1, "BB-1: due"),
+    ]
+    failures = []
+    for label, extra, plan, want_rc, want_out in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "ledger").mkdir()
+            (root / "ledger" / "REQUIREMENTS.json").write_text(
+                json.dumps({"items": rows}), encoding="utf-8")
+            (root / "plans").mkdir()
+            (root / "plans" / "01-PLAN.md").write_text(plan, encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["--root", tmp, "--phase", "40",
+                           "--plans", str(root / "plans")] + extra)
+            if rc != want_rc or want_out not in buf.getvalue():
+                failures.append(f"{label}: rc={rc} output={buf.getvalue().strip()!r}")
+    for line in failures:
+        print(f"plan-gate self-test FAIL -- {line}")
+    if failures:
+        return 1
+    print(f"plan-gate self-test PASS -- {len(cases)} planted cases")
+    return 0
 
 
 if __name__ == "__main__":

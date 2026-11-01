@@ -33,6 +33,9 @@ vendor_machine = "DeBIOS"
 vendor_display = "DeBIOS Foundation"
 description = "A rebrandable browser platform: a Gecko shell hosting an Eclipse Theia sidecar as its default GUI."
 homepage = "https://powerbrowser.org"
+# The release key is v<ESR>-<revision> (REL-01). Reset to 1 when the ESR pin
+# moves; increase it for an out-of-band rebuild on the same ESR.
+revision = 1
 
 [identity]
 display_name = "PowerBrowser"
@@ -77,22 +80,38 @@ support_url = "https://powerbrowser.org"
 
 # Update endpoint (NG-064). update is the update-descriptor URL the client asks.
 # Its host becomes MOZ_APPUPDATE_HOST through generated/identity.configure, so
-# application.ini's [AppUpdate] URL names this host rather than Mozilla's, and
-# powerbrowser/distribution/policies.json AppUpdateURL must equal it (the policy
-# wins over application.ini; ng064-update-url-from-manifest pins both).
+# application.ini's [AppUpdate] URL names this host rather than Mozilla's. It is the
+# only update URL source (UPD-12): ng064-update-url-from-manifest asserts that
+# application.ini and the binaries carry it, and that
+# powerbrowser/distribution/policies.json carries no update URL.
+#
+# release_notes and homepage feed the About dialog's release-notes link and its
+# manual-update fallback link. They are click destinations, never contacted
+# unattended (endpoint-allowlist disposition user-initiated).
 [urls]
 update = "https://updates.powerbrowser.org/update.xml"
+release_notes = "https://github.com/Deocracy/powerbrowser/releases"
+homepage = "https://powerbrowser.org"
+
+# mar_origin is the primary MAR origin (owner ruling 2026-10-29): the host the update
+# descriptor's patch URLs name, <mar_origin>/<tag>/<asset>. It is https and names only a
+# host, with no path, port, query or trailing slash; generate refuses any other value by
+# name. It is never a click destination. Unset is recorded as null in the release manifest.
+mar_origin = "https://downloads.powerbrowser.org"
 
 # Product telemetry (TEL-01/TEL-02). level is one of off, crash, error, all
 # and defaults to off: an unset level resolves to off with the standard
 # D-08 default-echo, so a downstream omitting it inherits off rather than
 # a live sender. endpoint is the downstream's own https URL; an enabled
 # level with no endpoint fails the generate naming telemetry.endpoint, so
-# a sender that can never deliver never builds. endpoint is deliberately
-# UNSET here: with level off there is nowhere to send and nothing ever
-# leaves the application.
+# a sender that can never deliver never builds. The endpoint is stated while
+# level stays off (TEL-06, A48-2): raising the preference is the opt-in, and at
+# level off the Gecko server pref is blanked, so nothing leaves the application.
+# The events hostname follows the Phase 47 zone; it is assumed here until the
+# Phase 47 record names it.
 [telemetry]
 level = "off"
+endpoint = "https://events.powerbrowser.org/events"
 
 # Declared sidecar extensions. Each [[extensions]] entry names an Open VSX
 # id at an exact version pin, or a direct https URL, plus the sha256 of the
@@ -124,14 +143,14 @@ suggest_url = "https://en.wikipedia.org/w/api.php?action=opensearch&search={sear
 
 # Upstream pins (UPD-01, UPD-02). firefox_esr_tag is the one ESR tag this
 # project builds against: scripts/fetch-upstream.sh clones it,
-# scripts/rebase-upstream.sh moves to it, and the rebase workflow mirrors
-# it. theia_release is the one Theia release this project composes: every
-# @theia/* pin in theia/package.json resolutions, every member
-# applications/*/package.json and extensions/*/package.json, and the
-# resolved @theia tarballs in theia/yarn.lock agree with it (the
-# @theia/monaco-editor-core exception carries upstream's own monaco line).
-# Edit one value, run `node scripts/generate.mjs`, and every consumer
-# follows -- no second copy lives anywhere else in the tree.
+# scripts/rebase-upstream.sh moves to it, and the rebase workflow receives
+# it as an explicit tag input (it carries no copy). theia_release is the one
+# Theia release this project composes: every @theia/* pin in theia/package.json
+# resolutions, every member applications/*/package.json and
+# extensions/*/package.json, and the resolved @theia tarballs in theia/yarn.lock
+# agree with it (the @theia/monaco-editor-core exception carries upstream's own
+# monaco line). Edit one value, run `node scripts/generate.mjs`, and every
+# consumer follows -- no second copy lives anywhere else in the tree.
 [upstreams]
-firefox_esr_tag = "FIREFOX_153_5_0esr_BUILD1"
+firefox_esr_tag = "FIREFOX_153_5_1esr_RELEASE"
 theia_release = "1.76.0"

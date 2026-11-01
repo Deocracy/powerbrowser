@@ -10,6 +10,7 @@ import { PowerBrowserTerminalFrontendContribution, PowerBrowserTerminalWidget } 
 import { TerminalUriOpenHandler } from './terminal-open-handler';
 import { PowerBrowserOutputOpenHandler, PowerBrowserWebviewOpenHandler } from './existing-scheme-coverage';
 import { BrowserWindowCommandContribution } from './browser-window-command';
+import { UpdateClientContribution } from './update-client';
 import { WEB_TAB_FACTORY_ID, WebTabActivationContribution, WebTabChannel, WebTabOpenHandler, WebTabOptions, WebTabWidget, isCurrentSessionTabId } from './web-tab';
 import { LocalStorageService } from '@theia/core/lib/browser/storage-service';
 import { ProfileStorageService, ShellStateFlushContribution } from './profile-storage';
@@ -130,6 +131,14 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
     // which is this command's ONLY affordance.
     bind(BrowserWindowCommandContribution).toSelf().inSingletonScope();
     bind(CommandContribution).toService(BrowserWindowCommandContribution);
+
+    // UPD-20/21/22/23 (46-02): the in-app-update experience. Bound statically
+    // at module load for the same D-50 reason as the command above: the two
+    // palette commands' ONLY affordance is the palette, and the appUpdate push
+    // listener must exist before chrome's first push.
+    bind(UpdateClientContribution).toSelf().inSingletonScope();
+    bind(CommandContribution).toService(UpdateClientContribution);
+    bind(FrontendApplicationContribution).toService(UpdateClientContribution);
 
     // D-27: the AI chat widget must never escape into a secondary window
     // -- the future unified tab strip has no way to model a chrome-owned

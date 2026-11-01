@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
  * GEN-04's byte-identity gate: what the generator emits from
- * configuration.toml is byte-for-byte the thirty-three build surfaces Phase 1
- * wrote by hand -- plus the one declared exception EXPECTED marks MIG-05:
- * the identity carrier never had a hand-written original, so its comparand
- * is a frozen copy of the emission rather than an independent original.
+ * configuration.toml is byte-for-byte its tracked comparands: the thirty-three
+ * build surfaces Phase 1 wrote by hand, the surfaces later phases added (the
+ * live total is printed on every run; 39 at Phase 55), and three declared
+ * exceptions: the identity carrier
+ * (MIG-05) and the two release-identity version files (REL-01) never had a
+ * hand-written original, so their comparands are frozen copies of the
+ * emission rather than independent originals.
  *
  * This is the phase's acceptance test made mechanical. Phase 1 deliberately
  * wrote every branding value as a hand-written literal -- CLAUDE.md says so in
@@ -40,9 +43,9 @@
  * The freshness of `generated/` itself is a DIFFERENT question with a different
  * answer, and it has its own instrument: `node scripts/generate.mjs --check`.
  *
- * Honestly --quick: it reads the manifest and thirty-three tracked files --
- * ten of them PNG rasters -- and writes into the OS temp directory. No
- * build, no browser, no display, no network.
+ * Honestly --quick: it reads the manifest and every tracked comparand (39 at
+ * Phase 55, ten of them PNG rasters; the run prints the live count) and writes
+ * into the OS temp directory. No build, no browser, no display, no network.
  *
  * Usage:
  *   node scripts/verify-generated-identity.mjs
@@ -125,6 +128,34 @@ const EXPECTED = Object.freeze([
     // build input: the build reads generated/identity.configure through the
     // upstream/identity.configure symlink, never this path.
     'powerbrowser/identity.configure.comparand',
+    // NEW (Phase 40, REL-01): the release-identity version files. Frozen
+    // copies of the emission, authored once from the emitter, same contract
+    // as the carrier above. Release metadata, never a Gecko build input.
+    'powerbrowser/packaging/version/version.txt',
+    'powerbrowser/packaging/version/release.txt',
+    // NEW (Phase 45, PKG-17): the release .mozconfig variant. Frozen copy of
+    // the release emission (objdir-release, --enable-bootstrap, SB keyfile
+    // mount), authored once from the emitter, same contract as the carrier
+    // above: on a red, the emitter is what changes. The container release
+    // build configures against the generated copy of these bytes.
+    // Deliberately written here as well as in TARGETS (IN-03, Phase 45): the
+    // TARGETS row is the emitter side, this line is the declared contract. Deriving
+    // it from TARGETS would compare the generator with itself, so a dropped or
+    // renamed release target would never go red.
+    'powerbrowser/packaging/mozconfig.release',
+    // NEW (Phase 55, PKG-14): the aarch64 macOS mozconfig. A deliberate contract
+    // change, so it lands here in the same commit as its TARGETS row. Frozen copy
+    // of the shared builder's output plus the Darwin tail, authored once from the
+    // emitter; on a red, the emitter is what changes.
+    'powerbrowser/packaging/mozconfig-macos-aarch64',
+    // NEW (Phase 55, PKG-14): the x86_64 macOS mozconfig, the second target through
+    // the same shared builder. Same contract as the aarch64 entry above.
+    'powerbrowser/packaging/mozconfig-macos-x86_64',
+    // NEW (Phase 54, PKG-11): the x86_64 Windows mozconfig through the same shared
+    // builder, with the target triple and --disable-maintenance-service as its tail.
+    // A deliberate contract change, so it lands here in the same commit as its
+    // TARGETS row; on a red, the emitter is what changes, never this comparand.
+    'powerbrowser/packaging/mozconfig-windows-x86_64',
 ]);
 
 /** Set difference reported by name, so a failure says WHICH path drifted. */

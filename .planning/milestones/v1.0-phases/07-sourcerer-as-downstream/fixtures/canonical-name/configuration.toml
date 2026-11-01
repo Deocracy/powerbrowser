@@ -21,6 +21,7 @@
 # fixture's.
 
 [product]
+revision = 1
 vendor_machine = "Ironwood"
 vendor_display = "Ironwood Collective"
 
@@ -49,3 +50,5 @@ theia_release = "1.74.1"
 
 [urls]
 update = "https://updates.example.org/update.xml"
+release_notes = "https://example.org/releases"
+homepage = "https://example.org"

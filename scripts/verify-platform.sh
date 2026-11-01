@@ -118,6 +118,13 @@ track_temp() { TEMP_PATHS+=("$1"); }
 REAL_XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}"
 HARNESS_CONFIG_HOME="$(mktemp -d)"; track_temp "$HARNESS_CONFIG_HOME"
 export XDG_CONFIG_HOME="$HARNESS_CONFIG_HOME"
+# gh resolves its config (and so its auth) from XDG_CONFIG_HOME/gh, which the export above
+# points at an empty dir: every full-tier gh api row (repo-controls, descriptor-monotonic) would
+# fail as unauthenticated. Point gh at the caller's real config dir instead, only when it exists
+# and the caller did not set GH_CONFIG_DIR. Only the path is exported; no token is read or copied.
+if [ -z "${GH_CONFIG_DIR:-}" ] && [ -d "${REAL_XDG_CONFIG_HOME:-$HOME/.config}/gh" ]; then
+  export GH_CONFIG_DIR="${REAL_XDG_CONFIG_HOME:-$HOME/.config}/gh"
+fi
 
 # The merged teardown. This is the UNION of the four deleted drivers' cleanup()
 # bodies, not a rewrite: verify-phase-05.sh's was already a superset of 03's and
@@ -2616,9 +2623,13 @@ check_desktop_entry_quick() {
 
 # --- the allowlist schema check ---
 check_allowlist_schema() {
-  node -e '
-    const fs = require("fs");
-    const allowlistPath = process.argv[1];
+  # The accepted disposition set is derived from scripts/lib/endpoint-verdict.mjs DISPOSITIONS,
+  # the one verdict rule, never a literal list here (UPD-33).
+  node --input-type=module -e '
+    import fs from "node:fs";
+    import { pathToFileURL } from "node:url";
+    const [allowlistPath, libPath] = process.argv.slice(1);
+    const { DISPOSITIONS } = await import(pathToFileURL(libPath).href);
     if (!fs.existsSync(allowlistPath)) {
       console.error(`allowlist-schema: FAIL -- ${allowlistPath} does not exist`);
       process.exit(1);
@@ -2629,8 +2640,8 @@ check_allowlist_schema() {
       process.exit(1);
     }
     for (const h of a.hosts) {
-      if (!h.host || !["allow", "deny"].includes(h.disposition) || !h.reason) {
-        console.error(`allowlist-schema: FAIL -- malformed host entry: ${JSON.stringify(h)}`);
+      if (!h.host || !DISPOSITIONS.includes(h.disposition) || !h.reason) {
+        console.error(`allowlist-schema: FAIL -- malformed host entry (disposition must be one of ${DISPOSITIONS.join(", ")}): ${JSON.stringify(h)}`);
         process.exit(1);
       }
     }
@@ -2641,7 +2652,7 @@ check_allowlist_schema() {
       }
     }
     console.log(`allowlist-schema: PASS -- ${a.hosts.length} host(s), ${a.prefs.length} pref(s)`);
-  ' "$REPO_ROOT/powerbrowser/endpoint-allowlist.json"
+  ' "$REPO_ROOT/powerbrowser/endpoint-allowlist.json" "$REPO_ROOT/scripts/lib/endpoint-verdict.mjs"
 }
 
 # --- allowlist-to-document consistency (03-VERIFICATION.md Gap 2) ---
@@ -3469,6 +3480,10 @@ fi
 # two reasons side05's own comment gives: gfxPlatform::IsHeadless() disables
 # Firefox's native remoting protocol outright, and nsRemoteService keys
 # remoting on the profile path.
+check_plan_gate_streams_self_test() {
+  python3 "$REPO_ROOT/scripts/plan-gate.py" --self-test
+}
+
 check_gui01_single_shell_window() {
   local bin profile result=0
   bin="$REPO_ROOT/objdir/dist/bin/powerbrowser"
@@ -3590,6 +3605,23 @@ run_own_checks() {
     # and requires this exact un-flagged invocation's decision function to
     # reject it, with a clean control proving the red is plant-caused.
     "scan-brand-residue-self-test|node $REPO_ROOT/scripts/scan-brand-residue.mjs --self-test"
+    # NEW (deploy, 2026-10-31): two GitHub organisations each hold a powerbrowser repository,
+    # so a hand-typed owner points at the wrong one without failing anything else. Every
+    # github.com/<owner>/<repo> reference in tracked code, workflows and generated output must
+    # name the owner configuration.toml derives (prose, the brand inventory and the historical
+    # records are exempt). The self-test plants a wrong-owner literal per surface and a manifest
+    # naming the other owner, and requires each to go red naming the file and the literal.
+    "repo-slug-derived|node $REPO_ROOT/scripts/verify-repo-slug-derived.mjs"
+    "repo-slug-derived-self-test|node $REPO_ROOT/scripts/verify-repo-slug-derived.mjs --self-test"
+    # NEW (58-03, UPS-03): the dual-build measurement table in docs/BUILD.md. The tuple and verdict
+    # columns are found in the table's own header, and a row with any measurement must carry the
+    # tree commit, the toolchain-baseline cite, a date and a verdict (or a hosted-spill verdict with
+    # its evidence link); an empty row is the honest "not measured yet" and stays green. Shape only:
+    # it cannot tell a real number from an invented one. The self-test plants twelve faults and
+    # requires each to go red naming the cause, with four clean controls. Honestly --quick: one
+    # text read, no build, no browser, no network.
+    "dual-build-table|node $REPO_ROOT/scripts/verify-dual-build-table.mjs"
+    "dual-build-table-self-test|node $REPO_ROOT/scripts/verify-dual-build-table.mjs --self-test"
     "branding-preflight|node $REPO_ROOT/scripts/verify-branding-preflight.mjs"
     "branding-preflight-self-test|node $REPO_ROOT/scripts/verify-branding-preflight.mjs --self-test"
     # NEW (06-01): VER-01's static layer -- the manifest's own display
@@ -3674,6 +3706,17 @@ run_own_checks() {
     # rides alongside: every planted fault must go red naming its drift.
     "ext-tab-host-scope|node $REPO_ROOT/scripts/verify-ext-tab-host-scope.mjs"
     "ext-tab-host-scope-self-test|node $REPO_ROOT/scripts/verify-ext-tab-host-scope.mjs --self-test"
+    # NEW (Phase 57, TEL-09): the Glean crash-ping consent read fails closed. The host is
+    # derived from TELEMETRY_SERVER in upstream's crashping/src/lib.rs at check time; patch 050
+    # equals its regeneration; the applied determine_telemetry_enabled carries no true literal;
+    # both branding variants pin uploadEnabled false; the allowlist denies the derived host.
+    # Honestly --quick: text reads and git plumbing over the existing upstream/ checkout.
+    "crash-ping-consent|node $REPO_ROOT/scripts/verify-crash-ping-consent.mjs"
+    # Its self-test row rides alongside for the reason every other self-test row in
+    # this array gives: green first, then seven in-memory plants (derivation moved and removed,
+    # fail-open default, patch missing, hand-edited hunk, branding default true, allowlist
+    # widened), each red naming the drifted file.
+    "crash-ping-consent-self-test|node $REPO_ROOT/scripts/verify-crash-ping-consent.mjs --self-test"
     "fetch-upstream-self-test|bash $REPO_ROOT/scripts/fetch-upstream.sh --self-test"
     # NEW (05-02): the ESR pin-agreement gate -- configuration.toml's
     # [upstreams] tag equals the generated shell fragment, the workflow
@@ -4510,6 +4553,15 @@ run_own_checks() {
     # browser, no display, no network.
     "telemetry|node $REPO_ROOT/scripts/verify-telemetry.mjs"
     "telemetry-self-test|node $REPO_ROOT/scripts/verify-telemetry.mjs --self-test"
+    # NEW (Phase 48, TEL-06): the analyzer half of the live-delivery row. The pure analyzeCapture over
+    # captured requests: the control is one preflight and one POST carrying both corrected events; every rule
+    # has a plant (no POST, no preflight, a wrong content type, a non-JSON or non-events body, a top-level or
+    # per-event extra key, a stack or message field, an unadmitted key, a full path, a non-number position, a
+    # position on a rejection, a missing required key, a missing uncaught or rejection event, a usage event,
+    # the drill's own message text, a body the Worker's handleEvents rejects, an empty capture, a request at
+    # level off) and must go red naming its drift. Honestly --quick: in-memory fixtures only; no build, no
+    # browser, no display, no network.
+    "tel06-error-delivery-live-self-test|node $REPO_ROOT/scripts/verify-telemetry-live-delivery.mjs --self-test"
 
     # NEW (04-04): GEN-05 remainder's branding gate -- the manifest's
     # [theia]/[installer] display values plus brand/mark.svg reach the
@@ -4599,13 +4651,20 @@ run_own_checks() {
     # mar-update-hop-self-test rides alongside for the reason every other
     # self-test row in this array gives: it runs a mock proof through the
     # same runChecks (control green first), then requires red naming file
-    # and values for a same-version loop, a stale-hash descriptor, and a
-    # Mozilla host in the resolver log.
+    # and values for a same-version loop, a stale-hash descriptor, a
+    # Mozilla host in the resolver log, plus the 46-03 plants (notification
+    # absent, version not N+1, layout not restored, read-only ready string,
+    # read-only empty).
     #
     # Honestly --quick for the twin only: node:crypto plus text files in
     # mkdtemp. No build, no browser, no display, no network. The full row
     # is emphatically not --quick.
     "mar-update-hop-self-test|node $REPO_ROOT/scripts/verify-mar-update-hop.mjs --self-test"
+    # NEW (Phase 46, UPD-27): the exposure self-test twin. Fixture doubles
+    # only (silent/throwing/recording) plus the comparand-missing plant;
+    # each red naming its signal. Honestly --quick: node only, no build,
+    # browser, display or network.
+    "nimbus-exposure-self-test|node $REPO_ROOT/scripts/verify-nimbus-exposure.mjs --self-test"
 
     # NEW (08-04): the NSIS-on-Nix build-proof rows. The full row stages
     # the pinned installer inputs from the tree at check time (real
@@ -4655,6 +4714,42 @@ run_own_checks() {
     "crash-collector|node $REPO_ROOT/scripts/verify-crash-collector.mjs"
     "crash-collector-self-test|node $REPO_ROOT/scripts/verify-crash-collector.mjs --self-test"
 
+    # NEW (Phase 57, TEL-07): the crash-submit Worker's contract gate. The receiver must speak the collector's
+    # contract for every shared name, its verdicts hold through the real fetch against an in-memory R2 stub,
+    # and its descriptors keep workers_dev off, the 30-day lifecycle over crash/, and no in-Worker throttle or
+    # credential. crash-submit-self-test plants each fault and requires it red naming its rule.
+    # Honestly --quick: synthetic Requests and a mkdtemp fixture only. No build, no network, no deploy.
+    "crash-submit|node $REPO_ROOT/scripts/verify-worker-submit.mjs"
+    "crash-submit-self-test|node $REPO_ROOT/scripts/verify-worker-submit.mjs --self-test"
+
+    # NEW (Phase 57, TEL-12): the per-target symbols archive gate. The archive suffix derives from
+    # package-name.mk and Makefile.in, every asset-table row is a token or marked pending, no name collides
+    # with the DIST-07 names (verify-release-asset-set.mjs --expected), the release workflow enumerates assets/
+    # into SHA256SUMS, the locale rename is recorded, and the runbook reads only annotations Gecko writes.
+    # release-symbols-self-test runs ten plants through runChecks, each red naming its asset or rule.
+    # Honestly --quick: text reads of upstream make files, docs and configuration.toml. No build, no network.
+    "release-symbols|node $REPO_ROOT/scripts/verify-release-symbols.mjs"
+    "release-symbols-self-test|node $REPO_ROOT/scripts/verify-release-symbols.mjs --self-test"
+
+    # NEW (Phase 48, TEL-10/TEL-11): the telemetry Worker's contract gate. It imports the Worker
+    # and drives every rule against a stub D1: method, path, content type, parse, shape, the body
+    # and batch caps, the string cap, no cross-caller throttle, the authenticated download-count
+    # route, the per-day upsert, the 30-day retention, and the maintainer query that excludes
+    # synthetic rows. It also cross-checks the admitted set against the producer, the privacy
+    # page's retention, the schema columns, the wrangler descriptor, and that no credential
+    # value is assigned in worker/.
+    #
+    # events-worker-self-test rides alongside for the reason every other self-test row gives: the
+    # unmutated Worker is green first, then one planted fault per rule on a copy of the Worker
+    # (and one on the privacy page) must each go red naming its rule.
+    #
+    # Honestly --quick: node stdlib, text reads and an in-memory stub D1 in mkdtemp. No build,
+    # no browser, no display, no network. The live Worker, the D1 database and the rate-limit
+    # rule are owner actions at plan 48-05: this row proves the code and the descriptor, not the
+    # deploy.
+    "events-worker|node $REPO_ROOT/scripts/verify-events-worker.mjs"
+    "events-worker-self-test|node $REPO_ROOT/scripts/verify-events-worker.mjs --self-test"
+
     # --- non-GUI wave E (NG-068, NG-070, NG-074): quick rows. No build, no browser,
     # no display; ng068 binds a loopback port only and reads upstream/'s report.rs.
     "ng068-crash-extra-part|node $REPO_ROOT/scripts/verify-ng-068-crash-extra-part.mjs"
@@ -4663,6 +4758,44 @@ run_own_checks() {
     "ng074-ci-green-on-main-self-test|node $REPO_ROOT/scripts/verify-ng-074-ci-main.mjs --self-test"
     # NG-089 (Phase 24, UAT-01): the UAT-sheet check's plant self-test; quick.
     "ng089-uat-sheets-self-test|node $REPO_ROOT/scripts/verify-ng-089-uat-sheets.mjs --self-test"
+
+    # NEW (Phase 45, PKG-22/PKG-18/PKG-23): the portability self-test twins.
+    # Each twin is honestly --quick (node plus text/bytes in mkdtemp only: no
+    # build, no browser, no display, no network); the full rows live in the
+    # full set below beside ng063 and FAIL naming the container-build
+    # procedure when the container tarball is absent, never skip green.
+    # NEW (Phase 45, PKG-04/PKG-05): the packaged-identity self-test twin.
+    # Honestly --quick for the same reason (mkdtemp fixtures, derivation
+    # reads only); the full row lives beside ng063 below.
+    "portable-elf-self-test|node $REPO_ROOT/scripts/verify-portable-elf.mjs --self-test"
+    "sidecar-no-symlinks-self-test|node $REPO_ROOT/scripts/verify-sidecar-no-symlinks.mjs --self-test"
+    "package-target-natives-self-test|node $REPO_ROOT/scripts/verify-package-target-natives.mjs --self-test"
+    "packaged-identity-self-test|node $REPO_ROOT/scripts/verify-packaged-identity.mjs --self-test"
+    # NEW (Phase 45, CR-05): the drift comparator behind the container baseline.
+    # Planted mismatched sysroot and UNMEASURED lines must go red; no host state read.
+    "toolchain-baseline-self-test|bash $REPO_ROOT/scripts/toolchain-baseline.sh --self-test"
+    # NEW (Phase 49, AUTO-05): toolchain-container. build-linux measures the container toolchain in the
+    # build container and refuses drift from toolchain-baseline.txt before packaging (the same script with
+    # --measured); the baseline's lines match the keys and forms the emitter's --container block prints;
+    # its base image pin and apt snapshot equal the Containerfile's; no build-date pin in the workflow, the
+    # Containerfile, the baseline or the measured output. Honestly --quick: text reads and YAML parsing.
+    "toolchain-container|node $REPO_ROOT/scripts/verify-toolchain-container.mjs"
+    # toolchain-container-self-test: the green tree plus a fully measured fixture, then three families of
+    # plants, each red naming the drift: a drifted rustc line (measured, unprintable in the baseline, the
+    # drift step removed, moved after packaging, or failing open), a drifted image digest (either side) or
+    # apt snapshot, and a pinned build date (build env, Containerfile, measured output). In memory only.
+    "toolchain-container-self-test|node $REPO_ROOT/scripts/verify-toolchain-container.mjs --self-test"
+    # NEW (Phase 45, CR-03): the release objdir name is read from mozconfig.release,
+    # so the packager and the release rows share one value. Planted mozconfig text only.
+    "release-objdir-self-test|node $REPO_ROOT/scripts/lib/release-objdir.mjs --self-test"
+    # NEW (Phase 45, WR-04): the CLI URL admission predicate, read from the shell
+    # module and probed with planted refusal shapes; the self-test plants two mutants.
+    "cli-url-admission|node $REPO_ROOT/scripts/verify-cli-url.mjs"
+    "cli-url-admission-self-test|node $REPO_ROOT/scripts/verify-cli-url.mjs --self-test"
+    # NEW (Phase 45, WR-03): the pre-45 sidecar state file moves once into ProfD and a
+    # failed move keeps it findable; read from TheiaService and run against a fake store.
+    "sidecar-state-migration|node $REPO_ROOT/scripts/verify-sidecar-state-migration.mjs"
+    "sidecar-state-migration-self-test|node $REPO_ROOT/scripts/verify-sidecar-state-migration.mjs --self-test"
 
     # NEW (09-03): the WebExtensions declaration rows -- the manifest's
     # [[webextensions]] table reaches the policy engine as the tracked
@@ -4797,10 +4930,665 @@ run_own_checks() {
     # into a live phase dir.
     "planning-paths|node $REPO_ROOT/scripts/verify-planning-paths.mjs"
     "planning-paths-self-test|node $REPO_ROOT/scripts/verify-planning-paths.mjs --self-test"
+    # NEW (v1.6 workstream deploy): plan-gate.py --stream scopes due rows to one planning
+    # stream, because a GSD workstream numbers its phases independently of main. Honestly
+    # --quick: temp-dir plants only. Red when a stream-less row stops counting in the default
+    # stream, or a row leaks across streams.
+    "plan-gate-streams-self-test|check_plan_gate_streams_self_test"
+    # NEW (Phase 40, AUTO-10): every tracked patch equals its regeneration from the applied
+    # upstream/ (git diff HEAD --abbrev=10 over the paths of the patch's own diff --git
+    # headers, user git config off; a path the regeneration drops is refused, WR-01). A file upstream moved since the patch was generated (an ESR bump) is compared on
+    # its added and removed lines only, with a regenerate NOTE (CR-01, phase 40 review).
+    # Honestly --quick: git plumbing over the existing upstream/ checkout, no build,
+    # browser, display or network. upstream/ is required: CI's verify.yml provides an applied
+    # checkout.
+    "patches-regenerated|bash $REPO_ROOT/scripts/regenerate-patches.sh --check"
+    # patches-regenerated-self-test rides alongside for the reason every other self-test row
+    # in this array gives: a hermetic fixture repo, green control first, then a hand-edited
+    # hunk, a pristine upstream, two patches naming one path and an unsafe write -- each red,
+    # naming the patch -- plus a clean replay onto a moved upstream (green) and a hand-edited
+    # hunk on that moved upstream (red), a two-file patch with one file unchanged upstream
+    # (red, naming it) and a patch deleting a file (green, deletion kept).
+    "patches-regenerated-self-test|bash $REPO_ROOT/scripts/regenerate-patches.sh --self-test"
+    # NEW (Phase 40, REL-01): the release key v<ESR>-<revision> derived by releaseIdentity()
+    # agrees with both version files, the upstream milestone, every tracked update.xml
+    # descriptor and every release-shaped git tag HEAD contains. Honestly --quick: git plumbing and text
+    # reads only, no build, browser, display or network.
+    "release-identity|node $REPO_ROOT/scripts/verify-release-identity.mjs"
+    # release-identity-self-test plants thirteen faults in one mkdtemp git repo (two version
+    # literals, an off-pin milestone, two descriptor versions, six no-update descriptor
+    # fragments that must not pass as a no-update document (WR-01), two tags) and keeps six
+    # controls green, among them a commit after a release tag and a higher tag on a commit
+    # HEAD does not contain (WR-02); it writes nothing in the repository.
+    "release-identity-self-test|node $REPO_ROOT/scripts/verify-release-identity.mjs --self-test"
+    # NEW (Phase 40, UPD-11): the update channel and the MAR channel id derive from
+    # UPDATE_CHANNEL through the .mozconfig emission, and every structured channel mention in
+    # the tracked tree equals the value of its own kind. Honestly --quick: git ls-files and text
+    # reads plus an in-memory emit, no build, browser, display or network.
+    "update-channel|node $REPO_ROOT/scripts/verify-update-channel.mjs"
+    # update-channel-self-test plants each mismatch kind in memory (a release descriptor path, a
+    # backticked <app_basename>-release, the tracked .mozconfig channel, a doc MAR_CHANNEL_ID, the
+    # MAR id under the channel kind, letter case, the emitter, zero mentions, and the update-URL
+    # policy key with an https and an empty value) and keeps the MAR key store and runner unit
+    # names green; it writes nothing.
+    "update-channel-self-test|node $REPO_ROOT/scripts/verify-update-channel.mjs --self-test"
+    # NEW (Phase 44, UPD-14): one update.xml per observed BUILD_TARGET, emitted by the shared
+    # buildUpdateXml from application.ini, config.status and the MAR. The self-test plants an unknown
+    # target, an application.ini with no BuildID, an ABI that disagrees with the table, the MAR channel
+    # id given as the update channel, a non-https detailsURL and a hand-edited descriptor, each red
+    # naming its file and value, and keeps a byte-identity control green. Honestly --quick: mkdtemp
+    # fixtures, node:crypto and text reads, no build, browser, display or network; it writes nothing
+    # outside mkdtemp.
+    "build-update-xml-self-test|node $REPO_ROOT/scripts/build-update-xml.mjs --self-test"
+    # NEW (Phase 44, UPD-26): the descriptor buildID order, proven in memory. Green controls first (a
+    # candidate above the published buildID, zero published Releases green by named count, a different
+    # appVersion line, its own Release already published, a draft Release not counted, another BUILD_TARGET,
+    # ghRead paging through a stub exec), then planted faults each red naming the descriptor, Release or
+    # endpoint: same-version older or equal buildID, own Release disagreeing, a regression on page two, a
+    # Release with no or a malformed release-manifest.json, an implausible build_id, an unparsable, unreadable
+    # or misplaced candidate, a non-list Releases body, gh failing, a throwing or empty getter, and on-disk
+    # trees (empty or absent --descriptors, a stray file, a hollow target). Honestly --quick: fixtures in memory
+    # and under mkdtemp (removed), no network, no gh.
+    "descriptor-monotonic-self-test|node $REPO_ROOT/scripts/verify-descriptor-monotonic.mjs --self-test"
+    # NEW (Phase 44, UPD-26, T-44-13): no build-date pin. Neither the Gecko build-date variable nor the
+    # reproducible-builds source epoch may appear in any tracked file outside .planning/ (git ls-files at
+    # check time) or under generated/: a pinned date freezes the BuildID and descriptor-monotonic then refuses
+    # every later descriptor. Each required surface (the emitter, the descriptor CLI, .mozconfig,
+    # configuration.toml, powerbrowser/, .github/, patches/, brand/, scripts/*.sh, generated/) must contribute
+    # a scanned file, else FAIL; an absent generated/ (fresh clone) is a named note. The self-test plants a
+    # hit per surface kind and each missing surface. Honestly --quick: text reads, no build or network.
+    "no-build-date-pin|node $REPO_ROOT/scripts/verify-no-build-date-pin.mjs"
+    "no-build-date-pin-self-test|node $REPO_ROOT/scripts/verify-no-build-date-pin.mjs --self-test"
+    # NEW (Phase 40, UPD-33): layer 3's real `Resolving host [...]` extraction and the shared
+    # verdict (scripts/lib/endpoint-verdict.mjs) over fixture logs. An unattended user-initiated
+    # host goes red naming it, passes after a user action; deny fails in both modes; allow passes;
+    # every real user-initiated host is planted unattended. Honestly --quick: bash and node over
+    # fixture logs, no build, browser, display or network.
+    "endpoint-dispositions-self-test|bash $REPO_ROOT/scripts/verify-endpoints.sh --disposition-self-test"
+    # NEW (Phase 40, UPD-25): both variants' firefox-branding.js, emitted in memory from the
+    # generator's TARGETS rows, set no app.update.* pref outside the set the generator owns
+    # (releaseLinkPrefs names plus app.update.langpack.enabled, derived; WR-05), keep
+    # app.update.langpack.enabled false, and carry the About-dialog links
+    # releaseLinkPrefs derives. Honestly --quick: in-memory emission and text parsing only; it
+    # writes no file and runs no build, browser, display or network.
+    "update-prefs|node $REPO_ROOT/scripts/verify-update-prefs.mjs"
+    # update-prefs-self-test plants six update prefs the generator does not own (the five
+    # UPD-25 cadence prefs and app.update.background.enabled), a langpack line flipped to
+    # true, an unparseable app.update.url.manual, no emitter rows and no release row in emitted
+    # text, each red naming the pref and variant; an added extensions.update.autoUpdateDefault
+    # line stays green (a different pref family). It writes nothing.
+    "update-prefs-self-test|node $REPO_ROOT/scripts/verify-update-prefs.mjs --self-test"
+    # NEW (Phase 40, PKG-08): LICENSING.md and THIRD-PARTY-NOTICES.txt equal their re-derivation
+    # from configuration.toml and about:license, preprocessed from the applied upstream/ checkout
+    # with Mozilla's own mozbuild preprocessor. Honestly --quick: python over upstream/ plus file
+    # reads; no build, browser, display or network. The byte comparison with the built
+    # license.html runs only where an objdir exists, otherwise one named SKIP line.
+    "licensing|node $REPO_ROOT/scripts/generate-licensing.mjs --check"
+    # licensing-self-test builds a fixture node_modules and node-runtime.json in a temp dir: two
+    # byte-identical MIT texts render as one block, a licence-less package is listed with its
+    # marker, and a tampered line, an added package, a removed package, a Node header version off
+    # the pin and an unresolvable dependency each go red naming the file, package or versions.
+    # It writes nothing in the tree.
+    "licensing-self-test|node $REPO_ROOT/scripts/generate-licensing.mjs --self-test"
+    # NEW (Phase 41, GH-02): repo-controls-self-test serves the declared .github/settings/
+    # bodies back in GitHub's live response shape and plants each widening -- allowed_actions
+    # all, sha_pinning_required false, an orphan, missing or empty settings set, and a getter
+    # that throws -- each red naming the control. Honestly --quick: in-memory, with no network
+    # and no gh; it writes nothing. The live read-back is the full-tier repo-controls row.
+    "repo-controls-self-test|node $REPO_ROOT/scripts/verify-repo-controls.mjs --self-test"
+    # NEW (Phase 47, DIST-03): updates-repo-static-self-test plants, in memory only, a functions
+    # hook file, a root-level _worker.js, a nested functions path, a truncated listing, a non-array
+    # tree, an empty listing, a throwing getter, a malformed result, a non-github release_notes host
+    # an unknown argument, a tree with no _redirects rule and a tree with no */update.xml descriptor
+    # (IN-01), each red naming its path, endpoint or key over a clean static tree
+    # that must stay green first. Honestly --quick: in-memory, no network and no gh; it writes nothing.
+    # The live read-back is the full-tier updates-repo-static row.
+    "updates-repo-static-self-test|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs --self-test"
+    # NEW (Phase 47, WR-02): the privacy page's two host lists each equal, as a set, the hosts the
+    # endpoint allowlist derives into that group: allow rows with no trigger (contacted without any
+    # action) and allow rows with trigger user-feature (contacted only after a feature is used).
+    # Loopback excluded. Derived at check time; red naming any host on one side only.
+    # Honestly --quick: two text reads, no build, browser, display or network.
+    "privacy-hosts|node $REPO_ROOT/scripts/verify-privacy-hosts.mjs"
+    # privacy-hosts-self-test plants, per list, an extra page host, a missing page host, an allowlist
+    # addition and an allowlist removal; plus a feature host listed in the unattended list, an allow
+    # row with an unknown trigger, and a page with no marked host, each
+    # red naming its host or attribute; the real page and allowlist stay green first. It writes nothing.
+    "privacy-hosts-self-test|node $REPO_ROOT/scripts/verify-privacy-hosts.mjs --self-test"
+    # NEW (Phase 47, WR-04): website-publish-ready-self-test plants an OWNER TO FILL marker, a
+    # class="pending" block and an empty site over a clean fixture that carries a CSS .pending
+    # selector (which must stay green); each red naming its file or marker. It writes nothing.
+    # The live read of website-staging/ is the full-tier website-publish-ready row.
+    "website-publish-ready-self-test|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs --self-test"
+    # NEW (Phase 47, WR-05): the legal page carries the configuration.toml [legal] license, copyright
+    # holder and trademark notice verbatim. Values come from generate.mjs resolveConfig, not a regex
+    # over the TOML. Honestly --quick: one manifest resolution and one text read.
+    "legal-page-verbatim|node $REPO_ROOT/scripts/verify-legal-page.mjs"
+    # legal-page-verbatim-self-test plants one edited value per [legal] key over a fixture carrying
+    # each value verbatim; each edit goes red naming its key. It writes nothing.
+    "legal-page-verbatim-self-test|node $REPO_ROOT/scripts/verify-legal-page.mjs --self-test"
+    # NEW (Phase 41, GH-12 and GH-08): the trust-boundary rules over every workflow --
+    # SHA-pinned and admitted uses:, set equality with actions-selected.json, and the GH-12
+    # runner, permission, trigger, cache and event-text rules. Honestly --quick: YAML parsing
+    # (js-yaml from theia/) and file reads only; no build, browser, display or network.
+    "workflows|node $REPO_ROOT/scripts/verify-workflows.mjs"
+    # workflows-self-test plants, in memory, unpinned, short, uppercase and docker:// uses:, an
+    # unadmitted foo/bar, an unused admission, an empty patterns_allowed, a duplicate on:, zero
+    # workflows, each GH-12 fault over a good release.yml fixture, and the TRAIN-08 dry-run-gate
+    # forms (an inverted or always()-wrapped gate, git push and commit including git -c, gh api
+    # write methods and implicit POST, gh release, curl -X, an action outside the read-only list),
+    # and the bot-job-gate rule (an environment-bound job with no negated job-level dry-run gate);
+    # each red naming file and job; and the dependabot rule (.github/dependabot.yml: the claude-code-action
+    # ignore, cooldown, no auto-merge key, npm limit 0, group update-types without major, ecosystem set,
+    # registries). It writes nothing.
+    "workflows-self-test|node $REPO_ROOT/scripts/verify-workflows.mjs --self-test"
+    # NEW (Phase 48, MON-01): the watchdog source. The decision is the workflow's own shell: the run: bodies
+    # of docs/watchdog.yml are extracted and run under bash with a stub gh (a 25-hour silence opens nothing, a
+    # 27-hour silence opens one issue with the run link and the fixed label, a missing run opens one naming it,
+    # the bot-and-label dedupe suppresses a second while a stranger's same-title issue does not), and the source
+    # checks over the YAML (schedule-only triggers, one 06:17 UTC cron, issues write only, no secret, pinned
+    # uses, no event text in run) plus the product repository's parsed no-schedule rule.
+    "watchdog|node $REPO_ROOT/scripts/verify-watchdog.mjs"
+    # watchdog-self-test plants an unguarded workflow_run wake, event text in a run step, a secret
+    # reference, a drifted cron, a 25-hour threshold, a contents write scope, a dropped label, three
+    # product-repository schedule forms, and fourteen faults in the watchdog's own shell (inverted or removed
+    # dedupe, any-author dedupe, missing label or state filter, a skipped dedupe on an unset author, the
+    # missing-run branch, OPEN turned off, a reversed age, an inverted open gate, a wrong runs path, an
+    # unlabeled issue, a label never created); each must go red naming its drift, with the control green first.
+    "watchdog-self-test|node $REPO_ROOT/scripts/verify-watchdog.mjs --self-test"
+    # NEW (Phase 49, DIST-02): the release.yml shape the workflows row does not cover. Dispatch
+    # only with a required sha input; build-linux on the release runner label with no environment
+    # and no secret; the SHA-ancestor and key>tag gates before the first build step; retention-days
+    # 1 on every upload; no cache. Honestly --quick: YAML parsing (js-yaml from theia/) and file
+    # reads only; no build, browser, display or network.
+    "release-shape|node $REPO_ROOT/scripts/verify-release-shape.mjs"
+    # release-shape also pins the least-privilege invariant structurally (Phase 49 review): legion
+    # permissions exactly contents: read at workflow and job level, no secrets word in any form, no
+    # token input, only the workspace and the Safe Browsing key directory (the one recorded exception,
+    # an API key shipped in the binary) mounted; every build-linux step after the key gate carries its
+    # output as if:; sign-publish takes its commit from inputs.sha, re-gates, derives the key and
+    # builds signmar from the pinned source (the pin's tag equals configuration.toml); one concurrency
+    # group; the first step refuses any ref but main.
+    # release-shape-self-test plants one fault per rule in memory over the real release.yml text and
+    # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
+    # the file, the rule and the fault.
+    "release-shape-self-test|node $REPO_ROOT/scripts/verify-release-shape.mjs --self-test"
+    # NEW (Phase 49, SEC-10): the tracked pre-job hook on legion. It runs under bash with only the three
+    # runner variables set; the release triple must exit 0, and a foreign-branch workflow ref, a push
+    # event, a wrong repo and an empty triple must exit non-zero naming the expected value. The expected
+    # repo derives from configuration.toml [urls] release_notes. Every legion job must start with the
+    # main-and-dispatch refusal and carry the full-SHA check second, before the checkout. Honestly --quick:
+    # bash on stdin plus file and YAML reads; no network, no gh, no write.
+    "hook-refusal|node $REPO_ROOT/scripts/verify-hook-refusal.mjs"
+    # hook-refusal-self-test plants a foreign-branch GITHUB_WORKFLOW_REF, a push event, a wrong repo in the
+    # hook text, and a legion job without the SHA step, each in memory; each goes red naming the file, the
+    # variable or job, and the value. It writes nothing.
+    "hook-refusal-self-test|node $REPO_ROOT/scripts/verify-hook-refusal.mjs --self-test"
+    # NEW (Phase 50, TRAIN-10): the release SHA gate. The bash step text that release.yml carries
+    # in build-linux and sign-publish is read with js-yaml and executed, unchanged, against scratch
+    # git repositories with a local bare origin: the tip of main and a configuration.toml ancestor
+    # with main's workflows are green; the two job texts must be identical. Honestly --quick: local
+    # git in mkdtemp; no network, build, browser or display.
+    "release-sha-gate|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs"
+    # NEW (Phase 50, TRAIN-10): the plants for the same gate, each run against the shipped text and
+    # required to go red naming the drift: a side commit not on main (its SHA), an ancestor that does
+    # not change configuration.toml, an ancestor whose .github/workflows/ diverges from the tip, and a
+    # checked-out HEAD that is not the requested SHA. Each refusal names its next step. Honestly
+    # --quick, as the row above.
+    "release-sha-gate-self-test|node $REPO_ROOT/scripts/verify-release-sha-gate.mjs --self-test"
+    # NEW (Phase 50 review CR-01, WR-01): the dispatch-release correlation. The merged, existing, dispatch
+    # and run steps of release-train.yml are executed unchanged under a fake gh that answers from fixtures
+    # through the real jq. A dispatched run's head_sha is the tip of main, not inputs.sha, so with main
+    # advanced past the merge SHA the count must be 1 (no re-dispatch) and the link must be the run
+    # titled `Release <sha>`; a cross-repository merged PR and runs from another repository, path or
+    # event are ignored. Honestly --quick: bash, jq and node in mkdtemp; no network, gh, build or display.
+    "dispatch-release|node $REPO_ROOT/scripts/verify-dispatch-release.mjs"
+    # NEW (Phase 50 review CR-01, WR-01): the plants for the same steps (a head_sha key, a missing
+    # isCrossRepository select, a missing --base main, a missing repository, path or event condition,
+    # a dispatch no longer gated on a zero count), each required to go red naming the drift.
+    "dispatch-release-self-test|node $REPO_ROOT/scripts/verify-dispatch-release.mjs --self-test"
+    # NEW (Phase 49, SEC-07): the sign-publish channel gate. mar_channel_gate refuses a MAR whose
+    # product-info channel is not ACCEPTED_MAR_CHANNEL_IDS, cross-checks the `--channel` value against
+    # MOZ_UPDATE_CHANNEL, and never compares the MAR id with the update channel; signmar -s runs
+    # before signmar -v, and the verification uses the tracked DER. The comparands derive from
+    # generate.mjs updateChannel(). Honestly --quick: file reads and YAML parsing only.
+    "mar-channel-gate|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs"
+    # mar-channel-gate-self-test plants twelve faults in memory over the real release.yml text: a
+    # foreign-channel MAR accepted, the gate comparing the MAR id with --channel, a verification
+    # against a non-tracked DER, a dropped independent node:crypto check, a mismatch branch or
+    # cross-check without its exit 1, continue-on-error, `|| true` after signmar -v, an if: on the
+    # sign step, a runner-supplied signer, and a sign-before-verify swap. Each goes red naming the
+    # file and the fault. It writes nothing.
+    "mar-channel-gate-self-test|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs --self-test"
+    # NEW (Phase 49, DIST-07): the draft asset set equals the manifest-derived set (versioned and
+    # stable tarball and MAR, SHA256SUMS, release-manifest.json, the notices and the source tarball)
+    # as set equality, the assemble step has a case arm for every expected kind, and the equality runs
+    # before the single publish, the bot App token is minted immediately before the publish, and no
+    # --generate-notes appears. Honestly --quick: file reads and YAML parsing;
+    # the live draft list is compared by the release job, never here.
+    "release-asset-set|node $REPO_ROOT/scripts/verify-release-asset-set.mjs"
+    # release-asset-set-self-test plants a dropped asset (a notice and the manifest), an extra asset,
+    # a stable-name drift, a versioned-name drift, an assemble step missing the manifest or notice arm, a publish-before-equality order, a fail-open publish chain, an R2
+    # copy that is missing, after the publish, failing open, local (no --remote), without its read-back or
+    # its overwrite refusal (DIST-08, plan 49-05), a Cloudflare credential in another step or another
+    # workflow, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
+    # step. It writes nothing.
+    "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
+    # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A
+    # mkdtemp manifest (mar_origin from configuration.toml) and descriptor tree served by one loopback
+    # server through an injected transport go green first (with --manifest, from the latest Release's
+    # release-manifest.json asset, and through --manifest-agrees), then thirty plants each go red naming
+    # the target and the value: a wrong hashValue, a missing target file, a 404 MAR, a size mismatch, a
+    # public descriptor not byte-equal to the repo copy, an appVersion, buildID or offered version off
+    # the manifest or the latest Release, a latest tag off release_key, no published Release (404),
+    # a decoy data-URL beside or ahead of an evil URL and a second patch element (the gate judges the
+    # URL parseUpdateXml returns), six string-level patch URLs refused before any MAR fetch (a
+    # github.com Releases download, a release-assets or objects.githubusercontent.com signed URL,
+    # another host, a path other than /<tag>/<asset>, a non-https scheme), a manifest mar_origin or
+    # update_url that disagrees with the tree (red naming both values; the tree decides), a
+    # build_target carrying a path separator and ../ (red before any request), a latest Release
+    # without the manifest asset, with an unreadable one, or with one whose mar_origin disagrees (each
+    # red naming the Release or the values, before any request), and four --manifest-agrees faults
+    # (update_channel, mar_origin or update_url off the tree, a null mar_origin). Honestly
+    # --quick: node:crypto, text files in mkdtemp and loopback HTTP; no build, browser, display or
+    # public network. It writes nothing in the repo.
+    "channel-live-self-test|node $REPO_ROOT/scripts/verify-channel-live.mjs --self-test"
+    # NEW (Phase 49 review WR-09): the one key comparator behind the key>tag gate and the stale-approval
+    # guard. Exit 0 newer, 1 not newer, 2 an unparseable key or tag (an error, never "not newer").
+    "release-key-newer-self-test|node $REPO_ROOT/scripts/release-key-newer.mjs --self-test"
+    # NEW (Phase 49 review BL-01): the node:crypto MAR signature check run after signmar -v, independent
+    # of the signer. Its self-test builds signed MARs in memory and plants a flipped data byte, a flipped
+    # signature byte, another key, a changed algorithm id, zero signatures, truncation and bad magic.
+    "mar-signature-self-test|node $REPO_ROOT/scripts/verify-mar-signature.mjs --self-test"
+    # NEW (Phase 41, AUTO-09): zizmor --offline over .github/workflows/ and .github/dependabot.yml at its default persona,
+    # green only on exit 0. Honestly --quick, offline audit; the zizmor binary comes from the
+    # theia shell or is self-provided through nix develop on first use, and absent tooling fails
+    # naming the shell, never skips.
+    "zizmor|node $REPO_ROOT/scripts/verify-zizmor.mjs"
+    # zizmor-self-test audits the mkdtemp bad and clean fixtures: bad (event text in run:,
+    # actions/checkout@v4) must exit non-zero naming template-injection and unpinned-uses, clean
+    # must exit 0; a dependabot.yml with no cooldown must exit non-zero naming dependabot-cooldown, one
+    # with default-days 7 must exit 0. It writes nothing in the tree.
+    "zizmor-self-test|node $REPO_ROOT/scripts/verify-zizmor.mjs --self-test"
+    # NEW (Phase 56, PKG-19): the flake package repacks the Release tarball. The tarball name and URL derive
+    # from the release key and the asset table; the hash comes from nix/pkg/release-hash.json, and the sentinel
+    # placeholder is green here and red under --release. The sidecar takes the nodejs_24 binding; no darwin
+    # literal (A3). Honestly --quick: text reads and the generator's pure functions; no nix, no network.
+    "flake-repack|node $REPO_ROOT/scripts/verify-flake-repack.mjs"
+    # flake-repack-self-test plants a stale hash record, a non-SRI hash, a nodejs_22 literal, a darwin literal,
+    # a typed version, a missing DisableAppUpdate merge and a missing overlay, each red naming its file.
+    "flake-repack-self-test|node $REPO_ROOT/scripts/verify-flake-repack.mjs --self-test"
+    # NEW (deploy w1): plain nix develop resolves devShells.default and falls back to packages.default, the
+    # Release fetch that 404s before a Release exists. The row requires devShells.default and requires its
+    # .drv closure to exclude packages.default.src, both derived by `nix eval --offline`. Honestly --quick:
+    # eval-only against the locked nixpkgs in the store; no build, no network.
+    "nix-default-shell|node $REPO_ROOT/scripts/verify-nix-default-shell.mjs"
+    # nix-default-shell-self-test runs the predicate over packages.default (must go red naming the fetch .drv)
+    # and devShells.theia (must stay green).
+    "nix-default-shell-self-test|node $REPO_ROOT/scripts/verify-nix-default-shell.mjs --self-test"
+    # NEW (Phase 56, PKG-19/PKG-20): the update-disable split. The release tarball's policies.json carries no
+    # DisableAppUpdate; the Nix repack and the Flatpak staging copy each add exactly that key and keep every
+    # sibling value. Derived from the derivation and the manifest merges, compared as set and value. Honestly
+    # --quick: text reads and JSON parses; no build, no network.
+    "policies-update-split|node $REPO_ROOT/scripts/verify-policies-update-split.mjs"
+    # policies-update-split-self-test plants the key in the tarball, the key missing from either repack, and a
+    # sibling key drifting in either repack; each goes red naming the file, the key or the sibling.
+    "policies-update-split-self-test|node $REPO_ROOT/scripts/verify-policies-update-split.mjs --self-test"
+    # NEW (Phase 56, INF-05): the binary cache. nix/cache.json declares Cachix first and the R2 bucket as the
+    # committed fallback behind one interface; the substituters and the trusted keys derive from the two
+    # backend blocks and must equal the interface. The cache-token row is present in docs/RENEWALS.md. The
+    # Flatpak tarball template is cross-checked against the same release key. Honestly --quick: JSON and text
+    # reads; no network, no cache. The live substitute proof is owner-checkpoint evidence, not a quick row.
+    "binary-cache|node $REPO_ROOT/scripts/verify-binary-cache.mjs"
+    # binary-cache-self-test plants a substituter and a trusted key disagreeing with their backends, a removed R2
+    # block, an empty R2 endpoint, a removed RENEWALS row, and a Flatpak template naming another host.
+    "binary-cache-self-test|node $REPO_ROOT/scripts/verify-binary-cache.mjs --self-test"
+    # NEW (Phase 56, PKG-20): the Flathub manifest, submission-shaped and static. The app id, the persist path,
+    # the TXT record name and the desktop and icon agreement derive from the tracked identity and branding;
+    # the runtime is org.freedesktop.Platform with the Firefox BaseApp as base; the Flatpak-only DisableAppUpdate merge and the checker data are
+    # present; the exception stays pending-owner-reply on the written-exception path, with one repack module.
+    # Honestly --quick: JSON, text and the tracked PNG bytes; no flatpak-builder, no network, no account.
+    "flathub-manifest|node $REPO_ROOT/scripts/verify-flathub-manifest.mjs"
+    # flathub-manifest-self-test plants a wrong runtime, a missing persist, a missing disable merge, missing checker
+    # data, a TXT record name off the homepage host, an approved exception, a second from-source module, a desktop
+    # Icon off the app id, a download copy leak and a cache interface missing the Cachix substituter.
+    "flathub-manifest-self-test|node $REPO_ROOT/scripts/verify-flathub-manifest.mjs --self-test"
+    # NEW (Phase 56, DIST-04): the winget set, a template rendered per release. PackageIdentifier, PackageVersion,
+    # the installer URL under the release key, the locale publisher, licence and release notes derive from the tree;
+    # InstallerSha256 renders the fixture bytes this row carries while the Windows asset is pending (A2); the
+    # WINGET_TOKEN custody row is present by structure. Honestly --quick: YAML parse (js-yaml from theia/) and text
+    # reads; no wingetcreate, no network, no credential.
+    "winget-manifest|node $REPO_ROOT/scripts/verify-winget-manifest.mjs"
+    # winget-manifest-self-test plants a neighbouring PackageVersion, an installer URL off the release-key shape, a
+    # SHA-256 literal, a removed fixture marker, a fixture under --release, a removed custody row, an arch node
+    # missing its Architecture, and a publisher drift; each goes red naming the file or value.
+    "winget-manifest-self-test|node $REPO_ROOT/scripts/verify-winget-manifest.mjs --self-test"
+    # NEW (Phase 56, DIST-11): the own-tap Homebrew cask, a template rendered per release. The version, url and sha256
+    # derive from the release key and the disk-image fixture (A3); verified: names the release host and owner path;
+    # auto_updates true; a livecheck block; the cask block and its stanzas; the darwin deferral marker naming A3 and
+    # Phase 55; and no signing claim. Honestly --quick: text reads and an in-memory fixture digest; ruby -c is an
+    # owner-checkpoint step through the locked nixpkgs.
+    "homebrew-cask|node $REPO_ROOT/scripts/verify-homebrew-cask.mjs"
+    # homebrew-cask-self-test plants auto_updates false, a verified host drift, a neighbouring version, an arm64
+    # enablement, a removed deferral marker, a signing claim, a removed zap stanza and a cask block header removed.
+    "homebrew-cask-self-test|node $REPO_ROOT/scripts/verify-homebrew-cask.mjs --self-test"
+    # NEW (Phase 56, DIST-12): the channel-manifests stage, read as YAML. Four legs per release: a flake-hash pull
+    # request (never a push to main), a tap commit, a gated winget submission with WINGET_TOKEN by name, and the
+    # Flatpak checker-template check; a dry run renders the payloads and submits nothing. No schedule, no
+    # pull_request trigger, no credential literal; every non-GitHub-owned action is admitted. Honestly --quick:
+    # YAML parse (js-yaml from theia/) and text reads; no network, no gh, no wingetcreate.
+    "channel-release-jobs|node $REPO_ROOT/scripts/verify-channel-release-jobs.mjs"
+    # channel-release-jobs-self-test plants a hash not prefetched from the asset, a push to main, a removed tap leg, a
+    # removed winget leg, a stale checker template, a submit step in the dry run, a pull_request trigger, a schedule
+    # key and a credential literal; each goes red naming the job or the value.
+    "channel-release-jobs-self-test|node $REPO_ROOT/scripts/verify-channel-release-jobs.mjs --self-test"
+    # NEW (Phase 51, AUTO-02): the Renovate Theia inflow config, read as text. One grouped theia
+    # packageRule selects the theia/package.json @theia/* pins minus monaco-editor-core, monaco has its
+    # own pinned group, one regex customManager captures the live configuration.toml theia_release,
+    # automerge is off, the nix manager is off (flake.lock not moved, BLOCKED.md item 5), the post-upgrade
+    # hook is the licensing pair, the branch prefix
+    # is chore/theia-, and no clock key exists. Honestly --quick: JSON5 and JSON text reads; no
+    # renovate binary, no network, no gh.
+    "renovate-config|node $REPO_ROOT/scripts/verify-renovate-config.mjs"
+    # renovate-config-self-test plants one fault per rule in memory, after the unmodified tree and a
+    # clean fixture stay green; each plant must go red naming its rule. It writes nothing in the tree.
+    "renovate-config-self-test|node $REPO_ROOT/scripts/verify-renovate-config.mjs --self-test"
+    # NEW (Phase 54, PKG-11): the per-target Windows mozconfig. The expected lines come from the shared
+    # emitter in memory and the tracked comparand must equal them, with the maintenance service disabled.
+    # Honestly --quick: text reads and an in-memory emit only; no build, browser, display or network.
+    "windows-mozconfig|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs"
+    # windows-mozconfig-self-test plants an inverted service flag, a missing target line, a foreign MAR
+    # channel and an empty emission; each must go red naming the file and the value. It writes nothing.
+    "windows-mozconfig-self-test|node $REPO_ROOT/scripts/verify-windows-mozconfig.mjs --self-test"
+    # NEW (Phase 54, PKG-13): the Node pin set equals the per-target keys the packagers read (derived),
+    # each entry carries a version, a url embedding it and a 64-hex sha256. The sha256 value against
+    # SHASUMS256.txt is the Phase 43 detector's job, not this row's. Honestly --quick: JSON and text reads.
+    "node-runtime-targets|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs"
+    # node-runtime-targets-self-test plants a missing win32-x64 key, an extra key, a missing sha256, a
+    # url-version mismatch and an empty set; each must go red naming the key. It writes nothing.
+    "node-runtime-targets-self-test|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs --self-test"
+    # NEW (Phase 54, PKG-10 static half): the build-windows job of release.yml. Legion label set only,
+    # contents: read, no secret, environment or schedule, SHA-pinned uses, gates identical to build-linux,
+    # no fail-open step, repackage calls present, retention 1. Honestly --quick: YAML parse and text reads;
+    # the live cross-build on legion is the owner's at the 54-04 checkpoint, never a quick path.
+    "build-windows-shape|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs"
+    # build-windows-shape-self-test plants a moved runner, a secret, a write grant, a schedule, an unpinned
+    # uses, a missing package-windows.sh call or mach build, a reintroduced get_vs.py or WINSYSROOT, each removed
+    # required repackage argument, upload globs that match nothing, a broken or all-accepting Node-pin filter, a
+    # removed key gate, a drifted sha gate, a dropped pipefail, a raised retention and an image build missing
+    # --no-cache; each must go red naming job and cause.
+    "build-windows-shape-self-test|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs --self-test"
+    # NEW (Phase 54 review fix, PKG-13): the admission and purge gates for the hosted Windows sidecar artifact.
+    # Honestly --quick: mktemp fixtures only, no network. It plants an unlisted file, an absent listed file, a
+    # tampered manifest, a symlink, a '..' and an absolute manifest path, a nested SHA256SUMS, a wrong or unset
+    # out-of-band digest, an empty build root, each slash form of the hosted root, and an unreadable stage.
+    "win-sidecar-check-self-test|bash $REPO_ROOT/powerbrowser/packaging/check-win-sidecar.sh --self-test"
+    # NEW (Phase 54, UPD-30): the sidecar reap blocker. Quit and restart both await the bounded reap, so the
+    # updater rename never meets a live node.exe. Derived from the tree and the catalogue; honestly --quick
+    # (it parses the shell files and evaluates the reap methods against stubs; the live version flip is the
+    # matrix update cell).
+    "sidecar-reap-blocker|node $REPO_ROOT/scripts/verify-sidecar-reap-blocker.mjs"
+    # sidecar-reap-blocker-self-test plants a missing or comment-only registration, a pid poll, a stale handle, a
+    # rejecting wait, a grace mismatch, an ungated ctypes open and a wrong catalogue row; each must go red naming
+    # the rule and the value. It writes nothing.
+    "sidecar-reap-blocker-self-test|node $REPO_ROOT/scripts/verify-sidecar-reap-blocker.mjs --self-test"
+    # NEW (Phase 43, AUTO-01): the upstream detector's pure half. Tag mapping and the pinned-major
+    # guard from fixtures, including the 175.0esr fixture whose 153.23 ESR tag must yield a 153.23
+    # bump; each plant (a _BUILDn tag, a 175 tag under the 153 guard, a
+    # FIREFOX_ESR-driven 175 steer, an empty listing, a Node pin newer than the newest v24 line, an
+    # open bump PR that holds the candidate or the Node line) must go red naming its drift; a control
+    # shows an open PR on another branch holds nothing. Honestly
+    # --quick: fixtures only; the live tag listing runs in the release-train detect job. It writes
+    # nothing.
+    "detect-upstreams-self-test|node $REPO_ROOT/scripts/detect-upstreams.mjs --self-test"
+    # NEW (Phase 43, TRAIN-02, TRAIN-03, TRAIN-09 and AUTO-07): the five Phase-A states as a frozen
+    # table, with derive, next and render checked against fixtures that carry their expected action
+    # as a literal, and states, fixtures and actions compared as set equality. Plants that go red
+    # naming their drift: a sixth state, fixture or action, a state with no action, a merged PR with
+    # an unchanged pin, a 175.x ESR under the 153 guard, a conflict line with no patch number, and a
+    # conflict decision that writes under the patch directory. The would-write view (--would-write,
+    # called by the release-train report job) runs the same derive, next, render and conflict rules,
+    # with a green control and a refusal plant. The publish plan (--publish-plan, called by
+    # scripts/publish-bump-branch.sh) plants a remote branch with an owner commit and an unlistable
+    # compare, and controls for create, skip and bot-only force-with-lease pinned to the observed tip. UNWIRED (no workflow caller, so no plant):
+    # findExactlyOne (live tracking writer, BLOCKED.md item 3), admitWakeRun (workflow_run held out,
+    # BLOCKED.md item 1) and classifyRelease (live Release list, Phase 50). A green row over those is
+    # not production coverage. Honestly --quick: pure functions over in-memory fixtures; no network,
+    # no gh, no build. It writes nothing.
+    "release-train-logic-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
+    # NEW (Phase 48, TRAIN-07): the maintenance half of the release-train core. The same --self-test
+    # run carries the thirteen maintenance rows (the Phase 48 six: runner-online, esr-pin-age, channel-liveness,
+    # watchdog-age, synthetic events POST, download-count; and the Phase 51 seven: renewals-due, repo-controls,
+    # dependabot-prs, dependabot-alerts, codeql-alerts, codeql-push-age, codeberg-mirror) with their no-data
+    # branches, the 30-day and 3-day boundaries, the threshold paragraph read from docs/RELEASING.md, the byte-stable render, the
+    # exactly-one write plan, one comment per transition into red and zero on a staying-red re-run, the
+    # once-per-day 06:00 UTC sweep gate, the workflow's CLI glue run as a child node (owner unset, empty,
+    # malformed, another case), and the planted faults: a stale tag with no published Release, a draft
+    # Release as the only match, a 27-hour watchdog, a missing watchdog run, a synthetic POST answering
+    # 500 or 200 without the acknowledgement, a newer tag with no commit date, a fourteenth row, two tracking
+    # issues, a workflow_run wake from a fork head, one plant per rule of the previous-state selection
+    # (event, path, conclusion, branch, repository, head sha, artifact name, expiry, run link) and per rule
+    # of the pinned-issue selection (label, author, title, unset owner). Each plant calls the real function
+    # and goes red naming its drift with the unmutated control green first. Honestly --quick: in-memory fixtures
+    # only; no network, no gh, no build. It writes nothing. The live sweep and the pinned issue are the
+    # plan 48-05 owner checkpoint.
+    "release-train-maintenance-self-test|node $REPO_ROOT/scripts/release-train.mjs --self-test"
+    # NEW (Phase 51 review CR-01, WR-04, WR-06, IN-01 to IN-03): the live reads behind the Phase 51 sweep rows. The repo-facts,
+    # security-reads and codeberg steps of the maintenance-probe job are read with js-yaml and executed unchanged under bash -e
+    # with a stub gh and a stub curl on PATH. A count is written only from a successful, well-shaped read: empty output, a 403 JSON
+    # error body, a 5xx page, a gh failure that still prints an empty list, an error object with exit 0 and a page of non-objects
+    # write nothing (the row then renders no-data, never 0 and never red); a zero-length list from a successful read is a real 0.
+    # The default branch is read (a rename moves the requests), an unset Codeberg mirror writes nothing and a declared one always
+    # writes the pair. The repoControls deferral marker and every probe output name are checked from the workflow text.
+    # Honestly --quick: bash, jq and node in mkdtemp; no network, gh, build or display.
+    "sweep-reads|node $REPO_ROOT/scripts/verify-sweep-reads.mjs"
+    # sweep-reads-self-test plants the exit status ignored, the page shape unchecked or too loose, --slurp dropped, the branch
+    # hard-coded to main in the activity and Codeberg reads, an unset mirror reported as declared, a renamed probe output, an
+    # undeclared render env and a removed deferral marker, each over the real step text; each goes red naming its drift.
+    "sweep-reads-self-test|node $REPO_ROOT/scripts/verify-sweep-reads.mjs --self-test"
+    # NEW (Phase 52, FIX-07/FIX-11): fix-gate-self-test serves a green control diff, then one
+    # planted diff per .github/fix-gate-deny.json entry (the plant list read from the deny file
+    # itself), a registry-named file, a hand-edited patch hunk, a vacuous diff, a compiled-file
+    # patch target, a brand token and a Theia core path; each rejected naming its stage and path.
+    # Honestly --quick: in-memory diffs through the gate's own stages; no build, browser, display
+    # or network, and it writes nothing. The real gate (--diff) runs the full chain in a worktree.
+    "fix-gate-self-test|node $REPO_ROOT/scripts/verify-fix-gate.mjs --self-test"
+    # NEW (Phase 52, CR-01 trust boundary): fixer-prepare-self-test plants a changed work/.git/config
+    # (core.fsmonitor, diff.external), a hook and a .gitattributes change, and proves the emit refuses each
+    # before any command from them runs.
+    "fixer-prepare-self-test|bash $REPO_ROOT/scripts/fixer-prepare.sh --self-test"
+    # NEW (Phase 52, CR-02): fixer-isolate-self-test proves the wrapper the fix-gate job runs the model's diff
+    # under: no network interface but a down loopback, a failed connect to a public address, no_new_privs, no
+    # effective capability, no GITHUB_*/ACTIONS_*/credential variable, no surviving background process, and the
+    # exit status passing through. It fails when the host offers neither an unprivileged user namespace nor
+    # passwordless sudo (the gate never runs unisolated). Honestly --quick: local namespaces only; no network.
+    "fixer-isolate-self-test|bash $REPO_ROOT/scripts/fixer-isolate.sh --self-test"
+    # NEW (Phase 55, PKG-24): the macOS entitlement gate. Derives the signing inputs from the
+    # hardened-sign-config block, compares the files on disk with set equality both ways, and fails
+    # on any 43AQ936H96, org.mozilla or restricted key outside the known-open hits of .planning/
+    # WINDOWS.md entry 22 (the upstream production plists, until the owner's Team-ID patch lands).
+    # Honestly --quick: text reads and XML parsing only, no build, browser, display or network.
+    "mac-entitlements|node $REPO_ROOT/scripts/verify-mac-entitlements.mjs"
+    # mac-entitlements-self-test plants a Team ID and an org.mozilla string in a developer input, a
+    # restricted key, an added file, a removed file, a new production hit, a closed known-open entry
+    # and zero files; each must go red naming the drift. The control stays green. It writes nothing.
+    "mac-entitlements-self-test|node $REPO_ROOT/scripts/verify-mac-entitlements.mjs --self-test"
+    # NEW (Phase 55, PKG-14, PKG-15, SEC-04 wiring): the universal macOS payload gate's self-test twin. It
+    # builds a synthetic evidence tree in mkdtemp (fat Mach-O files with real CodeDirectory page hashes, a
+    # fake DMG extractor, descriptors from buildUpdateXml) and plants a single-slice binary, divergent
+    # BuildIDs, a stripped signature, a certificate chain, a Team ID, a non-ad-hoc flag, a byte changed after
+    # signing, a stapled ticket, a hash-mismatched descriptor, a same-target descriptor pair, a generic-certs
+    # config.status, missing evidence, an ELF node, a missing backend entry, a checkout path, a file missing
+    # from the DMG, no Applications symlink and a shell-string spawn; each must go red naming the drift. The
+    # control stays green. It writes nothing outside mkdtemp. Honestly --quick: no build, browser or network.
+    "macos-package-payload-self-test|node $REPO_ROOT/scripts/verify-macos-package-payload.mjs --self-test"
+    # NEW (Phase 55, PKG-16): the self-test twins of the two macOS record gates. The matrix twin
+    # derives the expected cells from the macOS row of the BUILD.md install matrix and the targets from the
+    # per-target mozconfigs, requires the draft record to be structurally clean with its unobserved items
+    # named, builds a fully observed fixture, and plants a missing cell, an invented cell, a causeless RED, a
+    # RED, a doubled and a malformed verdict line, GREEN without evidence, a hosted GREEN with no run, an
+    # empty, foreign and incomplete BUILD_TARGET set, a Mozilla-root residue path, a path outside the product
+    # namespace, surviving paths, an absent Gatekeeper block, a dropped update limit, a SHA256 mismatch and a
+    # staple without notarization. The copy twin derives the page claims and the record
+    # claims, compares them as set equality, and plants a dropped Gatekeeper consequence, three internal
+    # identifiers, notarization, staple and Developer ID overclaims, a dropped signing line, en-US scope line
+    # and complete-MAR size line, a wrong and a stale size, an unobserved Gatekeeper sentence, a misspelt
+    # product name, a missing macOS line and an unreadable record; each must go red naming the drift. The
+    # controls stay green. Both are honestly --quick: they read tracked text and build fixtures in memory; no
+    # build, browser, network or Mac.
+    "macos-install-matrix-self-test|node $REPO_ROOT/scripts/verify-macos-install-matrix.mjs --self-test"
+    "macos-download-copy-self-test|node $REPO_ROOT/scripts/verify-macos-download-copy.mjs --self-test"
+    # NEW (Phase 53, GH-03): the triage workflow shape. The row reads the good fixture in fixture
+    # mode (53-01) and the declared workflow in tree mode (53-02), derives the label set from
+    # labels.json, and runs the workflow's own fixed-text step against a hostile model output with
+    # a stub gh. Honestly --quick: text reads, js-yaml from theia/, and a mkdtemp shim; no network.
+    "triage-workflow|node $REPO_ROOT/scripts/verify-triage.mjs"
+    # triage-workflow-self-test plants forty-four faults in the good fixture (the two-job shape:
+    # classify holds the model with no write scope, apply holds issues write and no model), each
+    # red naming the file, job and rule, and requires the hostile-output proof to go red on a removed label filter
+    # and on a raw model template id. The green control runs first. It writes nothing in the tree.
+    "triage-workflow-self-test|node $REPO_ROOT/scripts/verify-triage.mjs --self-test"
+    # NEW (Phase 53, TEL-05): the Report-a-Bug affordance. Derives the prefill keys from the
+    # contribution source and compares them with the Phase 42 bug form's field ids, the target
+    # origin and path with urls.release_notes, the opener id with the GUI-01 export, and the
+    # github.com allowlist row. Honestly --quick: text reads and js-yaml from theia/.
+    "bug-report-affordance|node $REPO_ROOT/scripts/verify-bug-report.mjs"
+    # bug-report-affordance-self-test plants in memory a diagnostics-bearing query key, an origin
+    # mismatch, an extra prefill id outside bug.yml, an absent bug form, a respelled opener id, a
+    # widened github.com disposition, a removed install_format deferral record, a Copy button removed
+    # from the diagnostics layer and a Copy handler that does not write the clipboard; each goes red
+    # naming the drift. It writes nothing.
+    "bug-report-affordance-self-test|node $REPO_ROOT/scripts/verify-bug-report.mjs --self-test"
+    # NEW (Phase 53, GH-04): the legion mirror timer and service. Quick mode reads the two tracked
+    # unit files and the tracked workflow and settings files, checks the timer and service keys and
+    # the absence of token material, and proves the SHA-compare on in-memory pairs. Honestly --quick:
+    # file reads only; no network, gh or build. The live compare is the full-tier codeberg-mirror-live row.
+    "codeberg-mirror|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs"
+    # codeberg-mirror-self-test plants a lagged SHA pair, a token literal, a credential that is not
+    # mirror-push, a credential inside the repository, a relative credential, --prune, --mirror and a
+    # force refspec in the push, a dropped sandbox key, a widened timeout and address-family list, a
+    # removed main guard, and a weekly or non-persistent timer; each goes red naming the drift. The
+    # matching pair and the unmodified units stay green. It writes nothing.
+    "codeberg-mirror-self-test|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --self-test"
+    # NEW (Phase 53, MON-02): the Upptime target set. Derives the expected targets from the
+    # configuration.toml urls and telemetry endpoint at check time and compares them with the
+    # tracked declaration by set equality; the events target is a named deferral until the manifest
+    # declares the telemetry endpoint. Also checks the sweep-report contract on fixtures and that no
+    # product workflow carries a schedule key (D-77). Honestly --quick: text reads only.
+    "upptime-config|node $REPO_ROOT/scripts/verify-upptime.mjs"
+    # upptime-config-self-test plants a dropped target, an added target, an events endpoint the
+    # declaration omits, a disabled status workflow, a stale scheduled workflow, a status site set that
+    # drops the update feed or watches the origin root, and a schedule key; each goes red naming the
+    # target, workflow or URL. The fresh scheduled sweep, an idle event-triggered workflow and the
+    # matching set stay green.
+    "upptime-config-self-test|node $REPO_ROOT/scripts/verify-upptime.mjs --self-test"
+    # NEW (Phase 53, DOC-07 and GH-17): the support-operations section of docs/RELEASING.md. Derives
+    # every documented workflow trigger, job id, environment, model and template id from the workflow
+    # files, the private-reporting, Discussions, code-scanning and fork-approval values from the tracked
+    # settings bodies, and the acknowledgement-window sentence from SECURITY.md, and compares each with
+    # the section as set equality; a missing SECURITY.md fails closed. Honestly --quick: text reads and
+    # js-yaml from theia/ only; no network, gh, build or display.
+    "releasing-support-ops|node $REPO_ROOT/scripts/verify-releasing-support-ops.mjs"
+    # releasing-support-ops-self-test runs the unmutated tree green first, then plants in memory a removed
+    # trigger, a renamed job id, a deleted and an added template id, a changed environment and model, a
+    # missing workflow file, a missing window sentence, moderation rule, CodeQL rule and fork approval
+    # rule, a private-reporting flag turned off, a changed fork policy, an added scanned language, an
+    # absent SECURITY.md and a removed subsection; each goes red naming the drift. It writes nothing.
+    "releasing-support-ops-self-test|node $REPO_ROOT/scripts/verify-releasing-support-ops.mjs --self-test"
+    # NEW (Phase 42, GH-13 and GH-01): the label agreement. Every label an issue form or a
+    # workflow issue-label writer names must be declared in .github/settings/labels.json, and
+    # config.yml keeps blank issues off with security-policy and Discussions links. Honestly
+    # --quick: file reads and YAML parsing (js-yaml from theia/) only; no build, browser,
+    # display or network. The live label set is the full-tier repo-controls row.
+    "labels|node $REPO_ROOT/scripts/verify-labels.mjs"
+    # labels-self-test plants, in memory, an undeclared label in a form and in a workflow
+    # snippet, a case-variant label, an expression label, a malformed labels.json, a case-variant
+    # duplicate, zero forms, an extra form, a missing form, and config.yml and form-field faults;
+    # each red naming the file and label. Green controls: a runner name in runs-on, and a quoted
+    # label with a space. It writes nothing.
+    "labels-self-test|node $REPO_ROOT/scripts/verify-labels.mjs --self-test"
+    # NEW (Phase 42, DOC-04): the renewals register, structure only. Every row of docs/RENEWALS.md
+    # carries a recognizable date and an owner action that begins with an imperative verb, and no
+    # item is named twice. No calendar math: the 30-day red is the maintenance sweep's renewals-due
+    # row (Phase 48). Honestly --quick: one file read; no network, build, browser or display.
+    "renewals|node $REPO_ROOT/scripts/verify-renewals.mjs"
+    # renewals-self-test plants, in memory, a dateless row, an actionless row, a non-imperative
+    # action, a row with a missing cell, a missing table header, a duplicate item and a table with
+    # no rows, each red naming the row; a Month YYYY deadline stays green. It writes nothing.
+    "renewals-self-test|node $REPO_ROOT/scripts/verify-renewals.mjs --self-test"
+    # NEW (Phase 42, GH-14): the community files. The set is derived from the tree (SECURITY.md,
+    # CONTRIBUTING.md and CODE_OF_CONDUCT.md at the root when present, .github/ISSUE_TEMPLATE/ and
+    # org-github/) and compared with the committed list in the script header, so a deleted required
+    # file and an unreviewed added file both go red. Each derived file is also scanned for internal
+    # identifiers in visitor text, with the shape rule shell-error-copy-no-internals uses. Honestly
+    # --quick: file reads only; no network, build, browser or display.
+    "community-files|node $REPO_ROOT/scripts/verify-community-files.mjs"
+    # community-files-self-test deletes one required file and plants one identifier and one unlisted
+    # file, in memory, and requires each to go red naming the file. It writes nothing.
+    "community-files-self-test|node $REPO_ROOT/scripts/verify-community-files.mjs --self-test"
+    # NEW (Phase 46, UPD-19): the chrome/frontend shell-request kind contract.
+    # Derives the accepted kinds from handleShellMessage cases plus
+    # SHELL_MESSAGE_KINDS and the dispatched kinds from the Theia shell-state
+    # channel clients plus the ShellStateMessage union, and compares as set
+    # equality; out-of-scope kinds (other dispatches, pushes) derive from
+    # their own unions. Honestly --quick: text reads only.
+    "shell-request-kinds|node $REPO_ROOT/scripts/verify-shell-request-kinds.mjs"
+    # shell-request-kinds-self-test plants, in memory only, a stray accepted
+    # kind, a stray dispatched kind, a removed kind on each side, and a
+    # throwing default case; each must go red naming the kind and the side.
+    "shell-request-kinds-self-test|node $REPO_ROOT/scripts/verify-shell-request-kinds.mjs --self-test"
+    # NEW (Phase 46, UPD-32): the update-copy shape gate. Derives the seven
+    # contracted strings from the @powerbrowser/branding contribution and
+    # applies the no-internal-identifier shape test (names PowerBrowser, no
+    # ALL-CAPS token or dotted key, body wired to its on-screen affordance in
+    # the client). Phase 55 (UPD-21): the macOS variant must name the folder the
+    # DMG installs into (read from dmg.py), and the download page's macOS
+    # signing claims must equal the posture release.yml implements, as a set.
+    # Honestly --quick: text reads only.
+    "update-copy|node $REPO_ROOT/scripts/verify-update-copy.mjs"
+    # update-copy-self-test plants, in memory only, a pref key, an ALL-CAPS
+    # token, a missing product name, an unwired affordance, a status with no
+    # next step, an unclassified string, client literals (whitespace-bearing
+    # and single-word), a pref key in the macOS body, the Applications folder
+    # dropped from it, a notarization overclaim and a Developer ID overclaim on
+    # the download page, and the two Check-again faults, each red naming its
+    # drift. The once-per-session rule is driven through the real client
+    # (prompts 1, 1, 2), not a constant stub (CR-06, WR-05, WR-06).
+    "update-copy-self-test|node $REPO_ROOT/scripts/verify-update-copy.mjs --self-test"
+    # NEW (Phase 46, review CR-01): the update observer is started from the real
+    # startup path (TheiaService._swap) and its stop function is invoked on
+    # shutdown. Derived from the tree; self-test plants a removed call site, a
+    # dropped stop call and a definer-only tree.
+    "update-observer-wired|node $REPO_ROOT/scripts/verify-update-observer-wired.mjs"
+    "update-observer-wired-self-test|node $REPO_ROOT/scripts/verify-update-observer-wired.mjs --self-test"
+    # NEW (Phase 46, review CR-02): currentState is a numeric long in the shipped
+    # IDL; the shell compares it to a named STATE_* constant, never a string or
+    # a bare number. Derived from the IDL and the shell at check time.
+    "update-state-contract|node $REPO_ROOT/scripts/verify-update-state-contract.mjs"
+    "update-state-contract-self-test|node $REPO_ROOT/scripts/verify-update-state-contract.mjs --self-test"
+    # NEW (Phase 46, WR-07 owner ruling 2026-10-25, amended 2026-10-29): no tracked
+    # descriptor template, generator output or fixture names a github.com
+    # /releases/download/ URL or a GitHub signed asset URL as an update download (github.com
+    # is user-initiated; the signed asset URL expires; the R2 primary origin is the MAR
+    # host). Only the selfTest function of a verifier script is exempt. Derived from git
+    # ls-files; the self-test plants seven forms (three github data files, a release-assets
+    # and an objects.githubusercontent.com template, a non-verifier script, a verifier
+    # outside its selfTest) and proves three controls (a release-notes link, a MAR-origin
+    # patch URL, a verifier script carrying the form inside its selfTest).
+    "update-download-host|node $REPO_ROOT/scripts/verify-update-download-host.mjs"
+    "update-download-host-self-test|node $REPO_ROOT/scripts/verify-update-download-host.mjs --self-test"
   )
 
   if [ "$QUICK" -eq 0 ]; then
     CHECKS+=(
+      # NEW (Phase 48, TEL-06): the live loopback delivery drill. Full tier: it needs the nix theia shell
+      # (a frontend rebuild), the built binary through the BiDi harness, and a free loopback port. It binds
+      # 127.0.0.1, rewrites only the tracked powerbrowserTelemetry endpoint to the loopback URL, drives an
+      # uncaught error and an unhandled rejection at level error (flushed by batch size), asserts one POST
+      # with both corrected events after the CORS preflight, then sets level off and asserts zero requests in
+      # the same run. It restores package.json byte-identical, rebuilds, and greps the bundle for the marker.
+      # The live run is the plan 48-05 owner checkpoint; this row is the registry entry for it.
+      "tel06-error-delivery-live|node $REPO_ROOT/scripts/verify-telemetry-live-delivery.mjs"
       # NEW (01-07): the Theia half's smoke gate. It was the ONLY member of
       # 01-VALIDATION.md's full-suite command with no row in this registry --
       # a real superset gap, found by reconciling the two at the phase gate
@@ -4887,16 +5675,35 @@ run_own_checks() {
       "verify-endpoints|bash $REPO_ROOT/scripts/verify-endpoints.sh"
       "verify-endpoints-interrupt-self-test|bash $REPO_ROOT/scripts/verify-endpoints.sh --interrupt-self-test"
 
-      # NEW (08-04): the self-hosted MAR-hop proof (PKG-02, T-08-04a). Reads
-      # the effective update URL from powerbrowser/distribution/policies.json
-      # (never user-branch prefs) and re-verifies the .mozbuild/mar-hop/
-      # evidence of one real Linux N to N-plus-1 hop: two distinct versions
-      # and build IDs, a hash-pinned descriptor byte-identical to a fresh
-      # emission from the MAR bytes, fork-server access-log entries, and a
-      # zero-Mozilla-host resolver log. Needs the proof run (tier-3 N and
-      # N-plus-1 builds plus the hop drive per docs/BUILD.md), so it lives
-      # in the full set and FAILS when the evidence is absent.
+      # NEW (08-04, extended 46-03 UPD-24): the self-hosted MAR-hop proof
+      # (PKG-02, T-08-04a). Reads the effective update URL from
+      # configuration.toml [urls] update (UPD-12; never user-branch prefs)
+      # and re-verifies the .mozbuild/mar-hop/ evidence of one real Linux N
+      # to N-plus-1 hop: two distinct versions and build IDs, a hash-pinned
+      # descriptor byte-identical to a fresh emission from the MAR bytes,
+      # fork-server access-log entries, a zero-Mozilla-host resolver log,
+      # plus the UI transcript (ready notification with N+1, Restart-now
+      # click, N+1 landing, layout restored) and the read-only
+      # cannot-update variant, both derived against the contracted copy.
+      # Needs the proof run (tier-3 N and N-plus-1 builds plus the hop drive
+      # per docs/BUILD.md), so it lives in the full set and FAILS when the
+      # evidence is absent. The Phase 45 packaged re-run stays Phase 50's
+      # criterion.
       "mar-update-hop|node $REPO_ROOT/scripts/verify-mar-update-hop.mjs"
+      # NEW (Phase 44, UPD-14): full tier. Reads objdir/dist/bin/application.ini, objdir/config.status and
+      # the N-plus-1 MAR (.mozbuild/mar-hop/nplus1.mar, or the path the CLI's --mar names), emits the
+      # descriptor of each observed BUILD_TARGET twice and parses it back against the built values.
+      # Without --outdir it proves determinism from the built tree, not a committed descriptor tree.
+      # FAILs naming the first missing input (the built tree or the MAR), never SKIPs.
+      "build-update-xml|node $REPO_ROOT/scripts/build-update-xml.mjs --check"
+      # NEW (Phase 46, UPD-27): the Nimbus exposure probe. Full-tier: drives
+      # the available + manual UpdateListener paths in-Gecko with a fixture
+      # update carrying detailsURL and asserts recordExposureEvent returned
+      # plus the probe-window resolver observation is empty (set-difference
+      # over the derived contacted set, never an own-log absence). Needs a
+      # browser, so it lives in the full set and FAILs naming the evidence
+      # when none exists.
+      "nimbus-exposure|node $REPO_ROOT/scripts/verify-nimbus-exposure.mjs"
 
       # NEW (08-04): the NSIS-on-Nix build proof (PKG-01). Stages the
       # pinned installer inputs from the tree at check time and compiles
@@ -4912,6 +5719,19 @@ run_own_checks() {
       # Gecko build, the packaged tree, the built sidecar, a browser, or the network.
       # Commands and live-main/live-clone markers: docs/non-gui/checks-wave-e.tsv.
       "ng063-packaged-launch|node $REPO_ROOT/scripts/verify-ng-063-packaged-launch.mjs"
+      # NEW (Phase 45, PKG-22/PKG-18/PKG-23): the portability gates. Each needs
+      # the container-built tarball (full tier, beside ng063): the Nix-built
+      # tree is red-by-design here, which is exactly what the container build
+      # fixes. Each FAILs naming the container-build procedure when the
+      # tarball is absent; full green waits on the plan 45-04 owner gate.
+      "portable-elf|node $REPO_ROOT/scripts/verify-portable-elf.mjs"
+      "sidecar-no-symlinks|node $REPO_ROOT/scripts/verify-sidecar-no-symlinks.mjs"
+      "package-target-natives|node $REPO_ROOT/scripts/verify-package-target-natives.mjs"
+      # NEW (Phase 45, PKG-04/PKG-05): the packaged-identity gate. Derives the
+      # release-variant identity at check time and compares field-by-field
+      # against the staged package; FAILs naming the container-build procedure
+      # when the tarball is absent, like its three neighbours above.
+      "packaged-identity|node $REPO_ROOT/scripts/verify-packaged-identity.mjs"
       "ng064-update-url-from-manifest|node $REPO_ROOT/scripts/verify-ng-064-update-url.mjs"
       "ng065-mar-signature-enforced|node $REPO_ROOT/scripts/verify-ng-065-mar-signature.mjs"
       "ng066-nsis-branding-no-ping|node $REPO_ROOT/scripts/verify-ng-066-nsis-branding.mjs"
@@ -5259,6 +6079,110 @@ run_own_checks() {
       # see P2 (a lib-only import) or P3 (the web-tab.css path); the self-test plants both.
       "theia-fresh-clone-build|bash $REPO_ROOT/scripts/verify-theia-fresh-clone-build.sh"
       "theia-fresh-clone-build-self-test|bash $REPO_ROOT/scripts/verify-theia-fresh-clone-build.sh --self-test"
+
+      # NEW (Phase 55, PKG-14, PKG-15, SEC-04 wiring): the universal macOS payload gate. It reads the evidence
+      # package-macos.sh universal leaves under .mozbuild/macos-package/ and derives every expectation from the
+      # tree: the Darwin targets from the per-target mozconfigs, the generic-certs switch from upstream, the
+      # sidecar paths from TheiaService, the DMG install symlink from dmg.py, and each descriptor re-emitted
+      # through buildUpdateXml. Full tier: it needs the built universal bundle, DMG and MAR (and the Linux dmg
+      # tools to open the DMG); absent evidence FAILs naming the docs/BUILD.md procedure, never a skip.
+      "macos-package-payload|node $REPO_ROOT/scripts/verify-macos-package-payload.mjs"
+
+      # NEW (Phase 55, PKG-16): the macOS matrix record gate. It reads 55-MACOS-MATRIX.md, which the owner's hosted
+      # run and real-Mac session complete, so it is red on the draft: every UNVERIFIED value is named as
+      # unobserved, never counted as a pass. Structure is derived from the tree (the cells from the macOS row of
+      # the BUILD.md install matrix, the Darwin BUILD_TARGET set from the per-target mozconfigs). Full tier:
+      # the record only exists after the session; the self-test twin is in --quick.
+      "macos-install-matrix|node $REPO_ROOT/scripts/verify-macos-install-matrix.mjs"
+      # NEW (Phase 55, PKG-16, SEC-04): the macOS download copy gate. It compares the claims website-staging/
+      # download.html makes (signing, notarization, staple, en-US scope, complete-MAR size, Gatekeeper path) with
+      # the claims the record observed, as set equality, and runs the no-internal-identifier shape test over the
+      # macOS strings. Green on the draft because an unobserved value maps to the conservative claim; it goes red
+      # the moment the page gets ahead of the record or falls behind it. Full tier next to the matrix row; it
+      # reads two text files and never touches the network.
+      "macos-download-copy|node $REPO_ROOT/scripts/verify-macos-download-copy.mjs"
+
+      # NEW (Phase 41, GH-02): the live org and repo equal the declared .github/settings/
+      # bodies, by projection and set equality, failing closed on any unreadable endpoint.
+      # Full tier: read-only gh api against the live org and repo (network, gh auth with repo
+      # and read:org); green only after the owner applies the settings at plan 41-04.
+      "repo-controls|node $REPO_ROOT/scripts/verify-repo-controls.mjs"
+
+      # NEW (Phase 49, UPD-17): the public channel equals the latest Release. Full tier: read-only gh api
+      # against the live Releases and the updates repo, plus public HTTPS reads of each update.xml through
+      # the baked 11-segment path and of each MAR on the MAR origin (HEAD size, GET sha512). Every value
+      # derives from release-manifest.json (--manifest, else the latest Release's asset). Green only after
+      # the first public release; until then it fails closed naming the missing Release, never green.
+      "channel-live|node $REPO_ROOT/scripts/verify-channel-live.mjs"
+
+      # NEW (Phase 44, UPD-26): full tier. Read-only gh api against the live Releases (network, gh auth with
+      # read access to the repository): each non-draft Release's release-manifest.json is read, and each candidate
+      # descriptor under .mozbuild/update-descriptors must offer a buildID strictly newer than every published
+      # buildID for its appVersion. Zero published Releases is green with a named count. Zero candidates under
+      # the gitignored default tree prints a named SKIP, never a PASS; the Phase 49 job passes --descriptors
+      # <dir>, where zero descriptors is a FAIL. FAILs naming the endpoint or Release on any unreadable input.
+      "descriptor-monotonic|node $REPO_ROOT/scripts/verify-descriptor-monotonic.mjs"
+
+      # NEW (Phase 47, DIST-03): the live updates repo holds no functions/ directory and no root
+      # _worker.js, by the absence property over one read-only recursive tree listing. Full tier:
+      # read-only gh api against the live updates repo (network, gh auth with repo and read:org);
+      # green only after the owner pushes the static tree at plan 47-04. Fails closed when unreadable.
+      "updates-repo-static|node $REPO_ROOT/scripts/verify-updates-repo-static.mjs"
+
+      # NEW (Phase 47, WR-04): the staged website pages carry no OWNER TO FILL marker and no
+      # class="pending" block. Full tier, deliberately: the placeholders are intentional until the
+      # owner fills them, so this row stays red until then. It must be green before the website
+      # push (docs/RELEASING.md, the website section).
+      "website-publish-ready|node $REPO_ROOT/scripts/verify-website-publish-ready.mjs"
+
+      # NEW (Phase 53, GH-04): the live Codeberg mirror SHA compared with GitHub main. Full tier:
+      # one unauthenticated GET to the Codeberg API and one read-only gh api call. Red until the owner
+      # creates the mirror and applies the timer at the 53-04 checkpoint; an undeclared mirror slug is
+      # a FAIL, never a SKIP. Never called by a quick path.
+      "codeberg-mirror-live|node $REPO_ROOT/scripts/verify-codeberg-mirror.mjs --live"
+
+      # NEW (Phase 53, MON-02): the live Upptime status repository. Full tier: read-only gh api over
+      # its workflows and their last runs; red until the owner creates the repository and its status
+      # CNAME. An undeclared status slug is a FAIL, never a SKIP. Never called by a quick path.
+      "upptime-sweep-live|node $REPO_ROOT/scripts/verify-upptime.mjs --live"
+
+      # NEW (Phase 54, MTX-01 and UPD-31): the pkg-win11 matrix record. Full tier: it reads the record the owner's
+      # guest run writes, so it is red until the 54-04 checkpoint runs the matrix. An absent record is FAIL naming
+      # that step, never a skip. Never called by a quick path.
+      "win-matrix-record|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs"
+      # win-matrix-record-self-test builds its fixture with the real writer (scripts/matrix/win-matrix-record.py) from
+      # synthetic guest output and plants each fault (all-FAIL, a missing observation, a namespace mismatch, a drifted
+      # guest script) over mkdtemp fixtures only; hermetic.
+      "win-matrix-record-self-test|node $REPO_ROOT/scripts/verify-win-matrix-record.mjs --self-test"
+
+      # NEW (Phase 54, SEC-03): the unsigned-first Windows warning, word for word. Full tier because it reads the
+      # published download page (one GET to the homepage origin's download.html) and the matrix record the owner's
+      # guest run writes; red until both exist. It compares every SEC-03 block in docs/WINDOWS-DISTRIBUTION.md,
+      # docs/RELEASING.md, website-staging/download.html and the published page with the requirement text, and the
+      # quoted dialog title with the record. Never called by a quick path.
+      "win-download-copy|node $REPO_ROOT/scripts/verify-win-download-copy.mjs"
+      # win-download-copy-self-test runs over in-memory copies of the real files plus a fixture record: two green
+      # controls (unsigned, signed), then a reworded word per source, an empty set, an unreadable source, an absent
+      # or disagreeing record and a stale block after signing, each red naming its file. Hermetic; writes nothing.
+      "win-download-copy-self-test|node $REPO_ROOT/scripts/verify-win-download-copy.mjs --self-test"
+
+      # NEW (Phase 54, SEC-12, DIST-10): the Windows Authenticode chain in release.yml sign-windows. Full tier because
+      # the signing status it compares includes the published download page (one GET); the live chain evidence is the
+      # owner's first sign-windows run at the 54-04 checkpoint. It classifies each sign-windows step from its own
+      # text and compares the sequence with inner jsign, repackage installer, installer jsign, repackage mar, signmar
+      # sign, signmar verify as ordered equality, plus OIDC-only Azure behind every gate, no stored Azure secret, no
+      # schedule key, no secret or environment on a legion job, and the Windows status line against the posture
+      # line in docs/RELEASING.md. Never called by a quick path.
+      "win-sign-chain|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs"
+      # win-sign-chain-self-test plants every fault in memory over the real workflow, docs and page (two green
+      # controls, then an out-of-order step, a stored secret, a schedule key, a legion secret and a stale unsigned
+      # status among others), each red naming its step or key. Hermetic; writes nothing.
+      "win-sign-chain-self-test|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs --self-test"
+      # win-sign-list-self-test: the list of inner PE files sign-windows signs, derived from the pinned package manifest
+      # (upstream/browser/installer/package-manifest.in) and compared with a staged tree; the zip name derived from
+      # configuration.toml and checked against package-windows.sh's glob. Plants an extra PE file, a missing
+      # unconditional one, an unsafe name, an empty tree and an unreadable manifest over mkdtemp fixtures; hermetic.
+      "win-sign-list-self-test|node $REPO_ROOT/scripts/win-sign-list.mjs --self-test"
     )
   fi
 

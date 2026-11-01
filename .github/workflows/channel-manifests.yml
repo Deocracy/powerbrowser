@@ -1,0 +1,422 @@
+# The channel-manifests stage (Phase 56, DIST-12). One release produces four channel legs, each behind the
+# release-train interface as a workflow_call from the train (Phases 43 and 49; assumption A6):
+#
+#   flake-hash-pr      the bot opens a pull request to main carrying the flake hash of the published tarball.
+#                      It never pushes to main (GH-05): the branch is chore/channel-<key> and the change is reviewed.
+#   tap-commit         the bot App commits the rendered cask to the own tap repository. This is a direct push to
+#                      the tap (plan 56-04 mandates it and the own tap has no reviewer), allowed only after the
+#                      digest is recomputed and attested and verify-homebrew-cask.mjs --release passes on the
+#                      rendered file.
+#   winget-submit      wingetcreate writes the winget set and submits it with WINGET_TOKEN from the release
+#                      environment, by name. It runs only when the train names the Windows asset (A2).
+#   checker-freshness  the Flatpak x-checker-data template resolves for the release key. Static, no network.
+#
+# Live or dry is decided by inputs, never by github.event_name: inside a called workflow the github context is
+# the caller's, so an event_name gate is true or false for the wrong reason (CR-01). The caller passes live: true for
+# a published release and dry_run: true to render without writing. workflow_dispatch has no live input, so a direct
+# dispatch runs the dry-run job alone: it renders the four payloads into the runner's temp directory and lists
+# them. It writes nothing to any repository and submits nothing.
+#
+# Every digest a leg publishes is recomputed here from the downloaded Release asset (verify-assets), compared with
+# the Release's SHA256SUMS, and the asset and SHA256SUMS are verified against the build attestation pinned to
+# release.yml on main, as Phase 50 does. A digest the caller supplies is only cross-checked; a mismatch fails.
+# Asset names derive from the tree (scripts/verify-channel-release-jobs.mjs) and are checked against SHA256SUMS.
+#
+# Every live leg reads the release key from the derive job, which checks it against the key the tree derives and
+# validates every input once (--check-key, --check-inputs). Each leg's payload derives from the tree at run time
+# (--facts, --render-live), and no caller input is ever placed in a sed or shell program: values travel in
+# environment variables and the templates are rendered by literal replacement with a leftover-token check.
+# The row scripts/verify-channel-release-jobs.mjs checks this file.
+#
+# No schedule key (D-77): the Cloudflare Worker clock owns timing. No pull_request trigger. Credentials are
+# referenced by name only, and no job holds write scope on contents at the workflow level (write-trio).
+
+name: Channel manifests
+
+on:
+  workflow_call:
+    inputs:
+      release_key:
+        description: "The release key v<ESR>-<revision> the train published"
+        required: true
+        type: string
+      live:
+        description: "True only for a published release; false renders the dry run and writes nothing"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "True forces the dry run even when live is true (the train dry-run switch)"
+        required: false
+        type: boolean
+        default: false
+      tarball_sha256:
+        description: "The SHA-256 of the published Linux tarball; required when live, cross-checked against SHA256SUMS"
+        required: false
+        type: string
+        default: ""
+      dmg_asset:
+        description: "The macOS disk image asset name; empty until Phase 55 (A3), which skips the tap leg"
+        required: false
+        type: string
+        default: ""
+      dmg_sha256:
+        description: "The SHA-256 of that disk image; required with dmg_asset, cross-checked against SHA256SUMS"
+        required: false
+        type: string
+        default: ""
+      winget_asset:
+        description: "The Windows installer asset name; empty until Phase 54 (A2), which skips the winget leg"
+        required: false
+        type: string
+        default: ""
+      winget_sha256:
+        description: "The SHA-256 of that installer; required with winget_asset, cross-checked against SHA256SUMS"
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      release_key:
+        description: "The release key to render the four payloads for (dry run, nothing is written to a repository)"
+        required: true
+        type: string
+
+permissions: {}
+
+# bash on every runner, so run steps are bash -eo pipefail rather than bash -e (WR-04).
+defaults:
+  run:
+    shell: bash
+
+# One run per release key at a time: two calls would race on chore/channel-<key> and on the tap (WR-03).
+concurrency:
+  group: channel-manifests-${{ inputs.release_key }}
+  cancel-in-progress: false
+
+jobs:
+  derive:
+    name: Derive and check the release key and every input
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      key: ${{ steps.check.outputs.key }}
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check the key against the tree and validate every input once
+        id: check
+        env:
+          KEY: ${{ inputs.release_key }}
+          LIVE: ${{ inputs.live }}
+          TARBALL_SHA: ${{ inputs.tarball_sha256 }}
+          DMG_ASSET: ${{ inputs.dmg_asset }}
+          DMG_SHA: ${{ inputs.dmg_sha256 }}
+          WINGET_ASSET: ${{ inputs.winget_asset }}
+          WINGET_SHA: ${{ inputs.winget_sha256 }}
+        run: |
+          set -eu
+          node scripts/verify-channel-release-jobs.mjs --check-key "$KEY"
+          node scripts/verify-channel-release-jobs.mjs --check-inputs
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+  dry-run:
+    name: Render the four payloads (dry run)
+    if: ${{ !inputs.live || inputs.dry_run }}
+    needs: [derive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Render the payloads into the runner temp directory (writes nothing to a repository)
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+        run: |
+          set -eu
+          node scripts/verify-channel-release-jobs.mjs --render "$RUNNER_TEMP/payloads" --key "$KEY"
+          find "$RUNNER_TEMP/payloads" -type f | sort
+
+  verify-assets:
+    name: Recompute every published digest and verify the build attestation
+    if: ${{ inputs.live && !inputs.dry_run }}
+    needs: [derive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      attestations: read
+    outputs:
+      tarball: ${{ steps.verify.outputs.tarball }}
+      dmg: ${{ steps.verify.outputs.dmg }}
+      winget: ${{ steps.verify.outputs.winget }}
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download each asset, verify its attestation, and recompute its SHA-256 against SHA256SUMS
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ needs.derive.outputs.key }}
+          TARBALL_SHA: ${{ inputs.tarball_sha256 }}
+          DMG_ASSET: ${{ inputs.dmg_asset }}
+          DMG_SHA: ${{ inputs.dmg_sha256 }}
+          WINGET_ASSET: ${{ inputs.winget_asset }}
+          WINGET_SHA: ${{ inputs.winget_sha256 }}
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/assets"
+          mkdir -p "$D"
+          SIGNER="$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          fetch() { gh release download "$KEY" --repo "$GITHUB_REPOSITORY" --pattern "$1" --dir "$D" --clobber >&2; }
+          attest() {
+            gh attestation verify "$D/$1" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" \
+              --source-ref refs/heads/main --deny-self-hosted-runners >&2
+          }
+          check() {
+            fetch "$2"
+            attest "$2"
+            ASSET_NAME="$2" EXPECT_SHA="$3" node scripts/verify-channel-release-jobs.mjs --check-asset "$1" "$D/$2" "$D/SHA256SUMS"
+          }
+          fetch SHA256SUMS
+          attest SHA256SUMS
+          TARBALL="$(node scripts/verify-channel-release-jobs.mjs --facts | jq -r '."@TARBALL_ASSET@"')"
+          echo "tarball=$(check tarball "$TARBALL" "$TARBALL_SHA")" >> "$GITHUB_OUTPUT"
+          if [ -n "$DMG_ASSET" ]; then
+            echo "dmg=$(check dmg "$DMG_ASSET" "$DMG_SHA")" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$WINGET_ASSET" ]; then
+            echo "winget=$(check installer "$WINGET_ASSET" "$WINGET_SHA")" >> "$GITHUB_OUTPUT"
+          fi
+
+  flake-hash-pr:
+    name: Flake hash bot pull request
+    if: ${{ inputs.live && !inputs.dry_run }}
+    needs: [derive, verify-assets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The bot environment holds the App key. The installation token is minted below and passed to git and gh only.
+    environment: bot
+    permissions: {}
+    steps:
+      - name: Mint the bot App token for the release repository
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      - name: Prefetch the published tarball, compare it with the verified digest and write the hash record
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          VERIFIED_SHA: ${{ needs.verify-assets.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-channel-release-jobs.mjs --facts > "$RUNNER_TEMP/facts.json"
+          URL="$(jq -r '."@RELEASE_URL@"' "$RUNNER_TEMP/facts.json")"
+          PREFETCH="$(nix store prefetch-file --hash-type sha256 --json "$URL")"
+          SRI="$(jq -r '.hash' <<<"$PREFETCH")"
+          WANT="$(nix hash convert --hash-algo sha256 --to sri "$VERIFIED_SHA")"
+          [ "$WANT" = "$SRI" ] || { echo "flake-hash-pr: FAIL -- the published tarball hashes to $SRI but the attested SHA256SUMS digest is $WANT" >&2; exit 1; }
+          jq -n --arg k "$KEY" --arg h "$SRI" '{releaseKey: $k, sha256: $h}' > nix/pkg/release-hash.json
+          node scripts/verify-flake-repack.mjs --release
+
+      - name: Open the bot pull request (never a push to main; a re-run is safe)
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="chore/channel-$KEY"
+          git config user.name "release-train"
+          git config user.email "release-train@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add nix/pkg/release-hash.json
+          if git diff --cached --quiet; then echo "flake-hash-pr: the hash record already names $KEY; nothing to open"; exit 0; fi
+          git commit -m "chore(nix): flake hash for $KEY"
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          REMOTE="$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push --force-with-lease="refs/heads/$BRANCH:$REMOTE" origin "HEAD:refs/heads/$BRANCH"
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" = "0" ]; then
+            gh pr create --base main --head "$BRANCH" --title "chore(nix): flake hash for $KEY" \
+              --body "The DIST-12 channel stage recomputed the flake hash of the published $KEY tarball and checked it against the attested SHA256SUMS. Review, then merge."
+          fi
+
+  tap-commit:
+    name: Homebrew tap commit (bot App, direct to the tap)
+    if: ${{ inputs.live && !inputs.dry_run && inputs.dmg_asset != '' }}
+    needs: [derive, verify-assets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: bot
+    permissions: {}
+    steps:
+      - name: Mint the bot App token for the tap repository
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-powerbrowser
+          permission-contents: write
+
+      - name: Check out the release repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check out the tap repository with the bot token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-powerbrowser
+          token: ${{ steps.app.outputs.token }}
+          path: tap
+          persist-credentials: false
+
+      - name: Render the cask from the tree's derived values and the verified disk image digest
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          ASSET_NAME: ${{ inputs.dmg_asset }}
+          ASSET_SHA: ${{ needs.verify-assets.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Casks
+          node scripts/verify-channel-release-jobs.mjs --render-live tap tap/Casks/powerbrowser.rb
+
+      - name: Refuse a cask that fails the release check (fixture asset, leftover token, digest or name drift)
+        env:
+          ASSET_NAME: ${{ inputs.dmg_asset }}
+          ASSET_SHA: ${{ needs.verify-assets.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-homebrew-cask.mjs --release --rendered tap/Casks/powerbrowser.rb
+
+      - name: Commit and push the cask to the tap default branch
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          cd tap
+          git config user.name "release-train"
+          git config user.email "release-train@users.noreply.github.com"
+          git add Casks/powerbrowser.rb
+          if git diff --cached --quiet; then echo "tap-commit: the cask already names $KEY; nothing to commit"; exit 0; fi
+          git commit -m "powerbrowser $KEY"
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "HEAD:refs/heads/main"
+
+  winget-submit:
+    name: winget set and submission (WINGET_TOKEN by name, winget environment)
+    if: ${{ inputs.live && !inputs.dry_run && inputs.winget_asset != '' }}
+    needs: [derive, verify-assets]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    # The winget environment holds WINGET_TOKEN alone. The release environment holds the signing key and is never
+    # entered from this file.
+    environment: winget
+    permissions: {}
+    env:
+      # wingetcreate is pinned by version and by the SHA-256 of the release asset (read from the GitHub release of
+      # microsoft/winget-create, 2026-10-31, and recomputed on download). Bump both together.
+      WINGETCREATE_VERSION: 1.12.13.0
+      WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download the pinned wingetcreate and check its SHA-256 (no token in this step)
+        run: |
+          set -euo pipefail
+          URL="https://github.com/microsoft/winget-create/releases/download/v${WINGETCREATE_VERSION}/wingetcreate.exe"
+          curl -fsSL -o "$RUNNER_TEMP/wingetcreate.exe" "$URL"
+          GOT="$(sha256sum "$RUNNER_TEMP/wingetcreate.exe" | cut -d' ' -f1)"
+          [ "$GOT" = "$WINGETCREATE_SHA256" ] || { echo "winget-submit: FAIL -- wingetcreate.exe hashes to $GOT, not the pinned $WINGETCREATE_SHA256" >&2; exit 1; }
+
+      - name: Render the tracked winget set with the verified installer digest and check what will be submitted
+        env:
+          ASSET_NAME: ${{ inputs.winget_asset }}
+          ASSET_SHA: ${{ needs.verify-assets.outputs.winget }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-channel-release-jobs.mjs --render-live winget "$RUNNER_TEMP/winget"
+          node scripts/verify-winget-manifest.mjs --release --rendered "$RUNNER_TEMP/winget"
+
+      - name: Choose the set to submit (the rendered set for the first version, an updated set for later versions)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ needs.derive.outputs.key }}
+          ASSET_NAME: ${{ inputs.winget_asset }}
+          ASSET_SHA: ${{ needs.verify-assets.outputs.winget }}
+        run: |
+          set -euo pipefail
+          VERSION="${KEY#v}"
+          SUBMIT="$RUNNER_TEMP/winget-submit"
+          rm -rf "$SUBMIT"
+          if gh api repos/microsoft/winget-pkgs/contents/manifests/d/DeBIOSFoundation/PowerBrowser --silent 2>/dev/null; then
+            # A later version: wingetcreate update starts from the published manifest and recomputes the hash itself.
+            URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$KEY/$ASSET_NAME"
+            "$RUNNER_TEMP/wingetcreate.exe" update DeBIOSFoundation.PowerBrowser --version "$VERSION" --urls "$URL" --out "$SUBMIT"
+            grep -qi "InstallerSha256: *\"\?$ASSET_SHA" "$SUBMIT"/*.installer.yaml || { echo "winget-submit: FAIL -- the updated set does not carry the verified digest" >&2; exit 1; }
+          else
+            # The first version: the tracked winget/ set, rendered above, is what is submitted.
+            cp -r "$RUNNER_TEMP/winget" "$SUBMIT"
+          fi
+          ls "$SUBMIT"
+
+      - name: Submit the set with WINGET_TOKEN from the winget environment (token in the environment, never on a command line)
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          KEY: ${{ needs.derive.outputs.key }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/wingetcreate.exe" submit --prtitle "DeBIOSFoundation.PowerBrowser version ${KEY#v}" --no-open "$RUNNER_TEMP/winget-submit"
+
+  checker-freshness:
+    name: Flatpak checker data resolves for the key (static)
+    if: ${{ inputs.live && !inputs.dry_run }}
+    needs: [derive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository without persisting the token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check that the x-checker-data template resolves for the release key
+        env:
+          KEY: ${{ needs.derive.outputs.key }}
+        run: |
+          set -eu
+          node scripts/verify-channel-release-jobs.mjs --check-checker "$KEY"

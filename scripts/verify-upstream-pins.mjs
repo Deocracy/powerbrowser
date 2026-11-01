@@ -16,10 +16,16 @@
 //     gate its readers skip (generate-check's own rule). A present but
 //     unreadable fragment FAILs -- that is broken output, not a fresh
 //     clone.
-//  2. .github/workflows/rebase-upstream.yml's input default equals the
-//     manifest tag. The default is a literal because a workflow input
-//     cannot read TOML, so it is a check-covered mirror, never a second
-//     source: drift fails naming the workflow.
+//  2. .github/workflows/rebase-upstream.yml carries no tag and no default
+//     (Phase 40, AUTO-08): the caller passes the tag. Three assertions over
+//     its text, each failing naming the workflow: (a) both a
+//     workflow_dispatch and a workflow_call trigger declare a `tag` input;
+//     (b) no `default:` key sits under any `tag` input; (c) every `run:`
+//     command that invokes scripts/generate.mjs,
+//     scripts/verify-generated-identity.mjs or scripts/rebase-upstream.sh
+//     starts with `nix develop .#theia --command`, because generate.mjs
+//     needs the pinned inkscape. Indentation-aware line scan, no YAML
+//     library: scripts/ imports nothing from theia/node_modules.
 //  3. scripts/fetch-upstream.sh's effective default equals the manifest
 //     tag, resolved by PARSING, never by executing the clone path: the
 //     script must source the fragment and must carry no tag literal of
@@ -31,9 +37,10 @@
 //     inventory/ are excluded as historical record, not build input
 //     (they quote past pins the way they quote everything else, and
 //     renaming history would destroy the provenance the project keeps).
-//     The three allowed carriers above -- manifest (authoritative),
-//     workflow mirror (equality-checked) and this script's own self-test
-//     fixtures -- are excluded from the sweep by path.
+//     The two allowed carriers -- the manifest (authoritative) and this
+//     script's own self-test fixtures -- are excluded from the sweep by
+//     path. The workflow is not a carrier: it holds no tag and is swept
+//     like any other file.
 //
 // A tag literal is `FIREFOX_` followed by a digit. The narrower shape is
 // deliberate: the variable and constant names around it (the fragment key,
@@ -69,6 +76,12 @@
 //     half of the agreement; the header ranges and the upstream-authored
 //     transitive constraint lines inside stanzas are not asserted.
 //
+// Uptake lane (step 8, Phase 58, TRAIN-05/UPS-01): the 175 tag is not a second manifest key. It
+// is the detector's uptake candidate, and the release-train uptake-replay job must take its tag from
+// needs.detect.outputs.uptake-candidate and from nothing else. The literal sweep (step 4) covers the
+// file's text; step 8 covers the job's source and the chain that carries the candidate there (the
+// detector's uptake-candidate= line, the Decide allowlist and the detect job's output mapping, WR-04).
+//
 // Honestly --quick: it reads text files and runs one git ls-files. No
 // clone, no fetch, no build, no browser, no display, no network.
 //
@@ -76,10 +89,13 @@
 //   node scripts/verify-upstream-pins.mjs
 //   node scripts/verify-upstream-pins.mjs --self-test
 //
-// The self-test plants four faults and requires each to go red naming the
-// file -- an ESR drifted workflow mirror, an ESR second literal under
-// scripts/, a patch-bumped @theia pin in one member package.json, and a
-// drifted @theia stanza version in the lockfile -- with the unmutated tree
+// The self-test plants eight faults and requires each to go red naming the
+// file -- five on the workflow (a default under the workflow_call tag, a
+// default under the workflow_dispatch tag, the workflow_call trigger
+// removed, a generator step outside nix develop, a tag literal in a
+// comment), an ESR second literal under scripts/, a patch-bumped @theia pin
+// in one member package.json, and a drifted @theia stanza version in the
+// lockfile -- with the unmutated tree
 // as the clean control proving each red is plant-caused. Every plant lands
 // in memory: no tracked file is edited, not even temporarily.
 
@@ -158,16 +174,129 @@ function inScope(rel) {
     return false;
 }
 
-// The allowed carriers: the manifest (authoritative), the workflow
-// mirror (equality-checked in step 2) and this script (whose self-test
-// plants tag-shaped fixtures). Everything else in scope must be clean.
+// The allowed carriers: the manifest (authoritative) and this script
+// (whose self-test plants tag-shaped fixtures). Everything else in scope,
+// the rebase workflow included, must be clean.
 function sweepExcluded(rel) {
     return rel.startsWith('generated/')
         || rel.startsWith('.planning/')
         || rel.startsWith('inventory/')
         || rel === MANIFEST_REL
-        || rel === WORKFLOW_REL
         || rel === SELF_REL;
+}
+
+// --- workflow structure, by indentation (step 2) ------------------------------
+// Commands that need the pinned toolchain, and the prefix that supplies it.
+const NIX_SCRIPTS = Object.freeze(['scripts/generate.mjs', 'scripts/verify-generated-identity.mjs', 'scripts/rebase-upstream.sh']);
+const NIX_PREFIX = 'nix develop .#theia --command ';
+const WORKFLOW_TRIGGERS = Object.freeze(['workflow_dispatch', 'workflow_call']);
+
+const indentOf = (line) => line.match(/^ */)[0].length;
+const isContent = (line) => line.trim() !== '' && !line.trim().startsWith('#');
+const keyRe = (key) => new RegExp(`^\\s*(?:-\\s+)?["']?${key}["']?\\s*:(?:\\s|$)`);
+
+// Indices of the content lines nested under line i (deeper indentation),
+// stopping at the first content line back at i's level or shallower.
+function childLines(lines, i) {
+    const out = [];
+    if (i < 0) return out;
+    const base = indentOf(lines[i]);
+    for (let j = i + 1; j < lines.length; j += 1) {
+        if (!isContent(lines[j])) continue;
+        if (indentOf(lines[j]) <= base) break;
+        out.push(j);
+    }
+    return out;
+}
+
+// The direct child of line i (or of the top level when i is -1) keyed `key`.
+function directChild(lines, i, key) {
+    const kids = i === -1
+        ? lines.map((_, j) => j).filter(j => isContent(lines[j]) && indentOf(lines[j]) === 0)
+        : childLines(lines, i);
+    if (kids.length === 0) return -1;
+    const depth = indentOf(lines[kids[0]]);
+    return kids.find(j => indentOf(lines[j]) === depth && keyRe(key).test(lines[j])) ?? -1;
+}
+
+function parentOf(lines, i) {
+    const ind = indentOf(lines[i]);
+    for (let j = i - 1; j >= 0; j -= 1) {
+        if (isContent(lines[j]) && indentOf(lines[j]) < ind) return j;
+    }
+    return -1;
+}
+
+const keyName = (line) => line.trim().replace(/^-\s+/, '').split(':')[0].replace(/["']/g, '');
+
+// Every `run:` command as { line, cmd }: the value of a single-line run, or
+// each non-empty line of a `|` / `>` block.
+// shortcut: a command continued over a trailing backslash is read line by
+// line; fine while no step does that, upgrade to joining continuations if one does.
+function runCommands(lines) {
+    const out = [];
+    for (let i = 0; i < lines.length; i += 1) {
+        const m = lines[i].match(/^(\s*(?:-\s+)?)run:\s*(.*)$/);
+        if (m === null) continue;
+        const value = m[2].trim();
+        if (/^[|>][-+]?\s*(#.*)?$/.test(value)) {
+            const keyCol = m[1].length;
+            for (let j = i + 1; j < lines.length; j += 1) {
+                if (lines[j].trim() === '') continue;
+                if (indentOf(lines[j]) <= keyCol) break;
+                out.push({ line: j + 1, cmd: lines[j].trim() });
+            }
+        } else if (value !== '') {
+            out.push({ line: i + 1, cmd: value.replace(/^(["'])(.*)\1$/, '$2') });
+        }
+    }
+    return out;
+}
+
+function workflowFailures(text) {
+    const failures = [];
+    const lines = text.split('\n');
+
+    // (a) both triggers, each declaring a tag input.
+    const on = directChild(lines, -1, 'on');
+    if (on === -1) {
+        failures.push(`${WORKFLOW_REL} declares no top-level on: block, so nothing can start it. Next step: restore the workflow_dispatch and workflow_call triggers, each with a tag input.`);
+    } else {
+        for (const trigger of WORKFLOW_TRIGGERS) {
+            const t = directChild(lines, on, trigger);
+            if (t === -1) {
+                failures.push(`${WORKFLOW_REL} declares no ${trigger} trigger, so ${trigger === 'workflow_call' ? 'the release train cannot call it' : 'the owner cannot dispatch it'}. Next step: restore on.${trigger} with a required tag input of type string and no default.`);
+                continue;
+            }
+            const tag = directChild(lines, directChild(lines, t, 'inputs'), 'tag');
+            if (tag === -1) {
+                failures.push(`${WORKFLOW_REL} ${trigger} trigger declares no tag input, so the caller cannot name the tag to replay. Next step: add on.${trigger}.inputs.tag, required, of type string, with no default.`);
+            }
+        }
+    }
+
+    // (b) no default under any tag input.
+    for (let i = 0; i < lines.length; i += 1) {
+        if (!keyRe('tag').test(lines[i]) || !isContent(lines[i])) continue;
+        const inputs = parentOf(lines, i);
+        if (inputs === -1 || keyName(lines[inputs]) !== 'inputs') continue;
+        const trigger = parentOf(lines, inputs);
+        const where = trigger === -1 ? 'a' : `the ${keyName(lines[trigger])}`;
+        for (const j of childLines(lines, i)) {
+            if (keyRe('default').test(lines[j])) {
+                failures.push(`${WORKFLOW_REL}:${j + 1} gives ${where} tag input a default, so a run can replay a tag nobody chose and an ESR bump would have to edit this file. Next step: delete the default line; the pin lives in ${MANIFEST_REL} and the caller passes it.`);
+            }
+        }
+    }
+
+    // (c) every generator, identity and rebase command runs inside the Nix shell.
+    for (const { line, cmd } of runCommands(lines)) {
+        const script = NIX_SCRIPTS.find(s => cmd.includes(s));
+        if (script !== undefined && !cmd.startsWith(NIX_PREFIX)) {
+            failures.push(`${WORKFLOW_REL}:${line} runs ${script} outside nix develop .#theia, so it gets the runner's tools instead of the pinned ones (generate.mjs has no inkscape there). Next step: start that command with '${NIX_PREFIX.trim()}'.`);
+        }
+    }
+    return failures;
 }
 
 function tagLiterals(text) {
@@ -240,6 +369,71 @@ function lockTheiaStanzas(text) {
     return rows;
 }
 
+// --- the uptake lane's tag source (step 8, TRAIN-05) -----------------------------------------
+// The train workflow carries one uptake-replay job; its tag input must be exactly the detector's
+// uptake candidate. A line scan by indentation, the same style as the rebase workflow scan.
+const TRAIN_WF_REL = '.github/workflows/release-train.yml';
+const UPTAKE_JOB = 'uptake-replay';
+const UPTAKE_SOURCE = /^\s*tag:\s*\$\{\{\s*needs\.detect\.outputs\.uptake-candidate\s*\}\}\s*$/;
+
+/** Failures for the uptake-replay job's tag source. Pure: text in, named failures out. */
+function uptakeSourceFailures(text) {
+    const lines = text.split('\n');
+    const start = lines.findIndex(l => new RegExp(`^  ${UPTAKE_JOB}:\\s*$`).test(l));
+    if (start < 0) {
+        return [`${TRAIN_WF_REL} declares no ${UPTAKE_JOB} job, so the 175 uptake lane replays nothing. Next step: restore the ${UPTAKE_JOB} job beside bump.`];
+    }
+    let end = start + 1;
+    while (end < lines.length && (lines[end].trim() === '' || indentOf(lines[end]) > 2)) end += 1;
+    const tags = lines.slice(start + 1, end).filter(l => /^\s*tag:/.test(l));
+    if (tags.length !== 1) {
+        return [`${TRAIN_WF_REL} ${UPTAKE_JOB} carries ${tags.length} tag input(s), not one. Next step: give it exactly one tag, sourced from needs.detect.outputs.uptake-candidate.`];
+    }
+    if (!UPTAKE_SOURCE.test(tags[0])) {
+        return [`${TRAIN_WF_REL} ${UPTAKE_JOB} takes its tag from ${tags[0].trim()}, not from needs.detect.outputs.uptake-candidate. Next step: source the tag from the detect listing, never a literal, a default or the 153 candidate.`];
+    }
+    return [];
+}
+
+// The uptake-candidate chain (WR-04): the detector prints it, the detect job's Decide step allowlists
+// it, and the detect job maps it to its output. Each link is required. Removing one leaves the lane
+// silently off: the candidate is empty, uptake-replay is skipped and the report says idle.
+const DETECTOR_REL = 'scripts/detect-upstreams.mjs';
+const DETECT_JOB = 'detect';
+const UPTAKE_PRINT = /console\.log\(`uptake-candidate=\$\{/;
+const UPTAKE_OUTPUT = /^\s*uptake-candidate:\s*\$\{\{\s*steps\.decide\.outputs\.uptake-candidate\s*\}\}\s*$/;
+const DECIDE_ALLOWLIST = /grep -E '\^\(([^)]*)\)=' /;
+
+/** The lines of one top-level job, by indentation, or null when the job is absent. */
+function jobLines(text, jobId) {
+    const lines = text.split('\n');
+    const start = lines.findIndex(l => new RegExp(`^  ${jobId}:\\s*$`).test(l));
+    if (start < 0) return null;
+    let end = start + 1;
+    while (end < lines.length && (lines[end].trim() === '' || indentOf(lines[end]) > 2)) end += 1;
+    return lines.slice(start + 1, end);
+}
+
+/** Failures for the uptake-candidate links. Pure: texts in, named failures out. */
+function uptakeLinkFailures(workflowText, detectorText) {
+    const failures = [];
+    if (!UPTAKE_PRINT.test(detectorText)) {
+        failures.push(`${DETECTOR_REL} no longer prints uptake-candidate=, so the detect job has no uptake candidate to pass on. Next step: restore the uptake-candidate= line in ${DETECTOR_REL}.`);
+    }
+    const block = jobLines(workflowText, DETECT_JOB);
+    if (block === null) {
+        return [...failures, `${TRAIN_WF_REL} declares no ${DETECT_JOB} job, so the uptake candidate has no source. Next step: restore the detect job.`];
+    }
+    const allow = DECIDE_ALLOWLIST.exec(block.join('\n'));
+    if (allow === null || !allow[1].split('|').includes('uptake-candidate')) {
+        failures.push(`${TRAIN_WF_REL} ${DETECT_JOB} job's Decide step has no uptake-candidate in its grep allowlist, so the candidate never reaches the job outputs. Next step: add uptake-candidate to that allowlist.`);
+    }
+    if (!block.some(l => UPTAKE_OUTPUT.test(l))) {
+        failures.push(`${TRAIN_WF_REL} ${DETECT_JOB} job does not map the uptake-candidate output from steps.decide, so uptake-replay reads an empty tag. Next step: restore that output in the detect job.`);
+    }
+    return failures;
+}
+
 function runChecks(root, overrides = {}) {
     const failures = [];
     const skipped = [];
@@ -294,16 +488,13 @@ function runChecks(root, overrides = {}) {
         failures.push(`${FRAGMENT_REL} carries ${FRAGMENT_KEY}=${fragmentPin} but ${MANIFEST_REL} declares ${expected} -- stale output. Next step: run ${RERUN_GENERATE}, then re-run this check.`);
     }
 
-    // --- 2. the workflow mirror ----------------------------------------------
+    // --- 2. the workflow: both triggers, no tag default, generators in Nix --------
     {
         const text = read(WORKFLOW_REL);
         if (text === null) {
-            failures.push(`${WORKFLOW_REL} could not be read, so the mirror proves nothing. Next step: restore it.`);
-        } else if (expected !== null) {
-            const found = tagLiterals(text);
-            if (found.length !== 1 || found[0] !== expected) {
-                failures.push(`${WORKFLOW_REL} mirrors ${found.length === 0 ? 'no tag' : found.join(', ')} but ${MANIFEST_REL} declares ${expected} -- the mirror drifted. Next step: bump the manifest first, then mirror its tag in the workflow input default.`);
-            }
+            failures.push(`${WORKFLOW_REL} could not be read, so its triggers and steps prove nothing. Next step: restore it.`);
+        } else {
+            failures.push(...workflowFailures(text));
         }
     }
 
@@ -336,7 +527,7 @@ function runChecks(root, overrides = {}) {
                 for (let i = 0; i < lines.length; i += 1) {
                     const found = tagLiterals(lines[i]);
                     if (found.length > 0) {
-                        failures.push(`${rel}:${i + 1} carries a tag literal ${found.join(', ')} outside the three allowed carriers -- the pin lives in ${MANIFEST_REL} alone. Next step: read the pin from ${FRAGMENT_REL} instead of restating it.`);
+                        failures.push(`${rel}:${i + 1} carries a tag literal ${found.join(', ')} outside the two allowed carriers -- the pin lives in ${MANIFEST_REL} alone. Next step: read the pin from ${FRAGMENT_REL} instead of restating it.`);
                     }
                 }
             }
@@ -462,6 +653,22 @@ function runChecks(root, overrides = {}) {
         }
     }
 
+    // --- 8. the uptake lane's tag comes from the train's listing (TRAIN-05, UPS-01) -----------
+    // The 175 tag is not a second manifest key (A-58-6): it is the detector's uptake candidate, passed
+    // into the uptake-replay job. The literal sweep (step 4) already refuses a tag literal in that file.
+    // This step requires the job's tag input to be sourced from that one output, and from nothing else.
+    {
+        const text = read(TRAIN_WF_REL);
+        if (text === null) {
+            failures.push(`${TRAIN_WF_REL} could not be read, so the uptake tag source proves nothing. Next step: restore it.`);
+        } else {
+            failures.push(...uptakeSourceFailures(text));
+            const detectorText = read(DETECTOR_REL);
+            if (detectorText === null) failures.push(`${DETECTOR_REL} could not be read, so the uptake candidate chain proves nothing. Next step: restore it.`);
+            else failures.push(...uptakeLinkFailures(text, detectorText));
+        }
+    }
+
     return { failures, skipped, expected, theia, theiaMembers };
 }
 
@@ -474,7 +681,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- the manifest ESR pin agrees with the fragment, the workflow mirror and fetch's default, with no second literal in scope; the Theia pin ${theia} agrees across resolutions, ${theiaMembers} member files and the lockfile`);
+    console.log(`${NAME}: PASS -- the manifest ESR pin agrees with the fragment and fetch's default, with no second literal in scope; the rebase workflow is callable and dispatchable with no tag default and runs its generator steps inside nix develop .#theia; the Theia pin ${theia} agrees across resolutions, ${theiaMembers} member files and the lockfile`);
     return 0;
 }
 
@@ -529,20 +736,52 @@ function selfTest() {
         return true;
     };
 
-    // Plant 1: the workflow mirror drifted to the neighbour tag must go
-    // red NAMING the workflow. The substitution lands in memory -- the
-    // tracked file is the independent comparand and is never edited, not
-    // even temporarily.
+    // Plants 1a-1e: five faults on the rebase workflow, each substituted in
+    // memory on the real text -- the tracked file is never edited, not even
+    // temporarily -- and each required to go red NAMING the workflow with
+    // the marker of the assertion it targets, so a plant cannot pass on
+    // another assertion's failure.
     {
-        const name = 'drifted workflow mirror';
         const real = readBytes(REPO_ROOT, WORKFLOW_REL)?.toString('utf8') ?? '';
-        const planted = real.split(expected).join(neighbor);
-        if (planted === real) {
-            console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land.`);
-            failed += 1;
-        } else {
+        const lines = real.split('\n');
+        const on = directChild(lines, -1, 'on');
+        const tagLineOf = (trigger) => directChild(lines, directChild(lines, directChild(lines, on, trigger), 'inputs'), 'tag');
+        const withDefault = (trigger) => {
+            const t = tagLineOf(trigger);
+            if (t === -1) return null;
+            const copy = [...lines];
+            copy.splice(t + 1, 0, `${' '.repeat(indentOf(lines[t]) + 2)}default: self-test-plant`);
+            return copy.join('\n');
+        };
+        const withoutCall = () => {
+            const t = directChild(lines, on, 'workflow_call');
+            if (t === -1) return null;
+            const kids = childLines(lines, t);
+            const last = kids.length === 0 ? t : kids[kids.length - 1];
+            return [...lines.slice(0, t), ...lines.slice(last + 1)].join('\n');
+        };
+        const bareGenerator = () => {
+            const i = lines.findIndex(l => /^\s*(?:-\s+)?run:\s/.test(l) && l.includes(NIX_PREFIX) && NIX_SCRIPTS.some(sc => l.includes(sc)));
+            if (i === -1) return null;
+            const copy = [...lines];
+            copy[i] = copy[i].replace(NIX_PREFIX, '');
+            return copy.join('\n');
+        };
+        const plants = [
+            ['default under workflow_call tag', withDefault('workflow_call'), 'workflow_call tag input a default'],
+            ['default under workflow_dispatch tag', withDefault('workflow_dispatch'), 'workflow_dispatch tag input a default'],
+            ['workflow_call trigger removed', withoutCall(), 'declares no workflow_call trigger'],
+            ['bare generator step', bareGenerator(), 'outside nix develop .#theia'],
+            ['tag literal in the workflow', `# self-test plant only: ${neighbor}\n${real}`, neighbor],
+        ];
+        for (const [name, planted, marker] of plants) {
+            if (planted === null || planted === real) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land.`);
+                failed += 1;
+                continue;
+            }
             const { failures } = runChecks(REPO_ROOT, { read: (rel) => (rel === WORKFLOW_REL ? planted : readBytes(REPO_ROOT, rel)?.toString('utf8') ?? null) });
-            if (failures.some(f => f.includes(WORKFLOW_REL) && f.includes(neighbor))) {
+            if (failures.some(f => f.includes(WORKFLOW_REL) && f.includes(marker))) {
                 console.log(`  ok  ${name} -> red, naming '${WORKFLOW_REL}'`);
                 if (!checkNoRoot(name, failures)) failed += 1;
             } else {
@@ -652,8 +891,63 @@ function selfTest() {
         }
     }
 
+    // Plants 5-7 (step 8, TRAIN-05): the uptake job's tag is sourced from the detector's uptake
+    // candidate and from nothing else. Each plant lands in memory on the real train workflow.
+    {
+        const trainReal = readBytes(REPO_ROOT, TRAIN_WF_REL)?.toString('utf8') ?? null;
+        const sourceLine = '      tag: ${{ needs.detect.outputs.uptake-candidate }}';
+        const plants = [
+            ['uptake tag as a literal', trainReal?.replace(sourceLine, `      tag: ${neighbor}`), 'takes its tag from'],
+            ['uptake tag from the 153 candidate', trainReal?.replace(sourceLine, '      tag: ${{ needs.detect.outputs.candidate }}'), 'takes its tag from'],
+            [`${UPTAKE_JOB} job renamed away`, trainReal?.replace(`\n  ${UPTAKE_JOB}:\n`, '\n  uptake-renamed:\n'), `declares no ${UPTAKE_JOB} job`],
+        ];
+        for (const [name, planted, marker] of plants) {
+            if (trainReal === null || typeof planted !== 'string' || planted === trainReal) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land in ${TRAIN_WF_REL}.`);
+                failed += 1;
+                continue;
+            }
+            const { failures } = runChecks(REPO_ROOT, { read: (rel) => (rel === TRAIN_WF_REL ? planted : readBytes(REPO_ROOT, rel)?.toString('utf8') ?? null) });
+            if (failures.some(f => f.includes(TRAIN_WF_REL) && f.includes(marker))) {
+                console.log(`  ok  ${name} -> red, naming '${TRAIN_WF_REL}'`);
+                if (!checkNoRoot(name, failures)) failed += 1;
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${TRAIN_WF_REL}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    }
+
+    // Plants 8-10 (WR-04): each link of the uptake-candidate chain is required. Removing the detector's
+    // print, the Decide allowlist entry or the detect job's output mapping must each go red naming its file.
+    {
+        const workflowReal = readBytes(REPO_ROOT, TRAIN_WF_REL)?.toString('utf8') ?? null;
+        const detectorReal = readBytes(REPO_ROOT, DETECTOR_REL)?.toString('utf8') ?? null;
+        const plants = [
+            ['detector stops printing uptake-candidate=', detectorReal?.replace(/^.*console\.log\(`uptake-candidate=.*\n/m, ''), DETECTOR_REL, 'no longer prints uptake-candidate='],
+            ['Decide allowlist drops uptake-candidate', workflowReal?.replace('|uptake-candidate)=', ')='), TRAIN_WF_REL, 'grep allowlist'],
+            ['detect job drops the uptake-candidate output', workflowReal?.replace(/^ *uptake-candidate: \$\{\{ steps\.decide\.outputs\.uptake-candidate \}\}\n/m, ''), TRAIN_WF_REL, 'does not map the uptake-candidate output'],
+        ];
+        for (const [name, planted, file, marker] of plants) {
+            const real = file === TRAIN_WF_REL ? workflowReal : detectorReal;
+            if (typeof planted !== 'string' || planted === real) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land in ${file}.`);
+                failed += 1;
+                continue;
+            }
+            const { failures } = runChecks(REPO_ROOT, { read: (rel) => (rel === file ? planted : readBytes(REPO_ROOT, rel)?.toString('utf8') ?? null) });
+            if (failures.some(f => f.includes(file) && f.includes(marker))) {
+                console.log(`  ok  ${name} -> red, naming '${file}'`);
+                if (!checkNoRoot(name, failures)) failed += 1;
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${file}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    }
+
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 4 planted faults went red naming the drifted file`);
+    console.log(`${NAME}: --self-test PASS -- 14 planted faults went red naming the drifted file (8 pin plants, 3 uptake-source plants and 3 uptake-link plants)`);
     return 0;
 }
 

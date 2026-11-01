@@ -1,0 +1,11 @@
+{
+  "slug": "powerbrowser-clock",
+  "permissions": {
+    "actions": "write",
+    "metadata": "read"
+  },
+  "repository_selection": "selected",
+  "repositories": [
+    "powerbrowser"
+  ]
+}

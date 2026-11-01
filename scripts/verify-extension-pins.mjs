@@ -369,6 +369,7 @@ function selfTest() {
         const pinD = sha256Hex(bytesD);
         const manifest = [
             '[product]',
+            'revision = 1',
             'vendor_machine = "AcmeWorks"',
             'vendor_display = "Acme Works"',
             '',

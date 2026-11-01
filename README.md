@@ -44,7 +44,7 @@ Firefox ESR + Eclipse Theia     upstream — consumed, never modified
   reachable. No custom browser chrome is authored.
 
 Keeping the patch stack small is what keeps upstream updates cheap: ESR rebases
-roughly every four weeks, Theia upgrades by changing a version number.
+roughly every two weeks, Theia upgrades by changing a version number.
 
 ## Rebranding
 
@@ -84,9 +84,10 @@ scripts/verify-platform.sh --gate    # everything, plus the known-open exclusion
 ## Status
 
 Alpha. Both halves build and run on the reference host. Pinned to Firefox ESR
-153 (`FIREFOX_153_5_0esr_BUILD1`) and Theia 1.76.0, Linux first. The rebrand
+153 (`FIREFOX_153_5_1esr_RELEASE`) and Theia 1.76.0, Linux first. The rebrand
 manifest and generator are complete; the remaining verification is live-build
 drills that need a human at a screen.
+Release builds are en-US only: no other locale or language pack ships.
 
 ## License
 

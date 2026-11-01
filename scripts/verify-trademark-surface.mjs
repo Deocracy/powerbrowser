@@ -383,6 +383,7 @@ function main() {
 
 const FIXTURE_MANIFEST = [
   '[product]',
+  'revision = 1',
   'vendor_machine = "AcmeWorks"',
   'vendor_display = "Acme Works"',
   '',

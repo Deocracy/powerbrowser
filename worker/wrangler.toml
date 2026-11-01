@@ -1,0 +1,50 @@
+# worker/wrangler.toml: the deploy descriptor for the telemetry Worker (Phase 48, TEL-10, TEL-11).
+#
+# No secret or token is stated here. DOWNLOAD_COUNT_SECRET is a Worker secret the owner sets at the
+# checkpoint; the code reads it from env at request time. Phase 47 attaches the events hostname to
+# the zone, so this file states no route.
+#
+# RUNBOOK (owner, once; the executor never runs these). Use the pinned wrangler from nixpkgs.
+# wrangler never enters a flake dev shell.
+#   1. Pin and record the version:   nix run nixpkgs#wrangler -- --version
+#   2. Create the D1 database:        nix run nixpkgs#wrangler -- d1 create powerbrowser-events
+#      Copy the printed database_id over the placeholder in the d1_databases block below.
+#   3. Apply the schema:              nix run nixpkgs#wrangler -- d1 execute powerbrowser-events --remote --file worker/schema.sql
+#   4. Set the shared secret:         nix run nixpkgs#wrangler -- secret put DOWNLOAD_COUNT_SECRET
+#      Put the same value in the bot environment secret; docs/RENEWALS.md has the rows.
+#   5. Deploy:                        nix run nixpkgs#wrangler -- deploy --config worker/wrangler.toml
+#   6. Rate-limit rule (dashboard):   ONE zone rule, per IP, action block, whose expression matches the
+#      events hostname with the path in {"/events" "/download-counts"}. This rule is the only rate
+#      limit that holds across Worker instances; the Worker keeps no counter of its own, and
+#      /download-counts has no other guess limit, so the rule must cover it. It applies only to
+#      the zone hostname, which is why workers_dev and preview_urls are off below: a workers.dev
+#      URL would bypass it. Record the threshold and the period verbatim at the plan 48-05
+#      checkpoint. With workers_dev off and no route in this file, the Worker is unreachable until
+#      the Phase 47 hostname is attached; wrangler may warn about that on deploy.
+#   7. Synthetic POST verify:         curl -sS -X POST https://events.powerbrowser.org/events -H 'content-type: application/json' -H "authorization: Bearer $DOWNLOAD_COUNT_SECRET" --data '{"events":[{"kind":"error","name":"synthetic.probe","data":{"type":"SyntheticProbe"},"synthetic":true,"at":0}]}'
+#      Expect 200 and "ok: stored 1 synthetic 1" (the acknowledgement appears only when the secret was
+#      accepted; a plain "ok: stored 1" means the flag was ignored and the row stored as a real one). The synthetic flag is honoured only with the shared secret (the
+#      same value as step 4, held in your shell); without the header the row is stored as a real one.
+#      The synthetic row is excluded by the maintainer query.
+
+name = "powerbrowser-events"
+main = "events-worker.mjs"
+# Fixed past date, not the day of writing: a date newer than the owner's pinned wrangler/workerd build
+# falls back with a warning. This Worker uses only the fetch and scheduled handlers, Request and
+# Response, streams, Blob, TextEncoder and the D1 binding, none of which changes behaviour with the
+# compatibility date, so a date well before any current runtime is the safe floor.
+compatibility_date = "2025-01-01"
+
+# No workers.dev URL and no preview URLs: the zone rate-limit rule (runbook step 6) does not apply
+# to them, so they would be an unthrottled way to write to D1 and to guess the shared secret.
+workers_dev = false
+preview_urls = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "powerbrowser-events"
+database_id = "REPLACE-WITH-OWNER-D1-ID"
+
+# The scheduled job deletes rows older than RETENTION_DAYS from both tables, daily at 03:00 UTC.
+[triggers]
+crons = ["0 3 * * *"]

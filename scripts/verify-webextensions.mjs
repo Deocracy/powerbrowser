@@ -19,7 +19,7 @@
 //     manifest entry fails naming the add-on id). The tracked file is
 //     committed, so this step always runs -- it is what pins the
 //     policy-engine side. The copy-over is surgical: set ONLY the
-//     ExtensionSettings key from the fragment, leaving the three sibling
+//     ExtensionSettings key from the fragment, leaving the two sibling
 //     keys byte-identical.
 //  3. Every https install_url origin the manifest declares is PRESENT in
 //     powerbrowser/endpoint-allowlist.json's `hosts` array -- the policy

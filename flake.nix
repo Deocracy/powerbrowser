@@ -20,6 +20,13 @@
       # Override so yarn itself, and every compile it drives, runs on the pinned Node.
       nodejs = pkgs.nodejs_24;
       yarn = pkgs.yarn.override { inherit nodejs; };
+
+      # PKG-19: the repacked browser is PolyForm Noncommercial, which nixpkgs counts as unfree. Only
+      # this package name is allowed here; the devShells keep the plain pkgs above.
+      pkgsPowerBrowser = import nixpkgs {
+        inherit system;
+        config.allowUnfreePredicate = pkg: builtins.elem (nixpkgs.lib.getName pkg) [ "powerbrowser" ];
+      };
     in
     {
       devShells.${system} = {
@@ -45,6 +52,8 @@
             # produced them) reproduces those bytes. A distro package of a
             # different version passes the raster step and fails byte identity.
             pkgs.inkscape
+            # zizmor for the AUTO-09 quick row (scripts/verify-zizmor.mjs), 1.29.0 from the locked nixpkgs.
+            pkgs.zizmor
           ];
           buildInputs = [
             pkgs.libx11
@@ -103,6 +112,56 @@
               echo "PowerBrowser firefox shell ready. This shell already supplies the full Gecko toolchain (rustc, cargo, cbindgen, clang) -- no separate toolchain setup is needed. Next: scripts/fetch-upstream.sh, then cd upstream && MOZCONFIG=../.mozconfig ./mach build" >&2
             '';
           };
+
+        # Phase 55 (PKG-14): the macOS cross-build shell. Same stdenv override, MOZBUILD anchor and
+        # bintools unset line as the firefox shell above, plus the native inputs the macOS steps call.
+        firefox-macos =
+          (pkgs.mkShell.override { stdenv = pkgs.llvmPackages.stdenv; }) {
+            inputsFrom = [ pkgs.firefox-esr-153-unwrapped ];
+            nativeBuildInputs = [
+              # llvm-lipo is LIPO for unify.py (the two per-target trees) and the sidecar merge (RESEARCH Standard Stack).
+              pkgs.llvm
+              # lld: the linker option the S7 probe chose for the Darwin cross link; confirm it at the Mac session.
+              pkgs.lld
+              # rcodesign signs the bundle from Linux (mach macos-sign --use_rcodesign); 0.29.0 per SEC-13.
+              pkgs.rcodesign
+              # rsync: the Linux DMG branch copies the bundle tree (S7 DMG mechanics).
+              pkgs.rsync
+              # cmake: listed by the S7 probe for the macOS configure; exercised only by the Mac-side build.
+              pkgs.cmake
+              # openssl: listed by the S7 probe as a link input for the macOS tool builds.
+              pkgs.openssl
+              # zlib: listed by the S7 probe as a link input for the macOS tool builds.
+              pkgs.zlib
+              # gnupatch: listed by the S7 probe; GNU patch for the patch-stack steps.
+              pkgs.gnupatch
+            ];
+            buildInputs = [ pkgs.sccache ];
+            shellHook = ''
+              export MOZBUILD_STATE_PATH="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")/.mozbuild"
+              # The same bintools unset as the firefox shell: see the comment there.
+              unset AS LD NM AR RANLIB OBJDUMP OBJCOPY READELF SIZE STRINGS STRIP
+              export RUSTC_WRAPPER=sccache
+              echo "PowerBrowser firefox-macos shell ready. Cross-build with MOZCONFIG=powerbrowser/packaging/mozconfig-macos-<arch> from the repo root; signing and notarization are owner actions." >&2
+            '';
+          };
+
+        # Plain `nix develop` and .envrc's `use flake` look up devShells.default first and, when it
+        # is absent, fall back to packages.default -- the repacked Release tarball, whose fetchurl
+        # 404s until a Release is published. The theia shell is the cheap one the generator and the
+        # quick tier need, so it is the default.
+        default = self.devShells.${system}.theia;
+      };
+
+      # PKG-19: the repacked Release tarball. The sidecar takes the same nodejs_24 binding as the shells.
+      packages.${system} = {
+        powerbrowser = pkgsPowerBrowser.callPackage ./nix/pkg/powerbrowser-bin.nix { inherit nodejs; };
+        default = self.packages.${system}.powerbrowser;
+      };
+
+      # A consumer's own nixpkgs must allow the unfree name powerbrowser before it evaluates this overlay.
+      overlays.default = final: _prev: {
+        powerbrowser = final.callPackage ./nix/pkg/powerbrowser-bin.nix { nodejs = final.nodejs_24; };
       };
     };
 }

@@ -1,0 +1,108 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v1.6",
+  "phases": [
+    {
+      "number": "40",
+      "name": "Release identity, ESR pin and patch regeneration (A)",
+      "status": "complete"
+    },
+    {
+      "number": "41",
+      "name": "Repository controls and GitHub Apps (A)",
+      "status": "pending"
+    },
+    {
+      "number": "42",
+      "name": "Community surface and release documentation (A)",
+      "status": "pending"
+    },
+    {
+      "number": "43",
+      "name": "Release train skeleton and upstream bump automation (A)",
+      "status": "pending"
+    },
+    {
+      "number": "44",
+      "name": "Trust path (B)",
+      "status": "pending"
+    },
+    {
+      "number": "45",
+      "name": "Portable Linux release build (C)",
+      "status": "pending"
+    },
+    {
+      "number": "46",
+      "name": "In-app update experience and egress pass (C)",
+      "status": "pending"
+    },
+    {
+      "number": "47",
+      "name": "Hosting, website and mail (D)",
+      "status": "pending"
+    },
+    {
+      "number": "48",
+      "name": "Error telemetry, maintenance sweep and watchdog (D)",
+      "status": "pending"
+    },
+    {
+      "number": "49",
+      "name": "Release pipeline and legion runner (E)",
+      "status": "pending"
+    },
+    {
+      "number": "50",
+      "name": "Release train stages and first public Linux release (E)",
+      "status": "pending"
+    },
+    {
+      "number": "51",
+      "name": "Dependency flow and train supersede (F)",
+      "status": "pending"
+    },
+    {
+      "number": "52",
+      "name": "Claude fixer (F)",
+      "status": "pending"
+    },
+    {
+      "number": "53",
+      "name": "Support operations (G)",
+      "status": "pending"
+    },
+    {
+      "number": "54",
+      "name": "Windows (H)",
+      "status": "pending"
+    },
+    {
+      "number": "55",
+      "name": "macOS (I)",
+      "status": "pending"
+    },
+    {
+      "number": "56",
+      "name": "Package channels (J)",
+      "status": "pending"
+    },
+    {
+      "number": "57",
+      "name": "Native crash reporting (K)",
+      "status": "pending"
+    },
+    {
+      "number": "58",
+      "name": "ESR 175 (L)",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 2 of 19 · 5% · executing"
+  },
+  "updated_at": "2026-10-22T16:22:33.973Z"
+}

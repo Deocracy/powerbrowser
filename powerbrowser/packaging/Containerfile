@@ -1,0 +1,86 @@
+# Release build environment (PKG-17, Phase 45).
+#
+# Debian bookworm base carrying the adapter set of Mozilla's taskcluster
+# `debian-build` image (upstream/taskcluster/docker/debian-build/Dockerfile),
+# which is the image shape Gecko 153 ESR release builds expect. The release
+# build configures with --enable-bootstrap inside this container, so Mozilla
+# clang/rust/cbindgen plus the jessie sysroot (glibc 2.19 build baseline) come
+# from the bootstrap flow rather than from any host or Nix toolchain. The
+# shipped Linux floor is glibc 2.28 (packaging/portability-floor.json, owner
+# ruling 2026-10-22: the pinned official Node needs it).
+#
+# Build (on legion, from the repo root):
+#   podman build -t pb-gecko-build -f powerbrowser/packaging/Containerfile .
+# Then configure and build with the release mozconfig variant generated from
+# configuration.toml (powerbrowser/packaging/mozconfig.release, emitted by
+# scripts/generate.mjs, never hand-edited):
+#   podman run --rm -v "$PWD:/src:rw" -v <legion-keydir>:/keys:ro -w /src/upstream \
+#     pb-gecko-build bash -c 'MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container'
+# ./mach lives in upstream/, so the build runs from /src/upstream; the release
+# objdir is objdir-release/ at the repo root (the mozconfig's @TOPSRCDIR@/..).
+#
+# UPD-29 mount discipline: the Safe Browsing keyfile is bind-mounted
+# read-only at /keys (see -v above); this image definition carries mount
+# paths only, never key material.
+# The key VALUE never appears in the repo, the image, a scan, or a log;
+# only the /keys/sb-gapi.data mount path travels in the tree.
+FROM debian:bookworm@sha256:854dd8ab51d62866dbd8f5431d15ce77b12983a2a4a1e1fe43a2395dc7ef9f61
+
+# Adapted from upstream/taskcluster/docker/debian-build/Dockerfile:19-50.
+# Kept: the build toolchain, VCS/fetch tools, and archive/compression tools
+# the Gecko build and packaging need. Dropped: wine-multilib scaffolding
+# (lib32atomic1, lib32gcc, lib32stdc++6, lib32z1, libc6-i386 are 32-bit
+# test-runtime libraries for spidermonkey/wine paths this release does not
+# run) and screen (interactive use only). Added: python3-venv (mach virtualenv),
+# patchelf (staging RUNPATH strip), nodejs (mach build-system JS; the shipped
+# sidecar still stages the pinned official node from node-runtime.json, never
+# apt node).
+# Reproducible package set: the base is pinned by digest above, and apt reads a
+# snapshot.debian.org timestamp rather than the floating mirror, so two builds
+# of this file fetch the same packages. dist-upgrade is gone; it pulled whatever
+# the mirror held that day. The snapshot date is verified to exist (both suites
+# return 200 on 2026-10-22); bump it deliberately, never implicitly.
+RUN rm -f /etc/apt/sources.list.d/debian.sources && \
+    printf '%s\n' \
+      'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261019T000000Z bookworm main' \
+      'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261019T000000Z bookworm-security main' \
+      > /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      bash \
+      binutils \
+      bzip2 \
+      ca-certificates \
+      cpio \
+      curl \
+      file \
+      findutils \
+      gawk \
+      gnupg \
+      gzip \
+      jq \
+      libasound2 \
+      libgtk-3-0 \
+      libucl1 \
+      libxml2 \
+      make \
+      nodejs \
+      patchelf \
+      perl \
+      procps \
+      python3-dev \
+      python3-venv \
+      rsync \
+      tar \
+      unzip \
+      uuid \
+      wget \
+      zip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root build user: legion runs rootless podman and the runner work dir
+# must stay free of spaces (SEC-08 shape). The build runs as this user, so a
+# container-side root-owned objdir can never lock the host checkout.
+RUN useradd -m -s /bin/bash builder
+USER builder
+WORKDIR /src

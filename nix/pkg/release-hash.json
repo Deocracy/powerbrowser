@@ -1,0 +1,5 @@
+{
+  "releaseKey": "v153.5.1-1",
+  "sha256": "sha256-UExBQ0VIT0xERVItRElTVDEyLUJPVC1QUi1GSUxMTUU=",
+  "state": "placeholder: decodes to PLACEHOLDER-DIST12-BOT-PR-FILLME; the DIST-12 bot PR (channel-manifests.yml flake-hash-pr) replaces it with the SRI hash of the published asset, and verify-flake-repack.mjs --release refuses it until then"
+}

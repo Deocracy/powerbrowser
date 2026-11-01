@@ -1,0 +1,111 @@
+// .github/renovate.json5
+//
+// AUTO-02, the declarative half of the Theia inflow (Phase 51, plan 51-01). Renovate reads this
+// file from the default branch and opens one grouped pull request per Theia release.
+// scripts/verify-renovate-config.mjs (the renovate-config quick row) asserts the rules below.
+//
+// What the file does
+//  - One group, `theia`, holds every @theia/* resolutions pin in theia/package.json except
+//    @theia/monaco-editor-core. The exception is a negative lookahead inside one regex matcher.
+//  - @theia/monaco-editor-core has its own group, `theia-monaco-editor-core`. It keeps upstream's
+//    own monaco line (1.108.201), which differs from the 1.76.0 Theia line.
+//  - rangeStrategy pin on both groups: the resolutions are exact pins today.
+//  - One regex customManager reads theia_release from the root configuration.toml only. Its
+//    managerFilePatterns is anchored (^configuration\.toml$), and ignorePaths skips the frozen
+//    configuration.toml fixture copies under .planning/. Without both, Renovate matched nine archived
+//    copies and opened a Theia PR that rewrote them (BL-01). The verifier derives the tracked copies
+//    with git ls-files and fails if the pattern matches any copy other than the root file.
+//    configuration.toml is the single source for the Theia release this project composes. The version
+//    anchor is @theia/core, because every @theia/* moves in lockstep per Theia release. One mismatch report from a real run would
+//    disprove that anchor; until then it is an assumption, not a proof.
+//  - The nix manager is off (Renovate's default; this file does not set it). So the Theia PR does not
+//    change flake.lock, and AUTO-02's "flake.lock updates through the nix manager" is NOT met. That is
+//    an owner decision (BLOCKED.md item 5): a separate nixpkgs group, or an amendment to AUTO-02.
+//    The scope rule still disables the nixpkgs input, so re-enabling nix cannot open a chore/theia-*
+//    branch for it.
+//  - automerge and platformAutomerge are false. The Theia PR merges only after owner review and a
+//    green verify.yml.
+//  - branchPrefix chore/theia-. A group branch is named by its slug, so the rendered name is
+//    chore/theia-theia; the version sits in the PR title and body. The fixer class (FIX-01)
+//    matches on the prefix. The first owner-dispatched live run still has to confirm the name.
+//
+// Checked
+//  - renovate-config-validator 44.198.3, repo mode, --strict: passes.
+//  - Renovate 44.198.3, local platform, dry-run=lookup, in a scratch repo with the Theia pins seeded
+//    to 1.75.0 and monaco to 1.100.0: 50 upgrades to 1.76.0 on one branch, chore/theia-theia; monaco
+//    to 1.108.201 on its own branch, chore/theia-theia-monaco-editor-core. Non-Theia packages
+//    produced no branch.
+//  - The post-upgrade hook runs the licensing generator and the generate check once per branch
+//    (executionMode branch), after every upgrade in the group, not once per package. Only the
+//    files listed in fileFilters are committed back.
+//
+// Not in this file, on purpose
+//  - No cadence key of any kind. The only clock is the sweep tick plus owner dispatch (D-77).
+//  - No workflow file writes. The bot App holds no Workflows permission, and no fileFilters
+//    entry names .github/workflows, so a change there is never committed by this flow.
+//  - allowedPostUpgradeCommands is a self-hosted option, not a repository option. The dispatch
+//    job must set RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS to the two licensing commands instead.
+//  - No flake.lock writer is added. The Phase 52 fixer is denied flake.lock (.github/fix-gate-deny.json);
+//    the nixpkgs update path stays with the owner.
+//
+// MEASURED (research flag F, 2026-10-31, theia dev shell, 16-core host; wall time and peak tree RSS):
+//   cold yarn install --ignore-scripts --frozen-lockfile, empty yarn cache: 26.7 s, 488 MiB peak;
+//     node_modules 688 MiB, yarn cache 1.24 GiB, so the disk need is about 2 GiB.
+//   warm yarn install over an existing node_modules: 2.7 s, 395 MiB peak.
+//   licensing regen (write mode, output byte-identical to the tree): 2.1 s, 186 MiB peak.
+//   generate --check: 1.9 s, 158 MiB peak. The Node archive (31.6 MB) comes from the tree cache;
+//     a fresh runner downloads it once.
+//   The flags follow scripts/smoke-theia.sh: --ignore-scripts and PUPPETEER_SKIP_DOWNLOAD=1. The
+//     drivelist node-gyp rebuild and the browser download are outside the cold figure.
+//   Runner ubuntu-latest (GitHub-hosted, about 2 GiB of disk). timeout-minutes 60, the default: the
+//     cold wall is far below the 20-minute threshold that would raise it. The Renovate job runs the
+//     renovatebot action, not the Mend app, so Mend's hosted limits do not apply; it is measured anyway.
+//
+// JSON5 subset used here: // comments, trailing commas, double-quoted strings.
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "automerge": false,
+  "platformAutomerge": false,
+  "rangeStrategy": "pin",
+  "branchPrefix": "chore/theia-",
+  "ignorePaths": [".planning/**"],
+  // WR-02: a vulnerability alert opens a chore/theia-*-vulnerability PR that bypasses the scope rule and
+  // the Theia group (remediation updates are force-enabled). Security updates stay with AUTO-03.
+  "vulnerabilityAlerts": { "enabled": false },
+  "osvVulnerabilityAlerts": false,
+  "packageRules": [
+    {
+      // Renovate updates everything by default. This rule turns off every dependency that is not
+      // @theia/*: typescript, the @types packages, the node and yarn engines, and the nixpkgs flake
+      // input. Without it those updates open chore/theia-* branches beside the Theia PR.
+      "matchPackageNames": ["/^(?!@theia\\/)/"],
+      "enabled": false
+    },
+    {
+      "matchPackageNames": ["/^@theia\\/(?!monaco-editor-core$)/"],
+      "groupName": "theia",
+      "groupSlug": "theia",
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchPackageNames": ["@theia/monaco-editor-core"],
+      "groupName": "theia-monaco-editor-core",
+      "groupSlug": "theia-monaco-editor-core",
+      "rangeStrategy": "pin"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^configuration\\.toml$/"],
+      "matchStrings": ["theia_release\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "@theia/core"
+    }
+  ],
+  "postUpgradeTasks": {
+    "commands": ["node scripts/generate-licensing.mjs", "node scripts/generate.mjs --check"],
+    "fileFilters": ["THIRD-PARTY-NOTICES.txt", "LICENSING.md", "theia/yarn.lock", "configuration.toml"],
+    "executionMode": "branch"
+  }
+}

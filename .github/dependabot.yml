@@ -1,0 +1,62 @@
+# .github/dependabot.yml
+#
+# AUTO-03 (Phase 51, plan 51-02). Dependabot is GitHub-native: nothing here is an action to admit or a SHA to pin.
+# `interval: weekly` below is Dependabot's own cadence, not a workflow `on.schedule` event (D-77 is not touched).
+# The `workflows` row (rule `dependabot`, scripts/verify-workflows.mjs) pins the shape of this file and the `zizmor`
+# row audits it, so a change here that drops the claude-code-action ignore, a cooldown, the npm limit of 0 or the
+# minor/patch group types goes red.
+#
+#  - github-actions: one grouped pull request per week for the minor and patch updates of every workflow's `uses:`.
+#    Dependabot rewrites the 40-hex pin and its plain `# vX.Y.Z` comment together. Pin comments stay plain; a compound
+#    comment (`# vX.Y.Z # note`) would go stale on the next bump and is not used anywhere. A major update is not in the
+#    group: it arrives as its own pull request for the owner to read, because most of these actions run only in the
+#    dispatch-only release workflows, which no pull-request check exercises. A merged actions bump is therefore
+#    exercised by the next release, not by its own pull request.
+#  - anthropics/claude-code-action is ignored. Its pin is exact in the fixer-pin rule (scripts/verify-workflows.mjs)
+#    and the triage pin rule (scripts/verify-triage.mjs), so a Dependabot bump could never merge. The owner re-pins it
+#    by hand together with those two verifiers and re-reviews its tool allowlist (FIX-08).
+#  - cooldown: a new release is adopted only after 7 days (14 for a major), so a compromised release is not rewritten
+#    into a pin the minute it is published. zizmor's dependabot-cooldown audit asks for it. Cooldown does not delay
+#    security updates.
+#  - npm, /theia: security updates only. `open-pull-requests-limit: 0` is the documented way to switch version updates
+#    off for an ecosystem; Dependabot security updates run on their own limit and still open a pull request for a
+#    vulnerable dependency in theia/yarn.lock. They need the repository's Dependabot security updates switch on, which
+#    this file cannot set (live it was enabled at plan time; see the 51-02 summary). The Theia version line itself
+#    is Renovate's, see .github/renovate.json5.
+#  - There is no auto-merge key and no auto-merge workflow: every Dependabot pull request merges by owner hand.
+#  - The weekly runs fire at 04:00 UTC on Monday, before the maintenance sweep's 06:00 UTC gate, so the sweep that day
+#    already sees the grouped pull request. A week with no updates opens no pull request (Dependabot behaviour);
+#    this file adds no paging on empty.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    ignore:
+      - dependency-name: "anthropics/claude-code-action"
+    groups:
+      actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+  - package-ecosystem: "npm"
+    directory: "/theia"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+      semver-major-days: 14

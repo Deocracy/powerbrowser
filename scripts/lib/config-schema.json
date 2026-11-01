@@ -23,6 +23,12 @@
       "type": "string",
       "required": false
     },
+    "product.revision": {
+      "type": "integer",
+      "required": true,
+      "minimum": 1,
+      "type_help": "a whole number of at least 1 written without quotes; reset to 1 when the ESR pin moves, increased for a rebuild on the same ESR"
+    },
     "identity.display_name": {
       "type": "string",
       "required": true,
@@ -108,11 +114,18 @@
       "regex_help": "a web address starting with https:// and containing no spaces or control characters",
       "regex_example": "https://example.org/update"
     },
+    "urls.mar_origin": {
+      "type": "string",
+      "required": false,
+      "regex": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+      "regex_help": "an https address that names only a lower-case host with at least two dot-separated labels, with no path, port, query or trailing slash",
+      "regex_example": "https://downloads.example.org"
+    },
     "urls.crash_report": {
       "type": "string",
       "required": false,
-      "regex": "^https://[^\\s\\x00-\\x1f\\x7f]+$",
-      "regex_help": "a web address starting with https:// and containing no spaces or control characters",
+      "regex": "^https://[^\\s\\x00-\\x1f\\x7f@/?#]+([/?#][^\\s\\x00-\\x1f\\x7f]*)?$",
+      "regex_help": "a web address starting with https:// and containing no spaces, control characters or user name and password (only its scheme, host and port become the crash submit address; the path is the report view link)",
       "regex_example": "https://example.org/crash-report"
     },
     "urls.homepage": {

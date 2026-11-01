@@ -538,6 +538,7 @@ function discoverFixtures(root) {
 
 const SELFTEST_MANIFEST = [
     '[product]',
+    'revision = 1',
     'vendor_machine = "Selftestworks"',
     'vendor_display = "Selftest Works"',
     '',
@@ -557,11 +558,13 @@ const SELFTEST_MANIFEST = [
     'support_url = "https://selftest.example.org"',
     '',
     '[upstreams]',
-    'firefox_esr_tag = "SELFTEST_9_9_9_RELEASE"',
+    'firefox_esr_tag = "SELFTEST_9_9_9esr_RELEASE"',
     'theia_release = "1.74.1"',
     '',
     '[urls]',
     'update = "https://updates.example.org/update.xml"',
+    'release_notes = "https://selftest.example.org/releases"',
+    'homepage = "https://selftest.example.org"',
     '',
 ].join('\n');
 

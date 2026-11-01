@@ -230,6 +230,11 @@ function settingOf(path) {
  * caller: it is the merge's only Phase-2 coverage, and deleting it would
  * delete the merge's tests along with it.
  */
+// IN-07: TOML `1.0` and `1` both parse to the number 1, so an integer setting written with a
+// decimal point is visible only to a second parse that returns integers as BigInt. Maps each
+// loaded layer to the integer-typed paths it writes that way; resolveConfig refuses them.
+const DECIMAL_INTEGERS = new WeakMap();
+
 function loadLayer(path) {
     let text;
     try {
@@ -241,7 +246,11 @@ function loadLayer(path) {
         process.exit(1);
     }
     try {
-        return parse(text);
+        const layer = parse(text);
+        const probe = parse(text, { integersAsBigInt: true });
+        DECIMAL_INTEGERS.set(layer, Object.keys(SCHEMA_KEYS).filter(k => SCHEMA_KEYS[k].type === 'integer'
+            && typeof readPath(probe, k) === 'number' && Number.isInteger(readPath(probe, k))));
+        return layer;
     } catch (err) {
         if (!(err instanceof TomlError)) throw err;
         // Only the structured line and column are used. The caught error's own
@@ -1116,6 +1125,14 @@ function validate(doc, leaves) {    const failures = [];
             );
             continue;
         }
+        // REL-01 (40-03). A quoted "1" or a fractional 1.5 is refused here, never coerced.
+        if (spec.type === 'integer' && (!Number.isInteger(value) || value < spec.minimum)) {
+            failures.push(
+                `${path} is ${JSON.stringify(value)}, but this setting has to be ${spec.type_help}. `
+                + `Correct it in ${MANIFEST_NAME}, then run: ${RERUN}`,
+            );
+            continue;
+        }
         if (spec.regex && typeof value === 'string' && !new RegExp(spec.regex).test(value)) {
             failures.push(
                 `${path} is ${JSON.stringify(value)}, which is not allowed here. Write it as ${spec.regex_help}. `
@@ -1448,11 +1465,113 @@ function emitBrandProperties(config, variant) {
 }
 
 /**
+ * The update channel (UPD-11): the %CHANNEL% segment of every descriptor path and
+ * the suffix of the MAR channel id. Platform policy, not a manifest key -- the
+ * telemetry-policy precedent below: one channel for every downstream. Patch 030
+ * removed channel-dependent certificate selection, and AppConstants.IS_ESR already
+ * overrides the channel for Remote Settings and search, so nothing else keys on it.
+ * Changing it costs a tier-3 rebuild and re-proof of ng065 and mar-update-hop, and
+ * after a release has shipped it needs a channel-transition release.
+ */
+export const UPDATE_CHANNEL = 'default';
+
+/**
+ * The two channel values every consumer must agree with, derived from one constant:
+ * the update channel, and the MAR channel id `<app_basename>-<channel>`.
+ */
+export function updateChannel(config) {
+    const appBasename = assertEmittable('identity.app_basename', config.identity.app_basename);
+    return { channel: UPDATE_CHANNEL, marChannelId: `${appBasename}-${UPDATE_CHANNEL}` };
+}
+
+/**
+ * The primary MAR origin: [urls] mar_origin, the host the update descriptor's patch URLs
+ * name as <mar_origin>/<tag>/<asset> (owner ruling 2026-10-29). It is an https origin
+ * that names only a host: no path, port, query, fragment, userinfo or trailing slash.
+ * Unset returns null, and the release manifest then records null so the descriptor's
+ * form gate fails closed. Any other value is refused here by name, as urls.update is.
+ */
+export function marOrigin(config) {
+    const raw = config.urls?.mar_origin;
+    if (isUnset(raw)) return null;
+    const value = assertEmittable('urls.mar_origin', raw);
+    let hostOnly = false;
+    try {
+        const u = new URL(value);
+        hostOnly = u.protocol === 'https:' && u.pathname === '/' && u.search === '' && u.hash === ''
+            && u.username === '' && u.password === '' && u.port === ''
+            && value === `https://${u.hostname}`;
+    } catch {
+        hostOnly = false;
+    }
+    if (!hostOnly) {
+        report([
+            `urls.mar_origin is ${JSON.stringify(value)}, which is not an https origin that names only a host. `
+            + `Write it as [urls] mar_origin in ${MANIFEST_NAME}, for example "https://downloads.example.org", then run: ${RERUN}`,
+        ]);
+    }
+    return value;
+}
+
+/**
+ * TEL-07 (57-02): the crash submit ORIGIN, derived from the ONE stated [urls].crash_report key. The
+ * same key drives the breakpad.reportURL view-link base (verbatim, mozillaEndpointPrefs) and this
+ * origin feeds --with-crashreporter-url, which moz.configure rstrips and application.ini.in joins
+ * with /submit. Only the origin (scheme, host, port) is kept: the path a stated value carries is the
+ * view-link base, never the submit target. Unset returns '' and emits nothing, so the tree stays
+ * byte-identical while the reporter is compiled out (TEL-13 owns the flip).
+ */
+export function crashReporterOrigin(config) {
+    const raw = config.urls?.crash_report;
+    if (isUnset(raw)) return '';
+    const value = assertEmittable('urls.crash_report', raw);
+    let origin = '';
+    try {
+        origin = new URL(value).origin;
+    } catch {
+        origin = '';
+    }
+    if (!origin.startsWith('https://')) {
+        report([
+            `urls.crash_report is ${JSON.stringify(value)}, which is not an https URL. `
+            + `Write your own https crash-report address as [urls] crash_report in ${MANIFEST_NAME}, for example "https://crash.example.org/report", then run: ${RERUN}`,
+        ]);
+    }
+    return origin;
+}
+
+/**
+ * TEL-13 (WR-09): the ONE switch that decides whether a generated mozconfig builds the native crash reporter.
+ * It stays false until plan 57-04 (the TEL-13 flip). The generator owns the pairing with the crash address:
+ * `--disable-crashreporter` is emitted exactly when this is false, and when it is true a configuration with no
+ * [urls].crash_report fails generation, because the stock default of --with-crashreporter-url is Mozilla's
+ * crash-reports.mozilla.com. The flip is therefore this constant, never the deletion of an emitted literal.
+ */
+const CRASH_REPORTER_ENABLED = false;
+
+/**
+ * The crash-reporter lines of a mozconfig for a derived submit origin ('' when [urls].crash_report is unset).
+ * Throws when the reporter would be enabled with no origin. Exported for the self-test, which plants that fault.
+ */
+export function crashReporterOptions(origin, enabled = CRASH_REPORTER_ENABLED) {
+    if (enabled && origin === '') {
+        throw new Error(
+            'the crash reporter would be built on with no crash address, so it would send to the stock Mozilla address. '
+            + `Write your own https crash-report address as [urls] crash_report in ${MANIFEST_NAME}, then run: ${RERUN}`,
+        );
+    }
+    return [
+        ...(enabled ? [] : ['ac_add_options --disable-crashreporter']),
+        ...(origin ? [`ac_add_options --with-crashreporter-url=${origin}`] : []),
+    ];
+}
+
+/**
  * The root .mozconfig: the shared generated-from banner, a blank line, then
- * twelve lines against the file Phase 1 wrote by hand.
+ * thirteen lines against the file Phase 1 wrote by hand.
  *
  * FIVE VALUES come from the manifest: the MAR channel id and accepted MAR
- * channel ids (both `<app_basename>-default`, NG-065), the
+ * channel ids (both `<app_basename>-<UPDATE_CHANNEL>`, NG-065), the
  * --with-app-basename argument, the --with-distribution-id argument, the
  * exported MOZ_APP_REMOTINGNAME, and -- inside the MOZ_OBJDIR shell-default
  * expansion on line 1 -- the variant's objdir.
@@ -1488,7 +1607,7 @@ function emitBrandProperties(config, variant) {
  * part of the build's interface.
  *
  * WHY SIX LINES ARE LITERAL TEXT (research assumption A3, and a recorded
- * decision rather than an oversight). Lines 2, 5, 6 and 9-11 are platform
+ * decision rather than an oversight). Lines 2, 6, 7 and 10-12 are platform
  * policy and toolchain flags -- the application selection, the wasm sandbox,
  * the libclang path, the crash reporter, the compiler cache, and the
  * branding default. None of them is a
@@ -1497,49 +1616,145 @@ function emitBrandProperties(config, variant) {
  * entry and one emitter line -- so the cheap direction is to leave them literal
  * until a downstream actually needs to differ.
  *
-  * THE MAR CHANNEL LINES ARE FORK POLICY, NOT BRAND DEFAULTS (non-GUI
-  * NG-065). --enable-unverified-updates compiled every MAR check out of
+  * THE CHANNEL LINES ARE FORK POLICY, NOT BRAND DEFAULTS (non-GUI NG-065,
+  * UPD-11). --enable-unverified-updates compiled every MAR check out of
   * every build (the MAR signature and MAR-channel checks sit inside #ifdef
   * MOZ_VERIFY_MAR_SIGNATURE, updater.cpp:3063, 3329); removing it turns
   * verification on, and MAR_CHANNEL_ID plus ACCEPTED_MAR_CHANNEL_IDS bake
-  * one fixed channel, `<app_basename>-default`, into the build and into
-  * update-settings.ini. The `-default` suffix is fork policy and stays
-  * literal, so no [build] table; the prefix is the manifest's app_basename.
+  * one fixed MAR channel into the build and into update-settings.ini. Line 3
+  * names the update channel explicitly (configure's own default is the same
+  * value, so the line changes no build). Both derive from updateChannel():
+  * the update channel is UPDATE_CHANNEL, and the MAR channel id is
+  * `<app_basename>-<UPDATE_CHANNEL>`. No [build] table: the channel is fork
+  * policy; the MAR id's prefix is the manifest's app_basename.
  *
  * Built by concatenation rather than by template interpolation on the two
  * expansion lines: `${...}` inside a JS template literal is JS interpolation,
  * and the shell-default syntax has to survive to the emitted bytes intact.
  */
 function emitMozconfig(config, variant) {
-    // NG-065: one MAR channel for every build of this manifest, <app_basename>-<update channel>
-    // (the build's MOZ_UPDATE_CHANNEL is "default"). It is baked into MAR_CHANNEL_ID
-    // and into update-settings.ini's ACCEPTED_MAR_CHANNEL_IDS, so a MAR made for another
-    // product or channel is refused (updater error MAR_CHANNEL_MISMATCH_ERROR).
-    const marChannel = `${assertEmittable('identity.app_basename', config.identity.app_basename)}-default`;
-    // Every manifest value on these twelve lines lands in a file the Gecko
+    return emitMozconfigFor(config, variant, { bootstrap: false, sbKeyfile: null });
+}
+
+/**
+ * PKG-17 (Phase 45): the release .mozconfig variant. Same shape as the dev
+ * row, parameterised rather than forked: drops the two Nix-only lines
+ * (--without-wasm-sandboxed-libraries, --with-libclang-path), adds
+ * --enable-bootstrap (Mozilla clang/rust/cbindgen plus the jessie sysroot
+ * flow from the container), and -- with the UPD-29 line only when
+ * sbKeyfile is non-null -- the release SB keyfile mount path. The dev row
+ * keeps the unbaked default (never carries the keyfile line). MAR_CHANNEL_ID
+ * and ACCEPTED_MAR_CHANNEL_IDS stay equal to powerbrowser-default on both
+ * rows, so a foreign-channel MAR still fails with updater error 22.
+ */
+const SB_KEYFILE_MOUNT = '/keys/sb-gapi.data';
+function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) {
+    // NG-065: one MAR channel for every build of this manifest, <app_basename>-<update channel>.
+    // It is baked into MAR_CHANNEL_ID and into update-settings.ini's ACCEPTED_MAR_CHANNEL_IDS,
+    // so a MAR made for another product or channel is refused (updater error
+    // MAR_CHANNEL_MISMATCH_ERROR).
+    const { channel, marChannelId: marChannel } = updateChannel(config);
+    // Every manifest value on these thirteen lines lands in a file the Gecko
     // build sources, so each passes the sink guard on its way in. The
     // --with-branding default is the one line that carries no manifest value
     // at all -- see above -- so branding_dir is neither read nor guarded
     // here. (It is still read and guarded where it IS emitted as content:
     // the desktop entry's Icon line.)
     const objdir = assertEmittable(variantPath(variant, 'objdir'), variant.objdir);
+    // TEL-07: empty while [urls].crash_report is unset, so no url line is emitted and the bytes do not move.
+    // WR-09: crashReporterOptions owns the disable line and the url line together.
+    let crashLines = [];
+    try {
+        crashLines = crashReporterOptions(crashReporterOrigin(config));
+    } catch (err) {
+        report([err.message]);
+    }
+    const brandingDefault = bootstrap
+        ? 'powerbrowser/branding-generated/release'
+        : 'powerbrowser/branding-generated/dev';
     const lines = [
         ...GENERATED_BANNER,
         '',
         'mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/../${POWERBROWSER_OBJDIR:-' + objdir + '}',
         'ac_add_options --enable-application=browser',
+        `ac_add_options --enable-update-channel=${channel}`,
         `ac_add_options MAR_CHANNEL_ID=${marChannel}`,
         `ac_add_options ACCEPTED_MAR_CHANNEL_IDS=${marChannel}`,
-        'ac_add_options --without-wasm-sandboxed-libraries',
-        'ac_add_options --with-libclang-path="$LIBCLANG_PATH"',
+        ...(bootstrap ? [] : ['ac_add_options --without-wasm-sandboxed-libraries']),
+        ...(bootstrap ? [] : ['ac_add_options --with-libclang-path="$LIBCLANG_PATH"']),
+        ...(bootstrap ? ['ac_add_options --enable-bootstrap'] : []),
+        ...(sbKeyfile ? [`ac_add_options --with-google-safebrowsing-api-keyfile=${sbKeyfile}`] : []),
         `ac_add_options --with-app-basename=${assertEmittable('identity.app_basename', config.identity.app_basename)}`,
         `ac_add_options --with-distribution-id=${assertEmittable('identity.distribution_id', config.identity.distribution_id)}`,
-        'ac_add_options --disable-crashreporter',
+        ...crashLines,
         'ac_add_options --with-ccache=sccache',
-        'ac_add_options --with-branding=${POWERBROWSER_BRANDING:-powerbrowser/branding-generated/dev}',
+        'ac_add_options --with-branding=${POWERBROWSER_BRANDING:-' + brandingDefault + '}',
         `mk_add_options "export MOZ_APP_REMOTINGNAME=${assertEmittable('identity.remoting_name', config.identity.remoting_name)}"`,
+        // Per-target tail (Phase 55, PKG-14). Empty for every existing row, so
+        // their bytes do not move.
+        ...tail,
     ];
     return lines.join('\n') + '\n';
+}
+
+/**
+ * Phase 55 (PKG-14): the per-target macOS mozconfig. ONE shared builder
+ * (emitMozconfigFor) carries every line the Linux dev row carries, with its
+ * own objdir suffix; each target appends only the Darwin lines below. The
+ * generic-certs switch (it widens privileged-update trust, Pitfall 2) and the
+ * arm64 spelling (the canonical CPU name is aarch64, Pitfall 4,
+ * init.configure:565-577) appear in no line below. Nothing checks that at
+ * generation time: the generated-byte-identity row compares these bytes with
+ * the tracked comparands, so a change that adds either spelling must also
+ * change a tracked mozconfig, and that change is then reviewed as such.
+ */
+const MACOS_TARGETS = Object.freeze({
+    aarch64: Object.freeze({ triple: 'aarch64-apple-darwin', objdir: 'objdir-macos-aarch64' }),
+    x86_64: Object.freeze({ triple: 'x86_64-apple-darwin', objdir: 'objdir-macos-x86_64' }),
+});
+function emitMozconfigMacos(config, variant, cpu) {
+    const target = MACOS_TARGETS[cpu];
+    const tail = [
+        `ac_add_options --target=${target.triple}`,
+        // The bootstrap SDK floor is 26.5 (toolchain.configure mac_sdk_min_version).
+        'mk_add_options "export MACOS_SDK_DIR=$MOZ_FETCHES_DIR/MacOSX26.5.sdk"',
+        // The DMG tools for the Linux branch of dmg.py (upstream cross-mozconfig.common).
+        'mk_add_options "export MKFSHFS=$MOZ_FETCHES_DIR/hfsplus/newfs_hfs"',
+        'mk_add_options "export DMG_TOOL=$MOZ_FETCHES_DIR/dmg/dmg"',
+        'mk_add_options "export HFS_TOOL=$MOZ_FETCHES_DIR/dmg/hfsplus"',
+    ];
+    return emitMozconfigFor(config, { ...variant, objdir: target.objdir }, { bootstrap: false, sbKeyfile: null, tail });
+}
+
+/**
+ * Phase 54 (PKG-11): the per-target Windows mozconfig, through the SAME shared
+ * builder as the release and macOS rows (emitMozconfigFor). The release shape
+ * is the cross-build shape: the container bootstrap (--enable-bootstrap, the
+ * release branch's flags, the release SB keyfile mount) plus the Windows tail.
+ * The tail carries the target triple and --disable-maintenance-service, which
+ * keeps the NSIS maintenance service out of the build (T-54-01). No function
+ * body here spells the enabling flag, so the only way a build gets it is a
+ * reviewed edit to this tail, which the windows-mozconfig row then reds.
+ */
+// node: the powerbrowser/packaging/node-runtime.json key the Windows stage reads (PKG-13).
+export const WINDOWS_TARGET = Object.freeze({ triple: 'x86_64-pc-windows-msvc', objdir: 'objdir-windows-x86_64', node: 'win32-x64' });
+export function emitMozconfigWindows(config, variant) {
+    const tail = [
+        `ac_add_options --target=${WINDOWS_TARGET.triple}`,
+        'ac_add_options --disable-maintenance-service',
+    ];
+    return emitMozconfigFor(config, { ...variant, objdir: WINDOWS_TARGET.objdir }, { bootstrap: true, sbKeyfile: SB_KEYFILE_MOUNT, tail });
+}
+
+/**
+ * UPD-29 (Phase 45): the release-variant SB keyfile line joins the release
+ * branch only. The mount path is a platform constant (the legion keydir is
+ * bind-mounted read-only at /keys inside the container, per the mount
+ * discipline in powerbrowser/packaging/Containerfile's neighbours), never a
+ * manifest key and never the key value -- only the path travels in the tree.
+ */
+function emitMozconfigRelease(config, variant) {
+    return emitMozconfigFor(config, variant, { bootstrap: true, sbKeyfile: SB_KEYFILE_MOUNT });
 }
 
 /**
@@ -2037,9 +2252,9 @@ export function emitTheiaPlugins(config, variant) {
  * updates from.
  *
  * FRAGMENT, NOT THE WHOLE POLICY FILE. The tracked
- * powerbrowser/distribution/policies.json carries sibling keys the
- * manifest does not own (AppUpdateURL, DisableTelemetry,
- * DisableFirefoxStudies); whole-file byte-identity would wed those keys
+ * powerbrowser/distribution/policies.json carries two sibling keys the
+ * manifest does not own (DisableTelemetry, DisableFirefoxStudies; it
+ * carries no update URL, UPD-12); whole-file byte-identity would wed those keys
  * to this emitter. The copy-over sets ONLY the ExtensionSettings key from
  * this fragment and leaves every sibling byte-identical. No tracked
  * comparand row -- the byte-identity gate skips rows without one, --check
@@ -2158,7 +2373,9 @@ export function emitSearchEngines(config, variant) {
 /**
  * The telemetry fragment (04-03, TEL-01/TEL-02): the level the sender
  * enforces and the downstream's own endpoint it delivers to, as
- * `{level, endpoint}`.
+ * `{level, endpoint}`, plus the version and buildID TEL-06 stamps on each
+ * error report (both from releaseIdentity, so they never drift from the
+ * manifest).
  *
  * FRAGMENT, NOT THE WHOLE PACKAGE (04-01's rule carried over). The tracked
  * theia/applications/browser/package.json is yarn-managed, so whole-file
@@ -2205,10 +2422,16 @@ export function emitTheiaTelemetry(config, variant) {
     const endpoint = isUnset(rawEndpoint) ? null : rawEndpoint;
     assertEmittable('telemetry.level', level);
     if (endpoint !== null) assertEmittable('telemetry.endpoint', endpoint);
+    // TEL-06: version is the ESR version and buildID the release key (v<ESR>-<revision>),
+    // both from releaseIdentity so the error reports carry the build that produced them.
+    // buildID is not MOZ_BUILDID: that one names the Gecko build in MAR descriptors.
+    const identity = releaseIdentity(config);
     const lines = [
         '{',
         `  "level": ${JSON.stringify(level)},`,
-        `  "endpoint": ${JSON.stringify(endpoint)}`,
+        `  "endpoint": ${JSON.stringify(endpoint)},`,
+        `  "version": ${JSON.stringify(assertEmittable('product.version', identity.esrVersion))},`,
+        `  "buildID": ${JSON.stringify(assertEmittable('product.buildID', identity.releaseKey))}`,
         '}',
     ];
     return lines.join('\n') + '\n';
@@ -2495,7 +2718,12 @@ function emitBrandingAboutDialogCss() {
  * [urls].crash_report), and emitFirefoxBrandingJs splices them in at the
  * anchor. Everything else in this const interpolates no manifest value
  * and is a literal like the layout files.
+ *
+ * THE SECOND SPLICE (UPD-13). The four About-dialog link prefs follow
+ * RELEASE_LINK_ANCHOR; releaseLinkPrefs owns their values from [urls].
  */
+const RELEASE_LINK_ANCHOR = '// UPD-13: About-dialog release-notes and manual-update links, derived from configuration.toml [urls].';
+
 const FIREFOX_BRANDING_BASE_LINES = Object.freeze([
     '/* This Source Code Form is subject to the terms of the Mozilla Public',
     ' * License, v. 2.0. If a copy of the MPL was not distributed with this',
@@ -2517,10 +2745,13 @@ const FIREFOX_BRANDING_BASE_LINES = Object.freeze([
     'pref("startup.homepage_welcome_url", "");',
     'pref("startup.homepage_welcome_url.additional", "");',
     '',
-    '// The Mozilla update-wizard URLs must not be carried forward from the',
-    '// unofficial/ template (both pointed at nightly.mozilla.org).',
-    'pref("app.update.url.manual", "");',
-    'pref("app.update.url.details", "");',
+    RELEASE_LINK_ANCHOR,
+    '',
+    '// UPD-25: language packs are not updated with the app; release scope is en-US only (PKG-09). Upstream default true at browser/app/profile/firefox.js:175.',
+    'pref("app.update.langpack.enabled", false);',
+    '',
+    '// UPD-28 (owner decision 6): Firefox Accounts and Sync are off. Upstream default true at browser/app/profile/firefox.js:2311; a fixed false in both variants, no manifest key. The FxA/Sync host family (accounts.firefox.com, profile/oauth subdomains, token.services.mozilla.com) must never be contacted; verify-endpoints proves it by set-difference over the derived contacted-host list (Phase 50 live run).',
+    'pref("identity.fxaccounts.enabled", false);',
     '',
     '// --- D-86: GMP manager -- Widevine stays working, no Mozilla host involved ---',
     '// Blanked so the GMP manager never contacts aus5.mozilla.org for a plugin',
@@ -2575,9 +2806,9 @@ const FIREFOX_BRANDING_BASE_LINES = Object.freeze([
     '',
     '// --- Region-lookup and Web Push server URLs (both resolve',
     '// location.services.mozilla.com / push.services.mozilla.com respectively,',
-    '// which powerbrowser/endpoint-allowlist.json disposition `deny` -- neither',
-    '// URL is essential to this phase\'s scope, no Theia-side feature depends on',
-    '// them yet). The GEOLOCATION and PUSH *APIs themselves*',
+    '// which powerbrowser/endpoint-allowlist.json dispositions `deny` -- both are',
+    '// unattended callouts with no DRM/security-parity rationale, so both stay',
+    '// blanked rather than waived). The GEOLOCATION and PUSH *APIs themselves*',
     '// (geo.enabled/geo.provider.network.url, dom.push.enabled) are deliberately',
     '// left untouched: both fire only on an explicit site request, never at',
     '// unattended startup, and disabling the API surface would remove real',
@@ -2622,11 +2853,12 @@ const FIREFOX_BRANDING_BASE_LINES = Object.freeze([
     '// network.dns.disablePrefetchFromHTTPS also defaults false (:15161), so',
     '// the origin scheme is irrelevant. Root cause traced to',
     '// theia/extensions/branding/src/browser/powerbrowser-welcome-widget.tsx:13\'s',
-    '// POWERBROWSER_REPO_URL link to github.com. Disabled rather than removing',
-    '// the link -- the link is a real, wanted affordance, and an explicit',
-    '// click is a user request this pref does not block, only the',
-    '// speculative prefetch. github.com stays a `deny` entry in',
-    '// endpoint-allowlist.json so a regression fails the check. ---',
+    '// POWERBROWSER_REPO_URL link. Disabled rather than removing the link --',
+    '// the link is a real, wanted affordance, and an explicit click is a user',
+    '// request this pref does not block, only the speculative prefetch.',
+    '// powerbrowser.org and github.com are `user-initiated` entries in',
+    '// endpoint-allowlist.json: reachable by an explicit click, never',
+    '// unattended, so a prefetch regression still fails layer 3. ---',
     'pref("network.dns.disablePrefetch", true);',
     '',
     '// --- BRAND-04 ledger entry 5 fix (2026-08-29): media.gmp-gmpopenh264.enabled',
@@ -2757,6 +2989,28 @@ export function mozillaEndpointPrefs(config) {
 }
 
 /**
+ * The About dialog's release-notes and manual-update links (UPD-13), spliced
+ * after RELEASE_LINK_ANCHOR in file order. app.releaseNotesURL{,.aboutDialog}
+ * fall back to about:blank, which aboutDialog.js reads as "hide the link";
+ * the update-wizard URLs fall back to "". These are click destinations, NOT
+ * unattended callouts: they deliberately stay out of mozillaEndpointPrefs
+ * (the unattended gate set, which verify-theia-endpoints check 4 pairs with
+ * allowlist `prefs` rows), and their hosts are `user-initiated` allowlist
+ * entries. Each stated value passes the same sink guard. Returns [{name, value}].
+ */
+export function releaseLinkPrefs(config) {
+    const url = key => (isUnset(config.urls?.[key]) ? null : assertEmittable(`urls.${key}`, config.urls[key]));
+    const notes = url('release_notes');
+    const home = url('homepage');
+    return [
+        { name: 'app.releaseNotesURL', value: notes ?? 'about:blank' },
+        { name: 'app.releaseNotesURL.aboutDialog', value: notes ?? 'about:blank' },
+        { name: 'app.update.url.manual', value: home ?? '' },
+        { name: 'app.update.url.details', value: notes ?? '' },
+    ];
+}
+
+/**
  * Every manifest URL that names a host this build may contact (04-04,
  * TEL-03): the [telemetry] endpoint when stated, each stated [urls] value,
  * each [[search_engines]] url and suggest_url (BAR-03), and
@@ -2792,7 +3046,8 @@ export function manifestEndpointSources(config) {
         sources.push({ path, url: value, host });
     };
     take('telemetry.endpoint', config.telemetry?.endpoint);
-    for (const key of ['release_notes', 'update', 'crash_report', 'homepage', 'search']) {
+    // mar_origin: the primary MAR origin is an unattended update fetch host (DIST-08, owner ruling 2026-10-29).
+    for (const key of ['release_notes', 'update', 'mar_origin', 'crash_report', 'homepage', 'search']) {
         take(`urls.${key}`, config.urls?.[key]);
     }
     // BAR-01/BAR-03: each configured search engine's search and suggest
@@ -2874,6 +3129,47 @@ export function emitUpstreamPins(config, variant) {
 }
 
 /**
+ * REL-01 (40-03). The release identity: one key, v<ESR>-<revision>, derived
+ * from the ESR pin and [product] revision. A _BUILDn candidate tag is refused:
+ * a release is only ever cut from an esr_RELEASE tag. esrVersion is the
+ * numeric groups joined by dots -- two parts for an x.0 release, three for a
+ * point release -- which is the string upstream writes in config/milestone.txt.
+ */
+const ESR_RELEASE_TAG = /^[A-Za-z]+_(\d+)_(\d+)(?:_(\d+))?esr_RELEASE$/;
+export function releaseIdentity(config) {
+    const tag = config.upstreams?.firefox_esr_tag;
+    const m = typeof tag === 'string' ? ESR_RELEASE_TAG.exec(tag) : null;
+    if (m === null) {
+        report([
+            `upstreams.firefox_esr_tag is ${JSON.stringify(tag)}, which is not an ESR release tag. `
+            + `It must be an *esr_RELEASE tag, never a _BUILD candidate. Correct it in ${MANIFEST_NAME}, then run: ${RERUN}`,
+        ]);
+    }
+    const esrVersion = m.slice(1).filter(g => g !== undefined).join('.');
+    const revision = config.product.revision;
+    return Object.freeze({ esrVersion, revision, releaseKey: `v${esrVersion}-${revision}` });
+}
+
+/**
+ * The two version files (REL-01): release metadata read by release tooling
+ * (release key, descriptor appVersion, asset names), never a Gecko build input.
+ * WHY NO GENERATED_BANNER. Same reason as the JSON fragments: each is a
+ * one-value file its reader takes whole, so a comment line would be read as
+ * the value.
+ */
+export function emitVersionTxt(config, variant) {
+    void variant;
+    return `${releaseIdentity(config).esrVersion}\n`;
+}
+export function emitReleaseTxt(config, variant) {
+    void variant;
+    // The release path reads mar_origin only after a 50-minute build (package-linux.sh); refuse a bad
+    // value here, in generate and generate --check, before any build (review WR-04).
+    marOrigin(config);
+    return `${releaseIdentity(config).releaseKey}\n`;
+}
+
+/**
  * The one emitter both pref rows share. The dev-only tail is a property of
  * the VARIANT, not of the brand: no manifest value selects it, so the branch
  * is on the variant id, the two values this project builds. The
@@ -2885,6 +3181,12 @@ function emitFirefoxBrandingJs(config, variant) {
     const base = variant.id === 'dev'
         ? [...FIREFOX_BRANDING_BASE_LINES, ...FIREFOX_BRANDING_DEV_TAIL_LINES]
         : FIREFOX_BRANDING_BASE_LINES;
+    if (!base.includes(RELEASE_LINK_ANCHOR)) {
+        report([
+            `the branding pref emitter lost its anchor line ${JSON.stringify(RELEASE_LINK_ANCHOR)} -- the About dialog's `
+            + `release-notes and manual-update links would ship nowhere. Next step: report this; ${MANIFEST_NAME} is not the cause and editing it will not help.`,
+        ]);
+    }
     if (!base.includes(DYNAMIC_PREF_ANCHOR)) {
         report([
             `the branding pref emitter lost its anchor line ${JSON.stringify(DYNAMIC_PREF_ANCHOR)} -- the manifest-driven `
@@ -2892,10 +3194,12 @@ function emitFirefoxBrandingJs(config, variant) {
         ]);
     }
     const dynamic = mozillaEndpointPrefs(config).map(({ name, value }) => `pref("${name}", ${JSON.stringify(value)});`);
+    const links = releaseLinkPrefs(config).map(({ name, value }) => `pref("${name}", ${JSON.stringify(value)});`);
     const lines = [];
     for (const line of base) {
         lines.push(line);
         if (line === DYNAMIC_PREF_ANCHOR) lines.push(...dynamic);
+        if (line === RELEASE_LINK_ANCHOR) lines.push(...links);
     }
     return lines.join('\n') + '\n';
 }
@@ -3392,6 +3696,47 @@ function emitFirefoxIcnsFile(config, variant) {
 }
 
 /**
+ * Phase 55 (PKG-14): the five cocoa and DMG branding inputs. Each is emitted into
+ * generated/ with no tracked comparand and no brand directory input, so a brand
+ * change never adds a file to the tree. The two upstream consumers name them:
+ * upstream/browser/app/Makefile.in copies firefox.icns, document.icns and
+ * Assets.car into the bundle, and upstream/toolkit/moz.configure passes dsstore,
+ * background.png and disk.icns to the DMG step.
+ *
+ * Honest placeholders. These are not designed artwork:
+ *  - document.icns and disk.icns are the application icon's own raster set through
+ *    the same icns writer (emitFirefoxIcnsFile).
+ *  - background.png is the 128-pixel application raster, used as a backdrop.
+ *  - dsstore is an empty file. The DMG extra-file copy finds a file, and Finder
+ *    falls back to its default window layout.
+ *  - Assets.car is an empty file. The unconditional Makefile copy succeeds without
+ *    copying third-party artwork.
+ * RISK, stated plainly: Info.plist declares both CFBundleIconFile firefox.icns and
+ * CFBundleIconName AppIcon. macOS prefers the name, which it resolves out of
+ * Assets.car, so an empty Assets.car is expected to degrade the Dock and Finder
+ * icon to a generic one. Upgrade path: build a real asset catalog with actool
+ * (xcrun actool) on a Mac, then replace this emitter's output. The Mac session in
+ * plan 55-04 observes the icon and records it.
+ */
+function emitDmgBackgroundPng(config, variant) {
+    void config;
+    void variant;
+    return iconPngBytes(128);
+}
+
+function emitDmgDsStorePlaceholder(config, variant) {
+    void config;
+    void variant;
+    return Buffer.alloc(0);
+}
+
+function emitAssetsCarPlaceholder(config, variant) {
+    void config;
+    void variant;
+    return Buffer.alloc(0);
+}
+
+/**
  * The installer support address both NSIS URL defines carry.
  *
  * installer.support_url first; product.homepage as the fallback, so a
@@ -3586,6 +3931,45 @@ export const TARGETS = Object.freeze([
         variant: 'dev',
         emit: emitMozconfig,
     }),
+    // NEW (Phase 55, PKG-14): the aarch64 macOS mozconfig through the shared
+    // builder. The variant is 'dev' because the macOS row carries no variant
+    // of its own: the objdir suffix and the Darwin tail come from the emitter.
+    // A frozen copy authored once from the emitter; never edited to go green.
+    Object.freeze({
+        generated: 'packaging/mozconfig-macos-aarch64',
+        tracked: 'powerbrowser/packaging/mozconfig-macos-aarch64',
+        variant: 'dev',
+        emit: (config, variant) => emitMozconfigMacos(config, variant, 'aarch64'),
+    }),
+    // NEW (Phase 55, PKG-14): the x86_64 macOS mozconfig through the same shared
+    // builder as the aarch64 row above. Only the Darwin tail and the objdir suffix
+    // differ; the shared lines are identical by construction.
+    Object.freeze({
+        generated: 'packaging/mozconfig-macos-x86_64',
+        tracked: 'powerbrowser/packaging/mozconfig-macos-x86_64',
+        variant: 'dev',
+        emit: (config, variant) => emitMozconfigMacos(config, variant, 'x86_64'),
+    }),
+    // NEW (Phase 54, PKG-11): the x86_64 Windows mozconfig through the shared
+    // builder. A frozen copy authored once from the emitter, never edited to go green.
+    Object.freeze({
+        generated: 'packaging/mozconfig-windows-x86_64',
+        tracked: 'powerbrowser/packaging/mozconfig-windows-x86_64',
+        variant: 'dev',
+        emit: emitMozconfigWindows,
+    }),
+    // NEW (Phase 45, PKG-17): the release .mozconfig variant. A frozen copy
+    // of the release emission, authored once from the emitter and committed,
+    // same contract as the hand-written files: on a red, the emitter is what
+    // changes; this file is never edited to make the gate green. The release
+    // build configures with MOZCONFIG pointing at the generated copy of
+    // these bytes (objdir-release, --enable-bootstrap, SB keyfile mount).
+    Object.freeze({
+        generated: 'packaging/mozconfig.release',
+        tracked: 'powerbrowser/packaging/mozconfig.release',
+        variant: 'release',
+        emit: emitMozconfigRelease,
+    }),
     // 03-04: the GEN-01 identity carrier. 05-01: the relocated
     // telemetry-policy lines are byte-identity gated through the tracked
     // comparand below -- a frozen copy of the emission, authored once from
@@ -3598,6 +3982,23 @@ export const TARGETS = Object.freeze([
         tracked: 'powerbrowser/identity.configure.comparand',
         variant: 'dev',
         emit: emitIdentityConfigure,
+    }),
+    // NEW (Phase 40, REL-01): the release identity, byte-identity gated
+    // through tracked comparands authored once from the emitter. Release
+    // metadata (release key, descriptor appVersion, asset names), never a
+    // Gecko build input: nothing passes these to --with-version-file-path,
+    // because a display version not ending in `esr` clears AppConstants.IS_ESR.
+    Object.freeze({
+        generated: 'packaging/version/version.txt',
+        tracked: 'powerbrowser/packaging/version/version.txt',
+        variant: 'dev',
+        emit: emitVersionTxt,
+    }),
+    Object.freeze({
+        generated: 'packaging/version/release.txt',
+        tracked: 'powerbrowser/packaging/version/release.txt',
+        variant: 'dev',
+        emit: emitReleaseTxt,
     }),
     // NEW (04-01): GEN-05's Theia frontend-config fragment. No tracked
     // comparand -- the tracked theia/applications/browser/package.json is
@@ -3924,6 +4325,19 @@ export const TARGETS = Object.freeze([
         variant: 'release',
         emit: emitFirefoxIcnsFile,
     }),
+    // NEW (Phase 55, PKG-14): the five cocoa and DMG branding inputs, per variant.
+    // No tracked comparand: see emitDmgBackgroundPng for the placeholder labels and the
+    // Assets.car risk. Each row is a literal path; no brand value reaches a write path.
+    Object.freeze({ generated: 'branding/dev/document.icns', variant: 'dev', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/dev/disk.icns', variant: 'dev', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/dev/background.png', variant: 'dev', emit: emitDmgBackgroundPng }),
+    Object.freeze({ generated: 'branding/dev/dsstore', variant: 'dev', emit: emitDmgDsStorePlaceholder }),
+    Object.freeze({ generated: 'branding/dev/Assets.car', variant: 'dev', emit: emitAssetsCarPlaceholder }),
+    Object.freeze({ generated: 'branding/release/document.icns', variant: 'release', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/release/disk.icns', variant: 'release', emit: emitFirefoxIcnsFile }),
+    Object.freeze({ generated: 'branding/release/background.png', variant: 'release', emit: emitDmgBackgroundPng }),
+    Object.freeze({ generated: 'branding/release/dsstore', variant: 'release', emit: emitDmgDsStorePlaceholder }),
+    Object.freeze({ generated: 'branding/release/Assets.car', variant: 'release', emit: emitAssetsCarPlaceholder }),
     // NEW (03-03): GEN-03's installer branding fields. Two NSIS/tile files
     // per variant under branding/ plus two XML field fragments per variant
     // under installer/. No tracked comparand: no hand-written originals
@@ -4224,12 +4638,21 @@ export function resolveConfig(defaultsPath = MANIFEST_PATH, downstreamPath) {
     const mergedLeaves = [];
     collectLeaves(config, '', mergedLeaves, []);
     const failures = validate(config, mergedLeaves);
+    for (const layer of [defaultsLayer, downstreamLayer]) {
+        for (const path of DECIMAL_INTEGERS.get(layer) ?? []) {
+            failures.push(
+                `${path} is written with a decimal point, but this setting has to be ${SCHEMA_KEYS[path].type_help}. `
+                + `Correct it in ${MANIFEST_NAME}, then run: ${RERUN}`,
+            );
+        }
+    }
 
     // R11 (NG-064): a downstream build (PB_CONFIG_DIR) must state its own update address.
     // Otherwise it inherits the platform's host and its users are offered the platform's
     // updates. The platform host is derived from the platform manifest, never typed here.
     if (downstreamPath !== undefined) {
-        const platformUpdate = resolveConfig(defaultsPath, undefined).config?.urls?.update;
+        const platform = resolveConfig(defaultsPath, undefined).config;
+        const platformUpdate = platform?.urls?.update;
         const update = config?.urls?.update;
         // M-2: parse inside try so a mistyped address returns the named R11
         // failure instead of throwing TypeError: Invalid URL.
@@ -4245,6 +4668,41 @@ export function resolveConfig(defaultsPath = MANIFEST_PATH, downstreamPath) {
                 `urls.update is ${JSON.stringify(update)}, the platform's own update address, and a downstream build must not ship it. `
                 + `Write your own https update address as [urls] update in ${MANIFEST_NAME}, then run: ${RERUN}`,
             );
+        }
+        // WR-04: the same for the About dialog's release-notes and manual-download links when the
+        // downstream ships under a different name: an omitted key inherits the platform's page and
+        // sends the downstream's users there. A copy that keeps the platform identity is exempt.
+        const identityOf = c => JSON.stringify([c?.identity, c?.product?.vendor_machine, c?.product?.vendor_display]);
+        if (platform !== undefined && identityOf(config) !== identityOf(platform)) {
+            for (const [key, what] of [['release_notes', 'release-notes page'], ['homepage', 'download page']]) {
+                const value = config?.urls?.[key];
+                if (!isUnset(value) && value === platform.urls?.[key]) {
+                    failures.push(
+                        `urls.${key} is ${JSON.stringify(value)}, the platform's own ${what}, so the About dialog of a build under your name would send its users there. `
+                        + `Write your own https address as [urls] ${key} in ${MANIFEST_NAME}, then run: ${RERUN}`,
+                    );
+                }
+            }
+            // TEL-06: the platform states its events endpoint in the defaults layer, so a downstream that
+            // enables a telemetry level without stating its own would send its users' error reports to the
+            // platform's host. Same rule as urls.update above: an enabled level must name its own endpoint.
+            // (Level off is left alone: nothing is sent until the user raises the preference.)
+            const endpoint = config?.telemetry?.endpoint;
+            const platformEndpoint = platform.telemetry?.endpoint;
+            let sameEndpointHost = false;
+            try {
+                sameEndpointHost = !isUnset(endpoint) && !isUnset(platformEndpoint)
+                    && new URL(endpoint).host === new URL(platformEndpoint).host;
+            } catch {
+                sameEndpointHost = false;
+            }
+            if (config?.telemetry?.level !== 'off' && sameEndpointHost) {
+                failures.push(
+                    `telemetry.endpoint is ${JSON.stringify(endpoint)}, the platform's own events endpoint, while telemetry.level is ${JSON.stringify(config?.telemetry?.level)}, `
+                    + `so the error reports of a build under your name would be sent to the platform. `
+                    + `Write your own https address as [telemetry] endpoint in ${MANIFEST_NAME}, or keep [telemetry] level = "off", then run: ${RERUN}`,
+                );
+            }
         }
     }
 
@@ -4299,6 +4757,7 @@ const FIXTURE_BASE = [
     '[product]',
     'vendor_machine = "AcmeWorks"',
     'vendor_display = "Acme Works"',
+    'revision = 1',
     '',
     '[identity]',
     'display_name = "Acme Browser"',
@@ -4343,6 +4802,8 @@ const FIXTURE_VARIANT = [
 const FIXTURE_URLS = [
     '[urls]',
     'update = "https://updates.example.org/update.xml"',
+    'release_notes = "https://example.org/releases"',
+    'homepage = "https://example.org"',
     '',
 ].join('\n');
 
@@ -5239,6 +5700,64 @@ function selfTest() {
     // expected pairs are literals: deriving them through emitTheiaTelemetry
     // would make the control agree with the emitter no matter how wrong
     // both were.
+    // TEL-07 (57-02): the crash origin control. A stated https crash_report derives its origin (path
+    // dropped) and emits the --with-crashreporter-url line; an unset key derives '' and emits nothing.
+    // The expected values are literals, so the control cannot agree with the emitter by construction.
+    const crashOriginControl = (() => {
+        const fixtureDir = mkdtempSync(join(tmpdir(), 'generate-selftest-crash-origin-'));
+        try {
+            const checkOne = (toml, wantOrigin, label) => {
+                const fixturePath = join(fixtureDir, `crash-origin-${label}.toml`);
+                writeFileSync(fixturePath, toml, 'utf8');
+                const resolved = resolveConfig(MANIFEST_PATH, fixturePath);
+                if (resolved.failures.length > 0) {
+                    return [`the crash-origin ${label} fixture failed validation: ${resolved.failures.join(' | ')}`];
+                }
+                const dev = resolved.config.variants.find(v => v.id === 'dev');
+                const problems = [];
+                const origin = crashReporterOrigin(resolved.config);
+                if (origin !== wantOrigin) problems.push(`crashReporterOrigin is ${JSON.stringify(origin)} for ${label}, not ${JSON.stringify(wantOrigin)}`);
+                const mozconfig = emitMozconfig(resolved.config, dev);
+                if (wantOrigin === '' && mozconfig.includes('--with-crashreporter-url')) {
+                    problems.push(`${label} emitted --with-crashreporter-url though the key is unset`);
+                }
+                if (wantOrigin !== '' && !mozconfig.includes(`ac_add_options --with-crashreporter-url=${wantOrigin}\n`)) {
+                    problems.push(`${label} did not emit ac_add_options --with-crashreporter-url=${wantOrigin}`);
+                }
+                return problems;
+            };
+            return [
+                ...checkOne(`${FIXTURE_DOWNSTREAM}\ncrash_report = "https://crash.example.org/report"\n`, 'https://crash.example.org', 'stated'),
+                ...checkOne(FIXTURE_DOWNSTREAM, '', 'unset'),
+            ];
+        } finally {
+            rmSync(fixtureDir, { recursive: true, force: true });
+        }
+    })();
+    // WR-09: the pairing of the disable line with the crash address. The expected arrays are literals.
+    const crashEnableControl = (() => {
+        const problems = [];
+        const same = (got, want, what) => {
+            if (JSON.stringify(got) !== JSON.stringify(want)) problems.push(`${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+        };
+        const URL_LINE = 'ac_add_options --with-crashreporter-url=https://crash.example.org';
+        same(crashReporterOptions('', false), ['ac_add_options --disable-crashreporter'], 'compiled out, no key');
+        same(crashReporterOptions('https://crash.example.org', false), ['ac_add_options --disable-crashreporter', URL_LINE], 'compiled out, key stated');
+        same(crashReporterOptions('https://crash.example.org', true), [URL_LINE], 'enabled, key stated');
+        let thrown = null;
+        try {
+            crashReporterOptions('', true);
+        } catch (err) {
+            thrown = err;
+        }
+        if (thrown === null) problems.push('the reporter enabled with no crash_report key did not fail generation, so deleting the disable literal would build one that sends to Mozilla');
+        else if (!thrown.message.includes('crash_report')) problems.push(`the enabled-without-key failure does not name crash_report: ${thrown.message}`);
+        // The shipped mozconfig is still compiled out.
+        const shippedConfig = resolveConfig(MANIFEST_PATH, undefined).config;
+        const shipped = emitMozconfig(shippedConfig, shippedConfig.variants.find(v => v.id === 'dev'));
+        if (!shipped.includes('ac_add_options --disable-crashreporter\n')) problems.push('the dev mozconfig no longer carries --disable-crashreporter while the flip has not happened');
+        return problems;
+    })();
     const telemetryControl = (() => {
         const fixtureDir = mkdtempSync(join(tmpdir(), 'generate-selftest-telemetry-'));
         try {
@@ -5263,12 +5782,15 @@ function selfTest() {
                 }
                 return [];
             };
+            // An omitted [telemetry] section inherits the default manifest's level and endpoint through the
+            // default-echo (TEL-06 states the endpoint at level off), so the expectation is derived from it.
+            const inheritedEndpoint = resolveConfig(MANIFEST_PATH, undefined).config.telemetry?.endpoint ?? null;
             return [
                 ...checkOne(
                     `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "error"\nendpoint = "https://example.org/telemetry/v1/events"\n`,
                     'error', 'https://example.org/telemetry/v1/events',
                 ),
-                ...checkOne(`${FIXTURE_DOWNSTREAM}`, 'off', null),
+                ...checkOne(`${FIXTURE_DOWNSTREAM}`, 'off', inheritedEndpoint),
             ];
         } finally {
             rmSync(fixtureDir, { recursive: true, force: true });
@@ -5420,17 +5942,48 @@ function selfTest() {
             };
             return [
                 ...checkOne(
-                    `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[telemetry]\nlevel = "all"\nendpoint = "https://collector.example.org/v1/events"\n[urls]\ncrash_report = "https://crash.example.org/report"\nupdate = "https://updates.example.org/update.xml"\n[installer]\nsupport_url = "https://example.org/support"\n[[search_engines]]\nname = "Acme Search"\nurl = "https://search.example.org/?q={searchTerms}"\nsuggest_url = "https://suggest.example.org/?q={searchTerms}"\n`,
-                    ['collector.example.org', 'crash.example.org', 'example.org', 'search.example.org', 'suggest.example.org', 'updates.example.org'],
+                    `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[telemetry]\nlevel = "all"\nendpoint = "https://collector.example.org/v1/events"\n[urls]\ncrash_report = "https://crash.example.org/report"\nupdate = "https://updates.example.org/update.xml"\nmar_origin = "https://downloads.example.org"\nrelease_notes = "https://notes.example.org/releases"\nhomepage = "https://example.org"\n[installer]\nsupport_url = "https://example.org/support"\n[[search_engines]]\nname = "Acme Search"\nurl = "https://search.example.org/?q={searchTerms}"\nsuggest_url = "https://suggest.example.org/?q={searchTerms}"\n`,
+                    ['collector.example.org', 'crash.example.org', 'downloads.example.org', 'example.org', 'notes.example.org', 'search.example.org', 'suggest.example.org', 'updates.example.org'],
                     'https://collector.example.org/v1/events',
                     'https://crash.example.org/report',
                 ),
+                // BAR-03: a downstream that states no [[search_engines]] inherits the platform's
+                // engines and hosts beside the platform's other inherited hosts; it states its own
+                // About-dialog pages (WR-04).
                 ...checkOne(
-                    `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[urls]\nupdate = "https://updates.example.org/update.xml"\n`,
-                    ['ac.duckduckgo.com', 'en.wikipedia.org', 'lite.duckduckgo.com', 'powerbrowser.org', 'updates.example.org'],
+                    `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[urls]\nupdate = "https://updates.example.org/update.xml"\nrelease_notes = "https://notes.example.org/releases"\nhomepage = "https://example.org"\n`,
+                    ['ac.duckduckgo.com', 'downloads.powerbrowser.org', 'en.wikipedia.org', 'events.powerbrowser.org', 'example.org', 'lite.duckduckgo.com', 'notes.example.org', 'powerbrowser.org', 'updates.example.org'],
                     '',
                     '',
                 ),
+                // WR-04: a downstream under a new name that states no urls.release_notes or
+                // urls.homepage inherits the platform's pages, and is refused naming both.
+                ...(() => {
+                    const fixturePath = join(fixtureDir, 'endpoints-inherited.toml');
+                    writeFileSync(fixturePath, `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[urls]\nupdate = "https://updates.example.org/update.xml"\n`, 'utf8');
+                    const text = resolveConfig(MANIFEST_PATH, fixturePath).failures.join(' | ');
+                    return text.includes('urls.release_notes') && text.includes('urls.homepage')
+                        ? [] : [`a downstream inheriting the platform's About-dialog links was not refused naming urls.release_notes and urls.homepage: ${text || '(no failure)'}`];
+                })(),
+                // ...while a copy of the platform manifest that keeps its identity and states only
+                // its own update address still resolves (the ng071/ng073 fixtures' shape).
+                ...(() => {
+                    const fixturePath = join(fixtureDir, 'endpoints-same-identity.toml');
+                    const copy = readFileSync(MANIFEST_PATH, 'utf8').replace(/^\[urls\][\s\S]*?(?=^\[|(?![\s\S]))/m, '');
+                    writeFileSync(fixturePath, `${copy}\n[urls]\nupdate = "https://updates.example.org/update.xml"\n`, 'utf8');
+                    const { failures } = resolveConfig(MANIFEST_PATH, fixturePath);
+                    return failures.length === 0 ? [] : [`a same-identity downstream copy was refused: ${failures.join(' | ')}`];
+                })(),
+                // UPD-13: unstated links fall back to about:blank (hidden) and "", stated ones map verbatim.
+                ...[
+                    [{}, ['about:blank', 'about:blank', '', '']],
+                    [{ release_notes: 'https://notes.example.org/r', homepage: 'https://example.org' },
+                        ['https://notes.example.org/r', 'https://notes.example.org/r', 'https://example.org', 'https://notes.example.org/r']],
+                ].flatMap(([urls, want]) => {
+                    const got = releaseLinkPrefs({ urls }).map(p => p.value);
+                    return JSON.stringify(got) === JSON.stringify(want)
+                        ? [] : [`the About-dialog link prefs for ${JSON.stringify(urls)} are not ${JSON.stringify(want)}: ${JSON.stringify(got)}`];
+                }),
             ];
         } finally {
             rmSync(fixtureDir, { recursive: true, force: true });
@@ -5533,6 +6086,12 @@ function selfTest() {
             name: 'variant with an id nothing builds',
             toml: `${FIXTURE_DOWNSTREAM.replace('id = "dev"', 'id = "relase"')}`,
             expect: 'is never used',
+        },
+        {
+            // IN-07. TOML 1.0 parses to the number 1; a whole number with a decimal point is still refused.
+            name: 'revision written with a decimal point',
+            toml: (FIXTURE_BASE + FIXTURE_URLS).replace('revision = 1\n', 'revision = 1.0\n'),
+            expect: 'product.revision is written with a decimal point',
         },
         {
             // CFG-02's core. A required setting is one a downstream must state
@@ -5958,11 +6517,19 @@ function selfTest() {
             resolved: c => Array.isArray(c.extensions) && c.extensions.length === 0,
         },
         {
-            // TEL-01. An enabled level with no endpoint must fail NAMING
-            // the missing key -- a sender that can never deliver must
-            // never build.
+            // TEL-01 / TEL-06. An enabled level with no endpoint of its own must fail NAMING the key.
+            // The default manifest states the platform's endpoint, so an omitted key inherits it and the
+            // downstream would send its users' error reports to the platform: the refusal is the
+            // R11-style rule in resolveConfig, the same as for urls.update.
             name: 'telemetry level enabled without an endpoint',
             toml: `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "all"\n`,
+            expect: 'telemetry.endpoint',
+        },
+        {
+            // TEL-01. The explicit form: the endpoint is cleared, so a sender that can never deliver
+            // must never build.
+            name: 'telemetry level enabled with the endpoint cleared',
+            toml: `${FIXTURE_DOWNSTREAM}\n[telemetry]\nlevel = "all"\nendpoint = ""\n`,
             expect: 'telemetry.endpoint',
         },
         {
@@ -5989,8 +6556,24 @@ function selfTest() {
             // value rather than on the plant.
             name: 'telemetry fragment carries the stated pair and defaults an unset section to off',
             probe: () => telemetryControl,
-            holds: 'the stated level and endpoint verbatim, and off/null when unset',
+            holds: 'the stated level and endpoint verbatim, and off with the inherited default endpoint when unset',
             resolved: () => telemetryControl.length === 0,
+        },
+        {
+            // TEL-07 (57-02): the submit origin is derived from the ONE stated crash_report key (path
+            // dropped) and is inert while unset. The control proves the derivation on a fixture
+            // manifest; the real manifest states no key, so the reporter stays compiled out.
+            name: 'crash origin derives from the stated crash_report key and stays inert when unset',
+            probe: () => crashOriginControl,
+            holds: 'the stated https URL reduces to its origin and emits --with-crashreporter-url, and an unset key derives the empty origin and emits no line',
+            resolved: () => crashOriginControl.length === 0,
+        },
+        {
+            // WR-09: the flip is the generator's one constant, and it cannot be made without the crash address.
+            name: 'enabling the crash reporter without a crash_report key fails generation',
+            probe: () => crashEnableControl,
+            holds: 'the disable line is emitted exactly while the reporter is off, and enabling it with no crash_report key throws naming the key',
+            resolved: () => crashEnableControl.length === 0,
         },
         {
             // GEN-05 remainder. A theme id outside Theia's builtin set must
@@ -6018,6 +6601,13 @@ function selfTest() {
             // manifest bug, not a coverage gap.
             name: 'crash-report URL outside https',
             toml: `${FIXTURE_DOWNSTREAM}\ncrash_report = "http://example.org/crash"\n`,
+            expect: 'urls.crash_report',
+        },
+        {
+            // IN-01. A user name and password in the crash address would be kept verbatim in
+            // breakpad.reportURL while the submit origin dropped them; the key refuses them.
+            name: 'crash-report URL carrying a user name and password',
+            toml: `${FIXTURE_DOWNSTREAM}\ncrash_report = "https://user:secret@crash.example.org/report"\n`,
             expect: 'urls.crash_report',
         },
         {

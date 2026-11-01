@@ -1,0 +1,25 @@
+{
+  "_comment": "INF-05: one binary-cache configuration with two backends behind one interface. Public identifiers and placeholders only: a placeholder such as @CACHIX_PUBLIC_KEY@ stands for a value the owner creates in the cache dashboard, and scripts/verify-binary-cache.mjs --release refuses every placeholder. No token, password or account identifier is written here; tokens live in environments and are recorded by holder in docs/RENEWALS.md.",
+  "cachix": {
+    "cacheName": "powerbrowser",
+    "substituter": "https://powerbrowser.cachix.org",
+    "publicKey": "@CACHIX_PUBLIC_KEY@"
+  },
+  "r2": {
+    "bucket": "powerbrowser-nix-cache",
+    "endpoint": "https://@R2_ACCOUNT_ID@.r2.cloudflarestorage.com",
+    "keyName": "powerbrowser-nix-cache-1",
+    "substituter": "https://@R2_PUBLIC_HOST@",
+    "publicKey": "@R2_PUBLIC_KEY@"
+  },
+  "interface": {
+    "substituters": [
+      "https://powerbrowser.cachix.org",
+      "https://@R2_PUBLIC_HOST@"
+    ],
+    "trustedKeys": [
+      "@CACHIX_PUBLIC_KEY@",
+      "@R2_PUBLIC_KEY@"
+    ]
+  }
+}

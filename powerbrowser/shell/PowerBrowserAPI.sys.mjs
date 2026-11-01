@@ -299,7 +299,7 @@ let groupSenderPort = null;
 // one JSON document per profile, written atomically by the one chrome-side
 // writer. The frontend sends the whole map; the cap keeps a runaway frontend
 // from filling the disk through this channel.
-const SHELL_MESSAGE_KINDS = new Set(["shellStateLoad", "shellStateSave", "shellFlushed", "shellArmWebTabHistory"]);
+const SHELL_MESSAGE_KINDS = new Set(["shellStateLoad", "shellStateSave", "shellFlushed", "shellArmWebTabHistory", "appUpdateState", "checkForUpdates", "restartToUpdate"]);
 const SHELL_STATE_FILE_NAME = "powerbrowser-shell-state.json";
 const SHELL_STATE_MAX_CHARS = 16 * 1024 * 1024;
 // NG-032/NG-033: quit flushes chrome is waiting on, flushId -> resolve.
@@ -611,6 +611,19 @@ export const PowerBrowserAPI = Object.freeze({
   },
 
   /**
+   * UPD-30 (Phase 54): waits for `proc` to exit, resolving true once it has and false when `graceMs`
+   * passes first. Works on every platform because it awaits the Subprocess handle (its own wait()),
+   * not a pid probe. Never rejects: a wait() that rejects means the handle is already dead.
+   */
+  async waitForExit(proc, graceMs) {
+    try {
+      return await Promise.race([proc.wait().then(() => true), PowerBrowserAPI.sleep(graceMs).then(() => false)]);
+    } catch {
+      return true;
+    }
+  },
+
+  /**
    * Reads the next available chunk of text from `proc`'s named output
    * pipe ("stdout" or "stderr"), resolving null at end of stream.
    */
@@ -695,6 +708,17 @@ export const PowerBrowserAPI = Object.freeze({
     const observer = { observe: () => callback() };
     Services.obs.addObserver(observer, "quit-application-granted");
     return () => Services.obs.removeObserver(observer, "quit-application-granted");
+  },
+
+  /**
+   * UPD-30 (Phase 54): registers `fn` as the AsyncShutdown blocker that quit and restart both await.
+   * restartToUpdate quits with eRestart, which also raises quit-application-granted, so one
+   * registration covers both paths and the sidecar is reaped before the updater rename can run.
+   * AsyncShutdown rejects a second blocker under the same name, so the caller registers once per process.
+   */
+  addSidecarReapBlocker(fn) {
+    const { AsyncShutdown } = ChromeUtils.importESModule("resource://gre/modules/AsyncShutdown.sys.mjs");
+    AsyncShutdown.quitApplicationGranted.addBlocker("PowerBrowser: reap sidecar", fn);
   },
 
   /**
@@ -1017,13 +1041,19 @@ export const PowerBrowserAPI = Object.freeze({
    * (see `killProcess` above, which remains the correct call for an
    * already-spawned handle). `Subprocess.sys.mjs` has no API to signal a
    * pid it did not itself create, so this opens libc directly via
-   * js-ctypes. Linux-only per CLAUDE.md -- no cross-platform branch.
-   * Returns true only when the platform call itself returned 0; false on
-   * ESRCH (already gone), EPERM, or any other failure -- never throws.
+   * js-ctypes. The libc call exists on Linux only; on any other platform
+   * this returns false without touching ctypes (a Windows leftover is not
+   * reaped, see BLOCKED.md). Returns true only when the platform call itself
+   * returned 0; false on ESRCH (already gone), EPERM, a platform without
+   * libc, or any other failure -- never throws.
    */
   signalBarePid(pid, signal) {
-    const libc = lazy.ctypes.open("libc.so.6");
+    let libc = null;
     try {
+      if (lazy.AppConstants.platform !== "linux") {
+        return false;
+      }
+      libc = lazy.ctypes.open("libc.so.6");
       const kill = libc.declare(
         "kill",
         lazy.ctypes.default_abi,
@@ -1035,7 +1065,11 @@ export const PowerBrowserAPI = Object.freeze({
     } catch {
       return false;
     } finally {
-      libc.close();
+      try {
+        libc?.close();
+      } catch {
+        // Closing is best-effort; the contract is never to throw.
+      }
     }
   },
 
@@ -2319,6 +2353,35 @@ export const PowerBrowserAPI = Object.freeze({
           armedWebTabHistories.add(data.key);
           return { ok: true, kind };
         }
+        case "appUpdateState": {
+          const state = await PowerBrowserAPI.readUpdateState();
+          if (!state.ok) {
+            return { ok: false, reason: "store", message: "handleShellMessage: update state unavailable" };
+          }
+          if (state.version) {
+            return { ok: true, kind, state: state.state, version: state.version };
+          }
+          return { ok: true, kind, state: state.state };
+        }
+        case "checkForUpdates": {
+          const accepted = await PowerBrowserAPI.requestUpdateCheck();
+          if (!accepted) {
+            return { ok: false, reason: "not-started", message: "handleShellMessage: update check not started" };
+          }
+          return { ok: true, kind, accepted: true };
+        }
+        case "restartToUpdate": {
+          // WR-01 (46 review): a restart with nothing staged would quit and
+          // relaunch with no update. Refuse first; the client shows plain copy.
+          if (!(await PowerBrowserAPI.readyUpdate())) {
+            return { ok: false, reason: "not-staged", message: "handleShellMessage: no update is staged" };
+          }
+          const restarted = PowerBrowserAPI.restartToUpdate();
+          if (!restarted) {
+            return { ok: false, reason: "cancelled", message: "handleShellMessage: restart cancelled by an observer" };
+          }
+          return { ok: true, kind, accepted: true };
+        }
         default:
           return { ok: false, reason: "validation", message: `handleShellMessage: unknown kind ${String(kind)}` };
       }
@@ -2326,6 +2389,202 @@ export const PowerBrowserAPI = Object.freeze({
       // Final-review M3: the IOUtils failure names the profile file -- reply
       // with the fixed string plus err.name, never the message text.
       return { ok: false, reason: "store", message: `handleShellMessage: ${kind} failed (store ${err && err.name ? err.name : "error"})` };
+    }
+  },
+
+  /**
+   * UPD-18/19 (46-01): the update-service read helpers behind appUpdateState,
+   * checkForUpdates and restartToUpdate. Each reaches Gecko through the one
+   * boundary accessor below, never around it.
+   */
+
+  /**
+   * UPD-18/19 (46-01): the one accessor for the Gecko update service. Reads
+   * through the platform contract id, never a stored handle. Never throws:
+   * an unreached service resolves null.
+   */
+  updateService() {
+    try {
+      return Cc["@mozilla.org/updates/update-service;1"].getService(Ci.nsIApplicationUpdateService);
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * UPD-18/19 (46-01): the one current-state read. Mirrors the AppUpdater
+   * shape: currentState plus the ready update's displayVersion/appVersion
+   * when the service exposes one. Never throws: an unreadable service
+   * resolves { ok: false }.
+   */
+  async readUpdateState() {
+    try {
+      const svc = PowerBrowserAPI.updateService();
+      if (!svc) {
+        return { ok: false };
+      }
+      // Gecko's currentState is a numeric nsIApplicationUpdateService constant.
+      // The boundary maps it to the contract string here, once, so no caller
+      // compares against a Gecko enum value.
+      if (svc.currentState !== Ci.nsIApplicationUpdateService.STATE_PENDING) {
+        return { ok: true, state: "idle", version: "" };
+      }
+      // A pending state with no readable ready update is refused, not rendered
+      // as a version-less ready prompt (UPD-20 names the version).
+      const ready = await PowerBrowserAPI.readyUpdate();
+      const version = (ready && (ready.displayVersion || ready.appVersion)) || "";
+      if (!version) {
+        return { ok: false };
+      }
+      return { ok: true, state: "pending", version };
+    } catch {
+      return { ok: false };
+    }
+  },
+
+  /**
+   * UPD-20 (46-02, review CR-03): the staged update, read from the update
+   * manager (nsIUpdateManager.getReadyUpdate). nsIApplicationUpdateService has
+   * no readyUpdate attribute; the manager owns the ready update. Never throws:
+   * an unreadable manager resolves null.
+   */
+  async readyUpdate() {
+    try {
+      const um = Cc["@mozilla.org/updates/update-manager;1"].getService(Ci.nsIUpdateManager);
+      return (await um.getReadyUpdate()) || null;
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * UPD-18 (46-01): one update topic notification mapped to the contracted
+   * appUpdate status. An explicit table (46 review WR-04): update-available
+   * with show-prompt to available, with cant-apply or unsupported to
+   * cant-apply; staged and downloaded to ready; everything else, update-error
+   * and any unnamed status included, to error. The subject may be null (cant-apply notifies with a
+   * null subject): the null guard runs before any QueryInterface, and the
+   * version read never throws. The returned triple is primitives only.
+   */
+  mapUpdateNotification(topic, status) {
+    if (topic === "update-available") {
+      if (status === "show-prompt") {
+        return "available";
+      }
+      return status === "cant-apply" || status === "unsupported" ? "cant-apply" : "error";
+    }
+    if (topic === "update-staged" || topic === "update-downloaded") {
+      return "ready";
+    }
+    return "error";
+  },
+
+  /**
+   * UPD-18 (46-01): the subject's version half of an appUpdate push. The
+   * null guard runs before QueryInterface: cant-apply notifies with subject
+   * null (UpdateService.sys.mjs:3972), and QueryInterface on it would throw.
+   * Never throws: an unreadable subject resolves "".
+   */
+  updateVersionFromSubject(subject) {
+    try {
+      const update = subject ? subject.QueryInterface(Ci.nsIUpdate) : null;
+      return (update && (update.displayVersion || update.appVersion)) || "";
+    } catch {
+      return "";
+    }
+  },
+
+  /**
+   * UPD-18 (46-01): one observer for the four update topics, registered
+   * chrome-side (parent process) next to startTabStoreTriggers. Pushes
+   * { kind: "appUpdate", status, version } over the existing
+   * PowerBrowserWebTabState path (the flushShellState shape). Returns a stop
+   * function removing every observer added here.
+   */
+  startUpdateObserver(theiaBrowser) {
+    const topics = ["update-available", "update-staged", "update-downloaded", "update-error"];
+    const observer = {
+      observe: (subject, topic, status) => {
+        try {
+          PowerBrowserAPI.pushAppUpdate(theiaBrowser, PowerBrowserAPI.mapUpdateNotification(topic, status), PowerBrowserAPI.updateVersionFromSubject(subject));
+        } catch (err) {
+          PowerBrowserAPI.log("error", `[update-observer] push failed (${err && err.name ? err.name : "error"})`);
+        }
+      },
+    };
+    for (const topic of topics) {
+      Services.obs.addObserver(observer, topic);
+    }
+    return () => {
+      for (const topic of topics) {
+        try {
+          Services.obs.removeObserver(observer, topic);
+        } catch {
+          // Observer removal is best-effort on teardown.
+        }
+      }
+    };
+  },
+
+  /**
+   * UPD-18 (46-01): the chrome half of the appUpdate push. Same actor pair
+   * and event the web-tab state rides: the Theia frame's WindowGlobal's
+   * parent actor sends to its child, which re-dispatches the payload into
+   * the content window as a PowerBrowserWebTabState event. Primitives only
+   * (status, version), never the raw update object. A frame that is mid-swap
+   * throws here; the throw is logged and dropped, never unwound into the
+   * observer notification.
+   */
+  pushAppUpdate(theiaBrowser, status, version) {
+    try {
+      theiaBrowser.browsingContext.currentWindowGlobal
+        .getActor(GROUP_ACTOR_NAME)
+        .sendAsyncMessage("PowerBrowserWebTabState", { kind: "appUpdate", status, version });
+      // WR-08 (46 review): the logged event the MAR-hop transcript is derived from.
+      PowerBrowserAPI.log("info", `[update-observer] appUpdate status=${status} version=${version}`);
+    } catch (err) {
+      PowerBrowserAPI.log("error", `[update-observer] state push failed (${err && err.name ? err.name : "error"})`);
+    }
+  },
+
+  /**
+   * UPD-19 (46-01): triggers one background update check through the update
+   * service accessor. The result arrives as an appUpdate push, never as this
+   * call's return: true means the check was accepted, false means the
+   * service was unreachable. Never throws.
+   */
+  async requestUpdateCheck() {
+    try {
+      const svc = PowerBrowserAPI.updateService();
+      if (!svc || typeof svc.checkForBackgroundUpdates !== "function") {
+        return false;
+      }
+      // Resolves false when the check did not start (policy, or manual-only updates).
+      return (await svc.checkForBackgroundUpdates()) === true;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * UPD-19 (46-01): restarts into the staged update. Copies UpdateListener
+   * requestRestart exactly: announces quit-application-requested with data
+   * "restart", and only when no observer cancelled quits with
+   * eAttemptQuit | eRestart. The granted observer then runs the same
+   * runQuitFlushSync flush every quit runs, so the layout restores. Returns
+   * true when the restart was requested, false when cancelled. Never throws.
+   */
+  restartToUpdate() {
+    try {
+      const cancelQuit = Cc["@mozilla.org/supports-PRBool;1"].createInstance(Ci.nsISupportsPRBool);
+      Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
+      if (cancelQuit.data) {
+        return false;
+      }
+      Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
+      return true;
+    } catch {
+      return false;
     }
   },
 
@@ -4073,7 +4332,59 @@ export const PowerBrowserAPI = Object.freeze({
   installShellFurniture(window) {
     installShellFurnitureReceivers(window);
   },
+
+  /**
+   * PKG-07 (Phase 45): the one CLI URL argument the single-instance
+   * handler routes into the stock window. Reads the bare (flagless) argument
+   * through the platform command-line interface and admits only the
+   * scheme-walled shapes -- http/https URLs plus the single literal
+   * about:newtab, mirroring openStockTab -- resolving through
+   * cmdLine.resolveURI so a bare host still parses. Returns the admitted
+   * spec string, or null when no argument names a web page. Never throws:
+   * an unreadable command line behaves like no argument. The caller hands
+   * the result only to the scheme-walled stock-window path (openStockTab
+   * on handoff, openBrowserWindow on first launch); a refusal opens nothing
+   * and persists nothing outside the normal history path.
+   */
+  cliUrl(cmdLine) {
+    let raw = "";
+    try {
+      if (cmdLine.length === 0) {
+        return null;
+      }
+      raw = cmdLine.getArgument(0);
+    } catch {
+      return null;
+    }
+    if (typeof raw !== "string" || raw === "") {
+      return null;
+    }
+    let spec = raw;
+    try {
+      spec = cmdLine.resolveURI(raw).spec;
+    } catch {
+      spec = raw;
+    }
+    return admitCliUrlSpec(spec);
+  },
 });
+
+/**
+ * WR-04 (Phase 45): the CLI admission predicate, at module scope so the repo
+ * check runs this exact source (scripts/verify-cli-url.mjs reads the function
+ * out of this file and feeds it the planted refusal shapes). Admits only
+ * http/https URLs and the literal about:newtab. Every other value, including a
+ * non-string, returns null.
+ */
+export function admitCliUrlSpec(spec) {
+  if (typeof spec !== "string") {
+    return null;
+  }
+  if (spec === "about:newtab" || /^https?:\/\//i.test(spec)) {
+    return spec;
+  }
+  return null;
+}
 
 /**
  * D-121/D-123/D-124: the single-instance command-line handler, registered
@@ -4086,14 +4397,15 @@ export const PowerBrowserAPI = Object.freeze({
  * touches the boundary guard forbids everywhere else under
  * `powerbrowser/shell/` (D-96/D-97).
  *
- * Behaviour (D-123/D-124, extended by 01-05 for GUI-01): look up the
- * existing shell window. If one is found -- a second launch of the same
- * binary against the same profile -- focus it and set `preventDefault`,
- * ignoring every command-line argument: never read one, never open a
- * window.
+ * Behaviour (D-123/D-124, extended by 01-05 for GUI-01, by Phase 45
+ * for PKG-07): look up the existing shell window. If one is found -- a
+ * second launch of the same binary against the same profile -- focus it,
+ * route a CLI URL argument (when one names a web page) into the
+ * stock-window path, and set `preventDefault`.
  *
  * If none is found AND this is the process's own initial launch, open the
- * shell document here and set `preventDefault`. This is startup-window
+ * shell document here, route a CLI URL argument the same way, and set
+ * `preventDefault`. This is startup-window
  * selection, and it lives here rather than in the compiled
  * BROWSER_CHROME_URL define patch 020 used to override (01-05, D-20): the
  * stock default handler
@@ -4103,6 +4415,13 @@ export const PowerBrowserAPI = Object.freeze({
  * then closes the early `navigator:blank` window, which is the brief
  * startup flicker upstream's own comment there calls acceptable and which
  * 01-UI-SPEC.md accepts and documents rather than fixes.
+ *
+ * The URL argument is UNTRUSTED input: it is handed only to the
+ * scheme-walled stock-window path (http/https plus about:newtab, the same
+ * wall openStockTab enforces), never evaled, never shelled, never persisted
+ * outside the normal history path. A launch naming a different profile never
+ * reaches this handler (nsRemoteService keys remoting on the profile path),
+ * so first-launch plus remote-handoff are the only two branches needing it.
  *
  * If none is found and this is NOT the initial launch -- a remote handoff
  * that arrived before or without a shell window -- do nothing at all;
@@ -4119,9 +4438,20 @@ export class PowerBrowserSingleInstanceHandler {
 
   handle(cmdLine) {
     try {
+      // PKG-07 (Phase 45): route a CLI URL argument into the stock window.
+      // The argument is untrusted: cliUrl() admits only the scheme-walled
+      // shapes (http/https/about:newtab) and returns null otherwise, so a
+      // refusal opens nothing and persists nothing.
+      const url = PowerBrowserAPI.cliUrl(cmdLine);
       const win = PowerBrowserAPI.findShellWindow();
       if (win) {
         PowerBrowserAPI.focusWindow(win);
+        if (url !== null) {
+          // WR-05: openStockTab is async; an unhandled rejection would drop the URL silently.
+          PowerBrowserAPI.openStockTab(url).catch((err) =>
+            PowerBrowserAPI.log("error", `[PowerBrowserSingleInstanceHandler] openStockTab: ${err}`)
+          );
+        }
         cmdLine.preventDefault = true;
         return;
       }
@@ -4129,6 +4459,9 @@ export class PowerBrowserSingleInstanceHandler {
         return;
       }
       PowerBrowserAPI.openShellWindow();
+      if (url !== null) {
+        PowerBrowserAPI.openBrowserWindow(url);
+      }
       cmdLine.preventDefault = true;
     } catch (err) {
       PowerBrowserAPI.log("error", `[PowerBrowserSingleInstanceHandler] ${err}`);

@@ -17,9 +17,9 @@
 //     that is the state of every fresh clone, and a gate red on it would
 //     be a gate its readers skip (generate-check's own rule).
 //  2. Every derived host is PRESENT in the allowlist's `hosts` array --
-//     any disposition counts as present (the shipped support host is a
-//     `deny`: prefetch is disabled, so an observation is a failure either
-//     way, yet the host is tracked). A missing host fails NAMING it: the
+//     any disposition counts as present (the shipped support and release-notes
+//     hosts are `user-initiated`: prefetch is disabled, so an unattended
+//     observation is a failure, yet the host is tracked). A missing host fails NAMING it: the
 //     fix is to add an entry, not to edit the manifest down.
 //  3. Stale marked entries fail NAMING them. An allowlist host carrying a
 //     `manifest` field (the dotted manifest key it was added for, e.g.
@@ -27,8 +27,8 @@
 //     since unset, or repointed elsewhere, makes the entry stale. Entries
 //     WITHOUT the field are out of this check's scope -- they are owned by
 //     the BRAND-04 product decisions (D-83..D-88) and layer 3, not by the
-//     manifest. The shipped allowlist carries no marked entries, so this
-//     direction is vacuous until a downstream adds its first host.
+//     manifest. The shipped allowlist marks github.com with
+//     "urls.release_notes" (UPD-13).
 //  4. The allowlist's `expect` entries for the two manifest-driven prefs
 //     (toolkit.telemetry.server, breakpad.reportURL) equal what the
 //     manifest derives right now. This is the single-source agreement the
@@ -225,8 +225,9 @@ function selfTest() {
         const dir = mkdtempSync(join(tmpdir(), 'theia-endpoints-selftest-'));
         try {
             copyInto(dir, ALLOWLIST_REL);
+            // The manifest states the events endpoint at level off (TEL-06), so the plant swaps that host.
             const manifestText = readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8')
-                .replace('level = "off"', 'level = "all"\nendpoint = "https://absent.example.org/v1/events"');
+                .replace('endpoint = "https://events.powerbrowser.org/events"', 'endpoint = "https://absent.example.org/v1/events"');
             if (manifestText === readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8')) {
                 complain('absent endpoint host', 'planted no fault at all: the manifest edit did not land');
             } else {
@@ -278,8 +279,53 @@ function selfTest() {
         }
     }
 
+    // Plants 3 and 4 (TEL-07, 57-02): a STATED [urls].crash_report is one key with two consumers.
+    // The fixture states the key inside [urls]; the fragment is derived from that fixture through the
+    // same resolver, so only the named half can fire. Plant 3: the crash host has no allowlist row,
+    // so an unattended resolution must go red NAMING it. Plant 4: the row is present, so coverage is
+    // green and the breakpad.reportURL expect (still blank) must go red NAMING the pref.
+    const statedCrashManifest = readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8')
+        .replace(/^\[urls\]\s*$/m, '[urls]\ncrash_report = "https://crash.example.org/report"');
+    const crashPlant = (label, needle, addAllowRow) => {
+        const dir = mkdtempSync(join(tmpdir(), 'theia-endpoints-selftest-'));
+        try {
+            copyInto(dir, ALLOWLIST_REL);
+            if (statedCrashManifest === readFileSync(join(REPO_ROOT, MANIFEST_REL), 'utf8')) {
+                complain(label, 'planted no fault at all: the [urls] insertion did not land');
+                return;
+            }
+            writeFileSync(join(dir, MANIFEST_REL), statedCrashManifest, 'utf8');
+            if (addAllowRow) {
+                const allow = JSON.parse(readFileSync(join(dir, ALLOWLIST_REL), 'utf8'));
+                allow.hosts.push({
+                    host: 'crash.example.org',
+                    disposition: 'user-initiated',
+                    reason: 'Self-test plant only: covers the stated crash host so coverage stays green.',
+                });
+                writeFileSync(join(dir, ALLOWLIST_REL), JSON.stringify(allow, null, 2), 'utf8');
+            }
+            const { failures: resolveFailures, config } = resolveConfig(join(dir, MANIFEST_REL), undefined);
+            if (resolveFailures.length > 0) {
+                complain(label, `the fixture manifest is red for an unrelated reason: ${resolveFailures.join(' | ')}`);
+                return;
+            }
+            mkdirSync(join(dir, 'generated'), { recursive: true });
+            writeFileSync(join(dir, FRAGMENT_REL), emitEndpointHosts(config, { id: 'dev' }), 'utf8');
+            const { failures } = runChecks(dir);
+            if (!failures.some(f => f.includes(needle))) {
+                complain(label, `did not go red naming '${needle}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+            } else {
+                console.log(`  ok  ${label} -> red, naming '${needle}'`);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    crashPlant('unattended crash host', 'crash.example.org', false);
+    crashPlant('stated crash_report disagrees with breakpad.reportURL expect', 'breakpad.reportURL', true);
+
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 2 planted faults all behaved as pinned`);
+    console.log(`${NAME}: --self-test PASS -- 4 planted faults all behaved as pinned`);
     return 0;
 }
 

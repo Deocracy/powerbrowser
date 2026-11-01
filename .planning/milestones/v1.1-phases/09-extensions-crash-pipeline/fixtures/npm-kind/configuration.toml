@@ -15,6 +15,7 @@
 # inherits the platform's two, exercising the default-echo path.
 
 [product]
+revision = 1
 vendor_machine = "Acme"
 vendor_display = "Acme Collective"
 
@@ -50,3 +51,5 @@ sha256 = "0b087a555ea3fee84ec5f0724795642389a43187d0a98ac7ace63f863ce7afb8"
 
 [urls]
 update = "https://updates.example.org/update.xml"
+release_notes = "https://example.org/releases"
+homepage = "https://example.org"

@@ -32,11 +32,14 @@
 #     would corrupt the allowlist with hosts that never had real traffic.
 #     Matching is exact-host, or a suffix match only when the allowlist
 #     entry begins with a literal dot -- a host that merely contains an
-#     allowlisted string does not match.
+#     allowlisted string does not match. The match and the verdict are
+#     scripts/lib/endpoint-verdict.mjs, called unattended: a `user-initiated`
+#     host fails exactly as a `deny` host does (UPD-33).
 #   Layer 4 -- the sidecar's egress (NG-069). The Theia backend is a Node process that
 #   Gecko's MOZ_LOG never sees. A NODE_OPTIONS preload records every hostname any
 #   sidecar Node process resolves during a session that installs one extension, and each
-#   one must be covered by an allowlist row. scripts/verify-ng-069-sidecar-egress.mjs.
+#   one must pass the same unattended verdict as layer 3 (an `allow` row).
+#   scripts/verify-ng-069-sidecar-egress.mjs.
 #
 # `--layer 1|2|3|4` runs one layer; no flag runs all four. `--positive-control`
 # runs each selected layer's control instead of its assertion and exits 0
@@ -55,6 +58,7 @@ BRANDING_PREF_FILE="$BIN_DIR/browser/defaults/preferences/firefox-branding.js"
 
 HELP="Usage: verify-endpoints.sh [--layer 1|2|3|4] [--positive-control] [--help]
        verify-endpoints.sh --interrupt-self-test
+       verify-endpoints.sh --disposition-self-test
 
 Runs BRAND-04's three endpoint/telemetry proof layers and NG-069's sidecar
 egress layer against the built binary.
@@ -68,12 +72,18 @@ No flag runs all four layers' real assertions.
                           positive control on purpose, and asserts the
                           installed pref file survives byte-identical.
                           Mutually exclusive with --layer/--positive-control.
+  --disposition-self-test
+                         Runs layer 3's host extraction and verdict over fixture
+                          logs (no build): an unattended user-initiated host
+                          must go red, as must every user-initiated host in the
+                          real allowlist. Mutually exclusive with every other flag.
   --help                 Print this message and exit 0
 "
 
 LAYER_ARG=""
 DO_CONTROL=0
 INTERRUPT_SELF_TEST=0
+DISPOSITION_SELF_TEST=0
 
 args=("$@")
 i=0
@@ -93,6 +103,7 @@ while [ "$i" -lt "${#args[@]}" ]; do
       ;;
     --positive-control) DO_CONTROL=1 ;;
     --interrupt-self-test) INTERRUPT_SELF_TEST=1 ;;
+    --disposition-self-test) DISPOSITION_SELF_TEST=1 ;;
     --help)
       echo "$HELP"
       exit 0
@@ -107,6 +118,11 @@ done
 
 if [ "$INTERRUPT_SELF_TEST" -eq 1 ] && { [ -n "$LAYER_ARG" ] || [ "$DO_CONTROL" -eq 1 ]; }; then
   echo "verify-endpoints: FAIL -- --interrupt-self-test is mutually exclusive with --layer/--positive-control" >&2
+  exit 1
+fi
+
+if [ "$DISPOSITION_SELF_TEST" -eq 1 ] && { [ -n "$LAYER_ARG" ] || [ "$DO_CONTROL" -eq 1 ] || [ "$INTERRUPT_SELF_TEST" -eq 1 ]; }; then
+  echo "verify-endpoints: FAIL -- --disposition-self-test is mutually exclusive with --layer/--positive-control/--interrupt-self-test" >&2
   exit 1
 fi
 
@@ -351,18 +367,30 @@ run_layer2_control() {
 # ---------------------------------------------------------------------------
 # Layer 3 -- network, host resolution
 # ---------------------------------------------------------------------------
-allowlist_host_allowed() {
-  node -e '
-    const fs = require("fs");
-    const [, host, allowlistPath] = process.argv;
-    const allow = JSON.parse(fs.readFileSync(allowlistPath, "utf8"));
-    const match = allow.hosts.find(h => {
-      if (h.host === host) return true;
-      if (h.host.startsWith(".") && host.endsWith(h.host)) return true;
-      return false;
-    });
-    process.exit(match && match.disposition === "allow" ? 0 : 1);
-  ' "$1" "$ALLOWLIST"
+# extract_resolved_hosts LOG_BASE -- the sorted unique hostnames from the anchored
+# `Resolving host [...]` lines of <base>.moz_log and its <base>.child-N.moz_log siblings.
+# Naming order, confirmed against GeckoChildProcessHost.cpp:945-967: the child-specific
+# postfix is appended to the (extension-stripped) base BEFORE the logging backend re-adds
+# .moz_log -- so per-child logs are <base>.child-N.moz_log, not <base>.moz_log.child-N.
+extract_resolved_hosts() {
+  cat "${1}.moz_log" "${1}".child-*.moz_log 2>/dev/null \
+    | grep -oE 'Resolving host \[[^]]+\]' \
+    | sed -E 's/Resolving host \[([^]]+)\]/\1/' \
+    | sort -u
+}
+
+# endpoint_violations ALLOWLIST_PATH USER_ACTION(0|1) -- reads hosts on stdin, prints the
+# failing ones one per line through scripts/lib/endpoint-verdict.mjs (the one verdict rule).
+endpoint_violations() {
+  node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    import { pathToFileURL } from "node:url";
+    const [libPath, allowlistPath, userAction] = process.argv.slice(1);
+    const { violations } = await import(pathToFileURL(libPath).href);
+    const { hosts } = JSON.parse(readFileSync(allowlistPath, "utf8"));
+    const observed = readFileSync(0, "utf8").split("\n").filter(Boolean);
+    for (const h of violations(hosts, observed, { userAction: userAction === "1" })) console.log(h);
+  ' "$REPO_ROOT/scripts/lib/endpoint-verdict.mjs" "$1" "$2"
 }
 
 run_layer3_impl() {
@@ -413,18 +441,11 @@ PREFEOF
   wait "$ACTIVE_PID" 2>/dev/null || true
   ACTIVE_PID=""
 
-  # Naming order, confirmed against GeckoChildProcessHost.cpp:945-967: the
-  # child-specific postfix is appended to the (extension-stripped) base
-  # BEFORE the logging backend re-adds .moz_log -- so per-child logs are
-  # <base>.child-N.moz_log, not <base>.moz_log.child-N. Empirically, every
-  # child log observed this session was 0 bytes (this build's DNS activity
-  # all logs through the parent process), but the glob below still reads
-  # them correctly if that ever changes.
+  # Empirically, every child log observed this session was 0 bytes (this
+  # build's DNS activity all logs through the parent process), but
+  # extract_resolved_hosts still reads them correctly if that ever changes.
   local extracted
-  extracted="$(cat "${log_base}.moz_log" "${log_base}".child-*.moz_log 2>/dev/null \
-    | grep -oE 'Resolving host \[[^]]+\]' \
-    | sed -E 's/Resolving host \[([^]]+)\]/\1/' \
-    | sort -u)"
+  extracted="$(extract_resolved_hosts "$log_base")"
 
   rm -f "${log_base}.moz_log" "${log_base}".child-*.moz_log 2>/dev/null
 
@@ -447,13 +468,13 @@ PREFEOF
     return 1
   fi
 
-  local violations=""
-  while IFS= read -r host; do
-    [ -z "$host" ] && continue
-    if ! allowlist_host_allowed "$host"; then
-      violations="${violations}${host}"$'\n'
-    fi
-  done <<< "$extracted"
+  # Layer 3 is an unattended capture: no user action, so a user-initiated
+  # host fails exactly as a deny host does (UPD-33).
+  local violations
+  if ! violations="$(endpoint_violations "$ALLOWLIST" 0 <<< "$extracted")"; then
+    echo "verify-endpoints: layer 3 FAIL -- the verdict call itself failed" >&2
+    return 1
+  fi
 
   if [ "$control" -eq 1 ]; then
     if [ -n "$violations" ]; then
@@ -465,8 +486,8 @@ PREFEOF
   fi
 
   if [ -n "$violations" ]; then
-    echo "verify-endpoints: layer 3 FAIL -- unlisted or denied host(s) resolved:" >&2
-    sort -u <<< "$violations" | sed '/^$/d;s/^/  /' >&2
+    echo "verify-endpoints: layer 3 FAIL -- unlisted, denied or user-initiated host(s) resolved without a user action:" >&2
+    sed '/^$/d;s/^/  /' <<< "$violations" >&2
     return 1
   fi
   echo "verify-endpoints: layer 3 PASS -- all resolved hosts are allowlisted"
@@ -591,8 +612,83 @@ run_interrupt_self_test() {
 }
 
 # ---------------------------------------------------------------------------
+# Disposition self-test (UPD-33) -- layer 3's real extraction and verdict over
+# fixture logs. Reads no objdir, so it needs no build, browser, display or network.
+# ---------------------------------------------------------------------------
+run_disposition_self_test() {
+  echo "verify-endpoints: disposition self-test..."
+  local tmp rc=0
+  tmp="$(mktemp -d)"
+  track_temp "$tmp"
+  local fixture="$tmp/allowlist.json"
+  cat > "$fixture" <<'JSONEOF'
+{ "hosts": [
+  { "host": "allowed.example.test", "disposition": "allow", "reason": "fixture" },
+  { "host": "denied.example.test", "disposition": "deny", "reason": "fixture" },
+  { "host": "clicked.example.test", "disposition": "user-initiated", "reason": "fixture" }
+], "prefs": [] }
+JSONEOF
+
+  # plant NAME HOST -- writes <base>.moz_log with one anchored resolution of HOST among noise
+  # lines the anchored pattern must ignore, then extracts it the way layer 3 does.
+  plant() {
+    local base="$tmp/$1"
+    printf '%s\n' \
+      "[Parent 100: Main Thread]: D/nsHostResolver TRR URI noise.example.test" \
+      "[Parent 100: Socket Thread]: D/nsHostResolver Resolving host [$2] <Address family 0>." \
+      > "$base.moz_log"
+    extract_resolved_hosts "$base"
+  }
+
+  # verdict CASE ALLOWLIST USER_ACTION HOST red|green
+  verdict() {
+    local got
+    got="$(plant "$1" "$4" | endpoint_violations "$2" "$3")"
+    if [ "$5" = red ] && grep -qxF "$4" <<< "$got"; then
+      echo "verify-endpoints: disposition self-test PASS -- $1: red, names $4"
+    elif [ "$5" = green ] && [ -z "$got" ]; then
+      echo "verify-endpoints: disposition self-test PASS -- $1: green"
+    else
+      echo "verify-endpoints: disposition self-test FAIL -- $1: expected $5 for $4, violations: [${got//$'\n'/ }]" >&2
+      rc=1
+    fi
+  }
+
+  verdict "user-initiated-unattended" "$fixture" 0 clicked.example.test red
+  verdict "user-initiated-after-click" "$fixture" 1 clicked.example.test green
+  verdict "deny-unattended" "$fixture" 0 denied.example.test red
+  verdict "deny-after-click" "$fixture" 1 denied.example.test red
+  verdict "allow-unattended" "$fixture" 0 allowed.example.test green
+  verdict "unlisted-unattended" "$fixture" 0 unlisted.example.test red
+  # 46 WR-07 ruling (2026-10-25): github.com is user-initiated, so an unattended
+  # request to it (the update download must never reach it) fails against the real allowlist.
+  verdict "github-com-unattended-real-allowlist" "$ALLOWLIST" 0 github.com red
+  verdict "github-com-after-click-real-allowlist" "$ALLOWLIST" 1 github.com green
+
+  # Every user-initiated host in the real allowlist, planted unattended, must go red naming it.
+  local real_hosts host n=0
+  real_hosts="$(node -e '
+    const a = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    for (const h of a.hosts) if (h.disposition === "user-initiated") console.log(h.host.startsWith(".") ? "x" + h.host : h.host);
+  ' "$ALLOWLIST")" || { echo "verify-endpoints: disposition self-test FAIL -- could not read $ALLOWLIST" >&2; return 1; }
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    n=$((n + 1))
+    verdict "real-allowlist-unattended-$host" "$ALLOWLIST" 0 "$host" red
+  done <<< "$real_hosts"
+  echo "verify-endpoints: disposition self-test -- $n user-initiated host(s) in the real allowlist: ${real_hosts//$'\n'/ }"
+
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
+if [ "$DISPOSITION_SELF_TEST" -eq 1 ]; then
+  run_disposition_self_test && exit 0
+  exit 1
+fi
+
 if [ "$INTERRUPT_SELF_TEST" -eq 1 ]; then
   if run_interrupt_self_test; then
     exit 0

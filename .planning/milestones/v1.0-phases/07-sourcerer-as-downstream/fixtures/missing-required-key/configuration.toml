@@ -11,6 +11,7 @@
 # wrong build shipping the platform's display name under this mark.
 
 [product]
+revision = 1
 vendor_machine = "Northlight"
 vendor_display = "Northlight Collective"
 

@@ -1,0 +1,15 @@
+{
+  "wait_timer": 1440,
+  "prevent_self_review": false,
+  "reviewers": [
+    {
+      "type": "User",
+      "id": 51835244
+    }
+  ],
+  "deployment_branch_policy": {
+    "protected_branches": false,
+    "custom_branch_policies": true
+  },
+  "can_admins_bypass": true
+}

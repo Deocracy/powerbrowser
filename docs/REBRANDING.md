@@ -249,6 +249,7 @@ with the OpenCode adapter. A manifest that still carries it now fails with
 | `product.vendor_display` | Required | Hard failure | `brand.ftl` vendor name, installer `CompanyName` |
 | `product.description` | Optional | Nothing emitted; no surface consumes it today — kept as the human-readable summary of the product | None (declared and validated only) |
 | `product.homepage` | Optional | Falls back per consumer; product metadata, never a contacted surface | In-app repo link and Eclipse sentence home clause when no `installer.support_url` is stated; installer defines require one of the two |
+| `product.revision` | Required | Hard failure; a quoted value, or a number written with a decimal point (`1.5`, and also `1.0`), is refused | `powerbrowser/packaging/version/release.txt` as the release key `v<ESR>-<revision>`. A whole number of at least 1, unquoted; reset to 1 when the ESR pin moves, increased for a rebuild on the same ESR |
 
 ### `[identity]` — the application identity (all required)
 
@@ -280,10 +281,11 @@ with the OpenCode adapter. A manifest that still carries it now fails with
 
 | Setting | Required? | If omitted | Reaches |
 |---|---|---|---|
-| `urls.release_notes` | Optional | Omitted from the endpoint-hosts fragment | `generated/endpoint-hosts.json` host coverage when stated |
-| `urls.update` | Optional | No update host is emitted, so upstream's default stays. A downstream that states no `urls.update` inherits the platform's own host, and generate refuses it (Task 15, R11). | `application.ini` `[AppUpdate]` URL host (`MOZ_APPUPDATE_HOST`, through `generated/identity.configure`), and `generated/endpoint-hosts.json` host coverage. `powerbrowser/distribution/policies.json` `AppUpdateURL` must equal it (check `ng064-update-url-from-manifest`). |
-| `urls.crash_report` | Optional | Blank report URL default | Crash-report URL default plus `generated/endpoint-hosts.json` host coverage when stated |
-| `urls.homepage` | Optional | Omitted from the endpoint-hosts fragment | `generated/endpoint-hosts.json` host coverage when stated |
+| `urls.release_notes` | Optional | In the platform manifest: `about:blank` hides the About dialog's release-notes link, and the update-details link is empty. A downstream that changes the product name and states no `urls.release_notes` inherits the platform's own release-notes page, and generate refuses it, as it refuses an inherited `urls.update`. | The About dialog's release-notes link (`app.releaseNotesURL`, `app.releaseNotesURL.aboutDialog`) and update-details link (`app.update.url.details`) in both branding pref files, plus `generated/endpoint-hosts.json` host coverage. A click destination: its host is a `user-initiated` allowlist entry. |
+| `urls.update` | Optional | No update host is emitted, so upstream's default stays. A downstream that states no `urls.update` inherits the platform's own host, and generate refuses it (Task 15, R11). | `application.ini` `[AppUpdate]` URL host (`MOZ_APPUPDATE_HOST`, through `generated/identity.configure`), and `generated/endpoint-hosts.json` host coverage. `powerbrowser/distribution/policies.json` carries no update URL (check `ng064-update-url-from-manifest`). |
+| `urls.mar_origin` | Optional | `release-manifest.json` records `mar_origin` as `null`, and the descriptor job's form gate refuses to commit a descriptor. Generate and `generate --check` refuse any value that is not a lower-case https origin naming only a host (at least two dot-separated labels, no port, path, query or trailing slash), before any build starts. | The update descriptor's patch URLs, `<mar_origin>/<tag>/<asset>` (DIST-08, the 2026-10-29 owner ruling), plus `generated/endpoint-hosts.json` host coverage. The origin is an unattended fetch host, never a click destination: its host is an `allow` allowlist entry. |
+| `urls.crash_report` | Optional | Blank report URL default | Crash-report URL default plus `generated/endpoint-hosts.json` host coverage when stated. Only its scheme, host and port become the crash submit address (`<origin>/submit`); the full value, path included, is the about:crashes report view link. A user name and password in it are refused. The receiver in `worker/crash-submit.mjs` serves only `/submit`, so a view link on its host has no page |
+| `urls.homepage` | Optional | In the platform manifest: an empty manual-update link in the About dialog. A downstream that changes the product name and states no `urls.homepage` inherits the platform's own download page, and generate refuses it. | The About dialog's manual-update link (`app.update.url.manual`) in both branding pref files, plus `generated/endpoint-hosts.json` host coverage. A click destination: its host is a `user-initiated` allowlist entry. |
 | `urls.search` | Optional | Omitted from the endpoint-hosts fragment | `generated/endpoint-hosts.json` host coverage when stated |
 
 ### `[installer]` — Windows installer branding (both optional)
@@ -304,7 +306,7 @@ with the OpenCode adapter. A manifest that still carries it now fails with
 
 | Setting | Required? | If omitted | Reaches |
 |---|---|---|---|
-| `upstreams.firefox_esr_tag` | Required | Hard failure | `generated/upstream-pins.env`, the fetch script default, the rebase workflow mirror |
+| `upstreams.firefox_esr_tag` | Required | Hard failure; must be an `*esr_RELEASE` tag, never a `_BUILDn` candidate | `generated/upstream-pins.env`, the fetch script default; the ESR version in `powerbrowser/packaging/version/version.txt` and the release key in `powerbrowser/packaging/version/release.txt` |
 | `upstreams.theia_release` | Required | Hard failure | Exact triple enforced across every `@theia/*` pin and the lockfile by `verify-upstream-pins`; the generator emits no fragment for it |
 
 ### `[[variants]]` — build variants (every key required per element)

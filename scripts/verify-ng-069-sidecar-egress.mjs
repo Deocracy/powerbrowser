@@ -9,9 +9,10 @@
 //     Each derived host needs a row.
 //   Live: a NODE_OPTIONS preload records every hostname any sidecar Node process resolves
 //     (dns.lookup and dns.promises.lookup). The session installs one extension through the
-//     DI-bound PluginServer (the backend's Open VSX download). Every recorded host must be
-//     covered by a row (exact, or a leading-dot suffix row, as layer 3 matches), and the
-//     registry host must have been seen (anti-vacuity). The session runs with no AI key and
+//     DI-bound PluginServer (the backend's Open VSX download). Every recorded host must pass
+//     the shared verdict in scripts/lib/endpoint-verdict.mjs for an unattended request, as
+//     layer 3 does: an `allow` row passes; no row, a `deny` row or a `user-initiated` row fails
+//     (WR-03, UPD-33). The registry host must have been seen (anti-vacuity). The session runs with no AI key and
 //     sends no AI request, so a derived AI provider host in the log fails (R15: those hosts
 //     are contacted only after the user configures a key and sends a request).
 // Tier: full. Marker: live-clone.
@@ -20,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withFirefoxPage } from './lib/firefox-bidi.mjs';
+import { violations } from './lib/endpoint-verdict.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'ng069-sidecar-egress';
@@ -72,7 +74,7 @@ const pl = dns.promises.lookup; dns.promises.lookup = function (h, ...a) { rec(h
         });
         const seen = existsSync(log) ? [...new Set(readFileSync(log, 'utf8').split('\n').filter(Boolean))].filter(h => h !== 'localhost') : [];
         if (!seen.includes(new URL(vsx).host)) failures.push(`instrument: the sidecar never resolved ${new URL(vsx).host} during an extension install -- nothing was observed`);
-        for (const h of seen) if (!covered(h)) failures.push(`the sidecar resolved ${h}, which has no endpoint-allowlist row`);
+        for (const h of violations(allow, seen, { userAction: false })) failures.push(`the sidecar resolved ${h} unattended, which the endpoint allowlist does not allow (no row, a deny row, or a user-initiated row)`);
         for (const h of seen) if (derived.get(h)?.startsWith('@theia/ai-')) failures.push(`the sidecar resolved ${h} (${derived.get(h)}) with no AI key configured and no AI request sent`);
     } finally {
         rmSync(dir, { recursive: true, force: true, maxRetries: 3 });

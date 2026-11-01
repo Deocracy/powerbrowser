@@ -1,3 +1,22 @@
+# Phase 45 (PKG-17, decision 19): the release container's toolchain baseline.
+# Line order matches `scripts/toolchain-baseline.sh --container`, which the
+# Phase 49 (AUTO-05) drift diff compares against this file.
+#
+# UNMEASURED lines are deliberate: no container build has run yet, so no value
+# in this file is a measurement of the release container. An UNMEASURED line
+# never matches the container output, so the drift diff fails, and the
+# portability ceiling (scripts/verify-portable-elf.mjs) refuses to resolve.
+# Fill each UNMEASURED line by copying the matching line from the container
+# output after the bootstrap build (DSH-BLOCKED.md step 3). Do not type values.
+# rustc/cargo/cbindgen below are the Nix firefox dev shell measurements; the
+# container's bootstrap values replace them when measured.
+# Image pins (host-measured with podman, not compared by the drift diff):
+#   base debian:bookworm@sha256:854dd8ab51d62866dbd8f5431d15ce77b12983a2a4a1e1fe43a2395dc7ef9f61
+#   apt snapshot 20261019T000000Z (debian and debian-security)
+clang UNMEASURED
 rustc 1.97.1
 cargo 1.97.0
 cbindgen 0.29.4
+sysroot UNMEASURED
+sysroot-glibcxx UNMEASURED
+image pb-gecko-build UNMEASURED

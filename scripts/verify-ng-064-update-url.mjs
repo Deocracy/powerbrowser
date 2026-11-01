@@ -7,7 +7,10 @@
 //   - the EFFECTIVE default prefs: greprefs.js, then browser/defaults/preferences/*.js
 //     with firefox.js first and firefox-branding.js last, later wins
 //     (verify-endpoints.sh layer-1 order);
-//   - the tracked distribution/policies.json, which the browser prefers over application.ini.
+//   - the tracked distribution/policies.json, which must carry NO AppUpdateURL key at all
+//     (UPD-12): an enterprise policy beats application.ini, so a second source could
+//     disagree with MOZ_APPUPDATE_HOST. The manifest's [urls] update is the only source.
+// Hosts compare as new URL().host, so letter case and the path never decide equality.
 // Only `https://aus5.mozilla.org` URLs count. Two bare-host mentions are not endpoints
 // (decisions.md R10): nsHttpChannel.cpp's HTTP/3 exclusion list in libxul, and the
 // Remote Settings from/to fallback dump.
@@ -33,12 +36,21 @@ const failures = [];
 const { failures: rf, config } = resolveConfig(join(REPO_ROOT, 'configuration.toml'), undefined);
 if (rf.length) failures.push(`configuration.toml does not resolve: ${rf.join('; ')}`);
 const update = config?.urls?.update;
-const host = typeof update === 'string' ? /^https:\/\/([^/]+)\//.exec(update)?.[1] : undefined;
+// The host of an https URL, or undefined; new URL() lower-cases it.
+const hostOf = (u) => {
+    try {
+        const url = new URL(u);
+        return url.protocol === 'https:' ? url.host : undefined;
+    } catch {
+        return undefined;
+    }
+};
+const host = typeof update === 'string' ? hostOf(update) : undefined;
 if (!host) failures.push(`configuration.toml [urls] update is ${JSON.stringify(update)} -- the update URL must come from the manifest`);
 
 const ini = readFileSync(join(BIN, 'application.ini'), 'utf8');
 const appUrl = /\[AppUpdate\][^[]*?^URL=(\S+)/m.exec(ini)?.[1];
-const appHost = appUrl && /^https:\/\/([^/]+)\//.exec(appUrl)?.[1];
+const appHost = appUrl && hostOf(appUrl);
 if (!appHost) failures.push('application.ini carries no https [AppUpdate] URL');
 else if (appHost !== host) failures.push(`application.ini [AppUpdate] URL host is ${appHost}, the manifest says ${host}`);
 
@@ -49,7 +61,7 @@ for (const f of [`${config.identity.binary_name}-bin`, 'libxul.so']) {
     const found = spawnSync('grep', ['-a', '-o', '-E', 'https://[a-z0-9.-]+/update/6/', file], { encoding: 'latin1', maxBuffer: 1 << 26 });
     const moz = spawnSync('grep', ['-a', '-q', '-F', MOZ, file], { encoding: 'utf8' });
     if (found.status === 2 || moz.status === 2) { failures.push(`grep could not read ${f}: ${(found.stderr || moz.stderr).trim()}`); continue; }
-    for (const u of new Set(found.stdout.split('\n').filter(Boolean))) if (!u.startsWith(`https://${host}/`)) failures.push(`${f} carries the update URL ${u}`);
+    for (const u of new Set(found.stdout.split('\n').filter(Boolean))) if (hostOf(u) !== host) failures.push(`${f} carries the update URL ${u}`);
     if (moz.status === 0) failures.push(`${f} carries a ${MOZ} URL`);
 }
 
@@ -61,8 +73,9 @@ const effective = new Map();
 for (const file of order) for (const m of readFileSync(file, 'utf8').matchAll(PREF)) effective.set(m[1], m[2]);
 for (const [name, value] of effective) if (value.includes('aus5.mozilla.org')) failures.push(`effective default pref ${name} = ${value}`);
 
+// UPD-12: key presence fails whatever the value, an empty string included.
 const policy = JSON.parse(readFileSync(join(REPO_ROOT, 'powerbrowser/distribution/policies.json'), 'utf8')).policies ?? {};
-if (policy.AppUpdateURL !== update) failures.push(`policies.json AppUpdateURL is ${JSON.stringify(policy.AppUpdateURL)}, the manifest [urls] update is ${JSON.stringify(update)}`);
+if (Object.hasOwn(policy, 'AppUpdateURL')) failures.push('policies.json carries an update-URL policy; MOZ_APPUPDATE_HOST from configuration.toml [urls] update must be the only update URL source (UPD-12)');
 
 // R11: a downstream copy of the platform manifest with a new identity and no [urls] table.
 if (host) {

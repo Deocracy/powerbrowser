@@ -1,21 +1,24 @@
-# D-77: workflow_dispatch-only. Deliberately no `schedule:` key -- the
-# ~4-weekly ESR rebase cadence (PITFALLS #8) is a standing operational item
-# for after v4.0, not a Phase 3 deliverable, and a red scheduled job with
-# nobody watching is the exact failure mode PITFALLS #8 warns about.
+# Replays the patch stack onto one upstream ESR tag and verifies the result.
+# The owner dispatches it, or the release train calls it, and either way the
+# caller passes the tag explicitly. The tag input has no default, so an ESR
+# bump edits configuration.toml alone and never this file; this file carries
+# no tag at all, and scripts/verify-upstream-pins.mjs asserts both facts.
 #
-# Nix and the Gecko build are deliberately OUT of scope for this workflow:
-# the Nix Gecko toolchain closure does not fit a standard GitHub-hosted
-# runner alongside a 5.6 GB Gecko working tree (01-03-SUMMARY.md), so this
-# job only exercises scripts/rebase-upstream.sh's clone/replay/verify
-# sequence -- it never runs `./mach build`. The toolchain-baseline.sh diff
-# PITFALLS #2 requires after every ESR rebase is therefore an operator step,
-# run locally under `nix develop .#firefox` after a successful CI replay,
-# not something this workflow silently skips.
+# The stage output (Phase 43, AUTO-07) names the first FAIL line the replay printed,
+# so the release train can tell a patch conflict from a red gate. It carries no tag.
 #
-# This workflow is not dispatched from plan 03-04: workflow_dispatch only
-# registers a workflow present on the repo's default branch, and
-# origin/master has zero registered workflows as of this plan. The first
-# real dispatch is plan 03-06's job, after the push that registers it.
+# D-77: there is deliberately no `schedule:` key. A red scheduled job with
+# nobody watching is the failure mode PITFALLS #8 warns about; the release
+# train is the caller that runs this on a cadence.
+#
+# The generator, identity and rebase steps run inside `nix develop .#theia`
+# because scripts/generate.mjs rasterises brand/mark.svg with the pinned
+# inkscape, and only that inkscape reproduces the tracked PNG bytes. That is
+# the small Node-side shell. The Gecko toolchain closure does not fit a
+# standard GitHub-hosted runner alongside a 5.6 GB Gecko working tree, so
+# this job never runs `./mach build`. The toolchain-baseline.sh diff that
+# PITFALLS #2 requires after every ESR rebase is an operator step, run
+# locally under `nix develop .#firefox` after a successful CI replay.
 
 name: Rebase upstream
 
@@ -25,24 +28,31 @@ on:
       tag:
         description: "Upstream Firefox-ESR tag to rebase onto"
         required: true
-        # 05-02: configuration.toml ([upstreams] firefox_esr_tag) is
-        # authoritative; this literal is a mirror, because a
-        # workflow_dispatch input default cannot read TOML. Drift between
-        # the two fails scripts/verify-upstream-pins.mjs -- bump the
-        # manifest first, then mirror it here.
-        default: FIREFOX_153_5_0esr_BUILD1
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: "Upstream Firefox-ESR tag to rebase onto"
+        required: true
+        type: string
+    outputs:
+      stage:
+        description: "The first FAIL line the replay printed, or replayed when it succeeded"
+        value: ${{ jobs.rebase.outputs.stage }}
 
 jobs:
   rebase:
     runs-on: ubuntu-latest
+    outputs:
+      stage: ${{ steps.stage.outputs.stage }}
     # WR-09 (plan 01-18). This job clones 1.1 GB from a third-party remote and
     # then runs this repo's scripts over the result; it reads and verifies, and
     # pushes nothing. With no `permissions:` block it would inherit the
     # repository-default GITHUB_TOKEN scope, which on many repos is
     # write-capable, and actions/checkout leaves that credential in
-    # .git/config for the whole job. `contents: read` plus
-    # `persist-credentials: false` means the token is neither powerful nor
-    # present while the third-party tree is on disk.
+    # .git/config for the whole job. A read-only contents scope plus a
+    # checkout that does not persist the credential means the token is
+    # neither powerful nor present while the third-party tree is on disk.
     timeout-minutes: 60
     permissions:
       contents: read
@@ -51,6 +61,16 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          df -h
+
+      # Pinned by SHA, the same action and SHA verify.yml uses. No Gecko
+      # closure is fetched: `.#theia` is the Node-side shell only.
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
       # D-18's permanent gate, run BEFORE the rebase as well as inside it. It
       # is static and needs no build, no Nix and no upstream tree, so it costs
@@ -106,23 +126,37 @@ jobs:
       # No ./mach build step belongs here. Nothing this phase produces reaches
       # the compiler: every build consumer still reads the hand-written files.
       - name: Generate the derived build surfaces
-        run: node scripts/generate.mjs
+        run: nix develop .#theia --command node scripts/generate.mjs
 
       - name: Check the generated tree is fresh
-        run: node scripts/generate.mjs --check
+        run: nix develop .#theia --command node scripts/generate.mjs --check
 
       - name: Check the generated tree is byte-identical to the tracked files
-        run: node scripts/verify-generated-identity.mjs
-
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
-          df -h
+        run: nix develop .#theia --command node scripts/verify-generated-identity.mjs
 
       - name: Rebase onto requested tag
+        id: rebase
         env:
           REBASE_TAG: ${{ inputs.tag }}
-        run: bash scripts/rebase-upstream.sh --tag "$REBASE_TAG"
+        # pipefail: without it the step takes tee's status and a failed replay reads as success.
+        run: |
+          set -o pipefail
+          nix develop .#theia --command bash scripts/rebase-upstream.sh --tag "$REBASE_TAG" 2>&1 | tee "$RUNNER_TEMP/rebase.log"
+
+      # Names the stage for the release train. The first FAIL line in the replay log
+      # is the stage; a replay that succeeded reports replayed. Runs even on failure.
+      - name: Name the stage the replay ended at
+        id: stage
+        if: ${{ always() }}
+        env:
+          OUTCOME: ${{ steps.rebase.outcome }}
+        run: |
+          if [ "$OUTCOME" = "success" ]; then
+            echo "stage=replayed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LINE=$(grep -m1 'FAIL -- ' "$RUNNER_TEMP/rebase.log" 2>/dev/null || true)
+          echo "stage=${LINE:-FAIL -- rebase-upstream.sh did not complete the replay}" >> "$GITHUB_OUTPUT"
 
       # THE POST-REPLAY OBSERVATION. The three generator steps above run before
       # the rebase and so report on the pre-replay tree; this is the one that
@@ -134,4 +168,4 @@ jobs:
       # means the tree arrived broken, red here means the replay broke it, and
       # those send a reader to different places.
       - name: Re-check byte-identity after the replay
-        run: node scripts/verify-generated-identity.mjs
+        run: nix develop .#theia --command node scripts/verify-generated-identity.mjs

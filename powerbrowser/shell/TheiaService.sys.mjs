@@ -55,6 +55,32 @@ const USER_MESSAGE = {
   didNotFinishStarting: "PowerBrowser's interface didn't finish starting. Choose Retry, or open Details if this keeps happening.",
 };
 
+/**
+ * WR-03 (Phase 45): moves a pre-45 sidecar state file into the ProfD state
+ * directory, once. `store` is `{ read, write, remove }` over PowerBrowserAPI's
+ * never-throw read, the state writer and the remover. The repo check
+ * (scripts/verify-sidecar-state-migration.mjs) runs this exact source against a
+ * fake store. Order is the invariant: the copy is written before the old file
+ * is removed, so a failed write leaves the old file in place as a reap target.
+ * Returns true when a record moved.
+ */
+export async function migrateLegacyStateFile(store, legacyPath, newPath) {
+  if (!legacyPath || legacyPath === newPath) {
+    return false;
+  }
+  const record = await store.read(legacyPath);
+  if (!record) {
+    return false;
+  }
+  if (await store.read(newPath)) {
+    // A record already sits at the new location; both records stay reap targets.
+    return false;
+  }
+  await store.write(newPath, record);
+  await store.remove(legacyPath);
+  return true;
+}
+
 // Discretionary constants (plan 04-04 recorded_decisions) -- no pref exists
 // for these (04-03's powerbrowser-sidecar.js ships only the health/timeout/
 // grace/log-buffer prefs), so they stay literal here.
@@ -108,6 +134,11 @@ export const TheiaService = {
   // observer and tab listeners detach on stop(). Null until start() wires
   // the writer below.
   _tabStoreTriggersOff: null,
+
+  // UPD-18 (46-01, review CR-01): the stop function PowerBrowserAPI.startUpdateObserver
+  // returns, retained so the four update observers detach on stop(). Null until
+  // _swap() attaches them to the live browser element.
+  _updateObserverOff: null,
 
   // SHELL-03 (05-02) give-up/error-state fields.
   // _errorShown guards _showError/_hideError the same way _swapped guards
@@ -229,6 +260,19 @@ export const TheiaService = {
       this._pushLog(`Quit flush not registered: ${err && err.message ? err.message : err}`);
     }
 
+    // UPD-30 (Phase 54): the reap blocker quit and restart both await, registered once per process.
+    if (!this._reapBlockerAdded) {
+      this._reapBlockerAdded = true;
+      try {
+        // Bound to a local, not passed inline: the start-path-recovery row derives its one
+        // quit-observer registration from an inline arrow callback, and this blocker is a second one.
+        const reapBlocker = () => this.stopAndReap();
+        PowerBrowserAPI.addSidecarReapBlocker(reapBlocker);
+      } catch (err) {
+        this._pushLog(`Reap blocker not registered: ${err && err.message ? err.message : err}`);
+      }
+    }
+
     // 01-10: this was one of three unguarded throw sites in the start path --
     // a rejection here left `start()` altogether and, before the terminal
     // handler existed, vanished as an unhandled promise rejection. Guarded now,
@@ -263,8 +307,8 @@ export const TheiaService = {
     // 01-10: guarded, and DELIBERATELY NON-FATAL -- the asymmetry with the
     // settings-folder step above is the decision, not an oversight. That step
     // is a precondition of this launch; this one is best-effort cleanup of a
-    // PREVIOUS launch's process (`PowerBrowserAPI.signalBarePid` opens libc
-    // outside its own try, so it can throw). Failing this launch because a
+    // PREVIOUS launch's process (`PowerBrowserAPI.signalBarePid` never throws,
+    // but the guard stays as a second line of defence). Failing this launch because a
     // stale pid could not be signalled would turn a cosmetic cleanup miss into
     // the dead screen this whole guard exists to prevent. Nothing is lost:
     // `_reapLog` writes the outcome on the same dual channel every other reap
@@ -385,6 +429,16 @@ export const TheiaService = {
       this._tabStoreTriggersOff = null;
     }
 
+    // UPD-18 (46-01, review CR-01): detach the update observers wired in _swap().
+    if (this._updateObserverOff) {
+      try {
+        this._updateObserverOff();
+      } catch {
+        // Observer removal is best-effort on teardown.
+      }
+      this._updateObserverOff = null;
+    }
+
     // D-110: a clean stop must leave nothing for the next startup's
     // _reapLeftover() to find -- a normal quit followed by a normal start
     // signals nothing. Fire-and-forget beside the kill above: removeStateFile
@@ -408,6 +462,33 @@ export const TheiaService = {
     if (this._quitObserverOff) {
       this._quitObserverOff();
       this._quitObserverOff = null;
+    }
+  },
+
+  /**
+   * UPD-30 (Phase 54): the reap the quit and restart blocker awaits. stop() is idempotent and already
+   * signals the sidecar; this waits on the Subprocess handle stop() signals (the same on every
+   * platform, no pid probe), bounded by powerbrowser.sidecar.killGraceMs (the same default as stop())
+   * plus 500 ms. A handle that was never live is not waited on, so a stale pid is never touched. On
+   * timeout it logs the live pid loudly and resolves, and any failure resolves too, so an unkillable
+   * child can never hold shutdown open or reject the blocker.
+   */
+  async stopAndReap() {
+    const proc = this._proc && this._proc.exitCode == null ? this._proc : null;
+    const pid = this._pid;
+    const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.killGraceMs", 3000);
+    try {
+      this.stop();
+      if (proc === null) {
+        return;
+      }
+      if (await PowerBrowserAPI.waitForExit(proc, graceMs + 500)) {
+        this._pid = null;
+      } else {
+        PowerBrowserAPI.log("error", `Sidecar pid ${pid} is still alive ${graceMs} ms after the reap; shutdown continues without it.`);
+      }
+    } catch (err) {
+      PowerBrowserAPI.log("error", `Sidecar reap failed (${err && err.name ? err.name : "error"}); shutdown continues without it.`);
     }
   },
 
@@ -519,7 +600,23 @@ export const TheiaService = {
     return { ok: true, message: null, details: null };
   },
 
+  /**
+   * PKG-06 (Phase 45): the sidecar state directory lives under this launch's
+   * own Gecko profile directory (ProfD), never under XDG_CONFIG_HOME/HOME.
+   * _profileStateKey() already suffixes the state file name by profile (the
+   * CR-01 fix); this moves the BASE too, so the matrix no-residue rows can
+   * derive the inspected paths from the packaged application.ini plus ProfD
+   * at check time. Falls back to the pre-45 XDG behaviour only when
+   * getProfileDir() resolves "" (the same never-throw convention as
+   * _profileStateKey()'s "default" fallback), so a ProfD read failure
+   * degrades to the old single-location behaviour rather than crashing
+   * startup. No new pref, no new internal touchpoint.
+   */
   _resolveConfigDir() {
+    const profileDir = PowerBrowserAPI.getProfileDir();
+    if (profileDir) {
+      return `${profileDir}/powerbrowser-theia`;
+    }
     const xdg = PowerBrowserAPI.getEnv("XDG_CONFIG_HOME");
     const home = PowerBrowserAPI.getEnv("HOME");
     const base = xdg || `${home}/.config`;
@@ -551,6 +648,43 @@ export const TheiaService = {
   },
 
   /**
+   * WR-03 (Phase 45): the state file a pre-45 build wrote lives under the XDG
+   * config dir, at the same profile-keyed name. The path comes from the same
+   * inputs the old `_resolveConfigDir()` used, so it is exact.
+   */
+  _legacyStateFilePath() {
+    const xdg = PowerBrowserAPI.getEnv("XDG_CONFIG_HOME");
+    const home = PowerBrowserAPI.getEnv("HOME");
+    return `${xdg || `${home}/.config`}/powerbrowser/sidecar-state-${this._profileStateKey()}.json`;
+  },
+
+  /**
+   * WR-03: moves the legacy record into ProfD (once) and returns the paths the
+   * leftover reap must read: the ProfD path, plus the legacy path whenever the
+   * legacy file is still there (a failed move keeps it findable).
+   */
+  async _migrateLegacyStateFile() {
+    const legacy = this._legacyStateFilePath();
+    try {
+      const moved = await migrateLegacyStateFile(
+        {
+          read: (p) => PowerBrowserAPI.readStateFile(p),
+          write: (p, value) => PowerBrowserAPI.writeStateFile(p, value),
+          remove: (p) => PowerBrowserAPI.removeStateFile(p),
+        },
+        legacy,
+        this._stateFilePath
+      );
+      if (moved) {
+        this._reapLog(`Moved the pre-upgrade sidecar state file into the profile directory.`);
+      }
+    } catch (err) {
+      this._reapLog(`Pre-upgrade sidecar state file could not be moved (${err.message}); reaping it in place.`);
+    }
+    return legacy && legacy !== this._stateFilePath ? [this._stateFilePath, legacy] : [this._stateFilePath];
+  },
+
+  /**
    * SIDE-04's startup half: verified-identity reap of a leftover backend
    * from a previous crashed launch, called from start() before this
    * session's first spawn. D-111: signals a recorded pid ONLY when its
@@ -565,7 +699,15 @@ export const TheiaService = {
    * exactly as it does today.
    */
   async _reapLeftover() {
-    const record = await PowerBrowserAPI.readStateFile(this._stateFilePath);
+    // WR-03: a pre-45 state file moves into ProfD first; both paths are reaped.
+    for (const path of await this._migrateLegacyStateFile()) {
+      await this._reapLeftoverAt(path);
+    }
+  },
+
+  /** One leftover record: the reap body for a single state-file path. */
+  async _reapLeftoverAt(path) {
+    const record = await PowerBrowserAPI.readStateFile(path);
     if (!record || typeof record.pid !== "number") {
       return;
     }
@@ -573,7 +715,7 @@ export const TheiaService = {
     const alive = PowerBrowserAPI.signalBarePid(record.pid, /* signal 0: liveness only */ 0);
     if (!alive) {
       this._reapLog(`Leftover state file named pid ${record.pid}, already gone -- removing stale state file.`);
-      await this._removeStateFileQuietly();
+      await this._removeStateFileQuietly(path);
       return;
     }
 
@@ -585,7 +727,7 @@ export const TheiaService = {
         `Leftover state file's pid ${record.pid} is alive but its start-time ticks MISMATCH ` +
           `(recorded ${record.startTicks}, observed ${observedTicks}) -- the pid has been recycled by the OS onto an unrelated process; not signalling it.`
       );
-      await this._removeStateFileQuietly();
+      await this._removeStateFileQuietly(path);
       return;
     }
 
@@ -593,7 +735,7 @@ export const TheiaService = {
     const signalled = PowerBrowserAPI.signalBarePid(record.pid, SIGTERM);
     if (!signalled) {
       this._reapLog(`Leftover pid ${record.pid} (verified identity match) could not be signalled with SIGTERM.`);
-      await this._removeStateFileQuietly();
+      await this._removeStateFileQuietly(path);
       return;
     }
 
@@ -612,7 +754,7 @@ export const TheiaService = {
     } else {
       this._reapLog(`Leftover pid ${record.pid} (verified identity match) was signalled with SIGTERM and is gone.`);
     }
-    await this._removeStateFileQuietly();
+    await this._removeStateFileQuietly(path);
   },
 
   /**
@@ -627,9 +769,9 @@ export const TheiaService = {
     PowerBrowserAPI.log("log", `[TheiaService] ${message}`);
   },
 
-  async _removeStateFileQuietly() {
+  async _removeStateFileQuietly(path = this._stateFilePath) {
     try {
-      await PowerBrowserAPI.removeStateFile(this._stateFilePath);
+      await PowerBrowserAPI.removeStateFile(path);
     } catch {
       // Best-effort; removeStateFile already tolerates an absent file.
     }
@@ -1461,6 +1603,14 @@ export const TheiaService = {
     PowerBrowserAPI.setGroupSenderPort(this._port);
     this._browserElement.ownerDocument.defaultView.powerbrowserSwapToUrl(`http://127.0.0.1:${this._port}/`);
     this._swapped = true;
+    // UPD-18 (46-01, review CR-01): the update observer pushes appUpdate over
+    // the live browser element, so it attaches here, once the element carries
+    // the frontend. Best-effort like the tab-store triggers in start().
+    try {
+      this._updateObserverOff = PowerBrowserAPI.startUpdateObserver(this._browserElement);
+    } catch (err) {
+      this._pushLog(`Update observer not attached: ${err && err.message ? err.message : err}`);
+    }
   },
 
   _fatal(message) {

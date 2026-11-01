@@ -14,7 +14,9 @@
         "powerbrowserPrivilegedJs": false,
         "powerbrowserTelemetry": {
           "level": "off",
-          "endpoint": null
+          "endpoint": "https://events.powerbrowser.org/events",
+          "version": "153.5.1",
+          "buildID": "v153.5.1-1"
         },
         "preferences": {
           "security.workspace.trust.enabled": false,

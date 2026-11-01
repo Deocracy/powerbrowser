@@ -317,6 +317,16 @@ document.addEventListener(
       window.powerbrowserHideDiagnostics();
     });
 
+    // TEL-05: the Copy path is the clipboard only. The layer's own rows and log text leave the
+    // sidecar here, and never enter a URL.
+    const diagnosticsCopyButton = document.getElementById("powerbrowser-diagnostics-copy");
+    diagnosticsCopyButton.addEventListener("click", () => {
+      const fields = Array.from(diagnosticsFieldsElement.children, row => row.textContent);
+      navigator.clipboard.writeText([...fields, diagnosticsLogElement.textContent].join("\n")).catch(err => {
+        dump(`POWERBROWSER_DIAGNOSTICS_COPY_FAILED ${err}\n`);
+      });
+    });
+
     errorDiagnosticsButton.addEventListener("click", () => {
       window.powerbrowserShowDiagnostics();
     });

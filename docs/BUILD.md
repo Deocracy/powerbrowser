@@ -622,6 +622,15 @@ plus any `Cargo.*` file — reading each patch's own `+++ b/` header lines, neve
 grepping the patch body (a body-grep would false-match a string that merely
 appears inside changed content).
 
+**One exception, by exact path (amends D-72/D-73, owner ruling 2026-10-31,
+Phase 57 B1 option (a)).** `ALLOWED_COMPILED_PATHS` in the script accepts
+exactly `toolkit/crashreporter/client/app/src/glean.rs` and
+`toolkit/crashreporter/client/app/src/send_ping.rs`, because the Glean
+crash-ping consent read (TEL-09) exists only in Rust. The match is the whole
+repo-relative path: the same basename under another directory, any other
+`.rs`, and every other compiled suffix stay offenses, and `--self-test` plants
+each of those cases. A patch touching either file makes every rebuild tier 3.
+
 Two invocations:
 
 ```
@@ -809,11 +818,12 @@ grep -q "'MOZ_VERIFY_MAR_SIGNATURE'" objdir/config.status && echo VERIFY_ON
 
 Two facts about where the update URL lives:
 
-- `application.ini`'s `[AppUpdate]` URL host comes from `configuration.toml` `[urls] update` (NG-064). `generated/identity.configure` emits `set_config("MOZ_APPUPDATE_HOST", …)`, which `upstream/build/moz.build:96` prefers over its `aus5.mozilla.org` default. It is a compiled value, so a change needs a tier-3 rebuild. The `AppUpdateURL` enterprise policy still wins when present (`UpdateService.sys.mjs:5466`), and `powerbrowser/distribution/policies.json` carries the same URL.
+- `application.ini`'s `[AppUpdate]` URL host comes from `configuration.toml` `[urls] update` (NG-064). `generated/identity.configure` emits `set_config("MOZ_APPUPDATE_HOST", …)`, which `upstream/build/moz.build:96` prefers over its `aus5.mozilla.org` default. It is a compiled value, so a change needs a tier-3 rebuild. The `AppUpdateURL` enterprise policy would win when present (`UpdateService.sys.mjs:5466`), so `powerbrowser/distribution/policies.json` carries none: the manifest is the only update URL source (UPD-12).
 - `app.update.url` as a pref does not exist (removed in Bug 1568994; the
   removal is noted in `upstream/browser/app/profile/firefox.js:156`), so
-  no pref file can carry the fork URL. The policy file and the compiled
-  `application.ini` URL above are the only mechanisms.
+  no pref file can carry the fork URL. The compiled `MOZ_APPUPDATE_HOST`
+  in `application.ini` above is the only mechanism: `policies.json`
+  carries no `AppUpdateURL` (UPD-12).
 
 ### Policy install (dev runs only)
 
@@ -825,9 +835,12 @@ cp powerbrowser/distribution/policies.json objdir/dist/bin/distribution/policies
 ```
 
 (This extends the 03-03 command with the `mkdir -p` the original assumed.)
-Layer 3 passes with the fork policy installed (the fork host is an
-allowlisted `allow`: the project's own update service) and fails without
-it — both directions observed live in 08-04.
+The policy disables telemetry and studies; it carries no update URL. The
+08-04 live run, which saw layer 3 fail without the policy, predates UPD-12,
+when the policy still set the update URL. A layer-3 failure on an update host
+now points at the compiled `MOZ_APPUPDATE_HOST` (the fork host is an
+allowlisted `allow`: the project's own update service), not at a missing
+policy file.
 
 ### MAR build and serve loop (the N to N-plus-1 proof)
 
@@ -919,6 +932,15 @@ the version string). All commands below run inside `nix develop
    it from identical bytes is byte-identical (no timestamps or nonces —
    PKG-02/idempotency, asserted in the gate by generating twice).
 
+   The procedure above passes no `detailsURL`, so the descriptor carries
+   none and the gate judges it against an emission without one. A
+   descriptor that does carry `detailsURL` (as
+   `node scripts/build-update-xml.mjs --emit` writes it, from
+   `configuration.toml` `[urls] release_notes`) must match `hop.json`
+   `detailsURL` when set, else `release_notes`; a mismatch is reported as
+   a byte difference, which a hand edit or a changed `release_notes`
+   would both cause.
+
 5. Stage the N test install: copy the packaged N tree to a writable
    proof dir (never update the build tree in place — further incremental
    builds would break and a clobber would be needed), install a test
@@ -968,12 +990,91 @@ the version string). All commands below run inside `nix develop
    GETs, resolver log with zero `*.mozilla.org` / `*.mozilla.net`
    (only `update.googleapis.com`, Safe Browsing).
 
+   UPD-24 (46-03) extends the transcript `hop.json` carries (the Phase 44
+   `build-update-xml.mjs` import direction, if that script exists, is
+   recorded in the plan SUMMARY; this procedure uses the in-file
+   `buildUpdateXml` directly):
+
+   - `transcript.readyNotification`: the exact ready-notification text shown
+     (must equal the contracted UPD-20 string with the N+1 version
+     interpolated, derived at check time from
+     `theia/extensions/branding/src/browser/powerbrowser-update-copy.ts`).
+   - `transcript.restartClicked`: true (the Restart-now click event).
+   - `transcript.postVersion` / `transcript.postBuildID`: the version and
+     buildID read post-restart (must equal N+1; the buildID must be distinct
+     from N's).
+   - `transcript.layoutRestored`: true (shell layout + mode persisted across
+     the restart, seeded from the profile-storage map).
+   - `readOnly.cannotUpdate`: the exact string recorded by a second evidence
+     run with a read-only app directory (chmod plant on the staged app-dir
+     copy in mkdtemp for the self-test; the documented procedure for the
+     live run). Must equal the contracted UPD-21 cannot-update string,
+     never a ready string; `readOnly.recordedReady` must not be true.
+
+   UPD-27 probe-window capture (same procedure): drive the available +
+   manual UpdateListener paths in-Gecko with a fixture update carrying
+   `detailsURL`, capture the probe window with
+   `MOZ_LOG=nsHostResolver:5`, and sift `Resolving host [...]` lines. The
+   assertion is set-difference (derived contacted set must be empty for
+   the window), never the absence of an own-log line.
+
+   The Phase 45 packaged tarball + MAR re-run stays Phase 50's criterion,
+   not this procedure's; the Phase 44 `build-update-xml.mjs` import
+   direction is recorded in the plan output, not built here.
+
 6. Prove it: `node scripts/verify-mar-update-hop.mjs` (row
    `mar-update-hop`). It requires two distinct versions AND build IDs (a
    same-version loop fails as plumbing-only), the served descriptor
    byte-identical to a fresh emission, fork-server access entries for
-   descriptor and MAR, and zero `*.mozilla.org` / `*.mozilla.net` hosts
-   in the sifted resolver log.
+   descriptor and MAR, zero `*.mozilla.org` / `*.mozilla.net` hosts
+   in the sifted resolver log, plus the transcript fields above
+   (notification text, Restart-now click, N+1 landing with layout) and the
+   read-only cannot-update variant. `node scripts/verify-nimbus-exposure.mjs`
+   (row `nimbus-exposure`) asserts the exposure call neither threw nor
+   requested network; its `--self-test` twin runs the fixture doubles.
+
+### Clean-room drill for a published Release (served: release, UPD-16)
+
+The loop above proves the fork-server path. The release drill proves the published bytes:
+N is the installed tarball of the previous release, N+1 is the Release MAR as published, and
+the client takes the update from the live public descriptor and the write-once origin. Run it
+on `legion` (owner action; nothing in this repository runs it) inside a clean container:
+
+- Image: Debian bookworm, the same family as the PKG-17 release container. Not a Nix store
+  image, and no Nix mount of any kind (a Nix-mounted or host-resolver run proves nothing).
+- Mounts, read-only in and writable evidence out, and nothing else:
+  `-v /path/to/N.tar.xz:/in/N.tar.xz:ro`, `-v /path/to/nplus1.mar:/in/nplus1.mar:ro`,
+  `-v /path/to/evidence:/out`.
+- Network on, so the client reaches `updates.powerbrowser.org` and
+  `downloads.powerbrowser.org`. A fresh profile for each run, never the operator profile.
+- `MOZ_LOG=nsHostResolver:5` and `app.update.log=true` set for the whole check, download,
+  stage and apply cycle. The shell's stdout goes to `/out/client-update.log`.
+- The client takes the update from the public descriptor (`servedUrl`) and the MAR is served
+  from `https://downloads.powerbrowser.org/<tag>/<asset>` (`servedMarUrl`). `github.com` and
+  `release-assets.githubusercontent.com` must not appear in the resolver log.
+
+The host sets `SIGNMAR` to the signer built from the pinned source (`scripts/build-signmar.sh`),
+which the signature check (`signmar -v`) and the channel read (`signmar -T`) need.
+
+Then, on the host, write `.mozbuild/mar-hop/hop.json` with `served: "release"` and the fields
+the release assertion set reads (`n`, `nplus1`, `mar`, `descriptor`, `servedUrl`,
+`servedMarUrl`, `result`, `postHop`, and `attestation.bundle` when a bundle was fetched), copy
+the evidence into `.mozbuild/mar-hop/`, and run:
+
+```
+node scripts/verify-mar-update-hop.mjs
+scripts/verify-platform.sh --only mar-update-hop
+```
+
+Attestation is verified with `gh attestation verify <mar> --repo <owner/repo> --signer-workflow
+<owner/repo>/.github/workflows/release.yml --source-ref refs/heads/main --deny-self-hosted-runners
+--bundle <bundle>` (offline, from a bundle fetched on the host with the owner's `gh` login), or,
+when no bundle is present, the same command without `--bundle` from a logged-in `gh` on the host.
+The three pins mean the attestation must come from this repository's release workflow on main
+on a hosted runner (the attesting `sign-publish` job), not from any workflow of the repository. A MAR with neither is red, never skipped. Pitfall 7
+(Nix mounted, or the host resolver inherited) and Pitfall 8 (attestation skipped for lack of a
+login inside the container) are the two ways this drill proves nothing; the record in
+`docs/RELEASING.md` names the path taken.
 
 ### NSIS-on-Nix path (PKG-01)
 
@@ -1003,10 +1104,12 @@ only.
 ### Packaging hosts (08-05): capability record
 
 One row per host. Every later task cites its host by name; no artifact work
-starts on an unnamed host. MSIX and DMG are never attempted on Linux: the
-pinned tree's own tooling is the authority — `msix.py` raises without
-`makeappx.exe`/`signtool.exe` from the Windows SDK, and `dmg.py` shells out
-to macOS-only `hdiutil`/`SetFile`.
+starts on an unnamed host. MSIX is never attempted on Linux: `msix.py` raises
+without `makeappx.exe`/`signtool.exe` from the Windows SDK. DMG is built on
+Linux through the Linux branch of `dmg.py` (`is_linux`): it uses `rsync` and
+the tools the target mozconfig exports (`MKFSHFS`, `DMG_TOOL`, `HFS_TOOL`).
+The macOS branch (`hdiutil`, `SetFile`) is not used for the release build;
+see the MSIX / DMG mechanics section below.
 
 Numbered versions on `staged-unexecuted` rows are the REQUIRED spec (floor),
 not observations: the exact media, OS, and SDK builds are recorded here at
@@ -1016,6 +1119,7 @@ provision time. Observed facts carry their evidence inline.
 |---|---|---|---|---|
 | nix-linux (legion) | NixOS 26.05.8954 (Yarara), x86_64, `nix develop .#firefox` toolchain per toolchain-baseline.txt | makensis 3.12 (`nix shell nixpkgs#nsis --command makensis -VERSION` gives `v3.12`, re-verified 2026-09-05) | reachable | Proof: 08-04 `installer-build-proof` PASS — the pinned installer.nsi compiled with the generated branding.nsi into setup.exe in 3.4s |
 | pkg-win11 | Windows 11 23H2+ install media (required) + Windows SDK 10.0 with makeappx.exe and signtool.exe via WINDOWSSDKDIR or PATH (required) + NSIS 3.12 (required) | n/a until provisioned (Windows-side NSIS after the guest exists) | staged-unexecuted | Provisioning error (observed 2026-09-05): `sudo -n true` fails (`sudo: a password is required`), so qemu:///system is unmanageable — no domain can be defined, no NAT network created, and the root-owned `/var/lib/libvirt/images/win11.qcow2` is unreadable; `virsh list --all` shows zero defined domains; that qcow2 is 200704 bytes (a fresh-image stub, no installed guest OS); no guest agent, no guest credentials, and no Windows SDK/NSIS on any reachable guest exist. Media present and verified listable: `win11-install.iso` (8471603200 bytes, UDF volume `CCCOMA_X64FRE_EN-US_DV9`, 2026-03-07) with EFI boot plus `sources/install.wim` (7.5 GB) plus `sources/setup.exe`, and `virtio-win.iso` (1435727872 bytes), both 2026-07-29. A genuine MSIX proof additionally needs a full Windows Gecko build (multi-hour Windows compile) that no host can run yet. Unblock (operator, needs privilege): create the libvirt NAT network, define the pkg-win11 domain from the verified media above, run an unattended install, install the QEMU guest agent plus Windows SDK 10.0 plus NSIS 3.12, build the Windows dist, then hand the agent guest access — or provision any Windows 11 host with SDK plus NSIS and name it pkg-win11. Dependent cells (Windows MSIX build, Windows install/launch/uninstall/no-residue, Windows N to N-plus-1 hop, Windows alongside-stock-Firefox) stay staged-unexecuted until then. |
+| nix-linux (legion), macOS cross | Cross-configure and build host for `aarch64-apple-darwin` and `x86_64-apple-darwin` through `nix develop .#firefox-macos` (`flake.nix`); SDK floor 26.5 from the bootstrap `MacOSX26.5.sdk`; DMG via the Linux branch | n/a | declared, not run | `nix flake check --no-build` evaluates `firefox-macos` (Phase 55 plan 55-02). The SDK licence position is UNSETTLED (`55-SEC13-MEMO.md`, section 1); a cross build may not be published until the owner records it. The hosted `macos-26` native build is the recorded fallback. |
 | pkg-macos | macOS 14+ with Xcode command-line tools (required; hdiutil and SetFile are system tools) | n/a (no NSIS role on macOS) | staged-unexecuted | Provisioning error (observed 2026-09-05): no macOS install image exists anywhere reachable — `/var/lib/libvirt/images/` holds only the Windows media and stub above, and a filesystem-wide `*.dmg` search returns nothing; no Apple hardware; no lawful download path for a macOS image from Linux. Unblock (operator): provision a real Mac (or lawful macOS VM) with Xcode command-line tools, build the macOS dist on it, and hand the agent access as pkg-macos. Dependent cells (DMG build, macOS install/launch/uninstall/no-residue, macOS N to N-plus-1 hop, macOS alongside-stock-Firefox) stay staged-unexecuted until then. |
 
 Test-signing posture (T-08-05a, accepted): when the staged hosts provision,
@@ -1029,11 +1133,98 @@ decision per RESEARCH open question 1 and is NOT procured in this phase.
 - MSIX: `upstream/python/mozbuild/mozbuild/repackaging/msix.py`
   raises without `makeappx.exe`/`signtool.exe` from the Windows SDK —
   a real Windows host/VM, no Linux fallback.
-- DMG: `upstream/python/mozbuild/mozpack/dmg.py` shells out to
-  macOS-only `hdiutil`/`SetFile` — a real macOS host/VM.
+- DMG: `upstream/python/mozbuild/mozpack/dmg.py` has two branches. The
+  Linux branch (`is_linux`) builds the image with `rsync`, `newfs_hfs` and the
+  `hfsplus` and `dmg` tools, found through the target mozconfig's
+  `MKFSHFS`, `DMG_TOOL` and `HFS_TOOL` exports (`cross-mozconfig.common`).
+  Phase 55 uses this branch. The macOS branch (`hdiutil`, `SetFile`) is for a
+  real macOS host and is not used. A Mac is still needed to observe the
+  Gatekeeper copy (plan 55-04).
+- macOS per-target inputs (Phase 55): `powerbrowser/packaging/mozconfig-macos-aarch64`
+  and `-x86_64` are generated from one shared builder (`scripts/generate.mjs`
+  `emitMozconfigMacos`), with the objdirs `objdir-macos-aarch64` and
+  `objdir-macos-x86_64`. `powerbrowser/packaging/package-macos.sh <arch>`
+  stages one architecture's bundle, its Node pinned by `node-runtime.json`
+  (`darwin-arm64`, `darwin-x64`), and the Theia sidecar. The universal unify
+  and the DMG are plan 55-03.
+- Before `package-macos.sh`, set `MOZ_FETCHES_DIR` to the directory holding
+  `MacOSX26.5.sdk/`, `hfsplus/newfs_hfs` and `dmg/dmg`, `dmg/hfsplus`. The
+  mozconfig expands it into `MACOS_SDK_DIR`, `MKFSHFS`, `DMG_TOOL` and
+  `HFS_TOOL`. The script stops before the Node download and the Gecko build when
+  any of them is missing. Its staging also requires every native payload of the
+  Theia build to be a Mach-O of the target arch: a Linux `yarn build` leaves ELF
+  natives, and the script fails on them by name.
+- `package-macos.sh` stages release branding (`powerbrowser/branding-generated/release`)
+  unless `POWERBROWSER_BRANDING` is set. A dev bundle needs
+  `POWERBROWSER_BRANDING=powerbrowser/branding-generated/dev` named explicitly.
+  The script checks that `objdir-macos-<arch>/config.status` records the chosen
+  branding.
+- The five DMG branding inputs (`document.icns`, `disk.icns`, `background.png`,
+  `dsstore`, `Assets.car`) are generated into `generated/branding/<variant>/`
+  with no tracked comparand and no brand input. Their placeholder meanings and
+  the `actool` upgrade path are in `docs/RELEASING.md`, "Phase 55 macOS build
+  inputs".
 - The per-OS install → launch → uninstall → no-residue matrix, plus the
   alongside-stock-Firefox interleaved launch, run there (matrix section
   below records the Linux cells green and the staged cells with unblocks).
+
+### macOS universal package (plan 55-03)
+
+The `macos-package-payload` row judges the evidence the universal step leaves under
+`.mozbuild/macos-package/`. With no evidence the row FAILs naming this section; it never skips.
+The evidence contract, one file or directory each:
+
+| Evidence | Holds |
+|---|---|
+| `application-<arch>.ini` | Each per-target bundle's `Contents/Resources/application.ini`, copied before unify. |
+| `config.status-<arch>` | Each per-target objdir's `config.status`. |
+| `<App>.app/` | The unified bundle, signed ad hoc. |
+| `*.macos-universal.dmg` | The disk image, built through `mozbuild.action.make_dmg`. |
+| `*.macos-universal.complete.mar` | The complete MAR of the unified bundle. |
+| `update/<channel>/Darwin_<cpu>-gcc3/update.xml` | One descriptor per per-target mozconfig, emitted through `buildUpdateXml`. |
+
+The row derives what it compares from the tree, not from a list: the Darwin targets from the
+`--target` line of each `powerbrowser/packaging/mozconfig-macos-<arch>`, the forbidden
+generic-certs switch from `upstream/build/moz.configure/update-programs.configure`, the sidecar
+paths from `TheiaService.sys.mjs`, and the drag-to-install symlink from `mozpack/dmg.py`. It
+asserts one shared fourteen-digit BuildID across both `.ini` copies, the bundle and every
+descriptor (two independent builds stamp two clock-time BuildIDs, and `unify.py` refuses the
+differing `application.ini`); both
+slices in every Mach-O; a verifying ad-hoc signature with no Team ID, no certificate chain and no
+stapled ticket; the same bundle inside the DMG; and each descriptor byte-identical to a fresh
+`buildUpdateXml` emission over the MAR bytes. Opening the DMG needs the Linux `dmg` and `hfsplus`
+tools (`DMG_TOOL` and `HFS_TOOL`, or `MOZ_FETCHES_DIR/dmg/`).
+
+The Developer ID signature, notarization and stapling are not part of this evidence. They wait on
+the owner's Team ID (plan 55-03 Task 2, `BLOCKED.md` item 2), and the row stays ad hoc until then.
+
+Procedure, in `nix develop .#firefox-macos` with `MOZ_FETCHES_DIR` set as above:
+
+1. Build both targets, each with its own mozconfig and objdir. Both builds must stamp one BuildID.
+   Gecko takes the BuildID from a build date the build environment supplies, else from the clock
+   (`upstream/build/variables.py`). No tracked file sets that date yet: the `no-build-date-pin`
+   row (UPD-26) refuses one, and the shared per-build date belongs to the `release.yml`
+   `build-macos` job (plan 55-03 Task 2), where that row must be narrowed with its reason first.
+2. `bash powerbrowser/packaging/package-macos.sh aarch64`, then `... x86_64`. Each stages its
+   own thin sidecar from the Theia build of a matching host.
+3. `bash powerbrowser/packaging/package-macos.sh universal`. It refuses differing BuildIDs, lifts
+   both sidecars out, re-checks each staged `node` byte for byte against its pinned archive,
+   unifies the Gecko halves with `unify.py` (x86_64 first, as `unify.sh` orders them), and merges
+   the sidecar with `lipo -create`. Every thin Mach-O pair (`.node`, `rg`, `node`) becomes one fat
+   file. Every other file must be byte-identical in both trees. The two `better-sqlite3`
+   prebuilds become one fat file staged under both names, because the loader picks
+   `prebuilds/<platform>-<arch>.node`. Absolute `LC_RPATH` entries are deleted, every native must
+   read Mach-O universal (`package-target-natives --target macos` runs on the merged sidecar),
+   and a file naming the checkout fails the run. The merged sidecar lands under
+   `Contents/Resources` (macOS GreD). The bundle is signed ad hoc with
+   `./mach macos-sign --use_rcodesign -e developer`. The script then writes the DMG through
+   `mozbuild.action.make_dmg`, the complete MAR through `make_full_update.sh`, and one descriptor
+   per Darwin target through `buildUpdateXml`, replaces `.mozbuild/macos-package/`, and runs the
+   `macos-package-payload` row.
+
+Not run on this tree yet: it needs both built objdirs, and the cross configure stops before the
+Gecko compile until the Darwin `rust-std` question is settled (`BLOCKED.md` items 8 and 9). The
+sidecar merge was exercised against synthetic thin Mach-O pairs with `llvm-lipo`.
 
 ### Linux package (NG-063, NG-072)
 
@@ -1048,21 +1239,20 @@ runs `./mach package` and adds these to the staged application directory:
 The Node download happens at build time and is deliberately not in the
 runtime allowlist: that file governs browser/sidecar egress only (R15).
 
-The pin's provenance is the release-key step the owner performs, not this
-script: the sha256 in `powerbrowser/packaging/node-runtime.json` comes from
-nodejs.org's `SHASUMS256.txt` after `gpg --verify SHASUMS256.txt` against the
-Node release signing keys (RELEASING.md "Node provenance" names the step and
-the key origin). The script cannot perform that check -- it has no keyring
-here -- so it enforces the pin: a download that does not hash to it is deleted
-and the run fails naming it, and an unverified archive is never unpacked into
-the package. Bump Node by rerunning the pin step in the non-GUI wave E plan,
-Task 10 Step 2, including the signature check.
+The pin's provenance is established by the release train's detect-node job, not by
+this script. For each Node 24 bump that job fetches nodejs.org's
+`SHASUMS256.txt` and its `.sig`, verifies the signature with `gpgv` against the
+nodejs/release-keys keyring, and asserts that the tarball's sha256 equals the
+signed entry before it opens `chore/node-v24.x` (RELEASING.md "Node provenance"
+records the chain). This script has no keyring, so it enforces the committed
+pin: a download that does not hash to it is deleted and the run fails naming
+it, and an unverified archive is never unpacked into the package.
 
 It then refreshes `precomplete` and rewrites
 `objdir/dist/<app>-<Version>.en-US.linux-x86_64.tar.xz`. A packaged install runs
 its own staged backend and Node unless a user pref names another path (NG-063).
-`objdir/dist/bin` is untouched, so dev runs keep the dev tree. Bump Node by
-rerunning the pin step in the non-GUI wave E plan, Task 10 Step 2.
+`objdir/dist/bin` is untouched, so dev runs keep the dev tree. Node bumps arrive as `chore/node-v24.x` pull requests from the release train;
+there is no manual pin step.
 The Gecko binaries are built in the Nix shell, so the package runs where those
 store paths exist.
 
@@ -1146,20 +1336,19 @@ pin, the tree, and every phase proof agree: drills rehearse, pins decide.
 Adopting 153.2.0esr is a future rebase-adoption task (pin move plus full
 tier-3 rebuilds), not part of this drill.
 
-**Pinned ESR (Phase 18).** The pin is `FIREFOX_153_5_0esr_BUILD1` at commit
-`223014c6b9299ac9b035b4c50ea481e5c6de282c`. On 2026-10-16, `git ls-remote`
-resolved both `FIREFOX_153_5_0esr_BUILD1` and `FIREFOX_153_5_0esr_RELEASE` to
+**Pinned ESR (Phase 40, DIST-06).** The pin is `FIREFOX_153_5_1esr_RELEASE` at
+commit `6cd88e7d45fe7a5b0b87b984fb32a8779151860e`. On 2026-10-20, `git ls-remote`
+resolved both `FIREFOX_153_5_1esr_RELEASE` and `FIREFOX_153_5_1esr_BUILD1` to
 that commit. Tag names alone are not identity: at 153.4, `_RELEASE` resolved to
 `508788b6f8314edb3c33905f6d56c3fe6b087670` (the `_BUILD3` commit) while
 `_BUILD1` resolved to `f92008fc60401bb78216ce83704f6f58be94cc20`. The SHA
 above is the identity recorded at adoption, and no gate checks it:
 `configuration.toml` pins only the tag, and `fetch-upstream.sh` and
 `rebase-upstream.sh` resolve the tag name. If the mirror re-pointed the tag, a
-fresh clone would get the new commit and every gate would pass. The four patches replayed unchanged. The rebase ran
-locally through `scripts/rebase-upstream.sh --tag FIREFOX_153_5_0esr_BUILD1`
-(340 s wall, clone 279 s). The clobbered dev build through
-`scripts/smoke-firefox.sh` took 2388 s wall (mach reported 2376 s) on the
-reference host.
+fresh clone would get the new commit and every gate would pass. The rebase ran
+locally through `scripts/rebase-upstream.sh --tag FIREFOX_153_5_1esr_RELEASE`
+on 2026-10-20 (474 s wall, clone 370 s), and the four patches replayed
+unchanged.
 
 **CI story:** `.github/workflows/rebase-upstream.yml` is `workflow_dispatch`-only
 (no `schedule:` — the ~4-weekly ESR cadence is a standing post-v4.0 operational
@@ -1213,6 +1402,51 @@ update-desktop-database ~/.local/share/applications
 follow-up needs the package (nixpkgs `desktop-file-utils`) added to a dev
 shell before it can be run; neither `.desktop` file has been installed here
 yet, so this has not blocked anything so far.
+
+### Dual-build window (UPS-03)
+
+While the 153 line is live and the 175 line is being brought up, two objdirs of about
+14 GB each sit beside `upstream/` on one disk. This table records whether both fit. It is
+filled by the owner from a real run on `legion` (two tier-3 builds, about 40 to 60 minutes
+each), or closed with a hosted-fallback verdict when `legion` cannot hold both. Until a
+row is measured it stays empty: no digit in it is carried over from research, from an
+earlier phase, or from an estimate.
+
+Pre-flight, at the repository root, before the first 175 build (more than 30 GB free is
+required; record both outputs):
+
+    df -h; du -sh upstream/ objdir*
+
+The 175 build gets its own objdir from its first compile and never touches the live one:
+
+    POWERBROWSER_OBJDIR=objdir-175 MOZCONFIG=../.mozconfig ./mach build
+
+Never run `./mach clobber`, or any build, against the live 153 `objdir/` to prove 175.
+Re-run the pre-flight command after the build and fill the `after` columns.
+
+Fill a row completely or not at all. A row with any measurement in it must also carry the
+build tuple (tree commit, host, a cite of `toolchain-baseline.txt` as used for the
+measured build, and the date) and a verdict. If `legion` cannot hold both objdirs, do not
+force it: write `spills to hosted` as the verdict with the hosted-build evidence link
+(INF-04), together with the tuple. `scripts/verify-dual-build-table.mjs` holds the table to
+that shape.
+
+| line | objdir | du before | du after | df before | df after | mach wall time | D-73 tuple | verdict |
+|---|---|---|---|---|---|---|---|---|
+| 153 line (live) | `objdir/` | | | | | | | |
+| 175 line (objdir-175) | `objdir-175/` | | | | | | | |
+
+## Crash symbols per target (TEL-12, Phase 57)
+
+`mach buildsymbols` writes `objdir/dist/<PKG_BASENAME>.crashreporter-symbols.zip` for each BUILD_TARGET (the suffix derives from `upstream/toolkit/mozapps/installer/package-name.mk`, and `scripts/verify-release-symbols.mjs` gates it). The target is a no-op while the reporter is compiled out (`--disable-crashreporter`), so the command runs only on a reporter-enabled build, which the TEL-13 flip produces.
+
+The on-disk name is not the release asset name. `PKG_BASENAME` in `package-name.mk` is `<MOZ_PKG_APPNAME>-<MOZ_PKG_VERSION>.<AB_CD>.<MOZ_PKG_PLATFORM>`: the Gecko version (`MOZ_APP_VERSION`, for example 153.1.0), the locale (`en-US`) and the platform string. The release asset is `<app>-<tag version>.<target-token>.crashreporter-symbols.zip` plus the stable `<app>-<target-token>.crashreporter-symbols.zip` (tag version = the tag minus its `v`; see `docs/RELEASING.md`, Release asset names). The release workflow must therefore rename each zip when it assembles `assets/`: drop the locale, replace the Gecko version by the tag version and the platform string by the target token. That rename step lands with the symbols in the asset set at the TEL-13 flip, and until then the rename is a recorded requirement that the gate cannot see in the workflow. Whether the tarball and MAR keep the locale token is the same open question recorded in `docs/RELEASING.md`.
+
+Owner command, once per target after a reporter-enabled build (not run in the agent shell; a tier-3 build):
+
+    nix develop .#firefox --command ./mach buildsymbols
+
+Record the zip's SHA256 and its name in the operator record beside the Release asset set. The minidump-stackwalk runbook in `docs/CRASH-POLICY.md` names the symbol path.
 
 ## Toolchain baseline
 

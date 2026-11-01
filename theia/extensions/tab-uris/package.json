@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "license": "MIT",
   "dependencies": {
+    "@powerbrowser/branding": "0.1.0",
     "@powerbrowser/token-gate": "0.1.0",
     "@theia/ai-chat-ui": "1.76.0",
     "@theia/core": "1.76.0",

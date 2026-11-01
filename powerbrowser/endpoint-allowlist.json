@@ -1,5 +1,5 @@
 {
-  "$comment": "BRAND-04 (D-83..D-88): the single machine-readable source of truth for every endpoint this build is allowed to contact and every pref that gates an unattended callout. Read directly by scripts/verify-endpoints.sh layers 1 and 3. D-85: any host observed at runtime that is absent from `hosts`, or any host present here with disposition `deny`, is a FAILURE -- Mozilla or not. Any pref in `prefs` whose installed value differs from `expect` is a FAILURE. A host or pref absent from this file fails the check rather than being silently ignored.",
+  "$comment": "BRAND-04 (D-83..D-88): the single machine-readable source of truth for every endpoint this build is allowed to contact and every pref that gates an unattended callout. Read directly by scripts/verify-endpoints.sh layers 1 and 3. Three dispositions (scripts/lib/endpoint-verdict.mjs DISPOSITIONS): `allow` may be contacted unattended; `deny` must never be contacted; `user-initiated` is reachable only after a user action such as a click, and any unattended request to it fails exactly like `deny` (UPD-33). D-85: any host observed at runtime that is absent from `hosts`, or any host present here with disposition `deny`, or with disposition `user-initiated` and no user action, is a FAILURE -- Mozilla or not. Any pref in `prefs` whose installed value differs from `expect` is a FAILURE. A host or pref absent from this file fails the check rather than being silently ignored.",
   "hosts": [
     {
       "host": "firefox.settings.services.mozilla.com",
@@ -19,12 +19,23 @@
     {
       "host": "aus5.mozilla.org",
       "disposition": "deny",
-      "reason": "Mozilla's AUS (Application Update Service) host. The updater is compiled IN since 08-04 (--enable-unverified-updates, self-hosted MAR under fork signing), but the effective update URL is fork-controlled: shipped installs carry the AppUpdateURL enterprise policy (powerbrowser/distribution/policies.json) pointing at updates.powerbrowser.org, which getUpdateURL prefers over the baked application.ini URL. A resolution of aus5 therefore means the fork policy is missing or bypassed -- fail-loud by design (layer 3 catches a policy-less install red). media.gmp-manager.url / extensions.systemAddon.update.url stay blanked (D-84/D-86) so no other path can name this host."
+      "reason": "Mozilla's AUS (Application Update Service) host. The updater is compiled in since 08-04. The effective update URL is application.ini's [AppUpdate] URL, whose host is MOZ_APPUPDATE_HOST from configuration.toml [urls] update (NG-064, UPD-12); no enterprise policy overrides it. MAR signature and MAR channel verification are on (NG-065). A resolution of aus5 therefore means the baked host is missing or bypassed -- fail-loud by design (layer 3 catches it red). media.gmp-manager.url / extensions.systemAddon.update.url stay blanked (D-84/D-86) so no other path can name this host."
+    },
+    {
+      "host": "crash-reports.mozilla.com",
+      "disposition": "deny",
+      "reason": "UPD-15 (owner decision 9): the crash reporter is compiled out (--disable-crashreporter), so no report path may name this host. Pairs with the blanked breakpad.reportURL pref expect above. A resolution of this host means a compiled-out path was re-enabled -- fail-loud by design."
     },
     {
       "host": "updates.powerbrowser.org",
       "disposition": "allow",
-      "reason": "08-04 (PKG-02, T-08-04a): the fork's own update-descriptor host. The only unattended callout the enabled updater may make: AppUpdateURL policy and the hash-pinned update.xml it serves, fetched over HTTPS from infrastructure this project controls. Deliberate waiver in the same category as the Safe Browsing entries -- a real capability (self-update), not an inherited default. Until the static file host exists the name does not resolve and checks fail closed; scripts/verify-mar-update-hop.mjs proves each hop with zero *.mozilla.org / *.mozilla.net resolutions."
+      "reason": "08-04 (PKG-02, T-08-04a): the fork's own update-descriptor host. The descriptor host: the enabled updater's unattended update.xml fetch goes to the application.ini [AppUpdate] URL from configuration.toml [urls] update, with no policy involved (UPD-12), and the hash-pinned update.xml it serves comes over HTTPS from infrastructure this project controls. The MAR bytes come from the MAR origin row (downloads.powerbrowser.org, owner ruling 2026-10-29), the only other unattended update callout. Deliberate waiver in the same category as the Safe Browsing entries -- a real capability (self-update), not an inherited default. Until the static file host exists the name does not resolve and checks fail closed; scripts/verify-mar-update-hop.mjs proves each hop with zero *.mozilla.org / *.mozilla.net resolutions."
+    },
+    {
+      "host": "downloads.powerbrowser.org",
+      "disposition": "allow",
+      "manifest": "urls.mar_origin",
+      "reason": "UPD-15 and DIST-08, owner ruling 2026-10-29: the primary MAR origin. The update descriptor's patchURL names this host at /<tag>/<asset>, so the updater fetches MAR bytes unattended after the update.xml fetch. Served from the R2 bucket's own custom domain with public read; no r2.dev URL is enabled. Keys are write-once: release.yml's sign-publish copies each signed MAR here before the single publish and refuses to overwrite a key holding other bytes. Chosen over the release-assets host (its signed URL expires about one hour after issue) and over the updates host (Pages caps a single file at 25 MiB)."
     },
     {
       "host": "lite.duckduckgo.com",
@@ -72,7 +83,7 @@
     {
       "host": "location.services.mozilla.com",
       "disposition": "deny",
-      "reason": "browser.region.network.url (modules/libpref/init/all.js:3094), blanked in powerbrowser/branding/dev/pref/firefox-branding.js -- Mozilla's region-lookup service, used for search-engine/locale defaults and queried unattended at startup. Not a DRM/security-parity concern; disabled rather than waived. This host is distinct from the geolocation provider (geo.provider.network.url, also this same host by stock default) that actually serves an explicit site's navigator.geolocation request -- that pref is deliberately left untouched (real capability, fires only on explicit request), so a site that does request geolocation will still attempt this host and fail; that trade-off is accepted for this phase, which ships no Theia-side feature depending on it."
+      "reason": "browser.region.network.url (modules/libpref/init/all.js:3094), blanked in powerbrowser/branding/dev/pref/firefox-branding.js -- Mozilla's region-lookup service, used for search-engine/locale defaults and queried unattended at startup. Not a DRM/security-parity concern; disabled rather than waived. Distinct half, deliberately untouched: geo.provider.network.url (stock default names this same host) serves an explicit site's navigator.geolocation request -- a real capability that fires only on explicit site request, never unattended. A site that requests geolocation will still attempt this host and fail; that trade-off is accepted and no pref change ships here."
     },
     {
       "host": "edgedl.me.gvt1.com",
@@ -100,9 +111,26 @@
       "reason": "The Theia sidecar loopback -- architecture, not a concession. The phase-04 shell (powerbrowser/shell/TheiaService.sys.mjs) supervises a bundled Node + Theia browser-target backend on localhost and presents it full-window as the only GUI; a build that could not reach loopback would have no GUI at all. A literal loopback address, so no name resolution leaves the machine. Exact-string match only (allowlist_host_allowed, scripts/verify-endpoints.sh:340-352 -- suffix matching requires a leading literal dot in the allowlist entry), so this entry admits the one literal address 127.0.0.1 and nothing else."
     },
     {
+      "host": "events.powerbrowser.org",
+      "disposition": "allow",
+      "manifest": "telemetry.endpoint",
+      "reason": "TEL-06 (Phase 48): the error-report endpoint [telemetry] endpoint states in configuration.toml. Error reports at level error fire with no per-event click, so the disposition is allow (unattended), not user-initiated, the same category as the sidecar loopback. At the shipped level off nothing is contacted: toolkit.telemetry.server is blank and the sender drops before queueing. Raising the telemetry preference is the opt-in. A48-2: the hostname follows the Phase 47 zone and is assumed until that record names it."
+    },
+    {
       "host": "powerbrowser.org",
-      "disposition": "deny",
-      "reason": "Root cause: theia/extensions/branding/src/browser/powerbrowser-welcome-widget.tsx exports POWERBROWSER_REPO_URL = 'https://powerbrowser.org/' and renders it as a link; Gecko speculatively DNS-prefetches link targets (network.dns.disablePrefetch defaults false, modules/libpref/init/StaticPrefList.yaml:15308; network.dns.disablePrefetchFromHTTPS also defaults false, :15161, so the http-vs-https origin of the Theia frontend does not matter). Closed by network.dns.disablePrefetch = true, not by removing the link -- the link is a real, wanted affordance and a user who clicks it is making an explicit request, the same allow-the-capability/deny-the-unattended-callout distinction the geo.provider.network.url and dom.push.enabled entries already draw. Kept as `deny` rather than absent so the file stays the single source of truth: an observation of this host is a failure either way, and this reason records why it is not expected."
+      "disposition": "user-initiated",
+      "reason": "UPD-33: click destinations only. The welcome widget's link (theia/extensions/branding/src/browser/powerbrowser-welcome-widget.tsx POWERBROWSER_REPO_URL), the About dialog's manual-update link (app.update.url.manual from configuration.toml [urls] homepage, UPD-13) and the installer support URL ([installer] support_url) all name this host, and each is reached only by an explicit click. Gecko speculatively DNS-prefetches link targets (network.dns.disablePrefetch defaults false, modules/libpref/init/StaticPrefList.yaml:15308; network.dns.disablePrefetchFromHTTPS also defaults false, :15161); that unattended path is closed by network.dns.disablePrefetch = true, not by removing the links. An unattended resolution of this host is a failure exactly as for a `deny` entry; previously dispositioned `deny`, re-dispositioned when the About-dialog links became real pages."
+    },
+    {
+      "host": "github.com",
+      "disposition": "user-initiated",
+      "manifest": "urls.release_notes",
+      "reason": "UPD-33: the About dialog's release-notes link (app.releaseNotesURL, app.releaseNotesURL.aboutDialog and app.update.url.details from configuration.toml [urls] release_notes, UPD-13) points at the GitHub Releases page (SEED-002 section 7), reached only by an explicit click. network.dns.disablePrefetch = true closes the speculative prefetch; an unattended resolution of this host is a failure exactly as for a `deny` entry. Owner ruling 2026-10-25 (46 review WR-07), amended 2026-10-29: the unattended MAR download must never touch github.com; the update descriptor's patchURL and servedMarUrl name the MAR origin row (downloads.powerbrowser.org, the mar_origin host of configuration.toml [urls], at /<tag>/<asset>) instead; the update-download-host row guards the github.com half."
+    },
+    {
+      "host": "release-assets.githubusercontent.com",
+      "disposition": "user-initiated",
+      "reason": "UPD-15, reworded by the owner ruling 2026-10-29: this host is no longer the updater's download host. The descriptor names the R2 MAR origin (the downloads.powerbrowser.org row), because a signed release-assets URL expires about one hour after issue, so a static descriptor cannot name it. This host is reached only when a user clicks a GitHub Release asset link, which redirects here; an unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs). scripts/verify-update-download-host.mjs refuses a descriptor naming this host, and Phase 50 criterion 5 observes the R2 host in a real update's resolver log instead."
     },
     {
       "host": "cloudflare-dns.com",
@@ -142,21 +170,25 @@
     {
       "host": "open-vsx.org",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the extension feature. The Open VSX registry the sidecar is configured with (VSX_REGISTRY_URL in powerbrowser/shell/TheiaService.sys.mjs, and the application start script). It is contacted only when the user searches for, installs or updates an extension: the frontend's search request (layer 3) and the backend's install download (layer 4)."
     },
     {
       "host": "openvsx.eclipsecontent.org",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the extension feature. Open VSX's download storage: the registry answers the .vsix download URL (open-vsx.org/api/<namespace>/<name>/<version>/file/<name>.vsix) with a 302 to this host, and the sidecar's backend fetched the probe extension's .vsix from it during the NG-069 probe install (observed 2026-09-25). It is contacted only when the user searches for, installs or updates an extension: search results' icons (open-vsx.org/api/<namespace>/<name>/<version>/file/icon.png) redirect here too."
     },
     {
       "host": "api.anthropic.com",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-anthropic (the @anthropic-ai/sdk base URL). It is contacted only after the user configures an Anthropic API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup."
     },
     {
       "host": "api.openai.com",
       "disposition": "allow",
+      "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-openai (the openai package base URL). It is contacted only after the user configures an OpenAI API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup."
     }
   ],

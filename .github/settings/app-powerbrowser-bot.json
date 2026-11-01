@@ -1,0 +1,17 @@
+{
+  "slug": "powerbrowser-bot",
+  "permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "issues": "write",
+    "administration": "read",
+    "vulnerability_alerts": "read",
+    "metadata": "read"
+  },
+  "repository_selection": "selected",
+  "repositories": [
+    "powerbrowser",
+    "powerbrowser-updates",
+    "homebrew-tap"
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "glibc": "2.28",
+  "ruling": "owner ruling 2026-10-22 (WR-09): the pinned official Node v24.19.0 needs GLIBC_2.28, so the shipped Linux tarball promises glibc 2.28"
+}

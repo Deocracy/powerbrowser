@@ -18,10 +18,17 @@ pref("startup.homepage_override_url", "");
 pref("startup.homepage_welcome_url", "");
 pref("startup.homepage_welcome_url.additional", "");
 
-// The Mozilla update-wizard URLs must not be carried forward from the
-// unofficial/ template (both pointed at nightly.mozilla.org).
-pref("app.update.url.manual", "");
-pref("app.update.url.details", "");
+// UPD-13: About-dialog release-notes and manual-update links, derived from configuration.toml [urls].
+pref("app.releaseNotesURL", "https://github.com/Deocracy/powerbrowser/releases");
+pref("app.releaseNotesURL.aboutDialog", "https://github.com/Deocracy/powerbrowser/releases");
+pref("app.update.url.manual", "https://powerbrowser.org");
+pref("app.update.url.details", "https://github.com/Deocracy/powerbrowser/releases");
+
+// UPD-25: language packs are not updated with the app; release scope is en-US only (PKG-09). Upstream default true at browser/app/profile/firefox.js:175.
+pref("app.update.langpack.enabled", false);
+
+// UPD-28 (owner decision 6): Firefox Accounts and Sync are off. Upstream default true at browser/app/profile/firefox.js:2311; a fixed false in both variants, no manifest key. The FxA/Sync host family (accounts.firefox.com, profile/oauth subdomains, token.services.mozilla.com) must never be contacted; verify-endpoints proves it by set-difference over the derived contacted-host list (Phase 50 live run).
+pref("identity.fxaccounts.enabled", false);
 
 // --- D-86: GMP manager -- Widevine stays working, no Mozilla host involved ---
 // Blanked so the GMP manager never contacts aus5.mozilla.org for a plugin
@@ -78,9 +85,9 @@ pref("browser.topsites.contile.enabled", false);
 
 // --- Region-lookup and Web Push server URLs (both resolve
 // location.services.mozilla.com / push.services.mozilla.com respectively,
-// which powerbrowser/endpoint-allowlist.json disposition `deny` -- neither
-// URL is essential to this phase's scope, no Theia-side feature depends on
-// them yet). The GEOLOCATION and PUSH *APIs themselves*
+// which powerbrowser/endpoint-allowlist.json dispositions `deny` -- both are
+// unattended callouts with no DRM/security-parity rationale, so both stay
+// blanked rather than waived). The GEOLOCATION and PUSH *APIs themselves*
 // (geo.enabled/geo.provider.network.url, dom.push.enabled) are deliberately
 // left untouched: both fire only on an explicit site request, never at
 // unattended startup, and disabling the API surface would remove real
@@ -125,11 +132,12 @@ pref("network.connectivity-service.enabled", false);
 // network.dns.disablePrefetchFromHTTPS also defaults false (:15161), so
 // the origin scheme is irrelevant. Root cause traced to
 // theia/extensions/branding/src/browser/powerbrowser-welcome-widget.tsx:13's
-// POWERBROWSER_REPO_URL link to github.com. Disabled rather than removing
-// the link -- the link is a real, wanted affordance, and an explicit
-// click is a user request this pref does not block, only the
-// speculative prefetch. github.com stays a `deny` entry in
-// endpoint-allowlist.json so a regression fails the check. ---
+// POWERBROWSER_REPO_URL link. Disabled rather than removing the link --
+// the link is a real, wanted affordance, and an explicit click is a user
+// request this pref does not block, only the speculative prefetch.
+// powerbrowser.org and github.com are `user-initiated` entries in
+// endpoint-allowlist.json: reachable by an explicit click, never
+// unattended, so a prefetch regression still fails layer 3. ---
 pref("network.dns.disablePrefetch", true);
 
 // --- BRAND-04 ledger entry 5 fix (2026-08-29): media.gmp-gmpopenh264.enabled

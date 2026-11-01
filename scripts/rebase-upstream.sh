@@ -92,6 +92,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "  2. rm -rf '$UPSTREAM_DIR' && TAG=$NEW_TAG '$REPO_ROOT/scripts/fetch-upstream.sh'"
   echo "  3. '$REPO_ROOT/scripts/apply-patches.sh'"
   echo "  4. '$REPO_ROOT/scripts/check-patch-surface.sh'"
+  echo '  4a. "'"$REPO_ROOT"'/scripts/regenerate-patches.sh" --check  # AUTO-10: every tracked patch equals its regeneration from the replayed tree (files upstream moved: added and removed lines only); a failure is reported after 4b-5b run'
   # WR-08 (plan 01-18): expanded, like every neighbouring line. It used to print
   # the literal `--extra-root "$UPSTREAM_DIR"`, which pasted into a shell where
   # that variable is unset becomes `--extra-root ""` and the scanner exits 2.
@@ -121,6 +122,19 @@ echo "rebase-upstream: checking patch surface"
 if ! "$REPO_ROOT/scripts/check-patch-surface.sh"; then
   echo "rebase-upstream: FAIL -- check-patch-surface.sh rejected the replayed stack" >&2
   exit 1
+fi
+
+# AUTO-10: a hand-edited hunk replays as a silent no-op under --3way, so the
+# replayed tree is re-diffed and every tracked patch compared with it. A file
+# $NEW_TAG moved is compared on its added and removed lines only (CR-01), so a
+# clean replay onto a new ESR passes with a regenerate NOTE. A failure is held
+# until the end: the brand scan, the classifier and the overlay check below
+# still report on the new tag.
+echo "rebase-upstream: checking every patch equals its regeneration"
+REGEN_FAILED=0
+if ! "$REPO_ROOT/scripts/regenerate-patches.sh" --check; then
+  echo "rebase-upstream: FAIL (reported again at the end) -- a tracked patch's added or removed lines differ from the replayed upstream/: a hunk was edited by hand, or the replay onto $NEW_TAG changed what a patch does. The checks below still run." >&2
+  REGEN_FAILED=1
 fi
 
 # D-18: the residual-brand scan is a PERMANENT gate from Phase 1 onward, not a
@@ -165,6 +179,12 @@ if [ "$RESOLVED" != "$REPO_ROOT/powerbrowser" ]; then
   echo "rebase-upstream: FAIL -- upstream/powerbrowser does not resolve to $REPO_ROOT/powerbrowser (got: ${RESOLVED:-<broken symlink>})" >&2
   echo "  The overlay path is git-excluded, so this is invisible to git status and to the classifier above --" >&2
   echo "  without this assertion a missing symlink would exit 0 here and fail later, deep in moz.build traversal." >&2
+  exit 1
+fi
+
+if [ "$REGEN_FAILED" -eq 1 ]; then
+  echo "rebase-upstream: FAIL -- a tracked patch does not match its regeneration from upstream/ at $NEW_TAG (see the regenerate-patches output above); every other check passed" >&2
+  echo "  Next step: inspect the replayed upstream/, then run scripts/regenerate-patches.sh and commit the regenerated patches." >&2
   exit 1
 fi
 
