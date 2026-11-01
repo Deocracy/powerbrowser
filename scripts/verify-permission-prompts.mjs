@@ -51,6 +51,10 @@
  *       (the stock WebRTCParent call) reaches; the frontend writes a tab's
  *       sharing state only in its display-only sharingChanged subscriber and
  *       never reads a sharing field from a message.
+ *   (o) sharing destination (37-02 post-review): the push's duplicate check
+ *       compares the frontend WindowGlobal too, and webTabOpen of an overlay
+ *       chrome already holds re-pushes its last observed state, so a reloaded
+ *       frontend never shows a stale or missing indicator.
  * Rules (j) and (k) are the furniture-gate rows for this plan; at the Phase 35
  * merge they move to verify-shell-furniture.mjs with rule (a).
  *
@@ -406,8 +410,22 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name)) {
     // (n) The sharing indicator follows chrome-observed webrtcUI state only.
     const sharingPushes = [...api.matchAll(/sendWebTabPush\(\s*[\w$.]+\s*,\s*\{\s*kind:\s*"sharingChanged"/g)];
     const sharingFn = functionBody(api, 'updateWebTabSharing');
-    if (sharingPushes.length !== 1 || !sharingFn.includes(sharingPushes[0][0])) {
-        failures.push(`sharing: ${API} has ${sharingPushes.length} sharingChanged pushes, or one outside updateWebTabSharing -- the indicator's source is not the observed webrtcUI state`);
+    const pushFn = functionBody(api, 'pushWebTabSharing');
+    if (sharingPushes.length !== 1 || !pushFn.includes(sharingPushes[0][0])) {
+        failures.push(`sharing: ${API} has ${sharingPushes.length} sharingChanged pushes, or one outside pushWebTabSharing -- the indicator's source is not the observed webrtcUI state`);
+    }
+    // Only the observed report and the re-push of its stored state reach the push.
+    const pushCallers = [...api.matchAll(/\bpushWebTabSharing\(/g)].length;
+    if (pushCallers !== 3 || !sharingFn.includes('pushWebTabSharing(') || !functionBody(api, 'resendWebTabSharing').includes('pushWebTabSharing(')) {
+        failures.push(`sharing: pushWebTabSharing is called from somewhere other than updateWebTabSharing and resendWebTabSharing -- the indicator's source is not the observed webrtcUI state`);
+    }
+    // (o) Post-review: the duplicate check covers the destination, and a re-registered overlay gets its state again.
+    if (!/last\.windowGlobal === windowGlobal/.test(pushFn) || !/currentWindowGlobal/.test(pushFn)) {
+        failures.push(`sharing-destination: pushWebTabSharing's duplicate check ignores the frontend WindowGlobal -- a reloaded frontend would never be sent a live sharing state (the indicator fails open)`);
+    }
+    const reopened = /if \(webTabs\.has\(tabId\)\) \{([^}]*)return "already-open";/.exec(api);
+    if (!reopened || !reopened[1].includes('resendWebTabSharing(tabId)')) {
+        failures.push(`sharing-destination: webTabOpen's already-open branch does not re-push the overlay's sharing state -- a re-registered tab shows no indicator while a track is live`);
     }
     if (sharingFn && !/\.webRTC\b/.test(sharingFn)) {
         failures.push(`sharing: updateWebTabSharing does not read the stock webRTC state WebRTCParent hands updateBrowserSharing`);
@@ -578,6 +596,18 @@ function selfTest() {
             name: 'indicator honours a frame flag',
             sources: { ...clean, [WEB_TAB]: `${clean[WEB_TAB]}\nexport function plantedFlag(w: WebTabWidget): void { window.addEventListener('message', e => { w.sharing = e.data.sharing; }); }\n` },
             expect: 'indicator driven from a frame flag',
+        },
+        {
+            // Post-review fix reverted: the duplicate check is keyed on the overlay only.
+            name: 'sharing dedupe ignores the destination',
+            sources: { ...clean, [API]: clean[API].replace('last.key === key && last.windowGlobal === windowGlobal', 'last.key === key') },
+            expect: "duplicate check ignores the frontend WindowGlobal",
+        },
+        {
+            // Post-review fix reverted: a re-registered overlay is not sent its state again.
+            name: 'no sharing re-push on re-registration',
+            sources: { ...clean, [API]: clean[API].replace(/\n\s*resendWebTabSharing\(tabId\);\n(\s*return "already-open";)/, '\n$1') },
+            expect: "already-open branch does not re-push",
         },
     ];
     let failed = 0;

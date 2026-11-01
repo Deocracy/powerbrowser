@@ -3277,6 +3277,7 @@ export const PowerBrowserAPI = Object.freeze({
       return "refused-scheme";
     }
     if (webTabs.has(tabId)) {
+      resendWebTabSharing(tabId);
       return "already-open";
     }
     const doc = theiaBrowser.ownerDocument;
@@ -6955,7 +6956,7 @@ function placePromptAnchor(browser) {
   });
 }
 
-// D-05: the sharing state last pushed per overlay, so a stock update that changes no kind sends nothing.
+// D-05: per overlay, the sharing state last observed and the frontend WindowGlobal it was pushed to.
 const sharingSent = new WeakMap();
 
 // The shell gBrowser's updateBrowserSharing (powerbrowser.js). WebRTCParent.updateIndicators calls it with webrtcUI's own
@@ -6969,13 +6970,30 @@ export function updateWebTabSharing(browser, sharingState) {
   }
   const webRTC = (sharingState && sharingState.webRTC) || {};
   // Paused still counts as shared, as tabbrowser's getTabSharingState reads it.
-  const camera = Boolean(webRTC.camera);
-  const microphone = Boolean(webRTC.microphone);
-  const screen = Boolean(webRTC.screen);
-  const key = `${camera}/${microphone}/${screen}`;
-  if ((sharingSent.get(browser) ?? "false/false/false") === key) {
+  pushWebTabSharing(browser, tabId, host, { camera: Boolean(webRTC.camera), microphone: Boolean(webRTC.microphone), screen: Boolean(webRTC.screen) }, false);
+}
+
+// webTabOpen of an overlay chrome already holds (a reloaded frontend registering it again): the frontend's widget is new,
+// so the last observed state is pushed again. Phase 36 adoption has no hook in this tree yet; adoptTab calls this too.
+function resendWebTabSharing(tabId) {
+  const entry = webTabs.get(tabId);
+  const last = entry ? sharingSent.get(entry.browser) : undefined;
+  const host = last ? tabHosts.get(entry.browser.ownerGlobal) : null;
+  if (host) {
+    pushWebTabSharing(entry.browser, tabId, host, last.state, true);
+  }
+}
+
+// The one sharingChanged push. The duplicate check covers the destination too: a frontend in a new WindowGlobal has never
+// seen the state, and a skipped push there would leave the indicator stale or hidden while a track is live.
+function pushWebTabSharing(browser, tabId, host, state, force) {
+  const windowGlobal = host.theiaBrowser.browsingContext?.currentWindowGlobal ?? null;
+  const key = `${state.camera}/${state.microphone}/${state.screen}`;
+  const last = sharingSent.get(browser);
+  const unchanged = last ? last.key === key && last.windowGlobal === windowGlobal : key === "false/false/false";
+  if (unchanged && !force) {
     return;
   }
-  sharingSent.set(browser, key);
-  sendWebTabPush(host.theiaBrowser, { kind: "sharingChanged", tabId, camera, microphone, screen });
+  sharingSent.set(browser, { windowGlobal, key, state });
+  sendWebTabPush(host.theiaBrowser, { kind: "sharingChanged", tabId, camera: state.camera, microphone: state.microphone, screen: state.screen });
 }
