@@ -1,5 +1,5 @@
 {
-  "model_profile": "budget",
+  "model_profile": "quality",
   "commit_docs": true,
   "parallelization": true,
   "search_gitignored": false,
@@ -57,18 +57,18 @@
     "full_on_enable": true
   },
   "models": {
-    "planning": "sonnet",
-    "discuss": "haiku",
-    "research": "haiku",
-    "execution": "haiku",
-    "verification": "haiku",
-    "completion": "haiku"
+    "planning": "opus",
+    "discuss": "opus",
+    "research": "opus",
+    "execution": "opus",
+    "verification": "opus",
+    "completion": "opus"
   },
   "model_overrides": {
-    "gsd-debugger": "sonnet",
-    "gsd-code-reviewer": "sonnet",
-    "gsd-security-auditor": "sonnet",
-    "gsd-code-fixer": "haiku",
-    "gsd-roadmapper": "sonnet"
+    "gsd-debugger": "opus",
+    "gsd-code-reviewer": "opus",
+    "gsd-security-auditor": "opus",
+    "gsd-code-fixer": "opus",
+    "gsd-roadmapper": "opus"
   }
 }
