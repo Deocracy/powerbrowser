@@ -667,7 +667,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/verify-descriptor-monotonic.mjs --descriptors "$RUNNER_TEMP/descriptors"
 
-      # DIST-08. Every patchURL and servedMarUrl must be https on the manifest's mar_origin with path
+      # The manifest is build output (data): the tree decides the MAR origin and the update channel, as
+      # derive_key decides the release key, and a manifest that disagrees is refused naming both values.
+      - name: Require the manifest's MAR origin and update channel to equal this tree's
+        run: |
+          set -euo pipefail
+          read -r ORIGIN CHANNEL < <(node --input-type=module -e "import { resolveConfig, marOrigin, updateChannel } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(marOrigin(config) ?? 'unset', updateChannel(config).channel);" | tail -n 1)
+          [[ "$ORIGIN" == https://* ]] || { echo "::error::configuration.toml [urls] mar_origin is $ORIGIN; no descriptor may name a MAR origin" >&2; exit 1; }
+          M_ORIGIN="$(jq -r '.mar_origin // "null"' release/release-manifest.json)"
+          M_CHANNEL="$(jq -r '.update_channel // "null"' release/release-manifest.json)"
+          [ "$M_ORIGIN" = "$ORIGIN" ] || { echo "::error::manifest mar_origin '$M_ORIGIN' differs from '$ORIGIN' derived from the dispatched commit; the tree decides" >&2; exit 1; }
+          [ "$M_CHANNEL" = "$CHANNEL" ] || { echo "::error::manifest update_channel '$M_CHANNEL' differs from '$CHANNEL' derived from the dispatched commit; the tree decides" >&2; exit 1; }
+          echo "manifest agrees with the tree: MAR origin $ORIGIN, update channel $CHANNEL"
+
+      # DIST-08. Every patchURL and servedMarUrl must be https on the tree's mar_origin with path
       # /<tag>/<asset>; any other form fails here, naming the descriptor and the value, before any commit.
       - name: Refuse any patch URL that is not the MAR origin at /<tag>/<asset> (the pre-commit form gate)
         run: node scripts/verify-channel-live.mjs --form-only --manifest release/release-manifest.json --descriptors "$RUNNER_TEMP/descriptors"
@@ -729,6 +742,19 @@ jobs:
         with:
           name: release-linux
           path: release
+
+      # The manifest is build output (data): the tree decides the MAR origin and the update channel, as
+      # derive_key decides the release key, and a manifest that disagrees is refused naming both values.
+      - name: Require the manifest's MAR origin and update channel to equal this tree's
+        run: |
+          set -euo pipefail
+          read -r ORIGIN CHANNEL < <(node --input-type=module -e "import { resolveConfig, marOrigin, updateChannel } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(marOrigin(config) ?? 'unset', updateChannel(config).channel);" | tail -n 1)
+          [[ "$ORIGIN" == https://* ]] || { echo "::error::configuration.toml [urls] mar_origin is $ORIGIN; no descriptor may name a MAR origin" >&2; exit 1; }
+          M_ORIGIN="$(jq -r '.mar_origin // "null"' release/release-manifest.json)"
+          M_CHANNEL="$(jq -r '.update_channel // "null"' release/release-manifest.json)"
+          [ "$M_ORIGIN" = "$ORIGIN" ] || { echo "::error::manifest mar_origin '$M_ORIGIN' differs from '$ORIGIN' derived from the dispatched commit; the tree decides" >&2; exit 1; }
+          [ "$M_CHANNEL" = "$CHANNEL" ] || { echo "::error::manifest update_channel '$M_CHANNEL' differs from '$CHANNEL' derived from the dispatched commit; the tree decides" >&2; exit 1; }
+          echo "manifest agrees with the tree: MAR origin $ORIGIN, update channel $CHANNEL"
 
       - name: Prove the public channel equals the Release (byte-equal descriptors, MAR-origin form, HEAD size, GET sha512, latest version)
         env:

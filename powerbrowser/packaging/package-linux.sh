@@ -107,17 +107,27 @@ done < <(grep -rlF "$ROOT/" "$STAGE/theia" "$STAGE/node" 2>/dev/null || true)
     # [urls] mar_origin (DIST-08): the primary MAR origin, or empty when unset. The writer
     # records an empty value as null, so the descriptor form gate can fail closed.
     MAR_ORIGIN="$(node --input-type=module -e "import { resolveConfig, marOrigin } from '$ROOT/scripts/generate.mjs'; const { config } = resolveConfig('$ROOT/configuration.toml'); console.log(marOrigin(config) ?? '');")"
+    # The build identity the descriptor gates read (descriptor-monotonic, channel-live): BuildID and the
+    # baked [AppUpdate] URL template from application.ini, and BUILD_TARGET (OS_TARGET_TARGET_XPCOM_ABI,
+    # as UpdateUtils formats it) from the [substs] block of config.status.
+    BUILD_ID="$(sed -n 's/^BuildID=//p' "$OBJ/dist/bin/application.ini")"
+    UPDATE_URL="$(sed -n '/^\[AppUpdate\]/,/^\[/s/^URL=//p' "$OBJ/dist/bin/application.ini")"
+    subst() { sed -n "/^substs = {/,/^[A-Za-z_][A-Za-z0-9_]* = /s/^ \{3,4\}'$1': '\([^']*\)',\{0,1\}\$/\1/p" "$OBJ/config.status"; }
+    BUILD_TARGET="$(subst OS_TARGET)_$(subst TARGET_XPCOM_ABI)"
+    [ -n "$BUILD_ID" ] && [ -n "$UPDATE_URL" ] && [ "${BUILD_TARGET#_}" = "$BUILD_TARGET" ] && [ "${BUILD_TARGET%_}" = "$BUILD_TARGET" ] \
+        || fail "the release objdir lacks BuildID, the [AppUpdate] URL or OS_TARGET/TARGET_XPCOM_ABI (got '$BUILD_ID', '$UPDATE_URL', '$BUILD_TARGET'); rebuild the release tree"
     # Beside the tarball only. A copy in $STAGE would be packed into the archive
     # the end user installs, and its host field names the build machine.
     # JSON.stringify escapes the values; printf did not.
     node --input-type=module -e '
         import { writeFileSync } from "node:fs";
-        const [out, version, releaseKey, channel, marChannel, marOrigin, tree, host] = process.argv.slice(1);
+        const [out, version, releaseKey, channel, marChannel, marOrigin, buildId, buildTarget, updateUrl, tree, host] = process.argv.slice(1);
         const manifest = { version, release_key: releaseKey, update_channel: channel, mar_channel_id: marChannel,
-            mar_origin: marOrigin === "" ? null : marOrigin, tree, host,
+            mar_origin: marOrigin === "" ? null : marOrigin, build_id: buildId, build_target: buildTarget, update_url: updateUrl, tree, host,
             toolchain: "container pb-gecko-build (--enable-bootstrap; see toolchain-baseline.txt)" };
         writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n");
     ' "$OBJ/dist/release-manifest.json" "$VERSION" "$RELEASE_KEY" "$CHANNEL" "$MAR_CHANNEL" "$MAR_ORIGIN" \
+        "$BUILD_ID" "$BUILD_TARGET" "$UPDATE_URL" \
         "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" "$(hostname 2>/dev/null || echo unknown)"
     echo "package-linux: wrote $OBJ/dist/release-manifest.json (release $RELEASE_KEY, channel $CHANNEL)"
 }

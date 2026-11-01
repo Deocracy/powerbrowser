@@ -138,7 +138,7 @@ function makeReporter() {
 }
 
 /** sha512 hex plus byte size of MAR bytes -- the two values pinning the descriptor. */
-function marDigest(bytes) {
+export function marDigest(bytes) {
     return {
         hashValue: createHash('sha512').update(bytes).digest('hex'),
         size: String(bytes.length),

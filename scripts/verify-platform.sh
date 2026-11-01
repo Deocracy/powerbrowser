@@ -4958,6 +4958,16 @@ run_own_checks() {
     # gate, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
     # step. It writes nothing.
     "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
+    # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A
+    # mkdtemp manifest (mar_origin from configuration.toml) and descriptor tree served by one loopback
+    # server through an injected transport go green first, then ten plants each go red naming the
+    # target and the value: a wrong hashValue, a missing target file, a 404 MAR, a size mismatch,
+    # five string-level patch URLs refused before any MAR fetch (a github.com Releases download, a
+    # release-assets URL, another host, a path other than /<tag>/<asset>, a non-https scheme), and a
+    # manifest mar_origin that disagrees with the tree (red naming both values; the tree decides). Honestly
+    # --quick: node:crypto, text files in mkdtemp and loopback HTTP; no build, browser, display or
+    # public network. It writes nothing in the repo.
+    "channel-live-self-test|node $REPO_ROOT/scripts/verify-channel-live.mjs --self-test"
     # NEW (Phase 49 review WR-09): the one key comparator behind the key>tag gate and the stale-approval
     # guard. Exit 0 newer, 1 not newer, 2 an unparseable key or tag (an error, never "not newer").
     "release-key-newer-self-test|node $REPO_ROOT/scripts/release-key-newer.mjs --self-test"
@@ -5691,6 +5701,13 @@ run_own_checks() {
       # Full tier: read-only gh api against the live org and repo (network, gh auth with repo
       # and read:org); green only after the owner applies the settings at plan 41-04.
       "repo-controls|node $REPO_ROOT/scripts/verify-repo-controls.mjs"
+
+      # NEW (Phase 49, UPD-17): the public channel equals the latest Release. Full tier: read-only gh api
+      # against the live Releases and the updates repo, plus public HTTPS reads of each update.xml through
+      # the baked 11-segment path and of each MAR on the MAR origin (HEAD size, GET sha512). Every value
+      # derives from release-manifest.json (--manifest, else the latest Release's asset). Green only after
+      # the first public release; until then it fails closed naming the missing Release, never green.
+      "channel-live|node $REPO_ROOT/scripts/verify-channel-live.mjs"
 
       # NEW (Phase 44, UPD-26): full tier. Read-only gh api against the live Releases (network, gh auth with
       # read access to the repository): each non-draft Release's release-manifest.json is read, and each candidate
