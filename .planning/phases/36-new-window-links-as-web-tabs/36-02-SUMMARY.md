@@ -65,7 +65,7 @@ Complete for static scope. Nothing was run live (owner ruling: no `./mach build`
 - **Task 1 verified (049fe84f).** All acceptance greps hold: `kind: 'webTabAdopt'` is a union member and is sent, there is one `onPush('adoptTab'` and one `onPush('dropAdoptedTab'`, the `unknown-tab` sweep line is present, `mode: 'tab-after'` appears twice (openInBackground and adopt), and `pcKey` reaches no title, tooltip or user error. The must-haves were checked one by one:
   - *Adjacency:* the tab is added `tab-after` the opener widget. If the opener has closed or is unknown, the tab is added at the end of the main area, so the navigation is never dropped.
   - *Background-aware focus:* `activateWidget` runs only when `background` is false, so a background adopt leaves the opener focused.
-  - *Unknown-tab reply:* any reply that is not ok, including `unknown-tab` and a timeout, sends `webTabClose` for the widget id and disposes the unattached widget. This covers the late-ack edge.
+  - *Unknown-tab reply:* any reply that is not ok, including `unknown-tab` and a timeout, sends `webTabClose` for the widget id and disposes the unattached widget. This covers the late-ack edge. Post-merge correction (2026-11-01): describes the pre-fix `adopt()`. 36-REVIEW WR-01 and WR-02 changed it, so a late ack no longer closes a page chrome already adopted.
   - *dropAdoptedTab:* disposes the named widget if this frontend still has it.
   - *Malformed push:* dropped, and logged as `adopt dropped: adoptTab` (kind only).
   - *Close-reselect:* no new code. Theia's `ApplicationShell` handles it, and 36-03 asserts it live.
@@ -134,7 +134,7 @@ See `key-decisions` in the frontmatter.
    - an adopted tab landing after its opener, foreground and background;
    - close-adopted-reselects-opener;
    - the unknown-tab self-sweep and the dropAdoptedTab sweep;
-   - the GUI-01 rows with the popup branch gone (a palette invocation opening the stock window through openStockTab);
+   - the GUI-01 rows with the popup branch gone (a palette invocation opening the stock window through openStockTab); Post-merge correction (2026-11-01): the GUI-01 rows drive a bare `window.open` and cover only the receiver's null fall-through, not a palette run of the command. The palette route is exercised by verify-ext-tab-host-live.mjs and verify-address-bar-live.mjs.
    - the dead-channel throw path, if the channel is dead when that leg runs.
 
 3. **Recorded reduction (D-36, accepted).** With the actor channel down (no chrome host, as in plain Theia in a dev browser, or a probe that timed out), the command now shows its actionable error instead of opening a stock window by `window.open`.
@@ -152,8 +152,8 @@ None. No new endpoint, kind or trust boundary. The change removes a route (the p
 ## Verification
 
 - `theia/node_modules/.bin/tsc --noEmit -p theia/extensions/tab-uris`: clean.
-- `node scripts/verify-new-window-adopt.mjs`: PASS. `--self-test`: PASS, 16 plants. Push-versus-subscription parity holds with both halves present.
-- `node scripts/verify-web-tab-bridge.mjs`: PASS (33 webTab kinds, 39 sources). `--self-test`: PASS, 36 plants, including the new second-sender and `dead-channel-opens` plants, each going red and naming its drift.
+- `node scripts/verify-new-window-adopt.mjs`: PASS. `--self-test`: PASS, 16 plants. Push-versus-subscription parity holds with both halves present. Post-merge correction (2026-11-01): the adopt gate now has 22 plants.
+- `node scripts/verify-web-tab-bridge.mjs`: PASS (33 webTab kinds, 39 sources). `--self-test`: PASS, 36 plants, including the new second-sender and `dead-channel-opens` plants, each going red and naming its drift. Post-merge correction (2026-11-01): the bridge gate now has 35 kinds and 62 plants.
 - `grep -n "window.open(" theia/extensions/tab-uris/src/browser/browser-window-command.ts`: nothing.
 - `scripts/verify-platform.sh --quick`: exit 0, 168 rows PASS, 0 FAIL ("verify-platform: PASS -- all checks passed"). This includes `gui07-strip-spike-verdict` and its self-test, which were red at the end of 36-01. No registry row changed.
 

@@ -11,7 +11,7 @@ requires:
     provides: openStockTab (delayed-startup-safe), the GUI-01 stock-window fall-through
 provides:
   - PowerBrowserAPI.installNewWindowReceivers(win) -- `win.browserDOMWindow = {` (full nsIBrowserDOMWindow member set) and `win.openLinkIn`
-  - PowerBrowserAPI.openAdoptedWebTab(openerBrowser, url, { inBackground, triggeringPrincipal }) -- the public open-as-adopted-tab path (Phase 37)
+  - PowerBrowserAPI.openAdoptedWebTab(openerBrowser, url, { inBackground, triggeringPrincipal }) -- the public open-as-adopted-tab path (Phase 37) (Post-merge correction (2026-11-01): removed. Phase 37's Allow replays the page's own window.open through popupAndRedirectBlocker.unblockPopup, so the receivers adopt it.)
   - webTabOpen pending mode (opener remoteType, openWindowInfo before append, returns the element) and PowerBrowserAPI.webTabAttach (the split registration half)
   - end-of-file adopt section -- adoptContentWindow, adoptLinkIn, createPendingOverlay, adoptFallback, adoptPendingOverlay; pc-<n> pending table; adoptTab and dropAdoptedTab pushes; 5 s openStockTab fallback
   - case "webTabAdopt" in handleWebTabAction (routed through WEB_TAB_ACTION_KINDS)
@@ -21,7 +21,7 @@ affects:
   - 36-02 (its Task 1 frontend adopt landed here -- verify, do not re-implement; ack must precede addWidget)
   - 36-03 (live adopt scenarios run against this chrome half)
   - 35 merge (add the browserDOMWindow IDL_SHIMS entry, below)
-  - 37 (Allow on a blocked popup calls PowerBrowserAPI.openAdoptedWebTab)
+  - 37 (Allow on a blocked popup calls PowerBrowserAPI.openAdoptedWebTab) (Post-merge correction (2026-11-01): stale. 37 uses the unblockPopup replay; openAdoptedWebTab no longer exists.)
 tech-stack:
   added: []
   patterns:
@@ -164,17 +164,17 @@ The two sets are identical by construction, because the pending overlay is built
 
 ### Scope Deviations
 
-- **IDL_SHIMS entry skipped (owner ruling).** Phase 35's shim comparison (`IDL_SHIMS`, `SHIM_ABSENT`, the shim-name derivation) has not merged into this tree. The entry is a deferred merge item (below). Coverage is not lost, because `new-window-adopt` already compares the IDL set.
+- **IDL_SHIMS entry skipped (owner ruling).** Phase 35's shim comparison (`IDL_SHIMS`, `SHIM_ABSENT`, the shim-name derivation) has not merged into this tree. The entry is a deferred merge item (below). Coverage is not lost, because `new-window-adopt` already compares the IDL set. Post-merge correction (2026-11-01): closed by the "Merge into main" section in 36-02-SUMMARY, which added the entry.
 - **Self-test plants use in-memory source copies** (the print-save gate's shape) instead of mkdtemp copies. The tree is never written.
-- **Adopted overlays do not enter the Phase 31.1 tab host.** `tabHostAddTab` stays webTabOpen's only call, and `makeTabNode` hard-codes `openerTab: null`. There is no TabOpen-with-openerTab entry point (assumption A-01 is false). RESEARCH A-01's fallback applies: adopted tabs work as plain overlays, and extensions do not see them yet.
+- **Adopted overlays do not enter the Phase 31.1 tab host.** `tabHostAddTab` stays webTabOpen's only call, and `makeTabNode` hard-codes `openerTab: null`. There is no TabOpen-with-openerTab entry point (assumption A-01 is false). RESEARCH A-01's fallback applies: adopted tabs work as plain overlays, and extensions do not see them yet. Post-merge correction (2026-11-01): reversed. `adoptPendingOverlay` now calls `tabHostAddTab(win, tabId, pending.browser, pending.opener)` after `webTabAttach` (37-REVIEW CR-01), so adopted tabs join the tab host and extensions see them.
 
 ## Deferred Items
 
-1. **Phase 35 merge: add the `browserDOMWindow` IDL_SHIMS entry** to `scripts/verify-shell-gbrowser-standin.mjs`. Map `browserDOMWindow` to `upstream/dom/interfaces/base/nsIBrowserDOMWindow.idl`. Reason text: Gecko C++ calls it through the chrome window, on the remote path at `ContentParent.cpp:5430,5451,5490` and the in-process path at `nsContentTreeOwner.cpp:524,550`. REQUIRED members are the IDL's six members (`:139,153,171,186,196,202`) plus JS call sites on a `browserDOMWindow` receiver. Plant: a staged boundary copy whose shim drops `canClose` must go red naming `UNIMPLEMENTED browserDOMWindow.canClose`. `openLinkIn` stays out of `IDL_SHIMS` (it is function-valued). The literal is already spelled `win.browserDOMWindow = {` with `QueryInterface` as a member, so 35's `objectLiteralMembers` reads it. Note that 35's parser, as it exists today for ZOOM_SHIMS, would also collect `generateQI` from the `QueryInterface:` value. The 35 comparison must skip identifiers in value position, as this plan's gate does.
+1. **Phase 35 merge: add the `browserDOMWindow` IDL_SHIMS entry** to `scripts/verify-shell-gbrowser-standin.mjs`. Map `browserDOMWindow` to `upstream/dom/interfaces/base/nsIBrowserDOMWindow.idl`. Reason text: Gecko C++ calls it through the chrome window, on the remote path at `ContentParent.cpp:5430,5451,5490` and the in-process path at `nsContentTreeOwner.cpp:524,550`. REQUIRED members are the IDL's six members (`:139,153,171,186,196,202`) plus JS call sites on a `browserDOMWindow` receiver. Plant: a staged boundary copy whose shim drops `canClose` must go red naming `UNIMPLEMENTED browserDOMWindow.canClose`. `openLinkIn` stays out of `IDL_SHIMS` (it is function-valued). The literal is already spelled `win.browserDOMWindow = {` with `QueryInterface` as a member, so 35's `objectLiteralMembers` reads it. Note that 35's parser, as it exists today for ZOOM_SHIMS, would also collect `generateQI` from the `QueryInterface:` value. The 35 comparison must skip identifiers in value position, as this plan's gate does. Post-merge correction (2026-11-01): closed by the "Merge into main" section in 36-02-SUMMARY.
 2. **Live proof (plan 36-03).** None of the following has been run: Gecko accepting the returned element (frameloader remote tab, no double load), a working `window.opener` (postMessage round trip), popup-features windows staying stock windows, background versus foreground focus, the 5 s fallback, the unknown-key sweep, and the GUI-01 rows with the receiver installed.
 3. **36-02 overlap.** 36-02 Task 1 (`adopt`, `dropAdopted`, both subscriptions, the union member) is in `049fe84f`. The 36-02 executor should verify it and not re-implement it. 36-02-PLAN's order (`addWidget`, then activate, then `request webTabAdopt`) would build a second overlay through the widget's own `webTabOpen`. The ack must come first.
-4. **Tab-host follow-up (31.1 side).** Adopted overlays need a TabOpen with `openerTab` set, through a sanctioned second `tabHostAddTab` path or an amended `verify-ext-tab-host-scope.mjs` rule.
-5. **openLinkIn has no stock caller in the shell.** BrowserGlue is not loaded, so ClickHandler is not registered. The path is reachable only through `openAdoptedWebTab` or a future context menu (Phase 35). Middle-click on a link in an overlay does not reach it yet.
+4. **Tab-host follow-up (31.1 side).** Adopted overlays need a TabOpen with `openerTab` set, through a sanctioned second `tabHostAddTab` path or an amended `verify-ext-tab-host-scope.mjs` rule. Post-merge correction (2026-11-01): closed by 37-REVIEW CR-01 (`tabHostAddTab` from `adoptPendingOverlay`).
+5. **openLinkIn has no stock caller in the shell.** BrowserGlue is not loaded, so ClickHandler is not registered. The path is reachable only through `openAdoptedWebTab` or a future context menu (Phase 35). Middle-click on a link in an overlay does not reach it yet. Post-merge correction (2026-11-01): `openAdoptedWebTab` is gone; Phase 37's Allow reaches the receivers through the `unblockPopup` replay.
 6. **Late-ack edge.** If the frontend's 5 s request times out but chrome did adopt, the frontend sends `webTabClose` and drops the widget, and the page is not reopened. This is rare, because the frontend and chrome share one process.
 
 ## Known Stubs
@@ -185,7 +185,7 @@ None.
 
 | Flag | File | Description |
 |------|------|-------------|
-| threat_flag: new-public-entry | powerbrowser/shell/PowerBrowserAPI.sys.mjs | `openAdoptedWebTab` is a chrome-only literal member (not reachable from the actor channel). It applies the same opener and scheme walls and replaces a missing or system principal with a null principal. |
+| threat_flag: new-public-entry | powerbrowser/shell/PowerBrowserAPI.sys.mjs | `openAdoptedWebTab` is a chrome-only literal member (not reachable from the actor channel). It applies the same opener and scheme walls and replaces a missing or system principal with a null principal. | Post-merge correction (2026-11-01): `openAdoptedWebTab` was removed; the entry no longer exists.
 
 ## Verification
 

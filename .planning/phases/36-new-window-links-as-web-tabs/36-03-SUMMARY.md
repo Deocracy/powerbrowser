@@ -6,7 +6,7 @@ tags: [new-window, adopt, web-tabs, live-harness, bidi, self-test, gui-01]
 status: partial
 requires:
   - phase: 36-new-window-links-as-web-tabs
-    provides: 36-01 receivers, pending overlay, adoptTab/dropAdoptedTab pushes, webTabAdopt arm, 5 s openStockTab fallback, PowerBrowserAPI.openAdoptedWebTab; 36-02 adopt subscription and the openStockTab-only GUI-01 command
+    provides: 36-01 receivers, pending overlay, adoptTab/dropAdoptedTab pushes, webTabAdopt arm, 5 s openStockTab fallback, PowerBrowserAPI.openAdoptedWebTab; 36-02 adopt subscription and the openStockTab-only GUI-01 command (Post-merge correction (2026-11-01): PowerBrowserAPI.openAdoptedWebTab was removed; Phase 37 uses the unblockPopup replay.)
   - phase: 27-groundwork-navigation-buttons-and-page-focus-keys
     provides: scripts/lib/pb-live-probe.mjs (withProbeShell, push recorder, serveNavPages, inChrome) and the verify-nav-keys-live.mjs runner shape
 provides:
@@ -150,14 +150,14 @@ Items carried forward from 36-01 and 36-02 that this pass covers:
 - The 5 s fallback. Covered by adopt-fallback.
 - The unknown-key sweep and the dropAdoptedTab sweep (36-01 deferred 2, 36-02 deferred 2). Covered by adopt-unknown-key.
 - Close-adopted-reselects-opener (36-02 deferred 2). Covered by the adopt-order reselect leg.
-- The GUI-01 rows with the receiver installed and the popup branch gone, where a palette invocation opens the stock window through openStockTab (36-01 deferred 2, 36-02 deferred 2). Covered by step 4.
+- The GUI-01 rows with the receiver installed and the popup branch gone, where a palette invocation opens the stock window through openStockTab (36-01 deferred 2, 36-02 deferred 2). Covered by step 4. Post-merge correction (2026-11-01): not covered by step 4. The GUI-01 rows drive a bare `window.open` and cover only the receiver's null fall-through, not a palette invocation of the command.
 
 Carried forward but **not** covered by this script:
 - The dead-channel throw path of the stock-window command (36-02 deferred 2). No scenario kills the actor channel.
-- An adopt attach failure after a successful ack (36-02 deferred 4).
-- The late-ack edge (36-01 deferred 6).
-- Adopted overlays entering the 31.1 tab host (36-01 deferred 4).
-- The Phase 35 `IDL_SHIMS` merge item (36-01 deferred 1).
+- An adopt attach failure after a successful ack (36-02 deferred 4). Post-merge correction (2026-11-01): fixed in code (36-REVIEW WR-01); the live leg is still missing.
+- The late-ack edge (36-01 deferred 6). Post-merge correction (2026-11-01): fixed in code (36-REVIEW WR-02); the live leg is still missing.
+- Adopted overlays entering the 31.1 tab host (36-01 deferred 4). Post-merge correction (2026-11-01): now in code (`tabHostAddTab` in `adoptPendingOverlay`, 37-REVIEW CR-01); the live leg is still missing.
+- The Phase 35 `IDL_SHIMS` merge item (36-01 deferred 1). Post-merge correction (2026-11-01): closed by the "Merge into main" section in 36-02-SUMMARY.
 - The CLAUDE.md rule-5 owner wording (36-02 deferred 1).
 - The VALIDATION manual rows: VB-01 visual parity, and the stock window opening and closing cleanly.
 
