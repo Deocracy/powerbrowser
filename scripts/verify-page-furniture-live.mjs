@@ -47,6 +47,27 @@
  *                       first tab pushes nothing within 1500 ms; made current, the
  *                       same right-click pushes a menu. Scored only when
  *                       context-menu passed (CONTROL_OF).
+ *   menu-page-tools     (35-04) On a blank area: Bookmark Page opens Phase 33's star
+ *                       editor (.pb-bookmark-editor) and the page is in Places; Save
+ *                       Page As opens Theia's "Save page as" dialog (cancelled: no
+ *                       error); View Page Source loads view-source:<page> in the tab
+ *                       (Phase 32's same-tab route). On an element with an id:
+ *                       Inspect opens the tab's toolbox and the inspector selects that
+ *                       element within 10 s. In the frame: This Frame > View Frame
+ *                       Source loads view-source:<frame document>.
+ *   menu-edit           (35-04) In a text field with a selected word: Undo, Cut, Copy,
+ *                       Paste, Delete and Select All show with textActions.ftl labels;
+ *                       Copy fills the clipboard, Paste into a second field sets it,
+ *                       Undo removes the paste; on an image, Copy Image leaves an
+ *                       image/png flavour on the clipboard.
+ *   menu-spelling       (35-04) A spellcheck textarea holding "teh": the menu offers a
+ *                       "the" suggestion row and picking it fixes the word; on "wrod",
+ *                       Add to Dictionary drops it from the next menu's suggestions and
+ *                       Undo Add brings them back.
+ *   menu-save           (35-04) Save Link As on a link to a served file: Theia's save
+ *                       dialog takes a path in a fresh temp directory; the file lands
+ *                       with the served bytes, its GET carried the page's origin as
+ *                       Referer, and a downloadsChanged row names it (Phase 32's panel).
  *
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
@@ -54,6 +75,8 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
     BROKEN,
@@ -84,6 +107,7 @@ const recordReferer = path => request => {
     return '';
 };
 const MENU_WORDS = 'menu words';
+const INSPECT_ID = 'inspect-me';
 
 const PAGES = {
     '/furniture': {
@@ -112,6 +136,17 @@ const PAGES = {
     '/frame': { title: 'Frame', body: '<p style="height: 60px">frame</p>' },
     '/search': { title: 'Search', body: '<p>search</p>', extra: recordReferer('/search') },
     '/ide-link': { title: 'IDE link', body: '<p>ide</p>' },
+    // 35-04: the page-tool, edit, spelling and save targets.
+    '/tools': {
+        title: 'Tools',
+        body: '<style>body { font: 20px sans-serif; margin: 24px; } p, div { margin: 18px 0; }</style>'
+            + `<p id="${INSPECT_ID}">Inspect me</p>`
+            + '<p><input id="field" value="alpha beta"> <input id="field2" value=""></p>'
+            + '<p><textarea id="spell" spellcheck="true" rows="2" cols="24">teh</textarea> <textarea id="spell2" spellcheck="true" rows="2" cols="24">wrod</textarea></p>'
+            + '<iframe id="frame" src="/frame" width="200" height="80"></iframe>'
+            + '<div id="blank" style="height: 80px"></div>',
+        extra: () => (assets ? `<p><a id="filelink" href="${assets.url('/file.bin')}">File link</a> <img id="img" src="${assets.url('/pixel.png')}" width="64" height="64" alt="pixel"></p>` : ''),
+    },
     '/pip': {
         title: 'Picture in Picture',
         body: '<canvas id="c" width="320" height="180"></canvas><video id="v" width="320" height="180" muted autoplay></video>'
@@ -399,11 +434,18 @@ async function pipClose({ app, pages, plant, fail, note }) {
 /** A one-pixel PNG; serveNavPages serves HTML only, so the image has its own loopback server. */
 const PIXEL_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 let assets = null;
+/** 35-04: the bytes Save Link As must land (the asset server serves them at /file.bin). */
+const FILE_BYTES = Buffer.from('page menu save check\n');
 
 async function serveAssets() {
     const requests = [];
     const server = createServer((request, response) => {
-        requests.push({ path: new URL(request.url, 'http://127.0.0.1').pathname, at: Date.now() });
+        requests.push({ path: new URL(request.url, 'http://127.0.0.1').pathname, at: Date.now(), referer: request.headers.referer ?? null });
+        if (request.url === '/file.bin') {
+            response.writeHead(200, { 'content-type': 'application/octet-stream' });
+            response.end(FILE_BYTES);
+            return;
+        }
         if (request.url === '/pixel.png') {
             response.writeHead(200, { 'content-type': 'image/png' });
             response.end(PIXEL_PNG);
@@ -419,14 +461,14 @@ async function serveAssets() {
 
 const readTree = rel => readFileSync(join(REPO_ROOT, rel), 'utf8');
 
-/** Upstream's en-US label for a browserContext.ftl message (its .label, else its .aria-label). */
+/** Upstream's en-US label for a browserContext.ftl (or, for text-action-*, textActions.ftl) message: its .label, else its .aria-label. */
 function ftlLabel(id) {
-    const text = readTree('upstream/browser/locales/en-US/browser/browserContext.ftl');
+    const text = readTree(id.startsWith('text-action-') ? 'upstream/toolkit/locales/en-US/toolkit/global/textActions.ftl' : 'upstream/browser/locales/en-US/browser/browserContext.ftl');
     const block = new RegExp(`^${id} =\\n((?:[ \\t]+\\..*\\n)+)`, 'm').exec(text);
     const attr = name => block && new RegExp(`^\\s+\\.${name} = (.*)$`, 'm').exec(block[1])?.[1];
     const label = attr('label') ?? attr('aria-label');
     if (!label) {
-        throw new Error(`${BROKEN} no label for ${id} in upstream browserContext.ftl`);
+        throw new Error(`${BROKEN} no label for ${id} in upstream's ftl`);
     }
     return label;
 }
@@ -676,15 +718,18 @@ async function contextMenu({ app, pages, plant, fail, note }) {
     const strip = await inChrome(app, `return Services.prefs.getBoolPref('privacy.query_stripping.strip_on_share.enabled', false);`) === true;
     const rows = pageMenuRows();
     const appName = await app.evaluate(appNameExpr);
-    const linkNames = ['openLink', 'copyLink', ...(strip ? ['stripOnShare'] : []), 'search'];
+    // 35-04: Inspect shows on every target (default prefs); the page rows on a blank area and in the frame.
+    const inspect = await inChrome(app, `return Services.prefs.getBoolPref('devtools.inspector.enabled', true) && !Services.prefs.getBoolPref('devtools.policy.disabled', false);`) === true ? ['inspect'] : [];
+    const pageNames = ['navigation', 'reload', 'bookmarkPage', 'savePage', 'selectAll', 'viewSource', ...inspect];
+    const linkNames = ['openLink', 'copyLink', ...(strip ? ['stripOnShare'] : []), 'search', ...inspect];
     const targets = [
-        { name: 'link', selector: '#link', when: linkNames },
+        { name: 'link', selector: '#link', when: ['saveLink', ...linkNames] },
         { name: 'javascript link', selector: '#jslink', when: linkNames, refused: true },
-        { name: 'image', selector: '#img', when: ['viewImage', 'copyImage'] },
-        { name: 'video', selector: '#v', when: ['mediaPause', 'mediaUnmute', 'onMedia', 'mediaShowControls', 'onVideo'] },
-        { name: 'selection', selector: '#words', when: ['search'], select: true },
-        { name: 'frame', selector: '#frame', when: ['navigation', 'reload', 'inFrame', 'frameTarget'] },
-        { name: 'blank', selector: '#blank', when: ['navigation', 'reload'] },
+        { name: 'image', selector: '#img', when: ['viewImage', 'saveImage', 'copyImageContents', 'copyImage', ...inspect] },
+        { name: 'video', selector: '#v', when: ['mediaPause', 'mediaUnmute', 'onMedia', 'mediaShowControls', 'onVideo', ...inspect] },
+        { name: 'selection', selector: '#words', when: ['search', 'copy', 'selectAll', ...inspect], select: true },
+        { name: 'frame', selector: '#frame', when: [...pageNames, 'inFrame', 'frameTarget', 'frameSource'] },
+        { name: 'blank', selector: '#blank', when: pageNames },
     ];
     const times = [];
     for (const target of targets) {
@@ -899,6 +944,336 @@ async function backgroundMenu({ app, pages, results, fail }) {
     await closeMenu(app);
 }
 
+// ---------------------------------------------------------------------------
+// 35-04 (PROMPT-04): the rows that run on Phase 32's and Phase 33's mechanisms.
+// ---------------------------------------------------------------------------
+
+/** Opens /tools in a new current web tab; returns { tabId, page, theia, url } or a failure string. */
+async function openTools(app, pages) {
+    const url = pages.url('/tools');
+    const tabId = await openWebTab(app, url);
+    if (await waitForPush(app, loadedAt(tabId, '/tools')) < 0) {
+        return 'no loaded state push arrived for /tools';
+    }
+    await makeCurrent(app, tabId);
+    if (await settle(() => overlayVisibility(app, tabId), v => v === 'visible') !== 'visible') {
+        return `${BROKEN} the /tools page is not shown`;
+    }
+    const page = (await app.contexts()).filter(c => c.url === url).at(-1)?.context;
+    if (!page) {
+        return `${BROKEN} no BiDi context for the /tools page`;
+    }
+    return { tabId, page, theia: await contextOf(app, await app.evaluate('location.href')), url };
+}
+
+/** Right-clicks `selector` in the page and picks the row labelled `label` (a submenu row when `parent` names one). */
+async function pickFromMenu(app, tools, selector, label, parent) {
+    await settle(() => overlayVisibility(app, tools.tabId), v => v === 'visible');
+    const opened = await openMenuAt(app, tools.page, tools.tabId, await centreOf(app, tools.page, selector));
+    if (!opened.push) {
+        return false;
+    }
+    if (parent) {
+        if (!await pickRow(app, tools.theia, parent)) {
+            return false;
+        }
+        await settle(() => menuRows(app, 1), r => Array.isArray(r) && r.length > 0, 3000);
+        return pickRow(app, tools.theia, label, 1);
+    }
+    return pickRow(app, tools.theia, label);
+}
+
+const overlayUri = (app, tabId) => inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o && o.currentURI ? o.currentURI.spec : '';`);
+
+/** True while the Theia frame shows a dialog titled `title`. */
+const dialogOpen = (app, title) => probe(app, `return [...document.querySelectorAll('.dialogTitle')].some(node => node.textContent.trim() === ${JSON.stringify(title)});`);
+
+/** Clicks the open dialog's Cancel button; true when one was clicked. */
+const cancelDialog = app => probe(app, "const button = [...document.querySelectorAll('.dialogControl button')].find(node => node.textContent.trim() === 'Cancel'); if (!button) { return false; } button.click(); return true;");
+
+/** A CHROME_BAR_COPY string literal (`key: '...'`), read from the tree so the dialog title is never typed here. */
+function chromeBarCopy(key) {
+    const value = new RegExp(`\\b${key}: '([^']+)'`).exec(readTree('theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts'))?.[1];
+    if (!value) {
+        throw new Error(`${BROKEN} no ${key} in chrome-bar-copy.ts`);
+    }
+    return value;
+}
+
+async function applyPageToolPlants(app, plant, note) {
+    if (plant === 'inspect-no-select') {
+        if (await inChrome(app, `const { DevToolsShim } = ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs');
+            const noop = () => Promise.resolve();
+            noop.__pbPlanted = true;
+            DevToolsShim.inspectNode = noop;
+            return DevToolsShim.inspectNode.__pbPlanted === true;`) === true) {
+            note('PLANT inspect-no-select applied');
+        }
+    }
+    if (plant === 'copy-row-unwired') {
+        // The Copy row's frontend handler is a no-op: the pick reaches chrome, nothing reaches the clipboard.
+        if (await probe(app, `const menu = get('PageContextMenuContribution');
+            const settle = menu.settle;
+            const planted = function (widget, tabId, menuId, itemId, reply) { return itemId === 'context-copy' ? Promise.resolve() : settle.apply(this, arguments); };
+            planted.__pbPlanted = true;
+            menu.settle = planted;
+            return menu.settle.__pbPlanted === true;`) === true) {
+            note('PLANT copy-row-unwired applied');
+        }
+    }
+    if (plant === 'spellcheck-off') {
+        if (await inChrome(app, `Services.prefs.setIntPref('layout.spellcheckDefault', 0); return Services.prefs.getIntPref('layout.spellcheckDefault') === 0;`) === true) {
+            note('PLANT spellcheck-off applied');
+        }
+    }
+    if (plant === 'save-dialog-cancelled') {
+        if (await probe(app, `const dialogs = get('FileDialogService');
+            const planted = async () => undefined;
+            planted.__pbPlanted = true;
+            dialogs.showSaveDialog = planted;
+            return dialogs.showSaveDialog.__pbPlanted === true;`) === true) {
+            note('PLANT save-dialog-cancelled applied');
+        }
+    }
+}
+
+async function menuPageTools({ app, pages, plant, fail, note }) {
+    await applyPageToolPlants(app, plant, note);
+    let tools = await openTools(app, pages);
+    if (typeof tools === 'string') {
+        return fail(tools);
+    }
+
+    // Bookmark Page: Phase 33's star editor opens and the page is bookmarked.
+    if (!await pickFromMenu(app, tools, '#blank', ftlLabel('main-context-menu-bookmark-page'))) {
+        return fail('the blank-area menu has no Bookmark Page row to pick');
+    }
+    if (await settle(() => probe(app, "const e = document.querySelector('.pb-bookmark-editor'); return !!e && e.getBoundingClientRect().height > 0;"), v => v === true) !== true) {
+        return fail('Bookmark Page opened no .pb-bookmark-editor');
+    }
+    const bookmarked = await settle(() => inChrome(app, `const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        return (async () => !!(await PlacesUtils.bookmarks.fetch({ url: ${JSON.stringify(tools.url)} })))();`), v => v === true);
+    if (bookmarked !== true) {
+        return fail('Bookmark Page left the page out of Places');
+    }
+    await pressKey(app, ESCAPE);
+
+    // Save Page As: Phase 32's dialog opens; Cancel leaves no error.
+    const savePageTitle = chromeBarCopy('savePageTitle');
+    if (!await pickFromMenu(app, tools, '#blank', ftlLabel('main-context-menu-page-save'))) {
+        return fail('the blank-area menu has no Save Page As row to pick');
+    }
+    if (await settle(() => dialogOpen(app, savePageTitle), v => v === true) !== true) {
+        return fail(`Save Page As opened no "${savePageTitle}" dialog`);
+    }
+    if (await cancelDialog(app) !== true || await settle(() => dialogOpen(app, savePageTitle), v => v === false) !== false) {
+        return fail(`the "${savePageTitle}" dialog did not close on Cancel`);
+    }
+
+    // Inspect: the toolbox for this tab selects the right-clicked element.
+    if (!await pickFromMenu(app, tools, `#${INSPECT_ID}`, ftlLabel('main-context-menu-inspect'))) {
+        return fail('the element menu has no Inspect row to pick');
+    }
+    const selected = await settle(() => inChrome(app, `const o = overlayOf(${JSON.stringify(tools.tabId)});
+        const tab = o && window.gBrowser.getTabForBrowser(o);
+        const { DevToolsShim } = ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs');
+        const toolbox = tab && DevToolsShim.isInitialized() ? DevToolsShim.getToolboxForTab(tab) : null;
+        const node = toolbox?.getPanel('inspector')?.selection?.nodeFront;
+        return node ? node.getAttribute('id') : null;`), v => v === INSPECT_ID, 10000);
+    if (selected !== INSPECT_ID) {
+        return fail(`the inspector did not select the clicked node (selected id ${JSON.stringify(selected)})`);
+    }
+
+    // View Frame Source: the frame document's source in the tab.
+    if (!await pickFromMenu(app, tools, '#frame', ftlLabel('main-context-menu-frame-view-source'), ftlLabel('main-context-menu-frame'))) {
+        return fail('the frame menu has no This Frame > View Frame Source row to pick');
+    }
+    if (await settle(() => overlayUri(app, tools.tabId), v => v === `view-source:${pages.url('/frame')}`) !== `view-source:${pages.url('/frame')}`) {
+        return fail('View Frame Source did not load the frame document\'s source');
+    }
+
+    // View Page Source, in a fresh tab of the page.
+    tools = await openTools(app, pages);
+    if (typeof tools === 'string') {
+        return fail(tools);
+    }
+    if (!await pickFromMenu(app, tools, '#blank', ftlLabel('main-context-menu-view-page-source'))) {
+        return fail('the blank-area menu has no View Page Source row to pick');
+    }
+    if (await settle(() => overlayUri(app, tools.tabId), v => v === `view-source:${tools.url}`) !== `view-source:${tools.url}`) {
+        return fail('View Page Source did not load view-source: plus the page URL');
+    }
+}
+
+async function menuEdit({ app, pages, plant, fail, note }) {
+    await applyPageToolPlants(app, plant, note);
+    const tools = await openTools(app, pages);
+    if (typeof tools === 'string') {
+        return fail(tools);
+    }
+    await app.evaluateIn(tools.page, `const f = document.getElementById('field'); f.focus(); f.setSelectionRange(6, 10); true`);
+    const opened = await openMenuAt(app, tools.page, tools.tabId, await centreOf(app, tools.page, '#field'));
+    if (!opened.push) {
+        return fail('no pageContextMenu push for the text field');
+    }
+    const labels = (opened.rows ?? []).map(r => r.label);
+    const missing = ['text-action-undo', 'text-action-cut', 'text-action-copy', 'text-action-paste', 'text-action-delete', 'text-action-select-all'].map(ftlLabel).filter(label => !labels.includes(label));
+    if (missing.length) {
+        return fail(`the text field menu lacks ${missing.join(', ')}; rows ${JSON.stringify(labels)}`);
+    }
+    // A sentinel first: the system clipboard outlives the session, so an earlier "beta" cannot pass for this copy.
+    await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString('pb-sentinel'); return true;`);
+    if (!await pickRow(app, tools.theia, ftlLabel('text-action-copy'))) {
+        return fail('the text field menu has no Copy row to pick');
+    }
+    if (await settle(() => clipboardText(app), t => t === 'beta', 3000) !== 'beta') {
+        return fail('copy did not reach the clipboard');
+    }
+    await app.evaluateIn(tools.page, `document.getElementById('field2').focus(); true`);
+    if (!await pickFromMenu(app, tools, '#field2', ftlLabel('text-action-paste'))) {
+        return fail('the second field has no Paste row to pick');
+    }
+    const fieldValue = () => app.evaluateIn(tools.page, `document.getElementById('field2').value`);
+    if (await settle(fieldValue, v => v === 'beta', 3000) !== 'beta') {
+        return fail('Paste did not set the second field');
+    }
+    await app.evaluateIn(tools.page, `document.getElementById('field2').focus(); true`);
+    if (!await pickFromMenu(app, tools, '#field2', ftlLabel('text-action-undo'))) {
+        return fail('the second field has no Undo row to pick');
+    }
+    if (await settle(fieldValue, v => v === '', 3000) !== '') {
+        return fail('Undo did not restore the second field\'s previous value');
+    }
+    await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString('pb-sentinel'); return true;`);
+    if (!await pickFromMenu(app, tools, '#img', ftlLabel('main-context-menu-image-copy'))) {
+        return fail('the image menu has no Copy Image row to pick');
+    }
+    const png = await settle(() => inChrome(app, `return Services.clipboard.hasDataMatchingFlavors(['image/png'], Services.clipboard.kGlobalClipboard);`), v => v === true, 3000);
+    if (png !== true) {
+        return fail('Copy Image left no image/png flavour on the clipboard');
+    }
+}
+
+/** The pushed menu's spelling suggestion labels (dynamic spell-suggestion rows) after a right-click on `selector`. */
+async function suggestionsAt(app, tools, selector) {
+    await app.evaluateIn(tools.page, `document.querySelector(${JSON.stringify(selector)}).focus(); true`);
+    await sleep(500); // the inline checker runs after focus
+    const opened = await openMenuAt(app, tools.page, tools.tabId, await centreOf(app, tools.page, selector));
+    const items = opened.push ? opened.push.items : [];
+    return { opened, words: items.filter(item => /^spell-suggestion-\d+$/.test(item.id)).map(item => item.label), ids: flatIds(items) };
+}
+
+async function menuSpelling({ app, pages, plant, fail, note }) {
+    await applyPageToolPlants(app, plant, note);
+    const tools = await openTools(app, pages);
+    if (typeof tools === 'string') {
+        return fail(tools);
+    }
+    const first = await suggestionsAt(app, tools, '#spell');
+    if (!first.opened.push) {
+        return fail('no pageContextMenu push for the misspelt textarea');
+    }
+    if (!first.words.includes('the')) {
+        await closeMenu(app);
+        return fail(`no suggestion row "the" for "teh" (suggestions ${JSON.stringify(first.words)})`);
+    }
+    if (!await pickRow(app, tools.theia, 'the')) {
+        return fail('the suggestion row "the" could not be picked');
+    }
+    const fixed = await settle(() => app.evaluateIn(tools.page, `document.getElementById('spell').value`), v => /\bthe\b/.test(v), 3000);
+    if (!/\bthe\b/.test(String(fixed))) {
+        return fail(`picking "the" did not replace the misspelling (value ${JSON.stringify(fixed)})`);
+    }
+    const before = await suggestionsAt(app, tools, '#spell2');
+    if (!before.words.length) {
+        await closeMenu(app);
+        return fail(`no suggestion row for "wrod" (rows ${JSON.stringify(before.ids)})`);
+    }
+    if (!await pickRow(app, tools.theia, ftlLabel('text-action-spell-add-to-dictionary'))) {
+        return fail('the misspelling menu has no Add to Dictionary row to pick');
+    }
+    const added = await suggestionsAt(app, tools, '#spell2');
+    if (added.words.length || added.ids.includes('spell-add-to-dictionary')) {
+        await closeMenu(app);
+        return fail('Add to Dictionary left "wrod" misspelt in the next menu');
+    }
+    if (!await pickRow(app, tools.theia, ftlLabel('text-action-spell-undo-add-to-dictionary'))) {
+        return fail('the next menu has no Undo Add to Dictionary row to pick');
+    }
+    const undone = await suggestionsAt(app, tools, '#spell2');
+    await closeMenu(app);
+    if (!undone.words.length) {
+        return fail('Undo Add to Dictionary did not restore the suggestions for "wrod"');
+    }
+}
+
+/** Accepts the open save dialog with `dir`/`name`: the location text input, the file name field, then Save. */
+const acceptSaveDialog = (app, dir, name) => probe(app, `const dialog = document.querySelector('.theia-SaveFileDialog');
+    if (!dialog) { return 'no save dialog'; }
+    const fire = (node, type) => node.dispatchEvent(new Event(type, { bubbles: true }));
+    const setValue = (input, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value); fire(input, 'input'); fire(input, 'change'); };
+    const enter = node => node.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    if (!dialog.querySelector('.theia-LocationTextInput')) {
+        dialog.querySelector('.theia-LocationInputToggle')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    }
+    if (!await until(() => dialog.querySelector('.theia-LocationTextInput'), 2000)) { return 'no location text input'; }
+    const location = dialog.querySelector('.theia-LocationTextInput');
+    setValue(location, ${JSON.stringify(dir)});
+    enter(location);
+    await sleep(500);
+    const field = dialog.querySelector('.theia-FileNameTextField');
+    if (!field) { return 'no file name field'; }
+    setValue(field, ${JSON.stringify(name)});
+    const save = [...dialog.querySelectorAll('.dialogControl button')].find(node => node.classList.contains('main'));
+    if (!save) { return 'no Save button'; }
+    save.click();
+    return 'accepted';`);
+
+async function menuSave({ app, pages, plant, fail, note }) {
+    await applyPageToolPlants(app, plant, note);
+    const tools = await openTools(app, pages);
+    if (typeof tools === 'string') {
+        return fail(tools);
+    }
+    const subscribed = await probe(app, `return (await get('WebTabChannel').request({ kind: 'webTabDownloadsSubscribe', tabId: ${JSON.stringify(tools.tabId)} })).ok === true;`);
+    if (subscribed !== true) {
+        return fail(`${BROKEN} the downloads view could not be subscribed, so the panel row would prove nothing`);
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'pb-35-04-save-'));
+    try {
+        const name = 'saved-link.bin';
+        const path = join(dir, name);
+        const mark = (await pushes(app)).length;
+        const served = assets.requests.length;
+        if (!await pickFromMenu(app, tools, '#filelink', ftlLabel('main-context-menu-save-link'))) {
+            return fail('the link menu has no Save Link As row to pick');
+        }
+        const title = chromeBarCopy('saveLinkTitle');
+        // No dialog (a cancelled pick) leaves nothing to accept; the file check below then scores it.
+        if (await settle(() => dialogOpen(app, title), v => v === true) === true) {
+            const accepted = await acceptSaveDialog(app, dir, name);
+            if (accepted !== 'accepted') {
+                return fail(`${BROKEN} the "${title}" dialog could not be driven (${accepted})`);
+            }
+        } else {
+            note(`no "${title}" dialog opened`);
+        }
+        const landed = await settle(async () => (await stat(path).then(info => info.isFile(), () => false)) && (await readFile(path)).equals(FILE_BYTES), v => v === true, 10000);
+        if (landed !== true) {
+            return fail('no file at the chosen path with the served bytes');
+        }
+        const get = assets.requests.slice(served).find(r => r.path === '/file.bin');
+        if (!get?.referer || !get.referer.startsWith(pages.origin)) {
+            return fail(`the save GET carried Referer ${JSON.stringify(get?.referer ?? null)}, not the page's origin ${pages.origin}`);
+        }
+        if (await waitForPush(app, p => p && p.kind === 'downloadsChanged' && (p.rows ?? []).some(r => r.filename === name), { from: mark, timeoutMs: 10000 }) < 0) {
+            return fail('the downloads panel lists no row for the saved file');
+        }
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+}
+
 const SCENARIOS = {
     'tooltip-status': tooltipStatus,
     'theia-hover-silent': theiaHoverSilent,
@@ -906,6 +1281,10 @@ const SCENARIOS = {
     'context-menu': contextMenu,
     'menu-not-in-ide': menuNotInIde,
     'background-menu': backgroundMenu,
+    'menu-page-tools': menuPageTools,
+    'menu-edit': menuEdit,
+    'menu-spelling': menuSpelling,
+    'menu-save': menuSave,
 };
 
 /** The scenario each absence scenario takes as its positive control. */
@@ -990,6 +1369,11 @@ const PLANTS = [
     { plant: 'background-check-off', target: 'background-menu', run: ['context-menu', 'background-menu'], expect: 'a hidden tab opened a menu' },
     { plant: 'ide-menu-leak', target: 'menu-not-in-ide', run: ['context-menu', 'menu-not-in-ide'], expect: 'the IDE right-click pushed a page menu' },
     { plant: 'referrer-dropped', target: 'context-menu', run: ['context-menu'], expect: 'new tab request carried no Referer' },
+    // 35-04 (PROMPT-04).
+    { plant: 'inspect-no-select', target: 'menu-page-tools', run: ['menu-page-tools'], expect: 'inspector did not select the clicked node' },
+    { plant: 'copy-row-unwired', target: 'menu-edit', run: ['menu-edit'], expect: 'copy did not reach the clipboard' },
+    { plant: 'spellcheck-off', target: 'menu-spelling', run: ['menu-spelling'], expect: 'no suggestion row' },
+    { plant: 'save-dialog-cancelled', target: 'menu-save', run: ['menu-save'], expect: 'no file at the chosen path' },
 ];
 
 async function selfTest() {
