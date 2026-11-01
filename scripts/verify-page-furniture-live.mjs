@@ -106,6 +106,27 @@
  *                       whose item reads upstream's en-US text-action-paste label; once
  *                       security.dialog_enable_delay passes, doCommand on it resolves the
  *                       page's promise with the 15-character clipboard text.
+ *   element-fullscreen  (35-07, PAGE-07, D-05, D-19) A served page's button calls
+ *                       video.requestFullscreen(), clicked with BiDi input: the page's
+ *                       fullscreenElement is the video, chrome's is the overlay and
+ *                       window.fullScreen is true; #fullscreen-warning is :popover-open
+ *                       with the domain text naming the served host and the exit button
+ *                       reading upstream's en-US fullscreen-exit-button string. Esc
+ *                       (chrome-scope key synthesis) clears the page's fullscreenElement,
+ *                       closes the warning, drops the root inDOMFullscreen attribute and
+ *                       returns the overlay to the widget placeholder's rect within 1 s.
+ *                       Entered again, Ctrl+Tab from the page switches tabs and fullscreen
+ *                       exits and stays off. The page menu's Full Screen row on the video
+ *                       enters it; a right-click during fullscreen pushes no
+ *                       pageContextMenu within 1500 ms (control: the row's own menu push
+ *                       in this session); the warning's exit button leaves.
+ *   fullscreen-key      (35-07, D-07) With the overlay focused, F11 (chrome-scope key
+ *                       synthesis) fires the fullscreen row and window.fullScreen becomes
+ *                       true; F11 again restores it. Runs Phase 33's full-screen command.
+ *   f11-keeps-debug     (35-07, KEY-04) With an untitled Theia editor focused, F11 fires
+ *                       no fullscreen row and window.fullScreen stays false over 1500 ms.
+ *                       Scored only when fullscreen-key passed (CONTROL_OF: the same fire
+ *                       recorder).
  *
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
@@ -119,7 +140,10 @@ import { join } from 'node:path';
 import {
     BROKEN,
     WEB_TAB_STATE_EVENT,
+    firedRows,
     focusOverlay,
+    focusTheiaFrame,
+    installFireRecorder,
     appNameExpr,
     inChrome,
     loadedAt,
@@ -204,6 +228,16 @@ const PAGES = {
         body: '<p><button id="read" type="button">Read clipboard</button></p>'
             + '<script>document.getElementById("read").addEventListener("click", () => navigator.clipboard.readText()'
             + '.then(text => { document.title = String(text.length); }, error => { document.title = "rejected: " + error.name; }));</script>',
+    },
+    // 35-07: element fullscreen from a page button (user activation) or the page menu's Full Screen row.
+    '/fullscreen': {
+        title: 'Fullscreen',
+        body: '<style>body { font: 20px sans-serif; margin: 24px; }</style><p><button id="go" type="button">Full screen</button></p>'
+            + '<canvas id="c" width="320" height="180" hidden></canvas><video id="v" width="320" height="180" muted autoplay></video>'
+            + '<script>const c = document.getElementById("c"); const g = c.getContext("2d"); let n = 0;'
+            + 'setInterval(() => { g.fillStyle = "hsl(" + (n++ % 360) + ",80%,50%)"; g.fillRect(0, 0, 320, 180); }, 33);'
+            + 'const v = document.getElementById("v"); v.srcObject = c.captureStream(30); v.play();'
+            + 'document.getElementById("go").addEventListener("click", () => v.requestFullscreen());</script>',
     },
     '/pip': {
         title: 'Picture in Picture',
@@ -790,7 +824,7 @@ async function contextMenu({ app, pages, plant, fail, note }) {
         { name: 'link', selector: '#link', when: ['saveLink', ...linkNames] },
         { name: 'javascript link', selector: '#jslink', when: linkNames, refused: true },
         { name: 'image', selector: '#img', when: ['viewImage', 'saveImage', 'copyImageContents', 'copyImage', ...inspect] },
-        { name: 'video', selector: '#v', when: ['mediaPause', 'mediaUnmute', 'onMedia', 'mediaShowControls', 'onVideo', ...inspect] },
+        { name: 'video', selector: '#v', when: ['mediaPause', 'mediaUnmute', 'onMedia', 'videoFullscreen', 'mediaShowControls', 'onVideo', ...inspect] },
         { name: 'selection', selector: '#words', when: ['search', 'copy', 'selectAll', ...inspect], select: true },
         { name: 'frame', selector: '#frame', when: [...pageNames, 'inFrame', 'frameTarget', 'frameSource'] },
         { name: 'blank', selector: '#blank', when: pageNames },
@@ -1752,6 +1786,237 @@ async function pastePopup({ app, pages, plant, fail, note }) {
     note(`research probe 12: the paste popup opened labelled ${JSON.stringify(want)} and readText() resolved with ${want15} characters after Paste`);
 }
 
+// 35-07 (PAGE-07): the fullscreen scenarios.
+const F11 = { key: 'F11', code: 'F11', keyCode: 122 };
+const CTRL_TAB = { key: 'Tab', code: 'Tab', keyCode: 9, modifiers: ['accel'] };
+
+/** Upstream's en-US value of a browser.ftl message (`id = value`). */
+function browserFtlValue(id) {
+    const value = new RegExp(`^${id} = (.*)$`, 'm').exec(readTree('upstream/browser/locales/en-US/browser/browser.ftl'))?.[1];
+    if (!value) {
+        throw new Error(`${BROKEN} no ${id} value in upstream's browser.ftl`);
+    }
+    return value;
+}
+
+/** Chrome's fullscreen state for `tabId`'s overlay and the warning; booleans and the warning's two strings only. */
+const fullscreenState = (app, tabId) => inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)});
+    const w = document.getElementById('fullscreen-warning');
+    const t = w ? w.querySelector('.pointerlockfswarning-domain-text') : null;
+    const b = document.getElementById('fullscreen-exit-button');
+    return JSON.stringify({
+        chromeFull: !!document.fullscreenElement,
+        overlayFull: !!o && document.fullscreenElement === o,
+        windowFull: window.fullScreen,
+        inDom: document.documentElement.hasAttribute('inDOMFullscreen'),
+        warning: !!w,
+        warningOpen: !!w && w.matches(':popover-open'),
+        domain: t && !t.hidden ? t.textContent : '',
+        button: b ? b.textContent.trim() : '',
+    });`).then(JSON.parse);
+
+const pageFullscreen = (app, page) => app.evaluateIn(page, `document.fullscreenElement ? document.fullscreenElement.id : ''`);
+
+/** The overlay's rect relative to the Theia frame, and the web tab placeholder's rect in the frame. */
+async function overlayMatchesPlaceholder(app, tabId) {
+    const overlay = JSON.parse(await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return 'null';
+        const f = document.getElementById('powerbrowser-content').getBoundingClientRect(); const r = o.getBoundingClientRect();
+        return JSON.stringify({ x: r.left - f.left, y: r.top - f.top, w: r.width, h: r.height });`));
+    const holder = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); if (!w) return null;
+        const r = w.node.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height };`);
+    return !!overlay && !!holder && ['x', 'y', 'w', 'h'].every(k => Math.abs(overlay[k] - holder[k]) <= 2);
+}
+
+async function applyFullscreenPlants(app, plant, note, names, tabId) {
+    if (!names.includes(plant)) {
+        return;
+    }
+    const plants = {
+        'warning-removed': `document.getElementById('fullscreen-warning')?.remove(); return document.getElementById('fullscreen-warning') === null;`,
+        'fullscreen-standin-missing': `delete window.FullScreen; return window.FullScreen === undefined;`,
+        // The row loses its disabled attribute and the focus tracker's re-disable is undone at once.
+        'f11-row-enabled-under-theia': `const k = document.getElementById('powerbrowser-page-key-fullscreen'); if (!k) return false;
+            const keep = () => { if (k.hasAttribute('disabled')) k.removeAttribute('disabled'); };
+            new MutationObserver(keep).observe(k, { attributes: true, attributeFilter: ['disabled'] }); keep();
+            return !k.hasAttribute('disabled');`,
+        'tab-switch-stays-fullscreen': `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return false;
+            document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) o.requestFullscreen().catch(() => {}); });
+            window.__pbFullscreenReentry = true; return window.__pbFullscreenReentry === true;`,
+    };
+    if (plants[plant] && await inChrome(app, plants[plant]) === true) {
+        note(`PLANT ${plant} applied`);
+    }
+}
+
+async function elementFullscreen({ app, pages, plant, fail, note }) {
+    const other = await openPage(app, pages, '/target');
+    if (typeof other === 'string') {
+        return fail(other);
+    }
+    const tab = await openPage(app, pages, '/fullscreen');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    await applyFullscreenPlants(app, plant, note, ['warning-removed', 'fullscreen-standin-missing'], tab.tabId);
+    if (!(await settle(() => app.evaluateIn(tab.page, `document.getElementById('v').currentTime`), t => t > 0) > 0)) {
+        return fail(`${BROKEN} the page's video never started playing`);
+    }
+    const host = new URL(tab.url).hostname;
+    const enter = async how => {
+        const inPage = await settle(() => pageFullscreen(app, tab.page), id => id === 'v', 5000);
+        if (inPage !== 'v') {
+            return `the page never entered fullscreen (${how}; page fullscreenElement ${JSON.stringify(inPage ?? null)})`;
+        }
+        const st = await settle(() => fullscreenState(app, tab.tabId), x => x.overlayFull && x.windowFull, 5000);
+        if (!st?.overlayFull || !st.windowFull) {
+            return `the page entered fullscreen (${how}) but chrome did not cover the window with the overlay: ${JSON.stringify(st)}`;
+        }
+        return null;
+    };
+    const left = async how => {
+        const out = await settle(() => pageFullscreen(app, tab.page), id => id === '', 5000);
+        const st = await settle(() => fullscreenState(app, tab.tabId), x => !x.chromeFull && !x.windowFull && !x.inDom && !x.warningOpen, 5000);
+        if (out !== '' || st?.chromeFull || st?.windowFull || st?.inDom || st?.warningOpen) {
+            return `${how} did not leave fullscreen: page fullscreenElement ${JSON.stringify(out ?? null)}, chrome ${JSON.stringify(st)}`;
+        }
+        return null;
+    };
+
+    // 1. A button click with BiDi input (a real user activation).
+    const go = await centreOf(app, tab.page, '#go');
+    await clickAt(app, tab.page, go.x, go.y);
+    const entered = await enter('the page button');
+    if (entered) {
+        return fail(entered);
+    }
+    const exitLabel = browserFtlValue('fullscreen-exit-button');
+    const warned = await settle(() => fullscreenState(app, tab.tabId), x => x.warningOpen && x.domain.includes(host) && x.button === exitLabel, 3000);
+    if (!warned?.warning || !warned.warningOpen) {
+        return fail(`no fullscreen warning was shown on entry: ${JSON.stringify(warned)}`);
+    }
+    if (!warned.domain.includes(host) || warned.button !== exitLabel) {
+        return fail(`the fullscreen warning names ${JSON.stringify(warned.domain)} with a button reading ${JSON.stringify(warned.button)}; expected the host ${host} and upstream's ${JSON.stringify(exitLabel)}`);
+    }
+    note(`warning: ${JSON.stringify(warned.domain.replace(/[\u2068\u2069]/g, ''))}, button ${JSON.stringify(warned.button)}`);
+
+    // 2. Esc leaves, and the overlay goes back to its placeholder.
+    await focusOverlay(app, tab.tabId);
+    await pressKey(app, ESCAPE);
+    const escaped = await left('Esc');
+    if (escaped) {
+        return fail(escaped);
+    }
+    if (await settle(() => overlayMatchesPlaceholder(app, tab.tabId), v => v === true, 1000) !== true) {
+        return fail('after Esc the overlay did not return to the web tab placeholder\'s rect within 1 s');
+    }
+
+    // 3. Entered again, a tab switch from the page leaves fullscreen and it stays off.
+    await clickAt(app, tab.page, go.x, go.y);
+    const again = await enter('the page button, second time');
+    if (again) {
+        return fail(again);
+    }
+    await applyFullscreenPlants(app, plant, note, ['tab-switch-stays-fullscreen'], tab.tabId);
+    await focusOverlay(app, tab.tabId);
+    await pressKey(app, CTRL_TAB);
+    if (await settle(() => currentTabId(app), id => id === other.tabId, 5000) !== other.tabId) {
+        return fail(`${BROKEN} Ctrl+Tab from the fullscreen page did not switch to the other tab`);
+    }
+    // Off, then off on every 100 ms read for one second: a re-entry inside that window is caught.
+    let stuck = null;
+    const off = await settle(() => fullscreenState(app, tab.tabId), x => !x.chromeFull && !x.windowFull, 5000);
+    if (off?.chromeFull || off?.windowFull) {
+        stuck = off;
+    }
+    for (let i = 0; i < 10 && !stuck; i++) {
+        await sleep(100);
+        const st = await fullscreenState(app, tab.tabId);
+        if (st.chromeFull || st.windowFull) {
+            stuck = st;
+        }
+    }
+    if (stuck) {
+        return fail(`the tab switch left fullscreen on: ${JSON.stringify(stuck)}`);
+    }
+
+    // 4. The page menu's Full Screen row on the video, then a right-click during fullscreen opens nothing.
+    await makeCurrent(app, tab.tabId);
+    const mark = (await pushes(app)).length;
+    if (!await pickFromMenu(app, tab, '#v', ftlLabel('main-context-menu-media-video-fullscreen'))) {
+        return fail('the video\'s page menu had no Full Screen row to pick');
+    }
+    const control = (await pushes(app)).slice(mark).some(isMenuPush(tab.tabId));
+    const viaMenu = await enter('the page menu\'s Full Screen row');
+    if (viaMenu) {
+        return fail(viaMenu);
+    }
+    if (!control) {
+        return fail(`${BROKEN} the Full Screen row's menu was not seen as a pageContextMenu push, so the absence below would prove nothing`);
+    }
+    const during = (await pushes(app)).length;
+    const centre = await centreOf(app, tab.page, '#v');
+    await clickAt(app, tab.page, centre.x, centre.y, 2);
+    await sleep(1500);
+    if ((await pushes(app)).slice(during).some(isMenuPush(tab.tabId))) {
+        return fail('a right-click during element fullscreen pushed a page menu (D-19)');
+    }
+    await inChrome(app, `document.getElementById('fullscreen-exit-button').click(); return true;`);
+    const exited = await left('the warning\'s exit button');
+    if (exited) {
+        return fail(exited);
+    }
+}
+
+async function fullscreenKey({ app, pages, fail }) {
+    const tab = await openPage(app, pages, '/target');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    await installFireRecorder(app);
+    const windowFull = () => inChrome(app, 'return window.fullScreen;');
+    for (const [want, step] of [[true, 'first'], [false, 'second']]) {
+        if (!await focusOverlay(app, tab.tabId)) {
+            return fail(`${BROKEN} the page could not be focused before the ${step} F11`);
+        }
+        const mark = (await firedRows(app)).length;
+        await pressKey(app, F11);
+        const fired = await settle(() => firedRows(app), rows => rows.slice(mark).includes('fullscreen'), 3000);
+        if (!fired?.slice(mark).includes('fullscreen')) {
+            return fail(`the ${step} F11 with the page focused fired no fullscreen row`);
+        }
+        if (await settle(windowFull, v => v === want, 5000) !== want) {
+            return fail(`the ${step} F11 left window.fullScreen ${!want} (Phase 33's full-screen command toggles it)`);
+        }
+    }
+}
+
+async function f11KeepsDebug({ app, plant, results, fail, note }) {
+    const control = results.find(r => r.name === 'fullscreen-key');
+    if (!control || control.failures.length || control.notScored) {
+        return 'not-scored';
+    }
+    await applyFullscreenPlants(app, plant, note, ['f11-row-enabled-under-theia']);
+    if (await focusTheiaFrame(app) !== true) {
+        return fail(`${BROKEN} the Theia frame could not be made chrome's active element`);
+    }
+    const opened = await probe(app, `await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile');
+        if (!await until(() => !!get('EditorManager').currentEditor, 10000)) return false;
+        const ed = get('EditorManager').currentEditor;
+        await get('ApplicationShell').activateWidget(ed.id); ed.editor.focus(); return true;`);
+    if (opened !== true || await settle(() => probe(app, `return get('ContextKeyService').match('editorFocus');`), v => v === true) !== true) {
+        return fail(`${BROKEN} no focused untitled editor`);
+    }
+    const mark = (await firedRows(app)).length;
+    await pressKey(app, F11);
+    await sleep(1500);
+    if ((await firedRows(app)).slice(mark).includes('fullscreen')) {
+        return fail('F11 fired a page key with the IDE focused');
+    }
+    if (await inChrome(app, 'return window.fullScreen;') !== false) {
+        return fail('the window went full screen on F11 with the IDE focused');
+    }
+}
+
 const SCENARIOS = {
     'tooltip-status': tooltipStatus,
     'theia-hover-silent': theiaHoverSilent,
@@ -1769,10 +2034,13 @@ const SCENARIOS = {
     'saved-login': savedLogin,
     'form-validation': formValidation,
     'paste-popup': pastePopup,
+    'element-fullscreen': elementFullscreen,
+    'fullscreen-key': fullscreenKey,
+    'f11-keeps-debug': f11KeepsDebug,
 };
 
 /** The scenario each absence scenario takes as its positive control. */
-const CONTROL_OF = { 'theia-hover-silent': 'tooltip-status', 'menu-not-in-ide': 'context-menu', 'background-menu': 'context-menu' };
+const CONTROL_OF = { 'theia-hover-silent': 'tooltip-status', 'menu-not-in-ide': 'context-menu', 'background-menu': 'context-menu', 'f11-keeps-debug': 'fullscreen-key' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
@@ -1867,6 +2135,11 @@ const PLANTS = [
     { plant: 'autocomplete-attr-removed', target: 'autocomplete', run: ['autocomplete'], expect: 'no autocomplete popup' },
     { plant: 'validation-template-removed', target: 'form-validation', run: ['form-validation'], expect: 'no validation bubble' },
     { plant: 'paste-l10n-removed', target: 'paste-popup', run: ['paste-popup'], expect: 'paste label not translated' },
+    // 35-07 (PAGE-07, D-05, D-07).
+    { plant: 'warning-removed', target: 'element-fullscreen', run: ['element-fullscreen'], expect: 'no fullscreen warning' },
+    { plant: 'fullscreen-standin-missing', target: 'element-fullscreen', run: ['element-fullscreen'], expect: 'page never entered fullscreen' },
+    { plant: 'f11-row-enabled-under-theia', target: 'f11-keeps-debug', run: ['fullscreen-key', 'f11-keeps-debug'], expect: 'F11 fired a page key with the IDE focused' },
+    { plant: 'tab-switch-stays-fullscreen', target: 'element-fullscreen', run: ['element-fullscreen'], expect: 'tab switch left fullscreen on' },
 ];
 
 async function selfTest() {
