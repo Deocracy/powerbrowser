@@ -4752,6 +4752,14 @@ run_own_checks() {
     # policy key with an https and an empty value) and keeps the MAR key store and runner unit
     # names green; it writes nothing.
     "update-channel-self-test|node $REPO_ROOT/scripts/verify-update-channel.mjs --self-test"
+    # NEW (Phase 44, UPD-14): one update.xml per observed BUILD_TARGET, emitted by the shared
+    # buildUpdateXml from application.ini, config.status and the MAR. The self-test plants an unknown
+    # target, an application.ini with no BuildID, an ABI that disagrees with the table, the MAR channel
+    # id given as the update channel, a non-https detailsURL and a hand-edited descriptor, each red
+    # naming its file and value, and keeps a byte-identity control green. Honestly --quick: mkdtemp
+    # fixtures, node:crypto and text reads, no build, browser, display or network; it writes nothing
+    # outside mkdtemp.
+    "build-update-xml-self-test|node $REPO_ROOT/scripts/build-update-xml.mjs --self-test"
     # NEW (Phase 40, UPD-33): layer 3's real `Resolving host [...]` extraction and the shared
     # verdict (scripts/lib/endpoint-verdict.mjs) over fixture logs. An unattended user-initiated
     # host goes red naming it, passes after a user action; deny fails in both modes; allow passes;
@@ -5365,6 +5373,12 @@ run_own_checks() {
       # evidence is absent. The Phase 45 packaged re-run stays Phase 50's
       # criterion.
       "mar-update-hop|node $REPO_ROOT/scripts/verify-mar-update-hop.mjs"
+      # NEW (Phase 44, UPD-14): full tier. Reads objdir/dist/bin/application.ini, objdir/config.status and
+      # the N-plus-1 MAR (.mozbuild/mar-hop/nplus1.mar, or the path the CLI's --mar names), emits the
+      # descriptor of each observed BUILD_TARGET twice and parses it back against the built values.
+      # Without --outdir it proves determinism from the built tree, not a committed descriptor tree.
+      # FAILs naming the first missing input (the built tree or the MAR), never SKIPs.
+      "build-update-xml|node $REPO_ROOT/scripts/build-update-xml.mjs --check"
       # NEW (Phase 46, UPD-27): the Nimbus exposure probe. Full-tier: drives
       # the available + manual UpdateListener paths in-Gecko with a fixture
       # update carrying detailsURL and asserts recordExposureEvent returned
