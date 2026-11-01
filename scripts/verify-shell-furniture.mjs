@@ -30,6 +30,17 @@
 //      (D-11); .pb-page-status is defined in chrome-bar.css and the
 //      BLOCKING_LAYER_SELECTOR derived from web-tab.ts does not contain it (the
 //      status line never hides the page).
+//   5. Page menu rows (35-03, D-12). Each id in the PAGE_MENU_ROWS table of the
+//      Phase 35 section is an element id of upstream browser-context.inc.xhtml as a
+//      Linux release build preprocesses it (the non-mac navigation menugroup), in
+//      upstream's order; its `l10n` equals that element's data-l10n-id and exists
+//      in upstream browserContext.ftl; a `bundle` key exists in upstream
+//      browser.properties.
+//   6. Page menu actions. The `runs: "chrome"` ids equal the `case "context-..."`
+//      arms of runPageMenuRow, and the `runs: "frontend"` ids equal the keys of
+//      FRONTEND_ROWS in page-context-menu.ts, both as set equality.
+//   7. Page menu policy. #powerbrowser-content carries disablecontextmenu="true"
+//      (ContextMenuParent.sys.mjs:29), so an IDE right-click never reaches the shim.
 //
 // A section, block or selector that cannot be found, or empty A and B, is a BROKEN
 // INSTRUMENT, never a clean pass. `--self-test` asserts the clean tree green,
@@ -51,6 +62,10 @@ const FILES = {
   webTab: 'theia/extensions/tab-uris/src/browser/web-tab.ts',
   popupset: 'upstream/browser/base/content/main-popupset.inc.xhtml',
   fullscreen: 'upstream/browser/base/content/fullscreen-and-pointerlock.inc.xhtml',
+  contextMenu: 'upstream/browser/base/content/browser-context.inc.xhtml',
+  contextFtl: 'upstream/browser/locales/en-US/browser/browserContext.ftl',
+  browserProperties: 'upstream/browser/locales/en-US/chrome/browser/browser.properties',
+  pageMenu: 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts',
 };
 const UPSTREAM_KEYS = ['popupset', 'fullscreen'];
 const SECTION_HEADER = '// Phase 35: shell furniture.';
@@ -252,7 +267,55 @@ function check(inputs) {
   if (!selector) return { broken: [`no BLOCKING_LAYER_SELECTOR string in ${FILES.webTab}`], failures };
   if (selector[1].includes('pb-page-status')) failures.push('POLICY: BLOCKING_LAYER_SELECTOR contains .pb-page-status: a hover state would hide the page');
 
-  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}}, each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold` };
+  // Rule 5: the page menu rows against upstream's markup and strings.
+  const rowsAt = sectionCode.indexOf('const PAGE_MENU_ROWS = Object.freeze([');
+  const rowsText = rowsAt === -1 ? '' : sectionCode.slice(rowsAt, sectionCode.indexOf('\n]);', rowsAt));
+  const field = (line, name) => new RegExp(`\\b${name}: "([^"]*)"`).exec(line)?.[1];
+  const rows = rowsText.split('\n').filter(line => /^\s*\{ id: "/.test(line)).map(line => ({ id: field(line, 'id'), l10n: field(line, 'l10n'), bundle: field(line, 'bundle'), runs: field(line, 'runs') }));
+  if (!rows.length) return { broken: [`no PAGE_MENU_ROWS rows in the Phase 35 section of ${FILES.api}: rules 5 and 6 would prove nothing`], failures };
+  const menuTokens = tokenize(preprocess(inputs.contextMenu, FILES.contextMenu, broken));
+  if (broken.length) return { broken, failures };
+  let lastAt = -1;
+  for (const row of rows) {
+    const at = menuTokens.findIndex(t => t.type === 'start' && t.attrs.get('id') === row.id);
+    if (at === -1) {
+      failures.push(`ROWS: ${row.id} is not an element id in upstream ${FILES.contextMenu} (Linux build)`);
+      continue;
+    }
+    if (at < lastAt) failures.push(`ROWS: ${row.id} is out of upstream's order in ${FILES.contextMenu}`);
+    lastAt = at;
+    const upstreamL10n = menuTokens[at].attrs.get('data-l10n-id');
+    if (row.l10n !== undefined && row.l10n !== upstreamL10n) failures.push(`ROWS: ${row.id}: l10n "${row.l10n}" differs from upstream's data-l10n-id "${upstreamL10n ?? '(none)'}"`);
+    if (row.l10n !== undefined && !new RegExp(`^${row.l10n} =`, 'm').test(inputs.contextFtl)) failures.push(`ROWS: ${row.id}: l10n "${row.l10n}" is not a message in upstream ${FILES.contextFtl}`);
+    if (row.bundle !== undefined && !new RegExp(`^${row.bundle}=`, 'm').test(inputs.browserProperties)) failures.push(`ROWS: ${row.id}: bundle key "${row.bundle}" is not in upstream ${FILES.browserProperties}`);
+    if (row.l10n === undefined && row.bundle === undefined) failures.push(`ROWS: ${row.id} has neither an l10n id nor a bundle key: its label would not be Firefox's string`);
+  }
+
+  // Rule 6: chrome rows == runPageMenuRow arms; frontend rows == FRONTEND_ROWS keys.
+  const dispatcherAt = sectionCode.search(/^async function runPageMenuRow\(/m);
+  const dispatcher = dispatcherAt === -1 ? '' : sectionCode.slice(dispatcherAt, sectionCode.indexOf('\n}', dispatcherAt));
+  const arms = new Set([...dispatcher.matchAll(/case "(context-[^"]+)"/g)].map(m => m[1]));
+  const frontendAt = inputs.pageMenu.indexOf('const FRONTEND_ROWS');
+  const frontendKeys = new Set(frontendAt === -1 ? [] : [...inputs.pageMenu.slice(frontendAt, inputs.pageMenu.indexOf('});', frontendAt)).matchAll(/^\s*'(context-[^']+)':/gm)].map(m => m[1]));
+  if (!arms.size) return { broken: [`no case "context-..." arms in runPageMenuRow in ${FILES.api}: rule 6 would prove nothing`], failures };
+  if (!frontendKeys.size) return { broken: [`no FRONTEND_ROWS keys in ${FILES.pageMenu}: rule 6 would prove nothing`], failures };
+  const chromeRows = new Set(rows.filter(r => r.runs === 'chrome').map(r => r.id));
+  const frontendRows = new Set(rows.filter(r => r.runs === 'frontend').map(r => r.id));
+  const missingArms = [...chromeRows].filter(id => !arms.has(id)).sort();
+  const surplusArms = [...arms].filter(id => !chromeRows.has(id)).sort();
+  const missingKeys = [...frontendRows].filter(id => !frontendKeys.has(id)).sort();
+  const surplusKeys = [...frontendKeys].filter(id => !frontendRows.has(id)).sort();
+  if (missingArms.length) failures.push(`ACTIONS: chrome rows with no runPageMenuRow arm: ${missingArms.join(', ')}`);
+  if (surplusArms.length) failures.push(`ACTIONS: runPageMenuRow arms with no chrome row: ${surplusArms.join(', ')}`);
+  if (missingKeys.length) failures.push(`ACTIONS: frontend rows with no FRONTEND_ROWS handler in ${FILES.pageMenu}: ${missingKeys.join(', ')}`);
+  if (surplusKeys.length) failures.push(`ACTIONS: FRONTEND_ROWS handlers with no frontend row: ${surplusKeys.join(', ')}`);
+
+  // Rule 7: the Theia frame never feeds the page menu.
+  const content = /<xul:browser\b[^>]*\bid="powerbrowser-content"[^>]*>/.exec(inputs.xhtml);
+  if (!content) return { broken: [`no #powerbrowser-content browser in ${FILES.xhtml}`], failures };
+  if (!/\sdisablecontextmenu="true"/.test(content[0])) failures.push('POLICY: #powerbrowser-content does not carry disablecontextmenu="true" (ContextMenuParent.sys.mjs:29): an IDE right-click would reach the page menu');
+
+  return { broken, failures, summary: `furniture {${[...setB].sort().join(', ')}} == wired {${[...setA].sort().join(', ')}}, each equal to upstream's element; installer member, receivers and one call; windowtype, D-11 and the status-line layer rule hold; ${rows.length} page menu rows are upstream's ids and strings in upstream's order, ${chromeRows.size} chrome rows == dispatcher arms, ${frontendRows.size} frontend rows == FRONTEND_ROWS; the Theia frame carries disablecontextmenu` };
 }
 
 function report(result) {
@@ -279,6 +342,11 @@ function selfTest() {
     { name: '(f) a tabContainer reference in the section', key: 'api', mutate: t => `${t}\nwindow.gBrowser.tabContainer;\n`, expect: 'POLICY: the Phase 35 section references tabContainer' },
     { name: '(g) .pb-page-status in the blocking selector', key: 'webTab', mutate: t => t.replace(/(const BLOCKING_LAYER_SELECTOR\s*=\s*'[^']*)'/, "$1, .pb-page-status'"), expect: 'POLICY: BLOCKING_LAYER_SELECTOR contains .pb-page-status' },
     { name: '(h) the section header removed', key: 'api', mutate: t => t.replace(SECTION_HEADER, '// Phase 35 header removed.'), expect: `BROKEN INSTRUMENT: no '${SECTION_HEADER}' section header` },
+    { name: '(i) an invented page menu row id', key: 'api', mutate: t => t.replace(/^(\s*)\{ id: "context-copylink",/m, '$1{ id: "context-zzzplanted", l10n: "main-context-menu-copy-link-simple", when: "copyLink", runs: "frontend", group: "copy" },\n$&'), expect: 'ROWS: context-zzzplanted is not an element id in upstream' },
+    { name: '(j) a row l10n id that differs from upstream', key: 'api', mutate: t => t.replace('l10n: "main-context-menu-copy-link-simple"', 'l10n: "main-context-menu-copy-link"'), expect: 'ROWS: context-copylink: l10n "main-context-menu-copy-link" differs from upstream\'s data-l10n-id "main-context-menu-copy-link-simple"' },
+    { name: '(k) a chrome row with no dispatcher arm', key: 'api', mutate: t => t.replace(/^\s*case "context-reloadframe":.*\n/m, ''), expect: 'ACTIONS: chrome rows with no runPageMenuRow arm: context-reloadframe' },
+    { name: '(l) a frontend row with no frontend handler', key: 'pageMenu', mutate: t => t.replace(/^\s*'context-stop':.*\n/m, ''), expect: `ACTIONS: frontend rows with no FRONTEND_ROWS handler in ${FILES.pageMenu}: context-stop` },
+    { name: '(m) disablecontextmenu removed from the Theia frame', key: 'xhtml', mutate: t => t.replace(' disablecontextmenu="true"', ''), expect: 'POLICY: #powerbrowser-content does not carry disablecontextmenu="true"' },
   ];
   let failed = false;
   for (const plant of plants) {
@@ -301,7 +369,7 @@ function selfTest() {
     console.error(`${NAME} --self-test: FAIL`);
     process.exit(1);
   }
-  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (h) each landed and went red naming their drift`);
+  console.log(`${NAME} --self-test: PASS -- the clean tree is green and plants (a) through (m) each landed and went red naming their drift`);
 }
 
 if (process.argv.includes('--self-test')) {

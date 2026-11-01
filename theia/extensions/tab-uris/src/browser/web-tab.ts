@@ -157,6 +157,12 @@ export interface WebTabOptions {
      * and thumbnail.
      */
     key?: string;
+    /**
+     * Phase 35 plan 03 (PROMPT-04, D-06): a page-menu open grant id chrome minted (`g-<n>`). The first
+     * webTabOpen carries it, so the first load gets the opener page's principal and referrer. It grants
+     * nothing here: chrome checks it is unused, under 5 s old and minted for this exact URL.
+     */
+    grant?: string;
 }
 
 export interface WebTabState {
@@ -239,7 +245,7 @@ export function downloadRowsOf(detail: Record<string, unknown>): WebTabDownloadR
  * section). One stable set for the bridge gate.
  */
 export type WebTabMessage =
-    | { kind: 'webTabOpen'; tabId: string; url: string; key: string }
+    | { kind: 'webTabOpen'; tabId: string; url: string; key: string; grant?: string }
     | { kind: 'webTabGeometry'; tabId: string; x: number; y: number; w: number; h: number; visible: boolean }
     | { kind: 'webTabNavigate'; tabId: string; url: string }
     | { kind: 'webTabBack'; tabId: string }
@@ -543,6 +549,8 @@ export class WebTabWidget extends BaseWidget {
     tabId: string;
     /** NG-001: the tab-store row this tab writes (`WebTabOptions.key`, else `web:<id>`). */
     rowKey = '';
+    /** Phase 35 plan 03: the open grant the first webTabOpen carries, then cleared (chrome spends it either way). */
+    protected grant: string | undefined;
     url: string;
     pageTitle = '';
     loading = false;
@@ -617,6 +625,7 @@ export class WebTabWidget extends BaseWidget {
         this.id = `${WEB_TAB_FACTORY_ID}:${options.id}`;
         this.tabId = options.id;
         this.rowKey = options.key ?? `web:${options.id}`;
+        this.grant = options.grant;
         this.url = options.url;
         this.title.closable = true;
         this.title.iconClass = 'codicon codicon-globe';
@@ -709,7 +718,9 @@ export class WebTabWidget extends BaseWidget {
         ensureBodyObserver();
         // Lost-view detection (UI-SPEC A10/A11): the open is awaited, and a
         // refusal, a nack or silence (timeout included) marks the view lost.
-        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey })
+        const grant = this.grant;
+        this.grant = undefined;
+        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...(grant ? { grant } : {}) })
             .then(reply => this.setLostView(WebTabWidget.lostReply(reply)));
         this.publish();
         if (!this.listening) {
@@ -1297,18 +1308,21 @@ export class WebTabOpenHandler implements OpenHandler {
         return widget;
     }
 
-    /** NAV-06: a new web tab directly after `ref`; the current tab stays current. */
-    async openInBackground(url: string, ref: Widget): Promise<WebTabWidget> {
+    /**
+     * NAV-06: a new web tab directly after `ref`; the current tab stays current. `grant` (35-03, D-06) is a
+     * page-menu open grant chrome minted for this URL; the tab's first open carries it.
+     */
+    async openInBackground(url: string, ref: Widget, grant?: string): Promise<WebTabWidget> {
         if (!/^https?:\/\//i.test(url)) {
             throw new Error('@powerbrowser/tab-uris: openInBackground takes an http(s) URL only');
         }
-        const widget = await this.createWidget(url);
+        const widget = await this.createWidget(url, undefined, grant);
         this.shell.addWidget(widget, { area: 'main', ref, mode: 'tab-after' });
         return widget;
     }
 
-    protected createWidget(url: string, rowKey?: string): Promise<WebTabWidget> {
-        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}) };
+    protected createWidget(url: string, rowKey?: string, grant?: string): Promise<WebTabWidget> {
+        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}), ...(grant ? { grant } : {}) };
         return this.widgetManager.getOrCreateWidget<WebTabWidget>(WEB_TAB_FACTORY_ID, options);
     }
 }

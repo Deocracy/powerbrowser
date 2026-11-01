@@ -174,6 +174,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     // Phase 31 plan 05: a text badge, not a Theia accelerator: the Ctrl+Q key is chrome's reserved <key> row (powerbrowser.js).
     menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,
     comingSoonRow: (label: string) => `${label} (Coming soon)`,
+    // Phase 35 plan 03 (PROMPT-04, 35-UI-SPEC Refused target): the page menu's row for a link the shell cannot open.
+    pageMenuRefusedLink: (subject: string) => `${subject} can't open that link here. Choose Copy Link to copy it instead.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

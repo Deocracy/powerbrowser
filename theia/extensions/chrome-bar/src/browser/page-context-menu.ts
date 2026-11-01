@@ -13,9 +13,10 @@
  */
 
 import { inject, injectable } from '@theia/core/shared/inversify';
-import { ContextMenuRenderer, FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { ApplicationShell, ContextMenuRenderer, FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { CommandMenu, CompoundMenuNode, MenuNode, MenuPath, Submenu } from '@theia/core/lib/common';
-import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { WebTabChannel, WebTabOpenHandler, WebTabReply, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { CHROME_BAR_COPY, appSubject } from './chrome-bar-copy';
 
 export const PAGE_CONTEXT_MENU_PATH: MenuPath = ['powerbrowser-page-context-menu'];
 
@@ -26,11 +27,27 @@ interface PageMenuItem {
     enabled: boolean;
     checked?: boolean;
     group: string;
+    /** The refusal row (a link the shell cannot open): disabled, labelled from CHROME_BAR_COPY here. */
+    refused?: boolean;
     children?: PageMenuItem[];
 }
 
-/** Rows the frontend performs with the widget's own methods, keyed by upstream id (furniture rule 6). */
-const FRONTEND_ROWS: Readonly<Record<string, (widget: WebTabWidget) => unknown>> = Object.freeze({});
+interface FrontendRow {
+    run: (widget: WebTabWidget) => unknown;
+    /** Enablement from the widget's own state; chrome's `enabled` when absent. */
+    enabled?: (widget: WebTabWidget) => boolean;
+}
+
+/**
+ * Rows the frontend performs with the widget's existing methods, keyed by upstream id. Their keys equal the
+ * `runs: "frontend"` rows of chrome's PAGE_MENU_ROWS (furniture rule 6).
+ */
+const FRONTEND_ROWS: Readonly<Record<string, FrontendRow>> = Object.freeze({
+    'context-back': { run: widget => widget.back(), enabled: widget => widget.canGoBack },
+    'context-forward': { run: widget => widget.forward(), enabled: widget => widget.canGoForward },
+    'context-reload': { run: widget => widget.reload() },
+    'context-stop': { run: widget => widget.stop() },
+});
 
 const sortKey = (index: number): string => String(index).padStart(3, '0');
 
@@ -48,6 +65,12 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
 
     @inject(ContextMenuRenderer)
     protected readonly menus: ContextMenuRenderer;
+
+    @inject(WebTabOpenHandler)
+    protected readonly webTabs: WebTabOpenHandler;
+
+    @inject(ApplicationShell)
+    protected readonly shell: ApplicationShell;
 
     onStart(): void {
         this.channel.onPush('pageContextMenu', detail => this.open(detail));
@@ -68,7 +91,7 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
         const pick = (itemId: string | null): void => {
             if (!sent) {
                 sent = true;
-                void this.send(tabId, menuId, itemId).then(reply => this.settle(widget, itemId, reply));
+                void this.send(tabId, menuId, itemId).then(reply => this.settle(widget, itemId, reply)).catch(() => widget.focusPage());
             }
         };
         const menu: CompoundMenuNode = {
@@ -126,27 +149,39 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
             };
             return submenu;
         }
+        const frontendRow = FRONTEND_ROWS[item.id];
+        const enabled = !item.refused && (frontendRow?.enabled ? frontendRow.enabled(widget) : item.enabled);
         const row: CommandMenu = {
             id: item.id,
-            label: item.label,
+            label: item.refused ? CHROME_BAR_COPY.pageMenuRefusedLink(appSubject()) : item.label,
             sortString: sortKey(position),
             isVisible: () => true,
-            isEnabled: () => item.enabled,
+            isEnabled: () => enabled,
             isToggled: () => item.checked === true,
             run: async () => pick(item.id),
         };
         return row;
     }
 
-    protected send(tabId: string, menuId: number, itemId: string | null): ReturnType<WebTabChannel['request']> {
+    protected send(tabId: string, menuId: number, itemId: string | null): Promise<WebTabReply> {
         return this.channel.request({ kind: 'webTabContextMenuAction', tabId, menuId, itemId });
     }
 
-    /** After chrome answers: a frontend row runs on the widget; otherwise the page gets focus back. */
-    protected settle(widget: WebTabWidget, itemId: string | null, reply: Awaited<ReturnType<WebTabChannel['request']>>): void {
-        const frontendRow = itemId !== null && reply.ok && reply.where === 'frontend' ? FRONTEND_ROWS[itemId] : undefined;
-        if (frontendRow) {
-            frontendRow(widget);
+    /**
+     * After chrome answers: a frontend row runs on the widget; a grant (D-06) opens a new web tab after the
+     * opener with chrome's target and grant id, activated unless chrome said background. Otherwise, and for a
+     * background tab, the page gets focus back.
+     */
+    protected async settle(widget: WebTabWidget, itemId: string | null, reply: WebTabReply): Promise<void> {
+        if (itemId !== null && reply.ok && reply.where === 'frontend') {
+            FRONTEND_ROWS[itemId]?.run(widget);
+        }
+        if (reply.ok && reply.where === 'grant' && typeof reply.url === 'string' && typeof reply.grantId === 'string') {
+            const opened = await this.webTabs.openInBackground(reply.url, widget, reply.grantId);
+            if (reply.background === false) {
+                await this.shell.activateWidget(opened.id);
+                return;
+            }
         }
         widget.focusPage();
     }
