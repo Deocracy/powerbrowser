@@ -334,7 +334,7 @@ export const CHROME_BAR_COPY = Object.freeze({
     unpinFromToolbarRow: 'Unpin from Toolbar',
     removeExtensionRow: 'Remove Extension',
     removeExtensionHeading: (name: string) => `Remove ${name}?`,
-    removeExtensionBody: 'The extension and its data stay in the profile until the browser restarts.',
+    removeExtensionBody: 'The extension and its data are removed from this profile.',
     removeExtensionConfirm: 'Remove',
     removeExtensionCancel: 'Cancel',
     extensionRemoveRefused: (name: string) => `${name} can't be removed here. Choose Manage Extension to see it in Add-ons.`,

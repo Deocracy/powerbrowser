@@ -158,7 +158,7 @@ literal user-facing string. `{App}` is `appSubject()` (configured app name).
 | Row: Manage | `Manage Extension` |
 | Row: Remove | `Remove Extension` |
 | Row: Sidebar toggle | `Show Sidebar` / `Hide Sidebar` (toggled; only for extensions with a sidebar page) |
-| Remove confirm | `Remove {name}?`: `The extension and its data stay in the profile until the browser restarts.` Choices: `Remove` / `Cancel` |
+| Remove confirm | `Remove {name}?`: `The extension and its data are removed from this profile.` Choices: `Remove` / `Cancel` |
 | Install prompt (stock) | Stock `PopupNotifications` strings (Phase 37 host); no authored copy |
 | Install failure | `Could not install {name}.` + next step `Try again or install from a file.` |
 | Popup load failure | `This extension's popup could not be shown.` + next step `Reload the tab and try again.` |

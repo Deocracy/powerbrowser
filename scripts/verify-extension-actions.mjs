@@ -48,6 +48,8 @@
  *                    extension content in Theia DOM: no <iframe, no
  *                    dangerouslySetInnerHTML (an icon is an <img src> only) and
  *                    no moz-extension: string. The popup is the native panel.
+ *                    38-REVIEW WR-04: the Remove confirm's body promises the
+ *                    data stays only if the product sets keepStorageOnUninstall.
  *                    38-REVIEW WR-02: focus returns to the pill only for a close
  *                    the user made in the popup or on the button; the page-focus
  *                    and TabSelect closes clear `refocus`, so chrome does not
@@ -389,6 +391,14 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             }
         });
     }
+    // 8a. WR-04: the Remove confirm tells the truth about the data. Upstream clears it on uninstall unless the keep pref is set.
+    {
+        const copy = `${CHROME_BAR_SRC}browser/chrome-bar-copy.ts`;
+        const body = /removeExtensionBody: '([^']*)'/.exec(src[copy] ?? '')?.[1];
+        const keeps = products.some(f => stripComments(src[f]).includes('keepStorageOnUninstall'));
+        if (body === undefined) failures.push(`remove-copy: ${copy} has no removeExtensionBody (broken instrument)`);
+        else if (/\b(stay|stays|kept|keep|restore)\b/i.test(body) !== keeps) failures.push(`remove-copy: removeExtensionBody ${JSON.stringify(body)} ${keeps ? 'does not promise' : 'promises'} the data stays, but the product ${keeps ? 'sets' : 'does not set'} extensions.webextensions.keepStorageOnUninstall`);
+    }
     // 8b. WR-02: a close caused by page focus or a tab switch never pulls focus back to Theia or the pill.
     if (bridgeLanded) {
         const open = span(apiLines, /^function extensionOpenPopup\(/);
@@ -589,6 +599,8 @@ function selfTest() {
         { name: 'signal unheard', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('new window.Event("TabHostActionUpdate")', 'new window.Event("TabHostPlanted")') }), expect: 'dispatches TabHostPlanted, which EXTENSION_TAB_EVENTS does not listen for' },
         { name: 'page-focus refocuses', run: () => check({ ...clean, [API]: clean[API].replace('    refocus = false;\n    popup.closePopup();', '    popup.closePopup();') }), expect: 'extensionOpenPopup refocuses the Theia frame on a close caused by page focus' },
         { name: 'pill always focused', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: clean[EXTENSIONS_WIDGET].replace('popupClosed && this.webTabs.extensionActionsRefocus', 'popupClosed') }), expect: 'focuses the pill on every popup close' },
+        { name: 'remove copy promises retention', run: () => check({ ...clean, [`${CHROME_BAR_SRC}browser/chrome-bar-copy.ts`]: clean[`${CHROME_BAR_SRC}browser/chrome-bar-copy.ts`].replace('are removed from this profile.', 'stay in the profile until the browser restarts.') }), expect: 'promises the data stays' },
+        { name: 'keep pref set', run: () => check(apiWith('Services.prefs.setBoolPref("extensions.webextensions.keepStorageOnUninstall", true);')), expect: 'does not promise the data stays' },
         { name: 'popup-dom', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <iframe src={popupUrl} />;\n` }), expect: `${EXTENSIONS_WIDGET}:` },
         { name: 'inlined svg icon', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <span dangerouslySetInnerHTML={{ __html: row.icon }} />;\n` }), expect: '(dangerouslySetInnerHTML)' },
         { name: 'anchor reporter gone', run: () => check(Object.fromEntries(Object.entries(clean).filter(([f]) => f !== EXTENSIONS_ANCHOR))), expect: `${EXTENSIONS_ANCHOR} is missing` },
