@@ -964,12 +964,19 @@ export class WebTabWidget extends BaseWidget {
     /** PAGE-01: runs the find in the page. Counts and status return in the state push, not in this reply. */
     async find(query: string, options: { caseSensitive?: boolean; entireWord?: boolean; highlightAll?: boolean } = {}): Promise<WebTabReply> {
         this.findQuery = query;
+        this.findOptions = options;
         return this.settleUnknownTab(await this.channel.request({ kind: 'webTabFind', tabId: this.tabId, query, ...options }));
     }
 
-    /** PAGE-01: steps to the next match of the last query, or to the previous one with `backwards`. */
+    protected findOptions: { caseSensitive?: boolean; entireWord?: boolean; highlightAll?: boolean } = {};
+
+    /**
+     * PAGE-01: steps to the next match of the last query, or to the previous one with `backwards`. A new page resets
+     * chrome's query while the bar still shows this one, so `no-query` re-runs it (32-REVIEW WR-06).
+     */
     async findNext(backwards = false): Promise<WebTabReply> {
-        return this.settleUnknownTab(await this.channel.request({ kind: 'webTabFindNext', tabId: this.tabId, backwards }));
+        const reply = this.settleUnknownTab(await this.channel.request({ kind: 'webTabFindNext', tabId: this.tabId, backwards }));
+        return reply.ok && reply.where === 'no-query' && this.findQuery.length > 0 ? this.find(this.findQuery, this.findOptions) : reply;
     }
 
     /** PAGE-01: ends the find and clears the page selection. The stored query stays for the next open. */

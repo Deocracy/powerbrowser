@@ -367,6 +367,19 @@ async function scenarioFind(app, origin, kind = 'webTabFind') {
     if (!off.slice(onCount).includes(false)) {
         return 'highlight-all off did not clear the highlights (no highlight-false pass from the page)';
     }
+    // 32-REVIEW WR-06: a new page resets chrome's stored query, while Theia's tab still holds "needle" (the bar shows it).
+    // A step from Theia must still find: the widget's findNext, the path Enter, F3 and the step buttons take.
+    await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).find('needle', {}); return true;`);
+    const navMark = (await pushes(app)).length;
+    if ((await channelRequest(app, { kind: 'webTabNavigate', tabId, url: `${origin}/find?again` }))?.ok !== true
+        || await waitForPush(app, loadedAt(tabId, '/find?again'), { from: navMark, timeoutMs: 30000 }) < 0) {
+        throw new Error(`${BROKEN} the second find page never loaded`);
+    }
+    const stepMark = (await pushes(app)).length;
+    await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).findNext(false); return true;`);
+    if (await waitForPush(app, stateOf(tabId, p => p.findTotal >= 3 && p.findStatus === 'found'), { from: stepMark, timeoutMs: 10000 }) < 0) {
+        return 'after a navigation, a find step from the bar did nothing (chrome had no query, and Theia did not re-run its own)';
+    }
     await channelRequest(app, { kind: 'webTabFindClose', tabId });
     const closed = await waitForPush(app, stateOf(tabId, p => p.findTotal === 0 && p.findStatus === null), { from: stepped, timeoutMs: 10000 });
     return closed < 0 ? 'FindClose did not reset the counts and status in a state push' : null;
