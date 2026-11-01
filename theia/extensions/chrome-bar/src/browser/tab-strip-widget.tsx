@@ -1352,9 +1352,22 @@ export class TabStripWidget extends ReactWidget {
         });
     }
 
+    /**
+     * TAB-05 (Firefox): a tab dragged into the other block is clamped to the boundary and keeps its pin state. The
+     * strip renders the pinned block first whatever the bar order is, so an unclamped drop would move the TabBar and
+     * leave the strip as it was. Idempotent, so the aim, the drop and Move all share it.
+     */
+    protected clampDrop(widget: Widget, before: Widget | undefined): Widget | undefined {
+        const firstLoose = this.shownTabs().find(tab => !this.isPinned(tab));
+        if (this.isPinned(widget)) {
+            return before && this.isPinned(before) ? before : firstLoose;
+        }
+        return before && this.isPinned(before) ? firstLoose : before;
+    }
+
     /** TAB-02: aims the in-flight reorder at the pointer and repaints the 2px drop indicator. */
     protected aimReorder(widget: Widget, x: number): void {
-        const before = this.dropBefore(x);
+        const before = this.clampDrop(widget, this.dropBefore(x));
         const tabs = this.shownTabs();
         const at = tabs.indexOf(widget);
         // Before itself or before its right neighbour, or after the last tab when it is the last: nowhere new.
@@ -1370,10 +1383,11 @@ export class TabStripWidget extends ReactWidget {
      * in the home pane TabBar (insertTab through moveInBar). The strip may hide some of that bar's tabs (PAN-03,
      * the stack), so the index is the bar's, not the strip's. Never touches the dock's layout.
      */
-    protected reorderTo(widget: Widget, before: Widget | undefined): void {
+    protected reorderTo(widget: Widget, requested: Widget | undefined): void {
         const titles = this.primaryBar()?.titles ?? [];
         const from = titles.indexOf(widget.title);
         const tabs = this.shownTabs();
+        const before = this.clampDrop(widget, requested);
         const anchor = before ?? tabs[tabs.length - 1];
         if (from < 0 || !anchor) {
             return;

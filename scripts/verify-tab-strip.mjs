@@ -369,11 +369,17 @@ function check(src) {
         failures.push(`pin store: restorePins does not require the reopened tab's own key to equal entry.key -- a stale key could re-pin another tab (W1)`);
     }
 
-    // 10b. pinned block (WR-03): every multi-close selection goes through `ranged`.
+    // 10b. pinned block (WR-02, WR-03): every multi-close selection goes through `ranged`, and both the aim and the drop clamp.
     const bypass = [...(rows ?? '').matchAll(/const (\w+) = closable\(/g)].map(m => m[1]);
     if (bypass.length) {
         failures.push(`pinned block: tabMenuRows selects ${bypass.join(', ')} through closable, not ranged -- that close row closes pinned tabs and forgetTab drops their pins (WR-03)`);
     }
+    for (const signature of ['protected aimReorder(', 'protected reorderTo(']) {
+        if (!/this\.clampDrop\(widget, /.test(methodBody(strip, signature) ?? '')) {
+            failures.push(`pinned block: ${signature.slice(10, -1)} does not clamp the drop with clampDrop -- a drag across the pinned boundary moves the bar and the strip re-sorts it back (WR-02)`);
+        }
+    }
+
     // 11. preview occlusion and anchor
     const members = selector ? selector.split(',').map(member => member.trim()) : [];
     const renderPreview = methodBody(strip, 'protected renderPreview(');
@@ -630,6 +636,12 @@ const PLANTS = [
         file: STRIP,
         mutate: s => s.replace('const duplicates = ranged(', 'const duplicates = closable('),
         expect: 'through closable, not ranged',
+    },
+    {
+        name: 'drop-not-clamped',
+        file: STRIP,
+        mutate: s => s.replace('const before = this.clampDrop(widget, requested);', 'const before = requested;'),
+        expect: 'reorderTo does not clamp',
     },
     {
         name: 'url-keyed-pin',
