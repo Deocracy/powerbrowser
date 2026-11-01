@@ -698,6 +698,16 @@ jobs:
       - name: Refuse any patch URL that is not the MAR origin at /<tag>/<asset> (the pre-commit form gate)
         run: node scripts/verify-channel-live.mjs --form-only --manifest release/release-manifest.json --descriptors "$RUNNER_TEMP/descriptors"
 
+      # One derivation of the updates repo (<owner>/<repo>-updates, today powerbrowser-updates), read by the
+      # token scope and the commit target alike, so a rename or a fork cannot split them.
+      - name: Derive the updates repo from this repository, once
+        id: updates_repo
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "::error::the repository name $GITHUB_REPOSITORY is not owner/repo; no updates repo is derived and nothing is committed" >&2; exit 1; }
+          UPDATES_REPO="$GITHUB_REPOSITORY-updates"
+          { echo "full=$UPDATES_REPO"; echo "owner=${UPDATES_REPO%%/*}"; echo "name=${UPDATES_REPO#*/}"; } >> "$GITHUB_OUTPUT"
+
       - name: Mint the bot App token for the updates repo only, immediately before the commit (revoked at job end)
         id: updates_token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -705,15 +715,16 @@ jobs:
           client-id: ${{ vars.BOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
           permission-contents: write
-          repositories: powerbrowser-updates
+          owner: ${{ steps.updates_repo.outputs.owner }}
+          repositories: ${{ steps.updates_repo.outputs.name }}
 
       - name: Commit each changed descriptor to the updates repo through the Contents API (an unchanged one is a no-op)
         env:
           GH_TOKEN: ${{ steps.updates_token.outputs.token }}
           TAG: ${{ steps.derive_key.outputs.tag }}
+          REPO: ${{ steps.updates_repo.outputs.full }}
         run: |
           set -euo pipefail
-          REPO="$GITHUB_REPOSITORY-updates"
           cd "$RUNNER_TEMP/descriptors"
           find . -type f -name update.xml | sed 's|^\./||' | sort > "$RUNNER_TEMP/descriptor-list.txt"
           [ -s "$RUNNER_TEMP/descriptor-list.txt" ] || { echo "::error::no descriptor was emitted; nothing is committed" >&2; exit 1; }
