@@ -23,30 +23,67 @@
  *   pip-close           A Picture-in-Picture window opened from a web-tab video
  *                       closes, and the overlay still renders and plays
  *                       (gBrowser.shouldActivateDocShell, 35-01).
+ *   context-menu        (35-03, PROMPT-04) Right-clicking a link, a javascript:
+ *                       link, an image, a video, a selection, a frame and a blank
+ *                       area pushes pageContextMenu for that tab whose item ids are
+ *                       the boundary's PAGE_MENU_ROWS for that target (ids and
+ *                       order proven upstream's by verify-shell-furniture.mjs rule 5),
+ *                       and shows a .lm-Menu whose first link row reads upstream's
+ *                       en-US Open Link in New Tab label. Picks: Copy Link and Copy
+ *                       Image Link fill the clipboard; Open Link in New Tab opens a
+ *                       tab after the opener, the opener still current, whose
+ *                       /target GET carries the opener's URL as Referer; the
+ *                       javascript: link shows the disabled refusal row, opens no
+ *                       tab and serves nothing; Open Image in New Tab loads the
+ *                       image; Pause then Play flip video.paused; Reload Frame
+ *                       fetches the frame again; the search row opens /search?q=
+ *                       with the selection on a served engine. Prints
+ *                       `context-menu timing: p50 <ms> p95 <ms> n=<n>` and, per
+ *                       target, the context flags the shim captured (probe 35-1).
+ *   menu-not-in-ide     A right-click on the IDE's main-area tab opens Theia's own
+ *                       .lm-Menu and pushes no pageContextMenu within 1500 ms.
+ *                       Scored only when context-menu passed (CONTROL_OF).
+ *   background-menu     With a second web tab current, a right-click on the hidden
+ *                       first tab pushes nothing within 1500 ms; made current, the
+ *                       same right-click pushes a menu. Scored only when
+ *                       context-menu passed (CONTROL_OF).
  *
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
  * applied` only after reading the mutation back.
  */
+import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
     BROKEN,
+    appNameExpr,
     inChrome,
     loadedAt,
     makeCurrent,
     openWebTab,
     overlayVisibility,
+    pressKey,
     pushes,
     serveNavPages,
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
-import { pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
+import { REPO_ROOT, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
 
 const NAME = 'verify-page-furniture-live';
 const TOOLTIP_TEXT = 'Furniture tooltip';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/** 35-03: the Referer header of each /target and /search GET, recorded by this script's own pages. */
+const referers = [];
+const recordReferer = path => request => {
+    referers.push({ path, referer: request.headers.referer ?? null });
+    return '';
+};
+const MENU_WORDS = 'menu words';
 
 const PAGES = {
     '/furniture': {
@@ -56,7 +93,24 @@ const PAGES = {
             + '<p id="plain">Plain text</p>'
             + `<p><span id="tip" title="${TOOLTIP_TEXT}">Has a tooltip</span></p>`,
     },
-    '/target': { title: 'Target', body: '<p>target</p>' },
+    '/target': { title: 'Target', body: '<p>target</p>', extra: recordReferer('/target') },
+    '/menu': {
+        title: 'Menu',
+        body: '<style>body { font: 20px sans-serif; margin: 24px; } p, div { margin: 18px 0; }</style>'
+            + '<p><a id="link" href="/target">Target link</a></p>'
+            + '<p><a id="jslink" href="javascript:void(0)">Script link</a></p>'
+            + `<p id="words">${MENU_WORDS}</p>`
+            + '<canvas id="c" width="160" height="90" hidden></canvas><video id="v" width="160" height="90" muted autoplay></video>'
+            + '<iframe id="frame" src="/frame" width="200" height="80"></iframe>'
+            + '<div id="blank" style="height: 80px"></div>'
+            + '<script>const c = document.getElementById("c"); const g = c.getContext("2d"); let n = 0;'
+            + 'setInterval(() => { g.fillStyle = "hsl(" + (n++ % 360) + ",80%,50%)"; g.fillRect(0, 0, 160, 90); }, 33);'
+            + 'const v = document.getElementById("v"); v.srcObject = c.captureStream(30); v.play();</script>',
+        // The image comes from this script's asset server (serveNavPages serves HTML only), at a port known per session.
+        extra: () => (assets ? `<p><img id="img" src="${assets.url('/pixel.png')}" width="64" height="64" alt="pixel"></p>` : ''),
+    },
+    '/frame': { title: 'Frame', body: '<p style="height: 60px">frame</p>' },
+    '/search': { title: 'Search', body: '<p>search</p>', extra: recordReferer('/search') },
     '/ide-link': { title: 'IDE link', body: '<p>ide</p>' },
     '/pip': {
         title: 'Picture in Picture',
@@ -338,17 +392,529 @@ async function pipClose({ app, pages, plant, fail, note }) {
     note('Picture-in-Picture opened and closed; the overlay still plays');
 }
 
+// ---------------------------------------------------------------------------
+// 35-03 (PROMPT-04): the page context menu.
+// ---------------------------------------------------------------------------
+
+/** A one-pixel PNG; serveNavPages serves HTML only, so the image has its own loopback server. */
+const PIXEL_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+let assets = null;
+
+async function serveAssets() {
+    const requests = [];
+    const server = createServer((request, response) => {
+        requests.push({ path: new URL(request.url, 'http://127.0.0.1').pathname, at: Date.now() });
+        if (request.url === '/pixel.png') {
+            response.writeHead(200, { 'content-type': 'image/png' });
+            response.end(PIXEL_PNG);
+            return;
+        }
+        response.writeHead(404, { 'content-type': 'text/plain' });
+        response.end('not found');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    return { origin, url: path => `${origin}${path}`, requests, close: () => new Promise(resolve => { server.closeAllConnections?.(); server.close(() => resolve()); }) };
+}
+
+const readTree = rel => readFileSync(join(REPO_ROOT, rel), 'utf8');
+
+/** Upstream's en-US label for a browserContext.ftl message (its .label, else its .aria-label). */
+function ftlLabel(id) {
+    const text = readTree('upstream/browser/locales/en-US/browser/browserContext.ftl');
+    const block = new RegExp(`^${id} =\\n((?:[ \\t]+\\..*\\n)+)`, 'm').exec(text);
+    const attr = name => block && new RegExp(`^\\s+\\.${name} = (.*)$`, 'm').exec(block[1])?.[1];
+    const label = attr('label') ?? attr('aria-label');
+    if (!label) {
+        throw new Error(`${BROKEN} no label for ${id} in upstream browserContext.ftl`);
+    }
+    return label;
+}
+
+/** The search row's label: upstream's browser.properties contextMenuSearch with the engine and the selection. */
+function searchLabel(engine, terms) {
+    const template = /^contextMenuSearch=(.*)$/m.exec(readTree('upstream/browser/locales/en-US/chrome/browser/browser.properties'))?.[1];
+    if (!template) {
+        throw new Error(`${BROKEN} no contextMenuSearch in upstream browser.properties`);
+    }
+    return template.replace('%1$S', engine).replace('%2$S', terms);
+}
+
+/** The refusal row's text from CHROME_BAR_COPY.pageMenuRefusedLink, with appSubject()'s subject (the name, else noAppName). */
+function refusalLabel(appName) {
+    const copy = readTree('theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts');
+    const template = /pageMenuRefusedLink: \(subject: string\) => `\$\{subject\}([^`]*)`/.exec(copy)?.[1];
+    const noAppName = /noAppName: '([^']+)'/.exec(copy)?.[1];
+    if (!template || !noAppName) {
+        throw new Error(`${BROKEN} no pageMenuRefusedLink or noAppName in chrome-bar-copy.ts`);
+    }
+    return `${appName || noAppName}${template}`;
+}
+
+/**
+ * The page menu rows the boundary declares, in order: `{ id, when, child }`. Their ids, strings and
+ * order are upstream's (verify-shell-furniture.mjs rule 5), so the expectation below is derived, not typed.
+ */
+function pageMenuRows() {
+    const text = readTree('powerbrowser/shell/PowerBrowserAPI.sys.mjs');
+    const at = text.indexOf('const PAGE_MENU_ROWS = Object.freeze([');
+    if (at < 0) {
+        throw new Error(`${BROKEN} no PAGE_MENU_ROWS in the boundary file`);
+    }
+    return text.slice(at, text.indexOf('\n]);', at)).split('\n').filter(line => /^\s*\{ id: "/.test(line))
+        .map(line => ({ id: /id: "([^"]+)"/.exec(line)[1], when: /when: "([^"]+)"/.exec(line)[1], child: /^ {4}\{/.test(line) }));
+}
+
+/** The row ids a target whose context satisfies the `when` names should show, children under a shown parent. */
+function expectedIds(rows, names) {
+    const ids = [];
+    let parentShown = false;
+    for (const row of rows) {
+        if (!row.child) {
+            parentShown = names.includes(row.when);
+            if (parentShown) {
+                ids.push(row.id);
+            }
+        } else if (parentShown && (row.when === 'always' || names.includes(row.when))) {
+            ids.push(row.id);
+        }
+    }
+    return ids;
+}
+
+const flatIds = items => (Array.isArray(items) ? items.flatMap(item => [item.id, ...flatIds(item.children)]) : []);
+const isMenuPush = tabId => p => p && p.kind === 'pageContextMenu' && (tabId === undefined || p.tabId === tabId);
+
+/** The open root .lm-Menu's rows in the Theia frame, or null when no menu is open. */
+const menuRows = (app, level = 0) => app.evaluate(`JSON.stringify((() => {
+    const menu = document.querySelectorAll('.lm-Menu')[${level}];
+    if (!menu) return null;
+    return [...menu.querySelectorAll('.lm-Menu-item')].map(item => {
+        const r = item.getBoundingClientRect();
+        return { label: item.querySelector('.lm-Menu-itemLabel')?.textContent ?? '', type: item.getAttribute('data-type'), disabled: item.classList.contains('lm-mod-disabled'), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
+})())`).then(JSON.parse);
+
+/** A trusted mouse click with `button` at (x, y) in `context`. */
+async function clickAt(app, context, x, y, button = 0) {
+    await app.send('input.performActions', { context, actions: [{ type: 'pointer', id: 'pb-furniture-mouse', parameters: { pointerType: 'mouse' }, actions: [
+        { type: 'pointerMove', x: Math.round(x), y: Math.round(y), duration: 0 },
+        { type: 'pointerDown', button },
+        { type: 'pointerUp', button },
+    ] }] });
+    await app.send('input.releaseActions', { context });
+}
+
+async function centreOf(app, context, selector) {
+    const box = JSON.parse(await app.evaluateIn(context, `JSON.stringify((() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2 }; })())`));
+    if (!box) {
+        throw new Error(`${BROKEN} no ${selector} in the page`);
+    }
+    return box;
+}
+
+const ESCAPE = { key: 'Escape', code: 'Escape', keyCode: 27 };
+
+/** Closes whatever .lm-Menu is open and waits until none is. */
+async function closeMenu(app) {
+    if (await menuRows(app)) {
+        await pressKey(app, ESCAPE);
+        await settle(() => menuRows(app), rows => rows === null, 3000);
+    }
+}
+
+/** Clicks the row labelled `label` in the open menu at `level`; false when there is none. */
+async function pickRow(app, theia, label, level = 0) {
+    const row = (await menuRows(app, level) ?? []).find(r => r.label === label);
+    if (!row) {
+        return false;
+    }
+    await clickAt(app, theia, row.x, row.y);
+    return true;
+}
+
+const clipboardText = app => inChrome(app, `try {
+    const trans = Cc['@mozilla.org/widget/transferable;1'].createInstance(Ci.nsITransferable);
+    trans.init(null);
+    trans.addDataFlavor('text/plain');
+    Services.clipboard.getData(trans, Services.clipboard.kGlobalClipboard);
+    const data = {};
+    try { trans.getTransferData('text/plain', data); } catch { return ''; }
+    return String(data.value.QueryInterface(Ci.nsISupportsString).data);
+} catch (e) {
+    return 'error: ' + e;
+}`);
+
+const mainTabIds = app => probe(app, `return get('ApplicationShell').getWidgets('main').map(w => w.tabId ?? null);`);
+const currentTabId = app => probe(app, `return get('ApplicationShell').currentWidget?.tabId ?? null;`);
+
+const MENU_ENGINE = 'Furniture Engine';
+
+/** Chrome scope: a served user engine as the default, so the search row never leaves loopback. */
+async function installMenuEngine(app, pages) {
+    const reply = await inChrome(app, `return (async () => {
+        try {
+            const { SearchService } = ChromeUtils.importESModule('moz-src:///toolkit/components/search/SearchService.sys.mjs');
+            await SearchService.init();
+            const engine = SearchService.getEngineByName(${JSON.stringify(MENU_ENGINE)})
+                ?? await SearchService.addUserEngine({ name: ${JSON.stringify(MENU_ENGINE)}, url: ${JSON.stringify(`${pages.origin}/search?q={searchTerms}`)} });
+            await SearchService.setDefault(engine, SearchService.CHANGE_REASON.USER);
+            return (await SearchService.getDefault()).name;
+        } catch (e) {
+            return 'error: ' + e;
+        }
+    })();`);
+    if (reply !== MENU_ENGINE) {
+        throw new Error(`${BROKEN} the served search engine could not be installed (${String(reply)})`);
+    }
+}
+
+/** Probe 35-1: records the true flags and the protocol of every context the shim captures. */
+const installContextRecorder = app => inChrome(app, `const shim = window.nsContextMenu;
+    const desc = Object.getOwnPropertyDescriptor(shim, 'contentData');
+    if (!desc || !desc.set) return false;
+    window.__pbMenuContexts = [];
+    Object.defineProperty(shim, 'contentData', { configurable: true, get: desc.get, set(data) {
+        if (data && data.context) {
+            window.__pbMenuContexts.push(Object.keys(data.context).filter(k => data.context[k] === true).sort().join(',') + (data.context.linkProtocol ? ' linkProtocol=' + data.context.linkProtocol : ''));
+        }
+        desc.set.call(this, data);
+    } });
+    return true;`);
+
+async function applyMenuPlants(app, plant, note) {
+    if (plant === 'stub-removed') {
+        if (await inChrome(app, `document.getElementById('contentAreaContextMenu')?.remove(); return document.getElementById('contentAreaContextMenu') === null;`) === true) {
+            note('PLANT stub-removed applied');
+        }
+    }
+    if (plant === 'background-check-off') {
+        // Keeps every capture: the overlay reads as visible for the duration of the real setter's check.
+        const read = await inChrome(app, `const shim = window.nsContextMenu;
+            const desc = Object.getOwnPropertyDescriptor(shim, 'contentData');
+            const set = function (data) {
+                const b = data && data.browser;
+                const was = b ? b.style.visibility : '';
+                if (b) b.style.visibility = 'visible';
+                try { desc.set.call(this, data); } finally { if (b) b.style.visibility = was; }
+            };
+            set.__pbPlanted = true;
+            Object.defineProperty(shim, 'contentData', { configurable: true, get: desc.get, set });
+            return Object.getOwnPropertyDescriptor(shim, 'contentData').set.__pbPlanted === true;`);
+        if (read === true) {
+            note('PLANT background-check-off applied');
+        }
+    }
+    if (plant === 'ide-menu-leak') {
+        // The IDE frame reaches the actor again, and a shim that keeps any browser turns its capture into a page menu push.
+        const read = await inChrome(app, `const frame = document.getElementById('powerbrowser-content');
+            frame.removeAttribute('disablecontextmenu');
+            const shim = window.nsContextMenu;
+            const desc = Object.getOwnPropertyDescriptor(shim, 'contentData');
+            const set = function (data) {
+                if (data && data.browser === frame) {
+                    frame.browsingContext.currentWindowGlobal.getActor('PowerBrowserGroup').sendAsyncMessage('PowerBrowserWebTabState', { kind: 'pageContextMenu', tabId: 'planted', menuId: -1, x: 0, y: 0, items: [] });
+                    return;
+                }
+                desc.set.call(this, data);
+            };
+            set.__pbPlanted = true;
+            Object.defineProperty(shim, 'contentData', { configurable: true, get: desc.get, set });
+            return !frame.hasAttribute('disablecontextmenu') && Object.getOwnPropertyDescriptor(shim, 'contentData').set.__pbPlanted === true;`);
+        if (read === true) {
+            note('PLANT ide-menu-leak applied');
+        }
+    }
+    if (plant === 'referrer-dropped') {
+        if (await inChrome(app, `Services.prefs.setIntPref('network.http.sendRefererHeader', 0); return Services.prefs.getIntPref('network.http.sendRefererHeader') === 0;`) === true) {
+            note('PLANT referrer-dropped applied');
+        }
+    }
+}
+
+/** Right-clicks (x, y) in `context` and waits for this tab's menu push and a visible .lm-Menu; returns { push, ms }. */
+async function openMenuAt(app, context, tabId, point) {
+    const mark = (await pushes(app)).length;
+    const started = Date.now();
+    await clickAt(app, context, point.x, point.y, 2);
+    const at = await waitForPush(app, isMenuPush(tabId), { from: mark, timeoutMs: 5000 });
+    if (at < 0) {
+        return { push: null, ms: 0 };
+    }
+    const rows = await settle(() => menuRows(app), r => Array.isArray(r) && r.length > 0, 3000);
+    return { push: (await pushes(app))[at], ms: Array.isArray(rows) ? Date.now() - started : 0, rows };
+}
+
+const percentile = (values, p) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)];
+};
+
+async function contextMenu({ app, pages, plant, fail, note }) {
+    await applyMenuPlants(app, plant, note);
+    if (!plant && await installContextRecorder(app) !== true) {
+        return fail(`${BROKEN} the probe 35-1 context recorder could not be installed on the shim`);
+    }
+    await installMenuEngine(app, pages);
+    const url = pages.url('/menu');
+    const tabId = await openWebTab(app, url);
+    if (await waitForPush(app, loadedAt(tabId, '/menu')) < 0) {
+        return fail('no loaded state push arrived for /menu');
+    }
+    await makeCurrent(app, tabId);
+    if (await settle(() => overlayVisibility(app, tabId), v => v === 'visible') !== 'visible') {
+        return fail(`${BROKEN} the page is not shown`);
+    }
+    const page = await contextOf(app, url);
+    const theia = await contextOf(app, await app.evaluate('location.href'));
+    if (!(await settle(() => app.evaluateIn(page, `document.getElementById('v').currentTime`), t => t > 0) > 0)) {
+        return fail(`${BROKEN} the page's video never started playing`);
+    }
+    if (await settle(() => app.evaluateIn(page, `document.getElementById('img')?.complete === true && document.getElementById('img').naturalWidth > 0`), v => v === true) !== true) {
+        return fail(`${BROKEN} the served image never loaded`);
+    }
+    const strip = await inChrome(app, `return Services.prefs.getBoolPref('privacy.query_stripping.strip_on_share.enabled', false);`) === true;
+    const rows = pageMenuRows();
+    const appName = await app.evaluate(appNameExpr);
+    const linkNames = ['openLink', 'copyLink', ...(strip ? ['stripOnShare'] : []), 'search'];
+    const targets = [
+        { name: 'link', selector: '#link', when: linkNames },
+        { name: 'javascript link', selector: '#jslink', when: linkNames, refused: true },
+        { name: 'image', selector: '#img', when: ['viewImage', 'copyImage'] },
+        { name: 'video', selector: '#v', when: ['mediaPause', 'mediaUnmute', 'onMedia', 'mediaShowControls', 'onVideo'] },
+        { name: 'selection', selector: '#words', when: ['search'], select: true },
+        { name: 'frame', selector: '#frame', when: ['navigation', 'reload', 'inFrame', 'frameTarget'] },
+        { name: 'blank', selector: '#blank', when: ['navigation', 'reload'] },
+    ];
+    const times = [];
+    for (const target of targets) {
+        if (target.select) {
+            await app.evaluateIn(page, `getSelection().selectAllChildren(document.getElementById('words')); true`);
+        }
+        const opened = await openMenuAt(app, page, tabId, await centreOf(app, page, target.selector));
+        if (!opened.push) {
+            return fail(`no pageContextMenu push for ${tabId} after a right-click on the ${target.name}`);
+        }
+        if (!opened.ms) {
+            return fail(`the ${target.name}'s pageContextMenu push showed no .lm-Menu in the Theia frame`);
+        }
+        times.push(opened.ms);
+        const want = expectedIds(rows, target.when);
+        const got = flatIds(opened.push.items);
+        if (JSON.stringify(got) !== JSON.stringify(want)) {
+            return fail(`the ${target.name}'s menu rows are ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+        }
+        if (target.name === 'link' && opened.rows[0]?.label !== ftlLabel('main-context-menu-open-link-new-tab')) {
+            return fail(`the link menu's first row reads ${JSON.stringify(opened.rows[0]?.label)}, not upstream's ${JSON.stringify(ftlLabel('main-context-menu-open-link-new-tab'))}`);
+        }
+        if (target.refused) {
+            const row = opened.rows.find(r => r.label === refusalLabel(appName));
+            if (!row || !row.disabled) {
+                return fail(`the javascript: link shows no disabled refusal row reading ${JSON.stringify(refusalLabel(appName))}; rows ${JSON.stringify(opened.rows.map(r => r.label))}`);
+            }
+        }
+        if (!plant) {
+            const seen = JSON.parse(await inChrome(app, 'return JSON.stringify(window.__pbMenuContexts || []);'));
+            note(`probe 35-1 ${target.name}: ${seen[seen.length - 1] ?? '(no capture)'}`);
+        }
+        await closeMenu(app);
+        if (target.select) {
+            await app.evaluateIn(page, `getSelection().removeAllRanges(); true`);
+        }
+    }
+
+    // Copy Link.
+    await openMenuAt(app, page, tabId, await centreOf(app, page, '#link'));
+    if (!await pickRow(app, theia, ftlLabel('main-context-menu-copy-link-simple'))) {
+        return fail('the link menu has no Copy Link row to pick');
+    }
+    if (await settle(() => clipboardText(app), t => t === pages.url('/target'), 3000) !== pages.url('/target')) {
+        return fail(`Copy Link did not put ${pages.url('/target')} on the clipboard`);
+    }
+
+    // Open Link in New Tab: after the opener, the opener still current, with the page's referrer.
+    await makeCurrent(app, tabId);
+    let mark = (await pushes(app)).length;
+    referers.length = 0;
+    await openMenuAt(app, page, tabId, await centreOf(app, page, '#link'));
+    if (!await pickRow(app, theia, ftlLabel('main-context-menu-open-link-new-tab'))) {
+        return fail('the link menu has no Open Link in New Tab row to pick');
+    }
+    const openedAt = await waitForPush(app, p => p && p.kind === 'state' && p.tabId !== tabId && p.loading === false && String(p.url).endsWith('/target'), { from: mark, timeoutMs: 10000 });
+    if (openedAt < 0) {
+        return fail('Open Link in New Tab opened no web tab that loaded /target');
+    }
+    const newTab = (await pushes(app))[openedAt].tabId;
+    const order = await mainTabIds(app);
+    if (order.indexOf(newTab) !== order.indexOf(tabId) + 1) {
+        return fail(`the new tab is not directly after its opener: ${JSON.stringify(order)}`);
+    }
+    if (await currentTabId(app) !== tabId) {
+        return fail('the opener is no longer the current tab after Open Link in New Tab (browser.tabs.loadInBackground is true)');
+    }
+    const targetGet = referers.find(r => r.path === '/target');
+    if (!targetGet?.referer) {
+        return fail('new tab request carried no Referer');
+    }
+    if (targetGet.referer !== url) {
+        return fail(`the new tab's /target GET carried Referer ${JSON.stringify(targetGet.referer)}, not the opener's ${JSON.stringify(url)}`);
+    }
+
+    // The javascript: link: refusal only.
+    mark = (await pushes(app)).length;
+    const served = pages.requests.length;
+    await openMenuAt(app, page, tabId, await centreOf(app, page, '#jslink'));
+    await closeMenu(app);
+    await sleep(1000);
+    if (pages.requests.length !== served || (await pushes(app)).slice(mark).some(p => p && p.kind === 'state' && p.tabId !== tabId)) {
+        return fail('the javascript: link menu opened a tab or served a request');
+    }
+
+    // Image: Copy Image Link, then Open Image in New Tab.
+    await openMenuAt(app, page, tabId, await centreOf(app, page, '#img'));
+    if (!await pickRow(app, theia, ftlLabel('main-context-menu-image-copy-link'))) {
+        return fail('the image menu has no Copy Image Link row to pick');
+    }
+    if (await settle(() => clipboardText(app), t => t === assets.url('/pixel.png'), 3000) !== assets.url('/pixel.png')) {
+        return fail('Copy Image Link did not put the image URL on the clipboard');
+    }
+    mark = (await pushes(app)).length;
+    await openMenuAt(app, page, tabId, await centreOf(app, page, '#img'));
+    if (!await pickRow(app, theia, ftlLabel('main-context-menu-image-view-new-tab'))) {
+        return fail('the image menu has no Open Image in New Tab row to pick');
+    }
+    if (await waitForPush(app, p => p && p.kind === 'state' && p.tabId !== tabId && String(p.url) === assets.url('/pixel.png'), { from: mark, timeoutMs: 10000 }) < 0) {
+        return fail('Open Image in New Tab opened no tab on the image URL');
+    }
+    await makeCurrent(app, tabId);
+
+    // Video: Pause, then Play.
+    for (const [id, paused] of [['main-context-menu-media-pause', true], ['main-context-menu-media-play', false]]) {
+        await settle(() => overlayVisibility(app, tabId), v => v === 'visible');
+        await openMenuAt(app, page, tabId, await centreOf(app, page, '#v'));
+        if (!await pickRow(app, theia, ftlLabel(id))) {
+            return fail(`the video menu has no ${ftlLabel(id)} row to pick`);
+        }
+        if (await settle(() => app.evaluateIn(page, `document.getElementById('v').paused`), v => v === paused, 3000) !== paused) {
+            return fail(`${ftlLabel(id)} did not leave video.paused ${paused}`);
+        }
+    }
+
+    // Frame: This Frame > Reload Frame fetches the frame document once more.
+    const frameGets = () => pages.requests.filter(r => r.path === '/frame').length;
+    const before = frameGets();
+    await settle(() => overlayVisibility(app, tabId), v => v === 'visible');
+    await openMenuAt(app, page, tabId, await centreOf(app, page, '#frame'));
+    if (!await pickRow(app, theia, ftlLabel('main-context-menu-frame'))) {
+        return fail('the frame menu has no This Frame submenu');
+    }
+    await settle(() => menuRows(app, 1), r => Array.isArray(r) && r.length > 0, 3000);
+    if (!await pickRow(app, theia, ftlLabel('main-context-menu-frame-reload'), 1)) {
+        return fail('the This Frame submenu has no Reload Frame row to pick');
+    }
+    if (await settle(async () => frameGets(), n => n === before + 1, 5000) !== before + 1) {
+        return fail(`Reload Frame did not fetch the frame document once more (${before} then ${frameGets()})`);
+    }
+
+    // Search: the selection on the served engine.
+    await settle(() => overlayVisibility(app, tabId), v => v === 'visible');
+    await app.evaluateIn(page, `getSelection().selectAllChildren(document.getElementById('words')); true`);
+    mark = (await pushes(app)).length;
+    await openMenuAt(app, page, tabId, await centreOf(app, page, '#words'));
+    if (!await pickRow(app, theia, searchLabel(MENU_ENGINE, MENU_WORDS))) {
+        return fail(`the selection menu has no row reading ${JSON.stringify(searchLabel(MENU_ENGINE, MENU_WORDS))}`);
+    }
+    const searched = p => p && p.kind === 'state' && p.tabId !== tabId && new URL(String(p.url), pages.origin).pathname === '/search'
+        && new URL(String(p.url), pages.origin).searchParams.get('q') === MENU_WORDS;
+    if (await waitForPush(app, searched, { from: mark, timeoutMs: 10000 }) < 0) {
+        return fail('the search row opened no tab on /search?q= with the selection');
+    }
+    console.log(`context-menu timing: p50 ${percentile(times, 50)} p95 ${percentile(times, 95)} n=${times.length}`);
+}
+
+async function menuNotInIde({ app, results, fail }) {
+    const control = results.find(r => r.name === 'context-menu');
+    if (!control || control.failures.length || control.notScored) {
+        return 'not-scored';
+    }
+    await closeMenu(app);
+    const theia = await contextOf(app, await app.evaluate('location.href'));
+    const tab = JSON.parse(await app.evaluate(`JSON.stringify((() => { const t = document.querySelector('#theia-main-content-panel .lm-TabBar-tab'); if (!t) return null; const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })())`));
+    if (!tab) {
+        return fail(`${BROKEN} no main-area tab to right-click in the IDE`);
+    }
+    const mark = (await pushes(app)).length;
+    await clickAt(app, theia, tab.x, tab.y, 2);
+    const own = await settle(() => menuRows(app), r => Array.isArray(r) && r.length > 0, 3000);
+    if (!Array.isArray(own) || !own.length) {
+        return fail(`${BROKEN} the IDE right-click opened no Theia menu, so the absence would prove nothing`);
+    }
+    await sleep(1500);
+    await closeMenu(app);
+    if ((await pushes(app)).slice(mark).some(isMenuPush())) {
+        return fail('the IDE right-click pushed a page menu');
+    }
+}
+
+async function backgroundMenu({ app, pages, results, fail }) {
+    const control = results.find(r => r.name === 'context-menu');
+    if (!control || control.failures.length || control.notScored) {
+        return 'not-scored';
+    }
+    await closeMenu(app);
+    const url = pages.url('/menu');
+    const first = await openWebTab(app, url);
+    if (await waitForPush(app, loadedAt(first, '/menu')) < 0) {
+        return fail('no loaded state push arrived for the first tab');
+    }
+    const firstContext = (await app.contexts()).filter(c => c.url === url).at(-1)?.context;
+    const second = await openWebTab(app, pages.url('/frame'));
+    if (await waitForPush(app, loadedAt(second, '/frame')) < 0) {
+        return fail('no loaded state push arrived for the second tab');
+    }
+    await makeCurrent(app, second);
+    if (await settle(() => overlayVisibility(app, first), v => v === 'hidden') !== 'hidden' || !firstContext) {
+        return fail(`${BROKEN} the first tab is not hidden behind the second, so the absence would prove nothing`);
+    }
+    let mark = (await pushes(app)).length;
+    try {
+        await clickAt(app, firstContext, 40, 40, 2);
+    } catch {
+        // input on a hidden context may be refused; the absence below is judged the same either way
+    }
+    await sleep(1500);
+    if ((await pushes(app)).slice(mark).some(isMenuPush(first))) {
+        await closeMenu(app);
+        return fail('a hidden tab opened a menu');
+    }
+    await makeCurrent(app, first);
+    if (await settle(() => overlayVisibility(app, first), v => v === 'visible') !== 'visible') {
+        return fail(`${BROKEN} the first tab could not be shown again`);
+    }
+    mark = (await pushes(app)).length;
+    await clickAt(app, firstContext, 40, 40, 2);
+    if (await waitForPush(app, isMenuPush(first), { from: mark, timeoutMs: 5000 }) < 0) {
+        return fail('the same right-click on the shown tab pushed no menu (the in-scenario positive control)');
+    }
+    await closeMenu(app);
+}
+
 const SCENARIOS = {
     'tooltip-status': tooltipStatus,
     'theia-hover-silent': theiaHoverSilent,
     'pip-close': pipClose,
+    'context-menu': contextMenu,
+    'menu-not-in-ide': menuNotInIde,
+    'background-menu': backgroundMenu,
 };
 
 /** The scenario each absence scenario takes as its positive control. */
-const CONTROL_OF = { 'theia-hover-silent': 'tooltip-status' };
+const CONTROL_OF = { 'theia-hover-silent': 'tooltip-status', 'menu-not-in-ide': 'context-menu', 'background-menu': 'context-menu' };
 
 /** One session over `names`; returns `[{ name, failures, notes, notScored }]` or throws. */
 async function runSession(names, plant = '') {
+    assets = await serveAssets();
+    referers.length = 0;
     const pages = await serveNavPages(PAGES);
     try {
         return await withProbeShell(async app => {
@@ -373,6 +939,8 @@ async function runSession(names, plant = '') {
         });
     } finally {
         await pages.close();
+        await assets.close();
+        assets = null;
     }
 }
 
@@ -417,6 +985,11 @@ const PLANTS = [
     { plant: 'theia-tooltip-leak', target: 'theia-hover-silent', run: ['tooltip-status', 'theia-hover-silent'], expect: 'the IDE hover opened the page tooltip' },
     { plant: 'status-over-page', target: 'tooltip-status', run: ['tooltip-status'], expect: 'status line intersects the page' },
     { plant: 'pip-shouldactivate-missing', target: 'pip-close', run: ['pip-close'], expect: 'Picture-in-Picture window is still open' },
+    // 35-03 (PROMPT-04).
+    { plant: 'stub-removed', target: 'context-menu', run: ['context-menu'], expect: 'no pageContextMenu push' },
+    { plant: 'background-check-off', target: 'background-menu', run: ['context-menu', 'background-menu'], expect: 'a hidden tab opened a menu' },
+    { plant: 'ide-menu-leak', target: 'menu-not-in-ide', run: ['context-menu', 'menu-not-in-ide'], expect: 'the IDE right-click pushed a page menu' },
+    { plant: 'referrer-dropped', target: 'context-menu', run: ['context-menu'], expect: 'new tab request carried no Referer' },
 ];
 
 async function selfTest() {
