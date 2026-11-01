@@ -218,3 +218,74 @@ None. The 38-02 install-footer stub (Add-ons Manager until 38-05) is unchanged.
 - FOUND: theia/extensions/chrome-bar/src/browser/extensions/extension-sidebar-view.ts
 - FOUND: scripts/verify-extension-actions-live.mjs (`--scenario sidebar`, `tab-pages` and `commands` defined)
 - FOUND: commits cd68bf4d, 6b320312, bbebb091 (ancestors of HEAD)
+
+## Security fixes (private browsing)
+
+Two MEDIUM findings from the Phase 38 security review were fixed after the plan closed, one commit each. Patch 050, `theia/` and the copy table are unchanged.
+
+**Can the shell window be private?** Yes. `nsAppShellService.cpp:590-592` applies `browser.privatebrowsing.autostart` to every top-level window it creates, so under permanent private browsing the shell window is private too. Both fixes check access on every path. None of them assumes the shell window is non-private.
+
+### Finding 1: sidebar, rows, click and popup (`866b535f`)
+
+- **Issue.** `extensionSidebarOpen`, `extensionSidebarRequest` and the rows `pushExtensionActions` builds never called `extension.canAccessWindow(win)`. An extension not allowed in private windows could load its sidebar page, show its buttons and page-action icon, and run its click or popup in a private shell window.
+- **Fix.** This follows stock `ext-sidebarAction.js` (createMenuItem, updateWindow) and `ext-browserAction.js`.
+  - `extensionActionsById(win, page)` and `extensionSidebarsById(win)` now take the window and skip an extension where `!extension.canAccessWindow(win)`.
+  - Everything else reads those two sets: every toolbar row, page-action row and sidebar-only row, the row's `sidebarTitle`, `extensionNamed` (so click, pin and remove), `extensionSidebarRequest` (Show/Hide Sidebar) and `extensionExecute` (the `_execute_*` shortcuts).
+  - `extensionSidebarOpen`, `extensionClick` and `extensionOpenPopup` check again at the sink. Sidebar open and click answer `refused`. The popup check cannot be reached past the click's check, and if it fires it is logged as a failed popup.
+  - A sidebar that is open when its extension loses access closes on the next push. Upstream `ExtensionShortcuts.registerKeysToDocument` already adds no keyset to a private window for such an extension (`ExtensionShortcuts.sys.mjs:394-399`).
+
+### Finding 2: stock-tab and shell-tab window choice (`8fce2695`)
+
+- **Issue.** `extensionOpenTabPage` handles `tabs.create` of an extension page and `runtime.openOptionsPage` through the `switchToTabHavingURI` shim. It added the tab to `Services.wm.getMostRecentWindow("navigator:browser")`, which may be a private stock window.
+- **Fix.** The window is chosen the way stock `tabs.create`'s `getTopNormalWindow` chooses it, which passes `private: false` for an extension not allowed in private windows.
+  - The most recent stock window is kept only if `policy.canAccessWindow(win)`.
+  - Otherwise the most recent non-private window is used (`getMostRecentNonPBWindow`).
+  - If there is none, the page opens in a new window, which is non-private.
+  - Under permanent private browsing every new window is private, so such an extension is refused with an `ExtensionError`.
+- **Shell-window tabs.** `tabsBridgeCreate` refuses an http(s) `tabs.create` into the shell window when the triggering principal's extension (`WebExtensionPolicy.getByID(addonId)`) is not allowed there. Stock `tabs.create` checks `context.canAccessWindow` before `addTab` in the same way. Upstream's patched `getTopNormalWindow` already skips a private shell window for that extension. The bridge now checks this instead of assuming it.
+
+### Left unguarded at the bridge, and why
+
+- **`tabsBridgeRemove` and `tabsBridgeActivate`.** The tab host stand-in's `removeTab(tab)` and `selectTab(tab)` receive only the tab, with no extension and no principal, so the bridge cannot know which extension is asking. Upstream does the check before either call. `tabs.remove` resolves tabs through `getNativeTabsFromIDArray` and `tabs.update` through `getTabOrActive` (`ext-tabs.js:552-575`). Both call `tabManager.canAccessTab`, which is `extension.canAccessWindow(nativeTab.documentGlobal)` (`ext-browser.js:1282-1286`), and both refuse a tab in a window the extension may not use. Checking at the bridge would need a patch 050 hand-off that passes the extension.
+- **Commands.** `extensionKeysetArrived` and `extensionShortcutOf` read the extension map directly. They act only on keysets upstream registered, which never happens in a private window for such an extension, and on rows that already passed the filter.
+
+### Gate
+
+`verify-extension-actions.mjs` has a new **rule 14 (private browsing)**, with 28 plants in total.
+
+- The guarded set is derived, not listed. It is every extension-section function whose body reaches one of the `PB_SINKS` markers:
+  - `.loadPanel(` (loads a sidebar)
+  - `triggerClickOrPopup(` (runs a click)
+  - `shellPanelPopup(` (opens a popup)
+  - `actionFor(extension)` and `sidebarFor(extension)` (the per-window sets that rows and requests read)
+  - `getMostRecentWindow(` (resolves a stock window)
+  - `createPendingOverlay(` (makes a shell tab)
+- Each function in that set must contain a `.canAccessWindow(` check.
+- A guarded function that takes `win` must be called with `win`.
+- A marker that reaches no function counts as a broken instrument.
+- Today the set is `extensionSidebarOpen`, `extensionClick`, `extensionOpenPopup`, `extensionActionsById`, `extensionSidebarsById`, `extensionOpenTabPage` and `tabsBridgeCreate`.
+- `--self-test` derives one plant per guarded function, 7 in all. Each plant removes that function's check and must go red naming the function. One more plant reads the sidebar set without the window.
+- Nine INTERNAL-APIS.md rows were appended. Shifted rows were renumbered from `git diff -U0` hunks, and one flagged row was set by hand (`getMostRecentWindow`, now `let`). `--fix` was never run.
+
+| Check | Result |
+|---|---|
+| `node scripts/verify-extension-actions.mjs` (+ `--self-test`) | PASS (28 plants, 8 new) |
+| `node scripts/verify-ng-040-internals-catalogue-lines.mjs` (normal mode) | PASS |
+| `bash scripts/check-internals-boundary.sh` / `--catalogue` | PASS |
+| `nix develop .#theia --command scripts/verify-platform.sh --quick` | PASS after each fix commit |
+
+### Deferred live proof
+
+No live scenario was added. The harness installs fixtures as temporary add-ons in a profile without permanent private browsing, so it has no private shell window to drive. A manual check covers this in the end-of-milestone live pass, after the 38-04 build prerequisites above.
+
+1. Start from a fresh profile whose `user.js` sets `user_pref("browser.privatebrowsing.autostart", true);`. Copy the `surfaces` fixture from `scripts/lib/pb-extension-fixtures.mjs` and add `"incognito": "not_allowed"` and a `browser_action` to its manifest. Install it from about:debugging.
+2. Run `objdir/dist/bin/powerbrowser -purgecaches -profile <that profile>`. Expected results:
+   - The puzzle menu shows no row for it, and no button or Show Sidebar row appears.
+   - `Alt+Shift+I` with a page focused does nothing.
+   - Its options page (`open_in_tab`) is refused with "PowerBrowser refused to open that page: this extension is not allowed in private windows."
+3. Remove `incognito`, reinstall, and turn on "Run in Private Windows" in about:addons. The row, the sidebar and the options tab come back.
+4. Without autostart, open a private stock window last, then trigger the options page. It must open in a non-private stock window, or in a new one if none is open.
+
+### Follow-up (not fixed, recorded)
+
+- **Principal mismatch for PB-allowed extensions.** For a `moz-extension:` page, upstream builds the triggering principal with the shell window's `privateBrowsingId` (`setContentTriggeringPrincipal(url, window.gBrowser, …)`, `ext-tabs.js:608-622`). `extensionOpenTabPage` may then add that tab to a stock window whose private state differs. This can happen only for an extension allowed in private windows. It is a load-correctness question, not an access leak. The fix would rebuild the principal for the chosen window.
