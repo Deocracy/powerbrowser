@@ -913,6 +913,15 @@ the version string). All commands below run inside `nix develop
    it from identical bytes is byte-identical (no timestamps or nonces —
    PKG-02/idempotency, asserted in the gate by generating twice).
 
+   The procedure above passes no `detailsURL`, so the descriptor carries
+   none and the gate judges it against an emission without one. A
+   descriptor that does carry `detailsURL` (as
+   `node scripts/build-update-xml.mjs --emit` writes it, from
+   `configuration.toml` `[urls] release_notes`) must match `hop.json`
+   `detailsURL` when set, else `release_notes`; a mismatch is reported as
+   a byte difference, which a hand edit or a changed `release_notes`
+   would both cause.
+
 5. Stage the N test install: copy the packaged N tree to a writable
    proof dir (never update the build tree in place — further incremental
    builds would break and a clobber would be needed), install a test

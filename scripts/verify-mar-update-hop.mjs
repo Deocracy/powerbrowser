@@ -54,8 +54,10 @@
 // value fails naming the key; nothing defaults.
 //
 // UPD-14 (Phase 44): buildUpdateXml carries detailsURL (the release-notes link). The hop gate
-// regenerates with hop.detailsURL, falling back to [urls] release_notes; a descriptor with no
-// detailsURL attribute stays byte-identical to its pre-UPD-14 emission.
+// regenerates with hop.detailsURL, falling back to [urls] release_notes only when the served descriptor
+// carries a detailsURL attribute. The emitter omits the attribute when given none, so a pre-UPD-14
+// descriptor (or one built by the BUILD.md procedure, which passes none) is judged against an emission
+// without it and stays valid; a descriptor that carries one must match hop.json or the manifest.
 //
 // Honestly --quick (self-test only): node:crypto plus text files in mkdtemp, and a fake gh, signmar and
 // certutil that drive the real attestation, signature and channel wiring. No build, no browser, no display, no network.
@@ -287,6 +289,36 @@ function readReleaseNotesUrl(root) {
     return { url };
 }
 
+/** True for an https: URL with no whitespace or control character (the URL parser would strip those, the XML attribute would not). Pure. */
+export function isCleanHttpsUrl(x) {
+    if (typeof x !== 'string' || /[\s\x00-\x1f]/.test(x)) return false;
+    try {
+        return new URL(x).protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * The detailsURL a served descriptor must carry, or null when it must carry none. hop.json wins.
+ * Otherwise [urls] release_notes, but only when the served descriptor itself carries the attribute:
+ * evidence recorded before UPD-14 (and the BUILD.md procedure, which passes no detailsURL) emits none,
+ * and requiring one there would call an honest descriptor a hand edit. A value present is refused
+ * unless it is a clean https: URL, and it is compared with the served attribute independently of the
+ * emitter, so an emitter that dropped detailsURL cannot agree with itself.
+ */
+function expectedDetailsUrl(r, hop, notesUrl, served) {
+    const parsed = parseUpdateXml(served);
+    const want = hop.detailsURL ?? (parsed?.detailsURL == null ? null : notesUrl ?? null);
+    if (want === null) return null;
+    const source = hop.detailsURL == null ? `${MANIFEST_REL} [urls] release_notes` : 'hop.json detailsURL';
+    if (!isCleanHttpsUrl(want)) {
+        r.fail(`${source} is ${JSON.stringify(want)}, which is not a clean https: URL, so the descriptor's detailsURL is refused. Next step: set it to an https: Releases page`);
+    }
+    if (parsed !== null) r.eq('descriptor detailsURL', parsed.detailsURL, want, `served descriptor vs ${source}`);
+    return want;
+}
+
 /** The hostname of a URL, or null when it does not parse. Pure. */
 function hostOf(url) {
     try {
@@ -401,14 +433,14 @@ function runReleaseChecks(root, evDir, hop, deps, r) {
     const gen = buildUpdateXml({
         marBytes,
         marUrl: typeof marUrl === 'string' ? marUrl : '',
-        detailsURL: hop.detailsURL ?? readReleaseNotesUrl(root).url,
+        detailsURL: expectedDetailsUrl(r, hop, readReleaseNotesUrl(root).url, served),
         appVersion: hop.nplus1.version,
         platformVersion: hop.nplus1.platformVersion ?? hop.nplus1.version,
         buildID: hop.nplus1.buildID,
         displayVersion: hop.nplus1.displayVersion ?? hop.nplus1.version,
     });
     if (served !== gen) {
-        r.fail(`served descriptor ${descriptorName} is not byte-identical to a fresh emission from the ${hop.mar} bytes (served ${served.length} bytes vs emitted ${gen.length}) -- a hand edit may have intervened. Next step: serve exactly what buildUpdateXml emits`);
+        r.fail(`served descriptor ${descriptorName} is not byte-identical to a fresh emission from the ${hop.mar} bytes (served ${served.length} bytes vs emitted ${gen.length}) -- the served bytes differ from what hop.json and ${MANIFEST_REL} produce (a hand edit, or a changed input such as [urls] release_notes, would do it). Next step: serve exactly what buildUpdateXml emits`);
     }
 
     // Version: distinct buildIDs, and N+1 not older than N in dotted order. Same appVersion is the ratified scheme.
@@ -656,7 +688,7 @@ function runChecks(root, deps = realDeps(root)) {
     const genArgs = {
         marBytes,
         marUrl: hop.servedMarUrl ?? hop.servedUrl,
-        detailsURL: hop.detailsURL ?? notes.url,
+        detailsURL: expectedDetailsUrl(r, hop, notes.url, served),
         appVersion: hop.nplus1.version,
         platformVersion: hop.nplus1.platformVersion ?? hop.nplus1.version,
         buildID: hop.nplus1.buildID,
@@ -668,7 +700,7 @@ function runChecks(root, deps = realDeps(root)) {
     if (served !== gen1) {
         r.fail(
             `served descriptor ${join('.mozbuild', 'mar-hop', hop.descriptor ?? 'update.xml')} is not byte-identical to a fresh emission from the MAR bytes `
-            + `(served ${served.length} bytes vs emitted ${gen1.length} bytes) -- a hand edit may have intervened. `
+            + `(served ${served.length} bytes vs emitted ${gen1.length} bytes) -- the served bytes differ from what hop.json and ${MANIFEST_REL} produce (a hand edit, or a changed input such as [urls] release_notes, would do it). `
             + `Next step: serve exactly what buildUpdateXml emits`,
         );
     }
@@ -810,6 +842,36 @@ function selfTest() {
         } else {
             console.log(`${NAME}: --self-test -- the unmutated mock proof is GREEN`);
         }
+
+        // detailsURL (UPD-14, WR-01, IN-02, IN-03). The served attribute is judged against hop.json or the manifest,
+        // independently of the emitter; a descriptor with no attribute stays valid.
+        const rewriteServed = (details) => {
+            const marBytes = readFileSync(join(evDir, 'nplus1.mar'));
+            writeFileSync(join(evDir, 'update.xml'), buildUpdateXml({ detailsURL: details,
+                marBytes,
+                marUrl: 'http://updates.powerbrowser.org:8000/nplus1.mar',
+                appVersion: '153.1.1',
+                platformVersion: '153.1.0',
+                buildID: '20260905010000',
+                displayVersion: '153.1.1',
+            }));
+        };
+        const setHopDetails = (details) => {
+            const hopPath = join(evDir, 'hop.json');
+            writeFileSync(hopPath, JSON.stringify({ ...JSON.parse(readFileSync(hopPath, 'utf8')), detailsURL: details }));
+        };
+        mirror();
+        rewriteServed(undefined);
+        const preUpd14 = runChecks(dir);
+        if (preUpd14.failures.length !== 0) {
+            console.error(`${NAME}: --self-test FAIL -- a descriptor with no detailsURL attribute was refused: ${preUpd14.failures.join(' | ')}`);
+            ok = false;
+        } else {
+            console.log(`${NAME}: --self-test -- a descriptor with no detailsURL attribute (pre-UPD-14) is accepted (GREEN)`);
+        }
+        expectRed('served descriptor without the detailsURL hop.json declares', () => { setHopDetails(FIXTURE_DETAILS); rewriteServed(undefined); }, 'descriptor detailsURL', 'null');
+        expectRed('served detailsURL differing from [urls] release_notes', () => { rewriteServed(`${FIXTURE_DETAILS}/other`); }, 'update.xml', 'not byte-identical');
+        expectRed('hop.json detailsURL with an embedded tab', () => { setHopDetails('https://example.invalid/a\tb'); rewriteServed('https://example.invalid/a\tb'); }, 'hop.json detailsURL', 'clean https');
 
         // Plant 1: same-version descriptor -- the plumbing-only loop.
         expectRed(
