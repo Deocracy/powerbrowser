@@ -1,5 +1,5 @@
 {
-  "model_profile": "quality",
+  "model_profile": "balanced",
   "commit_docs": true,
   "parallelization": true,
   "search_gitignored": false,
@@ -59,10 +59,10 @@
   "models": {
     "planning": "opus",
     "discuss": "opus",
-    "research": "opus",
+    "research": "sonnet",
     "execution": "opus",
-    "verification": "opus",
-    "completion": "opus"
+    "verification": "sonnet",
+    "completion": "sonnet"
   },
   "model_overrides": {
     "gsd-debugger": "opus",
