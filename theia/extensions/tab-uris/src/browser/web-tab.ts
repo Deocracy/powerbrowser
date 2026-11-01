@@ -1280,7 +1280,8 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
 
     /** Phase 36 (PROMPT-05): a page's new window, which chrome already holds, lands as a web tab next to its opener. */
     onStart(): void {
-        this.channel.onPush('adoptTab', detail => void this.adopt(detail));
+        // adopt() is async, so the router's synchronous try/catch cannot see its rejection; log the kind only.
+        this.channel.onPush('adoptTab', detail => void this.adopt(detail).catch(() => console.error('[@powerbrowser/tab-uris] adopt failed:', 'adoptTab')));
         this.channel.onPush('dropAdoptedTab', detail => this.dropAdopted(detail.tabId));
     }
 
