@@ -108,7 +108,8 @@ export const CRASHED_RELOAD_LABEL = 'Reload tab';
 //     chrome-bar hover requests `position: 'top'`.
 //   focus rule: a Theia popup opened by a key while a page has focus first
 //     moves focus to the Theia frame, and returns it to the page on close.
-const BLOCKING_LAYER_SELECTOR = '.pb-chrome-bar-dropdown, .quick-input-widget, .lm-Widget.dialogOverlay, .lm-Menu, .lm-mod-drag-image';
+// Phase 34 plan 04 (TAB-07, D-11): the strip's hover preview card is a rule (a) layer.
+const BLOCKING_LAYER_SELECTOR = '.pb-chrome-bar-dropdown, .quick-input-widget, .lm-Widget.dialogOverlay, .lm-Menu, .lm-mod-drag-image, .pb-tab-preview';
 
 function blockingLayerOpen(): boolean {
     return Array.from(document.querySelectorAll(BLOCKING_LAYER_SELECTOR))
@@ -199,6 +200,11 @@ export interface WebTabState {
     isReaderMode: boolean;
     /** Phase 32 gap closure (PAGE-10): true while the page passed the reader's readability check; false on the next page. */
     isArticle: boolean;
+    /**
+     * Phase 34 plan 04 (TAB-09, D-12): the background tab's title changed since it was last active. Minted
+     * chrome-side in the state push and cleared there on webTabActivated; the frontend only reads it.
+     */
+    titleChanged: boolean;
 }
 
 /** Phase 32 plan 04 (PAGE-06): a row action, the frozen set the chrome arm accepts. */
@@ -394,6 +400,7 @@ export class WebTabChannel {
             const crashedBefore = widget.crashed;
             // 32-REVIEW WR-11: the strip's audio mark follows the mute and playback state too.
             const audioBefore = `${widget.audioMuted}/${widget.soundPlaying}`;
+            const titleChangedBefore = widget.titleChanged;
             widget.applyState({
                 url: typeof detail.url === 'string' ? detail.url : widget.url,
                 title: typeof detail.title === 'string' ? detail.title : '',
@@ -424,8 +431,11 @@ export class WebTabChannel {
                 crashed: typeof detail.crashed === 'boolean' ? detail.crashed : widget.crashed,
                 isReaderMode: typeof detail.isReaderMode === 'boolean' ? detail.isReaderMode : widget.isReaderMode,
                 isArticle: typeof detail.isArticle === 'boolean' ? detail.isArticle : widget.isArticle,
+                // Phase 34 plan 04 (TAB-09): chrome mints the flag on every state push; anything but true reads false.
+                titleChanged: detail.titleChanged === true,
             });
-            if (iconBefore !== widget.favicon || crashedBefore !== widget.crashed || audioBefore !== `${widget.audioMuted}/${widget.soundPlaying}`) {
+            if (iconBefore !== widget.favicon || crashedBefore !== widget.crashed || audioBefore !== `${widget.audioMuted}/${widget.soundPlaying}`
+                || titleChangedBefore !== widget.titleChanged) {
                 this.tabStatusEmitter.fire(widget);
             }
         });
@@ -441,7 +451,7 @@ export class WebTabChannel {
     private readonly downloadsEmitter = new Emitter<WebTabDownloadRow[]>();
     readonly onDidChangeDownloads: TheiaEvent<WebTabDownloadRow[]> = this.downloadsEmitter.event;
 
-    /** Phase 32 plan 08 (PAGE-04, PAGE-11): fires when a web tab's pushed favicon or crash flag changes, so the strip redraws. */
+    /** Phase 32 plan 08 (PAGE-04, PAGE-11): fires when a web tab's pushed favicon, crash flag or (34-04) attention flag changes, so the strip redraws. */
     private readonly tabStatusEmitter = new Emitter<WebTabWidget>();
     readonly onDidChangeTabStatus: TheiaEvent<WebTabWidget> = this.tabStatusEmitter.event;
 
@@ -579,6 +589,8 @@ export class WebTabWidget extends BaseWidget {
     isReaderMode = false;
     /** Phase 32 gap closure (PAGE-10): the last pushed readability signal; the reader toggle is enabled by it or by reader view. */
     isArticle = false;
+    /** Phase 34 plan 04 (TAB-09): the last pushed attention flag; written only by applyState from the state push. */
+    titleChanged = false;
     /** Phase 31 plan 02 (SITE-06): the non-default permission ids, table order; the identity box's icons. */
     permissionIcons: string[] = [];
     /** Phase 31 plan 02: the labels of permissionIcons, same order; the icons' tooltip. */
@@ -1194,6 +1206,7 @@ export class WebTabWidget extends BaseWidget {
         this.crashed = state.crashed;
         this.isReaderMode = state.isReaderMode;
         this.isArticle = state.isArticle;
+        this.titleChanged = state.titleChanged;
         if (state.permissionIcons !== undefined) {
             this.permissionIcons = state.permissionIcons;
         }

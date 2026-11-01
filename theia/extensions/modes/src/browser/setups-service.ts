@@ -20,6 +20,7 @@ import { ExtractableWidget } from '@theia/core/lib/browser/widgets/extractable-w
 import { ConfirmDialog } from '@theia/core/lib/browser/dialogs';
 import { QuickInputService } from '@theia/core/lib/common/quick-pick-service';
 import URI from '@theia/core/lib/common/uri';
+import { Deferred } from '@theia/core/lib/common/promise-util';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { FileChangeType } from '@theia/filesystem/lib/common/files';
 import { UserStorageUri } from '@theia/userstorage/lib/browser/user-storage-uri';
@@ -476,6 +477,9 @@ export class SetupsService implements FrontendApplicationContribution {
     /** NG-034: when each web tab (by row key) was last the current main-area tab. */
     protected webTabAccess = new Map<string, number>();
     protected restoreSeq = 0;
+    protected readonly lastSessionApplied = new Deferred<void>();
+    /** TAB-05 (34-03): settles once the launch restore has run, restored or not; the tab strip re-pins after it. */
+    readonly sessionRestored: Promise<void> = this.lastSessionApplied.promise;
 
     protected readonly setupsUri = UserStorageUri.resolve(SETUPS_STORE_FILENAME);
     protected readonly debouncedReload = pDebounce(() => this.reloadSetups(), 150);
@@ -514,7 +518,7 @@ export class SetupsService implements FrontendApplicationContribution {
         // Ready-ordered applicator: runs after core layout restore, so the
         // last-session pointer re-applies onto the restored shell with no
         // race (14-RESEARCH.md Pattern 1 ordering).
-        void this.stateService.reachedState('ready').then(() => this.applyLastSession());
+        void this.stateService.reachedState('ready').then(() => this.applyLastSession()).finally(() => this.lastSessionApplied.resolve());
         this.fileService.onDidFilesChange(event => {
             // A DELETED change is a deliberate absence: reset immediately,
             // bypassing the keep-last-good guard (same shape as customize).

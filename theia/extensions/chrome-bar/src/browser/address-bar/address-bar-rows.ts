@@ -172,3 +172,12 @@ export function classifyAddress(raw: string, { files = false }: { files?: boolea
     }
     return /^[^/:]+\.[^/:]+(:\d+)?$/.test(t) ? 'ambiguous' : 'text';
 }
+
+/** NAV-06: drag types that are links, as distinct from plain text. Here so the strip shares it without importing the widget. */
+export const LINK_DRAG_TYPES = ['text/uri-list', 'text/x-moz-url'];
+
+/** The dropped payload: first non-comment uri-list line, else x-moz-url's first line, else plain text, trimmed. */
+export function droppedTextOf(data: DataTransfer): string {
+    const uriList = data.getData('text/uri-list').split(/\r?\n/).find(line => line.trim() && !line.startsWith('#'));
+    return (uriList || data.getData('text/x-moz-url').split(/\r?\n/)[0] || data.getData('text/plain')).trim();
+}

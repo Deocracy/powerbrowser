@@ -29,6 +29,24 @@ export const CHROME_BAR_EDIT_COPY_COMMAND_ID = 'powerbrowser.chrome-bar.edit-cop
 export const CHROME_BAR_EDIT_PASTE_COMMAND_ID = 'powerbrowser.chrome-bar.edit-paste';
 export const CHROME_BAR_VIEW_SOURCE_COMMAND_ID = 'powerbrowser.chrome-bar.view-source';
 export const CHROME_BAR_READER_TOGGLE_COMMAND_ID = 'powerbrowser.chrome-bar.reader-toggle';
+// TAB-01 (34-01): the tab menu's single-tab actions. Labelless and uncategorised: each acts only on the tab it is handed
+// (the right-clicked tab; 34-03's multiselect calls it per tab), never the current widget, so a palette run has no target.
+export const CHROME_BAR_TAB_RELOAD_COMMAND_ID = 'powerbrowser.chrome-bar.tab-reload';
+export const CHROME_BAR_TAB_MUTE_COMMAND_ID = 'powerbrowser.chrome-bar.tab-mute';
+export const CHROME_BAR_TAB_DUPLICATE_COMMAND_ID = 'powerbrowser.chrome-bar.tab-duplicate';
+export const CHROME_BAR_TAB_MOVE_START_COMMAND_ID = 'powerbrowser.chrome-bar.tab-move-start';
+export const CHROME_BAR_TAB_MOVE_END_COMMAND_ID = 'powerbrowser.chrome-bar.tab-move-end';
+export const CHROME_BAR_TAB_CLOSE_OTHERS_COMMAND_ID = 'powerbrowser.chrome-bar.tab-close-others';
+export const CHROME_BAR_TAB_CLOSE_LEFT_COMMAND_ID = 'powerbrowser.chrome-bar.tab-close-left';
+export const CHROME_BAR_TAB_CLOSE_RIGHT_COMMAND_ID = 'powerbrowser.chrome-bar.tab-close-right';
+export const CHROME_BAR_TAB_CLOSE_DUPLICATES_COMMAND_ID = 'powerbrowser.chrome-bar.tab-close-duplicates';
+export const CHROME_BAR_TAB_CLOSE_COMMAND_ID = 'powerbrowser.chrome-bar.tab-close';
+const CHROME_BAR_TAB_COMMAND_IDS = [
+    CHROME_BAR_TAB_RELOAD_COMMAND_ID, CHROME_BAR_TAB_MUTE_COMMAND_ID, CHROME_BAR_TAB_DUPLICATE_COMMAND_ID,
+    CHROME_BAR_TAB_MOVE_START_COMMAND_ID, CHROME_BAR_TAB_MOVE_END_COMMAND_ID, CHROME_BAR_TAB_CLOSE_OTHERS_COMMAND_ID,
+    CHROME_BAR_TAB_CLOSE_LEFT_COMMAND_ID, CHROME_BAR_TAB_CLOSE_RIGHT_COMMAND_ID, CHROME_BAR_TAB_CLOSE_DUPLICATES_COMMAND_ID,
+    CHROME_BAR_TAB_CLOSE_COMMAND_ID,
+];
 
 /**
  * D-11 (30-03): the palette category of the four visible commands ("Browser:
@@ -133,6 +151,18 @@ export function setChooseSaveDestination(choose: ((suggestedName: string) => Pro
 /** PAGE-08: the path the user picked, or undefined on cancel. Fails closed: with no dialog registered, nothing is saved. */
 export function chooseSaveDestination(suggestedName: string): Promise<string | undefined> {
     return chooseSaveDestinationDialog ? chooseSaveDestinationDialog(suggestedName) : Promise.resolve(undefined);
+}
+
+/** TAB-01: the tab strip's rows, which the tab commands run. Set by the strip, which owns them (the one-way pattern above). */
+export interface TabActions {
+    isEnabled(id: string, widget: Widget): boolean;
+    run(id: string, widget: Widget): Promise<void>;
+}
+
+let tabActions: TabActions | undefined;
+
+export function setTabActions(actions: TabActions | undefined): void {
+    tabActions = actions;
 }
 
 /**
@@ -277,6 +307,13 @@ export class ChromeBarCommandContribution implements CommandContribution {
         commands.registerCommand(CHROME_BAR_FOCUS_ADDRESS, {
             execute: () => focusAddressPill(),
         });
+        // TAB-01 (34-01): each tab command needs the tab as its argument; without one it is disabled and does nothing.
+        for (const id of CHROME_BAR_TAB_COMMAND_IDS) {
+            commands.registerCommand({ id }, {
+                execute: (widget: unknown) => (widget instanceof Widget ? tabActions?.run(id, widget) : undefined),
+                isEnabled: (widget: unknown) => widget instanceof Widget && !!tabActions?.isEnabled(id, widget),
+            });
+        }
         // PAGE-10 (32-08): each execute is the widget method on the active tab, never a kind sent from here.
         commands.registerCommand(CHROME_BAR_VIEW_SOURCE, {
             execute: () => currentWebTab()?.viewSource(),

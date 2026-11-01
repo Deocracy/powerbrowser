@@ -174,6 +174,48 @@ export const CHROME_BAR_COPY = Object.freeze({
     // Phase 31 plan 05: a text badge, not a Theia accelerator: the Ctrl+Q key is chrome's reserved <key> row (powerbrowser.js).
     menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,
     comingSoonRow: (label: string) => `${label} (Coming soon)`,
+    // Phase 34 plan 01 (TAB-01, BMK-07): the tab menu's rows (34-UI-SPEC Copywriting Contract). Keyed by row.
+    tabMenu: Object.freeze({
+        reload: 'Reload',
+        mute: 'Mute Tab',
+        unmute: 'Unmute Tab',
+        pin: 'Pin Tab',
+        unpin: 'Unpin Tab',
+        duplicate: 'Duplicate Tab',
+        bookmark: 'Bookmark Tab',
+        bookmarkAll: 'Bookmark All Tabs',
+        moveToStart: 'Move to Start',
+        moveToEnd: 'Move to End',
+        closeOthers: 'Close Other Tabs',
+        closeLeft: 'Close Tabs to the Left',
+        closeRight: 'Close Tabs to the Right',
+        closeDuplicates: 'Close Duplicate Tabs',
+        close: 'Close Tab',
+        // Phase 34 plan 03 (TAB-06): the bulk rows a selection of two or more tabs offers; N is the selection count.
+        closeN: (count: number) => `Close ${count} Tabs`,
+        moveNToStart: (count: number) => `Move ${count} Tabs to Start`,
+        moveNToEnd: (count: number) => `Move ${count} Tabs to End`,
+        muteN: (count: number) => `Mute ${count} Tabs`,
+        unmuteN: (count: number) => `Unmute ${count} Tabs`,
+        bookmarkN: (count: number) => `Bookmark ${count} Tabs`,
+    }),
+    // One failure sentence per verb (34-UI-SPEC Failures), shown in the strip; never an id, URL or raw error.
+    reloadTabFailed: (subject: string) => `${subject} couldn't reload that tab. Try again.`,
+    muteTabFailed: (subject: string) => `${subject} couldn't mute that tab. Try again.`,
+    duplicateTabFailed: (subject: string) => `${subject} couldn't duplicate that tab. Try again.`,
+    bookmarkTabFailed: (subject: string) => `${subject} couldn't bookmark that tab. Try again.`,
+    closeTabFailed: (subject: string) => `${subject} couldn't close that tab. Try again.`,
+    // Phase 34 plan 02 (TAB-03, TAB-08): the empty strip's tooltip, and the sentence for a dropped link the strip refuses.
+    emptyStripTooltip: 'Double-click to open a new tab',
+    dropTabFailed: (subject: string) => `${subject} can't open that link in a tab. Drop a link to a web page instead.`,
+    // Phase 34 plan 02 (TAB-04): the overflow chevron's tooltip and label.
+    listAllTabs: 'List All Tabs',
+    // Phase 34 plan 03 (TAB-05): a pinned tab shows its icon only; its accessible name keeps the label and says so.
+    pinnedTabLabel: (label: string) => `${label}, pinned`,
+    // Phase 34 plan 04 (TAB-09): a background tab whose title changed since it was last active: the tooltip addition
+    // and the accessible-name addition beside the attention dot.
+    updatedTabTooltip: (label: string) => `${label} — Updated`,
+    updatedTabLabel: (label: string) => `${label}, updated`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

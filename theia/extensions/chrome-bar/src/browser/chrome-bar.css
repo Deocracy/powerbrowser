@@ -807,6 +807,170 @@
     font-weight: 600;
 }
 
+/* TAB-01 (34-01): the tab menu inherits the bar's 32px menu rows. Set as Theia's own row-height variable on the
+   menu element, so it holds from inside this layer against the unlayered stock sheet. */
+.lm-Menu.pb-tab-menu {
+    --theia-private-menu-item-height: 32px;
+}
+
+/* TAB-01: a failed tab action's sentence at the strip's end, until the next tab menu opens. */
+.pb-tab-strip-notice {
+    align-self: center;
+    margin-left: auto;
+    padding: 0 8px;
+    font-size: 12px;
+    white-space: nowrap;
+    color: var(--theia-errorForeground);
+}
+
+/* TAB-02 (34-02): the reorder drop indicator, a 2px accent bar in the 2px gap before the target tab or after the
+   last one. Accent use: highlight (34-UI-SPEC Color). */
+.pb-tab.is-drop-before,
+.pb-tab.is-drop-after {
+    position: relative;
+}
+
+.pb-tab.is-drop-before::before,
+.pb-tab.is-drop-after::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    bottom: 0;
+    width: 2px;
+    background: var(--theia-focusBorder, var(--color-primary, #00a6f5));
+    pointer-events: none;
+}
+
+.pb-tab.is-drop-before::before {
+    left: -3px;
+}
+
+.pb-tab.is-drop-after::after {
+    right: -3px;
+}
+
+/* TAB-04 (34-02, D-07): the row scrolls horizontally with its scrollbar hidden until hover, and the List All Tabs
+   chevron (24x24) sits at the strip's end, outside the scrolling row. */
+.pb-tab-strip {
+    display: flex;
+    align-items: center;
+}
+
+.pb-tab-strip-row {
+    flex: 1 1 auto;
+    min-width: 0;
+    scrollbar-width: none;
+}
+
+.pb-tab-strip-row:hover {
+    scrollbar-width: thin;
+}
+
+.pb-tab-strip-chevron {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    margin: 0 4px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--color-text-muted, #9a99a8);
+    cursor: pointer;
+}
+
+.pb-tab-strip-chevron:hover {
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-tab-strip-chevron:focus-visible {
+    outline: 2px solid var(--theia-focusBorder, var(--color-primary, #00a6f5));
+    outline-offset: 2px;
+}
+
+/* TAB-05 (34-03, D-08): the pinned block leads the row and stays put while the row scrolls under it; a 1px
+   separator follows the last pinned tab. */
+.pb-tab-pinned-block {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    display: flex;
+    flex: none;
+    align-self: stretch;
+    align-items: flex-end;
+    gap: 2px;
+    padding-right: 4px;
+    margin-right: 2px;
+    border-right: 1px solid var(--color-border, #3f3e4a);
+    background: var(--color-bg, #1c1b22);
+}
+
+/* TAB-07 (34-04, D-10/D-11): the hover preview card, 280px, below the tab (the widget sets left/top from the tab's
+   rect: its bottom plus 4px). A blocking layer (web-tab.ts BLOCKING_LAYER_SELECTOR): the page hides while it is open.
+   Not a pointer target, so leaving the tab closes it. */
+.pb-tab-preview {
+    position: fixed;
+    z-index: 1000;
+    width: 280px;
+    min-height: 48px;
+    padding: 8px;
+    box-sizing: border-box;
+    background: var(--color-surface, #2b2a33);
+    border: 1px solid var(--color-border, #3f3e4a);
+    border-radius: 4px;
+    box-shadow: 0 10px 15px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+}
+
+.pb-tab-preview-image {
+    display: block;
+    width: 264px;
+    height: 150px;
+    margin-bottom: 8px;
+    object-fit: cover;
+    border-radius: 4px;
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-tab-preview-image.is-shimmer {
+    animation: pb-chrome-bar-shimmer 0.9s ease-in-out infinite alternate;
+}
+
+.pb-tab-preview-title,
+.pb-tab-preview-url {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.35;
+}
+
+.pb-tab-preview-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text, #fbfbfe);
+}
+
+.pb-tab-preview-url {
+    font-size: 12px;
+    color: var(--color-text-muted, #9a99a8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pb-tab-preview-image.is-shimmer {
+        animation: none;
+    }
+}
+
+/* TAB-09 (34-04, D-12): the attention dot on a background tab whose title changed (accent use: attention). */
+.pb-tab-attention {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin-left: 4px;
+    border-radius: 50%;
+    background: var(--theia-focusBorder, var(--color-primary, #00a6f5));
+}
+
 }
 
 /* GUI-06 (13-UI-SPEC "Single chrome bar, full-bleed, 40px", ratified order
@@ -970,6 +1134,30 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
     outline-offset: 2px;
 }
 
+/* TAB-05 (34-03): a pinned tab is its icon only, 32px wide; its tooltip and accessible name keep the label.
+   Unlayered beside the .pb-tab rules it narrows: a layered rule loses to an unlayered one whatever its
+   specificity, so min-width and padding would not move from inside the layer. */
+.pb-tab.is-pinned {
+    justify-content: center;
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    padding: 0;
+    gap: 0;
+}
+
+.pb-tab.is-pinned .pb-tab-title,
+.pb-tab.is-pinned .pb-tab-audio {
+    display: none;
+}
+
+/* TAB-06 (34-03): a selected tab carries the sheet's accent-tinted wash (accent use: highlight). Unlayered for the
+   same reason as .is-pinned: the unlayered .pb-tab background would win over a layered one. */
+.pb-tab.is-selected {
+    background: rgba(0, 166, 245, 0.18);
+    color: var(--color-text, #fbfbfe);
+}
+
 /*-----------------------------------------------------------------------------
 | Dragging a tab out of the strip and into the dock
 |
@@ -1011,7 +1199,8 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
 /* The tab stays put while its clone travels; dimming says which one is in
    flight without moving anything in the strip. */
 .pb-tab.is-dragging {
-    opacity: 0.4;
+    /* 34-UI-SPEC Drag: 0.6, for the in-strip reorder and the dock drag alike. */
+    opacity: 0.6;
 }
 
 /* The strip is where a tab dragged out of a pane goes back. Said while the

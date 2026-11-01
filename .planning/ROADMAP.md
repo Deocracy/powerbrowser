@@ -427,11 +427,11 @@ Plans:
 **Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
-- [ ] 34-01-PLAN.md (wave 1) — Tab context menu (TAB-01) plus Bookmark Tab / Bookmark All Tabs (BMK-07) on the extended strip (D-01, D-02, D-03, D-04, D-13, D-15, D-16).
-- [ ] 34-02-PLAN.md (wave 2) — In-strip drag reorder (TAB-02), middle-click close plus double-click new plus drop-to-open (TAB-03, TAB-08), overflow scroll plus List All Tabs (TAB-04) — D-01, D-02, D-05, D-06, D
-- [ ] 34-03-PLAN.md (wave 3) — Pin with restart persistence (TAB-05) plus multiselect with bulk delegation (TAB-06) — D-01, D-02, D-08, D-09, D-13, D-14, D-15, D-16.
-- [ ] 34-04-PLAN.md (wave 4) — Hover preview card (TAB-07) plus background-title attention mark (TAB-09) — D-01, D-02, D-10, D-11, D-12, D-15, D-16.
-- [ ] 34-05-PLAN.md (wave 5) — Phase-close live run: full twelve-scenario suite (all TAB plus BMK-07 plus modes/D-02), registry order proof, VALIDATION green-marking — D-01..D-16 (all prior decisions proven toge
+- [x] 34-01-PLAN.md (wave 1) — Tab context menu (TAB-01) plus Bookmark Tab / Bookmark All Tabs (BMK-07) on the extended strip (D-01, D-02, D-03, D-04, D-13, D-15, D-16).
+- [x] 34-02-PLAN.md (wave 2) — In-strip drag reorder (TAB-02), middle-click close plus double-click new plus drop-to-open (TAB-03, TAB-08), overflow scroll plus List All Tabs (TAB-04) — D-01, D-02, D-05, D-06, D
+- [x] 34-03-PLAN.md (wave 3) — Pin with restart persistence (TAB-05) plus multiselect with bulk delegation (TAB-06) — D-01, D-02, D-08, D-09, D-13, D-14, D-15, D-16.
+- [x] 34-04-PLAN.md (wave 4) — Hover preview card (TAB-07) plus background-title attention mark (TAB-09) — D-01, D-02, D-10, D-11, D-12, D-15, D-16.
+- [x] 34-05-PLAN.md (wave 5) — Phase-close live run: full twelve-scenario suite (all TAB plus BMK-07 plus modes/D-02), registry order proof, VALIDATION green-marking — D-01..D-16 (all prior decisions proven toge
 
 **UI hint**: yes
 
@@ -547,7 +547,7 @@ Plans:
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
 | 32. Page Tools | 9/9 | In Progress | - |
 | 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
-| 34. Tab Strip | 0/TBD | Not started | - |
+| 34. Tab Strip | 5/5 | Executed, live verification deferred | - |
 | 35. Shell Furniture and Page Context Menu | 0/TBD | Not started | - |
 | 36. New-Window Links as Web Tabs | 3/3 | In Progress (live checks deferred) | - |
 | 37. Permission Prompts and Dialogs | 0/TBD | Not started | - |
