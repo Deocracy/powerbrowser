@@ -1000,6 +1000,59 @@ rule holds for the Gecko toolchain: `scripts/toolchain-baseline.sh` regenerates
 
 ---
 
+### The liveness row after a withdrawal (`--withdrawn`)
+
+Withdraw is no-update only: it commits the two-line no-update document for every
+BUILD_TARGET and never repoints a descriptor. The default `channel-live` run goes red on
+a withdrawn release by construction, because it requires the offered version to equal the
+latest Release and a withdrawn Release is still published (never deleted). Running it
+after a correct withdraw and reading the red as a regression is the mistake this section
+exists to prevent. The withdraw job therefore runs the same script, which lives at
+`scripts/verify-channel-live.mjs` (registry rows `channel-live` and
+`channel-live-self-test`), in withdrawn mode:
+
+```
+node scripts/verify-channel-live.mjs --withdrawn <tag> [--manifest <release-manifest.json>]
+```
+
+`<tag>` is the release key of the withdrawn Release (`v<ESR>-<revision>`). Without
+`--manifest` the manifest is the `release-manifest.json` asset of the Release at that tag,
+which stays published and marked; a tag with no Release, or a Release without that asset,
+is red. The mode derives the target set from that manifest, never from a hand-kept list,
+fetches each descriptor through the baked eleven-segment path and asserts three things per
+target: HTTP 200, bytes exactly equal to the no-update document (the XML prolog line, the
+empty `updates` element line, one trailing newline; so no `update` and no `patch` element),
+and byte-equality with the updates repo copy at `<channel>/<BUILD_TARGET>/update.xml`. It
+reads no MAR origin, because a withdrawn descriptor offers no MAR. It is read-only.
+
+The expected output after a correct withdraw, one target (Linux), is exactly:
+
+```
+channel-live: --withdrawn PASS -- 1 target(s): each public update.xml serves the no-update document and byte-equals its updates repo copy, so <tag> is no longer offered
+```
+
+with exit code 0. A red names the target and one subcheck: `answered 404, so the withdrawn
+channel cannot be read` (the descriptor is unreachable), `it still offers an update (<n>
+patch element(s)), so <tag> is still offered` (the commit has not deployed or did not land),
+`its bytes differ from it` (not the exact document), or `is not byte-equal to the updates
+repo copy` (the host serves other bytes than the repo). Each ends with the step to take:
+re-run the withdraw job, then wait for the host deploy.
+
+The default run after the same withdraw is expected to be red, and is not a regression. In
+the notes-only marking branch, where `releases/latest` is still the withdrawn tag, its first
+problem line reads:
+
+```
+channel-live: FAIL -- <n> problem(s); the public channel is not proven equal to the latest Release
+  - <BUILD_TARGET> <channel>/<BUILD_TARGET>/update.xml does not carry the descriptor shape. Next step: emit it with scripts/build-update-xml.mjs
+```
+
+In the pre-release-flag branch `releases/latest` moves to the previous good Release (or has
+none), so the default run additionally reads another tag or finds no published Release.
+Either way the withdrawn run above is the one that counts, and the self-test proves the
+flip both ways: release bytes are green in the default mode and red under `--withdrawn`,
+and the no-update document is green under `--withdrawn` and red in the default mode.
+
 ## Train stages after the bump PR merges
 
 The release train (`scripts/release-train.mjs`, `.github/workflows/release-train.yml`)

@@ -40,6 +40,14 @@
 // patch, and the URL judged is the one parseUpdateXml returns, the value the live fetch and Gecko
 // read; the hop drill's servedMarUrl is the same emitted value, so this covers both.
 //
+// --withdrawn <tag> [--manifest <path>] flips the expectation for a withdrawn Release (REL-02). Withdraw is no-update
+// only: after it, every public update.xml must serve the no-update document byte for byte (HTTP 200, no update, no
+// patch) and byte-equal its updates repo copy, and no MAR origin is probed because a withdrawn descriptor offers no
+// MAR. The default run goes red on a withdrawn Release by construction (it requires the offered version to equal the
+// latest Release), so the withdraw job runs this mode and never the default one. The manifest is the one of <tag>:
+// --manifest, else the release-manifest.json asset of the Release at that tag (the Release stays published, marked).
+// The mode is self-tested both ways: release bytes green in the default mode and red here, no-update bytes the reverse.
+//
 // Fail closed. An unreadable endpoint, a missing Release, a missing descriptor or a non-200 answer
 // is a FAIL naming the endpoint. Until the first public release this row is red, by design.
 //
@@ -50,6 +58,7 @@
 //
 // Usage:
 //   node scripts/verify-channel-live.mjs [--manifest <release-manifest.json>]
+//   node scripts/verify-channel-live.mjs --withdrawn <tag> [--manifest <release-manifest.json>]
 //   node scripts/verify-channel-live.mjs --manifest-agrees --manifest <path>
 //   node scripts/verify-channel-live.mjs --form-only --manifest <path> --descriptors <dir>
 //   node scripts/verify-channel-live.mjs --self-test
@@ -79,6 +88,8 @@ const show = v => JSON.stringify(v ?? null);
 export const UPDATE_PATH = '/update/6/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%SYSTEM_CAPABILITIES%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml';
 // One BUILD_TARGET token (OS_TARGET_TARGET_XPCOM_ABI). It becomes a path segment, so nothing else is admitted.
 const TARGET_TOKEN = /^[A-Za-z0-9_-]+$/;
+// The no-update document, exactly as the withdraw job writes it for every BUILD_TARGET (two lines plus the trailing newline).
+export const NO_UPDATE_XML = '<?xml version="1.0" encoding="UTF-8"?>\n<updates></updates>\n';
 const targetsOf = v => String(v).split(/[\s,]+/).filter(Boolean);
 
 // --- reads ------------------------------------------------------------------
@@ -109,6 +120,35 @@ async function httpRead(url, method) {
     } catch (e) {
         return { ok: false, why: String(e?.cause?.message ?? e?.message ?? e).split('\n')[0] };
     }
+}
+
+/** The manifest at a path, or why it cannot be read. */
+function manifestFromFile(path) {
+    try {
+        return { manifest: JSON.parse(readFileSync(path, 'utf8')) };
+    } catch (e) {
+        return { why: `${path} could not be read as JSON (${String(e.message).split('\n')[0]}). Next step: pass the build job's ${MANIFEST_ASSET}` };
+    }
+}
+
+/** The release-manifest.json asset of one Release body (label names the Release in the failure text). */
+function manifestFromRelease(get, slug, release, label) {
+    const a = (release?.assets ?? []).find(x => x?.name === MANIFEST_ASSET);
+    if (a === undefined) {
+        return { why: `the ${label} ${show(release?.tag_name)} carries no ${MANIFEST_ASSET} asset, so the channel values cannot be derived and this row stays red. Next step: upload that build's ${MANIFEST_ASSET} to ${show(release?.tag_name)} (sign-publish attaches it to every Release it publishes), or run the row with --manifest <path>` };
+    }
+    const r = get(`repos/${slug.owner}/${slug.repo}/releases/assets/${a.id}`, { accept: 'application/octet-stream' });
+    return r?.ok ? { manifest: r.body } : { why: String(r?.why) };
+}
+
+/** The updates repo copy of one target's descriptor against the public bytes. Returns the failure text or null. */
+function repoCopyProblem(get, slug, manifest, target, pubBytes) {
+    const rel = `${manifest.update_channel}/${target}/update.xml`;
+    const copyPath = `repos/${slug.owner}/${slug.repo}${UPDATES_SUFFIX}/contents/${[manifest.update_channel, target, 'update.xml'].map(encodeURIComponent).join('/')}?ref=main`;
+    const copy = get(copyPath);
+    if (!copy?.ok || typeof copy.body?.content !== 'string') return `${target}: ${copy?.why ?? `GET ${copyPath} carries no content`}`;
+    if (!Buffer.from(copy.body.content, 'base64').equals(pubBytes)) return `${target}: the public ${rel} is not byte-equal to the updates repo copy at ${copyPath}. Next step: wait for the host deploy, or re-run the descriptor job`;
+    return null;
 }
 
 // --- derivation -------------------------------------------------------------
@@ -304,25 +344,20 @@ export async function runChecks(root, overrides = {}) {
 
     let manifest = overrides.manifest ?? null;
     if (manifest === null && overrides.manifestPath !== undefined) {
-        try {
-            manifest = JSON.parse(readFileSync(overrides.manifestPath, 'utf8'));
-        } catch (e) {
-            fail(`${overrides.manifestPath} could not be read as JSON (${String(e.message).split('\n')[0]}). Next step: pass the build job's ${MANIFEST_ASSET}`);
+        const m = manifestFromFile(overrides.manifestPath);
+        if (m.why) {
+            fail(m.why);
             return { failures, targets: 0 };
         }
+        manifest = m.manifest;
     } else if (manifest === null) {
         if (!latest?.ok) return { failures, targets: 0 };
-        const a = (latest.body?.assets ?? []).find(x => x?.name === MANIFEST_ASSET);
-        if (a === undefined) {
-            fail(`the latest Release ${show(latestTag)} carries no ${MANIFEST_ASSET} asset, so the channel values cannot be derived and this row stays red. Next step: upload that build's ${MANIFEST_ASSET} to ${show(latestTag)} (sign-publish attaches it to every Release it publishes), or run the row with --manifest <path>`);
+        const m = manifestFromRelease(get, slug, latest.body, 'latest Release');
+        if (m.why) {
+            fail(m.why);
             return { failures, targets: 0 };
         }
-        const r = get(`repos/${slug.owner}/${slug.repo}/releases/assets/${a.id}`, { accept: 'application/octet-stream' });
-        if (!r?.ok) {
-            fail(String(r?.why));
-            return { failures, targets: 0 };
-        }
-        manifest = r.body;
+        manifest = m.manifest;
     }
     const problems = manifestProblems(manifest);
     if (problems.length > 0) {
@@ -354,13 +389,8 @@ export async function runChecks(root, overrides = {}) {
             continue;
         }
         const text = pub.bytes.toString('utf8');
-        const copyPath = `repos/${slug.owner}/${slug.repo}${UPDATES_SUFFIX}/contents/${[manifest.update_channel, target, 'update.xml'].map(encodeURIComponent).join('/')}?ref=main`;
-        const copy = get(copyPath);
-        if (!copy?.ok || typeof copy.body?.content !== 'string') {
-            fail(`${target}: ${copy?.why ?? `GET ${copyPath} carries no content`}`);
-        } else if (!Buffer.from(copy.body.content, 'base64').equals(pub.bytes)) {
-            fail(`${target}: the public ${rel} is not byte-equal to the updates repo copy at ${copyPath}. Next step: wait for the host deploy, or re-run the descriptor job`);
-        }
+        const copyProblem = repoCopyProblem(get, slug, manifest, target, pub.bytes);
+        if (copyProblem !== null) fail(copyProblem);
         const form = descriptorFormProblems(`${target} ${rel}`, text, manifest, asset);
         if (form.length > 0) {
             form.forEach(fail);
@@ -386,6 +416,76 @@ export async function runChecks(root, overrides = {}) {
         const got = marDigest(body.bytes);
         if (got.hashValue !== p.hashValue) fail(`${target}: GET ${p.url} hashes to sha512 ${got.hashValue}, not the descriptor hashValue ${p.hashValue}. Next step: the MAR origin serves other bytes than the descriptor pins; re-copy the signed MAR`);
         if (got.size !== p.size) fail(`${target}: GET ${p.url} returned ${got.size} bytes, not the descriptor size ${p.size}`);
+    }
+    return { failures, targets: targets.length };
+}
+
+/**
+ * The withdrawn comparison for the Release at tag: every public descriptor is the no-update document and equals its
+ * updates repo copy. Nothing about the latest Release or the MAR origin is read. overrides: manifest, manifestPath,
+ * get, transport, as in runChecks. Returns { failures, targets }.
+ */
+export async function runWithdrawnChecks(root, tag, overrides = {}) {
+    const failures = [];
+    const fail = msg => failures.push(msg);
+    const get = overrides.get ?? (path => ghGet(path));
+    const transport = overrides.transport ?? (url => url);
+    if (!RELEASE_KEY_RE.test(String(tag))) {
+        fail(`the withdrawn tag ${show(tag)} is not a release key of the form v<ESR>-<revision>. Next step: pass the tag of the Release that was withdrawn`);
+        return { failures, targets: 0 };
+    }
+    let slug;
+    try {
+        slug = repoSlug(root);
+    } catch (e) {
+        fail(String(e.message));
+        return { failures, targets: 0 };
+    }
+    let m;
+    if (overrides.manifest !== undefined) m = { manifest: overrides.manifest };
+    else if (overrides.manifestPath !== undefined) m = manifestFromFile(overrides.manifestPath);
+    else {
+        const path = `repos/${slug.owner}/${slug.repo}/releases/tags/${encodeURIComponent(tag)}`;
+        const rel = get(path);
+        if (!rel?.ok) m = { why: rel?.status === 404 ? `GET ${path} found no Release at ${tag}, so there is nothing to check. Next step: pass the tag of a published Release` : String(rel?.why ?? `GET ${path} could not be read. ${NEXT_AUTH}`) };
+        else m = manifestFromRelease(get, slug, rel.body, 'withdrawn Release');
+    }
+    if (m.why) {
+        fail(m.why);
+        return { failures, targets: 0 };
+    }
+    const problems = manifestProblems(m.manifest);
+    if (problems.length > 0) {
+        problems.forEach(fail);
+        return { failures, targets: 0 };
+    }
+    const authority = treeAuthority(root, m.manifest);
+    if (authority.problems.length > 0) {
+        authority.problems.forEach(fail);
+        return { failures, targets: 0 };
+    }
+    const manifest = authority.tree;
+    if (manifest.release_key !== tag) {
+        fail(`the manifest names ${manifest.release_key} but the withdrawn tag is ${tag}. Next step: pass the manifest of the Release that was withdrawn`);
+        return { failures, targets: 0 };
+    }
+    const targets = targetsOf(manifest.build_target);
+    const want = Buffer.from(NO_UPDATE_XML);
+    for (const target of targets) {
+        const rel = `${manifest.update_channel}/${target}/update.xml`;
+        const publicUrl = bakedUrl(manifest, target);
+        const pub = await httpRead(transport(publicUrl), 'GET');
+        if (!pub.ok || pub.status !== 200) {
+            fail(`${target}: GET ${publicUrl} answered ${pub.ok ? pub.status : `nothing (${pub.why})`}, so the withdrawn channel cannot be read. Next step: wait for the host deploy, then re-run the withdraw job`);
+            continue;
+        }
+        if (!pub.bytes.equals(want)) {
+            const text = pub.bytes.toString('utf8');
+            const patches = (text.match(/<patch\b/g) ?? []).length;
+            fail(`${target}: the public ${rel} is not the no-update document: ${/<update\b/.test(text) ? `it still offers an update (${patches} patch element(s)), so ${tag} is still offered` : 'its bytes differ from it'}. Next step: re-run the withdraw job, then wait for the host deploy`);
+        }
+        const copyProblem = repoCopyProblem(get, slug, manifest, target, pub.bytes);
+        if (copyProblem !== null) fail(copyProblem);
     }
     return { failures, targets: targets.length };
 }
@@ -453,11 +553,12 @@ async function selfTest() {
     const latestPath = `repos/${slug.owner}/${slug.repo}/releases/latest`;
     // Plantable answers: the latest Release, the updates repo copy (null serves the same file the loopback serves),
     // and the Release's manifest asset (null answers 404).
-    const state = { latest: null, repoXml: null, asset: null };
+    const state = { latest: null, repoXml: null, asset: null, tagRelease: null };
     const assetPath = `repos/${slug.owner}/${slug.repo}/releases/assets/77`;
     const withAsset = { ok: true, body: { tag_name: tag, draft: false, assets: [{ name: MANIFEST_ASSET, id: 77 }] } };
     const get = path => {
         if (path === latestPath) return state.latest ?? { ok: true, body: { tag_name: tag, draft: false, assets: [] } };
+        if (path === `repos/${slug.owner}/${slug.repo}/releases/tags/${tag}`) return state.tagRelease ?? { ok: false, status: 404, why: `GET ${path} could not be read (HTTP 404)` };
         if (path === assetPath) return state.asset ?? { ok: false, status: 404, why: `GET ${path} could not be read (HTTP 404)` };
         if (path === `repos/${slug.owner}/${slug.repo}${UPDATES_SUFFIX}/contents/${manifest.update_channel}/${target}/update.xml?ref=main`) {
             try {
@@ -472,6 +573,7 @@ async function selfTest() {
         state.latest = planted.latest ?? null;
         state.repoXml = planted.repoXml ?? null;
         state.asset = planted.asset ?? null;
+        state.tagRelease = planted.tagRelease ?? null;
         rmSync(join(dir, 'tree'), { recursive: true, force: true });
         rmSync(join(dir, 'origin'), { recursive: true, force: true });
         if (xml !== null) {
@@ -646,8 +748,86 @@ async function selfTest() {
                 failed += 1;
             }
         }
+        // --withdrawn <tag>: the expectation flip, proven both ways. No-update bytes are green here and red in the default
+        // mode; release bytes are green in the default mode (the baseline) and red here. The withdrawn mode never reads a MAR.
+        const runW = (t = tag, over = {}) => runWithdrawnChecks(REPO_ROOT, t, { manifest, get, transport, ...over });
+        reset(NO_UPDATE_XML);
+        const wBase = await runW();
+        if (wBase.failures.length === 0 && wBase.targets === 1 && hits.mar === 0) console.log(`  ok  --withdrawn baseline: no-update bytes -> green (${wBase.targets} target, the MAR origin was not read)`);
+        else {
+            console.error(`${NAME}: --self-test FAIL -- --withdrawn is not green over the no-update document (MAR reads ${hits.mar}); got: ${wBase.failures.join(' | ') || '(no failures)'}`);
+            failed += 1;
+        }
+        const flips = [
+            ['release bytes under --withdrawn', () => reset(), () => runW(), ['still offers an update (1 patch element(s))', tag]],
+            ['no-update bytes under the default mode', () => reset(NO_UPDATE_XML), () => run(), ['does not carry the descriptor shape']],
+        ];
+        const noUpdateText = NO_UPDATE_XML;
+        const withdrawnPlants = [
+            ['no-update bytes without the trailing newline', () => reset(noUpdateText.trimEnd()), ['its bytes differ from it']],
+            ['empty updates element in another spelling', () => reset('<?xml version="1.0" encoding="UTF-8"?>\n<updates/>\n'), ['its bytes differ from it']],
+            ['an update element with no patch', () => reset(`<?xml version="1.0" encoding="UTF-8"?>\n<updates>\n  <update type="minor" appVersion="${manifest.version}" buildID="${manifest.build_id}"/>\n</updates>\n`), ['still offers an update (0 patch element(s))']],
+            ['missing target file', () => reset(null), ['answered 404, so the withdrawn channel cannot be read']],
+            ['updates repo copy still the release descriptor', () => reset(NO_UPDATE_XML, true, { repoXml: emit() }), ['is not byte-equal to the updates repo copy']],
+        ];
+        for (const [name, plant, doRun, values] of flips) {
+            plant();
+            const { failures } = await doRun();
+            if (failures.some(f => f.includes(target) && values.every(v => f.includes(v))) && hits.mar === 0) console.log(`  ok  ${name} -> red naming ${target} and ${values.join(' and ')}, before any MAR fetch`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${target} and ${values.join(' and ')} (MAR reads ${hits.mar}); got: ${failures.join(' | ') || '(no failures)'}`);
+                failed += 1;
+            }
+        }
+        for (const [name, plant, values] of withdrawnPlants) {
+            plant();
+            const { failures } = await runW();
+            if (failures.some(f => f.includes(target) && values.every(v => f.includes(v))) && hits.mar === 0) console.log(`  ok  --withdrawn: ${name} -> red naming ${target} and ${values.join(' and ')}`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- --withdrawn '${name}' did not go red naming ${target} and ${values.join(' and ')} (MAR reads ${hits.mar}); got: ${failures.join(' | ') || '(no failures)'}`);
+                failed += 1;
+            }
+        }
+        // Refused before any request: a tag that is not a release key, a manifest of another release, a manifest claim off the tree.
+        const refusals = [
+            ['a tag that is not a release key', () => runW('../../contents/evil'), ['../../contents/evil']],
+            ['a manifest naming another release', () => runW(otherTag), [otherTag, tag]],
+            ['a manifest mar_origin off the tree', () => runW(tag, { manifest: { ...manifest, mar_origin: drifted } }), [drifted, origin]],
+        ];
+        for (const [name, doRun, values] of refusals) {
+            reset(NO_UPDATE_XML);
+            const { failures } = await doRun();
+            if (failures.some(f => values.every(v => f.includes(v))) && hits.all === 0) console.log(`  ok  --withdrawn: ${name} -> red naming ${values.join(' and ')}, before any request`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- --withdrawn '${name}' did not go red naming ${values.join(' and ')} before any request (requests ${hits.all}); got: ${failures.join(' | ') || '(no failures)'}`);
+                failed += 1;
+            }
+        }
+        // Without --manifest the manifest is the asset of the Release at the withdrawn tag (the Release stays published, marked).
+        const taggedWithAsset = { ok: true, body: { tag_name: tag, draft: false, prerelease: true, assets: [{ name: MANIFEST_ASSET, id: 77 }] } };
+        reset(NO_UPDATE_XML, true, { tagRelease: taggedWithAsset, asset: { ok: true, body: manifest } });
+        const wAsset = await runWithdrawnChecks(REPO_ROOT, tag, { get, transport });
+        if (wAsset.failures.length === 0 && wAsset.targets === 1 && hits.mar === 0) console.log(`  ok  --withdrawn: manifest derived from the ${MANIFEST_ASSET} asset of ${tag} -> green (no --manifest)`);
+        else {
+            console.error(`${NAME}: --self-test FAIL -- --withdrawn is not green over the ${MANIFEST_ASSET} asset of ${tag}; got: ${wAsset.failures.join(' | ') || '(no failures)'}`);
+            failed += 1;
+        }
+        const wAssetPlants = [
+            ['no Release at the tag (404)', {}, [`releases/tags/${tag} found no Release at ${tag}`]],
+            ['the Release at the tag without the manifest asset', { tagRelease: { ok: true, body: { tag_name: tag, prerelease: true, assets: [] } } }, [tag, `carries no ${MANIFEST_ASSET} asset`]],
+        ];
+        for (const [name, planted, values] of wAssetPlants) {
+            reset(NO_UPDATE_XML, true, planted);
+            const { failures } = await runWithdrawnChecks(REPO_ROOT, tag, { get, transport });
+            if (failures.some(f => values.every(v => f.includes(v))) && hits.all === 0) console.log(`  ok  --withdrawn: ${name} -> red naming ${values.join(' and ')}, before any request`);
+            else {
+                console.error(`${NAME}: --self-test FAIL -- --withdrawn '${name}' did not go red naming ${values.join(' and ')} before any request (requests ${hits.all}); got: ${failures.join(' | ') || '(no failures)'}`);
+                failed += 1;
+            }
+        }
+        const withdrawnCount = 1 + flips.length + withdrawnPlants.length + refusals.length + 1 + wAssetPlants.length;
         if (failed > 0) return 1;
-        console.log(`${NAME}: --self-test PASS -- the clean fixture is green (with --manifest, from the Release asset and through --manifest-agrees) and ${network.length + release.length + strings.length + decoys.length + 1 + claims.length + assetPlants.length + agreePlants.length} planted faults each went red naming the target and the value`);
+        console.log(`${NAME}: --self-test PASS -- the clean fixture is green (with --manifest, from the Release asset and through --manifest-agrees) and ${network.length + release.length + strings.length + decoys.length + 1 + claims.length + assetPlants.length + agreePlants.length} planted faults each went red naming the target and the value, and the --withdrawn mode held ${withdrawnCount} checks (green over the no-update document, red over a release, and the reverse of the default mode)`);
         return 0;
     } finally {
         server.close();
@@ -659,7 +839,7 @@ async function selfTest() {
 
 function usage(msg) {
     console.error(`${NAME}: FAIL -- ${msg}`);
-    console.error(`  Next step: run: node ${SELF_REL} [--manifest <release-manifest.json>], node ${SELF_REL} --manifest-agrees --manifest <path>, node ${SELF_REL} --form-only --manifest <path> --descriptors <dir>, or add --self-test.`);
+    console.error(`  Next step: run: node ${SELF_REL} [--manifest <release-manifest.json>], node ${SELF_REL} --withdrawn <tag> [--manifest <path>], node ${SELF_REL} --manifest-agrees --manifest <path>, node ${SELF_REL} --form-only --manifest <path> --descriptors <dir>, or add --self-test.`);
     return 2;
 }
 
@@ -668,7 +848,7 @@ async function main(argv) {
     for (let i = 0; i < argv.length; i += 1) {
         const a = argv[i];
         if (a === '--self-test' || a === '--form-only' || a === '--manifest-agrees') opts[a] = true;
-        else if ((a === '--manifest' || a === '--descriptors') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') && opts[a] === undefined) {
+        else if ((a === '--manifest' || a === '--descriptors' || a === '--withdrawn') && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') && opts[a] === undefined) {
             opts[a] = argv[i + 1];
             i += 1;
         } else return usage(`unknown, repeated or incomplete argument '${a}'`);
@@ -692,6 +872,7 @@ async function main(argv) {
         return 0;
     }
     if (opts['--form-only']) {
+        if (opts['--withdrawn'] !== undefined) return usage('--withdrawn is not read by --form-only');
         if (opts['--manifest'] === undefined || opts['--descriptors'] === undefined) return usage('--form-only needs --manifest <path> and --descriptors <dir>');
         let manifest;
         try {
@@ -709,6 +890,16 @@ async function main(argv) {
         return 0;
     }
     if (opts['--descriptors'] !== undefined) return usage('--descriptors is read by --form-only only');
+    if (opts['--withdrawn'] !== undefined) {
+        const { failures, targets } = await runWithdrawnChecks(REPO_ROOT, opts['--withdrawn'], { manifestPath: opts['--manifest'] });
+        if (failures.length > 0) {
+            console.error(`${NAME}: --withdrawn FAIL -- ${failures.length} problem(s); ${opts['--withdrawn']} is not proven withdrawn from the public channel`);
+            failures.forEach(f => console.error(`  - ${f}`));
+            return 1;
+        }
+        console.log(`${NAME}: --withdrawn PASS -- ${targets} target(s): each public update.xml serves the no-update document and byte-equals its updates repo copy, so ${opts['--withdrawn']} is no longer offered`);
+        return 0;
+    }
     const { failures, targets } = await runChecks(REPO_ROOT, { manifestPath: opts['--manifest'] });
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s); the public channel is not proven equal to the latest Release`);
