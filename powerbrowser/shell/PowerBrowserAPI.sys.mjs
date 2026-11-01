@@ -10321,7 +10321,7 @@ function stockWindowStarted(win) {
 // (a private one only if it is allowed in private windows). 38-REVIEW WR-01: no "own pages only" check. Stock tabs.create
 // replaces the principal with a content principal made from the URL itself, so a caller-versus-page comparison could
 // never fail; as in stock Firefox, an extension may open another extension's page.
-function extensionOpenTabPage(url, principal) {
+function extensionOpenTabPage(url, principal, reuse = false) {
   const policy = WebExtensionPolicy.getByURI(Services.io.newURI(url));
   if (!policy) {
     throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: no extension owns it.");
@@ -10342,21 +10342,26 @@ function extensionOpenTabPage(url, principal) {
     }
     // 38-REVIEW WR-01: the page itself never goes through openBrowserWindow (its window argument loads with the system
     // principal). An empty window, or the one still starting, takes the tab with the caller's principal once it has
-    // started. shortcut: the caller gets no tab back (tabs.create needs one synchronously); hand it back once an
-    // extension needs it.
+    // started. shortcut: tabs.create gets no tab back (it needs one synchronously, so it is told the page opened in a
+    // new window); hand it back once an extension needs it. 38-REVIEW WR-06: a switch-to caller (reuse) has no use for
+    // a tab, so it gets no error for a page that opened.
     const starting = win ?? PowerBrowserAPI.openBrowserWindow("");
     stockWindowStarted(starting).then(() => {
       if (!starting.closed) {
-        extensionSelectTabPage(starting, url, principal);
+        extensionSelectTabPage(starting, url, principal, reuse);
       }
     });
+    if (reuse) {
+      return null;
+    }
     throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser opened that page in a new browser window.");
   }
-  return extensionSelectTabPage(win, url, principal);
+  return extensionSelectTabPage(win, url, principal, reuse);
 }
 
-function extensionSelectTabPage(win, url, principal) {
-  const tab = win.gBrowser.addTab(url, { triggeringPrincipal: principal });
+// `reuse` (runtime.openOptionsPage): switch to the tab already showing the page, else add one, as switchToTabHavingURI does.
+function extensionSelectTabPage(win, url, principal, reuse) {
+  const tab = (reuse && win.gBrowser.tabs.find(t => t.linkedBrowser?.currentURI?.spec === url)) || win.gBrowser.addTab(url, { triggeringPrincipal: principal });
   win.gBrowser.selectedTab = tab;
   PowerBrowserAPI.focusWindow(win);
   return tab;
@@ -10366,7 +10371,7 @@ function extensionSelectTabPage(win, url, principal) {
 // window's switchToTabHavingURI for an open_in_tab options page; the shell has no tabbrowser, so the page goes stock.
 function installExtensionReceivers(win) {
   win.switchToTabHavingURI = (uri, openNew, params) => {
-    extensionOpenTabPage(uri instanceof Ci.nsIURI ? uri.spec : String(uri), params?.triggeringPrincipal);
+    extensionOpenTabPage(uri instanceof Ci.nsIURI ? uri.spec : String(uri), params?.triggeringPrincipal, true);
     return true;
   };
   // Commands (below): every extension keyset starts disabled, as the Phase 27 rows do, until a page has focus.

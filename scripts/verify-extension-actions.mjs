@@ -88,6 +88,9 @@
  *                    a container request (userContextId)
  *                    is refused before either branch (38-REVIEW CR-02); the overlay location wall
  *                    (OVERLAY_LOCATION) names no extension scheme.
+ *      38-REVIEW WR-06: the switchToTabHavingURI receiver passes reuse, so
+ *                    openOptionsPage switches to the open tab and is not
+ *                    told a successful open failed.
  *  12b. tab remove -- (38-REVIEW WR-03) tabsBridgeRemove closes an adopted tab's
  *                    node and overlay (webTabClose) before it pushes
  *                    closeAdoptedTab, so tabs.remove resolves after the tab is gone.
@@ -520,6 +523,14 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
         for (const o of OVERLAY_OPENERS) {
             if (openerBody.includes(o)) failures.push(`tab-pages: extensionOpenTabPage opens an overlay (${o})`);
         }
+        // 38-REVIEW WR-06: openOptionsPage (the receiver) switches to an open tab and gets no error for a page that opened.
+        const receiver = span(apiLines, /^function installExtensionReceivers\(/);
+        const receiverBody = receiver ? apiLines.slice(receiver.start, receiver.end + 1).join('\n') : '';
+        const select = span(apiLines, /^function extensionSelectTabPage\(/);
+        const selectBody = select ? apiLines.slice(select.start, select.end + 1).join('\n') : '';
+        if (!/win\.switchToTabHavingURI = [^]*?extensionOpenTabPage\([^;]*, true\);/.test(receiverBody)) failures.push(`tab-pages: the switchToTabHavingURI receiver does not call extensionOpenTabPage with reuse, so every Options click adds a duplicate tab and a started-late window reports an error`);
+        if (opener && !/if \(reuse\) \{\s*return null;\s*\}\s*throw /.test(openerBody)) failures.push(`tab-pages: extensionOpenTabPage throws for a reuse caller after the page opened`);
+        if (!select || !/reuse && win\.gBrowser\.tabs\.find\(/.test(selectBody)) failures.push(`tab-pages: extensionSelectTabPage does not look for the tab already showing the page`);
         const wall = /^const OVERLAY_LOCATION = (.*);$/m.exec(src[API])?.[1];
         if (!wall) failures.push(`tab-pages: ${API} has no OVERLAY_LOCATION (broken instrument)`);
         else if (/moz-extension|extension:/i.test(wall)) failures.push(`tab-pages: OVERLAY_LOCATION admits an extension page into an overlay (${wall})`);
@@ -628,6 +639,8 @@ function selfTest() {
         { name: 'remove resolves early', run: () => check({ ...clean, [API]: clean[API].replace('    PowerBrowserAPI.webTabClose(tabId);\n    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });', '    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });') }), expect: 'tabsBridgeRemove pushes closeAdoptedTab without closing' },
         { name: 'sidebar left painted', run: () => check({ ...clean, [API]: clean[API].replace('    extensionFrontendGone(actorRef);\n', '') }), expect: 'webTabDropOwnedBy does not call extensionFrontendGone' },
         { name: 'sidebar not hidden', run: () => check({ ...clean, [API]: clean[API].replace('sidebar.frame.style.visibility = "hidden";', 'sidebar.frame.style.visibility = "visible";') }), expect: 'does not both close the open popup and hide the sidebar browser' },
+        { name: 'options page duplicated', run: () => check({ ...clean, [API]: clean[API].replace('params?.triggeringPrincipal, true);', 'params?.triggeringPrincipal);') }), expect: 'does not call extensionOpenTabPage with reuse' },
+        { name: 'success reported as error', run: () => check({ ...clean, [API]: clean[API].replace('    if (reuse) {\n      return null;\n    }\n', '') }), expect: 'throws for a reuse caller after the page opened' },
         { name: 'container dropped', run: () => check({ ...clean, [API]: clean[API].replace('  if (options?.userContextId) {\n', '  if (false) {\n') }), expect: 'tabsBridgeCreate does not refuse a container' },
         { name: 'page via window argument', run: () => check({ ...clean, [API]: clean[API].replace('win ?? PowerBrowserAPI.openBrowserWindow("")', 'win ?? PowerBrowserAPI.openBrowserWindow(url)') }), expect: 'extensionOpenTabPage passes the page through openBrowserWindow' },
         { name: 'execute name drift', run: () => check({ ...clean, [API]: clean[API].replace(', "_execute_sidebar_action"];', '];') }), expect: 'missing _execute_sidebar_action' },
