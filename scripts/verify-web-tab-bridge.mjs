@@ -383,18 +383,32 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
     if (WINDOW_OPEN.test(src[BWC])) {
         failures.push(`${BWC}: calls window.open -- a Phase 36 new-window receiver would divert that popup into a web tab; the command must send openStockTab only`);
     }
-    // Dead channel (Phase 36): with channelAlive not true, openBrowserWindow throws its actionable error and opens nothing.
-    const bwcOpenBody = src[BWC].match(/openBrowserWindow\([^)]*\)\s*:\s*void\s*\{([\s\S]*?)\n {4}\}/)?.[1];
+    // Dead channel (Phase 36, 36-REVIEW WR-07): a click re-probes a channel not known alive; if it is still down,
+    // openBrowserWindow throws user-facing copy (PowerBrowser named, no command id) and opens nothing.
+    const bwcOpenBody = src[BWC].match(/openBrowserWindow\([^)]*\)\s*:\s*(?:void|Promise<void>)\s*\{([\s\S]*?)\n {4}\}/)?.[1];
     const aliveGate = bwcOpenBody?.match(/if \(this\.channelAlive === true[\s\S]*?\n {8}\}/);
     if (!aliveGate) {
         failures.push(`${BWC}: dead-channel rule found no openBrowserWindow gated on "this.channelAlive === true" -- the parse found nothing to check`);
     } else {
+        const reprobe = /if \(this\.channelAlive !== true\) \{\s*await this\.probeChannel\(\);/.exec(bwcOpenBody);
+        if (!reprobe || reprobe.index > aliveGate.index) {
+            failures.push(`${BWC}: openBrowserWindow no longer re-probes a channel not known alive before its gate -- one lost startup probe would disable the stock window for the session`);
+        }
         const deadBranch = bwcOpenBody.slice(aliveGate.index + aliveGate[0].length);
         if (WINDOW_OPEN.test(deadBranch)) {
             failures.push(`${BWC}: dead-channel branch of openBrowserWindow calls window.open -- with the channel down it must throw the actionable error, never pop up`);
         }
-        if (!/throw new Error\(\s*`\$\{OPEN_BROWSER_WINDOW_COMMAND_ID\}:[\s\S]*command palette/.test(deadBranch)) {
-            failures.push(`${BWC}: dead-channel branch of openBrowserWindow no longer throws the actionable error naming the command and the command palette`);
+        const thrown = /throw new Error\(([^;]*)\);/.exec(deadBranch);
+        const copyNames = thrown ? [...thrown[1].matchAll(/\b(OPEN_BROWSER_WINDOW_\w+_COPY)\b/g)].map(m => m[1]) : [];
+        if (!thrown || copyNames.length === 0 || /OPEN_BROWSER_WINDOW_COMMAND_ID|`/.test(thrown[1])) {
+            failures.push(`${BWC}: dead-channel branch of openBrowserWindow no longer throws the actionable error -- it must throw an OPEN_BROWSER_WINDOW_*_COPY constant, never the command id or an inline string`);
+        }
+        for (const name of copyNames) {
+            const copy = new RegExp(`const ${name} =\\s*'([^']*)'`).exec(src[BWC])?.[1];
+            if (copy === undefined) failures.push(`${BWC}: ${name} is thrown but has no string literal definition`);
+            else if (!/^PowerBrowser\b/.test(copy) || /powerbrowser\.|open-browser-window/i.test(copy)) {
+                failures.push(`${BWC}: ${name} does not start by naming PowerBrowser, or carries an internal identifier: ${JSON.stringify(copy)}`);
+            }
         }
     }
 
@@ -799,13 +813,28 @@ function selfTest() {
         },
         {
             name: 'dead-channel-opens',
-            sources: { ...clean, [BWC]: replaceWithin(clean[BWC], 'protected openBrowserWindow(', '\n    }', 'throw new Error(', "window.open(target, '_blank');\n        throw new Error(") },
+            sources: { ...clean, [BWC]: replaceWithin(clean[BWC], 'protected async openBrowserWindow(', '\n    }', 'throw new Error(', "window.open(target, '_blank');\n        throw new Error(") },
             expect: 'dead-channel branch of openBrowserWindow calls window.open',
         },
         {
             name: 'planted dead-channel branch that no longer throws',
-            sources: { ...clean, [BWC]: replaceWithin(clean[BWC], 'protected openBrowserWindow(', '\n    }', 'throw new Error(', 'console.error(') },
+            sources: { ...clean, [BWC]: replaceWithin(clean[BWC], 'protected async openBrowserWindow(', '\n    }', 'throw new Error(', 'console.error(') },
             expect: 'dead-channel branch of openBrowserWindow no longer throws',
+        },
+        {
+            name: 'planted dead-channel error that names the command id',
+            sources: { ...clean, [BWC]: replaceWithin(clean[BWC], 'protected async openBrowserWindow(', '\n    }', "throw new Error(cause === 'not-web'", "throw new Error(OPEN_BROWSER_WINDOW_COMMAND_ID + cause === 'not-web'") },
+            expect: 'never the command id or an inline string',
+        },
+        {
+            name: 'planted copy that drops the product name',
+            sources: { ...clean, [BWC]: clean[BWC].replace("'PowerBrowser could not open a browser window because", "'Could not open a browser window because") },
+            expect: 'OPEN_BROWSER_WINDOW_NO_ANSWER_COPY does not start by naming PowerBrowser',
+        },
+        {
+            name: 'planted click that never re-probes',
+            sources: { ...clean, [BWC]: replaceWithin(clean[BWC], 'protected async openBrowserWindow(', '\n    }', 'await this.probeChannel();', '') },
+            expect: 'no longer re-probes a channel not known alive',
         },
         {
             name: 'planted inline lost-reply spelling',

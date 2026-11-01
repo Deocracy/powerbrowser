@@ -44,6 +44,15 @@ const PROBE_CHANNEL_KIND = 'probeChannel';
 const PROBE_TIMEOUT_MS = 5000;
 /** The one non-http target chrome's openStockTab admits, used for a bare New Tab. */
 const NEW_TAB_URL = 'about:newtab';
+/**
+ * User-facing copy for the two ways the command opens nothing (01-UI-SPEC
+ * rules: names PowerBrowser, plain problem, a next step on screen). The
+ * command id and the cause go to the console, never into this text.
+ */
+export const OPEN_BROWSER_WINDOW_NO_ANSWER_COPY =
+    'PowerBrowser could not open a browser window because the browser did not answer. Run Open Browser Window again from the command palette.';
+export const OPEN_BROWSER_WINDOW_NOT_WEB_COPY =
+    'PowerBrowser opens only web addresses (http or https) in a browser window. Type the address in the address bar instead.';
 
 /**
  * The frontend-to-chrome channel, and what changed about it.
@@ -88,8 +97,9 @@ const NEW_TAB_URL = 'about:newtab';
  * shell's browserDOMWindow returns null for a Theia opener), but this command
  * no longer depends on that path, and the popup fallback is deleted. Recorded
  * reduction (accepted, D-36): with the actor channel down the command throws
- * its existing actionable error instead of opening stock chrome by
- * `window.open`; the palette retry is the affordance.
+ * an actionable error instead of opening stock chrome by `window.open`. A
+ * click re-probes a channel not known alive (36-REVIEW WR-07), so the palette
+ * retry the error names is a real affordance.
  *
  * HOW AVAILABILITY IS DECIDED, AND WHY NOT AT CLICK TIME. F9 decided per click
  * by having the actor child cancel the request event and reading
@@ -97,10 +107,12 @@ const NEW_TAB_URL = 'about:newtab';
  * two independent routes, that return value is still `true` with
  * `defaultPrevented` false EVEN WHEN chrome has received and acted on the
  * message -- so the caller concluded "chrome declined", ran the popup fallback
- * as well, and one click cost TWO windows. Awaiting the ack instead is not
- * available: a popup needs the user activation of the click that started it,
- * and an await spends it. So availability is decided ONCE, off the click path,
- * by `probeChannel` below; a click then either sends openStockTab or throws.
+ * as well, and one click cost TWO windows. Awaiting the ack was then not
+ * available: a popup needed the user activation of the click that started it,
+ * and an await spent it. So availability is decided off the click path, by
+ * `probeChannel` below, at startup. Since Phase 36 there is no popup, so a
+ * click whose channel is not known alive awaits one more probe (WR-07); it
+ * then either sends openStockTab or throws.
  * `gui01-browser-close-does-not-quit` and `scripts/verify-gui01-command.mjs`
  * remain the registered checks over the contract this preserves.
  */
@@ -125,10 +137,11 @@ export class BrowserWindowCommandContribution implements CommandContribution {
     }
 
     /**
-     * Asks chrome once whether this channel is available, and remembers the
-     * answer. Never throws and never rejects: any failure -- no chrome host,
-     * an actor child that did not load, a nack, or silence -- settles
-     * `channelAlive` false, which makes every click throw the actionable error.
+     * Asks chrome whether this channel is available, and remembers the
+     * answer: once at startup, and again on a click while the answer is not
+     * true. Never throws and never rejects: any failure -- no chrome host, an
+     * actor child that did not load, a nack, or silence -- settles
+     * `channelAlive` false, which makes that click throw the actionable error.
      */
     protected probeChannel(): Promise<void> {
         return new Promise<void>(resolve => {
@@ -167,22 +180,25 @@ export class BrowserWindowCommandContribution implements CommandContribution {
      * the stock address bar is the affordance. Callers that have a URL (plan
      * 01-06's escape action) pass it straight through.
      *
-     * Phase 36: the openStockTab actor kind is the only route. With the
-     * channel not known alive, or a non-web target, nothing would open, so
-     * the call throws an error naming this contribution and what to do
-     * instead rather than leaving the user staring at nothing.
+     * Phase 36: the openStockTab actor kind is the only route. A channel not
+     * known alive is probed again first (36-REVIEW WR-07): the popup path that
+     * made an await spend the click's user activation is gone. If the channel
+     * is still down, or the target is not a web address, nothing would open,
+     * so the call throws user-facing copy rather than leaving the user staring
+     * at nothing; the command id and the cause go to the console.
      */
-    protected openBrowserWindow(url?: string): void {
+    protected async openBrowserWindow(url?: string): Promise<void> {
         const target = url ?? '';
+        if (this.channelAlive !== true) {
+            await this.probeChannel();
+        }
         if (this.channelAlive === true && (!target || /^https?:\/\//i.test(target))) {
             this.requestStockTab(target || NEW_TAB_URL);
             return;
         }
-        throw new Error(
-            `${OPEN_BROWSER_WINDOW_COMMAND_ID}: the browser window was blocked and did not open -- ` +
-            'invoke the command directly from the command palette (a keypress or click carries the ' +
-            'user activation a popup needs) rather than from a script or a delayed handler'
-        );
+        const cause = this.channelAlive === true ? 'not-web' : 'no-answer';
+        console.error('[@powerbrowser/tab-uris] open browser window failed:', OPEN_BROWSER_WINDOW_COMMAND_ID, cause);
+        throw new Error(cause === 'not-web' ? OPEN_BROWSER_WINDOW_NOT_WEB_COPY : OPEN_BROWSER_WINDOW_NO_ANSWER_COPY);
     }
 
     /**
