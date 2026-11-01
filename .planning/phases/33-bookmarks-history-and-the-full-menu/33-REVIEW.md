@@ -299,10 +299,10 @@ Applied 2026-11-01 on `workspace/p33` by gsd-code-fixer, in the worktree (no sep
 - The picker ignores Esc, Cancel and blur while `busy`, so a refusal always lands on the failure row. On success, focus is restored to the opener only when focus is still in the panel or on the body.
 - **Deferred live check:** Clear Everything on a large profile and confirm no failure row appears while it runs; click elsewhere during a clear and confirm the panel stays until the answer.
 
-### WR-06: fixed (commit `953a7cf4`)
+### WR-06: fixed (commits `953a7cf4` and `f038d3d7`, the second moving the helper out of the tsx widget so `verify-shell-error-copy` does not read its generic signature as copy)
 
 - Chrome's `webTabEditEnabled` races the content-process query against 250 ms (`EDIT_STATE_BUDGET_MS`) and falls back to the cached flag. A hung page no longer holds the hamburger for 5 s. The abandoned query stays pending in chrome until the content process answers or dies; that cannot be cancelled.
-- The hamburger's store reads (History, Bookmarks) and the edit-state read each give up after 1 s (`withinBudget`, `MENU_READ_BUDGET_MS`) and draw the existing failure row or disabled Edit rows. `openAppMenu` ignores a click while its reads are pending (`appMenuOpening`).
+- The hamburger's store reads (History, Bookmarks) and the edit-state read each give up after 1 s (`withinBudget`, `MENU_READ_BUDGET_MS`, in `site-identity/app-menu.ts`) and draw the existing failure row or disabled Edit rows. `openAppMenu` ignores a click while its reads are pending (`appMenuOpening`).
 - The REVIEW suggested a frontend race to 250 ms for the edit rows; the timeout lives in chrome instead because only chrome holds the cached flag to fall back to.
 - **Deferred live check:** hang a page with a script loop, open the hamburger, and confirm it opens within about 300 ms with the Quit row usable; double-click the hamburger and confirm one menu.
 
