@@ -1129,7 +1129,11 @@ token or is renamed without it is recorded by stage
 | macOS universal | pending stage `macos-adhoc-signed` | pending stage `macos-adhoc-signed` |
 
 Assets that carry no target token and are attached once per Release: `SHA256SUMS`,
-`LICENSING.md`, `THIRD-PARTY-NOTICES.txt`, and the source tarball.
+`release-manifest.json`, `LICENSING.md`, `THIRD-PARTY-NOTICES.txt`, and the source tarball.
+`release-manifest.json` is the build manifest under its stable name, published so
+`descriptor-monotonic` and the full-tier `channel-live` row can read each Release's build values;
+its `host` field names the build machine, which `release.yml` already names (owner decision
+2026-10-31). `SHA256SUMS` hashes it with every other asset.
 
 A descriptor's patch URL names the R2 MAR origin, `https://downloads.powerbrowser.org/<tag>/<asset>`
 (owner ruling 2026-10-29). It is never a github.com `/releases/download/` URL, because

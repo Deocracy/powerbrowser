@@ -512,7 +512,7 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/mar-sign" "$RUNNER_TEMP/mar-verify"
 
-      - name: Assemble the asset set (tree-derived names, SHA256SUMS, the source tarball and the notices)
+      - name: Assemble the asset set (tree-derived names, SHA256SUMS, the build manifest, the source tarball and the notices)
         run: |
           set -euo pipefail
           mkdir -p assets
@@ -524,6 +524,8 @@ jobs:
               versioned-tarball|stable-tarball) cp "$TARBALL" "assets/$NAME" ;;
               versioned-mar|stable-mar) cp "$MAR" "assets/$NAME" ;;
               notice) cp "$NAME" "assets/$NAME" ;;
+              # The build manifest, attached as data under its stable name; its values are judged elsewhere, never here.
+              manifest) cp "release/$NAME" "assets/$NAME" ;;
               source) git archive --format=tar.gz --prefix="${NAME%.tar.gz}/" -o "assets/$NAME" "$RELEASE_SHA" ;;
             esac
           done < "$RUNNER_TEMP/expected.tsv"

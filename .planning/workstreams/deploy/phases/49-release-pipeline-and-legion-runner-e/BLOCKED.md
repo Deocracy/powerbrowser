@@ -193,7 +193,11 @@ Nothing below was run. No descriptor was committed, no token was minted, no envi
    bypasses the wait after the own N-1 to N hop, within a day of the build. Durable fix (owner decision):
    attach `release-manifest.json` to the Release, which `descriptor-monotonic` already expects, and have
    the descriptor job read the manifest and the identity files from a durable source.
-2. **release-manifest.json is not a Release asset.** `descriptor-monotonic` FAILs when a published
+2. **release-manifest.json is not a Release asset.** Decided 2026-10-31: published as a Release asset
+   (this commit). sign-publish copies it into assets/ under its stable name, so SHA256SUMS hashes it and
+   the attestation covers it; `release-asset-set` expects it; `channel-live` without `--manifest` derives
+   from it. The `host` field stays, because release.yml already names the build machine. The text below
+   is the original gap. `descriptor-monotonic` FAILs when a published
    Release has no `release-manifest.json` asset, and `channel-live` without `--manifest` reads the same
    asset. The asset set (`verify-release-asset-set.mjs`, `docs/RELEASING.md`) does not include it, and
    the manifest's `host` field names the build machine. The owner decides whether to publish it, and

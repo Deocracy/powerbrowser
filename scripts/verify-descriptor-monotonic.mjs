@@ -64,13 +64,14 @@ import { fileURLToPath } from 'node:url';
 
 import { buildUpdateXml, parseUpdateXml } from './verify-mar-update-hop.mjs';
 import { API_VERSION_HEADER, repoSlug } from './verify-repo-controls.mjs';
-import { RELEASE_KEY_RE } from './lib/channel-identity.mjs';
+import { MANIFEST_ASSET, RELEASE_KEY_RE } from './lib/channel-identity.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'descriptor-monotonic';
 const SELF_REL = 'scripts/verify-descriptor-monotonic.mjs';
 const CANDIDATE_REL = '.mozbuild/update-descriptors';
-const ASSET_NAME = 'release-manifest.json';
+// The stable name sign-publish attaches the manifest under, shared with release-asset-set and channel-live.
+const ASSET_NAME = MANIFEST_ASSET;
 const RELEASES_PATH = 'repos/{owner}/{repo}/releases?per_page=100';
 const ASSET_PATH = 'repos/{owner}/{repo}/releases/assets/{id}';
 const JSON_ACCEPT = 'application/vnd.github+json';
@@ -266,7 +267,7 @@ export function runChecks(root, overrides = {}) {
                 const tag = typeof release?.tag_name === 'string' ? release.tag_name : `(unnamed Release ${show(release?.id)})`;
                 const asset = (Array.isArray(release?.assets) ? release.assets : []).find(a => a?.name === ASSET_NAME);
                 if (!asset || !Number.isInteger(asset.id)) {
-                    failures.push(`Release ${tag} carries no ${ASSET_NAME} asset, so its buildIDs cannot be read and the published set is unproven. Next step: upload the manifest to ${tag}, or remove the Release.`);
+                    failures.push(`Release ${tag} carries no ${ASSET_NAME} asset, so its buildIDs cannot be read and the published set is unproven. Next step: upload that build's ${ASSET_NAME} to ${tag} (sign-publish attaches it to every Release it publishes), or remove the Release.`);
                     continue;
                 }
                 const got = get(fill(ASSET_PATH).replace('{id}', String(asset.id)), RAW_ACCEPT);
@@ -605,7 +606,7 @@ function selfTest() {
             name: 'non-draft Release with no release-manifest.json asset',
             w: world({ releases: [{ tag_name: 'v153.5.1-1', draft: false, assets: [{ name: 'fixture.mar', id: 5 }] }] }),
             d: [candidate('153.5.1', '20261021000000')],
-            needles: ['v153.5.1-1', `carries no ${ASSET_NAME} asset`],
+            needles: ['v153.5.1-1', `carries no ${ASSET_NAME} asset`, `Next step: upload that build's ${ASSET_NAME} to v153.5.1-1`],
         },
         {
             name: 'candidate that does not parse as a descriptor',

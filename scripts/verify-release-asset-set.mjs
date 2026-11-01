@@ -9,17 +9,20 @@
 //                           version is the tag minus its leading v, as docs/RELEASING.md states;
 //  - target token           the first Target key row of the docs/RELEASING.md asset table;
 //  - no-token assets        the paragraph of docs/RELEASING.md that lists the assets attached
-//                           once per Release (SHA256SUMS, the notices, the source tarball), and
-//                           each notice must exist in the tree.
+//                           once per Release (SHA256SUMS, release-manifest.json, the notices, the
+//                           source tarball), and each notice must exist in the tree.
 // The expected set (versioned and stable names for the tarball and the MAR, SHA256SUMS, the
-// notices, the source tarball) is compared as set equality. An addition and a removal are
-// both red, naming the asset.
+// build manifest under its stable name, the notices, the source tarball) is compared as set
+// equality. An addition and a removal are both red, naming the asset. The manifest is published
+// so descriptor-monotonic and the full-tier channel-live row can read it (owner decision 2026-10-31).
 //
 // What the row checks in .github/workflows/release.yml, sign-publish:
 //  - the draft is created with --draft, and --generate-notes appears nowhere;
 //  - the set equality step runs after attestation and before the bot App token is minted;
 //  - the bot App token is minted immediately before the single publish;
-//  - the publish is the only step with --draft=false, and it runs after the equality step.
+//  - the publish is the only step with --draft=false, and it runs after the equality step;
+//  - the assemble step (the one that reads --expected) copies every expected kind but sums, which
+//    the step writes itself over every file of assets/ (so the manifest is hashed too).
 //
 // Modes:
 //  (no argument)                       the row: the workflow order and the derived expectation.
@@ -37,6 +40,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { releaseIdentity, resolveConfig } from './generate.mjs';
+import { MANIFEST_ASSET } from './lib/channel-identity.mjs';
 import { failOpenFaults, loadYaml, stepsOf } from './lib/release-workflow.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -125,13 +129,14 @@ export function expectedAssets({ app, releaseKey, token, noToken }) {
     if (typeof releaseKey !== 'string' || !RELEASE_KEY.test(releaseKey)) throw new Error(`release key ${JSON.stringify(releaseKey)} is not v<esr>-<revision>`);
     if (typeof token !== 'string' || noToken === null || noToken === undefined) throw new Error('the target token or the no-token asset list is not derivable from docs/RELEASING.md');
     const version = releaseKey.replace(/^v/, '');
-    const notices = noToken.filter(n => n !== 'SHA256SUMS');
+    const notices = noToken.filter(n => n !== 'SHA256SUMS' && n !== MANIFEST_ASSET);
     const set = [
         ['versioned-tarball', `${app}-${version}.${token}.tar.xz`],
         ['stable-tarball', `${app}-${token}.tar.xz`],
         ['versioned-mar', `${app}-${version}.${token}.complete.mar`],
         ['stable-mar', `${app}-${token}.complete.mar`],
         ['sums', 'SHA256SUMS'],
+        ['manifest', MANIFEST_ASSET],
         ...notices.map(n => ['notice', n]),
         ['source', `${app}-${version}.source.tar.gz`],
     ];
@@ -215,6 +220,14 @@ function runChecks(root, overrides = {}) {
     }
     const steps = stepsOf(wf?.jobs?.['sign-publish']);
     const at = id => steps.findIndex(s => s.id === id);
+    // Every expected kind but sums needs a case arm in the assemble step, else that asset never reaches the draft.
+    const assemble = steps.find(s => /verify-release-asset-set\.mjs --expected/.test(String(s.run ?? '')));
+    if (assemble === undefined) fail(RELEASE_REL, 'assemble', `sign-publish has no step that copies the assets by the --expected list. Next step: restore the assemble step.`);
+    for (const kind of new Set(expected.map(([k]) => k).filter(k => k !== 'sums'))) {
+        if (assemble !== undefined && !new RegExp(`^\\s*(?:[a-z-]+\\|)*${kind}(?:\\|[a-z-]+)*\\)`, 'm').test(String(assemble.run))) {
+            fail(RELEASE_REL, 'assemble', `the assemble step has no case arm for kind ${kind}, so that asset never reaches the draft. Next step: copy the ${kind} asset into assets/ by its --expected name.`);
+        }
+    }
     const attestAt = steps.findIndex(s => String(s.uses ?? '').startsWith('actions/attest-build-provenance@'));
     const draftAt = at('draft_release');
     const equalAt = at('asset_set');
@@ -342,7 +355,7 @@ function main() {
         failures.forEach(f => console.error(`  ${fmt(f)}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- sign-publish creates a draft with every asset, checks it against ${expected.length} derived names (versioned and stable tarball and MAR, SHA256SUMS, notices, source tarball) before the bot App token is minted and the single publish.`);
+    console.log(`${NAME}: PASS -- sign-publish creates a draft with every asset, checks it against ${expected.length} derived names (versioned and stable tarball and MAR, SHA256SUMS, ${MANIFEST_ASSET}, notices, source tarball) before the bot App token is minted and the single publish; the assemble step copies every expected kind.`);
     return 0;
 }
 
@@ -397,6 +410,9 @@ function selfTest() {
     const versionedTar = expected.find(([k]) => k === 'versioned-tarball')[1];
     const plants = [
         ['dropped asset (LICENSING.md)', { draft: good.filter(n => n !== 'LICENSING.md') }, 'LICENSING.md'],
+        [`dropped asset (${MANIFEST_ASSET})`, { draft: good.filter(n => n !== MANIFEST_ASSET) }, MANIFEST_ASSET],
+        ['assemble step without the manifest arm', { text: edit('              manifest) ', '              manifest-x) ') }, 'no case arm for kind manifest'],
+        ['assemble step without the notice arm', { text: edit('              notice) ', '              notice-x) ') }, 'no case arm for kind notice'],
         ['extra asset (stray.zip)', { draft: [...good, 'stray.zip'] }, 'stray.zip'],
         ['stable-name drift', { draft: good.map(n => (n === stableTar ? 'powerbrowser-linux-x86.tar.xz' : n)) }, stableTar],
         ['versioned-name drift', { draft: good.map(n => (n === versionedTar ? versionedTar.replace(/-\d+\.linux/, '-99.linux') : n)) }, versionedTar],
