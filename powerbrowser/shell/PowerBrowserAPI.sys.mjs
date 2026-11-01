@@ -6381,11 +6381,22 @@ function tabHostAddTab(win, tabId, browser, openerBrowser = null) {
   if (!host || browser.getAttribute("messagemanagergroup") !== "browsers") {
     return;
   }
+  // 38-01 (D-06): an extension's tabs.create built this overlay's node already (tabsBridgeCreate); the ack names it.
+  const built = host.byBrowser.get(browser);
+  if (built) {
+    host.byTabId.set(tabId, built);
+    if (activeTabByFrame.get(host.theiaBrowser) === tabId) {
+      selectNode(host, built);
+    }
+    return;
+  }
   const node = makeTabNode(host, browser);
   node.openerTab = (openerBrowser && host.byBrowser.get(openerBrowser)) ?? null;
   host.strip.appendChild(node);
   host.byBrowser.set(browser, node);
-  host.byTabId.set(tabId, node);
+  if (tabId !== null) {
+    host.byTabId.set(tabId, node);
+  }
   attachProgress(host, browser, node);
   const becameSelected = host.selected === null;
   if (becameSelected) {
@@ -6395,7 +6406,7 @@ function tabHostAddTab(win, tabId, browser, openerBrowser = null) {
   if (becameSelected) {
     fireTabEvent(node, "TabSelect", { previousTab: null });
   }
-  if (activeTabByFrame.get(host.theiaBrowser) === tabId) {
+  if (tabId !== null && activeTabByFrame.get(host.theiaBrowser) === tabId) {
     selectNode(host, node);
   }
 }
@@ -6665,9 +6676,9 @@ export const PowerBrowserTabHost = Object.freeze({
       getTabSharingState: () => ({ camera: undefined, microphone: undefined, screen: undefined }),
       addTabsProgressListener: listener => host.progressListeners.add(listener),
       removeTabsProgressListener: listener => host.progressListeners.delete(listener),
-      refuse(action) {
-        throw new Error(`PowerBrowser cannot ${action} for an extension yet.`);
-      },
+      addTab: (url, options) => tabsBridgeCreate(host, url, options),
+      removeTab: tab => tabsBridgeRemove(host, tab),
+      selectTab: tab => tabsBridgeActivate(host, tab),
     });
   },
 });
@@ -7086,9 +7097,13 @@ function createPendingOverlay(opener, spec, background, openWindowInfo) {
   const theiaBrowser = opener.ownerDocument.getElementById(SHELL_CONTENT_BROWSER_ID);
   const pcKey = mintPendingKey();
   const browser = PowerBrowserAPI.webTabOpen(theiaBrowser, null, pcKey, spec, null, undefined, { remoteType: opener.remoteType, openWindowInfo });
-  const pending = { browser, theiaBrowser, url: spec, opener };
+  const pending = { browser, theiaBrowser, url: spec, opener, background };
   pendingContent.set(pcKey, pending);
-  sendWebTabPush(theiaBrowser, { kind: "adoptTab", pcKey, openerTabId, url: spec, background });
+  // 38-01: one microtask later, so the selectedTab write tabs.create makes right after addTab can still foreground it.
+  Promise.resolve().then(() => {
+    const { background } = pending;
+    sendWebTabPush(theiaBrowser, { kind: "adoptTab", pcKey, openerTabId, url: spec, background });
+  });
   PowerBrowserAPI.sleep(ADOPT_ACK_TIMEOUT_MS).then(() => adoptFallback(pcKey, pending));
   return browser;
 }
@@ -7110,6 +7125,7 @@ function adoptFallback(pcKey, pending) {
     }
   }
   hideBars(pending.browser);
+  tabHostDropTab(win, pending.browser);
   pending.browser.remove();
   if (!win || win.closed) {
     return;
@@ -9850,5 +9866,77 @@ async function extensionStoreRequest(kind, data, actorRef) {
       return { ok: true, kind, where: extensionPin(win, named, data.pinned) };
     default:
       return { ok: true, kind, where: await extensionRemove(named) };
+  }
+}
+
+// D-06: an extension's tabs.create, tabs.remove and selection writes reach the host's addTab, removeTab and selectTab
+// members. Chrome makes, closes or selects the overlay and pushes; the frontend claims it as it claims a page's new
+// window (Phase 36), so a tab an extension made has an owner and does not leak on reload.
+
+// tabs.create: an http(s) page in a new overlay next to the opener, never an extension page (sub-ruling 2). Its node
+// exists at once, because the caller reads the new tab back synchronously; the frontend's ack gives it its tab id.
+function tabsBridgeCreate(host, url, options) {
+  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+    throw new Error("PowerBrowser refused to open that page: an extension may open only web pages in a tab.");
+  }
+  const opener = options?.openerBrowser ?? host.selected?.linkedBrowser ?? null;
+  if (tabIdOfBrowser(opener) === null) {
+    throw new Error("PowerBrowser refused to open that page: there is no web tab to open it next to.");
+  }
+  // In the background unless the caller's selectedTab write brings it to the front before the adoptTab push.
+  const browser = createPendingOverlay(opener, url, true, null);
+  tabHostAddTab(host.win, null, browser, opener);
+  const principal = options?.triggeringPrincipal;
+  browser.loadURI(Services.io.newURI(url), { triggeringPrincipal: principal && !principal.isSystemPrincipal ? principal : Services.scriptSecurityManager.createNullPrincipal({}) });
+  return host.byBrowser.get(browser);
+}
+
+// tabs.remove: an adopted tab closes in the frontend as a user's close does (its close releases the overlay and the
+// row). A tab still waiting for its ack goes here, and the late ack is answered unknown-tab.
+function tabsBridgeRemove(host, tab) {
+  if (!isHostTab(host, tab)) {
+    throw new Error("PowerBrowser refused to close that tab: it is not one of this window's web tabs.");
+  }
+  const tabId = tabIdOfBrowser(tab.linkedBrowser);
+  if (tabId !== null) {
+    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });
+    return;
+  }
+  for (const [pcKey, pending] of pendingContent) {
+    if (pending.browser === tab.linkedBrowser) {
+      pendingContent.delete(pcKey);
+      // As adoptFallback: what was kept for it while it was pending (37-REVIEW WR-01) goes with it.
+      for (const [token, record] of promptRecords) {
+        if (record.browser === pending.browser) {
+          promptRecords.delete(token);
+        }
+      }
+      hideBars(pending.browser);
+      tabHostDropTab(host.win, pending.browser);
+      pending.browser.remove();
+    }
+  }
+}
+
+// A selection write. The selected tab stays selected; there is always a web tab selected, never none (sub-ruling 1).
+// A tab still waiting for its ack is foregrounded by its adoptTab push; an adopted one is shown by the selectTab push,
+// and the frontend's webTabActivated that follows finds it already selected.
+function tabsBridgeActivate(host, tab) {
+  if (tab === host.selected) {
+    return;
+  }
+  if (!isHostTab(host, tab)) {
+    throw new Error("PowerBrowser refused to switch to that tab: it is not one of this window's web tabs.");
+  }
+  selectNode(host, tab);
+  const tabId = tabIdOfBrowser(tab.linkedBrowser);
+  if (tabId !== null) {
+    sendWebTabPush(host.theiaBrowser, { kind: "selectTab", tabId });
+    return;
+  }
+  for (const pending of pendingContent.values()) {
+    if (pending.browser === tab.linkedBrowser) {
+      pending.background = false;
+    }
   }
 }

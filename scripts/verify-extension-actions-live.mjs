@@ -20,6 +20,12 @@
 //                   fixture answers 'popup'. Plant wrong-page fires the stock
 //                   delegate path in a GUI-01 stock window on /c instead, and must
 //                   go red naming the stock tab.
+//   tabs-bridge  -- the action fixture's tabs.create opens /b adopted, selected and
+//                   next to /a; a background create of /c then tabs.update({active})
+//                   shows it; tabs.remove closes it; an extension-page create is
+//                   refused; after the frontend reloads no orphan overlay is left.
+//                   Plant create-unadopted swallows the adoptTab push in the frame
+//                   and must go red naming the orphan overlay.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -99,14 +105,68 @@ async function scenarioPopupAction({ app, plant }) {
   return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action click ran in the overlay on screen /a (retitled to ${overlayTitle}); the popup click answered 'popup'`, null);
 }
 
+// tabs.create (active, next to its opener, adopted), tabs.create in the background then tabs.update({active}),
+// tabs.remove, a refused extension-page create, and no orphan overlay once the frontend reloads.
+async function scenarioTabsBridge({ app, plant, command }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  if (plant?.name === 'create-unadopted') {
+    // The frontend never hears the adoptTab push, so nothing claims the overlay chrome made.
+    await app.evaluate(`(() => { window.addEventListener(${JSON.stringify(live.WEB_TAB_STATE_EVENT)}, e => { if (e.detail && e.detail.kind === 'adoptTab') e.stopImmediatePropagation(); }, true); return true; })()`);
+  }
+  const created = await command('create', { props: { url: `${ORIGIN}/b`, active: true } });
+  if (!created.ok) {
+    return verdict(false, null, `tabs.create of /b was rejected: ${created.error}`);
+  }
+  const B = await pollUntil(() => overlayOfExtTab(app, created.result.id), o => o.tabId !== null, 10000);
+  if (!B) {
+    return verdict(false, null, 'the created tab /b was never adopted: an orphan overlay no frontend tab owns');
+  }
+  const order = await live.probe(app, "return { ids: get('ApplicationShell').getWidgets('main').map(w => w.tabId), current: get('ApplicationShell').currentWidget?.tabId ?? null };");
+  if (!B.selected || order.current !== B.tabId || order.ids.indexOf(B.tabId) !== order.ids.indexOf(A) + 1) {
+    return verdict(false, null, `the created tab /b is adopted but not the selected tab next to /a: ${JSON.stringify({ selected: B.selected, order })}`);
+  }
+  const bg = await command('create', { props: { url: `${ORIGIN}/c`, active: false } });
+  const C = bg.ok ? await pollUntil(() => overlayOfExtTab(app, bg.result.id), o => o.tabId !== null, 10000) : null;
+  if (!C || C.selected) {
+    return verdict(false, null, `the background tabs.create of /c did not land adopted and unselected: ${JSON.stringify(bg.ok ? C : bg.error)}`);
+  }
+  const act = await command('activate', { tabId: bg.result.id });
+  if (!act.ok) {
+    return verdict(false, null, `tabs.update({active}) on /c was rejected: ${act.error}`);
+  }
+  const shown = await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, bg.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').currentWidget?.tabId ?? null };")).id }), v => v.chrome.selected && v.current === C.tabId, 10000);
+  if (!shown) {
+    return verdict(false, null, 'tabs.update({active}) on /c did not select it in chrome and show it in the frontend');
+  }
+  const rm = await command('remove', { tabId: bg.result.id });
+  const gone = rm.ok ? await pollUntil(() => overlayOfExtTab(app, bg.result.id), o => !o.present, 10000) : null;
+  if (!gone) {
+    return verdict(false, null, `tabs.remove of /c did not close its overlay: ${rm.ok ? 'still present' : rm.error}`);
+  }
+  const ext = await command('create', { props: { url: 'page.html' } });
+  if (ext.ok || !/refused/.test(String(ext.error))) {
+    return verdict(false, null, `tabs.create of an extension page was not refused: ${JSON.stringify(ext)}`);
+  }
+  await app.evaluateIn(app.chrome, "(() => { document.getElementById('powerbrowser-content').reload(); return true; })()");
+  const settled = await pollUntil(() => orphanCount(app), n => n === 0, 45000, 3);
+  if (settled === null) {
+    return verdict(false, null, `an orphan overlay outlived the frontend reload (${await orphanCount(app)} overlay(s) with no frontend tab)`);
+  }
+  return verdict(true, `tabs.create /b landed adopted, selected and next to /a; /c landed in the background, tabs.update({active}) showed it and tabs.remove closed it; an extension page was refused (${ext.error}); no orphan overlay after the frontend reload`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
+  'tabs-bridge': scenarioTabsBridge,
 };
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
 // patched product: the scenario reads `plant.name`.
 const PLANTS_TABLE = {
   'wrong-page': { scenario: 'popup-action', expect: 'the action ran in the stock tab' },
+  'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -227,6 +287,38 @@ async function waitForSelected(app, tabId, path) {
     if (Date.now() > end) throw new Error(`BROKEN INSTRUMENT: the host never selected ${path}`);
     await sleep(200);
   }
+}
+
+// Polls `read` until `pred` holds `times` reads in a row; the last value, or null on timeout.
+async function pollUntil(read, pred, timeoutMs, times = 1) {
+  const end = Date.now() + timeoutMs;
+  let streak = 0;
+  for (;;) {
+    const value = await read();
+    streak = pred(value) ? streak + 1 : 0;
+    if (streak >= times) return value;
+    if (Date.now() > end) return null;
+    await sleep(300);
+  }
+}
+
+// The overlay behind an extension tab id, read in chrome: whether it is still in the shell, its frontend tab id
+// (null while it waits for its adoption ack) and whether the 31.1 host has it selected.
+async function overlayOfExtTab(app, extTabId) {
+  return JSON.parse(await app.evaluateIn(app.chrome, `JSON.stringify((() => {
+    const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+    const W = ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs').PowerBrowserWebTabs;
+    let tab = null;
+    try { tab = ExtensionParent.apiManager.global.tabTracker.getTab(${Number(extTabId)}); } catch (e) { return { present: false, tabId: null, selected: false }; }
+    const b = tab.linkedBrowser;
+    return { present: Boolean(b && b.isConnected), tabId: b ? W.tabIdOfBrowser(b) : null, selected: window.gBrowser.selectedTab === tab };
+  })())`));
+}
+
+// Overlays in the shell that no frontend tab owns, or that the host strip does not hold.
+async function orphanCount(app) {
+  return Number(await live.inChrome(app, `const overlays = [...document.querySelectorAll('browser[messagemanagergroup="browsers"]')];
+    return overlays.filter(o => W.tabIdOfBrowser(o) === null).length + Math.abs(window.gBrowser.tabs.length - overlays.length);`));
 }
 
 // Writes a fixture into a fresh directory and installs it as a temporary add-on.

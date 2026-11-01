@@ -1597,6 +1597,13 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
         this.channel.onPush('adoptTab', detail => void this.adopt(detail).catch(() => console.error('[@powerbrowser/tab-uris] adopt failed:', 'adoptTab')));
         this.channel.onPush('dropAdoptedTab', detail => this.dropAdopted(detail.tabId));
         this.channel.onPush('closeAdoptedTab', detail => this.closeAdopted(detail.tabId));
+        // Phase 38 plan 01 (D-06): an extension selected a web tab; chrome selected it already, so this only shows it.
+        this.channel.onPush('selectTab', detail => {
+            const widget = typeof detail.tabId === 'string' ? this.channel.widgetOf(detail.tabId) : undefined;
+            if (widget) {
+                void this.shell.activateWidget(widget.id);
+            }
+        });
     }
 
     /**
