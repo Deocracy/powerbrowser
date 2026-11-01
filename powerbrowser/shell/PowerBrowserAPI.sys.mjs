@@ -6954,3 +6954,28 @@ function placePromptAnchor(browser) {
     pointerEvents: "none",
   });
 }
+
+// D-05: the sharing state last pushed per overlay, so a stock update that changes no kind sends nothing.
+const sharingSent = new WeakMap();
+
+// The shell gBrowser's updateBrowserSharing (powerbrowser.js). WebRTCParent.updateIndicators calls it with webrtcUI's own
+// per-tab state (webrtcUI.updateIndicators), so the state is observed chrome-side and never comes from a page or a
+// frame message. Theia gets one boolean per kind; device labels and the browsing context stay here.
+export function updateWebTabSharing(browser, sharingState) {
+  const tabId = tabIdOfBrowser(browser);
+  const host = tabId === null ? null : tabHosts.get(browser.ownerGlobal);
+  if (!host) {
+    return;
+  }
+  const webRTC = (sharingState && sharingState.webRTC) || {};
+  // Paused still counts as shared, as tabbrowser's getTabSharingState reads it.
+  const camera = Boolean(webRTC.camera);
+  const microphone = Boolean(webRTC.microphone);
+  const screen = Boolean(webRTC.screen);
+  const key = `${camera}/${microphone}/${screen}`;
+  if ((sharingSent.get(browser) ?? "false/false/false") === key) {
+    return;
+  }
+  sharingSent.set(browser, key);
+  sendWebTabPush(host.theiaBrowser, { kind: "sharingChanged", tabId, camera, microphone, screen });
+}

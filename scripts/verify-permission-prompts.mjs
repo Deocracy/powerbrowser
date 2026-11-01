@@ -38,6 +38,19 @@
  *       its own (a hand-kept array of template ids in this file goes red).
  *   (k) preview callback (37-02, N4): the installer registers the webrtc-preview
  *       creation callback on the module URL upstream's browser.js imports.
+ *   (l) single writer (37-02, D-02, D-11): no SitePermissions or permission
+ *       manager write call appears in any file under powerbrowser/shell
+ *       (derived by listing the directory), except inside the Phase 31 site
+ *       panel's webTabSetPermission arm, the user's own settings edit. A prompt's
+ *       grant is written only by the stock PermissionUI callback when the stock
+ *       Remember checkbox is checked.
+ *   (m) no remember field (D-11): no webTab kind literal, push payload or case
+ *       arm carries or reads a remember field, so no Theia path sets Remember.
+ *   (n) chrome-observed sharing (D-05): the one sharingChanged push is in
+ *       updateWebTabSharing, which only the shell gBrowser's updateBrowserSharing
+ *       (the stock WebRTCParent call) reaches; the frontend writes a tab's
+ *       sharing state only in its display-only sharingChanged subscriber and
+ *       never reads a sharing field from a message.
  * Rules (j) and (k) are the furniture-gate rows for this plan; at the Phase 35
  * merge they move to verify-shell-furniture.mjs with rule (a).
  *
@@ -64,6 +77,9 @@ const UPSTREAM_MOZBUILD = 'upstream/toolkit/modules/moz.build';
 const UPSTREAM_BROWSER_JS = 'upstream/browser/base/content/browser.js';
 const GATE = 'scripts/verify-permission-prompts.mjs';
 const FRONTEND_DIRS = ['theia/extensions/tab-uris/src/browser', 'theia/extensions/chrome-bar/src/browser'];
+const SHELL_DIR = 'powerbrowser/shell';
+/** Every grant or revoke call of SitePermissions and the permission manager. */
+const PERMISSION_WRITE = /\b(?:setForPrincipal|removeFromPrincipal|addFromPrincipal)\s*\(|\bperms\.(?:add|remove)\w*\s*\(/g;
 
 const MODULE_FILE = 'PopupNotifications.sys.mjs';
 const SECTION_MARKER = '// Phase 37: permission prompts.';
@@ -147,6 +163,11 @@ function moduleUrl(mozbuild) {
 
 function readSources() {
     const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_BROWSER_JS, GATE]);
+    for (const name of readdirSync(join(REPO_ROOT, SHELL_DIR))) {
+        if (/\.m?js$/.test(name)) {
+            files.add(`${SHELL_DIR}/${name}`);
+        }
+    }
     for (const dir of FRONTEND_DIRS) {
         for (const name of readdirSync(join(REPO_ROOT, dir), { recursive: true })) {
             if (/\.tsx?$/.test(name)) {
@@ -347,6 +368,83 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name)) {
         failures.push(`preview-callback: ${INSTALLER} registers no ${PREVIEW_ELEMENT} creation callback importing ${previewUrl} -- WebRTCParent's lazy preview insert would throw`);
     }
 
+    // (l) One prompt-path writer: the stock PermissionUI callback. The Phase 31 site panel's arm is the user's own edit.
+    const shellFiles = Object.keys(raw).filter(file => file.startsWith(`${SHELL_DIR}/`));
+    if (shellFiles.length === 0) {
+        failures.push(`single-writer: derived ZERO files under ${SHELL_DIR} -- the scan proves nothing (broken instrument)`);
+    }
+    const panelArmAt = api.indexOf('case "webTabSetPermission"');
+    const panelArm = panelArmAt === -1 ? '' : braceBlock(api, panelArmAt);
+    const panelStart = panelArmAt === -1 ? -1 : api.indexOf(panelArm, panelArmAt);
+    for (const file of shellFiles) {
+        const text = stripComments(raw[file]);
+        for (const m of text.matchAll(PERMISSION_WRITE)) {
+            const inPanelArm = file === API && panelStart !== -1 && m.index > panelStart && m.index < panelStart + panelArm.length;
+            if (!inPanelArm) {
+                failures.push(`single-writer: ${file} calls ${m[0].replace(/\s*\($/, '')} outside the site panel's webTabSetPermission arm -- a second permission writer; a prompt's grant is written only by the stock PermissionUI callback (D-02, D-11)`);
+            }
+        }
+    }
+
+    // (m) No remember field on any kind, push or arm.
+    for (const file of frontend) {
+        for (const m of stripComments(raw[file]).matchAll(/\{[^{}]*\bkind:\s*'webTab[A-Za-z]+'[^{}]*\}/g)) {
+            if (/\bremember\w*\s*[:,}]/i.test(m[0])) {
+                failures.push(`remember: a webTab kind literal in ${file} carries a remember field -- a Theia path would set Remember (D-11)`);
+            }
+        }
+    }
+    for (const push of api.matchAll(/sendWebTabPush\(\s*[\w$.]+\s*,\s*\{([^}]*)\}/g)) {
+        if (/\bremember\w*\s*[:,}]/i.test(push[1])) {
+            failures.push(`remember: a push payload in ${API} carries a remember field -- Remember is the stock checkbox only (D-11)`);
+        }
+    }
+    if (/\b(?:data|detail|message|msg)\s*\??\.\s*remember/i.test(api)) {
+        failures.push(`remember: ${API} reads a sender-supplied remember field -- a frame message would set Remember (D-11)`);
+    }
+
+    // (n) The sharing indicator follows chrome-observed webrtcUI state only.
+    const sharingPushes = [...api.matchAll(/sendWebTabPush\(\s*[\w$.]+\s*,\s*\{\s*kind:\s*"sharingChanged"/g)];
+    const sharingFn = functionBody(api, 'updateWebTabSharing');
+    if (sharingPushes.length !== 1 || !sharingFn.includes(sharingPushes[0][0])) {
+        failures.push(`sharing: ${API} has ${sharingPushes.length} sharingChanged pushes, or one outside updateWebTabSharing -- the indicator's source is not the observed webrtcUI state`);
+    }
+    if (sharingFn && !/\.webRTC\b/.test(sharingFn)) {
+        failures.push(`sharing: updateWebTabSharing does not read the stock webRTC state WebRTCParent hands updateBrowserSharing`);
+    }
+    const shellText = stripComments(raw[SHELL]);
+    const sharingCalls = [...shellText.matchAll(/\bupdateWebTabSharing\s*\(/g)].filter(m => !/[\w$]\s*$/.test(shellText.slice(Math.max(0, m.index - 1), m.index)));
+    const memberAt = shellText.search(/^\s*updateBrowserSharing\(browser, state\) \{/m);
+    const member = memberAt === -1 ? '' : braceBlock(shellText, memberAt);
+    if (sharingCalls.length !== 1 || !member.includes('updateWebTabSharing(')) {
+        failures.push(`sharing: ${SHELL} calls updateWebTabSharing ${sharingCalls.length} times, or outside the gBrowser updateBrowserSharing member -- only the stock WebRTCParent report may drive the indicator`);
+    }
+    if (/\b(?:data|detail|message|msg)\s*\??\.\s*(?:sharing|camera|microphone|screen)\b/.test(section.replace(functionBody(section, 'updateWebTabSharing'), ''))) {
+        failures.push(`sharing: the prompt section reads a sender-supplied sharing field -- the indicator would be driven from a frame flag`);
+    }
+    const sharingSubscribers = [];
+    for (const file of frontend) {
+        const text = stripComments(raw[file]);
+        const blocks = [...text.matchAll(/onPush\(\s*'sharingChanged'/g)].map(m => braceBlock(text, m.index));
+        sharingSubscribers.push(...blocks.map(body => ({ file, body })));
+        for (const m of text.matchAll(/\.sharing\s*=(?!=)/g)) {
+            if (!blocks.some(body => text.indexOf(body) <= m.index && m.index < text.indexOf(body) + body.length)) {
+                failures.push(`sharing: ${file} sets a tab's sharing state outside the sharingChanged subscriber -- indicator driven from a frame flag`);
+            }
+        }
+        if (/\b(?:data|detail|message|msg)\s*\??\.\s*sharing\b/.test(text)) {
+            failures.push(`sharing: ${file} reads a sharing field from a message -- indicator driven from a frame flag`);
+        }
+    }
+    if (sharingSubscribers.length === 0) {
+        failures.push(`sharing: no frontend source subscribes to the sharingChanged push -- the indicator has no source`);
+    }
+    for (const { file, body } of sharingSubscribers) {
+        if (/\b(?:send|request|dispatch|dispatchEvent)\s*\(|\bkind\s*:/.test(body)) {
+            failures.push(`sharing: the sharingChanged subscriber in ${file} sends a message -- it must be display-only`);
+        }
+    }
+
     const writes = (api.match(/\bactiveTabByFrame\.set\(/g) ?? []).length;
     const setter = functionBody(api, 'setActiveTabOfFrame');
     if (writes !== 1 || !setter.includes('activeTabByFrame.set(')) {
@@ -461,6 +559,26 @@ function selfTest() {
             sources: { ...clean, [GATE]: `${clean[GATE]}\nconst KEPT = [${"'"}webRTC-selectCamera${"'"}, ${"'"}webRTC-selectMicrophone${"'"}];\n` },
             expect: 'hand-kept array of template ids',
         },
+        {
+            name: 'second permission writer in the boundary',
+            sources: { ...clean, [API]: inSection('function plantedWriter(browser) { lazy.SitePermissions.setForPrincipal(browser.contentPrincipal, "geolocation", 1); }') },
+            expect: 'a second permission writer',
+        },
+        {
+            name: 'remember field on a webTab kind literal',
+            sources: { ...clean, [WEB_TAB]: `${clean[WEB_TAB]}\nexport const plantedRemember = (c: WebTabChannel) => c.send({ kind: 'webTabSetPermission', tabId: '', remember: true } as never);\n` },
+            expect: 'carries a remember field -- a Theia path would set Remember (D-11)',
+        },
+        {
+            name: 'sharing push outside the observed state',
+            sources: { ...clean, [API]: inSection('function plantedSharing(theiaBrowser, tabId) { sendWebTabPush(theiaBrowser, { kind: "sharingChanged", tabId, camera: true, microphone: false, screen: false }); }') },
+            expect: '2 sharingChanged pushes',
+        },
+        {
+            name: 'indicator honours a frame flag',
+            sources: { ...clean, [WEB_TAB]: `${clean[WEB_TAB]}\nexport function plantedFlag(w: WebTabWidget): void { window.addEventListener('message', e => { w.sharing = e.data.sharing; }); }\n` },
+            expect: 'indicator driven from a frame flag',
+        },
     ];
     let failed = 0;
     for (const testCase of cases) {
@@ -499,7 +617,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, and the ${PREVIEW_ELEMENT} callback is registered`);
+    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, the ${PREVIEW_ELEMENT} callback is registered, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, and the sharing indicator follows chrome-observed webrtcUI state only`);
     return 0;
 }
 

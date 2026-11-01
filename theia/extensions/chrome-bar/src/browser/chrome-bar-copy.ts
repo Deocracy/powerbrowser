@@ -69,6 +69,10 @@ export const CHROME_BAR_COPY = Object.freeze({
     unmuteTab: 'Unmute tab',
     // Phase 37 plan 01 (D-11): the tab strip's pending-prompt mark. The stock prompt's own strings are not copied here.
     pendingPrompt: 'This page asked for a permission. Open the tab to answer it.',
+    // Phase 37 plan 02 (D-05): the sharing indicator's tooltip, one per kind (37-UI-SPEC copy row).
+    sharingCamera: (subject: string) => `${subject} is sharing your camera with this tab.`,
+    sharingMicrophone: (subject: string) => `${subject} is sharing your microphone with this tab.`,
+    sharingScreen: (subject: string) => `${subject} is sharing your screen with this tab.`,
     // Phase 32 plan 08 (PAGE-10): the reader toggle and view source (32-UI-SPEC Copywriting Contract, Reader toggle and View source).
     readerView: 'Reader view',
     exitReaderView: 'Exit reader view',

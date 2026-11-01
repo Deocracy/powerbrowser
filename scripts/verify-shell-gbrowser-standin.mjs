@@ -222,10 +222,6 @@ const DELIBERATELY_ABSENT = new Map([
     'browser-custom-element.mjs:1617 is reached only when both browsers have a tabbrowser (:1611-1612), an XPCOM swapDocShells path. The host gives every overlay a tabbrowser, so the call now reaches the missing member and throws a TypeError, where the old null receiver skipped it. powerbrowser/shell calls neither swapDocShells nor swapBrowsers. Open item: no roadmap phase names this path; Phase 36 (browser adoption) is the nearest owner',
   ],
   [
-    'updateBrowserSharing',
-    'WebRTCParent.sys.mjs:155 reads its receiver from browser.documentGlobal.gBrowser (:153) and reports camera, microphone and screen sharing, which is Phase 37 furniture. The old stand-in also lacked the member, so the TypeError is pre-existing; the receiver widening revealed it',
-  ],
-  [
     'refreshBlocked',
     'KNOWN GAP: RefreshBlockerParent calls it on the stand-in itself, but the actor is registered only while accessibility.blockautorefresh is on; with that pref on the call throws a TypeError, and the notification bar it would show belongs to Phase 37',
   ],

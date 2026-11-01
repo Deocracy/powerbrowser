@@ -204,6 +204,13 @@ export interface WebTabState {
 /** Phase 32 plan 04 (PAGE-06): a row action, the frozen set the chrome arm accepts. */
 export type DownloadAction = 'cancel' | 'launch' | 'showContainingDirectory' | 'remove' | 'retry';
 
+/** Phase 37 plan 02 (D-05): whether a tab shares each kind now, as chrome observed it (sharingChanged push). */
+export interface WebTabSharing {
+    camera: boolean;
+    microphone: boolean;
+    screen: boolean;
+}
+
 /**
  * Phase 32 plan 04 (PAGE-06): one Downloads row as chrome serializes it. The
  * frame never gets a path or an error text: a failed row offers Retry.
@@ -447,6 +454,16 @@ export class WebTabChannel {
                 this.tabStatusEmitter.fire(widget);
             }
         });
+        // Phase 37 plan 02 (D-05): what a tab shares, as chrome read it from webrtcUI. Display-only: nothing is sent back,
+        // and an unknown tab is ignored, so no indicator shows for it.
+        this.onPush('sharingChanged', detail => {
+            const widget = typeof detail.tabId === 'string' ? this.widgets.get(detail.tabId) : undefined;
+            if (!widget) {
+                return;
+            }
+            widget.sharing = { camera: detail.camera === true, microphone: detail.microphone === true, screen: detail.screen === true };
+            this.tabStatusEmitter.fire(widget);
+        });
     }
 
     /** Phase 32 plan 04 (PAGE-06): the last Downloads rows chrome pushed, newest first. */
@@ -605,6 +622,9 @@ export class WebTabWidget extends BaseWidget {
     get pendingPrompt(): boolean {
         return this.pendingPrompts.size > 0;
     }
+
+    /** Phase 37 plan 02 (D-05): the kinds this tab shares now, only from chrome's sharingChanged push; all false until one arrives. */
+    sharing: WebTabSharing = { camera: false, microphone: false, screen: false };
 
     protected readonly stateEmitter = new Emitter<WebTabState>();
     readonly onDidChangeState: TheiaEvent<WebTabState> = this.stateEmitter.event;
