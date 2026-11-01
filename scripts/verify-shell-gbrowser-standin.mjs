@@ -18,9 +18,14 @@
 // Both sides are DERIVED at check time (CLAUDE.md `## Verification` rule 2):
 //
 //   REQUIRED (gBrowser)
-//     actor scope     -- UPSTREAM_SCOPE: the widget file plus every
+//     actor scope     -- UPSTREAM_SCOPE: the widget file, every
 //                        *Parent.sys.mjs under upstream/browser/actors and
-//                        upstream/toolkit/actors. Calls only, as before.
+//                        upstream/toolkit/actors, and every parent module the two
+//                        actor registries name (Phase 35 plan 01, T-27-11): each
+//                        `parent:` esModuleURI/moduleURI in DesktopActorRegistry.sys.mjs
+//                        and ActorManagerParent.sys.mjs, resolved to an upstream
+//                        file (moz-src:///X -> upstream/X; any other URI by its
+//                        unique non-test basename). Calls only, as before.
 //     extension scope -- every non-test *.js/*.mjs under
 //                        upstream/browser/components/extensions/ and
 //                        upstream/toolkit/components/extensions/, listed by
@@ -48,7 +53,8 @@
 // the shell must NOT implement, each with its verified reason. Failure kinds,
 // each named: UNIMPLEMENTED (required, neither implemented nor absent), STALE
 // ABSENCE (absent, no longer used), CONTRADICTION (implemented and absent), DEAD
-// SURFACE (implemented, nobody uses it), MISSING DATA MEMBER, STALE DATA MEMBER,
+// SURFACE (implemented, nobody uses it), UNCOVERED CALL SITE (an absence reason
+// that does not name a file the member is used in), MISSING DATA MEMBER, STALE DATA MEMBER,
 // and for gBrowserInit the same four shapes named `gBrowserInit.<member>`.
 //
 // DATA_MEMBERS are data properties, held out of the comparison and asserted on
@@ -56,6 +62,18 @@
 // through a receiver the derivation cannot name (remote/shared/TabManager.sys.mjs
 // reads `webDriverTabs` through a local `tabBrowser` binding, and 050 adds that
 // read). `webDriverTabs` is therefore also asserted against the 050 patch text.
+//
+// Phase 27 shim globals (Phase 35 plan 01, D-17): the names are the quoted words of
+// the Phase 27 shim line of FORBIDDEN_PATTERNS in scripts/check-internals-boundary.sh
+// (gBrowserInit and the zoom shims have their own lines and comparisons). For each:
+// REQUIRED is every member called or assigned on a receiver of that name over the
+// actor and extension scopes, plus, for an IDL_SHIMS name, the methods its IDL
+// declares; IMPLEMENTED is the top-level members of the literal after
+// `window.<Name> = ` (or `win.<Name> = `) in the boundary file, a function value
+// comparing as an empty set. REQUIRED == IMPLEMENTED methods ∪ SHIM_ABSENT, with the
+// same four failure kinds named `<Name>.<member>`, and SHIM_DATA_MEMBERS asserted
+// present. A shim the boundary file does not define is listed on the PASS line as
+// not defined; two definitions of one shim are a broken instrument.
 //
 // An empty derivation on any side fails distinctly as a broken instrument. A
 // negated or set-equality assertion over a walk that found nothing is not a
@@ -82,8 +100,17 @@
 //   (s) staged patch text without the TabManager hunk (STALE DATA MEMBER webDriverTabs);
 //   (x) a staged tabbrowser facade without tabContainer (Phase 37, FACADES);
 //   (y) a staged tabbrowser facade with a surplus member.
+//   (h) a staged registry entry whose parent module sits outside the scanned
+//       directories and calls a new gBrowser member (registry derivation);
+//   (i) a staged registry entry whose basename resolves to no file (broken instrument);
+//   (o) an absence reason naming only one of the member's call-site files;
+//   (j) a staged window.FullScreen with only enterDomFullscreen (UNIMPLEMENTED cleanupDomFullscreen);
+//   (k) a staged window.nsContextMenu with a surplus method (DEAD SURFACE);
+//   (l) a staged IDL with one more method against a staged XULBrowserWindow implementing the three;
+//   (m) two staged definitions of one shim (broken instrument);
+//   (n) a staged XULBrowserWindow without QueryInterface (MISSING DATA MEMBER).
 
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -111,6 +138,17 @@ const UPSTREAM_SCOPE = {
     [
       'upstream/toolkit/actors',
       'toolkit-level JSWindowActor parents run for the same browsers; scanned so a rebase that adds a gBrowser call there is caught at check time',
+    ],
+  ],
+  // The directory scan stays: an actor registered from code outside these two registries is still covered.
+  registries: [
+    [
+      'upstream/browser/components/DesktopActorRegistry.sys.mjs',
+      'names every browser-level JSWindowActor and JSProcessActor parent module Gecko loads, wherever in the tree it lives (ProfilesParent, ScreenshotsUtils, PdfjsParent are outside the two directories)',
+    ],
+    [
+      'upstream/toolkit/modules/ActorManagerParent.sys.mjs',
+      'names every toolkit-level JSWindowActor and JSProcessActor parent module (LoginManagerParent, TranslationsParent, PictureInPicture are outside the two directories)',
     ],
   ],
 };
@@ -142,12 +180,105 @@ const FACADES = [
 ];
 const ID = '[A-Za-z_$][\\w$]*';
 
-// The upstream call-site files for the actor scope: the scope's widget files plus
-// every *Parent.sys.mjs directly under each scope directory, sorted. An
-// unreadable directory is reported as unreadable, never as an empty clean list.
-function deriveCallSiteFiles(scope = UPSTREAM_SCOPE) {
+// Phase 35 plan 01 (D-17): the Phase 27 shim globals, compared member by member. The names are read from this file's line.
+const BOUNDARY_SCRIPT = 'scripts/check-internals-boundary.sh';
+const PHASE27_SHIM_COMMENT = '# Phase 27 gBrowser stand-in policy';
+// The one hand-kept map: a shim Gecko C++ calls through an XPCOM interface has no JS call site to derive from.
+const IDL_SHIMS = new Map([
+  [
+    'XULBrowserWindow',
+    {
+      idl: 'upstream/xpfe/appshell/nsIXULBrowserWindow.idl',
+      reason: 'Gecko C++ calls window.XULBrowserWindow through nsIAppWindow (BrowserParent.cpp:2520-2566, nsContentTreeOwner.cpp:298-309), so its members are the IDL method declarations',
+    },
+  ],
+]);
+// Data members held out of the comparison and asserted present on a defined shim.
+const SHIM_DATA_MEMBERS = new Map([
+  ['XULBrowserWindow', new Map([['QueryInterface', 'XPConnect wraps a JS object as an interface only through its QueryInterface']])],
+]);
+// `<Name>.<member>` -> reason: members upstream uses that a defined shim must not implement. Empty today.
+const SHIM_ABSENT = new Map();
+// A shim whose value is an instance of a stock class, not a literal (Phase 37 sets window.PopupNotifications to its one
+// `new PopupNotifications(...)`): IMPLEMENTED is the members of `<Name>.prototype = {` in `module`, and no member is
+// surplus, since the stock class is upstream's surface, not ours.
+const STOCK_INSTANCE_SHIMS = new Map([
+  ['PopupNotifications', { module: 'upstream/toolkit/modules/PopupNotifications.sys.mjs', reason: 'installPermissionPromptFurniture assigns its stock PopupNotifications instance' }],
+]);
+
+// The pinned tree's non-test file list as `upstream/<path>`, read once per run
+// (read-only). null when git cannot list it.
+let upstreamListing;
+function upstreamFileList() {
+  if (upstreamListing !== undefined) return upstreamListing;
+  try {
+    upstreamListing = execFileSync('git', ['-C', join(REPO_ROOT, 'upstream'), 'ls-tree', '-r', '--name-only', 'HEAD'], {
+      encoding: 'utf8',
+      maxBuffer: 1 << 28,
+    })
+      .split('\n')
+      .filter(p => p && !p.split('/').some(seg => seg === 'test' || seg === 'tests'))
+      .map(p => `upstream/${p}`);
+  } catch {
+    upstreamListing = null;
+  }
+  return upstreamListing;
+}
+
+// Every `parent:` object's esModuleURI or moduleURI in one registry, comment lines
+// stripped. null when the registry is unreadable.
+const REGISTRY_PARENT_RE = /\bparent\s*:\s*\{[^}]*?\b(?:esModuleURI|moduleURI)\s*:\s*["'`]([^"'`]+)["'`]/g;
+function registryParentURIs(path) {
+  const src = readSource(path);
+  if (src === null) return null;
+  return [...stripCommentLines(src).matchAll(REGISTRY_PARENT_RE)].map(m => m[1]);
+}
+
+// A module URI to one file of `fileList`: moz-src:///X is upstream/X; any other
+// URI matches by basename, exactly once. Returns { path } or { error }.
+function resolveModuleURI(uri, fileList) {
+  if (uri.startsWith('moz-src:///')) {
+    const path = `upstream/${uri.slice('moz-src:///'.length)}`;
+    return fileList.includes(path) ? { path } : { error: `${uri} (no file ${path})` };
+  }
+  const base = uri.split('/').pop();
+  const matches = fileList.filter(p => p.split('/').pop() === base);
+  if (matches.length !== 1) return { error: `${uri} (${matches.length} files named ${base})` };
+  return { path: matches[0] };
+}
+
+// The upstream call-site files for the actor scope: the scope's widget files,
+// every *Parent.sys.mjs directly under each scope directory, and every parent
+// module the scope's registries name, de-duplicated and sorted. An unreadable
+// directory or registry, a registry yielding no URI, and an unresolvable URI are
+// each reported, never an empty clean list. `fileList` is the resolver's file list.
+function deriveCallSiteFiles(scope = UPSTREAM_SCOPE, fileList = upstreamFileList()) {
   const files = scope.files.map(([p]) => p);
   const unreadable = [];
+  const broken = [];
+  const uriCounts = { entries: 0, distinct: new Set() };
+  for (const [registry] of scope.registries ?? []) {
+    const uris = registryParentURIs(registry);
+    if (uris === null) {
+      unreadable.push(registry);
+      continue;
+    }
+    if (uris.length === 0) {
+      broken.push(`${registry} yielded zero parent module URIs`);
+      continue;
+    }
+    if (fileList === null) {
+      broken.push('git -C upstream ls-tree -r HEAD (no file list to resolve registry URIs against)');
+      break;
+    }
+    uriCounts.entries += uris.length;
+    for (const uri of uris) {
+      uriCounts.distinct.add(uri);
+      const r = resolveModuleURI(uri, fileList);
+      if (r.error) broken.push(`unresolvable parent module URI in ${registry.split('/').pop()}: ${r.error}`);
+      else files.push(r.path);
+    }
+  }
   for (const [dir] of scope.dirs) {
     const abs = dir.startsWith('/') ? dir : join(REPO_ROOT, dir);
     let names;
@@ -161,26 +292,16 @@ function deriveCallSiteFiles(scope = UPSTREAM_SCOPE) {
       if (d.isFile() && d.name.endsWith(PARENT_SUFFIX)) files.push(`${dir}/${d.name}`);
     }
   }
-  return { files: files.sort(), unreadable };
+  return { files: [...new Set(files)].sort(), unreadable, broken, uriEntries: uriCounts.entries, uriDistinct: uriCounts.distinct.size };
 }
 
 // The extension scope, from the pinned tree's file list (read-only).
 function deriveExtensionFiles() {
-  let listing;
-  try {
-    listing = execFileSync('git', ['-C', join(REPO_ROOT, 'upstream'), 'ls-tree', '-r', '--name-only', 'HEAD'], {
-      encoding: 'utf8',
-      maxBuffer: 1 << 28,
-    });
-  } catch {
-    return { files: [], unreadable: ['git -C upstream ls-tree -r HEAD'] };
-  }
+  const listing = upstreamFileList();
+  if (listing === null) return { files: [], unreadable: ['git -C upstream ls-tree -r HEAD'] };
   const files = listing
-    .split('\n')
-    .filter(p => EXTENSION_PREFIXES.some(prefix => p.startsWith(prefix)))
-    .filter(p => /\.m?js$/.test(p))
-    .filter(p => !p.split('/').some(seg => seg === 'test' || seg === 'tests'))
-    .map(p => `upstream/${p}`);
+    .filter(p => EXTENSION_PREFIXES.some(prefix => p.startsWith(`upstream/${prefix}`)))
+    .filter(p => /\.m?js$/.test(p));
   return { files: files.sort(), unreadable: [] };
 }
 
@@ -207,7 +328,7 @@ const DATA_MEMBERS = new Map([
 const DELIBERATELY_ABSENT = new Map([
   [
     'getTabDialogBox',
-    'PromptParent feature-detects it (`win?.gBrowser?.getTabDialogBox &&`) before calling it; absent keeps the window-modal prompt path, which needs no tab',
+    'PromptParent feature-detects it (`win?.gBrowser?.getTabDialogBox &&`) before calling it; absent keeps the window-modal prompt path, which needs no tab. ScreenshotsUtils (:803, openPreviewDialog from takeScreenshot :1185) calls it unguarded, but only inside a screenshot session that ScreenshotsUtils.start opens; the shell has no screenshot entry point (the browser-sets.js key, the toolbar button and the context-take-screenshot row are browser.xhtml furniture, and 35 D-12 omits that row)',
   ],
   [
     'setTabLabelForAuthPrompts',
@@ -215,7 +336,23 @@ const DELIBERATELY_ABSENT = new Map([
   ],
   [
     'getNotificationBox',
-    'BlockedSiteParent (:39, :78), DecoderDoctorParent (:102), EncryptedMediaParent (:152, :188), PluginParent (:131) and SpeechDispatcherParent (:61) call it on a getTabBrowser() receiver, which the Phase 31.1 host makes non-null for overlays. The shell has no notification box (Phase 37 furniture), so each call throws a TypeError on the missing member, the outcome the old null receiver gave',
+    'BlockedSiteParent (:39, :78), DecoderDoctorParent (:102), EncryptedMediaParent (:152, :188), PluginParent (:131) and SpeechDispatcherParent (:61) call it on a getTabBrowser() receiver, which the Phase 31.1 host makes non-null for overlays. The shell has no notification box (Phase 37 furniture), so each call throws a TypeError on the missing member, the outcome the old null receiver gave. AboutLoginsParent (:713, :746) calls it on gBrowser directly, but serves only about:logins, which an overlay never loads: the webTabOpen and webTabNavigate scheme walls refuse it and web content cannot link to it (AboutRedirector.cpp:71-75 has no MAKE_LINKABLE)',
+  ],
+  [
+    'addTrustedTab',
+    'ProfilesParent (:95, :258) calls it on topChromeWindow.gBrowser while handling Profiles:CancelDelete. The Profiles actor matches only about:editprofile, about:deleteprofile and about:newprofile in the privilegedabout process (DesktopActorRegistry.sys.mjs:703-715); overlays load only http(s) or the empty page through the webTabOpen and webTabNavigate scheme walls, and web content cannot link to those pages because their about modules lack MAKE_LINKABLE (AboutRedirector.cpp:152-169, nsAboutProtocolHandler.cpp:66-72). Its removeTab (:97, :260) is the stand-in refusal',
+  ],
+  [
+    'getPanel',
+    'ScreenshotsUtils.openPanel (:881-882) calls it when ScreenshotsComponentParent receives Screenshots:ShowPanel (:145-147), which ScreenshotsComponentChild sends only for a trusted event (:88, :155-156) that the screenshots overlay dispatches after ScreenshotsUtils.start. The shell has no screenshot entry point (the browser-sets.js:275 key, the toolbar button and the context-take-screenshot row are browser.xhtml furniture, and 35 D-12 omits that row)',
+  ],
+  [
+    'getFindBar',
+    "PdfjsParent's find-bar hookups (_updateControlState :601, _updateMatchesCount :670) call it on browser.getTabBrowser(). Before the 31.1 host that receiver was null and the next line threw a TypeError; now getTabForBrowser answers and this call throws the same TypeError, so the outcome is unchanged. The shell has no find bar: Phase 32 find drives overlay.finder and never loads findbar.js (32 D-07)",
+  ],
+  [
+    'getCachedFindBar',
+    "PdfjsParent (_hookupEventListeners :772) and TranslationsParent's #registerFindBarEventListeners (:1575, :3763; called from actor creation :610 and on TabFindInitialized) call it on browser.getTabBrowser(). The old null receiver threw a TypeError on the line before; now getTabForBrowser answers and this call throws the same TypeError, so the outcome is unchanged. The shell has no find bar (32 D-07: Phase 32 find drives overlay.finder)",
   ],
   [
     'swapBrowsers',
@@ -338,6 +475,7 @@ function gBrowserMembersOf(code, callsOnly) {
 // the whole list (actor scope true, extension scope false).
 function deriveRequired(files, callsOnly) {
   const members = new Set();
+  const sites = new Map(); // member -> Set of call-site file paths
   const unreadable = [];
   for (const path of files) {
     if (path.split('/').pop() === SELF_BASENAME) continue;
@@ -346,9 +484,20 @@ function deriveRequired(files, callsOnly) {
       unreadable.push(path);
       continue;
     }
-    for (const n of gBrowserMembersOf(stripCommentLines(src), callsOnly)) members.add(n);
+    for (const n of gBrowserMembersOf(stripCommentLines(src), callsOnly)) {
+      members.add(n);
+      if (!sites.has(n)) sites.set(n, new Set());
+      sites.get(n).add(path);
+    }
   }
-  return { members, unreadable };
+  return { members, sites, unreadable };
+}
+
+// A call-site file as an absence reason names it: the basename without its extension.
+// shortcut: coverage is checked per file, not per line, because line numbers drift on every rebase; a new call
+// inside an already-named file is not caught here.
+function fileStem(path) {
+  return path.split('/').pop().replace(/(\.sys)?\.m?js$/, '');
 }
 
 // Every member accessed on `gBrowserInit` over a list of files (reads and calls).
@@ -374,6 +523,10 @@ function objectLiteralMembers(code, anchor) {
 
   const members = new Set();
   let depth = 0;
+  // True where a key may start: right after the opening brace or a depth-1 comma.
+  // Without it a call inside a value (`QueryInterface: ChromeUtils.generateQI([...])`)
+  // read as a method shorthand named `generateQI`.
+  let keyPos = true;
   for (let i = open; i < code.length; i++) {
     const c = code[i];
     if (c === '"' || c === "'" || c === '`') {
@@ -394,15 +547,21 @@ function objectLiteralMembers(code, anchor) {
       if (depth === 0) return members;
       continue;
     }
+    if (depth === 1 && c === ',') {
+      keyPos = true;
+      continue;
+    }
     if (depth === 1 && /[A-Za-z_$]/.test(c)) {
       let j = i;
       while (j < code.length && /[\w$]/.test(code[j])) j++;
       const word = code.slice(i, j);
       let k = j;
       while (k < code.length && /\s/.test(code[k])) k++;
-      // A key is an identifier followed by `:` (property) or `(` (method
-      // shorthand, getter, setter). Anything else at depth 1 is not a member name.
-      if (code[k] === ':' || code[k] === '(') members.add(word);
+      // A key is an identifier in key position followed by `:` (property) or
+      // `(` (method shorthand, getter, setter). `get`/`set`/`async` before a
+      // name keep the key position for that name.
+      if (keyPos && (code[k] === ':' || code[k] === '(')) members.add(word);
+      keyPos = keyPos && ['get', 'set', 'async'].includes(word) && /[A-Za-z_$]/.test(code[k] ?? '');
       i = j - 1;
     }
   }
@@ -450,6 +609,96 @@ function deriveZoomShimImplemented(boundaryFile, name) {
   const members = objectLiteralMembers(code, `win.${name} = {`);
   if (members === null) return { members: null, reason: 'no-literal', count };
   return { members, reason: '', count };
+}
+
+// The quoted words of the line after the Phase 27 shim comment. [] when absent (a broken instrument for the caller).
+function phase27ShimNames(scriptFile = BOUNDARY_SCRIPT) {
+  const lines = (readSource(scriptFile) ?? '').split('\n');
+  const at = lines.findIndex(line => line.trim().startsWith(PHASE27_SHIM_COMMENT));
+  if (at === -1 || at + 1 >= lines.length) return [];
+  return [...lines[at + 1].matchAll(/'([A-Za-z_$][\w$]*)'/g)].map(m => m[1]);
+}
+
+// The method names an XPIDL file declares (block and line comments stripped). null when unreadable.
+function idlMethods(idlFile) {
+  const src = readSource(idlFile);
+  if (src === null) return null;
+  const code = stripCommentLines(src.replace(/\/\*[\s\S]*?\*\//g, ''));
+  return new Set([...code.matchAll(/^\s*(?:\[[^\]]*\]\s*)?[A-Za-z_][\w:<>]*\s+([A-Za-z_]\w*)\s*\(/gm)].map(m => m[1]));
+}
+
+// Every member called (`name.m(`) or assigned (`name.m =`, not `==`) on a receiver `name` over the files.
+function deriveCalledOrAssigned(name, files) {
+  const members = new Set();
+  const re = new RegExp(`(?<![\\w$])${name}\\s*\\??\\.\\s*(${ID})\\s*(?:\\(|=(?!=))`, 'g');
+  for (const path of files) {
+    const src = readSource(path);
+    if (src === null || path.split('/').pop() === SELF_BASENAME) continue;
+    for (const m of stripCommentLines(src).matchAll(re)) members.add(m[1]);
+  }
+  return members;
+}
+
+// The `window.<name> = ` (or `win.<name> = `) definition in the boundary file: { count, members }. members is the
+// literal's top-level names, an empty set for a non-literal value, null for an unbalanced literal.
+function deriveShimDefinition(boundaryFile, name) {
+  const src = readSource(boundaryFile);
+  if (src === null) return { count: 0, members: null, unreadable: true };
+  const code = stripCommentLines(src);
+  const defs = [...code.matchAll(new RegExp(`\\b(?:win|window)\\.${name}\\s*=(?!=)`, 'g'))];
+  if (defs.length !== 1) return { count: defs.length, members: null };
+  const rest = code.slice(defs[0].index + defs[0][0].length).trimStart();
+  return { count: 1, members: rest.startsWith('{') ? objectLiteralMembers(rest, '{') : new Set() };
+}
+
+// The Phase 27 shim comparison. Returns { broken } or { shims, clean }.
+function comparePhase27Shims(files, inputs) {
+  const names = phase27ShimNames(inputs.shimScript ?? BOUNDARY_SCRIPT);
+  if (names.length === 0) return { broken: `no shim names on the line after '${PHASE27_SHIM_COMMENT}' in ${inputs.shimScript ?? BOUNDARY_SCRIPT}` };
+  const idlShims = inputs.idlShims ?? IDL_SHIMS;
+  const shimAbsent = inputs.shimAbsent ?? SHIM_ABSENT;
+  const shims = [];
+  let anyRequired = false;
+  for (const name of names) {
+    const required = deriveCalledOrAssigned(name, files);
+    const idl = idlShims.get(name);
+    if (idl) {
+      const declared = idlMethods(idl.idl);
+      if (declared === null || declared.size === 0) return { broken: `${name}: no method declarations read from ${idl.idl}` };
+      for (const m of declared) required.add(m);
+    }
+    if (required.size) anyRequired = true;
+    const def = deriveShimDefinition(inputs.boundaryFile, name);
+    if (def.unreadable) return { broken: `cannot read ${inputs.boundaryFile}` };
+    if (def.count > 1) return { broken: `${inputs.boundaryFile} defines ${name} ${def.count} times; a second definition is a second boundary` };
+    if (def.count === 0) {
+      shims.push({ name, defined: false, required: sorted(required) });
+      continue;
+    }
+    if (def.members === null) return { broken: `no balanced literal after the ${name} definition in ${inputs.boundaryFile}` };
+    const stock = def.members.size === 0 ? (inputs.stockInstanceShims ?? STOCK_INSTANCE_SHIMS).get(name) : undefined;
+    if (stock) {
+      def.members = objectLiteralMembers(stripCommentLines(readSource(stock.module) ?? ''), `${name}.prototype = {`);
+      if (!def.members?.size) return { broken: `${name}: no members read from ${name}.prototype in ${stock.module}` };
+    }
+    const data = SHIM_DATA_MEMBERS.get(name) ?? new Map();
+    const methods = new Set([...def.members].filter(m => !data.has(m)));
+    const absentOf = new Set([...shimAbsent.keys()].filter(k => k.startsWith(`${name}.`)).map(k => k.slice(name.length + 1)));
+    shims.push({
+      name,
+      defined: true,
+      required: sorted(required),
+      implemented: sorted(methods),
+      unimplemented: sorted([...required].filter(m => !methods.has(m) && !absentOf.has(m))),
+      staleAbsent: sorted([...absentOf].filter(m => !required.has(m))),
+      contradiction: sorted([...absentOf].filter(m => methods.has(m))),
+      surplus: stock ? [] : sorted([...methods].filter(m => !required.has(m))),
+      missingData: sorted([...data.keys()].filter(m => !def.members.has(m))),
+    });
+  }
+  if (!anyRequired) return { broken: `derived zero member uses for every Phase 27 shim (${names.join(', ')})` };
+  const clean = shims.every(x => !x.defined || ['unimplemented', 'staleAbsent', 'contradiction', 'surplus', 'missingData'].every(k => x[k].length === 0));
+  return { shims, clean };
 }
 
 function sorted(set) {
@@ -502,6 +751,12 @@ function runScan(inputs) {
   const staleAbsent = sorted(new Set([...absent.keys()].filter(m => !requiredMethods.has(m))));
   const contradiction = sorted(new Set([...absent.keys()].filter(m => methods.has(m))));
   const surplus = sorted(new Set([...methods].filter(m => !requiredMethods.has(m))));
+  // Every absence reason names every file its member is used in (T-27-11: a widened scope must re-check old reasons).
+  const uncovered = [];
+  for (const [m, reason] of absent) {
+    const files = new Set([...(actor.sites.get(m) ?? []), ...(ext.sites.get(m) ?? [])]);
+    for (const f of sorted(files)) if (!reason.includes(fileStem(f))) uncovered.push(`${m} @ ${fileStem(f)}`);
+  }
 
   // gBrowserInit: the second comparison.
   const shellRequired = new Set([...deriveShimRequired([...actorFiles, ...extensionFiles])]);
@@ -539,6 +794,11 @@ function runScan(inputs) {
       surplus: sorted([...zoomImpl.members].filter(m => !req.has(m))),
     });
   }
+  const phase27 = comparePhase27Shims([...actorFiles, ...extensionFiles], inputs);
+  if (phase27.broken) {
+    return { ok: false, reason: 'phase27-shim-broken', detail: phase27.broken };
+  }
+
   const zoomClean = zoomShims.every(
     shim => shim.unimplemented.length === 0 && shim.staleAbsent.length === 0 && shim.contradiction.length === 0 && shim.surplus.length === 0
   );
@@ -575,14 +835,17 @@ function runScan(inputs) {
       staleAbsent.length === 0 &&
       contradiction.length === 0 &&
       surplus.length === 0 &&
+      uncovered.length === 0 &&
       missingData.length === 0 &&
       staleData.length === 0 &&
       shimUnimplemented.length === 0 &&
       shimSurplus.length === 0 &&
       zoomClean &&
-      facadesClean,
+      facadesClean &&
+      phase27.clean,
     zoomShims,
     facades,
+    phase27Shims: phase27.shims,
     reason: '',
     fileCount: actorFiles.length,
     extensionFileCount: extensionFiles.length,
@@ -594,6 +857,7 @@ function runScan(inputs) {
     staleAbsent,
     contradiction,
     surplus,
+    uncovered,
     missingData,
     staleData,
     shellRequired: sorted(shellRequired),
@@ -661,6 +925,9 @@ function reportFailure(result) {
     case 'facade-definitions':
       console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}. Exactly one definition of each tabbrowser facade is allowed, in the boundary file.`);
       return;
+    case 'phase27-shim-broken':
+      console.error(`${NAME}: FAIL -- broken instrument: ${result.detail}`);
+      return;
     default:
       break;
   }
@@ -679,6 +946,9 @@ function reportFailure(result) {
   }
   for (const m of result.surplus) {
     console.error(`  DEAD SURFACE: '${m}' is implemented on the stand-in but nothing upstream uses it -- remove it rather than carry it`);
+  }
+  for (const m of result.uncovered ?? []) {
+    console.error(`  UNCOVERED CALL SITE: '${m}' -- the DELIBERATELY_ABSENT reason does not name this call-site file; verify the outcome there and name it in the reason`);
   }
   for (const m of result.missingData) {
     console.error(`  MISSING DATA MEMBER: '${m}' -- ${DATA_MEMBERS.get(m).reason}`);
@@ -714,6 +984,17 @@ function reportFailure(result) {
       console.error(`  DEAD SURFACE: '${facade.name}.${m}' is defined on the facade but the module it is handed to never accesses it -- remove it rather than carry it`);
     }
   }
+  reportPhase27(result);
+}
+
+function reportPhase27(result) {
+  for (const shim of (result.phase27Shims ?? []).filter(x => x.defined)) {
+    for (const m of shim.unimplemented) console.error(`  UNIMPLEMENTED: '${shim.name}.${m}' is used upstream on the shim, but the ${shim.name} definition in ${BOUNDARY_FILE} neither implements it nor records it in SHIM_ABSENT`);
+    for (const m of shim.staleAbsent) console.error(`  STALE ABSENCE: '${shim.name}.${m}' is in SHIM_ABSENT but nothing upstream uses it any more`);
+    for (const m of shim.contradiction) console.error(`  CONTRADICTION: '${shim.name}.${m}' is implemented on the shim AND listed in SHIM_ABSENT -- one of the two is wrong`);
+    for (const m of shim.surplus) console.error(`  DEAD SURFACE: '${shim.name}.${m}' is implemented on the shim but nothing upstream uses it -- remove it rather than carry it`);
+    for (const m of shim.missingData) console.error(`  MISSING DATA MEMBER: '${shim.name}.${m}' -- ${SHIM_DATA_MEMBERS.get(shim.name).get(m)}`);
+  }
 }
 
 function patchLineReason(name) {
@@ -722,13 +1003,19 @@ function patchLineReason(name) {
 
 // Resolve the actor scope to files, failing distinctly on an unreadable directory.
 function actorFilesOrExit(scope, label) {
-  const { files, unreadable } = deriveCallSiteFiles(scope);
+  const { files, unreadable, broken, uriEntries, uriDistinct } = deriveCallSiteFiles(scope);
   if (unreadable.length) {
-    console.error(`${NAME}${label}: FAIL -- broken instrument: unreadable upstream actor director${unreadable.length > 1 ? 'ies' : 'y'}: ${unreadable.join(', ')}`);
+    console.error(`${NAME}${label}: FAIL -- broken instrument: unreadable upstream actor director${unreadable.length > 1 ? 'ies' : 'y'} or registr${unreadable.length > 1 ? 'ies' : 'y'}: ${unreadable.join(', ')}`);
     process.exit(1);
   }
+  if (broken.length) {
+    console.error(`${NAME}${label}: FAIL -- broken instrument: ${broken.join('; ')}`);
+    process.exit(1);
+  }
+  registryCounts = { uriEntries, uriDistinct };
   return files;
 }
+let registryCounts = { uriEntries: 0, uriDistinct: 0 };
 
 function extensionFilesOrExit(label) {
   const { files, unreadable } = deriveExtensionFiles();
@@ -757,9 +1044,15 @@ function main() {
     process.exit(1);
   }
   console.log(
-    `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}; zoom shims ${result.zoomShims
+    `${NAME}: PASS -- gBrowser required {${result.required.join(', ')}} derived from ${result.fileCount} actor files (calls; ${registryCounts.uriEntries} registry parent entries, ${registryCounts.uriDistinct} distinct URIs) and ${result.extensionFileCount} extension files (every access) equals implemented {${result.methods.join(', ')}} plus deliberately absent {${result.absent.join(', ')}}; data member(s) {${[...DATA_MEMBERS.keys()].join(', ')}} present; gBrowserInit required {${result.shellRequired.join(', ')}} equals the shim {${result.shimImplemented.join(', ')}}; zoom shims ${result.zoomShims
       .map(shim => `${shim.name} {${shim.implemented.join(', ')}}${shim.absent.length ? ` with ${shim.absent.join(', ')} absent with reasons` : ''}`)
-      .join('; ')}; tabbrowser facades ${result.facades.map(f => `${f.name} {${f.implemented.join(', ')}}`).join('; ') || '(none)'}`
+      .join('; ')}; tabbrowser facades ${result.facades.map(f => `${f.name} {${f.implemented.join(', ')}}`).join('; ') || '(none)'}; Phase 27 shims ${result.phase27Shims
+      .filter(x => x.defined)
+      .map(x => `${x.name} {${x.implemented.join(', ')}}`)
+      .join('; ') || 'none defined'}; not yet defined: ${result.phase27Shims
+      .filter(x => !x.defined)
+      .map(x => `${x.name} (upstream uses {${x.required.join(', ')}})`)
+      .join(', ')}`
   );
 }
 
@@ -1027,13 +1320,161 @@ function selfTest() {
         } else ok(`staged facade with surplus getNotificationBox -> red, naming '${facade.name}.getNotificationBox' DEAD SURFACE`);
       }
     }
+    // (h) a component-parent plant: a staged DesktopActorRegistry copy names a module outside the scanned directories.
+    {
+      const planted = 'zzzPlantedComponentMember';
+      const [registry, why] = UPSTREAM_SCOPE.registries[0];
+      const regCopy = join(stage, 'DesktopActorRegistry.sys.mjs');
+      const moduleFile = join(stage, 'components', 'zzzplanted', 'ZzzPlantedComponentModule.sys.mjs');
+      const entry = `  ZzzPlanted: {\n    parent: {\n      esModuleURI: "resource:///modules/ZzzPlantedComponentModule.sys.mjs",\n    },\n  },\n`;
+      const regText = readSource(registry) ?? '';
+      writeFileSync(regCopy, regText.replace(/^  Profiles: \{$/m, `${entry}  Profiles: {`));
+      mkdirSync(dirname(moduleFile), { recursive: true });
+      writeFileSync(moduleFile, `export const ZzzPlanted = {\n  open(win) {\n    win.gBrowser.${planted}(win);\n  },\n};\n`);
+      const scope = { ...UPSTREAM_SCOPE, registries: [[regCopy, why], ...UPSTREAM_SCOPE.registries.slice(1)] };
+      const fileList = [...upstreamFileList(), moduleFile];
+      const derived = deriveCallSiteFiles(scope, fileList);
+      const dirsOnly = deriveCallSiteFiles({ ...scope, registries: [] }, fileList);
+      if (!derived.files.includes(moduleFile) || dirsOnly.files.includes(moduleFile) || derived.broken.length) {
+        fail(`'component parent' plant did not land (in registry scope: ${derived.files.includes(moduleFile)}, reachable by the directory scan: ${dirsOnly.files.includes(moduleFile)}, broken: ${derived.broken.join('; ')})`);
+      } else {
+        const r = runScan({ ...real, actorFiles: derived.files });
+        if (r.ok || !r.unimplemented?.includes(planted)) {
+          fail(`a registry-named parent module calling '${planted}' did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
+        } else ok(`registry entry naming a module outside the scanned directories -> red, naming '${planted}' UNIMPLEMENTED (registry derivation only)`);
+      }
+    }
+
+    // (i) a staged registry entry whose basename matches no file: a broken instrument naming the URI.
+    {
+      const uri = 'resource:///modules/ZzzNoSuchParent.sys.mjs';
+      const [registry, why] = UPSTREAM_SCOPE.registries[1];
+      const regCopy = join(stage, 'ActorManagerParent.sys.mjs');
+      const regText = readSource(registry) ?? '';
+      const at = regText.indexOf('parent: {');
+      writeFileSync(regCopy, at === -1 ? regText : `${regText.slice(0, at)}parent: { esModuleURI: "${uri}" },\n    unusedParent: {${regText.slice(at + 'parent: {'.length)}`);
+      if (!(registryParentURIs(regCopy) ?? []).includes(uri)) {
+        fail(`'unresolvable URI' plant did not land (${uri} not parsed from the staged registry)`);
+      } else {
+        const derived = deriveCallSiteFiles({ ...UPSTREAM_SCOPE, registries: [UPSTREAM_SCOPE.registries[0], [regCopy, why]] });
+        if (!derived.broken.some(b => b.includes(uri))) {
+          fail(`a registry URI resolving to no file did not fail as a broken instrument naming it; got: ${JSON.stringify(derived.broken)}`);
+        } else ok(`registry URI ${uri} resolving to no file -> broken instrument naming the URI`);
+      }
+    }
+
+    // (o) an absence reason naming only one of its member's call-site files.
+    {
+      const victimAbsent = baseline.absent.find(m => {
+        const reason = DELIBERATELY_ABSENT.get(m);
+        return (reason.match(/[A-Za-z][\w-]*Parent\b/g) ?? []).length >= 2;
+      });
+      const first = (DELIBERATELY_ABSENT.get(victimAbsent) ?? '').match(/[A-Za-z][\w-]*Parent\b/)?.[0];
+      if (!victimAbsent || !first) {
+        fail(`'uncovered call site' plant did not land (no absence reason names two call-site files)`);
+      } else {
+        const absent = new Map([...DELIBERATELY_ABSENT, [victimAbsent, `${first} calls it (self-test reason naming one call site)`]]);
+        const r = runScan({ ...real, absent });
+        if (r.ok || !r.uncovered?.some(u => u.startsWith(`${victimAbsent} @ `))) {
+          fail(`a '${victimAbsent}' reason naming only ${first} did not go red; got: ${JSON.stringify({ reason: r.reason, uncovered: r.uncovered })}`);
+        } else ok(`'${victimAbsent}' reason naming only ${first} -> red, naming UNCOVERED CALL SITE ${r.uncovered.filter(u => u.startsWith(`${victimAbsent} @ `)).join(', ')}`);
+      }
+    }
+
+    // Phase 27 shim plants (j)-(n): each stages a boundary copy with a shim definition appended.
+    const boundaryWith = (file, text) => {
+      writeFileSync(join(stage, file), `${readSource(BOUNDARY_FILE) ?? ''}\n${text}\n`);
+      return join(stage, file);
+    };
+    const shimOf = (r, name) => r.phase27Shims?.find(x => x.name === name);
+
+    // (j) window.FullScreen with only enterDomFullscreen, replacing the boundary file's own definition (35-07 defines it).
+    {
+      const realText = readSource(BOUNDARY_FILE) ?? '';
+      const path = join(stage, 'boundary-fullscreen.mjs');
+      writeFileSync(path, `${realText.replace(/^(\s*)window\.FullScreen = \{$/m, '$1window.zzzStagedAwayFullScreenShim = {')}\nwindow.FullScreen = {\n  enterDomFullscreen(browser, actor) { return null; },\n};\n`);
+      const r = runScan({ ...real, boundaryFile: path });
+      const shim = shimOf(r, 'FullScreen');
+      if (!shim?.defined) fail(`'FullScreen' plant did not land (the staged definition was not parsed)`);
+      else if (r.ok || !shim.unimplemented.includes('cleanupDomFullscreen')) {
+        fail(`a FullScreen shim without cleanupDomFullscreen did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim.unimplemented })}`);
+      } else ok(`staged window.FullScreen with only enterDomFullscreen -> red, naming 'FullScreen.cleanupDomFullscreen' UNIMPLEMENTED`);
+    }
+
+    // (k) window.nsContextMenu with a surplus method, added to the boundary file's own definition (35-03 defines it).
+    {
+      const realText = readSource(BOUNDARY_FILE) ?? '';
+      const planted = realText.replace(/^(\s*)window\.nsContextMenu = \{\n/m, '$&$1  zzzSurplusMenuMethod() { return null; },\n');
+      const path = join(stage, 'boundary-contextmenu.mjs');
+      writeFileSync(path, planted);
+      const r = runScan({ ...real, boundaryFile: path });
+      const shim = shimOf(r, 'nsContextMenu');
+      if (planted === realText || !shim?.defined) fail(`'nsContextMenu' plant did not land`);
+      else if (r.ok || !shim.surplus.includes('zzzSurplusMenuMethod') || shim.unimplemented.length) {
+        fail(`a surplus nsContextMenu method did not go red as DEAD SURFACE alone; got: ${JSON.stringify({ reason: r.reason, surplus: shim.surplus, unimplemented: shim.unimplemented })}`);
+      } else ok(`staged window.nsContextMenu with a surplus method -> red, naming 'nsContextMenu.zzzSurplusMenuMethod' DEAD SURFACE`);
+    }
+
+    // (l) a staged IDL with one more method against the boundary file's own XULBrowserWindow (35-02 defines it with the three).
+    {
+      const idl = IDL_SHIMS.get('XULBrowserWindow');
+      const idlCopy = join(stage, 'nsIXULBrowserWindow.idl');
+      const idlText = readSource(idl.idl) ?? '';
+      writeFileSync(idlCopy, idlText.replace(/(\n\s*void hideTooltip\(\);)/, '$1\n  void zzzPlantedIdlMethod(in AString x);'));
+      const path = real.boundaryFile;
+      const control = shimOf(runScan({ ...real, boundaryFile: path }), 'XULBrowserWindow');
+      const r = runScan({ ...real, boundaryFile: path, idlShims: new Map([['XULBrowserWindow', { ...idl, idl: idlCopy }]]) });
+      const shim = shimOf(r, 'XULBrowserWindow');
+      if (!control?.defined || control.unimplemented.length || control.surplus.length || !readFileSync(idlCopy, 'utf8').includes('zzzPlantedIdlMethod')) {
+        fail(`'IDL method' plant did not land (control: ${JSON.stringify(control)})`);
+      } else if (r.ok || !shim?.unimplemented.includes('zzzPlantedIdlMethod')) {
+        fail(`an IDL method the shim lacks did not go red naming it; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim?.unimplemented })}`);
+      } else ok(`staged nsIXULBrowserWindow.idl with one more method -> red, naming 'XULBrowserWindow.zzzPlantedIdlMethod' UNIMPLEMENTED (the three-method control matched)`);
+    }
+
+    // (p) the stock PopupNotifications class without show: the instance shim's implemented set is its prototype.
+    {
+      const stock = STOCK_INSTANCE_SHIMS.get('PopupNotifications');
+      const modCopy = join(stage, 'PopupNotifications.sys.mjs');
+      const modText = readSource(stock.module) ?? '';
+      writeFileSync(modCopy, modText.replace(/^  show: /m, '  zzzShowStagedAway: '));
+      const r = runScan({ ...real, stockInstanceShims: new Map([['PopupNotifications', { ...stock, module: modCopy }]]) });
+      const shim = shimOf(r, 'PopupNotifications');
+      if (!shim?.defined || !readFileSync(modCopy, 'utf8').includes('zzzShowStagedAway: ')) fail(`'stock instance' plant did not land`);
+      else if (r.ok || !shim.unimplemented.includes('show') || shim.surplus.length) {
+        fail(`a stock PopupNotifications prototype without show did not go red naming it alone; got: ${JSON.stringify({ reason: r.reason, unimplemented: shim.unimplemented, surplus: shim.surplus })}`);
+      } else ok(`staged PopupNotifications.prototype without show -> red, naming 'PopupNotifications.show' UNIMPLEMENTED (no surplus on a stock instance)`);
+    }
+
+    // (m) two staged definitions of one shim.
+    {
+      const path = boundaryWith('boundary-twice.mjs', 'window.PointerlockFsWarning = { close() {}, showFullScreen() {} };\nwin.PointerlockFsWarning = { close() {}, showFullScreen() {} };');
+      const r = runScan({ ...real, boundaryFile: path });
+      if (r.ok || r.reason !== 'phase27-shim-broken' || !String(r.detail).includes('PointerlockFsWarning')) {
+        fail(`two PointerlockFsWarning definitions did not fail as a broken instrument naming it; got: ${JSON.stringify({ reason: r.reason, detail: r.detail })}`);
+      } else ok(`two staged PointerlockFsWarning definitions -> broken instrument naming PointerlockFsWarning`);
+    }
+
+    // (n) the boundary file's XULBrowserWindow with its QueryInterface line removed.
+    {
+      const boundaryText = readSource(BOUNDARY_FILE) ?? '';
+      const withoutQi = boundaryText.replace(/\n\s*QueryInterface: ChromeUtils\.generateQI\(\["nsIXULBrowserWindow"\]\),/, '');
+      const path = join(stage, 'boundary-xulbw-noqi.mjs');
+      writeFileSync(path, withoutQi);
+      const r = runScan({ ...real, boundaryFile: path });
+      const shim = shimOf(r, 'XULBrowserWindow');
+      if (!shim?.defined || withoutQi === boundaryText) fail(`'no QueryInterface' plant did not land`);
+      else if (r.ok || !shim.missingData.includes('QueryInterface')) {
+        fail(`a XULBrowserWindow without QueryInterface did not go red naming it; got: ${JSON.stringify({ reason: r.reason, missingData: shim.missingData })}`);
+      } else ok(`staged XULBrowserWindow without QueryInterface -> red, naming MISSING DATA MEMBER 'XULBrowserWindow.QueryInterface'`);
+    }
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
 
   if (failed) process.exit(1);
   console.log(
-    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, facade missing tabContainer / surplus getNotificationBox); the empty file list failed distinctly`
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site, FullScreen member, nsContextMenu surplus, IDL method, XULBrowserWindow QueryInterface, stock PopupNotifications without show, facade missing tabContainer / surplus getNotificationBox); the empty file list, an unresolvable registry URI and a duplicate shim definition failed distinctly`
   );
 }
 

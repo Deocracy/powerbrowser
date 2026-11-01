@@ -24,6 +24,7 @@ import { ChromeBarPlacesSuggestions } from './chrome-bar-places-suggestions';
 import { ChromeBarCommandContribution } from './chrome-bar-commands';
 import { ChromeBarKeybindingContribution } from './chrome-bar-keybindings';
 import { ChromeBarShortcutRelay } from './chrome-bar-shortcuts';
+import { PageContextMenuContribution } from './page-context-menu';
 import { bindChromeBarPreferences } from './chrome-bar-preferences';
 import { ChromeBarContribution, ChromeBarWidget } from './chrome-bar-widget';
 import { AddressBar } from './address-bar/address-bar';
@@ -104,6 +105,10 @@ export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     // like every bind above (D-50): its onStart subscribes to chrome's pushes.
     bind(ChromeBarShortcutRelay).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(ChromeBarShortcutRelay);
+    // Phase 35 plan 03 (PROMPT-04): the page context menu, static like every bind above (D-50); its onStart
+    // subscribes to chrome's pageContextMenu push.
+    bind(PageContextMenuContribution).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(PageContextMenuContribution);
     // NAV-04: the Home settings, static at module load (D-50).
     bindChromeBarPreferences(bind);
 });

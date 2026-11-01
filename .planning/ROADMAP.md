@@ -452,13 +452,13 @@ Plans:
 **Plans**: 7 plans (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
-- [ ] 35-01-PLAN.md (wave 1) — Close T-27-11 and give every Phase 35 shim global its derived coverage before any shim lands.
-- [ ] 35-02-PLAN.md (wave 2) — The tracer for the furniture installer, on PROMPT-08: page tooltips and the link-hover status
-- [ ] 35-03-PLAN.md (wave 3) — Build the page context menu engine (PROMPT-04) and every row that needs nothing from Phases
-- [ ] 35-04-PLAN.md (wave 4) — Finish PROMPT-04's rows that run on other phases' mechanisms: Inspect (D-13), the edit rows
-- [ ] 35-05-PLAN.md (wave 5) — Complete the page menu with the two pieces the 28 sign-off and the ROADMAP research line bind to
-- [ ] 35-06-PLAN.md (wave 6) — Host the stock form furniture (PROMPT-06): the `PopupAutoComplete` panel FormHistory and
-- [ ] 35-07-PLAN.md (wave 7) — Ship PAGE-07 with both halves and the stock warning (D-05, B5).
+- [x] 35-01-PLAN.md (wave 1) — Close T-27-11 and give every Phase 35 shim global its derived coverage before any shim lands.
+- [x] 35-02-PLAN.md (wave 2) — The tracer for the furniture installer, on PROMPT-08: page tooltips and the link-hover status
+- [x] 35-03-PLAN.md (wave 3) — Build the page context menu engine (PROMPT-04) and every row that needs nothing from Phases
+- [x] 35-04-PLAN.md (wave 4) — Finish PROMPT-04's rows that run on other phases' mechanisms: Inspect (D-13), the edit rows
+- [x] 35-05-PLAN.md (wave 5) — Complete the page menu with the two pieces the 28 sign-off and the ROADMAP research line bind to
+- [x] 35-06-PLAN.md (wave 6) — Host the stock form furniture (PROMPT-06): the `PopupAutoComplete` panel FormHistory and
+- [x] 35-07-PLAN.md (wave 7) — Ship PAGE-07 with both halves and the stock warning (D-05, B5).
 
 **UI hint**: yes
 
@@ -548,7 +548,7 @@ Plans:
 | 32. Page Tools | 9/9 | In Progress | - |
 | 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
 | 34. Tab Strip | 5/5 | Executed, live verification deferred | - |
-| 35. Shell Furniture and Page Context Menu | 0/TBD | Not started | - |
+| 35. Shell Furniture and Page Context Menu | 7/7 | Executed; live verification deferred | - |
 | 36. New-Window Links as Web Tabs | 3/3 | In Progress (live checks deferred) | - |
 | 37. Permission Prompts and Dialogs | 4/4 | In Progress (live checks deferred) | - |
 | 38. WebExtensions | 0/TBD | Not started | - |

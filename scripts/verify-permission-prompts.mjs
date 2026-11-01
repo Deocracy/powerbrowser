@@ -150,6 +150,13 @@ const PERMISSION_WRITE = /\b(?:setForPrincipal|removeFromPrincipal|addFromPrinci
 const MODULE_FILE = 'PopupNotifications.sys.mjs';
 const SECTION_MARKER = '// Phase 37: permission prompts.';
 const BAR_SECTION_MARKER = '// Phase 37: notification bars.';
+/** Where the bar section ends: the next end-of-file section's `// ----` + `// Phase` header (Phase 35's follows it), else EOF. */
+function barSectionEnd(text, barAt) {
+    const next = /\n\/\/ -{20,}\n\/\/ Phase /g;
+    next.lastIndex = barAt;
+    const m = next.exec(text);
+    return m ? m.index : text.length;
+}
 const INSTALLER = 'installPermissionPromptFurniture';
 const PANEL_ID = 'notification-popup';
 const TEMPLATE_ID = 'webRTC-shareDevices-notification';
@@ -346,7 +353,7 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
     const sectionAt = raw[API].indexOf(SECTION_MARKER);
     const barAt = raw[API].indexOf(BAR_SECTION_MARKER);
     const section = sectionAt === -1 ? '' : stripComments(raw[API].slice(sectionAt, barAt > sectionAt ? barAt : undefined));
-    const bars = barAt === -1 ? '' : stripComments(raw[API].slice(barAt));
+    const bars = barAt === -1 ? '' : stripComments(raw[API].slice(barAt, barSectionEnd(raw[API], barAt)));
     if (sectionAt === -1) {
         failures.push(`section: ${API} has no '${SECTION_MARKER}' end-of-file section -- the prompt code has no home, so rules (a), (c) and (f) prove nothing`);
     }
@@ -859,7 +866,8 @@ function selfTest() {
     const barAt = clean[API].indexOf(BAR_SECTION_MARKER);
     const promptEnd = clean[API].lastIndexOf('\n// ----', barAt);
     const inSection = text => `${clean[API].slice(0, promptEnd)}\n${text}\n${clean[API].slice(promptEnd)}`;
-    const inBars = text => `${clean[API].replace(/\n$/, '')}\n${text}\n`;
+    const barEnd = barSectionEnd(clean[API], barAt);
+    const inBars = text => `${clean[API].slice(0, barEnd)}\n${text}\n${clean[API].slice(barEnd)}`;
     const cases = [
         {
             name: 'missing panel',

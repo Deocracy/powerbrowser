@@ -13,10 +13,12 @@
  *      bare-command path that could send the kind without a widget handler.
  *   4. the Edit items: every edit('cmd_…') call in the Theia sources names a
  *      frozen command, and at least one item exists (the positive control for 3).
+ *      The page menu's edit rows (35-04, page-context-menu.ts FRONTEND_ROWS) are
+ *      Edit items too: they reach the page only through WebTabWidget.edit.
  *
  * --self-test plants a surplus literal, a dropped literal, a send site outside
- * the widget and an Edit item naming an unfrozen command, and requires each to
- * go red naming the drift. Text reads only: --quick, no build, no browser, no display.
+ * the widget, an Edit item naming an unfrozen command and a page menu row naming
+ * one, and requires each to go red naming the drift. Text reads only: --quick, no build, no browser, no display.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -195,10 +197,11 @@ function selfTest() {
         return 1;
     }
     const menuPath = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
+    const pageMenuPath = 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts';
     const cases = [
         {
             name: 'surplus literal (a non-probed command added to the frozen set)',
-            build: () => ({ ...clean, api: plant(clean.api, '"cmd_selectAll", "cmd_delete"]);', '"cmd_selectAll", "cmd_delete", "cmd_pasteNoFormatting"]);') }),
+            build: () => ({ ...clean, api: plant(clean.api, 'const WEB_TAB_EDIT_CMDS = Object.freeze([', 'const WEB_TAB_EDIT_CMDS = Object.freeze(["cmd_pasteNoFormatting", ') }),
             expect: 'cmd_pasteNoFormatting',
         },
         {
@@ -210,6 +213,11 @@ function selfTest() {
             name: 'Edit item naming an unfrozen command',
             build: () => ({ ...clean, theia: { ...clean.theia, [menuPath]: plant(clean.theia[menuPath], "edit('cmd_undo')", "edit('cmd_pasteNoFormatting')") } }),
             expect: "'cmd_pasteNoFormatting', which is outside the frozen set",
+        },
+        {
+            name: 'page menu row naming an unfrozen command (35-04)',
+            build: () => ({ ...clean, theia: { ...clean.theia, [pageMenuPath]: plant(clean.theia[pageMenuPath], "edit('cmd_copyImage')", "edit('cmd_zzzPlanted')") } }),
+            expect: `${pageMenuPath}: Edit item names 'cmd_zzzPlanted', which is outside the frozen set`,
         },
         {
             name: 'bare-command send (the kind sent outside the widget handler)',

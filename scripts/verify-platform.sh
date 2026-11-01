@@ -3728,6 +3728,13 @@ run_own_checks() {
     # self-test row in this array gives.
     "shell-gbrowser-standin|node $REPO_ROOT/scripts/verify-shell-gbrowser-standin.mjs"
     "shell-gbrowser-standin-self-test|node $REPO_ROOT/scripts/verify-shell-gbrowser-standin.mjs --self-test"
+    # Phase 35 (35-02): the shell furniture. The ids in powerbrowser.xhtml's
+    # furniture block equal the ids the boundary's Phase 35 section wires, each
+    # element equals upstream's element of the same id, the installer is one
+    # member called once, and the D-11 and status-line layer rules hold. Text
+    # reads only; `upstream/` is read, never written.
+    "shell-furniture|node $REPO_ROOT/scripts/verify-shell-furniture.mjs"
+    "shell-furniture-self-test|node $REPO_ROOT/scripts/verify-shell-furniture.mjs --self-test"
 
     # NEW (01-06): GUI-04's bridge-contract assertion. Reads the TypeScript
     # sources, never a compiled artifact, so it is honestly --quick: no build,
@@ -5138,6 +5145,13 @@ run_own_checks() {
       # session per planted fault, each scored on the scenario it targets.
       "nav-keys-live|node $REPO_ROOT/scripts/verify-nav-keys-live.mjs"
       "nav-keys-live-self-test|node $REPO_ROOT/scripts/verify-nav-keys-live.mjs --self-test"
+
+      # NEW (Phase 35): the shell furniture -- page tooltips and the in-bar link
+      # status first; the scenarios grow in 35-03 to 35-07. Needs the built
+      # binary and the last Theia build, so never --quick. The self-test runs a
+      # clean control session, then one session per planted runtime fault.
+      "page-furniture-live|node $REPO_ROOT/scripts/verify-page-furniture-live.mjs"
+      "page-furniture-live-self-test|node $REPO_ROOT/scripts/verify-page-furniture-live.mjs --self-test"
 
       # NEW (Phase 29): the address bar's search and URI fixup, driven in the
       # built shell against a hermetic engine chrome adds per session (its

@@ -618,6 +618,12 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} couldn't open the print dialog. Press Ctrl+P to try again.",
   "Save page as",
   "${name} couldn't save that page. Choose a different place and try again.",
+  "${name} can't open that link here. Choose Copy Link to copy it instead.",
+  "Save link as",
+  "Save image as",
+  "Save video as",
+  "Save audio as",
+  "${name} couldn't save that file. Choose a different place and try again.",
   "${name} couldn't read this tab's history. Use Back and Forward to move one page at a time.",
   "Show the Home button next to Reload.",
   "${name} can't open your home page. Press Enter to change it in Settings.",
@@ -768,7 +774,7 @@ const EXPECTED_SHORTCUT_COPY = new Set([
   "Ctrl+Tab", "Ctrl+Shift+Tab", "Ctrl+Page Down", "Ctrl+Page Up",
   "Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+6", "Alt+7", "Alt+8", "Alt+9",
   "F6", "Shift+F6",
-  "Ctrl+F", "F3", "Shift+F3", "Ctrl+=", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+M", "Ctrl+P", "Ctrl+S", "Ctrl+U", "F12",
+  "Ctrl+F", "F3", "Shift+F3", "Ctrl+=", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+M", "Ctrl+P", "Ctrl+S", "Ctrl+U", "F12", "F11",
   "Back", "Forward", "Reload", "Stop", "Home", "New Tab",
 ]);
 

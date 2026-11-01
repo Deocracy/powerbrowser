@@ -60,9 +60,12 @@ document.addEventListener(
     // so the Theia frame never appears to them (D-06 as amended).
     //
     // The member set is derived by scripts/verify-shell-gbrowser-standin.mjs
-    // from the actor scope and the extension scope, and compared as set
-    // equality, so an upstream rebase adding a call and a member deleted or
-    // added here each go red by name.
+    // and compared as set equality, so an upstream rebase adding a call and a
+    // member deleted or added here each go red by name. Its scope is
+    // browser-custom-element.mjs, every *Parent.sys.mjs under
+    // upstream/browser/actors and upstream/toolkit/actors, every parent module
+    // the two actor registries name (DesktopActorRegistry.sys.mjs,
+    // ActorManagerParent.sys.mjs), and the extension scope.
     //
     // The never-synthesise rule is reversed for the tab host only (Phase 28
     // sign-off, 2026-10-21): each host node stands for one live overlay that
@@ -101,6 +104,9 @@ document.addEventListener(
       tabGroups: [],
       getTabForBrowser(browser) {
         return host.getTabForBrowser(browser);
+      },
+      shouldActivateDocShell(b) {
+        return host.shouldActivateDocShell(b);
       },
       getBrowserForTab(tab) {
         return host.getBrowserForTab(tab);
@@ -164,6 +170,8 @@ document.addEventListener(
     // window (GUI-01). The link-click companion is plain JS, not part of the
     // Gecko interface. Adopted tabs do not yet enter the Phase 31.1 tab host.
     PowerBrowserAPI.installNewWindowReceivers(window);
+    // Phase 35 (D-01): page tooltips, link status and the rest of the shell furniture, wired once.
+    PowerBrowserAPI.installShellFurniture(window);
 
     // SHELL-03 (05-02): the error layer, reached by TheiaService exactly
     // the same way powerbrowserSwapToUrl is -- through this window's exposed
@@ -440,6 +448,10 @@ document.addEventListener(
       // Phase 32 plan 08 (PAGE-10): view source and (32-07 gap closure) F12 DevTools, page-focus only.
       { id: "viewSource", key: "U", modifiers: "accel", reserved: false, landsInTheia: false },
       { id: "devtoolsOpen", keycode: "VK_F12", modifiers: "", reserved: false, landsInTheia: false },
+      // Phase 35 plan 07 (PAGE-07, D-07): F11 toggles window full screen from a page only; the IDE keeps F11
+      // (KEY-04), so the row is never reserved. No `firefox` field: the upstream key id carries an internals-boundary
+      // pattern, so verify-shell-furniture.mjs rule 12 holds the row to the Linux key_enterFullScreen instead.
+      { id: "fullscreen", keycode: "VK_F11", modifiers: "", reserved: false, landsInTheia: false },
       // No upstream <key>: content's document navigation consumes F6, so these ride the reply listener below.
       { id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false, landsInTheia: true, via: "replyListener" },
       { id: "focusAddressShiftF6", keycode: "VK_F6", modifiers: "shift", reserved: false, landsInTheia: true, via: "replyListener" },

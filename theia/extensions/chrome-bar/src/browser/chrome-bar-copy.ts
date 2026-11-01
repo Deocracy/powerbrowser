@@ -233,6 +233,14 @@ export const CHROME_BAR_COPY = Object.freeze({
     // and the accessible-name addition beside the attention dot.
     updatedTabTooltip: (label: string) => `${label} — Updated`,
     updatedTabLabel: (label: string) => `${label}, updated`,
+    // Phase 35 plan 03 (PROMPT-04, 35-UI-SPEC Refused target): the page menu's row for a link the shell cannot open.
+    pageMenuRefusedLink: (subject: string) => `${subject} can't open that link here. Choose Copy Link to copy it instead.`,
+    // Phase 35 plan 04 (PROMPT-04): the save dialog titles of the page menu's save rows, and their failure line.
+    saveLinkTitle: 'Save link as',
+    saveImageTitle: 'Save image as',
+    saveVideoTitle: 'Save video as',
+    saveAudioTitle: 'Save audio as',
+    saveTargetFailed: (subject: string) => `${subject} couldn't save that file. Choose a different place and try again.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

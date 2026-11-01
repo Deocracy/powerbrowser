@@ -161,6 +161,12 @@ export interface WebTabOptions {
      * and thumbnail.
      */
     key?: string;
+    /**
+     * Phase 35 plan 03 (PROMPT-04, D-06): a page-menu open grant id chrome minted (`g-<n>`). The first
+     * webTabOpen carries it, so the first load gets the opener page's principal and referrer. It grants
+     * nothing here: chrome checks it is unused, under 5 s old and minted for this exact URL.
+     */
+    grant?: string;
 }
 
 export interface WebTabState {
@@ -282,7 +288,7 @@ export function downloadRowsOf(detail: Record<string, unknown>): WebTabDownloadR
  * section). One stable set for the bridge gate.
  */
 export type WebTabMessage =
-    | { kind: 'webTabOpen'; tabId: string; url: string; key: string }
+    | { kind: 'webTabOpen'; tabId: string; url: string; key: string; grant?: string }
     | { kind: 'webTabGeometry'; tabId: string; x: number; y: number; w: number; h: number; visible: boolean }
     | { kind: 'webTabNavigate'; tabId: string; url: string }
     | { kind: 'webTabBack'; tabId: string }
@@ -316,8 +322,8 @@ export type WebTabMessage =
     | { kind: 'webTabSavePick'; tabId: string }
     | { kind: 'webTabSaveExport'; tabId: string; path: string }
     // Phase 32 plan 06 (PAGE-09): the chrome-help edit set the edit-today probe recorded. Keys never send this kind;
-    // only a Theia-initiated Edit item does. checkOnly reads enablement and runs nothing.
-    | { kind: 'webTabEdit'; tabId: string; cmd: 'cmd_undo' | 'cmd_redo' | 'cmd_cut' | 'cmd_copy' | 'cmd_paste' | 'cmd_selectAll' | 'cmd_delete'; checkOnly?: boolean }
+    // only a Theia-initiated Edit item does (a page menu row is one, 35-04, which adds cmd_copyImage). checkOnly reads enablement and runs nothing.
+    | { kind: 'webTabEdit'; tabId: string; cmd: 'cmd_undo' | 'cmd_redo' | 'cmd_cut' | 'cmd_copy' | 'cmd_paste' | 'cmd_selectAll' | 'cmd_delete' | 'cmd_copyImage'; checkOnly?: boolean }
     // Phase 32 plan 07 (PAGE-10): reader enter/leave (same overlay), view source (the inner page is the overlay's own; the
     // source URL is minted chrome-side, never sent by the frame) and DevTools (the stock toolbox window for this tab, minted chrome-side).
     | { kind: 'webTabReader'; tabId: string; enter: boolean }
@@ -326,7 +332,11 @@ export type WebTabMessage =
     // Phase 36 (PROMPT-05): the ack for a page's new window chrome adopted; pcKey is chrome's correlator, never shown.
     | { kind: 'webTabAdopt'; tabId: string; pcKey: string }
     // Phase 37 plan 04 (D-08): a notification bar's button; the token names chrome's record, the action is the fixed enum.
-    | { kind: 'webTabBarAction'; tabId: string; token: string; action: NotificationBarAction };
+    | { kind: 'webTabBarAction'; tabId: string; token: string; action: NotificationBarAction }
+    // Phase 35 plan 03 (PROMPT-04, D-09): the page menu pick, privileged. It names the tab, chrome's menu id and an
+    // offered row id (null dismisses); never a URL. Sent only from chrome-bar's page-context-menu.ts. `path` (35-04)
+    // answers a save row's `save-pick` reply with the file the user picked in Theia's save dialog.
+    | { kind: 'webTabContextMenuAction'; tabId: string; menuId: number; itemId: string | null; path?: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -362,6 +372,10 @@ export interface WebTabReply {
     entries?: WebTabHistoryEntry[];
     /** `webTabSavePick`: the proposed file name (a page title, bounded, with an .html suffix). */
     suggestedName?: string;
+    /** `webTabContextMenuAction` (35-03): a one-time open grant, its chrome-derived target and whether it opens in the background. */
+    grantId?: string;
+    url?: string;
+    background?: boolean;
 }
 
 /** Phase 31 plan 02: one managed permission on this tab's principal, in table order. */
@@ -523,6 +537,13 @@ export class WebTabChannel {
                 ? { token: detail.token, barKind: barKind as NotificationBarKind, displayFields: typeof fields === 'object' && fields !== null ? fields as Record<string, unknown> : {} }
                 : undefined);
         });
+        // Phase 35 plan 05 (D-08, G4b): the right-clicked page's still, shown on its placeholder under the page menu.
+        this.onPush('pageStill', detail => {
+            const { tabId, menuId, dataUrl } = detail;
+            if (typeof tabId === 'string' && typeof menuId === 'number' && typeof dataUrl === 'string' && dataUrl.startsWith('data:image/jpeg;base64,')) {
+                this.widgets.get(tabId)?.showStill(menuId, dataUrl);
+            }
+        });
     }
 
     /** Phase 37 plan 04: the bar copy, supplied by chrome-bar (which owns CHROME_BAR_COPY and depends on this package). */
@@ -637,6 +658,8 @@ export class WebTabWidget extends BaseWidget {
     tabId: string;
     /** NG-001: the tab-store row this tab writes (`WebTabOptions.key`, else `web:<id>`). */
     rowKey = '';
+    /** Phase 35 plan 03: the open grant the first webTabOpen carries, then cleared (chrome spends it either way). */
+    protected grant: string | undefined;
     url: string;
     pageTitle = '';
     loading = false;
@@ -710,6 +733,8 @@ export class WebTabWidget extends BaseWidget {
 
     protected raf = 0;
     protected lastSent = '';
+    /** D-08 (35-05): the page still under an open page menu; `layerSeen` once the menu's blocking layer has shown. */
+    protected still: { img: HTMLImageElement; layerSeen: boolean; at: number } | undefined;
     /** A focusPage() waiting for the publish that shows the overlay. */
     protected focusWanted = false;
     protected resizeObserver: ResizeObserver | undefined;
@@ -741,6 +766,7 @@ export class WebTabWidget extends BaseWidget {
         this.id = `${WEB_TAB_FACTORY_ID}:${options.id}`;
         this.tabId = options.id;
         this.rowKey = options.key ?? `web:${options.id}`;
+        this.grant = options.grant;
         this.url = options.url;
         this.title.closable = true;
         this.title.iconClass = 'codicon codicon-globe';
@@ -837,7 +863,9 @@ export class WebTabWidget extends BaseWidget {
         ensureBodyObserver();
         // Lost-view detection (UI-SPEC A10/A11): the open is awaited, and a
         // refusal, a nack or silence (timeout included) marks the view lost.
-        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey })
+        const grant = this.grant;
+        this.grant = undefined;
+        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...(grant ? { grant } : {}) })
             .then(reply => this.setLostView(WebTabWidget.lostReply(reply)));
         this.publish();
         if (!this.listening) {
@@ -931,6 +959,7 @@ export class WebTabWidget extends BaseWidget {
                 h: Math.round(r.height - bars),
                 visible: showable && !blockingLayerOpen(),
             };
+            this.settleStill();
             const key = JSON.stringify(msg);
             if (key !== this.lastSent) {
                 this.lastSent = key;
@@ -1007,6 +1036,35 @@ export class WebTabWidget extends BaseWidget {
     /** A bar button: the token and one action of its bar's fixed set. Chrome resolves the record and pushes the result. */
     async barAction(token: string, action: NotificationBarAction): Promise<WebTabReply> {
         return this.settleUnknownTab(await this.channel.request({ kind: 'webTabBarAction', tabId: this.tabId, token, action }));
+    }
+
+    /** D-08: a still for a new menu replaces the last one; it fills the placeholder, which the hidden overlay leaves showing. */
+    showStill(menuId: number, dataUrl: string): void {
+        this.still?.img.remove();
+        const img = document.createElement('img');
+        img.className = 'pb-web-tab-still';
+        img.alt = '';
+        img.src = dataUrl;
+        img.dataset.menuId = String(menuId);
+        this.node.appendChild(img);
+        this.still = { img, layerSeen: false, at: Date.now() };
+    }
+
+    /**
+     * The still stays while the menu's blocking layer is open and goes on the first publish after it closes (the
+     * overlay visible again). The pageStill push precedes the menu's, so a publish before the layer first shows keeps
+     * it, unless no layer showed within a second (a menu that never opened).
+     */
+    protected settleStill(): void {
+        if (!this.still) {
+            return;
+        }
+        if (blockingLayerOpen()) {
+            this.still.layerSeen = true;
+        } else if (this.still.layerSeen || Date.now() - this.still.at > 1000) {
+            this.still.img.remove();
+            this.still = undefined;
+        }
     }
 
     async navigate(url: string): Promise<WebTabReply> {
@@ -1577,18 +1635,21 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
         return widget;
     }
 
-    /** NAV-06: a new web tab directly after `ref`; the current tab stays current. */
-    async openInBackground(url: string, ref: Widget): Promise<WebTabWidget> {
+    /**
+     * NAV-06: a new web tab directly after `ref`; the current tab stays current. `grant` (35-03, D-06) is a
+     * page-menu open grant chrome minted for this URL; the tab's first open carries it.
+     */
+    async openInBackground(url: string, ref: Widget, grant?: string): Promise<WebTabWidget> {
         if (!/^https?:\/\//i.test(url)) {
             throw new Error('@powerbrowser/tab-uris: openInBackground takes an http(s) URL only');
         }
-        const widget = await this.createWidget(url);
+        const widget = await this.createWidget(url, undefined, grant);
         this.shell.addWidget(widget, { area: 'main', ref, mode: 'tab-after' });
         return widget;
     }
 
-    protected createWidget(url: string, rowKey?: string): Promise<WebTabWidget> {
-        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}) };
+    protected createWidget(url: string, rowKey?: string, grant?: string): Promise<WebTabWidget> {
+        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}), ...(grant ? { grant } : {}) };
         return this.widgetManager.getOrCreateWidget<WebTabWidget>(WEB_TAB_FACTORY_ID, options);
     }
 }

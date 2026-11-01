@@ -216,6 +216,9 @@ export class ChromeBarWidget extends ReactWidget {
 
     protected mode = ChromeBarWidget.MODES[0];
 
+    /** Phase 35 (PROMPT-08): the hovered link chrome last pushed, shown as one in-bar line; empty when none. */
+    protected pageStatus = '';
+
     @postConstruct()
     protected init(): void {
         this.addressBar.attach(this);
@@ -233,6 +236,14 @@ export class ChromeBarWidget extends ReactWidget {
             if (tab === currentWebTab()) {
                 this.update();
             }
+        }));
+        // PROMPT-08: chrome pushes a hovered link only for an overlay; a tab this frontend no longer has is ignored.
+        this.toDispose.push(this.webTabs.onPush('overLink', detail => {
+            if (typeof detail.tabId !== 'string' || !this.webTabs.widgetOf(detail.tabId)) {
+                return;
+            }
+            this.pageStatus = typeof detail.url === 'string' ? detail.url : '';
+            this.update();
         }));
         // NAV-04: toggling either Home setting updates the bar live, with no reload.
         this.toDispose.push(this.preferences.onPreferenceChanged(change => {
@@ -1085,6 +1096,7 @@ export class ChromeBarWidget extends ReactWidget {
                 </button>
             )}
             {this.addressBar.render()}
+            {this.pageStatus && <span className='pb-page-status' aria-label={this.pageStatus}>{this.pageStatus}</span>}
             {this.renderReaderToggle()}
             {this.renderSharing()}
             {this.renderZoomChip()}

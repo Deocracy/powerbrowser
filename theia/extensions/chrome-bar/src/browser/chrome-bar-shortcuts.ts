@@ -77,6 +77,8 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'viewSource', key: 'U', modifiers: 'accel', label: 'Ctrl+U', macLabel: '⌘U' },
     // PAGE-10 (32-07 gap closure): F12 opens the stock DevTools toolbox window for the focused page.
     { id: 'devtoolsOpen', keycode: 'VK_F12', modifiers: '', label: 'F12', macLabel: 'F12' },
+    // PAGE-07 (35-07, D-07): F11 on a page toggles window full screen; with the IDE focused F11 stays Theia's.
+    { id: 'fullscreen', keycode: 'VK_F11', modifiers: '', label: 'F11', macLabel: 'F11' },
 ];
 
 export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
@@ -111,6 +113,12 @@ export function tooltipFor(button: NavButton): string {
     const row = PAGE_SHORTCUTS.find(r => r.id === rows[0]);
     return row ? `${verb} (${isOSX ? row.macLabel : row.label})` : verb;
 }
+
+/**
+ * Phase 33 plan 33-05's Full Screen command (MENU-03, D-14), which toggles `window.fullScreen` chrome-side.
+ * shortcut: spelled here until Phase 33 lands its exported `CHROME_BAR_FULL_SCREEN_COMMAND` const; import that instead then.
+ */
+const FULL_SCREEN_COMMAND_ID = 'powerbrowser.chrome-bar.full-screen';
 
 /** True while a web page (an overlay) has keyboard focus. */
 export const PAGE_FOCUS_CONTEXT_KEY = 'powerbrowser.webPageFocused';
@@ -190,6 +198,8 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         // PAGE-10 (32-08): the widget method, never a kind; the reader toggle has no key (the button and command only).
         ['viewSource', tab => tab.viewSource()],
         ['devtoolsOpen', tab => tab.openDevtools()],
+        // PAGE-07 (35-07): the one Full Screen command, as newTab runs its command; the top panel stays (D-05 amended).
+        ['fullscreen', () => this.commands.executeCommand(FULL_SCREEN_COMMAND_ID)],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */

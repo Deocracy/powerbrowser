@@ -2502,8 +2502,12 @@ export const PowerBrowserAPI = Object.freeze({
           if (data.key !== undefined && !webTabKeyIsValid(data.key)) {
             return { ok: false, reason: "validation", message: "handleGroupMutation: refusing malformed tab key" };
           }
+          // PROMPT-04 (D-06): an optional page-menu open grant, by id only (takeOpenGrant checks the rest).
+          if (data.grant !== undefined && (typeof data.grant !== "string" || !OPEN_GRANT_RE.test(data.grant))) {
+            return { ok: false, reason: "validation", message: "handleGroupMutation: refusing malformed open grant" };
+          }
           const theiaBrowser = actorRef.browsingContext.top.embedderElement;
-          return { ok: true, kind, where: PowerBrowserAPI.webTabOpen(theiaBrowser, actorRef, data.tabId, data.url, data.key) };
+          return { ok: true, kind, where: PowerBrowserAPI.webTabOpen(theiaBrowser, actorRef, data.tabId, data.url, data.key, data.grant) };
         }
         case "webTabGeometry": {
           if (!webTabIdIsValid(data.tabId)) {
@@ -3278,7 +3282,7 @@ export const PowerBrowserAPI = Object.freeze({
    * listener or load: Gecko loads into it, and webTabAttach registers it when
    * the frontend acks (the adopt section at the end of the file).
    */
-  webTabOpen(theiaBrowser, actorRef, tabId, url, key, pending = null) {
+  webTabOpen(theiaBrowser, actorRef, tabId, url, key, grant, pending = null) {
     const spec = typeof url === "string" && url ? url : "about:blank";
     if (spec !== "about:blank" && !/^https?:\/\//i.test(spec)) {
       return "refused-scheme";
@@ -3298,9 +3302,9 @@ export const PowerBrowserAPI = Object.freeze({
     // manualactiveness: activeness then follows docShellIsActive below
     // rather than the shell window (BrowsingContext.cpp:821-830), which is
     // what lets a hidden tab stop painting and stop running foreground
-    // timers. No primary (that is the Theia frame), no contextmenu/tooltip/
-    // autocompletepopup (they name browser.xhtml elements this shell lacks),
-    // and no src (the load is the null-principal call below).
+    // timers. No primary (that is the Theia frame), no contextmenu/tooltip
+    // (D-02, D-04), and no src (the load is the null-principal call below).
+    // autocompletepopup names the shell's stock PopupAutoComplete (D-03).
     for (const [name, value] of Object.entries({
       type: "content",
       remote: "true",
@@ -3309,6 +3313,7 @@ export const PowerBrowserAPI = Object.freeze({
       maychangeremoteness: "true",
       manualactiveness: "true",
       messagemanagergroup: "browsers",
+      autocompletepopup: "PopupAutoComplete",
       tabindex: "-1",
     })) {
       browser.setAttribute(name, value);
@@ -3342,7 +3347,7 @@ export const PowerBrowserAPI = Object.freeze({
     if (pending) {
       return browser;
     }
-    const entry = PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec);
+    const entry = PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec, grant);
     tabHostAddTab(win, tabId, browser);
     // NG-034: a tab the frontend reopened from last session's snapshot, with
     // its history armed, gets its back/forward history back; any other tab
@@ -3376,14 +3381,15 @@ export const PowerBrowserAPI = Object.freeze({
    * webTabOpen does both for its own tabs, and the tab-host node is webTabOpen's
    * alone (verify-ext-tab-host-scope.mjs).
    */
-  webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec) {
+  webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec, grant = null) {
     const win = theiaBrowser.ownerDocument.defaultView;
     // WebDriver reaches the overlay through gBrowser.webDriverTabs (the 050
     // TabManager hunk); extensions see it as a tab node (tabHostAddTab below).
     // NG-001: the row key is the tab's identity -- the key the frontend sent
     // (a reopened card's row) or web:<tabId> -- never the page URL.
     // NG-034: that value is also the web-tab history key (saveWebTabHistories).
-    const entry = { browser, uri: key || `web:${tabId}`, listener: null, titleListener: null, owner: actorRef, rowKey: key || `web:${tabId}` };
+    // PROMPT-04 (D-06): a page-menu open grant for exactly this URL gives the first load the page's principal and referrer.
+    const entry = { browser, uri: key || `web:${tabId}`, listener: null, titleListener: null, owner: actorRef, rowKey: key || `web:${tabId}`, grant: takeOpenGrant(win, grant, spec) };
     // NG-004: the row exists from the moment the tab does, a New Tab on the
     // empty page included, so every Panorama mutation has a row to act on.
     PowerBrowserAPI.writeTabRow({ uri: entry.uri, url: spec === "about:blank" ? "" : spec, title: "", chromeWin: win }).catch(err => {
@@ -3508,7 +3514,7 @@ export const PowerBrowserAPI = Object.freeze({
     if (!committed()) {
       PowerBrowserAPI.log("warn", "[web-tab] initial history entry not yet committed; loading anyway");
     }
-    PowerBrowserAPI.webTabNavigate(tabId, spec, { replace: true });
+    PowerBrowserAPI.webTabNavigate(tabId, spec, { replace: true, grant: entry.grant });
   },
 
   /**
@@ -3828,7 +3834,7 @@ export const PowerBrowserAPI = Object.freeze({
    * hardening addWebTab applies (tabbrowser.js:3185-3198 throws on a system
    * principal), and never browser.src.
    */
-  webTabNavigate(tabId, url, { replace = false } = {}) {
+  webTabNavigate(tabId, url, { replace = false, grant = null } = {}) {
     const spec = typeof url === "string" && url ? url : "about:blank";
     if (spec !== "about:blank" && !/^https?:\/\//i.test(spec)) {
       return "refused-scheme";
@@ -3841,7 +3847,8 @@ export const PowerBrowserAPI = Object.freeze({
     entry.firstLoad = null;
     const triggeringPrincipal = Services.scriptSecurityManager.createNullPrincipal({});
     const loadFlags = replace ? Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY : Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
-    entry.browser.fixupAndLoadURIString(spec, { triggeringPrincipal, loadFlags });
+    // PROMPT-04 (D-06): a consumed open grant's principal, policy container and referrer replace the null principal.
+    entry.browser.fixupAndLoadURIString(spec, { triggeringPrincipal, loadFlags, ...grant });
     return "loading";
   },
 
@@ -3877,6 +3884,10 @@ export const PowerBrowserAPI = Object.freeze({
     const wasVisible = entry.browser.style.visibility === "visible";
     if (wasVisible && !visible && entry.uri) {
       PowerBrowserAPI.scheduleSettleCapture(entry.uri, win);
+    }
+    // PAGE-07 (35-07, D-05): upstream exits element fullscreen on TabSelect (browser-fullScreenAndPointerLock.js:660, :478-483).
+    if (wasVisible && !visible && win.document.fullscreenElement === entry.browser) {
+      win.document.exitFullscreen().catch(() => {});
     }
     Object.assign(entry.browser.style, {
       left: `${host.left + left}px`,
@@ -4056,6 +4067,11 @@ export const PowerBrowserAPI = Object.freeze({
    */
   openAdoptedWebTab(openerBrowser, url, { inBackground = false, triggeringPrincipal = null } = {}) {
     return adoptLinkIn(url, "tab", { openerBrowser, inBackground, triggeringPrincipal });
+  },
+
+  /** Phase 35 (D-01): wires the shell furniture once per shell window; the receivers live in the end-of-file section. */
+  installShellFurniture(window) {
+    installShellFurnitureReceivers(window);
   },
 });
 
@@ -4616,7 +4632,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools", "webTabAdopt", "webTabBarAction"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools", "webTabAdopt", "webTabBarAction", "webTabContextMenuAction"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -5144,6 +5160,10 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed bar action" };
       }
       return webTabBarActionReply(kind, data, actorRef.browsingContext.top.embedderElement);
+    }
+    // PROMPT-04 (D-09): the page menu pick, the first privileged kind here; walls in handlePageMenuAction (Phase 35 section).
+    case "webTabContextMenuAction": {
+      return handlePageMenuAction(data, actorRef);
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -6575,6 +6595,9 @@ export const PowerBrowserTabHost = Object.freeze({
       selectedBrowser: () => (host.selected ? host.selected.linkedBrowser : null),
       currentURI: () => (host.selected ? host.selected.linkedBrowser.currentURI : null),
       getTabForBrowser: browser => host.byBrowser.get(browser) ?? null,
+      // Phase 35 plan 01 (T-35-28): PictureInPicture.removePiPBrowserFromWeakMap asks this before closing; stock keeps only
+      // the visible browser active (tabbrowser.js:8031-8041), and webTabGeometry writes visibility with docShellIsActive.
+      shouldActivateDocShell: browser => host.byBrowser.has(browser) && browser.style.visibility === "visible",
       getBrowserForTab: tab => (isHostTab(host, tab) ? tab.linkedBrowser : null),
       isTab: tab => isHostTab(host, tab),
       getIcon: tab => (isHostTab(host, tab) ? tab.image : null),
@@ -6610,8 +6633,9 @@ export const PowerBrowserTabHost = Object.freeze({
 // ---------------------------------------------------------------------------
 // Phase 32 plan 06 (PAGE-09): probe-gated edit commands. The set is the chrome-help subset the edit-today
 // probe recorded (scripts/lib/pb-probe-verdicts.json). cmd_pasteNoFormatting had no chrome effect there, so
-// it has no kind. Frozen: the union, the Edit items and verify-page-tools-edit.mjs derive from this list.
-const WEB_TAB_EDIT_CMDS = Object.freeze(["cmd_undo", "cmd_redo", "cmd_cut", "cmd_copy", "cmd_paste", "cmd_selectAll", "cmd_delete"]);
+// it has no kind (and the page menu omits Paste Without Formatting, 35-04). cmd_copyImage is the page menu's Copy
+// Image (35-04). Frozen: the union, the Edit items and verify-page-tools-edit.mjs derive from this list.
+const WEB_TAB_EDIT_CMDS = Object.freeze(["cmd_undo", "cmd_redo", "cmd_cut", "cmd_copy", "cmd_paste", "cmd_selectAll", "cmd_delete", "cmd_copyImage"]);
 
 // The chrome route is the Controllers actor (ControllersParent.sys.mjs). A remote overlay has no parent-side
 // docShell, so `docShell.doCommand` is not reachable. The child (ControllersChild) runs its own docShell
@@ -6825,7 +6849,7 @@ function webTabReaderReply(kind, tabId, enter) {
 // View source (PAGE-10): the inner URL is this overlay's own page, validated chrome-side. The view-source: load is minted
 // here through the overlay's navigation, the webTabNavigate shape. The ViewSource actor is child-only and is never messaged.
 // A new overlay for the source is not built (inNewTab is refused).
-function webTabViewSourceReply(kind, tabId, inNewTab) {
+function webTabViewSourceReply(kind, tabId, inNewTab, frameUrl) {
   const entry = webTabs.get(tabId);
   if (!entry) {
     return { ok: true, kind, where: "unknown-tab" };
@@ -6833,7 +6857,7 @@ function webTabViewSourceReply(kind, tabId, inNewTab) {
   if (inNewTab) {
     return { ok: false, reason: "unavailable", message: "handleWebTabAction: a view-source overlay is not built; use the same tab" };
   }
-  const inner = entry.browser.currentURI ? entry.browser.currentURI.spec : "";
+  const inner = frameUrl ?? (entry.browser.currentURI ? entry.browser.currentURI.spec : ""); // frameUrl: the page menu's View Frame Source (35-04)
   if (!/^(https?|file):/i.test(inner)) {
     return { ok: false, reason: "validation", message: "handleWebTabAction: view source needs a web or file page" };
   }
@@ -6861,7 +6885,7 @@ function webTabDevtoolsReply(kind, tabId) {
   if (!node || !shim.isEnabled()) {
     return { ok: false, reason: "unavailable", message: "handleWebTabAction: DevTools are not available for this tab" };
   }
-  shim.showToolboxForTab(node, { hostType: "window" }).catch(err => {
+  entry.toolboxOpening = shim.showToolboxForTab(node, { hostType: "window" }).catch(err => { // the page menu's Inspect awaits it (35-04)
     PowerBrowserAPI.log("error", `[web-tab] devtools failed to open (${err && err.name ? err.name : "error"})`);
   });
   return { ok: true, kind, where: "opened" };
@@ -6994,7 +7018,7 @@ function createPendingOverlay(opener, spec, background, openWindowInfo) {
   const openerTabId = tabIdOfBrowser(opener);
   const theiaBrowser = opener.ownerDocument.getElementById(SHELL_CONTENT_BROWSER_ID);
   const pcKey = mintPendingKey();
-  const browser = PowerBrowserAPI.webTabOpen(theiaBrowser, null, pcKey, spec, null, { remoteType: opener.remoteType, openWindowInfo });
+  const browser = PowerBrowserAPI.webTabOpen(theiaBrowser, null, pcKey, spec, null, undefined, { remoteType: opener.remoteType, openWindowInfo });
   const pending = { browser, theiaBrowser, url: spec };
   pendingContent.set(pcKey, pending);
   sendWebTabPush(theiaBrowser, { kind: "adoptTab", pcKey, openerTabId, url: spec, background });
@@ -7600,4 +7624,1290 @@ function showProtocolHandlerBar(registrar, aProtocol, aURI, aTitle, aDocumentURI
     return;
   }
   setBar(browser, "protocol-handler", { displayHost: aURI.host, scheme: protocol }, { protocol, uri: aURI.spec, name: String(aTitle || "") });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 35: shell furniture.
+//
+// The stock pieces a remote page reaches through the shell window itself, not
+// through the Theia frontend: page tooltips and link status first (PROMPT-08,
+// D-04); later plans add the page context menu, form autocomplete, fullscreen
+// and the pointer-lock warning. PowerBrowserAPI.installShellFurniture is the
+// one entry (D-01) and calls installShellFurnitureReceivers below, nothing
+// else. Every receiver wires an element of the furniture block in
+// powerbrowser.xhtml by its literal id (scripts/verify-shell-furniture.mjs
+// compares the two sets, and each element with upstream's).
+//
+// This section sits at the end of the file on purpose: nothing above the
+// last catalogued internals line moves when it grows. It has its own
+// lazy-getter block, so the top block does not move either.
+// ---------------------------------------------------------------------------
+
+const furnitureLazy = {};
+ChromeUtils.defineESModuleGetters(furnitureLazy, {
+  BrowserUIUtils: "resource:///modules/BrowserUIUtils.sys.mjs",
+  E10SUtils: "resource://gre/modules/E10SUtils.sys.mjs",
+});
+
+function installShellFurnitureReceivers(window) {
+  installTooltipsAndLinkStatus(window);
+  installPageContextMenu(window);
+  installFullscreen(window);
+}
+
+// A hovered link as browser.js:1985-2005 shows it: unescaped for display, the
+// bidi controls encoded so a page cannot reorder the text, trimURLs applied.
+function linkStatusText(url) {
+  const text = Services.textToSubURI.unEscapeURIForUI(url).replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, encodeURIComponent);
+  return Services.prefs.getBoolPref("browser.urlbar.trimURLs", true) ? furnitureLazy.BrowserUIUtils.trimURL(text) : text;
+}
+
+// PROMPT-08: remote content reaches tooltips and link status only through the
+// AppWindow's nsIXULBrowserWindow (BrowserParent.cpp:2520-2566). Gecko looks the
+// object up on every call (BrowserParent.cpp:512-536), so registering it after
+// the Theia frame exists is enough. Only overlays are served: the Theia frame
+// keeps its own HoverService hovers (the 27-08 invariant).
+function installTooltipsAndLinkStatus(window) {
+  const document = window.document;
+  const theiaBrowser = window.powerbrowserGetBrowser();
+  // The last mouseover target: setOverLink carries no browser, so the source is
+  // the hovered overlay, else the focused one (browser-init.js:649 reads pointer
+  // moves over remote content the same way).
+  let hovered;
+  let statusTabId = null;
+  let pending = null;
+  let frameQueued = false;
+
+  // T-35-08: one push per animation frame, latest wins. The log line of a
+  // failed push is sendWebTabPush's (kind and error only, never the URL).
+  const queue = (tabId, url) => {
+    pending = { tabId, url };
+    statusTabId = url ? tabId : null;
+    if (frameQueued) {
+      return;
+    }
+    frameQueued = true;
+    window.requestAnimationFrame(() => {
+      frameQueued = false;
+      const next = pending;
+      pending = null;
+      sendWebTabPush(theiaBrowser, { kind: "overLink", tabId: next.tabId, url: next.url });
+    });
+  };
+  const clearStatus = () => {
+    if (statusTabId !== null) {
+      queue(statusTabId, "");
+    }
+  };
+
+  document.addEventListener(
+    "mouseover",
+    event => {
+      hovered = event.target;
+      if (tabIdOfBrowser(hovered) === null) {
+        clearStatus();
+      }
+    },
+    true
+  );
+
+  window.XULBrowserWindow = {
+    QueryInterface: ChromeUtils.generateQI(["nsIXULBrowserWindow"]),
+    setOverLink(url) {
+      // Content sends the clear on leave, often once the pointer is already over the Theia frame.
+      if (!url) {
+        clearStatus();
+        return;
+      }
+      const tabId = tabIdOfBrowser(tabIdOfBrowser(hovered) !== null ? hovered : document.activeElement);
+      if (tabId !== null) {
+        queue(tabId, linkStatusText(url));
+      }
+    },
+    showTooltip(x, y, text, direction, browser) {
+      if (Cc["@mozilla.org/widget/dragservice;1"].getService(Ci.nsIDragService).getCurrentSession()) {
+        return;
+      }
+      if (!document.hasFocus() || tabIdOfBrowser(browser) === null) {
+        return;
+      }
+      const tooltip = document.getElementById("remoteBrowserTooltip");
+      tooltip.label = text;
+      tooltip.style.direction = direction;
+      tooltip.openPopupAtScreen(x / window.devicePixelRatio, y / window.devicePixelRatio, false, null);
+    },
+    hideTooltip() {
+      document.getElementById("remoteBrowserTooltip").hidePopup();
+    },
+  };
+  window.docShell.treeOwner.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIAppWindow).XULBrowserWindow = window.XULBrowserWindow;
+}
+
+// PROMPT-04 (D-02, D-06, D-09, D-12): the page context menu. ContextMenuParent
+// writes window.nsContextMenu.contentData and opens #contentAreaContextMenu
+// (ContextMenuParent.sys.mjs:190-256); its message cannot be observed from outside
+// the actor. So the shim keeps the data of a visible overlay only, the stub's
+// popupshowing is always cancelled, and the rows reach Theia as a pageContextMenu
+// push. A pick comes back as webTabContextMenuAction naming the tab, the menu and
+// the row, never a target: every URL and principal is read from the captured data.
+
+// One row per upstream element, in browser-context.inc.xhtml order: `id` is the
+// element id, `l10n` its data-l10n-id in browserContext.ftl (or `bundle`, a
+// browser.properties key), `when`, `off`, `on` and `refuse` name PAGE_MENU_WHEN
+// predicates (shown, disabled, checked, replaced by the refusal row), `runs`
+// says who performs it. verify-shell-furniture.mjs rules 5-6 compare every field
+// with upstream and with the two row dispatchers. The fullscreen media row enters
+// element fullscreen through the 35-07 stand-ins. A `dynamic` row has no upstream id: it
+// expands into one row per PAGE_MENU_DYNAMIC label (spelling suggestions are
+// dictionary words), ids `<kind>-<index>`; extension entries (D-16) arrive built.
+const PAGE_MENU_ROWS = Object.freeze([
+  { id: "context-back", l10n: "main-context-menu-back-2", when: "navigation", runs: "frontend", group: "navigation" },
+  { id: "context-forward", l10n: "main-context-menu-forward-2", when: "navigation", runs: "frontend", group: "navigation" },
+  { id: "context-reload", l10n: "main-context-menu-reload", when: "reload", runs: "frontend", group: "navigation" },
+  { id: "context-stop", l10n: "main-context-menu-stop", when: "stop", runs: "frontend", group: "navigation" },
+  { id: "context-bookmarkpage", l10n: "main-context-menu-bookmark-page", when: "bookmarkPage", runs: "frontend", group: "navigation" },
+  { id: "spell-no-suggestions", l10n: "text-action-spell-no-suggestions", when: "spellNoSuggestions", off: "always", group: "spell" },
+  { dynamic: "spell-suggestion", when: "spellSuggestions", runs: "chrome", group: "spell" },
+  { id: "spell-add-to-dictionary", l10n: "text-action-spell-add-to-dictionary", when: "onMisspelling", runs: "chrome", group: "spell" },
+  { id: "spell-undo-add-to-dictionary", l10n: "text-action-spell-undo-add-to-dictionary", when: "spellUndo", runs: "chrome", group: "spell" },
+  { id: "context-openlinkintab", l10n: "main-context-menu-open-link-new-tab", when: "openLink", refuse: "linkNotWeb", runs: "chrome", group: "open" },
+  { id: "context-savelink", l10n: "main-context-menu-save-link", when: "saveLink", runs: "chrome", group: "copy" },
+  { id: "context-copyemail", l10n: "main-context-menu-copy-email", when: "mailtoLink", runs: "chrome", group: "copy" },
+  { id: "context-copylink", l10n: "main-context-menu-copy-link-simple", when: "copyLink", runs: "chrome", group: "copy" },
+  { id: "context-stripOnShareLink", l10n: "main-context-menu-copy-clean-link", when: "stripOnShare", off: "cannotStrip", runs: "chrome", group: "copy" },
+  { id: "context-media-play", l10n: "main-context-menu-media-play", when: "mediaPlay", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-media-pause", l10n: "main-context-menu-media-pause", when: "mediaPause", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-media-mute", l10n: "main-context-menu-media-mute", when: "mediaMute", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-media-unmute", l10n: "main-context-menu-media-unmute", when: "mediaUnmute", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-media-playbackrate", l10n: "main-context-menu-media-play-speed-2", when: "mediaRate", group: "media", children: [
+    { id: "context-media-playbackrate-050x", l10n: "main-context-menu-media-play-speed-slow-2", when: "always", on: "rate050", off: "mediaError", runs: "chrome", group: "rate" },
+    { id: "context-media-playbackrate-100x", l10n: "main-context-menu-media-play-speed-normal-2", when: "always", on: "rate100", off: "mediaError", runs: "chrome", group: "rate" },
+    { id: "context-media-playbackrate-125x", l10n: "main-context-menu-media-play-speed-fast-2", when: "always", on: "rate125", off: "mediaError", runs: "chrome", group: "rate" },
+    { id: "context-media-playbackrate-150x", l10n: "main-context-menu-media-play-speed-faster-2", when: "always", on: "rate150", off: "mediaError", runs: "chrome", group: "rate" },
+    { id: "context-media-playbackrate-200x", l10n: "main-context-menu-media-play-speed-fastest-2", when: "always", on: "rate200", off: "mediaError", runs: "chrome", group: "rate" },
+  ] },
+  { id: "context-media-loop", l10n: "main-context-menu-media-loop", when: "onMedia", on: "mediaLoops", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-video-fullscreen", l10n: "main-context-menu-media-video-fullscreen", when: "videoFullscreen", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-media-hidecontrols", l10n: "main-context-menu-media-hide-controls", when: "mediaHideControls", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-media-showcontrols", l10n: "main-context-menu-media-show-controls", when: "mediaShowControls", off: "mediaError", runs: "chrome", group: "media" },
+  { id: "context-viewvideo", l10n: "main-context-menu-video-view-new-tab", when: "viewVideo", runs: "chrome", group: "media-view" },
+  { id: "context-reloadimage", l10n: "main-context-menu-image-reload", when: "reloadImage", runs: "chrome", group: "image" },
+  { id: "context-viewimage", l10n: "main-context-menu-image-view-new-tab", when: "viewImage", runs: "chrome", group: "image" },
+  { id: "context-saveimage", l10n: "main-context-menu-image-save-as", when: "saveImage", runs: "chrome", group: "image" },
+  { id: "context-savevideo", l10n: "main-context-menu-video-save-as", when: "saveVideo", runs: "chrome", group: "image" },
+  { id: "context-saveaudio", l10n: "main-context-menu-audio-save-as", when: "saveAudio", runs: "chrome", group: "image" },
+  { id: "context-copyimage-contents", l10n: "main-context-menu-image-copy", when: "copyImageContents", runs: "frontend", group: "image" },
+  { id: "context-copyimage", l10n: "main-context-menu-image-copy-link", when: "copyImage", runs: "chrome", group: "image" },
+  { id: "context-copyvideourl", l10n: "main-context-menu-video-copy-link", when: "onVideo", off: "noMediaURL", runs: "chrome", group: "image" },
+  { id: "context-copyaudiourl", l10n: "main-context-menu-audio-copy-link", when: "onAudio", off: "noMediaURL", runs: "chrome", group: "image" },
+  { id: "context-viewimagedesc", l10n: "main-context-menu-image-desc", when: "viewImageDesc", runs: "chrome", group: "image" },
+  { id: "context-savepage", l10n: "main-context-menu-page-save", when: "savePage", runs: "frontend", group: "page" },
+  { id: "context-undo", l10n: "text-action-undo", when: "onTextInput", off: "cmdUndoOff", runs: "frontend", group: "undo" },
+  { id: "context-redo", l10n: "text-action-redo", when: "onTextInput", off: "cmdRedoOff", runs: "frontend", group: "undo" },
+  { id: "context-cut", l10n: "text-action-cut", when: "onTextInput", off: "cmdCutOff", runs: "frontend", group: "edit" },
+  { id: "context-copy", l10n: "text-action-copy", when: "copy", off: "cmdCopyOff", runs: "frontend", group: "edit" },
+  { id: "context-paste", l10n: "text-action-paste", when: "onTextInput", off: "cmdPasteOff", runs: "frontend", group: "edit" },
+  { id: "context-delete", l10n: "text-action-delete", when: "onTextInput", off: "cmdDeleteOff", runs: "frontend", group: "edit" },
+  { id: "context-selectall", l10n: "text-action-select-all", when: "selectAll", off: "cmdSelectAllOff", runs: "frontend", group: "edit" },
+  { id: "context-searchselect", bundle: "contextMenuSearch", when: "search", runs: "chrome", group: "search" },
+  { id: "frame", l10n: "main-context-menu-frame", when: "inFrame", group: "frame", children: [
+    { id: "context-showonlythisframe", l10n: "main-context-menu-frame-show-this", when: "frameTarget", runs: "chrome", group: "frame-open" },
+    { id: "context-openframeintab", l10n: "main-context-menu-frame-open-tab", when: "frameTarget", runs: "chrome", group: "frame-open" },
+    { id: "context-reloadframe", l10n: "main-context-menu-frame-reload", when: "always", runs: "chrome", group: "frame-reload" },
+    { id: "context-viewframesource", l10n: "main-context-menu-frame-view-source", when: "frameSource", runs: "chrome", group: "frame-source" },
+  ] },
+  { id: "spell-check-enabled", l10n: "text-action-spell-check-toggle", when: "canSpell", on: "spellEnabled", runs: "chrome", group: "spell-check" },
+  { id: "context-viewsource", l10n: "main-context-menu-view-page-source", when: "viewSource", runs: "frontend", group: "inspect" },
+  { id: "context-inspect-a11y", l10n: "main-context-menu-inspect-a11y-properties", when: "inspectA11y", runs: "chrome", group: "inspect" },
+  { id: "context-inspect", l10n: "main-context-menu-inspect", when: "inspect", runs: "chrome", group: "inspect" },
+  { dynamic: "extension-entry", when: "extensionEntries", runs: "chrome", group: "extension" },
+]);
+
+// Upstream's show, disable and check conditions (nsContextMenu.sys.mjs), read
+// over the captured context plus the facts pageMenuFacts adds. A target the
+// shell cannot open (not http(s)) omits its open row, except a link, which gets
+// the refusal row (UI-SPEC).
+const pageMenuOnMedia = f => !!(f.onVideo || f.onAudio);
+const pageMenuNavigation = f => !(f.selected || f.onLink || f.onImage || f.onCanvas || f.onVideo || f.onAudio || f.onTextInput); // :548-557
+const pageMenuRate = rate => f => f.target?.playbackRate === rate;
+const pageMenuCommandOff = cmd => f => !f.commands[cmd]; // the page's own command state, as goUpdateGlobalEditMenuItems reads it
+const PAGE_MENU_WHEN = Object.freeze({
+  always: () => true,
+  navigation: pageMenuNavigation,
+  reload: f => pageMenuNavigation(f) && !f.loading, // :570-583
+  stop: f => pageMenuNavigation(f) && f.loading,
+  openLink: f => f.onLink && !f.onMailtoLink && !f.onTelLink,
+  linkNotWeb: f => !f.webLink,
+  mailtoLink: f => !!f.onMailtoLink, // :1028
+  copyLink: f => f.onLink && !f.onMailtoLink && !f.onTelLink, // :1033-1037
+  stripOnShare: f => f.stripOnShareEnabled && f.onLink && !f.onMailtoLink && !f.onTelLink && !f.onMozExtLink, // :1040-1049
+  cannotStrip: f => !f.canStrip,
+  onMedia: pageMenuOnMedia,
+  onVideo: f => !!f.onVideo,
+  onAudio: f => !!f.onAudio,
+  mediaPlay: f => pageMenuOnMedia(f) && !!(f.target?.paused || f.target?.ended), // :1066-1075
+  mediaPause: f => pageMenuOnMedia(f) && !f.target?.paused && !f.target?.ended,
+  mediaMute: f => pageMenuOnMedia(f) && !f.target?.muted,
+  mediaUnmute: f => pageMenuOnMedia(f) && !!f.target?.muted,
+  mediaRate: f => pageMenuOnMedia(f) && f.target?.duration !== Number.POSITIVE_INFINITY,
+  mediaLoops: f => !!f.target?.loop,
+  mediaHideControls: f => !!f.target?.controls && !!(f.onVideo || (f.onAudio && !f.inSyntheticDoc)),
+  mediaShowControls: f => pageMenuOnMedia(f) && !f.target?.controls,
+  videoFullscreen: f => !!f.onVideo && !f.target?.ownerDocument?.fullscreen, // :1092-1095
+  mediaError: f => f.target?.error != null || f.target?.networkState === f.target?.NETWORK_NO_SOURCE, // :1137-1139
+  rate050: pageMenuRate(0.5),
+  rate100: pageMenuRate(1),
+  rate125: pageMenuRate(1.25),
+  rate150: pageMenuRate(1.5),
+  rate200: pageMenuRate(2),
+  noMediaURL: f => !f.mediaURL,
+  viewVideo: f => f.onVideo && (!f.inSyntheticDoc || f.inFrame) && f.webMedia, // :862-866
+  reloadImage: f => f.onImage && !f.onCompletedImage && f.webMedia, // :693-696
+  viewImage: f => ((f.onImage && (!f.inSyntheticDoc || f.inFrame) && !f.inPDFViewer) || f.showBGImage) && f.webMedia, // :702-727
+  copyImage: f => !!(f.onImage || f.showBGImage), // :751
+  viewImageDesc: f => f.onImage && f.webImageDesc, // :778-781
+  search: f => f.search !== null,
+  inFrame: f => !!f.inFrame, // :897
+  frameTarget: f => !f.inSrcdocFrame && f.webFrame, // :921-922
+  bookmarkPage: f => !(f.contentSelected || f.onTextInput || f.onLink || f.onImage || f.onVideo || f.onAudio || f.onCanvas), // :872-886
+  spellNoSuggestions: f => f.onMisspelling && !f.spellSuggestions.length, // :965-978
+  spellSuggestions: f => f.onMisspelling && f.spellSuggestions.length > 0,
+  onMisspelling: f => f.onMisspelling,
+  spellUndo: f => f.canSpell && f.spellUndo,
+  canSpell: f => f.canSpell,
+  spellEnabled: f => f.canSpell && f.spellEnabled,
+  saveLink: f => f.onSaveableLink && f.webLink, // :637-640, a link the shell can fetch
+  saveImage: f => f.onLoadedImage && f.webMedia, // :730-734 (a canvas has no URL to save)
+  saveVideo: f => f.onVideo && f.webMedia, // :653-657
+  saveAudio: f => f.onAudio && f.webMedia,
+  copyImageContents: f => !!(f.onImage || f.onCanvas), // :748
+  savePage: f => !(f.onTextInput || f.onLink || f.contentSelected || f.onImage || f.onCanvas || f.onVideo || f.onAudio), // :625-634
+  onTextInput: f => !!f.onTextInput, // :1004-1010
+  copy: f => !!(f.contentSelected || f.onTextInput),
+  selectAll: f => !(f.onLink || f.onImage || f.onVideo || f.onAudio || f.inSyntheticDoc) || !!f.isDesignMode,
+  cmdUndoOff: pageMenuCommandOff("cmd_undo"),
+  cmdRedoOff: pageMenuCommandOff("cmd_redo"),
+  cmdCutOff: pageMenuCommandOff("cmd_cut"),
+  cmdCopyOff: pageMenuCommandOff("cmd_copy"),
+  cmdPasteOff: pageMenuCommandOff("cmd_paste"),
+  cmdDeleteOff: pageMenuCommandOff("cmd_delete"),
+  cmdSelectAllOff: pageMenuCommandOff("cmd_selectAll"),
+  frameSource: f => f.frameSource, // :927-931
+  viewSource: f => f.viewableTop && !(f.contentSelected || f.onImage || f.onCanvas || f.onVideo || f.onAudio || f.onLink || f.onTextInput), // :830-839
+  inspect: f => f.showInspect, // :842-846
+  inspectA11y: f => f.showInspect && f.showInspectA11y, // :848-855
+  extensionEntries: f => f.extensionEntries.length > 0, // D-16: what ext-menus built into the stub, after the stock rows
+});
+
+const PAGE_MENU_TTL_MS = 60000;
+const OPEN_GRANT_TTL_MS = 5000;
+const OPEN_GRANT_RE = /^g-[0-9]{1,9}$/;
+const PAGE_MENU_RATES = Object.freeze({ "050x": 0.5, "100x": 1, "125x": 1.25, "150x": 1.5, "200x": 2 });
+const pageMenus = new WeakMap(); // shell window -> { captured, kept, pending, nextMenuId, grants, nextGrant }
+const pageMenuLabelCache = new Map();
+let pageMenuStrings = null;
+let pageMenuBundle = null;
+
+function pageMenuState(window) {
+  let state = pageMenus.get(window);
+  if (!state) {
+    state = { captured: null, kept: false, pending: null, nextMenuId: 0, grants: new Map(), nextGrant: 0 };
+    pageMenus.set(window, state);
+  }
+  return state;
+}
+
+const pageMenuFlatRows = (rows = PAGE_MENU_ROWS) => rows.flatMap(row => [row, ...(row.children ? pageMenuFlatRows(row.children) : [])]);
+const pageMenuWeb = url => typeof url === "string" && /^https?:\/\//i.test(url);
+
+// The query-string stripper upstream's Copy Clean Link uses (nsContextMenu.sys.mjs:2405-2445).
+function pageMenuStripper() {
+  return Cc["@mozilla.org/url-query-string-stripper;1"].getService(Ci.nsIURLQueryStringStripper);
+}
+
+// The context fields ContextMenuChild sent, plus what the parent knows: the
+// selection, whether the tab loads, the http(s) wall per target, and the bar
+// engine's submission for the search row.
+async function pageMenuFacts(data) {
+  const context = data.context;
+  const selectedText = data.selectionInfo?.text ?? "";
+  const mediaURL = context.mediaURL || context.bgImageURL || "";
+  const facts = {
+    ...context,
+    selected: !!selectedText,
+    mediaURL,
+    loading: !!data.browser.webProgress?.isLoadingDocument,
+    showBGImage: !!(context.hasBGImage && !context.hasMultipleBGImages && !context.inSyntheticDoc && !context.inPDFViewer && !selectedText && !context.onImage && !context.onCanvas && !context.onVideo && !context.onAudio && !context.onLink && !context.onTextInput),
+    webLink: pageMenuWeb(context.linkURL),
+    webMedia: pageMenuWeb(mediaURL),
+    webImageDesc: pageMenuWeb(context.imageDescURL),
+    webFrame: pageMenuWeb(data.docLocation),
+    stripOnShareEnabled: Services.prefs.getBoolPref("privacy.query_stripping.strip_on_share.enabled", false),
+    canStrip: false,
+    search: null,
+    searchLabel: "",
+    ...pageToolFacts(data),
+  };
+  if (facts.stripOnShareEnabled && facts.webLink) {
+    try {
+      facts.canStrip = pageMenuStripper().canStripForShare(Services.io.newURI(context.linkURL));
+    } catch {}
+  }
+  // showAndFormatSearchContextItem (:2750-2810): the selection, else the link
+  // text, searched with the bar's engine; a refused submission omits the row.
+  const terms = selectedText || (context.onLink ? context.linkTextStr || "" : "");
+  if (terms && (selectedText || context.onLink) && !context.onImage) {
+    const engine = await barEngine(null);
+    const submission = engine ? engineSearch(engine, terms) : { kind: "refused" };
+    if (submission.kind === "search") {
+      let shown = terms;
+      if (shown.length > 15) {
+        const trail = shown.charCodeAt(15);
+        shown = shown.substr(0, trail >= 0xdc00 && trail <= 0xdfff ? 16 : 15) + Services.locale.ellipsis;
+      }
+      pageMenuBundle ??= Services.strings.createBundle("chrome://browser/locale/browser.properties");
+      facts.search = { url: submission.url };
+      facts.searchLabel = pageMenuBundle.formatStringFromName("contextMenuSearch", [submission.engineName, shown]);
+    }
+  }
+  return facts;
+}
+
+// Firefox's own strings, formatted once per id: the label attribute, or the
+// aria-label of the Linux navigation group that upstream draws as icon buttons.
+async function pageMenuFormatLabels(rows) {
+  const missing = [...new Set(rows.filter(row => row.l10n && !pageMenuLabelCache.has(row.l10n)).map(row => row.l10n))];
+  if (!missing.length) {
+    return;
+  }
+  pageMenuStrings ??= new Localization(["browser/browserContext.ftl", "toolkit/global/textActions.ftl", "branding/brand.ftl"]);
+  const messages = await pageMenuStrings.formatMessages(missing.map(id => ({ id, args: { shortcut: "" } })));
+  missing.forEach((id, i) => {
+    const attrs = new Map((messages[i]?.attributes ?? []).map(attr => [attr.name, attr.value]));
+    pageMenuLabelCache.set(id, attrs.get("label") ?? attrs.get("aria-label") ?? messages[i]?.value ?? "");
+  });
+}
+
+// Rows whose condition holds, as push items (labels, never a URL). Enabled leaf
+// rows go into `offered`, the only ids a pick may name. A refused row is
+// disabled, unlabelled (the frontend labels it from CHROME_BAR_COPY) and never offered.
+function pageMenuItems(rows, facts, offered) {
+  const items = [];
+  for (const row of rows) {
+    if (!PAGE_MENU_WHEN[row.when](facts)) {
+      continue;
+    }
+    if (row.dynamic) {
+      for (const [i, label] of PAGE_MENU_DYNAMIC[row.dynamic](facts).entries()) {
+        if (typeof label !== "string") {
+          items.push(label); // an extension entry, built and offered by pageMenuExtensionItems
+          continue;
+        }
+        items.push({ id: `${row.dynamic}-${i}`, label, enabled: true, group: row.group });
+        offered.add(`${row.dynamic}-${i}`);
+      }
+      continue;
+    }
+    const refused = !!(row.refuse && PAGE_MENU_WHEN[row.refuse](facts));
+    const label = refused ? "" : row.bundle ? facts.searchLabel : pageMenuLabelCache.get(row.l10n) ?? "";
+    const item = { id: row.id, label, enabled: !refused && !(row.off && PAGE_MENU_WHEN[row.off](facts)), group: row.group };
+    if (refused) {
+      item.refused = true;
+    }
+    if (row.on) {
+      item.checked = !!PAGE_MENU_WHEN[row.on](facts);
+    }
+    if (row.children) {
+      item.children = pageMenuItems(row.children, facts, offered);
+      if (!item.children.length) {
+        continue;
+      }
+    } else if (item.enabled) {
+      offered.add(row.id);
+    }
+    items.push(item);
+  }
+  return items;
+}
+
+function installPageContextMenu(window) {
+  const document = window.document;
+  const theiaBrowser = window.powerbrowserGetBrowser();
+  const state = pageMenuState(window);
+  // T-35-11: only a visible overlay's capture is kept. The actor reads
+  // contentData.context right after writing it (ContextMenuParent.sys.mjs:219),
+  // so the getter returns what was written either way.
+  window.nsContextMenu = {
+    get contentData() {
+      return state.captured;
+    },
+    set contentData(data) {
+      state.captured = data;
+      // D-19 (35-07): no capture during element fullscreen; a Theia menu cannot draw over the fullscreen top layer.
+      state.kept = !document.fullscreenElement && tabIdOfBrowser(data?.browser) !== null && data.browser.style.visibility === "visible";
+    },
+  };
+  document.getElementById("contentAreaContextMenu").addEventListener(
+    "popupshowing",
+    event => {
+      event.preventDefault(); // the native popup never opens
+      const { captured: data, kept } = state;
+      state.captured = null;
+      state.kept = false;
+      if (!data) {
+        return;
+      }
+      if (!kept) {
+        data.actor.hiding();
+        return;
+      }
+      openPageMenu(window, theiaBrowser, state, data).catch(err => {
+        PowerBrowserAPI.log("error", `[web-tab] pageContextMenu failed: ${err && err.message ? err.message : err}`);
+        pageMenuClose(data);
+      });
+    },
+    true
+  );
+}
+
+async function openPageMenu(window, theiaBrowser, state, data) {
+  const tabId = tabIdOfBrowser(data.browser);
+  const menuId = ++state.nextMenuId;
+  if (state.pending) {
+    pageMenuClose(state.pending.data);
+  }
+  const pending = { menuId, tabId, data, facts: null, offered: new Set(), extensionItems: new Map(), at: Date.now() };
+  state.pending = pending;
+  const still = pageMenuStill(window, data.browser); // D-08: raced against its deadline from here, beside the facts
+  const [facts] = await Promise.all([pageMenuFacts(data), pageMenuFormatLabels(pageMenuFlatRows())]);
+  if (state.pending !== pending) {
+    return; // a newer right-click replaced this one while the strings formatted
+  }
+  pending.facts = facts;
+  facts.extensionEntries = pageMenuExtensionEntries(window, data, facts, pending);
+  const items = pageMenuItems(PAGE_MENU_ROWS, facts, pending.offered);
+  if (!items.length) {
+    state.pending = null;
+    pageMenuClose(data);
+    return;
+  }
+  // Theia-frame client pixels from the device-pixel screen point the child sent.
+  const frame = theiaBrowser.getBoundingClientRect();
+  const x = data.context.screenXDevPx / window.devicePixelRatio - window.mozInnerScreenX - frame.left;
+  const y = data.context.screenYDevPx / window.devicePixelRatio - window.mozInnerScreenY - frame.top;
+  const dataUrl = await still;
+  if (state.pending !== pending) {
+    return; // a newer right-click closed this menu while the still was racing
+  }
+  if (dataUrl) {
+    sendWebTabPush(theiaBrowser, { kind: "pageStill", tabId, menuId, dataUrl });
+  }
+  theiaBrowser.focus();
+  sendWebTabPush(theiaBrowser, { kind: "pageContextMenu", tabId, menuId, x, y, items });
+}
+
+// T-35-09: the payload names the tab, the menu and the row. The menu is single
+// use and at most a minute old, the row must be one this menu offered, and the
+// reply never echoes a URL except a grant's chrome-derived target. Logs carry
+// the kind and the error text only.
+async function handlePageMenuAction(data, actorRef) {
+  const kind = data.kind;
+  if (!webTabIdIsValid(data.tabId)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
+  }
+  if (!Number.isSafeInteger(data.menuId) || (data.itemId !== null && typeof data.itemId !== "string")) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed page menu pick" };
+  }
+  const state = pageMenuState(actorRef.browsingContext.top.embedderElement.ownerGlobal);
+  const pending = state.pending;
+  if (!pending || pending.menuId !== data.menuId || pending.tabId !== data.tabId) {
+    return { ok: true, kind, where: "stale" };
+  }
+  state.pending = null;
+  try {
+    if (Date.now() - pending.at > PAGE_MENU_TTL_MS) {
+      return { ok: true, kind, where: "stale" };
+    }
+    if (data.itemId === null) {
+      return { ok: true, kind, where: "dismissed" };
+    }
+    if (pending.savePick !== undefined || data.path !== undefined) {
+      // T-35-14: a path answers only this menu's pending save pick; the target stays the captured URL.
+      if (pending.savePick !== data.itemId || !pageMenuSavePathOk(data.path)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a save path this menu did not ask for" };
+      }
+      return { ok: true, kind, ...(await pageMenuSave(pending, data.path)) };
+    }
+    if (!pending.offered.has(data.itemId)) {
+      return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a row this menu did not offer" };
+    }
+    const row = pageMenuRowOf(data.itemId);
+    if (row.runs === "frontend") {
+      return { ok: true, kind, where: "frontend" };
+    }
+    const result = await runPageMenuRow(row.id ?? row.dynamic, pending, state, data.itemId);
+    if (result.where === "save-pick") {
+      pending.savePick = data.itemId; // kept for the one path reply (T-35-14)
+      state.pending = pending;
+    }
+    return { ok: true, kind, ...result };
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[web-tab] ${kind} failed: ${err && err.message ? err.message : err}`);
+    return { ok: false, reason: "failed", message: "handleWebTabAction: the page menu row failed" };
+  } finally {
+    pageMenuClose(pending.data);
+  }
+}
+
+// The chrome-run rows: browser-context.js's arms and the menu-class methods they call.
+async function runPageMenuRow(id, pending, state, itemId) {
+  const { data, facts } = pending;
+  const context = data.context;
+  const actor = data.actor;
+  switch (id) {
+    case "context-openlinkintab": // upstream open-link-in-tab and its load parameters (:1438-1471, :1530-1541)
+      return openGrant(state, data.principal, context.linkURL, pageMenuLoad(data, data.linkReferrerInfo), "browser.tabs.loadInBackground");
+    case "context-copyemail": // copyEmail (:2222-2240)
+      copyFromPage(data, pageMenuEmailAddresses(context.linkURL));
+      return { where: "done" };
+    case "context-copylink": // copyLink (:2267-2274)
+      copyFromPage(data, context.linkURL.replace(/^view-source:/, ""));
+      return { where: "done" };
+    case "context-stripOnShareLink": { // copyStrippedLink (:2287-2297, :2415-2430)
+      const uri = Services.io.newURI(context.linkURL);
+      const spec = Services.io.createExposableURI(pageMenuStripper().stripForCopyOrShare(uri) ?? uri)?.displaySpec;
+      if (spec) {
+        copyFromPage(data, spec);
+      }
+      return { where: "done" };
+    }
+    case "context-media-play":
+    case "context-media-pause":
+    case "context-media-mute":
+    case "context-media-unmute":
+    case "context-media-loop":
+    case "context-media-hidecontrols":
+    case "context-media-showcontrols": // mediaCommand (ContextMenuParent.sys.mjs:100-112)
+      actor.mediaCommand(context.targetIdentifier, id.slice("context-media-".length));
+      return { where: "done" };
+    case "context-media-playbackrate-050x":
+    case "context-media-playbackrate-100x":
+    case "context-media-playbackrate-125x":
+    case "context-media-playbackrate-150x":
+    case "context-media-playbackrate-200x":
+      actor.mediaCommand(context.targetIdentifier, "playbackRate", PAGE_MENU_RATES[id.slice(-4)]);
+      return { where: "done" };
+    case "context-video-fullscreen": // browser-context.js:112-113; the pick is the user's click on the row, carried as user input so the page's requestFullscreen is allowed
+      furnitureLazy.E10SUtils.wrapHandlingUserInput(data.browser.ownerGlobal, true, () => actor.mediaCommand(context.targetIdentifier, "fullscreen"));
+      return { where: "done" };
+    case "context-viewvideo":
+    case "context-viewimage": // viewMedia (:1744-1778)
+      return openGrant(state, data.principal, facts.mediaURL, pageMenuLoad(data, data.referrerInfo), "browser.tabs.loadInBackground");
+    case "context-reloadimage": // reloadImage (:1715-1722)
+      if (!pageMenuTargetAllowed(data.principal, facts.mediaURL)) {
+        return { where: "refused" };
+      }
+      actor.reloadImage(context.targetIdentifier);
+      return { where: "done" };
+    case "context-copyimage":
+    case "context-copyvideourl":
+    case "context-copyaudiourl": // copyMediaLocation (:2574-2579)
+      copyFromPage(data, context.originalMediaURL || facts.mediaURL);
+      return { where: "done" };
+    case "context-viewimagedesc": // viewImageDesc (:1691-1702)
+      return openGrant(state, data.principal, context.imageDescURL, pageMenuLoad(data, data.referrerInfo), "browser.tabs.loadInBackground");
+    case "context-searchselect": // loadSearch with the bar engine; no referrer
+      return openGrant(state, data.principal, facts.search.url, pageMenuLoad(data, undefined), "browser.search.context.loadInBackground");
+    case "context-showonlythisframe": // showOnlyThisFrame (:1602-1612), through this tab's own navigate
+      if (!pageMenuTargetAllowed(data.browser.contentPrincipal, data.docLocation)) {
+        return { where: "refused" };
+      }
+      return { where: PowerBrowserAPI.webTabNavigate(pending.tabId, data.docLocation, { grant: pageMenuFrameLoad(data) }) };
+    case "context-openframeintab": // openFrameInTab (:1576-1583)
+      return openGrant(state, data.browser.contentPrincipal, data.docLocation, pageMenuFrameLoad(data), "browser.tabs.loadInBackground");
+    case "context-reloadframe": // reloadFrame (:1586-1589), never forced
+      actor.reloadFrame(context.targetIdentifier, false);
+      return { where: "done" };
+    case "context-viewframesource": // viewFrameSource (:1663-1670) through the 32-07 view-source function, with the frame's own document
+      return { where: webTabViewSourceReply("webTabViewSource", pending.tabId, false, data.docLocation).where ?? "refused" };
+    case "context-savelink":
+    case "context-saveimage":
+    case "context-savevideo":
+    case "context-saveaudio": // saveLink / saveMedia (:2104-2160): the captured target; the path comes from Theia's save dialog
+      return pageMenuSavePick(id, pending);
+    case "spell-suggestion": // replaceMisspelling (InlineSpellChecker.sys.mjs:350-363)
+      return pageMenuSpell(state, data, spell => spell.replaceMisspelling(facts.spellSuggestions[Number(itemId.slice("spell-suggestion-".length))]));
+    case "spell-add-to-dictionary":
+      return pageMenuSpell(state, data, spell => spell.addToDictionary());
+    case "spell-undo-add-to-dictionary":
+      return pageMenuSpell(state, data, spell => spell.undoAddToDictionary());
+    case "spell-check-enabled":
+      return pageMenuSpell(state, data, spell => spell.toggleEnabled());
+    case "context-inspect-a11y":
+    case "context-inspect": // inspectA11Y / inspectNode (:1424-1436), on the toolbox the 32-07 devtools route opened (D-13)
+      return pageMenuInspect(id, pending);
+    case "extension-entry": // ext-menus listens for command on each item it built (ext-menus.js:385-440)
+      pending.extensionItems.get(itemId).doCommand();
+      return { where: "done" };
+    default:
+      throw new Error(`no dispatcher arm for ${id}`);
+  }
+}
+
+// The address list of a mailto link, unescaped for display (copyEmail).
+function pageMenuEmailAddresses(url) {
+  const qmark = url.indexOf("?");
+  const addresses = qmark > 7 ? url.substring(7, qmark) : url.substr(7);
+  try {
+    return Services.textToSubURI.unEscapeURIForUI(addresses);
+  } catch {
+    return addresses;
+  }
+}
+
+// The load a page-chosen target gets (the _openLinkInParameters shape): the
+// page's principal, policy container and process, and the referrer given.
+function pageMenuLoad(data, referrerInfo) {
+  return {
+    triggeringPrincipal: data.principal,
+    policyContainer: furnitureLazy.E10SUtils.deserializePolicyContainer(data.context.policyContainer),
+    triggeringRemoteType: data.actor.manager.domProcess.remoteType,
+    ...(referrerInfo ? { referrerInfo } : {}),
+  };
+}
+
+// A frame document opened on its own, as openFrameInTab and showOnlyThisFrame load it.
+function pageMenuFrameLoad(data) {
+  return { triggeringPrincipal: data.browser.contentPrincipal, policyContainer: data.browser.policyContainer, referrerInfo: data.frameReferrerInfo };
+}
+
+// T-35-10: the http(s) wall, then the page's own permission to load the target.
+function pageMenuTargetAllowed(principal, url) {
+  if (!pageMenuWeb(url)) {
+    return false;
+  }
+  try {
+    Services.scriptSecurityManager.checkLoadURIStrWithPrincipal(principal, url, Ci.nsIScriptSecurityManager.DISALLOW_INHERIT_PRINCIPAL);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// D-06: a one-time grant for a new tab, minted only after the wall. webTabOpen
+// consumes it (takeOpenGrant) for that exact URL within 5 s; any other open keeps
+// the null-principal load. The reply's url is the chrome-derived target.
+function openGrant(state, principal, url, load, backgroundPref) {
+  if (!pageMenuTargetAllowed(principal, url)) {
+    return { where: "refused" };
+  }
+  const now = Date.now();
+  for (const [id, grant] of state.grants) {
+    if (now - grant.at >= OPEN_GRANT_TTL_MS) {
+      state.grants.delete(id);
+    }
+  }
+  const grantId = `g-${++state.nextGrant}`;
+  state.grants.set(grantId, { url, load, at: now });
+  return { where: "grant", grantId, url, background: Services.prefs.getBoolPref(backgroundPref, true) };
+}
+
+// Called from webTabOpen: the grant's load options when `grantId` names an unused
+// grant of this window for exactly `spec` that is under 5 s old, else null. A
+// presented grant is spent whether or not it matched.
+function takeOpenGrant(window, grantId, spec) {
+  const grants = pageMenus.get(window)?.grants;
+  const grant = grantId === undefined ? undefined : grants?.get(grantId);
+  if (!grant) {
+    return null;
+  }
+  grants.delete(grantId);
+  return grant.url === spec && Date.now() - grant.at < OPEN_GRANT_TTL_MS ? grant.load : null;
+}
+
+// T-35-13: written only on an explicit pick of a copy row.
+function copyFromPage(data, text) {
+  Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString(text, data.frameBrowsingContext.currentWindowGlobal);
+}
+
+// 35-04: the page-tool rows. Each one calls the mechanism an earlier plan built
+// (Phase 32's devtools, edit, view-source and save routes); none is a second path.
+
+// Inspect's conditions (nsContextMenu.sys.mjs:842-855). The overlay's tab-host node is inTabBrowser.
+function pageToolFacts(data) {
+  const showInspect = !!tabHostNodeOf(data.browser) && Services.prefs.getBoolPref("devtools.inspector.enabled", true) && !Services.prefs.getBoolPref("devtools.policy.disabled", false);
+  const a11yPrefs = Services.prefs.getBoolPref("devtools.accessibility.enabled", false) && Services.prefs.getBoolPref("devtools.enabled", true);
+  return {
+    showInspect,
+    showInspectA11y: showInspect && a11yPrefs && (Services.prefs.getBoolPref("devtools.everOpened", false) || webTabDevToolsShim().isDevToolsUser()),
+    ...pageEditFacts(data),
+  };
+}
+
+// 35-04 continued: the edit, save, view-source and spelling facts.
+const pageToolsLazy = {};
+ChromeUtils.defineESModuleGetters(pageToolsLazy, {
+  BrowserUtils: "resource://gre/modules/BrowserUtils.sys.mjs",
+  DownloadPaths: "resource://gre/modules/DownloadPaths.sys.mjs",
+  InlineSpellChecker: "resource://gre/modules/InlineSpellChecker.sys.mjs",
+});
+
+// Rows with no upstream id: one row per label (D-12). Spelling suggestions are dictionary words, rendered verbatim.
+const PAGE_MENU_DYNAMIC = Object.freeze({
+  "spell-suggestion": f => f.spellSuggestions,
+  "extension-entry": f => f.extensionEntries, // built items (35-05): their labels and ids come from the stub
+});
+
+const pageMenuRowOf = itemId => pageMenuFlatRows().find(row => row.id === itemId || (row.dynamic && itemId.startsWith(`${row.dynamic}-`)));
+
+// The edit rows read the page's own command state from the overlay's top window
+// global (ControllersParent.sys.mjs:34-43); the spelling rows read the spellInfo
+// ContextMenuChild sent (:736-743) and this window's undo stack (initSpellingItems).
+function pageEditFacts(data) {
+  const controller = data.browser.browsingContext?.currentWindowGlobal?.getActor("Controllers");
+  const spellInfo = data.spellInfo;
+  const canSpell = !!(spellInfo?.canSpellCheck && !spellInfo.initialSpellCheckPending && data.context.canSpellCheck);
+  return {
+    contentSelected: data.selectionInfo ? !data.selectionInfo.docSelectionIsCollapsed : false,
+    commands: Object.fromEntries(WEB_TAB_EDIT_CMDS.map(cmd => [cmd, controller?.isCommandEnabled(cmd) === true])),
+    viewableTop: /^(https?|file):/i.test(data.browser.currentURI?.spec ?? ""),
+    frameSource: /^(https?|file):/i.test(data.docLocation ?? "") && pageToolsLazy.BrowserUtils.mimeTypeIsTextBased(data.contentType ?? ""),
+    canSpell,
+    onMisspelling: !!spellInfo?.overMisspelling,
+    spellSuggestions: spellInfo?.overMisspelling && Array.isArray(spellInfo.spellSuggestions) ? spellInfo.spellSuggestions : [],
+    spellEnabled: !!spellInfo?.enableRealTimeSpell,
+    spellUndo: !!pageMenus.get(data.browser.ownerGlobal)?.spell?.canUndo(),
+  };
+}
+
+// The window's one spell checker (browser.js's InlineSpellCheckerUI), bound to
+// this right-click's remote spell info for the one action, then released as
+// upstream releases it when the popup hides (nsContextMenu.sys.mjs:349-351).
+function pageMenuSpell(state, data, act) {
+  state.spell ??= new pageToolsLazy.InlineSpellChecker();
+  state.spell.initFromRemote(data.spellInfo, data.actor.manager);
+  try {
+    act(state.spell);
+  } finally {
+    state.spell.uninit();
+  }
+  return { where: "done" };
+}
+
+// Save step one: the target is the captured URL behind the http(s) wall; the
+// reply proposes a file name and the frontend shows Theia's save dialog. The
+// referrer is the one upstream's saveLink and saveMedia choose (:2104-2160).
+function pageMenuSavePick(id, pending) {
+  const { data, facts } = pending;
+  const link = id === "context-savelink";
+  const url = link ? data.context.linkURL : facts.mediaURL;
+  if (!pageMenuTargetAllowed(data.principal, url)) {
+    return { where: "refused" };
+  }
+  pending.save = { url, referrerInfo: link && data.context.onLink ? data.linkReferrerInfo : data.referrerInfo };
+  let name = "";
+  try {
+    name = pageToolsLazy.DownloadPaths.sanitize(decodeURIComponent(new URL(url).pathname.split("/").pop()));
+  } catch {}
+  return { where: "save-pick", suggestedName: name || "download" };
+}
+
+// The path is the only frontend value: absolute, bounded, a string.
+function pageMenuSavePathOk(path) {
+  return typeof path === "string" && path.length > 0 && path.length <= 4096 && PathUtils.isAbsolute(path);
+}
+
+// Save step two: a Downloads download of the captured target with the page's
+// referrer, principal and cookie jar, added to the public list Phase 32's
+// downloads panel reads, so no save is silent (T-35-15).
+async function pageMenuSave(pending, path) {
+  const { Downloads } = downloadsLazy;
+  const { url, referrerInfo } = pending.save;
+  const download = await Downloads.createDownload({
+    source: { url, referrerInfo, loadingPrincipal: pending.data.principal, cookieJarSettings: pending.data.cookieJarSettings, isPrivate: false },
+    target: path,
+  });
+  await (await Downloads.getList(Downloads.PUBLIC)).add(download);
+  download.start().catch(() => {}); // a failed transfer is the panel's failed row with Retry (32-04)
+  return { where: "saved" };
+}
+
+// D-13: open the overlay's toolbox through the webTabDevtools function and wait
+// for it, so gDevTools.inspectNode finds it open and selects the node there
+// (devtools.js:883-920) instead of opening a docked toolbox the shell cannot host.
+async function pageMenuInspect(id, pending) {
+  const opened = webTabDevtoolsReply("webTabDevtools", pending.tabId);
+  const toolbox = opened.ok ? await webTabs.get(pending.tabId)?.toolboxOpening : null;
+  if (!toolbox) {
+    return { where: "refused" };
+  }
+  const DevToolsShim = webTabDevToolsShim();
+  const tab = tabHostNodeOf(pending.data.browser);
+  const target = pending.data.context.targetIdentifier;
+  (id === "context-inspect" ? DevToolsShim.inspectNode(tab, target) : DevToolsShim.inspectA11Y(tab, target)).catch(err => {
+    PowerBrowserAPI.log("error", `[web-tab] inspect failed (${err && err.name ? err.name : "error"})`);
+  });
+  return { where: "done" };
+}
+
+// 35-05 (D-16, EXT-08): extension entries. Upstream's nsContextMenu constructor
+// notifies on-build-contextmenu with this subject (nsContextMenu.sys.mjs:147-180)
+// and ext-menus builds each extension's menus entries into subject.menu
+// (ext-menus.js:51-60, 1046-1050), appended after a separator (:188-201). Here
+// subject.menu is the #contentAreaContextMenu stub, which never opens, and each
+// field is derived from the captured data as setContext derives it (:196-305).
+// verify-shell-furniture.mjs rule 8 compares this literal's keys with upstream's.
+function pageMenuExtensionEntries(window, data, facts, pending) {
+  const context = data.context;
+  const stub = window.document.getElementById("contentAreaContextMenu");
+  let linkURI = null;
+  try {
+    linkURI = Services.io.newURI(context.linkURL);
+  } catch {} // e.g. an empty URL string (getLinkURI, :2398-2406)
+  const subject = {
+    menu: stub,
+    tab: window.gBrowser?.getTabForBrowser(data.browser),
+    timeStamp: context.timeStamp,
+    isContentSelected: facts.contentSelected,
+    inFrame: context.inFrame,
+    isTextSelected: facts.selected,
+    onTextInput: context.onTextInput,
+    onLink: context.onLink,
+    onImage: context.onImage,
+    onVideo: context.onVideo,
+    onAudio: context.onAudio,
+    onCanvas: context.onCanvas,
+    onEditable: context.onEditable,
+    onSpellcheckable: context.onSpellcheckable,
+    onPassword: context.onPassword,
+    passwordRevealed: context.passwordRevealed,
+    srcUrl: context.originalMediaURL || facts.mediaURL,
+    frameUrl: data.docLocation,
+    pageUrl: data.browser.currentURI.spec,
+    linkText: context.linkTextStr,
+    linkUrl: context.linkURL,
+    linkURI,
+    selectionText: facts.selected ? data.selectionInfo.fullText : undefined,
+    frameId: context.frameID,
+    webExtBrowserType: data.browser.getAttribute("webextension-view-type"),
+    webExtContextData: data.webExtContextData,
+  };
+  subject.wrappedJSObject = subject;
+  Services.obs.notifyObservers(subject, "on-build-contextmenu");
+  return pageMenuExtensionItems(stub, pending);
+}
+
+// The stub's children after the notify, as page menu items: a menuitem is a row
+// (label, disabled, and checked for a checkbox or radio), a menu a submenu of its
+// menupopup's items, a menuseparator a group break. Ids are extension-entry-<n>,
+// each element kept for the pick; enabled leaves are offered. Labels are the
+// extension's plain text. Icons are not forwarded: the Theia frame cannot load
+// moz-extension: images, so the rows are label-only (UI-SPEC).
+function pageMenuExtensionItems(popup, pending, groups = { n: 0 }) {
+  const items = [];
+  for (const element of popup.children) {
+    if (element.localName === "menuseparator") {
+      groups.n++;
+      continue;
+    }
+    if (element.hidden || (element.localName !== "menuitem" && element.localName !== "menu")) {
+      continue;
+    }
+    const id = `extension-entry-${pending.extensionItems.size}`;
+    pending.extensionItems.set(id, element);
+    const item = { id, label: element.getAttribute("label") ?? "", enabled: element.getAttribute("disabled") !== "true", group: `extension-${groups.n}` };
+    if (element.localName === "menu") {
+      item.children = pageMenuExtensionItems(element.querySelector(":scope > menupopup"), pending, { n: 0 });
+      if (!item.children.length) {
+        continue;
+      }
+    } else {
+      if (["checkbox", "radio"].includes(element.getAttribute("type"))) {
+        item.checked = element.getAttribute("checked") === "true";
+      }
+      if (item.enabled) {
+        pending.offered.add(id);
+      }
+    }
+    items.push(item);
+  }
+  return items;
+}
+
+// Every close of a page menu, picked or dismissed: ext-menus removes its items
+// on the stub's popuphidden (ext-menus.js:560-572 checks only the target and
+// type), then the actor hears the menu is gone.
+function pageMenuClose(data) {
+  const window = data.browser.ownerGlobal;
+  window.document.getElementById("contentAreaContextMenu").dispatchEvent(new window.Event("popuphidden"));
+  data.actor.hiding();
+}
+
+// 35-05 (D-08, G4b): the freeze-frame. Before the overlay hides under the page
+// menu, the right-clicked overlay's visible viewport is drawn (the
+// captureShellRegion path) at most 640 px wide and encoded as a JPEG, and the
+// web tab's placeholder shows it under the menu. The capture races a 50 ms
+// deadline: a late capture is dropped when it settles, never pushed, and the
+// menu opens over the hidden page as before. The still is the user's own page
+// shown in the product's own frame (the Panorama thumbnail precedent); it is
+// never written to disk or logged.
+const PAGE_STILL_DEADLINE_MS = 50;
+const PAGE_STILL_MAX_WIDTH = 640;
+
+async function pageMenuStill(window, browser) {
+  const capture = (async () => {
+    const rect = browser.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+    if (w < 1 || h < 1) {
+      return null;
+    }
+    // fullViewport: the scrolled-to view the user sees, not the document's top.
+    const bitmap = await browser.drawSnapshot(0, 0, w, h, Math.min(1, PAGE_STILL_MAX_WIDTH / w), "white", true);
+    if (!bitmap) {
+      return null;
+    }
+    const canvas = window.document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return canvas.toDataURL("image/jpeg", 0.8);
+  })().catch(err => {
+    PowerBrowserAPI.log("error", `[web-tab] pageStill capture failed: ${err && err.message ? err.message : err}`);
+    return null;
+  });
+  let timer;
+  const deadline = new Promise(resolve => {
+    timer = window.setTimeout(resolve, PAGE_STILL_DEADLINE_MS, null);
+  });
+  try {
+    return await Promise.race([capture, deadline]);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+// 35-07 (PAGE-07, D-05): element fullscreen. DOMFullscreenParent calls
+// window.FullScreen and window.PointerlockFsWarning, which
+// browser-fullScreenAndPointerLock.js defines in Firefox and this shell does
+// not load. Both are ported here with exactly the members the actor calls
+// (verify-shell-gbrowser-standin.mjs); their state lives in this closure. The
+// overlay covers the window through the :fullscreen top layer, so no geometry
+// is written. The stock warning shows the page's domain on every entry and
+// nothing here suppresses it (T-35-24). Not ported (D-11, D-05): permission
+// doorhangers, the find bar, add-on install prompts, the pointer-lock warning,
+// and the TabSelect listener (webTabGeometry's hide branch exits instead).
+function installFullscreen(window) {
+  const document = window.document;
+  // The overlay that entered fullscreen: closing the warning returns focus to it (upstream: gBrowser.selectedBrowser, :211).
+  let fullscreenBrowser = null;
+  // PointerlockFsWarning's state (:5-310), for the fullscreen-warning element only.
+  let element = null;
+  let origin = null;
+  let timeoutHide = null;
+  let timeoutShow = null;
+  let lastState = null;
+  const getState = () => ["hidden", "ontop", "onscreen"].find(s => element.hasAttribute(s)) ?? "hiding";
+  const doHide = () => {
+    try {
+      element.hidePopover();
+    } catch (e) {}
+    element.hidden = true;
+  };
+  // "onscreen" and "ontop" take effect at once; "hidden" passes through "hiding" until the transition ends.
+  const setState = newState => {
+    const currentState = getState();
+    if (currentState == newState) {
+      return;
+    }
+    if (currentState != "hiding") {
+      lastState = currentState;
+      element.removeAttribute(currentState);
+    }
+    if (currentState == "hidden") {
+      element.showPopover();
+    }
+    if (newState != "hidden") {
+      element.setAttribute(newState, "");
+    }
+  };
+  const listener = {
+    handleEvent(event) {
+      switch (event.type) {
+        case "mousemove": {
+          const state = getState();
+          if (state == "hidden") {
+            // Hidden: show it again after a short delay while the pointer is at the top.
+            if (event.clientY != 0) {
+              timeoutShow.cancel();
+            } else if (timeoutShow.delay >= 0) {
+              timeoutShow.start();
+            }
+          } else if (state != "onscreen") {
+            const elemRect = element.getBoundingClientRect();
+            if (state == "hiding" && lastState != "hidden") {
+              if (event.clientY <= elemRect.bottom + 50) {
+                setState(lastState);
+                timeoutHide.start();
+              }
+            } else if (state == "ontop" || lastState != "hidden") {
+              if (event.clientY > elemRect.bottom + 50) {
+                setState("hidden");
+                timeoutHide.cancel();
+              }
+            }
+          }
+          break;
+        }
+        case "transitionend":
+        case "transitioncancel": {
+          if (getState() == "hiding") {
+            doHide();
+          }
+          if (getState() == "onscreen") {
+            window.dispatchEvent(new window.CustomEvent("FullscreenWarningOnScreen"));
+          }
+          break;
+        }
+        case "activate": {
+          setState("onscreen");
+          timeoutHide.start();
+          break;
+        }
+        case "deactivate": {
+          setState("hidden");
+          timeoutHide.cancel();
+          break;
+        }
+      }
+    },
+  };
+  const closeWarning = elementId => {
+    if (!elementId) {
+      throw new Error("Must pass id of warning element to close");
+    }
+    if (!element || element.id != elementId) {
+      return;
+    }
+    timeoutHide.cancel();
+    timeoutShow.cancel();
+    setState("hidden");
+    doHide();
+    element.querySelector(".pointerlockfswarning-domain-text").removeAttribute("data-l10n-id");
+    document.getElementById("fullscreen-exit-button").removeAttribute("data-l10n-id");
+    element.removeEventListener("transitionend", listener);
+    element.removeEventListener("transitioncancel", listener);
+    window.removeEventListener("mousemove", listener, true);
+    window.removeEventListener("activate", listener);
+    window.removeEventListener("deactivate", listener);
+    element = null;
+    timeoutHide = null;
+    timeoutShow = null;
+    // Focus leaves the hidden warning for the page, unless that overlay is gone or hidden (a tab switch).
+    if (fullscreenBrowser && tabIdOfBrowser(fullscreenBrowser) !== null && fullscreenBrowser.style.visibility === "visible") {
+      fullscreenBrowser.focus();
+    }
+  };
+  const showWarning = (browsingContext, keyboardLockEnabled) => {
+    const timeout = Services.prefs.getIntPref(keyboardLockEnabled ? "full-screen-api.keyboardlock-warning.timeout" : "full-screen-api.warning.timeout");
+    const delay = Services.prefs.getIntPref("full-screen-api.warning.delay");
+    if (!element) {
+      element = document.getElementById("fullscreen-warning");
+      element.addEventListener("transitionend", listener);
+      element.addEventListener("transitioncancel", listener);
+      window.addEventListener("mousemove", listener, true);
+      if (timeout > 0) {
+        window.addEventListener("activate", listener);
+        window.addEventListener("deactivate", listener);
+      }
+      timeoutHide = new FullscreenWarningTimeout(window, () => {
+        window.removeEventListener("activate", listener);
+        window.removeEventListener("deactivate", listener);
+        setState("hidden");
+      }, timeout);
+      timeoutShow = new FullscreenWarningTimeout(window, () => {
+        setState("ontop");
+        timeoutHide.start();
+      }, delay);
+    }
+    // The top level's origin: ancestors control what is on screen (:57-61).
+    origin = browsingContext.top.currentWindowGlobal.documentPrincipal.originNoSuffix || origin;
+    const uri = Services.io.newURI(origin);
+    let host = null;
+    if (origin != "resource://pdf.js") {
+      try {
+        host = uri.host;
+      } catch (e) {}
+    }
+    const textElem = element.querySelector(".pointerlockfswarning-domain-text");
+    if (!host) {
+      textElem.hidden = true;
+    } else {
+      textElem.removeAttribute("hidden");
+      document.l10n.setAttributes(textElem, "fullscreen-warning-domain", { domain: pageToolsLazy.BrowserUtils.formatURIForDisplay(uri, { onlyBaseDomain: true }) });
+    }
+    document.l10n.setAttributes(document.getElementById("fullscreen-exit-button"), keyboardLockEnabled ? "fullscreen-keyboardlock-exit-button" : "fullscreen-exit-button");
+    element.dataset.identity = fullscreenWarningIdentity(browsingContext.top.embedderElement);
+    // Upstream's own opt-out: a timeout of 0 or less leaves the warning as set.
+    if (timeoutHide.delay <= 0) {
+      return;
+    }
+    if (Services.focus.activeWindow == window) {
+      setState("onscreen");
+      timeoutHide.start();
+    }
+  };
+  // FullScreen.exitDomFullScreen (:478-483), wired as FullScreen.init does (:381-384).
+  document.getElementById("fullscreen-exit-button").addEventListener("click", () => {
+    if (document.fullscreen) {
+      document.exitFullscreen();
+    }
+  });
+
+  window.FullScreen = {
+    enterDomFullscreen(aBrowser, aActor) {
+      if (!document.fullscreenElement) {
+        aActor.requestOrigin = null;
+        return;
+      }
+      // A remote browser's content enters fullscreen state first, through any OOP ancestor frames (:586-623).
+      if (aBrowser?.hasAttribute("remote")) {
+        const [targetActor, inProcessBC] = fullscreenNextRecipient(aActor, false);
+        if (!targetActor) {
+          abortEnterFullscreen(window, aActor);
+          return;
+        }
+        targetActor.waitingForChildEnterFullscreen = true;
+        targetActor.sendAsyncMessage("DOMFullscreen:Entered", { remoteFrameBC: inProcessBC });
+        if (inProcessBC) {
+          return;
+        }
+      }
+      // T-35-25: only a visible overlay of the active window stays fullscreen (the selected-browser check, :628-634).
+      if (!aBrowser || tabIdOfBrowser(aBrowser) === null || aBrowser.style.visibility !== "visible" || Services.focus.activeWindow != window) {
+        abortEnterFullscreen(window, aActor);
+        return;
+      }
+      fullscreenBrowser = aBrowser;
+      document.documentElement.setAttribute("inDOMFullscreen", true);
+      // XULBrowserWindow.onEnterDOMFullscreen (browser.js:2009-2014): the link status clears.
+      window.XULBrowserWindow.setOverLink("");
+    },
+    cleanupDomFullscreen(aActor) {
+      let needToWaitForChildExit = false;
+      const [target, inProcessBC] = fullscreenNextRecipient(aActor, true);
+      if (target) {
+        needToWaitForChildExit = true;
+        target.waitingForChildExitFullscreen = true;
+        target.sendAsyncMessage("DOMFullscreen:CleanUp", { remoteFrameBC: inProcessBC });
+        if (inProcessBC) {
+          return needToWaitForChildExit;
+        }
+      }
+      closeWarning("fullscreen-warning");
+      document.documentElement.removeAttribute("inDOMFullscreen");
+      return needToWaitForChildExit;
+    },
+  };
+  window.PointerlockFsWarning = {
+    showFullScreen(browsingContext, keyboardLockEnabled) {
+      showWarning(browsingContext, keyboardLockEnabled);
+    },
+    close(elementId) {
+      closeWarning(elementId);
+    },
+  };
+}
+
+// PointerlockFsWarning.Timeout (:14-37): starting it again cancels the pending call.
+class FullscreenWarningTimeout {
+  constructor(window, func, delay) {
+    this._window = window;
+    this._id = 0;
+    this._func = func;
+    this._delay = delay;
+  }
+  start() {
+    this.cancel();
+    this._id = this._window.setTimeout(() => this._handle(), this._delay);
+  }
+  cancel() {
+    if (this._id) {
+      this._window.clearTimeout(this._id);
+      this._id = 0;
+    }
+  }
+  _handle() {
+    this._id = 0;
+    this._func();
+  }
+  get delay() {
+    return this._delay;
+  }
+}
+
+// gIdentityHandler.pointerlockFsWarningClassName (browser-siteIdentity.js:810-816):
+// the lock only for a page whose URI has a host and whose connection is secure.
+function fullscreenWarningIdentity(browser) {
+  let host = "";
+  try {
+    host = browser?.currentURI?.host ?? "";
+  } catch (e) {}
+  return host && PowerBrowserAPI.webTabIdentity(browser, browser.currentURI.spec).securityState === "secure" ? "verifiedDomain" : "unknownIdentity";
+}
+
+// FullScreen._abortEnterFullscreen (:755-768): exits on the next tick, never
+// synchronously inside the fullscreen change, and cancels the change timer.
+function abortEnterFullscreen(window, aActor) {
+  window.setTimeout(() => window.document.exitFullscreen().catch(() => {}), 0);
+  if (aActor.timerId) {
+    Glean.fullscreen.change.cancel(aActor.timerId);
+    aActor.timerId = null;
+  }
+}
+
+// FullScreen._getNextMsgRecipientActor (:788-849): the first ancestor of aActor
+// in another process and its in-process child browsing context, else
+// [request origin, null]; [null, null] when the target is destroyed or in BFCache.
+function fullscreenNextRecipient(aActor, aUseCache) {
+  if (aUseCache && aActor.nextMsgRecipient) {
+    let nextMsgRecipient = aActor.nextMsgRecipient;
+    while (nextMsgRecipient) {
+      const [actor] = nextMsgRecipient;
+      if (!actor.hasBeenDestroyed() && actor.windowContext && !actor.windowContext.isInBFCache) {
+        return nextMsgRecipient;
+      }
+      nextMsgRecipient = actor.nextMsgRecipient;
+    }
+  }
+  if (aActor.hasBeenDestroyed()) {
+    return [null, null];
+  }
+  let childBC = aActor.browsingContext;
+  let parentBC = childBC.parent;
+  while (parentBC) {
+    if (!childBC.currentWindowGlobal || !parentBC.currentWindowGlobal) {
+      break;
+    }
+    if (childBC.currentWindowGlobal.osPid == parentBC.currentWindowGlobal.osPid) {
+      childBC = parentBC;
+      parentBC = childBC.parent;
+    } else {
+      break;
+    }
+  }
+  let target = null;
+  let inProcessBC = null;
+  if (parentBC && parentBC.currentWindowGlobal) {
+    target = parentBC.currentWindowGlobal.getActor("DOMFullscreen");
+    inProcessBC = childBC;
+    aActor.nextMsgRecipient = [target, inProcessBC];
+  } else {
+    target = aActor.requestOrigin;
+  }
+  if (!target || target.hasBeenDestroyed() || target.windowContext?.isInBFCache) {
+    return [null, null];
+  }
+  return [target, inProcessBC];
 }
