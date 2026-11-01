@@ -52,6 +52,20 @@
  *                       .planning/probes/prompt-probe-verdict.json and its
  *                       evidence directory, replacing a provisional verdict.
  *                       Red when the stock dialog blocks the IDE.
+ *   dialog           -- (37-03 Task 4) the same five kinds: each answer resolves
+ *                       the page, an IDE edit lands and the shell's input stays
+ *                       enabled while it is open, and the push sequence
+ *                       advances on the same recorder; screenshots are logged
+ *                       for review;
+ *   stop-repeat      -- (37-03 Task 4, N6) an alert loop is stopped with the
+ *                       stock checkbox (ShouldPromptToBlockDialogs and
+ *                       DisableDialogs, keyed by browsing-context group): the
+ *                       loop finishes with no further dialog, this tab does not
+ *                       prompt again, and a new tab (a new group) still prompts;
+ *   beforeunload-scope -- (37-03 Task 4) a web tab's leave-page reaches the
+ *                       stock dialog (the control); the Theia frame's own
+ *                       dirty-editor beforeunload shows the stock leave dialog
+ *                       and no dialogRequest push is recorded for it.
  *
  * --self-test runs a clean control session per target scenario, then one
  * session per planted fault, each required to go red naming its drift.
@@ -70,7 +84,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
-import { BROKEN, inChrome, loadedAt, makeCurrent, openWebTab, pollFor, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { BROKEN, WEB_TAB_STATE_EVENT, inChrome, loadedAt, makeCurrent, openWebTab, pollFor, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'prompts-live';
 const SELF = fileURLToPath(import.meta.url);
@@ -91,6 +105,7 @@ const SHARING_ICONS = { 'device-camera-video': 'camera', mic: 'microphone', 'dev
 const UPSTREAM_PROMPT_PARENT = 'upstream/browser/actors/PromptParent.sys.mjs';
 const UPSTREAM_COMMON_DIALOG = 'upstream/toolkit/components/prompts/content/commonDialog.xhtml';
 const UPSTREAM_PREFS = 'upstream/modules/libpref/init/StaticPrefList.yaml';
+const UPSTREAM_OUTER_WINDOW = 'upstream/dom/base/nsGlobalWindowOuter.cpp';
 const COMMON_DIALOG_URL = 'chrome://global/content/commonDialog.xhtml';
 const DIALOG_IDS = ['commonDialog', 'infoBody', 'loginContainer', 'loginTextbox', 'password1Container', 'password1Textbox', 'checkboxContainer', 'checkbox'];
 const BEFOREUNLOAD_PREF = 'dom.require_user_interaction_for_beforeunload';
@@ -741,6 +756,10 @@ function blockedKinds(rows) {
 }
 
 const STOCK_BLOCKS = 'stock dialog blocks the IDE';
+const PUSH_FROZEN = 'IDE push traffic stopped while dialog open';
+const LEAKED = 'suppression leaked across tabs';
+const THEIA_RELAYED = 'Theia-frame beforeunload relayed';
+const REPEAT_COUNT = 20;
 
 /** Probe 1 (Task 1). Writes the verdict only on a live `--scenario dialog-probe` run. */
 async function scenarioDialogProbe(app, fx, plant) {
@@ -782,6 +801,110 @@ async function scenarioDialogProbe(app, fx, plant) {
     return blocked.length ? `${STOCK_BLOCKS}: ${blocked.join('; ')}` : null;
 }
 
+/** Task 4: every kind appears, its answer resolves the page, and the IDE stays usable while it is open. */
+async function scenarioDialog(app, fx, plant) {
+    const run = await driveDialogs(app, fx, plant, mkdtempSync(join(tmpdir(), 'pb-dialog-')));
+    if (run.broken) {
+        return run.broken;
+    }
+    for (const r of run.rows) {
+        if (!r.advanced) {
+            return `${PUSH_FROZEN} (${r.kind}: no push recorded after index ${r.pushFrom})`;
+        }
+        if (!r.resolved) {
+            return `the ${r.kind} answer did not resolve the page`;
+        }
+        if (!r.landed || r.inputEnabled !== true) {
+            return `${STOCK_BLOCKS}: ${blockedKinds([r]).join('; ')}`;
+        }
+        if (!r.shot) {
+            return `${BROKEN} no KWin screenshot for ${r.kind} (spectacle needs the session DBus; run with the sandbox off)`;
+        }
+    }
+    console.log(`dialog: screenshots for review (the IDE must look interactive): ${run.rows.map(r => r.shot).join(', ')}`);
+    return null;
+}
+
+/** Task 4 (N6): the stock stop checkbox ends a loop for this tab's browsing-context group only. */
+async function scenarioStopRepeat(app, fx, plant) {
+    const a = await openPage(app, fx, '/a');
+    await app.evaluateIn(a.ctx, `(() => { window.__pbAlerts = 0; setTimeout(() => { for (let i = 0; i < ${REPEAT_COUNT}; i++) { alert('pb repeat ' + i); window.__pbAlerts = i + 1; } }, 0); return true; })()`);
+    if (!await waitDialog(app)) {
+        return `${BROKEN} the first alert of the loop never appeared`;
+    }
+    await answerDialog(app);
+    const second = await waitDialog(app);
+    if (!second) {
+        return `${BROKEN} the second alert of the loop never appeared`;
+    }
+    if (!second.checkbox) {
+        return 'the stock stop checkbox is not offered on a repeated alert';
+    }
+    await answerDialog(app, { stop: true });
+    // The page is blocked while a dialog is open, so the dialog is checked before the page is read.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    if (await dialogState(app)) {
+        await answerDialog(app, { stop: true });
+        return 'the alert loop kept prompting after the stock stop checkbox';
+    }
+    if (await app.evaluateIn(a.ctx, 'window.__pbAlerts') !== REPEAT_COUNT) {
+        return 'the alert loop did not finish after the stock stop checkbox';
+    }
+    await app.evaluateIn(a.ctx, "(() => { setTimeout(() => { alert('pb late'); }, 0); return true; })()");
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    if (await dialogState(app)) {
+        await answerDialog(app);
+        return 'this tab prompted again after the stock stop checkbox';
+    }
+    // A new web tab is a new top-level browser, so a new browsing-context group with its own dialog state.
+    const b = await openPage(app, fx, '/b');
+    if (plant === 'cross-tab-leak') {
+        // What a leak looks like from the new tab: its alert shows nothing, as if the first tab's block covered its group.
+        await app.evaluateIn(b.ctx, '(window.alert = () => undefined, true)');
+    }
+    await app.evaluateIn(b.ctx, "(() => { setTimeout(() => { alert('pb other tab'); }, 0); return true; })()");
+    if (!await waitDialog(app, 8000)) {
+        return `${LEAKED}: a new tab in a new browsing-context group did not prompt`;
+    }
+    await answerDialog(app);
+    return null;
+}
+
+/** Task 4: the Theia frame's own beforeunload keeps the stock path and is never routed to a tab relay. */
+async function scenarioBeforeunloadScope(app, fx, plant) {
+    const page = await openPage(app, fx, '/a');
+    await app.evaluateIn(page.ctx, `(() => { setTimeout(() => { ${DIALOG_START.leave}; }, 0); return true; })()`);
+    if (!await waitDialog(app)) {
+        return 'a web-tab leave-page never reached the stock dialog path';
+    }
+    await answerDialog(app, { accept: false });
+    const theiaCtx = await openIdeEditor(app, fx);
+    if (theiaCtx.startsWith(BROKEN)) {
+        return theiaCtx;
+    }
+    if (!await ideEdit(app, theiaCtx, 'pbdirty')) {
+        return `${BROKEN} typing did not reach the IDE editor, so the frame has no dirty editor`;
+    }
+    const from = (await pushes(app)).length;
+    if (plant === 'theia-beforeunload-relayed') {
+        // What a relay of the frame's own beforeunload would record: a dialogRequest push.
+        await app.evaluate(`(window.dispatchEvent(new CustomEvent(${JSON.stringify(WEB_TAB_STATE_EVENT)}, { detail: { kind: 'dialogRequest', tabId: null } })), true)`);
+    }
+    await app.evaluate('(setTimeout(() => location.reload(), 0), true)');
+    if (!await waitDialog(app)) {
+        return "the Theia frame's dirty-editor beforeunload did not reach the stock leave dialog";
+    }
+    // Stay: the IDE keeps its unsaved editor and its push recorder.
+    await answerDialog(app, { accept: false });
+    // Same-session recorder control: a web-tab load after the dialog is recorded at or after `from`.
+    await app.send('browsingContext.navigate', { context: page.ctx, url: fx.url('/c'), wait: 'none' });
+    if (await waitForPush(app, loadedAt(page.tabId, '/c'), { from, timeoutMs: 8000 }) < 0) {
+        return `${BROKEN} the push recorder recorded nothing after the Theia leave dialog, so the absence below proves nothing`;
+    }
+    const relayed = (await pushes(app)).slice(from).filter(p => p && p.kind === 'dialogRequest');
+    return relayed.length ? `${THEIA_RELAYED}: ${JSON.stringify(relayed[0])}` : null;
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
@@ -791,6 +914,9 @@ const SCENARIOS = {
     sharing: scenarioSharing,
     'camera-doorhanger': scenarioCameraDoorhanger,
     'dialog-probe': scenarioDialogProbe,
+    dialog: scenarioDialog,
+    'stop-repeat': scenarioStopRepeat,
+    'beforeunload-scope': scenarioBeforeunloadScope,
 };
 
 /** Each plant runs its target scenario with one thing wrong and must go red naming `expect`. */
@@ -806,6 +932,9 @@ const PLANTS = [
     { plant: 'frame-flag-accepted', target: 'sharing', expect: 'indicator driven from a frame flag' },
     { plant: 'camera-template-missing', target: 'camera-doorhanger', expect: 'camera template missing: request never resolved' },
     { plant: 'probe-edit-blocked', target: 'dialog-probe', expect: 'stock dialog blocks the IDE' },
+    { plant: 'push-traffic-frozen', target: 'dialog', expect: 'IDE push traffic stopped while dialog open' },
+    { plant: 'cross-tab-leak', target: 'stop-repeat', expect: 'suppression leaked across tabs' },
+    { plant: 'theia-beforeunload-relayed', target: 'beforeunload-scope', expect: 'Theia-frame beforeunload relayed' },
 ];
 
 async function runSession(name, plant) {
@@ -883,6 +1012,14 @@ function staticAudit() {
     }
     if (!readFileSync(join(REPO_ROOT, UPSTREAM_PREFS), 'utf8').includes(`- name: ${BEFOREUNLOAD_PREF}\n`)) {
         failures.push(`${UPSTREAM_PREFS} has no ${BEFOREUNLOAD_PREF}; the leave kind sets a pref upstream does not read`);
+    }
+    // Task 4: the native stop is upstream's own, keyed by browsing-context group.
+    const outer = readFileSync(join(REPO_ROOT, UPSTREAM_OUTER_WINDOW), 'utf8');
+    if (!outer.includes('bool nsGlobalWindowOuter::ShouldPromptToBlockDialogs()') || (outer.match(/if \(disallowDialog\) \{\s*DisableDialogs\(\);/g) ?? []).length < 2) {
+        failures.push(`${UPSTREAM_OUTER_WINDOW} no longer offers the stop checkbox through ShouldPromptToBlockDialogs and DisableDialogs; stop-repeat ticks a checkbox upstream does not honour`);
+    }
+    if (!/group->SetAreDialogsEnabled\(false\)/.test(outer)) {
+        failures.push(`${UPSTREAM_OUTER_WINDOW} no longer disables dialogs per browsing-context group; stop-repeat's new-group control assumes a scope upstream does not use`);
     }
     if (!(PREFS[BEFOREUNLOAD_PREF] === false)) {
         failures.push(`PREFS does not turn ${BEFOREUNLOAD_PREF} off; the leave kind needs a gesture the harness never gives`);
