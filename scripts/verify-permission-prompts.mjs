@@ -95,6 +95,13 @@
  *   (x) Phase 36 call site (D-12): openAdoptedWebTab is called exactly once,
  *       inside openBlockedPopup, behind the http(s) wall, and the superseded
  *       webTabAdopt/adoptTab vocabulary appears nowhere.
+ *   (y) enum parity (D-03): the barKind:action pairs web-tab.ts sends
+ *       (NOTIFICATION_BAR_ACTIONS, the one webTabBarAction sender's set) equal
+ *       the pairs handleWebTabAction accepts (WEB_TAB_BAR_ACTIONS), both derived
+ *       from the tree, and every accepted action has a BAR_ANSWERS handler.
+ *   (z) no stock bar call (N2): nothing under powerbrowser/shell calls or reads
+ *       getNotificationBox or gNotificationBox; the stock boxes throw in the
+ *       shell, so the bars replace them wholesale.
  * The prompt section ends where the '// Phase 37: notification bars.' section
  * starts; rules (c), (f) and (h) read the prompt section only.
  * Rules (j), (k), (q) and (r) are the furniture-gate rows for plans 02 and 04; at
@@ -766,6 +773,40 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
         }
     }
 
+    // (y) The bar action enum: what the frontend sends equals what chrome accepts, per bar kind, both derived.
+    const pairsOf = body => (body ? [...body.matchAll(/['"]([\w-]+)['"]\s*:\s*\[([^\]]*)\]/g)].flatMap(m => derive(m[2], /['"]([\w-]+)['"]/g).map(a => `${m[1]}:${a}`)) : []);
+    const sent = new Set(pairsOf(/export const NOTIFICATION_BAR_ACTIONS = \{([\s\S]*?)\} as const;/.exec(webTab)?.[1]));
+    const accepted = new Set(pairsOf(/const WEB_TAB_BAR_ACTIONS = \{([^;]*)\};/.exec(api)?.[1]));
+    if (sent.size === 0 || accepted.size === 0) {
+        failures.push(`bar-enum: derived ${sent.size} sent and ${accepted.size} accepted bar actions -- the parity proves nothing (broken instrument)`);
+    } else {
+        const unaccepted = [...sent].filter(pair => !accepted.has(pair));
+        const unsent = [...accepted].filter(pair => !sent.has(pair));
+        if (unaccepted.length) {
+            failures.push(`bar-enum: web-tab.ts sends bar actions chrome does not accept: ${unaccepted.join(', ')}`);
+        }
+        if (unsent.length) {
+            failures.push(`bar-enum: chrome accepts bar actions web-tab.ts never sends (stale): ${unsent.join(', ')}`);
+        }
+        const answers = /const BAR_ANSWERS = \{([\s\S]*?)\n\};/.exec(api)?.[1] ?? '';
+        const handled = new Set(derive(answers, /^\s{2}(?:async\s+)?"?([\w-]+)"?\s*\(/gm));
+        const unhandled = [...new Set([...accepted].map(pair => pair.split(':')[1]))].filter(action => !handled.has(action));
+        if (unhandled.length) {
+            failures.push(`bar-enum: accepted bar actions with no BAR_ANSWERS handler: ${unhandled.join(', ')}`);
+        }
+    }
+    const senders = [...webTab.matchAll(/kind:\s*'webTabBarAction'/g)].length;
+    if (senders !== 2 || !/barAction\(token: string, action: NotificationBarAction\)/.test(webTab)) {
+        failures.push(`bar-enum: web-tab.ts names webTabBarAction ${senders} times (the message type and one sender expected), or the sender's action is not a NotificationBarAction -- the sent set is not the table`);
+    }
+    // (z) The stock notification boxes are never reached from the shell.
+    for (const file of shellFiles) {
+        const hit = /\b(getNotificationBox|gNotificationBox)\b/.exec(stripComments(raw[file]));
+        if (hit) {
+            failures.push(`no-stock-bar: ${file} reaches ${hit[1]} -- the stock notification box throws in the shell (no box exists); the per-tab bar replaces it`);
+        }
+    }
+
     const writes = (api.match(/\bactiveTabByFrame\.set\(/g) ?? []).length;
     const setter = functionBody(api, 'setActiveTabOfFrame');
     if (writes !== 1 || !setter.includes('activeTabByFrame.set(')) {
@@ -958,6 +999,21 @@ function selfTest() {
             sources: { ...clean, [WEB_TAB]: `${clean[WEB_TAB]}\nexport const plantedAdopt = (c: WebTabChannel) => c.onPush('adoptTab', () => undefined);\n` },
             expect: 'names adoptTab',
         },
+        {
+            name: 'unaccepted sender value',
+            sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace("'hung-script': ['stop-script', 'wait-longer'],", "'hung-script': ['stop-script', 'wait-longer', 'planted-action'],") },
+            expect: 'web-tab.ts sends bar actions chrome does not accept: hung-script:planted-action',
+        },
+        {
+            name: 'accepted value with no sender',
+            sources: { ...clean, [API]: clean[API].replace('"hung-script": ["stop-script", "wait-longer"]', '"hung-script": ["stop-script", "wait-longer", "planted-action"]') },
+            expect: 'chrome accepts bar actions web-tab.ts never sends (stale): hung-script:planted-action',
+        },
+        {
+            name: 'stock notification box call',
+            sources: { ...clean, [API]: inBars('function plantedBox(win) { return win.gNotificationBox.appendNotification("process-hang", {}, []); }') },
+            expect: 'the stock notification box throws in the shell',
+        },
         // Plan 04 (D-07): the password template, the login callback and the no-credential scans.
         {
             name: 'theia-credential-sync',
@@ -1080,7 +1136,7 @@ function main() {
     }
     const dialog = checkDialogOutcome(sources);
     console.log(`${NAME}: dialog outcome ${dialog.outcome}${dialog.provisional ? ' (PROVISIONAL: the owner default pending live probe 1; the live dialog-probe run overwrites it with evidence)' : ' (live probe-1 verdict)'}; getTabDialogBox ${dialog.outcome === 'stock-keeps-ide-usable' ? 'absent, the stock window-modal fallback' : 'present, the audited relay member'}`);
-    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, the ${PREVIEW_ELEMENT} callback is registered, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, the sharing indicator follows chrome-observed webrtcUI state only, #${PASSWORD_TEMPLATE_ID} and #${AUTOCOMPLETE_ID} match upstream, the ${LOGIN_ELEMENT} callback is registered, the stock prompter alone owns the credential fields, and no credential reaches a push, a Theia message or a log`);
+    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, the ${PREVIEW_ELEMENT} callback is registered, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, the sharing indicator follows chrome-observed webrtcUI state only, #${PASSWORD_TEMPLATE_ID} and #${AUTOCOMPLETE_ID} match upstream, the ${LOGIN_ELEMENT} callback is registered, the stock prompter alone owns the credential fields, no credential reaches a push, a Theia message or a log, the notification bars sit outside the blocking layer and shrink the page rect, each bar answer resolves a chrome-held record of the sender's own tab, the bar action enum matches between sender and arm, openAdoptedWebTab has one call site, and no stock notification box is reached`);
     return 0;
 }
 

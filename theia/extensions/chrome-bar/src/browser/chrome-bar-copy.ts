@@ -78,6 +78,9 @@ export const CHROME_BAR_COPY = Object.freeze({
     barRedirectBlocked: (subject: string) => `${subject} stopped this page from sending you to another page.`,
     barAllow: 'Allow',
     barDismiss: 'Dismiss',
+    barHungScript: 'A script on this page is taking too long.',
+    barStopScript: 'Stop script',
+    barKeepWaiting: 'Keep waiting',
     // Phase 32 plan 08 (PAGE-10): the reader toggle and view source (32-UI-SPEC Copywriting Contract, Reader toggle and View source).
     readerView: 'Reader view',
     exitReaderView: 'Exit reader view',
@@ -200,6 +203,9 @@ export function notificationBarCopy(bar: NotificationBar): NotificationBarText |
         return count > 0
             ? { message: CHROME_BAR_COPY.barPopupBlocked(appSubject(), count), labels: { 'allow-popup': CHROME_BAR_COPY.barAllow, dismiss: CHROME_BAR_COPY.barDismiss } }
             : { message: CHROME_BAR_COPY.barRedirectBlocked(appSubject()), labels: { dismiss: CHROME_BAR_COPY.barDismiss } };
+    }
+    if (bar.barKind === 'hung-script') {
+        return { message: CHROME_BAR_COPY.barHungScript, labels: { 'stop-script': CHROME_BAR_COPY.barStopScript, 'wait-longer': CHROME_BAR_COPY.barKeepWaiting }, destructive: ['stop-script'] };
     }
     return undefined;
 }

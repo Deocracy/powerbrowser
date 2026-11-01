@@ -7021,7 +7021,7 @@ function pushWebTabSharing(browser, tabId, host, state, force) {
 // ---------------------------------------------------------------------------
 
 // barKind -> the actions its bar offers; verify-permission-prompts.mjs compares this with web-tab.ts's table.
-const WEB_TAB_BAR_ACTIONS = { "blocked-popup": ["allow-popup", "dismiss"] };
+const WEB_TAB_BAR_ACTIONS = { "blocked-popup": ["allow-popup", "dismiss"], "hung-script": ["stop-script", "wait-longer"] };
 // token -> the chrome-held record of one bar on screen.
 const barRecords = new Map();
 // overlay -> barKind -> its record: one bar of each kind per tab.
@@ -7050,6 +7050,7 @@ function installNotificationBars(window, host) {
     },
   });
   host.strip.addEventListener("TabClose", event => hideBars(event.target.linkedBrowser));
+  installHangBars();
 }
 
 // Shows, updates or hides one tab's bar of `barKind`. `stored` is chrome-only data the bar's answers act on.
@@ -7162,6 +7163,28 @@ const BAR_ANSWERS = {
     }
     return "opened";
   },
+  // ProcessHangMonitor.terminateScript (:100-101): the report's own method (:145) ends the script.
+  "stop-script"(record) {
+    setBar(record.browser, record.barKind, null, null);
+    record.stored.report.terminateScript();
+    return "stopped";
+  },
+  // ProcessHangMonitor.waitLonger (:152-189): the report is paused for the stock wait period without userCanceled, and
+  // its bar comes back if no clear-hang-report has arrived when the period ends.
+  "wait-longer"(record) {
+    const { browser } = record;
+    const { report } = record.stored;
+    const win = browser.ownerGlobal;
+    setBar(browser, record.barKind, null, null);
+    const timer = win.setTimeout(() => {
+      if (pausedHangs.get(report)?.timer === timer) {
+        pausedHangs.delete(report);
+        setBar(browser, "hung-script", {}, { report });
+      }
+    }, Services.prefs.getIntPref("browser.hangNotification.waitPeriod", 10000));
+    pausedHangs.set(report, { win, timer });
+    return "waiting";
+  },
   // The stock bar's dismissal: the blocker remembers it for this document (hasBeenDismissed).
   dismiss(record) {
     record.browser.popupAndRedirectBlocker.eventCallback("dismissed");
@@ -7181,4 +7204,61 @@ async function openBlockedPopup(opener, spec, principal) {
     return PowerBrowserAPI.openStockTab(spec);
   }
   return PowerBrowserAPI.openAdoptedWebTab(opener, spec, { triggeringPrincipal: principal });
+}
+
+// D-08: hung scripts. ProcessHangMonitor draws its bar only in stock browser windows ("navigator:browser",
+// updateWindows :425-443) through win.gNotificationBox (:534, :564, :588-591), which the shell window does not have, so a
+// hung overlay script had no bar. This observer of the same two topics (:89-90, :227-232) gives the overlay's report a
+// per-tab bar; win.gNotificationBox is never reached from here. Add-on hangs stay with the stock monitor's own branch.
+const HANG_TOPICS = ["process-hang-report", "clear-hang-report"];
+// report -> { win, timer } while Keep waiting holds it (the stock _pausedReports).
+const pausedHangs = new Map();
+let hangObserverInstalled = false;
+
+function installHangBars() {
+  if (hangObserverInstalled) {
+    return;
+  }
+  hangObserverInstalled = true;
+  const observer = { observe: (subject, topic) => onHangTopic(subject, topic) };
+  for (const topic of HANG_TOPICS) {
+    Services.obs.addObserver(observer, topic);
+  }
+}
+
+function onHangTopic(subject, topic) {
+  try {
+    const report = subject.QueryInterface(Ci.nsIHangReport);
+    const browser = report.addonId ? null : hungOverlay(report);
+    if (!browser) {
+      return;
+    }
+    const shown = barsOfBrowser.get(browser)?.get("hung-script");
+    if (topic === "clear-hang-report") {
+      const paused = pausedHangs.get(report);
+      paused?.win.clearTimeout(paused.timer);
+      pausedHangs.delete(report);
+      if (shown?.stored.report === report) {
+        setBar(browser, "hung-script", null, null);
+      }
+      return;
+    }
+    // A repeat report of a hang already on screen, or one the user chose to wait for, shows nothing new (reportHang).
+    if (!pausedHangs.has(report) && shown?.stored.report !== report) {
+      setBar(browser, "hung-script", {}, { report });
+    }
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[bar] hung-script bar failed (${err && err.name ? err.name : "error"})`);
+  }
+}
+
+// The overlay whose frame tree the report is for (ProcessHangMonitor.findActiveReport's own test).
+function hungOverlay(report) {
+  for (const entry of webTabs.values()) {
+    const frameLoader = entry.browser.frameLoader;
+    if (frameLoader && report.isReportForBrowserOrChildren(frameLoader)) {
+      return entry.browser;
+    }
+  }
+  return null;
 }
