@@ -200,9 +200,17 @@ async function serveFixtures(downloadBody) {
             response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             response.end(EDIT_PAGE);
         } else if (path === '/icon') {
-            // favicon: the page's own icon as a data: URL, so no icon is fetched over the network.
+            // favicon: the page's own icon as a data: URL, so no icon is fetched over the network. The link is added from a
+            // timer after load (32-REVIEW WR-03), so the icon lands after the load's last state push and must push itself.
             response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-            response.end(`<!doctype html><html><head><title>Icon fixture</title><link rel="icon" href="${ICON_DATA}"></head><body><p>icon page</p></body></html>`);
+            response.end(`<!doctype html><html><head><title>Icon fixture</title></head><body><p>icon page</p><script>
+addEventListener('load', () => setTimeout(() => {
+    const link = document.createElement('link');
+    link.rel = 'icon';
+    link.href = ${JSON.stringify(ICON_DATA)};
+    document.head.appendChild(link);
+}, 1500));
+</script></body></html>`);
         } else if (path === '/article') {
             // reader: four long paragraphs pass Readerable's check (each sqrt(length - 140) adds to a score that must pass 20).
             response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });

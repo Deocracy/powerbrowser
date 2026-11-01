@@ -6470,6 +6470,8 @@ export const PowerBrowserTabHost = Object.freeze({
         }
         tab.image = spec || null;
         fireTabEvent(tab, "TabAttrModified", { changed: ["image"] });
+        // 32-REVIEW WR-03: an icon often lands after the page's last state push, so its own change pushes.
+        webTabPagePush(tab.linkedBrowser);
       },
       getTabSharingState: () => ({ camera: undefined, microphone: undefined, screen: undefined }),
       addTabsProgressListener: listener => host.progressListeners.add(listener),
