@@ -1,6 +1,6 @@
 import { injectable } from '@theia/core/shared/inversify';
 import { KeybindingContribution, KeybindingRegistry } from '@theia/core/lib/browser';
-import { CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID } from './chrome-bar-commands';
+import { CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID } from './chrome-bar-commands';
 
 /**
  * Set on the address pill's input element only (an element-scoped context
@@ -36,6 +36,13 @@ export class ChromeBarKeybindingContribution implements KeybindingContribution {
         keybindings.registerKeybinding({
             command: CHROME_BAR_FOCUS_ADDRESS_COMMAND_ID,
             keybinding: 'alt+d',
+            when: '!editorFocus && !terminalFocus',
+        });
+        // BMK-01 (D-15, KEY-04): Ctrl+D opens the star path with Theia focused; in an editor Monaco keeps
+        // add-selection-to-next-match and the terminal keeps its key. The page-focused half is the relay row.
+        keybindings.registerKeybinding({
+            command: CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID,
+            keybinding: 'ctrlcmd+d',
             when: '!editorFocus && !terminalFocus',
         });
         // WR-02: F6/Shift+F6 in the pill go to the page (the pill's own keydown

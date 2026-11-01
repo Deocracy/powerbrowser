@@ -18,7 +18,7 @@ import { CommandRegistry } from '@theia/core/lib/common/command';
 import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
-import { CHROME_BAR_NEW_TAB_COMMAND_ID, chooseSaveDestination, focusAddressPill, openFindBarFor } from './chrome-bar-commands';
+import { CHROME_BAR_NEW_TAB_COMMAND_ID, chooseSaveDestination, focusAddressPill, openBookmarkStar, openFindBarFor } from './chrome-bar-commands';
 import { AddressBar } from './address-bar/address-bar';
 import { TabStripWidget } from './tab-strip-widget';
 
@@ -77,6 +77,8 @@ export const PAGE_SHORTCUTS: readonly PageShortcut[] = [
     { id: 'viewSource', key: 'U', modifiers: 'accel', label: 'Ctrl+U', macLabel: '⌘U' },
     // PAGE-10 (32-07 gap closure): F12 opens the stock DevTools toolbox window for the focused page.
     { id: 'devtoolsOpen', keycode: 'VK_F12', modifiers: '', label: 'F12', macLabel: 'F12' },
+    // Phase 33 plan 02 (BMK-01, D-15): Ctrl+D with a page focused; the Theia-focused twin is chrome-bar-keybindings.ts.
+    { id: 'bookmarkPage', key: 'D', modifiers: 'accel', label: 'Ctrl+D', macLabel: '⌘D' },
 ];
 
 export type NavButton = 'back' | 'forward' | 'reload' | 'stop' | 'home' | 'newTab';
@@ -183,6 +185,8 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         // PAGE-10 (32-08): the widget method, never a kind; the reader toggle has no key (the button and command only).
         ['viewSource', tab => tab.viewSource()],
         ['devtoolsOpen', tab => tab.openDevtools()],
+        // BMK-01 (T-27-19): the star's own path, which owns the editor and the write; never the store kind.
+        ['bookmarkPage', () => openBookmarkStar()],
     ]);
 
     /** Pitfall P9: Theia moves activation on close only for a focused widget, so focus the new current one here. */
@@ -222,6 +226,9 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
     }
 
     onStart(): void {
+        // BMK-01: the star's tooltip names only the key this table binds (the pill cannot import this module).
+        const star = PAGE_SHORTCUTS.find(row => row.id === 'bookmarkPage');
+        this.addressBar.starShortcut = star ? (isOSX ? star.macLabel : star.label) : '';
         this.pageFocused = this.contextKeys.createKey<boolean>(PAGE_FOCUS_CONTEXT_KEY, false);
         this.channel.onPush('pageFocus', detail => {
             const tabId = typeof detail.tabId === 'string' ? detail.tabId : null;

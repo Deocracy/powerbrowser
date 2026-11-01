@@ -425,6 +425,8 @@ document.addEventListener(
       // Phase 32 plan 08 (PAGE-10): view source and (32-07 gap closure) F12 DevTools, page-focus only.
       { id: "viewSource", key: "U", modifiers: "accel", reserved: false, landsInTheia: false },
       { id: "devtoolsOpen", keycode: "VK_F12", modifiers: "", reserved: false, landsInTheia: false },
+      // Phase 33 plan 02 (BMK-01, D-15): Ctrl+D with a page focused; the editor opens in Theia, so it lands there.
+      { id: "bookmarkPage", key: "D", modifiers: "accel", reserved: false, landsInTheia: true, firefox: "addBookmarkAsKb" },
       // No upstream <key>: content's document navigation consumes F6, so these ride the reply listener below.
       { id: "focusAddressF6", keycode: "VK_F6", modifiers: "", reserved: false, landsInTheia: true, via: "replyListener" },
       { id: "focusAddressShiftF6", keycode: "VK_F6", modifiers: "shift", reserved: false, landsInTheia: true, via: "replyListener" },
