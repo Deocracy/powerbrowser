@@ -3714,6 +3714,8 @@ async function commandCentreHandoff(ctx) {
 const TYPED_TEXT_KINDS = ['resolveTypedAddress', 'searchSuggestions', 'autofillOrigin', 'searchPlaces'];
 const ENGINE_PATHS = ['/one/search', '/one/suggest', '/two/search', '/two/suggest'];
 const PRIVACY_TEXTS = ['hello', 'README', 'localhost:4000'];
+/** SMODE-07 (33-05): the type shapes a search engine would take -- a bare domain, a full URL, a multi-word query, a file:line pick. */
+const PRIVACY_SHAPES = ['example.com', 'https://example.org/a?b=c', 'what is power browser', 'README.md:12'];
 
 /** Wraps the page realm's ChromeStoreClient.request, the one method every store kind goes through, to record each kind. */
 const recordStoreKinds = app => probe(app, `const client = get('ChromeStoreClient');
@@ -3811,13 +3813,18 @@ async function commandCentrePrivacy(ctx) {
             await enterMode(app, mode.id);
             const kindMark = (await storeKinds(app)).length;
             const getMark = pages.requests.length;
-            for (const text of PRIVACY_TEXTS) {
+            for (const text of [...PRIVACY_TEXTS, ...PRIVACY_SHAPES]) {
                 await typeInPill(app, text);
                 await sleep(600);
             }
             const sent = (await storeKinds(app)).slice(kindMark).filter(kind => TYPED_TEXT_KINDS.includes(kind));
             for (const kind of [...new Set(sent)]) {
-                fail(`sent ${kind} from ${mode.label} while typing ${JSON.stringify(PRIVACY_TEXTS)}`);
+                fail(`sent ${kind} from ${mode.label} while typing ${JSON.stringify([...PRIVACY_TEXTS, ...PRIVACY_SHAPES])}`);
+            }
+            // SMODE-07: the live row this mode answers with stays all false while it holds typed text (no exception added).
+            const sends = await probe(app, `return get('AddressBar').modeSends();`);
+            if (!sends || Object.values(sends).some(v => v !== false)) {
+                fail(`${mode.label} holds typed text with a modeSends() row that is not all false: ${JSON.stringify(sends)}`);
             }
             const gets = pages.requests.slice(getMark).filter(r => ENGINE_PATHS.includes(r.path));
             if (gets.length) {
@@ -5933,6 +5940,322 @@ async function clearHistoryLive(ctx) {
     return undefined;
 }
 
+// Phase 33 plan 05 (MENU-03, SMODE-07): the full hamburger, the Actions list and one implementation per action.
+// Every expectation is derived from the tree: the table and its builder (imported under type stripping, as the static
+// gate does), row labels from the widget's appMenuLabel switch and CHROME_BAR_COPY, command ids from the command file,
+// the app-menu entry list from ROADMAP.md's Phase 33 success criterion 5.
+const MENU_TABLE = await import(new URL('../theia/extensions/chrome-bar/src/browser/site-identity/site-identity-table.ts', import.meta.url).href);
+const APP_MENU_BUILDER = await import(new URL('../theia/extensions/chrome-bar/src/browser/site-identity/app-menu.ts', import.meta.url).href);
+const MENU_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+const MENU_COMMANDS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
+const STOCK_WINDOW_COMMAND_ID = sourceConst('theia/extensions/tab-uris/src/browser/browser-window-command.ts', 'OPEN_BROWSER_WINDOW_COMMAND_ID');
+const ROADMAP_MENU = sourceMatch('.planning/ROADMAP.md', /### Phase 33:[\s\S]*?The app menu reaches (.+?); Actions mode runs/).split(/,\s*|\s+and\s+/).map(x => x.trim()).filter(Boolean);
+
+/** A hamburger row's label as drawn: CHROME_BAR_COPY through the widget's switch; a template's fixed prefix (`Quit `) as a RegExp. */
+function menuRowLabel(menuId) {
+    const key = sourceMatch(MENU_WIDGET_REL, new RegExp(`case '${menuId}': return CHROME_BAR_COPY\\.([A-Za-z]+)`));
+    try {
+        return copyPlain(key);
+    } catch {
+        const prefix = sourceMatch(CHROME_BAR_COPY_REL, new RegExp(`\\b${key}: \\([^)]*\\) => \`([^$\`]*)`));
+        return new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+    }
+}
+/** The rows this tree renders, in table order, each with its label. */
+const MENU_ROWS = APP_MENU_BUILDER.applyMenuOrder(MENU_TABLE.MENU_ORDER, APP_MENU_BUILDER.WIRED_MENU_IDS, MENU_TABLE.MENU_PHASE)
+    .map(({ row, enabled }) => ({ id: row.menuId, enabled, label: menuRowLabel(row.menuId) }));
+/** menuId -> the Browser command id its row runs (the widget's APP_MENU_COMMANDS), the id its Actions twin runs. */
+const MENU_ROW_COMMANDS = Object.fromEntries([...sourceMatch(MENU_WIDGET_REL, /const APP_MENU_COMMANDS[^=]*= Object\.freeze\(\{([\s\S]*?)\}\);/)
+    .matchAll(/'([a-z-]+)': (CHROME_BAR_[A-Z_]+_COMMAND_ID)/g)].map(m => [m[1], sourceConst(MENU_COMMANDS_REL, m[2])]));
+const ZOOM_IN_ID = sourceConst(MENU_COMMANDS_REL, 'CHROME_BAR_ZOOM_IN_COMMAND_ID');
+const FULL_SCREEN_ID = sourceConst(MENU_COMMANDS_REL, 'CHROME_BAR_FULL_SCREEN_COMMAND_ID');
+const labelOf = id => { const l = MENU_ROWS.find(r => r.id === id)?.label; return typeof l === 'string' ? l : null; };
+const sameLabel = (want, got) => (want instanceof RegExp ? want.test(got) : want === got);
+
+/** Wraps the page realm's CommandRegistry.executeCommand (an own property over the prototype's) to record each id run. */
+const recordCommands = app => probe(app, `const r = get('CommandRegistry');
+    const run = Object.getPrototypeOf(r).executeCommand;
+    window.__pbCommands = [];
+    r.executeCommand = function (id, ...rest) { window.__pbCommands.push(id); return run.call(this, id, ...rest); };
+    return true;`);
+const commandsRun = app => app.evaluate('JSON.stringify(window.__pbCommands || [])').then(JSON.parse);
+const restoreCommands = app => probe(app, `delete get('CommandRegistry').executeCommand; return true;`);
+
+/** Opens the hamburger with a trusted-shaped click on its button; returns the root menu's items, or [] when it did not open. */
+async function openAppMenuRoot(app) {
+    await closeOpenMenus(app);
+    const opened = await app.evaluate(`(() => { const b = document.querySelector('.pb-chrome-bar button[aria-label=${JSON.stringify(APP_MENU_LABEL)}]'); if (!b) return false; b.click(); return true; })()`);
+    const menus = opened === true ? await settle(() => readOpenMenus(app), m => m.length === 1 && m[0].length > 3, 10000) : [];
+    return menus.length === 1 ? menus[0] : [];
+}
+
+/** Opens the hamburger and hovers the submenu row `label`; returns the submenu's items, or [] when none opened. */
+async function openAppSubmenu(app, label) {
+    if (!(await openAppMenuRoot(app)).some(i => i.label === label)) {
+        return [];
+    }
+    await pointMenuRow(app, 0, label, { hover: true });
+    const menus = await settle(() => readOpenMenus(app), m => m.length === 2 && m[1].length > 0, 5000);
+    return menus.length === 2 ? menus[1] : [];
+}
+
+/** Chrome scope: the shell window's full-screen flag. */
+const shellFullScreen = app => inChrome(app, `const w = Services.wm.getMostRecentWindow('powerbrowser:main'); return w ? w.fullScreen : null;`);
+
+/**
+ * MENU-03 (D-11..D-14), ROADMAP Phase 33 criterion 5. The hamburger draws the table's rows in order with no
+ * "Coming soon" row, and holds every ROADMAP app-menu entry in ROADMAP order. Each command row runs the Browser
+ * command id its Actions twin runs (recorded at CommandRegistry.executeCommand): Print and Save Page As reach the
+ * tab method the page relay's key runs (stubbed so no modal opens), New Window runs GUI-01's stock-window command,
+ * Full Screen toggles the shell window both ways through the fullScreen store kind. The Bookmarks, Zoom, More
+ * Tools and Help submenus draw their rows; Zoom In changes the pushed zoom; Esc steps back one menu level;
+ * About opens the stock About dialog.
+ */
+async function appMenu(ctx) {
+    const { app, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    await recordCommands(app);
+    await recordStoreKinds(app);
+    await probe(app, `const proto = Object.getPrototypeOf(get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}));
+        window.__pbTabCalls = [];
+        window.__pbTabStubs = { print: proto.print, savePage: proto.savePage };
+        proto.print = function () { window.__pbTabCalls.push('print'); return Promise.resolve({ ok: true, where: 'stubbed' }); };
+        proto.savePage = function () { window.__pbTabCalls.push('savePage'); return Promise.resolve({ ok: true, where: 'stubbed' }); };
+        return true;`);
+    if (plant === 'menu-twin-diverges' && await probe(app, `const w = get('ChromeBarWidget'); const run = Object.getPrototypeOf(w).runAppMenuRow;
+        w.runAppMenuRow = function (row) {
+            if (row.menuId === 'print') { void get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).print(); return; }
+            return run.call(this, row);
+        };
+        return true;`) === true) {
+        note('PLANT menu-twin-diverges applied');
+    }
+    try {
+        const root = await openAppMenuRoot(app);
+        const drawn = root.filter(i => !i.separator);
+        if (!drawn.length) {
+            return fail(`${BROKEN} the hamburger did not open`);
+        }
+        if (drawn.length !== MENU_ROWS.length || !MENU_ROWS.every((row, i) => sameLabel(row.label, drawn[i]?.label ?? ''))) {
+            fail(`the hamburger must draw the table's rows in order ${JSON.stringify(MENU_ROWS.map(r => String(r.label)))}; drew ${JSON.stringify(drawn.map(i => i.label))}`);
+        }
+        const comingSoon = drawn.filter(i => /\(Coming soon\)$/.test(i.label));
+        if (comingSoon.length) {
+            fail(`a MENU-03 row rendered as a stub: ${JSON.stringify(comingSoon.map(i => i.label))}`);
+        }
+        const names = drawn.map(i => i.label.replace(/…$/, ''));
+        const missing = ROADMAP_MENU.filter(name => !names.includes(name));
+        const order = names.filter(name => ROADMAP_MENU.includes(name));
+        if (missing.length || JSON.stringify(order) !== JSON.stringify(ROADMAP_MENU)) {
+            fail(`the hamburger must hold the ROADMAP Phase 33 entries ${JSON.stringify(ROADMAP_MENU)} in that order; missing ${JSON.stringify(missing)}, drawn order ${JSON.stringify(order)}`);
+        }
+        await closeOpenMenus(app);
+
+        // One implementation per action: each command row runs its Actions twin's id.
+        for (const menuId of ['print', 'save-page', 'find-in-page', 'downloads', 'new-window']) {
+            const label = labelOf(menuId);
+            const id = MENU_ROW_COMMANDS[menuId];
+            if (!label || !id) {
+                fail(`${BROKEN} the ${menuId} row has no label or command id in the tree`);
+                continue;
+            }
+            await openAppMenuRoot(app);
+            const mark = (await commandsRun(app)).length;
+            const tabMark = (await app.evaluate('JSON.stringify(window.__pbTabCalls || [])').then(JSON.parse)).length;
+            await pointMenuRow(app, 0, label);
+            const ran = (await settle(() => commandsRun(app), v => v.slice(mark).includes(id), 5000)).slice(mark);
+            if (!ran.includes(id)) {
+                fail(`the ${label} row ran no Browser command id: its Actions twin runs ${id}; the row ran ${JSON.stringify(ran)}`);
+            }
+            const tabCalls = (await app.evaluate('JSON.stringify(window.__pbTabCalls || [])').then(JSON.parse)).slice(tabMark);
+            if (menuId === 'print' && !tabCalls.includes('print')) {
+                fail(`the ${label} row never reached the tab's print(), the method the Ctrl+P relay row runs`);
+            }
+            if (menuId === 'save-page' && !tabCalls.includes('savePage')) {
+                fail(`the ${label} row never reached the tab's savePage(), the method the Ctrl+S relay row runs`);
+            }
+            if (menuId === 'new-window' && !ran.includes(STOCK_WINDOW_COMMAND_ID)) {
+                fail(`New Window must open the stock window through ${STOCK_WINDOW_COMMAND_ID} (D-12); it ran ${JSON.stringify(ran)}`);
+            }
+            await closeOpenMenus(app);
+            await makeCurrent(app, tabId);
+        }
+
+        // Full Screen toggles the shell window both ways through the window-chrome kind.
+        const before = await shellFullScreen(app);
+        for (const step of ['enter', 'leave']) {
+            await openAppMenuRoot(app);
+            const kindMark = (await storeKinds(app)).length;
+            await pointMenuRow(app, 0, labelOf('full-screen'));
+            const now = await settle(() => shellFullScreen(app), v => v === (step === 'enter' ? !before : before), 5000);
+            if (now !== (step === 'enter' ? !before : before)) {
+                fail(`Full Screen (${step}) did not toggle the shell window: fullScreen is ${JSON.stringify(now)}, was ${JSON.stringify(before)}`);
+            }
+            if (!(await storeKinds(app)).slice(kindMark).includes('fullScreen')) {
+                fail(`Full Screen (${step}) sent no fullScreen store kind`);
+            }
+            await makeCurrent(app, tabId);
+        }
+
+        // Submenus: Bookmarks, Zoom, More Tools, Help; Esc steps back one level.
+        const bookmarks = await openAppSubmenu(app, labelOf('bookmarks'));
+        if (bookmarks[0]?.label !== copyPlain('bookmarkThisPageRow') || !bookmarks[0].shortcut
+            || !bookmarks.some(i => i.label === copyPlain('showBookmarksToolbarRow'))) {
+            fail(`the Bookmarks submenu must open on ${JSON.stringify(copyPlain('bookmarkThisPageRow'))} with its key, then ${JSON.stringify(copyPlain('showBookmarksToolbarRow'))}; saw ${JSON.stringify(bookmarks)}`);
+        }
+        await app.evaluate(`(() => { const m = [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0).pop();
+            m.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true })); return true; })()`);
+        const afterEsc = await settle(() => readOpenMenus(app), m => m.length === 1, 3000);
+        if (afterEsc.length !== 1) {
+            fail(`Esc in the Bookmarks submenu must step back to the hamburger alone; ${afterEsc.length} menus are open`);
+        }
+        await closeOpenMenus(app);
+        const zoomRows = (await openAppSubmenu(app, labelOf('zoom'))).filter(i => !i.separator);
+        const wantZoom = [copyPlain('zoomInRow'), copyPlain('zoomOutRow'), copyPlain('zoomResetRow')];
+        if (JSON.stringify(zoomRows.slice(0, 3).map(i => i.label)) !== JSON.stringify(wantZoom) || !/^Zoom: \d+%$/.test(zoomRows[3]?.label ?? '') || !zoomRows[3]?.disabled) {
+            fail(`the Zoom submenu must list ${JSON.stringify(wantZoom)} then a disabled "Zoom: {percent}" row; saw ${JSON.stringify(zoomRows)}`);
+        } else {
+            const mark = (await commandsRun(app)).length;
+            const pushMark = (await pushes(app)).length;
+            await pointMenuRow(app, 1, wantZoom[0]);
+            if (!(await settle(() => commandsRun(app), v => v.slice(mark).includes(ZOOM_IN_ID), 5000)).slice(mark).includes(ZOOM_IN_ID)) {
+                fail(`Zoom In ran no ${ZOOM_IN_ID}`);
+            }
+            const zoomed = await waitForPush(app, p => p.tabId === tabId && typeof p.zoom === 'number' && p.zoom > 1, { from: pushMark });
+            if (zoomed < 0) {
+                fail('Zoom In did not raise the tab zoom (no state push with zoom above 1)');
+            }
+            await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).zoomReset(); return true;`);
+        }
+        await closeOpenMenus(app);
+        const tools = (await openAppSubmenu(app, labelOf('more-tools'))).map(i => i.label);
+        const wantTools = [copyPlain('pageSourceRow'), copyPlain('readerViewRow'), copyPlain('pageDevToolsRow')];
+        if (JSON.stringify(tools) !== JSON.stringify(wantTools)) {
+            fail(`the More Tools submenu must list ${JSON.stringify(wantTools)}; saw ${JSON.stringify(tools)}`);
+        }
+        await closeOpenMenus(app);
+        const help = (await openAppSubmenu(app, labelOf('help'))).filter(i => !i.separator);
+        const aboutLabel = help[1]?.label ?? '';
+        if (help[0]?.label !== copyPlain('getHelpRow') || !/^About /.test(aboutLabel)) {
+            fail(`the Help submenu must list ${JSON.stringify(copyPlain('getHelpRow'))} then "About {App}"; saw ${JSON.stringify(help)}`);
+        } else {
+            await pointMenuRow(app, 1, aboutLabel);
+            const about = await settle(() => inChrome(app, `return !!Services.wm.getMostRecentWindow('Browser:About');`), v => v === true, 15000);
+            if (about !== true) {
+                fail('About {App} did not open the stock About dialog');
+            }
+            await inChrome(app, `const w = Services.wm.getMostRecentWindow('Browser:About'); if (w) w.close(); return true;`);
+        }
+    } finally {
+        await closeOpenMenus(app).catch(() => null);
+        await probe(app, `const proto = Object.getPrototypeOf(get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}));
+            if (window.__pbTabStubs) { proto.print = window.__pbTabStubs.print; proto.savePage = window.__pbTabStubs.savePage; }
+            delete get('ChromeBarWidget').runAppMenuRow;
+            delete get('ChromeStoreClient').request;
+            return true;`).catch(() => null);
+        await restoreCommands(app).catch(() => null);
+        await makeCurrent(app, tabId).catch(() => null);
+    }
+}
+
+/** The Actions rows as drawn: title and keybinding badges. */
+const readActionRows = app => app.evaluate(`JSON.stringify([...document.querySelectorAll('.pb-chrome-bar-dropdown .pb-chrome-bar-row:not(.is-shimmer)')]
+    .filter(r => r.querySelector('.pb-chrome-bar-row-title'))
+    .map(r => ({ title: r.querySelector('.pb-chrome-bar-row-title').textContent || '', badges: [...r.querySelectorAll('.pb-chrome-bar-row-badge')].map(b => b.textContent) })))`).then(JSON.parse);
+
+/** Derived now from the page realm: the labels of the listed Browser commands that carry a keybinding. */
+const boundCategoryLabels = app => probe(app, `const registry = get('CommandRegistry'); const keys = get('KeybindingRegistry');
+    return registry.commands.filter(c => c.category === ${JSON.stringify(COMMAND_CATEGORY)} && c.label && registry.isVisible(c.id) && registry.isEnabled(c.id)
+        && keys.getKeybindingsForCommand(c.id).length > 0).map(c => c.label);`);
+
+/** Runs the Actions row titled `title`: Actions mode, the title typed, the row highlighted, Enter. Returns whether it was highlighted. */
+async function runActionRow(app, title) {
+    await restoreDefaultMode(app);
+    await pickLocalMode(app, 'actions');
+    await typeInPill(app, title);
+    const view = await settle(() => readRows(app), v => v.rows.some(r => r.title === title && r.selected));
+    if (!view.rows.some(r => r.title === title && r.selected)) {
+        return false;
+    }
+    await pressKey(app, ENTER);
+    return true;
+}
+
+/**
+ * SMODE-07 (D-13). Actions lists exactly the visible, enabled Browser-category commands the registry holds now --
+ * the MENU-03 commands among them -- and each one with a keybinding shows its badge. Enter on a row runs its command
+ * id and nothing else: Full Screen, whose command's handler sends the fullScreen kind, is the positive control that
+ * the same store recorder catches a kind (B3); Zoom In then must reach no store kind at all.
+ */
+async function actionsList(ctx) {
+    const { app, plant, fail, note } = ctx;
+    const tabId = await sessionTab(ctx);
+    const want = await settle(() => categoryLabels(app), v => !!v && v.listed.length > 0);
+    const menuLabels = Object.values(MENU_ROW_COMMANDS).length;
+    if (!want?.listed.length || !menuLabels) {
+        return fail(`${BROKEN} no listed ${COMMAND_CATEGORY} commands or no menu command rows derived (${JSON.stringify(want)})`);
+    }
+    await restoreDefaultMode(app);
+    await pickLocalMode(app, 'actions');
+    const rowsNow = await settle(() => readActionRows(app), v => v.length >= want.listed.length);
+    const titles = rowsNow.map(r => r.title);
+    if (JSON.stringify([...titles].sort()) !== JSON.stringify([...want.listed].sort())) {
+        fail(`Actions must list exactly the visible, enabled ${COMMAND_CATEGORY} commands ${JSON.stringify(want.listed)}; saw ${JSON.stringify(titles)}`);
+    }
+    const bound = await boundCategoryLabels(app);
+    const unbadged = rowsNow.filter(r => bound.includes(r.title) && !r.badges.length).map(r => r.title);
+    if (!bound.length || unbadged.length) {
+        fail(`every Actions row whose command has a keybinding must show its badge; bound ${JSON.stringify(bound)}, unbadged ${JSON.stringify(unbadged)}`);
+    }
+    await restoreDefaultMode(app);
+    if (plant === 'actions-reach-store' && await probe(app, `const m = get('ActionsAddressBarMode'); const provide = Object.getPrototypeOf(m).provide;
+        m.provide = async function (text) {
+            return (await provide.call(this, text)).map(row => ({ ...row, run: async () => { await row.run(); await get('ChromeStoreClient').searchPlaces(text || 'x', 1).catch(() => null); } }));
+        };
+        return true;`) === true) {
+        note('PLANT actions-reach-store applied');
+    }
+    await recordCommands(app);
+    await recordStoreKinds(app);
+    try {
+        const fullScreenLabel = sourceMatch(MENU_COMMANDS_REL, /CHROME_BAR_FULL_SCREEN: Command = \{[^}]*label: '([^']+)'/);
+        const before = await shellFullScreen(app);
+        let mark = (await storeKinds(app)).length;
+        if (!(await runActionRow(app, fullScreenLabel))) {
+            return fail(`${BROKEN} the ${fullScreenLabel} Actions row could not be highlighted`);
+        }
+        const control = await settle(() => storeKinds(app), v => v.slice(mark).includes('fullScreen'), 5000);
+        if (!control.slice(mark).includes('fullScreen') || !(await commandsRun(app)).includes(FULL_SCREEN_ID)) {
+            return fail(`${BROKEN} the ${fullScreenLabel} Actions row must run ${FULL_SCREEN_ID} and the recorder must see its fullScreen kind, else "no store kind" below proves nothing (kinds ${JSON.stringify(control.slice(mark))})`);
+        }
+        await settle(() => shellFullScreen(app), v => v !== before, 5000);
+        await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(FULL_SCREEN_ID)}); return true;`);
+        await settle(() => shellFullScreen(app), v => v === before, 5000);
+        await makeCurrent(app, tabId);
+
+        const zoomLabel = sourceMatch(MENU_COMMANDS_REL, /CHROME_BAR_ZOOM_IN: Command = \{[^}]*label: '([^']+)'/);
+        mark = (await storeKinds(app)).length;
+        const commandMark = (await commandsRun(app)).length;
+        if (!(await runActionRow(app, zoomLabel))) {
+            return fail(`${BROKEN} the ${zoomLabel} Actions row could not be highlighted`);
+        }
+        const ran = (await settle(() => commandsRun(app), v => v.slice(commandMark).includes(ZOOM_IN_ID), 5000)).slice(commandMark);
+        await sleep(800);
+        if (JSON.stringify(ran) !== JSON.stringify([ZOOM_IN_ID])) {
+            fail(`the ${zoomLabel} Actions row must run ${ZOOM_IN_ID} and nothing else; it ran ${JSON.stringify(ran)}`);
+        }
+        const reached = (await storeKinds(app)).slice(mark);
+        if (reached.length) {
+            fail(`the ${zoomLabel} Actions row reached the store kind ${[...new Set(reached)].join(', ')}`);
+        }
+        await probe(app, `await get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).zoomReset(); return true;`);
+    } finally {
+        await probe(app, `delete get('ActionsAddressBarMode').provide; delete get('ChromeStoreClient').request; return true;`).catch(() => null);
+        await restoreCommands(app).catch(() => null);
+        await restoreDefaultMode(app).catch(() => null);
+    }
+}
+
 const SCENARIOS = {
     'token-cookie': tokenCookie,
     search,
@@ -5965,6 +6288,8 @@ const SCENARIOS = {
     'reopen-closed': reopenClosed,
     'history-menu': historyMenu,
     'clear-history': clearHistoryLive,
+    'app-menu': appMenu,
+    'actions-list': actionsList,
     // Last: command-centre reloads the Theia frame on the fixture workspace, and the scenarios after it run in that reloaded frame.
     'command-centre': commandCentre,
     'command-centre-handoff': commandCentreHandoff,
@@ -6094,6 +6419,8 @@ const PLANTS = [
     { plant: 'clear-drops-store', target: 'clear-history', run: ['clear-history'], expect: 'saved_pages still holds the planted in-range copy' },
     { plant: 'clear-takes-token', target: 'clear-history', run: ['clear-history'], expect: 'the IDE was signed out by the clear' },
     { plant: 'ctrl-d-everywhere', target: 'bookmark-keys', run: ['bookmark-star', 'bookmark-keys'], expect: 'Ctrl+D in the README.md editor' },
+    { plant: 'menu-twin-diverges', target: 'app-menu', run: ['app-menu'], expect: 'row ran no Browser command id' },
+    { plant: 'actions-reach-store', target: 'actions-list', run: ['actions-list'], expect: 'Actions row reached the store kind' },
     { plant: 'handoff-off', target: 'command-centre-handoff', run: ['search', 'command-centre', 'command-centre-handoff'], expect: "@ did not open Theia's picker" },
 ];
 
