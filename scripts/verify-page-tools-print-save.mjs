@@ -12,8 +12,12 @@
  *   2b. save path: the export mints its copy through savePageCopy (the one page-byte
  *      writer), keeps savePageCopy's refusals and minted-directory check, refuses a
  *      private or non-http(s) tab, and only accepts an absolute .html destination.
- *   3. no tab-modal path (D-08) and no browserDOMWindow shim (D-09a): the forbidden
- *      literals are absent from every chrome source once comments are stripped.
+ *   3. no tab-modal path (D-08) and no print through a browserDOMWindow (D-09a): the
+ *      forbidden literals are absent from every chrome source once comments are
+ *      stripped. Phase 36 (D-07) adds the shell's new-window receiver to the
+ *      boundary file, so there the rule is derived instead: every OPEN_PRINT_BROWSER
+ *      use is the Ci destructure or an `if` that returns null, and a receiver in the
+ *      file requires that null guard -- print still opens Gecko's own window.
  *   4. probe gate: scripts/lib/pb-probe-verdicts.json records print-today, and the
  *      verdict is a completing one. A missing key or a failing verdict is a
  *      blocker the executor reports, never an assumed pass (D-08a).
@@ -21,7 +25,7 @@
  *      file-write call. The chrome side is the only writer of page bytes (Pitfall 11).
  *
  * --self-test plants a dropped arm, a stale union member, a tab-modal call, a
- * browserDOMWindow shim, a failing verdict, a dropped save arm, a removed save
+ * browserDOMWindow shim, an adopted print location, a failing verdict, a dropped save arm, a removed save
  * guard, a removed minted-directory check and a Theia-side writer; each must go red
  * naming the drift.
  * Text reads only: --quick, no build, no browser, no display.
@@ -42,6 +46,10 @@ const THEIA_BROWSER_DIRS = ['theia/extensions/tab-uris/src/browser', 'theia/exte
 const FILE_WRITERS = /\b(writeFile|writeFileSync|createWriteStream|appendFile|appendFileSync|writeSync|copyFile|copyFileSync)\b/;
 // Names the tab-modal preview and the browserDOMWindow shim use. Absent from every chrome source, comments excluded.
 const FORBIDDEN = ['getTabDialogBox', '_openTabModalPrint', 'print.html', 'PrintPreview', 'browserDOMWindow', 'OPEN_PRINT_BROWSER', 'nsIBrowserDOMWindow', 'printUtils.js'];
+// Phase 36 (D-07): the boundary file may hold the new-window receiver; these three are then checked by PRINT_NULL_GUARD.
+const RECEIVER_NAMES = ['browserDOMWindow', 'OPEN_PRINT_BROWSER', 'nsIBrowserDOMWindow'];
+const PRINT_DESTRUCTURE = /const \{[^}\n]*\bOPEN_PRINT_BROWSER\b[^}\n]*\} = Ci\.nsIBrowserDOMWindow;/g;
+const PRINT_NULL_GUARD = /if \([^\n]*\bOPEN_PRINT_BROWSER\b[^\n]*\) \{\n\s*return null;/g;
 
 function stripComments(text) {
     return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
@@ -175,10 +183,24 @@ function checkPrint(sources) {
     for (const key of Object.keys(sources).filter(k => k.startsWith(`${SHELL_DIR}/`) || k === API)) {
         const code = stripComments(sources[key]);
         for (const literal of FORBIDDEN) {
+            if (key === API && RECEIVER_NAMES.includes(literal)) {
+                continue;
+            }
             if (code.includes(literal)) {
                 failures.push(`forbidden: ${key} carries '${literal}' outside a comment (no tab-modal print and no browserDOMWindow shim, D-08 and D-09a)`);
             }
         }
+    }
+
+    // 3b. the receiver's print location answers null (D-09a as amended by Phase 36 D-07).
+    const apiCode = stripComments(sources[API] ?? '');
+    const printUses = (apiCode.match(/\bOPEN_PRINT_BROWSER\b/g) || []).length;
+    const accounted = (apiCode.match(PRINT_DESTRUCTURE) || []).length + (apiCode.match(PRINT_NULL_GUARD) || []).length;
+    if (printUses !== accounted) {
+        failures.push(`print location: ${API} uses OPEN_PRINT_BROWSER ${printUses} time(s) but only ${accounted} are the Ci destructure or an if that returns null (a print request must open Gecko's own window, D-09a)`);
+    }
+    if (apiCode.includes('browserDOMWindow') && !(apiCode.match(PRINT_NULL_GUARD) || []).length) {
+        failures.push(`print location: ${API} installs a browserDOMWindow receiver with no OPEN_PRINT_BROWSER null guard (a print request would land in a shell-owned browser, D-09a)`);
     }
 
     // 4. probe gate: the recorded print-today verdict must exist and must complete.
@@ -241,6 +263,11 @@ function selfTest() {
             name: 'browserDOMWindow shim added to the shell',
             sources: { [`${SHELL_DIR}/powerbrowser.js`]: `${clean[`${SHELL_DIR}/powerbrowser.js`]}\nwindow.shimPrint = { browserDOMWindow: true };\n` },
             expect: 'browserDOMWindow',
+        },
+        {
+            name: 'print location adopted (the receiver drops its OPEN_PRINT_BROWSER null guard)',
+            sources: { [API]: plant(clean[API], 'if (tabIdOfBrowser(opener) === null || aWhere === OPEN_PRINT_BROWSER) {', 'if (tabIdOfBrowser(opener) === null) {') },
+            expect: 'print location',
         },
         {
             name: 'print-today verdict failing',

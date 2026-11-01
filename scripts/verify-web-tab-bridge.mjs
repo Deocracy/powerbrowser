@@ -21,9 +21,10 @@
  * removal is a shortfall, both reported by name, and a derivation that
  * yields nothing fails as a broken instrument rather than passing as a
  * comparison against nothing. The one rule that only BANS something (no
- * chrome-bar source may reach the stock-window command or a bare popup)
- * carries a registered positive control -- `browser-window-command.ts`
- * must still open its popup -- so "removed everywhere" cannot pass it.
+ * chrome-bar source may reach the stock-window command, the openStockTab
+ * kind or a bare popup) carries a registered positive control --
+ * `browser-window-command.ts` must still send openStockTab, as the one
+ * allow-listed sender (Phase 36) -- so "removed everywhere" cannot pass it.
  *
  * Comments are stripped before every derivation so header prose (this
  * file's, and the sources' own) never counts as a spelling.
@@ -108,6 +109,9 @@ const KIND_CLASSES = new Map([
     ['webTabReader', 'tab-navigation'],
     ['webTabViewSource', 'tab-navigation'],
     ['webTabDevtools', 'tab-navigation'],
+    // Phase 36 plan 01 (PROMPT-05): the adopt ack binds one new overlay to one new widget, so tab-lifecycle. Its
+    // companions adoptTab and dropAdoptedTab are chrome->frontend push kinds, which push-kind parity covers, not this map.
+    ['webTabAdopt', 'tab-lifecycle'],
 ]);
 
 /**
@@ -170,6 +174,8 @@ const STOCK_HTTP_HANDLER_PRIORITY = 500;
 /** Stock-window escape hatches no chrome-bar source may reach. */
 const STOCK_WINDOW_COMMAND = 'OPEN_BROWSER_WINDOW_COMMAND_ID';
 const WINDOW_OPEN = /window\.open\s*\(/;
+/** Phase 36: the stock-window actor kind; only `browser-window-command.ts` may send it. */
+const STOCK_TAB_KIND = /openStockTab|OPEN_STOCK_TAB_KIND/;
 
 /**
  * Strip `/* … *\/` blocks and `//` line comments. A `//` counts only when it
@@ -366,9 +372,30 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
         if (WINDOW_OPEN.test(src[file])) {
             failures.push(`${file}: calls window.open -- the chrome bar must land in the in-shell web tab, never a popup`);
         }
+        if (STOCK_TAB_KIND.test(src[file])) {
+            failures.push(`${file}: sends openStockTab -- ${BWC} is the one allow-listed stock-window sender`);
+        }
     }
-    if (!WINDOW_OPEN.test(src[BWC])) {
-        failures.push(`${BWC}: no longer calls window.open -- GUI-01's popup fallback is gone, and without this positive control the no-escape rule would pass on "removed everywhere" (browser-window-command must keep it)`);
+    // Positive control (Phase 36): the allow-listed sender still sends the kind, and no longer pops up.
+    if (!/const OPEN_STOCK_TAB_KIND = 'openStockTab'/.test(src[BWC]) || !/kind: OPEN_STOCK_TAB_KIND\b/.test(src[BWC])) {
+        failures.push(`${BWC}: no longer sends OPEN_STOCK_TAB_KIND ('openStockTab') -- GUI-01's only route to the stock window is gone, and without this positive control the no-escape rule would pass on "removed everywhere"`);
+    }
+    if (WINDOW_OPEN.test(src[BWC])) {
+        failures.push(`${BWC}: calls window.open -- a Phase 36 new-window receiver would divert that popup into a web tab; the command must send openStockTab only`);
+    }
+    // Dead channel (Phase 36): with channelAlive not true, openBrowserWindow throws its actionable error and opens nothing.
+    const bwcOpenBody = src[BWC].match(/openBrowserWindow\([^)]*\)\s*:\s*void\s*\{([\s\S]*?)\n {4}\}/)?.[1];
+    const aliveGate = bwcOpenBody?.match(/if \(this\.channelAlive === true[\s\S]*?\n {8}\}/);
+    if (!aliveGate) {
+        failures.push(`${BWC}: dead-channel rule found no openBrowserWindow gated on "this.channelAlive === true" -- the parse found nothing to check`);
+    } else {
+        const deadBranch = bwcOpenBody.slice(aliveGate.index + aliveGate[0].length);
+        if (WINDOW_OPEN.test(deadBranch)) {
+            failures.push(`${BWC}: dead-channel branch of openBrowserWindow calls window.open -- with the channel down it must throw the actionable error, never pop up`);
+        }
+        if (!/throw new Error\(\s*`\$\{OPEN_BROWSER_WINDOW_COMMAND_ID\}:[\s\S]*command palette/.test(deadBranch)) {
+            failures.push(`${BWC}: dead-channel branch of openBrowserWindow no longer throws the actionable error naming the command and the command palette`);
+        }
     }
 
     // 7. CHILD PURITY: zero privileged reach (belt to the boundary scan).
@@ -761,9 +788,24 @@ function selfTest() {
             expect: 'primary',
         },
         {
-            name: 'planted loss of the GUI-01 popup (positive control)',
-            sources: { ...clean, [BWC]: clean[BWC].replace(/window\.open\(/, 'windowOpen(') },
-            expect: 'browser-window-command',
+            name: 'planted loss of the openStockTab send (positive control)',
+            sources: { ...clean, [BWC]: clean[BWC].replace('kind: OPEN_STOCK_TAB_KIND', "kind: 'plantedKind'") },
+            expect: `${BWC}: no longer sends OPEN_STOCK_TAB_KIND`,
+        },
+        {
+            name: 'planted second openStockTab sender in the chrome bar',
+            sources: { ...clean, [`${CHROME_BAR_DIR}/planted-sender.ts`]: "document.dispatchEvent(new CustomEvent('PowerBrowserGroupRequest', { bubbles: true, detail: { msg: { kind: 'openStockTab', url } } }));\n" },
+            expect: `${CHROME_BAR_DIR}/planted-sender.ts: sends openStockTab`,
+        },
+        {
+            name: 'dead-channel-opens',
+            sources: { ...clean, [BWC]: replaceWithin(clean[BWC], 'protected openBrowserWindow(', '\n    }', 'throw new Error(', "window.open(target, '_blank');\n        throw new Error(") },
+            expect: 'dead-channel branch of openBrowserWindow calls window.open',
+        },
+        {
+            name: 'planted dead-channel branch that no longer throws',
+            sources: { ...clean, [BWC]: replaceWithin(clean[BWC], 'protected openBrowserWindow(', '\n    }', 'throw new Error(', 'console.error(') },
+            expect: 'dead-channel branch of openBrowserWindow no longer throws',
         },
         {
             name: 'planted inline lost-reply spelling',
@@ -797,6 +839,12 @@ function selfTest() {
                 [API]: replaceWithin(clean[API], 'async function handleWebTabAction(', '\n}', 'switch (kind) {', 'switch (kind) {\n    case "webTabPlantedArm": { break; }'),
             },
             expect: 'webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): webTabPlantedArm',
+        },
+        // Phase 36 plan 01: the adopt ack's arm renamed away leaves an unclassified arm and a stale entry, both by name.
+        {
+            name: 'webTabAdopt arm unclassified (renamed away from its KIND_CLASSES entry)',
+            sources: { ...clean, [API]: clean[API].replace('case "webTabAdopt": {', 'case "webTabAdoptUnclassified": {') },
+            expect: 'webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): webTabAdoptUnclassified',
         },
         // Phase 31 plan 02: the privileged webTab class is admitted only under its call-site rules.
         {

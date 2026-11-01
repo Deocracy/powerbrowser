@@ -83,10 +83,15 @@ const NEW_TAB_URL = 'about:newtab';
  * (all of them execute this command), so the window spam was every navigation
  * the chrome bar could start.
  *
- * `window.open` remains the fallback, not a leftover: it is what runs with no
- * chrome host at all (plain Theia in a dev browser).
+ * PHASE 36: the stock window is reached ONLY through the openStockTab actor
+ * kind. A Theia-frame `window.open` still falls through to stock chrome (the
+ * shell's browserDOMWindow returns null for a Theia opener), but this command
+ * no longer depends on that path, and the popup fallback is deleted. Recorded
+ * reduction (accepted, D-36): with the actor channel down the command throws
+ * its existing actionable error instead of opening stock chrome by
+ * `window.open`; the palette retry is the affordance.
  *
- * HOW THE FALLBACK IS DECIDED, AND WHY NOT AT CLICK TIME. F9 decided per click
+ * HOW AVAILABILITY IS DECIDED, AND WHY NOT AT CLICK TIME. F9 decided per click
  * by having the actor child cancel the request event and reading
  * `dispatchEvent`'s return value. Measured live against the built binary, by
  * two independent routes, that return value is still `true` with
@@ -95,7 +100,7 @@ const NEW_TAB_URL = 'about:newtab';
  * as well, and one click cost TWO windows. Awaiting the ack instead is not
  * available: a popup needs the user activation of the click that started it,
  * and an await spends it. So availability is decided ONCE, off the click path,
- * by `probeChannel` above; a click then takes exactly one of the two paths.
+ * by `probeChannel` below; a click then either sends openStockTab or throws.
  * `gui01-browser-close-does-not-quit` and `scripts/verify-gui01-command.mjs`
  * remain the registered checks over the contract this preserves.
  */
@@ -107,16 +112,15 @@ export class BrowserWindowCommandContribution implements CommandContribution {
 
     /**
      * Whether the chrome channel answered a liveness probe. `undefined` until
-     * the probe settles, which is why the fallback is the popup path: an
-     * unknown channel must behave exactly as it did before this channel
-     * existed, never speculatively.
+     * the probe settles; only `true` sends, so an unknown channel throws the
+     * actionable error rather than sending speculatively.
      */
     private channelAlive: boolean | undefined;
 
     @postConstruct()
     protected initChannelProbe(): void {
-        // Off the click path deliberately: this costs a round trip, and doing
-        // it during a click would spend the user activation window.open needs.
+        // Off the click path deliberately: this costs a round trip a click
+        // should not wait on.
         void this.probeChannel();
     }
 
@@ -124,8 +128,7 @@ export class BrowserWindowCommandContribution implements CommandContribution {
      * Asks chrome once whether this channel is available, and remembers the
      * answer. Never throws and never rejects: any failure -- no chrome host,
      * an actor child that did not load, a nack, or silence -- settles
-     * `channelAlive` false, which routes every click down the popup path the
-     * command shipped with.
+     * `channelAlive` false, which makes every click throw the actionable error.
      */
     protected probeChannel(): Promise<void> {
         return new Promise<void>(resolve => {
@@ -160,35 +163,26 @@ export class BrowserWindowCommandContribution implements CommandContribution {
     }
 
     /**
-     * `url` is optional: with none, the empty string opens the new window on
-     * `about:blank`, where the stock address bar is the affordance. Callers
-     * that have a URL (plan 01-06's escape action) pass it straight through.
+     * `url` is optional: with none, the stock window opens a New Tab, where
+     * the stock address bar is the affordance. Callers that have a URL (plan
+     * 01-06's escape action) pass it straight through.
      *
-     * The chrome channel is tried first and takes the whole call when it
-     * answers. Otherwise the original popup path runs unchanged: a blocked
-     * popup returns `null` rather than throwing, which would leave the user
-     * staring at nothing with no explanation -- so the null is turned into an
-     * error naming this contribution and what to do instead, per the
-     * extension's own handler conventions.
+     * Phase 36: the openStockTab actor kind is the only route. With the
+     * channel not known alive, or a non-web target, nothing would open, so
+     * the call throws an error naming this contribution and what to do
+     * instead rather than leaving the user staring at nothing.
      */
     protected openBrowserWindow(url?: string): void {
         const target = url ?? '';
-        // Exactly one of these two runs. The channel's availability is decided
-        // once, off the click path (see probeChannel below), so a click can
-        // never both hand the request to chrome AND open a popup -- which is
-        // what produced two windows per click.
         if (this.channelAlive === true && (!target || /^https?:\/\//i.test(target))) {
             this.requestStockTab(target || NEW_TAB_URL);
             return;
         }
-        const opened = window.open(target, '_blank');
-        if (!opened) {
-            throw new Error(
-                `${OPEN_BROWSER_WINDOW_COMMAND_ID}: the browser window was blocked and did not open -- ` +
-                'invoke the command directly from the command palette (a keypress or click carries the ' +
-                'user activation a popup needs) rather than from a script or a delayed handler'
-            );
-        }
+        throw new Error(
+            `${OPEN_BROWSER_WINDOW_COMMAND_ID}: the browser window was blocked and did not open -- ` +
+            'invoke the command directly from the command palette (a keypress or click carries the ' +
+            'user activation a popup needs) rather than from a script or a delayed handler'
+        );
     }
 
     /**
@@ -202,8 +196,7 @@ export class BrowserWindowCommandContribution implements CommandContribution {
      *
      * The scheme test is a routing decision, not the security wall -- chrome
      * re-applies its own, and chrome's is the one that counts. This one keeps
-     * a non-web scheme on the path it already had rather than handing it to a
-     * channel that will refuse it silently.
+     * a non-web scheme off a channel that would refuse it silently.
      */
     protected requestStockTab(url: string): boolean {
         if (url && !/^https?:\/\//i.test(url)) {

@@ -116,6 +116,8 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
     })).inSingletonScope();
     bind(WebTabOpenHandler).toSelf().inSingletonScope();
     bind(OpenHandler).toService(WebTabOpenHandler);
+    // Phase 36 (PROMPT-05): subscribes the adopt pushes at startup, before any page can open a window.
+    bind(FrontendApplicationContribution).toService(WebTabOpenHandler);
     bind(WebTabActivationContribution).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(WebTabActivationContribution);
 

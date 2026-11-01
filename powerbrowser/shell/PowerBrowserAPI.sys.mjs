@@ -3271,8 +3271,14 @@ export const PowerBrowserAPI = Object.freeze({
    *
    * Returns one of "opened" | "already-open" | "refused-scheme" | "loading" |
    * "unknown-tab"; handleGroupMutation echoes it as `where`.
+   *
+   * Phase 36 (PROMPT-05): `pending` ({ remoteType, openWindowInfo }) makes
+   * this the new-window adopt path's factory too, so one attribute literal
+   * builds every overlay. It returns the appended element with no entry, row,
+   * listener or load: Gecko loads into it, and webTabAttach registers it when
+   * the frontend acks (the adopt section at the end of the file).
    */
-  webTabOpen(theiaBrowser, actorRef, tabId, url, key) {
+  webTabOpen(theiaBrowser, actorRef, tabId, url, key, pending = null) {
     const spec = typeof url === "string" && url ? url : "about:blank";
     if (spec !== "about:blank" && !/^https?:\/\//i.test(spec)) {
       return "refused-scheme";
@@ -3297,7 +3303,8 @@ export const PowerBrowserAPI = Object.freeze({
     for (const [name, value] of Object.entries({
       type: "content",
       remote: "true",
-      remoteType: "web",
+      // An adopted new window keeps its opener's process type (tabbrowser.js:4249-4251).
+      remoteType: pending?.remoteType || "web",
       maychangeremoteness: "true",
       manualactiveness: "true",
       messagemanagergroup: "browsers",
@@ -3324,8 +3331,52 @@ export const PowerBrowserAPI = Object.freeze({
       visibility: "hidden",
       border: "none",
     });
+    // The window.opener truth for an adopted new window, set before the frameloader exists (tabbrowser.js:2801).
+    const openWindowInfo = pending?.openWindowInfo;
+    if (openWindowInfo) {
+      browser.openWindowInfo = openWindowInfo;
+    }
     doc.body.appendChild(browser);
     browser.docShellIsActive = false;
+    if (pending) {
+      return browser;
+    }
+    const entry = PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec);
+    tabHostAddTab(win, tabId, browser);
+    // NG-034: a tab the frontend reopened from last session's snapshot, with
+    // its history armed, gets its back/forward history back; any other tab
+    // loads its URL through the null-principal navigate below.
+    const history = PowerBrowserAPI.takeWebTabHistory(entry.rowKey);
+    if (history) {
+      PowerBrowserAPI.restoreWebTabHistory(browser, history).then(() => {
+        // 32-REVIEW WR-08: a crashed tab recreated for another URL (typed into its pill) goes there after its history is back.
+        if (history.crashKept && spec !== webTabPushedSpec(history.entries[history.index - 1].url)) {
+          PowerBrowserAPI.webTabNavigate(tabId, spec);
+        }
+      }, err => {
+        // Final-review M3: the restore failure can carry XPCOM/IOUtils text
+        // with the profile path -- fixed string plus err.name only.
+        PowerBrowserAPI.log("error", `[web-tab] history restore failed (${err && err.name ? err.name : "error"})`);
+        PowerBrowserAPI.webTabNavigate(tabId, spec);
+      });
+      return "opened";
+    }
+    // UF-30-01: not awaited, so a rejection is logged here; err.name only, never the URL.
+    PowerBrowserAPI.firstWebTabLoad(tabId, entry, spec).catch(err => {
+      PowerBrowserAPI.log("error", `[web-tab] first load failed (${err && err.name ? err.name : "error"})`);
+    });
+    return "opened";
+  },
+
+  /**
+   * The registration half of webTabOpen, split out so an adopted new window
+   * (Phase 36) gets the same entry, store row, listeners and webTabs record as
+   * a tab the frontend opened. It never loads and never adds a tab-host node:
+   * webTabOpen does both for its own tabs, and the tab-host node is webTabOpen's
+   * alone (verify-ext-tab-host-scope.mjs).
+   */
+  webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec) {
+    const win = theiaBrowser.ownerDocument.defaultView;
     // WebDriver reaches the overlay through gBrowser.webDriverTabs (the 050
     // TabManager hunk); extensions see it as a tab node (tabHostAddTab below).
     // NG-001: the row key is the tab's identity -- the key the frontend sent
@@ -3432,30 +3483,7 @@ export const PowerBrowserAPI = Object.freeze({
     // A browsing-context switch leaves a placeholder until the new page's location change (scheduleWebTabState).
     browser.addEventListener("DidChangeBrowserRemoteness", () => switchingOverlays.add(browser));
     webTabs.set(tabId, entry);
-    tabHostAddTab(win, tabId, browser);
-    // NG-034: a tab the frontend reopened from last session's snapshot, with
-    // its history armed, gets its back/forward history back; any other tab
-    // loads its URL through the null-principal navigate below.
-    const history = PowerBrowserAPI.takeWebTabHistory(entry.rowKey);
-    if (history) {
-      PowerBrowserAPI.restoreWebTabHistory(browser, history).then(() => {
-        // 32-REVIEW WR-08: a crashed tab recreated for another URL (typed into its pill) goes there after its history is back.
-        if (history.crashKept && spec !== webTabPushedSpec(history.entries[history.index - 1].url)) {
-          PowerBrowserAPI.webTabNavigate(tabId, spec);
-        }
-      }, err => {
-        // Final-review M3: the restore failure can carry XPCOM/IOUtils text
-        // with the profile path -- fixed string plus err.name only.
-        PowerBrowserAPI.log("error", `[web-tab] history restore failed (${err && err.name ? err.name : "error"})`);
-        PowerBrowserAPI.webTabNavigate(tabId, spec);
-      });
-      return "opened";
-    }
-    // UF-30-01: not awaited, so a rejection is logged here; err.name only, never the URL.
-    PowerBrowserAPI.firstWebTabLoad(tabId, entry, spec).catch(err => {
-      PowerBrowserAPI.log("error", `[web-tab] first load failed (${err && err.name ? err.name : "error"})`);
-    });
-    return "opened";
+    return entry;
   },
 
   /**
@@ -3973,6 +4001,58 @@ export const PowerBrowserAPI = Object.freeze({
    */
   isInitialLaunch(cmdLine) {
     return cmdLine.state === Ci.nsICommandLine.STATE_INITIAL_LAUNCH;
+  },
+
+  /**
+   * Phase 36 (PROMPT-05): the shell window's new-window receivers, installed
+   * once by powerbrowser.js. Gecko asks the chrome window for its
+   * browserDOMWindow when a page opens a new window (ContentParent.cpp:5427,
+   * 5490; nsContentTreeOwner.cpp:524, 550), so the receiver implements the
+   * whole nsIBrowserDOMWindow member set (nsIBrowserDOMWindow.idl:139, 153,
+   * 171, 186, 196, 202) with verbatim signatures. Only the two InFrame members
+   * adopt; the rest answer as a window with no tab strip of its own. A null
+   * from any member makes Gecko open its own new window, which is the GUI-01
+   * stock window. openLinkIn is not an IDL member: it is the chrome-window JS
+   * function stock link-click and context-menu code call (utilityOverlay.js:123,
+   * ClickHandlerParent.sys.mjs:146), and it must load (URILoadingHelper.sys.mjs:465).
+   * Both are defined here, never in powerbrowser.js (FORBIDDEN_PATTERNS).
+   */
+  installNewWindowReceivers(win) {
+    win.browserDOMWindow = {
+      QueryInterface: ChromeUtils.generateQI(["nsIBrowserDOMWindow"]),
+      // The in-process path (nsContentTreeOwner.cpp:550); every page here is remote, so null opens a stock window.
+      createContentWindow(aURI, aOpenWindowInfo, aWhere, aFlags, aTriggeringPrincipal, aPolicyContainer) {
+        return null;
+      },
+      createContentWindowInFrame(aURI, params, aWhere, aFlags, aName) {
+        return adoptContentWindow(aURI, params, aWhere);
+      },
+      openURI(aURI, aOpenWindowInfo, aWhere, aFlags, aTriggeringPrincipal, aPolicyContainer) {
+        return null;
+      },
+      openURIInFrame(aURI, params, aWhere, aFlags, aName) {
+        return adoptContentWindow(aURI, params, aWhere);
+      },
+      canClose() {
+        return true;
+      },
+      get tabCount() {
+        return 1;
+      },
+    };
+    win.openLinkIn = (url, where, params) => adoptLinkIn(url, where, params);
+  },
+
+  /**
+   * Phase 36 (PROMPT-05): opens `url` as an adopted web tab directly after the
+   * overlay `openerBrowser`, loaded with `triggeringPrincipal` (a null
+   * principal when absent). The public entry for chrome code that must open a
+   * page's window itself, such as allowing a blocked popup (Phase 37). Returns
+   * the pending overlay, "refused-scheme", or null when the opener is not an
+   * overlay this host holds (nothing is created then).
+   */
+  openAdoptedWebTab(openerBrowser, url, { inBackground = false, triggeringPrincipal = null } = {}) {
+    return adoptLinkIn(url, "tab", { openerBrowser, inBackground, triggeringPrincipal });
   },
 });
 
@@ -4533,7 +4613,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools", "webTabAdopt"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -5042,6 +5122,13 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
       return webTabDevtoolsReply(kind, data.tabId);
+    }
+    // Phase 36 (PROMPT-05): the frontend's ack for an adopted new window; the swap pc-<n> -> tabId binds them.
+    case "webTabAdopt": {
+      if (!webTabIdIsValid(data.tabId) || typeof data.pcKey !== "string" || !/^pc-[0-9]+$/.test(data.pcKey)) {
+        return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed tabId or pending key" };
+      }
+      return adoptPendingOverlay(kind, data.tabId, data.pcKey, actorRef);
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -6783,3 +6870,135 @@ function webTabPushedSpec(spec) {
   }
   return spec;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 36 (PROMPT-05): the new-window adopt section.
+//
+// installNewWindowReceivers (on the literal above) points the shell window's
+// new-window receivers here. An overlay opener gets a pending overlay,
+// chrome-first, built by webTabOpen's own factory and keyed pc-<n>; one
+// adoptTab push asks the frontend for a wt-* widget next to the opener, and
+// its webTabAdopt ack moves the overlay to that tab id. The swap is the
+// binding: no browser handle crosses to the frontend. A Theia-frame opener,
+// an opener this host does not hold, and a print request get null before
+// anything exists, so Gecko opens its own new window (ContentParent.cpp:
+// 5464-5472, 5505-5508), which is the GUI-01 stock window. With no ack in 5 s
+// the page opens through openStockTab instead, so a lost frontend never
+// swallows a navigation. Log lines carry the kind and the error text only.
+//
+// This section sits at the end of the file on purpose: nothing above the
+// last catalogued internals line moves when it grows.
+// ---------------------------------------------------------------------------
+
+// pc-<n> -> { browser, theiaBrowser, url }. A chrome-only correlator: never a
+// store key, never user-facing, never logged.
+const pendingContent = new Map();
+let pendingContentSeq = 0;
+// The frontend's own ack deadline (web-tab.ts WEB_TAB_ACK_TIMEOUT_MS).
+const ADOPT_ACK_TIMEOUT_MS = 5000;
+
+function mintPendingKey() {
+  pendingContentSeq += 1;
+  return `pc-${pendingContentSeq}`;
+}
+
+// openLinkIn: middle-click, Ctrl+click and context-menu opens. The stock function opens AND loads
+// (URILoadingHelper.sys.mjs:465), so this one loads the new overlay through its own docshell.
+function adoptLinkIn(url, where, params) {
+  const opener = params?.openerBrowser ?? null;
+  if (tabIdOfBrowser(opener) === null) {
+    return null;
+  }
+  const spec = typeof url === "string" && url ? url : "about:blank";
+  if (where !== "tab" && where !== "tabshifted") {
+    // "window" and anything else stock may send: the stock window, so a click is never swallowed.
+    PowerBrowserAPI.openStockTab(spec === "about:blank" ? "" : spec).catch(err => {
+      PowerBrowserAPI.log("error", `[web-tab] link stock-window open failed: ${err && err.message ? err.message : err}`);
+    });
+    return null;
+  }
+  const inBackground = typeof params.inBackground === "boolean"
+    ? params.inBackground
+    : Services.prefs.getBoolPref("browser.tabs.loadInBackground", true);
+  const browser = createPendingOverlay(opener, spec, where === "tabshifted" ? !inBackground : inBackground, null);
+  if (typeof browser === "string") {
+    return browser;
+  }
+  // The caller's principal, never the system principal on a page-chosen URL.
+  let triggeringPrincipal = params.triggeringPrincipal;
+  if (!triggeringPrincipal || triggeringPrincipal.isSystemPrincipal) {
+    triggeringPrincipal = Services.scriptSecurityManager.createNullPrincipal({});
+  }
+  browser.loadURI(Services.io.newURI(spec), { triggeringPrincipal });
+  return browser;
+}
+
+// The InFrame members: a page's window.open or target=_blank link (ContentParent.cpp:5490). Gecko loads into
+// the returned element itself, so nothing here navigates it (stock skipLoad, tabbrowser.js:2835).
+function adoptContentWindow(aURI, params, aWhere) {
+  const { OPEN_PRINT_BROWSER, OPEN_NEWTAB, OPEN_NEWTAB_BACKGROUND } = Ci.nsIBrowserDOMWindow;
+  const opener = params?.openerBrowser ?? null;
+  if (tabIdOfBrowser(opener) === null || aWhere === OPEN_PRINT_BROWSER) {
+    return null;
+  }
+  const divertedInBackground = Services.prefs.getBoolPref("browser.tabs.loadDivertedInBackground", false);
+  const background = aWhere === OPEN_NEWTAB_BACKGROUND || (aWhere === OPEN_NEWTAB && divertedInBackground);
+  const browser = createPendingOverlay(opener, aURI ? aURI.spec : "about:blank", background, params.openWindowInfo);
+  // refused-scheme: null, so Gecko's own new-window path takes the page, never an overlay.
+  return typeof browser === "string" ? null : browser;
+}
+
+// The scheme wall comes before any element exists; the opener wall is the callers'.
+function createPendingOverlay(opener, spec, background, openWindowInfo) {
+  if (spec !== "about:blank" && !/^https?:\/\//i.test(spec)) {
+    return "refused-scheme";
+  }
+  const openerTabId = tabIdOfBrowser(opener);
+  const theiaBrowser = opener.ownerDocument.getElementById(SHELL_CONTENT_BROWSER_ID);
+  const pcKey = mintPendingKey();
+  const browser = PowerBrowserAPI.webTabOpen(theiaBrowser, null, pcKey, spec, null, { remoteType: opener.remoteType, openWindowInfo });
+  const pending = { browser, theiaBrowser, url: spec };
+  pendingContent.set(pcKey, pending);
+  sendWebTabPush(theiaBrowser, { kind: "adoptTab", pcKey, openerTabId, url: spec, background });
+  PowerBrowserAPI.sleep(ADOPT_ACK_TIMEOUT_MS).then(() => adoptFallback(pcKey, pending));
+  return browser;
+}
+
+// No ack in time: the page opens through openStockTab (which waits out a starting stock window) and the
+// pending overlay goes. A shell window already closed opens nothing new.
+function adoptFallback(pcKey, pending) {
+  if (pendingContent.get(pcKey) !== pending) {
+    return;
+  }
+  pendingContent.delete(pcKey);
+  const live = pending.browser.currentURI?.spec ?? "";
+  const url = /^https?:\/\//i.test(live) ? live : pending.url;
+  const win = pending.theiaBrowser.ownerGlobal;
+  pending.browser.remove();
+  if (!win || win.closed) {
+    return;
+  }
+  PowerBrowserAPI.openStockTab(url === "about:blank" ? "" : url).catch(err => {
+    PowerBrowserAPI.log("error", `[web-tab] adoptTab fallback failed: ${err && err.message ? err.message : err}`);
+  });
+}
+
+// The webTabAdopt arm's body. A key chrome no longer holds (the fallback ran) or one another shell window
+// minted answers unknown-tab, and dropAdoptedTab tells the frontend to drop the widget it minted for it.
+function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
+  const theiaBrowser = actorRef.browsingContext.top.embedderElement;
+  if (webTabs.has(tabId)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a tabId that is already open" };
+  }
+  const pending = pendingContent.get(pcKey);
+  if (!pending || pending.theiaBrowser !== theiaBrowser) {
+    sendWebTabPush(theiaBrowser, { kind: "dropAdoptedTab", tabId });
+    return { ok: false, reason: "unknown-tab" };
+  }
+  pendingContent.delete(pcKey);
+  const live = pending.browser.currentURI?.spec ?? "";
+  PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, pending.browser, null, /^https?:\/\//i.test(live) ? live : pending.url);
+  scheduleWebTabState(theiaBrowser, tabId, pending.browser, pending.browser.webProgress?.isLoadingDocument ?? false, true);
+  return { ok: true, kind, where: "opened" };
+}
+// Phase 36: new-window adopt section end.

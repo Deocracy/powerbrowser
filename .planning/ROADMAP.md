@@ -478,9 +478,9 @@ Plans:
 **Plans**: 3 plans (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
-- [ ] 36-01-PLAN.md (wave 1) — Build the chrome half of PROMPT-05: a minimal nsIBrowserDOMWindow shim behind the boundary, installed by one `installNewWindowReceivers(window)` call, that adopts overlay-opener ne
-- [ ] 36-02-PLAN.md (wave 2) — Build the frontend half of PROMPT-05 on top of plan 36-01: WebTabOpenHandler.adopt (mint + tab-after + background-aware activation + webTabAdopt ack + unknown-key self-sweep), the 
-- [ ] 36-03-PLAN.md (wave 3) — Prove PROMPT-05 live in the built shell: _blank clicks and page window.open become opener-adjacent web tabs with a working window.opener (postMessage round-trip), close reselects t
+- [x] 36-01-PLAN.md (wave 1) — Build the chrome half of PROMPT-05: a minimal nsIBrowserDOMWindow shim behind the boundary, installed by one `installNewWindowReceivers(window)` call, that adopts overlay-opener ne
+- [x] 36-02-PLAN.md (wave 2) — Build the frontend half of PROMPT-05 on top of plan 36-01: WebTabOpenHandler.adopt (mint + tab-after + background-aware activation + webTabAdopt ack + unknown-key self-sweep), the 
+- [x] 36-03-PLAN.md (wave 3) — Prove PROMPT-05 live in the built shell: _blank clicks and page window.open become opener-adjacent web tabs with a working window.opener (postMessage round-trip), close reselects t
 
 ### Phase 37: Permission Prompts and Dialogs
 
@@ -549,7 +549,7 @@ Plans:
 | 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
 | 34. Tab Strip | 0/TBD | Not started | - |
 | 35. Shell Furniture and Page Context Menu | 0/TBD | Not started | - |
-| 36. New-Window Links as Web Tabs | 0/TBD | Not started | - |
+| 36. New-Window Links as Web Tabs | 3/3 | In Progress (live checks deferred) | - |
 | 37. Permission Prompts and Dialogs | 0/TBD | Not started | - |
 | 38. WebExtensions | 0/TBD | Not started | - |
 

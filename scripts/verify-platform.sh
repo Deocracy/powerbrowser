@@ -3824,6 +3824,18 @@ run_own_checks() {
     "gui02-web-tab-bridge|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs"
     "gui02-web-tab-bridge-self-test|node $REPO_ROOT/scripts/verify-web-tab-bridge.mjs --self-test"
 
+    # NEW (Phase 36 plan 01, PROMPT-05 chrome half): the shell window's
+    # new-window receivers. Derives the nsIBrowserDOMWindow member set from the
+    # pinned IDL plus upstream and shell call sites and compares it with the
+    # receiver literal as set equality, and checks the null fall-through for
+    # Theia and print openers, the one overlay factory, the split load rule
+    # (the InFrame path never loads, openLinkIn loads), the adopt arm's walls
+    # and reply words, the push payloads and pc-* hygiene. Honestly --quick:
+    # text reads plus one git grep over the pinned upstream, no build, no
+    # browser, no display, no network. The self-test rides alongside.
+    "new-window-adopt|node $REPO_ROOT/scripts/verify-new-window-adopt.mjs"
+    "new-window-adopt-self-test|node $REPO_ROOT/scripts/verify-new-window-adopt.mjs --self-test"
+
     # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the
     # WebTabMessage union, the routed set and the state fields agree (derive and
     # compare, set equality). The find gate also pins the Finder listener and the
@@ -4941,6 +4953,22 @@ run_own_checks() {
       "gui01-single-shell-window|check_gui01_single_shell_window"
       "gui01-browser-close-does-not-quit|node $REPO_ROOT/scripts/verify-gui01-window.mjs"
       "gui01-command-registered|check_gui01_command_registered"
+
+      # NEW (36-03, PROMPT-05): the live proof for a page's new windows. One
+      # probe-shell session drives seven scenarios: _blank and window.open
+      # land directly after the opener with the shell-window count at 1,
+      # close reselects the opener, the adopted page's window.opener answers a
+      # postMessage round trip, popup features stay a stock popup window,
+      # background and foreground focus match Firefox, a dropped ack reaches
+      # the stock window (waited on the context tree, never a fixed sleep),
+      # a javascript: URL opens nothing, and an unknown-key ack sweeps the
+      # orphan widget. The self-test plants eight faults, one per assertion,
+      # and requires each to go red naming its drift. Needs the built binary
+      # and the last Theia app build, so never --quick; the static half is
+      # new-window-adopt in the --quick set. The three GUI-01 rows directly
+      # above must stay green beside it, unmodified.
+      "new-window-adopt-live|node $REPO_ROOT/scripts/verify-new-window-adopt-live.mjs"
+      "new-window-adopt-live-self-test|node $REPO_ROOT/scripts/verify-new-window-adopt-live.mjs --self-test"
 
       # NEW (12-03): SQL-05's store gates, live halves. All five rows need the
       # built binary, so none is --quick; STAGED-exit-clean (binary or startup

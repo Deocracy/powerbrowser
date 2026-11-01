@@ -322,6 +322,7 @@ function makeFakeApi(state, overrides = {}) {
     createPermanentKey: () => ({}),
     getAppIdentity: () => ({ name: "Power Browser", vendor: "Power Browser", version: "0.0.0" }),
     notifyStartupFinished: () => {},
+    installNewWindowReceivers: () => {},
   };
   Object.assign(table, overrides);
   return new Proxy(table, {
