@@ -114,8 +114,9 @@ function check(src) {
         if (surplus.length) {
             failures.push(`menu: tab-menu rows name items ROADMAP criterion 1 does not offer: ${surplus.join(', ')}`);
         }
-        // Tracer (34-01 Task 1): the addition half only; the removal half lands with the full row set.
-        void missing;
+        if (missing.length) {
+            failures.push(`menu: ROADMAP criterion 1 items no tab-menu row offers: ${missing.join(', ')}`);
+        }
     }
 
     // 2. copy
@@ -210,10 +211,16 @@ function readSources() {
 /** Each plant edits one source in memory and must go red with a line naming `expect`. */
 const PLANTS = [
     {
+        name: 'menu-item-removed',
+        file: STRIP,
+        mutate: s => s.replace("contract: 'Close Duplicates', ", ''),
+        expect: 'Close Duplicates',
+    },
+    {
         name: 'copy-row-removed',
         file: COPY,
-        mutate: s => s.replace(/\n\s*reload: 'Reload',/, ''),
-        expect: 'reload',
+        mutate: s => s.replace(/\n\s*closeDuplicates: 'Close Duplicate Tabs',/, ''),
+        expect: 'closeDuplicates',
     },
     {
         name: 'occlusion-selector-dropped',
@@ -230,8 +237,8 @@ const PLANTS = [
     {
         name: 'codicon-deleted',
         file: CODICONS,
-        mutate: s => s.replace(/\.codicon-globe:before/g, '.codicon-planted-gone:before'),
-        expect: 'globe',
+        mutate: s => s.replace(/\.codicon-pin:before/g, '.codicon-planted-gone:before'),
+        expect: 'pin',
     },
     {
         name: 'current-widget-fallback',
