@@ -93,6 +93,9 @@ FORBIDDEN_PATTERNS=(
   # chromehidden attribute and the direct call of the stock module's anchorVisibilityChange -- so the next unrecorded
   # reach of either needs a row or goes red.
   'setAttribute("chromehidden"' 'anchorVisibilityChange'
+  # 35-REVIEW WR-07: three Phase 35 reaches that are not Services/Cc/Ci-shaped -- the user-input elevation, Firefox
+  # telemetry and the chrome-only Fluent constructor -- so the next unrecorded one needs a row or goes red.
+  'wrapHandlingUserInput' 'Glean.' 'new Localization'
 )
 
 is_conditional_pattern() {
