@@ -4627,6 +4627,17 @@ run_own_checks() {
     # NEW (Phase 45, CR-05): the drift comparator behind the container baseline.
     # Planted mismatched sysroot and UNMEASURED lines must go red; no host state read.
     "toolchain-baseline-self-test|bash $REPO_ROOT/scripts/toolchain-baseline.sh --self-test"
+    # NEW (Phase 49, AUTO-05): toolchain-container. build-linux measures the container toolchain in the
+    # build container and refuses drift from toolchain-baseline.txt before packaging (the same script with
+    # --measured); the baseline's lines match the keys and forms the emitter's --container block prints;
+    # its base image pin and apt snapshot equal the Containerfile's; no build-date pin in the workflow, the
+    # Containerfile, the baseline or the measured output. Honestly --quick: text reads and YAML parsing.
+    "toolchain-container|node $REPO_ROOT/scripts/verify-toolchain-container.mjs"
+    # toolchain-container-self-test: the green tree plus a fully measured fixture, then three families of
+    # plants, each red naming the drift: a drifted rustc line (measured, unprintable in the baseline, the
+    # drift step removed, moved after packaging, or failing open), a drifted image digest (either side) or
+    # apt snapshot, and a pinned build date (build env, Containerfile, measured output). In memory only.
+    "toolchain-container-self-test|node $REPO_ROOT/scripts/verify-toolchain-container.mjs --self-test"
     # NEW (Phase 45, CR-03): the release objdir name is read from mozconfig.release,
     # so the packager and the release rows share one value. Planted mozconfig text only.
     "release-objdir-self-test|node $REPO_ROOT/scripts/lib/release-objdir.mjs --self-test"
@@ -4983,8 +4994,10 @@ run_own_checks() {
     # the live draft list is compared by the release job, never here.
     "release-asset-set|node $REPO_ROOT/scripts/verify-release-asset-set.mjs"
     # release-asset-set-self-test plants a dropped asset (a notice and the manifest), an extra asset,
-    # a stable-name drift, a versioned-name drift, an assemble step missing the manifest or notice arm, a publish-before-equality order, a fail-open publish chain, a missing R2
-    # gate, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
+    # a stable-name drift, a versioned-name drift, an assemble step missing the manifest or notice arm, a publish-before-equality order, a fail-open publish chain, an R2
+    # copy that is missing, after the publish, failing open, local (no --remote), without its read-back or
+    # its overwrite refusal (DIST-08, plan 49-05), a Cloudflare credential in another step or another
+    # workflow, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
     # step. It writes nothing.
     "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
     # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A

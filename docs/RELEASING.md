@@ -58,17 +58,21 @@ with `pk12util -i`, signs every MAR with `signmar -d <db> -n powerbrowser-mar -s
 verifies each one against the tracked certificate imported into a scratch NSS
 database (`signmar -d <db> -n powerbrowser-mar -v`, see the verify form in
 `docs/BUILD.md` "Key-custody rung") **before** any upload, writes
-`SHA256SUMS`, creates the GitHub Release as a **draft** carrying every asset,
-attests build provenance, emits one `update.xml` per BUILD_TARGET with
-`scripts/build-update-xml.mjs --emit`, commits the descriptor tree to
-`Deocracy/powerbrowser-updates`, and only then publishes. Cloudflare
+`SHA256SUMS`, attests build provenance, creates the GitHub Release as a **draft**
+carrying every asset, checks the draft's asset set against the tree-derived set,
+copies each signed MAR to the R2 primary MAR origin at `<tag>/<asset>` (write-once,
+read back and compared), and only then publishes the Release once. The `descriptor`
+job, after the 1440-minute wait and the owner's approval, emits one `update.xml` per
+BUILD_TARGET with `scripts/build-update-xml.mjs --emit` and commits the descriptor tree
+to `Deocracy/powerbrowser-updates`. Cloudflare
 Pages serves that descriptor repository at `updates.powerbrowser.org`, where one
 `_redirects` rule maps the eleven-segment path baked into `application.ini` onto
 `<channel>/<BUILD_TARGET>/update.xml`. An installed client reads the update host
 out of its own `application.ini`, fetches the descriptor, downloads the MAR from
-the immutable Release asset URL (`github.com`, which 302s to
-`release-assets.githubusercontent.com`), verifies the signature against the fork
-certificates embedded in its own updater, and applies. A final `channel-live` job
+the R2 primary origin on its custom domain (`downloads.powerbrowser.org`, path
+`/<tag>/<asset>`, owner ruling 2026-10-29), verifies the signature against the fork
+certificates embedded in its own updater, and applies. The GitHub Release keeps the same
+signed bytes as the archival copy. A final `channel-live` job
 re-reads the published Release and the live channel and fails the release if they
 disagree. Reports travel the other way and share none of that path: a Report a Bug
 command opens a prefilled GitHub issue form in a stock browser window, and the
@@ -94,9 +98,10 @@ The build-provenance attestation names the hosted `sign-publish` job, not the le
 build that produced the bytes. A re-run of one job conflicts with the artifacts of
 the failed run only when upload-artifact cannot overwrite them; after a late failure
 start a fresh dispatch. The legion pre-job hook refuses any run attempt other than 1, so a
-re-run of a release run fails at set-up: a release re-run is always a fresh dispatch. Until plan 49-05 adds the R2 copy, `sign-publish` ends in a
-deliberate failure before the bot token is minted: a dispatch leaves a verified draft
-and publishes nothing.
+re-run of a release run fails at set-up: a release re-run is always a fresh dispatch. Until the owner has set the R2 bucket, account and
+token in the `release` environment (section "R2 primary MAR origin"), the R2 copy step
+fails closed before the bot token is minted: a dispatch leaves a verified draft and
+publishes nothing.
 
 ---
 
@@ -296,7 +301,7 @@ for the `objdir-release` rebuild. Both builds are auto tasks in their plans.
 
 | Stage | Work |
 |---|---|
-| `prerequisites-and-hardening` | Correct the two stale control claims and re-sync the pref comparands; write the nine `.github/settings/*.json` bodies and apply them; write this document's control half; register `scripts/verify-repo-controls.mjs` as the permanent drift check; rebase the ESR pin to `FIREFOX_153_2_0esr_RELEASE`, push `main` to parity and watch that run |
+| `prerequisites-and-hardening` | Correct the two stale control claims and re-sync the pref comparands; write the nine `.github/settings/*.json` bodies and apply them; write this document's control half; register `scripts/verify-repo-controls.mjs` as the permanent drift check; rebase the ESR pin to the 153.2.0 ESR release tag, push `main` to parity and watch that run |
 | `release-identity` | Configure-level probe of the four levers; `releaseIdentity()` in the generator with tracked comparands; policy file, hop gate, branding gate and documents follow the baked host; `scripts/verify-release-identity.mjs` with self-test and two registry rows; one batched dev rebuild proving the baked identity |
 | `mar-signing-and-update-integrity` | Carried out by non-GUI wave E Task 8 (NG-065): `patches/030-powerbrowser-mar-certificates.patch`; drop `--enable-unverified-updates`; tier-3 rebuild of N and N+1; fork-key signing per wave E plan Task 8 Produces, descriptor emission, updater-driven four-outcome proof (`ng065-mar-signature-enforced`) |
 | `packaged-product-correctness-linux` | Staging and packaging probe; `scripts/stage-sidecar.sh` and `patches/050-powerbrowser-package.patch`; application-directory resolution, profile-scoped Theia state, URL argument handling; variant-free legal notice; shell-side update-ready layer; four registry row pairs and `scripts/run-install-matrix.sh` |
@@ -816,6 +821,43 @@ The primary MAR origin is R2 at `downloads.powerbrowser.org` (owner ruling
 2026-10-29), and the update descriptor's `patchURL` names that host. The GitHub
 Release keeps the same signed bytes as the archival copy.
 
+### R2 primary MAR origin (DIST-08)
+
+One R2 bucket holds the signed MARs. Its own custom domain is the `mar_origin` host of
+`configuration.toml` `[urls]` (`downloads.powerbrowser.org`), with public read; no `r2.dev`
+URL is enabled. The key of each object is `<tag>/<asset>`, the path of the descriptor's patch
+URL, and keys are write-once. `sign-publish` copies each versioned signed MAR in the step
+`r2_copy`, after the draft's asset set is checked and before the bot token is minted, so the
+origin holds the bytes before any Release is public. For each key the step reads the key
+first: the same sha512 is a no-op, other bytes are refused (it never overwrites), and an
+absent key is written with `wrangler r2 object put --remote` and then read back and compared
+by sha512 before the step passes. A failed copy is rerun by a fresh dispatch at the same key,
+because no Release exists yet. wrangler is pinned by the committed lockfile in
+`.github/r2/wrangler` (wrangler 4.94.0, the version the tree's `flake.lock` resolves) and
+installed with every package script off. wrangler uploads at most 300 MiB per object, which a
+MAR must stay under. `release-asset-set` goes red when the step is missing, out of order,
+failing open, local (no `--remote`), or without its read-back or its overwrite refusal.
+
+Owner setup (plan 49-05 Task 3; nothing in the tree performs it):
+
+1. Enable R2 on the Cloudflare account (a payment method may be asked for).
+2. Create the MAR bucket.
+3. Attach `downloads.powerbrowser.org` to that bucket as its custom domain with public read,
+   and leave the `r2.dev` URL off. Confirm in the dashboard that the custom domain shows
+   active and that `r2.dev` access is disabled.
+4. In the `release` environment, set the variables `R2_MAR_BUCKET` (the bucket name) and
+   `CLOUDFLARE_ACCOUNT_ID` (the account id). Neither is a secret.
+5. Create an R2 API token with object read and write on the MAR bucket only (the read-back
+   needs read), and store it as the `release` environment secret `R2_MAR_WRITE_TOKEN`, nowhere
+   else. Record the holder and the date in `docs/RENEWALS.md` (row "Cloudflare R2
+   object-write token").
+
+A bad release is never fixed by replacing an object or deleting a Release: Releases are never
+deleted, R2 keys are never overwritten, and the fix is a new revision with a new tag and so a
+new key. The withdraw path (REL-02, owned by Phase 50) is no-update only: the 2026-10-29 ruling
+removes the R2-repoint mode, so a withdraw publishes a no-update descriptor and leaves the
+objects in place.
+
 The staged updates tree lives in this repository at `updates-staging/` and is copied,
 unchanged, into the `powerbrowser-updates` repository for the owner push.
 
@@ -959,6 +1001,8 @@ that is not admitted.
 | `descriptor` environment | no descriptor-repository PAT: the descriptor PAT is replaced by the scoped App token, a `powerbrowser-bot` token minted in the job with `repositories: powerbrowser-updates`, revoked when the job ends | `linux-release-pipeline-and-update-channel` | n/a, nothing to rotate |
 | `fixer` and `triage` environments | the Anthropic credential for each (see the fixer sections); no App key | the fixer and triage stages | GitHub, gated on the environment's branch policy |
 | Cloudflare Worker | the `powerbrowser-clock` App key, held by the Worker and not by any GitHub environment | Phase 43 | the Worker's secret store |
+| `release` environment | `R2_MAR_WRITE_TOKEN`: an R2 API token with object read and write on the MAR bucket only (the bucket behind `downloads.powerbrowser.org`); read by `sign-publish`'s `r2_copy` step and by no other step or workflow | `linux-release-pipeline-and-update-channel` (plan 49-05) | one holder, the owner (Christopher Colantuono); renewal row "Cloudflare R2 object-write token" in `docs/RENEWALS.md` |
+| `release` environment variables (not secrets) | `R2_MAR_BUCKET` (the MAR bucket name) and `CLOUDFLARE_ACCOUNT_ID` | `linux-release-pipeline-and-update-channel` (plan 49-05) | the owner |
 | `winget` environment | `WINGET_TOKEN`: a classic PAT with `public_repo` on a dedicated bot account whose only write access is its winget-pkgs fork (wingetcreate does not support fine-grained tokens), branch-restricted to `main`; it shares no environment with the signing key | `listings-and-cadence`, `package-channels` | the bot account holder, recorded in `docs/RENEWALS.md` |
 | Host filesystem on `legion` | no personal access token and no App key; only `/var/lib/secrets/github-runner-registration`, root-owned mode 0600, present from minting; the token inside it expires after one hour and is harmless afterwards, and the file stays because the unit reads it on every start; the hook copy `/etc/pb-runner/legion-pre-job-hook.sh`, root-owned mode 0555 | `linux-release-pipeline-and-update-channel` | the operator; not readable by the runner user `pb-runner` |
 | Two offline media, stored apart | On each: `powerbrowser-mar.p12` and `powerbrowser-mar-secondary.p12` (from the ceremony blocks' mandatory `pk12util` lines, each protected with its own store's `password.txt`) and both key-store passwords. The secondary `.p12` signs nothing and enters no environment until a rotation; if the owner ever dual-signs, it first gains its own named `release` rows in this table. The ceremony record holds each copy's existence and date, never a medium's location | `mar-signing-and-update-integrity` | the operator |
@@ -967,6 +1011,11 @@ Holders are named here and values never are: nothing in this table, the tree or 
 a token or key content. No secret reaches `legion` through Actions. The build job holds `contents: read`,
 no `environment:` and no `secrets.` reference; the static release-workflow gate
 asserts all three.
+
+The only Cloudflare credential any workflow holds is the R2 token in `release.yml`'s
+`r2_copy` step; `release-asset-set` goes red on a Cloudflare credential in any other step or
+workflow file. The maintenance sweep holds no Cloudflare token: it writes download counts
+through the telemetry Worker (TEL-11).
 
 ## Immutable releases consequence
 
@@ -1331,18 +1380,19 @@ and the source tarball. Then confirm the descriptor commit exists in
 complete patch rather than the empty `updates` element.
 
 **7. The liveness row.** `release.yml`'s final job `channel-live` runs
-`scripts/verify-update-channel-live.mjs --manifest <path>` against the release it
+`scripts/verify-channel-live.mjs --manifest <path>` against the release it
 just published. It derives the descriptor host, the eleven-segment path, the channel
 and the BUILD_TARGET set from the build job's own manifest, fetches each descriptor
 through the baked path (which exercises the `_redirects` rule rather than the
 underlying file path), HEADs the patch URL and compares Content-Length to the
 descriptor size, GETs the MAR and compares its sha512 to the descriptor hashValue,
-requires the patch URL to be https and to be the immutable
-`/releases/download/<tag>/` form rather than a latest-download form, and compares
+requires the patch URL to be https on the MAR origin host (`downloads.powerbrowser.org`)
+with the path `/<tag>/<asset>`, refusing a github.com download, a release-assets or a
+latest-download form before any MAR request, and compares
 appVersion and buildID against the published Release. It can also be run by hand:
 
 ```
-scripts/verify-platform.sh --only update-channel-live
+scripts/verify-platform.sh --only channel-live
 ```
 
 **8. The hop drill, before any announcement.** Install the published tarball as N,
@@ -1417,10 +1467,12 @@ Assets that carry no target token and are attached once per Release: `SHA256SUMS
 its `host` field names the build machine, which `release.yml` already names (owner decision
 2026-10-31). `SHA256SUMS` hashes it with every other asset.
 
-A descriptor's patch URL names the R2 MAR origin, `https://downloads.powerbrowser.org/<tag>/<asset>`
-(owner ruling 2026-10-29). It is never a github.com `/releases/download/` URL, because
-github.com is user-initiated and an unattended fetch from it fails the endpoint verdict.
-The live channel gate reddens on a latest-download URL.
+A descriptor's patch URL is the MAR origin plus `/<tag>/<asset>`,
+`https://downloads.powerbrowser.org/<tag>/<asset>` (owner ruling 2026-10-29), the key
+`sign-publish` wrote write-once. It is never a github.com `/releases/download/` URL, because
+github.com is user-initiated and an unattended fetch from it fails the endpoint verdict, and
+never a release-assets URL, because that signed URL expires about one hour after issue. The
+live channel gate reddens on either form and on a latest-download URL.
 
 ### Partner search codes (UPD-15, recorded 46-04)
 
@@ -1596,15 +1648,22 @@ Provision about 62 GB of free disk for them before registering.
    belongs to the owner's account, not the runner's, and a rebuild restores it only from the
    offline `.p12` backup.
 
+The sweep's `runner-online` row watches the runner. The `descriptor` environment's
+1440-minute wait is a wait timer, not a queued job, so a runner outage never shows there;
+watch `runner-online` for it.
+
 ### Cloudflare upkeep
 
-Two Pages projects, one Worker, one D1 database, one R2 bucket reserved for the
-gated crash sub-plan, and the DNS records for `updates.powerbrowser.org`, the events
-hostname and the site. The one contract that must not drift is the `_redirects` rule
+Two Pages projects, one Worker, one D1 database, two R2 buckets (the MAR bucket, the
+primary MAR origin on its custom domain `downloads.powerbrowser.org` with write-once
+`<tag>/<asset>` keys, next to the bucket reserved for the gated crash sub-plan), and the DNS
+records for `updates.powerbrowser.org`, `downloads.powerbrowser.org`, the events hostname and
+the site. The one contract that must not drift is the `_redirects` rule
 (or the `_worker.js` that replaced it) mapping the baked eleven-segment update path
 onto `<channel>/<BUILD_TARGET>/update.xml`: every installed client depends on it, and
-the baked path cannot be changed for builds already in users' hands. Free-tier caps
-are what keep MAR bytes on GitHub Release assets rather than on Pages.
+the baked path cannot be changed for builds already in users' hands. The Pages
+25 MiB file cap is what keeps MAR bytes in the R2 bucket rather than on Pages; R2 storage and
+the per-release artifact size are measured, not assumed (`docs/BUILD.md`, INF-04).
 
 #### The scheduler clock (INF-03)
 
@@ -1799,7 +1858,7 @@ checkpoint.
 **`FIREFOX_ESR` is advisory after the flip.** From 2027-06-29 product-details reports
 `175.0esr` as `FIREFOX_ESR`. The 153 line does not read it. Its candidate comes from the
 153 tag list, and the Phase 43 regression fixture (`FIREFOX_ESR=175.0esr` with
-`FIREFOX_153_23_0esr_RELEASE` present dispatches 153.23) stays in the detector self-test.
+the 153.23.0 ESR release tag present dispatches 153.23) stays in the detector self-test.
 The train never depends on an undocumented `FIREFOX_ESR153` key.
 
 ### Rebase onto 175 (UPS-01)
@@ -1956,7 +2015,8 @@ on the absence of a log line.
 | `install-matrix-linux` | 4 | Install, launch, coexistence and no-residue over paths derived from the packaged `application.ini` | Driver self-test |
 | `update-ready-layer` | 4 | The shell offers a working restart affordance, gated on the probe verdict about whether the stock prompt can render at all | Layer self-test |
 | `release-workflow` | 5 | Triggers, SHA pins, actions-policy admissibility, per-job permissions and the derived asset set | An unpinned action; an added `pull_request` trigger; `id-token: write` moved onto the legion job; a secret reference in the legion job; a dropped asset name; a third-party action absent from `patterns_allowed`; a verify invocation removed from between sign and upload; a renamed signing secret |
-| `update-channel-live` | 5 | The live channel agrees with the published Release, all derived from the build's manifest | A wrong `hashValue`; a missing target descriptor; a 404 MAR URL; a size mismatch; a latest-download patch URL |
+| `channel-live` | 5 | The live channel agrees with the published Release, all derived from the build's manifest and the tree; the patch URL is the MAR origin at `/<tag>/<asset>` | A wrong `hashValue`; a missing target descriptor; a 404 MAR URL; a size mismatch; a github.com, release-assets or other-host patch URL; a manifest `mar_origin` off the tree |
+| `toolchain-container` | 5 | The release build refuses container toolchain drift from `toolchain-baseline.txt` before packaging; the baseline's image pins equal the Containerfile's | A drifted rustc line; a drifted image digest; a pinned build date |
 | `installer-schema` (widened) | 6 | The staged NSIS sources carry fork defines and no Mozilla literal | Existing self-test widened |
 | `installer-build-proof` (widened) | 6 | The staged preprocessed `.nsi` sources contain no Mozilla telemetry host and no survey host, and still compile | Planted deny host in the staged tree |
 | `win-matrix-record` | 6 | Every schema cell (`scripts/matrix/win-matrix-schema.json`, shared with the writer) is PASS with verbatim evidence, or carries an explicit owner-approved deferral; the BUILD_TARGET parses from the installed `application.ini`; the registry diff names the expected namespace root (derived from patch 040) and nothing survives the uninstall; the SmartScreen text was observed on the guest; the version changed; the maintenance service was observed disabled | An all-FAIL record; a missing cell; a bare RED with no cause; an empty BUILD_TARGET; the wrong registry root; a SmartScreen text the guest never observed |

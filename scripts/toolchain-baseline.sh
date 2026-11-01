@@ -15,16 +15,19 @@
 # Outside a container the mode refuses and names that command, because host
 # numbers would describe the host, not the release toolchain.
 #
-# Phase 49 (AUTO-05) diffs this output against toolchain-baseline.txt with
-# drift failing the build. A line that cannot be measured prints UNMEASURED
-# and exits non-zero, so it can never match a committed value.
+# Phase 49 (AUTO-05): build-linux writes this output to a file and
+# scripts/verify-toolchain-container.mjs --measured compares it with
+# toolchain-baseline.txt, drift failing the build before packaging. A line that
+# cannot be measured prints UNMEASURED and exits non-zero, so it can never match
+# a committed value.
 set -euo pipefail
 
 CONTAINER_CMD='podman run --rm -v "$PWD:/src:rw" -w /src pb-gecko-build bash -c '"'"'MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container'"'"
 
 # drift <container-output> <committed-baseline>: red on any UNMEASURED line
 # and on any line that differs. Comment lines of the committed file are not
-# compared. Phase 49 (AUTO-05) calls this same comparator.
+# compared. The release build's comparison (verify-toolchain-container.mjs
+# --measured) applies the same rule.
 drift() {
     local bad=0 committed
     committed="$(grep -v '^#' "$2")"

@@ -36,7 +36,9 @@ const NAME = 'no-build-date-pin';
 const SELF_REL = 'scripts/verify-no-build-date-pin.mjs';
 const GENERATED = 'generated/';
 const EXCLUDED_PREFIX = '.planning/';
-const PIN = /\b(MOZ_BUILD_DATE|SOURCE_DATE_EPOCH)\b/;
+// Exported so verify-toolchain-container.mjs refuses the same pin without spelling the token.
+export const PIN_VARIABLES = Object.freeze(['MOZ_BUILD_DATE', 'SOURCE_DATE_EPOCH']);
+export const PIN = new RegExp(`\\b(${PIN_VARIABLES.join('|')})\\b`);
 const NEXT_PIN = 'Next step: remove the pin and let the BuildID come from the build time; if the value is derived per build, never from the tag or a constant, record why in this row before narrowing it.';
 
 /** The surfaces the assert must cover, each with the test that places a path on it. */

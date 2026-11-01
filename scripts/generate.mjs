@@ -2896,7 +2896,8 @@ export function manifestEndpointSources(config) {
         sources.push({ path, url: value, host });
     };
     take('telemetry.endpoint', config.telemetry?.endpoint);
-    for (const key of ['release_notes', 'update', 'crash_report', 'homepage', 'search']) {
+    // mar_origin: the primary MAR origin is an unattended update fetch host (DIST-08, owner ruling 2026-10-29).
+    for (const key of ['release_notes', 'update', 'mar_origin', 'crash_report', 'homepage', 'search']) {
         take(`urls.${key}`, config.urls?.[key]);
     }
     take('installer.support_url', config.installer?.support_url);
@@ -5768,8 +5769,8 @@ function selfTest() {
             };
             return [
                 ...checkOne(
-                    `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[telemetry]\nlevel = "all"\nendpoint = "https://collector.example.org/v1/events"\n[urls]\ncrash_report = "https://crash.example.org/report"\nupdate = "https://updates.example.org/update.xml"\nrelease_notes = "https://notes.example.org/releases"\nhomepage = "https://example.org"\n[installer]\nsupport_url = "https://example.org/support"\n`,
-                    ['collector.example.org', 'crash.example.org', 'example.org', 'notes.example.org', 'updates.example.org'],
+                    `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[telemetry]\nlevel = "all"\nendpoint = "https://collector.example.org/v1/events"\n[urls]\ncrash_report = "https://crash.example.org/report"\nupdate = "https://updates.example.org/update.xml"\nmar_origin = "https://downloads.example.org"\nrelease_notes = "https://notes.example.org/releases"\nhomepage = "https://example.org"\n[installer]\nsupport_url = "https://example.org/support"\n`,
+                    ['collector.example.org', 'crash.example.org', 'downloads.example.org', 'example.org', 'notes.example.org', 'updates.example.org'],
                     'https://collector.example.org/v1/events',
                     'https://crash.example.org/report',
                 ),

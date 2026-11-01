@@ -62,10 +62,11 @@ needed before a real `release.yml` dispatch can complete.
     authored from `docs/BUILD.md` and `verify.yml` and never run on legion. Open: the Theia build
     downloads plugins over the network during `yarn build`; whether the legion unit allows that is
     unmeasured. Items 6 and 7 stand.
-11. **R2 copy and the deliberate failure (review WR-06).** `sign-publish` carries a step `r2_gate`
-    that fails every run after the draft is verified and before the bot token is minted, so nothing
-    can publish without the DIST-08 copy. Plan 49-05 replaces it with an `r2_copy` step in the same
-    commit; the `release-asset-set` row accepts either and goes red if neither is there.
+11. **R2 copy and the deliberate failure (review WR-06).** Resolved by plan 49-05 Task 2: the `r2_gate`
+    step is replaced by `r2_copy`, which writes each versioned signed MAR write-once to R2 at
+    `<tag>/<asset>` and reads it back, and still fails closed (nothing published) while the R2 bucket,
+    account or token is absent from the `release` environment. `release-asset-set` now requires
+    `r2_copy` and no longer accepts `r2_gate`. The owner setup is the "49-05" section below.
 12. **Runner group and ref control (review WR-11).** The first-step ref refusal is defence in depth
     only. Plan 49-02 must register the runner in a group restricted to
     `release.yml@refs/heads/main`; the `release` and `descriptor` environments already carry the
@@ -214,3 +215,27 @@ Nothing below was run. No descriptor was committed, no token was minted, no envi
 4. **Reading the updates repo with the default token.** `channel-live` reads
    `<owner>/<repo>-updates/contents/...` with the job's `github.token`. That works only because the
    updates repo is public. Confirm on the first run.
+
+## 49-05: R2 primary MAR origin and measurement rows (owner, 2026-10-31)
+
+Plan 49-05 Tasks 1 and 2 are built; Task 3 (`checkpoint:human-action`) was not executed. Nothing
+below was run: no Cloudflare write, no token, no secret, no fallback build.
+
+1. Enable R2 on the Cloudflare account (a payment method may be asked for).
+2. Create the MAR bucket; attach `downloads.powerbrowser.org` as its custom domain with public read;
+   leave the `r2.dev` URL off. Confirm the custom domain shows active and `r2.dev` access is disabled.
+3. In the `release` environment set the variables `R2_MAR_BUCKET` and `CLOUDFLARE_ACCOUNT_ID`, and the
+   secret `R2_MAR_WRITE_TOKEN` (an R2 API token with object read and write on the MAR bucket only).
+   Store the token nowhere else.
+4. Fill the holder and the date on the "Cloudflare R2 object-write token" row of `docs/RENEWALS.md`.
+5. Reply with the holder name and the date, the bucket name, and the dashboard state of the custom
+   domain and of `r2.dev` (no token value).
+6. Not written by this run (Task 3's executor half, held by instruction): the INF-04 cold hosted
+   fallback procedure and its empty measured row, and the per-release artifact-size row against the
+   500 MB cap, in `docs/BUILD.md`. The numbers land at the first execution.
+7. Unmeasured until the first dispatch: that wrangler 4.94.0 authenticates with a bucket-scoped R2 API
+   token plus the account id (no membership lookup), that `r2 object get` of an absent key prints
+   "The specified key does not exist." (read from the 4.94.0 source, not run against a live bucket),
+   and that the MAR is under wrangler's 300 MiB upload limit. Also unmeasured: the in-container
+   `toolchain-baseline.sh --container` output (four baseline lines stay UNMEASURED, so the build-time
+   drift step refuses every release until they are copied from a container build).

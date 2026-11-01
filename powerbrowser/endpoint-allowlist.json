@@ -29,7 +29,13 @@
     {
       "host": "updates.powerbrowser.org",
       "disposition": "allow",
-      "reason": "08-04 (PKG-02, T-08-04a): the fork's own update-descriptor host. The only unattended callout the enabled updater may make: the application.ini [AppUpdate] URL from configuration.toml [urls] update, with no policy involved (UPD-12), and the hash-pinned update.xml it serves, fetched over HTTPS from infrastructure this project controls. Deliberate waiver in the same category as the Safe Browsing entries -- a real capability (self-update), not an inherited default. Until the static file host exists the name does not resolve and checks fail closed; scripts/verify-mar-update-hop.mjs proves each hop with zero *.mozilla.org / *.mozilla.net resolutions."
+      "reason": "08-04 (PKG-02, T-08-04a): the fork's own update-descriptor host. The descriptor host: the enabled updater's unattended update.xml fetch goes to the application.ini [AppUpdate] URL from configuration.toml [urls] update, with no policy involved (UPD-12), and the hash-pinned update.xml it serves comes over HTTPS from infrastructure this project controls. The MAR bytes come from the MAR origin row (downloads.powerbrowser.org, owner ruling 2026-10-29), the only other unattended update callout. Deliberate waiver in the same category as the Safe Browsing entries -- a real capability (self-update), not an inherited default. Until the static file host exists the name does not resolve and checks fail closed; scripts/verify-mar-update-hop.mjs proves each hop with zero *.mozilla.org / *.mozilla.net resolutions."
+    },
+    {
+      "host": "downloads.powerbrowser.org",
+      "disposition": "allow",
+      "manifest": "urls.mar_origin",
+      "reason": "UPD-15 and DIST-08, owner ruling 2026-10-29: the primary MAR origin. The update descriptor's patchURL names this host at /<tag>/<asset>, so the updater fetches MAR bytes unattended after the update.xml fetch. Served from the R2 bucket's own custom domain with public read; no r2.dev URL is enabled. Keys are write-once: release.yml's sign-publish copies each signed MAR here before the single publish and refuses to overwrite a key holding other bytes. Chosen over the release-assets host (its signed URL expires about one hour after issue) and over the updates host (Pages caps a single file at 25 MiB)."
     },
     {
       "host": "normandy.cdn.mozilla.net",
@@ -101,12 +107,12 @@
       "host": "github.com",
       "disposition": "user-initiated",
       "manifest": "urls.release_notes",
-      "reason": "UPD-33: the About dialog's release-notes link (app.releaseNotesURL, app.releaseNotesURL.aboutDialog and app.update.url.details from configuration.toml [urls] release_notes, UPD-13) points at the GitHub Releases page (SEED-002 section 7), reached only by an explicit click. network.dns.disablePrefetch = true closes the speculative prefetch; an unattended resolution of this host is a failure exactly as for a `deny` entry. Owner ruling 2026-10-25 (46 review WR-07): the unattended MAR download must never touch github.com; the update descriptor's patchURL and servedMarUrl name the write-once MAR origin (the mar_origin host of configuration.toml [urls], form <origin>/<tag>/<asset>) instead; the update-download-host row guards the github.com half."
+      "reason": "UPD-33: the About dialog's release-notes link (app.releaseNotesURL, app.releaseNotesURL.aboutDialog and app.update.url.details from configuration.toml [urls] release_notes, UPD-13) points at the GitHub Releases page (SEED-002 section 7), reached only by an explicit click. network.dns.disablePrefetch = true closes the speculative prefetch; an unattended resolution of this host is a failure exactly as for a `deny` entry. Owner ruling 2026-10-25 (46 review WR-07), amended 2026-10-29: the unattended MAR download must never touch github.com; the update descriptor's patchURL and servedMarUrl name the MAR origin row (downloads.powerbrowser.org, the mar_origin host of configuration.toml [urls], at /<tag>/<asset>) instead; the update-download-host row guards the github.com half."
     },
     {
       "host": "release-assets.githubusercontent.com",
-      "disposition": "allow",
-      "reason": "UPD-15: the updater fetches MAR bytes unattended after staging, so this host is allowed for that fetch (not a click destination, so not user-initiated). Constraint (owner ruling 2026-10-25, 46 review WR-07): the update descriptor's patchURL and servedMarUrl name the write-once MAR origin (the mar_origin host of configuration.toml [urls], form <origin>/<tag>/<asset>, owner ruling 2026-10-29), never a github.com /releases/download/ URL; github.com is user-initiated and an unattended request to it fails scripts/lib/endpoint-verdict.mjs. The constraint is recorded in 49-CONTEXT.md and 46-VERIFICATION.md and guarded by scripts/verify-update-download-host.mjs. Layer-3 observation of a real update's asset download is Phase 50 criterion 5, where the release drill (scripts/verify-mar-update-hop.mjs, served release) fails a resolver log that names this host."
+      "disposition": "user-initiated",
+      "reason": "UPD-15, reworded by the owner ruling 2026-10-29: this host is no longer the updater's download host. The descriptor names the R2 MAR origin (the downloads.powerbrowser.org row), because a signed release-assets URL expires about one hour after issue, so a static descriptor cannot name it. This host is reached only when a user clicks a GitHub Release asset link, which redirects here; an unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs). scripts/verify-update-download-host.mjs refuses a descriptor naming this host, and Phase 50 criterion 5 observes the R2 host in a real update's resolver log instead."
     },
     {
       "host": "cloudflare-dns.com",
