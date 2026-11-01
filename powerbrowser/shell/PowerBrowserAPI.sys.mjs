@@ -2651,7 +2651,7 @@ export const PowerBrowserAPI = Object.freeze({
       return {
         guid: item.guid ?? "",
         title: item.title ?? "",
-        url: item.url ?? url,
+        url: item.url ?? url, folder: bookmarkFolderName(item.parentGuid),
       };
     } catch {
       return null;
@@ -4162,7 +4162,7 @@ async function handleStoreRequest(data, actorRef) {
       }
       case "readBookmarkByUrl": {
         const bookmark = await PowerBrowserAPI.readBookmarkByUrl(storeUrlArg(data.url));
-        return { ok: true, kind, bookmark: bookmark && { guid: bookmark.guid, title: bookmark.title, url: String(bookmark.url) } };
+        return { ok: true, kind, bookmark: bookmark && { guid: bookmark.guid, title: bookmark.title, url: String(bookmark.url), folder: bookmark.folder } };
       }
       case "listBookmarkFolder": {
         const rows = PowerBrowserAPI.listBookmarkFolder(resolveBookmarkFolder(data.folderGuid)).map(row => ({ guid: row.guid, title: row.title, url: String(row.url) }));
@@ -6863,7 +6863,7 @@ function bookmarkTitleArg(method, title) {
 
 // Places hands back URL objects, which do not structured-clone: strings only.
 function bookmarkReply(item, fallbackUrl = "") {
-  return { guid: String(item.guid ?? ""), title: String(item.title ?? ""), url: String(item.url ?? fallbackUrl) };
+  return { guid: String(item.guid ?? ""), title: String(item.title ?? ""), url: String(item.url ?? fallbackUrl), folder: bookmarkFolderName(item.parentGuid) };
 }
 
 // BMK-01: bookmarks the page. Idempotent: a page already bookmarked answers its
@@ -7156,4 +7156,12 @@ async function clearHistory(range) {
     throw new Error(`clearHistory failed for ${failed.join(", ")}`);
   }
   return range;
+}
+
+// Phase 33 (33-02, BMK-02): the root a bookmark sits in, by the names the editor
+// sends ('toolbar' | 'menu' | 'unfiled'), or "" for any other folder, so the
+// editor's folder radios show where the bookmark is. Appended last so no
+// catalogued line moves.
+function bookmarkFolderName(parentGuid) {
+  return Object.keys(BOOKMARK_FOLDER_ROOTS).find(name => resolveBookmarkFolder(name) === parentGuid) ?? "";
 }

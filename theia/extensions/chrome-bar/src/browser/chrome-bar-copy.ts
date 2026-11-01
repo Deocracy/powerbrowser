@@ -174,6 +174,22 @@ export const CHROME_BAR_COPY = Object.freeze({
     // Phase 31 plan 05: a text badge, not a Theia accelerator: the Ctrl+Q key is chrome's reserved <key> row (powerbrowser.js).
     menuQuit: (subject: string) => `Quit ${subject} (Ctrl+Q)`,
     comingSoonRow: (label: string) => `${label} (Coming soon)`,
+    // Phase 33 plan 02 (BMK-01, BMK-02): the star and its editor (33-UI-SPEC Copywriting Contract); {shortcut} is the bound key's label.
+    bookmarkStarTip: (shortcut: string) => `Bookmark this page (${shortcut})`,
+    editBookmarkTip: (shortcut: string) => `Edit this bookmark (${shortcut})`,
+    cantBookmark: "You can't bookmark this page",
+    editBookmarkHeading: 'Edit bookmark',
+    bookmarkPageHeading: 'Bookmark this page',
+    bookmarkName: 'Name',
+    bookmarkFolder: 'Folder',
+    bookmarkFolderToolbar: 'Bookmarks Toolbar',
+    bookmarkFolderMenu: 'Bookmarks Menu',
+    bookmarkFolderOther: 'Other Bookmarks',
+    removeBookmark: 'Remove bookmark',
+    bookmarkCancel: 'Cancel',
+    bookmarkDone: 'Done',
+    bookmarkSaveFailed: (subject: string) => `${subject} couldn't save that bookmark. Press Enter to try again.`,
+    bookmarkRemoveFailed: (subject: string) => `${subject} couldn't remove that bookmark. Press Enter to try again.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

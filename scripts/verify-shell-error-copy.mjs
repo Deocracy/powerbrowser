@@ -708,6 +708,20 @@ const EXPECTED_NAV_COPY = new Set([
   "Help",
   "Quit ${name} (Ctrl+Q)",
   "${name} (Coming soon)",
+  "Bookmark this page (${name})",
+  "Edit this bookmark (${name})",
+  "You can't bookmark this page",
+  "Edit bookmark",
+  "Bookmark this page",
+  "Name",
+  "Folder",
+  "Bookmarks Toolbar",
+  "Bookmarks Menu",
+  "Other Bookmarks",
+  "Remove bookmark",
+  "Done",
+  "${name} couldn't save that bookmark. Press Enter to try again.",
+  "${name} couldn't remove that bookmark. Press Enter to try again.",
 ]);
 
 /**
@@ -1028,6 +1042,15 @@ const MODES_COPY_FAULTS = [
       [`${ADDRESS_BAR_DIR_REL}planted.tsx`]: "export const planted = <div aria-label='Planted pill copy' />;\n",
     }),
     expect: "Planted pill copy",
+  },
+  {
+    // Phase 33 plan 02: the star's tooltip lives in CHROME_BAR_COPY; spelling it in the pill bypasses the pin.
+    name: "a star tooltip spelled in address-bar.tsx instead of CHROME_BAR_COPY",
+    apply: (sources) => ({
+      ...sources,
+      [`${ADDRESS_BAR_DIR_REL}address-bar.tsx`]: `${sources[`${ADDRESS_BAR_DIR_REL}address-bar.tsx`] ?? ""}\nconst planted = <button aria-label='Edit this bookmark (Ctrl+D)' />;\n`,
+    }),
+    expect: "Edit this bookmark (Ctrl+D)",
   },
   {
     name: "all-caps sentinel leaked into the fallback notice",

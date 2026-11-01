@@ -125,8 +125,9 @@
     /* border-box like every sibling control: the xl token prescribes a 32px
        pill, and under content-box the 1px hairline rendered it at 34. */
     box-sizing: border-box;
-    /* 30-UI-SPEC: 4px on the left, where the mode button sits. */
-    padding: 0 12px 0 4px;
+    /* 30-UI-SPEC: 4px on the left, where the mode button sits; 33-UI-SPEC:
+       4px on the right, where the star sits. */
+    padding: 0 4px;
     background: var(--color-bg, #1c1b22);
     border: 1px solid var(--color-border, #3f3e4a);
     border-radius: 9999px;
@@ -230,6 +231,48 @@
     font-size: 16px;
 }
 
+/* BMK-01 (33-UI-SPEC): the star, last in the pill. Never accent: bookmarked is
+   the filled glyph in text ink, unbookmarked the outline in muted ink. */
+.pb-address-star {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-radius: 9999px;
+    color: var(--color-text-muted, #9a99a8);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.pb-address-star .codicon {
+    font-size: 16px;
+}
+
+.pb-address-star.is-bookmarked {
+    color: var(--color-text, #fbfbfe);
+}
+
+.pb-address-star:hover:not(:disabled) {
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-address-star:focus-visible {
+    outline: 1px solid var(--color-text-muted, #9a99a8);
+    outline-offset: 1px;
+}
+
+/* Dimmed, never removed: the layout does not shift (nav-button contract). */
+.pb-address-star:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
 .pb-address-mode-reset:hover {
     background: var(--color-border, #3f3e4a);
 }
@@ -288,6 +331,108 @@
     white-space: nowrap;
     font-size: 14px;
     line-height: 1.5;
+}
+
+/* BMK-02 (33-UI-SPEC): the star's editor, anchored under the star. */
+.pb-chrome-bar-dropdown.pb-bookmark-editor {
+    left: auto;
+    width: 320px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.pb-bookmark-editor-heading {
+    height: 24px;
+    font-size: 13px;
+    line-height: 24px;
+    color: var(--color-text, #fbfbfe);
+}
+
+.pb-bookmark-editor-failure {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text, #fbfbfe);
+}
+
+.pb-bookmark-editor-field,
+.pb-bookmark-editor-folders {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.pb-bookmark-editor-label {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted, #9a99a8);
+}
+
+.pb-bookmark-editor-name {
+    height: 32px;
+    padding: 0 8px;
+    box-sizing: border-box;
+    font-size: 14px;
+    color: var(--color-text, #fbfbfe);
+    background: var(--color-bg, #1c1b22);
+    border: 1px solid var(--color-border, #3f3e4a);
+    border-radius: 4px;
+}
+
+.pb-bookmark-editor-folder {
+    height: 32px;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 14px;
+    color: var(--color-text, #fbfbfe);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.pb-bookmark-editor-folder:hover {
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-bookmark-editor-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.pb-bookmark-editor-spacer {
+    flex: 1 1 auto;
+}
+
+.pb-bookmark-editor-remove,
+.pb-bookmark-editor-button {
+    height: 32px;
+    padding: 0 12px;
+    font-size: 14px;
+    color: var(--color-text, #fbfbfe);
+    background: transparent;
+    border: 1px solid var(--color-border, #3f3e4a);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+/* The destructive token, on exactly this button and the clear-history Clear button. */
+.pb-bookmark-editor-remove {
+    color: var(--color-danger, #ff848b);
+    border-color: var(--color-danger, #ff848b);
+}
+
+.pb-bookmark-editor-button.is-primary {
+    background: var(--color-surface-raised, #35343f);
+}
+
+.pb-bookmark-editor-remove:disabled,
+.pb-bookmark-editor-button:disabled {
+    opacity: 0.4;
+    cursor: default;
 }
 
 /* SITE-01: the plan-01 panel fallback keeps the panel geometry. */

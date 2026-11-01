@@ -21,11 +21,11 @@ import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { ConfirmDialog } from '@theia/core/lib/browser/dialogs';
 import pDebounce from 'p-debounce';
 import { MessageLoop } from '@theia/core/shared/@lumino/messaging';
-import { EMPTY_PAGE_URL, WebTabOpenHandler, WebTabShieldReply, WebTabSiteInfo, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { EMPTY_PAGE_URL, WebTabChannel, WebTabOpenHandler, WebTabShieldReply, WebTabSiteInfo, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { TabUriRegistry } from '@powerbrowser/tab-uris/lib/browser/tab-uri-registry';
-import { ChromeStoreClient, ResolvedAddress, SearchEngineList } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
-import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, currentWebTab, focusAddressPill, setAddressFocus } from '../chrome-bar-commands';
+import { BookmarkEntry, ChromeStoreClient, ResolvedAddress, SearchEngineList } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
+import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, bookmarkablePageUrl, currentWebTab, focusAddressPill, setAddressFocus, setOpenBookmarkStar } from '../chrome-bar-commands';
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
 import { PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, iconFor, isCanonizable, nextHighlight, safeIcon } from './address-bar-rows';
@@ -148,8 +148,8 @@ function dropKindOf(data: DataTransfer): 'link' | 'text' | 'none' {
  * Threat notes carried from the widget (13-03, Phase 29): suggestion titles
  * and captions render as React text nodes only, never markup; typed text
  * resolves chrome-side through resolveTypedAddress, with empty as a no-op;
- * the privileged store kinds (removeHistoryEntry, readClipboardText) run
- * only from this file's event handlers.
+ * the privileged store kinds (removeHistoryEntry, readClipboardText, and
+ * Phase 33's bookmark writes) run only from this file's event handlers.
  */
 @injectable()
 export class AddressBar {
@@ -209,6 +209,10 @@ export class AddressBar {
     @inject(LabelParser)
     protected readonly labelParser: LabelParser;
 
+    /** Phase 33 (BMK-01): chrome's Places bookmark push; the star re-reads on it. */
+    @inject(WebTabChannel)
+    protected readonly webTabs: WebTabChannel;
+
     /** Phase 29 (BAR-04): chrome's engine list; undefined until it arrives or when it failed. */
     protected engineList: SearchEngineList | undefined;
 
@@ -236,6 +240,7 @@ export class AddressBar {
     attach(host: ReactWidget): void {
         this.host = host;
         setAddressFocus(() => this.focusAddress());
+        setOpenBookmarkStar(() => void this.openBookmarkStar());
     }
 
     /**
@@ -668,6 +673,8 @@ export class AddressBar {
             }
         });
         void this.refreshEngines();
+        // BMK-01: a bookmark added, removed or moved anywhere re-reads the star for the page on screen.
+        this.webTabs.onDidChangeBookmarks(() => this.refreshStar(true));
     }
 
     /**
@@ -2268,6 +2275,8 @@ export class AddressBar {
      * (a tab switch) always syncs.
      */
     syncAddressFromWidget(widget: Widget | undefined, keepEdit = true): void {
+        // BMK-01: a navigation re-reads the star; an unchanged page reads nothing.
+        this.refreshStar();
         const address = this.addressOf(widget);
         if (keepEdit && this.inputValue !== this.committedAddress) {
             this.committedAddress = address;
@@ -2294,6 +2303,9 @@ export class AddressBar {
         // D-15: a tab change ends a picked mode.
         this.closeModesMenu();
         this.resetMode();
+        // BMK-02: the editor belongs to the page it was opened on.
+        this.closeBookmarkEditor(false);
+        this.refreshStar();
         this.draftOwner = widget;
         const draft = widget && this.drafts.get(widget);
         if (widget && draft !== undefined) {
@@ -2530,10 +2542,12 @@ export class AddressBar {
                     onBlur={this.onInputBlur}
                     onFocus={this.onInputFocus}
                 />
+                {this.renderStar()}
             </div>
             {this.renderDropdown()}
             {this.renderModesMenu()}
             {this.renderSitePanel()}
+            {this.renderBookmarkEditor()}
         </>;
     }
 
@@ -2555,6 +2569,227 @@ export class AddressBar {
             onSetPermission={(id, state) => { void this.setSitePermission(id, state); }}
             onClearSiteData={() => { void this.clearSiteDataFromPanel(); }}
             onToggleShield={except => { void this.setSiteShield(except); }}
+        />;
+    }
+
+    /** Phase 33 (BMK-01): the page the star last read for ('' when none is bookmarkable). */
+    protected starUrl = '';
+    /** Phase 33 (BMK-01): that page's bookmark, or null; null until the read arrives (the unbookmarked form still accepts a click). */
+    protected starBookmark: BookmarkEntry | null = null;
+    /** Drops a read that a newer navigation or push overtook. */
+    protected starSeq = 0;
+    protected starRef: HTMLButtonElement | null = null;
+    /**
+     * Phase 33 (BMK-01): the bound Ctrl+D label from the page-shortcut table,
+     * set by the relay that owns the table (this file must not import it at
+     * runtime: the table's module imports this one). '' names no key.
+     */
+    starShortcut = '';
+    /** Phase 33 (BMK-02): the open editor, or undefined. */
+    protected bookmarkEditor: BookmarkEditorState | undefined;
+
+    /**
+     * BMK-01: re-reads the active page's bookmark through the readBookmarkByUrl
+     * point-read. Without `force` an unchanged page reads nothing; the
+     * `bookmarks-changed` push forces it. The pill never reads Places itself.
+     */
+    protected refreshStar(force = false): void {
+        const url = bookmarkablePageUrl();
+        if (!force && url === this.starUrl) {
+            return;
+        }
+        if (url !== this.starUrl) {
+            this.starBookmark = null;
+        }
+        this.starUrl = url;
+        const seq = ++this.starSeq;
+        if (!url) {
+            this.update();
+            return;
+        }
+        this.store.readBookmarkByUrl(url).then(bookmark => bookmark, () => null).then(bookmark => {
+            if (seq === this.starSeq) {
+                this.starBookmark = bookmark;
+                this.update();
+            }
+        });
+    }
+
+    /** The star's tooltip and accessible name: the state's copy with the bound key, or the bare heading when no key is bound. */
+    protected starLabel(url: string, bookmarked: boolean): string {
+        if (!url) {
+            return CHROME_BAR_COPY.cantBookmark;
+        }
+        if (bookmarked) {
+            return this.starShortcut ? CHROME_BAR_COPY.editBookmarkTip(this.starShortcut) : CHROME_BAR_COPY.editBookmarkHeading;
+        }
+        return this.starShortcut ? CHROME_BAR_COPY.bookmarkStarTip(this.starShortcut) : CHROME_BAR_COPY.bookmarkPageHeading;
+    }
+
+    /** BMK-01 (D-01): the star, last in the pill in every mode; disabled-not-removed when no http(s) page is on screen. */
+    protected renderStar(): React.ReactNode {
+        const url = bookmarkablePageUrl();
+        const bookmarked = !!url && url === this.starUrl && !!this.starBookmark;
+        const label = this.starLabel(url, bookmarked);
+        return <button
+            type='button'
+            ref={el => { this.starRef = el; }}
+            className={'pb-address-star' + (bookmarked ? ' is-bookmarked' : '')}
+            disabled={!url}
+            aria-label={label}
+            aria-haspopup='dialog'
+            aria-expanded={!!this.bookmarkEditor}
+            // Pointer, not mouse, enter: a disabled star keeps its tooltip.
+            onPointerEnter={e => this.hover.requestHover({
+                content: label,
+                target: e.currentTarget,
+                position: 'top',
+                cssClasses: ['pb-chrome-bar-hover'],
+            })}
+            onClick={() => void this.openBookmarkStar()}
+        >
+            <span className={'codicon ' + (bookmarked ? 'codicon-star-full' : 'codicon-star-empty')} aria-hidden='true' />
+        </button>;
+    }
+
+    /**
+     * BMK-01: the star's click, the bookmark-page command (Ctrl+D with Theia
+     * focused) and the page relay's Ctrl+D all come here. An unbookmarked page
+     * is bookmarked in Firefox's default folder, then the editor opens; a
+     * bookmarked page opens the editor directly. A failed bookmark opens the
+     * editor on its failure row, where Enter retries.
+     */
+    async openBookmarkStar(): Promise<void> {
+        const tab = currentWebTab();
+        const url = bookmarkablePageUrl(tab);
+        if (!tab || !url) {
+            return;
+        }
+        if (this.bookmarkEditor) {
+            return;
+        }
+        this.closeDropdown();
+        this.closeModesMenu();
+        this.closeSitePanel();
+        let bookmark = url === this.starUrl ? this.starBookmark : null;
+        let created = false;
+        let failure: string | undefined;
+        if (!bookmark) {
+            try {
+                bookmark = await this.store.bookmarkPage(url, tab.pageTitle);
+                created = true;
+            } catch {
+                failure = CHROME_BAR_COPY.bookmarkSaveFailed(appSubject());
+            }
+        }
+        // The tab or its page changed while chrome answered: the editor would describe the wrong page.
+        if (bookmarkablePageUrl() !== url || this.bookmarkEditor) {
+            return;
+        }
+        if (bookmark) {
+            this.starUrl = url;
+            this.starBookmark = bookmark;
+        }
+        const name = bookmark ? bookmark.title : tab.pageTitle;
+        const folder = bookmark?.folder ?? '';
+        this.bookmarkEditor = {
+            url, guid: bookmark?.guid, created: created || !bookmark, name, initialName: name, folder, initialFolder: folder,
+            failure, retry: 'save', busy: false,
+        };
+        this.update();
+    }
+
+    /** BMK-02: closes the editor without saving; focus returns to the star (history-menu onHide precedent). */
+    protected closeBookmarkEditor = (restoreFocus = true): void => {
+        if (!this.bookmarkEditor) {
+            return;
+        }
+        this.bookmarkEditor = undefined;
+        this.update();
+        if (restoreFocus) {
+            setTimeout(() => this.starRef?.focus());
+        }
+    };
+
+    /**
+     * BMK-02: Done (and Enter in the Name field). An existing bookmark sends
+     * only what changed through updateBookmark; a bookmark the star could not
+     * create is created now with the chosen name and folder. A refusal keeps
+     * the panel and its text with the failure row.
+     */
+    protected async saveBookmarkEditor(): Promise<void> {
+        const editor = this.bookmarkEditor;
+        if (!editor || editor.busy || !editor.name.trim()) {
+            return;
+        }
+        editor.busy = true;
+        try {
+            if (editor.guid) {
+                const title = editor.name !== editor.initialName ? editor.name : undefined;
+                const folder = editor.folder !== editor.initialFolder && editor.folder ? editor.folder : undefined;
+                if (title !== undefined || folder !== undefined) {
+                    await this.store.updateBookmark(editor.guid, title, folder);
+                }
+            } else {
+                await this.store.bookmarkPage(editor.url, editor.name, editor.folder || undefined);
+            }
+        } catch {
+            this.failBookmarkEditor(editor, 'save');
+            return;
+        }
+        editor.busy = false;
+        if (this.bookmarkEditor === editor) {
+            this.closeBookmarkEditor();
+        }
+        this.refreshStar(true);
+    }
+
+    /** BMK-02: Remove runs at once (the panel is the confirmation) and removes every bookmark of the page, as Firefox's star does. */
+    protected async removeFromBookmarkEditor(): Promise<void> {
+        const editor = this.bookmarkEditor;
+        if (!editor || editor.busy || !editor.guid) {
+            return;
+        }
+        editor.busy = true;
+        try {
+            await this.store.removeBookmark(editor.url);
+        } catch {
+            this.failBookmarkEditor(editor, 'remove');
+            return;
+        }
+        editor.busy = false;
+        if (this.bookmarkEditor === editor) {
+            this.closeBookmarkEditor();
+        }
+        this.refreshStar(true);
+    }
+
+    protected failBookmarkEditor(editor: BookmarkEditorState, retry: 'save' | 'remove'): void {
+        editor.busy = false;
+        editor.retry = retry;
+        editor.failure = retry === 'save' ? CHROME_BAR_COPY.bookmarkSaveFailed(appSubject()) : CHROME_BAR_COPY.bookmarkRemoveFailed(appSubject());
+        this.update();
+    }
+
+    /** BMK-02 (D-02): the editor, a `.pb-chrome-bar-dropdown` portal anchored under the star, never a Theia dialog. */
+    protected renderBookmarkEditor(): React.ReactNode {
+        const editor = this.bookmarkEditor;
+        if (!editor) {
+            return undefined;
+        }
+        // 33-UI-SPEC geometry: 4px under the pill, the panel's right edge on the star's.
+        const pill = this.pillRef?.getBoundingClientRect();
+        const star = this.starRef?.getBoundingClientRect();
+        return <BookmarkEditor
+            editor={editor}
+            top={Math.round((pill?.bottom ?? 0) + 4)}
+            right={Math.round(window.innerWidth - (star?.right ?? window.innerWidth))}
+            onName={name => { editor.name = name; this.update(); }}
+            onFolder={folder => { editor.folder = folder; this.update(); }}
+            onDone={() => void this.saveBookmarkEditor()}
+            onEnter={() => void (editor.failure && editor.retry === 'remove' ? this.removeFromBookmarkEditor() : this.saveBookmarkEditor())}
+            onRemove={() => void this.removeFromBookmarkEditor()}
+            onClose={() => this.closeBookmarkEditor()}
         />;
     }
 
@@ -2933,4 +3168,109 @@ export class AddressBar {
             </span>
         </div>;
     }
+}
+
+/** Phase 33 (BMK-02): the open star editor. `guid` undefined: the star's bookmark write failed, so Done creates it. */
+export interface BookmarkEditorState {
+    url: string;
+    guid: string | undefined;
+    /** The star made this bookmark just now (heading "Bookmark this page"), else "Edit bookmark". */
+    created: boolean;
+    name: string;
+    initialName: string;
+    /** 'toolbar' | 'menu' | 'unfiled', or '' (another folder, or not known). */
+    folder: string;
+    initialFolder: string;
+    failure: string | undefined;
+    /** What Enter repeats while the failure row shows. */
+    retry: 'save' | 'remove';
+    busy: boolean;
+}
+
+/** BMK-02: the three root folders, one level (nested folders are deferred), keyed by the names chrome resolves. */
+const BOOKMARK_FOLDERS: ReadonlyArray<{ folder: string; label: () => string }> = [
+    { folder: 'toolbar', label: () => CHROME_BAR_COPY.bookmarkFolderToolbar },
+    { folder: 'menu', label: () => CHROME_BAR_COPY.bookmarkFolderMenu },
+    { folder: 'unfiled', label: () => CHROME_BAR_COPY.bookmarkFolderOther },
+];
+
+interface BookmarkEditorProps {
+    editor: BookmarkEditorState;
+    top: number;
+    right: number;
+    onName(name: string): void;
+    onFolder(folder: string): void;
+    onDone(): void;
+    onEnter(): void;
+    onRemove(): void;
+    onClose(): void;
+}
+
+/**
+ * BMK-02: the editor body. Calls back only: the store writes stay in the
+ * AddressBar handlers (rule 12). The name renders as an input value, never
+ * markup (T-33-01b). Enter is Done (or the failed action's retry), Esc and
+ * focus leaving the panel close it without saving.
+ */
+function BookmarkEditor(props: BookmarkEditorProps): React.ReactElement {
+    const { editor, top, right, onName, onFolder, onDone, onEnter, onRemove, onClose } = props;
+    const nameRef = React.useRef<HTMLInputElement>(null);
+    // Mount only: a re-render (each keystroke) must not reselect the text.
+    React.useEffect(() => {
+        nameRef.current?.focus();
+        nameRef.current?.select();
+    }, []);
+    const heading = editor.created ? CHROME_BAR_COPY.bookmarkPageHeading : CHROME_BAR_COPY.editBookmarkHeading;
+    return createPortal(
+        <div
+            className='pb-chrome-bar-dropdown pb-bookmark-editor'
+            role='dialog'
+            aria-label={heading}
+            tabIndex={-1}
+            style={{ position: 'fixed', top, right, maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)) }}
+            onKeyDown={e => {
+                if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    onClose();
+                } else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
+                    e.preventDefault();
+                    onEnter();
+                }
+            }}
+            onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) { onClose(); } }}
+        >
+            <div className='pb-bookmark-editor-heading'>{heading}</div>
+            {editor.failure && <div className='pb-bookmark-editor-failure' role='alert'>{editor.failure}</div>}
+            <label className='pb-bookmark-editor-field'>
+                <span className='pb-bookmark-editor-label'>{CHROME_BAR_COPY.bookmarkName}</span>
+                <input
+                    ref={nameRef}
+                    className='pb-bookmark-editor-name'
+                    spellCheck={false}
+                    maxLength={512}
+                    value={editor.name}
+                    onChange={e => onName(e.currentTarget.value)}
+                />
+            </label>
+            <div className='pb-bookmark-editor-folders' role='radiogroup' aria-label={CHROME_BAR_COPY.bookmarkFolder}>
+                <span className='pb-bookmark-editor-label'>{CHROME_BAR_COPY.bookmarkFolder}</span>
+                {BOOKMARK_FOLDERS.map(({ folder, label }) => <label key={folder} className='pb-bookmark-editor-folder'>
+                    <input type='radio' name='pb-bookmark-folder' checked={editor.folder === folder} onChange={() => onFolder(folder)} />
+                    <span>{label()}</span>
+                </label>)}
+            </div>
+            <div className='pb-bookmark-editor-footer'>
+                <button type='button' className='pb-bookmark-editor-remove' disabled={!editor.guid || editor.busy} onClick={onRemove}>
+                    {CHROME_BAR_COPY.removeBookmark}
+                </button>
+                <span className='pb-bookmark-editor-spacer' />
+                <button type='button' className='pb-bookmark-editor-button' onClick={onClose}>{CHROME_BAR_COPY.bookmarkCancel}</button>
+                <button type='button' className='pb-bookmark-editor-button is-primary' disabled={!editor.name.trim() || editor.busy} onClick={onDone}>
+                    {CHROME_BAR_COPY.bookmarkDone}
+                </button>
+            </div>
+        </div>,
+        document.body
+    );
 }

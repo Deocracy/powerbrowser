@@ -29,6 +29,8 @@ export const CHROME_BAR_EDIT_COPY_COMMAND_ID = 'powerbrowser.chrome-bar.edit-cop
 export const CHROME_BAR_EDIT_PASTE_COMMAND_ID = 'powerbrowser.chrome-bar.edit-paste';
 export const CHROME_BAR_VIEW_SOURCE_COMMAND_ID = 'powerbrowser.chrome-bar.view-source';
 export const CHROME_BAR_READER_TOGGLE_COMMAND_ID = 'powerbrowser.chrome-bar.reader-toggle';
+// Phase 33 plan 02 (BMK-01): opens the star path; the pill's handler does the bookmark write, never this command.
+export const CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.bookmark-page';
 
 /**
  * D-11 (30-03): the palette category of the four visible commands ("Browser:
@@ -72,6 +74,9 @@ export const CHROME_BAR_EDIT_UNDO: Command = { id: CHROME_BAR_EDIT_UNDO_COMMAND_
 export const CHROME_BAR_EDIT_CUT: Command = { id: CHROME_BAR_EDIT_CUT_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Cut' };
 export const CHROME_BAR_EDIT_COPY: Command = { id: CHROME_BAR_EDIT_COPY_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Copy' };
 export const CHROME_BAR_EDIT_PASTE: Command = { id: CHROME_BAR_EDIT_PASTE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Paste' };
+
+// 33-UI-SPEC command table: Firefox's casing.
+export const CHROME_BAR_BOOKMARK_PAGE: Command = { id: CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Bookmark This Page' };
 
 // PAGE-10 (32-08): labelless and categorised by neither, like Focus Address; Phase 33 owns the palette and menu rows.
 // Each one acts on the active web tab.
@@ -133,6 +138,27 @@ export function setChooseSaveDestination(choose: ((suggestedName: string) => Pro
 /** PAGE-08: the path the user picked, or undefined on cancel. Fails closed: with no dialog registered, nothing is saved. */
 export function chooseSaveDestination(suggestedName: string): Promise<string | undefined> {
     return chooseSaveDestinationDialog ? chooseSaveDestinationDialog(suggestedName) : Promise.resolve(undefined);
+}
+
+/**
+ * BMK-01: the page the star can bookmark -- the active web tab's http(s)
+ * page URL, or '' (no web tab, no page, or another scheme), so the star's
+ * disabled state and the command's enablement never disagree.
+ */
+export function bookmarkablePageUrl(tab: WebTabWidget | undefined = current): string {
+    return tab && tab.hasPage && /^https?:\/\//i.test(tab.url) ? tab.url : '';
+}
+
+let openBookmarkStarPath: (() => void) | undefined;
+
+/** Set by the address bar, which owns the star and its editor; the command and the page relay's Ctrl+D open them through this. */
+export function setOpenBookmarkStar(open: (() => void) | undefined): void {
+    openBookmarkStarPath = open;
+}
+
+/** BMK-01: the star's own click path. A no-op until the address bar registers it. */
+export function openBookmarkStar(): void {
+    openBookmarkStarPath?.();
 }
 
 /**
@@ -272,6 +298,12 @@ export class ChromeBarCommandContribution implements CommandContribution {
         commands.registerCommand(CHROME_BAR_EDIT_PASTE, {
             execute: () => currentWebTab()?.edit('cmd_paste'),
             isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        // BMK-01 (rule 12): opens the star path only; the store write runs in the pill's handler.
+        commands.registerCommand(CHROME_BAR_BOOKMARK_PAGE, {
+            execute: () => openBookmarkStar(),
+            isEnabled: () => bookmarkablePageUrl() !== '',
             isVisible: () => true,
         });
         commands.registerCommand(CHROME_BAR_FOCUS_ADDRESS, {

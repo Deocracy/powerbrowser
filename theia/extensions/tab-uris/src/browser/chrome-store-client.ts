@@ -27,6 +27,8 @@ export interface BookmarkEntry {
     guid: string;
     title: string;
     url: string;
+    /** Phase 33 (BMK-02): the root folder the bookmark sits in ('toolbar' | 'menu' | 'unfiled'), '' for any other; absent on folder-listing rows. */
+    folder?: string;
 }
 
 export interface SessionTabRow {

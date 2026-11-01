@@ -72,10 +72,12 @@ const EXPECTED_IDS = Object.freeze([
     // Phase 32 plan 08 (PAGE-10): labelless and uncategorised; the palette rows are Phase 33's.
     'powerbrowser.chrome-bar.view-source',
     'powerbrowser.chrome-bar.reader-toggle',
+    // Phase 33 plan 02 (BMK-01): the star path's command, label from 33-UI-SPEC.md.
+    'powerbrowser.chrome-bar.bookmark-page',
 ]);
 
 /** The contracted visible labels: four verbatim from 13-UI-SPEC.md, Downloads from 32-UI-SPEC.md (plan 04), and the Edit items (plan 06). */
-const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste']);
+const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste', 'Bookmark This Page']);
 
 function diff(actual, expected) {
     const a = new Set(actual);
@@ -285,10 +287,20 @@ function selfTest() {
         console.log(`  ok  planted re-spelled id in ${nestedRel} -> red, naming 'powerbrowser.chrome-bar.new-tab'`);
     }
 
+    // Phase 33 plan 02: the pill re-spelling the bookmark-page id instead of importing the const goes red naming it.
+    const pillRel = `${ADDRESS_BAR_DIR_REL}/address-bar.tsx`;
+    const pillFailures = checkCommands({ ...clean, [pillRel]: `${clean[pillRel] ?? ''}\nvoid this.commands.executeCommand('powerbrowser.chrome-bar.bookmark-page');\n` });
+    if (!pillFailures.some(f => f.includes(pillRel) && f.includes('powerbrowser.chrome-bar.bookmark-page'))) {
+        console.error(`${NAME} --self-test: FAIL -- 'planted re-spelled bookmark-page id in ${pillRel}' did not go red naming it; got: ${pillFailures.join(' | ') || '(no failures at all)'}`);
+        failed++;
+    } else {
+        console.log(`  ok  planted re-spelled bookmark-page id in ${pillRel} -> red, naming 'powerbrowser.chrome-bar.bookmark-page'`);
+    }
+
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- ${cases.length + 1} planted faults all went red`);
+    console.log(`${NAME} --self-test: PASS -- ${cases.length + 2} planted faults all went red`);
     return 0;
 }
 
