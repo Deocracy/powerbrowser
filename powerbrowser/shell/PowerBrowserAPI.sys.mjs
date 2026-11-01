@@ -3526,7 +3526,7 @@ export const PowerBrowserAPI = Object.freeze({
    * in the same push as `url`, and reset on every location change by the
    * caller below: what the pill renders is always this tab's last push.
    */
-  webTabPush(theiaBrowser, tabId, browser, loading) {
+  webTabPush(theiaBrowser, tabId, browser, loading, rebase = loading) {
     try {
       const pageSpec = browser.currentURI ? browser.currentURI.spec : "";
       const identity = PowerBrowserAPI.webTabIdentity(browser, pageSpec);
@@ -3564,7 +3564,7 @@ export const PowerBrowserAPI = Object.freeze({
           isReaderMode: pageFields.isReaderMode,
           isArticle: pageFields.isArticle,
           // Phase 34 plan 04 (TAB-09, D-12): minted here from chrome's own overlay state, never from a frame field.
-          titleChanged: webTabTitleChanged(theiaBrowser, tabId, browser, loading),
+          titleChanged: webTabTitleChanged(browser, rebase),
         });
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] state push for ${tabId} failed: ${err && err.message ? err.message : err}`);
@@ -5181,12 +5181,12 @@ const activeTabByFrame = new WeakMap();
 // active, or while its page loaded, keyed by the overlay <browser>. A title
 // change in a settled background page differs from it, which is the
 // attention mark; activating the tab rebases it (webTabActivated pushes).
-// Computed from chrome's own state only: no frame field is read, nothing polls.
+// Computed from chrome's own state only: no frame field is read, nothing polls. `rebase` is decided per call in scheduleWebTabState (loading or active then, sticky over the frame), not at the flush: the coalescer keeps only the last call's `loading`, so a load ending in the title's frame must not read as a background title change.
 const seenTitleByOverlay = new WeakMap();
 
-function webTabTitleChanged(frame, tabId, browser, loading) {
+function webTabTitleChanged(browser, rebase) {
   const title = browser.contentTitle;
-  if (loading || activeTabByFrame.get(frame) === tabId || !seenTitleByOverlay.has(browser)) {
+  if (rebase || !seenTitleByOverlay.has(browser)) {
     seenTitleByOverlay.set(browser, title);
   }
   return seenTitleByOverlay.get(browser) !== title;
@@ -5222,12 +5222,12 @@ function scheduleWebTabState(frame, tabId, browser, loading, settled = false) {
       pendingStatesByWindow.delete(win);
       for (const [id, rec] of pending) {
         if (webTabs.get(id)?.browser === rec.browser && !switchingOverlays.has(rec.browser)) {
-          PowerBrowserAPI.webTabPush(rec.theiaBrowser, id, rec.browser, rec.loading);
+          PowerBrowserAPI.webTabPush(rec.theiaBrowser, id, rec.browser, rec.loading, rec.rebase);
         }
       }
     });
   }
-  pending.set(tabId, { theiaBrowser: frame, browser, loading });
+  pending.set(tabId, { theiaBrowser: frame, browser, loading, rebase: !!(pending.get(tabId)?.rebase || loading || activeTabByFrame.get(frame) === tabId) });
 }
 
 // ---------------------------------------------------------------------------

@@ -413,12 +413,18 @@ function check(src) {
         failures.push(`push field: ${API}: webTabPush's state literal not derived (broken instrument, never a pass)`);
     } else if (!pushKeys.includes('titleChanged')) {
         failures.push(`push field: webTabPush's state literal lacks titleChanged -- the attention flag must ride the existing push (W3)`);
-    } else if (!/titleChanged: webTabTitleChanged\(theiaBrowser, tabId, browser, loading\)/.test(stateLiteral)) {
-        failures.push(`push field: webTabPush's titleChanged is not chrome's own webTabTitleChanged(theiaBrowser, tabId, browser, loading)`);
+    } else if (!/titleChanged: webTabTitleChanged\(browser, rebase\)/.test(stateLiteral)) {
+        failures.push(`push field: webTabPush's titleChanged is not chrome's own webTabTitleChanged(browser, rebase)`);
     }
     const minter = braceBody(apiCode, apiCode.indexOf('{', apiCode.indexOf('function webTabTitleChanged(')));
     if (minter === null || /\b(data|detail|msg|message)\./.test(minter)) {
         failures.push(`push field: ${API}: webTabTitleChanged is missing or reads a message field -- the flag is minted from chrome state only`);
+    } else if (/activeTabByFrame|\bloading\b/.test(minter)) {
+        failures.push(`push field: ${API}: webTabTitleChanged reads the active tab or the loading flag at flush time -- the coalescer keeps only the last call's loading, so the decision belongs to scheduleWebTabState (WR-01)`);
+    }
+    const stateScheduler = braceBody(apiCode, apiCode.indexOf('{', apiCode.indexOf('function scheduleWebTabState(')));
+    if (stateScheduler === null || !/rebase:[^\n]*pending\.get\(tabId\)\?\.rebase[^\n]*loading[^\n]*activeTabByFrame\.get\(frame\) === tabId/.test(stateScheduler)) {
+        failures.push(`push field: ${API}: scheduleWebTabState does not decide rebase per call (sticky over the frame, from loading or the active tab at schedule time) -- a load ending in the title's frame would mark a background tab (WR-01)`);
     }
     const pushStart = push === null ? -1 : apiCode.indexOf(push);
     for (const m of apiCode.matchAll(/\btitleChanged\s*:/g)) {
@@ -677,8 +683,20 @@ const PLANTS = [
     {
         name: 'push-field-missing',
         file: API,
-        mutate: s => s.replace(/\n\s*titleChanged: webTabTitleChanged\(theiaBrowser, tabId, browser, loading\),/, ''),
+        mutate: s => s.replace(/\n\s*titleChanged: webTabTitleChanged\(browser, rebase\),/, ''),
         expect: 'lacks titleChanged',
+    },
+    {
+        name: 'title-rebase-at-flush',
+        file: API,
+        mutate: s => s.replace(/(function webTabTitleChanged\(browser, rebase\) \{\n)/, '$1  if (activeTabByFrame.get(browser)) {}\n'),
+        expect: 'at flush time',
+    },
+    {
+        name: 'title-rebase-not-sticky',
+        file: API,
+        mutate: s => s.replace('rebase: !!(pending.get(tabId)?.rebase || ', 'rebase: !!('),
+        expect: 'does not decide rebase per call',
     },
     {
         name: 'push-field-moved',
