@@ -179,3 +179,20 @@ None outside the plan's threat model. `gBrowser.updateBrowserSharing` is a new m
 - FOUND: the `webRTC-shareDevices-notification` template in powerbrowser/shell/powerbrowser.xhtml, `updateWebTabSharing` in powerbrowser/shell/PowerBrowserAPI.sys.mjs, `updateBrowserSharing` in powerbrowser/shell/powerbrowser.js, `renderSharing` in chrome-bar-widget.tsx, the `remember` scenario in scripts/verify-prompts-live.mjs
 - FOUND commits: dbe275af, 1838350a, 867f6ba4 (ancestors of HEAD; `git rev-list --count f6e6df36..867f6ba4` = 3)
 - Live proof: deferred, not claimed (see above)
+
+## Post-review fixes
+
+A security review of the sharing-indicator commit (`1838350a`) flagged one MEDIUM finding in the Phase 37 section of `PowerBrowserAPI.sys.mjs`. The fix is its own commit. It adds a `verify-permission-prompts.mjs` self-test plant for each of its two halves, and each plant goes red when that half is reverted.
+
+**Stale or missing indicator after a frontend reload (the privacy indicator fails open).** Commit `295d5140`.
+- **Issue:** the `sharingChanged` duplicate check stored only a per-overlay key. After the Theia frontend reloaded (a new WindowGlobal), an unchanged state counted as already sent. The new frontend never learned that a camera, microphone or screen track was live, so it showed no indicator.
+- **Fix:**
+  - `pushWebTabSharing` is now the one push. Each overlay stores `{windowGlobal, key, state}`, and the push is skipped only when both the state and the destination WindowGlobal are unchanged.
+  - `webTabOpen`'s `already-open` branch, the path a reloaded frontend takes for an overlay chrome already holds, calls `resendWebTabSharing(tabId)`. That function re-pushes the stored observed state unconditionally, because the frontend's widget is new.
+  - Phase 36 adoption has no hook in this tree; a comment at `resendWebTabSharing` notes that `adoptTab` should call it too.
+  - The re-pushed state is the last state WebRTCParent reported, so the source is still chrome-observed webrtcUI state. Nothing comes from the frame.
+- **Gate:** new rule (o). Plants: "sharing dedupe ignores the destination" and "no sharing re-push on re-registration". Rule (n) now pins the single push inside `pushWebTabSharing`, and only `updateWebTabSharing` and `resendWebTabSharing` may call it.
+- **Catalogue:** the inserted line shifted every `INTERNAL-APIS.md` reference below `PowerBrowserAPI.sys.mjs:3280` by one. NG-040 `--fix` picked wrong lines for some rows, so I restored the file from HEAD and added one to each reference at or below that line. NG-040 and `--catalogue` pass.
+- **Live (deferred):** a reload-the-frontend-while-sharing check belongs to the end-of-milestone pass, together with the `sharing` scenario.
+
+**Verification after the fix:** `verify-permission-prompts.mjs --self-test` passes (control green, 23 plants red). `nix develop .#theia --command scripts/verify-platform.sh --quick` reports "verify-platform: PASS -- all checks passed".
