@@ -14,7 +14,7 @@ provides:
   - installPermissionPromptFurniture(window) in the Phase 37 end-of-file section of PowerBrowserAPI.sys.mjs
   - window.PopupNotifications (stock module) on the shell window, #notification-popup panel and anchor in powerbrowser.xhtml
   - display-only doorhanger push {token, tabId, permission, displayHost, pending} and its web-tab.ts subscriber
-  - background queue, cap 3 per shell window, oldest cancelled through the stock removal
+  - background queue, cap 3 per tab (post-review), the tab's oldest cancelled through the stock removal
   - scripts/verify-permission-prompts.mjs (rules a-g, --self-test, 9 plants)
   - FACADES mechanism in scripts/verify-shell-gbrowser-standin.mjs (promptTabbrowser row)
   - scripts/verify-prompts-live.mjs (4 scenarios, 5 plants, --self-test --static)
@@ -48,7 +48,8 @@ key-decisions:
   - "The stock module is imported from resource://gre/modules/PopupNotifications.sys.mjs, where upstream's toolkit/modules/moz.build ships it (EXTRA_JS_MODULES); the gate derives the URL from moz.build."
   - "The tabbrowser facade is documentGlobal, selectedBrowser, selectedTab and tabContainer = the tab host's strip, so stock TabSelect shows a waiting prompt on webTabActivated and stock TabClose cancels a closed tab's prompts; no queue-show code exists."
   - "The doorhanger topics are observed by wrapping the instance's show and composing options.eventCallback; eventCallback is a show() option, not a constructor option."
-  - "The background queue cap is 3 per shell window: stock keeps one notification per id per browser, so a per-tab cap would almost never bind."
+  - "The background queue cap is 3 per tab (post-review fix 2; first shipped per window, which let one page evict another tab's prompt)."
+  - "The facade reports a web tab selected only while the Theia frame reports one current (post-review fix 1); an IDE/web-tab focus move runs the stock anchorVisibilityChange."
   - "A dismissed prompt keeps pending true (a persistent prompt re-shows when its tab is selected); only removal sends pending false."
   - "The pending-prompt mark is in the tab strip (chrome-bar tab-strip-widget.tsx): the overlay covers the web tab widget's node, and tab-uris cannot import CHROME_BAR_COPY."
 patterns-established:
@@ -67,7 +68,7 @@ actuals:
 
 # Phase 37 Plan 01: Stock doorhanger furniture, display-only push, background queue and gates Summary
 
-**The stock PopupNotifications now runs on the shell window with the #notification-popup panel. Its tabbrowser facade sits over the tab host and is audited member by member. Prompts are answered only through the stock panel buttons. The tab strip shows a display-only pending mark. Background requests queue (cap 3, the oldest cancelled through the stock removal). A static gate and a live harness cover all of this. The live run is deferred because this lane has no built binary.**
+**The stock PopupNotifications now runs on the shell window with the #notification-popup panel. Its tabbrowser facade sits over the tab host and is audited member by member. Prompts are answered only through the stock panel buttons. The tab strip shows a display-only pending mark. Background requests queue (cap 3 per tab, that tab's oldest cancelled through the stock removal). A static gate and a live harness cover all of this. The live run is deferred because this lane has no built binary.**
 
 ## Status
 
@@ -165,7 +166,7 @@ Restart note: chrome JS and XHTML under `powerbrowser/shell` are symlinked into 
 
 - **Lane override for Phase 35:** `installShellFurniture` is absent. The installer is `installPermissionPromptFurniture(window)`, called from one bootstrap line in `powerbrowser.js` with a fold-at-merge comment. `verify-shell-furniture.mjs` was not created. The furniture-vs-upstream check is rule (a) of `verify-permission-prompts.mjs`, and it **moves to `verify-shell-furniture.mjs` at merge**.
 - **Anchor attribute at request time:** `popupnotificationanchor` is set in the show wrapper, not at overlay creation in `webTabOpen`. This keeps the append-only rule (no line above the catalogue moves), and every overlay that asks is covered.
-- **Queue cap scope:** the cap is 3 per shell window, not per tab (see key decisions). The live `cancel-on-evict` scenario uses four background tabs.
+- **Queue cap scope:** the cap is 3 per tab, as the plan implies. The first commit shipped it per shell window; security review flagged that as a cross-tab denial, and post-review fix 2 (`5070c3d2`) made it per tab. The live `cancel-on-evict` scenario asks four distinct prompts from one tab.
 - **check-internals-boundary.sh:** no exemption was added. The boundary file is excluded from the scan, and `--catalogue` already covers its lines. An exemption would only weaken the guard. The task's hook is instead a self-test plant: the import plus the construction in any other shell file must be rejected, naming both patterns.
 - **INTERNAL-APIS.md:** 4 rows (the import, the construction, the `Ci.` constant, and the `window.PopupNotifications` shim), not 1. They landed in Task 2 rather than Task 1, because the lines exist only from Task 2 and NG-040 direction 2 would have gone red.
 - **Task 1 fixture seeding:** until Task 2 landed, the Task 1 self-test added a minimal correct copy of each absent piece in memory, with the panel built from upstream's own attributes. Task 2 deleted the seeds, so the same-session control is now the real tree.
@@ -199,3 +200,24 @@ None outside the plan's threat model. The new `window.PopupNotifications` global
 - FOUND: scripts/verify-permission-prompts.mjs, scripts/verify-prompts-live.mjs, the Phase 37 section in powerbrowser/shell/PowerBrowserAPI.sys.mjs, #notification-popup in powerbrowser/shell/powerbrowser.xhtml
 - FOUND commits: 107a3c72, 30967ec6, 41b10ad7 (ancestors of HEAD; `git rev-list --count 23c08bb5..41b10ad7` = 3)
 - Live proof: deferred, not claimed (see above)
+
+## Post-review fixes
+
+A security review of the first three commits flagged two MEDIUM findings in the Phase 37 section of `PowerBrowserAPI.sys.mjs`. Each fix is its own commit, with a `verify-permission-prompts.mjs` self-test plant that goes red when the fix is reverted. The owner ruling still holds: prompts are answered only through Firefox's own buttons, and no allow kind exists.
+
+**1. A prompt could show over a tab the user is not looking at (UI spoofing).** Commit `0584e5dd`.
+- **Issue:** the facade's `selectedBrowser` returned the tab host's selection even while the IDE frame was current. The host keeps the last web tab selected (D-04), so a background page's prompt could open over the IDE.
+- **Fix:** `selectedBrowser` and `selectedTab` report a web tab only while `activeTabByFrame` (the Theia frame's current web tab, from `webTabActivated`) is non-null. Otherwise the Theia frame stands in, and `selectedTab` is null.
+  - The `webTabActivated` arm's one map write was changed in place, on the same line, to `setActiveTabOfFrame(...)`. When focus moves between the IDE and a web tab, that function runs the stock `anchorVisibilityChange()` after the arm's own selection change. A waiting prompt therefore hides while the IDE is current and shows when its tab is back.
+  - The reviewer suggested dispatching a synthetic `TabSelect` on the facade's `tabContainer`. I did not do that: the host strip's `TabSelect` listeners include the extension trackers, which would receive the strip instead of a tab as the event target. `anchorVisibilityChange()` is the stock `TabSelect` handler's own update, called directly.
+- **Gate:** rule (h). Plants: "facade ignores the current web tab" and "activation writes the map directly".
+- **Live (deferred):** a click into a still-visible page while the IDE is current does not report the tab current until Theia's next `webTabActivated`. In that window a prompt stays hidden; it does not spoof.
+
+**2. Cross-tab denial through the queue cap.** Commit `5070c3d2`.
+- **Issue:** the cap counted every waiting record in the window (`r.window === window`) and evicted the window's oldest. A page flooding requests could therefore cancel another tab's pending prompt.
+- **Fix:** the cap counts and evicts only the requesting tab's records (`r.tabId === tabId`).
+- **Gate:** rule (i). Plant: "window-wide queue cap".
+- **Live harness:** `cancel-on-evict` now asks three distinct prompts (geolocation, notifications, persistent storage) from one background tab, then a fourth (a fake camera). It asserts that the flooding tab's geolocation request is denied and gone, that another background tab's prompt survives, and that the remaining two grant. A new live plant, `evict-cross-tab`, goes red naming "a prompt of another tab was evicted by requests from this tab". The camera prompt is only asserted queued; it is answered in 37-02, which installs its stock template. Risk to watch live: whether `WebRTCParent` reaches `show` for a background overlay at all. If it does not, the fourth request does not trigger the eviction, and the scenario reports that rather than passing.
+
+**Verification after both fixes:** `verify-permission-prompts.mjs --self-test` passes (control green, 12 plants red). `verify-prompts-live.mjs --self-test --static` passes (6 plants). `check-internals-boundary.sh --catalogue` and NG-040 pass; the catalogue rows were renumbered, and the construction row was corrected to `:6830` by hand because `--fix` picked the import line. `nix develop .#theia --command scripts/verify-platform.sh --quick` reports "all checks passed" with no FAIL row. The live runs are still deferred, as above.
+
