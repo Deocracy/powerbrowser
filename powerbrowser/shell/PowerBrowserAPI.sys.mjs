@@ -802,6 +802,21 @@ export const PowerBrowserAPI = Object.freeze({
     return Object.keys(histories).length;
   },
 
+  /** PAGE-11: arms the crashed overlay's own history under its row key, so the reopen restores it. Never throws. */
+  keepCrashedWebTabHistory(entry) {
+    try {
+      const sessionHistory = entry.browser.browsingContext?.sessionHistory;
+      if (!sessionHistory || sessionHistory.count === 0) {
+        return;
+      }
+      const { SessionHistory } = ChromeUtils.importESModule("resource://gre/modules/sessionstore/SessionHistory.sys.mjs");
+      savedWebTabHistories[entry.rowKey] = SessionHistory.collectFromParent(entry.browser.currentURI?.spec ?? "about:blank", true, sessionHistory);
+      armedWebTabHistories.add(entry.rowKey);
+    } catch (err) {
+      PowerBrowserAPI.log("error", `[web-tab] crashed history not kept (${err && err.name ? err.name : "error"})`);
+    }
+  },
+
   /**
    * NG-034: the saved history for `rowKey` when the frontend armed it, once.
    * Only http(s) entries are admitted, top-level and subframes alike -- the
@@ -3845,6 +3860,11 @@ export const PowerBrowserAPI = Object.freeze({
     }
     const { browser } = entry;
     const win = browser.ownerDocument.defaultView;
+    // PAGE-11: a crashed overlay is recreated by close then open (Reload tab); its parent-side session history outlives
+    // the content process, so the open that follows restores it through the NG-034 armed-history path.
+    if (webTabPageState.get(browser)?.crashed && entry.rowKey) {
+      PowerBrowserAPI.keepCrashedWebTabHistory(entry);
+    }
     // Listener removal is best-effort on teardown (the startTabStoreTriggers
     // idiom): a frameloader already torn down throws here, and the element
     // removal below is what matters.

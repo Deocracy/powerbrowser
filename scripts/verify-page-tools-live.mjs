@@ -68,7 +68,7 @@
  *   source   PAGE-10 (32-08): Ctrl+U loads the page's source in the same overlay (chrome-side positive control); Theia
  *            holds no view-source URL and no push carries one.
  *   crash    PAGE-11 (32-08): about:crashcontent in the scratch tab; the contracted crash copy and Reload tab button show,
- *            the overlay hides, Reload tab brings the page back with its history.
+ *            the overlay hides, Reload tab brings the page back with its history (kept by the shell, restored on the reopen).
  *   remoteness-regression  (32-08, D-25a): five same-site tabs, the fifth reloaded and then activated; each must end on its
  *            page with docShellIsActive. Self-sessioned; writes no verdict.
  *   Not scenarios: F12 DevTools (its route is not built) and the readability signal (not built). Neither has a row.
@@ -1210,7 +1210,8 @@ async function scenarioRemotenessRepro() {
  * (the tab is the only web tab of the session, so no other overlay shares the process). The crashed push arrives; the
  * placeholder shows the contracted copy and the Reload tab button; the strip marks the tab; the overlay is hidden.
  * Reload tab runs the reload path: the page comes back at crashed false, with its history entries kept.
- * `plant` removes the crash copy from the placeholder, so no crash UI is shown, which must go red.
+ * `plant` true removes the crash copy from the placeholder, so no crash UI is shown, which must go red; `plant` 'history'
+ * recreates the overlay under another row key, so the history is not restored, which must go red.
  */
 async function scenarioCrash(app, origin, plant = false) {
     const { tabId, from } = await openLoaded(app, `${origin}/find`, '/find');
@@ -1231,7 +1232,7 @@ async function scenarioCrash(app, origin, plant = false) {
     if (await waitForPush(app, stateOf(tabId, p => p.crashed === true), { from: mark, timeoutMs: 30000 }) < 0) {
         return 'no crashed push: about:crashcontent did not crash the scratch tab';
     }
-    if (plant) {
+    if (plant === true) {
         await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).node.querySelector('.pb-web-tab-state').replaceChildren(); return true;`);
     }
     const crashUi = () => probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
@@ -1251,7 +1252,10 @@ async function scenarioCrash(app, origin, plant = false) {
         return 'the crashed overlay is still visible over the crash UI';
     }
     const clickMark = (await pushes(app)).length;
-    const clicked = await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); const b = w.node.querySelector('button.pb-web-tab-reload'); if (!b) return false; b.click(); return true;`);
+    // The history plant recreates the overlay under another row key, so the kept history is never taken (the loss the row exists to catch).
+    const clicked = plant === 'history'
+        ? (await channelRequest(app, { kind: 'webTabClose', tabId }), (await channelRequest(app, { kind: 'webTabOpen', tabId, url: `${origin}/edit`, key: 'web:planted' })).ok === true)
+        : await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); const b = w.node.querySelector('button.pb-web-tab-reload'); if (!b) return false; b.click(); return true;`);
     if (clicked !== true) {
         return 'the crashed tab has no Reload tab button to click';
     }
@@ -1410,6 +1414,12 @@ const PLANTS = [
         target: 'crash',
         run: (app, fx) => scenarioCrash(app, fx.origin, true),
         expect: 'shows no contracted crash copy',
+    },
+    {
+        plant: 'crash-history-dropped',
+        target: 'crash',
+        run: (app, fx) => scenarioCrash(app, fx.origin, 'history'),
+        expect: 'history lost across Reload tab',
     },
     {
         // Self-sessioned regression row: its clean control is the two-session pass, its plant puts the fifth tab on about:blank.
