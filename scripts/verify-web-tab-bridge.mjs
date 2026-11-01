@@ -116,8 +116,11 @@ const KIND_CLASSES = new Map([
  * equality so an unclassified kind and a stale entry each go red by name.
  * `network` = sends user input off the machine; `privileged` = Places writes
  * or clipboard reads. Neither may enter TAB_STORE_RELAY_KINDS (the backend
- * relay), and a privileged kind runs only from address-bar/address-bar.tsx through
- * its same-named ChromeStoreClient method, never from a command or a key row.
+ * relay), and a privileged kind runs only from the two sanctioned handler files,
+ * address-bar/address-bar.tsx (the pill: Shift+Delete, paste, the star and its
+ * editor) and chrome-bar-widget.tsx (Phase 33: the History submenu, the bookmarks
+ * toolbar and the Clear Recent History confirm), through its same-named
+ * ChromeStoreClient method, never from a command or a key row.
  * savePageCopy runs from a command, so it is store-write, not privileged.
  * searchSuggestions (29-06) is the first network kind and removeHistoryEntry
  * (29-09) the first privileged one. The first entry of each was a deliberate
@@ -151,6 +154,15 @@ const STORE_KIND_CLASSES = new Map([
     ['openStockPage', 'store-write'],
     // Phase 31 plan 05 (MENU-04, D-31-13): the Quit row. The one existing quit path, reached only from the widget's row.
     ['quitRequest', 'lifecycle'],
+    // Phase 33 (BMK-01/02/05): the bookmark writes and the one history clear write Places, so they are
+    // privileged -- clearHistory runs only from the range picker's confirm, never a command, key or the relay.
+    ['bookmarkPage', 'privileged'],
+    ['updateBookmark', 'privileged'],
+    ['removeBookmark', 'privileged'],
+    ['clearHistory', 'privileged'],
+    // Phase 33 (BMK-03/06): the closed-tab list and the reopen lookup read tabs.sqlite and write nothing.
+    ['listClosedTabs', 'read'],
+    ['reopenClosedTab', 'read'],
 ]);
 /**
  * Phase 31 plan 04: store kinds the app menu sends straight from the Theia window to chrome. Each
@@ -163,6 +175,8 @@ const STORE_CLIENT = `${TAB_URIS_DIR}/chrome-store-client.ts`;
 const CHROME_BAR_WIDGET = `${CHROME_BAR_DIR}/address-bar/address-bar.tsx`;
 /** Phase 31 plan 05: the chrome bar widget, which sends the Quit row's `quitRequest` (the lifecycle caller). */
 const CHROME_BAR_WIDGET_FILE = `${CHROME_BAR_DIR}/chrome-bar-widget.tsx`;
+/** Phase 33: the two sanctioned privileged callers -- the pill and the chrome bar widget -- and nothing else. */
+const PRIVILEGED_CALLERS = [CHROME_BAR_WIDGET, CHROME_BAR_WIDGET_FILE];
 
 /** Stock `HttpOpenHandler`'s priority; the web-tab handler must exceed it. */
 const STOCK_HTTP_HANDLER_PRIORITY = 500;
@@ -416,14 +430,15 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES) {
     // 9. PUSH KINDS: what chrome pushes on the one state event vs what the
     // frontend subscribes through WebTabChannel.onPush, both directions.
     const pushedKinds = [
-        ...derive(src[API], /sendWebTabPush\(\s*[\w$.]+\s*,\s*\{\s*kind:\s*"([A-Za-z]+)"/g),
-        ...derive(src[API], /sendAsyncMessage\(\s*"PowerBrowserWebTabState"\s*,\s*\{\s*kind:\s*"([A-Za-z]+)"/g),
+        // Phase 33: a push kind may carry a hyphen (bookmarks-changed); [A-Za-z]+ alone left it underived.
+        ...derive(src[API], /sendWebTabPush\(\s*[\w$.]+\s*,\s*\{\s*kind:\s*"([A-Za-z][A-Za-z-]*)"/g),
+        ...derive(src[API], /sendAsyncMessage\(\s*"PowerBrowserWebTabState"\s*,\s*\{\s*kind:\s*"([A-Za-z][A-Za-z-]*)"/g),
     ];
     const frontendFiles = Object.keys(src).filter(file => file.startsWith(`${CHROME_BAR_DIR}/`) || file.startsWith(`${TAB_URIS_DIR}/`));
     const frontendText = frontendFiles.map(file => src[file]).join('\n');
-    const constants = new Map(derive(frontendText, /export const ([A-Za-z_$][\w$]*\s*=\s*'[A-Za-z]+')/g)
-        .map(pair => /^(\S+)\s*=\s*'([A-Za-z]+)'$/.exec(pair)).map(m => [m[1], m[2]]));
-    const subscribedKinds = derive(frontendText, /onPush\(\s*'([A-Za-z]+)'/g);
+    const constants = new Map(derive(frontendText, /export const ([A-Za-z_$][\w$]*\s*=\s*'[A-Za-z][A-Za-z-]*')/g)
+        .map(pair => /^(\S+)\s*=\s*'([A-Za-z][A-Za-z-]*)'$/.exec(pair)).map(m => [m[1], m[2]]));
+    const subscribedKinds = derive(frontendText, /onPush\(\s*'([A-Za-z][A-Za-z-]*)'/g);
     // `\s*,` after the identifier: the method's own declaration (`onPush(kind: string`) is not a call.
     for (const ident of derive(frontendText, /onPush\(\s*([A-Za-z_$][\w$]*)\s*,/g)) {
         if (constants.has(ident)) {
@@ -582,9 +597,10 @@ function checkStoreKinds(src, storeClasses) {
         if (kindClass !== 'privileged' && kindClass !== 'lifecycle') {
             continue;
         }
-        // A privileged kind is sent from the address pill; a lifecycle kind from the chrome bar widget (its Quit row).
-        const home = kindClass === 'lifecycle' ? CHROME_BAR_WIDGET_FILE : CHROME_BAR_WIDGET;
-        const callers = new Set([STORE_CLIENT, home]);
+        // A privileged kind is sent from the pill or the chrome bar widget; a lifecycle kind from the widget alone (its Quit row).
+        const homes = kindClass === 'lifecycle' ? [CHROME_BAR_WIDGET_FILE] : PRIVILEGED_CALLERS;
+        const home = homes.join(' or ');
+        const callers = new Set([STORE_CLIENT, ...homes]);
         if (!new RegExp(`^\\s+(?:async\\s+)?${kind}\\(`, 'm').test(src[STORE_CLIENT] ?? '')) {
             failures.push(`store-kinds: the ${kindClass} kind ${kind} has no same-named ChromeStoreClient method ${kind}( in ${STORE_CLIENT}`);
         }
@@ -677,12 +693,12 @@ function selfTest() {
             name: 'planted privileged kind called from chrome-bar-commands.ts',
             sources: { ...clean, [API]: withStoreKind('plantedPrivileged'), [COMMANDS]: clean[COMMANDS] + '\nvoid this.store.plantedPrivileged();\n' },
             storeClasses: classedAs('plantedPrivileged', 'privileged'),
-            expect: `the privileged kind plantedPrivileged is called outside ${CHROME_BAR_WIDGET}, in ${COMMANDS}`,
+            expect: `the privileged kind plantedPrivileged is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${COMMANDS}`,
         },
         {
             name: 'planted privileged call in a nested chrome-bar file',
             sources: { ...clean, [`${CHROME_BAR_DIR}/nested/planted.ts`]: 'void this.store.readClipboardText();\n' },
-            expect: `the privileged kind readClipboardText is called outside ${CHROME_BAR_WIDGET}, in ${CHROME_BAR_DIR}/nested/planted.ts`,
+            expect: `the privileged kind readClipboardText is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${CHROME_BAR_DIR}/nested/planted.ts`,
         },
         {
             name: 'planted privileged kind named in chrome-bar-keybindings.ts',
@@ -817,6 +833,51 @@ function selfTest() {
             sources: { ...clean, [KEYBINDINGS]: clean[KEYBINDINGS] + "\nexport const plantedKey = 'webTabSetPermission'; registerKeybinding({});\n" },
             expect: `the privileged webTab kind webTabSetPermission is named by a command or keybinding file, ${KEYBINDINGS}`,
         },
+        // Phase 33 plants: the six new store kinds and the bookmarks-changed push.
+        {
+            name: 'planted unclassified clearHistory',
+            sources: clean,
+            storeClasses: new Map([...STORE_KIND_CLASSES].filter(([kind]) => kind !== 'clearHistory')),
+            expect: 'store kinds with no STORE_KIND_CLASSES entry (classify each under the privileged-kind rule): clearHistory',
+        },
+        {
+            name: 'planted stale bookmarkPage class (kind dropped from the boundary)',
+            sources: {
+                ...clean,
+                [API]: replaceWithin(clean[API].replace('  "bookmarkPage",\n', ''), 'async function handleStoreRequest(', '\n}', 'case "bookmarkPage": {', 'case "bookmarkPageGone": {'),
+            },
+            expect: 'STORE_KIND_CLASSES entries with no store kind left (stale): bookmarkPage',
+        },
+        {
+            name: 'planted clearHistory in the backend relay',
+            sources: { ...clean, [STORE_PROTOCOL]: relaying('clearHistory') },
+            expect: 'the privileged kind clearHistory is relayed from the backend',
+        },
+        {
+            name: 'planted bookmarkPage called from chrome-bar-commands.ts',
+            sources: { ...clean, [COMMANDS]: clean[COMMANDS] + "\nvoid this.store.bookmarkPage('https://example.com/', '');\n" },
+            expect: `the privileged kind bookmarkPage is called outside ${PRIVILEGED_CALLERS.join(' or ')}, in ${COMMANDS}`,
+        },
+        {
+            name: 'planted clearHistory named in chrome-bar-keybindings.ts',
+            sources: { ...clean, [KEYBINDINGS]: clean[KEYBINDINGS] + "\nconst plantedRow = 'clearHistory';\n" },
+            expect: `the privileged kind clearHistory is named by a command or keybinding file, ${KEYBINDINGS}`,
+        },
+        {
+            name: 'planted removeBookmark without its client method',
+            sources: { ...clean, [STORE_CLIENT]: clean[STORE_CLIENT].replace(/^(\s+)removeBookmark\(/m, '$1removeBookmarkGone(') },
+            expect: `the privileged kind removeBookmark has no same-named ChromeStoreClient method removeBookmark( in ${STORE_CLIENT}`,
+        },
+        {
+            name: 'planted chrome-only bookmarks-changed push (subscription dropped)',
+            sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace("onPush('bookmarks-changed'", "onPush('bookmarksGone'") },
+            expect: 'chrome pushes kinds no frontend source subscribes to: bookmarks-changed',
+        },
+        {
+            name: 'planted bookmarks-changed subscription with no chrome push',
+            sources: { ...clean, [API]: clean[API].replace('{ kind: "bookmarks-changed" }', '{ kind: "bookmarksGone" }') },
+            expect: 'the frontend subscribes to kinds chrome never pushes: bookmarks-changed',
+        },
         {
             name: 'planted loss of the privileged frontend method',
             sources: { ...clean, [WEB_TAB]: clean[WEB_TAB].replace(/^(\s+)setPermission\(/m, '$1setPermissionGone(') },
@@ -825,6 +886,14 @@ function selfTest() {
     ];
 
     let failed = 0;
+    // Positive control (Phase 33): the widget is a sanctioned privileged caller, so its clearHistory call stays green.
+    const widgetCall = checkBridge({ ...clean, [WIDGET]: clean[WIDGET] + "\nvoid this.store.clearHistory('today');\n" });
+    if (widgetCall.length) {
+        console.error(`verify-web-tab-bridge --self-test: FAIL -- a privileged call from ${WIDGET} went red, but it is a sanctioned caller: ${widgetCall.join(' | ')}`);
+        failed++;
+    } else {
+        console.log(`  ok  privileged clearHistory call from ${WIDGET} -> green (sanctioned caller)`);
+    }
     for (const testCase of cases) {
         const mutated = Object.keys({ ...clean, ...testCase.sources }).some(file => testCase.sources[file] !== clean[file]);
         if (!mutated && !testCase.storeClasses) {

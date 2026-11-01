@@ -802,8 +802,11 @@ export const PowerBrowserAPI = Object.freeze({
     return Object.keys(histories).length;
   },
 
-  /** PAGE-11: arms the crashed overlay's own history under its row key, so the reopen restores it. Never throws. */
-  keepCrashedWebTabHistory(entry) {
+  /**
+   * PAGE-11: arms the crashed overlay's own history under its row key, so the reopen restores it. Never throws.
+   * Phase 33 (BMK-03): `arm` false keeps a closed overlay's history unarmed, for a later reopen to arm.
+   */
+  keepCrashedWebTabHistory(entry, arm = true) {
     try {
       const sessionHistory = entry.browser.browsingContext?.sessionHistory;
       if (!sessionHistory || sessionHistory.count === 0) {
@@ -811,7 +814,9 @@ export const PowerBrowserAPI = Object.freeze({
       }
       const { SessionHistory } = ChromeUtils.importESModule("resource://gre/modules/sessionstore/SessionHistory.sys.mjs");
       savedWebTabHistories[entry.rowKey] = SessionHistory.collectFromParent(entry.browser.currentURI?.spec ?? "about:blank", true, sessionHistory);
-      armedWebTabHistories.add(entry.rowKey);
+      if (arm) {
+        armedWebTabHistories.add(entry.rowKey);
+      }
     } catch (err) {
       PowerBrowserAPI.log("error", `[web-tab] crashed history not kept (${err && err.name ? err.name : "error"})`);
     }
@@ -2245,11 +2250,13 @@ export const PowerBrowserAPI = Object.freeze({
    * TheiaService._swap before the Theia frame is navigated, and only there. A
    * non-positive or non-integer port clears it, which refuses every sender.
    * A valid port also installs the token-cookie strip (BAR-02), right after
-   * the cookie is minted, so it covers every load in the process.
+   * the cookie is minted, so it covers every load in the process, and
+   * (Phase 33, BMK-04) the Places bookmark observer beside it.
    */
   setGroupSenderPort(port) {
     groupSenderPort = Number.isInteger(port) && port > 0 ? port : null;
     if (groupSenderPort !== null) installTokenCookieStrip();
+    if (groupSenderPort !== null) installBookmarkObserver();
   },
 
   /**
@@ -3868,6 +3875,8 @@ export const PowerBrowserAPI = Object.freeze({
     // the content process, so the open that follows restores it through the NG-034 armed-history path.
     if (webTabPageState.get(browser)?.crashed && entry.rowKey) {
       PowerBrowserAPI.keepCrashedWebTabHistory(entry);
+    } else {
+      keepClosedWebTabHistory(entry);
     }
     // Listener removal is best-effort on teardown (the startTabStoreTriggers
     // idiom): a frameloader already torn down throws here, and the element
@@ -4101,6 +4110,12 @@ const STORE_REQUEST_KINDS = new Set([
   "readClipboardText",
   "openStockPage",
   "quitRequest",
+  "bookmarkPage",
+  "updateBookmark",
+  "removeBookmark",
+  "listClosedTabs",
+  "reopenClosedTab",
+  "clearHistory",
 ]);
 
 function isStoreRequestKind(kind) {
@@ -4150,10 +4165,7 @@ async function handleStoreRequest(data, actorRef) {
         return { ok: true, kind, bookmark: bookmark && { guid: bookmark.guid, title: bookmark.title, url: String(bookmark.url) } };
       }
       case "listBookmarkFolder": {
-        if (typeof data.folderGuid !== "string" || !/^[A-Za-z0-9_-]{12}$/.test(data.folderGuid)) {
-          throw new Error("handleStoreRequest: refusing a malformed folderGuid");
-        }
-        const rows = PowerBrowserAPI.listBookmarkFolder(data.folderGuid).map(row => ({ guid: row.guid, title: row.title, url: String(row.url) }));
+        const rows = PowerBrowserAPI.listBookmarkFolder(resolveBookmarkFolder(data.folderGuid)).map(row => ({ guid: row.guid, title: row.title, url: String(row.url) }));
         return { ok: true, kind, rows };
       }
       case "projectSessionStoreTabs": {
@@ -4213,6 +4225,25 @@ async function handleStoreRequest(data, actorRef) {
           return { ok: false, kind, reason: "cancelled" };
         }
         return { ok: true, kind, where: "applied" };
+      }
+      // Phase 33: the bookmark writes and the history clear are privileged (rule 12); the closed-tab reads are reads.
+      case "bookmarkPage": {
+        return { ok: true, kind, bookmark: await bookmarkPage(data.url, data.title, data.folderGuid) };
+      }
+      case "updateBookmark": {
+        return { ok: true, kind, bookmark: await updateBookmark(data.guid, data.title, data.folderGuid) };
+      }
+      case "removeBookmark": {
+        return { ok: true, kind, removed: await removeBookmark(data.target) };
+      }
+      case "listClosedTabs": {
+        return { ok: true, kind, rows: await listClosedTabs(data.limit) };
+      }
+      case "reopenClosedTab": {
+        return { ok: true, kind, tab: await reopenClosedTab(data.uri) };
+      }
+      case "clearHistory": {
+        return { ok: true, kind, cleared: await clearHistory(data.range) };
       }
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
@@ -6773,4 +6804,356 @@ function webTabPushedSpec(spec) {
     }
   }
   return spec;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 33: bookmarks and clear-history.
+//
+// The star, its editor, the bookmarks toolbar, reopen closed tab and Clear
+// Recent History (BMK-01..06). Places writes go only through
+// PlacesUtils.bookmarks.insert/update/remove and PlacesUtils.history -- never
+// raw SQL, never a second writer. bookmarkPage, updateBookmark, removeBookmark
+// and clearHistory are privileged store kinds (rule 12): sent only from the
+// pill's and the chrome bar widget's event handlers, never a command, a key
+// row or the backend relay. listClosedTabs and reopenClosedTab are reads.
+// Replies carry plain strings; no log line carries a URL, title, guid or path.
+// It sits at the end of the file so no catalogued line above moves.
+// ---------------------------------------------------------------------------
+
+const BOOKMARK_GUID_RE = /^[A-Za-z0-9_-]{12}$/;
+const BOOKMARK_TITLE_MAX_CHARS = 512;
+// The names the toolbar, the History submenu and the editor send, mapped to
+// Places' own root GUID constants (Bookmarks.sys.mjs toolbarGuid/menuGuid/unfiledGuid).
+const BOOKMARK_FOLDER_ROOTS = Object.freeze({ toolbar: "toolbarGuid", menu: "menuGuid", unfiled: "unfiledGuid" });
+
+// A root name or a 12-character Places GUID; anything else is refused with fixed text.
+function resolveBookmarkFolder(value) {
+  if (typeof value === "string" && Object.prototype.hasOwnProperty.call(BOOKMARK_FOLDER_ROOTS, value)) {
+    return lazy.PlacesUtils.bookmarks[BOOKMARK_FOLDER_ROOTS[value]];
+  }
+  if (typeof value === "string" && BOOKMARK_GUID_RE.test(value)) {
+    return value;
+  }
+  throw new Error("resolveBookmarkFolder: refusing a malformed folder");
+}
+
+// Firefox's own default location for a new bookmark (browser.bookmarks.defaultLocation, "toolbar").
+function defaultBookmarkFolder() {
+  try {
+    return resolveBookmarkFolder(PowerBrowserAPI.getStringPref("browser.bookmarks.defaultLocation", "toolbar"));
+  } catch {
+    return lazy.PlacesUtils.bookmarks.toolbarGuid;
+  }
+}
+
+function bookmarkUrlArg(method, url) {
+  const target = storeUrlArg(url);
+  if (!/^https?:\/\//i.test(target)) {
+    throw new Error(`${method}: refusing a non-http(s) url`);
+  }
+  return target;
+}
+
+function bookmarkTitleArg(method, title) {
+  if (typeof title !== "string") {
+    throw new Error(`${method}: refusing a non-string title`);
+  }
+  return title.slice(0, BOOKMARK_TITLE_MAX_CHARS);
+}
+
+// Places hands back URL objects, which do not structured-clone: strings only.
+function bookmarkReply(item, fallbackUrl = "") {
+  return { guid: String(item.guid ?? ""), title: String(item.title ?? ""), url: String(item.url ?? fallbackUrl) };
+}
+
+// BMK-01: bookmarks the page. Idempotent: a page already bookmarked answers its
+// first bookmark instead of a duplicate, so a double click never makes two.
+async function bookmarkPage(url, title, folderGuid) {
+  const target = bookmarkUrlArg("bookmarkPage", url);
+  const name = title === undefined ? "" : bookmarkTitleArg("bookmarkPage", title);
+  const parentGuid = folderGuid === undefined ? defaultBookmarkFolder() : resolveBookmarkFolder(folderGuid);
+  const existing = await lazy.PlacesUtils.bookmarks.fetch({ url: target });
+  if (existing) {
+    return bookmarkReply(existing, target);
+  }
+  const item = await lazy.PlacesUtils.bookmarks.insert({ type: lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK, parentGuid, url: target, title: name });
+  return bookmarkReply(item, target);
+}
+
+// BMK-02: the editor's name and folder. Bookmarks.update requires the guid and,
+// with a parentGuid, an index (DEFAULT_INDEX appends). A folder or separator
+// guid is refused: this kind edits bookmarks only.
+async function updateBookmark(guid, title, folderGuid) {
+  if (typeof guid !== "string" || !BOOKMARK_GUID_RE.test(guid)) {
+    throw new Error("updateBookmark: refusing a malformed guid");
+  }
+  const info = { guid };
+  if (title !== undefined) {
+    info.title = bookmarkTitleArg("updateBookmark", title);
+  }
+  if (folderGuid !== undefined) {
+    info.parentGuid = resolveBookmarkFolder(folderGuid);
+    info.index = lazy.PlacesUtils.bookmarks.DEFAULT_INDEX;
+  }
+  if (Object.keys(info).length === 1) {
+    throw new Error("updateBookmark: refusing an update with no title or folder");
+  }
+  const existing = await lazy.PlacesUtils.bookmarks.fetch(guid);
+  if (!existing || existing.type !== lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK) {
+    throw new Error("updateBookmark: refusing an unknown bookmark");
+  }
+  const item = await lazy.PlacesUtils.bookmarks.update(info);
+  return bookmarkReply({ ...existing, ...item });
+}
+
+// BMK-02: Remove in the editor. A guid removes that one bookmark; an http(s)
+// url removes every bookmark of the page, as Firefox's star does. Answers how
+// many were removed; an unknown guid or an unbookmarked page is 0, not an error.
+async function removeBookmark(target) {
+  const guids = [];
+  if (typeof target === "string" && BOOKMARK_GUID_RE.test(target)) {
+    const found = await lazy.PlacesUtils.bookmarks.fetch(target);
+    if (found && found.type === lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK) {
+      guids.push(found.guid);
+    }
+  } else {
+    const url = bookmarkUrlArg("removeBookmark", target);
+    await lazy.PlacesUtils.bookmarks.fetch({ url }, item => guids.push(item.guid));
+  }
+  if (guids.length) {
+    await lazy.PlacesUtils.bookmarks.remove(guids.map(guid => ({ guid })));
+  }
+  return guids.length;
+}
+
+// BMK-04: one Places observer, installed once beside the token-cookie strip
+// (setGroupSenderPort), on the exact event quartet stock chrome registers
+// (browser-places.js). It fires chrome-side with no actor sender, so the push
+// goes to the shell window's own Theia frame, found by window type. The push
+// carries the kind only: Theia re-reads the star and the toolbar folder. A
+// PlacesObservers batch arrives as one call, so a bulk edit pushes once.
+const BOOKMARK_OBSERVER_EVENTS = Object.freeze(["bookmark-added", "bookmark-removed", "bookmark-moved", "bookmark-url-changed"]);
+
+function pushBookmarksChanged() {
+  const frame = PowerBrowserAPI.findShellWindow()?.document.getElementById(SHELL_CONTENT_BROWSER_ID);
+  if (!frame) {
+    return;
+  }
+  sendWebTabPush(frame, { kind: "bookmarks-changed" });
+}
+
+// setGroupSenderPort sets the sender wall, so a failed install is logged and
+// retried at the next call, never thrown into it.
+let bookmarkObserverInstalled = false;
+function installBookmarkObserver() {
+  if (bookmarkObserverInstalled) {
+    return;
+  }
+  try {
+    lazy.PlacesUtils.observers.addListener([...BOOKMARK_OBSERVER_EVENTS], pushBookmarksChanged);
+    bookmarkObserverInstalled = true;
+  } catch (err) {
+    PowerBrowserAPI.log("warn", `[bookmark-observer] install failed (${err && err.name ? err.name : "error"})`);
+  }
+}
+
+// BMK-03: a closed overlay's back/forward history, kept unarmed under its row
+// key so reopenClosedTab can offer it. At most 25 (Firefox's
+// browser.sessionstore.max_tabs_undo); the oldest kept history is dropped.
+const CLOSED_WEB_TAB_HISTORY_MAX = 25;
+const keptClosedWebTabHistories = [];
+
+function keepClosedWebTabHistory(entry) {
+  if (!entry.rowKey || !WEB_TAB_ROW_KEY_RE.test(entry.rowKey)) {
+    return;
+  }
+  PowerBrowserAPI.keepCrashedWebTabHistory(entry, false);
+  if (!Object.prototype.hasOwnProperty.call(savedWebTabHistories, entry.rowKey)) {
+    return;
+  }
+  const at = keptClosedWebTabHistories.indexOf(entry.rowKey);
+  if (at >= 0) {
+    keptClosedWebTabHistories.splice(at, 1);
+  }
+  keptClosedWebTabHistories.push(entry.rowKey);
+  while (keptClosedWebTabHistories.length > CLOSED_WEB_TAB_HISTORY_MAX) {
+    const dropped = keptClosedWebTabHistories.shift();
+    if (!armedWebTabHistories.has(dropped)) {
+      delete savedWebTabHistories[dropped];
+    }
+  }
+}
+
+// BMK-03/BMK-06: closed tabs.sqlite rows, newest first. Web and stock rows
+// with an http(s) address only -- a closed Theia editor's key is a file path
+// and is never listed. Rows older than the retention window may already be
+// pruned; they are simply absent.
+const CLOSED_TABS_MAX = 25;
+const CLOSED_TABS_SQL = `SELECT uri, url, title, closed_at FROM tabs
+  WHERE closed_at IS NOT NULL AND (uri GLOB 'web:*' OR uri GLOB 'stock:*')
+    AND (url GLOB 'http://*' OR url GLOB 'https://*')`;
+
+function closedTabRow(row) {
+  return {
+    uri: String(row.getResultByName("uri")),
+    url: String(row.getResultByName("url")),
+    title: String(row.getResultByName("title") ?? ""),
+    closedAt: Number(row.getResultByName("closed_at")),
+  };
+}
+
+async function listClosedTabs(limit) {
+  const cap = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), CLOSED_TABS_MAX) : 10;
+  const conn = await PowerBrowserAPI.openTabStore();
+  const rows = await conn.execute(`${CLOSED_TABS_SQL} ORDER BY closed_at DESC LIMIT :cap`, { cap });
+  return rows.map(closedTabRow);
+}
+
+// BMK-03: the closed row to reopen -- the one named, or the newest. Read only:
+// the frontend reopens it through webTabOpen on the same row key (`key`, web
+// rows only) and arms the history through shellArmWebTabHistory when
+// `withHistory` says one was kept. Nothing is fabricated: no kept history,
+// withHistory false. A row already pruned answers null, a no-op.
+async function reopenClosedTab(uri) {
+  if (uri !== undefined && (typeof uri !== "string" || uri.length > 2048 || !/^(web|stock):./.test(uri))) {
+    throw new Error("reopenClosedTab: refusing a malformed tab key");
+  }
+  let row;
+  if (uri === undefined) {
+    [row] = await listClosedTabs(1);
+  } else {
+    const conn = await PowerBrowserAPI.openTabStore();
+    const rows = await conn.execute(`${CLOSED_TABS_SQL} AND uri = :uri`, { uri });
+    row = rows.length ? closedTabRow(rows[0]) : undefined;
+  }
+  if (!row) {
+    return null;
+  }
+  const key = WEB_TAB_ROW_KEY_RE.test(row.uri) ? row.uri : null;
+  const withHistory = key !== null && Object.prototype.hasOwnProperty.call(savedWebTabHistories, key);
+  return { uri: row.uri, url: row.url, title: row.title, key, withHistory };
+}
+
+// BMK-05: Clear Recent History. One kind, one range from Firefox's set minus
+// the site-specific rows; each range is a begin time, the end is now.
+const CLEAR_HISTORY_RANGES = Object.freeze({
+  "last-hour": now => now - 60 * 60 * 1000,
+  "last-2-hours": now => now - 2 * 60 * 60 * 1000,
+  "last-4-hours": now => now - 4 * 60 * 60 * 1000,
+  today: now => new Date(now).setHours(0, 0, 0, 0),
+  everything: () => 0,
+});
+
+// The fan-out: every PowerBrowser store that holds browsing history, by name.
+// Places goes through History.removeVisitsByFilter, never Sanitizer (D-09b:
+// Sanitizer needs browser.xhtml furniture the shell does not load). No target
+// reaches a cookie: the 127.0.0.1 token cookie is exempt by construction.
+// scripts/verify-clear-history.mjs derives the expected targets from the
+// store declarations above and compares this table to them.
+const CLEAR_HISTORY_FANOUT = Object.freeze([
+  ["places", clearPlacesHistory],
+  ["tabs.closed_at", clearClosedTabRows],
+  ["tabs.thumbnail", clearTabThumbnails],
+  ["saved_pages", clearSavedPages],
+  ["WEB_TAB_HISTORY_FILE_NAME", clearWebTabHistories],
+]);
+
+async function clearPlacesHistory(span) {
+  await lazy.PlacesUtils.history.removeVisitsByFilter({ beginDate: new Date(span.begin), endDate: new Date(span.end) });
+}
+
+// Closed rows in range only: an open row (closed_at NULL) is never deleted. The
+// deleted keys go on to the web-tab history target.
+async function clearClosedTabRows(span) {
+  const conn = await PowerBrowserAPI.openTabStore();
+  const params = { begin: span.begin, end: span.end };
+  const rows = await conn.execute("SELECT uri FROM tabs WHERE closed_at IS NOT NULL AND closed_at >= :begin AND closed_at <= :end", params);
+  rows.forEach(row => span.closedKeys.add(String(row.getResultByName("uri"))));
+  await conn.execute("DELETE FROM tabs WHERE closed_at IS NOT NULL AND closed_at >= :begin AND closed_at <= :end", params);
+}
+
+// A card image is a picture of the page: dropped for every row seen in range. An open tab captures a new one.
+async function clearTabThumbnails(span) {
+  const conn = await PowerBrowserAPI.openTabStore();
+  await conn.execute(
+    "UPDATE tabs SET thumbnail = NULL WHERE thumbnail IS NOT NULL AND MAX(last_active, COALESCE(last_accessed, 0)) >= :begin",
+    { begin: span.begin }
+  );
+}
+
+// Copies saved in range, and every copy of a closed row this clear deleted. Only
+// a directory savePageCopy minted under saved-pages/ is ever removed.
+async function clearSavedPages(span) {
+  const conn = await PowerBrowserAPI.openTabStore();
+  const params = { begin: span.begin, end: span.end };
+  const rows = await conn.execute("SELECT tab_uri, dir FROM saved_pages WHERE saved_at >= :begin AND saved_at <= :end", params);
+  const doomed = rows.map(row => ({ uri: String(row.getResultByName("tab_uri")), dir: String(row.getResultByName("dir")) }));
+  for (const uri of span.closedKeys) {
+    const extra = await conn.execute("SELECT tab_uri, dir FROM saved_pages WHERE tab_uri = :uri", { uri });
+    extra.forEach(row => doomed.push({ uri, dir: String(row.getResultByName("dir")) }));
+  }
+  const profile = PowerBrowserAPI.getProfileDir();
+  const root = profile ? PathUtils.join(profile, SAVED_PAGES_DIR) : "";
+  for (const { uri, dir } of doomed) {
+    await conn.execute("DELETE FROM saved_pages WHERE tab_uri = :uri", { uri });
+    if (root && isMintedSavedPageDir(dir, root)) {
+      await IOUtils.remove(dir, { recursive: true, ignoreAbsent: true });
+    }
+  }
+}
+
+// Saved back/forward histories carry no time, so a history goes with its row:
+// the keys of the closed rows this clear deleted, or every saved one for
+// everything. Memory and the history file alike; an open overlay's live
+// history is the open tab's own and is not touched.
+async function clearWebTabHistories(span) {
+  const dropped = key => span.everything || span.closedKeys.has(key);
+  for (const key of Object.keys(savedWebTabHistories)) {
+    if (dropped(key)) {
+      delete savedWebTabHistories[key];
+      armedWebTabHistories.delete(key);
+    }
+  }
+  for (let i = keptClosedWebTabHistories.length - 1; i >= 0; i -= 1) {
+    if (dropped(keptClosedWebTabHistories[i])) {
+      keptClosedWebTabHistories.splice(i, 1);
+    }
+  }
+  const profile = PowerBrowserAPI.getProfileDir();
+  if (!profile) {
+    return;
+  }
+  const path = `${profile}/${WEB_TAB_HISTORY_FILE_NAME}`;
+  let onDisk = {};
+  try {
+    const value = await IOUtils.readJSON(path);
+    onDisk = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    // Absent or unreadable: nothing on disk to keep.
+  }
+  const kept = Object.fromEntries(Object.entries(onDisk).filter(([key]) => !dropped(key)));
+  await IOUtils.writeJSON(path, kept, { tmpPath: `${path}.tmp` });
+}
+
+// Every target runs even when one fails, so one broken store never leaves the
+// others uncleared; a failure is logged by target name only and then fails the kind.
+async function clearHistory(range) {
+  if (typeof range !== "string" || !Object.prototype.hasOwnProperty.call(CLEAR_HISTORY_RANGES, range)) {
+    throw new Error("clearHistory: refusing an unknown range");
+  }
+  const end = Date.now();
+  const span = { begin: CLEAR_HISTORY_RANGES[range](end), end, everything: range === "everything", closedKeys: new Set() };
+  const failed = [];
+  for (const [target, clear] of CLEAR_HISTORY_FANOUT) {
+    try {
+      await clear(span);
+    } catch (err) {
+      failed.push(target);
+      PowerBrowserAPI.log("warn", `[clearHistory] ${target} failed (${err && err.name ? err.name : "error"})`);
+    }
+  }
+  if (failed.length) {
+    throw new Error(`clearHistory failed for ${failed.join(", ")}`);
+  }
+  return range;
 }

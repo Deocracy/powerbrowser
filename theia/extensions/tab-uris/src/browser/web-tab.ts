@@ -430,7 +430,13 @@ export class WebTabChannel {
             this.downloadRows = downloadRowsOf(detail);
             this.downloadsEmitter.fire(this.downloadRows);
         });
+        // Phase 33 (BMK-01, BMK-04): chrome's Places bookmark observer. The push carries no data; the star and the toolbar re-read.
+        this.onPush('bookmarks-changed', () => this.bookmarksEmitter.fire());
     }
+
+    /** Phase 33 (BMK-01, BMK-04): fires when a bookmark is added, removed, moved or re-pointed anywhere, so the star and the toolbar re-read. */
+    private readonly bookmarksEmitter = new Emitter<void>();
+    readonly onDidChangeBookmarks: TheiaEvent<void> = this.bookmarksEmitter.event;
 
     /** Phase 32 plan 04 (PAGE-06): the last Downloads rows chrome pushed, newest first. */
     downloadRows: WebTabDownloadRow[] = [];
