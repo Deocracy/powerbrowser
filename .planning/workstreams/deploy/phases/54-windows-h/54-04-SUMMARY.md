@@ -38,7 +38,7 @@ decisions:
   - "Deferred signing items 1-4 are not flipped: no certificate exists. The flip is written as the owner's step 5 in the RELEASING.md Windows signing section, and the rows go red on a page that disagrees with the posture"
   - "sign-windows fails closed without the six Azure release-environment variables; Azure/login runs after every gate; no Azure secret exists"
   - "sign-windows attests nothing: its bytes were built on legion and attest-build-provenance would name the hosted job as builder; legion is inside the Windows signing trust boundary (documented)"
-  - "Windows assets are not joined to the Release publish or the descriptor commit: that needs the Windows asset-table row and a decision on whether a failed Windows sign may block the Linux release"
+  - "Windows assets are not joined to the Release publish or the descriptor commit: that needs the Windows asset-table row. Owner ruling 2026-11-01: a failed Windows sign never blocks the Linux release; Windows joins the Release in its own run (enforced by the win-sign-chain independence check)"
 metrics:
   duration: "about 35 minutes of wall time (06:17Z to 06:52Z, 2026-11-01 UTC)"
   completed: 2026-11-01

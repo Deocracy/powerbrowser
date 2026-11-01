@@ -68,8 +68,9 @@ clock-only (B); 50 dispatch token = `GITHUB_TOKEN` as recorded; 44-03 WR-03 exem
 57 B1 = option (a); manifest published as a Release asset. Model tiering from this date: Opus for
 security-sensitive code and reviews, Sonnet for ordinary plan execution, Haiku for bookkeeping.
 
-Not settled, needs the owner: whether a failed Windows sign may block the Linux release (54-04
-SUMMARY, "Windows publish not wired").
+Owner ruling 2026-11-01: a failed Windows sign never blocks the Linux release; Linux ships alone and
+Windows joins the Release in its own run. The tree already behaved this way (sign-publish needs only
+build-linux); the `win-sign-chain` row now reds any Linux-publish-path job that waits on sign-windows.
 
 ## Next autonomous step
 

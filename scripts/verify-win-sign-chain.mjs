@@ -63,6 +63,7 @@ const NAME = 'win-sign-chain';
 const SELF_REL = 'scripts/verify-win-sign-chain.mjs';
 const RELEASE_REL = '.github/workflows/release.yml';
 const JOB = 'sign-windows';
+const LINUX_PUBLISH = 'sign-publish';
 const DER_REL = 'powerbrowser/packaging/mar/mar-primary.der';
 const LEGION_LABELS = ['legion', 'powerbrowser-release'];
 const CHAIN = ['inner-sign', 'repackage-installer', 'setup-sign', 'repackage-mar', 'signmar-sign', 'signmar-verify'];
@@ -138,6 +139,22 @@ export function runChecks({ wf, releasing, page, live, liveUrl = 'the published 
         if (/AZURE|ARM_|\bAZ_|CLIENT_SECRET/i.test(m[1])) fail(RELEASE_REL, 'secret', `names the stored secret ${m[1]}; Azure is reached over OIDC only and no Azure secret may exist. Next step: remove it and sign in with Azure/login over OIDC.`);
     }
     if (/id-token/.test(JSON.stringify(wf.permissions ?? {}))) fail(RELEASE_REL, 'permissions', `grants id-token at the workflow level; only ${JOB} may mint an OIDC token. Next step: move it to the job.`);
+
+    // independence: the Linux publish path never waits on Windows signing (owner ruling 2026-11-01: Linux ships alone)
+    const jobs = wf.jobs ?? {};
+    const needsOf = id => [jobs[id]?.needs ?? []].flat().map(String);
+    const ancestors = (id, seen = new Set()) => {
+        for (const n of needsOf(id)) if (!seen.has(n)) { seen.add(n); ancestors(n, seen); }
+        return seen;
+    };
+    if (!Object.hasOwn(jobs, LINUX_PUBLISH)) {
+        fail(LINUX_PUBLISH, 'independence', `is absent, so the Linux publish path cannot be proven independent of ${JOB}. Next step: restore the ${LINUX_PUBLISH} job.`);
+    } else {
+        for (const id of Object.keys(jobs)) {
+            if (id !== LINUX_PUBLISH && !ancestors(id).has(LINUX_PUBLISH)) continue;
+            if (ancestors(id).has(JOB)) fail(id, 'independence', `is on the Linux publish path and waits on ${JOB}, so a Windows signing failure would stop the Linux release. Next step: remove ${JOB} from its needs; Windows joins the Release in its own run.`);
+        }
+    }
 
     const job = wf.jobs?.[JOB];
     const steps = stepsOf(job);
@@ -341,6 +358,9 @@ function selfTest(yaml) {
         ['stale unsigned status after the signing validation', { releasing: signedReleasing }, PAGE_REL, 'status', 'unsigned'],
         ['stale unsigned status on the published page', { releasing: signedReleasing, page: signedPage }, liveUrl, 'status', 'unsigned'],
         ['signed status while the validation is pending', { page: signedPage }, PAGE_REL, 'status', 'pending'],
+        ['Linux publish waits on Windows signing', edit(c => { c.jobs[LINUX_PUBLISH].needs = [c.jobs[LINUX_PUBLISH].needs, JOB].flat(); }), LINUX_PUBLISH, 'independence', JOB],
+        ['a job after the Linux publish waits on Windows signing', edit(c => { c.jobs.descriptor.needs = [c.jobs.descriptor.needs, JOB].flat(); }), 'descriptor', 'independence', JOB],
+        ['Linux publish job removed', edit(c => { delete c.jobs[LINUX_PUBLISH]; }), LINUX_PUBLISH, 'independence', 'absent'],
         ['sign job removed (zero steps)', edit(c => { delete c.jobs[JOB]; }), JOB, 'vacuity', 'absent'],
         ['unreadable workflow', { wf: null }, RELEASE_REL, 'vacuity', 'unreadable'],
     ];
