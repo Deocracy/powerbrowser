@@ -847,9 +847,13 @@ const EXPECTED_NAV_COPY = new Set([
   "Unpin from Toolbar",
   "Remove Extension",
   "Remove ${name}?",
-  "The extension and its data stay in the profile until the browser restarts.",
+  "The extension and its data are removed from this profile.",
   "Remove",
   "${name} can't be removed here. Choose Manage Extension to see it in Add-ons.",
+  // Phase 38 plan 04 (B5): the gear menu's sidebar toggle.
+  "Show Sidebar",
+  "Hide Sidebar",
+  "${name} (${name})",
 ]);
 
 /**

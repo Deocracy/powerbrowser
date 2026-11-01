@@ -156,6 +156,23 @@
       "reason": "Discovered only after correcting layer 3's observation window from 20s to 35s (scripts/verify-endpoints.sh -- app.update.timerFirstInterval defaults to 30000ms, toolkit/components/timermanager/UpdateTimerManager.sys.mjs:97-103, so the periodic AddonManager update-check timer never fired inside a 20-second capture). AMO's addon-search/langpack-matching/discovery/browser-mappings API (extensions.getAddons.*, browser/app/profile/firefox.js:40-45). Not the Remote Settings carve-out (D-83) -- turned off via the extensions.getAddons.cache.enabled master switch, not waived."
     },
     {
+      "host": "addons.mozilla.org",
+      "disposition": "allow",
+      "trigger": "user-feature",
+      "reason": "38-05 (EXT-09, D-04): the add-ons site and the host that serves its signed XPIs (probed 2026-11-01: the listing API's current_version.file.url is an addons.mozilla.org/firefox/downloads/file/ URL answered 200 with no redirect, so no CDN host is touched). Contacted only when the user chooses the puzzle menu's install footer, which opens upstream's extensions.getAddons.link.url (browser/app/profile/firefox.js:42) in the stock browser window, and when the user installs from that page through the stock install prompt -- never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default. services.addons.mozilla.org (the AddonRepository API) stays deny."
+    },
+    {
+      "host": "versioncheck.addons.mozilla.org",
+      "disposition": "allow",
+      "trigger": "user-feature",
+      "reason": "38-05 (EXT-09): the update check for an add-on installed from the add-ons site when the user asks for one (extensions.update.url, browser/app/profile/firefox.js:229; XPIInstall.sys.mjs UpdateChecker uses it for every request but the periodic one). An AMO-signed add-on carries no update_url of its own, so this is the only place its updates come from. Contacted only once such an add-on is installed. Deliberate egress named in the REQUIREMENTS 'Inherited network egress' footer."
+    },
+    {
+      "host": "versioncheck-bg.addons.mozilla.org",
+      "disposition": "allow",
+      "reason": "38-05 (EXT-09): the periodic background update check for add-ons installed from the add-ons site (extensions.update.background.url, browser/app/profile/firefox.js:230; AddonManager backgroundUpdateCheck calls findUpdates with UPDATE_WHEN_PERIODIC_UPDATE even though extensions.update.autoUpdateDefault=false keeps the found update from installing itself). Contacted only once such an add-on is installed, so the fresh-profile layer-3 capture never sees it. Deliberate egress named in the REQUIREMENTS 'Inherited network egress' footer."
+    },
+    {
       "host": "update.googleapis.com",
       "disposition": "allow",
       "reason": "D-86 extension, same real session: Widevine's Chromium-Omaha-protocol update-check host (media.gmp-manager.chromium-update-url, browser/app/profile/firefox.js:2370), fetched by the same periodic AddonManager update-check timer as services.addons.mozilla.org above -- fires regardless of media.eme.enabled (which stays false by default on Linux, C-4), correcting C-4's premise that GMPUtils.isPluginHidden filters Widevine out of every unattended check: it filters the EME-toggle-triggered idle task, not this general periodic findUpdates() path. A Google host, not Mozilla -- same D-86 rationale as edgedl.me.gvt1.com (DRM stays working, no Mozilla host involved)."

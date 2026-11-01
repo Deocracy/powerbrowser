@@ -32,7 +32,12 @@
  *                    exactly one triggerClickOrPopup( call, spelled
  *                    triggerClickOrPopup(selectedTab), and reads tab identity
  *                    only from the 31.1 host (no tabTracker, no
- *                    getTabForBrowser of its own).
+ *                    getTabForBrowser of its own). 38-REVIEW CR-03: the host
+ *                    selection moves only to a tab the frontend shows:
+ *                    tabsBridgeActivate selects an adopted tab, or a pending
+ *                    one whose adoptTab push has not gone; after the push the
+ *                    request rides the entry to webTabOpen's already-open
+ *                    branch, which pushes selectTab once the widget attaches.
  *   7. signal     -- every event patch 050 dispatches (its updateWindow skip
  *                    fires one on setBadgeText/setIcon) is one the extension
  *                    section listens for in EXTENSION_TAB_EVENTS, so a badge
@@ -43,6 +48,12 @@
  *                    extension content in Theia DOM: no <iframe, no
  *                    dangerouslySetInnerHTML (an icon is an <img src> only) and
  *                    no moz-extension: string. The popup is the native panel.
+ *                    38-REVIEW WR-04: the Remove confirm's body promises the
+ *                    data stays only if the product sets keepStorageOnUninstall.
+ *                    38-REVIEW WR-02: focus returns to the pill only for a close
+ *                    the user made in the popup or on the button; the page-focus
+ *                    and TabSelect closes clear `refocus`, so chrome does not
+ *                    refocus the Theia frame and the widget skips the pill.
  *   9. page action -- (38-03, EXT-08 SC3, B2) the pill icon shows what chrome
  *                    pushed: the extension section reads isShownForTab on the
  *                    host's selected tab, the row validator requires
@@ -59,6 +70,55 @@
  *                    an extension-entry id) is page-context-menu.ts, never an
  *                    IDE menu contribution. The live proof is Phase 35's
  *                    verify-page-furniture-live.mjs --scenario extension-entry.
+ *  11. sidebar    -- (38-04, B5) patch 050's ext-sidebarAction.js still skips
+ *                    the shell window in createMenuItem and updateWindow (the
+ *                    ruling moves the sidebar into a Theia view, it does not
+ *                    revert 050); the page loads only through the stock panel
+ *                    document's loadPanel in a chrome browser, never through an
+ *                    overlay opener; the row validator requires sidebarOpen,
+ *                    and only the extensions/ widget shows the sidebar view.
+ *  11b. frontend gone -- (38-REVIEW WR-05) webTabDropOwnedBy also closes the open
+ *                    popup and hides the sidebar browser of the window whose
+ *                    subscribed frontend (bridge.actor) died.
+ *  12. tab pages  -- (38-04, B5) tabsBridgeCreate sends an extension page to
+ *                    extensionOpenTabPage (the stock window) before any overlay
+ *                    exists, and still refuses every other non-http(s) URL;
+ *                    extensionOpenTabPage opens no overlay and never passes the
+ *                    page through openBrowserWindow (system principal, WR-01);
+ *                    a container request (userContextId)
+ *                    is refused before either branch (38-REVIEW CR-02); the overlay location wall
+ *                    (OVERLAY_LOCATION) names no extension scheme.
+ *      38-REVIEW WR-06: the switchToTabHavingURI receiver passes reuse, so
+ *                    openOptionsPage switches to the open tab and is not
+ *                    told a successful open failed.
+ *  12b. tab remove -- (38-REVIEW WR-03) tabsBridgeRemove closes an adopted tab's
+ *                    node and overlay (webTabClose) before it pushes
+ *                    closeAdoptedTab, so tabs.remove resolves after the tab is gone.
+ *  13. commands   -- (38-04, B5 + the 2026-10-20 keys ruling) the section's
+ *                    EXTENSION_EXECUTE_COMMANDS equals the _execute_* names
+ *                    upstream ExtensionShortcuts.buildKey dispatches, and its
+ *                    keyset prefix equals the id registerKeysToDocument gives
+ *                    each keyset (both derived from upstream); pushPageFocus
+ *                    scopes the extension keys before its early return; the
+ *                    tab host install installs the receivers once, whose
+ *                    capture command listener stops the stock _execute_* path;
+ *                    and the boundary creates no <key> of its own and names no
+ *                    Phase 27 row id (the key table owns Theia's keys).
+ *  14. private    -- (38-04 security fix) every function in the extension
+ *      browsing      section that reaches a private-browsing sink (one of
+ *                    PB_SINKS: loads a sidebar page, runs a click, opens a
+ *                    popup, reads an extension's action or sidebar for a
+ *                    window, resolves a stock window for a tab page, creates
+ *                    a tab in the shell window) contains an extension
+ *                    canAccessWindow check, as stock ext-sidebarAction.js,
+ *                    ext-browserAction.js and ext-tabs.js create do;
+ *                    the function set is derived from the section, and a
+ *                    guarded function taking `win` is called with `win`.
+ *                    38-REVIEW WR-09: the check must guard the sink: it comes
+ *                    before it (unless the sink line resolves the window the
+ *                    check tests), and within three lines it returns, throws,
+ *                    continues or replaces that window.
+ *                    The self-test derives one plant per guarded function.
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -79,6 +139,7 @@ const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const BRIDGE_GATE = 'scripts/verify-web-tab-bridge.mjs';
 const LIVE = 'scripts/verify-extension-actions-live.mjs';
 const PATCH_050 = 'patches/050-extension-tab-host.patch';
+const UPSTREAM_SHORTCUTS = 'upstream/toolkit/components/extensions/ExtensionShortcuts.sys.mjs';
 const PRODUCT_DIRS = ['powerbrowser', 'theia/extensions'];
 const SECTION_MARK = '// Phase 38 (EXT-06, EXT-07): the extension bridge.';
 const CHROME_BAR_SRC = 'theia/extensions/chrome-bar/src/';
@@ -86,6 +147,9 @@ const EXTENSIONS_DIR = `${CHROME_BAR_SRC}browser/extensions/`;
 const EXTENSIONS_WIDGET = `${EXTENSIONS_DIR}extension-actions-widget.tsx`;
 const EXTENSIONS_ANCHOR = `${EXTENSIONS_DIR}extension-popup-anchor.ts`;
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
+const EXTENSIONS_SIDEBAR_VIEW = `${EXTENSIONS_DIR}extension-sidebar-view.ts`;
+// Rule 11: what putting a page into a web tab looks like in chrome (the overlay factories and the tabs bridge).
+const OVERLAY_OPENERS = ['createPendingOverlay(', 'webTabOpen(', 'tabsBridgeCreate(', 'tabHostAddTab('];
 const PAGE_MENU = 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts';
 // Rule 9: what computing a page action's visibility Theia-side would read (the page's address or the extension's patterns).
 const PAGE_MATCH = /url|uri\b|href|location|match/i;
@@ -94,12 +158,17 @@ const THEIA_DOM_POPUP = [['<iframe', 'an <iframe'], ['dangerouslySetInnerHTML', 
 // The stock delegate's call, assembled so this file's own text never matches rule 3's scan of the tree.
 const STOCK_TRIGGER = ['trigger', 'Action('].join('');
 const FIXTURE_NAMESPACE = /@powerbrowser\.test$/;
+// Rule 14: what reaching a window for an extension looks like in the section (the sink markers; the functions are derived).
+const PB_SINKS = ['.loadPanel(', 'triggerClickOrPopup(', 'shellPanelPopup(', 'actionFor(extension)', 'sidebarFor(extension)', 'getMostRecentWindow(', 'createPendingOverlay('];
 
 // D-11, the one hand-kept table: the classes a ruling fixed, not a derivation.
 const REQUIRED_STORE_CLASS = new Map([
     ['extensionClick', 'privileged'],
     ['extensionPin', 'privileged'],
     ['extensionRemove', 'privileged'],
+    ['extensionSidebar', 'privileged'],
+    ['extensionSidebarGeometry', 'privileged'],
+    ['extensionInstallSite', 'network'], // 38-05: D-11 makes the install trigger network
 ]);
 
 // 38-01 Task 2 landed the bridge (the PRESENCE_ASSERTION_TODO point): rule 6 requires the sanctioned click call and
@@ -136,6 +205,7 @@ function productFiles() {
 function readSources() {
     const src = {};
     for (const file of [...productFiles(), BRIDGE_GATE, PATCH_050]) src[file] = readFileSync(join(REPO_ROOT, file), 'utf8');
+    if (existsSync(join(REPO_ROOT, UPSTREAM_SHORTCUTS))) src[UPSTREAM_SHORTCUTS] = readFileSync(join(REPO_ROOT, UPSTREAM_SHORTCUTS), 'utf8');
     if (existsSync(join(REPO_ROOT, LIVE))) src[LIVE] = readFileSync(join(REPO_ROOT, LIVE), 'utf8');
     return src;
 }
@@ -164,6 +234,26 @@ function enclosingFunction(lines, index) {
         return s && index <= s.end ? { name: m[1], ...s } : null;
     }
     return null;
+}
+
+/** Rule 14: each extension-section function (name -> span, marker) whose body reaches a PB_SINKS marker. */
+function privateBrowsingSinks(apiLines, text) {
+    const at = text.indexOf(SECTION_MARK);
+    const base = at < 0 ? apiLines.length : text.slice(0, at).split('\n').length - 1;
+    const guarded = new Map();
+    const unreached = [];
+    for (const marker of PB_SINKS) {
+        let found = 0;
+        for (let i = base; i < apiLines.length; i++) {
+            const fn = apiLines[i].includes(marker) ? enclosingFunction(apiLines, i) : null;
+            if (fn && i !== fn.start) {
+                found++;
+                guarded.set(fn.name, { ...fn, marker });
+            }
+        }
+        if (!found) unreached.push(marker);
+    }
+    return { guarded, unreached };
 }
 
 function setMembers(text, name) {
@@ -267,6 +357,23 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             for (const word of ['tabTracker', 'getTabForBrowser(']) {
                 if (section.includes(word)) failures.push(`click-path: the extension section names ${word}; tab identity comes only from the 31.1 host (D-05)`);
             }
+            // 38-REVIEW WR-09: the clicked tab is the host's current selection, bound in extensionClick itself.
+            const click = span(apiLines, /^function extensionClick\(/);
+            const clickBody = click ? apiLines.slice(click.start, click.end + 1).join('\n') : '';
+            if (!/const selectedTab = tabHosts\.get\(win\)\?\.selected\b/.test(clickBody) || !clickBody.includes('triggerClickOrPopup(selectedTab)')) failures.push(`click-path: extensionClick does not bind selectedTab to the host's selection (const selectedTab = tabHosts.get(win)?.selected) and click it`);
+            // 38-REVIEW CR-03: the host selection follows only a tab the frontend shows. tabsBridgeActivate selects an
+            // adopted tab, or a pending one whose adoptTab push has not gone; after the push it defers to the attach.
+            const act = span(apiLines, /^function tabsBridgeActivate\(/);
+            const actBody = act ? apiLines.slice(act.start, act.end + 1).join('\n') : '';
+            const selects = (actBody.match(/selectNode\(/g) ?? []).length;
+            if (selects !== 2 || !/if \(tabId !== null\) \{\s*selectNode\(host, tab\);/.test(actBody) || !/if \(pending\.pushed\) \{\s*pending\.activateOnAck = true;\s*\} else \{\s*selectNode\(host, tab\);/.test(actBody)) {
+                failures.push(`click-path: tabsBridgeActivate moves the host selection ahead of the frontend (${selects} selectNode( call(s); the rule is one for an adopted tab and one for a pending tab whose adoptTab push has not gone)`);
+            }
+            if (!/pending\.pushed = true;\s*sendWebTabPush\(theiaBrowser, \{ kind: "adoptTab"/.test(stripComments(src[API]))) failures.push(`click-path: createPendingOverlay does not mark pending.pushed as its adoptTab push goes`);
+            if (!/entry\.activateOnAttach = Boolean\(pending\.activateOnAck\);/.test(src[API])) failures.push(`click-path: adoptPendingOverlay does not carry a deferred activation (activateOnAck) to the adopted entry`);
+            const show = span(apiLines, /^function showActivationOnAttach\(/);
+            const showBody = show ? apiLines.slice(show.start, show.end + 1).join('\n') : '';
+            if (!/if \(webTabs\.has\(tabId\)\) \{\s*showActivationOnAttach\(theiaBrowser, tabId\);/.test(src[API]) || !/if \(entry\.activateOnAttach\) \{\s*entry\.activateOnAttach = false;\s*sendWebTabPush\(theiaBrowser, \{ kind: "selectTab", tabId \}\);/.test(showBody)) failures.push(`click-path: webTabOpen's already-open branch does not show a deferred activation (selectTab) once the widget attaches`);
         }
     }
 
@@ -289,6 +396,24 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
                 if (line.includes(needle)) failures.push(`widget: ${file}:${i + 1} renders extension content in Theia DOM (${what}); the popup is the native XUL panel (D-02)`);
             }
         });
+    }
+    // 8a. WR-04: the Remove confirm tells the truth about the data. Upstream clears it on uninstall unless the keep pref is set.
+    {
+        const copy = `${CHROME_BAR_SRC}browser/chrome-bar-copy.ts`;
+        const body = /removeExtensionBody: '([^']*)'/.exec(src[copy] ?? '')?.[1];
+        const keeps = products.some(f => stripComments(src[f]).includes('keepStorageOnUninstall'));
+        if (body === undefined) failures.push(`remove-copy: ${copy} has no removeExtensionBody (broken instrument)`);
+        else if (/\b(stay|stays|kept|keep|restore)\b/i.test(body) !== keeps) failures.push(`remove-copy: removeExtensionBody ${JSON.stringify(body)} ${keeps ? 'does not promise' : 'promises'} the data stays, but the product ${keeps ? 'sets' : 'does not set'} extensions.webextensions.keepStorageOnUninstall`);
+    }
+    // 8b. WR-02: a close caused by page focus or a tab switch never pulls focus back to Theia or the pill.
+    if (bridgeLanded) {
+        const open = span(apiLines, /^function extensionOpenPopup\(/);
+        const body = open ? apiLines.slice(open.start, open.end + 1).join('\n') : '';
+        if (!open) failures.push(`popup-focus: ${API} has no extensionOpenPopup (broken instrument)`);
+        else if (!/const close = \(\) => \{\s*refocus = false;\s*popup\.closePopup\(\);/.test(body) || !/if \(refocus\) \{\s*bridge\.theiaBrowser\.focus\(\);/.test(body)) {
+            failures.push(`popup-focus: extensionOpenPopup refocuses the Theia frame on a close caused by page focus or a tab switch (38-REVIEW WR-02)`);
+        }
+        if (!/popupClosed && this\.webTabs\.extensionActionsRefocus/.test(src[EXTENSIONS_WIDGET] ?? '')) failures.push(`popup-focus: ${EXTENSIONS_WIDGET} focuses the pill on every popup close, not only the ones chrome marked refocus (38-REVIEW WR-02)`);
     }
     // 9. page action
     if (bridgeLanded) {
@@ -334,6 +459,141 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             if (what) failures.push(`menus: ${file}:${i + 1} takes the page menu's rows (${what}) outside the relay's one consumer ${PAGE_MENU}`);
         });
     }
+    // 11. sidebar
+    if (bridgeLanded) {
+        const sidebarDiff = /^diff --git a\/browser\/components\/extensions\/parent\/ext-sidebarAction\.js[\s\S]*?(?=^diff --git )/m.exec(src[PATCH_050])?.[0] ?? '';
+        if (!sidebarDiff) failures.push(`sidebar: ${PATCH_050} has no ext-sidebarAction.js diff (broken instrument)`);
+        for (const fn of ['createMenuItem(window, details)', 'updateWindow(window)']) {
+            const hunk = sidebarDiff.split(/^@@/m).find(h => h.includes(fn));
+            if (sidebarDiff && !/^\+.*windowTracker\.isTabHostWindow\(window\)/m.test(hunk ?? '')) failures.push(`sidebar: ${PATCH_050}'s ext-sidebarAction.js ${fn} no longer skips the shell window (isTabHostWindow); the B5 ruling moves the sidebar into a Theia view, it does not revert 050`);
+        }
+        const open = span(apiLines, /^function extensionSidebarOpen\(/);
+        if (!open) {
+            failures.push(`sidebar: ${API} has no extensionSidebarOpen (broken instrument)`);
+        } else {
+            const body = apiLines.slice(open.start, open.end + 1).join('\n');
+            if (!body.includes('EXTENSION_SIDEBAR_HOST') || !body.includes('.loadPanel(')) failures.push(`sidebar: extensionSidebarOpen does not load the page through the stock panel document's loadPanel`);
+            for (const opener of OVERLAY_OPENERS) {
+                if (body.includes(opener)) failures.push(`sidebar: extensionSidebarOpen puts the sidebar page in an overlay (${opener}); an extension page never enters a web tab`);
+            }
+        }
+        if (!/^const EXTENSION_SIDEBAR_HOST = "chrome:\/\/browser\/content\/webext-panels\.xhtml";$/m.test(src[API])) failures.push(`sidebar: EXTENSION_SIDEBAR_HOST is not the stock panel document chrome://browser/content/webext-panels.xhtml`);
+        if (!/typeof r\.sidebarOpen === 'boolean'/.test(src[WEB_TAB] ?? '')) failures.push(`sidebar: ${WEB_TAB}'s extensionActionRowsOf does not require sidebarOpen`);
+        if (!products.includes(EXTENSIONS_SIDEBAR_VIEW)) failures.push(`sidebar: ${EXTENSIONS_SIDEBAR_VIEW} is missing`);
+        for (const file of products.filter(f => f.startsWith(CHROME_BAR_SRC) && f !== EXTENSIONS_WIDGET && f !== EXTENSIONS_SIDEBAR_VIEW)) {
+            if (stripComments(src[file]).includes('ExtensionSidebarView')) failures.push(`sidebar: ${file} shows the sidebar view outside ${EXTENSIONS_WIDGET}`);
+        }
+    }
+    // 11b. WR-05: the frontend's death takes its popup and sidebar view down with its overlays.
+    if (bridgeLanded) {
+        const drop = span(apiLines, /^ {2}webTabDropOwnedBy\(actorRef\) \{/);
+        const gone = span(apiLines, /^function extensionFrontendGone\(/);
+        const goneBody = gone ? apiLines.slice(gone.start, gone.end + 1).join('\n') : '';
+        if (!drop || !gone) failures.push(`frontend-gone: ${API} has no ${!drop ? 'webTabDropOwnedBy' : 'extensionFrontendGone'} (broken instrument)`);
+        else {
+            if (!apiLines.slice(drop.start, drop.end + 1).join('\n').includes('extensionFrontendGone(actorRef)')) failures.push(`frontend-gone: webTabDropOwnedBy does not call extensionFrontendGone; a reload leaves the extension sidebar painted over the frame and a popup open`);
+            if (!/\.popup\.closePopup\(\)/.test(goneBody) || !/frame\.style\.visibility = "hidden"/.test(goneBody)) failures.push(`frontend-gone: extensionFrontendGone does not both close the open popup and hide the sidebar browser`);
+            if (!apiLines.join('\n').includes('bridge.actor = actorRef')) failures.push(`frontend-gone: extensionActionsSubscribe does not record the subscribing actor (bridge.actor), so extensionFrontendGone matches no frontend`);
+        }
+    }
+    // 12. tab pages
+    if (bridgeLanded) {
+        const create = span(apiLines, /^function tabsBridgeCreate\(/);
+        const route = create ? apiLines.slice(create.start, create.end + 1).findIndex(l => l.includes('startsWith("moz-extension:")')) : -1;
+        const block = route >= 0 ? span(apiLines.slice(create.start), /startsWith\("moz-extension:"\)/) : null;
+        if (!create || !block) {
+            failures.push(`tab-pages: tabsBridgeCreate does not route an extension page (startsWith("moz-extension:")) before its overlay`);
+        } else {
+            const body = apiLines.slice(create.start + block.start, create.start + block.end + 1).join('\n');
+            const rest = apiLines.slice(create.start + block.end + 1, create.end + 1).join('\n');
+            if (!body.includes('extensionOpenTabPage(')) failures.push(`tab-pages: tabsBridgeCreate's extension-page branch does not go to extensionOpenTabPage (the stock window)`);
+            for (const opener of OVERLAY_OPENERS) {
+                if (body.includes(opener)) failures.push(`tab-pages: tabsBridgeCreate puts an extension page in an overlay (${opener}); tab pages go to the stock window`);
+            }
+            if (!rest.includes('/^https?:\\/\\//i.test(url)')) failures.push(`tab-pages: tabsBridgeCreate no longer refuses every other non-http(s) URL`);
+            // 38-REVIEW CR-02: a container request is refused before either branch opens anything (never silently dropped).
+            const head = apiLines.slice(create.start, create.start + block.start).join('\n');
+            if (!/if \(options\?\.userContextId\) \{\s*throw new extensionLazy\.ExtensionUtils\.ExtensionError\(/.test(head)) failures.push(`tab-pages: tabsBridgeCreate does not refuse a container (options.userContextId) before it opens a page; the tab would load in the default cookie jar`);
+        }
+        const opener = span(apiLines, /^function extensionOpenTabPage\(/);
+        const openerBody = opener ? apiLines.slice(opener.start, opener.end + 1).join('\n') : '';
+        if (!opener) failures.push(`tab-pages: ${API} has no extensionOpenTabPage (broken instrument)`);
+        // 38-REVIEW WR-01: openBrowserWindow's window argument loads with the system principal; the page goes through addTab with the caller's.
+        if (opener && /openBrowserWindow\(\s*url\b/.test(openerBody)) failures.push(`tab-pages: extensionOpenTabPage passes the page through openBrowserWindow, which loads it with the system principal`);
+        for (const o of OVERLAY_OPENERS) {
+            if (openerBody.includes(o)) failures.push(`tab-pages: extensionOpenTabPage opens an overlay (${o})`);
+        }
+        // 38-REVIEW WR-06: openOptionsPage (the receiver) switches to an open tab and gets no error for a page that opened.
+        const receiver = span(apiLines, /^function installExtensionReceivers\(/);
+        const receiverBody = receiver ? apiLines.slice(receiver.start, receiver.end + 1).join('\n') : '';
+        const select = span(apiLines, /^function extensionSelectTabPage\(/);
+        const selectBody = select ? apiLines.slice(select.start, select.end + 1).join('\n') : '';
+        if (!/win\.switchToTabHavingURI = [^]*?extensionOpenTabPage\([^;]*, true\);/.test(receiverBody)) failures.push(`tab-pages: the switchToTabHavingURI receiver does not call extensionOpenTabPage with reuse, so every Options click adds a duplicate tab and a started-late window reports an error`);
+        if (opener && !/if \(reuse\) \{\s*return null;\s*\}\s*throw /.test(openerBody)) failures.push(`tab-pages: extensionOpenTabPage throws for a reuse caller after the page opened`);
+        if (!select || !/reuse && win\.gBrowser\.tabs\.find\(/.test(selectBody)) failures.push(`tab-pages: extensionSelectTabPage does not look for the tab already showing the page`);
+        const wall = /^const OVERLAY_LOCATION = (.*);$/m.exec(src[API])?.[1];
+        if (!wall) failures.push(`tab-pages: ${API} has no OVERLAY_LOCATION (broken instrument)`);
+        else if (/moz-extension|extension:/i.test(wall)) failures.push(`tab-pages: OVERLAY_LOCATION admits an extension page into an overlay (${wall})`);
+    }
+    // 12b. WR-03: tabs.remove closes an adopted tab before its promise resolves (stock removes it synchronously).
+    if (bridgeLanded) {
+        const remove = span(apiLines, /^function tabsBridgeRemove\(/);
+        const body = remove ? apiLines.slice(remove.start, remove.end + 1).join('\n') : '';
+        if (!remove) failures.push(`tab-remove: ${API} has no tabsBridgeRemove (broken instrument)`);
+        else if (!/PowerBrowserAPI\.webTabClose\(tabId\);\s*sendWebTabPush\([^)]*closeAdoptedTab/.test(body)) failures.push(`tab-remove: tabsBridgeRemove pushes closeAdoptedTab without closing the adopted tab's node and overlay first; tabs.remove would resolve before the tab is gone`);
+    }
+    // 13. commands
+    if (bridgeLanded) {
+        const upstream = (src[UPSTREAM_SHORTCUTS] ?? '').split('\n');
+        const build = span(upstream, /^ {2}buildKey\(doc, name, shortcut\) \{/);
+        const derived = build ? new Set(upstream.slice(build.start, build.end + 1).join('\n').match(/_execute_[a-z_]+/g) ?? []) : new Set();
+        const prefix = /keyset\.id = `([a-z-]+)\$\{/.exec(src[UPSTREAM_SHORTCUTS] ?? '')?.[1];
+        const ours = JSON.parse(/^const EXTENSION_EXECUTE_COMMANDS = (\[[^\]]*\]);$/m.exec(src[API])?.[1] ?? 'null');
+        const ourPrefix = /^const EXTENSION_KEYSET_PREFIX = "([^"]*)";$/m.exec(src[API])?.[1];
+        if (derived.size === 0 || !prefix) {
+            failures.push(`commands: derived no _execute_* name or keyset prefix from ${UPSTREAM_SHORTCUTS} (broken instrument)`);
+        } else {
+            const { surplus, missing } = diff(ours ?? [], [...derived]);
+            if (!ours || surplus.length || missing.length) failures.push(`commands: EXTENSION_EXECUTE_COMMANDS drifted from upstream buildKey's _execute_* names (surplus ${surplus.join(', ') || 'none'}; missing ${missing.join(', ') || 'none'})`);
+            if (ourPrefix !== prefix) failures.push(`commands: EXTENSION_KEYSET_PREFIX ${ourPrefix} is not the keyset id prefix upstream registerKeysToDocument uses (${prefix})`);
+        }
+        const focus = span(apiLines, /^ {2}pushPageFocus\(theiaBrowser, tabId\) \{/);
+        const focusLines = focus ? apiLines.slice(focus.start, focus.end + 1) : [];
+        const scoped = focusLines.findIndex(l => l.includes('extensionKeysFollowPageFocus('));
+        const early = focusLines.findIndex(l => l.includes('return;'));
+        if (scoped < 0 || (early >= 0 && scoped > early)) failures.push(`commands: pushPageFocus does not scope the extension keys (extensionKeysFollowPageFocus) before its early return; an extension key would fire with the IDE focused`);
+        const installs = apiLines.filter(l => /\binstallExtensionReceivers\(win\);/.test(l)).length;
+        if (installs !== 1) failures.push(`commands: installExtensionReceivers(win) is called ${installs} time(s); the rule is once, from the tab host install`);
+        const receivers = span(apiLines, /^function installExtensionReceivers\(/);
+        const receiversText = receivers ? apiLines.slice(receivers.start, receivers.end + 1).join('\n') : '';
+        if (!/addEventListener\("command"[\s\S]*stopPropagation\(\)[\s\S]*\}, true\)/.test(receiversText)) failures.push(`commands: installExtensionReceivers has no capture command listener that stops the stock _execute_* path`);
+        if (/createXULElement\("key"\)/.test(stripComments(src[API]))) failures.push(`commands: ${API} creates a <key> of its own; the Phase 27 key table owns key rows (key collision)`);
+        if (stripComments(src[API]).includes('powerbrowser-page-key-')) failures.push(`commands: ${API} names a Phase 27 row id (powerbrowser-page-key-); an extension key must not take a Theia key's row (key collision)`);
+    }
+    // 14. private browsing
+    if (bridgeLanded) {
+        const { guarded, unreached } = privateBrowsingSinks(apiLines, src[API]);
+        for (const marker of unreached) failures.push(`private-browsing: no function in the extension section reaches ${marker} (broken instrument)`);
+        for (const [name, fn] of guarded) {
+            const body = apiLines.slice(fn.start + 1, fn.end + 1);
+            const check = body.findIndex(l => l.includes('.canAccessWindow('));
+            const sink = body.findIndex(l => l.includes(fn.marker));
+            if (check < 0) {
+                failures.push(`private-browsing: ${name} reaches ${fn.marker} with no extension canAccessWindow check; an extension not allowed in private windows would reach a private window`);
+            } else {
+                // 38-REVIEW WR-09: the check guards the sink. It comes first, unless the sink line resolves the very window
+                // the check tests, and within three lines it leaves (return, throw, continue) or replaces that window.
+                const arg = (/\.canAccessWindow\(([\w$.]+)\)/.exec(body[check])?.[1] ?? '').replace(/[.$]/g, '\\$&');
+                const resolves = arg !== '' && new RegExp(`\\b${arg}\\s*=[^=]`).test(body[sink]);
+                const acts = new RegExp(`\\b(?:return|throw|continue)\\b${arg ? `|\\b${arg}\\s*=[^=]` : ''}`).test(body.slice(check, check + 4).join('\n'));
+                if ((check > sink && !resolves) || !acts) failures.push(`private-browsing: ${name}'s canAccessWindow check does not guard ${fn.marker} (it must come before it and leave or replace the window it tests)`);
+            }
+            if (!/^(?:async )?function \w+\(win[,)]/.test(apiLines[fn.start])) continue;
+            apiLines.forEach((line, i) => {
+                if (i !== fn.start && new RegExp(`\\b${name}\\((?!win\\b)`).test(line)) failures.push(`private-browsing: ${API}:${i + 1} calls ${name} without the window it checks (win)`);
+            });
+        }
+    }
     return failures;
 }
 
@@ -357,15 +617,44 @@ function selfTest() {
         { name: 'planted messagemanagergroup', run: () => check(apiWith('frame.setAttribute("messagemanagergroup", "browsers");')), expect: 'names messagemanagergroup outside the 31.1 host sites' },
         { name: 'unclassified kind', run: () => check({ ...clean, [API]: clean[API].replace('const STORE_REQUEST_KINDS = new Set([', 'const STORE_REQUEST_KINDS = new Set([\n  "extensionPlanted",') }), expect: 'the store kind extensionPlanted has no STORE_KIND_CLASSES entry' },
         { name: 'click path re-targeted', run: () => check({ ...clean, [API]: clean[API].replace('triggerClickOrPopup(selectedTab)', 'triggerClickOrPopup(host.selected)') }), expect: 'spelled triggerClickOrPopup(selectedTab)' },
+        { name: 'click selection unbound', run: () => check({ ...clean, [API]: clean[API].replace('const selectedTab = tabHosts.get(win)?.selected', 'const selectedTab = [...tabHosts.get(win).strip.children][0]') }), expect: 'extensionClick does not bind selectedTab' },
+        { name: 'private check without effect', run: () => check({ ...clean, [API]: clean[API].replace('      win = Services.wm.getMostRecentNonPBWindow("navigator:browser");\n', '      Services.wm.getMostRecentNonPBWindow("navigator:browser");\n') }), expect: "extensionOpenTabPage's canAccessWindow check does not guard" },
+        { name: 'private check after its sink', run: () => check({ ...clean, [API]: clean[API].replace('function extensionClick(win, named, anchorRect) {\n', 'function extensionClick(win, named, anchorRect) {\n  named.action.triggerClickOrPopup(tabHosts.get(win)?.selected);\n') }), expect: "extensionClick's canAccessWindow check does not guard" },
+        { name: 'activate ahead of ack', run: () => check({ ...clean, [API]: clean[API].replace('      pending.activateOnAck = true;\n', '      pending.activateOnAck = true;\n      selectNode(host, tab);\n') }), expect: 'tabsBridgeActivate moves the host selection ahead of the frontend' },
+        { name: 'deferred activation never shown', run: () => check({ ...clean, [API]: clean[API].replace('    entry.activateOnAttach = false;\n    sendWebTabPush(theiaBrowser, { kind: "selectTab", tabId });\n', '    entry.activateOnAttach = false;\n') }), expect: "already-open branch does not show a deferred activation" },
         { name: 'signal unheard', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('new window.Event("TabHostActionUpdate")', 'new window.Event("TabHostPlanted")') }), expect: 'dispatches TabHostPlanted, which EXTENSION_TAB_EVENTS does not listen for' },
+        { name: 'page-focus refocuses', run: () => check({ ...clean, [API]: clean[API].replace('    refocus = false;\n    popup.closePopup();', '    popup.closePopup();') }), expect: 'extensionOpenPopup refocuses the Theia frame on a close caused by page focus' },
+        { name: 'pill always focused', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: clean[EXTENSIONS_WIDGET].replace('popupClosed && this.webTabs.extensionActionsRefocus', 'popupClosed') }), expect: 'focuses the pill on every popup close' },
+        { name: 'remove copy promises retention', run: () => check({ ...clean, [`${CHROME_BAR_SRC}browser/chrome-bar-copy.ts`]: clean[`${CHROME_BAR_SRC}browser/chrome-bar-copy.ts`].replace('are removed from this profile.', 'stay in the profile until the browser restarts.') }), expect: 'promises the data stays' },
+        { name: 'keep pref set', run: () => check(apiWith('Services.prefs.setBoolPref("extensions.webextensions.keepStorageOnUninstall", true);')), expect: 'does not promise the data stays' },
         { name: 'popup-dom', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <iframe src={popupUrl} />;\n` }), expect: `${EXTENSIONS_WIDGET}:` },
         { name: 'inlined svg icon', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: `${clean[EXTENSIONS_WIDGET]}\nconst planted = <span dangerouslySetInnerHTML={{ __html: row.icon }} />;\n` }), expect: '(dangerouslySetInnerHTML)' },
         { name: 'anchor reporter gone', run: () => check(Object.fromEntries(Object.entries(clean).filter(([f]) => f !== EXTENSIONS_ANCHOR))), expect: `${EXTENSIONS_ANCHOR} is missing` },
         { name: 'pill-icon-local-match', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: clean[EXTENSIONS_WIDGET].replace('.filter(row => row.pageActionShown)', ".filter(row => window.location.href.startsWith('http'))") }), expect: `${EXTENSIONS_WIDGET} renderPageActions decides visibility from the page` },
         { name: 'menus-bypass', run: () => check({ ...clean, 'theia/extensions/chrome-bar/src/browser/ide-extension-menus.ts': "this.channel.onPush('pageContextMenu', d => d.items.filter(i => String(i.id).startsWith('extension-entry-')).forEach(i => this.menus.registerMenuAction(MAIN_MENU_BAR, { commandId: i.id, label: i.label })));\n" }), expect: "ide-extension-menus.ts:1 takes the page menu's rows (extension-entry)" },
         { name: 'second on-build-contextmenu notify', run: () => check(apiWith('Services.obs.notifyObservers(subject, "on-build-contextmenu");')), expect: 'the rule is one site' },
+        { name: 'sidebar skip reverted', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('+    if (windowTracker.isTabHostWindow(window) || !this.extension.canAccessWindow(window)) {', '+    if (!this.extension.canAccessWindow(window)) {') }), expect: 'createMenuItem(window, details) no longer skips the shell window' },
+        { name: 'sidebar-as-tab', run: () => check({ ...clean, [API]: clean[API].replace('  win.document.body.appendChild(frame);\n  extensionSidebars.set(', '  createPendingOverlay(null, panel, true, null);\n  extensionSidebars.set(') }), expect: 'extensionSidebarOpen puts the sidebar page in an overlay (createPendingOverlay(' },
+        { name: 'tabpage-in-overlay', run: () => check({ ...clean, [API]: clean[API].replace('    return extensionOpenTabPage(url, options?.triggeringPrincipal);', '    return createPendingOverlay(options.openerBrowser, url, true, null);') }), expect: 'tabsBridgeCreate puts an extension page in an overlay (createPendingOverlay(' },
+        { name: 'remove resolves early', run: () => check({ ...clean, [API]: clean[API].replace('    PowerBrowserAPI.webTabClose(tabId);\n    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });', '    sendWebTabPush(host.theiaBrowser, { kind: "closeAdoptedTab", tabId });') }), expect: 'tabsBridgeRemove pushes closeAdoptedTab without closing' },
+        { name: 'sidebar left painted', run: () => check({ ...clean, [API]: clean[API].replace('    extensionFrontendGone(actorRef);\n', '') }), expect: 'webTabDropOwnedBy does not call extensionFrontendGone' },
+        { name: 'sidebar not hidden', run: () => check({ ...clean, [API]: clean[API].replace('sidebar.frame.style.visibility = "hidden";', 'sidebar.frame.style.visibility = "visible";') }), expect: 'does not both close the open popup and hide the sidebar browser' },
+        { name: 'options page duplicated', run: () => check({ ...clean, [API]: clean[API].replace('params?.triggeringPrincipal, true);', 'params?.triggeringPrincipal);') }), expect: 'does not call extensionOpenTabPage with reuse' },
+        { name: 'success reported as error', run: () => check({ ...clean, [API]: clean[API].replace('    if (reuse) {\n      return null;\n    }\n', '') }), expect: 'throws for a reuse caller after the page opened' },
+        { name: 'container dropped', run: () => check({ ...clean, [API]: clean[API].replace('  if (options?.userContextId) {\n', '  if (false) {\n') }), expect: 'tabsBridgeCreate does not refuse a container' },
+        { name: 'page via window argument', run: () => check({ ...clean, [API]: clean[API].replace('win ?? PowerBrowserAPI.openBrowserWindow("")', 'win ?? PowerBrowserAPI.openBrowserWindow(url)') }), expect: 'extensionOpenTabPage passes the page through openBrowserWindow' },
+        { name: 'execute name drift', run: () => check({ ...clean, [API]: clean[API].replace(', "_execute_sidebar_action"];', '];') }), expect: 'missing _execute_sidebar_action' },
+        { name: 'commands-always-fire', run: () => check({ ...clean, [API]: clean[API].replace('    extensionKeysFollowPageFocus(theiaBrowser.ownerDocument.defaultView, tabId !== null);', '   ') }), expect: 'pushPageFocus does not scope the extension keys' },
+        { name: 'key collision', run: () => check(apiWith('const key = document.createXULElement("key"); key.id = "powerbrowser-page-key-newTab";')), expect: '(key collision)' },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
+    // Rule 14: one plant per guarded function, derived; each removes that function's canAccessWindow check.
+    const cleanLines = clean[API].split('\n');
+    for (const [name, fn] of privateBrowsingSinks(stripComments(clean[API]).split('\n'), clean[API]).guarded) {
+        const planted = cleanLines.map((l, i) => (i > fn.start && i <= fn.end ? l.replaceAll('.canAccessWindow(', '.plantedAccess(') : l)).join('\n');
+        plants.push({ name: `${name} unguarded`, run: () => check({ ...clean, [API]: planted }), expect: `private-browsing: ${name} reaches` });
+    }
+    plants.push({ name: 'sidebar set read without the window', run: () => check({ ...clean, [API]: clean[API].replace('const sidebars = extensionSidebarsById(win);', 'const sidebars = extensionSidebarsById();') }), expect: 'calls extensionSidebarsById without the window it checks' });
     let failed = 0;
     for (const plant of plants) {
         const red = plant.run();
@@ -391,7 +680,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows; the sidebar stays off in the shell window and loads only in the stock panel document; extension tab pages go to the stock window, never an overlay; extension shortcuts follow page focus and _execute_* runs on the bridge; every private-browsing sink checks canAccessWindow' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();

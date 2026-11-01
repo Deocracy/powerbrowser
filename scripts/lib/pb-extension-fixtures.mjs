@@ -42,6 +42,10 @@ async function run(cmd) {
     } else if (cmd.op === 'remove') {
       await browser.tabs.remove(cmd.tabId);
       result = true;
+    } else if (cmd.op === 'create-activate') {
+      const t = await browser.tabs.create({ ...cmd.props, active: false });
+      const u = await browser.tabs.update(t.id, { active: true });
+      result = { id: u.id, active: u.active };
     } else if (cmd.op === 'activate') {
       const t = await browser.tabs.update(cmd.tabId, { active: true });
       result = { id: t.id, active: t.active };
@@ -123,9 +127,53 @@ browser.runtime.onMessage.addListener(msg => {
 });
 `;
 
+// 38-04 (B5): the sidebar, tab-page and commands probe. It has no toolbar action, so its puzzle row is read from its
+// sidebar action. Its background answers the harness's commands on /cmd; it is the only fixture in a B5 session.
+const SURFACES_BACKGROUND = `${POST}
+post({ kind: 'surfaces-started', id: browser.runtime.id });
+// The commands probe: the custom command retitles the tab it was given, so the page-side effect names that tab.
+browser.commands.onCommand.addListener(async (name, tab) => {
+  let title = null;
+  let err = null;
+  try {
+    title = (await browser.tabs.executeScript(tab.id, { code: "document.title = 'pb-command ' + location.pathname; document.title" }))[0];
+  } catch (e) {
+    err = String((e && e.message) || e);
+  }
+  post({ kind: 'command', name, tabId: tab ? tab.id : null, url: tab ? tab.url : null, title, err });
+});
+async function run(cmd) {
+  try {
+    let result;
+    if (cmd.op === 'url') {
+      result = browser.runtime.getURL(cmd.path);
+    } else if (cmd.op === 'options') {
+      await browser.runtime.openOptionsPage();
+      result = true;
+    } else if (cmd.op === 'dashboard') {
+      const t = await browser.tabs.create({ url: 'dashboard.html' });
+      result = { id: t.id, windowId: t.windowId };
+    } else if (cmd.op === 'overlay-nav') {
+      const [t] = await browser.tabs.query({ url: cmd.url });
+      await browser.tabs.update(t.id, { url: browser.runtime.getURL('dashboard.html') });
+      result = true;
+    } else {
+      throw new Error('unknown op ' + cmd.op);
+    }
+    post({ kind: 'result', opId: cmd.opId, ok: true, result });
+  } catch (e) {
+    post({ kind: 'result', opId: cmd.opId, ok: false, error: String((e && e.message) || e) });
+  }
+}
+setInterval(() => {
+  fetch(ORIGIN + '/cmd').then(r => r.json()).then(cmds => cmds.forEach(run)).catch(() => {});
+}, 250);
+`;
+
 const ACTION_ID = 'pb-ext-action-probe@powerbrowser.test';
 const POPUP_ID = 'pb-ext-popup-probe@powerbrowser.test';
 const CONTENT_ID = 'pb-ext-content-probe@powerbrowser.test';
+const SURFACES_ID = 'pb-ext-surfaces-probe@powerbrowser.test';
 
 export const EXTENSION_FIXTURES = Object.freeze({
   action: {
@@ -168,6 +216,28 @@ export const EXTENSION_FIXTURES = Object.freeze({
       page_action: { default_title: 'PB page action probe', show_matches: ['http://127.0.0.1/*'] },
     },
     files: { 'background.js': CONTENT_BACKGROUND, 'content.js': CONTENT_SCRIPT },
+  },
+  surfaces: {
+    manifest: {
+      manifest_version: 2,
+      name: 'PB sidebar probe',
+      version: '1.0',
+      browser_specific_settings: { gecko: { id: SURFACES_ID } },
+      permissions: ['tabs', 'activeTab'],
+      background: { scripts: ['background.js'] },
+      sidebar_action: { default_panel: 'panel.html', default_title: 'PB sidebar probe' },
+      options_ui: { page: 'options.html', open_in_tab: true },
+      commands: {
+        'pb-probe': { suggested_key: { default: 'Alt+Shift+U' }, description: 'PB probe command' },
+        _execute_sidebar_action: { suggested_key: { default: 'Alt+Shift+I' } },
+      },
+    },
+    files: {
+      'background.js': SURFACES_BACKGROUND,
+      'panel.html': '<!doctype html><title>pb-sidebar-panel</title><body>sidebar</body>',
+      'options.html': '<!doctype html><title>pb-options</title><body>options</body>',
+      'dashboard.html': '<!doctype html><title>pb-dashboard</title><body>dashboard</body>',
+    },
   },
 });
 

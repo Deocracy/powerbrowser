@@ -2659,7 +2659,8 @@ check_allowlist_schema() {
 #
 # Shared inner helper: takes an allowlist path as its one argument, always
 # reads the real ROADMAP.md/REQUIREMENTS.md (the documents Task 1 amended).
-# Selects every allow-dispositioned mozilla.com/mozilla.net host and requires
+# Selects every allow-dispositioned mozilla.com/mozilla.net/mozilla.org host
+# (.org since 38-05, whose add-ons site hosts EXT-09 allows) and requires
 # a whole-token occurrence of each in both documents. Whole-token matching is
 # load-bearing: a plain substring search would let a documented host's own
 # suffix (e.g. "cdn.mozilla.net" inside "content-signature-2.cdn.mozilla.net")
@@ -2679,11 +2680,11 @@ _allowlist_doc_consistency_impl() {
     const requirements = fs.readFileSync(requirementsPath, "utf8");
 
     const hosts = (a.hosts || [])
-      .filter(h => h.disposition === "allow" && /(^|\.)mozilla\.(com|net)$/i.test(h.host))
+      .filter(h => h.disposition === "allow" && /(^|\.)mozilla\.(com|net|org)$/i.test(h.host))
       .map(h => h.host);
 
     if (hosts.length === 0) {
-      console.error(`allowlist-doc-consistency: FAIL -- filter matched no allow-dispositioned mozilla.com/mozilla.net host in ${allowlistPath}`);
+      console.error(`allowlist-doc-consistency: FAIL -- filter matched no allow-dispositioned mozilla.com/.net/.org host in ${allowlistPath}`);
       process.exit(1);
     }
 
@@ -2726,11 +2727,12 @@ check_allowlist_doc_consistency() {
   _allowlist_doc_consistency_impl "$REPO_ROOT/powerbrowser/endpoint-allowlist.json"
 }
 
-# Plants a temp copy of the real allowlist carrying two additional allow
+# Plants a temp copy of the real allowlist carrying three additional allow
 # entries -- one undocumented host, one that is a proper suffix of two
 # genuinely-documented hosts (proving whole-token, not substring, matching --
-# a bare substring search would let this second one pass vacuously) -- and
-# requires the helper to reject both. Never writes to the real allowlist; the
+# a bare substring search would let this second one pass vacuously), and an
+# undocumented mozilla.org host (proving the 38-05 .org filter) -- and
+# requires the helper to reject all three. Never writes to the real allowlist; the
 # temp copy is registered with track_temp so the script's own trap-covered
 # cleanup() removes it on every exit path, including an interrupt mid-test.
 check_allowlist_doc_consistency_self_test() {
@@ -2753,6 +2755,11 @@ check_allowlist_doc_consistency_self_test() {
       disposition: "allow",
       reason: "allowlist-doc-consistency-self-test: proper suffix of two documented hosts, must be rejected (proves whole-token matching)"
     });
+    a.hosts.push({
+      host: "powerbrowser-selftest-control.addons.mozilla.org",
+      disposition: "allow",
+      reason: "allowlist-doc-consistency-self-test: undocumented mozilla.org host, must be rejected (proves the 38-05 .org filter)"
+    });
     fs.writeFileSync(outPath, JSON.stringify(a, null, 2));
   ' "$real" "$tmp"
 
@@ -2764,12 +2771,13 @@ check_allowlist_doc_consistency_self_test() {
   fi
 
   if echo "$out" | grep -qF 'powerbrowser-selftest-control.cdn.mozilla.net' \
-     && echo "$out" | grep -qE '^  cdn\.mozilla\.net:'; then
-    echo "allowlist-doc-consistency-self-test: PASS -- both planted hosts (undocumented control, suffix-adjacency) correctly rejected"
+     && echo "$out" | grep -qE '^  cdn\.mozilla\.net:' \
+     && echo "$out" | grep -qF 'powerbrowser-selftest-control.addons.mozilla.org'; then
+    echo "allowlist-doc-consistency-self-test: PASS -- all three planted hosts (undocumented control, suffix-adjacency, undocumented mozilla.org) correctly rejected"
     return 0
   fi
 
-  echo "allowlist-doc-consistency-self-test: FAIL -- rejected, but output doesn't name both planted hosts" >&2
+  echo "allowlist-doc-consistency-self-test: FAIL -- rejected, but output doesn't name all three planted hosts" >&2
   echo "$out" >&2
   return 1
 }
@@ -3906,6 +3914,10 @@ run_own_checks() {
     # The live file's static half: every plant targets a scenario, names text it emits and is read by it, with the
     # audit's own plants red. No browser; the live sessions are extension-actions-live below.
     "extension-actions-live-static|node $REPO_ROOT/scripts/verify-extension-actions-live.mjs --self-test"
+    # NEW (Phase 38 plan 05, EXT-09/10): the AMO live file's static half -- every plant targets a scenario and names
+    # text it emits, and the file names no add-on id literal (Pitfall 7). No browser, no network; the live sessions are
+    # extension-amo-live below.
+    "extension-amo-live-static|node $REPO_ROOT/scripts/verify-extension-amo-live.mjs --self-test"
 
     # NEW (Phase 32 plan 01, PAGE-01/02): the find and zoom chrome arms, the
     # WebTabMessage union, the routed set and the state fields agree (derive and
@@ -6042,6 +6054,13 @@ run_own_checks() {
       # target scenario, then one session per plant.
       "extension-actions-live|node $REPO_ROOT/scripts/verify-extension-actions-live.mjs"
       "extension-actions-live-self-test|node $REPO_ROOT/scripts/verify-extension-actions-live.mjs --self-test --live"
+      # NEW (Phase 38 plan 05, EXT-09/10, D-04/D-07): installs from the add-ons site in the built shell -- the install
+      # footer opens the site in the stock window and the stock install prompt installs the smallest D-07 listing
+      # (amo-install), then the D-07 extensions' page-side effects in web tabs (fixtures). Every id, version and XPI
+      # URL is read at check time. Needs the binary with patch 050, the last Theia build and the network to the
+      # add-ons site, so never --quick. The plant run boots a clean control per target scenario, then each plant.
+      "extension-amo-live|node $REPO_ROOT/scripts/verify-extension-amo-live.mjs"
+      "extension-amo-live-self-test|node $REPO_ROOT/scripts/verify-extension-amo-live.mjs --self-test --live"
 
       # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
       # and identity-local (31-01), site-panel (31-02: certificate, six tri-state

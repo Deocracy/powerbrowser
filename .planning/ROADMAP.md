@@ -519,7 +519,7 @@ Plans:
 **Depends on**: Phase 37, and Phase 28's signed-off route (not planned without it)
 **Requirements**: EXT-06, EXT-07, EXT-08, EXT-09, EXT-10
 **Research**: yes — planned from the Phase 28 spike record
-**Notes**: if the signed-off route needs the GUI-05 bridge, the scope consequence recorded at sign-off governs this phase; EXT-09 adds addons.mozilla.org hosts to `powerbrowser/endpoint-allowlist.json`, and `allowlist-doc-consistency` then needs each allow-dispositioned Mozilla host named in this file and REQUIREMENTS.md in the same change; extension icon, name and badge are read chrome-side
+**Notes**: if the signed-off route needs the GUI-05 bridge, the scope consequence recorded at sign-off governs this phase; EXT-09 adds addons.mozilla.org hosts to `powerbrowser/endpoint-allowlist.json`, and `allowlist-doc-consistency` then needs each allow-dispositioned Mozilla host named in this file and REQUIREMENTS.md in the same change (38-05 allows exactly **addons.mozilla.org** for the add-ons site and its signed XPIs, and **versioncheck.addons.mozilla.org** and **versioncheck-bg.addons.mozilla.org** for the update checks of add-ons installed from it; services.addons.mozilla.org stays deny); extension icon, name and badge are read chrome-side
 **Success Criteria** (what must be TRUE):
 
   1. An installed extension's `tabs.query`, tab events and active tab report the web tabs as they would in Firefox
@@ -531,11 +531,11 @@ Plans:
 **Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
-- [ ] 38-01-PLAN.md (wave 1) — Build the chrome-side extension bridge on the Phase 31.1 tab host: action-state
-- [ ] 38-02-PLAN.md (wave 2) — Render the EXT-06/07 surface on the 38-01 bridge: buttons row, puzzle menu,
-- [ ] 38-03-PLAN.md (wave 3) — Prove EXT-08 on the stack that already exists: content scripts + messaging on the
-- [ ] 38-04-PLAN.md (wave 4) — Implement Chris's B5 ruling (2026-10-22, verbatim in 38-CONTEXT.md): sidebar
-- [ ] 38-05-PLAN.md (wave 5) — Close the phase's AMO + fixtures surface: AMO install over the stock prompt path
+- [x] 38-01-PLAN.md (wave 1) — Build the chrome-side extension bridge on the Phase 31.1 tab host: action-state
+- [x] 38-02-PLAN.md (wave 2) — Render the EXT-06/07 surface on the 38-01 bridge: buttons row, puzzle menu,
+- [x] 38-03-PLAN.md (wave 3) — Prove EXT-08 on the stack that already exists: content scripts + messaging on the
+- [x] 38-04-PLAN.md (wave 4) — Implement Chris's B5 ruling (2026-10-22, verbatim in 38-CONTEXT.md): sidebar
+- [x] 38-05-PLAN.md (wave 5) — Close the phase's AMO + fixtures surface: AMO install over the stock prompt path
 
 **UI hint**: yes
 
@@ -556,7 +556,7 @@ Plans:
 | 35. Shell Furniture and Page Context Menu | 7/7 | Executed, verification deferred | - |
 | 36. New-Window Links as Web Tabs | 3/3 | Executed, verification deferred | - |
 | 37. Permission Prompts and Dialogs | 4/4 | Executed, verification deferred | - |
-| 38. WebExtensions | 0/TBD | Not started | - |
+| 38. WebExtensions | 5/5 | Executed, verification deferred | - |
 
 ## Hard constraints (every phase)
 

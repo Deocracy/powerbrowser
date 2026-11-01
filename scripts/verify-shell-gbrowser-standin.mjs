@@ -32,6 +32,11 @@
 //                        read-only `git -C upstream ls-tree -r --name-only HEAD`.
 //                        Every member access counts: call, read, assignment or
 //                        destructuring. Tracker code reads members as data.
+//     050 added lines -- every `+` line of patches/050-extension-tab-host.patch,
+//                        read from the patch text with the extension-scope rule
+//                        (38-REVIEW CR-01/WR-09). upstream/ lags the patch while
+//                        a re-patch is deferred, and that lag let a 050-only
+//                        gBrowser.tabContainer read pass every static gate.
 //     receivers       -- in both scopes: `gBrowser`, any `.getTabBrowser()`
 //                        result chained directly, and any identifier bound in the
 //                        same file from an expression ending in `.gBrowser` or
@@ -98,6 +103,8 @@
 //   (q) a staged actor parent that calls a member through a bound getTabBrowser() receiver;
 //   (r) a staged gBrowserInit literal without isAdoptingTab;
 //   (s) staged patch text without the TabManager hunk (STALE DATA MEMBER webDriverTabs);
+//   (s2) a staged stand-in without tabContainer, read only by 050's added lines (38-REVIEW CR-01), and
+//        staged patch text without those reads (DEAD SURFACE tabContainer);
 //   (x) a staged tabbrowser facade without tabContainer (Phase 37, FACADES);
 //   (y) a staged tabbrowser facade with a surplus member.
 //   (h) a staged registry entry whose parent module sits outside the scanned
@@ -747,7 +754,24 @@ function runScan(inputs) {
   if (ext.unreadable.length) {
     return { ok: false, reason: 'unreadable-upstream', detail: ext.unreadable.join(', ') };
   }
-  const required = new Set([...actor.members, ...ext.members]);
+  // 38-REVIEW CR-01/WR-09: the 050 patch's added lines, read from the patch text itself. upstream/ lags the patch
+  // whenever a re-patch is deferred, so a member only the new 050 reads would otherwise pass unseen.
+  const patchText = readSource(patchFile);
+  if (patchText === null) return { ok: false, reason: 'unreadable-patch', detail: patchFile };
+  const patchAdded = patchText
+    .split('\n')
+    .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+    .map(line => line.slice(1))
+    .join('\n');
+  const patchMembers = gBrowserMembersOf(stripCommentLines(patchAdded), false);
+  if (patchMembers.size === 0) {
+    return { ok: false, reason: 'empty-required', detail: `derived zero gBrowser member uses from the added lines of ${patchFile}` };
+  }
+  for (const n of patchMembers) {
+    if (!ext.sites.has(n)) ext.sites.set(n, new Set());
+    ext.sites.get(n).add(patchFile);
+  }
+  const required = new Set([...actor.members, ...ext.members, ...patchMembers]);
   if (required.size === 0) {
     return { ok: false, reason: 'empty-required', detail: 'derived zero gBrowser member uses from the upstream call sites' };
   }
@@ -889,6 +913,7 @@ function runScan(inputs) {
     shimUnimplemented,
     shimSurplus,
     absentFor: absent,
+    sitesOf: m => sorted(new Set([...(actor.sites.get(m) ?? []), ...(ext.sites.get(m) ?? [])])),
   };
 }
 
@@ -960,7 +985,7 @@ function reportFailure(result) {
   console.error(`  implemented (derived from ${SHELL_FILE}): ${result.implemented.join(', ')}`);
   console.error(`  deliberately absent: ${result.absent.join(', ')}`);
   for (const m of result.unimplemented) {
-    console.error(`  UNIMPLEMENTED: '${m}' is used on a gBrowser receiver upstream but the stand-in neither implements it nor records it in DELIBERATELY_ABSENT -- implement it, or record why it must stay absent`);
+    console.error(`  UNIMPLEMENTED: '${m}' is used on a gBrowser receiver upstream (${result.sitesOf(m).join(', ')}) but the stand-in neither implements it nor records it in DELIBERATELY_ABSENT -- implement it, or record why it must stay absent`);
   }
   for (const m of result.staleAbsent) {
     console.error(`  STALE ABSENCE: '${m}' is in DELIBERATELY_ABSENT but nothing upstream uses it any more -- remove the entry (${result.absentFor.get(m)})`);
@@ -1265,6 +1290,27 @@ function selfTest() {
       } else ok(`050 patch text without the TabManager hunk -> red, naming STALE DATA MEMBER 'webDriverTabs'`);
     }
 
+    // (s2) 38-REVIEW CR-01: the stand-in without tabContainer, which only the 050 patch's added lines read (upstream/
+    // may still carry the old 050). Then the converse: patch text without those reads leaves tabContainer DEAD SURFACE.
+    {
+      const shellText = readSource(SHELL_FILE) ?? '';
+      const without = shellText.replace(/\n\s*get tabContainer\(\) \{\n\s*return host\.tabContainer\(\);\n\s*\},/, '');
+      const path = join(stage, 'standin-no-tabcontainer.js');
+      writeFileSync(path, without);
+      const r = runScan({ ...real, shellFile: path });
+      if (without === shellText) fail(`'stand-in without tabContainer' plant did not land`);
+      else if (r.ok || !r.unimplemented?.includes('tabContainer') || !r.sitesOf('tabContainer').includes(PATCH_FILE)) {
+        fail(`a stand-in without tabContainer did not go red naming it at ${PATCH_FILE}; got: ${JSON.stringify({ reason: r.reason, unimplemented: r.unimplemented })}`);
+      } else ok(`stand-in without tabContainer (CR-01) -> red, naming 'tabContainer' UNIMPLEMENTED at ${PATCH_FILE}`);
+      const patchPath = join(stage, 'patch-no-tabcontainer.patch');
+      const patch = readSource(PATCH_FILE) ?? '';
+      writeFileSync(patchPath, patch.split('\n').filter(line => !/^\+.*\bgBrowser\.tabContainer\b/.test(line)).join('\n'));
+      const r2 = runScan({ ...real, patchFile: patchPath });
+      if (r2.ok || !r2.surplus?.includes('tabContainer')) {
+        fail(`patch text without its tabContainer reads did not go red naming DEAD SURFACE 'tabContainer'; got: ${JSON.stringify({ reason: r2.reason, surplus: r2.surplus })}`);
+      } else ok(`050 patch text without its tabContainer reads -> red, naming DEAD SURFACE 'tabContainer' (derived from the patch, not upstream/)`);
+    }
+
     // (t) a staged ZoomManager literal without MIN.
     {
       const src = readSource(BOUNDARY_FILE) ?? '';
@@ -1525,7 +1571,7 @@ function selfTest() {
 
   if (failed) process.exit(1);
   console.log(
-    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site, FullScreen member, PointerLock member, nsContextMenu surplus, IDL method, XULBrowserWindow QueryInterface, stock PopupNotifications without show, browserDOMWindow without canClose, facade missing tabContainer / surplus getNotificationBox); the empty file list, an unresolvable registry URI and a duplicate shim definition failed distinctly`
+    `${NAME} --self-test: PASS -- every planted fault landed and went red naming its drift (missing member, new upstream call, surplus member, new caller file, stale absence, contradiction, missing data member, extension-scope read, receiver call, gBrowserInit member, stale patch hunk, 050-only tabContainer read / its converse, zoom shim MIN / surplus zoomIn / absent reason / duplicate ZoomUI, registry-named component parent, uncovered call site, FullScreen member, PointerLock member, nsContextMenu surplus, IDL method, XULBrowserWindow QueryInterface, stock PopupNotifications without show, browserDOMWindow without canClose, facade missing tabContainer / surplus getNotificationBox); the empty file list, an unresolvable registry URI and a duplicate shim definition failed distinctly`
   );
 }
 

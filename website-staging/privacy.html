@@ -67,6 +67,7 @@
     <li><code data-unattended-host="updates.powerbrowser.org">updates.powerbrowser.org</code>: checks for PowerBrowser updates.</li>
     <li><code data-unattended-host="downloads.powerbrowser.org">downloads.powerbrowser.org</code>: downloads update files.</li>
     <li><code data-unattended-host="update.googleapis.com">update.googleapis.com</code>, <code data-unattended-host="www.google.com">www.google.com</code>, <code data-unattended-host="dl.google.com">dl.google.com</code>, <code data-unattended-host="edgedl.me.gvt1.com">edgedl.me.gvt1.com</code>: the Widevine content decryption module, which is checked for updates and downloaded when needed for protected media.</li>
+    <li><code data-unattended-host="versioncheck-bg.addons.mozilla.org">versioncheck-bg.addons.mozilla.org</code>: the periodic update check for add-ons you installed from addons.mozilla.org, and only once you have installed one.</li>
     <li><code data-unattended-host="events.powerbrowser.org">events.powerbrowser.org</code>: receives error reports, and only while you have error reporting turned on. Each report carries only the fields listed above.</li>
   </ul>
   <h2>Hosts contacted only after you use a feature</h2>
@@ -75,6 +76,8 @@
     <li><code data-feature-host="api.anthropic.com">api.anthropic.com</code>: the AI chat feature, after you add an Anthropic API key and send a request.</li>
     <li><code data-feature-host="api.openai.com">api.openai.com</code>: the AI chat feature, after you add an OpenAI API key and send a request.</li>
     <li><code data-feature-host="open-vsx.org">open-vsx.org</code> and <code data-feature-host="openvsx.eclipsecontent.org">openvsx.eclipsecontent.org</code>: the extension catalogue, when you search for, install or update an extension.</li>
+    <li><code data-feature-host="addons.mozilla.org">addons.mozilla.org</code>: the add-ons site, when you open it from the extensions menu or install an add-on from it.</li>
+    <li><code data-feature-host="versioncheck.addons.mozilla.org">versioncheck.addons.mozilla.org</code>: the update check for an add-on installed from addons.mozilla.org, when you ask for one.</li>
     <li><code data-feature-host="lite.duckduckgo.com">lite.duckduckgo.com</code>, <code data-feature-host="ac.duckduckgo.com">ac.duckduckgo.com</code> and <code data-feature-host="en.wikipedia.org">en.wikipedia.org</code>: the built-in search engines, when you search from the address bar or, with search suggestions on, type a search there.</li>
   </ul>
   <p>The browser also talks to a service on this computer. That traffic does not leave the machine.</p>

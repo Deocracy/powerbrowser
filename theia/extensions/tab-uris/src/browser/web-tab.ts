@@ -114,13 +114,13 @@ const BAR_HOST_CLASS = 'pb-web-tab-bars';
 // Phase 34 plan 04 (TAB-07, D-11): the strip's hover preview card is a rule (a) layer.
 const BLOCKING_LAYER_SELECTOR = '.pb-chrome-bar-dropdown, .quick-input-widget, .lm-Widget.dialogOverlay, .lm-Menu, .lm-mod-drag-image, .pb-tab-preview';
 
-function blockingLayerOpen(): boolean {
+export function blockingLayerOpen(): boolean {
     return Array.from(document.querySelectorAll(BLOCKING_LAYER_SELECTOR))
         .some(element => element.getClientRects().length > 0);
 }
 
-/** Every attached web tab, so one body observer can re-publish all of them. */
-const attachedWebTabs = new Set<WebTabWidget>();
+/** Every attached web tab (and, 38-04, the extension sidebar view), so one body observer can re-publish all of them. */
+const attachedWebTabs = new Set<{ publish(): void }>();
 let bodyObserver: MutationObserver | undefined;
 
 /**
@@ -145,6 +145,16 @@ function ensureBodyObserver(): void {
         attributes: true,
         attributeFilter: ['class', 'style'],
     });
+}
+
+/**
+ * Phase 38 plan 04 (B5): another rect chrome paints over (the extension sidebar view) re-publishes on the same body
+ * observer, so it hides under a Theia layer exactly as a web tab does.
+ */
+export function watchBlockingLayers(widget: { publish(): void }): Disposable {
+    attachedWebTabs.add(widget);
+    ensureBodyObserver();
+    return Disposable.create(() => attachedWebTabs.delete(widget));
 }
 
 export interface WebTabOptions {
@@ -301,6 +311,12 @@ export interface ExtensionActionRow {
      * on the selected tab (the pill icon); false on a toolbar action's row.
      */
     pageActionShown: boolean;
+    /** Phase 38 plan 04 (B5): the extension's sidebar title (its name by default), or null when it has no sidebar page. */
+    sidebarTitle: string | null;
+    /** Phase 38 plan 04 (B5): the extension's sidebar is the one open (the Theia side-panel view shows it). */
+    sidebarOpen: boolean;
+    /** Phase 38 plan 04 (B5): the key bound to this row's action (the commands API), as written, or null when none. */
+    shortcut: string | null;
 }
 
 /** Phase 38 plan 01: the rows of one extensionAction push; a malformed row is dropped, never rendered. */
@@ -313,7 +329,9 @@ export function extensionActionRowsOf(detail: Record<string, unknown>): Extensio
         return !!row && typeof row === 'object' && typeof r.extensionId === 'string' && typeof r.title === 'string'
             && (r.icon === null || (typeof r.icon === 'string' && r.icon.startsWith('data:image/')))
             && typeof r.badgeText === 'string' && typeof r.enabled === 'boolean' && typeof r.hasPopup === 'boolean' && typeof r.pinned === 'boolean'
-            && typeof r.popupOpen === 'boolean' && typeof r.pageActionShown === 'boolean';
+            && typeof r.popupOpen === 'boolean' && typeof r.pageActionShown === 'boolean'
+            && (r.sidebarTitle === null || typeof r.sidebarTitle === 'string') && typeof r.sidebarOpen === 'boolean'
+            && (r.shortcut === null || typeof r.shortcut === 'string');
     });
 }
 
@@ -587,6 +605,7 @@ export class WebTabChannel {
         // subscribes (ChromeStoreClient.extensionActionsSubscribe); the buttons and puzzle menu read onDidChangeExtensionActions.
         this.onPush('extensionAction', detail => {
             this.extensionActions = extensionActionRowsOf(detail);
+            this.extensionActionsRefocus = detail.refocus === true;
             this.extensionActionsEmitter.fire(this.extensionActions);
         });
     }
@@ -610,6 +629,8 @@ export class WebTabChannel {
 
     /** Phase 38 plan 01 (EXT-06): the last extension action rows chrome pushed. */
     extensionActions: ExtensionActionRow[] = [];
+    /** 38-REVIEW WR-02: the last extensionAction push closed a popup the user ended (Esc, click outside), so the pill takes focus; not a close because focus moved into a page. */
+    extensionActionsRefocus = false;
     private readonly extensionActionsEmitter = new Emitter<ExtensionActionRow[]>();
     readonly onDidChangeExtensionActions: TheiaEvent<ExtensionActionRow[]> = this.extensionActionsEmitter.event;
 

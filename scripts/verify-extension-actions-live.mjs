@@ -28,9 +28,10 @@
 //                   by focus moving into page /a, by a tab switch to /b and by a second
 //                   click, each time with focus back in the pill. Plant wrong-page fires
 //                   the stock delegate path in a GUI-01 stock window on /c instead, and
-//                   must go red naming the stock tab. Plant popup-dom keeps the native
-//                   panel from showing and draws the popup in Theia DOM, and must go red
-//                   naming the occluded overlay.
+//                   must go red naming the stock tab. Plant popup-native-blocked cancels the native
+//                   panel's popupshowing (the product's panel never shows) and must go red
+//                   at the scenario's own assertion that the button opened its page in the panel.
+//                   (The Theia-DOM popup is covered by static rule 8, which forbids it in source.)
 //   buttons      -- (38-02) with the action fixture pinned, the chrome bar shows one
 //                   button per pinned row of the push (at most three) and the puzzle
 //                   menu one row per pushed extension, named by its pushed title (set
@@ -48,8 +49,11 @@
 //                   pinned pref before the reload and must go red naming the lost pin.
 //   tabs-bridge  -- the action fixture's tabs.create opens /b adopted, selected and
 //                   next to /a; a background create of /c then tabs.update({active})
-//                   shows it; tabs.remove closes it; an extension-page create is
-//                   refused; after the frontend reloads no orphan overlay is left.
+//                   shows it; tabs.remove closes it; a background create of /d activated
+//                   at once, before the frontend's ack (38-REVIEW CR-03), is shown in
+//                   the frontend and only then selected in chrome; an extension-page create goes to a
+//                   new stock window (38-04, B5), never an overlay; after the frontend
+//                   reloads no orphan overlay is left.
 //                   Plant create-unadopted swallows the adoptTab push in the frame
 //                   and must go red naming the orphan overlay.
 //   content      -- (38-03, EXT-08) the relaunched shell boots with zero overlays and the IDE
@@ -73,6 +77,31 @@
 //                   content script retitles the page and onClicked names /a's tab id).
 //                   Plant pageaction-pill-stale freezes the frame's extensionAction pushes
 //                   once the icon is drawn and must go red naming the stale icon.
+//   sidebar      -- (38-04, B5) Show Sidebar on the surfaces fixture's gear row (its puzzle row is read
+//                   from its sidebar action: it has no toolbar action) opens its sidebar as a
+//                   Theia side-panel view titled with the sidebar title; chrome's panel browser
+//                   holds the panel page (its own title read in the page) and is shown over the
+//                   view's rect; Hide Sidebar closes the view and removes the panel browser. Plant
+//                   sidebar-in-shell sends the open to the stock sidebar path for the shell window
+//                   and Plant sidebar-as-tab sends the open to a web tab instead (the shell refuses the
+//                   scheme); both must go red at the scenario's own assertion that the Theia view opened.
+//                   38-REVIEW WR-07: a plant changes what the product does; the scenario's assertions fail it.
+//   tab-pages    -- (38-04, B5) with a GUI-01 stock window open on a localhost page, the surfaces
+//                   fixture's runtime.openOptionsPage (options_ui open_in_tab) and its tabs.create
+//                   of its dashboard page each open the page as a tab of the stock window, while
+//                   the shell's overlay set, read by the same reader before and after, is
+//                   unchanged; its tabs.update of the web tab /a to its dashboard page is refused.
+//                   Plant tabpage-in-overlay sends the dashboard page to a web tab instead and
+//                   must go red at the assertion that tabs.create opened it in the stock window.
+//   commands     -- (38-04, B5 + the 2026-10-20 keys ruling) with page /a focused, the surfaces
+//                   fixture's Alt+Shift+U fires its command on /a (onCommand's tab retitles
+//                   /a); with the IDE focused, the same key lands in the Theia frame (a keydown
+//                   recorder there sees it) and the command does not fire, scored on the same
+//                   command recorder that saw the page-side fire; with /a focused again, its
+//                   _execute_sidebar_action key Alt+Shift+I opens the sidebar view through the
+//                   bridge. Plant commands-always-fire enables the extension keys while the IDE has
+//                   focus and must go red naming the IDE focus. Plant commands-never-fire disables
+//                   them while the page has focus and must go red naming the page.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -149,23 +178,21 @@ async function scenarioPopupAction({ app, plant }) {
   if (badgeAt < 0) {
     return verdict(false, null, "no extensionAction push carried the badge 'ok' the action fixture set on /a");
   }
-  if (plant?.name === 'popup-dom') {
-    // The native panel never shows; the popup is drawn in Theia DOM under the button instead.
+  if (plant?.name === 'popup-native-blocked') {
+    // The product's native panel never shows (its popupshowing is cancelled); the normal assertions below then read the result.
     await live.inChrome(app, "document.addEventListener('popupshowing', e => { if (e.target.classList.contains('browser-extension-panel')) e.preventDefault(); }, true); return true;");
-    await app.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(actionButton('popup'))}).getBoundingClientRect();
-      const d = document.createElement('div'); d.className = 'pb-chrome-bar-dropdown pb-ext-popup-dom'; d.textContent = 'popup';
-      Object.assign(d.style, { position: 'fixed', top: b.bottom + 'px', left: b.left + 'px', width: '320px', height: '400px' });
-      document.body.appendChild(d); return true; })()`);
   }
-  // Each close way: [name, how]. A popup is opened by a real click on the popup fixture's button first.
+  // Each close way: [name, how, pill]. A popup is opened by a real click on the popup fixture's button first. Focus returns to
+  // the pill only for a close the user made in the popup or on the button (38-REVIEW WR-02); a close because focus moved
+  // into the page leaves it in the page (pill false), and a tab switch leaves it wherever the switch put it (null).
   const closeWays = [
-    ['Esc', () => live.pressKey(app, { key: 'Escape', code: 'Escape', keyCode: 27 })],
-    ['focus into page /a', () => live.focusOverlay(app, A)],
-    ['tab switch to /b', () => live.makeCurrent(app, B)],
-    ['second click', () => clickInFrame(app, actionButton('popup'))],
+    ['Esc', () => live.pressKey(app, { key: 'Escape', code: 'Escape', keyCode: 27 }), true],
+    ['focus into page /a', () => live.focusOverlay(app, A), false],
+    ['tab switch to /b', () => live.makeCurrent(app, B), null],
+    ['second click', () => clickInFrame(app, actionButton('popup')), true],
   ];
   const closed = [];
-  for (const [way, how] of closeWays) {
+  for (const [way, how, pill] of closeWays) {
     await clickInFrame(app, actionButton('popup'));
     const shown = await pollUntil(() => popupState(app), p => p.panel === 'open' && p.pressed, 10000);
     if (!shown) {
@@ -179,9 +206,16 @@ async function scenarioPopupAction({ app, plant }) {
       return verdict(false, null, `the native panel shows ${JSON.stringify(shown.url)} with Theia DOM popup content ${shown.inTheiaDom}, not the fixture's popup page alone`);
     }
     await how();
-    const after = await pollUntil(() => popupState(app), p => p.panel !== 'open' && !p.pressed && p.pillFocused, 10000);
+    const after = await pollUntil(() => popupState(app), p => p.panel !== 'open' && !p.pressed && (pill === null || p.pillFocused === pill), 10000);
     if (!after) {
-      return verdict(false, null, `the ${way} close left ${JSON.stringify(await popupState(app))}; the panel must close with focus back in the pill`);
+      return verdict(false, null, `the ${way} close left ${JSON.stringify(await popupState(app))}; the panel must close ${pill ? 'with focus back in the pill' : pill === false ? 'without pulling focus back to the pill' : 'unpressed'}`);
+    }
+    if (pill === false) {
+      // Give a late refocus push time to land, then require the pill still unfocused.
+      await new Promise(resolve => setTimeout(resolve, 500));
+      if ((await popupState(app)).pillFocused) {
+        return verdict(false, null, `the ${way} close pulled focus back to the pill after the page took it`);
+      }
     }
     closed.push(way);
     if (way === 'tab switch to /b') {
@@ -189,7 +223,7 @@ async function scenarioPopupAction({ app, plant }) {
       await waitForSelected(app, A, '/a');
     }
   }
-  return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action button's click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup button opened its page in the native panel and it closed by ${closed.join(', ')}, focus back in the pill each time`, null);
+  return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action button's click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup button opened its page in the native panel and it closed by ${closed.join(', ')}, focus back in the pill only for Esc and the second click`, null);
 }
 
 // 38-02 (EXT-06): the buttons and puzzle rows equal the set the push carries, and a pushed badge reaches the button.
@@ -288,7 +322,7 @@ async function scenarioManage({ app, plant }) {
 }
 
 // tabs.create (active, next to its opener, adopted), tabs.create in the background then tabs.update({active}),
-// tabs.remove, a refused extension-page create, and no orphan overlay once the frontend reloads.
+// tabs.remove, an extension-page create sent stock-side (38-04), and no orphan overlay once the frontend reloads.
 async function scenarioTabsBridge({ app, plant, command }) {
   const A = await openTab(app, '/a');
   await live.makeCurrent(app, A);
@@ -323,20 +357,29 @@ async function scenarioTabsBridge({ app, plant, command }) {
     return verdict(false, null, 'tabs.update({active}) on /c did not select it in chrome and show it in the frontend');
   }
   const rm = await command('remove', { tabId: bg.result.id });
-  const gone = rm.ok ? await pollUntil(() => overlayOfExtTab(app, bg.result.id), o => !o.present, 10000) : null;
+  // 38-REVIEW WR-03: one read right after the reply, no polling; stock removes the tab before tabs.remove resolves.
+  const gone = rm.ok ? await overlayOfExtTab(app, bg.result.id).then(o => (o.present ? null : o)) : null;
   if (!gone) {
     return verdict(false, null, `tabs.remove of /c did not close its overlay: ${rm.ok ? 'still present' : rm.error}`);
   }
+  // 38-REVIEW CR-03: activated before its ack, /d must end shown in the frontend AND selected in chrome, never in chrome alone.
+  const ca = await command('create-activate', { props: { url: `${ORIGIN}/d` } });
+  const D = ca.ok ? await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, ca.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').currentWidget?.tabId ?? null };")).id }), v => v.chrome.tabId !== null && v.chrome.selected && v.current === v.chrome.tabId, 10000) : null;
+  if (!D) {
+    return verdict(false, null, `tabs.update({active}) on /d before its adoption ack did not leave it shown in the frontend and selected in chrome: ${JSON.stringify(ca.ok ? { chrome: await overlayOfExtTab(app, ca.result.id) } : ca.error)}`);
+  }
   const ext = await command('create', { props: { url: 'page.html' } });
-  if (ext.ok || !/refused/.test(String(ext.error))) {
-    return verdict(false, null, `tabs.create of an extension page was not refused: ${JSON.stringify(ext)}`);
+  // 38-04 (B5): with no stock window open the page opens in a new one and no tab comes back (the tab-pages scenario
+  // covers the stock window that is already open).
+  if (ext.ok || !/new browser window/.test(String(ext.error))) {
+    return verdict(false, null, `tabs.create of an extension page did not go to a new stock window: ${JSON.stringify(ext)}`);
   }
   await app.evaluateIn(app.chrome, "(() => { document.getElementById('powerbrowser-content').reload(); return true; })()");
   const settled = await pollUntil(() => orphanCount(app), n => n === 0, 45000, 3);
   if (settled === null) {
     return verdict(false, null, `an orphan overlay outlived the frontend reload (${await orphanCount(app)} overlay(s) with no frontend tab)`);
   }
-  return verdict(true, `tabs.create /b landed adopted, selected and next to /a; /c landed in the background, tabs.update({active}) showed it and tabs.remove closed it; an extension page was refused (${ext.error}); no orphan overlay after the frontend reload`, null);
+  return verdict(true, `tabs.create /b landed adopted, selected and next to /a; /c landed in the background, tabs.update({active}) showed it and tabs.remove closed it; /d activated before its ack was shown and selected; an extension page went to a new stock window (${ext.error}); no orphan overlay after the frontend reload`, null);
 }
 
 // 38-03 (EXT-08): content scripts and the page action's show_matches on the 31.1 identity, after a zero-overlay boot.
@@ -460,6 +503,134 @@ async function scenarioPageAction({ app, plant, command }) {
   return verdict(true, `the zero-overlay boot pushed and drew no page action; /a's push carried it and the pill drew ${JSON.stringify(row.title)}; on /n it was hidden and the icon went; back on /a its click ran in tab ${tabA} (retitled to ${overlayTitle})`, null);
 }
 
+// 38-04 (B5): the sidebar view. One session, surfaces fixture only.
+async function scenarioSidebar({ app, plant, command }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  const panelUrl = (await command('url', { path: 'panel.html' })).result;
+  if (plant?.name === 'sidebar-in-shell') {
+    // The stock route: the sidebar action asked to open in the shell window, which patch 050 keeps it out of.
+    await live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+      const ext = ExtensionParent.GlobalManager.extensionMap.get(${JSON.stringify(fixtureId('surfaces'))});
+      ExtensionParent.apiManager.global.sidebarActionFor(ext).open(window); return true;`);
+  } else if (plant?.name === 'sidebar-as-tab') {
+    // The open goes to a web tab instead (the shell refuses the scheme); the normal assertions below read the result.
+    await live.probe(app, `await get('WebTabOpenHandler').openUrl(${JSON.stringify(panelUrl)}); return true;`).catch(() => null);
+  } else {
+    await clickInFrame(app, '.pb-ext-puzzle');
+    if (!(await pollUntil(() => puzzleRows(app), r => r.some(x => x.id === fixtureId('surfaces') && x.name === 'PB sidebar probe'), 10000))) {
+      return verdict(false, null, `the puzzle menu has no row for the sidebar-only fixture: ${JSON.stringify(await puzzleRows(app))}`);
+    }
+    await puzzleRowMenu(app, 'surfaces', 'Show Sidebar');
+  }
+  const opened = await pollUntil(async () => ({ view: await sidebarView(app), frame: await sidebarFrame(app) }),
+    s => s.view.attached && s.view.visible && s.view.label === 'PB sidebar probe' && s.frame.present && s.frame.visibility === 'visible'
+      && s.frame.url === panelUrl && s.frame.title === 'pb-sidebar-panel' && Math.abs(s.frame.width - s.view.width) <= 1, 20000);
+  if (!opened) {
+    const now = { view: await sidebarView(app), frame: await sidebarFrame(app) };
+    return verdict(false, null, now.view.attached
+      ? `the Theia sidebar view opened but chrome's panel browser does not show the panel page over it: ${JSON.stringify(now)}`
+      : `no Theia side-panel view opened: the sidebar went to the shell window or a web tab, neither of which shows it (${JSON.stringify(now)})`);
+  }
+  await clickInFrame(app, '.pb-ext-puzzle');
+  await puzzleRowMenu(app, 'surfaces', 'Hide Sidebar');
+  const closed = await pollUntil(async () => ({ view: await sidebarView(app), frame: await sidebarFrame(app) }), s => !s.view.attached && !s.frame.present, 10000);
+  if (!closed) {
+    return verdict(false, null, `Hide Sidebar did not close the view and remove the panel browser: ${JSON.stringify({ view: await sidebarView(app), frame: await sidebarFrame(app) })}`);
+  }
+  return verdict(true, `Show Sidebar opened the Theia view 'PB sidebar probe' with chrome's panel browser on ${pathOf(panelUrl)} (page title pb-sidebar-panel) shown over its rect; Hide Sidebar closed both`, null);
+}
+
+// 38-04 (B5): extension tab pages open stock-side. One session, surfaces fixture only.
+async function scenarioTabPages({ app, plant, command }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  const stockUrl = `${STOCK_ORIGIN}/c`;
+  await live.probe(app, `await get('CommandRegistry').executeCommand('powerbrowser.open-browser-window', ${JSON.stringify(stockUrl)}); return true;`);
+  await live.stockTabOn(app, stockUrl, 30000);
+  const before = await overlayIds(app);
+  if (!before.includes(A)) {
+    return verdict(false, null, `BROKEN INSTRUMENT: the overlay reader does not see /a (${JSON.stringify(before)})`);
+  }
+  const dashboardUrl = (await command('url', { path: 'dashboard.html' })).result;
+  const optionsUrl = (await command('url', { path: 'options.html' })).result;
+  const options = await command('options');
+  if (!options.ok || !(await live.stockTabOn(app, optionsUrl, 20000).catch(() => null))) {
+    return verdict(false, null, `runtime.openOptionsPage did not open the options page in the stock window: ${JSON.stringify(options)}`);
+  }
+  // Plant tabpage-in-overlay: the dashboard page goes to a web tab instead (the shell refuses its scheme); the assertions below read the result.
+  const dashboard = plant?.name === 'tabpage-in-overlay'
+    ? await live.probe(app, `await get('WebTabOpenHandler').openUrl(${JSON.stringify(dashboardUrl)}); return true;`).then(() => ({ ok: true }), error => ({ ok: false, error: String(error) }))
+    : await command('dashboard');
+  if (!dashboard.ok || !(await live.stockTabOn(app, dashboardUrl, 20000).catch(() => null))) {
+    return verdict(false, null, `tabs.create of the dashboard page did not open it in the stock window: ${JSON.stringify(dashboard)}`);
+  }
+  const after = await overlayIds(app);
+  if (!sameSet(after, before)) {
+    return verdict(false, null, `a tab page changed the shell's overlay set: ${JSON.stringify({ before, after })}`);
+  }
+  const nav = await command('overlay-nav', { url: `${ORIGIN}/a` });
+  if (nav.ok || !/Illegal URL/.test(String(nav.error))) {
+    return verdict(false, null, `tabs.update of the web tab /a to an extension page was not refused: ${JSON.stringify(nav)}`);
+  }
+  return verdict(true, `runtime.openOptionsPage and tabs.create opened ${pathOf(optionsUrl)} and ${pathOf(dashboardUrl)} as stock-window tabs; the overlay set stayed ${JSON.stringify(before)}; tabs.update of /a to an extension page was refused (${nav.error})`, null);
+}
+
+// 38-04 (B5): commands shortcuts with page focus, Theia's keys otherwise. One session, surfaces fixture only.
+async function scenarioCommands({ app, plant }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await app.evaluate("(() => { window.__pbKeys = 0; window.addEventListener('keydown', e => { if (e.code === 'KeyU' && e.altKey && e.shiftKey) window.__pbKeys++; }, true); return true; })()");
+  const altShiftU = { key: 'U', code: 'KeyU', keyCode: 85, modifiers: ['alt', 'shift'] };
+  const setExtensionKeys = enabled => live.inChrome(app, `document.querySelectorAll('keyset[id^="ext-keyset-id-"] key').forEach(k => ${enabled} ? k.removeAttribute('disabled') : k.setAttribute('disabled', 'true')); return true;`);
+  if (!(await live.focusOverlay(app, A))) {
+    return verdict(false, null, 'BROKEN INSTRUMENT: page /a could not be focused');
+  }
+  if (plant?.name === 'commands-never-fire') {
+    await setExtensionKeys(false);
+  }
+  const from = session.logs.length;
+  await live.pressKey(app, altShiftU);
+  const fired = await waitSince(from, r => r.kind === 'command' && r.name === 'pb-probe', 10000);
+  if (!fired) {
+    return verdict(false, null, `the shortcut did not fire with the page /a focused (key route ${live.keyRoute.last})`);
+  }
+  if (pathOf(fired.url) !== '/a' || fired.title !== 'pb-command /a') {
+    return verdict(false, null, `the shortcut fired on the wrong tab: ${JSON.stringify(fired)}`);
+  }
+  if (!(await live.focusTheiaFrame(app))) {
+    return verdict(false, null, 'BROKEN INSTRUMENT: the Theia frame could not be focused');
+  }
+  if (plant?.name === 'commands-always-fire') {
+    await setExtensionKeys(true);
+  }
+  const keysBefore = await app.evaluate('window.__pbKeys');
+  const fromIde = session.logs.length;
+  await live.pressKey(app, altShiftU);
+  await sleep(1500);
+  const keysAfter = await app.evaluate('window.__pbKeys');
+  const ideFired = session.logs.slice(fromIde).find(r => r.kind === 'command');
+  if (ideFired) {
+    return verdict(false, null, `the extension command fired with the IDE focused: ${JSON.stringify(ideFired)}`);
+  }
+  if (keysAfter !== keysBefore + 1) {
+    return verdict(false, null, `with the IDE focused the key did not reach the Theia frame (${keysBefore} -> ${keysAfter})`);
+  }
+  if (!(await live.focusOverlay(app, A))) {
+    return verdict(false, null, 'BROKEN INSTRUMENT: page /a could not be focused again');
+  }
+  await live.pressKey(app, { key: 'I', code: 'KeyI', keyCode: 73, modifiers: ['alt', 'shift'] });
+  if (!(await pollUntil(() => sidebarView(app), v => v.attached && v.label === 'PB sidebar probe', 10000))) {
+    return verdict(false, null, `the _execute_sidebar_action key did not open the sidebar view: ${JSON.stringify(await sidebarView(app))}`);
+  }
+  return verdict(true, `Alt+Shift+U fired pb-probe on /a (title ${fired.title}); with the IDE focused it reached the Theia frame and fired nothing; Alt+Shift+I opened the sidebar view`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
@@ -467,21 +638,31 @@ const SCENARIOS_TABLE = {
   'tabs-bridge': scenarioTabsBridge,
   content: scenarioContent,
   'page-action': scenarioPageAction,
+  sidebar: scenarioSidebar,
+  'tab-pages': scenarioTabPages,
+  commands: scenarioCommands,
 };
 // Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
 const RELAUNCH_SCENARIOS = new Set(['content', 'page-action']);
+// 38-04 (B5): scenarios that install the surfaces fixture alone, so its background is the only reader of /cmd.
+const B5_SCENARIOS = new Set(['sidebar', 'tab-pages', 'commands']);
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
 // patched product: the scenario reads `plant.name`.
 const PLANTS_TABLE = {
   'wrong-page': { scenario: 'popup-action', expect: 'the action ran in the stock tab' },
-  'popup-dom': { scenario: 'popup-action', expect: 'the occluded overlay' },
+  'popup-native-blocked': { scenario: 'popup-action', expect: 'did not open its page in the native panel' },
   'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
   'buttons-stale': { scenario: 'buttons', expect: 'the button shows a stale badge' },
   'pin-lost': { scenario: 'manage', expect: 'the pin did not persist' },
   'sender-tab-null': { scenario: 'content', expect: 'the hello from /a carried sender.tab -1' },
   'pageaction-zero-tab': { scenario: 'content', expect: 'the zero-overlay startup threw' },
   'pageaction-pill-stale': { scenario: 'page-action', expect: 'the stale icon: the pill still shows' },
+  'sidebar-in-shell': { scenario: 'sidebar', expect: 'no Theia side-panel view opened' },
+  'sidebar-as-tab': { scenario: 'sidebar', expect: 'no Theia side-panel view opened' },
+  'tabpage-in-overlay': { scenario: 'tab-pages', expect: 'tabs.create of the dashboard page did not open it in the stock window' },
+  'commands-always-fire': { scenario: 'commands', expect: 'the extension command fired with the IDE focused' },
+  'commands-never-fire': { scenario: 'commands', expect: 'the shortcut did not fire with the page /a focused' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -490,6 +671,7 @@ const PLANTS = PLANTS_TABLE;
 const AUDIT_PLANTS = [
   { name: 'unknown scenario', plants: { stray: { scenario: 'no-such-scenario', expect: 'x' } }, expect: 'targets the unknown scenario no-such-scenario' },
   { name: 'unemitted expect', plants: { ...PLANTS_TABLE, 'wrong-page': { ...PLANTS_TABLE['wrong-page'], expect: 'zz never printed' } }, expect: "emits no text starting 'zz never printed'" },
+  { name: 'plant returns red itself', scenarios: { ...SCENARIOS_TABLE, sidebar: async function ({ plant }) { if (plant?.name === 'sidebar-as-tab') { return verdict(false, null, 'no Theia side-panel view opened'); } } }, expect: "returns a verdict from the plant's own branch" },
   { name: 'scenario without a plant', plants: {}, expect: 'has no plant' },
 ];
 
@@ -510,6 +692,19 @@ function staticAudit(PLANTS = PLANTS_TABLE, SCENARIOS = SCENARIOS_TABLE) {
     }
     if (!fn.toString().includes(`'${name}'`)) {
       failures.push(`plant ${name}: scenario ${plant.scenario} never reads it, so the plant would not apply`);
+    }
+    // 38-REVIEW WR-07: a plant changes what the product does and the scenario's own assertions go red; its branch never returns a verdict.
+    const text = fn.toString();
+    const at = text.indexOf(`plant?.name === '${name}'`);
+    const open = at < 0 ? -1 : text.indexOf('{', at);
+    let depth = 0;
+    let end = open;
+    for (let i = open; open >= 0 && i < text.length; i++) {
+      depth += text[i] === '{' ? 1 : text[i] === '}' ? -1 : 0;
+      if (depth === 0) { end = i; break; }
+    }
+    if (open >= 0 && text.slice(open, end + 1).includes('return verdict(')) {
+      failures.push(`plant ${name}: scenario ${plant.scenario} returns a verdict from the plant's own branch, so it is red whatever the product does`);
     }
   }
   for (const name of Object.keys(SCENARIOS)) {
@@ -683,6 +878,25 @@ async function puzzleRowMenu(app, name, label) {
     return true;
   })()`), hit => hit === true, 5000);
   if (!done) throw new Error(`BROKEN INSTRUMENT: no ${label} row in the ${name} fixture's menu`);
+}
+
+// 38-04 (B5): the frontend tab ids of every overlay in the shell.
+async function overlayIds(app) {
+  return JSON.parse(await live.inChrome(app, `return JSON.stringify([...document.querySelectorAll('browser[messagemanagergroup="browsers"]')].map(o => W.tabIdOfBrowser(o)));`));
+}
+
+// 38-04 (B5): the Theia sidebar view, read in the frontend.
+async function sidebarView(app) {
+  return live.probe(app, `const w = get('ApplicationShell').getWidgets('right').find(x => x.id === 'powerbrowser.extension-sidebar');
+    return { attached: !!(w && w.isAttached), visible: !!(w && w.isVisible), label: w ? w.title.label : null, width: w ? Math.round(w.node.getBoundingClientRect().width) : 0 };`);
+}
+
+// 38-04 (B5): chrome's sidebar panel browser and the extension page inside it.
+async function sidebarFrame(app) {
+  return JSON.parse(await live.inChrome(app, `const f = [...document.querySelectorAll('browser')].find(b => b.getAttribute('src') === 'chrome://browser/content/webext-panels.xhtml');
+    const inner = f && f.contentDocument ? f.contentDocument.getElementById('webext-panels-browser') : null;
+    return JSON.stringify({ present: !!f, visibility: f ? f.style.visibility : null, width: f ? Math.round(parseFloat(f.style.width)) : 0,
+      url: inner && inner.currentURI ? inner.currentURI.spec : null, title: inner ? inner.contentTitle : null });`));
 }
 
 // Whether the add-on is no longer installed, read in chrome.
@@ -872,6 +1086,16 @@ async function runSession(scenarioName, plantName = null) {
     if (RELAUNCH_SCENARIOS.has(scenarioName)) {
       return await runRelaunchSession(scenarioName, plantName ? { name: plantName, ...PLANTS[plantName] } : null);
     }
+    if (B5_SCENARIOS.has(scenarioName)) {
+      return await live.withProbeShell(
+        async app => {
+          await installFixture(app, 'surfaces');
+          if (!(await waitSince(0, r => r.kind === 'surfaces-started'))) throw new Error('BROKEN INSTRUMENT: the surfaces fixture background page never started');
+          return await SCENARIOS[scenarioName]({ app, plant: plantName ? { name: plantName, ...PLANTS[plantName] } : null, command });
+        },
+        { extraPrefs: SESSION_PREFS }
+      );
+    }
     return await live.withProbeShell(
       async app => {
         await installFixture(app, 'action');
@@ -899,7 +1123,7 @@ async function main() {
     if (JSON.stringify(zipRoundTrip(files)) !== JSON.stringify(files)) failures.push('the XPI writer (storedZip) does not round-trip its files');
     if (argv.includes('--self-test')) {
       for (const plant of AUDIT_PLANTS) {
-        const hit = staticAudit(plant.plants).find(f => f.includes(plant.expect));
+        const hit = staticAudit(plant.plants ?? PLANTS_TABLE, plant.scenarios ?? SCENARIOS_TABLE).find(f => f.includes(plant.expect));
         if (hit) console.log(`  ok  audit plant ${plant.name} -> red: ${hit}`);
         else failures.push(`audit plant ${plant.name} did not go red naming '${plant.expect}'`);
       }

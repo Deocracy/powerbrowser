@@ -12,7 +12,7 @@
 import * as React from '@theia/core/shared/react';
 import { createPortal } from '@theia/core/shared/react-dom';
 import { inject, injectable } from '@theia/core/shared/inversify';
-import { ContextMenuRenderer, ReactWidget } from '@theia/core/lib/browser';
+import { ApplicationShell, ContextMenuRenderer, ReactWidget } from '@theia/core/lib/browser';
 import { CommandMenu, CompoundMenuNode, MenuPath } from '@theia/core/lib/common';
 import { ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import { ExtensionActionRow, WebTabChannel } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -20,6 +20,7 @@ import { CHROME_BAR_COPY, appSubject } from '../chrome-bar-copy';
 import { focusAddressPill, openStockPage } from '../chrome-bar-commands';
 import { DROPDOWN_MAX_HEIGHT } from '../address-bar/address-bar';
 import { anchorRectOf } from './extension-popup-anchor';
+import { ExtensionSidebarView } from './extension-sidebar-view';
 
 /** One extension's menu (the gear on its puzzle row, or a right-click on its button). Built per request, never registered. */
 export const EXTENSIONS_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-extensions'];
@@ -35,6 +36,11 @@ function ExtensionIcon({ row }: { row: ExtensionActionRow }): React.ReactElement
         return <img className='pb-ext-icon' src={row.icon} alt='' />;
     }
     return <span className='pb-ext-icon codicon codicon-extensions' />;
+}
+
+/** 38-04 (B5): a button's tooltip, which names the shortcut bound to its action. */
+function tooltipOf(row: ExtensionActionRow): string {
+    return row.shortcut ? CHROME_BAR_COPY.extensionWithShortcut(row.title, row.shortcut) : row.title;
 }
 
 function ExtensionBadge({ row }: { row: ExtensionActionRow }): React.ReactElement | null {
@@ -160,6 +166,9 @@ export class ExtensionActionsWidget {
     @inject(ContextMenuRenderer)
     protected readonly menus: ContextMenuRenderer;
 
+    @inject(ApplicationShell)
+    protected readonly shell: ApplicationShell;
+
     /** The bar widget this renders into; its update() repaints the buttons. */
     protected host: ReactWidget | undefined;
     protected rows: ExtensionActionRow[] = [];
@@ -170,6 +179,8 @@ export class ExtensionActionsWidget {
     /** D-08: the extension whose Remove is waiting for the confirm row. */
     protected confirm: ExtensionActionRow | undefined;
     protected puzzle: HTMLButtonElement | null = null;
+    /** Phase 38 plan 04 (B5): the side-panel view the open extension sidebar shows in, made on first use. */
+    protected sidebar: ExtensionSidebarView | undefined;
     /** Stable, so React calls it only on mount and unmount. */
     protected puzzleRef = (el: HTMLButtonElement | null): void => {
         this.puzzle = el;
@@ -180,12 +191,14 @@ export class ExtensionActionsWidget {
         this.host = host;
         this.rows = this.webTabs.extensionActions;
         this.webTabs.onDidChangeExtensionActions(rows => {
-            // A popup closed (Esc, a click outside, page focus, a tab switch, a second click): chrome has focused this
-            // frame, and focus goes back to the pill (38-UI-SPEC focus contract).
+            // A popup closed by Esc, a click outside or a second click: chrome has focused this frame, and focus goes back
+            // to the pill (38-UI-SPEC focus contract). One closed because focus moved into a page, or the tab changed,
+            // leaves focus where it went (38-REVIEW WR-02).
             const popupClosed = this.rows.some(row => row.popupOpen) && !rows.some(row => row.popupOpen);
             this.rows = rows;
             this.update();
-            if (popupClosed) {
+            this.syncSidebar();
+            if (popupClosed && this.webTabs.extensionActionsRefocus) {
                 focusAddressPill();
             }
         });
@@ -222,6 +235,40 @@ export class ExtensionActionsWidget {
             this.update();
         } catch (error) {
             this.failed('click', error);
+        }
+    }
+
+    /**
+     * Phase 38 plan 04 (B5): the side-panel view follows the push. A row with sidebarOpen shows the view in the right side
+     * panel, titled as chrome pushed it; none closes it. Chrome paints the page over the rect the view reports.
+     */
+    protected syncSidebar(): void {
+        const open = this.rows.find(row => row.sidebarOpen && row.sidebarTitle !== null);
+        if (!open) {
+            this.sidebar?.dismiss();
+            return;
+        }
+        if (!this.sidebar || this.sidebar.isDisposed) {
+            this.sidebar = new ExtensionSidebarView(
+                (extensionId, rect) => {
+                    this.store.extensionSidebarGeometry(extensionId, rect).catch(error => this.failed('sidebar geometry', error, false));
+                },
+                extensionId => void this.setSidebar(extensionId, false),
+            );
+        }
+        this.sidebar.showSidebar(open.extensionId, open.sidebarTitle ?? '');
+        if (!this.sidebar.isAttached) {
+            void this.shell.addWidget(this.sidebar, { area: 'right' }).then(() => this.shell.revealWidget(ExtensionSidebarView.ID));
+        }
+    }
+
+    /** Phase 38 plan 04 (B5): Show Sidebar / Hide Sidebar; chrome opens or closes the page and the push moves the view. */
+    protected async setSidebar(extensionId: string, open: boolean): Promise<void> {
+        try {
+            await this.store.extensionSidebar(extensionId, open);
+            this.notice = undefined;
+        } catch (error) {
+            this.failed('sidebar', error);
         }
     }
 
@@ -271,8 +318,10 @@ export class ExtensionActionsWidget {
             isEmpty: () => false,
             children: [
                 leaf('0-pin', row.pinned ? CHROME_BAR_COPY.unpinFromToolbarRow : CHROME_BAR_COPY.pinToToolbarRow, () => this.pin(row)),
-                leaf('1-manage', CHROME_BAR_COPY.manageExtensionRow, () => openStockPage('addons')),
-                leaf('2-remove', CHROME_BAR_COPY.removeExtensionRow, () => this.askRemove(row)),
+                // 38-04 (B5): only for an extension with a sidebar page.
+                ...(row.sidebarTitle === null ? [] : [leaf('1-sidebar', row.sidebarOpen ? CHROME_BAR_COPY.hideSidebarRow : CHROME_BAR_COPY.showSidebarRow, () => this.setSidebar(row.extensionId, !row.sidebarOpen))]),
+                leaf('2-manage', CHROME_BAR_COPY.manageExtensionRow, () => openStockPage('addons')),
+                leaf('3-remove', CHROME_BAR_COPY.removeExtensionRow, () => this.askRemove(row)),
             ],
         };
         this.menus.render({ menuPath: EXTENSIONS_MENU_PATH, menu, anchor: { x: rect.left, y: rect.bottom }, context: anchor, includeAnchorArg: false });
@@ -300,7 +349,7 @@ export class ExtensionActionsWidget {
             className={'pb-chrome-bar-button pb-ext-action' + (row.popupOpen ? ' is-open' : '')}
             data-extension-id={row.extensionId}
             aria-label={row.title}
-            title={row.title}
+            title={tooltipOf(row)}
             aria-disabled={!row.enabled}
             aria-pressed={row.popupOpen}
             onClick={e => void this.run(row, e.currentTarget)}
@@ -326,7 +375,7 @@ export class ExtensionActionsWidget {
             className={'pb-chrome-bar-button pb-page-action' + (row.popupOpen ? ' is-open' : '')}
             data-extension-id={row.extensionId}
             aria-label={row.title}
-            title={row.title}
+            title={tooltipOf(row)}
             aria-pressed={row.popupOpen}
             onClick={e => void this.run(row, e.currentTarget)}
         >
@@ -352,7 +401,7 @@ export class ExtensionActionsWidget {
             onRowMenu={(row, anchor) => this.openRowMenu(row, anchor)}
             onInstall={() => {
                 this.closeMenu(false);
-                openStockPage('addons');
+                this.store.extensionInstallSite().catch(error => this.failed('install', error));
             }}
             onClose={restoreFocus => this.closeMenu(restoreFocus)}
         />;

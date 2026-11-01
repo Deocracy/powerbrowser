@@ -334,10 +334,15 @@ export const CHROME_BAR_COPY = Object.freeze({
     unpinFromToolbarRow: 'Unpin from Toolbar',
     removeExtensionRow: 'Remove Extension',
     removeExtensionHeading: (name: string) => `Remove ${name}?`,
-    removeExtensionBody: 'The extension and its data stay in the profile until the browser restarts.',
+    removeExtensionBody: 'The extension and its data are removed from this profile.',
     removeExtensionConfirm: 'Remove',
     removeExtensionCancel: 'Cancel',
     extensionRemoveRefused: (name: string) => `${name} can't be removed here. Choose Manage Extension to see it in Add-ons.`,
+    // Phase 38 plan 04 (B5, 38-UI-SPEC Copywriting): the gear menu's sidebar toggle, shown only for an extension with a sidebar page.
+    showSidebarRow: 'Show Sidebar',
+    hideSidebarRow: 'Hide Sidebar',
+    // Phase 38 plan 04 (B5, 38-UI-SPEC): an extension button's tooltip names its bound shortcut, Phase 27 table form.
+    extensionWithShortcut: (name: string, shortcut: string) => `${name} (${shortcut})`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */
