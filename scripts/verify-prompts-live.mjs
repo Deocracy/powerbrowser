@@ -27,6 +27,18 @@
  *                       whose page sees a denial and whose stock notification
  *                       is gone; another background tab's prompt survives
  *                       (the cap is per tab); the remaining prompts grant.
+ *   remember         -- (37-02) an Allow without Remember leaves a fresh tab on the
+ *                       same origin prompting again (the control half); an Allow
+ *                       with the stock Remember checkbox leaves a fresh tab
+ *                       granted with no panel, and getAllForBrowser reports a
+ *                       persistent allow. Teardown removes the grant harness-side;
+ *   sharing          -- (37-02) live camera, microphone and screen tracks bring a
+ *                       sharingChanged push and the chrome bar's indicator;
+ *                       stopping them brings the clear push and hides it; a
+ *                       forged frame message carrying sharing: true shows nothing;
+ *   camera-doorhanger -- (37-02) a camera request shows the stock
+ *                       webRTC-shareDevices doorhanger with its device menulist
+ *                       populated, and the stock Allow resolves the page promise.
  *
  * --self-test runs a clean control session per target scenario, then one
  * session per planted fault, each required to go red naming its drift.
@@ -42,7 +54,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
-import { inChrome, loadedAt, makeCurrent, openWebTab, pollFor, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { inChrome, loadedAt, makeCurrent, openWebTab, pollFor, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'prompts-live';
 const SELF = fileURLToPath(import.meta.url);
@@ -51,6 +63,14 @@ const UPSTREAM_PN = 'upstream/toolkit/modules/PopupNotifications.sys.mjs';
 const DELAY_LINE = 'Button click happened before the security delay';
 const DELAY_PREF = 'security.notification_enable_delay';
 const GEO_ID = 'geolocation';
+/** The stock WebRTC doorhanger's notification id (WebRTCParent.sys.mjs), the template's id without -notification. */
+const WEBRTC_ID = 'webRTC-shareDevices';
+const UPSTREAM_SP = 'upstream/browser/modules/SitePermissions.sys.mjs';
+const XHTML = 'powerbrowser/shell/powerbrowser.xhtml';
+const CHROME_BAR = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+/** The chrome bar's sharing indicator and its codicon per kind, as chrome-bar-widget.tsx renders them (staticAudit derives both). */
+const SHARING_CLASS = 'pb-chrome-bar-sharing';
+const SHARING_ICONS = { 'device-camera-video': 'camera', mic: 'microphone', 'device-desktop': 'screen' };
 
 /** A geolocation provider that answers from a data: URL, so a granted request resolves without the network. */
 const PREFS = {
@@ -72,6 +92,9 @@ const REQUESTS = {
     notify: { id: 'web-notifications', start: "Notification.requestPermission().then(r => done(r === 'granted' ? 'granted' : 'denied'))" },
     storage: { id: 'persistent-storage', start: "navigator.storage.persist().then(b => done(b ? 'granted' : 'denied'))" },
     camera: { id: 'webRTC-shareDevices', start: "navigator.mediaDevices.getUserMedia({ video: true }).then(() => done('granted'), e => done(e.name === 'NotAllowedError' ? 'denied' : 'granted'))" },
+    // 37-02 sharing: the streams are kept on the page so the scenario can stop their tracks.
+    av: { id: WEBRTC_ID, start: "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
+    screen: { id: WEBRTC_ID, start: "navigator.mediaDevices.getDisplayMedia({ video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
 };
 
 const PAGES = Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map(p => [`/${p}`, { title: `Prompt ${p}`, body: `<p>prompt page ${p}</p>` }]));
@@ -335,11 +358,182 @@ async function scenarioCancelOnEvict(app, fx, plant) {
     return null;
 }
 
+/** Chrome's read-back of tab `tabId`'s geolocation entry through the same stock call the Phase 31 site panel uses. */
+function rememberedGrant(app, tabId) {
+    return inChrome(app, `
+        const { SitePermissions } = ChromeUtils.importESModule('resource:///modules/SitePermissions.sys.mjs');
+        const o = overlayOf(${JSON.stringify(tabId)});
+        const p = o ? SitePermissions.getAllForBrowser(o).find(x => x.id === ${JSON.stringify(GEO_ID)}) : null;
+        if (!p) return 'no geolocation entry';
+        return p.state === SitePermissions.ALLOW && p.scope === SitePermissions.SCOPE_PERSISTENT ? 'persistent allow' : 'state ' + p.state + ', scope ' + p.scope;`);
+}
+
+/** Harness-side teardown only (never in powerbrowser/shell): drops the persistent grant so the next run starts clean. */
+function forgetGrant(app, tabId) {
+    return inChrome(app, `
+        const { SitePermissions } = ChromeUtils.importESModule('resource:///modules/SitePermissions.sys.mjs');
+        const o = overlayOf(${JSON.stringify(tabId)});
+        if (o) SitePermissions.removeFromPrincipal(o.contentPrincipal, ${JSON.stringify(GEO_ID)});
+        return true;`).catch(() => false);
+}
+
+/** PROMPT-01's Remember half, through the stock checkbox only. Both halves are needed for a pass. */
+async function scenarioRemember(app, fx, plant) {
+    let remembered = null;
+    try {
+        // Half one, the control: an answer without Remember is a temporary grant bound to that tab's browser.
+        const a = await openPage(app, fx, '/a');
+        await startGeo(app, a);
+        if (!await waitInPanel(app, a.tabId)) {
+            return 'no stock doorhanger for the first tab';
+        }
+        await answerStock(app, a.tabId);
+        if (await geoOutcome(app, a) !== 'granted') {
+            return 'stock Allow without Remember did not grant';
+        }
+        const b = await openPage(app, fx, '/b');
+        await startGeo(app, b);
+        if (!await waitInPanel(app, b.tabId)) {
+            return 'control half: a fresh tab on the same origin did not prompt after an answer without Remember';
+        }
+        await answerStock(app, b.tabId, { which: 'block' });
+        // Half two: the stock Remember checkbox, clicked in chrome, makes the stock PermissionUI write a persistent grant.
+        const c = await openPage(app, fx, '/c');
+        remembered = c.tabId;
+        await startGeo(app, c);
+        if (!await waitInPanel(app, c.tabId)) {
+            return 'no stock doorhanger for the Remember tab';
+        }
+        // The plant leaves the stock checkbox unchecked, as a dropped Remember click would.
+        const dropped = plant === 'remember-checkbox-dropped';
+        await answerStock(app, c.tabId, { remember: !dropped });
+        if (await geoOutcome(app, c) !== 'granted') {
+            return 'stock Allow with Remember did not grant';
+        }
+        const stored = await rememberedGrant(app, c.tabId);
+        const d = await openPage(app, fx, '/d');
+        await startGeo(app, d);
+        if (await waitInPanel(app, d.tabId, GEO_ID, 3000)) {
+            return 'remember half: site prompted again after Remember';
+        }
+        if (await geoOutcome(app, d) !== 'granted') {
+            return 'remember half: the fresh tab was not granted from the remembered decision';
+        }
+        return stored === 'persistent allow' ? null : `remember half: getAllForBrowser reports ${stored}, not a persistent allow`;
+    } finally {
+        if (remembered) {
+            await forgetGrant(app, remembered);
+        }
+    }
+}
+
+const isSharing = (tabId, want) => p => p && p.kind === 'sharingChanged' && p.tabId === tabId && Object.entries(want).every(([k, v]) => p[k] === v);
+
+/** The kinds the chrome bar's sharing indicator shows now, read from the Theia DOM (Theia is not XUL, so BiDi sees it). */
+async function indicatorKinds(app) {
+    const icons = JSON.parse(await app.evaluate(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(`.${SHARING_CLASS} .codicon`)})].map(e => [...e.classList].find(c => c.startsWith('codicon-')) || ''))`));
+    return icons.map(c => SHARING_ICONS[c.slice('codicon-'.length)] ?? c).sort();
+}
+
+/** Picks the first real window or screen in the stock doorhanger, as upstream's own screen-share tests do (doCommand). */
+function pickFirstScreen(app) {
+    return inChrome(app, `
+        const m = document.getElementById('webRTC-selectWindow-menulist');
+        if (!m) return false;
+        for (let i = 0; i < m.itemCount; i++) {
+            const item = m.getItemAtIndex(i);
+            if (item.value !== '-1' && !item.disabled) { item.doCommand(); return true; }
+        }
+        return false;`);
+}
+
+function stopTracks(app, page) {
+    return app.evaluateIn(page.ctx, '(window.__pbStreams || []).forEach(s => s.getTracks().forEach(t => t.stop())), true');
+}
+
+/** D-05: the indicator follows chrome-observed webrtcUI state and nothing else. */
+async function scenarioSharing(app, fx, plant) {
+    const page = await openPage(app, fx, '/e');
+    await startRequest(app, page, 'av');
+    if (!await waitInPanel(app, page.tabId, WEBRTC_ID)) {
+        return 'no stock webRTC-shareDevices doorhanger for camera and microphone';
+    }
+    await answerStock(app, page.tabId, { id: WEBRTC_ID });
+    if (await outcome(app, page, 'av') !== 'granted') {
+        return 'camera and microphone were not granted through the stock Allow';
+    }
+    if (await waitForPush(app, isSharing(page.tabId, { camera: true, microphone: true })) < 0) {
+        return 'no sharingChanged push with camera and microphone live';
+    }
+    let kinds = await pollFor(async () => {
+        const k = await indicatorKinds(app);
+        return k.includes('camera') && k.includes('microphone') ? k : null;
+    }, 5000, 'the camera and microphone marks').catch(() => null);
+    if (!kinds) {
+        return 'the chrome bar shows no camera and microphone marks while both tracks are live';
+    }
+    await startRequest(app, page, 'screen');
+    if (!await waitInPanel(app, page.tabId, WEBRTC_ID) || !await pickFirstScreen(app)) {
+        return 'screen share could not be started: no stock doorhanger with a window or screen to pick';
+    }
+    await answerStock(app, page.tabId, { id: WEBRTC_ID });
+    if (await outcome(app, page, 'screen', 15000) !== 'granted') {
+        return 'screen share was not granted through the stock Allow';
+    }
+    if (await waitForPush(app, isSharing(page.tabId, { screen: true })) < 0) {
+        return 'no sharingChanged push with the screen live';
+    }
+    if (plant === 'sharing-stuck-on') {
+        // What a broken observer does: the clear report never reaches the push.
+        await inChrome(app, `
+            const g = window.gBrowser, real = g.updateBrowserSharing;
+            g.updateBrowserSharing = (b, s) => { const w = (s && s.webRTC) || {}; if (w.camera || w.microphone || w.screen) real.call(g, b, s); };
+            return true;`);
+    }
+    const from = (await pushes(app)).length;
+    await stopTracks(app, page);
+    await waitForPush(app, isSharing(page.tabId, { camera: false, microphone: false, screen: false }), { from, timeoutMs: 8000 });
+    kinds = await indicatorKinds(app);
+    if (kinds.length) {
+        return 'indicator still shown after track end';
+    }
+    // A forged frame message: nothing live, sharing: true. The widget must not honour it.
+    if (plant === 'frame-flag-accepted') {
+        await probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(page.tabId)});
+            window.addEventListener('message', e => { if (e.data && e.data.sharing) { w.sharing = { camera: true, microphone: true, screen: true }; get('WebTabChannel').tabStatusEmitter.fire(w); } });
+            return true;`);
+    }
+    await app.evaluate(`(window.postMessage({ kind: 'sharingChanged', tabId: ${JSON.stringify(page.tabId)}, sharing: true, camera: true }, '*'), true)`);
+    await new Promise(resolve => setTimeout(resolve, 750));
+    return (await indicatorKinds(app)).length ? 'indicator driven from a frame flag' : null;
+}
+
+/** B2: the camera request resolves only because the stock template is installed. */
+async function scenarioCameraDoorhanger(app, fx, plant) {
+    const page = await openPage(app, fx, '/a');
+    if (plant === 'camera-template-missing') {
+        await inChrome(app, `const t = document.getElementById(${JSON.stringify(`${WEBRTC_ID}-notification`)}); if (t) t.remove(); return true;`);
+    }
+    await startRequest(app, page, 'camera');
+    if (!await waitInPanel(app, page.tabId, WEBRTC_ID, 10000)) {
+        return 'camera template missing: request never resolved';
+    }
+    const devices = await inChrome(app, `const m = document.getElementById('webRTC-selectCamera-menulist'); return m ? m.itemCount : -1;`);
+    if (!(devices > 0)) {
+        return `the camera device menulist has ${devices} items; listDevices populated nothing`;
+    }
+    await answerStock(app, page.tabId, { id: WEBRTC_ID });
+    return await outcome(app, page, 'camera') === 'granted' ? null : 'stock Allow on the camera doorhanger did not resolve the page promise';
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
     'background-queue': scenarioBackgroundQueue,
     'cancel-on-evict': scenarioCancelOnEvict,
+    remember: scenarioRemember,
+    sharing: scenarioSharing,
+    'camera-doorhanger': scenarioCameraDoorhanger,
 };
 
 /** Each plant runs its target scenario with one thing wrong and must go red naming `expect`. */
@@ -350,6 +544,10 @@ const PLANTS = [
     { plant: 'activation-wrong-tab', target: 'background-queue', expect: 'queued record shown for the wrong tab' },
     { plant: 'evict-hangs', target: 'cancel-on-evict', expect: 'evicted page promise pending, not cancelled' },
     { plant: 'evict-cross-tab', target: 'cancel-on-evict', expect: 'a prompt of another tab was evicted by requests from this tab' },
+    { plant: 'remember-checkbox-dropped', target: 'remember', expect: 'remember half: site prompted again after Remember' },
+    { plant: 'sharing-stuck-on', target: 'sharing', expect: 'indicator still shown after track end' },
+    { plant: 'frame-flag-accepted', target: 'sharing', expect: 'indicator driven from a frame flag' },
+    { plant: 'camera-template-missing', target: 'camera-doorhanger', expect: 'camera template missing: request never resolved' },
 ];
 
 async function runSession(name, plant) {
@@ -388,6 +586,28 @@ function staticAudit() {
     }
     if (!upstream.includes(`"${DELAY_PREF}"`)) {
         failures.push(`${UPSTREAM_PN} no longer reads ${DELAY_PREF}`);
+    }
+    // 37-02: every name the new scenarios read is derived here from the tree, so a rename goes red offline.
+    const sp = readFileSync(join(REPO_ROOT, UPSTREAM_SP), 'utf8');
+    for (const name of ['getAllForBrowser(', 'removeFromPrincipal(', 'SCOPE_PERSISTENT']) {
+        if (!sp.includes(name)) {
+            failures.push(`${UPSTREAM_SP} no longer has ${name.replace('(', '')}; the remember read-back or teardown reads a name upstream lacks`);
+        }
+    }
+    const markup = readFileSync(join(REPO_ROOT, XHTML), 'utf8');
+    for (const id of [`${WEBRTC_ID}-notification`, 'webRTC-selectCamera-menulist', 'webRTC-selectWindow-menulist']) {
+        if (!markup.includes(`id="${id}"`)) {
+            failures.push(`${XHTML} has no #${id}; the camera and sharing scenarios read an element the shell lacks`);
+        }
+    }
+    const bar = readFileSync(join(REPO_ROOT, CHROME_BAR), 'utf8');
+    if (!bar.includes(`className='${SHARING_CLASS}'`)) {
+        failures.push(`${CHROME_BAR} renders no .${SHARING_CLASS}; the sharing scenario reads an indicator that does not exist`);
+    }
+    for (const icon of Object.keys(SHARING_ICONS)) {
+        if (!bar.includes(`'${icon}'`)) {
+            failures.push(`${CHROME_BAR} has no '${icon}' codicon; the sharing scenario cannot name that kind`);
+        }
     }
     return failures;
 }
