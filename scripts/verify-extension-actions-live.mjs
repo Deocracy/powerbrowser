@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 // scripts/verify-extension-actions-live.mjs
 //
-// Phase 38 plan 01 (EXT-06, EXT-07): live proof, on the built shell with patch
-// 050 and the last Theia build, that the extension bridge reads action state
-// for the selected web tab and runs a click on the page on screen.
+// Phase 38 plans 01-03 (EXT-06, EXT-07, EXT-08): live proof, on the built shell
+// with patch 050 and the last Theia build, that the extension bridge reads
+// action state for the selected web tab and runs a click on the page on
+// screen, and that content scripts and page actions work per web tab.
 //
 // Each scenario runs in its own session: a fresh profile, the fixtures of
-// scripts/lib/pb-extension-fixtures.mjs installed as temporary add-ons in
-// chrome scope, and the shell. A session opens at most four web tabs on this
+// scripts/lib/pb-extension-fixtures.mjs installed in chrome scope, and the
+// shell. action and popup install as temporary add-ons. A relaunch scenario
+// (content) installs the content fixture as an XPI with zero overlays open,
+// quits, and runs on the relaunched shell, so the extension starts at app
+// startup with no web tab. A session opens at most four web tabs on this
 // script's 127.0.0.1 origin; a stock-window page comes from localhost. Every
 // scenario has a PLANT that must go red naming its expected text, scored on
 // the same recorder that showed the positive case in the clean session first.
@@ -48,6 +52,18 @@
 //                   refused; after the frontend reloads no orphan overlay is left.
 //                   Plant create-unadopted swallows the adoptTab push in the frame
 //                   and must go red naming the orphan overlay.
+//   content      -- (38-03, EXT-08) the relaunched shell boots with zero overlays and the IDE
+//                   focused; the console reader first sees a planted 'tab is null' throw (the
+//                   positive control) and the boot shows none. The first overlay /a then opens
+//                   with no new throw, then /b and a localhost page /n. The content script
+//                   retitles /a and /b; each page's hello carries sender.tab equal to its
+//                   overlay's extension tab id; the background's tabs.sendMessage to each id
+//                   is answered by that page; webRequest gives /a's image request /a's id;
+//                   the page action is shown on /a and hidden on /n. Plant sender-tab-null
+//                   makes the background record every hello's tab as -1 and must go red
+//                   naming the hello from /a. Plant pageaction-zero-tab runs upstream's
+//                   unguarded show_matches loop at the zero-overlay boot and must go red
+//                   naming the throw.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -61,6 +77,7 @@
 
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
+import { crc32 } from 'node:zlib';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -313,12 +330,77 @@ async function scenarioTabsBridge({ app, plant, command }) {
   return verdict(true, `tabs.create /b landed adopted, selected and next to /a; /c landed in the background, tabs.update({active}) showed it and tabs.remove closed it; an extension page was refused (${ext.error}); no orphan overlay after the frontend reload`, null);
 }
 
+// 38-03 (EXT-08): content scripts and the page action's show_matches on the 31.1 identity, after a zero-overlay boot.
+async function scenarioContent({ app, plant, command }) {
+  const hostTabs = await live.inChrome(app, 'return window.gBrowser.tabs.length;');
+  if (hostTabs !== 0) {
+    return verdict(false, null, `the relaunch did not boot with zero overlays (${hostTabs} host tab(s))`);
+  }
+  if (!(await live.focusTheiaFrame(app))) throw new Error('BROKEN INSTRUMENT: the IDE frame could not take focus');
+  if (plant?.name === 'pageaction-zero-tab') {
+    // Upstream's onManifestEntry loop before patch 050's guard: isShownForTab on a window whose selectedTab is null.
+    await pageActionThrow(app, 'for (const w of ExtensionParent.apiManager.global.windowTracker.browserWindows()) action.isShownForTab(w.gBrowser.selectedTab);');
+  }
+  const boot = await tabNullErrors(app);
+  const control = await pageActionThrow(app, 'action.isShownForTab(null);');
+  const seen = await tabNullErrors(app);
+  if (!control || seen.length !== boot.length + 1) {
+    throw new Error(`BROKEN INSTRUMENT: the console reader did not see the control throw (${control}; ${boot.length} then ${seen.length})`);
+  }
+  if (boot.length) {
+    return verdict(false, null, `the zero-overlay startup threw: ${boot[0]}`);
+  }
+  if (plant?.name === 'sender-tab-null') {
+    await command('forget-tabs');
+  }
+  const A = await openTab(app, '/a');
+  const first = await tabNullErrors(app);
+  if (first.length !== seen.length) {
+    return verdict(false, null, `the first overlay, opened while the host had no selected tab, threw: ${first[first.length - 1]}`);
+  }
+  const B = await openTab(app, '/b');
+  const N = await live.openWebTab(app, `${STOCK_ORIGIN}/n`);
+  const ids = { '/a': await extTabIdOf(app, A), '/b': await extTabIdOf(app, B), '/n': await extTabIdOf(app, N) };
+  if (Object.values(ids).some(id => !(id >= 0))) throw new Error(`BROKEN INSTRUMENT: an overlay has no extension tab id: ${JSON.stringify(ids)}`);
+  for (const [path, tabId] of [['/a', A], ['/b', B]]) {
+    const title = await pollUntil(() => live.inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o ? o.contentTitle : null;`), t => t === `pb-content ${path}`, 15000);
+    if (!title) {
+      return verdict(false, null, `the content script did not run in overlay ${path}: its title is not the script's marker`);
+    }
+    const hello = (await waitSince(0, r => r.kind === 'hello' && r.path === path)) ?? null;
+    if (!hello || hello.senderTabId !== ids[path]) {
+      return verdict(false, null, `the hello from ${path} carried sender.tab ${hello ? hello.senderTabId : 'none'}, not the overlay's tab ${ids[path]}`);
+    }
+    const ping = await command('ping', { tabId: ids[path] });
+    if (!ping.ok || ping.result?.path !== path) {
+      return verdict(false, null, `tabs.sendMessage(${ids[path]}) was answered by ${JSON.stringify(ping.ok ? ping.result : ping.error)}, not page ${path}`);
+    }
+  }
+  // The positive control is the record itself: the observer saw /a's image request before its tab id is read.
+  const request = await waitSince(0, r => r.kind === 'request' && pathOf(r.url) === '/img/a.png');
+  if (!request) {
+    return verdict(false, null, "webRequest.onBeforeRequest never saw overlay /a's image request");
+  }
+  if (request.tabId !== ids['/a']) {
+    return verdict(false, null, `webRequest gave /a's image request tab ${request.tabId}, not the overlay's tab ${ids['/a']}`);
+  }
+  const shownA = await command('isShown', { tabId: ids['/a'] });
+  const shownN = await command('isShown', { tabId: ids['/n'] });
+  if (shownA.result !== true || shownN.result !== false) {
+    return verdict(false, null, `the page action is ${JSON.stringify(shownA.result ?? shownA.error)} on /a and ${JSON.stringify(shownN.result ?? shownN.error)} on /n; show_matches shows it on the 127.0.0.1 page only`);
+  }
+  return verdict(true, `zero-overlay boot with no throw (the control throw was seen); the first overlay opened clean; the content script ran in /a and /b; sender.tab was ${ids['/a']} and ${ids['/b']}; tabs.sendMessage reached each page; /a's image request carried tab ${ids['/a']}; the page action is shown on /a and hidden on /n (tab ${ids['/n']})`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
   manage: scenarioManage,
   'tabs-bridge': scenarioTabsBridge,
+  content: scenarioContent,
 };
+// Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
+const RELAUNCH_SCENARIOS = new Set(['content']);
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
 // patched product: the scenario reads `plant.name`.
@@ -328,6 +410,8 @@ const PLANTS_TABLE = {
   'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
   'buttons-stale': { scenario: 'buttons', expect: 'the button shows a stale badge' },
   'pin-lost': { scenario: 'manage', expect: 'the pin did not persist' },
+  'sender-tab-null': { scenario: 'content', expect: 'the hello from /a carried sender.tab -1' },
+  'pageaction-zero-tab': { scenario: 'content', expect: 'the zero-overlay startup threw' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -404,7 +488,7 @@ async function startHarness() {
     }
     if (/^\/[a-z]$/.test(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(`<!doctype html><title>page ${path}</title><body>live page ${path}</body>`);
+      res.end(`<!doctype html><title>page ${path}</title><body>live page ${path}<img src="/img${path}.png" alt=""></body>`);
       return;
     }
     res.writeHead(404);
@@ -545,21 +629,91 @@ async function puzzleRows(app) {
     id: r.dataset.extensionId, name: r.querySelector('.pb-ext-row-name')?.textContent ?? null })))`));
 }
 
-// Writes a fixture into a fresh directory and installs it as a temporary add-on.
+// A zip of `files` (name -> text) with every entry stored, which is all an XPI needs.
+function storedZip(files) {
+  const local = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, text] of Object.entries(files)) {
+    const data = Buffer.from(text);
+    const nameBytes = Buffer.from(name);
+    const sum = crc32(data);
+    const head = Buffer.alloc(30);
+    head.writeUInt32LE(0x04034b50, 0);
+    head.writeUInt16LE(20, 4);
+    head.writeUInt16LE(0x21, 12); // 1980-01-01, the first valid DOS date
+    head.writeUInt32LE(sum, 14);
+    head.writeUInt32LE(data.length, 18);
+    head.writeUInt32LE(data.length, 22);
+    head.writeUInt16LE(nameBytes.length, 26);
+    const entry = Buffer.alloc(46);
+    entry.writeUInt32LE(0x02014b50, 0);
+    entry.writeUInt16LE(20, 4);
+    entry.writeUInt16LE(20, 6);
+    entry.writeUInt16LE(0x21, 14);
+    entry.writeUInt32LE(sum, 16);
+    entry.writeUInt32LE(data.length, 20);
+    entry.writeUInt32LE(data.length, 24);
+    entry.writeUInt16LE(nameBytes.length, 28);
+    entry.writeUInt32LE(offset, 42);
+    local.push(head, nameBytes, data);
+    central.push(entry, nameBytes);
+    offset += head.length + nameBytes.length + data.length;
+  }
+  const size = central.reduce((n, b) => n + b.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(central.length / 2, 8);
+  end.writeUInt16LE(central.length / 2, 10);
+  end.writeUInt32LE(size, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...local, ...central, end]);
+}
+
+// The static self-check of storedZip: each central entry names its file and points at a local header whose stored
+// bytes are that file's text with the CRC the entry carries.
+function zipRoundTrip(files) {
+  const zip = storedZip(files);
+  const end = zip.length - 22;
+  const out = {};
+  let at = zip.readUInt32LE(end + 16);
+  for (let i = 0; i < zip.readUInt16LE(end + 10); i++) {
+    const name = zip.toString('utf8', at + 46, at + 46 + zip.readUInt16LE(at + 28));
+    const local = zip.readUInt32LE(at + 42);
+    const start = local + 30 + zip.readUInt16LE(local + 26);
+    const data = zip.subarray(start, start + zip.readUInt32LE(local + 18));
+    if (zip.readUInt32LE(local) !== 0x04034b50 || crc32(data) !== zip.readUInt32LE(at + 16)) return null;
+    out[name] = data.toString('utf8');
+    at += 46 + name.length;
+  }
+  return out;
+}
+
+// The content fixture survives a relaunch, so it installs as an XPI; the others install as temporary add-ons.
+const XPI_FIXTURES = new Set(['content']);
+
+// Writes a fixture into a fresh directory and installs it.
 async function installFixture(app, name) {
   const fixture = EXTENSION_FIXTURES[name];
   const dir = await mkdtemp(join(tmpdir(), 'pb-ext-actions-fixture-'));
   sessionDirs.push(dir);
-  await writeFile(join(dir, 'manifest.json'), JSON.stringify(fixture.manifest));
+  const files = { 'manifest.json': JSON.stringify(fixture.manifest) };
   for (const [file, body] of Object.entries(fixture.files)) {
-    await writeFile(join(dir, file), body.replace('__ORIGIN__', JSON.stringify(ORIGIN)));
+    files[file] = body.replace('__ORIGIN__', JSON.stringify(ORIGIN));
+  }
+  let target = dir;
+  if (XPI_FIXTURES.has(name)) {
+    target = join(dir, `${name}.xpi`);
+    await writeFile(target, storedZip(files));
+  } else {
+    for (const [file, body] of Object.entries(files)) await writeFile(join(dir, file), body);
   }
   const installed = JSON.parse(await app.evaluateIn(app.chrome, `(async () => {
     try {
       const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
       const f = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile);
-      f.initWithPath(${JSON.stringify(dir)});
-      const addon = await AddonManager.installTemporaryAddon(f);
+      f.initWithPath(${JSON.stringify(target)});
+      const addon = ${XPI_FIXTURES.has(name)} ? await (await AddonManager.getInstallForFile(f)).install() : await AddonManager.installTemporaryAddon(f);
       return JSON.stringify({ id: addon.id, isActive: addon.isActive });
     } catch (e) { return JSON.stringify({ error: String(e) }); }
   })()`));
@@ -582,6 +736,29 @@ async function stockActionClick(app, extId) {
   })()`);
 }
 
+// The extension tab id of the overlay of frontend tab `tabId`, from the extension tab tracker; -1 when it has none.
+async function extTabIdOf(app, tabId) {
+  return Number(await live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+    const o = overlayOf(${JSON.stringify(tabId)});
+    const t = o && window.gBrowser.getTabForBrowser(o);
+    return t ? ExtensionParent.apiManager.global.tabTracker.getId(t) : -1;`));
+}
+
+// Every console message so far naming a null tab: the text the unguarded page-action and TabOpen paths throw.
+async function tabNullErrors(app) {
+  return JSON.parse(await live.inChrome(app, `return JSON.stringify(Services.console.getMessageArray()
+    .map(m => String(m.errorMessage || m.message || '')).filter(t => /tab is null/.test(t)));`));
+}
+
+// Runs `body` with `action` bound to the content fixture's page action and reports its throw to the console, as an
+// unguarded startup path would; the thrown text, or null when nothing threw.
+async function pageActionThrow(app, body) {
+  return live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+    const action = ExtensionParent.apiManager.global.pageActionFor(WebExtensionPolicy.getByID(${JSON.stringify(fixtureId('content'))}).extension).action;
+    try { ${body} } catch (e) { Cu.reportError(e); return String(e); }
+    return null;`);
+}
+
 async function stampCheck() {
   const digest = createHash('sha256').update(await readFile(join(live.REPO_ROOT, 'patches/050-extension-tab-host.patch'))).digest('hex');
   const stamp = (await readFile(join(live.REPO_ROOT, 'objdir/.pb-050-build.sha256'), 'utf8')).trim().split(/\s+/)[0];
@@ -590,10 +767,41 @@ async function stampCheck() {
   }
 }
 
+const SESSION_PREFS = {
+  'xpinstall.signatures.required': false,
+  // The content fixture is MV3: its background must not be suspended between the harness's commands.
+  'extensions.background.idle.timeout': 3600000,
+};
+
+// A relaunch scenario: the content XPI installs with zero overlays, the shell quits, and the scenario runs on the
+// relaunched shell (same profile) once the fixture's background has started again.
+async function runRelaunchSession(scenarioName, plant) {
+  const profile = await live.makeProfile(SESSION_PREFS);
+  process.env.MOZ_PURGE_CACHES = '1';
+  try {
+    await live.withShell(profile, async app => {
+      await installFixture(app, 'content');
+      if (!(await waitSince(0, r => r.kind === 'content-started'))) throw new Error('BROKEN INSTRUMENT: the content fixture never started');
+      if ((await app.quit()) !== 'exited') throw new Error('BROKEN INSTRUMENT: the shell did not quit after the install');
+    });
+    session = { logs: [], queue: [] };
+    return await live.withShell(profile, async app => {
+      await live.installPushRecorder(app);
+      if (!(await waitSince(0, r => r.kind === 'content-started', 30000))) throw new Error('BROKEN INSTRUMENT: the content fixture did not start again after the relaunch');
+      return await SCENARIOS[scenarioName]({ app, plant, command });
+    });
+  } finally {
+    await profile.dispose();
+  }
+}
+
 // One scenario in one session, with every fixture installed and started first.
 async function runSession(scenarioName, plantName = null) {
   session = { logs: [], queue: [] };
   try {
+    if (RELAUNCH_SCENARIOS.has(scenarioName)) {
+      return await runRelaunchSession(scenarioName, plantName ? { name: plantName, ...PLANTS[plantName] } : null);
+    }
     return await live.withProbeShell(
       async app => {
         await installFixture(app, 'action');
@@ -603,7 +811,7 @@ async function runSession(scenarioName, plantName = null) {
         }
         return await SCENARIOS[scenarioName]({ app, plant: plantName ? { name: plantName, ...PLANTS[plantName] } : null, command });
       },
-      { extraPrefs: { 'xpinstall.signatures.required': false } }
+      { extraPrefs: SESSION_PREFS }
     );
   } catch (error) {
     const text = error && error.message ? error.message : String(error);
@@ -617,6 +825,8 @@ async function main() {
   const argv = process.argv.slice(2);
   const failures = staticAudit();
   if (argv.includes('--static') || (argv.includes('--self-test') && !argv.includes('--live'))) {
+    const files = { 'manifest.json': '{}', 'a/b.js': 'x'.repeat(300) };
+    if (JSON.stringify(zipRoundTrip(files)) !== JSON.stringify(files)) failures.push('the XPI writer (storedZip) does not round-trip its files');
     if (argv.includes('--self-test')) {
       for (const plant of AUDIT_PLANTS) {
         const hit = staticAudit(plant.plants).find(f => f.includes(plant.expect));

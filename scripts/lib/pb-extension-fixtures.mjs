@@ -1,7 +1,8 @@
 // scripts/lib/pb-extension-fixtures.mjs
 //
-// Phase 38 (EXT-06, EXT-07): the extensions verify-extension-actions-live.mjs
-// installs as temporary add-ons. verify-extension-actions.mjs derives the
+// Phase 38 (EXT-06, EXT-07, EXT-08): the extensions verify-extension-actions-live.mjs
+// installs: action and popup as temporary add-ons, content as an XPI that
+// survives a restart. verify-extension-actions.mjs derives the
 // fixture set (ids and versions) from these manifests at check time, so the
 // live file and the static gate read one source and no id is kept by hand.
 //
@@ -65,8 +66,66 @@ post({ kind: 'popup-started', id: browser.runtime.id });
 browser.browserAction.onClicked.addListener(tab => post({ kind: 'popup-clicked', tabId: tab.id }));
 `;
 
+// 38-03 (EXT-08): the content probe. Its content script marks each 127.0.0.1 page in its title, says hello (the
+// background records sender.tab) and answers ping and act messages; its page action shows only on 127.0.0.1 pages,
+// and a click on it retitles the page through that tab's content script. It records the tab id webRequest gives an
+// overlay's image request. `forget-tabs` (the sender-tab-null plant) makes it record every later hello's tab as -1.
+const CONTENT_BACKGROUND = `${POST}
+post({ kind: 'content-started', id: browser.runtime.id });
+let forgetTabs = false;
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg.kind === 'hello') post({ kind: 'hello', path: msg.path, senderTabId: !forgetTabs && sender.tab ? sender.tab.id : -1 });
+});
+browser.webRequest.onBeforeRequest.addListener(d => post({ kind: 'request', url: d.url, tabId: d.tabId }), { urls: ['http://127.0.0.1/*'], types: ['image'] });
+browser.pageAction.onClicked.addListener(async tab => {
+  let title = null;
+  let err = null;
+  try {
+    title = (await browser.tabs.sendMessage(tab.id, { kind: 'act' })).title;
+  } catch (e) {
+    err = String((e && e.message) || e);
+  }
+  post({ kind: 'page-clicked', tabId: tab.id, title, err });
+});
+async function run(cmd) {
+  try {
+    let result;
+    if (cmd.op === 'ping') {
+      result = await browser.tabs.sendMessage(cmd.tabId, { kind: 'ping' });
+    } else if (cmd.op === 'isShown') {
+      result = await browser.pageAction.isShown({ tabId: cmd.tabId });
+    } else if (cmd.op === 'forget-tabs') {
+      forgetTabs = true;
+      result = true;
+    } else {
+      throw new Error('unknown op ' + cmd.op);
+    }
+    post({ kind: 'result', opId: cmd.opId, ok: true, result });
+  } catch (e) {
+    post({ kind: 'result', opId: cmd.opId, ok: false, error: String((e && e.message) || e) });
+  }
+}
+setInterval(() => {
+  fetch(ORIGIN + '/cmd').then(r => r.json()).then(cmds => cmds.forEach(run)).catch(() => {});
+}, 250);
+`;
+
+const CONTENT_SCRIPT = `
+document.title = 'pb-content ' + location.pathname;
+browser.runtime.sendMessage({ kind: 'hello', path: location.pathname });
+browser.runtime.onMessage.addListener(msg => {
+  if (msg.kind === 'ping') return Promise.resolve({ path: location.pathname });
+  if (msg.kind === 'act') {
+    document.title = 'pb-page-acted ' + location.pathname;
+    return Promise.resolve({ title: document.title });
+  }
+  return undefined;
+});
+`;
+
 const ACTION_ID = 'pb-ext-action-probe@powerbrowser.test';
 const POPUP_ID = 'pb-ext-popup-probe@powerbrowser.test';
+const CONTENT_ID = 'pb-ext-content-probe@powerbrowser.test';
 
 export const EXTENSION_FIXTURES = Object.freeze({
   action: {
@@ -95,6 +154,20 @@ export const EXTENSION_FIXTURES = Object.freeze({
       'background.js': POPUP_BACKGROUND,
       'popup.html': '<!doctype html><title>pb-ext-popup</title><body>popup</body>',
     },
+  },
+  content: {
+    manifest: {
+      manifest_version: 3,
+      name: 'PB content probe',
+      version: '1.0',
+      browser_specific_settings: { gecko: { id: CONTENT_ID } },
+      permissions: ['webRequest'],
+      host_permissions: ['http://127.0.0.1/*'],
+      background: { scripts: ['background.js'] },
+      content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'] }],
+      page_action: { default_title: 'PB page action probe', show_matches: ['http://127.0.0.1/*'] },
+    },
+    files: { 'background.js': CONTENT_BACKGROUND, 'content.js': CONTENT_SCRIPT },
   },
 });
 
