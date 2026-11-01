@@ -7249,11 +7249,13 @@ function installPermissionPromptFurniture(window) {
     }
     return record.notification;
   };
-  // browser.js onLocationChange: a new top-level document drops the previous page's prompts.
+  // browser.js onLocationChange (:2977-2983): a new top-level document drops the previous page's prompts and resets
+  // its sharing state (37-REVIEW WR-02).
   host.progressListeners.add({
     onLocationChange(browser, webProgress, _request, _location, flags) {
       if (webProgress.isTopLevel && !(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT)) {
         notifications.locationChange(browser);
+        resetWebTabSharing(browser);
       }
     },
   });
@@ -7363,6 +7365,13 @@ export function updateWebTabSharing(browser, sharingState) {
   const webRTC = merged.webRTC || {};
   // Paused still counts as shared, as tabbrowser's getTabSharingState reads it.
   pushWebTabSharing(browser, tabId, host, { camera: Boolean(webRTC.camera), microphone: Boolean(webRTC.microphone), screen: Boolean(webRTC.screen) }, false);
+}
+
+// 37-REVIEW WR-02: tabbrowser's resetBrowserSharing (:2171-2185) for a navigation. A navigation sends no final
+// updateIndicators (WebRTCParent.didDestroy only forgets the streams), so a mark left on would outlive the page.
+function resetWebTabSharing(browser) {
+  sharingStateOf.delete(browser);
+  updateWebTabSharing(browser, { webRTC: {} });
 }
 
 // webTabOpen of an overlay chrome already holds (a reloaded frontend registering it again): the frontend's widget is new,

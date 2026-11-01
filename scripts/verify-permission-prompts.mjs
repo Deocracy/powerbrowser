@@ -42,7 +42,8 @@
  *       arm carries or reads a remember field, so no Theia path sets Remember.
  *   (n) chrome-observed sharing (D-05): the one sharingChanged push is in
  *       updateWebTabSharing, which only the shell gBrowser's updateBrowserSharing
- *       (the stock WebRTCParent call) reaches; the frontend writes a tab's
+ *       (the stock WebRTCParent call) and the navigation reset (all marks off,
+ *       37-REVIEW WR-02) reach; the frontend writes a tab's
  *       sharing state only in its display-only sharingChanged subscriber and
  *       never reads a sharing field from a message.
  *   (o) sharing destination (37-02 post-review): the push's duplicate check
@@ -100,8 +101,10 @@
  *       pushWebTabSharing, cut from the tree and run against stub maps, keep
  *       the camera mark on when a { geo } or { xr } report follows a camera
  *       report (PermissionUI reports through the same updateBrowserSharing),
- *       and a camera report made before an adoption ack is pushed by the
- *       adoption's resend (37-REVIEW WR-01).
+ *       a camera report made before an adoption ack is pushed by the
+ *       adoption's resend (37-REVIEW WR-01), and resetWebTabSharing, which the
+ *       navigation listener calls after locationChange, pushes every mark off
+ *       (37-REVIEW WR-02).
  *   (ac) pending overlay (37-REVIEW WR-01): adoptPendingOverlay calls
  *       adoptPendingPushes, which pushes the kept prompts, sharing and blocked
  *       popups; setBar, hungOverlay and showBlockedPopupBar keep a pending
@@ -332,7 +335,7 @@ function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, fil
  * declared fresh, against stub hosts. The scenarios name what each push must mean, so a fault in the merge, the
  * pending-overlay record or the navigation reset goes red here rather than only on a built binary.
  */
-const SHARING_FUNCTIONS = ['updateWebTabSharing', 'pushWebTabSharing', 'resendWebTabSharing'];
+const SHARING_FUNCTIONS = ['updateWebTabSharing', 'pushWebTabSharing', 'resendWebTabSharing', 'resetWebTabSharing'];
 function checkSharingBehaviour(api) {
     const bodies = SHARING_FUNCTIONS.map(name => functionBody(api, name));
     const missing = SHARING_FUNCTIONS.filter((_, i) => !bodies[i]);
@@ -371,6 +374,12 @@ function checkSharingBehaviour(api) {
     run('xr report', () => fns.updateWebTabSharing(browser, { xr: true }));
     if (pushes.slice(afterCamera).some(p => p.camera !== true)) {
         failures.push('sharing-behaviour: location-grant-while-camera-shared -- a { geo } or { xr } report after a camera report pushed the camera mark off while the track is live (37-REVIEW CR-02)');
+    }
+    // WR-02: a navigation after a camera report pushes every mark off.
+    const beforeReset = pushes.length;
+    run('navigation reset', () => fns.resetWebTabSharing(browser));
+    if (!pushes.slice(beforeReset).some(p => p.tabId === 'wt-a' && !p.camera && !p.microphone && !p.screen)) {
+        failures.push('sharing-behaviour: navigate-resets-sharing -- a navigation after a camera report pushes no all-off state, so the mark outlives the page (37-REVIEW WR-02)');
     }
     // WR-01: a camera report while the overlay is pending (no tab id) is pushed when the adoption resends.
     const pendingBrowser = { ownerGlobal: win };
@@ -661,6 +670,10 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
 
     // (ab) The sharing functions run against stub maps: each scenario's pushes must match what the state means.
     failures.push(...checkSharingBehaviour(api));
+    // (ab) WR-02: the prompt section's navigation listener resets the sharing state, as browser.js does after locationChange.
+    if (!/notifications\.locationChange\(browser\);\s*resetWebTabSharing\(browser\);/.test(api)) {
+        failures.push('sharing-behaviour: the navigation listener does not call resetWebTabSharing after notifications.locationChange -- a mark outlives its page (37-REVIEW WR-02)');
+    }
     // (ac) WR-01: the adoption ack pushes what was kept for the pending overlay, and each kept kind is kept.
     const adoptPushes = functionBody(api, 'adoptPendingPushes');
     if (!functionBody(api, 'adoptPendingOverlay').includes('adoptPendingPushes(')) {
@@ -902,6 +915,17 @@ function selfTest() {
             name: 'geo report replaces the camera state',
             sources: { ...clean, [API]: clean[API].replace('if (!host || !("webRTC" in sharingState)) {', 'if (!host) {').replace('const webRTC = merged.webRTC || {};', 'const webRTC = sharingState.webRTC || {};') },
             expect: 'location-grant-while-camera-shared',
+        },
+        {
+            // 37-REVIEW WR-02 reverted: the reset forgets the state but pushes nothing.
+            name: 'navigation reset pushes nothing',
+            sources: { ...clean, [API]: clean[API].replace('  sharingStateOf.delete(browser);\n  updateWebTabSharing(browser, { webRTC: {} });', '  sharingStateOf.delete(browser);') },
+            expect: 'navigate-resets-sharing',
+        },
+        {
+            name: 'navigation listener skips the sharing reset',
+            sources: { ...clean, [API]: clean[API].replace('        resetWebTabSharing(browser);\n', '') },
+            expect: 'does not call resetWebTabSharing after notifications.locationChange',
         },
         {
             // 37-REVIEW WR-01 reverted: the resend reads only the last pushed state, so a pending overlay's report is lost.
