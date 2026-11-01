@@ -3847,8 +3847,11 @@ run_own_checks() {
     # occlusion selector, the no-uncatalogued-kind rule, the codicons it names and
     # the right-clicked-tab target, all derived and compared. 34-03 adds the
     # keyOf origin of every pin/selection key, bulk-arm delegation to the
-    # single-tab rows, and the open-tabs bound on the pin store. Honestly --quick:
-    # text reads only. The live proof is tab-strip-live.
+    # single-tab rows, and the open-tabs bound on the pin store. 34-04 adds the
+    # preview card's occlusion membership, below-tab anchor and capture-free
+    # source, titleChanged riding webTabPush's existing state literal, and no
+    # frame-side write of it. Honestly --quick: text reads only. The live proof
+    # is tab-strip-live.
     "tab-strip|node $REPO_ROOT/scripts/verify-tab-strip.mjs"
     "tab-strip-self-test|node $REPO_ROOT/scripts/verify-tab-strip.mjs --self-test"
 

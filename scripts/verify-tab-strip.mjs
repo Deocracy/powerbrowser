@@ -41,6 +41,26 @@
  *      the open tabs filtered by pinnedIds (bounded by open tabs) and is the
  *      only writer; restorePins re-pins a tab only when its own key equals
  *      the stored key.
+ *  11. preview occlusion and anchor (34-04, TAB-07, D-11): BLOCKING_LAYER_SELECTOR's
+ *      members, derived from web-tab.ts at check time, hold both the tab
+ *      menu's `.lm-Menu` and the strip's preview card class, which is derived
+ *      from renderPreview's root; openPreview anchors the card at the hovered
+ *      tab's own rect bottom plus 4px, and neither schedulePreview nor
+ *      openPreview opens for a tab on screen.
+ *  12. preview source (D-10, T-34-04): the preview methods make no capture,
+ *      screenshot or chrome request; the image is the GroupModel cards'
+ *      thumbnail, never a TabPlacesRow.
+ *  13. push field (D-12, W3): the keys of webTabPush's state literal, derived
+ *      from PowerBrowserAPI.sys.mjs at check time, include titleChanged,
+ *      valued by chrome's own webTabTitleChanged (which reads no message
+ *      field); no other literal in the boundary file carries titleChanged, so
+ *      a new kind carrying the flag goes red naming that kind; the
+ *      webTabActivated arm pushes the activated tab, which clears it.
+ *  14. no frame write (T-34-07): every frame-side source (the Theia
+ *      extensions' src trees, tests excluded, and GroupActorChild.sys.mjs) is
+ *      scanned for a write to titleChanged; the only writes allowed are
+ *      web-tab.ts reading the push (detail.titleChanged === true) and
+ *      applyState copying it, plus its two declarations.
  *
  * --self-test: the unmodified tree must be green first (the positive control
  * every plant preserves), then each named plant edits one source in memory
@@ -70,9 +90,21 @@ const ROADMAP = '.planning/ROADMAP.md';
 // After a milestone closes its roadmap moves here; the criterion is searched in both.
 const MILESTONES = '.planning/milestones';
 const ROADMAP_KEY = 'roadmap';
+const FRAME_KEY = 'frame-sources';
+const FRAME_DIR = 'theia/extensions';
+const FRAME_CHILD = 'powerbrowser/shell/GroupActorChild.sys.mjs';
+// The four titleChanged writes the frame may hold, all in web-tab.ts: the WebTabState and widget declarations, the
+// read of chrome's push, and applyState's copy of it. Anything else writing the flag is a frame-minted mark.
+const FRAME_WRITES_ALLOWED = new Set([
+    `${WEB_TAB}|titleChanged: boolean;`,
+    `${WEB_TAB}|titleChanged = false;`,
+    `${WEB_TAB}|titleChanged: detail.titleChanged === true,`,
+    `${WEB_TAB}|this.titleChanged = state.titleChanged;`,
+]);
 
 function stripComments(text) {
-    return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    // Block comments keep their newlines, so a line number read off the stripped text is the file's.
+    return text.replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, '')).replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
 /** The text between the brace at `open` and its match; strings are not parsed (none here holds a brace). */
@@ -324,12 +356,125 @@ function check(src) {
     if (!/if \((\w+) && this\.tabKey\(\1\) === entry\.key[^{]*\{\s*this\.pinnedIds\.add\(this\.tabKey\(\1\)\)/.test(restore)) {
         failures.push(`pin store: restorePins does not require the reopened tab's own key to equal entry.key -- a stale key could re-pin another tab (W1)`);
     }
+
+    // 11. preview occlusion and anchor
+    const members = selector ? selector.split(',').map(member => member.trim()) : [];
+    const renderPreview = methodBody(strip, 'protected renderPreview(');
+    const cardClass = renderPreview ? /return <div className='([\w-]+)'/.exec(renderPreview)?.[1] : undefined;
+    if (!cardClass) {
+        failures.push(`occlusion: ${STRIP}: renderPreview's root class not derived (broken instrument, never a pass)`);
+    } else if (!members.includes(`.${cardClass}`)) {
+        failures.push(`occlusion: BLOCKING_LAYER_SELECTOR lacks .${cardClass} -- the preview card would open with the page painted over it (D-11)`);
+    }
+    const schedule = methodBody(strip, 'protected schedulePreview(') ?? '';
+    const openCard = methodBody(strip, 'protected openPreview(') ?? '';
+    const box = /const (\w+) = node\.getBoundingClientRect\(\);/.exec(openCard)?.[1];
+    if (!box || !new RegExp(`top: ${box}\\.bottom \\+ 4[,}\\s]`).test(openCard)) {
+        failures.push(`anchor: ${STRIP}: openPreview does not place the card at the hovered tab's bottom plus 4px -- the card is not anchored below the tab`);
+    }
+    if (!/if \(widget\.isVisible\)/.test(schedule) || !/widget\.isVisible\)/.test(openCard)) {
+        failures.push(`active: ${STRIP}: schedulePreview/openPreview do not refuse a tab on screen -- a card could hide the active tab's visible page`);
+    }
+
+    // 12. preview source
+    const previewBodies = ['previewImage', 'schedulePreview', 'openPreview', 'closePreview', 'renderPreview']
+        .map(name => [name, methodBody(strip, `protected ${name}(`)]);
+    for (const [name, body] of previewBodies) {
+        if (body === null) {
+            failures.push(`capture: ${STRIP}: ${name} not found (broken instrument, never a pass)`);
+        } else if (/captur|screenshot|drawSnapshot|drawWindow|toDataURL|getContext\(|this\.channel\b|\.request\(|\bkind:/i.test(body)) {
+            failures.push(`capture: ${STRIP}: ${name} captures or asks chrome for an image -- the preview reads the settled GUI-08 thumbnail only (D-10)`);
+        }
+    }
+    const imageBody = previewBodies[0][1] ?? '';
+    if (!/this\.groups\.listUngrouped\(\)/.test(imageBody) || !/\.thumbnail\b/.test(imageBody) || /TabPlacesRow|queryTabsWithPlaces/.test(imageBody)) {
+        failures.push(`capture: ${STRIP}: previewImage does not read the GroupModel cards' thumbnail (TabPlacesRow carries none)`);
+    }
+
+    // 13. push field
+    const apiCode = stripComments(api);
+    const push = methodBody(apiCode, '  webTabPush(theiaBrowser');
+    const stateAt = push ? push.indexOf('.sendAsyncMessage("PowerBrowserWebTabState", {') : -1;
+    const stateLiteral = stateAt >= 0 ? braceBody(push, push.indexOf('{', stateAt)) : null;
+    const pushKeys = stateLiteral ? derive(stateLiteral, /^\s*(\w+):/gm) : [];
+    if (!pushKeys.includes('kind') || !/kind: "state"/.test(stateLiteral ?? '')) {
+        failures.push(`push field: ${API}: webTabPush's state literal not derived (broken instrument, never a pass)`);
+    } else if (!pushKeys.includes('titleChanged')) {
+        failures.push(`push field: webTabPush's state literal lacks titleChanged -- the attention flag must ride the existing push (W3)`);
+    } else if (!/titleChanged: webTabTitleChanged\(theiaBrowser, tabId, browser, loading\)/.test(stateLiteral)) {
+        failures.push(`push field: webTabPush's titleChanged is not chrome's own webTabTitleChanged(theiaBrowser, tabId, browser, loading)`);
+    }
+    const minter = braceBody(apiCode, apiCode.indexOf('{', apiCode.indexOf('function webTabTitleChanged(')));
+    if (minter === null || /\b(data|detail|msg|message)\./.test(minter)) {
+        failures.push(`push field: ${API}: webTabTitleChanged is missing or reads a message field -- the flag is minted from chrome state only`);
+    }
+    const pushStart = push === null ? -1 : apiCode.indexOf(push);
+    for (const m of apiCode.matchAll(/\btitleChanged\s*:/g)) {
+        if (pushStart >= 0 && m.index >= pushStart && m.index < pushStart + push.length) {
+            continue;
+        }
+        const before = apiCode.slice(0, m.index);
+        const kinds = [...before.matchAll(/(?:case |kind: )"(\w+)"/g)];
+        const kind = kinds.length ? kinds[kinds.length - 1][1] : '(no kind)';
+        failures.push(`push field: ${API}:${before.split('\n').length}: titleChanged rides ${kind}, not webTabPush's state push -- the flag is field-only on the existing push (W3)`);
+    }
+    const activatedArm = /case "webTabActivated": \{([\s\S]*?)\n {4}\}/.exec(apiCode)?.[1] ?? '';
+    if (!/webTabPagePush\(/.test(activatedArm)) {
+        failures.push(`push field: ${API}: the webTabActivated arm does not push the activated tab -- its attention flag would outlive activation`);
+    }
+
+    // 14. no frame write
+    const frameFiles = src[FRAME_KEY] ?? [];
+    if (!frameFiles.includes(WEB_TAB) || !frameFiles.includes(STRIP)) {
+        failures.push(`frame write: the frame-side file list lacks ${WEB_TAB} or ${STRIP} (broken instrument)`);
+    }
+    let reads = 0;
+    for (const rel of frameFiles) {
+        const lines = stripComments(src[rel] ?? '').split('\n');
+        lines.forEach((line, index) => {
+            if (!/\btitleChanged\b\s*(?:=(?!=)|:|\+\+|--)/.test(line)) {
+                return;
+            }
+            if (FRAME_WRITES_ALLOWED.has(`${rel}|${line.trim()}`)) {
+                reads += line.includes('detail.titleChanged') ? 1 : 0;
+                return;
+            }
+            failures.push(`frame write: ${rel}:${index + 1}: writes titleChanged (${line.trim()}) -- the attention flag is minted chrome-side only (T-34-07)`);
+        });
+    }
+    if (reads !== 1) {
+        failures.push(`frame write: ${WEB_TAB}: the push read of titleChanged (detail.titleChanged === true) was found ${reads} times, want 1`);
+    }
     return failures;
+}
+
+/** The frame-side sources: tracked .ts/.tsx under the extensions' src trees (tests excluded), plus the child actor. */
+function frameFiles() {
+    const out = [];
+    const walk = rel => {
+        for (const entry of readdirSync(join(REPO_ROOT, rel), { withFileTypes: true })) {
+            const next = `${rel}/${entry.name}`;
+            if (entry.isDirectory()) {
+                if (!['node_modules', 'lib', '__tests__', 'test'].includes(entry.name)) {
+                    walk(next);
+                }
+            } else if (/\.tsx?$/.test(entry.name) && !/\.(spec|test)\.tsx?$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+                out.push(next);
+            }
+        }
+    };
+    for (const ext of existsSync(join(REPO_ROOT, FRAME_DIR)) ? readdirSync(join(REPO_ROOT, FRAME_DIR)) : []) {
+        if (existsSync(join(REPO_ROOT, FRAME_DIR, ext, 'src'))) {
+            walk(`${FRAME_DIR}/${ext}/src`);
+        }
+    }
+    return [...out, FRAME_CHILD];
 }
 
 function readSources() {
     const out = {};
-    for (const rel of [STRIP, COPY, WEB_TAB, API, BRIDGE_GATE, CODICONS]) {
+    out[FRAME_KEY] = frameFiles();
+    for (const rel of new Set([STRIP, COPY, WEB_TAB, API, BRIDGE_GATE, CODICONS, ...out[FRAME_KEY]])) {
         out[rel] = existsSync(join(REPO_ROOT, rel)) ? readFileSync(join(REPO_ROOT, rel), 'utf8') : '';
     }
     const archived = existsSync(join(REPO_ROOT, MILESTONES))
@@ -421,6 +566,49 @@ const PLANTS = [
         mutate: s => s.replace(/(protected tabMenuRows\(widget: Widget\): TabMenuRow\[\] \{)/, '$1\n        widget = this.shell.currentWidget ?? widget;'),
         expect: 'currentWidget',
     },
+    {
+        name: 'occlusion-selector-dropped-34-04',
+        file: WEB_TAB,
+        mutate: s => s.replace(', .pb-tab-preview', ''),
+        expect: '.pb-tab-preview',
+    },
+    {
+        name: 'preview-anchor-over-page',
+        file: STRIP,
+        mutate: s => s.replace('top: box.bottom + 4,', 'top: box.top,'),
+        expect: 'anchor',
+    },
+    {
+        name: 'preview-on-active-tab',
+        file: STRIP,
+        mutate: s => s.replace(/(protected schedulePreview\([^)]*\): void \{\n\s*this\.closePreview\(\);\n\s*)if \(widget\.isVisible\) \{\n\s*return;\n\s*\}\n/, '$1'),
+        expect: 'active',
+    },
+    {
+        name: 'live-capture-call',
+        file: STRIP,
+        mutate: s => s.replace(/(protected previewImage\(widget: Widget\): string \| null \| undefined \{\n)/, "$1        void this.channel.request({ kind: 'webTabCapture', tabId: '' });\n"),
+        expect: 'capture',
+    },
+    {
+        name: 'push-field-missing',
+        file: API,
+        mutate: s => s.replace(/\n\s*titleChanged: webTabTitleChanged\(theiaBrowser, tabId, browser, loading\),/, ''),
+        expect: 'lacks titleChanged',
+    },
+    {
+        name: 'push-field-moved',
+        file: API,
+        mutate: s => s.replace(/(function webTabPagePush\(browser\) \{\n)/,
+            '$1  browser.ownerGlobal?.browsingContext?.currentWindowGlobal?.getActor(GROUP_ACTOR_NAME).sendAsyncMessage("PowerBrowserWebTabState", { kind: "webTabAttention", titleChanged: true });\n'),
+        expect: 'webTabAttention',
+    },
+    {
+        name: 'frame-write-titleChanged',
+        file: STRIP,
+        mutate: s => s.replace(/(protected isUpdated\(widget: Widget, active: boolean\): boolean \{\n)/, '$1        (widget as WebTabWidget).titleChanged = true;\n'),
+        expect: STRIP,
+    },
 ];
 
 function selfTest() {
@@ -466,7 +654,7 @@ function main() {
         failures.forEach(f => console.error(`  - ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- tab menu matches ROADMAP criterion 1, copy, occlusion, kinds, codicons, target, overflow, keys, delegation and pin store hold`);
+    console.log(`${NAME}: PASS -- tab menu matches ROADMAP criterion 1, copy, occlusion, kinds, codicons, target, overflow, keys, delegation, pin store, preview occlusion/anchor/source, push field and no frame write hold`);
     return 0;
 }
 
