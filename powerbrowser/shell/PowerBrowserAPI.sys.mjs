@@ -9670,8 +9670,8 @@ ChromeUtils.defineESModuleGetters(extensionLazy, { AddonManager: "resource://gre
 
 // D-08: the ids pinned to the toolbar, persisted across restarts.
 const EXTENSION_PINNED_PREF = "powerbrowser.extensions.pinned";
-// The 31.1 host's tab events after which the selected tab's action state may differ.
-const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModified"];
+// The 31.1 host's tab events after which the selected tab's action state may differ; patch 050's updateWindow fires the last on a setBadgeText/setIcon.
+const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModified", "TabHostActionUpdate"];
 // Source icon URL -> promise of its data: URL (or null); each icon is read once.
 const extensionIconData = new Map();
 // Shell window -> { theiaBrowser, last, seq }: the subscribed frame, the last set pushed (JSON) and the newest read.

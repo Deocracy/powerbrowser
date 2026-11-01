@@ -16,7 +16,9 @@
 //   popup-action -- with tab /a on screen and /b open, the subscribe pushes both
 //                   fixtures' rows; a click on the action fixture (the store kind
 //                   the 38-02 button sends) runs in /a: the extension's script
-//                   retitles /a and its onClicked names /a. A click on the popup
+//                   retitles /a and its onClicked names /a, and the badge it sets
+//                   on /a is pushed (patch 050's updateWindow signal; a retitle
+//                   push may carry it first, so this is not a signal-only proof). A click on the popup
 //                   fixture answers 'popup'. Plant wrong-page fires the stock
 //                   delegate path in a GUI-01 stock window on /c instead, and must
 //                   go red naming the stock tab.
@@ -98,11 +100,15 @@ async function scenarioPopupAction({ app, plant }) {
   if (overlayTitle !== 'pb-ext-acted /a') {
     return verdict(false, null, `overlay /a shows ${JSON.stringify(overlayTitle)} after the click, not the extension's title`);
   }
+  const badgeAt = await live.waitForPush(app, p => p.kind === 'extensionAction' && p.actions.some(r => r.extensionId === fixtureId('action') && r.badgeText === 'ok'), { from });
+  if (badgeAt < 0) {
+    return verdict(false, null, "no extensionAction push carried the badge 'ok' the action fixture set on /a");
+  }
   const popup = await live.probe(app, `return { where: await get('ChromeStoreClient').extensionClick(${JSON.stringify(fixtureId('popup'))}) };`);
   if (popup.where !== 'popup') {
     return verdict(false, null, `the popup fixture's click answered ${JSON.stringify(popup)}, not 'popup'`);
   }
-  return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action click ran in the overlay on screen /a (retitled to ${overlayTitle}); the popup click answered 'popup'`, null);
+  return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup click answered 'popup'`, null);
 }
 
 // tabs.create (active, next to its opener, adopted), tabs.create in the background then tabs.update({active}),

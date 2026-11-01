@@ -33,6 +33,10 @@
  *                    triggerClickOrPopup(selectedTab), and reads tab identity
  *                    only from the 31.1 host (no tabTracker, no
  *                    getTabForBrowser of its own).
+ *   7. signal     -- every event patch 050 dispatches (its updateWindow skip
+ *                    fires one on setBadgeText/setIcon) is one the extension
+ *                    section listens for in EXTENSION_TAB_EVENTS, so a badge
+ *                    change reaches Theia without waiting for a tab event.
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -52,6 +56,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const BRIDGE_GATE = 'scripts/verify-web-tab-bridge.mjs';
 const LIVE = 'scripts/verify-extension-actions-live.mjs';
+const PATCH_050 = 'patches/050-extension-tab-host.patch';
 const PRODUCT_DIRS = ['powerbrowser', 'theia/extensions'];
 const SECTION_MARK = '// Phase 38 (EXT-06, EXT-07): the extension bridge.';
 // The stock delegate's call, assembled so this file's own text never matches rule 3's scan of the tree.
@@ -98,7 +103,7 @@ function productFiles() {
 
 function readSources() {
     const src = {};
-    for (const file of [...productFiles(), BRIDGE_GATE]) src[file] = readFileSync(join(REPO_ROOT, file), 'utf8');
+    for (const file of [...productFiles(), BRIDGE_GATE, PATCH_050]) src[file] = readFileSync(join(REPO_ROOT, file), 'utf8');
     if (existsSync(join(REPO_ROOT, LIVE))) src[LIVE] = readFileSync(join(REPO_ROOT, LIVE), 'utf8');
     return src;
 }
@@ -221,6 +226,14 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             }
         }
     }
+
+    // 7. signal
+    if (bridgeLanded) {
+        const fired = [...src[PATCH_050].matchAll(/^\+.*dispatchEvent\(new window\.Event\("([A-Za-z]+)"\)\)/gm)].map(m => m[1]);
+        const heard = /const EXTENSION_TAB_EVENTS = \[([^\]]*)\]/.exec(src[API]);
+        if (fired.length === 0 || !heard) failures.push(`signal: derived no event ${PATCH_050} dispatches, or no EXTENSION_TAB_EVENTS in ${API} (broken instrument)`);
+        else for (const type of fired) if (!heard[1].includes(`"${type}"`)) failures.push(`signal: ${PATCH_050} dispatches ${type}, which EXTENSION_TAB_EVENTS does not listen for (a badge change would wait for a tab event)`);
+    }
     return failures;
 }
 
@@ -244,6 +257,7 @@ function selfTest() {
         { name: 'planted messagemanagergroup', run: () => check(apiWith('frame.setAttribute("messagemanagergroup", "browsers");')), expect: 'names messagemanagergroup outside the 31.1 host sites' },
         { name: 'unclassified kind', run: () => check({ ...clean, [API]: clean[API].replace('const STORE_REQUEST_KINDS = new Set([', 'const STORE_REQUEST_KINDS = new Set([\n  "extensionPlanted",') }), expect: 'the store kind extensionPlanted has no STORE_KIND_CLASSES entry' },
         { name: 'click path re-targeted', run: () => check({ ...clean, [API]: clean[API].replace('triggerClickOrPopup(selectedTab)', 'triggerClickOrPopup(host.selected)') }), expect: 'spelled triggerClickOrPopup(selectedTab)' },
+        { name: 'signal unheard', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('new window.Event("TabHostActionUpdate")', 'new window.Event("TabHostPlanted")') }), expect: 'dispatches TabHostPlanted, which EXTENSION_TAB_EVENTS does not listen for' },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
     let failed = 0;
@@ -271,7 +285,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab)' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();
