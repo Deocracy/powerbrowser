@@ -370,7 +370,7 @@ Plans:
   4. A downloads button and panel list each download, which the user can open, show in its folder, cancel or retry; no page-started download is saved without appearing there
   5. Reader view opens on article pages, Ctrl+U shows the page source, F12 opens the page's developer tools, and a crashed tab shows a reload button instead of a blank page
 
-**Plans**: 7/9 plans executed (strictly sequential waves; DSH codes, Claude checks)
+**Plans**: 9/9 plans executed (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
 - [x] 32-01-PLAN.md (wave 1) — Lead the phase with the three research probes plus the chrome half of the element-method tracers: find (PAGE-01), zoom (PAGE-02), mute/audio (PAGE-05).
@@ -380,8 +380,8 @@ Plans:
 - [x] 32-03-PLAN.md (wave 5) — Ship system-dialog print (PAGE-03) on the 32-01 foundation.
 - [x] 32-05-PLAN.md (wave 6) — Ship picker-split save (PAGE-08) on the 32-01 foundation.
 - [x] 32-06-PLAN.md (wave 7) — Ship probe-gated edit commands (PAGE-09) on the 32-01 foundation.
-- [ ] 32-07-PLAN.md (wave 8) — Ship the chrome half of the same-tab and stock-window page tools on the 32-01 foundation: reader / view source / devtools arms (PAGE-10), crash signal (PAGE-11), the shared-process
-- [ ] 32-08-PLAN.md (wave 9) — Ship the Theia half of the same-tab and stock-window page tools on the 32-07 chrome foundation: favicon rendering (PAGE-04), reader toggle / view source / devtools wiring (PAGE-10)
+- [x] 32-07-PLAN.md (wave 8) — Ship the chrome half of the same-tab and stock-window page tools on the 32-01 foundation: reader / view source / devtools arms (PAGE-10), crash signal (PAGE-11), the shared-process
+- [x] 32-08-PLAN.md (wave 9) — Ship the Theia half of the same-tab and stock-window page tools on the 32-07 chrome foundation: favicon rendering (PAGE-04), reader toggle / view source / devtools wiring (PAGE-10)
 
 **UI hint**: yes
 
@@ -544,7 +544,7 @@ Plans:
 | 29. Address Bar Search and Fixup | 10/10 | In Progress|  |
 | 30. Address-Bar Modes and Command Centre | 6/6 | In Progress|  |
 | 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
-| 32. Page Tools | 7/9 | In Progress | - |
+| 32. Page Tools | 9/9 | In Progress | - |
 | 33. Bookmarks, History and the Full Menu | 0/TBD | Not started | - |
 | 34. Tab Strip | 0/TBD | Not started | - |
 | 35. Shell Furniture and Page Context Menu | 0/TBD | Not started | - |

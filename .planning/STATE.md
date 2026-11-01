@@ -5,11 +5,11 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 32
 current_phase_name: Page Tools
 status: executing
-stopped_at: "32-08 partial: favicon, reader (disabled), source and crash UI delivered; crash history, F12, readability, remoteness fix not delivered"
-last_updated: "2026-10-31T23:59:53.473Z"
+stopped_at: "32-07 and 32-08 gap closure complete: F12, reader signal, crash history, pill favicons delivered; blank reload closed as obsolete (afda7df1); D-25b four-tab cap still open"
+last_updated: "2026-11-01T03:25:55.228Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 32 execution started
-state_head: bd5716503f6b5070907e4e831eb160055aced8d9
+state_head: 4b332e170e413e5814fbba6551f017ef0f11bae6
 progress:
   total_phases: 13
   completed_phases: 1
@@ -456,6 +456,7 @@ Recent decisions affecting current work:
 - [Phase 32]: PAGE-08: no Theia command for save (32-02 precedent); the saveOpen row calls savePage, and the chooser fails closed without a registered dialog.
 - [Phase 32]: PAGE-09 edit set is the edit-today chrome-help subset (7 commands); cmd_pasteNoFormatting has no kind
 - [Phase 32]: Edit route is the Controllers actor (remote overlays have no parent docShell); keys stay content-native with no relay rows
+- [Phase 32]: D-23 amended: F12 opens the stock toolbox window through DevToolsShim.showToolboxForTab with a window host; reader toggle goes through the AboutReader actor; a crashed tab's history is kept across Reload tab; the shared-process blank reload is obsolete (afda7df1)
 
 ### Pending Todos
 
@@ -566,8 +567,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-31T23:59:53.052Z
-Stopped at: 32-08 partial: favicon, reader (disabled), source and crash UI delivered; crash history, F12, readability, remoteness fix not delivered
+Last session: 2026-11-01T03:25:54.249Z
+Stopped at: 32-07 and 32-08 gap closure complete: F12, reader signal, crash history, pill favicons delivered; blank reload closed as obsolete (afda7df1); D-25b four-tab cap still open
 Resume file: None
 
 ## Operator Next Steps

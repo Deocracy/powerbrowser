@@ -3,7 +3,7 @@ phase: 32-page-tools
 plan: "07"
 subsystem: chrome-boundary
 tags: [page-tools, reader, view-source, devtools, crash, favicon, remoteness, live-harness, blocker]
-status: partial
+status: complete
 requires:
   - phase: 32-page-tools (plans 01, 02, 03, 04, 05, 06, 09)
     provides: the web-tab arms, the tab-host icon record, the Controllers edit route, the rebuilt and stamped 050 binary
@@ -223,3 +223,38 @@ Also still open: the live proof of the crash, favicon and reader rows (plan 32-0
 - `node -e "console.log(require('./scripts/lib/pb-probe-verdicts.json')['remoteness-repro'])"` prints `not-reproduced R 0/4 A 0/4`, as recorded. Task 1's acceptance criterion (a verdict starting `reproduced`) is NOT met.
 
 ## Self-Check: PARTIAL (build work, gates and regression pass; remoteness fix blocked; DevTools route and readability signal not delivered)
+
+
+## Gap closure (2026-10-31)
+
+Delivered by the gap-closure run on top of the 32-08 tree. Commits (measured from `ab699011`, 7 of mine; the config commit `b71bc20c` in that range is another session's):
+
+- `2d35dc79` chore: live shell spawn sets the core-dump limit to 0 (crash runs stop writing coredumps)
+- `6ec7297a` fix: a crashed tab keeps its history across Reload tab (PAGE-11)
+- `73ddb4fa` feat: F12 opens the stock DevTools toolbox window for the focused tab (PAGE-10)
+- `33ffc0fc` feat: reader readability signal and actor-based reader toggle (PAGE-10)
+- `b6d42935` fix: the F12 label admitted in the reviewed shortcut copy
+- `b09c0dd2` test: isolation capture proven, legacy-open control, activeness probe, pill-row favicon proof
+- `4b332e17` test: the devtools row prints the quit timing
+
+**Must-haves that were open, now:**
+
+1. **Remoteness fix (Task 3 f): closed as obsolete, no product change.** The defect is the first-load race (a phantom `about:blank` entry the first load left at the current index, so a reload read `about:blank`), fixed on 2026-10-22 by `afda7df1` (`firstWebTabLoad` waits for the initial commit and loads with `LOAD_FLAGS_REPLACE_HISTORY`; `c423f1a9` added `switchingOverlays`). The not-reproduced verdict of the first run was right; the `isolation=none` in 8 of 8 runs was a capture failure. Now `MOZ_LOG=sync,ProcessIsolation:5`, at least five `CheckIsolationForNavigation` lines before the trigger and the reload's own line afterwards (else NOT SCORED); the plant `repro-log-unsynced` goes red. The legacy-open control (the pre-fix open order) reads the phantom entry (`history=about:blank,http@1`; it sits before the page here, not after it as the source review predicted), the product order reads `http@0`; plant `legacy-control-clean` goes red. Verdict `not-reproduced R 0/4 A 0/4`. The cross-site activeness probe (record-only) read `active-after-switch` (didChange=1 active=1 renderLayers=1 bcActive=1 visible=1), so the `docShellIsActive` line was not built. The todo is in `.planning/todos/completed/2026-10-21-shared-process-blank-reload.md`.
+2. **F12 DevTools route (PAGE-10): delivered** (`73ddb4fa`). `DevToolsShim.showToolboxForTab(<tab-host node>, {hostType: "window"})`, toolbox destroyed in `webTabClose`, `devtoolsOpen` relay row, D-23 amended in 32-CONTEXT.md. `webTabDevtools` no longer refuses (the Known Stub above is gone).
+3. **Readability signal (PAGE-10): delivered** (`33ffc0fc`). Own `isArticle` accessor on the overlay (AboutReaderParent sets it on the embedder), in `webTabPageFields` and the push literal, `WebTabState`/`applyState`, counted by the reader-crash gate; the toggle enables on `isArticle` or reader view. Enter and leave go through `Reader:ToggleReaderMode` on the AboutReader actor.
+4. **Live proof of the crash, favicon and reader rows:** done (32-08 plus this closure).
+
+**Live results:**
+
+| Run (host quiet, load about 3) | Result |
+|---|---|
+| `page-tools-live --scenario find,zoom,audio,downloads,keys-theia,print,save,edit,favicon,reader,source,crash,devtools,remoteness-regression` | all PASS (run in three parts: the first run's `edit` and `devtools` and `verify-nav-keys` reds were host-load stalls, load average 30 to 57, and passed on the quiet host) |
+| `devtools` quit step | `exited after 754 ms` with a toolbox open: slowness under load, not a hang |
+| full `page-tools-live --self-test` | PASS, clean controls green, 17 planted faults red |
+| `verify-nav-keys-live.mjs` | PASS, no FAIL (`page-focus-reload` green) |
+| `verify-ext-tab-host-live.mjs --scenario scheme-wall,extension-redirect` and `--self-test` | PASS, PASS |
+| `scripts/verify-platform.sh --quick` (nix develop .#theia) | PASS, exit 0 |
+
+**Still not delivered from this plan:** `faviconLoading`, `outerWindowID`, `lineNumber` (no consumer), view source `inNewTab`. The AboutReaderParent button update still throws in the console on a selected overlay (no `#reader-mode-button` in this shell; harmless noise, Phase 35 furniture).
+
+## Self-Check: PASSED (gap closure; quick gate, full self-test and live regression green)

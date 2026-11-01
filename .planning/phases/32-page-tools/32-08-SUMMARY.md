@@ -43,7 +43,7 @@ key-decisions:
 requirements-completed: []
 duration: "not measured"
 completed: 2026-10-31
-status: partial
+status: complete
 actuals:
   tokens: 14400
   tasks: 2
@@ -203,3 +203,34 @@ ROADMAP 32-08 is not marked complete (its must-haves above are not delivered).
 - Crash live row: FAIL, recorded above. Not hidden.
 
 ## Self-Check: PARTIAL (build work and the gates pass; the crash history row, the reader signal, F12 and the remoteness fix are not delivered)
+
+
+## Gap closure (2026-10-31)
+
+Commits (same run as the 32-07 closure; measured from `ab699011`):
+
+- `2d35dc79` chore: live shell spawn sets the core-dump limit to 0 (crash runs stop writing coredumps)
+- `6ec7297a` fix: a crashed tab keeps its history across Reload tab (PAGE-11)
+- `73ddb4fa` feat: F12 opens the stock DevTools toolbox window for the focused tab (PAGE-10)
+- `33ffc0fc` feat: reader readability signal and actor-based reader toggle (PAGE-10)
+- `b6d42935` fix: the F12 label admitted in the reviewed shortcut copy
+- `b09c0dd2` test: isolation capture proven, legacy-open control, activeness probe, pill-row favicon proof
+- `4b332e17` test: the devtools row prints the quit timing
+
+**Not-delivered items above, now:**
+
+- **F12 DevTools (PAGE-10): delivered** (`73ddb4fa`). `devtoolsOpen` is a PAGE_SHORTCUTS row mirrored in PAGE_KEYS, `WebTabWidget.openDevtools()` sends `webTabDevtools`, live `devtools` scenario (open, one toolbox, second F12 keeps one, close-tab closes it, quit with a toolbox open exits in 754 ms, plant red). Deviation 12 is superseded.
+- **Reader readability signal (PAGE-10): delivered** (`33ffc0fc`). Live `reader` scenario: an article page pushes `isArticle` true, the toggle enables with the contracted copy, a click enters the reader in the same tab (chrome reads `about:reader?`, not blank), a click leaves it with Back and Forward as before; a short page never pushes true and keeps the disabled non-article tooltip; plant `reader-signal-dropped` red (it replaces `reader-enabled-non-article`).
+- **Shared-process blank-reload fix (D-25a): closed as obsolete**, cause `afda7df1`; see the 32-07 closure. The `remoteness-regression` row stays as the guard.
+- **History across Reload tab (PAGE-11): delivered** (`6ec7297a`). `webTabClose` on a crashed overlay keeps the parent-side session history under the row key and the reopen restores it through the NG-034 armed-history path (no new kind, Theia unchanged apart from a comment). Live `crash` PASS (2 entries before and after, goto the first entry loads); plant `crash-history-dropped` red.
+- **Favicon on the pill rows (PAGE-04): delivered** (`b09c0dd2`). The `favicon` scenario reads the icon on the Tabs-mode pill row; plant `favicon-pill-http-src` red.
+- **Four-tab workaround drop (D-25b): not done.** The cap is a session design in `verify-site-identity-live.mjs` and `verify-ext-tab-host-live.mjs`; its reason (the blank reload) is gone, but removing it means reworking those sessions and re-proving them, which was out of scope for the closure. Open.
+- Still not built, no consumer: `faviconLoading`, `outerWindowID`, `lineNumber`, view source `inNewTab`.
+
+**Live results:** as in the 32-07 closure (all regression rows, full self-test with 17 plants red, nav-keys, ext-tab-host with self-test, `--quick`: PASS).
+
+**Deferred to the end-of-milestone pass (on-screen look):** crash UI placement and button styling, the reader toggle in both themes, favicons at 16 px on tabs, strip and pill rows, the DevTools toolbox window.
+
+**Requirements:** PAGE-04, PAGE-10 and PAGE-11 marked complete in REQUIREMENTS.md.
+
+## Self-Check: PASSED (gap closure), with D-25b open
