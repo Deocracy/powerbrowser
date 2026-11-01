@@ -86,7 +86,8 @@ FORBIDDEN_PATTERNS=(
   # Phase 32 zoom shims under the Phase 27 policy (plan 32-09): defined only in PowerBrowserAPI.sys.mjs (the host install), compared member by member by verify-shell-gbrowser-standin.mjs. A separate line, so 35-01's derivation from the Phase 27 line is unchanged.
   'ZoomManager' 'FullZoom' 'ZoomUI'
   # Phase 37 plan 02 definition exemption under the Phase 27 policy: the stock custom-element creation callbacks
-  # browser.js registers (webrtc-preview) are registered only in PowerBrowserAPI.sys.mjs, each line catalogued.
+  # browser.js registers (webrtc-preview; login-doorhanger-username-field from plan 04) are registered only in
+  # PowerBrowserAPI.sys.mjs, each line catalogued.
   'setElementCreationCallback'
 )
 
@@ -380,6 +381,24 @@ EOF
   else
     echo "check-internals-boundary: --self-test FAIL -- the reach-through rejection doesn't name the import and the construction" >&2
     cat "$tmp/self-test-prompts.err" >&2
+    overall=1
+  fi
+
+  # Phase 37 plan 04 plant: the password template's username-field callback (browser.js:631-634) is
+  # legal only inside PowerBrowserAPI.sys.mjs; the same line in any other shell file must be rejected.
+  mkdir -p "$tmp/login"
+  cat > "$tmp/login/planted-login-callback.js" <<'EOF2'
+// planted-login-callback.js -- the Phase 37 login callback outside the boundary file.
+customElements.setElementCreationCallback("login-doorhanger-username-field", () => ChromeUtils.importESModule("chrome://browser/content/passwordmgr/login-doorhanger-username-field.mjs", { global: "current" }));
+EOF2
+  if scan_internals_boundary "$tmp/login" >/dev/null 2>"$tmp/self-test-login.err"; then
+    echo "check-internals-boundary: --self-test FAIL -- the login-doorhanger-username-field callback outside the boundary file was NOT rejected" >&2
+    overall=1
+  elif grep -q 'planted-login-callback.js:2: setElementCreationCallback' "$tmp/self-test-login.err"; then
+    echo "check-internals-boundary: --self-test PASS -- the login-doorhanger-username-field callback outside the boundary file was correctly rejected"
+  else
+    echo "check-internals-boundary: --self-test FAIL -- the login callback rejection doesn't name setElementCreationCallback" >&2
+    cat "$tmp/self-test-login.err" >&2
     overall=1
   fi
 

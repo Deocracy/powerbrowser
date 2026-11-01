@@ -66,8 +66,24 @@
  *       probe) is accepted and named in the output; it must claim no evidence.
  *       A live verdict must carry its screenshots, push log and build, and the
  *       evidence paths must exist.
- * Rules (j) and (k) are the furniture-gate rows for this plan; at the Phase 35
- * merge they move to verify-shell-furniture.mjs with rule (a).
+ *   (q) password template (37-04, D-07): powerbrowser.xhtml carries upstream's
+ *       password-notification verbatim (id set and element by element, derived
+ *       from popup-notifications.inc.xhtml), with no hidden input, plus the
+ *       PopupAutoComplete panel its username field names, attribute for
+ *       attribute against main-popupset.inc.xhtml.
+ *   (r) login callback (37-04, N3): the installer registers the
+ *       login-doorhanger-username-field creation callback on the module URL
+ *       upstream's browser.js imports.
+ *   (s) prompter ownership (D-07): upstream LoginManagerPrompter fills
+ *       (writeDataToUI) and reads back (readDataFromUI) each template field, and
+ *       no shell or frontend source names a field id, so no second value path
+ *       exists.
+ *   (t) no credential (D-07, T-37-04-01): no sendWebTabPush payload and no
+ *       webTab kind literal carries a credential-shaped key, and no log call
+ *       under powerbrowser/shell carries a credential-shaped argument. Both
+ *       scans walk every call site in the tree.
+ * Rules (j), (k), (q) and (r) are the furniture-gate rows for plans 02 and 04; at
+ * the Phase 35 merge they move to verify-shell-furniture.mjs with rule (a).
  *
  * Every expectation is derived from the tree at check time. --self-test runs
  * the unmodified fixture green first (the same-session positive control), then
@@ -90,6 +106,8 @@ const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const UPSTREAM_PANEL = 'upstream/browser/base/content/popup-notifications.inc.xhtml';
 const UPSTREAM_MOZBUILD = 'upstream/toolkit/modules/moz.build';
 const UPSTREAM_BROWSER_JS = 'upstream/browser/base/content/browser.js';
+const UPSTREAM_POPUPSET = 'upstream/browser/base/content/main-popupset.inc.xhtml';
+const UPSTREAM_PROMPTER = 'upstream/toolkit/components/passwordmgr/LoginManagerPrompter.sys.mjs';
 const GATE = 'scripts/verify-permission-prompts.mjs';
 const VERDICT = '.planning/probes/prompt-probe-verdict.json';
 const OUTCOMES = ['stock-keeps-ide-usable', 'stock-blocks-ide'];
@@ -106,6 +124,13 @@ const INSTALLER = 'installPermissionPromptFurniture';
 const PANEL_ID = 'notification-popup';
 const TEMPLATE_ID = 'webRTC-shareDevices-notification';
 const PREVIEW_ELEMENT = 'webrtc-preview';
+const PASSWORD_TEMPLATE_ID = 'password-notification';
+const LOGIN_ELEMENT = 'login-doorhanger-username-field';
+const AUTOCOMPLETE_ID = 'PopupAutoComplete';
+/** A credential-shaped key or argument (D-07). */
+const CREDENTIAL = /passw|credential|username|login/i;
+/** Every log call a shell source can make. */
+const LOG_CALL = /\b(?:PowerBrowserAPI\.log|console\.(?:log|info|warn|error|debug)|dump)\s*\(/g;
 const FORBIDDEN_FAMILY = /allow|grant|permit|doorhanger|prompt/i;
 const CONSTRUCTION = /new\s+(?:[\w$]+\.)*PopupNotifications\s*\(\s*([\w$]*)/g;
 
@@ -150,9 +175,9 @@ function attrSet(attrText) {
     return new Set([...attrText.matchAll(/([\w:-]+)="([^"]*)"/g)].map(m => `${m[1]}="${m[2]}"`));
 }
 
-/** The `<popupnotification id="TEMPLATE_ID">` element's text up to its close tag (either prefix), comments out; '' when absent. */
-function templateBlock(text) {
-    const open = new RegExp(`<((?:xul:)?popupnotification)\\s[^>]*?\\bid="${TEMPLATE_ID}"`).exec(text);
+/** The `<popupnotification id="…">` element's text up to its close tag (either prefix), comments out; '' when absent. */
+function templateBlock(text, id = TEMPLATE_ID) {
+    const open = new RegExp(`<((?:xul:)?popupnotification)\\s[^>]*?\\bid="${id}"`).exec(text);
     if (!open) {
         return '';
     }
@@ -163,6 +188,22 @@ function templateBlock(text) {
 /** Each start tag of a block as `tag attr="v" ...` (attributes sorted, namespace declarations dropped), in document order. */
 function startTags(block) {
     return [...block.matchAll(/<([\w:-]+)((?:\s+[\w:-]+="[^"]*")*)\s*\/?>/g)].map(m => [m[1], ...[...attrSet(m[2])].filter(a => !/^xmlns(?::|=)/.test(a)).sort()].join(' '));
+}
+
+/** The argument text of the call whose `(` is at `open`, string literal text blanked (template interpolations kept). */
+function callArgs(text, open) {
+    let depth = 0;
+    let end = open;
+    for (; end < text.length; end++) {
+        if (text[end] === '(') {
+            depth++;
+        } else if (text[end] === ')' && --depth === 0) {
+            break;
+        }
+    }
+    return text.slice(open + 1, end)
+        .replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"/g, '""')
+        .replace(/`((?:[^`\\]|\\.)*)`/g, (_, body) => derive(body, /\$\{([^}]*)\}/g).join(' '));
 }
 
 /** The URL upstream ships `MODULE_FILE` at, from the moz.build block that lists it (MOZ_SRC_FILES or EXTRA_JS_MODULES[.sub]). */
@@ -181,7 +222,7 @@ function moduleUrl(mozbuild) {
 }
 
 function readSources() {
-    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_BROWSER_JS, GATE]);
+    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_BROWSER_JS, UPSTREAM_POPUPSET, UPSTREAM_PROMPTER, GATE]);
     for (const name of readdirSync(join(REPO_ROOT, SHELL_DIR))) {
         if (/\.m?js$/.test(name)) {
             files.add(`${SHELL_DIR}/${name}`);
@@ -425,7 +466,7 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
         }
     }
     const ownSource = stripComments(raw[GATE] ?? '');
-    if (/\[\s*['"`]webRTC-[\w-]+['"`]\s*,/.test(ownSource)) {
+    if (/\[\s*['"`](?:webRTC|password-notification)-[\w-]+['"`]\s*,/.test(ownSource)) {
         failures.push(`template: ${GATE} holds a hand-kept array of template ids -- the expectation must be derived from ${UPSTREAM_PANEL} (CLAUDE.md verification rule 2)`);
     }
 
@@ -435,6 +476,112 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name), exists = unde
         failures.push(`preview-callback: ${UPSTREAM_BROWSER_JS} registers no ${PREVIEW_ELEMENT} creation callback (broken instrument)`);
     } else if (!new RegExp(`setElementCreationCallback\\(\\s*"${PREVIEW_ELEMENT}"[^;]*importESModule\\(\\s*"${previewUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(installer)) {
         failures.push(`preview-callback: ${INSTALLER} registers no ${PREVIEW_ELEMENT} creation callback importing ${previewUrl} -- WebRTCParent's lazy preview insert would throw`);
+    }
+
+    // (q) The password template, derived from upstream and compared id set and element by element; no hidden input.
+    const upstreamPassword = templateBlock(raw[UPSTREAM_PANEL], PASSWORD_TEMPLATE_ID);
+    const upstreamPasswordIds = new Set(derive(upstreamPassword, /\sid="([^"]+)"/g));
+    const ourPassword = templateBlock(markup, PASSWORD_TEMPLATE_ID);
+    if (!upstreamPassword || upstreamPasswordIds.size === 0) {
+        failures.push(`password-template: derived ZERO elements of #${PASSWORD_TEMPLATE_ID} from ${UPSTREAM_PANEL} -- the comparison proves nothing (broken instrument)`);
+    } else if (!ourPassword) {
+        failures.push(`password-template: ${XHTML} has no #${PASSWORD_TEMPLATE_ID} -- LoginManagerPrompter finds no template, so a login is never offered for saving`);
+    } else {
+        const ourIds = new Set(derive(ourPassword, /\sid="([^"]+)"/g));
+        const missing = [...upstreamPasswordIds].filter(id => !ourIds.has(id));
+        const surplus = [...ourIds].filter(id => !upstreamPasswordIds.has(id));
+        if (missing.length || surplus.length) {
+            failures.push(`password-template: #${PASSWORD_TEMPLATE_ID} ids differ from upstream -- missing ids ${missing.join(' ') || '(none)'}; surplus ids ${surplus.join(' ') || '(none)'}`);
+        }
+        if (/<(?:html:)?input\b|\btype="hidden"/.test(ourPassword)) {
+            failures.push(`password-template: hidden credential input present in #${PASSWORD_TEMPLATE_ID} -- a second value path beside the prompter's own fields (D-07)`);
+        }
+        const upstreamTags = startTags(upstreamPassword);
+        const ourTags = startTags(ourPassword);
+        const drift = upstreamTags.findIndex((tag, i) => ourTags[i] !== tag);
+        if (drift !== -1 || ourTags.length !== upstreamTags.length) {
+            const at = drift === -1 ? upstreamTags.length : drift;
+            failures.push(`password-template: #${PASSWORD_TEMPLATE_ID} element drift at element ${at + 1} -- upstream <${upstreamTags[at] ?? '(end)'}>, ours <${ourTags[at] ?? '(end)'}>`);
+        }
+    }
+    const upstreamPopup = new RegExp(`<panel\\s([^>]*?\\bid="${AUTOCOMPLETE_ID}"[^>]*?)\\/?>`).exec(raw[UPSTREAM_POPUPSET]);
+    const ourPopup = new RegExp(`<xul:panel\\s([^>]*?\\bid="${AUTOCOMPLETE_ID}"[^>]*?)\\/?>`).exec(markup);
+    if (!upstreamPopup) {
+        failures.push(`password-template: ${UPSTREAM_POPUPSET} has no #${AUTOCOMPLETE_ID} (broken instrument)`);
+    } else if (!ourPopup) {
+        failures.push(`password-template: ${XHTML} has no #${AUTOCOMPLETE_ID} -- the prompter's showing callback writes its select hooks and would throw`);
+    } else {
+        const want = [...attrSet(upstreamPopup[1])].sort().join(' ');
+        const got = [...attrSet(ourPopup[1])].sort().join(' ');
+        if (want !== got) {
+            failures.push(`password-template: #${AUTOCOMPLETE_ID} is not upstream's verbatim -- upstream ${want}; ours ${got}`);
+        }
+    }
+
+    // (r) The login-doorhanger-username-field creation callback, on the module URL upstream's browser.js imports.
+    const loginUrl = new RegExp(`setElementCreationCallback\\(\\s*"${LOGIN_ELEMENT}"[\\s\\S]*?importESModule\\(\\s*"([^"]+)"`).exec(raw[UPSTREAM_BROWSER_JS])?.[1];
+    if (!loginUrl) {
+        failures.push(`login-callback: ${UPSTREAM_BROWSER_JS} registers no ${LOGIN_ELEMENT} creation callback (broken instrument)`);
+    } else if (!new RegExp(`setElementCreationCallback\\(\\s*"${LOGIN_ELEMENT}"[^;]*importESModule\\(\\s*"${loginUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(installer)) {
+        failures.push(`login-callback: ${LOGIN_ELEMENT} callback missing from ${INSTALLER} (importing ${loginUrl}) -- the username field never upgrades and the password template is inert`);
+    }
+
+    // (s) The stock prompter owns the fields: it fills and reads back each one, and nothing in the tree names them.
+    const fieldIds = derive(upstreamPassword, /<html:[\w-]+\s[^>]*?\bid="([^"]+)"/g);
+    const prompter = raw[UPSTREAM_PROMPTER] ?? '';
+    const writeAt = prompter.indexOf('const writeDataToUI');
+    const readAt = prompter.indexOf('const readDataFromUI');
+    if (fieldIds.length === 0 || writeAt === -1 || readAt === -1) {
+        failures.push(`prompter-ownership: derived ${fieldIds.length} template fields, or ${UPSTREAM_PROMPTER} has no writeDataToUI/readDataFromUI (broken instrument)`);
+    } else {
+        for (const [name, at] of [['writeDataToUI', writeAt], ['readDataFromUI', readAt]]) {
+            const body = braceBlock(prompter, at);
+            const unowned = fieldIds.filter(id => !body.includes(`"${id}"`));
+            if (unowned.length) {
+                failures.push(`prompter-ownership: upstream ${name} no longer touches ${unowned.join(', ')} -- the fill and read-back ownership D-07 rests on has moved`);
+            }
+        }
+    }
+    for (const file of Object.keys(raw).filter(f => (f.startsWith(`${SHELL_DIR}/`) && f !== XHTML) || FRONTEND_DIRS.some(dir => f.startsWith(`${dir}/`)))) {
+        for (const id of fieldIds) {
+            if (stripComments(raw[file] ?? '').includes(id)) {
+                failures.push(`prompter-ownership: ${file} names the credential field ${id} -- a second writer or reader beside the stock prompter (D-07)`);
+            }
+        }
+    }
+
+    // (t) No credential crosses to Theia or reaches a log. Derived over every push, kind literal and log call site.
+    const apiFiles = Object.keys(raw).filter(file => file.startsWith(`${SHELL_DIR}/`) && /\.m?js$/.test(file));
+    let pushSites = 0;
+    let logSites = 0;
+    for (const file of apiFiles) {
+        const text = stripComments(raw[file]);
+        for (const push of text.matchAll(/sendWebTabPush\(\s*[\w$.]+\s*,\s*\{([^}]*)\}/g)) {
+            pushSites++;
+            const keys = derive(push[1], /\b([A-Za-z_$][\w$]*)\s*[:,]|\b([A-Za-z_$][\w$]*)\s*$/g).filter(Boolean);
+            const leak = keys.filter(key => CREDENTIAL.test(key));
+            if (leak.length) {
+                failures.push(`no-credential: credential field in a Theia push in ${file} (${leak.join(', ')}) -- the prompter owns credential values; none crosses to Theia (D-07)`);
+            }
+        }
+        for (const call of text.matchAll(LOG_CALL)) {
+            logSites++;
+            const args = callArgs(text, call.index + call[0].length - 1);
+            if (CREDENTIAL.test(args)) {
+                failures.push(`no-credential: credential value in log in ${file}: ${call[0]}${args.trim().slice(0, 80)}) -- logs carry kind and class only (D-07)`);
+            }
+        }
+    }
+    for (const file of frontend) {
+        for (const m of stripComments(raw[file]).matchAll(/\{[^{}]*\bkind:\s*'webTab[A-Za-z]+'[^{}]*\}/g)) {
+            const leak = derive(m[0], /\b([A-Za-z_$][\w$]*)\s*[:,}]/g).filter(key => CREDENTIAL.test(key));
+            if (leak.length) {
+                failures.push(`no-credential: credential field in a Theia message in ${file} (${leak.join(', ')}) -- Theia never syncs a credential to chrome (D-07)`);
+            }
+        }
+    }
+    if (pushSites === 0 || logSites === 0) {
+        failures.push(`no-credential: derived ${pushSites} push sites and ${logSites} log call sites under ${SHELL_DIR} -- the scan proves nothing (broken instrument)`);
     }
 
     // (l) One prompt-path writer: the stock PermissionUI callback. The Phase 31 site panel's arm is the user's own edit.
@@ -676,6 +823,47 @@ function selfTest() {
             sources: { ...clean, [API]: clean[API].replace(/\n\s*resendWebTabSharing\(tabId\);\n(\s*return "already-open";)/, '\n$1') },
             expect: "already-open branch does not re-push",
         },
+        // Plan 04 (D-07): the password template, the login callback and the no-credential scans.
+        {
+            name: 'theia-credential-sync',
+            sources: { ...clean, [API]: inSection('function plantedSync(theiaBrowser, tabId, login) { sendWebTabPush(theiaBrowser, { kind: "doorhanger", tabId, username: login.username }); }') },
+            expect: 'credential field in a Theia push',
+        },
+        {
+            name: 'theia-to-chrome credential message',
+            sources: { ...clean, [WEB_TAB]: `${clean[WEB_TAB]}\nexport const plantedPw = (c: WebTabChannel) => c.send({ kind: 'webTabStop', tabId: '', password: 'x' } as never);\n` },
+            expect: 'credential field in a Theia message',
+        },
+        {
+            name: 'hidden-input-variant',
+            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<html:moz-input-password id="password-notification-password"[^>]*\/>/, '<html:input type="hidden" id="password-notification-password"/>') },
+            expect: 'hidden credential input present',
+        },
+        {
+            name: 'credential-in-log',
+            sources: { ...clean, [API]: inSection('function plantedLog(login) { PowerBrowserAPI.log("error", `[pw] saved ${login.username}`); }') },
+            expect: 'credential value in log',
+        },
+        {
+            name: 'template-id-renamed',
+            sources: { ...clean, [XHTML]: clean[XHTML].replace('id="password-notification-username"', 'id="powerbrowser-username"') },
+            expect: 'missing ids password-notification-username',
+        },
+        {
+            name: 'login-callback-missing',
+            sources: { ...clean, [API]: clean[API].replace(/^.*setElementCreationCallback\("login-doorhanger-username-field".*\n/m, '') },
+            expect: 'login-doorhanger-username-field callback missing',
+        },
+        {
+            name: 'autocomplete popup removed',
+            sources: { ...clean, [XHTML]: clean[XHTML].replace(/<xul:panel is="autocomplete-richlistbox-popup"[\s\S]*?\/>/, '') },
+            expect: `has no #${AUTOCOMPLETE_ID}`,
+        },
+        {
+            name: 'second reader of a credential field',
+            sources: { ...clean, [API]: inSection('function plantedRead(doc) { return doc.getElementById("password-notification-password").value; }') },
+            expect: 'a second writer or reader beside the stock prompter',
+        },
         {
             name: 'getTabDialogBox added under the stock verdict',
             sources: { ...clean, [SHELL]: clean[SHELL].replace('window.gBrowser = {', 'window.gBrowser = {\n      getTabDialogBox(browser) { return null; },') },
@@ -757,7 +945,7 @@ function main() {
     }
     const dialog = checkDialogOutcome(sources);
     console.log(`${NAME}: dialog outcome ${dialog.outcome}${dialog.provisional ? ' (PROVISIONAL: the owner default pending live probe 1; the live dialog-probe run overwrites it with evidence)' : ' (live probe-1 verdict)'}; getTabDialogBox ${dialog.outcome === 'stock-keeps-ide-usable' ? 'absent, the stock window-modal fallback' : 'present, the audited relay member'}`);
-    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, the ${PREVIEW_ELEMENT} callback is registered, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, and the sharing indicator follows chrome-observed webrtcUI state only`);
+    console.log(`${NAME}: PASS -- #${PANEL_ID} matches upstream, one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, #${TEMPLATE_ID} matches upstream element by element, the ${PREVIEW_ELEMENT} callback is registered, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, the sharing indicator follows chrome-observed webrtcUI state only, #${PASSWORD_TEMPLATE_ID} and #${AUTOCOMPLETE_ID} match upstream, the ${LOGIN_ELEMENT} callback is registered, the stock prompter alone owns the credential fields, and no credential reaches a push, a Theia message or a log`);
     return 0;
 }
 

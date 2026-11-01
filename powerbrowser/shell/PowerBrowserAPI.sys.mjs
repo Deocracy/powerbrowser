@@ -6886,6 +6886,8 @@ export function installPermissionPromptFurniture(window) {
   // browser.js:623-625: WebRTCParent inserts <webrtc-preview> into the template's preview section on first use, and this
   // imports its definition then. window.ChromeUtils, so "current" is the shell window and not this module's shared global.
   window.customElements.setElementCreationCallback("webrtc-preview", () => window.ChromeUtils.importESModule("chrome://browser/content/webrtc/webrtc-preview.mjs", { global: "current" }));
+  // browser.js:631-634: the password template's username field upgrades on first use; LoginManagerPrompter fills and reads it.
+  window.customElements.setElementCreationCallback("login-doorhanger-username-field", () => window.ChromeUtils.importESModule("chrome://browser/content/passwordmgr/login-doorhanger-username-field.mjs", { global: "current" }));
   window.PopupNotifications = notifications;
 }
 
