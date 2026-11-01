@@ -70,7 +70,8 @@
  *                    extensionOpenTabPage (the stock window) before any overlay
  *                    exists, and still refuses every other non-http(s) URL;
  *                    extensionOpenTabPage opens no overlay and admits only the
- *                    caller's own pages; the overlay location wall
+ *                    caller's own pages; a container request (userContextId)
+ *                    is refused before either branch (38-REVIEW CR-02); the overlay location wall
  *                    (OVERLAY_LOCATION) names no extension scheme.
  *  13. commands   -- (38-04, B5 + the 2026-10-20 keys ruling) the section's
  *                    EXTENSION_EXECUTE_COMMANDS equals the _execute_* names
@@ -438,6 +439,9 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
                 if (body.includes(opener)) failures.push(`tab-pages: tabsBridgeCreate puts an extension page in an overlay (${opener}); tab pages go to the stock window`);
             }
             if (!rest.includes('/^https?:\\/\\//i.test(url)')) failures.push(`tab-pages: tabsBridgeCreate no longer refuses every other non-http(s) URL`);
+            // 38-REVIEW CR-02: a container request is refused before either branch opens anything (never silently dropped).
+            const head = apiLines.slice(create.start, create.start + block.start).join('\n');
+            if (!/if \(options\?\.userContextId\) \{\s*throw new extensionLazy\.ExtensionUtils\.ExtensionError\(/.test(head)) failures.push(`tab-pages: tabsBridgeCreate does not refuse a container (options.userContextId) before it opens a page; the tab would load in the default cookie jar`);
         }
         const opener = span(apiLines, /^function extensionOpenTabPage\(/);
         const openerBody = opener ? apiLines.slice(opener.start, opener.end + 1).join('\n') : '';
@@ -523,6 +527,7 @@ function selfTest() {
         { name: 'sidebar skip reverted', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('+    if (windowTracker.isTabHostWindow(window) || !this.extension.canAccessWindow(window)) {', '+    if (!this.extension.canAccessWindow(window)) {') }), expect: 'createMenuItem(window, details) no longer skips the shell window' },
         { name: 'sidebar-as-tab', run: () => check({ ...clean, [API]: clean[API].replace('  win.document.body.appendChild(frame);\n  extensionSidebars.set(', '  createPendingOverlay(null, panel, true, null);\n  extensionSidebars.set(') }), expect: 'extensionSidebarOpen puts the sidebar page in an overlay (createPendingOverlay(' },
         { name: 'tabpage-in-overlay', run: () => check({ ...clean, [API]: clean[API].replace('    return extensionOpenTabPage(url, options?.triggeringPrincipal);', '    return createPendingOverlay(options.openerBrowser, url, true, null);') }), expect: 'tabsBridgeCreate puts an extension page in an overlay (createPendingOverlay(' },
+        { name: 'container dropped', run: () => check({ ...clean, [API]: clean[API].replace('  if (options?.userContextId) {\n', '  if (false) {\n') }), expect: 'tabsBridgeCreate does not refuse a container' },
         { name: 'foreign extension page', run: () => check({ ...clean, [API]: clean[API].replace('principal?.addonId !== policy.id', 'false') }), expect: "extensionOpenTabPage admits another extension's page" },
         { name: 'execute name drift', run: () => check({ ...clean, [API]: clean[API].replace(', "_execute_sidebar_action"];', '];') }), expect: 'missing _execute_sidebar_action' },
         { name: 'commands-always-fire', run: () => check({ ...clean, [API]: clean[API].replace('    extensionKeysFollowPageFocus(theiaBrowser.ownerDocument.defaultView, tabId !== null);', '   ') }), expect: 'pushPageFocus does not scope the extension keys' },

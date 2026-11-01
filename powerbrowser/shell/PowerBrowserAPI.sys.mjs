@@ -10082,6 +10082,11 @@ async function extensionStoreRequest(kind, data, actorRef) {
 // tabs.create: an http(s) page in a new overlay next to the opener, never an extension page (sub-ruling 2). Its node
 // exists at once, because the caller reads the new tab back synchronously; the frontend's ack gives it its tab id.
 function tabsBridgeCreate(host, url, options) {
+  // 38-REVIEW CR-02: stock create passes a cookieStoreId's container as userContextId. Neither an overlay nor the stock
+  // window tab page carries it, so it is refused rather than loaded in the default cookie jar.
+  if (options?.userContextId) {
+    throw new extensionLazy.ExtensionUtils.ExtensionError("PowerBrowser refused to open that page: container tabs are not supported in this window.");
+  }
   // 38-04 (B5): an extension's own page goes to the stock browser window instead, never into an overlay.
   if (typeof url === "string" && url.startsWith("moz-extension:")) {
     return extensionOpenTabPage(url, options?.triggeringPrincipal);
