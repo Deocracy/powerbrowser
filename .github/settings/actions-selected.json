@@ -3,6 +3,7 @@
   "verified_allowed": false,
   "patterns_allowed": [
     "cachix/install-nix-action@*",
-    "anthropics/claude-code-action@*"
+    "anthropics/claude-code-action@*",
+    "Azure/login@*"
   ]
 }

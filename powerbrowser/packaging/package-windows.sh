@@ -122,4 +122,8 @@ rm -rf "$OUT"; mkdir -p "$OUT"
     --output "$OUT/$BASE.complete.mar" )
 test -s "$OUT/$BASE.installer.exe" || fail "the installer was not written to $OUT"
 test -s "$OUT/$BASE.complete.mar" || fail "the complete MAR was not written to $OUT"
-echo "package-windows: staged $STAGE (sidecar from $SIDECAR_DIR, node $NODE_VERSION win32-x64); wrote $OUT/$BASE.installer.exe and $OUT/$BASE.complete.mar"
+# SEC-12: the hosted sign-windows job signs the inner PE files before it repackages, so it needs the staged zip and the
+# setup.exe stub, not only the installer built from them. Both are data there: signed and repacked, never executed.
+cp "$ZIP" "$OUT/$BASE.zip"
+cp "$SETUPEXE" "$OUT/setup.exe"
+echo "package-windows: staged $STAGE (sidecar from $SIDECAR_DIR, node $NODE_VERSION win32-x64); wrote $OUT/$BASE.installer.exe, $OUT/$BASE.complete.mar, and the $BASE.zip and setup.exe the sign job repacks"

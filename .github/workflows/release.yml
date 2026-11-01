@@ -1,7 +1,8 @@
 # Release pipeline (DIST-02 skeleton; DIST-07, DIST-08, DIST-09, UPD-17 detail in later plans).
 #
 # One owner-approved dispatch runs these jobs (build-windows, Phase 54, runs beside build-linux
-# and shares its gates; the Linux chain below is unchanged):
+# and shares its gates, and sign-windows signs its output on a hosted runner over Azure OIDC; the
+# Linux chain below is unchanged):
 #   build-linux   self-hosted legion runner. No environment, no secret, no App token;
 #                 the default read-only GITHUB_TOKEN is the only token it sees. Its output
 #                 (tarball, MAR, manifest) is untrusted DATA: no later job executes it, and
@@ -228,7 +229,7 @@ jobs:
   # ref and event refusal, full SHA, checkout, SHA gate, key gate, then every step after the key gate
   # carries its if:. The job holds no secret, and its only credential-shaped input is the Safe
   # Browsing key directory (PB_KEYDIR at /keys:ro). Its output is data: sign-publish downloads only
-  # release-linux, so nothing built here reaches a job that holds a secret or a write token.
+  # release-linux, and sign-windows signs and repacks the release-windows bytes but executes none of them.
   build-windows:
     runs-on: [self-hosted, powerbrowser-release]
     timeout-minutes: 300
@@ -351,9 +352,11 @@ jobs:
           podman run --rm -v "$PWD:/src:rw" -w /src -e PB_WIN_SIDECAR_DIR=/src/windows-sidecar -e PB_WIN_SIDECAR_SUMS_SHA256 \
             pb-gecko-build bash powerbrowser/packaging/package-windows.sh
 
-      # Data only: nothing here is signed or executed by a later job in this revision (the Windows sign job is Phase 54-04's owner gate).
-      # The paths are the one directory package-windows.sh writes both files to.
-      - name: Upload the setup.exe and the complete MAR (untrusted data)
+      # Data only: no later job executes anything here. sign-windows signs the inner PE files of the zip and the
+      # setup.exe stub, then repackages the installer and the complete MAR itself (SEC-12 order); the unsigned
+      # installer and MAR stay as the unsigned-first (SEC-03) build of the same tree.
+      # The paths are the one directory package-windows.sh writes every file to.
+      - name: Upload the setup.exe, the complete MAR, the staged zip and the setup stub (untrusted data)
         if: steps.key_gate.outputs.build == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -361,6 +364,367 @@ jobs:
           path: |
             objdir-windows-x86_64/dist/release-windows/*.installer.exe
             objdir-windows-x86_64/dist/release-windows/*.complete.mar
+            objdir-windows-x86_64/dist/release-windows/*.zip
+            objdir-windows-x86_64/dist/release-windows/setup.exe
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # Phase 54 (SEC-12, DIST-10): the per-OS sign job for Windows. Hosted, under environment release, and the only job
+  # that reaches Azure. It authenticates with Azure/login over OIDC: id-token write is on this job only, and no Azure
+  # secret is stored anywhere (the client, tenant and subscription ids and the Artifact Signing endpoint, account and
+  # certificate profile are release-environment variables, docs/RELEASING.md "Secrets inventory"). The login runs
+  # only after every gate has passed. The order, which the win-sign-chain row compares as ordered equality:
+  #   jsign on the inner PE files of the staged zip and the setup.exe stub, `mach repackage installer`, jsign on the
+  #   installer, `mach repackage mar`, then signmar sign and verify against the tracked DER.
+  # Everything it runs comes from the dispatched commit or the pinned Firefox source; the legion artifact is data
+  # that is signed and repacked, never executed (signmar is built from the pinned source, as in sign-publish, and is
+  # the mar tool `mach repackage mar` calls). Without the Azure variables it fails closed before anything is minted
+  # and hands nothing off. It does not publish: joining the Windows assets to the one Release publish and the
+  # descriptor commit waits on the Windows row of the docs/RELEASING.md asset table (stage windows-unsigned).
+  # It attests nothing: the bytes it signs were built on legion, and actions/attest-build-provenance would name
+  # this hosted job as their builder, a claim this job cannot make. Compromising legion is therefore equivalent
+  # to compromising the Windows signing identity (docs/RELEASING.md, "Windows signing (SEC-12)").
+  sign-windows:
+    needs: build-windows
+    if: needs.build-windows.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: release
+    permissions:
+      contents: read # checkout and read-only gh api; this job publishes nothing
+      id-token: write # the Azure OIDC sign-in, nothing else
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      # The dispatch input, never a runner output: legion cannot choose the commit this job runs.
+      - name: Check out the dispatched commit (the tracked DER, the Windows mozconfig, the signmar pin and every script run here)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the release SHA (main tip, or a configuration.toml ancestor with main's workflows)
+        id: sha_gate
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          TIP="$(git rev-parse refs/remotes/origin/main)"
+          # Gate the commit actually checked out, and require it to be the one requested.
+          SHA="$(git rev-parse HEAD)"
+          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA. Next step: dispatch the SHA the run checks out; nothing is built" >&2; exit 1; }
+          if [ "$SHA" != "$TIP" ]; then
+            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main (tip $TIP). Next step: dispatch the merge SHA of a merged bump PR, or the tip of main" >&2; exit 1; }
+            git show --name-only --format= "$SHA" | grep -x 'configuration.toml' >/dev/null \
+              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main ($TIP). Next step: dispatch a SHA whose own commit changes configuration.toml" >&2; exit 1; }
+            git diff --quiet "$SHA" "$TIP" -- .github/workflows/ \
+              || { echo "::error::.github/workflows/ at $SHA differs from main (tip $TIP); the bot App cannot create a Release for that target. Next step: rebase the bump onto the tip of main" >&2; exit 1; }
+          fi
+          echo "validated $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # The tag comes from the tree, never from anything legion wrote.
+      - name: Read the release key from this tree
+        id: derive_key
+        run: |
+          set -euo pipefail
+          DERIVED="$(node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(releaseIdentity(config).releaseKey);" | tail -n 1)"
+          [[ "$DERIVED" =~ ^v[0-9]+(\.[0-9]+)*-[0-9]+$ ]] || { echo "::error::derived release key '$DERIVED' is not v<esr>-<revision>; nothing is signed" >&2; exit 1; }
+          echo "tag=$DERIVED" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a stale approval (a Release at or above this key already exists)
+        id: stale_guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.derive_key.outputs.tag }}
+        run: |
+          set -euo pipefail
+          LATEST="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.draft == false)][0].tag_name // "none"')"
+          echo "release key $TAG, latest published Release $LATEST"
+          if [ "$LATEST" != "none" ]; then
+            RC=0
+            node scripts/release-key-newer.mjs "$TAG" "$LATEST" || RC=$?
+            [ "$RC" -eq 0 ] || { echo "::error::the latest published Release $LATEST is not older than $TAG (comparator exit $RC); this approval is stale and nothing is signed" >&2; exit 1; }
+          fi
+
+      # Fails closed: without the Azure Artifact Signing configuration nothing is minted, signed or handed off.
+      - name: Require the Azure Artifact Signing configuration in the release environment (before anything is minted)
+        id: azure_config
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          set -euo pipefail
+          for V in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE; do
+            [ -n "${!V}" ] || { echo "::error::the release environment holds no $V, so the Windows build cannot be signed and nothing is handed off. Next step: finish the Azure setup in docs/RELEASING.md, section 'Windows signing (SEC-12)', then start a fresh dispatch" >&2; exit 1; }
+          done
+          [[ "$AZURE_SIGNING_ENDPOINT" =~ ^[a-z0-9]+\.codesigning\.azure\.net$ ]] || { echo "::error::the signing endpoint in the release environment is not a <region>.codesigning.azure.net host; nothing is signed. Next step: correct it as docs/RELEASING.md describes" >&2; exit 1; }
+          [[ "$AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9-]+$ ]] || { echo "::error::the signing account or certificate profile name in the release environment is not a plain name; nothing is signed. Next step: correct it as docs/RELEASING.md describes" >&2; exit 1; }
+
+      - name: Download the Windows build (untrusted data, signed and repacked, never executed)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-windows
+          path: windows
+
+      # The zip name and its top directory are DERIVED from this tree (scripts/win-sign-list.mjs --expected-base:
+      # configuration.toml's app basename and ESR version) and the artifact must match them; nothing the artifact
+      # names reaches GITHUB_OUTPUT. Zip entries are refused unless every name matches ^[A-Za-z0-9._/-]+$ with no
+      # .. segment and no leading slash, when they are symlinks, or when the top directory is not the derived one.
+      - name: Admit the staged zip and the setup stub against the tree-derived names, and unpack the zip
+        id: inputs
+        run: |
+          set -euo pipefail
+          IFS=$'\t' read -r WANT_BASE WANT_TOP < <(node scripts/win-sign-list.mjs --expected-base)
+          [[ "$WANT_BASE" =~ ^[A-Za-z0-9._-]+$ && "$WANT_TOP" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::the tree did not yield a plain package name; nothing is signed" >&2; exit 1; }
+          shopt -s nullglob
+          ZIPS=(windows/*.zip)
+          if [ "${#ZIPS[@]}" -ne 1 ] || [ "${ZIPS[0]}" != "windows/$WANT_BASE.zip" ] || [ ! -s windows/setup.exe ]; then
+            FOUND="$(for z in "${ZIPS[@]}"; do printf '%q ' "$(basename "$z")"; done)"
+            echo "::error::the Windows artifact holds the zip(s) ${FOUND:-none} and the setup stub $( [ -s windows/setup.exe ] && echo present || echo absent ), where this tree expects exactly $WANT_BASE.zip and a setup.exe; nothing is signed. Next step: re-dispatch from the commit whose build-windows produced this artifact" >&2
+            exit 1
+          fi
+          PKG="$RUNNER_TEMP/pkg"
+          rm -rf "$PKG"; mkdir -p "$PKG"
+          python3 - "windows/$WANT_BASE.zip" "$PKG" "$WANT_TOP" <<'PY'
+          import re, stat, sys, zipfile
+          z = zipfile.ZipFile(sys.argv[1])
+          want_top = sys.argv[3]
+          ok_name = re.compile(r'^[A-Za-z0-9._/-]+$')
+          ok_top = re.compile(r'^[A-Za-z0-9._-]+$')
+          for i in z.infolist():
+              n = i.filename
+              if not ok_name.match(n) or n.startswith('/') or '..' in n.split('/') or stat.S_ISLNK(i.external_attr >> 16):
+                  sys.exit(f"refused zip entry {n!r}: only [A-Za-z0-9._/-] names, no .. segment, no leading slash and no symlink")
+              top = n.split('/')[0]
+              if not ok_top.match(top) or top != want_top:
+                  sys.exit(f"refused zip entry {n!r}: its top directory is not {want_top!r}")
+          z.extractall(sys.argv[2])
+          PY
+          { echo "base=$WANT_BASE"; echo "top=$WANT_TOP"; echo "pkg=$PKG"; } >> "$GITHUB_OUTPUT"
+
+      - name: Install the NSS tools, the signmar build dependencies, the Java runtime for jsign and 7-Zip for the installer
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends libnss3-tools libnss3-dev libnspr4-dev pkg-config g++ openjdk-21-jre-headless 7zip
+          dpkg-query -W libnss3-tools openjdk-21-jre-headless 7zip
+
+      # Pinned source, hash-checked file by file; no secret and no write token is in this step's environment.
+      - name: Build signmar from the pinned Firefox source (never from the legion output)
+        id: win_signmar
+        run: |
+          set -euo pipefail
+          bash scripts/build-signmar.sh "$RUNNER_TEMP/signmar-bin"
+          echo "path=$RUNNER_TEMP/signmar-bin/signmar" >> "$GITHUB_OUTPUT"
+
+      # jsign 7.6, the jsign-7.6.jar asset of the ebourg/jsign Release 7.6, refused unless it hashes to the pin.
+      - name: Fetch jsign 7.6 and check it against the pinned sha256
+        id: jsign
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JSIGN_SHA256: 6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5
+        run: |
+          set -euo pipefail
+          gh release download 7.6 --repo ebourg/jsign --pattern jsign-7.6.jar --dir "$RUNNER_TEMP"
+          echo "$JSIGN_SHA256  $RUNNER_TEMP/jsign-7.6.jar" | sha256sum -c --quiet - || { echo "::error::jsign-7.6.jar does not hash to the pinned sha256; nothing is signed" >&2; exit 1; }
+          echo "jar=$RUNNER_TEMP/jsign-7.6.jar" >> "$GITHUB_OUTPUT"
+
+      # `mach repackage` runs from the pinned source at the configuration.toml tag, with the patch stack applied.
+      - name: Fetch the pinned Firefox source and apply the patch stack (for mach repackage)
+        run: |
+          set -euo pipefail
+          node scripts/generate.mjs
+          bash scripts/fetch-upstream.sh
+          bash scripts/apply-patches.sh
+
+      # The files to sign are the PE files of the staged tree that the pinned package manifest names (set
+      # comparison: an extra PE file or a missing unconditional one stops the job naming it); never a find over
+      # whatever legion produced. The list stays in a file; nothing from it reaches GITHUB_OUTPUT.
+      - name: Derive the inner PE files to sign from the pinned package manifest and compare them with the staged tree
+        id: sign_list
+        env:
+          PKG: ${{ steps.inputs.outputs.pkg }}
+          TOP: ${{ steps.inputs.outputs.top }}
+        run: |
+          set -euo pipefail
+          node scripts/win-sign-list.mjs --list --pkg "$PKG/$TOP" --manifest upstream/browser/installer/package-manifest.in > "$RUNNER_TEMP/sign-list.txt"
+          wc -l < "$RUNNER_TEMP/sign-list.txt"
+
+      # Directly before the first signature, after every gate above has passed.
+      - name: Sign in to Azure over OIDC (no stored secret)
+        id: azure_login
+        uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The inner PE files: the derived list (sign_list), plus the setup.exe stub the installer wraps. The access
+      # token lives in this step's shell only.
+      - name: Sign the inner PE files with jsign (Azure Artifact Signing), then rezip the staged tree
+        id: inner_sign
+        env:
+          JSIGN: ${{ steps.jsign.outputs.jar }}
+          PKG: ${{ steps.inputs.outputs.pkg }}
+          TOP: ${{ steps.inputs.outputs.top }}
+          BASE: ${{ steps.inputs.outputs.base }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          set -euo pipefail
+          AZURE_SIGNING_TOKEN="$(az account get-access-token --resource https://codesigning.azure.net --query accessToken -o tsv)"
+          echo "::add-mask::$AZURE_SIGNING_TOKEN"
+          export AZURE_SIGNING_TOKEN
+          mapfile -t REL < "$RUNNER_TEMP/sign-list.txt"
+          [ "${#REL[@]}" -gt 0 ] || { echo "::error::the derived signing list is empty; nothing is signed" >&2; exit 1; }
+          INNER=()
+          for R in "${REL[@]}"; do INNER+=("$PKG/$TOP/$R"); done
+          java -jar "$JSIGN" --storetype TRUSTEDSIGNING --keystore "$AZURE_SIGNING_ENDPOINT" --storepass env:AZURE_SIGNING_TOKEN \
+            --alias "$AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE" "${INNER[@]}" windows/setup.exe
+          mkdir -p "$RUNNER_TEMP/signed"
+          python3 - "$PKG" "$RUNNER_TEMP/signed/$BASE.zip" <<'PY'
+          import os, sys, zipfile
+          src, out = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for dirpath, dirnames, filenames in os.walk(src):
+                  dirnames.sort()
+                  for f in sorted(filenames):
+                      full = os.path.join(dirpath, f)
+                      z.write(full, os.path.relpath(full, src))
+          PY
+          echo "signed ${#INNER[@]} inner PE file(s) and the setup.exe stub"
+
+      - name: Repackage the installer from the signed tree (mach repackage installer)
+        id: repackage_installer
+        env:
+          BASE: ${{ steps.inputs.outputs.base }}
+          TOP: ${{ steps.inputs.outputs.top }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          (cd upstream && ./mach repackage installer \
+            --package "$RUNNER_TEMP/signed/$BASE.zip" --package-name "$TOP" \
+            --tag browser/installer/windows/app.tag --setupexe "$GITHUB_WORKSPACE/windows/setup.exe" \
+            --sfx-stub other-licenses/7zstub/firefox/7zSD.Win32.sfx \
+            --output "$RUNNER_TEMP/out/$BASE.installer.exe")
+          test -s "$RUNNER_TEMP/out/$BASE.installer.exe"
+
+      - name: Sign the installer with jsign (Azure Artifact Signing)
+        id: setup_sign
+        env:
+          JSIGN: ${{ steps.jsign.outputs.jar }}
+          BASE: ${{ steps.inputs.outputs.base }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          set -euo pipefail
+          AZURE_SIGNING_TOKEN="$(az account get-access-token --resource https://codesigning.azure.net --query accessToken -o tsv)"
+          echo "::add-mask::$AZURE_SIGNING_TOKEN"
+          export AZURE_SIGNING_TOKEN
+          java -jar "$JSIGN" --storetype TRUSTEDSIGNING --keystore "$AZURE_SIGNING_ENDPOINT" --storepass env:AZURE_SIGNING_TOKEN \
+            --alias "$AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE" "$RUNNER_TEMP/out/$BASE.installer.exe"
+
+      # The MAR channel comes from the tracked Windows mozconfig (generated-byte-identity keeps it equal to the generator).
+      - name: Produce the complete MAR from the signed tree (mach repackage mar)
+        id: repackage_mar
+        env:
+          SIGNMAR: ${{ steps.win_signmar.outputs.path }}
+          BASE: ${{ steps.inputs.outputs.base }}
+        run: |
+          set -euo pipefail
+          CHANNEL="$(sed -n 's/^ac_add_options ACCEPTED_MAR_CHANNEL_IDS=//p' powerbrowser/packaging/mozconfig-windows-x86_64 | tr -d '[:space:]')"
+          [ -n "$CHANNEL" ] || { echo "::error::the Windows mozconfig names no ACCEPTED_MAR_CHANNEL_IDS; no MAR is produced" >&2; exit 1; }
+          (cd upstream && ./mach repackage mar \
+            --input "$RUNNER_TEMP/signed/$BASE.zip" --mar "$SIGNMAR" --arch x86_64 --mar-channel-id "$CHANNEL" \
+            --output "$RUNNER_TEMP/out/$BASE.complete.mar")
+          test -s "$RUNNER_TEMP/out/$BASE.complete.mar"
+
+      - name: MAR channel gate (refuse a foreign MAR channel before the MAR is signed)
+        id: win_mar_channel_gate
+        env:
+          SIGNMAR: ${{ steps.win_signmar.outputs.path }}
+          BASE: ${{ steps.inputs.outputs.base }}
+        run: |
+          set -euo pipefail
+          ACCEPTED="$(sed -n 's/^ac_add_options ACCEPTED_MAR_CHANNEL_IDS=//p' powerbrowser/packaging/mozconfig-windows-x86_64 | tr -d '[:space:]')"
+          WIN_CHANNEL="$("$SIGNMAR" -T "$RUNNER_TEMP/out/$BASE.complete.mar" | sed -n 's/.*[Cc]hannel[^:]*: *//p' | awk 'NR==1{print}' | tr -d '[:space:]')"
+          if [ -z "$ACCEPTED" ] || [ "$WIN_CHANNEL" != "$ACCEPTED" ]; then
+            echo "::error::the Windows MAR carries the product-info channel '$WIN_CHANNEL', not the accepted '$ACCEPTED' of the Windows mozconfig (MAR_CHANNEL_MISMATCH_ERROR); the MAR is not signed" >&2
+            exit 1
+          fi
+          echo "Windows MAR channel $WIN_CHANNEL accepted"
+
+      - name: Sign the complete MAR (the key material is read only here, from the release environment)
+        id: win_sign_mar
+        env:
+          SIGNMAR: ${{ steps.win_signmar.outputs.path }}
+          BASE: ${{ steps.inputs.outputs.base }}
+          MAR_SIGNING_P12_B64: ${{ secrets.MAR_SIGNING_P12_B64 }}
+          MAR_SIGNING_P12_PASSWORD: ${{ secrets.MAR_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/mar-sign"
+          DB="$WORK/db"
+          mkdir -p "$DB" "$RUNNER_TEMP/handoff"
+          printf '%s' "$MAR_SIGNING_P12_B64" | base64 -d > "$WORK/mar.p12"
+          printf '%s' "$MAR_SIGNING_P12_PASSWORD" > "$WORK/pw"
+          certutil -N -d "sql:$DB" --empty-password
+          pk12util -i "$WORK/mar.p12" -d "sql:$DB" -k "$WORK/pw" -w "$WORK/pw"
+          "$SIGNMAR" -d "$DB" -n powerbrowser-mar -s "$RUNNER_TEMP/out/$BASE.complete.mar" "$RUNNER_TEMP/handoff/$BASE.complete.mar"
+
+      - name: Check the signed MAR with signmar -v and with node:crypto against the tracked DER
+        id: win_verify_mar
+        env:
+          SIGNMAR: ${{ steps.win_signmar.outputs.path }}
+          BASE: ${{ steps.inputs.outputs.base }}
+        run: |
+          set -euo pipefail
+          SIGNED_MAR="$RUNNER_TEMP/handoff/$BASE.complete.mar"
+          V="$RUNNER_TEMP/mar-verify"
+          mkdir -p "$V"
+          certutil -N -d "sql:$V" --empty-password
+          DER=powerbrowser/packaging/mar/mar-primary.der
+          certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i "$DER"
+          "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED_MAR"
+          node scripts/verify-mar-signature.mjs "$SIGNED_MAR" "$DER"
+
+      - name: Remove the signing scratch databases
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/mar-sign" "$RUNNER_TEMP/mar-verify"
+
+      - name: Hand off the signed installer and the signed complete MAR with SHA256SUMS
+        env:
+          BASE: ${{ steps.inputs.outputs.base }}
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/out/$BASE.installer.exe" "$RUNNER_TEMP/handoff/"
+          (cd "$RUNNER_TEMP/handoff" && sha256sum -- "$BASE.complete.mar" "$BASE.installer.exe" > SHA256SUMS)
+          cat "$RUNNER_TEMP/handoff/SHA256SUMS"
+
+      - name: Upload the signed Windows files (data for the publish step)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-signed
+          path: ${{ runner.temp }}/handoff/
           if-no-files-found: error
           retention-days: 1
           overwrite: true
