@@ -338,6 +338,9 @@ export const CHROME_BAR_COPY = Object.freeze({
     removeExtensionConfirm: 'Remove',
     removeExtensionCancel: 'Cancel',
     extensionRemoveRefused: (name: string) => `${name} can't be removed here. Choose Manage Extension to see it in Add-ons.`,
+    // Phase 38 plan 04 (B5, 38-UI-SPEC Copywriting): the gear menu's sidebar toggle, shown only for an extension with a sidebar page.
+    showSidebarRow: 'Show Sidebar',
+    hideSidebarRow: 'Hide Sidebar',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

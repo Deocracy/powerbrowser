@@ -59,6 +59,13 @@
  *                    an extension-entry id) is page-context-menu.ts, never an
  *                    IDE menu contribution. The live proof is Phase 35's
  *                    verify-page-furniture-live.mjs --scenario extension-entry.
+ *  11. sidebar    -- (38-04, B5) patch 050's ext-sidebarAction.js still skips
+ *                    the shell window in createMenuItem and updateWindow (the
+ *                    ruling moves the sidebar into a Theia view, it does not
+ *                    revert 050); the page loads only through the stock panel
+ *                    document's loadPanel in a chrome browser, never through an
+ *                    overlay opener; the row validator requires sidebarOpen,
+ *                    and only the extensions/ widget shows the sidebar view.
  *
  * Everything is derived at check time and compared; a derivation that finds
  * nothing is a broken instrument, never a pass. --self-test first requires
@@ -86,6 +93,9 @@ const EXTENSIONS_DIR = `${CHROME_BAR_SRC}browser/extensions/`;
 const EXTENSIONS_WIDGET = `${EXTENSIONS_DIR}extension-actions-widget.tsx`;
 const EXTENSIONS_ANCHOR = `${EXTENSIONS_DIR}extension-popup-anchor.ts`;
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
+const EXTENSIONS_SIDEBAR_VIEW = `${EXTENSIONS_DIR}extension-sidebar-view.ts`;
+// Rule 11: what putting a page into a web tab looks like in chrome (the overlay factories and the tabs bridge).
+const OVERLAY_OPENERS = ['createPendingOverlay(', 'webTabOpen(', 'tabsBridgeCreate(', 'tabHostAddTab('];
 const PAGE_MENU = 'theia/extensions/chrome-bar/src/browser/page-context-menu.ts';
 // Rule 9: what computing a page action's visibility Theia-side would read (the page's address or the extension's patterns).
 const PAGE_MATCH = /url|uri\b|href|location|match/i;
@@ -100,6 +110,8 @@ const REQUIRED_STORE_CLASS = new Map([
     ['extensionClick', 'privileged'],
     ['extensionPin', 'privileged'],
     ['extensionRemove', 'privileged'],
+    ['extensionSidebar', 'privileged'],
+    ['extensionSidebarGeometry', 'privileged'],
 ]);
 
 // 38-01 Task 2 landed the bridge (the PRESENCE_ASSERTION_TODO point): rule 6 requires the sanctioned click call and
@@ -334,6 +346,31 @@ function check(src, fixtures = EXTENSION_FIXTURES, bridgeLanded = BRIDGE_LANDED)
             if (what) failures.push(`menus: ${file}:${i + 1} takes the page menu's rows (${what}) outside the relay's one consumer ${PAGE_MENU}`);
         });
     }
+    // 11. sidebar
+    if (bridgeLanded) {
+        const sidebarDiff = /^diff --git a\/browser\/components\/extensions\/parent\/ext-sidebarAction\.js[\s\S]*?(?=^diff --git )/m.exec(src[PATCH_050])?.[0] ?? '';
+        if (!sidebarDiff) failures.push(`sidebar: ${PATCH_050} has no ext-sidebarAction.js diff (broken instrument)`);
+        for (const fn of ['createMenuItem(window, details)', 'updateWindow(window)']) {
+            const hunk = sidebarDiff.split(/^@@/m).find(h => h.includes(fn));
+            if (sidebarDiff && !/^\+.*windowTracker\.isTabHostWindow\(window\)/m.test(hunk ?? '')) failures.push(`sidebar: ${PATCH_050}'s ext-sidebarAction.js ${fn} no longer skips the shell window (isTabHostWindow); the B5 ruling moves the sidebar into a Theia view, it does not revert 050`);
+        }
+        const open = span(apiLines, /^function extensionSidebarOpen\(/);
+        if (!open) {
+            failures.push(`sidebar: ${API} has no extensionSidebarOpen (broken instrument)`);
+        } else {
+            const body = apiLines.slice(open.start, open.end + 1).join('\n');
+            if (!body.includes('EXTENSION_SIDEBAR_HOST') || !body.includes('.loadPanel(')) failures.push(`sidebar: extensionSidebarOpen does not load the page through the stock panel document's loadPanel`);
+            for (const opener of OVERLAY_OPENERS) {
+                if (body.includes(opener)) failures.push(`sidebar: extensionSidebarOpen puts the sidebar page in an overlay (${opener}); an extension page never enters a web tab`);
+            }
+        }
+        if (!/^const EXTENSION_SIDEBAR_HOST = "chrome:\/\/browser\/content\/webext-panels\.xhtml";$/m.test(src[API])) failures.push(`sidebar: EXTENSION_SIDEBAR_HOST is not the stock panel document chrome://browser/content/webext-panels.xhtml`);
+        if (!/typeof r\.sidebarOpen === 'boolean'/.test(src[WEB_TAB] ?? '')) failures.push(`sidebar: ${WEB_TAB}'s extensionActionRowsOf does not require sidebarOpen`);
+        if (!products.includes(EXTENSIONS_SIDEBAR_VIEW)) failures.push(`sidebar: ${EXTENSIONS_SIDEBAR_VIEW} is missing`);
+        for (const file of products.filter(f => f.startsWith(CHROME_BAR_SRC) && f !== EXTENSIONS_WIDGET && f !== EXTENSIONS_SIDEBAR_VIEW)) {
+            if (stripComments(src[file]).includes('ExtensionSidebarView')) failures.push(`sidebar: ${file} shows the sidebar view outside ${EXTENSIONS_WIDGET}`);
+        }
+    }
     return failures;
 }
 
@@ -364,6 +401,8 @@ function selfTest() {
         { name: 'pill-icon-local-match', run: () => check({ ...clean, [EXTENSIONS_WIDGET]: clean[EXTENSIONS_WIDGET].replace('.filter(row => row.pageActionShown)', ".filter(row => window.location.href.startsWith('http'))") }), expect: `${EXTENSIONS_WIDGET} renderPageActions decides visibility from the page` },
         { name: 'menus-bypass', run: () => check({ ...clean, 'theia/extensions/chrome-bar/src/browser/ide-extension-menus.ts': "this.channel.onPush('pageContextMenu', d => d.items.filter(i => String(i.id).startsWith('extension-entry-')).forEach(i => this.menus.registerMenuAction(MAIN_MENU_BAR, { commandId: i.id, label: i.label })));\n" }), expect: "ide-extension-menus.ts:1 takes the page menu's rows (extension-entry)" },
         { name: 'second on-build-contextmenu notify', run: () => check(apiWith('Services.obs.notifyObservers(subject, "on-build-contextmenu");')), expect: 'the rule is one site' },
+        { name: 'sidebar skip reverted', run: () => check({ ...clean, [PATCH_050]: clean[PATCH_050].replace('+    if (windowTracker.isTabHostWindow(window) || !this.extension.canAccessWindow(window)) {', '+    if (!this.extension.canAccessWindow(window)) {') }), expect: 'createMenuItem(window, details) no longer skips the shell window' },
+        { name: 'sidebar-as-tab', run: () => check({ ...clean, [API]: clean[API].replace('  win.document.body.appendChild(frame);\n  extensionSidebars.set(', '  createPendingOverlay(null, panel, true, null);\n  extensionSidebars.set(') }), expect: 'extensionSidebarOpen puts the sidebar page in an overlay (createPendingOverlay(' },
         { name: 'hand-kept id literal', run: () => check({ ...clean, [firstProduct]: `${clean[firstProduct]}\nconst planted = '${actionId}';\n` }), expect: `${firstProduct} names the fixture id ${actionId}` },
     ];
     let failed = 0;
@@ -391,7 +430,7 @@ function main() {
         console.error(`${NAME}: FAIL (${failures.length})`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows' : ' (click-path presence pending the bridge)'}`);
+    console.log(`${NAME}: PASS -- ${Object.keys(src).length} sources read; ${Object.keys(EXTENSION_FIXTURES).length} fixtures derived; no product source names a fixture id or the stock trigger; messagemanagergroup only at the 31.1 host sites; every extension kind classified${BRIDGE_LANDED ? '; one triggerClickOrPopup(selectedTab); every patch 050 signal heard; the extension widget draws no extension content in Theia DOM; the pill icon shows only pushed page actions; extension menu entries reach the menu only through the one on-build-contextmenu site (pageMenuExtensionEntries, from openPageMenu on the stub popupshowing) and only ' + PAGE_MENU + ' consumes the page menu rows; the sidebar stays off in the shell window and loads only in the stock panel document' : ' (click-path presence pending the bridge)'}`);
 }
 
 main();

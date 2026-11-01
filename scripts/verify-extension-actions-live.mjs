@@ -73,6 +73,14 @@
 //                   content script retitles the page and onClicked names /a's tab id).
 //                   Plant pageaction-pill-stale freezes the frame's extensionAction pushes
 //                   once the icon is drawn and must go red naming the stale icon.
+//   sidebar      -- (38-04, B5) Show Sidebar on the surfaces fixture's gear row (its puzzle row is read
+//                   from its sidebar action: it has no toolbar action) opens its sidebar as a
+//                   Theia side-panel view titled with the sidebar title; chrome's panel browser
+//                   holds the panel page (its own title read in the page) and is shown over the
+//                   view's rect; Hide Sidebar closes the view and removes the panel browser. Plant
+//                   sidebar-in-shell sends the open to the stock sidebar path for the shell window
+//                   and must go red naming the shell window. Plant sidebar-as-tab loads the panel
+//                   page in a web tab instead and must go red naming the refused scheme.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -460,6 +468,46 @@ async function scenarioPageAction({ app, plant, command }) {
   return verdict(true, `the zero-overlay boot pushed and drew no page action; /a's push carried it and the pill drew ${JSON.stringify(row.title)}; on /n it was hidden and the icon went; back on /a its click ran in tab ${tabA} (retitled to ${overlayTitle})`, null);
 }
 
+// 38-04 (B5): the sidebar view. One session, surfaces fixture only.
+async function scenarioSidebar({ app, plant, command }) {
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  const panelUrl = (await command('panel-url')).result;
+  if (plant?.name === 'sidebar-in-shell') {
+    // The stock route: the sidebar action asked to open in the shell window, which patch 050 keeps it out of.
+    await live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+      const ext = ExtensionParent.GlobalManager.extensionMap.get(${JSON.stringify(fixtureId('surfaces'))});
+      ExtensionParent.apiManager.global.sidebarActionFor(ext).open(window); return true;`);
+  } else if (plant?.name === 'sidebar-as-tab') {
+    const where = await live.probe(app, `const w = await get('WebTabOpenHandler').openUrl(${JSON.stringify(panelUrl)}); return { lost: !!(w && w.lostView) };`).catch(e => ({ error: String(e) }));
+    return verdict(false, null, `the panel page was sent to a web tab, where the shell refuses its scheme (refused-scheme): ${JSON.stringify(where)}`);
+  } else {
+    await clickInFrame(app, '.pb-ext-puzzle');
+    if (!(await pollUntil(() => puzzleRows(app), r => r.some(x => x.id === fixtureId('surfaces') && x.name === 'PB sidebar probe'), 10000))) {
+      return verdict(false, null, `the puzzle menu has no row for the sidebar-only fixture: ${JSON.stringify(await puzzleRows(app))}`);
+    }
+    await puzzleRowMenu(app, 'surfaces', 'Show Sidebar');
+  }
+  const opened = await pollUntil(async () => ({ view: await sidebarView(app), frame: await sidebarFrame(app) }),
+    s => s.view.attached && s.view.visible && s.view.label === 'PB sidebar probe' && s.frame.present && s.frame.visibility === 'visible'
+      && s.frame.url === panelUrl && s.frame.title === 'pb-sidebar-panel' && Math.abs(s.frame.width - s.view.width) <= 1, 20000);
+  if (!opened) {
+    const now = { view: await sidebarView(app), frame: await sidebarFrame(app) };
+    return verdict(false, null, now.view.attached
+      ? `the Theia sidebar view opened but chrome's panel browser does not show the panel page over it: ${JSON.stringify(now)}`
+      : `no Theia side-panel view opened: the sidebar went to the shell window, which shows none (${JSON.stringify(now)})`);
+  }
+  await clickInFrame(app, '.pb-ext-puzzle');
+  await puzzleRowMenu(app, 'surfaces', 'Hide Sidebar');
+  const closed = await pollUntil(async () => ({ view: await sidebarView(app), frame: await sidebarFrame(app) }), s => !s.view.attached && !s.frame.present, 10000);
+  if (!closed) {
+    return verdict(false, null, `Hide Sidebar did not close the view and remove the panel browser: ${JSON.stringify({ view: await sidebarView(app), frame: await sidebarFrame(app) })}`);
+  }
+  return verdict(true, `Show Sidebar opened the Theia view 'PB sidebar probe' with chrome's panel browser on ${pathOf(panelUrl)} (page title pb-sidebar-panel) shown over its rect; Hide Sidebar closed both`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
@@ -467,9 +515,12 @@ const SCENARIOS_TABLE = {
   'tabs-bridge': scenarioTabsBridge,
   content: scenarioContent,
   'page-action': scenarioPageAction,
+  sidebar: scenarioSidebar,
 };
 // Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
 const RELAUNCH_SCENARIOS = new Set(['content', 'page-action']);
+// 38-04 (B5): scenarios that install the surfaces fixture alone, so its background is the only reader of /cmd.
+const B5_SCENARIOS = new Set(['sidebar']);
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
 // patched product: the scenario reads `plant.name`.
@@ -482,6 +533,8 @@ const PLANTS_TABLE = {
   'sender-tab-null': { scenario: 'content', expect: 'the hello from /a carried sender.tab -1' },
   'pageaction-zero-tab': { scenario: 'content', expect: 'the zero-overlay startup threw' },
   'pageaction-pill-stale': { scenario: 'page-action', expect: 'the stale icon: the pill still shows' },
+  'sidebar-in-shell': { scenario: 'sidebar', expect: 'no Theia side-panel view opened: the sidebar went to the shell window' },
+  'sidebar-as-tab': { scenario: 'sidebar', expect: 'the panel page was sent to a web tab, where the shell refuses its scheme (refused-scheme)' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -685,6 +738,20 @@ async function puzzleRowMenu(app, name, label) {
   if (!done) throw new Error(`BROKEN INSTRUMENT: no ${label} row in the ${name} fixture's menu`);
 }
 
+// 38-04 (B5): the Theia sidebar view, read in the frontend.
+async function sidebarView(app) {
+  return live.probe(app, `const w = get('ApplicationShell').getWidgets('right').find(x => x.id === 'powerbrowser.extension-sidebar');
+    return { attached: !!(w && w.isAttached), visible: !!(w && w.isVisible), label: w ? w.title.label : null, width: w ? Math.round(w.node.getBoundingClientRect().width) : 0 };`);
+}
+
+// 38-04 (B5): chrome's sidebar panel browser and the extension page inside it.
+async function sidebarFrame(app) {
+  return JSON.parse(await live.inChrome(app, `const f = [...document.querySelectorAll('browser')].find(b => b.getAttribute('src') === 'chrome://browser/content/webext-panels.xhtml');
+    const inner = f && f.contentDocument ? f.contentDocument.getElementById('webext-panels-browser') : null;
+    return JSON.stringify({ present: !!f, visibility: f ? f.style.visibility : null, width: f ? Math.round(parseFloat(f.style.width)) : 0,
+      url: inner && inner.currentURI ? inner.currentURI.spec : null, title: inner ? inner.contentTitle : null });`));
+}
+
 // Whether the add-on is no longer installed, read in chrome.
 async function addonGone(app, id) {
   return (await app.evaluateIn(app.chrome, `(async () => {
@@ -871,6 +938,16 @@ async function runSession(scenarioName, plantName = null) {
   try {
     if (RELAUNCH_SCENARIOS.has(scenarioName)) {
       return await runRelaunchSession(scenarioName, plantName ? { name: plantName, ...PLANTS[plantName] } : null);
+    }
+    if (B5_SCENARIOS.has(scenarioName)) {
+      return await live.withProbeShell(
+        async app => {
+          await installFixture(app, 'surfaces');
+          if (!(await waitSince(0, r => r.kind === 'surfaces-started'))) throw new Error('BROKEN INSTRUMENT: the surfaces fixture background page never started');
+          return await SCENARIOS[scenarioName]({ app, plant: plantName ? { name: plantName, ...PLANTS[plantName] } : null, command });
+        },
+        { extraPrefs: SESSION_PREFS }
+      );
     }
     return await live.withProbeShell(
       async app => {

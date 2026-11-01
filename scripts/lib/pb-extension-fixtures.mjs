@@ -123,9 +123,32 @@ browser.runtime.onMessage.addListener(msg => {
 });
 `;
 
+// 38-04 (B5): the sidebar, tab-page and commands probe. It has no toolbar action, so its puzzle row is read from its
+// sidebar action. Its background answers the harness's commands on /cmd; it is the only fixture in a B5 session.
+const SURFACES_BACKGROUND = `${POST}
+post({ kind: 'surfaces-started', id: browser.runtime.id });
+async function run(cmd) {
+  try {
+    let result;
+    if (cmd.op === 'panel-url') {
+      result = browser.runtime.getURL('panel.html');
+    } else {
+      throw new Error('unknown op ' + cmd.op);
+    }
+    post({ kind: 'result', opId: cmd.opId, ok: true, result });
+  } catch (e) {
+    post({ kind: 'result', opId: cmd.opId, ok: false, error: String((e && e.message) || e) });
+  }
+}
+setInterval(() => {
+  fetch(ORIGIN + '/cmd').then(r => r.json()).then(cmds => cmds.forEach(run)).catch(() => {});
+}, 250);
+`;
+
 const ACTION_ID = 'pb-ext-action-probe@powerbrowser.test';
 const POPUP_ID = 'pb-ext-popup-probe@powerbrowser.test';
 const CONTENT_ID = 'pb-ext-content-probe@powerbrowser.test';
+const SURFACES_ID = 'pb-ext-surfaces-probe@powerbrowser.test';
 
 export const EXTENSION_FIXTURES = Object.freeze({
   action: {
@@ -168,6 +191,21 @@ export const EXTENSION_FIXTURES = Object.freeze({
       page_action: { default_title: 'PB page action probe', show_matches: ['http://127.0.0.1/*'] },
     },
     files: { 'background.js': CONTENT_BACKGROUND, 'content.js': CONTENT_SCRIPT },
+  },
+  surfaces: {
+    manifest: {
+      manifest_version: 2,
+      name: 'PB sidebar probe',
+      version: '1.0',
+      browser_specific_settings: { gecko: { id: SURFACES_ID } },
+      permissions: ['tabs', 'activeTab'],
+      background: { scripts: ['background.js'] },
+      sidebar_action: { default_panel: 'panel.html', default_title: 'PB sidebar probe' },
+    },
+    files: {
+      'background.js': SURFACES_BACKGROUND,
+      'panel.html': '<!doctype html><title>pb-sidebar-panel</title><body>sidebar</body>',
+    },
   },
 });
 

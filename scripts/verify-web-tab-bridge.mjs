@@ -211,6 +211,11 @@ const STORE_KIND_CLASSES = new Map([
     ['extensionClick', 'privileged'],
     ['extensionPin', 'privileged'],
     ['extensionRemove', 'privileged'],
+    // Phase 38 plan 04 (B5): Show/Hide Sidebar opens or closes a chrome panel browser holding an extension page, and the
+    // geometry kind places it over the Theia view. Both change chrome state outside any tab: privileged, sent only by the
+    // extension buttons widget (its gear row and its sidebar view's callbacks), no command id, no key row, never relayed.
+    ['extensionSidebar', 'privileged'],
+    ['extensionSidebarGeometry', 'privileged'],
 ]);
 /**
  * Phase 31 plan 04: store kinds the app menu sends straight from the Theia window to chrome. Each

@@ -4212,7 +4212,7 @@ const STORE_REQUEST_KINDS = new Set([
   "listClosedTabs",
   "reopenClosedTab",
   "clearHistory",
-  "extensionActionsSubscribe", "extensionClick", "extensionPin", "extensionRemove",
+  "extensionActionsSubscribe", "extensionClick", "extensionPin", "extensionRemove", "extensionSidebar", "extensionSidebarGeometry",
   "fullScreen",
 ]);
 
@@ -4347,7 +4347,7 @@ async function handleStoreRequest(data, actorRef) {
       case "fullScreen": {
         return { ok: true, kind, where: toggleShellFullscreen(actorRef) };
       }
-      case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": return extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11)
+      case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": case "extensionSidebar": case "extensionSidebarGeometry": return extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11; 38-04 sidebar)
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
       }
@@ -9680,6 +9680,10 @@ const extensionIconData = new Map();
 const extensionBridges = new WeakMap();
 // Shell window -> { extension, action, popup }: the one extension popup open in it, as in Firefox.
 const extensionPopups = new WeakMap();
+// 38-04 (B5): shell window -> { extensionId, frame }: the one extension sidebar open in it, as in Firefox.
+const extensionSidebars = new WeakMap();
+// 38-04 (B5): the stock panel document a sidebar page loads in (ext-sidebarAction.js createMenuItem's loadPanel host).
+const EXTENSION_SIDEBAR_HOST = "chrome://browser/content/webext-panels.xhtml";
 
 function extensionPinnedIds() {
   try {
@@ -9708,6 +9712,24 @@ function extensionActionsById(page = false) {
     const browserAction = actionFor(extension);
     if (browserAction?.action) {
       byId.set(extension.id, { extension, action: browserAction.action, browserStyle: browserAction.browserStyle });
+    }
+  }
+  return byId;
+}
+
+// 38-04 (B5): each running extension with a sidebar, by id. ext-sidebarAction.js defines sidebarActionFor when the
+// first such extension starts. Patch 050 keeps the stock sidebar off in the shell window, so the page is hosted here.
+function extensionSidebarsById() {
+  const { apiManager, GlobalManager } = extensionLazy.ExtensionParent;
+  const sidebarFor = apiManager.global.sidebarActionFor;
+  const byId = new Map();
+  if (typeof sidebarFor !== "function") {
+    return byId;
+  }
+  for (const extension of GlobalManager.extensionMap.values()) {
+    const sidebar = sidebarFor(extension);
+    if (sidebar) {
+      byId.set(extension.id, { extension, sidebar });
     }
   }
   return byId;
@@ -9758,9 +9780,24 @@ async function pushExtensionActions(win) {
   const seq = bridge.seq;
   const pinned = extensionPinnedIds();
   const popupAction = extensionPopups.get(win)?.action ?? null;
+  // 38-04 (B5): a sidebar whose extension stopped (disabled, removed) closes first; the close pushes again.
+  const sidebars = extensionSidebarsById();
+  const openSidebar = extensionSidebars.get(win)?.extensionId ?? null;
+  if (openSidebar !== null && !sidebars.has(openSidebar)) {
+    extensionSidebarClose(win, openSidebar);
+    return;
+  }
   let actions;
   try {
-    const rows = [...extensionActionsById().values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned, popupAction));
+    const toolbar = extensionActionsById();
+    const rows = [...toolbar.values()].map(({ extension, action }) => extensionActionRow(extension, action, host.selected, pinned, popupAction));
+    // 38-04 (B5): an extension with a sidebar and no toolbar action still gets a row, read from its sidebar action, so the
+    // puzzle menu reaches its sidebar.
+    for (const { extension, sidebar } of sidebars.values()) {
+      if (!toolbar.has(extension.id)) {
+        rows.push(extensionActionRow(extension, sidebar, host.selected, pinned, null));
+      }
+    }
     // 38-03 (EXT-08): a page action is sent only while shown for the selected tab (show_matches, show()/hide()); with
     // no web tab none is. Patch 050's updateButton signal re-pushes on show(), hide() and a navigation.
     for (const { extension, action } of extensionActionsById(true).values()) {
@@ -9769,6 +9806,11 @@ async function pushExtensionActions(win) {
       }
     }
     actions = await Promise.all(rows);
+    for (const row of actions) {
+      const named = row.pageActionShown ? undefined : sidebars.get(row.extensionId);
+      row.sidebarTitle = named ? String(named.sidebar.getContextData(host.selected).title || named.extension.name || "") : null;
+      row.sidebarOpen = Boolean(named) && row.extensionId === openSidebar;
+    }
   } catch (err) {
     PowerBrowserAPI.log("error", `[extensions] extensionAction read failed: ${err && err.message ? err.message : err}`);
     return;
@@ -9813,10 +9855,14 @@ function extensionActionsSubscribe(win, theiaBrowser) {
 }
 
 // The extension a store kind names, when the running set holds it with an action: its page action when the click
-// came from the pill icon (38-03), else its browser action.
+// came from the pill icon (38-03), else its browser action, else (38-04) its sidebar, whose row's click toggles it.
 function extensionNamed(data) {
   const id = data?.extensionId;
-  return typeof id === "string" && id.length <= 256 ? extensionActionsById(data.pageAction === true).get(id) ?? null : null;
+  if (typeof id !== "string" || id.length > 256) {
+    return null;
+  }
+  const page = data.pageAction === true;
+  return extensionActionsById(page).get(id) ?? (page ? null : extensionSidebarsById().get(id)) ?? null;
 }
 
 // D-02: the stock PanelPopup (ExtensionPopups.sys.mjs:484-518) parented to the shell's popupset, since the shell has no
@@ -9924,6 +9970,9 @@ function extensionClick(win, named, anchorRect) {
       return "closed";
     }
   }
+  if (!named.action) {
+    return extensionSidebarToggle(win, named);
+  }
   const selectedTab = tabHosts.get(win)?.selected ?? null;
   if (!selectedTab) {
     return "no-tab";
@@ -9980,6 +10029,10 @@ async function extensionStoreRequest(kind, data, actorRef) {
   const win = theiaBrowser.ownerDocument.defaultView;
   if (kind === "extensionActionsSubscribe") {
     return { ok: true, kind, where: extensionActionsSubscribe(win, theiaBrowser) };
+  }
+  if (kind === "extensionSidebar" || kind === "extensionSidebarGeometry") {
+    const where = extensionSidebarRequest(win, kind, data);
+    return where ? { ok: true, kind, where } : { ok: false, kind, reason: "validation", message: "handleStoreRequest: refusing a malformed sidebar request or an extension with no sidebar" };
   }
   const named = extensionNamed(data);
   if (!named) {
@@ -10068,4 +10121,78 @@ function tabsBridgeActivate(host, tab) {
       pending.background = false;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// 38-04 (B5, Chris 2026-10-22): an extension's sidebar page shows as a view in Theia's side panel. Patch 050 keeps
+// sidebarAction off in the shell window, so there is no stock sidebar box; chrome hosts the page in the stock panel
+// document (webext-panels.xhtml, a chrome-privileged browser, as the stock sidebar does) and paints that browser over
+// the rect the Theia view reports, the way an overlay is painted over a web tab. It is never an overlay: an extension
+// page never enters a web tab (sub-ruling 2).
+// ---------------------------------------------------------------------------
+
+// Show Sidebar: the page loads in a new panel browser, replacing any other open sidebar. Hidden until the view's rect.
+function extensionSidebarOpen(win, named) {
+  const open = extensionSidebars.get(win);
+  if (open) {
+    extensionSidebarClose(win, open.extensionId);
+  }
+  const panel = named.sidebar.getContextData(tabHosts.get(win)?.selected ?? null).panel;
+  const frame = win.document.createXULElement("browser");
+  frame.setAttribute("disablehistory", "true");
+  frame.setAttribute("src", EXTENSION_SIDEBAR_HOST);
+  Object.assign(frame.style, { position: "fixed", left: "0px", top: "0px", width: "0px", height: "0px", zIndex: "1", visibility: "hidden", border: "none" });
+  frame.addEventListener("load", () => frame.contentWindow.loadPanel(named.extension.id, panel, named.sidebar.browserStyle), { capture: true, once: true });
+  win.document.body.appendChild(frame);
+  extensionSidebars.set(win, { extensionId: named.extension.id, frame });
+  pushExtensionActions(win);
+  return "opened";
+}
+
+// Hide Sidebar, the view's own close, or the extension stopping: the panel browser goes, and the push closes the view.
+function extensionSidebarClose(win, extensionId) {
+  const open = extensionSidebars.get(win);
+  if (open?.extensionId !== extensionId) {
+    return "closed";
+  }
+  extensionSidebars.delete(win);
+  open.frame.remove();
+  pushExtensionActions(win);
+  return "closed";
+}
+
+function extensionSidebarToggle(win, named) {
+  return extensionSidebars.get(win)?.extensionId === named.extension.id ? extensionSidebarClose(win, named.extension.id) : extensionSidebarOpen(win, named);
+}
+
+// The view's rect (Theia-frame CSS pixels), clamped to the frame as webTabGeometry clamps an overlay's. Hidden while the
+// view is not visible or a Theia layer is open over it.
+function extensionSidebarPlace(win, data) {
+  const open = extensionSidebars.get(win);
+  if (open?.extensionId !== data.extensionId) {
+    return "not-open";
+  }
+  const frame = tabHosts.get(win).theiaBrowser.getBoundingClientRect();
+  const left = Math.min(Math.max(0, data.x), frame.width);
+  const top = Math.min(Math.max(0, data.y), frame.height);
+  Object.assign(open.frame.style, {
+    left: `${frame.left + left}px`,
+    top: `${frame.top + top}px`,
+    width: `${Math.max(0, Math.min(data.w, frame.width - left))}px`,
+    height: `${Math.max(0, Math.min(data.h, frame.height - top))}px`,
+    visibility: data.visible === true ? "visible" : "hidden",
+  });
+  return "applied";
+}
+
+// The two sidebar store kinds; null is a validation refusal.
+function extensionSidebarRequest(win, kind, data) {
+  if (kind === "extensionSidebarGeometry") {
+    return typeof data?.extensionId === "string" && [data.x, data.y, data.w, data.h].every(Number.isFinite) ? extensionSidebarPlace(win, data) : null;
+  }
+  const named = typeof data?.extensionId === "string" ? extensionSidebarsById().get(data.extensionId) : undefined;
+  if (!named || typeof data.open !== "boolean") {
+    return null;
+  }
+  return data.open ? extensionSidebarOpen(win, named) : extensionSidebarClose(win, named.extension.id);
 }

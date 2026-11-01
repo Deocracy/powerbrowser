@@ -374,6 +374,27 @@ export class ChromeStoreClient {
         return String(reply.where);
     }
 
+    /**
+     * Phase 38 plan 04 (B5): Show Sidebar (`open` true) or Hide Sidebar for an extension's sidebar page; resolves 'opened'
+     * or 'closed'. Privileged: only the gear row and the sidebar view's close, through the extension buttons widget.
+     */
+    async extensionSidebar(extensionId: string, open: boolean): Promise<string> {
+        const reply = await this.request({ kind: 'extensionSidebar', extensionId, open });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `extensionSidebar failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply.where);
+    }
+
+    /** Phase 38 plan 04 (B5): the sidebar view's rect, where chrome paints the sidebar page; resolves 'applied' or 'not-open'. Privileged, as extensionSidebar. */
+    async extensionSidebarGeometry(extensionId: string, rect: { x: number; y: number; w: number; h: number; visible: boolean }): Promise<string> {
+        const reply = await this.request({ kind: 'extensionSidebarGeometry', extensionId, ...rect });
+        if (!reply.ok) {
+            throw new Error(reply.message ?? `extensionSidebarGeometry failed (${reply.reason ?? 'store'})`);
+        }
+        return String(reply.where);
+    }
+
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
     queryTabsWithPlaces(query: TabPlacesQuery = {}): Promise<TabPlacesRow[]> {
         return this.field<TabPlacesRow[]>({ kind: 'queryTabsWithPlaces', ...query }, 'rows');
