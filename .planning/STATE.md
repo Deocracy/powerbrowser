@@ -457,6 +457,8 @@ Recent decisions affecting current work:
 - [Phase 32]: PAGE-09 edit set is the edit-today chrome-help subset (7 commands); cmd_pasteNoFormatting has no kind
 - [Phase 32]: Edit route is the Controllers actor (remote overlays have no parent docShell); keys stay content-native with no relay rows
 - [Phase 32]: D-23 amended: F12 opens the stock toolbox window through DevToolsShim.showToolboxForTab with a window host; reader toggle goes through the AboutReader actor; a crashed tab's history is kept across Reload tab; the shared-process blank reload is obsolete (afda7df1)
+- [Phase 33]: All 5 plans executed statically (verification human_needed, live pass deferred to end of milestone); PAGE-09 Edit submenu and live greying folded into 33-05 by coordinator ruling, greyed via a PowerBrowserEditState actor pair
+- [Phase 33]: Code review 1 critical, 8 warnings, 6 info; CR-01 (clear history re-imported stock closed tabs from SessionStore) and WR-01..08 fixed; reopenClosedTab now claims its row and is classed store-write
 
 ### Pending Todos
 
