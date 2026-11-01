@@ -177,7 +177,26 @@ export const CHROME_BAR_COPY = Object.freeze({
     // Phase 34 plan 01 (TAB-01, BMK-07): the tab menu's rows (34-UI-SPEC Copywriting Contract). Keyed by row.
     tabMenu: Object.freeze({
         reload: 'Reload',
+        mute: 'Mute Tab',
+        unmute: 'Unmute Tab',
+        pin: 'Pin Tab',
+        duplicate: 'Duplicate Tab',
+        bookmark: 'Bookmark Tab',
+        bookmarkAll: 'Bookmark All Tabs',
+        moveToStart: 'Move to Start',
+        moveToEnd: 'Move to End',
+        closeOthers: 'Close Other Tabs',
+        closeLeft: 'Close Tabs to the Left',
+        closeRight: 'Close Tabs to the Right',
+        closeDuplicates: 'Close Duplicate Tabs',
+        close: 'Close Tab',
     }),
+    // One failure sentence per verb (34-UI-SPEC Failures), shown in the strip; never an id, URL or raw error.
+    reloadTabFailed: (subject: string) => `${subject} couldn't reload that tab. Try again.`,
+    muteTabFailed: (subject: string) => `${subject} couldn't mute that tab. Try again.`,
+    duplicateTabFailed: (subject: string) => `${subject} couldn't duplicate that tab. Try again.`,
+    bookmarkTabFailed: (subject: string) => `${subject} couldn't bookmark that tab. Try again.`,
+    closeTabFailed: (subject: string) => `${subject} couldn't close that tab. Try again.`,
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

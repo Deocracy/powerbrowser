@@ -119,6 +119,11 @@ type ButtonEvent = React.MouseEvent<HTMLButtonElement>;
  * startup-opened window would break the stock chrome per the candidate-A
  * constraint).
  */
+/** BMK-07 (34-01): the Phase 33 ChromeStoreClient method the strip's Bookmark rows call (Phase 33 plan 01). */
+interface TabBookmarkStore {
+    bookmarkPage(url: string, title: string, folderGuid?: string): Promise<unknown>;
+}
+
 @injectable()
 export class ChromeBarWidget extends ReactWidget {
 
@@ -446,6 +451,24 @@ export class ChromeBarWidget extends ReactWidget {
         e.preventDefault();
         this.openHistoryMenu(e.currentTarget);
     };
+
+    /**
+     * BMK-07 (34-01): the strip's Bookmark Tab / Bookmark All Tabs path and the one call site of Phase 33's
+     * bookmarkPage store method (this file is inside Phase 33's privileged-caller fence). Undefined while the store
+     * client has no such method, so the strip renders both rows disabled and no second bookmark writer exists.
+     */
+    tabBookmarker(): ((tabs: WebTabWidget[]) => Promise<void>) | undefined {
+        const store = this.store as unknown as Partial<TabBookmarkStore>;
+        if (typeof store.bookmarkPage !== 'function') {
+            return undefined;
+        }
+        const bookmarks = store as TabBookmarkStore;
+        return async tabs => {
+            for (const tab of tabs) {
+                await bookmarks.bookmarkPage(tab.url, tab.title.label);
+            }
+        };
+    }
 
     /** Phase 31 plan 04 (MENU-01): the hamburger opens the per-request application menu under the button. */
     protected onAppMenuClick = (e: ButtonEvent): void => {
@@ -1440,6 +1463,7 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
     }
 
     async onStart(): Promise<void> {
+        this.tabStrip.bookmarkTabs = this.barWidget.tabBookmarker();
         this.armDragRelease();
         window.addEventListener('resize', () => this.scheduleDragRegions());
         new MutationObserver(() => this.scheduleDragRegions())

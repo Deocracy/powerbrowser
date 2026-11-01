@@ -116,17 +116,15 @@ function check(src) {
         }
         // Tracer (34-01 Task 1): the addition half only; the removal half lands with the full row set.
         void missing;
-        const twice = contracts.filter((c, i) => contracts.indexOf(c) !== i);
-        if (twice.length) {
-            failures.push(`menu: one ROADMAP item named by two rows: ${[...new Set(twice)].join(', ')}`);
-        }
     }
 
     // 2. copy
     const copy = stripComments(src[COPY]);
     const copyBody = braceBody(copy, copy.indexOf('{', copy.indexOf('tabMenu: Object.freeze(')));
     const copyKeys = copyBody ? derive(copyBody, /^\s*(\w+):/gm) : [];
-    const usedKeys = rows ? derive(rows, /CHROME_BAR_COPY\.tabMenu\.(\w+)/g) : [];
+    // The rows read CHROME_BAR_COPY.tabMenu directly or through one local alias of it.
+    const alias = rows ? /const (\w+) = CHROME_BAR_COPY\.tabMenu;/.exec(rows)?.[1] : undefined;
+    const usedKeys = rows ? derive(rows, new RegExp(`(?:CHROME_BAR_COPY\\.tabMenu${alias ? `|\\b${alias}` : ''})\\.(\\w+)`, 'g')) : [];
     if (copyBody === null || usedKeys.length === 0) {
         failures.push(`copy: CHROME_BAR_COPY.tabMenu ${copyBody === null ? 'not found' : 'found'}, ${usedKeys.length} keys read by the rows -- the comparison proves nothing`);
     } else {

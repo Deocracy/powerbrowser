@@ -807,6 +807,22 @@
     font-weight: 600;
 }
 
+/* TAB-01 (34-01): the tab menu inherits the bar's 32px menu rows. Set as Theia's own row-height variable on the
+   menu element, so it holds from inside this layer against the unlayered stock sheet. */
+.lm-Menu.pb-tab-menu {
+    --theia-private-menu-item-height: 32px;
+}
+
+/* TAB-01: a failed tab action's sentence at the strip's end, until the next tab menu opens. */
+.pb-tab-strip-notice {
+    align-self: center;
+    margin-left: auto;
+    padding: 0 8px;
+    font-size: 12px;
+    white-space: nowrap;
+    color: var(--theia-errorForeground);
+}
+
 }
 
 /* GUI-06 (13-UI-SPEC "Single chrome bar, full-bleed, 40px", ratified order

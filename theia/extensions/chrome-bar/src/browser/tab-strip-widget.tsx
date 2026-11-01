@@ -1,7 +1,7 @@
 import * as React from '@theia/core/shared/react';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ApplicationShell, ContextMenuRenderer, ReactWidget, Widget } from '@theia/core/lib/browser';
-import { CommandMenu, CompoundMenuNode, MenuPath } from '@theia/core/lib/common';
+import { CommandMenu, CommandRegistry, CompoundMenuNode, MenuPath } from '@theia/core/lib/common';
 import { DisposableCollection } from '@theia/core/lib/common/disposable';
 import { Drag } from '@theia/core/shared/@lumino/dragdrop';
 import { MimeData } from '@theia/core/shared/@lumino/coreutils';
@@ -9,8 +9,14 @@ import { Message } from '@theia/core/shared/@lumino/messaging';
 import { DockPanel, TabBar } from '@theia/core/shared/@lumino/widgets';
 import { GroupModel } from '@powerbrowser/modes/lib/browser/group-model';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
-import { CRASHED_COPY, WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
-import { CHROME_BAR_COPY } from './chrome-bar-copy';
+import { CRASHED_COPY, WebTabChannel, WebTabOpenHandler, WebTabReply, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { CHROME_BAR_COPY, appSubject } from './chrome-bar-copy';
+import {
+    CHROME_BAR_TAB_CLOSE_COMMAND_ID, CHROME_BAR_TAB_CLOSE_DUPLICATES_COMMAND_ID, CHROME_BAR_TAB_CLOSE_LEFT_COMMAND_ID,
+    CHROME_BAR_TAB_CLOSE_OTHERS_COMMAND_ID, CHROME_BAR_TAB_CLOSE_RIGHT_COMMAND_ID, CHROME_BAR_TAB_DUPLICATE_COMMAND_ID,
+    CHROME_BAR_TAB_MOVE_END_COMMAND_ID, CHROME_BAR_TAB_MOVE_START_COMMAND_ID, CHROME_BAR_TAB_MUTE_COMMAND_ID,
+    CHROME_BAR_TAB_RELOAD_COMMAND_ID, setTabActions,
+} from './chrome-bar-commands';
 import { safeIcon } from './address-bar/address-bar-rows';
 
 /** Marks a home-pane tab that the strip lists, so the pane's own bar does not. */
@@ -28,10 +34,24 @@ interface TabMenuRow {
     id: string;
     contract?: string;
     label: string;
+    icon?: string;
     group: number;
+    /** The single-tab command the row runs through (34-03's bulk rows call it per tab); absent for the Bookmark rows. */
+    command?: string;
     enabled: boolean;
+    /** The row's failure sentence (34-UI-SPEC: one per verb), shown in the strip when its action fails. */
+    failed?: (subject: string) => string;
     run(): Promise<void>;
 }
+
+/** A refused web-tab reply is a failed action, not a silent one. */
+function settled(reply: WebTabReply): void {
+    if (!reply.ok) {
+        throw new Error('refused');
+    }
+}
+
+const isHttp = (url: string): boolean => /^https?:\/\//i.test(url);
 
 /** PAN-04 (A3): a tab of a group in its undo window, hidden in every tab bar. */
 const GROUP_CLOSING_CLASS = 'pb-group-closing';
@@ -115,6 +135,22 @@ export class TabStripWidget extends ReactWidget {
     @inject(ContextMenuRenderer)
     protected readonly menus: ContextMenuRenderer;
 
+    @inject(CommandRegistry)
+    protected readonly commands: CommandRegistry;
+
+    /** TAB-01 Duplicate: the NAV-06 opener (http(s)-only wall, new tab right after the source). */
+    @inject(WebTabOpenHandler)
+    protected readonly opener: WebTabOpenHandler;
+
+    /**
+     * BMK-07 (34-01): set at startup by the chrome-bar contribution to the one Phase 33 bookmarkPage call site in
+     * chrome-bar-widget.tsx; undefined while that store method is absent, which renders both Bookmark rows disabled.
+     */
+    bookmarkTabs: ((tabs: WebTabWidget[]) => Promise<void>) | undefined;
+
+    /** A failed tab action's sentence, shown at the strip's end until the next tab menu opens. */
+    protected notice: string | undefined;
+
     protected readonly toDispose = new DisposableCollection();
 
     @postConstruct()
@@ -135,6 +171,16 @@ export class TabStripWidget extends ReactWidget {
             // Phase 32 plan 08 (PAGE-04, PAGE-11): a pushed favicon or crash flag repaints the row's icon and mark.
             this.channel.onDidChangeTabStatus(() => this.update()),
         ]);
+        // TAB-01: each single-tab command runs the same row the menu shows, for the tab it is handed.
+        setTabActions({
+            isEnabled: (id, widget) => !!this.tabMenuRows(widget).find(row => row.command === id)?.enabled,
+            run: async (id, widget) => {
+                const row = this.tabMenuRows(widget).find(candidate => candidate.command === id);
+                if (row?.enabled) {
+                    await this.runRow(row);
+                }
+            },
+        });
         this.shell.mainPanel.onDidChangeCurrent(() => this.update());
         // A split moves a tab between panes without adding or removing it,
         // and which pane a tab is in is exactly what this strip now shows.
@@ -477,14 +523,123 @@ export class TabStripWidget extends ReactWidget {
      * acts on (never the current widget). Built per request, so every predicate is read when the menu opens.
      */
     protected tabMenuRows(widget: Widget): TabMenuRow[] {
+        const COPY = CHROME_BAR_COPY.tabMenu;
         const web = widget instanceof WebTabWidget ? widget : undefined;
+        const page = web && isHttp(web.url) ? web : undefined;
+        const tabs = this.shownTabs();
+        const at = tabs.indexOf(widget);
+        const closable = (list: Widget[]) => list.filter(tab => tab.title.closable);
+        const others = closable(tabs.filter(tab => tab !== widget));
+        const left = closable(at < 0 ? [] : tabs.slice(0, at));
+        const right = closable(at < 0 ? [] : tabs.slice(at + 1));
+        const duplicates = closable(tabs.filter(tab => tab !== widget && tab instanceof WebTabWidget && tab.url === web?.url));
+        const pages = tabs.filter((tab): tab is WebTabWidget => tab instanceof WebTabWidget && isHttp(tab.url));
+        const bookmark = this.bookmarkTabs;
         return [
             {
-                id: 'reload', contract: 'Reload', label: CHROME_BAR_COPY.tabMenu.reload, group: 0,
-                enabled: !!web?.canReload,
-                run: async () => { await web?.reload(); },
+                id: 'reload', contract: 'Reload', label: COPY.reload, icon: 'codicon codicon-refresh', group: 0,
+                command: CHROME_BAR_TAB_RELOAD_COMMAND_ID, enabled: !!web?.canReload, failed: CHROME_BAR_COPY.reloadTabFailed,
+                run: async () => settled(await web!.reload()),
+            },
+            {
+                // Phase 32's path: setMuted sends webTabMute. Offered while the tab plays sound, or is muted so it can be unmuted.
+                id: 'mute', contract: 'Mute', label: web?.audioMuted ? COPY.unmute : COPY.mute,
+                icon: web?.audioMuted ? 'codicon codicon-unmute' : 'codicon codicon-mute', group: 0,
+                command: CHROME_BAR_TAB_MUTE_COMMAND_ID, enabled: !!web && (web.soundPlaying || web.audioMuted),
+                failed: CHROME_BAR_COPY.muteTabFailed,
+                run: async () => settled(await web!.setMuted(!web!.audioMuted)),
+            },
+            {
+                // shortcut: disabled until 34-03 lands the pin state (pinnedIds keyed by GroupModel.keyOf) it toggles.
+                id: 'pin', contract: 'Pin', label: COPY.pin, icon: 'codicon codicon-pin', group: 0,
+                enabled: false,
+                run: async () => undefined,
+            },
+            {
+                id: 'duplicate', contract: 'Duplicate', label: COPY.duplicate, group: 0,
+                command: CHROME_BAR_TAB_DUPLICATE_COMMAND_ID, enabled: !!page, failed: CHROME_BAR_COPY.duplicateTabFailed,
+                run: async () => {
+                    const copy = await this.opener.openInBackground(page!.url, widget);
+                    await this.groups.joinActiveGroup(copy);
+                },
+            },
+            {
+                id: 'bookmark', contract: 'Bookmark', label: COPY.bookmark, icon: 'codicon codicon-star-empty', group: 1,
+                enabled: !!bookmark && !!page, failed: CHROME_BAR_COPY.bookmarkTabFailed,
+                run: () => bookmark!([page!]),
+            },
+            {
+                id: 'bookmark-all', contract: 'Bookmark All Tabs', label: COPY.bookmarkAll, icon: 'codicon codicon-star-full', group: 1,
+                enabled: !!bookmark && pages.length > 0, failed: CHROME_BAR_COPY.bookmarkTabFailed,
+                run: () => bookmark!(pages),
+            },
+            {
+                id: 'move-start', contract: 'Move', label: COPY.moveToStart, icon: 'codicon codicon-arrow-left', group: 2,
+                command: CHROME_BAR_TAB_MOVE_START_COMMAND_ID, enabled: at > 0,
+                run: async () => this.moveInBar(widget, 0),
+            },
+            {
+                id: 'move-end', contract: 'Move', label: COPY.moveToEnd, icon: 'codicon codicon-arrow-right', group: 2,
+                command: CHROME_BAR_TAB_MOVE_END_COMMAND_ID, enabled: at >= 0 && at < tabs.length - 1,
+                run: async () => this.moveInBar(widget, Infinity),
+            },
+            {
+                id: 'close-others', contract: 'Close Others', label: COPY.closeOthers, group: 3,
+                command: CHROME_BAR_TAB_CLOSE_OTHERS_COMMAND_ID, enabled: others.length > 0, failed: CHROME_BAR_COPY.closeTabFailed,
+                run: () => this.closeTabs(others),
+            },
+            {
+                id: 'close-left', contract: 'Close Tabs to the Left', label: COPY.closeLeft, group: 3,
+                command: CHROME_BAR_TAB_CLOSE_LEFT_COMMAND_ID, enabled: left.length > 0, failed: CHROME_BAR_COPY.closeTabFailed,
+                run: () => this.closeTabs(left),
+            },
+            {
+                id: 'close-right', contract: 'Close Tabs to the Right', label: COPY.closeRight, group: 3,
+                command: CHROME_BAR_TAB_CLOSE_RIGHT_COMMAND_ID, enabled: right.length > 0, failed: CHROME_BAR_COPY.closeTabFailed,
+                run: () => this.closeTabs(right),
+            },
+            {
+                id: 'close-duplicates', contract: 'Close Duplicates', label: COPY.closeDuplicates, group: 3,
+                command: CHROME_BAR_TAB_CLOSE_DUPLICATES_COMMAND_ID, enabled: duplicates.length > 0, failed: CHROME_BAR_COPY.closeTabFailed,
+                run: () => this.closeTabs(duplicates),
+            },
+            {
+                // Firefox parity, beyond the ROADMAP list: the tab's own close.
+                id: 'close', label: COPY.close, icon: 'codicon codicon-close', group: 3,
+                command: CHROME_BAR_TAB_CLOSE_COMMAND_ID, enabled: widget.title.closable, failed: CHROME_BAR_COPY.closeTabFailed,
+                run: () => this.closeTabs([widget]),
             },
         ];
+    }
+
+    /** Runs one row; a failure shows the row's sentence in the strip and logs the action and error name only (T-34-04). */
+    protected async runRow(row: TabMenuRow): Promise<void> {
+        try {
+            await row.run();
+        } catch (error) {
+            console.error('[@powerbrowser/chrome-bar] a tab action failed:', row.id, error instanceof Error ? error.name : typeof error);
+            this.notice = row.failed?.(appSubject());
+            this.update();
+        }
+    }
+
+    /**
+     * The Move rows' order helper, which 34-02's drop index reuses: puts `widget` at `index` in the home pane's
+     * TabBar order, which is the strip's order. Lumino clamps the index, so Infinity is the end.
+     */
+    protected moveInBar(widget: Widget, index: number): void {
+        const bar = this.primaryBar();
+        if (bar && bar.titles.includes(widget.title)) {
+            bar.insertTab(index, widget.title);
+            this.update();
+        }
+    }
+
+    /** Closes each tab through the shell's own close path (D-14: no confirm; Phase 33's reopen is the undo). */
+    protected async closeTabs(tabs: Widget[]): Promise<void> {
+        for (const tab of tabs) {
+            await this.shell.closeWidget(tab.id);
+        }
     }
 
     /**
@@ -496,17 +651,25 @@ export class TabStripWidget extends ReactWidget {
         event.preventDefault();
         event.stopPropagation();
         const groups: CommandMenu[][] = [];
+        this.notice = undefined;
+        this.update();
         for (const row of this.tabMenuRows(widget)) {
             (groups[row.group] ??= []).push({
                 id: `tab-menu-${row.id}`,
                 label: row.label,
+                icon: row.icon,
                 sortString: String(groups[row.group].length).padStart(2, '0'),
                 isVisible: () => true,
                 isEnabled: () => row.enabled,
                 isToggled: () => false,
                 run: async () => {
-                    if (row.enabled) {
-                        await row.run();
+                    if (!row.enabled) {
+                        return;
+                    }
+                    if (row.command) {
+                        await this.commands.executeCommand(row.command, widget);
+                    } else {
+                        await this.runRow(row);
                     }
                 },
             });
@@ -658,6 +821,11 @@ export class TabStripWidget extends ReactWidget {
         return this.mainTabs().filter(widget => this.groups.showsInStrip(widget, current));
     }
 
+    /** The tabs the strip shows right now. The current widget decides membership (PAN-03), never a menu's target. */
+    protected shownTabs(): Widget[] {
+        return this.stripTabs(this.shell.mainPanel.currentTitle?.owner);
+    }
+
     /**
      * KEY-03: the order the tab-switching keys walk, which is the order the
      * user sees: the strip in Browsing when it lists `anchor`, otherwise the
@@ -724,6 +892,7 @@ export class TabStripWidget extends ReactWidget {
                     onPointerDown={event => event.stopPropagation()}
                 >✕</span>
             </div>}
+            {this.notice && <span className='pb-tab-strip-notice' role='status'>{this.notice}</span>}
         </div>;
     }
 

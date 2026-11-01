@@ -72,6 +72,17 @@ const EXPECTED_IDS = Object.freeze([
     // Phase 32 plan 08 (PAGE-10): labelless and uncategorised; the palette rows are Phase 33's.
     'powerbrowser.chrome-bar.view-source',
     'powerbrowser.chrome-bar.reader-toggle',
+    // Phase 34 plan 01 (TAB-01): the tab menu's single-tab actions, labelless and uncategorised (each needs its tab).
+    'powerbrowser.chrome-bar.tab-reload',
+    'powerbrowser.chrome-bar.tab-mute',
+    'powerbrowser.chrome-bar.tab-duplicate',
+    'powerbrowser.chrome-bar.tab-move-start',
+    'powerbrowser.chrome-bar.tab-move-end',
+    'powerbrowser.chrome-bar.tab-close-others',
+    'powerbrowser.chrome-bar.tab-close-left',
+    'powerbrowser.chrome-bar.tab-close-right',
+    'powerbrowser.chrome-bar.tab-close-duplicates',
+    'powerbrowser.chrome-bar.tab-close',
 ]);
 
 /** The contracted visible labels: four verbatim from 13-UI-SPEC.md, Downloads from 32-UI-SPEC.md (plan 04), and the Edit items (plan 06). */
