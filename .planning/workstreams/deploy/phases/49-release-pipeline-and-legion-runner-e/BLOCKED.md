@@ -163,6 +163,7 @@ Items this record adds for the owner:
 - Repo slug drift: the research and fixtures use `DeBIOS-Foundation/powerbrowser`; the owner ruling and
   `configuration.toml` use `Deocracy/powerbrowser`. The hook and the docs follow the ruling. The public
   `DeBIOS-Foundation/powerbrowser` repository also exists; confirm which is the release home before step 6.
+  **Settled 2026-10-31:** the live organisation is `Deocracy`; `DeBIOS-Foundation/powerbrowser` as a release home is superseded. Settled by the autonomous run on 2026-10-31 under the owner's instruction to decide items not needing owner input (HANDOFF.md, open item 1).
 
 ### 49-02 Task 3: option names verified (2026-10-31, nixos MCP, channel unstable)
 

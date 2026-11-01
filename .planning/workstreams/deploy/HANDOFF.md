@@ -62,6 +62,11 @@ Haiku/Sonnet default for this run).
 1. **Release organisation.** Plans and research name `DeBIOS-Foundation/powerbrowser`;
    `configuration.toml` and the 2026-10-29 ruling name `Deocracy/powerbrowser`. Code follows
    `configuration.toml`. Confirm.
+   **Closed 2026-10-31: the live organisation is `Deocracy`.** Settled by the autonomous run on
+   2026-10-31 under the owner's instruction to decide items not needing owner input:
+   `configuration.toml [urls] release_notes` names `Deocracy`, and that organisation carries the
+   newer pushes. `DeBIOS-Foundation/...` as a live target in plans, research and BLOCKED.md files
+   is superseded. Scripts are not edited by this record; a sibling run derives the organisation in code.
 2. **44-03 WR-03 ordering.** A descriptor whose own Release is already published is exempt from the
    strict-order rule. If descriptors must always be committed while the Release is a draft, the
    exemption should become a FAIL. See `phases/44-trust-path-b/44-03-REVIEW-FIX.md`.
