@@ -8384,8 +8384,11 @@ async function runPageMenuRow(id, pending, state, itemId) {
       return { where: "done" };
     case "context-viewimagedesc": // viewImageDesc (:1691-1702)
       return openGrant(state, data.principal, context.imageDescURL, pageMenuLoad(data, data.referrerInfo), "browser.tabs.loadInBackground");
-    case "context-searchselect": // loadSearch with the bar engine; no referrer
-      return openGrant(state, data.principal, facts.search.url, pageMenuLoad(data, undefined), "browser.search.context.loadInBackground");
+    case "context-searchselect": // loadSearchFromContext with the bar engine; no referrer. WR-02: the browser chose this URL, so it loads with upstream's null principal (SearchUIUtils.sys.mjs:538-541), never the page's
+      return openGrant(state, data.principal, facts.search.url, {
+        triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal(data.principal.originAttributes),
+        policyContainer: furnitureLazy.E10SUtils.deserializePolicyContainer(data.context.policyContainer),
+      }, "browser.search.context.loadInBackground");
     case "context-showonlythisframe": // showOnlyThisFrame (:1602-1612), through this tab's own navigate
       if (!pageMenuTargetAllowed(data.browser.contentPrincipal, data.docLocation)) {
         return { where: "refused" };
