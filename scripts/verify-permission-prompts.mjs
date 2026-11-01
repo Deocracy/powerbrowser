@@ -26,6 +26,9 @@
  *       kind routing set (no wall-crossing kind; KIND_CLASSES stays untouched);
  *   (g) display-only subscriber: the frontend's `doorhanger` subscriber sends
  *       nothing back, so no Theia path answers a prompt.
+ *   (h) visible tab (post-review): the facade reports a web tab selected only
+ *       while the Theia frame reports one current, and the one write of that
+ *       truth (setActiveTabOfFrame) refreshes the stock module on a focus move.
  *
  * Every expectation is derived from the tree at check time. --self-test runs
  * the unmodified fixture green first (the same-session positive control), then
@@ -252,6 +255,29 @@ function checkPrompts(raw, facadeNames = FACADES.map(f => f.name)) {
             failures.push(`subscriber: the doorhanger subscriber in ${file} sends a message -- a Theia path would answer a prompt (D-11)`);
         }
     }
+
+    // (h) Post-review fix 1 (UI spoofing): the facade reports a web tab selected only while one is current, and the one
+    // write of the visible-tab truth refreshes the stock module, so no prompt shows over a page the user is not on.
+    if (section) {
+        const facadeAt = section.search(/\bpromptTabbrowser\s*=\s*\{/);
+        const facadeBody = facadeAt === -1 ? '' : braceBlock(section, facadeAt);
+        for (const getter of ['selectedBrowser', 'selectedTab']) {
+            const at = facadeBody.search(new RegExp(`get ${getter}\\(`));
+            if (at === -1 || !braceBlock(facadeBody, at).includes('promptVisibleTab(')) {
+                failures.push(`visible-tab: the facade's ${getter} ignores whether a web tab is current (promptVisibleTab) -- a prompt would show over a page while the IDE is current`);
+            }
+        }
+        if (!functionBody(section, 'promptVisibleTab').includes('activeTabByFrame.get(')) {
+            failures.push(`visible-tab: promptVisibleTab does not read activeTabByFrame, the Theia frame's current web tab`);
+        }
+    }
+    const writes = (api.match(/\bactiveTabByFrame\.set\(/g) ?? []).length;
+    const setter = functionBody(api, 'setActiveTabOfFrame');
+    if (writes !== 1 || !setter.includes('activeTabByFrame.set(')) {
+        failures.push(`visible-tab: activeTabByFrame is written ${writes} times, or outside setActiveTabOfFrame -- a focus move would not refresh the waiting prompts`);
+    } else if (!setter.includes('anchorVisibilityChange(')) {
+        failures.push(`visible-tab: setActiveTabOfFrame does not call the stock anchorVisibilityChange -- a waiting prompt would not hide or show with focus`);
+    }
     return failures;
 }
 
@@ -314,6 +340,18 @@ function selfTest() {
             name: 'prompt section serves a kind',
             sources: { ...clean, [API]: inSection('function plantedArm(kind) { switch (kind) { case "webTabPlanted": break; } }') },
             expect: 'serves a case arm',
+        },
+        {
+            // Post-review fix 1 reverted: the facade reports the host's selection even while the IDE is current.
+            name: 'facade ignores the current web tab',
+            sources: { ...clean, [API]: clean[API].replace('return promptVisibleTab(host) ? host.selected.linkedBrowser : host.theiaBrowser;', 'return host.selected ? host.selected.linkedBrowser : host.theiaBrowser;') },
+            expect: "the facade's selectedBrowser ignores whether a web tab is current",
+        },
+        {
+            // Post-review fix 1 reverted: the webTabActivated arm writes the map directly, so no focus move refreshes prompts.
+            name: 'activation writes the map directly',
+            sources: { ...clean, [API]: clean[API].replace('setActiveTabOfFrame(actorRef.browsingContext.top.embedderElement, data.tabId);', 'activeTabByFrame.set(actorRef.browsingContext.top.embedderElement, data.tabId);') },
+            expect: 'activeTabByFrame is written 2 times',
         },
     ];
     let failed = 0;

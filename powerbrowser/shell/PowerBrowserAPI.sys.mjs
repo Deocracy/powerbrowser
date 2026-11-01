@@ -4711,7 +4711,7 @@ async function handleWebTabAction(data, actorRef) {
       if (data.tabId !== null && !webTabIdIsValid(data.tabId)) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
-      activeTabByFrame.set(actorRef.browsingContext.top.embedderElement, data.tabId);
+      setActiveTabOfFrame(actorRef.browsingContext.top.embedderElement, data.tabId);
       // A null (the IDE has focus) changes no selection: D-04, the last web tab stays active.
       if (data.tabId !== null) {
         tabHostSelectById(actorRef.browsingContext.top.embedderElement, data.tabId);
@@ -6797,6 +6797,8 @@ const PROMPT_QUEUE_CAP = 3;
 // token -> the display record of one stock notification. Nothing reads a record to answer a prompt.
 const promptRecords = new Map();
 const promptWindows = new WeakSet();
+// shell window -> its stock notifications instance, for the focus refresh below.
+const promptInstances = new WeakMap();
 let promptTokenCounter = 0;
 
 export function installPermissionPromptFurniture(window) {
@@ -6810,21 +6812,23 @@ export function installPermissionPromptFurniture(window) {
   if (!window.document.documentElement.hasAttribute("chromehidden")) {
     window.document.documentElement.setAttribute("chromehidden", "");
   }
-  // The selected overlay is the tab host's selection; with none, the Theia frame stands in, so every overlay is a
-  // background tab. The host strip fires TabSelect and TabClose, so the stock module shows a waiting prompt when its
+  // The selected overlay is the tab host's selection while the Theia frame reports a web tab current; with none, or
+  // while the IDE is current (webTabActivated null), the Theia frame stands in, so every overlay is a background tab
+  // and no prompt shows over a page the user is not looking at. The host strip fires TabSelect and TabClose, so the stock module shows a waiting prompt when its
   // tab is selected (webTabActivated) and drops a closed tab's prompts itself.
   const promptTabbrowser = {
     documentGlobal: window,
     get selectedBrowser() {
-      return host.selected ? host.selected.linkedBrowser : host.theiaBrowser;
+      return promptVisibleTab(host) ? host.selected.linkedBrowser : host.theiaBrowser;
     },
     get selectedTab() {
-      return host.selected;
+      return promptVisibleTab(host) ? host.selected : null;
     },
     tabContainer: host.strip,
   };
   const { PopupNotifications } = ChromeUtils.importESModule("resource://gre/modules/PopupNotifications.sys.mjs");
   const notifications = new PopupNotifications(promptTabbrowser, panel, null);
+  promptInstances.set(window, notifications);
   const stockShow = notifications.show;
   notifications.show = function (browser, id, message, anchorID, mainAction, secondaryActions, options) {
     const tabId = tabIdOfBrowser(browser);
@@ -6878,6 +6882,25 @@ export function installPermissionPromptFurniture(window) {
     },
   });
   window.PopupNotifications = notifications;
+}
+
+// The web tab the user is looking at: the host's selection, only while the Theia frame reports a web tab current.
+function promptVisibleTab(host) {
+  return Boolean(host.selected) && (activeTabByFrame.get(host.theiaBrowser) ?? null) !== null;
+}
+
+// The webTabActivated arm's one write of activeTabByFrame. When focus moves between the IDE and a web tab the stock
+// module re-reads the facade, so a waiting prompt hides while the IDE is current and shows when its tab is back. This
+// is the stock TabSelect handler's own update (anchorVisibilityChange), called directly: a synthetic TabSelect on the
+// host strip would reach the extension trackers' TabSelect listeners with the strip, not a tab, as its target.
+function setActiveTabOfFrame(theiaBrowser, tabId) {
+  const wasWeb = (activeTabByFrame.get(theiaBrowser) ?? null) !== null;
+  activeTabByFrame.set(theiaBrowser, tabId);
+  const notifications = promptInstances.get(theiaBrowser.ownerDocument.defaultView);
+  if (notifications && wasWeb !== (tabId !== null)) {
+    // After the arm's own selection change, as the stock handler defers its update.
+    theiaBrowser.ownerDocument.defaultView.setTimeout(() => notifications.anchorVisibilityChange(), 0);
+  }
 }
 
 // The stock eventCallback topics, observed for display only (PopupNotifications.sys.mjs show options). A dismissed
