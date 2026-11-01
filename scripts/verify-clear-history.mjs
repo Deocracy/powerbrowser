@@ -11,12 +11,18 @@
  *          markers: `<table>.closed_at` when the table carries closed_at (its
  *          closed rows; an open row is never deleted), `<table>` otherwise;
  *        - every `thumbnail` column, as `<table>.thumbnail`;
- *        - every `*HISTORY*_FILE_NAME` constant (the web-tab history file).
+ *        - every `*HISTORY*_FILE_NAME` constant (the web-tab history file);
+ *        - `sessionstore.<list>` for every sessionstore closed list
+ *          (`win._closed*`) iterated by a projection that
+ *          sweepTabStoreFromSessionStore calls: the sweep re-fills the closed
+ *          rows from it on every sessionstore write, so the clear must forget
+ *          it (CR-01), and before any `<table>.closed_at` target runs.
  *      A new store with a url column, a dropped target and a surplus target
  *      each go red by name. Each target's function must also carry its
  *      evidence: removeVisitsByFilter with beginDate/endDate (never Sanitizer,
  *      D-09b), a DELETE on the table, every closed-row DELETE fenced by
- *      `closed_at IS NOT NULL`, the thumbnail reset, the file write.
+ *      `closed_at IS NOT NULL`, the thumbnail reset, the file write, a
+ *      SessionStore.forgetClosedTab* call.
  *   2. TOKEN EXEMPT: no fan-out function (nor clearHistory) names a cookie,
  *      the token cookie's name or literal, 127.0.0.1, Sanitizer,
  *      SiteDataManager or a clearData service. Positive control in the same
@@ -70,9 +76,9 @@ function functionBody(src, name) {
     return end < 0 ? null : stripLineComments(src.slice(match.index, end));
 }
 
-/** The text of a two-space-indented method `  <name>(` up to its `  },`, or null. */
+/** The text of a two-space-indented method `  [async ]<name>(` up to its `  },`, or null. */
 function methodBody(src, name) {
-    const start = src.indexOf(`\n  ${name}(`);
+    const start = src.search(new RegExp(`\\n  (?:async )?${name}\\(`));
     if (start < 0) {
         return null;
     }
@@ -139,6 +145,23 @@ function checkFanout(src, failures) {
     for (const m of src.matchAll(/\nconst ([A-Z][A-Z0-9_]*HISTORY[A-Z0-9_]*_FILE_NAME) = "/g)) {
         expected.add(m[1]);
     }
+    // CR-01: the sweep re-fills the closed rows from sessionstore on every write, so the source must be
+    // cleared too. Every sessionstore closed list a sweep projection reads (win._closed*) is a target.
+    const sweep = methodBody(src, 'sweepTabStoreFromSessionStore');
+    const projections = sweep ? [...new Set([...sweep.matchAll(/PowerBrowserAPI\.(parseSessionStore\w+Rows)\(\)/g)].map(m => m[1]))] : [];
+    if (projections.length === 0) {
+        failures.push(`${BROKEN} ${BOUNDARY_REL}: sweepTabStoreFromSessionStore derived ZERO sessionstore projections`);
+    }
+    for (const name of projections) {
+        const body = methodBody(src, name);
+        if (!body) {
+            failures.push(`${BROKEN} ${BOUNDARY_REL}: the sweep's projection ${name} did not derive`);
+            continue;
+        }
+        for (const m of body.matchAll(/\bwin\.(_closed\w+)/g)) {
+            expected.add(`sessionstore.${m[1]}`);
+        }
+    }
     if (expected.size === 0) {
         failures.push(`${BROKEN} ${BOUNDARY_REL}: derived ZERO browsing-history stores`);
     }
@@ -151,6 +174,11 @@ function checkFanout(src, failures) {
     if (surplus.length) {
         failures.push(`fan-out: clearHistory targets no store declares (surplus target): ${surplus.join(', ')}`);
     }
+    const lastSource = fanout.map(entry => entry.target).findLastIndex(target => target.startsWith('sessionstore.'));
+    const firstRows = fanout.findIndex(entry => /^\w+\.closed_at$/.test(entry.target));
+    if (lastSource >= 0 && firstRows >= 0 && lastSource > firstRows) {
+        failures.push(`fan-out: ${fanout[lastSource].target} runs after ${fanout[firstRows].target}, so a sweep between the two re-imports the rows just deleted`);
+    }
 
     for (const { target, fn } of fanout) {
         const body = functionBody(src, fn);
@@ -161,6 +189,10 @@ function checkFanout(src, failures) {
         if (target === 'places') {
             if (!/PlacesUtils\.history\.removeVisitsByFilter\(\{[^}]*\bbeginDate\b[^}]*\bendDate\b/.test(body)) {
                 failures.push(`fan-out: places: ${fn} does not call PlacesUtils.history.removeVisitsByFilter({beginDate, endDate})`);
+            }
+        } else if (/^sessionstore\._closed\w+$/.test(target)) {
+            if (!/SessionStore\.forgetClosedTab(?:ById)?\(/.test(body)) {
+                failures.push(`fan-out: ${target}: ${fn} does not forget sessionstore's closed tabs, so the sweep re-imports them`);
             }
         } else if (/^\w+\.closed_at$/.test(target)) {
             const table = target.split('.')[0];

@@ -7059,9 +7059,10 @@ const CLEAR_HISTORY_RANGES = Object.freeze({
 // Sanitizer needs browser.xhtml furniture the shell does not load). No target
 // reaches a cookie: the 127.0.0.1 token cookie is exempt by construction.
 // scripts/verify-clear-history.mjs derives the expected targets from the
-// store declarations above and compares this table to them.
+// store declarations and the sweep's sessionstore imports, and compares.
 const CLEAR_HISTORY_FANOUT = Object.freeze([
   ["places", clearPlacesHistory],
+  ["sessionstore._closedTabs", clearSessionStoreClosedTabs],
   ["tabs.closed_at", clearClosedTabRows],
   ["tabs.thumbnail", clearTabThumbnails],
   ["saved_pages", clearSavedPages],
@@ -7219,5 +7220,20 @@ async function webTabEditEnabled(entry, cmd, cached) {
     return (await actor.sendQuery(EDIT_STATE_QUERY, { cmd })) === true;
   } catch {
     return cached;
+  }
+}
+
+// Phase 33 CR-01 (33-REVIEW): the stock:* closed rows are a projection of SessionStore's closed tabs, and
+// sweepTabStoreFromSessionStore re-imports them on every sessionstore write, so a clear that deleted only the
+// rows was undone within seconds. This target forgets the source in range; it runs before tabs.closed_at so a
+// sweep between the two finds nothing to re-import. Open non-private windows only, which is exactly what
+// parseSessionStoreClosedRows reads. Synchronous, so no closed tab moves between the read and the forget.
+// Appended last so no catalogued line moves.
+async function clearSessionStoreClosedTabs(span) {
+  const closed = lazy.SessionStore.getClosedTabData({ closedTabsFromAllWindows: true, private: false });
+  for (const tab of closed) {
+    if (span.everything || (tab.closedAt >= span.begin && tab.closedAt <= span.end)) {
+      lazy.SessionStore.forgetClosedTabById(tab.closedId, { includePrivate: false });
+    }
   }
 }
