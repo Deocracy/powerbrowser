@@ -16,6 +16,8 @@
 // module import of any kind, only the actor globals plus DOM dispatch. It
 // loads solely in documents matching the Theia local origin (the matches
 // pin in the registration call), so stock-window web content never runs it.
+// The edit-state child at the end of this file (33-05, PAGE-09) is a second
+// pair's child with its own registration; see its own note.
 //
 // GUI-02 (14.1-01): the channel now runs in BOTH directions. Chrome pushes
 // web-tab state (URL, title, loading, back/forward availability, and the
@@ -136,5 +138,20 @@ export class PowerBrowserGroupChild extends JSWindowActorChild {
         detail: win.wrappedJSObject.JSON.parse(JSON.stringify(message.data)),
       })
     );
+  }
+}
+
+// Phase 33 plan 05 (PAGE-09): the content half of the PowerBrowserEditState pair. Unlike the group child it has
+// no events and no matches pin: Gecko creates it only when chrome's webTabEditEnabled asks a web-tab overlay
+// (messageManagerGroups "browsers"), so page script never reaches it. It answers whether one edit command is
+// enabled now, from the docShell guard ControllersChild runs before each command, and returns a boolean only.
+// Zero privileged reach, like the class above: no module import, only the actor globals.
+export class PowerBrowserEditStateChild extends JSWindowActorChild {
+  receiveMessage(message) {
+    switch (message.name) {
+      case "PowerBrowserEditState:Query":
+        return !!this.docShell && this.docShell.isCommandEnabled(String(message.data && message.data.cmd)) === true;
+    }
+    return undefined;
   }
 }

@@ -315,6 +315,8 @@ export interface WebTabReply {
     entries?: WebTabHistoryEntry[];
     /** `webTabSavePick`: the proposed file name (a page title, bounded, with an .html suffix). */
     suggestedName?: string;
+    /** `webTabEdit`: whether the page has the command enabled; with checkOnly, the page's live answer (33-05, PAGE-09). */
+    enabled?: boolean;
 }
 
 /** Phase 31 plan 02: one managed permission on this tab's principal, in table order. */

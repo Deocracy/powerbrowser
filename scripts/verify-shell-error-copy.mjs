@@ -766,6 +766,14 @@ const EXPECTED_NAV_COPY = new Set([
   "Page Developer Tools",
   "Get Help",
   "About ${name}",
+  // Phase 33 plan 05 (PAGE-09): the Edit submenu, stock labels.
+  "Edit",
+  "Undo",
+  "Redo",
+  "Cut",
+  "Copy",
+  "Paste",
+  "Select All",
 ]);
 
 /**

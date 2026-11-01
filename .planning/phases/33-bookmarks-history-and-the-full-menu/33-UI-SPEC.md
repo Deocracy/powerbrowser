@@ -202,9 +202,10 @@ the same thing run the same command id (D-13).
 | Clear-history footnote | **This also clears {App}'s closed tabs, thumbnails, saved pages and web-tab history. Your open tabs stay open.** |
 | Clear-history buttons | **Clear** (destructive ink) / **Cancel** |
 | Clear-history failure | **{App} couldn't clear that history. Press Enter to try again.** |
-| Hamburger, new rows (Firefox order, Firefox casing) | **New Tab**, **New Window**, **Bookmarks** ›, **History** ›, **Downloads**, **Print…**, **Save Page As…**, **Find in Page…**, **Zoom** ›, **Full Screen**, **More Tools** ›, **Help** › |
+| Hamburger, new rows (Firefox order, Firefox casing) | **New Tab**, **New Window**, **Bookmarks** ›, **History** ›, **Downloads**, **Print…**, **Save Page As…**, **Find in Page…**, **Zoom** ›, **Edit** ›, **Full Screen**, **More Tools** ›, **Help** › |
 | Bookmarks submenu | **Bookmark This Page** + hint, separator, **Show Bookmarks Toolbar** (check), separator, up to 10 most recent bookmarks (title or address) |
 | Zoom submenu | **Zoom In** (Ctrl+plus), **Zoom Out** (Ctrl+minus), **Reset** (Ctrl+0), separator, current level row **Zoom: {percent}** (disabled, informational) |
+| Edit submenu (PAGE-09, coordinator ruling 2026-10-31, plan 33-05) | **Undo**, **Redo**, separator, **Cut**, **Copy**, **Paste**, separator, **Select All** — stock labels; each row runs its Phase 32 Edit command id and is dimmed unless the focused page reports the command enabled now (a live query, not Gecko's cached flag); the usual keys stay content-native |
 | Full Screen row | **Full Screen** (F11 hint while a page has focus) |
 | More Tools submenu | **Page Source** (Ctrl+U), **Reader View** (F9), **Page Developer Tools** (F12). A row whose Phase 32 command does not exist is absent, never disabled (D-13: Actions ships with whatever exists). |
 | Help submenu | **Get Help** (opens the configured help URL), separator, **About {App}** (opens the stock About dialog) |
@@ -333,16 +334,19 @@ never from `KeybindingRegistry`.
   10. **Find in Page…** (Phase 33 row; Phase 32 find command)
   11. **Zoom** › (Phase 33 submenu: Zoom In / Zoom Out / Reset / current-level row; Phase 32
       zoom command)
-  12. **Full Screen** (Phase 33 row; `powerbrowser.chrome-bar.full-screen` command id calling
+  12. **Edit** › (Phase 33 plan 05 submenu, PAGE-09 carried from Phase 32 by the 2026-10-31
+      coordinator ruling: Undo, Redo, Cut, Copy, Paste, Select All, greyed from the page's live
+      enablement; where Firefox's hamburger last carried its Edit row, after Zoom)
+  13. **Full Screen** (Phase 33 row; `powerbrowser.chrome-bar.full-screen` command id calling
       `ChromeStoreClient.fullScreen()` from the widget handler, chrome toggles `window.fullScreen`
       per `upstream/browser/base/content/browser-commands.js:567-569` behind the same
       command id until the Phase 35 fullscreen path lands, so the id is stable — D-14/D-14b;
       the `fullScreen` store kind is classed `window-chrome` so the command id may reach it)
-  13. separator
-  14. **More Tools** › (Phase 33 submenu: Page Source, Reader View, Page Developer Tools —
+  14. separator
+  15. **More Tools** › (Phase 33 submenu: Page Source, Reader View, Page Developer Tools —
       only rows whose Phase 32 command exists)
-  15. **Help** › (Phase 33 submenu: Get Help with the configured help URL, About {App})
-  16. (Phase 31 rows — Settings, Passwords, Add-ons — and Quit keep their Phase 31 positions
+  16. **Help** › (Phase 33 submenu: Get Help with the configured help URL, About {App})
+  17. (Phase 31 rows — Settings, Passwords, Add-ons — and Quit keep their Phase 31 positions
       in Firefox order around these entries; this phase moves none of them.)
 - **Omissions (Firefox rows deliberately absent):** New Private Window, Tab groups, AI window,
   Report Broken Site, Sync/account rows — per REQUIREMENTS Out of Scope and the gap list.

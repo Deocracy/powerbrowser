@@ -239,6 +239,14 @@ export const CHROME_BAR_COPY = Object.freeze({
     pageDevToolsRow: 'Page Developer Tools',
     getHelpRow: 'Get Help',
     aboutAppRow: (subject: string) => `About ${subject}`,
+    // Phase 33 plan 05 (PAGE-09): the Edit submenu, stock labels (32-UI-SPEC Edit menu).
+    menuEdit: 'Edit',
+    editUndoRow: 'Undo',
+    editRedoRow: 'Redo',
+    editCutRow: 'Cut',
+    editCopyRow: 'Copy',
+    editPasteRow: 'Paste',
+    editSelectAllRow: 'Select All',
 });
 
 /** The sentence subject naming the product: the configured application name, or "The browser". */

@@ -90,13 +90,16 @@ const EXPECTED_IDS = Object.freeze([
     'powerbrowser.chrome-bar.zoom-reset',
     'powerbrowser.chrome-bar.devtools',
     'powerbrowser.chrome-bar.settings',
+    // Phase 33 plan 05 (PAGE-09): the Edit submenu's Redo and Select All, stock labels.
+    'powerbrowser.chrome-bar.edit-redo',
+    'powerbrowser.chrome-bar.edit-select-all',
 ]);
 
 /** The contracted visible labels: four verbatim from 13-UI-SPEC.md, Downloads from 32-UI-SPEC.md (plan 04), and the Edit items (plan 06). */
 const EXPECTED_LABELS = Object.freeze(['Back', 'Forward', 'Reload', 'New Tab', 'Downloads', 'Undo', 'Cut', 'Copy', 'Paste', 'Bookmark This Page', 'Reopen Closed Tab', 'Show Bookmarks Toolbar', 'Clear Recent History…',
     // Phase 33 plan 05 (MENU-03): 33-UI-SPEC's hamburger and More Tools rows, Firefox's casing; the zoom reset reads "Reset Zoom" out of its submenu.
     'Page Source', 'Reader View', 'New Window', 'Full Screen', 'Print…', 'Save Page As…', 'Find in Page…', 'Zoom In', 'Zoom Out', 'Reset Zoom',
-    'Page Developer Tools', 'Settings']);
+    'Page Developer Tools', 'Settings', 'Redo', 'Select All']);
 
 function diff(actual, expected) {
     const a = new Set(actual);

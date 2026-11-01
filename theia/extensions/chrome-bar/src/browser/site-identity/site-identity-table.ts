@@ -82,9 +82,10 @@ export const MENU_PHASE = 33;
  * Phase 33 plan 05 (MENU-03, D-11, 33-UI-SPEC "Full menu"): the remaining
  * MENU-03 rows are appended around the Phase 31 rows, none of which moves:
  * New Tab, New Window | Bookmarks, History, Downloads | Print, Save Page As,
- * Find in Page, Zoom, Full Screen | Settings, Passwords, Add-ons | More Tools,
+ * Find in Page, Zoom, Edit, Full Screen | Settings, Passwords, Add-ons | More Tools,
  * Help | Quit. History joins Bookmarks' group (33-UI-SPEC separator after New
- * Window); Help keeps its row and becomes a submenu.
+ * Window); Help keeps its row and becomes a submenu. Edit (PAGE-09, carried
+ * from Phase 32) sits after Zoom, where Firefox's hamburger last had it.
  */
 export const MENU_ORDER: readonly MenuEntry[] = Object.freeze([
     { menuId: 'new-tab', minPhase: 27, group: 1 },
@@ -96,6 +97,7 @@ export const MENU_ORDER: readonly MenuEntry[] = Object.freeze([
     { menuId: 'save-page', minPhase: 33, group: 6 },
     { menuId: 'find-in-page', minPhase: 33, group: 6 },
     { menuId: 'zoom', minPhase: 33, group: 6 },
+    { menuId: 'edit', minPhase: 33, group: 6 },
     { menuId: 'full-screen', minPhase: 33, group: 6 },
     { menuId: 'settings', stockPage: 'settings', minPhase: 31, group: 2 },
     { menuId: 'passwords', stockPage: 'passwords', minPhase: 31, group: 2 },

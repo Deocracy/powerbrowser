@@ -2204,8 +2204,8 @@ export const PowerBrowserAPI = Object.freeze({
 
   /**
    * GUI-08 (15-01): registers the PowerBrowserGroup actor pair -- the SOLE
-   * actor-registration caller in this tree (the guard fails any second one
-   * by design). The child loads only in documents matching the Theia local
+   * actor-registration method in this tree (33-05 adds the edit-state pair
+   * from inside it; the guard fails any registration outside this file). The child loads only in documents matching the Theia local
    * origin; the parent class below lives in this same boundary file so no
    * second file reaches a privileged surface. Called once from
    * TheiaService.start beside the tab-store wiring, through PowerBrowserAPI
@@ -2243,6 +2243,7 @@ export const PowerBrowserAPI = Object.freeze({
       },
       matches: [`${GROUP_ACTOR_THEIA_ORIGIN}/*`],
     });
+    registerEditStateActor();
   },
 
   /**
@@ -6541,7 +6542,7 @@ async function webTabEditReply(kind, tabId, cmd, checkOnly) {
   }
   const enabled = controller.isCommandEnabled(cmd) === true;
   if (checkOnly) {
-    return { ok: true, kind, where: "checked", enabled };
+    return { ok: true, kind, where: "checked", enabled: await webTabEditEnabled(entry, cmd, enabled) };
   }
   controller.doCommand(cmd);
   return { ok: true, kind, where: "applied", enabled };
@@ -7184,4 +7185,39 @@ function toggleShellFullscreen(actorRef) {
   const win = actorRef.browsingContext.top.embedderElement.ownerDocument.defaultView;
   win.fullScreen = !win.fullScreen;
   return win.fullScreen ? "entered" : "left";
+}
+
+// ---------------------------------------------------------------------------
+// Phase 33 plan 05 (PAGE-09): the Edit submenu greys from the page's live enablement. ControllersParent caches the
+// enabled flag from the child's command updates, and TextInputListener::OnSelectionChange issues one only for a
+// non-empty selection (dom/html/TextControlState.cpp), so after a collapse the cache still reads true. The
+// PowerBrowserEditState pair asks the child's own docShell.isCommandEnabled, the guard ControllersChild runs
+// before every command. Registered by registerGroupActor (the one registration method) beside the group pair:
+// the parent class is here, the child class is in GroupActorChild.sys.mjs (the one actor-child file). No events
+// and no matches: the child is created only when webTabEditEnabled asks a web-tab overlay (messageManagerGroups
+// "browsers"), and it answers one boolean for one frozen command. Appended last so no catalogued line moves.
+// ---------------------------------------------------------------------------
+const EDIT_STATE_ACTOR_NAME = "PowerBrowserEditState";
+const EDIT_STATE_QUERY = "PowerBrowserEditState:Query";
+
+export class PowerBrowserEditStateParent extends GroupActorBase {}
+
+function registerEditStateActor() {
+  ChromeUtils.registerWindowActor(EDIT_STATE_ACTOR_NAME, {
+    parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
+    child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE },
+    messageManagerGroups: ["browsers"],
+    allFrames: false,
+  });
+}
+
+// The live answer for `cmd` (already checked against WEB_TAB_EDIT_CMDS); a failed query (the page navigating away,
+// the actor gone) falls back to the cached flag, so the row stays usable rather than greyed by an error.
+async function webTabEditEnabled(entry, cmd, cached) {
+  try {
+    const actor = entry.browser.browsingContext.currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
+    return (await actor.sendQuery(EDIT_STATE_QUERY, { cmd })) === true;
+  } catch {
+    return cached;
+  }
 }

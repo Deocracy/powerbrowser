@@ -26,7 +26,7 @@ export const APP_MENU_ID = 'powerbrowser-app-menu';
  * chrome-bar-commands.ts, STOCK_PAGES, the client's quitRequest and the widget.
  */
 export const WIRED_MENU_IDS: readonly string[] = Object.freeze([
-    'new-tab', 'new-window', 'bookmarks', 'history', 'downloads', 'print', 'save-page', 'find-in-page', 'zoom', 'full-screen',
+    'new-tab', 'new-window', 'bookmarks', 'history', 'downloads', 'print', 'save-page', 'find-in-page', 'zoom', 'edit', 'full-screen',
     'settings', 'passwords', 'addons', 'more-tools', 'help', 'quit',
 ]);
 

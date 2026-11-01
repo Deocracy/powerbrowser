@@ -24,6 +24,12 @@ import {
     CHROME_BAR_FORWARD_COMMAND_ID,
     CHROME_BAR_FULL_SCREEN_COMMAND_ID,
     CHROME_BAR_DOWNLOADS_COMMAND_ID,
+    CHROME_BAR_EDIT_COPY_COMMAND_ID,
+    CHROME_BAR_EDIT_CUT_COMMAND_ID,
+    CHROME_BAR_EDIT_PASTE_COMMAND_ID,
+    CHROME_BAR_EDIT_REDO_COMMAND_ID,
+    CHROME_BAR_EDIT_SELECT_ALL_COMMAND_ID,
+    CHROME_BAR_EDIT_UNDO_COMMAND_ID,
     CHROME_BAR_NEW_TAB_COMMAND_ID,
     CHROME_BAR_NEW_WINDOW_COMMAND_ID,
     CHROME_BAR_PRINT_COMMAND_ID,
@@ -91,6 +97,7 @@ function appMenuLabel(menuId: string): string {
         case 'save-page': return CHROME_BAR_COPY.menuSavePage;
         case 'find-in-page': return CHROME_BAR_COPY.menuFindInPage;
         case 'zoom': return CHROME_BAR_COPY.menuZoom;
+        case 'edit': return CHROME_BAR_COPY.menuEdit;
         case 'full-screen': return CHROME_BAR_COPY.menuFullScreen;
         case 'settings': return CHROME_BAR_COPY.menuSettings;
         case 'passwords': return CHROME_BAR_COPY.menuPasswords;
@@ -116,6 +123,10 @@ const APP_MENU_COMMANDS: Readonly<Record<string, string>> = Object.freeze({
     'full-screen': CHROME_BAR_FULL_SCREEN_COMMAND_ID,
     'settings': CHROME_BAR_SETTINGS_COMMAND_ID,
 });
+
+/** PAGE-09 (33-05): the Edit submenu's commands, each with the frozen edit cmd its command sends and the page reports on. */
+type EditCmd = Parameters<WebTabWidget['edit']>[0];
+const EDIT_MENU_CMDS: readonly EditCmd[] = Object.freeze(['cmd_undo', 'cmd_redo', 'cmd_cut', 'cmd_copy', 'cmd_paste', 'cmd_selectAll'] as EditCmd[]);
 
 /** NAV-03: Firefox's click-hold delay before Back/Forward open the history menu. */
 const HISTORY_HOLD_MS = 500;
@@ -1087,16 +1098,17 @@ export class ChromeBarWidget extends ReactWidget {
      * NAV-03 rule).
      */
     protected async openAppMenu(button: HTMLElement): Promise<void> {
-        const [history, bookmarks] = await Promise.all([
+        const [history, bookmarks, editState] = await Promise.all([
             this.readHistoryMenu(),
             this.store.searchPlaces('', HISTORY_MENU_ROWS, 'bookmark').catch((): 'failed' => 'failed'),
+            this.readEditState(),
         ]);
         const menu = buildAppMenu(MENU_ORDER, WIRED_MENU_IDS, MENU_PHASE, {
             label: (menuId, enabled) => (enabled ? appMenuLabel(menuId) : CHROME_BAR_COPY.comingSoonRow(appMenuLabel(menuId))),
             run: row => this.runAppMenuRow(row),
             isEnabled: menuId => APP_MENU_COMMANDS[menuId] === undefined || this.commands.isEnabled(APP_MENU_COMMANDS[menuId]),
             submenu: menuId => (menuId === 'history' ? { menuPath: BOOKMARKS_HISTORY_MENU_PATH, children: this.historyMenuChildren(history) as unknown as AppMenuSubmenu['children'] }
-                : this.appSubmenu(menuId, bookmarks)),
+                : this.appSubmenu(menuId, bookmarks, editState)),
         });
         const before = new Set(Array.from(document.querySelectorAll('.lm-Menu')));
         this.renderBarMenu(APP_MENU_PATH, menu as CompoundMenuNode, button);
@@ -1108,9 +1120,23 @@ export class ChromeBarWidget extends ReactWidget {
         }
     }
 
-    /** A per-request row that runs a Browser command id (D-13), dimmed while the command is disabled. */
-    protected commandLeaf(id: string, label: string, command: string, accelerator: string[] = []): CommandMenu {
-        return this.menuLeaf(id, label, () => this.runCommand(command)(), this.commands.isEnabled(command), accelerator);
+    /** A per-request row that runs a Browser command id (D-13), dimmed while the command is disabled (or `enabled` is false). */
+    protected commandLeaf(id: string, label: string, command: string, accelerator: string[] = [], enabled = this.commands.isEnabled(command)): CommandMenu {
+        return this.menuLeaf(id, label, () => this.runCommand(command)(), enabled, accelerator);
+    }
+
+    /**
+     * PAGE-09 (33-05): whether the focused page has each Edit row's command enabled now, read before the menu opens
+     * (the NAV-03 no-spinner rule). checkOnly asks chrome, which asks the page's own docShell, so a collapsed selection
+     * greys Cut and Copy. No web tab, or a refused read, reads as disabled.
+     */
+    protected async readEditState(): Promise<Partial<Record<EditCmd, boolean>>> {
+        const tab = currentWebTab();
+        if (!tab) {
+            return {};
+        }
+        const replies = await Promise.all(EDIT_MENU_CMDS.map(cmd => tab.edit(cmd, true).then(reply => reply.enabled === true, () => false)));
+        return Object.fromEntries(EDIT_MENU_CMDS.map((cmd, index) => [cmd, replies[index]]));
     }
 
     /**
@@ -1118,7 +1144,7 @@ export class ChromeBarWidget extends ReactWidget {
      * per open. Every row that does what a Browser command does runs that command's id; Get Help and About open
      * their stock pages through the Phase 31 row handler. Undefined keeps a row a plain row.
      */
-    protected appSubmenu(menuId: string, bookmarks: PlaceMatch[] | 'failed'): AppMenuSubmenu | undefined {
+    protected appSubmenu(menuId: string, bookmarks: PlaceMatch[] | 'failed', editState: Partial<Record<EditCmd, boolean>> = {}): AppMenuSubmenu | undefined {
         const ordered = (children: (CommandMenu | CompoundMenuNode)[]): AppMenuSubmenu => ({
             children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })) as unknown as AppMenuSubmenu['children'],
         });
@@ -1146,6 +1172,20 @@ export class ChromeBarWidget extends ReactWidget {
                     this.commandLeaf('zoom-out', CHROME_BAR_COPY.zoomOutRow, CHROME_BAR_ZOOM_OUT_COMMAND_ID, pageKeyLabel('zoomOut')),
                     this.commandLeaf('zoom-reset', CHROME_BAR_COPY.zoomResetRow, CHROME_BAR_ZOOM_RESET_COMMAND_ID, pageKeyLabel('zoomReset')),
                     this.menuGroup('zoom-level', [this.menuLeaf('zoom-level-row', CHROME_BAR_COPY.zoomLevelRow(percent), () => undefined, false)]),
+                ]);
+            }
+            case 'edit': {
+                // PAGE-09: each row runs its Edit command id and greys from the page's live reply, never the command's own predicate.
+                const live = (cmd: EditCmd): boolean => editState[cmd] === true;
+                return ordered([
+                    this.commandLeaf('edit-undo', CHROME_BAR_COPY.editUndoRow, CHROME_BAR_EDIT_UNDO_COMMAND_ID, [], live('cmd_undo')),
+                    this.commandLeaf('edit-redo', CHROME_BAR_COPY.editRedoRow, CHROME_BAR_EDIT_REDO_COMMAND_ID, [], live('cmd_redo')),
+                    this.menuGroup('edit-clipboard', [
+                        this.commandLeaf('edit-cut', CHROME_BAR_COPY.editCutRow, CHROME_BAR_EDIT_CUT_COMMAND_ID, [], live('cmd_cut')),
+                        this.commandLeaf('edit-copy', CHROME_BAR_COPY.editCopyRow, CHROME_BAR_EDIT_COPY_COMMAND_ID, [], live('cmd_copy')),
+                        this.commandLeaf('edit-paste', CHROME_BAR_COPY.editPasteRow, CHROME_BAR_EDIT_PASTE_COMMAND_ID, [], live('cmd_paste')),
+                    ]),
+                    this.commandLeaf('edit-select-all', CHROME_BAR_COPY.editSelectAllRow, CHROME_BAR_EDIT_SELECT_ALL_COMMAND_ID, [], live('cmd_selectAll')),
                 ]);
             }
             case 'more-tools':

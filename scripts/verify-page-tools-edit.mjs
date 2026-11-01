@@ -13,10 +13,24 @@
  *      bare-command path that could send the kind without a widget handler.
  *   4. the Edit items: every edit('cmd_…') call in the Theia sources names a
  *      frozen command, and at least one item exists (the positive control for 3).
+ *   5. (33-05, PAGE-09) the Edit menu: the hamburger's Edit submenu (the widget's
+ *      appSubmenu `case 'edit'`) has one commandLeaf per Edit command, compared as
+ *      set equality with the commands chrome-bar-commands.ts registers whose
+ *      execute is edit('cmd_…'): a row with no command and a command with no row
+ *      each go red by cmd.
+ *   6. (PAGE-09) greying: each Edit row's enabled argument is the page's live reply
+ *      for its own cmd (live('cmd_…') over readEditState, which reads edit(cmd, true)),
+ *      never the command's own predicate.
+ *   7. (PAGE-09) the live query: the webTabEdit arm's checkOnly reply comes from
+ *      webTabEditEnabled, which sendQuery()s EDIT_STATE_QUERY to the EDIT_STATE_ACTOR_NAME
+ *      actor; registerGroupActor registers that actor with the group child module;
+ *      the child (GroupActorChild.sys.mjs) answers exactly that message name.
  *
  * --self-test plants a surplus literal, a dropped literal, a send site outside
- * the widget and an Edit item naming an unfrozen command, and requires each to
- * go red naming the drift. Text reads only: --quick, no build, no browser, no display.
+ * the widget, an Edit item naming an unfrozen command, an Edit row dropped, a row
+ * greyed by the command predicate, a checkOnly reply from the cache, and a child
+ * message-name drift, and requires each to go red naming the drift. Text reads
+ * only: --quick, no build, no browser, no display.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -25,6 +39,9 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-page-tools-edit';
 const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
+const CHILD = 'powerbrowser/shell/GroupActorChild.sys.mjs';
+const WIDGET = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+const COMMANDS = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const SRC_ROOT = join(REPO_ROOT, 'theia/extensions');
 const KIND = 'webTabEdit';
@@ -92,6 +109,7 @@ function readTheiaSources() {
 function readSources() {
     return {
         api: readFileSync(join(REPO_ROOT, API), 'utf8'),
+        child: readFileSync(join(REPO_ROOT, CHILD), 'utf8'),
         theia: readTheiaSources(),
     };
 }
@@ -175,6 +193,64 @@ function checkEdit(sources) {
     if (items.length === 0) {
         failures.push('no Edit item calls WebTabWidget.edit with a command literal (positive control for the send-site rule is missing)');
     }
+
+    // 5. the Edit menu (PAGE-09): one row per Edit command, both ways.
+    const commands = stripComments(sources.theia[COMMANDS] ?? '');
+    const idConstOf = new Map();
+    for (const m of commands.matchAll(/export const (CHROME_BAR_\w+): Command = \{\s*id: (CHROME_BAR_[A-Z_]+_COMMAND_ID)/g)) {
+        idConstOf.set(m[1], m[2]);
+    }
+    const cmdOfId = new Map();
+    for (const m of commands.matchAll(/commands\.registerCommand\((CHROME_BAR_\w+), \{\s*execute: \(\) => currentWebTab\(\)\?\.edit\('(cmd_[A-Za-z]+)'\)/g)) {
+        cmdOfId.set(idConstOf.get(m[1]), m[2]);
+    }
+    const widget = stripComments(sources.theia[WIDGET] ?? '');
+    const editCase = /case 'edit': \{([\s\S]*?)\n {12}\}/.exec(widget)?.[1] ?? '';
+    const rows = [...editCase.matchAll(/this\.commandLeaf\('[a-z-]+', CHROME_BAR_COPY\.[A-Za-z]+, (CHROME_BAR_[A-Z_]+_COMMAND_ID), \[\], ([^)]*\))\)/g)]
+        .map(m => ({ id: m[1], cmd: cmdOfId.get(m[1]), enabled: m[2] }));
+    if (cmdOfId.size === 0 || !editCase) {
+        failures.push(`${COMMANDS} / ${WIDGET}: derived ZERO Edit commands (${cmdOfId.size}) or no Edit submenu case -- broken instrument, never a pass`);
+    } else {
+        const rowCmds = rows.map(r => r.cmd ?? `${r.id} (no Edit command)`);
+        const d = diff(rowCmds, [...cmdOfId.values()]);
+        if (d.surplus.length) {
+            failures.push(`${WIDGET}: Edit submenu rows that run no Edit command: ${d.surplus.join(', ')}`);
+        }
+        if (d.missing.length) {
+            failures.push(`${WIDGET}: Edit commands with no Edit submenu row: ${d.missing.join(', ')}`);
+        }
+        // 6. greying from the page's live reply for the row's own cmd.
+        for (const row of rows.filter(r => r.cmd && r.enabled !== `live('${r.cmd}')`)) {
+            failures.push(`${WIDGET}: the ${row.cmd} Edit row is not greyed from the page's live reply (enabled: ${row.enabled})`);
+        }
+        if (!/protected async readEditState\(\)[\s\S]*?tab\.edit\(cmd, true\)/.test(widget) || !/const live = \(cmd: EditCmd\): boolean => editState\[cmd\] === true;/.test(editCase)) {
+            failures.push(`${WIDGET}: the Edit rows' state is not read with edit(cmd, true) (readEditState) and handed to live() -- the greying has no page source`);
+        }
+    }
+
+    // 7. the live query behind checkOnly (PAGE-09).
+    const reply = /async function webTabEditReply\([\s\S]*?\n\}/.exec(api)?.[0] ?? '';
+    if (!/if \(checkOnly\) \{\s*return \{ ok: true, kind, where: "checked", enabled: await webTabEditEnabled\(entry, cmd, enabled\) \};/.test(reply)) {
+        failures.push(`${API}: webTabEditReply's checkOnly reply is not the page's live answer (webTabEditEnabled) -- Gecko's cached flag stays true after a collapse`);
+    }
+    const actorName = /const EDIT_STATE_ACTOR_NAME = "([A-Za-z]+)";/.exec(api)?.[1];
+    const query = /const EDIT_STATE_QUERY = "([A-Za-z:]+)";/.exec(api)?.[1];
+    const live = /async function webTabEditEnabled\([\s\S]*?\n\}/.exec(api)?.[0] ?? '';
+    if (!actorName || !query || !/getActor\(EDIT_STATE_ACTOR_NAME\)/.test(live) || !/sendQuery\(EDIT_STATE_QUERY, \{ cmd \}\)/.test(live)) {
+        failures.push(`${API}: webTabEditEnabled does not sendQuery EDIT_STATE_QUERY to the EDIT_STATE_ACTOR_NAME actor (name ${actorName}, query ${query})`);
+    }
+    // Raw text: the group registration's matches pin (`.../*`) opens a block comment for stripComments.
+    const group = /registerGroupActor\(\) \{[\s\S]*?\n {2}\},/.exec(sources.api)?.[0] ?? '';
+    if (!group.includes('registerEditStateActor();') || !/ChromeUtils\.registerWindowActor\(EDIT_STATE_ACTOR_NAME, \{[\s\S]*?child: \{ esModuleURI: GROUP_ACTOR_CHILD_MODULE \}/.test(api)) {
+        failures.push(`${API}: the edit-state actor is not registered from registerGroupActor with the group child module`);
+    }
+    const child = stripComments(sources.child ?? '');
+    if (actorName && !new RegExp(`export class ${actorName}Child extends JSWindowActorChild`).test(child)) {
+        failures.push(`${CHILD}: no ${actorName}Child class -- Gecko loads the child by that name`);
+    }
+    if (query && !child.includes(`case "${query}":`)) {
+        failures.push(`${CHILD}: the edit-state child does not answer "${query}", the message webTabEditEnabled sends`);
+    }
     return failures;
 }
 
@@ -212,6 +288,28 @@ function selfTest() {
             expect: "'cmd_pasteNoFormatting', which is outside the frozen set",
         },
         {
+            name: 'Edit row dropped (Select All has a command but no row)',
+            build: () => ({ ...clean, theia: { ...clean.theia, [WIDGET]: plant(clean.theia[WIDGET],
+                "                    this.commandLeaf('edit-select-all', CHROME_BAR_COPY.editSelectAllRow, CHROME_BAR_EDIT_SELECT_ALL_COMMAND_ID, [], live('cmd_selectAll')),\n", '') } }),
+            expect: 'Edit commands with no Edit submenu row: cmd_selectAll',
+        },
+        {
+            name: 'Edit row greyed by the command predicate',
+            build: () => ({ ...clean, theia: { ...clean.theia, [WIDGET]: plant(clean.theia[WIDGET],
+                "CHROME_BAR_EDIT_COPY_COMMAND_ID, [], live('cmd_copy'))", "CHROME_BAR_EDIT_COPY_COMMAND_ID, [], this.commands.isEnabled(CHROME_BAR_EDIT_COPY_COMMAND_ID))") } }),
+            expect: 'the cmd_copy Edit row is not greyed from the page',
+        },
+        {
+            name: 'checkOnly answered from the cache',
+            build: () => ({ ...clean, api: plant(clean.api, 'enabled: await webTabEditEnabled(entry, cmd, enabled) };', 'enabled };') }),
+            expect: "checkOnly reply is not the page's live answer",
+        },
+        {
+            name: 'child message-name drift',
+            build: () => ({ ...clean, child: plant(clean.child, 'case "PowerBrowserEditState:Query":', 'case "PowerBrowserEditState:Ask":') }),
+            expect: 'the edit-state child does not answer',
+        },
+        {
             name: 'bare-command send (the kind sent outside the widget handler)',
             build: () => ({ ...clean, theia: { ...clean.theia, [menuPath]: `${clean.theia[menuPath]}\nexport const bare = { send: () => channel.request({ kind: 'webTabEdit', tabId: 'x', cmd: 'cmd_undo' }) };\n` } }),
             expect: 'outside WebTabWidget.edit',
@@ -220,7 +318,7 @@ function selfTest() {
     let failed = 0;
     for (const testCase of cases) {
         const sources = testCase.build();
-        if (sources.api === null || Object.values(sources.theia).some(text => text === null)) {
+        if (sources.api === null || sources.child === null || Object.values(sources.theia).some(text => text === null)) {
             console.error(`${NAME} --self-test: FAIL -- '${testCase.name}' did not modify any source; the anchor it edits has drifted`);
             failed++;
             continue;

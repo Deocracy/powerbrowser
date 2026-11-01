@@ -30,6 +30,9 @@ export const CHROME_BAR_EDIT_UNDO_COMMAND_ID = 'powerbrowser.chrome-bar.edit-und
 export const CHROME_BAR_EDIT_CUT_COMMAND_ID = 'powerbrowser.chrome-bar.edit-cut';
 export const CHROME_BAR_EDIT_COPY_COMMAND_ID = 'powerbrowser.chrome-bar.edit-copy';
 export const CHROME_BAR_EDIT_PASTE_COMMAND_ID = 'powerbrowser.chrome-bar.edit-paste';
+// Phase 33 plan 05 (PAGE-09): the Edit submenu's other two rows, from the same frozen set.
+export const CHROME_BAR_EDIT_REDO_COMMAND_ID = 'powerbrowser.chrome-bar.edit-redo';
+export const CHROME_BAR_EDIT_SELECT_ALL_COMMAND_ID = 'powerbrowser.chrome-bar.edit-select-all';
 export const CHROME_BAR_VIEW_SOURCE_COMMAND_ID = 'powerbrowser.chrome-bar.view-source';
 export const CHROME_BAR_READER_TOGGLE_COMMAND_ID = 'powerbrowser.chrome-bar.reader-toggle';
 // Phase 33 plan 02 (BMK-01): opens the star path; the pill's handler does the bookmark write, never this command.
@@ -98,6 +101,8 @@ export const CHROME_BAR_EDIT_UNDO: Command = { id: CHROME_BAR_EDIT_UNDO_COMMAND_
 export const CHROME_BAR_EDIT_CUT: Command = { id: CHROME_BAR_EDIT_CUT_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Cut' };
 export const CHROME_BAR_EDIT_COPY: Command = { id: CHROME_BAR_EDIT_COPY_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Copy' };
 export const CHROME_BAR_EDIT_PASTE: Command = { id: CHROME_BAR_EDIT_PASTE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Paste' };
+export const CHROME_BAR_EDIT_REDO: Command = { id: CHROME_BAR_EDIT_REDO_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Redo' };
+export const CHROME_BAR_EDIT_SELECT_ALL: Command = { id: CHROME_BAR_EDIT_SELECT_ALL_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Select All' };
 
 // 33-UI-SPEC command table: Firefox's casing.
 export const CHROME_BAR_BOOKMARK_PAGE: Command = { id: CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, category: CHROME_BAR_COMMAND_CATEGORY, label: 'Bookmark This Page' };
@@ -399,6 +404,16 @@ export class ChromeBarCommandContribution implements CommandContribution {
         });
         commands.registerCommand(CHROME_BAR_EDIT_PASTE, {
             execute: () => currentWebTab()?.edit('cmd_paste'),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_EDIT_REDO, {
+            execute: () => currentWebTab()?.edit('cmd_redo'),
+            isEnabled: () => !!currentWebTab(),
+            isVisible: () => true,
+        });
+        commands.registerCommand(CHROME_BAR_EDIT_SELECT_ALL, {
+            execute: () => currentWebTab()?.edit('cmd_selectAll'),
             isEnabled: () => !!currentWebTab(),
             isVisible: () => true,
         });
