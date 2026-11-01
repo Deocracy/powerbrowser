@@ -18,19 +18,22 @@
 // fixtures. It reads the tracked tree (git ls-files), skips prose and binaries,
 // and fails on either forbidden form that sits in update-download context: on a
 // line that names a MAR or a patch, or in a file that does. A release-notes URL (no
-// /releases/download/ segment) is not a download and passes. Verifier scripts
-// (scripts/verify-*.mjs) are exempt by pattern: their self-test fixtures carry the
-// forbidden forms as literals by design. Data files and other scripts stay scanned.
+// /releases/download/ segment) is not a download and passes. In a verifier script
+// (scripts/verify-*.mjs) only the lines of its selfTest function are exempt: the
+// self-test fixtures carry the forbidden forms as literals by design. The rest of a
+// verifier, data files and every other script stay scanned.
 //
 // Usage:
 //   node scripts/verify-update-download-host.mjs
 //   node scripts/verify-update-download-host.mjs --self-test
 //
 // Exit 0 pass, 1 fail. --self-test plants a descriptor template, a generator
-// output and a fixture carrying the github.com form, plus a descriptor template
-// carrying the release-assets form, and requires each to go red naming the file and
-// the manifest's MAR origin; three controls (a release-notes URL, a patch URL on the
-// MAR origin, and a verifier script carrying the github form) must stay green.
+// output and a fixture carrying the github.com form, a descriptor template carrying
+// the release-assets form, a non-verifier script carrying the github form, and a
+// verifier script carrying it outside its selfTest function, and requires each to go
+// red naming the file and the manifest's MAR origin; three controls (a release-notes
+// URL, a patch URL on the MAR origin, and a verifier script carrying the github form
+// inside its selfTest function) must stay green.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -58,8 +61,9 @@ for (const a of args) {
 const GITHUB_DOWNLOAD = /https?:\/\/github\.com\/[^\s"'<>]+\/releases\/download\//i;
 // A release-assets URL: GitHub's signed redirect target, expiring about an hour after issue.
 const RELEASE_ASSETS = /https?:\/\/release-assets\.githubusercontent\.com\//i;
-// Verifier scripts carry the forbidden forms as self-test fixtures by design.
+// Verifier scripts carry the forbidden forms as self-test fixtures by design, inside their selfTest function.
 const VERIFIER = /^scripts\/verify-[^/]*\.mjs$/;
+const SELF_TEST_START = /^(?:async\s+)?function\s+selfTest\s*\(/;
 // Update-download context: a MAR, a patch, a descriptor, or the update XML.
 const UPDATE_CONTEXT = /\.mar\b|patchURL|servedMarUrl|<patch\b|update\.xml/i;
 // Prose, binaries and lockfiles are not descriptors, templates or fixtures.
@@ -104,14 +108,19 @@ function manifestMarOrigin(root) {
 export function githubDownloadHits(files, read) {
     const hits = [];
     for (const rel of files) {
-        if (VERIFIER.test(rel) || SKIP.some(re => re.test(rel))) continue;
+        if (SKIP.some(re => re.test(rel))) continue;
         const text = read(rel);
         if (text === null || text === undefined) continue;
         const fileIsUpdate = UPDATE_CONTEXT.test(text);
+        const verifier = VERIFIER.test(rel);
+        let inSelfTest = false;
         text.split('\n').forEach((line, i) => {
-            if ((GITHUB_DOWNLOAD.test(line) || RELEASE_ASSETS.test(line)) && (fileIsUpdate || UPDATE_CONTEXT.test(line))) {
+            // shortcut: the selfTest region ends at the first column-0 '}', the house style; upgrade to a parser if a verifier breaks it.
+            if (verifier && SELF_TEST_START.test(line)) inSelfTest = true;
+            if (!inSelfTest && (GITHUB_DOWNLOAD.test(line) || RELEASE_ASSETS.test(line)) && (fileIsUpdate || UPDATE_CONTEXT.test(line))) {
                 hits.push(`${rel}:${i + 1}`);
             }
+            if (inSelfTest && /^}/.test(line)) inSelfTest = false;
         });
     }
     return hits;
@@ -168,7 +177,9 @@ function selfTest() {
         'powerbrowser/packaging/update-xml.tmpl': '<updates><update><patch URL="https://release-assets.githubusercontent.com/github-production-release-asset/1/x.mar"/></update></updates>\n',
         'control/release-notes-link.json': '{ "app.releaseNotesURL": "https://github.com/DeBIOS-Foundation/powerbrowser/releases" }\n',
         'control/mar-origin-patch.xml': `<updates><update><patch URL="${manifestMarOrigin(REPO_ROOT)}/v1.0.0-1/x.mar"/></update></updates>\n`,
-        'scripts/verify-planted-fixture.mjs': "const BAD = 'patchURL https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\n",
+        'scripts/build-planted-descriptor.mjs': "const patchURL = 'https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\n",
+        'scripts/verify-planted-outside.mjs': "const BAD = 'patchURL https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\nfunction selfTest() {\n    return 0;\n}\n",
+        'scripts/verify-planted-fixture.mjs': "export const servedMarUrl = 'https://downloads.example.invalid/x.mar';\nfunction selfTest() {\n    const BAD = 'patchURL https://github.com/DeBIOS-Foundation/powerbrowser/releases/download/v1.0.0/x.mar';\n    return BAD;\n}\n",
     };
     const planted = (rels) => ({ files: [...real, ...rels], read: (rel) => (rel in fixtures ? fixtures[rel] : realRead(rel)) });
 
@@ -178,6 +189,8 @@ function selfTest() {
         ['generator output names the github.com download', 'scripts/generated-update-descriptor.json'],
         ['fixture names the github.com download as patchURL', 'powerbrowser/branding/release/fixtures/patch-manifest.json'],
         ['descriptor template names a release-assets download', 'powerbrowser/packaging/update-xml.tmpl'],
+        ['non-verifier script names the github.com download as patchURL', 'scripts/build-planted-descriptor.mjs'],
+        ['verifier script names the github.com download outside its selfTest function', 'scripts/verify-planted-outside.mjs'],
     ];
     for (const [name, rel] of plants) {
         const { failures } = runChecks(REPO_ROOT, planted([rel]));
