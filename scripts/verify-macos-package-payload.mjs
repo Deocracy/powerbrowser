@@ -460,8 +460,10 @@ export function runChecks(root, overrides = {}) {
 /** One thin 64-bit Mach-O slice with an optional embedded signature, its page hash real. */
 export function fakeSlice(cputype, { sign = true, adhoc = true, team = null, cms = 0 } = {}) {
     const code = Buffer.alloc(4096, 0x90);
+    code.fill(0, 0, 64);
     code.writeUInt32LE(0xfeedfacf, 0);
     code.writeUInt32LE(cputype, 4);
+    code.writeUInt32LE(cputype === CPU_TYPE.x86_64 ? 3 : 0, 8); // CPU_SUBTYPE_X86_64_ALL, CPU_SUBTYPE_ARM64_ALL
     code.writeUInt32LE(2, 12);
     code.writeUInt32LE(sign ? 1 : 0, 16);
     code.writeUInt32LE(sign ? 16 : 0, 20);
@@ -521,6 +523,7 @@ export function fakeFat(slices) {
     slices.forEach((s, i) => {
         const base = 8 + i * 20;
         head.writeUInt32BE(s.readUInt32LE(4), base);
+        head.writeUInt32BE(s.readUInt32LE(8), base + 4);
         head.writeUInt32BE(off, base + 8);
         head.writeUInt32BE(s.length, base + 12);
         head.writeUInt32BE(12, base + 16);

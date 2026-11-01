@@ -5285,12 +5285,17 @@ run_own_checks() {
     # contracted strings from the @powerbrowser/branding contribution and
     # applies the no-internal-identifier shape test (names PowerBrowser, no
     # ALL-CAPS token or dotted key, body wired to its on-screen affordance in
-    # the client). Honestly --quick: text reads only.
+    # the client). Phase 55 (UPD-21): the macOS variant must name the folder the
+    # DMG installs into (read from dmg.py), and the download page's macOS
+    # signing claims must equal the posture release.yml implements, as a set.
+    # Honestly --quick: text reads only.
     "update-copy|node $REPO_ROOT/scripts/verify-update-copy.mjs"
     # update-copy-self-test plants, in memory only, a pref key, an ALL-CAPS
     # token, a missing product name, an unwired affordance, a status with no
     # next step, an unclassified string, client literals (whitespace-bearing
-    # and single-word) and the two Check-again faults, each red naming its
+    # and single-word), a pref key in the macOS body, the Applications folder
+    # dropped from it, a notarization overclaim and a Developer ID overclaim on
+    # the download page, and the two Check-again faults, each red naming its
     # drift. The once-per-session rule is driven through the real client
     # (prompts 1, 1, 2), not a constant stub (CR-06, WR-05, WR-06).
     "update-copy-self-test|node $REPO_ROOT/scripts/verify-update-copy.mjs --self-test"
