@@ -73,7 +73,7 @@ Other problems:
 - highlight-all cannot be turned off;
 - the live checks for find steps and audio cannot catch the failures they are meant to catch.
 
-## Fix outcome (2026-10-31, fix run paused before close-out)
+## Fix outcome (2026-10-31; closed out 2026-11-01)
 
 Scope: CR-01 and WR-01 to WR-11. Info findings were not in scope. Every live row below ran on `objdir/dist/bin/powerbrowser` through `scripts/verify-page-tools-live.mjs`. Every "red pre-fix" result came from running the same row against the HEAD module or the HEAD frontend before the fix.
 
@@ -87,7 +87,7 @@ Scope: CR-01 and WR-01 to WR-11. Info findings were not in scope. Every live row
 | WR-05 | fixed | `f580f7e4` | The `find` row listens for FinderParent `onHighlightFinished` and requires an explicit `highlight:false` after the toggle is turned off. Red pre-fix, green after. |
 | WR-06 | fixed | `18b825d1` | The `find` row navigates, then steps from the widget, and must see `findTotal` 3. Red on the pre-fix frontend, green after the rebuild. |
 | WR-07 | skipped | none | The stand-in cannot satisfy `updateReaderButton` with a no-op. The method belongs to the AboutReaderParent actor. It returns early only when `browser.getTabBrowser()` is null or the overlay is not `selectedBrowser`, and getting either result means changing `getTabForBrowser` or `selectedBrowser` for every consumer (tabs.*). Hidden stub elements in the shell document would then reach `doc.l10n.setAttributes` and `PageActions.sendPlacedInUrlbarTrigger`. That needs its own Pitfall-2 record. Follow-up. |
-| WR-08 | fixed, needs human verification | `0cbb77b6` | New row `crash-navigate`: Back and Forward are disabled while crashed; navigating loads the new URL with the kept history behind it. Red pre-fix, green 3 times in a row in single-scenario runs. In the final combined run it hit a harness BiDi WebSocket error; this is not a product verdict, but it should be re-run. The fix also changes chrome: `webTabOpen` loads the requested URL after restoring a history it kept at a crash (`crashKept`), and only then. |
+| WR-08 | fixed, needs human verification | `0cbb77b6` | New row `crash-navigate`: Back and Forward are disabled while crashed; navigating loads the new URL with the kept history behind it. Red pre-fix, green 3 times in a row in single-scenario runs. The combined run before the pause hit a harness BiDi WebSocket error; the close-out re-ran it alone (PASS, load 7.7) and in the full live run (PASS). Navigate-after-restore still needs a human check (32-UAT.md). The fix also changes chrome: `webTabOpen` loads the requested URL after restoring a history it kept at a crash (`crashKept`), and only then. |
 | WR-09 | fixed | `1bdbfdf8` | FindNext and F3 now require `findCurrent` to change. Plant `find-step-noop` (the Finder's `findAgain` stubbed out) goes red; `--self-test --only find` passes. |
 | WR-10 | skipped | none | Release packaging must put libpulse on the loader path; tracked as a follow-up. |
 | WR-11 | fixed | `1cf10615` | The `audio` row focuses the muted tab's mark and presses Enter; the tab must unmute. Red with the pre-fix strip ("cannot take keyboard focus"). Also fixed: the strip did not re-render on mute or playback changes, so the mark did not appear. |
@@ -98,6 +98,13 @@ Verification so far:
 - Self-tests: `--self-test --only crash-reader`, `--only source` and `--only find` all passed.
 - `ng-040-internals-catalogue-lines` is green after each module edit. Catalogue rows were remapped by git hunk, not with `--fix`.
 - `scripts/verify-platform.sh --quick` exit 0 inside `nix develop .#theia` at `23c08bb5` only. It has not been re-run on the later commits.
+
+Close-out at `842d379c` (2026-11-01, load from /proc/loadavg, 1-minute value):
+
+- `nix develop .#theia --command scripts/verify-platform.sh --quick`: exit 0 (`verify-platform: PASS -- all checks passed`), load 6.3 at start.
+- `verify-page-tools-live.mjs --scenario crash-navigate` alone: PASS, load 7.7.
+- `verify-page-tools-live.mjs --self-test` (full, every plant): PASS. 14 clean controls green, 20 planted faults red, each naming its drift. Load 7.5 at start, 3.2 at end.
+- Full live run `--scenario find,zoom,audio,keys-theia,favicon,reader,source,crash,crash-reader,crash-switching,crash-navigate,devtools,downloads,print,save,edit`: 16/16 PASS, load 3.0 at start, 12.5 at end. The record-only probes (`*-today`, `remoteness-*`) were not re-run so their verdict keys were not rewritten.
 
 ## Critical Issues
 
