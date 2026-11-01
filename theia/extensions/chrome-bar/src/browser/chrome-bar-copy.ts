@@ -235,6 +235,8 @@ export const CHROME_BAR_COPY = Object.freeze({
     updatedTabLabel: (label: string) => `${label}, updated`,
     // Phase 35 plan 03 (PROMPT-04, 35-UI-SPEC Refused target): the page menu's row for a link the shell cannot open.
     pageMenuRefusedLink: (subject: string) => `${subject} can't open that link here. Choose Copy Link to copy it instead.`,
+    // 35-REVIEW WR-06: a page menu row chrome refused or that failed after the menu offered it.
+    pageMenuRowRefused: (subject: string) => `${subject} couldn't do that on this page. Right-click the page to choose something else.`,
     // Phase 35 plan 04 (PROMPT-04): the save dialog titles of the page menu's save rows, and their failure line.
     saveLinkTitle: 'Save link as',
     saveImageTitle: 'Save image as',

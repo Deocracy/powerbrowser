@@ -8404,14 +8404,15 @@ async function runPageMenuRow(id, pending, state, itemId) {
       if (!pageMenuTargetAllowed(data.browser.contentPrincipal, data.docLocation)) {
         return { where: "refused" };
       }
-      return { where: PowerBrowserAPI.webTabNavigate(pending.tabId, data.docLocation, { grant: pageMenuFrameLoad(data) }) };
+      // WR-06 (35-REVIEW): a navigate that did not start (refused-scheme, unknown-tab) is the row's refusal.
+      return { where: PowerBrowserAPI.webTabNavigate(pending.tabId, data.docLocation, { grant: pageMenuFrameLoad(data) }) === "loading" ? "loading" : "refused" };
     case "context-openframeintab": // openFrameInTab (:1576-1583)
       return openGrant(state, data.browser.contentPrincipal, data.docLocation, pageMenuFrameLoad(data), "browser.tabs.loadInBackground");
     case "context-reloadframe": // reloadFrame (:1586-1589), never forced
       actor.reloadFrame(context.targetIdentifier, false);
       return { where: "done" };
     case "context-viewframesource": // viewFrameSource (:1663-1670) through the 32-07 view-source function, with the frame's own document
-      return { where: webTabViewSourceReply("webTabViewSource", pending.tabId, false, data.docLocation).where ?? "refused" };
+      return { where: webTabViewSourceReply("webTabViewSource", pending.tabId, false, data.docLocation).where === "applied" ? "applied" : "refused" };
     case "context-savelink":
     case "context-saveimage":
     case "context-savevideo":
@@ -8526,7 +8527,8 @@ function copyFromPage(data, text) {
 
 // Inspect's conditions (nsContextMenu.sys.mjs:842-855). The overlay's tab-host node is inTabBrowser.
 function pageToolFacts(data) {
-  const showInspect = !!tabHostNodeOf(data.browser) && Services.prefs.getBoolPref("devtools.inspector.enabled", true) && !Services.prefs.getBoolPref("devtools.policy.disabled", false);
+  // WR-06 (35-REVIEW): shim.isEnabled() is the check webTabDevtoolsReply makes before it opens a toolbox, so a row it would refuse is omitted.
+  const showInspect = !!tabHostNodeOf(data.browser) && Services.prefs.getBoolPref("devtools.inspector.enabled", true) && !Services.prefs.getBoolPref("devtools.policy.disabled", false) && webTabDevToolsShim().isEnabled();
   const a11yPrefs = Services.prefs.getBoolPref("devtools.accessibility.enabled", false) && Services.prefs.getBoolPref("devtools.enabled", true);
   return {
     showInspect,

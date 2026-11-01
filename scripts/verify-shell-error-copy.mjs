@@ -619,6 +619,7 @@ const EXPECTED_NAV_COPY = new Set([
   "Save page as",
   "${name} couldn't save that page. Choose a different place and try again.",
   "${name} can't open that link here. Choose Copy Link to copy it instead.",
+  "${name} couldn't do that on this page. Right-click the page to choose something else.",
   "Save link as",
   "Save image as",
   "Save video as",

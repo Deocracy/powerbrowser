@@ -121,7 +121,12 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
         const pick = (itemId: string | null): void => {
             if (!sent) {
                 sent = true;
-                void this.send(tabId, menuId, itemId).then(reply => this.settle(widget, tabId, menuId, itemId, reply)).catch(() => widget.focusPage());
+                void this.send(tabId, menuId, itemId).then(reply => this.settle(widget, tabId, menuId, itemId, reply)).catch(() => {
+                    if (itemId !== null) {
+                        this.messages.error(CHROME_BAR_COPY.pageMenuRowRefused(appSubject()));
+                    }
+                    widget.focusPage();
+                });
             }
         };
         const menu: CompoundMenuNode = {
@@ -239,6 +244,11 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
         }
         if (itemId !== null && reply.ok && reply.where === 'save-pick') {
             await this.saveTarget(widget, tabId, menuId, itemId, reply.suggestedName ?? 'download');
+        }
+        // WR-06 (35-REVIEW): a row chrome refused after offering it (the page may not open that target, the toolbox
+        // did not open) or one that failed says so, never a click that does nothing.
+        if (itemId !== null && (reply.ok !== true || reply.where === 'refused')) {
+            this.messages.error(CHROME_BAR_COPY.pageMenuRowRefused(appSubject()));
         }
         if (reply.ok && reply.where === 'grant' && typeof reply.url === 'string' && typeof reply.grantId === 'string') {
             const opened = await this.webTabs.openInBackground(reply.url, widget, reply.grantId);
