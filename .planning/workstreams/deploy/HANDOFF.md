@@ -25,19 +25,26 @@ dependency is wave order only. They were run ahead of 44-01 on that basis.
 Last `--quick` result: PASS on e5e997fd (reported by the 44-03 fixer). Not re-run after the
 two doc-only commits that followed.
 
+## Update 2026-10-31 (second session): 49-04 is done
+
+| Plan | State | Commits |
+|------|-------|---------|
+| 49-04 descriptor job + channel-live | built, Opus-reviewed (3 CR, 5 WR, 4 IN), 10 of 12 fixed | c953d2f5..c7cff5d4, review f8b8f19b, fixes af31517e..4de8a340 |
+
+Not fixed: CR-02 (release-manifest.json is not a Release asset; its `host` field names the build
+machine, so publishing it is the owner's call — BLOCKED.md "49-04" item 2) and IN-03 (manifest-vs-tree
+check duplicated across release.yml and verify-channel-live.mjs). The CR-03 retention gap is resolved
+(7-day `release-linux-manifest` artifact; release-shape derives the minimum from the descriptor wait).
+
+Last `--quick`: PASS on 4de8a340. Self-tests: channel-live 25 ok, update-download-host 11 ok.
+
+Owner rule recorded 2026-10-31: DSH is not used for Power Browser work; Claude executes.
+
 ## Next autonomous step
 
-1. Re-run `scripts/verify-platform.sh --quick` (takes several minutes; must end `verify-platform: PASS`).
-2. Execute plan **49-04** (`phases/49-release-pipeline-and-legion-runner-e/49-04-PLAN.md`):
-   `descriptor` + `channel-live` jobs in `release.yml`. It consumes `scripts/build-update-xml.mjs`
-   and `descriptor-monotonic` (now takes `--descriptors <dir>`). Its plan text predates the 44-02
-   fixes: patch URLs now name the published asset `<app>-<ver>.<token>.complete.mar`, and the
-   emitter takes platformVersion from `[Gecko] MaxVersion`. `gsd-execute-phase` has no single-plan
-   filter and would stop at the 49-05 owner checkpoint, so dispatch a `gsd-executor` for 49-04 alone,
-   then review and fix it.
-3. After that, no autonomous plan remains. Every other unfinished plan is an owner checkpoint or is
-   blocked on an owner action (below). Per the owner's rule, owner checks are deferred to one
-   end-of-milestone pass, so the run stops there.
+**None.** Every unfinished plan is an owner checkpoint or is blocked on an owner action (below).
+Per the owner's rule, owner checks are deferred to one end-of-milestone pass. Start that pass with
+the "Blocked on the owner" and "Open questions" lists, plus BLOCKED.md "49-04" item 2.
 
 Owner instruction for this run: **every subagent runs on Opus** (given 2026-10-31, supersedes the
 Haiku/Sonnet default for this run).
