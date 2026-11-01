@@ -3728,6 +3728,13 @@ run_own_checks() {
     # self-test row in this array gives.
     "shell-gbrowser-standin|node $REPO_ROOT/scripts/verify-shell-gbrowser-standin.mjs"
     "shell-gbrowser-standin-self-test|node $REPO_ROOT/scripts/verify-shell-gbrowser-standin.mjs --self-test"
+    # Phase 35 (35-02): the shell furniture. The ids in powerbrowser.xhtml's
+    # furniture block equal the ids the boundary's Phase 35 section wires, each
+    # element equals upstream's element of the same id, the installer is one
+    # member called once, and the D-11 and status-line layer rules hold. Text
+    # reads only; `upstream/` is read, never written.
+    "shell-furniture|node $REPO_ROOT/scripts/verify-shell-furniture.mjs"
+    "shell-furniture-self-test|node $REPO_ROOT/scripts/verify-shell-furniture.mjs --self-test"
 
     # NEW (01-06): GUI-04's bridge-contract assertion. Reads the TypeScript
     # sources, never a compiled artifact, so it is honestly --quick: no build,

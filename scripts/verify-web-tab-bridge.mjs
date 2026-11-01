@@ -781,6 +781,12 @@ function selfTest() {
             expect: 'chrome pushes kinds no frontend source subscribes to: plantedPush',
         },
         {
+            // Phase 35 (35-02): the overLink status line's one subscription removed.
+            name: 'planted overLink subscription removed',
+            sources: { ...clean, [WIDGET]: clean[WIDGET].replace(/\s*this\.toDispose\.push\(this\.webTabs\.onPush\('overLink'[\s\S]*?\n {8}\}\)\);/, '') },
+            expect: 'chrome pushes kinds no frontend source subscribes to: overLink',
+        },
+        {
             name: 'planted frontend-only subscription',
             sources: { ...clean, [WIDGET]: clean[WIDGET] + "\nthis.channel.onPush('plantedSub', () => undefined);\n" },
             expect: 'the frontend subscribes to kinds chrome never pushes: plantedSub',
