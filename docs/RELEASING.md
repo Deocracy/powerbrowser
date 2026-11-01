@@ -1269,7 +1269,8 @@ Provision about 62 GB of free disk for them before registering.
 3. Fetch `upstream/` with `scripts/fetch-upstream.sh` and run `nix develop .#firefox` once, so
    the toolchain and `sccache` warm up. The four objdirs are build output and are not
    restored; the first build of each is a full build (about 54 minutes for Linux).
-4. Confirm the runner shows online with the `powerbrowser-release` label, that no PAT and no
+4. Confirm the runner shows online with its registered runner label (the one `release.yml`'s
+   `build-linux` job selects), that no PAT and no
    App key exists on the host, and that the pre-job hook refuses a run that is not a
    `workflow_dispatch` of `main`. The MAR key store at `~/.config/powerbrowser-release/mar-key/`
    belongs to the owner's account, not the runner's, and a rebuild restores it only from the
