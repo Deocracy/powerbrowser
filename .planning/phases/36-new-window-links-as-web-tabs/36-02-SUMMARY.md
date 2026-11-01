@@ -113,6 +113,12 @@ See `key-decisions` in the frontmatter.
 - **Task 1 not re-implemented.** It landed in `049fe84f` as a recorded 36-01 deviation, with the ack sent before `addWidget`. That order is kept on purpose. The plan's order (addWidget, then activate, then request webTabAdopt) would make the widget's own `webTabOpen` build a second overlay.
 - **CLAUDE.md not edited (caller instruction).** Task 2 asks for a rule-5 wording change. Changing the project's CLAUDE.md needs the owner's own approval, so the proposed text is a deferred owner item (below).
 - **`yarn build` not run.** `theia/node_modules/.bin/tsc --noEmit -p theia/extensions/tab-uris` is clean, and the `tab-uris-typecheck` row in `--quick` passes. No full sidecar build was run, because nothing outside tab-uris changed.
+- **Adopted tabs have no tab-host node, and this costs more than extension visibility (36-REVIEW WR-05).** 36-01-SUMMARY's scope deviation records that adopted overlays do not enter the Phase 31.1 tab host, so extensions do not see them. Every other path that finds a tab through `tabHostNodeOf(browser)` fails on an adopted tab for the same reason:
+  - **Favicon.** `webTabFaviconOf` reads `tabHostNodeOf(browser)?.image`, and LinkHandlerParent's `setIcon` finds no tab node, so an adopted tab never pushes a favicon and the strip shows the globe.
+  - **DevTools.** `webTabDevtoolsReply` answers `unavailable` when no node exists, so F12 and the DevTools menu item do nothing useful on an adopted tab.
+  - **WebDriver.** `gBrowser.webDriverTabs` lists tab-host nodes, so automation does not see an adopted tab.
+
+  An adopted tab becomes a full tab only after a restart, when it reopens through `webTabOpen`. Tab-host adoption (`tabHostAddTab` from `adoptPendingOverlay`, with `makeTabNode`'s `openerTab: null` effect recorded) is the follow-up in 36-01-SUMMARY deferred item 4; it is not built here. Live legs for the favicon, F12 and WebDriver losses belong to that follow-up.
 
 ## Deferred Items
 
