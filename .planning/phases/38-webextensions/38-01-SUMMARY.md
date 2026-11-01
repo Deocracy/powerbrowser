@@ -199,3 +199,21 @@ None. The plumbing has no UI. Nothing renders placeholder data; 38-02 renders th
 
 - FOUND: scripts/verify-extension-actions.mjs, scripts/verify-extension-actions-live.mjs, scripts/lib/pb-extension-fixtures.mjs
 - FOUND: commits 965999ae, ddbab7c5, 8edac760 (ancestors of HEAD)
+
+## Follow-up: patch 050 amendment
+
+The three patch 050 items under "Blocked on patch 050" are closed in the patch. Commits `12118720` (patch, guards gate, 31.1 live scenario) and `f3dbe649` (chrome listener, its gate rule, live badge assertion).
+
+- **Badge/icon signal.** The tab host skip in `ext-browserAction.js` `updateWindow` is kept (no CustomizableUI in the shell). It now dispatches `TabHostActionUpdate` on `window.gBrowser.tabContainer`, which is the host strip. `EXTENSION_TAB_EVENTS` in the Phase 38 section lists that event, so `setBadgeText` and `setIcon` re-push through the same deduplicated `pushExtensionActions`. The event was added on an existing line, so no `INTERNAL-APIS.md` row moved. `verify-extension-actions.mjs` rule 7 derives every event the patch dispatches and requires `EXTENSION_TAB_EVENTS` to list it. Its plant `signal unheard` goes red. popup-action now asserts that the badge `'ok'` is pushed. This proves presence only: a retitle push may carry the badge first.
+- **`tabs.update(id, {active: true})`.** The WR-07 block in `ext-tabs.js` now refuses only pinned and highlighted. Upstream's `tabbrowser.selectedTab = nativeTab` reaches the stand-in setter, which runs `tabsBridgeActivate`. G10 asserts the two remaining refusals, with no `||` after highlighted. The new plant `G10 active refusal restored` goes red as WEAKENED. `verify-ext-tab-host-live.mjs` `refused-write` now checks a highlighted write where it used to check active.
+- **`tabs.create` with zero web tabs.** `ext-tabs.js` create guards the frame loader with G3's shape (`currentTab?.linkedBrowser?.frameLoader`, size only when present). The extension now sees `tabsBridgeCreate`'s own refusal instead of a TypeError. The new GUARDS row G11 (`getAPI.create`) checks it with its removed, weakened and misplaced plants.
+
+Counts: patch 050 went from 10 files and 23 hunks (365 lines) to 10 files and 24 hunks (387 lines). The guards self-test went from 40 to 44 plants, and verify-extension-actions from 6 to 7 plants. The patch was regenerated in a scratch repo: the pristine files from `git -C upstream show HEAD:<path>`, with the current 050 applied. That regeneration was byte-identical to the committed patch before any edit. After the edits, `git diff --abbrev=10` against the pristine commit produced the new patch, and `git apply --check` passed on a fresh pristine copy.
+
+Gates on the final HEAD: `verify-ext-tab-host-patch-guards` and `--self-test`, `verify-extension-actions` and `--self-test`, `verify-extension-actions-live --static` and `--self-test`, `verify-ext-tab-host-scope` and `--self-test`, `verify-shell-gbrowser-standin`, `check-patch-surface.sh`, `apply-patches.sh --self-test` (it copies one upstream file read-only), `verify-ng-040` (normal mode), `check-internals-boundary.sh --catalogue`, and `verify-platform.sh --quick`. All PASS. No check hand-keeps a 050 hash or hunk count: the live stamp checks hash the patch at run time.
+
+Deferred:
+
+1. **Re-patch main's `upstream/` after the merge.** It holds the old 050, applied and staged. No other patch touches these 10 files. From `/home/chris/coding/Power-Browser`: `cd upstream && git checkout HEAD -- $(grep '^+++ b/' ../patches/050-extension-tab-host.patch | sed 's#^+++ b/##') && git apply --3way ../patches/050-extension-tab-host.patch`. Then confirm with `git -C upstream diff --cached --stat`.
+2. **Rebuild and stamp.** `nix develop .#firefox --command bash -c 'cd upstream && MOZCONFIG=../.mozconfig ./mach build'`, then `sha256sum patches/050-extension-tab-host.patch > objdir/.pb-050-build.sha256`.
+3. **The rebuild-verified live runs** listed above under "Deferred to the end-of-milestone live pass". Add `node scripts/verify-ext-tab-host-live.mjs --scenario refused-write`, whose highlighted step is new.
