@@ -19,6 +19,7 @@ import { isOSX } from '@theia/core/lib/common/os';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { WebTabChannel, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import {
+    CHROME_BAR_FULL_SCREEN_COMMAND_ID,
     CHROME_BAR_NEW_TAB_COMMAND_ID,
     chooseSaveDestination,
     focusAddressPill,
@@ -130,11 +131,6 @@ export function tooltipFor(button: NavButton): string {
     return row ? `${verb} (${isOSX ? row.macLabel : row.label})` : verb;
 }
 
-/**
- * Phase 33 plan 33-05's Full Screen command (MENU-03, D-14), which toggles `window.fullScreen` chrome-side.
- * shortcut: spelled here until Phase 33 lands its exported `CHROME_BAR_FULL_SCREEN_COMMAND` const; import that instead then.
- */
-const FULL_SCREEN_COMMAND_ID = 'powerbrowser.chrome-bar.full-screen';
 /** Phase 33 (MENU-03): a page row's key label as a menu row's shortcut hint (macOS: its macLabel); none for an unknown row. */
 export function pageKeyLabel(id: string): string[] {
     const row = PAGE_SHORTCUTS.find(r => r.id === id);
@@ -220,7 +216,7 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['viewSource', tab => tab.viewSource()],
         ['devtoolsOpen', tab => tab.openDevtools()],
         // PAGE-07 (35-07): the one Full Screen command, as newTab runs its command; the top panel stays (D-05 amended).
-        ['fullscreen', () => this.commands.executeCommand(FULL_SCREEN_COMMAND_ID)],
+        ['fullscreen', () => this.commands.executeCommand(CHROME_BAR_FULL_SCREEN_COMMAND_ID)],
         // BMK-01 (T-27-19): the star's own path, which owns the editor and the write; never the store kind.
         ['bookmarkPage', () => openBookmarkStar()],
         // BMK-03/BMK-04 (T-27-19): the widget's reopen path and the toolbar toggle (a setting), never a store kind.

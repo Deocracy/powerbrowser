@@ -23,7 +23,7 @@ import { CommandMenu, CommandRegistry, CompoundMenuNode, MenuNode, MenuPath, Mes
 import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { WebTabChannel, WebTabOpenHandler, WebTabReply, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { CHROME_BAR_COPY, appSubject } from './chrome-bar-copy';
-import { chooseSaveDestination } from './chrome-bar-commands';
+import { CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, chooseSaveDestination } from './chrome-bar-commands';
 
 export const PAGE_CONTEXT_MENU_PATH: MenuPath = ['powerbrowser-page-context-menu'];
 
@@ -46,12 +46,6 @@ interface FrontendRow {
     /** The row hands focus to a surface of its own (the bookmark editor), so the page does not take it back. */
     keepsFocus?: boolean;
 }
-
-/**
- * Cross-lane (35-04): Phase 33 plan 33-02 registers this command (bookmark the current page, then open the star
- * editor). It is executed by id; until it is registered, CommandRegistry rejects and the page gets focus back.
- */
-const BOOKMARK_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.bookmark-page';
 
 /**
  * Rows the frontend performs with the widget's existing methods, keyed by upstream id. Their keys equal the
@@ -214,7 +208,7 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
     /** Bookmark Page: the right-clicked tab becomes current, then Phase 33's bookmark path runs for it. Not named bookmarkPage: verify-web-tab-bridge rule 12 fences that store call. */
     async bookmarkThisPage(widget: WebTabWidget): Promise<void> {
         await this.shell.activateWidget(widget.id);
-        await this.commands.executeCommand(BOOKMARK_PAGE_COMMAND_ID);
+        await this.commands.executeCommand(CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID);
     }
 
     /**

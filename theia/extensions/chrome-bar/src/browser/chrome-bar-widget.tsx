@@ -379,11 +379,6 @@ function BookmarksToolbar(props: BookmarksToolbarProps): React.ReactElement {
  * startup-opened window would break the stock chrome per the candidate-A
  * constraint).
  */
-/** BMK-07 (34-01): the Phase 33 ChromeStoreClient method the strip's Bookmark rows call (Phase 33 plan 01). */
-interface TabBookmarkStore {
-    bookmarkPage(url: string, title: string, folderGuid?: string): Promise<unknown>;
-}
-
 @injectable()
 export class ChromeBarWidget extends ReactWidget {
 
@@ -1126,18 +1121,13 @@ export class ChromeBarWidget extends ReactWidget {
 
     /**
      * BMK-07 (34-01): the strip's Bookmark Tab / Bookmark All Tabs path and the one call site of Phase 33's
-     * bookmarkPage store method (this file is inside Phase 33's privileged-caller fence). Undefined while the store
-     * client has no such method, so the strip renders both rows disabled and no second bookmark writer exists.
+     * bookmarkPage store method (this file is inside Phase 33's privileged-caller fence). One call per tab: there is
+     * no bulk kind, and chrome queues each URL's call and makes it idempotent.
      */
-    tabBookmarker(): ((tabs: WebTabWidget[]) => Promise<void>) | undefined {
-        const store = this.store as unknown as Partial<TabBookmarkStore>;
-        if (typeof store.bookmarkPage !== 'function') {
-            return undefined;
-        }
-        const bookmarks = store as TabBookmarkStore;
+    tabBookmarker(): (tabs: WebTabWidget[]) => Promise<void> {
         return async tabs => {
             for (const tab of tabs) {
-                await bookmarks.bookmarkPage(tab.url, tab.title.label);
+                await this.store.bookmarkPage(tab.url, tab.title.label);
             }
         };
     }

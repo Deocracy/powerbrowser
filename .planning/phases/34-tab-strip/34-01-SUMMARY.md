@@ -105,6 +105,10 @@ Complete for build work and every static check. The live menu scenario is writte
 - Not implemented here: the `bookmarkPage` store kind, its `STORE_KIND_CLASSES` entry, and the client method. No `STORE_REQUEST_KINDS` or `WEB_TAB_ACTION_KINDS` entry was added.
 - The Phase 34 plans call this path `addBookmark`; the code uses Phase 33's real name, `bookmarkPage`.
 
+## Merge reconciliation (Phase 33)
+
+Done in the follow-up commit after the Phase 33 merge into main. `bookmarkPage` now exists on `ChromeStoreClient`, so the `typeof store.bookmarkPage === 'function'` probe, the local `TabBookmarkStore` interface and the `undefined` return of `tabBookmarker()` are removed, and the Bookmark Tab / Bookmark All Tabs rows are no longer disabled on the store method's absence (they stay disabled only with no http(s) page). `tabBookmarker()` in `chrome-bar-widget.tsx` remains the one `.bookmarkPage(` call site. Bookmark All Tabs calls it once per tab: Phase 33 has no bulk kind, and chrome queues each URL's call and makes it idempotent. The live scenario in `verify-tab-strip-live.mjs` still reads `typeof store.bookmarkPage` at run time; that is now always true.
+
 ## Task Commits
 
 1. **Task 1 (tracer): Reload-only menu plus gate scaffold.** Commit `75add5ad`. Tracer gate: re-ran the verify chain (`verify-tab-strip` + `--self-test` + `tsc --noEmit -p theia/extensions/chrome-bar`), all green, then expanded.

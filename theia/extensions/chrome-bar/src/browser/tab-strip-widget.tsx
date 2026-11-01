@@ -175,7 +175,7 @@ export class TabStripWidget extends ReactWidget {
 
     /**
      * BMK-07 (34-01): set at startup by the chrome-bar contribution to the one Phase 33 bookmarkPage call site in
-     * chrome-bar-widget.tsx; undefined while that store method is absent, which renders both Bookmark rows disabled.
+     * chrome-bar-widget.tsx (ChromeBarContribution.onStart, before any tab menu can open).
      */
     bookmarkTabs: ((tabs: WebTabWidget[]) => Promise<void>) | undefined;
 
@@ -672,12 +672,12 @@ export class TabStripWidget extends ReactWidget {
             },
             {
                 id: 'bookmark', contract: 'Bookmark', label: COPY.bookmark, icon: 'codicon codicon-star-empty', group: 1,
-                enabled: !!bookmark && !!page, failed: CHROME_BAR_COPY.bookmarkTabFailed,
+                enabled: !!page, failed: CHROME_BAR_COPY.bookmarkTabFailed,
                 run: () => bookmark!([page!]),
             },
             {
                 id: 'bookmark-all', contract: 'Bookmark All Tabs', label: COPY.bookmarkAll, icon: 'codicon codicon-star-full', group: 1,
-                enabled: !!bookmark && pages.length > 0, failed: CHROME_BAR_COPY.bookmarkTabFailed,
+                enabled: pages.length > 0, failed: CHROME_BAR_COPY.bookmarkTabFailed,
                 run: () => bookmark!(pages),
             },
             {
