@@ -1325,9 +1325,11 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
     /**
      * The ack goes BEFORE the widget attaches: chrome moves its pending overlay
      * to this widget's id, so the widget's own webTabOpen on attach finds it
-     * "already-open" instead of building a second overlay. Any other reply
-     * means chrome no longer holds it (its 5 s fallback opened the page in the
-     * stock window), so the widget is dropped unshown.
+     * "already-open" instead of building a second overlay. A refusal means
+     * chrome no longer holds it (its 5 s fallback opened the page in the
+     * stock window), so the widget is dropped unshown. A timeout is not a
+     * refusal: chrome is asked whether it holds the overlay before anything
+     * is dropped.
      */
     async adopt(detail: Record<string, unknown>): Promise<void> {
         const { pcKey, openerTabId, url, background } = detail;
@@ -1342,8 +1344,15 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
             widget.dispose();
         };
         // tabId, never widget.id: chrome's webTabIdIsValid refuses the factory-prefixed widget id.
-        const reply = await this.channel.request({ kind: 'webTabAdopt', tabId: widget.tabId, pcKey });
-        if (reply.ok !== true) {
+        let reply = await this.channel.request({ kind: 'webTabAdopt', tabId: widget.tabId, pcKey });
+        if (reply.ok !== true && reply.reason === 'timeout' && !widget.isDisposed) {
+            // 36-REVIEW WR-02: chrome answers in order, so a read sent after a late ack says who owns the page: an
+            // overlay held under tabId means chrome adopted it (keep the tab); unknown-tab means its fallback took it.
+            const held = await this.channel.request({ kind: 'webTabHistory', tabId: widget.tabId });
+            reply = held.ok === true && held.where !== UNKNOWN_TAB_OUTCOME ? { ok: true } : held;
+        }
+        if (reply.ok !== true || widget.isDisposed) {
+            // A second silence: the close queues behind the ack, so chrome and this frontend still agree no tab exists.
             dropUnshown();
             return;
         }
