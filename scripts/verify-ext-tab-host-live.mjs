@@ -27,7 +27,8 @@
 // tab), toolbar-target, gui01 (the stock window with the shell admitted),
 // scheme-wall and theia-never. Scenarios (38-06): network-wall (UF-31.1-02: the Theia frame's requests and the
 // token cookie stay out of webRequest and browser.cookies, with web-tab positive controls) and windows-refusal
-// (UF-31.1-01: windows.remove and windows.update are refused on the shell, which stays up). The fixtures are written from the literals in this
+// (UF-31.1-01: windows.remove and windows.update are refused on the shell, which stays up), and worker-wall
+// (UF-31.1-02: a service worker on the Theia origin has no browser, and its loads stay hidden too). The fixtures are written from the literals in this
 // file into temporary directories, and removed when the session ends.
 //
 //   node scripts/verify-ext-tab-host-live.mjs [--scenario a,b] [--self-test]
@@ -50,6 +51,7 @@ const STAMP_FILE = join(REPO_ROOT, 'objdir/.pb-050-build.sha256');
 const PATCH_060_FILE = join(REPO_ROOT, 'patches/060-extension-network-wall.patch');
 const STAMP_060_FILE = join(REPO_ROOT, 'objdir/.pb-060-build.sha256');
 const TOKEN_COOKIE = 'POWERBROWSER_TOKEN';
+const SW_PATH = '/pb-probe-sw.js';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // 1x1 PNG served as every page's favicon, so LinkHandlerParent hands gBrowser.setIcon an icon.
@@ -181,6 +183,17 @@ const server = createServer((req, res) => {
   if (path === '/icon.png') {
     res.writeHead(200, { 'content-type': 'image/png' });
     res.end(PNG);
+    return;
+  }
+  // 38-06 worker-wall: a page that registers a service worker, and the worker script.
+  if (path === '/sw') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><title>page /sw</title><body>worker page<script>navigator.serviceWorker.register('${SW_PATH}').catch(() => {});</script></body>`);
+    return;
+  }
+  if (path === SW_PATH) {
+    res.writeHead(200, { 'content-type': 'text/javascript' });
+    res.end("self.addEventListener('install', () => self.skipWaiting());");
     return;
   }
   if (path === '/plain') {
@@ -1533,6 +1546,56 @@ async function scenarioWindowsRefusal({ app, plant }) {
   return verdict(true, `on the shell window ${shell.id}: update state (${minimize}), update width (${resize}) and remove (${close}) were refused; the window stayed open at width ${after.w} and state ${after.state}; WebDriver still reached ${origin}; update focused, getCurrent and tabs.get still worked`, null);
 }
 
+// Counts, in chrome scope, the http channels for one exact URL from now on, and how many had no browsing context.
+async function installUrlWitness(app, spec) {
+  await chromeJson(app, `const w = { n: 0, browserless: 0, observe(s) { try { const c = s.QueryInterface(Ci.nsIHttpChannel);
+        if (c.URI.spec !== ${JSON.stringify(spec)}) return;
+        w.n++;
+        if (!c.loadInfo.browsingContext) w.browserless++;
+      } catch {} } };
+    Services.obs.addObserver(w, 'http-on-modify-request');
+    window.__pbUrlWitness = w;
+    return { landed: true };`);
+}
+
+async function urlWitness(app) {
+  return chromeJson(app, `const w = window.__pbUrlWitness; return { n: w ? w.n : 0, browserless: w ? w.browserless : 0 };`);
+}
+
+// The shell's hidden-origins list is emptied, so patch 060 no longer hides Theia-origin workers: worker-wall must go red.
+const PLANT_WORKER_WALL_OFF = `
+  Services.prefs.getDefaultBranch('').setStringPref('extensions.webRequest.hiddenOrigins', '');
+  return { landed: Services.prefs.getStringPref('extensions.webRequest.hiddenOrigins', '') === '' };`;
+
+// UF-31.1-02, worker branch: a service worker registered on the Theia origin has no browser element, so the frame's
+// attribute cannot hide it; the shell's hidden-origins pref does. Theia's own webview service worker lives on
+// {{uuid}}.webview.127.0.0.1:<port>, which does not resolve here, so the scenario registers a worker on the sidecar
+// origin from the Theia frame instead: the same browserless branch, on an origin the run can reach.
+async function scenarioWorkerWall({ app, theia, plant }) {
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant worker-wall-off did not land');
+  }
+  // Positive control, same session: a web page registers the same script, and its browserless load reaches the recorder.
+  await openAndCommit(app, '/sw');
+  const ctl = await tryWait(r => r.kind === 'request' && r.url === url(SW_PATH), 20000);
+  if (!ctl) return verdict(false, null, `positive control: the web page's service worker script ${url(SW_PATH)} never reached onBeforeRequest`);
+  if (ctl.tabId !== -1) {
+    return verdict(false, null, `positive control: the web page's service worker script load carried tab id ${ctl.tabId}, not -1, so a browserless load is not what this scenario exercises`);
+  }
+  const theiaSw = `${theia.origin}${SW_PATH}`;
+  await installUrlWitness(app, theiaSw);
+  await app.evaluate(`(navigator.serviceWorker.register(${JSON.stringify(SW_PATH)}).catch(() => {}), true)`);
+  await sleep(4000);
+  const seen = await urlWitness(app);
+  if (!seen.n) return verdict(false, null, `positive control: chrome scope saw no load of the Theia-origin worker script ${theiaSw}, so the absence below cannot be trusted`);
+  const leaked = session.logs.filter(r => (r.kind === 'request' || r.kind === 'headers') && String(r.url).startsWith(theia.origin));
+  if (leaked.length) {
+    return verdict(false, null, `Theia worker visible to network observers: ${leaked.length} record(s) named the Theia origin (${leaked[0].kind} ${leaked[0].url}, tab id ${leaked[0].tabId}) after ${seen.n} load(s) of ${theiaSw}, ${seen.browserless} without a browsing context`);
+  }
+  return verdict(true, `the web page's worker script reached onBeforeRequest with tab id -1 (positive control); the Theia-origin worker script loaded ${seen.n} time(s) in chrome scope (${seen.browserless} without a browsing context) and the probe recorded none of them`, null);
+}
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
@@ -1557,6 +1620,7 @@ const SCENARIOS = {
   'ext-capture': scenarioExtCapture,
   'network-wall': scenarioNetworkWall,
   'windows-refusal': scenarioWindowsRefusal,
+  'worker-wall': scenarioWorkerWall,
 };
 
 // Each plant names its scenario, the expected red text, and the chrome-scope mutation.
@@ -1626,6 +1690,7 @@ const PLANTS = {
   'zoom-settings-missing': { scenario: 'ext-zoom-change', expect: 'onZoomChange did not fire', body: PLANT_ZOOM_SETTINGS_MISSING },
   'network-wall-off': { scenario: 'network-wall', expect: 'Theia frame visible to network observers', late: () => PLANT_NETWORK_WALL_OFF },
   'windows-guard-off': { scenario: 'windows-refusal', expect: 'not the tab host refusal', late: () => PLANT_WINDOWS_GUARD_OFF },
+  'worker-wall-off': { scenario: 'worker-wall', expect: 'Theia worker visible to network observers', late: () => PLANT_WORKER_WALL_OFF },
 };
 
 // ---------------------------------------------------------------------------

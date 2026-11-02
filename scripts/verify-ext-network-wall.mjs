@@ -15,6 +15,11 @@
 //              with the right connective, and every checkSetCookiePermissions call is refused on it first.
 //   frame      the Theia frame in powerbrowser.xhtml carries the attribute the helpers read, and nothing else under
 //              powerbrowser/shell writes it (an overlay carrying it would hide a web tab from webRequest).
+//              Each helper also hands a browserless channel's loading principal (a service or shared worker's own) to
+//              an origin helper over one pref; both files read the same pref.
+//   origins    PowerBrowserAPI.setGroupSenderPort writes that pref on the default branch to exactly the sidecar origin
+//              (host from TheiaService's --hostname) and Theia's webview origin pattern (read from the installed
+//              @theia/plugin-ext defaultPattern, {{uuid}} as a wildcard), with no endpoint override in TheiaService.
 //   pref       powerbrowser-sidecar.js sets the cookies pref to the name and host TheiaService gives the token cookie,
 //              and that name is PowerBrowserAPI's TOKEN_COOKIE_NAME.
 //
@@ -45,6 +50,7 @@ const SIDECAR_REL = 'powerbrowser/shell/powerbrowser-sidecar.js';
 const API_REL = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const THEIA_REL = 'powerbrowser/shell/TheiaService.sys.mjs';
 const EXT_DIRS = ['toolkit/components/extensions', 'browser/components/extensions'];
+const WEBVIEW_PROTOCOL_REL = 'theia/node_modules/@theia/plugin-ext/lib/main/common/webview-protocol.js';
 
 // The files whose channel matching must be walled (family wall).
 const WALLED = [WEBREQUEST, PROXY];
@@ -109,7 +115,7 @@ function shellFiles() {
 
 function loadInputs() {
   const patchText = readFileSync(PATCH, 'utf8');
-  return { patchText, post: derivePost(patchText), consumers: deriveConsumers(), shell: shellFiles() };
+  return { patchText, post: derivePost(patchText), consumers: deriveConsumers(), shell: shellFiles(), webviewProtocol: readFileSync(join(ROOT, WEBVIEW_PROTOCOL_REL), 'utf8') };
 }
 
 // ---- structure -------------------------------------------------------------
@@ -163,22 +169,38 @@ function check(inp) {
 
   // wall
   const attrs = new Map();
+  const originPrefs = new Map();
   for (const file of WALLED) {
     const lines = inp.post.get(file).split('\n');
     const helpers = [];
+    const bodyOf = i => {
+      const end = lines.findIndex((l, j) => j > i && l === '}');
+      return lines.slice(i + 1, end < 0 ? i + 1 : end).join('\n');
+    };
+    const fns = new Map();
     lines.forEach((l, i) => {
       const m = /^function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\) \{$/.exec(l);
-      if (!m) return;
-      const body = lines.slice(i + 1, i + 4).join('\n');
-      const a = new RegExp(`return !!${m[2]}\\.browserElement\\?\\.hasAttribute\\("([a-z]+)"\\);`).exec(body);
-      if (a) helpers.push({ name: m[1], attr: a[1] });
+      if (m) fns.set(m[1], { param: m[2], body: bodyOf(i) });
     });
+    for (const [name, { param, body }] of fns) {
+      const a = new RegExp(`let browser = ${param}\\.browserElement;\\n\\s*if \\(browser\\) \\{\\n\\s*return browser\\.hasAttribute\\("([a-z]+)"\\);`).exec(body);
+      if (a) helpers.push({ name, attr: a[1], body });
+    }
     if (helpers.length !== 1) {
       fail('wall', file, 'HELPER', `${file} defines ${helpers.length} browser-element attribute helpers (need exactly one): patch 060 does not carry its wall here`);
       continue;
     }
-    const [{ name: helper, attr }] = helpers;
+    const [{ name: helper, attr, body: hbody }] = helpers;
     attrs.set(file, attr);
+    // The worker branch: a channel with no browser falls to an origin helper over a pref, on its loading principal.
+    const call = /return ([A-Za-z_$][\w$]*)\(\s*loadInfo\?\.loadingPrincipal\b/.exec(hbody);
+    const og = call && fns.get(call[1]);
+    const opref = og && /getStringPref\("([\w.]+)", ""\)/.exec(og.body);
+    if (!og || !opref || !og.body.includes('.isContentPrincipal') || !og.body.includes('.originNoSuffix') || !og.body.includes('.split(",")')) {
+      fail('wall', file, 'WORKER BRANCH', `${file} ${helper} does not hand a browserless channel's loading principal to an origin helper over a pref: Theia's service and shared workers would reach extensions`);
+    } else {
+      originPrefs.set(file, opref[1]);
+    }
     const sites = [];
     lines.forEach((l, i) => {
       const m = /\b([A-Za-z_$][\w$]*)\.matches\(/.exec(l);
@@ -197,6 +219,9 @@ function check(inp) {
   const attrSet = new Set(attrs.values());
   if (attrSet.size > 1) fail('wall', 'attribute', 'ATTRIBUTE MISMATCH', `the wall helpers read different attributes: ${[...attrs].map(([f, a]) => `${f} "${a}"`).join(', ')}`);
   const attr = attrSet.size === 1 ? [...attrSet][0] : null;
+  const oprefSet = new Set(originPrefs.values());
+  if (oprefSet.size > 1) fail('wall', 'origins pref', 'PREF MISMATCH', `the origin helpers read different prefs: ${[...originPrefs].map(([f, a]) => `${f} "${a}"`).join(', ')}`);
+  const originsPref = oprefSet.size === 1 && originPrefs.size === WALLED.length ? [...oprefSet][0] : null;
 
   // consumers
   const accounted = new Set([...WALLED, ...Object.keys(EXEMPT)]);
@@ -288,13 +313,42 @@ function check(inp) {
       out.passes.push(`pref PASS -- ${SIDECAR_REL} hides ${call[2]}@${call[1]}, the cookie TheiaService sets`);
     }
   }
+
+  // origins: the shell writes the hidden-origins pref to the sidecar origin and Theia's webview origin pattern.
+  if (originsPref) {
+    const api = inp.shell.get(API_REL) || '';
+    const theiaSrc = inp.shell.get(THEIA_REL) || '';
+    const side = inp.shell.get(SIDECAR_REL) || '';
+    const host = /"--hostname", "([^"]+)"/.exec(theiaSrc);
+    const pattern = /WebviewExternalEndpoint\.defaultPattern = '([^']+)';/.exec(inp.webviewProtocol || '');
+    const writes = [...api.matchAll(new RegExp(`getDefaultBranch\\(""\\)\\.setStringPref\\("${originsPref.replace(/\./g, '\\.')}", ([A-Za-z_$][\\w$]*)\\.join\\(","\\)\\);`, 'g'))];
+    if (!host || !pattern) {
+      fail('origins', 'derivation', 'BROKEN', `could not derive the sidecar host (${THEIA_REL} --hostname: ${!!host}) or Theia's webview endpoint pattern (${WEBVIEW_PROTOCOL_REL}: ${!!pattern}); run yarn in theia/`);
+    } else if (/THEIA_WEBVIEW_EXTERNAL_ENDPOINT/.test(theiaSrc)) {
+      fail('origins', THEIA_REL, 'ENDPOINT OVERRIDE', `${THEIA_REL} sets THEIA_WEBVIEW_EXTERNAL_ENDPOINT, so Theia's default webview pattern no longer applies; derive the hidden origins from the override`);
+    } else if (writes.length !== 1) {
+      fail('origins', API_REL, 'ORIGINS NOT SET', `${API_REL} writes pref ${originsPref} on the default branch ${writes.length} time(s) (need exactly one): Theia's workers stay visible to extensions`);
+    } else {
+      const v = writes[0][1];
+      const decl = new RegExp(`const ${v} = [^\\n]*\\[([^\\]]*)\\];`).exec(api);
+      const got = decl ? [...decl[1].matchAll(/`([^`]*)`/g)].map(m => m[1].replace(/\$\{[^}]+\}/g, 'PORT')).sort() : [];
+      const want = [`http://${host[1]}:PORT`, `http://${pattern[1].replace('{{uuid}}', '*').replace('{{hostname}}', `${host[1]}:PORT`)}`].sort();
+      if (JSON.stringify(got) !== JSON.stringify(want)) {
+        fail('origins', API_REL, 'ORIGINS MISMATCH', `${API_REL} hides ${JSON.stringify(got)}; the sidecar origin and Theia's webview pattern ${pattern[1]} give ${JSON.stringify(want)}`);
+      } else if ((side.match(new RegExp(`^pref\\("${originsPref.replace(/\./g, '\\.')}", ""\\);$`, 'gm')) || []).length !== 1) {
+        fail('origins', SIDECAR_REL, 'PREF UNDECLARED', `${SIDECAR_REL} must declare pref("${originsPref}", "") once (the live value is written at runtime)`);
+      } else {
+        out.passes.push(`origins PASS -- ${API_REL} writes ${originsPref} = ${want.join(',')} (port at runtime), derived from the sidecar host and Theia's webview pattern ${pattern[1]}`);
+      }
+    }
+  }
   return out;
 }
 
 // ---- self-test -------------------------------------------------------------
 
 function clone(inp) {
-  return { patchText: inp.patchText, post: new Map(inp.post), consumers: new Set(inp.consumers), shell: new Map(inp.shell) };
+  return { patchText: inp.patchText, post: new Map(inp.post), consumers: new Set(inp.consumers), shell: new Map(inp.shell), webviewProtocol: inp.webviewProtocol };
 }
 
 function dropFileSection(patchText, path) {
@@ -369,6 +423,17 @@ function selfTest(base) {
       return true;
     }, 'frame', 'WRITE SITE', 'PowerBrowserAPI.sys.mjs'],
     ['the sidecar pref dropped', mutateShell(SIDECAR_REL, 'pref("extensions.cookies.hidden", ', 'pref("zzz.planted", '), 'pref', 'COOKIE NOT HIDDEN'],
+    ['the WebRequest worker branch removed', mutatePost(WEBREQUEST, 'return isHiddenOrigin(\n    loadInfo?.loadingPrincipal ?? loadInfo?.triggeringPrincipal\n  );', 'return false;'), 'wall', 'WORKER BRANCH', 'WebRequest'],
+    ['the proxy worker branch removed', mutatePost(PROXY, 'return isHiddenOrigin(\n    loadInfo?.loadingPrincipal ?? loadInfo?.triggeringPrincipal\n  );', 'return false;'), 'wall', 'WORKER BRANCH', 'ProxyChannelFilter'],
+    ['the hidden-origins pref unset by the shell', mutateShell(API_REL, 'Services.prefs.getDefaultBranch("").setStringPref("extensions.webRequest.hiddenOrigins", hidden.join(","));', ''), 'origins', 'ORIGINS NOT SET'],
+    ['the webview pattern dropped from the hidden origins', mutateShell(API_REL, ', `http://*.webview.127.0.0.1:${groupSenderPort}`]', ']'), 'origins', 'ORIGINS MISMATCH'],
+    ['Theia\'s webview pattern changed upstream', inp => {
+      const t = inp.webviewProtocol.replace("defaultPattern = '{{uuid}}.webview.{{hostname}}'", "defaultPattern = 'webview-{{uuid}}.{{hostname}}'");
+      if (t === inp.webviewProtocol) return false;
+      inp.webviewProtocol = t;
+      return true;
+    }, 'origins', 'ORIGINS MISMATCH'],
+    ['a webview endpoint override in TheiaService', mutateShell(THEIA_REL, '      THEIA_CONFIG_DIR: this._configDir,', '      THEIA_CONFIG_DIR: this._configDir,\n      THEIA_WEBVIEW_EXTERNAL_ENDPOINT: "{{uuid}}.wv.{{hostname}}",'), 'origins', 'ENDPOINT OVERRIDE'],
     ['the token cookie renamed in the API', mutateShell(API_REL, 'const TOKEN_COOKIE_NAME = "POWERBROWSER_TOKEN";', 'const TOKEN_COOKIE_NAME = "POWERBROWSER_TOKEN2";'), 'pref', 'NAME MISMATCH'],
   ];
   for (const [label, plant, family, kind, needle] of plants) {
