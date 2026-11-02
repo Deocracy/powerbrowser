@@ -20,7 +20,7 @@ Patch 050 was amended in this phase (38-01, then again in 38-03) and has never b
 
 Run the binary with `-purgecaches` after any change to `powerbrowser/shell/*.js` or `*.sys.mjs`. Spectacle and the KWin raise script need the session DBus, so run the visual items with the sandbox off. The scenarios are `node scripts/verify-extension-actions-live.mjs --scenario <name>` and `node scripts/verify-extension-amo-live.mjs --scenario <name>`. Items 11 and 12 and 24 need network access to addons.mozilla.org.
 
-Items 1-13 are the live scenarios and the live self-tests. Items 14-17 are the neighbour suites 38-05 names as the phase-close regression set. Items 18-24 are visual and manual checks. Items 25-30 are the review fixes that have no live row. Item 31 is the EXT-10 password-manager decision. Items 32-40 are owner decisions. Items 41-44 are the plan 38-06 gap closure (UF-31.1-01, UF-31.1-02); they need the full-stack build and both stamps (`objdir/.pb-050-build.sha256`, `objdir/.pb-060-build.sha256`, see `.planning/v1.5-LIVE-PASS.md` "## Build"). 44 items in all.
+Items 1-13 are the live scenarios and the live self-tests. Items 14-17 are the neighbour suites 38-05 names as the phase-close regression set. Items 18-24 are visual and manual checks. Items 25-30 are the review fixes that have no live row. Item 31 is the EXT-10 password-manager decision. Items 32-40 are owner decisions. Items 41-45 are the plan 38-06 gap closure (UF-31.1-01, UF-31.1-02); they need the full-stack build and both stamps (`objdir/.pb-050-build.sha256`, `objdir/.pb-060-build.sha256`, see `.planning/v1.5-LIVE-PASS.md` "## Build"). 45 items in all.
 
 ## Current Test
 
@@ -247,17 +247,22 @@ command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-hos
 expected: On the shell window id from `windows.getCurrent`, `windows.update` with `state: 'minimized'` and with `width` both reject "This window cannot be changed by an extension.", and `windows.remove` rejects "This window cannot be closed by an extension."; the window stays open with its width and state unchanged and WebDriver still reaches the Theia frame; `windows.update({ focused: true })`, `windows.getCurrent` and `tabs.get` still work
 result: [pending]
 
-### 44. Plants for items 41-43
-command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario network-wall,windows-refusal,theia-never --self-test`
-expected: Each control is green first; `network-wall-off` (the frame loses `extensionnetworkhidden`) goes red naming "Theia frame visible to network observers"; `windows-guard-off` (the tracker stops treating the shell as a tab host window) goes red naming "not the tab host refusal"; `theia-in-tabs-late` still goes red naming "Theia frame visible to extensions"
+### 44. Plants for items 41-43 and 45
+command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario network-wall,windows-refusal,theia-never,worker-wall --self-test`
+expected: Each control is green first; `network-wall-off` (the frame loses `extensionnetworkhidden`) goes red naming "Theia frame visible to network observers"; `windows-guard-off` (the tracker stops treating the shell as a tab host window) goes red naming "not the tab host refusal"; `theia-in-tabs-late` still goes red naming "Theia frame visible to extensions"; `worker-wall-off` (the shell's hidden-origins pref emptied) goes red naming "Theia worker visible to network observers"
+result: [pending]
+
+### 45. Scenario `worker-wall` (UF-31.1-02 worker branch, plan 38-06)
+command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario worker-wall`
+expected: A harness page `/sw` registers `/pb-probe-sw.js`, and the probe records that script load with tab id -1 (positive control: a browserless load reaches the recorder). The Theia frame then registers the same path on the sidecar origin; chrome scope sees that load, and the probe records nothing naming the Theia origin. Theia's own webview service worker would sit on `{{uuid}}.webview.127.0.0.1:<port>`, which does not resolve on this host, so the scenario uses a worker on the sidecar origin, which takes the same browserless branch. If the positive control reports a tab id other than -1, the scenario does not exercise the worker branch; record that as a finding
 result: [pending]
 
 ## Summary
 
-total: 44
+total: 45
 passed: 0
 issues: 0
-pending: 44
+pending: 45
 skipped: 0
 blocked: 0
 
