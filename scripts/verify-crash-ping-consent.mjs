@@ -9,7 +9,7 @@
 //  1. The crash-ping host is DERIVED at check time from TELEMETRY_SERVER in
 //     upstream/toolkit/crashreporter/crashping/src/lib.rs, never a literal
 //     kept here. A missing or non-literal constant fails naming lib.rs.
-//  2. patches/050-powerbrowser-crash-ping-consent.patch exists, names
+//  2. patches/055-powerbrowser-crash-ping-consent.patch exists, names
 //     glean.rs, and equals its regeneration from the applied upstream/
 //     (scripts/regenerate-patches.sh --check over that one patch, so the same
 //     logic the patches-regenerated row uses decides a hand edit).
@@ -63,7 +63,7 @@ for (const a of args) {
 const LIB_REL = 'upstream/toolkit/crashreporter/crashping/src/lib.rs';
 const GLEAN_PATH = 'toolkit/crashreporter/client/app/src/glean.rs';
 const GLEAN_REL = `upstream/${GLEAN_PATH}`;
-const PATCH_NAME = '050-powerbrowser-crash-ping-consent.patch';
+const PATCH_NAME = '055-powerbrowser-crash-ping-consent.patch';
 const PATCH_REL = `patches/${PATCH_NAME}`;
 const BRANDING_DIR_REL = 'powerbrowser/branding';
 const ALLOWLIST_REL = 'powerbrowser/endpoint-allowlist.json';

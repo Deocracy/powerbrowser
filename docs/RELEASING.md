@@ -1970,7 +1970,7 @@ the patch's `+` lines.
    `include("../identity.configure")` is the one hook line.
 4. `020-powerbrowser-shell` (`browser/moz.build`, lowest drift). Invariant: the one `DIRS`
    entry for `../powerbrowser/shell`. It fails only if the `DIRS` block is restructured.
-5. `050-powerbrowser-crash-ping-consent` (`toolkit/crashreporter/client/app/src/glean.rs`,
+5. `055-powerbrowser-crash-ping-consent` (`toolkit/crashreporter/client/app/src/glean.rs`,
    drift not yet measured; added in Phase 57). Invariant: `determine_telemetry_enabled` carries
    no `true` literal, so every absent or unreadable consent input returns `false`. The
    `crash-ping-consent` row checks it on the replayed tree.
