@@ -257,12 +257,22 @@ command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-hos
 expected: A harness page `/sw` registers `/pb-probe-sw.js`, and the probe records that script load with tab id -1 (positive control: a browserless load reaches the recorder). The Theia frame then registers the same path on the sidecar origin; chrome scope sees that load, and the probe records nothing naming the Theia origin. Theia's own webview service worker would sit on `{{uuid}}.webview.127.0.0.1:<port>`, which does not resolve on this host, so the scenario uses a worker on the sidecar origin, which takes the same browserless branch. If the positive control reports a tab id other than -1, the scenario does not exercise the worker branch; record that as a finding
 result: [pending]
 
+### 46. Scenario `webview-render` (webview origins on localhost, plan 38-07)
+command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario webview-render`
+expected: A plugin-webview widget opened from the Theia frame has its endpoint on `http://<uuid>.webview.localhost:<port>/webview` (the sidecar's port), and its script posts back the text "PB webview probe rendered" with that origin within 30 s, so the frame and the content load past the token gate. Chrome scope sees the webview's `/webview/service-worker.js` load at least once without a browsing context (positive control), and the probe records no request naming the webview origin. Since 38-07 Theia's own webview worker resolves, so item 45's note that it does not is superseded. The Theia frame reaching 'ready' at all is the evidence that its own WebSocket upgrade still carries the token cookie past the new WebSocket validator. The unauthenticated side is the backend checks `scripts/verify-platform.sh --only side02-index-gated` (the webview host gets `/webview/index.html` with no Set-Cookie and nothing else) and `--only side02-ws-token` (an RPC handshake without the token cookie is refused); both passed on 2026-11-01
+result: [pending]
+
+### 47. Plant for item 46
+command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario webview-render --self-test`
+expected: The control is green first; `webview-wall-off` (the shell's hidden-origins pref loses its `*.webview.localhost` entry) goes red naming "Theia webview visible to network observers"
+result: [pending]
+
 ## Summary
 
-total: 45
+total: 47
 passed: 0
 issues: 0
-pending: 45
+pending: 47
 skipped: 0
 blocked: 0
 
