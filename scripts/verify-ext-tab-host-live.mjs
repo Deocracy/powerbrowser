@@ -14,7 +14,9 @@
 //
 // Preflight, BROKEN INSTRUMENT on failure:
 //   - the sha256 of patches/050-extension-tab-host.patch equals the stamp in
-//     objdir/.pb-050-build.sha256 (the binary carries the patch);
+//     objdir/.pb-050-build.sha256, and the sha256 of
+//     patches/060-extension-network-wall.patch equals objdir/.pb-060-build.sha256
+//     (the binary carries both patches);
 //   - after the install, chrome scope reports windowTracker.isTabHostWindow as a
 //     function, windowTracker.isBrowserWindow(window) true, and tabTracker
 //     getBrowserData as a function.
@@ -23,7 +25,9 @@
 // focus-follow, window-type, execute. Scenarios (31.1-04): adversarial-starts (the
 // chrome-error recorder with its positive control, zero tabs, IDE current, first
 // tab), toolbar-target, gui01 (the stock window with the shell admitted),
-// scheme-wall and theia-never. The fixtures are written from the literals in this
+// scheme-wall and theia-never. Scenarios (38-06): network-wall (UF-31.1-02: the Theia frame's requests and the
+// token cookie stay out of webRequest and browser.cookies, with web-tab positive controls) and windows-refusal
+// (UF-31.1-01: windows.remove and windows.update are refused on the shell, which stays up). The fixtures are written from the literals in this
 // file into temporary directories, and removed when the session ends.
 //
 //   node scripts/verify-ext-tab-host-live.mjs [--scenario a,b] [--self-test]
@@ -43,6 +47,9 @@ const EXT_ID = 'pb-ext-tab-host-probe@powerbrowser.test';
 const API_URL = 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs';
 const PATCH_FILE = join(REPO_ROOT, 'patches/050-extension-tab-host.patch');
 const STAMP_FILE = join(REPO_ROOT, 'objdir/.pb-050-build.sha256');
+const PATCH_060_FILE = join(REPO_ROOT, 'patches/060-extension-network-wall.patch');
+const STAMP_060_FILE = join(REPO_ROOT, 'objdir/.pb-060-build.sha256');
+const TOKEN_COOKIE = 'POWERBROWSER_TOKEN';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // 1x1 PNG served as every page's favicon, so LinkHandlerParent hands gBrowser.setIcon an icon.
@@ -57,7 +64,7 @@ const MANIFEST = {
   name: 'PB tab host probe',
   version: '1.0',
   browser_specific_settings: { gecko: { id: EXT_ID } },
-  permissions: ['tabs', 'webRequest', 'webRequestBlocking', 'webNavigation', '<all_urls>'],
+  permissions: ['tabs', 'webRequest', 'webRequestBlocking', 'webNavigation', 'cookies', '<all_urls>'],
   background: { scripts: ['background.js'] },
   content_scripts: [{ matches: ['<all_urls>'], js: ['content.js'], run_at: 'document_idle' }],
   browser_action: { default_title: 'PB tab host probe' },
@@ -83,6 +90,9 @@ browser.tabs.onRemoved.addListener((id, info) => post({ kind: 'removed', tabId: 
 browser.webRequest.onBeforeRequest.addListener(d => post({ kind: 'request', tabId: d.tabId, url: d.url, type: d.type, frameId: d.frameId }), { urls: ['<all_urls>'] }); // every type: the Theia frame's documents and subresources reach the recorder (WR-01)
 browser.webRequest.onBeforeRequest.addListener(d => (d.url.endsWith('/redirect-me') ? { redirectUrl: browser.runtime.getURL('page.html') } : {}), { urls: ['<all_urls>'], types: ['main_frame'] }, ['blocking']);
 browser.webNavigation.onCommitted.addListener(d => post({ kind: 'committed', tabId: d.tabId, url: d.url, frameId: d.frameId }));
+// UF-31.1-02: whether a Cookie header carried the token is recorded as a boolean; the value is never posted.
+browser.webRequest.onBeforeSendHeaders.addListener(d => post({ kind: 'headers', tabId: d.tabId, url: d.url, token: (d.requestHeaders || []).some(h => /^cookie$/i.test(h.name) && /(^|;\s*)POWERBROWSER_TOKEN=/.test(h.value || '')) }), { urls: ['<all_urls>'] }, ['requestHeaders']);
+browser.cookies.onChanged.addListener(c => post({ kind: 'cookie-changed', name: c.cookie.name, domain: c.cookie.domain, removed: c.removed }));
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg && msg.kind === 'hello') {
     post({ kind: 'sender', tabId: sender.tab && sender.tab.id, url: sender.tab && sender.tab.url, frameId: sender.frameId, href: msg.href });
@@ -103,6 +113,12 @@ async function run(cmd) {
     else if (cmd.op === 'getZoom') result = await browser.tabs.getZoom(cmd.tabId);
     else if (cmd.op === 'getZoomSettings') result = await browser.tabs.getZoomSettings(cmd.tabId);
     else if (cmd.op === 'capture') { const data = await browser.tabs.captureTab(cmd.tabId); result = { prefix: String(data).slice(0, 22), length: String(data).length }; }
+    else if (cmd.op === 'windowsCall') {
+      const w = await browser.windows[cmd.method](...(cmd.args || []));
+      result = w && typeof w === 'object' ? { id: w.id, type: w.type, state: w.state } : (w === undefined ? null : w);
+    }
+    else if (cmd.op === 'cookieNames') result = (await browser.cookies.getAll({ domain: cmd.domain })).map(c => c.name);
+    else if (cmd.op === 'cookieSet') result = !!(await browser.cookies.set(cmd.details));
     else if (cmd.op === 'windows') {
       const w = await browser.windows[cmd.method](cmd.info || {});
       result = Array.isArray(w) ? w.map(x => ({ id: x.id, type: x.type, focused: x.focused })) : { id: w.id, type: w.type };
@@ -1070,11 +1086,13 @@ async function scenarioTheiaNever({ app, theia, plant }) {
   if (origin0 !== theia.origin) {
     return verdict(false, null, `WebDriver origin at the start is ${origin0}, expected the Theia origin ${theia.origin}`);
   }
+  await installTheiaWitness(app, theia);
   await reloadTheiaFrame(app, theia);
-  // Positive control: the reloaded frame's own request reached the recorder, so an absence below is not blind.
-  const reach = await tryWait(r => r.kind === 'request' && r.tabId === -1 && String(r.url).startsWith(theia.origin), 30000);
-  if (!reach) {
-    return verdict(false, null, `positive control: after the Theia frame reloaded, the probe recorded no webRequest for the Theia origin ${theia.origin}, so the absence below cannot be trusted`);
+  // Positive control: chrome scope saw the reloaded frame open channels after the install, so the frame did make
+  // requests the recorder could have seen. The recorder itself is proven live by each web tab's records below.
+  const witnessed = await theiaWitnessCount(app);
+  if (!witnessed) {
+    return verdict(false, null, `positive control: after the Theia frame reloaded, chrome scope saw no http channel for the Theia origin ${theia.origin}, so the absence below cannot be trusted`);
   }
   const tabs = [];
   const absent = async where => {
@@ -1082,17 +1100,16 @@ async function scenarioTheiaNever({ app, theia, plant }) {
     if (info.extensionId !== -1) return `Theia frame visible to extensions: ${where}: getBrowserData(frame).tabId is ${info.extensionId}`;
     const listed = (await command('query', { info: {} })).filter(t => String(t.url).startsWith(theia.origin));
     if (listed.length) return `Theia frame visible to extensions: ${where}: tabs.query listed ${JSON.stringify(listed)}`;
-    // Named records: only a webRequest record of the frame's own request with tab id -1 is allowed. That leg is the
-    // known gap UF-31.1-02 (Phase 38): the product does not hide the frame from network observers.
-    const named = session.logs.filter(r => JSON.stringify(r).includes(theia.origin));
-    const leaked = named.find(r => !(r.kind === 'request' && r.tabId === -1));
+    // Named records: none. Patch 060 hides the frame's own requests from network observers (UF-31.1-02), so no
+    // record of any kind may name the Theia origin.
+    const leaked = session.logs.find(r => JSON.stringify(r).includes(theia.origin));
     if (leaked) {
       return `Theia frame visible to extensions: ${where}: an extension record named the Theia origin ${theia.origin} (${leaked.kind}, tab id ${leaked.tabId})`;
     }
     const webIds = tabs.map(t => t.extId);
     for (const r of session.logs) {
       for (const id of tabIdsOf(r)) {
-        if (r.kind === 'request' && id === -1) continue; // non-tab requests, the frame's own included (UF-31.1-02)
+        if (r.kind === 'request' && id === -1) continue; // non-tab requests (the extension's own); none names the Theia origin (checked above)
         if (!webIds.includes(id)) return `a ${r.kind} record named tab id ${id}, which is no web tab of this session (${where})`;
       }
     }
@@ -1145,8 +1162,7 @@ async function scenarioTheiaNever({ app, theia, plant }) {
   if (origin1 !== theia.origin || !first.frameFirst || !reported || !committed) {
     return verdict(false, null, `positive controls failed: WebDriver origin ${origin1}, webDriverTabs[0] is the frame ${first.frameFirst}, every tab created ${reported}, every tab committed ${committed}`);
   }
-  const gap = session.logs.filter(r => r.kind === 'request' && r.tabId === -1 && String(r.url).startsWith(theia.origin)).length;
-  return verdict(true, `four web tabs (${tabs.map(t => t.extId).join(', ')}), activated, B navigated to /c, C closed: no tabs.query row, event, sender report or other record named the Theia origin, and every tab id was a web tab of this session; the webRequest records of the frame's own requests (tabId -1, known gap UF-31.1-02) were ${gap} and are not counted as a leak; getBrowserData(frame).tabId stayed -1 at every step; WebDriver still reached the frame at both ends (${origin1}); every opened tab was reported`, null);
+  return verdict(true, `four web tabs (${tabs.map(t => t.extId).join(', ')}), activated, B navigated to /c, C closed: no tabs.query row, event, sender report, webRequest record or other record named the Theia origin after the reloaded frame opened ${witnessed} channel(s) seen in chrome scope, and every tab id was a web tab of this session; getBrowserData(frame).tabId stayed -1 at every step; WebDriver still reached the frame at both ends (${origin1}); every opened tab was reported`, null);
 }
 
 // tabs.update fields the shell cannot write are refused before the URL loads (WR-07), so a refused write applies
@@ -1389,6 +1405,134 @@ async function scenarioExtCapture({ app }) {
   return verdict(true, `tabs.captureTab of tab A resolved with a PNG data URL of ${cap.length} characters; the ZoomManager read in captureTab no longer throws`, null);
 }
 
+// ---- 38-06: UF-31.1-02 (network wall) and UF-31.1-01 (windows refusal) ----
+
+// Counts, in chrome scope, the http channels the Theia origin opens from now on. The witness is independent of the
+// extension recorder, so an absence of extension records is not blind: the frame did make requests.
+async function installTheiaWitness(app, theia) {
+  await chromeJson(app, `if (!window.__pbTheiaWitness) {
+      const w = { n: 0, observe(s) { try { if (s.QueryInterface(Ci.nsIHttpChannel).URI.prePath === ${JSON.stringify(theia.origin)}) w.n++; } catch {} } };
+      Services.obs.addObserver(w, 'http-on-modify-request');
+      window.__pbTheiaWitness = w;
+    }
+    window.__pbTheiaWitness.n = 0;
+    return { landed: true };`);
+}
+
+async function theiaWitnessCount(app) {
+  return (await chromeJson(app, `return { n: window.__pbTheiaWitness ? window.__pbTheiaWitness.n : 0 };`)).n;
+}
+
+// The Theia frame loses its marker, so patch 060 no longer hides its channels: network-wall must go red.
+const PLANT_NETWORK_WALL_OFF = `
+  const f = document.getElementById('powerbrowser-content');
+  const had = f.hasAttribute('extensionnetworkhidden');
+  f.removeAttribute('extensionnetworkhidden');
+  return { landed: had && !f.hasAttribute('extensionnetworkhidden') };`;
+
+// UF-31.1-02: a webRequest <all_urls> extension records nothing from the Theia frame while web-tab requests are still
+// seen in the same session; browser.cookies neither lists, overwrites nor reports the token cookie.
+async function scenarioNetworkWall({ app, theia, plant }) {
+  await installTheiaWitness(app, theia);
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant network-wall-off did not land');
+  }
+  await reloadTheiaFrame(app, theia);
+  const witnessed = await theiaWitnessCount(app);
+  if (!witnessed) {
+    return verdict(false, null, `positive control: after the Theia frame reloaded, chrome scope saw no http channel for the Theia origin ${theia.origin}, so the absence below cannot be trusted`);
+  }
+  // Positive control, same session and same listeners: a web tab's request and headers are recorded with its tab id.
+  const A = await openAndCommit(app, '/a');
+  const req = await tryWait(r => r.kind === 'request' && String(r.url).endsWith('/a') && r.tabId === A.extId, 15000);
+  const hdr = await tryWait(r => r.kind === 'headers' && String(r.url).endsWith('/a') && r.tabId === A.extId, 15000);
+  if (!req || !hdr) {
+    return verdict(false, null, `positive control: the web tab /a (${A.extId}) reached onBeforeRequest ${!!req} and onBeforeSendHeaders ${!!hdr}, so the recorder is blind`);
+  }
+  const theiaRecs = session.logs.filter(r => (r.kind === 'request' || r.kind === 'headers') && String(r.url).startsWith(theia.origin));
+  const tokenSeen = session.logs.filter(r => r.kind === 'headers' && r.token).length;
+  if (theiaRecs.length || tokenSeen) {
+    return verdict(false, null, `Theia frame visible to network observers: ${theiaRecs.length} webRequest record(s) named the Theia origin ${theia.origin} after ${witnessed} Theia channel(s) in chrome scope, and ${tokenSeen} recorded Cookie header(s) carried the token`);
+  }
+  // browser.cookies: the probe's own loopback cookie is listed (positive control); the token is not, and cannot be set.
+  await command('cookieSet', { details: { url: url('/'), name: 'pbprobe', value: '1' } });
+  const names = await command('cookieNames', { domain: '127.0.0.1' });
+  if (!names.includes('pbprobe')) return verdict(false, null, `positive control: cookies.getAll({ domain: '127.0.0.1' }) did not list the cookie the probe set (${JSON.stringify(names)})`);
+  if (names.includes(TOKEN_COOKIE)) return verdict(false, null, 'token cookie visible to extensions: cookies.getAll listed the token cookie');
+  let refused = null;
+  try {
+    await command('cookieSet', { details: { url: `${theia.origin}/`, name: TOKEN_COOKIE, value: 'planted' } });
+  } catch (e) {
+    refused = e.message;
+  }
+  // Booleans only: chrome scope compares the stored value and never returns it.
+  const kept = await chromeJson(app, `const cs = Services.cookies.getCookiesFromHost('127.0.0.1', {}).filter(c => c.name === ${JSON.stringify(TOKEN_COOKIE)});
+    return { present: cs.length > 0, planted: cs.some(c => c.value === 'planted') };`);
+  if (refused === null || kept.planted || !kept.present) {
+    return verdict(false, null, `token cookie writable by extensions: cookies.set refused ${refused !== null}, stored token present ${kept.present}, overwritten ${kept.planted}`);
+  }
+  await sleep(1000);
+  const changed = session.logs.filter(r => r.kind === 'cookie-changed');
+  if (changed.some(r => r.name === TOKEN_COOKIE)) return verdict(false, null, 'token cookie visible to extensions: cookies.onChanged reported the token cookie');
+  if (!changed.some(r => r.name === 'pbprobe')) return verdict(false, null, 'positive control: cookies.onChanged did not report the cookie the probe set');
+  return verdict(true, `the reloaded Theia frame opened ${witnessed} channel(s) seen in chrome scope and the probe recorded none of them, nor any Cookie header carrying the token; web tab /a (${A.extId}) reached onBeforeRequest and onBeforeSendHeaders in the same session; cookies.getAll listed pbprobe and not the token; cookies.set of the token was refused (${refused}) and the stored token was unchanged; cookies.onChanged reported pbprobe and not the token`, null);
+}
+
+// The extension framework no longer treats the shell as a tab host window, so a refusal, if any, is not patch 050's.
+const PLANT_WINDOWS_GUARD_OFF = `
+  ${IMPORT_EXT}
+  const wt = ExtensionParent.apiManager.global.windowTracker;
+  wt.isTabHostWindow = () => false;
+  return { landed: wt.isTabHostWindow(window) === false };`;
+
+// UF-31.1-01: windows.remove and the state-changing windows.update fields are refused on the shell with patch 050's
+// own errors; the shell stays open, unresized and reachable; focus and the read-only calls still work.
+async function scenarioWindowsRefusal({ app, plant }) {
+  const A = await openAndCommit(app, '/a');
+  const shell = await command('windows', { method: 'getCurrent' });
+  const all = await command('windows', { method: 'getAll' });
+  if (shell.type !== 'normal' || !all.some(w => w.id === shell.id)) {
+    return verdict(false, null, `positive control: windows.getCurrent returned ${JSON.stringify(shell)}, windows.getAll ${JSON.stringify(all)}`);
+  }
+  const before = await chromeJson(app, `return { w: window.outerWidth, state: window.windowState };`);
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant windows-guard-off did not land');
+  }
+  const call = async (method, ...args) => {
+    try {
+      await command('windowsCall', { method, args });
+      return null;
+    } catch (e) {
+      return e.message;
+    }
+  };
+  const minimize = await call('update', shell.id, { state: 'minimized' });
+  const resize = await call('update', shell.id, { width: Math.max(400, before.w - 200) });
+  const close = await call('remove', shell.id);
+  await sleep(1500);
+  const after = await chromeJson(app, `return { closed: window.closed, w: window.outerWidth, state: window.windowState };`);
+  const origin = await app.evaluate('location.origin');
+  if (after.closed || after.state === 2 || after.w !== before.w || !origin) {
+    return verdict(false, null, `shell window changed by an extension: closed ${after.closed}, windowState ${before.state} -> ${after.state}, width ${before.w} -> ${after.w}, WebDriver origin ${origin}`);
+  }
+  if (minimize === null || resize === null || close === null) {
+    return verdict(false, null, `windows call not refused on the shell: update state ${minimize}, update width ${resize}, remove ${close}`);
+  }
+  if (!/cannot be changed by an extension/.test(minimize) || !/cannot be changed by an extension/.test(resize) || !/cannot be closed by an extension/.test(close)) {
+    return verdict(false, null, `not the tab host refusal: update state '${minimize}', update width '${resize}', remove '${close}'`);
+  }
+  // Positive controls: focus is allowed, the read-only calls still answer, and the tab model still works.
+  const focus = await call('update', shell.id, { focused: true });
+  const again = await command('windows', { method: 'getCurrent' });
+  const tab = await command('get', { tabId: A.extId });
+  if (focus !== null || again.id !== shell.id || !String(tab.url).endsWith('/a')) {
+    return verdict(false, null, `positive control: update focused ${focus === null ? 'allowed' : `refused (${focus})`}, getCurrent ${again.id} (shell ${shell.id}), tabs.get ${tab.url}`);
+  }
+  return verdict(true, `on the shell window ${shell.id}: update state (${minimize}), update width (${resize}) and remove (${close}) were refused; the window stayed open at width ${after.w} and state ${after.state}; WebDriver still reached ${origin}; update focused, getCurrent and tabs.get still worked`, null);
+}
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
@@ -1411,6 +1555,8 @@ const SCENARIOS = {
   'ext-zoom-get': scenarioExtZoomGet,
   'ext-zoom-change': scenarioExtZoomChange,
   'ext-capture': scenarioExtCapture,
+  'network-wall': scenarioNetworkWall,
+  'windows-refusal': scenarioWindowsRefusal,
 };
 
 // Each plant names its scenario, the expected red text, and the chrome-scope mutation.
@@ -1478,6 +1624,8 @@ const PLANTS = {
   'mute-event-dropped': { scenario: 'ext-mute', expect: 'onUpdated mutedInfo did not fire', body: PLANT_MUTE_EVENT_DROPPED },
   'zoom-shim-missing': { scenario: 'ext-zoom-get', expect: 'tabs.getZoom failed', late: () => PLANT_ZOOM_SHIM_MISSING },
   'zoom-settings-missing': { scenario: 'ext-zoom-change', expect: 'onZoomChange did not fire', body: PLANT_ZOOM_SETTINGS_MISSING },
+  'network-wall-off': { scenario: 'network-wall', expect: 'Theia frame visible to network observers', late: () => PLANT_NETWORK_WALL_OFF },
+  'windows-guard-off': { scenario: 'windows-refusal', expect: 'not the tab host refusal', late: () => PLANT_WINDOWS_GUARD_OFF },
 };
 
 // ---------------------------------------------------------------------------
@@ -1491,6 +1639,16 @@ async function stampCheck() {
   const stamp = (await readFile(STAMP_FILE, 'utf8')).trim().split(/\s+/)[0];
   if (digest !== stamp) {
     throw new Error(`BROKEN INSTRUMENT: patches/050 hashes to ${digest}, the build stamp is ${stamp}; rebuild before a live run`);
+  }
+  const digest060 = createHash('sha256').update(await readFile(PATCH_060_FILE)).digest('hex');
+  let stamp060 = null;
+  try {
+    stamp060 = (await readFile(STAMP_060_FILE, 'utf8')).trim().split(/\s+/)[0];
+  } catch {
+    stamp060 = null;
+  }
+  if (digest060 !== stamp060) {
+    throw new Error(`BROKEN INSTRUMENT: patches/060 hashes to ${digest060}, the build stamp objdir/.pb-060-build.sha256 is ${stamp060}; rebuild with the full patch stack before a live run`);
   }
   return digest;
 }
