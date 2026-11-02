@@ -1,23 +1,52 @@
 diff --git a/toolkit/components/extensions/ProxyChannelFilter.sys.mjs b/toolkit/components/extensions/ProxyChannelFilter.sys.mjs
-index 66a3aec563..5aae5cebbe 100644
+index 66a3aec563..d5640cd001 100644
 --- a/toolkit/components/extensions/ProxyChannelFilter.sys.mjs
 +++ b/toolkit/components/extensions/ProxyChannelFilter.sys.mjs
-@@ -6,6 +6,14 @@ import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
+@@ -6,6 +6,43 @@ import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
  
  import { ExtensionUtils } from "resource://gre/modules/ExtensionUtils.sys.mjs";
  
++// An embedder lists origins whose browserless loads (its own service and
++// shared workers) are hidden from extension network observers, in a
++// chrome-set pref of comma-separated origins. "scheme://*.host:port" matches
++// every subdomain of host:port, for an embedder that mints one per frame.
++function isHiddenOrigin(principal) {
++  if (!principal?.isContentPrincipal) {
++    return false;
++  }
++  let origin = principal.originNoSuffix;
++  return Services.prefs
++    .getStringPref("extensions.webRequest.hiddenOrigins", "")
++    .split(",")
++    .some(entry => {
++      let wild = /^([a-z]+:\/\/)\*(\..+)$/.exec(entry);
++      return wild
++        ? origin.startsWith(wild[1]) && origin.endsWith(wild[2])
++        : entry === origin;
++    });
++}
++
 +// An embedder marks a top-level browser that must stay invisible to extension
 +// network observers (its own UI frame) with the extensionnetworkhidden
 +// attribute. No webRequest listener, declarativeNetRequest rule or proxy
-+// filter sees a channel of that browser or of any frame inside it.
++// filter sees a channel of that browser or of any frame inside it. A channel
++// with no browser is hidden when its loading principal (a worker's own) is on
++// the embedder's hidden origins.
 +function isHiddenChannel(wrapper) {
-+  return !!wrapper.browserElement?.hasAttribute("extensionnetworkhidden");
++  let browser = wrapper.browserElement;
++  if (browser) {
++    return browser.hasAttribute("extensionnetworkhidden");
++  }
++  let { loadInfo } = wrapper;
++  return isHiddenOrigin(
++    loadInfo?.loadingPrincipal ?? loadInfo?.triggeringPrincipal
++  );
 +}
 +
  const lazy = XPCOMUtils.declareLazy({
    ExtensionDocumentId: "resource://gre/modules/ExtensionDocumentId.sys.mjs",
    ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
-@@ -380,6 +388,10 @@ export class ProxyChannelFilter {
+@@ -380,6 +417,10 @@ export class ProxyChannelFilter {
      let proxyInfo;
      try {
        let wrapper = ChannelWrapper.get(channel);
@@ -85,25 +114,54 @@ index c812810cec..48c2c0c10e 100644
                message: `Permission denied to set cookie ${JSON.stringify(
                  details
 diff --git a/toolkit/components/extensions/webrequest/WebRequest.sys.mjs b/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
-index 8fada7e66c..87b667f6fe 100644
+index 8fada7e66c..10f2854fe8 100644
 --- a/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
 +++ b/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
-@@ -100,6 +100,14 @@ function isThenable(value) {
+@@ -100,6 +100,43 @@ function isThenable(value) {
    return value && typeof value === "object" && typeof value.then === "function";
  }
  
++// An embedder lists origins whose browserless loads (its own service and
++// shared workers) are hidden from extension network observers, in a
++// chrome-set pref of comma-separated origins. "scheme://*.host:port" matches
++// every subdomain of host:port, for an embedder that mints one per frame.
++function isHiddenOrigin(principal) {
++  if (!principal?.isContentPrincipal) {
++    return false;
++  }
++  let origin = principal.originNoSuffix;
++  return Services.prefs
++    .getStringPref("extensions.webRequest.hiddenOrigins", "")
++    .split(",")
++    .some(entry => {
++      let wild = /^([a-z]+:\/\/)\*(\..+)$/.exec(entry);
++      return wild
++        ? origin.startsWith(wild[1]) && origin.endsWith(wild[2])
++        : entry === origin;
++    });
++}
++
 +// An embedder marks a top-level browser that must stay invisible to extension
 +// network observers (its own UI frame) with the extensionnetworkhidden
 +// attribute. No webRequest listener, declarativeNetRequest rule or proxy
-+// filter sees a channel of that browser or of any frame inside it.
++// filter sees a channel of that browser or of any frame inside it. A channel
++// with no browser is hidden when its loading principal (a worker's own) is on
++// the embedder's hidden origins.
 +function isHiddenChannel(wrapper) {
-+  return !!wrapper.browserElement?.hasAttribute("extensionnetworkhidden");
++  let browser = wrapper.browserElement;
++  if (browser) {
++    return browser.hasAttribute("extensionnetworkhidden");
++  }
++  let { loadInfo } = wrapper;
++  return isHiddenOrigin(
++    loadInfo?.loadingPrincipal ?? loadInfo?.triggeringPrincipal
++  );
 +}
 +
  // Verify a requested redirect and throw a more explicit error.
  function verifyRedirect(channel, redirectUri, finalUrl, addonId) {
    const { isServiceWorkerScript } = channel;
-@@ -860,6 +868,9 @@ HttpObserverManager = {
+@@ -860,6 +897,9 @@ HttpObserverManager = {
    },
  
    runChannelListener(channel, kind, extraData = null) {
@@ -113,7 +171,7 @@ index 8fada7e66c..87b667f6fe 100644
      let handlerResults = [];
      let requestHeaders;
      let responseHeaders;
-@@ -1150,6 +1161,9 @@ HttpObserverManager = {
+@@ -1150,6 +1190,9 @@ HttpObserverManager = {
    },
  
    shouldHookListener(listener, channel, extraData) {

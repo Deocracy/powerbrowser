@@ -153,6 +153,8 @@ globalThis.Services = {
         },
     },
     obs: { addObserver() {}, removeObserver() {} },
+    // setGroupSenderPort writes extensions.webRequest.hiddenOrigins on the default branch (plan 38-06).
+    prefs: { getDefaultBranch: () => ({ setStringPref() {} }) },
 };
 globalThis.Ci = { nsIFile: {}, nsITimer: { TYPE_ONE_SHOT: 0 } };
 globalThis.Cc = {

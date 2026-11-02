@@ -51,3 +51,9 @@ pref("browser.dom.window.dump.enabled", true);
 // attribute in powerbrowser.xhtml. scripts/verify-ext-network-wall.mjs derives
 // this value from TheiaService and PowerBrowserAPI.
 pref("extensions.cookies.hidden", "POWERBROWSER_TOKEN@127.0.0.1");
+// UF-31.1-02 (plan 38-06): the origins whose browserless loads (Theia's service
+// and shared workers) patch 060 hides from extension network observers. Empty
+// here because the sidecar's port is chosen at its first spawn (--port 0);
+// PowerBrowserAPI.setGroupSenderPort writes the live value on the default
+// branch: the sidecar origin and its per-webview subdomain pattern.
+pref("extensions.webRequest.hiddenOrigins", "");
