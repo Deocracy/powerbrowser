@@ -114,6 +114,11 @@
       "reason": "The Theia sidecar loopback -- architecture, not a concession. The phase-04 shell (powerbrowser/shell/TheiaService.sys.mjs) supervises a bundled Node + Theia browser-target backend on localhost and presents it full-window as the only GUI; a build that could not reach loopback would have no GUI at all. A literal loopback address, so no name resolution leaves the machine. Exact-string match only (allowlist_host_allowed, scripts/verify-endpoints.sh:340-352 -- suffix matching requires a leading literal dot in the allowlist entry), so this entry admits the one literal address 127.0.0.1 and nothing else."
     },
     {
+      "host": ".webview.localhost",
+      "disposition": "allow",
+      "reason": "Plan 38-07: Theia's per-webview origins, <uuid>.webview.localhost:<port> on the sidecar's port (theia/extensions/tab-uris/src/browser/webview-loopback-environment.ts). The same sidecar loopback as 127.0.0.1, under a name instead of the literal because Theia puts every webview on a subdomain and only *.localhost has subdomains that resolve. Gecko answers *.localhost itself with a loopback record (nsHostResolver IsLoopbackHostname), so no name resolution leaves the machine. Suffix match (leading dot): admits only hosts ending in .webview.localhost."
+    },
+    {
       "host": "events.powerbrowser.org",
       "disposition": "allow",
       "manifest": "telemetry.endpoint",

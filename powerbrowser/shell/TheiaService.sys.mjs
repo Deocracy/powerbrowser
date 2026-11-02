@@ -837,6 +837,11 @@ export const TheiaService = {
     // at all.
     const environment = {
       THEIA_CONFIG_DIR: this._configDir,
+      // Plan 38-07: pinned to Theia's default webview pattern, so an inherited value cannot move webview
+      // origins off what the frontend (WebviewLoopbackEnvironment puts them on <uuid>.webview.localhost:<port>),
+      // the hidden-origins pref and scripts/verify-ext-network-wall.mjs assume. Not a literal host: the
+      // port is unknown on a --port 0 spawn, and Theia's vhost matches the Host without its port.
+      THEIA_WEBVIEW_EXTERNAL_ENDPOINT: "{{uuid}}.webview.{{hostname}}",
       VSX_REGISTRY_URL: "https://open-vsx.org",
       // SIDE-04 (05-01-PLAN.md): arms the backend's parent-death watchdog
       // (parent-watchdog-backend-contribution.ts). The watchdog is INERT

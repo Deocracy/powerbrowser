@@ -14,6 +14,8 @@ import { UpdateClientContribution } from './update-client';
 import { WEB_TAB_FACTORY_ID, WebTabActivationContribution, WebTabChannel, WebTabOpenHandler, WebTabOptions, WebTabWidget, isCurrentSessionTabId } from './web-tab';
 import { LocalStorageService } from '@theia/core/lib/browser/storage-service';
 import { ProfileStorageService, ShellStateFlushContribution } from './profile-storage';
+import { WebviewEnvironment } from '@theia/plugin-ext/lib/main/browser/webview/webview-environment';
+import { WebviewLoopbackEnvironment } from './webview-loopback-environment';
 
 /**
  * Registers an `OpenHandler` after the app's first `OpenerService.open()`
@@ -196,4 +198,6 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
     }
     bind(ShellStateFlushContribution).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(ShellStateFlushContribution);
+    // Plan 38-07: webview origins on <uuid>.webview.localhost:<port>, which Gecko resolves to loopback.
+    rebind(WebviewEnvironment).to(WebviewLoopbackEnvironment).inSingletonScope();
 });

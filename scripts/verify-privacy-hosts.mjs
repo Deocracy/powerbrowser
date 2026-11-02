@@ -54,7 +54,7 @@ const GROUPS = [
 ];
 
 export function isLoopback(host) {
-    return /^127\.\d+\.\d+\.\d+$/.test(host) || host === '::1';
+    return /^127\.\d+\.\d+\.\d+$/.test(host) || host === '::1' || /(^|\.)localhost$/.test(host);
 }
 
 /** The allow rows, loopback excluded, as the hosts array holds them. */

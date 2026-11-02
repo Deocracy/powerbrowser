@@ -5,6 +5,7 @@ import { injectable, inject } from '@theia/core/shared/inversify';
 import * as express from '@theia/core/shared/express';
 import { BackendApplicationContribution, EarlyExpressMiddleware } from '@theia/core/lib/node';
 import { POWERBROWSER_ENV } from './powerbrowser-env';
+import { isWebviewHost } from '../common/webview-host';
 
 // D-98: replaces the trust root for backend access on plain HTTP -- the
 // stock BrowserConnectionTokenBackendContribution (browser-connection-token.js)
@@ -16,6 +17,7 @@ import { POWERBROWSER_ENV } from './powerbrowser-env';
 export const POWERBROWSER_TOKEN_COOKIE_NAME = 'POWERBROWSER_TOKEN';
 const TOKEN_ENV_VAR = 'POWERBROWSER_TOKEN';
 const TOKEN_DISABLE_ENV_VAR = 'POWERBROWSER_TOKEN_DISABLE';
+const WEBVIEW_SHELL_FILE = /^\/webview\/[\w-]+\.(html|js)$/;
 
 @injectable()
 export class PowerBrowserTokenGateContribution implements BackendApplicationContribution {
@@ -140,6 +142,13 @@ export class PowerBrowserTokenGateContribution implements BackendApplicationCont
     protected gate(req: express.Request, res: express.Response, next: express.NextFunction): void {
         const token = this.getTokenFromCookie(req);
         if (token !== undefined && this.isTokenValid(token)) {
+            next();
+            return;
+        }
+        // Plan 38-07: a webview frame runs on its own origin, <uuid>.webview.localhost:<port>, which the
+        // host-only 127.0.0.1 token cookie never reaches. That origin may read only Theia's static webview
+        // shell (lib/webview/pre); its resources arrive through the main frame's authenticated connection.
+        if (isWebviewHost(req.headers.host) && (req.method === 'GET' || req.method === 'HEAD') && WEBVIEW_SHELL_FILE.test(req.path)) {
             next();
             return;
         }

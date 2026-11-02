@@ -2293,8 +2293,8 @@ export const PowerBrowserAPI = Object.freeze({
   setGroupSenderPort(port) {
     groupSenderPort = Number.isInteger(port) && port > 0 ? port : null;
     // UF-31.1-02 (plan 38-06): patch 060 hides browserless loads (service and shared workers) of the sidecar origin
-    // and of its per-webview subdomains (Theia's {{uuid}}.webview.{{hostname}}) from extensions. Default branch only.
-    const hidden = groupSenderPort === null ? [] : [`http://127.0.0.1:${groupSenderPort}`, `http://*.webview.127.0.0.1:${groupSenderPort}`];
+    // and of its per-webview subdomains (plan 38-07: {{uuid}}.webview.localhost:<port>) from extensions. Default branch only.
+    const hidden = groupSenderPort === null ? [] : [`http://127.0.0.1:${groupSenderPort}`, `http://*.webview.localhost:${groupSenderPort}`];
     Services.prefs.getDefaultBranch("").setStringPref("extensions.webRequest.hiddenOrigins", hidden.join(","));
     if (groupSenderPort !== null) installTokenCookieStrip();
     if (groupSenderPort !== null) installBookmarkObserver();

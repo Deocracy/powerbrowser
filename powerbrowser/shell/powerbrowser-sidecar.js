@@ -55,5 +55,5 @@ pref("extensions.cookies.hidden", "POWERBROWSER_TOKEN@127.0.0.1");
 // and shared workers) patch 060 hides from extension network observers. Empty
 // here because the sidecar's port is chosen at its first spawn (--port 0);
 // PowerBrowserAPI.setGroupSenderPort writes the live value on the default
-// branch: the sidecar origin and its per-webview subdomain pattern.
+// branch: the sidecar origin and its per-webview subdomains on localhost (38-07).
 pref("extensions.webRequest.hiddenOrigins", "");
