@@ -28,7 +28,9 @@
 // scheme-wall and theia-never. Scenarios (38-06): network-wall (UF-31.1-02: the Theia frame's requests and the
 // token cookie stay out of webRequest and browser.cookies, with web-tab positive controls) and windows-refusal
 // (UF-31.1-01: windows.remove and windows.update are refused on the shell, which stays up), and worker-wall
-// (UF-31.1-02: a service worker on the Theia origin has no browser, and its loads stay hidden too). The fixtures are written from the literals in this
+// (UF-31.1-02: a service worker on the Theia origin has no browser, and its loads stay hidden too). Scenario (38-07):
+// webview-render (a Theia webview renders from its <uuid>.webview.localhost:<port> origin, and its service worker's
+// loads stay hidden). The fixtures are written from the literals in this
 // file into temporary directories, and removed when the session ends.
 //
 //   node scripts/verify-ext-tab-host-live.mjs [--scenario a,b] [--self-test]
@@ -36,7 +38,7 @@
 // Node built-ins plus ./lib/pb-relaunch.mjs and ./lib/pb-live-probe.mjs only.
 
 import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1568,9 +1570,8 @@ const PLANT_WORKER_WALL_OFF = `
   return { landed: Services.prefs.getStringPref('extensions.webRequest.hiddenOrigins', '') === '' };`;
 
 // UF-31.1-02, worker branch: a service worker registered on the Theia origin has no browser element, so the frame's
-// attribute cannot hide it; the shell's hidden-origins pref does. Theia's own webview service worker lives on
-// {{uuid}}.webview.127.0.0.1:<port>, which does not resolve here, so the scenario registers a worker on the sidecar
-// origin from the Theia frame instead: the same browserless branch, on an origin the run can reach.
+// attribute cannot hide it; the shell's hidden-origins pref does. The scenario registers a worker on the sidecar origin
+// from the Theia frame; Theia's own webview worker, on <uuid>.webview.localhost:<port> since 38-07, is webview-render's.
 async function scenarioWorkerWall({ app, theia, plant }) {
   if (plant && plant.late) {
     const applied = await chromeJson(app, plant.late());
@@ -1594,6 +1595,61 @@ async function scenarioWorkerWall({ app, theia, plant }) {
     return verdict(false, null, `Theia worker visible to network observers: ${leaked.length} record(s) named the Theia origin (${leaked[0].kind} ${leaked[0].url}, tab id ${leaked[0].tabId}) after ${seen.n} load(s) of ${theiaSw}, ${seen.browserless} without a browsing context`);
   }
   return verdict(true, `the web page's worker script reached onBeforeRequest with tab id -1 (positive control); the Theia-origin worker script loaded ${seen.n} time(s) in chrome scope (${seen.browserless} without a browsing context) and the probe recorded none of them`, null);
+}
+
+// The shell's hidden-origins list loses its webview entry, so the webview's worker is no longer hidden: webview-render
+// must go red.
+const PLANT_WEBVIEW_WALL_OFF = `
+  const pref = 'extensions.webRequest.hiddenOrigins';
+  const before = Services.prefs.getStringPref(pref, '').split(',');
+  const kept = before.filter(entry => !entry.includes('.webview.'));
+  Services.prefs.getDefaultBranch('').setStringPref(pref, kept.join(','));
+  return { landed: kept.length === before.length - 1 && kept.length > 0 };`;
+
+const WEBVIEW_TEXT = 'PB webview probe rendered';
+
+// Plan 38-07: a Theia webview (the plugin-webview widget a plugin's createWebviewPanel makes, opened here from the
+// frontend because the app ships no plugin) renders from its own <uuid>.webview.localhost:<port> origin: its script
+// posts the rendered text and its origin back. Its service worker loads in chrome scope without a browsing context,
+// and the probe records none of the webview origin's requests (the frame's attribute covers the frame, the shell's
+// hidden-origins pref the worker).
+async function scenarioWebviewRender({ app, theia, plant }) {
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant webview-wall-off did not land');
+  }
+  const id = randomUUID();
+  const webviewOrigin = `http://${id}.webview.localhost:${new URL(theia.origin).port}`;
+  const swUrl = `${webviewOrigin}/webview/service-worker.js`;
+  await installUrlWitness(app, swUrl);
+  const html = `<!doctype html><body><p id="m">${WEBVIEW_TEXT}</p><script>acquireVsCodeApi().postMessage({ text: document.getElementById('m').textContent, origin: location.origin });</script></body>`;
+  const r = await probe(app, `
+    const widget = await get('WidgetManager').getOrCreateWidget('plugin-webview', { id: ${JSON.stringify(id)}, viewId: 'pb.webview-probe' });
+    let message = null;
+    widget.onMessage(m => { message = m; });
+    widget.setContentOptions({ allowScripts: true });
+    widget.setHTML(${JSON.stringify(html)});
+    await get('ApplicationShell').addWidget(widget, { area: 'main' });
+    await get('ApplicationShell').activateWidget(widget.id);
+    await until(() => message !== null, 30000);
+    return { message, endpoint: widget.externalEndpoint };`);
+  if (r.error) return verdict(false, null, `webview did not render: ${r.error}`);
+  if (!String(r.endpoint).startsWith(`${webviewOrigin}/`)) {
+    return verdict(false, null, `webview not on its localhost origin: the widget's endpoint is ${r.endpoint}, expected ${webviewOrigin}/webview`);
+  }
+  if (!r.message || r.message.text !== WEBVIEW_TEXT || r.message.origin !== webviewOrigin) {
+    return verdict(false, null, `webview did not render: after 30 s its script had posted ${JSON.stringify(r.message)}, expected the text '${WEBVIEW_TEXT}' from ${webviewOrigin}`);
+  }
+  await sleep(2000);
+  const seen = await urlWitness(app);
+  if (!seen.n || !seen.browserless) {
+    return verdict(false, null, `positive control: chrome scope saw ${seen.n} load(s) of the webview's service worker ${swUrl} (${seen.browserless} without a browsing context), so the absence below cannot be trusted`);
+  }
+  const leaked = session.logs.filter(rec => (rec.kind === 'request' || rec.kind === 'headers') && String(rec.url).startsWith(webviewOrigin));
+  if (leaked.length) {
+    return verdict(false, null, `Theia webview visible to network observers: ${leaked.length} record(s) named the webview origin (${leaked[0].kind} ${leaked[0].url}, tab id ${leaked[0].tabId}) after ${seen.n} load(s) of ${swUrl}, ${seen.browserless} without a browsing context`);
+  }
+  return verdict(true, `the webview rendered '${WEBVIEW_TEXT}' from ${webviewOrigin}; its service worker loaded ${seen.n} time(s) in chrome scope (${seen.browserless} without a browsing context) and the probe recorded none of the webview origin's requests`, null);
 }
 
 const SCENARIOS = {
@@ -1621,6 +1677,7 @@ const SCENARIOS = {
   'network-wall': scenarioNetworkWall,
   'windows-refusal': scenarioWindowsRefusal,
   'worker-wall': scenarioWorkerWall,
+  'webview-render': scenarioWebviewRender,
 };
 
 // Each plant names its scenario, the expected red text, and the chrome-scope mutation.
@@ -1691,6 +1748,7 @@ const PLANTS = {
   'network-wall-off': { scenario: 'network-wall', expect: 'Theia frame visible to network observers', late: () => PLANT_NETWORK_WALL_OFF },
   'windows-guard-off': { scenario: 'windows-refusal', expect: 'not the tab host refusal', late: () => PLANT_WINDOWS_GUARD_OFF },
   'worker-wall-off': { scenario: 'worker-wall', expect: 'Theia worker visible to network observers', late: () => PLANT_WORKER_WALL_OFF },
+  'webview-wall-off': { scenario: 'webview-render', expect: 'Theia webview visible to network observers', late: () => PLANT_WEBVIEW_WALL_OFF },
 };
 
 // ---------------------------------------------------------------------------

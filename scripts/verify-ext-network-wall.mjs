@@ -18,8 +18,12 @@
 //              Each helper also hands a browserless channel's loading principal (a service or shared worker's own) to
 //              an origin helper over one pref; both files read the same pref.
 //   origins    PowerBrowserAPI.setGroupSenderPort writes that pref on the default branch to exactly the sidecar origin
-//              (host from TheiaService's --hostname) and Theia's webview origin pattern (read from the installed
-//              @theia/plugin-ext defaultPattern, {{uuid}} as a wildcard), with no endpoint override in TheiaService.
+//              (host from TheiaService's --hostname) and the webview origin pattern (plan 38-07): the endpoint
+//              TheiaService pins in THEIA_WEBVIEW_EXTERNAL_ENDPOINT, which must equal the installed @theia/plugin-ext
+//              defaultPattern (any other value raises Theia's warning toast printing the raw pattern), with {{uuid}}
+//              as a wildcard and {{hostname}} as the loopback name in token-gate's webview-host.ts plus the port
+//              (the swap tab-uris' WebviewLoopbackEnvironment makes, which tab-uris must rebind).
+//              That name must be localhost or under .localhost: Gecko resolves nothing else to loopback itself.
 //   pref       powerbrowser-sidecar.js sets the cookies pref to the name and host TheiaService gives the token cookie,
 //              and that name is PowerBrowserAPI's TOKEN_COOKIE_NAME.
 //
@@ -51,6 +55,9 @@ const API_REL = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const THEIA_REL = 'powerbrowser/shell/TheiaService.sys.mjs';
 const EXT_DIRS = ['toolkit/components/extensions', 'browser/components/extensions'];
 const WEBVIEW_PROTOCOL_REL = 'theia/node_modules/@theia/plugin-ext/lib/main/common/webview-protocol.js';
+const WEBVIEW_HOST_REL = 'theia/extensions/token-gate/src/common/webview-host.ts';
+const WEBVIEW_ENV_REL = 'theia/extensions/tab-uris/src/browser/webview-loopback-environment.ts';
+const TAB_URIS_MODULE_REL = 'theia/extensions/tab-uris/src/browser/tab-uris-frontend-module.ts';
 
 // The files whose channel matching must be walled (family wall).
 const WALLED = [WEBREQUEST, PROXY];
@@ -115,7 +122,7 @@ function shellFiles() {
 
 function loadInputs() {
   const patchText = readFileSync(PATCH, 'utf8');
-  return { patchText, post: derivePost(patchText), consumers: deriveConsumers(), shell: shellFiles(), webviewProtocol: readFileSync(join(ROOT, WEBVIEW_PROTOCOL_REL), 'utf8') };
+  return { patchText, post: derivePost(patchText), consumers: deriveConsumers(), shell: shellFiles(), webviewProtocol: readFileSync(join(ROOT, WEBVIEW_PROTOCOL_REL), 'utf8'), webviewHost: readFileSync(join(ROOT, WEBVIEW_HOST_REL), 'utf8'), webviewEnv: readFileSync(join(ROOT, WEBVIEW_ENV_REL), 'utf8'), tabUrisModule: readFileSync(join(ROOT, TAB_URIS_MODULE_REL), 'utf8') };
 }
 
 // ---- structure -------------------------------------------------------------
@@ -314,31 +321,40 @@ function check(inp) {
     }
   }
 
-  // origins: the shell writes the hidden-origins pref to the sidecar origin and Theia's webview origin pattern.
+  // origins: the shell writes the hidden-origins pref to the sidecar origin and the webview origin pattern.
   if (originsPref) {
     const api = inp.shell.get(API_REL) || '';
     const theiaSrc = inp.shell.get(THEIA_REL) || '';
     const side = inp.shell.get(SIDECAR_REL) || '';
     const host = /"--hostname", "([^"]+)"/.exec(theiaSrc);
     const pattern = /WebviewExternalEndpoint\.defaultPattern = '([^']+)';/.exec(inp.webviewProtocol || '');
+    const pinned = [...theiaSrc.matchAll(/^\s*THEIA_WEBVIEW_EXTERNAL_ENDPOINT: "([^"]*)",$/gm)].map(m => m[1]);
+    const loopback = /^export const WEBVIEW_LOOPBACK_HOSTNAME = '([^']*)';$/m.exec(inp.webviewHost || '');
     const writes = [...api.matchAll(new RegExp(`getDefaultBranch\\(""\\)\\.setStringPref\\("${originsPref.replace(/\./g, '\\.')}", ([A-Za-z_$][\\w$]*)\\.join\\(","\\)\\);`, 'g'))];
-    if (!host || !pattern) {
-      fail('origins', 'derivation', 'BROKEN', `could not derive the sidecar host (${THEIA_REL} --hostname: ${!!host}) or Theia's webview endpoint pattern (${WEBVIEW_PROTOCOL_REL}: ${!!pattern}); run yarn in theia/`);
-    } else if (/THEIA_WEBVIEW_EXTERNAL_ENDPOINT/.test(theiaSrc)) {
-      fail('origins', THEIA_REL, 'ENDPOINT OVERRIDE', `${THEIA_REL} sets THEIA_WEBVIEW_EXTERNAL_ENDPOINT, so Theia's default webview pattern no longer applies; derive the hidden origins from the override`);
+    if (!host || !pattern || !loopback) {
+      fail('origins', 'derivation', 'BROKEN', `could not derive the sidecar host (${THEIA_REL} --hostname: ${!!host}), Theia's webview endpoint pattern (${WEBVIEW_PROTOCOL_REL}: ${!!pattern}; run yarn in theia/) or the webview loopback name (${WEBVIEW_HOST_REL}: ${!!loopback})`);
+    } else if (pinned.length !== 1) {
+      fail('origins', THEIA_REL, 'ENDPOINT UNPINNED', `${THEIA_REL} sets THEIA_WEBVIEW_EXTERNAL_ENDPOINT ${pinned.length} time(s) (need exactly one): an inherited value would move webview origins off the hidden-origins pref`);
+    } else if (pinned[0] !== pattern[1]) {
+      fail('origins', THEIA_REL, 'ENDPOINT NOT DEFAULT', `${THEIA_REL} pins THEIA_WEBVIEW_EXTERNAL_ENDPOINT to "${pinned[0]}", not Theia's default ${pattern[1]}: Theia shows a warning naming the raw pattern, and the frontend's hostname swap assumes the default`);
+    } else if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(loopback[1]) || !/(^|\.)localhost$/.test(loopback[1])) {
+      fail('origins', WEBVIEW_HOST_REL, 'NOT LOCALHOST', `${WEBVIEW_HOST_REL} puts webviews on "${loopback[1]}", which is not localhost or under .localhost: webview origins would not resolve to the sidecar`);
+    } else if (!/\.replace\(\/\^127\\\.0\\\.0\\\.1\(\?=:\|\$\)\/, WEBVIEW_LOOPBACK_HOSTNAME\)/.test(inp.webviewEnv || '')
+      || (inp.tabUrisModule.match(/^\s*rebind\(WebviewEnvironment\)\.to\(WebviewLoopbackEnvironment\)\.inSingletonScope\(\);$/gm) || []).length !== 1) {
+      fail('origins', WEBVIEW_ENV_REL, 'ENDPOINT UNSET', `the frontend no longer puts webviews on ${loopback[1]}: ${WEBVIEW_ENV_REL} must swap 127.0.0.1 for WEBVIEW_LOOPBACK_HOSTNAME, and ${TAB_URIS_MODULE_REL} must rebind WebviewEnvironment to it once`);
     } else if (writes.length !== 1) {
       fail('origins', API_REL, 'ORIGINS NOT SET', `${API_REL} writes pref ${originsPref} on the default branch ${writes.length} time(s) (need exactly one): Theia's workers stay visible to extensions`);
     } else {
       const v = writes[0][1];
       const decl = new RegExp(`const ${v} = [^\\n]*\\[([^\\]]*)\\];`).exec(api);
       const got = decl ? [...decl[1].matchAll(/`([^`]*)`/g)].map(m => m[1].replace(/\$\{[^}]+\}/g, 'PORT')).sort() : [];
-      const want = [`http://${host[1]}:PORT`, `http://${pattern[1].replace('{{uuid}}', '*').replace('{{hostname}}', `${host[1]}:PORT`)}`].sort();
+      const want = [`http://${host[1]}:PORT`, `http://${pinned[0].replace('{{uuid}}', '*').replace('{{hostname}}', `${loopback[1]}:PORT`)}`].sort();
       if (JSON.stringify(got) !== JSON.stringify(want)) {
-        fail('origins', API_REL, 'ORIGINS MISMATCH', `${API_REL} hides ${JSON.stringify(got)}; the sidecar origin and Theia's webview pattern ${pattern[1]} give ${JSON.stringify(want)}`);
+        fail('origins', API_REL, 'ORIGINS MISMATCH', `${API_REL} hides ${JSON.stringify(got)}; the sidecar origin and the webview endpoint ${pinned[0]} on ${loopback[1]} give ${JSON.stringify(want)}`);
       } else if ((side.match(new RegExp(`^pref\\("${originsPref.replace(/\./g, '\\.')}", ""\\);$`, 'gm')) || []).length !== 1) {
         fail('origins', SIDECAR_REL, 'PREF UNDECLARED', `${SIDECAR_REL} must declare pref("${originsPref}", "") once (the live value is written at runtime)`);
       } else {
-        out.passes.push(`origins PASS -- ${API_REL} writes ${originsPref} = ${want.join(',')} (port at runtime), derived from the sidecar host and Theia's webview pattern ${pattern[1]}`);
+        out.passes.push(`origins PASS -- ${API_REL} writes ${originsPref} = ${want.join(',')} (port at runtime), derived from the sidecar host, the endpoint ${THEIA_REL} pins (${pinned[0]}, Theia's default) and the loopback name ${loopback[1]}`);
       }
     }
   }
@@ -348,7 +364,7 @@ function check(inp) {
 // ---- self-test -------------------------------------------------------------
 
 function clone(inp) {
-  return { patchText: inp.patchText, post: new Map(inp.post), consumers: new Set(inp.consumers), shell: new Map(inp.shell), webviewProtocol: inp.webviewProtocol };
+  return { patchText: inp.patchText, post: new Map(inp.post), consumers: new Set(inp.consumers), shell: new Map(inp.shell), webviewProtocol: inp.webviewProtocol, webviewHost: inp.webviewHost, webviewEnv: inp.webviewEnv, tabUrisModule: inp.tabUrisModule };
 }
 
 function dropFileSection(patchText, path) {
@@ -426,14 +442,27 @@ function selfTest(base) {
     ['the WebRequest worker branch removed', mutatePost(WEBREQUEST, 'return isHiddenOrigin(\n    loadInfo?.loadingPrincipal ?? loadInfo?.triggeringPrincipal\n  );', 'return false;'), 'wall', 'WORKER BRANCH', 'WebRequest'],
     ['the proxy worker branch removed', mutatePost(PROXY, 'return isHiddenOrigin(\n    loadInfo?.loadingPrincipal ?? loadInfo?.triggeringPrincipal\n  );', 'return false;'), 'wall', 'WORKER BRANCH', 'ProxyChannelFilter'],
     ['the hidden-origins pref unset by the shell', mutateShell(API_REL, 'Services.prefs.getDefaultBranch("").setStringPref("extensions.webRequest.hiddenOrigins", hidden.join(","));', ''), 'origins', 'ORIGINS NOT SET'],
-    ['the webview pattern dropped from the hidden origins', mutateShell(API_REL, ', `http://*.webview.127.0.0.1:${groupSenderPort}`]', ']'), 'origins', 'ORIGINS MISMATCH'],
+    ['the webview pattern dropped from the hidden origins', mutateShell(API_REL, ', `http://*.webview.localhost:${groupSenderPort}`]', ']'), 'origins', 'ORIGINS MISMATCH'],
+    ['the pref webview entry not matching the endpoint', mutateShell(API_REL, '`http://*.webview.localhost:${groupSenderPort}`', '`http://*.webview.127.0.0.1:${groupSenderPort}`'), 'origins', 'ORIGINS MISMATCH'],
     ['Theia\'s webview pattern changed upstream', inp => {
       const t = inp.webviewProtocol.replace("defaultPattern = '{{uuid}}.webview.{{hostname}}'", "defaultPattern = 'webview-{{uuid}}.{{hostname}}'");
       if (t === inp.webviewProtocol) return false;
       inp.webviewProtocol = t;
       return true;
-    }, 'origins', 'ORIGINS MISMATCH'],
-    ['a webview endpoint override in TheiaService', mutateShell(THEIA_REL, '      THEIA_CONFIG_DIR: this._configDir,', '      THEIA_CONFIG_DIR: this._configDir,\n      THEIA_WEBVIEW_EXTERNAL_ENDPOINT: "{{uuid}}.wv.{{hostname}}",'), 'origins', 'ENDPOINT OVERRIDE'],
+    }, 'origins', 'ENDPOINT NOT DEFAULT'],
+    ['the webview endpoint removed from TheiaService', mutateShell(THEIA_REL, '      THEIA_WEBVIEW_EXTERNAL_ENDPOINT: "{{uuid}}.webview.{{hostname}}",\n', ''), 'origins', 'ENDPOINT UNPINNED'],
+    ['the frontend webview endpoint rebind removed', inp => {
+      const t = inp.tabUrisModule.replace('    rebind(WebviewEnvironment).to(WebviewLoopbackEnvironment).inSingletonScope();\n', '');
+      if (t === inp.tabUrisModule) return false;
+      inp.tabUrisModule = t;
+      return true;
+    }, 'origins', 'ENDPOINT UNSET'],
+    ['the webview endpoint not under .localhost', inp => {
+      const t = inp.webviewHost.replace("WEBVIEW_LOOPBACK_HOSTNAME = 'localhost';", "WEBVIEW_LOOPBACK_HOSTNAME = '127.0.0.1';");
+      if (t === inp.webviewHost) return false;
+      inp.webviewHost = t;
+      return true;
+    }, 'origins', 'NOT LOCALHOST'],
     ['the token cookie renamed in the API', mutateShell(API_REL, 'const TOKEN_COOKIE_NAME = "POWERBROWSER_TOKEN";', 'const TOKEN_COOKIE_NAME = "POWERBROWSER_TOKEN2";'), 'pref', 'NAME MISMATCH'],
   ];
   for (const [label, plant, family, kind, needle] of plants) {

@@ -3128,6 +3128,18 @@ check_side02_index_gated() {
     echo "side02-index-gated: FAIL -- SIDE-02 -- expected a non-403 for / with a valid token, still got 403" >&2
     result=1
   fi
+  # Plan 38-07: a webview origin (<uuid>.webview.localhost:<port>, no token cookie) gets Theia's static webview
+  # shell and nothing else: 200 for GET /webview/index.html (the positive control that vhost serves it), 403 for a
+  # POST there and for any other path.
+  local wv_host="0b6c2d1e-3f4a-4b5c-8d9e-112233445566.webview.localhost:$BACKEND_PORT" wv_shell wv_post wv_root wv_health
+  wv_shell="$(curl -sS -o /dev/null -w '%{http_code}' -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/webview/index.html")"
+  wv_post="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/webview/index.html")"
+  wv_root="$(curl -sS -o /dev/null -w '%{http_code}' -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/")"
+  wv_health="$(curl -sS -o /dev/null -w '%{http_code}' -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/powerbrowser/health")"
+  if [ "$wv_shell" != "200" ] || [ "$wv_post" != "403" ] || [ "$wv_root" != "403" ] || [ "$wv_health" != "403" ]; then
+    echo "side02-index-gated: FAIL -- 38-07 -- a webview origin must get GET /webview/index.html (200) and nothing else (403); got GET $wv_shell, POST $wv_post, / $wv_root, /powerbrowser/health $wv_health" >&2
+    result=1
+  fi
   stop_backend
   return "$result"
 }
