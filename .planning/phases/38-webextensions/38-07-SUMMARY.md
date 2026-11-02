@@ -110,3 +110,8 @@ Fixed in commit b81f674e:
 - The endpoint is set in the frontend, not as a literal environment value in TheiaService (reasons above).
   TheiaService still sets `THEIA_WEBVIEW_EXTERNAL_ENDPOINT`, pinned to the default.
 - No patch change: patch 060 already matches `*.webview.localhost:<port>`.
+
+## Owner sign-off
+
+- 2026-11-01, Chris: approved the frontend `WebviewEnvironment` rebind (localhost substitution) in place of a literal `THEIA_WEBVIEW_EXTERNAL_ENDPOINT` value in TheiaService.
+- `@theia/mini-browser` is not in the app, so `THEIA_MINI_BROWSER_HOST_PATTERN` needs no change.
