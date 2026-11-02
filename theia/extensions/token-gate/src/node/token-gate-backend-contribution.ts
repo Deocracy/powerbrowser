@@ -1,9 +1,12 @@
 import * as crypto from 'crypto';
 import * as http from 'http';
 import * as https from 'https';
+import * as path from 'path';
 import { injectable, inject } from '@theia/core/shared/inversify';
 import * as express from '@theia/core/shared/express';
 import { BackendApplicationContribution, EarlyExpressMiddleware } from '@theia/core/lib/node';
+import { WsRequestValidatorContribution } from '@theia/core/lib/node/ws-request-validators';
+import { ApplicationPackage } from '@theia/core/shared/@theia/application-package';
 import { POWERBROWSER_ENV } from './powerbrowser-env';
 import { isWebviewHost } from '../common/webview-host';
 
@@ -17,13 +20,17 @@ import { isWebviewHost } from '../common/webview-host';
 export const POWERBROWSER_TOKEN_COOKIE_NAME = 'POWERBROWSER_TOKEN';
 const TOKEN_ENV_VAR = 'POWERBROWSER_TOKEN';
 const TOKEN_DISABLE_ENV_VAR = 'POWERBROWSER_TOKEN_DISABLE';
-const WEBVIEW_SHELL_FILE = /^\/webview\/[\w-]+\.(html|js)$/;
+// Plan 38-07: Theia's static webview shell (@theia/plugin-ext, copied to <app>/lib/webview/pre), by exact name.
+const WEBVIEW_SHELL_FILES = new Set(['index.html', 'host.js', 'main.js', 'service-worker.js', 'fake.html']);
 
 @injectable()
-export class PowerBrowserTokenGateContribution implements BackendApplicationContribution {
+export class PowerBrowserTokenGateContribution implements BackendApplicationContribution, WsRequestValidatorContribution {
 
     @inject(EarlyExpressMiddleware)
     protected readonly earlyMiddleware: EarlyExpressMiddleware;
+
+    @inject(ApplicationPackage)
+    protected readonly applicationPackage: ApplicationPackage;
 
     protected token: string | undefined;
     protected disabled = false;
@@ -140,15 +147,15 @@ export class PowerBrowserTokenGateContribution implements BackendApplicationCont
     }
 
     protected gate(req: express.Request, res: express.Response, next: express.NextFunction): void {
-        const token = this.getTokenFromCookie(req);
-        if (token !== undefined && this.isTokenValid(token)) {
-            next();
+        // Plan 38-07: a webview frame runs on its own origin, <uuid>.webview.localhost:<port>, which the
+        // host-only 127.0.0.1 token cookie never reaches. Such a request is answered here and never passed on:
+        // downstream sits Theia's connection-token bootstrap, which would Set-Cookie its own token on it.
+        if (isWebviewHost(req.headers.host)) {
+            this.serveWebviewShell(req, res);
             return;
         }
-        // Plan 38-07: a webview frame runs on its own origin, <uuid>.webview.localhost:<port>, which the
-        // host-only 127.0.0.1 token cookie never reaches. That origin may read only Theia's static webview
-        // shell (lib/webview/pre); its resources arrive through the main frame's authenticated connection.
-        if (isWebviewHost(req.headers.host) && (req.method === 'GET' || req.method === 'HEAD') && WEBVIEW_SHELL_FILE.test(req.path)) {
+        const token = this.getTokenFromCookie(req);
+        if (token !== undefined && this.isTokenValid(token)) {
             next();
             return;
         }
@@ -158,7 +165,39 @@ export class PowerBrowserTokenGateContribution implements BackendApplicationCont
         res.sendStatus(403);
     }
 
-    protected getTokenFromCookie(req: express.Request): string | undefined {
+    /**
+     * Plan 38-07: the only answer a webview origin gets. GET or HEAD of one of Theia's static webview shell files,
+     * by exact name from a fixed root, or 403. Its resources arrive through the service worker and the main
+     * frame's authenticated connection, never over HTTP here. Sets no cookie and calls no further handler.
+     */
+    protected serveWebviewShell(req: express.Request, res: express.Response): void {
+        const name = req.path.startsWith('/webview/') ? req.path.slice('/webview/'.length) : '';
+        if ((req.method !== 'GET' && req.method !== 'HEAD') || !WEBVIEW_SHELL_FILES.has(name)) {
+            res.sendStatus(403);
+            return;
+        }
+        const root = path.join(this.applicationPackage.projectPath, 'lib', 'webview', 'pre');
+        res.sendFile(name, { root, dotfiles: 'deny' }, err => {
+            if (err && !res.headersSent) {
+                res.sendStatus(404);
+            }
+        });
+    }
+
+    /**
+     * Plan 38-07: every WebSocket upgrade (Theia's RPC) needs the token cookie too. Socket.IO answers its own
+     * path before express, so the gate above never sees these requests; Theia's own connection token alone
+     * would otherwise guard them.
+     */
+    allowWsUpgrade(request: http.IncomingMessage): boolean {
+        if (this.disabled) {
+            return true;
+        }
+        const token = this.getTokenFromCookie(request);
+        return token !== undefined && this.isTokenValid(token);
+    }
+
+    protected getTokenFromCookie(req: { headers: http.IncomingHttpHeaders }): string | undefined {
         const header = req.headers.cookie;
         if (!header) {
             return undefined;

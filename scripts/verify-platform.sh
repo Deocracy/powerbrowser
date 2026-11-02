@@ -3129,15 +3129,54 @@ check_side02_index_gated() {
     result=1
   fi
   # Plan 38-07: a webview origin (<uuid>.webview.localhost:<port>, no token cookie) gets Theia's static webview
-  # shell and nothing else: 200 for GET /webview/index.html (the positive control that vhost serves it), 403 for a
-  # POST there and for any other path.
-  local wv_host="0b6c2d1e-3f4a-4b5c-8d9e-112233445566.webview.localhost:$BACKEND_PORT" wv_shell wv_post wv_root wv_health
-  wv_shell="$(curl -sS -o /dev/null -w '%{http_code}' -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/webview/index.html")"
+  # shell and nothing else: 200 for GET /webview/index.html with no Set-Cookie (the token gate answers it itself,
+  # so Theia's connection-token bootstrap never runs), 403 for a POST there and for any other path.
+  local wv_host="0b6c2d1e-3f4a-4b5c-8d9e-112233445566.webview.localhost:$BACKEND_PORT" wv_shell wv_post wv_root wv_health wv_headers
+  wv_headers="$(mktemp)"
+  track_temp "$wv_headers"
+  wv_shell="$(curl -sS -o /dev/null -D "$wv_headers" -w '%{http_code}' -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/webview/index.html")"
+  if grep -qi '^set-cookie:' "$wv_headers"; then
+    echo "side02-index-gated: FAIL -- 38-07 -- the unauthenticated webview shell response set a cookie: $(grep -i '^set-cookie:' "$wv_headers" | cut -d= -f1 | tr -d '\r')" >&2
+    result=1
+  fi
   wv_post="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/webview/index.html")"
   wv_root="$(curl -sS -o /dev/null -w '%{http_code}' -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/")"
   wv_health="$(curl -sS -o /dev/null -w '%{http_code}' -H "Host: $wv_host" "http://127.0.0.1:$BACKEND_PORT/powerbrowser/health")"
   if [ "$wv_shell" != "200" ] || [ "$wv_post" != "403" ] || [ "$wv_root" != "403" ] || [ "$wv_health" != "403" ]; then
     echo "side02-index-gated: FAIL -- 38-07 -- a webview origin must get GET /webview/index.html (200) and nothing else (403); got GET $wv_shell, POST $wv_post, / $wv_root, /powerbrowser/health $wv_health" >&2
+    result=1
+  fi
+  stop_backend
+  return "$result"
+}
+
+# Plan 38-07: Socket.IO answers /socket.io/ before express, so the token gate's middleware never sees Theia's RPC
+# handshake; the token gate's WsRequestValidatorContribution must refuse it without the token cookie even when
+# Theia's own connection token and a same-origin Origin are present, and admit it with both (positive control).
+check_side02_ws_token() {
+  if ! start_backend; then
+    echo "side02-ws-token: FAIL -- 38-07 -- backend never became ready, cannot test the WebSocket gate" >&2
+    stop_backend
+    return 1
+  fi
+  local result=0 headers ct origin without with
+  headers="$(mktemp)"
+  track_temp "$headers"
+  curl -sS -o /dev/null -D "$headers" -b "POWERBROWSER_TOKEN=$BACKEND_TOKEN" "http://127.0.0.1:$BACKEND_PORT/"
+  ct="$(grep -io 'theia-connection-token=[^;]*' "$headers" | head -1)"
+  origin="Origin: http://127.0.0.1:$BACKEND_PORT"
+  if [ -z "$ct" ]; then
+    echo "side02-ws-token: FAIL -- 38-07 -- an authenticated page load issued no Theia connection token, so the refusal below could be Theia's" >&2
+    stop_backend
+    return 1
+  fi
+  without="$(curl -sS -o /dev/null -w '%{http_code}' -H "$origin" -b "$ct" "http://127.0.0.1:$BACKEND_PORT/socket.io/?EIO=4&transport=polling")"
+  with="$(curl -sS -o /dev/null -w '%{http_code}' -H "$origin" -b "$ct; POWERBROWSER_TOKEN=$BACKEND_TOKEN" "http://127.0.0.1:$BACKEND_PORT/socket.io/?EIO=4&transport=polling")"
+  if [ "$with" != "200" ]; then
+    echo "side02-ws-token: FAIL -- 38-07 -- positive control: the RPC handshake with both cookies got $with, not 200" >&2
+    result=1
+  elif [ "$without" = "200" ]; then
+    echo "side02-ws-token: FAIL -- 38-07 -- the RPC handshake without the token cookie was admitted (200)" >&2
     result=1
   fi
   stop_backend
@@ -3736,6 +3775,8 @@ run_own_checks() {
     # git show and git grep, a scratch git apply. The self-test rides alongside.
     "ext-network-wall|node $REPO_ROOT/scripts/verify-ext-network-wall.mjs"
     "ext-network-wall-self-test|node $REPO_ROOT/scripts/verify-ext-network-wall.mjs --self-test"
+    "token-gate-webview|node $REPO_ROOT/scripts/verify-token-gate-webview.mjs"
+    "token-gate-webview-self-test|node $REPO_ROOT/scripts/verify-token-gate-webview.mjs --self-test"
     # NEW (Phase 57, TEL-09): the Glean crash-ping consent read fails closed. The host is
     # derived from TELEMETRY_SERVER in upstream's crashping/src/lib.rs at check time; patch 055
     # equals its regeneration; the applied determine_telemetry_enabled carries no true literal;
@@ -5798,6 +5839,7 @@ run_own_checks() {
       "side02-token-negative|check_side02_token_negative"
       "side02-token-positive|check_side02_token_positive"
       "side02-index-gated|check_side02_index_gated"
+      "side02-ws-token|check_side02_ws_token"
       "side01-bind-scope|check_side01_bind_scope"
       "shell01-theia-is-the-window|node $SHELL01_MJS"
       "shell05-paint-before-backend|check_shell05_paint_before_backend"
