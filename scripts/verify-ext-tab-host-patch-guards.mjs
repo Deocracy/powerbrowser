@@ -59,6 +59,7 @@ const BROWSER = PARENT + 'ext-browser.js';
 const TABS = PARENT + 'ext-tabs.js';
 const TABS_BASE = 'toolkit/components/extensions/parent/ext-tabs-base.js';
 const SHORTCUTS = 'toolkit/components/extensions/ExtensionShortcuts.sys.mjs';
+const WINDOWS = PARENT + 'ext-windows.js';
 
 // mode: 'replace' = the anchor is a `-` line and the guard is its `+` change block;
 //       'after'   = the anchor is a context line and the guard is the `+` block after it;
@@ -116,6 +117,27 @@ const GUARDS = [
       /^\s*return Promise\.reject\(\{ message: `Illegal URL: \$\{url\}` \}\);\s*$/,
     ],
     why: 'a tabs.update in a tab host window refuses every URL but http(s) and about:blank (D-05, D-17)' },
+  { id: 'G12', file: WINDOWS, mode: 'before',
+    anchor: 'if (updateInfo.focused) {', site: 'getAPI.update',
+    regexes: [
+      /^\s*windowTracker\.isTabHostWindow\(win\.window\) &&\s*$/,
+      /^\s*\(updateInfo\.state !== null \|\|\s*$/,
+      /^\s*updateInfo\.left !== null \|\|\s*$/,
+      /^\s*updateInfo\.top !== null \|\|\s*$/,
+      /^\s*updateInfo\.width !== null \|\|\s*$/,
+      /^\s*updateInfo\.height !== null \|\|\s*$/,
+      /^\s*updateInfo\.titlePreface !== null\)\s*$/,
+      /^\s*throw new ExtensionError\("This window cannot be changed by an extension\."\);\s*$/,
+    ],
+    why: 'windows.update refuses state, geometry and titlePreface on a tab host window before any write runs; focused stays allowed (UF-31.1-01, plan 38-06)' },
+  { id: 'G13', file: WINDOWS, mode: 'before',
+    anchor: 'window.close();', site: 'getAPI.remove',
+    regexes: [
+      /^\s*if \(windowTracker\.isTabHostWindow\(window\)\) \{\s*$/,
+      /^\s*return Promise\.reject\(\{\s*$/,
+      /^\s*message: "This window cannot be closed by an extension\.",\s*$/,
+    ],
+    why: 'windows.remove refuses a tab host window: closing it ends the session past quitApplication() and the unsaved-work veto (UF-31.1-01, plan 38-06)' },
 ];
 
 // The weakening plant for each guard: one `+` line changed (or one dropped).
@@ -130,6 +152,8 @@ const WEAKEN = {
   G10: { find: 'updateProperties.pinned !== null ||', replace: 'updateProperties.pinned !== null &&' },
   G9: { find: 'url !== "about:blank" &&', replace: 'url !== "about:blank" ||' },
   G11: { find: 'currentTab?.linkedBrowser?.frameLoader', replace: 'currentTab.linkedBrowser?.frameLoader' },
+  G12: { find: 'updateInfo.width !== null ||', replace: 'updateInfo.width !== null &&' },
+  G13: { find: 'if (windowTracker.isTabHostWindow(window)) {', replace: 'if (!windowTracker.isTabHostWindow(window)) {' },
 };
 
 // Hunks of 050 that no GUARDS row carries. An entry names one needle found in an added line of one file, and why

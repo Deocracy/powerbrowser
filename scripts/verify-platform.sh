@@ -3714,8 +3714,18 @@ run_own_checks() {
     # rides alongside: every planted fault must go red naming its drift.
     "ext-tab-host-scope|node $REPO_ROOT/scripts/verify-ext-tab-host-scope.mjs"
     "ext-tab-host-scope-self-test|node $REPO_ROOT/scripts/verify-ext-tab-host-scope.mjs --self-test"
+    # UF-31.1-02 (plan 38-06): the network wall in patch 060. Derived from patch 060
+    # applied to the pristine upstream bytes: every channel-matching function in
+    # WebRequest.sys.mjs and ProxyChannelFilter.sys.mjs returns first on the
+    # browser-element attribute helper, every ChannelWrapper consumer is walled or
+    # reasoned, every browser.cookies read and write excludes the pref's cookies,
+    # the Theia frame carries the attribute and nothing else does, and the pref
+    # names the cookie TheiaService sets. Honestly --quick: text reads, read-only
+    # git show and git grep, a scratch git apply. The self-test rides alongside.
+    "ext-network-wall|node $REPO_ROOT/scripts/verify-ext-network-wall.mjs"
+    "ext-network-wall-self-test|node $REPO_ROOT/scripts/verify-ext-network-wall.mjs --self-test"
     # NEW (Phase 57, TEL-09): the Glean crash-ping consent read fails closed. The host is
-    # derived from TELEMETRY_SERVER in upstream's crashping/src/lib.rs at check time; patch 050
+    # derived from TELEMETRY_SERVER in upstream's crashping/src/lib.rs at check time; patch 055
     # equals its regeneration; the applied determine_telemetry_enabled carries no true literal;
     # both branding variants pin uploadEnabled false; the allowlist denies the derived host.
     # Honestly --quick: text reads and git plumbing over the existing upstream/ checkout.

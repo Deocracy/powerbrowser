@@ -1305,7 +1305,17 @@ function selfTest() {
       const patchPath = join(stage, 'patch-no-tabcontainer.patch');
       const patch = readSource(PATCH_FILE) ?? '';
       writeFileSync(patchPath, patch.split('\n').filter(line => !/^\+.*\bgBrowser\.tabContainer\b/.test(line)).join('\n'));
-      const r2 = runScan({ ...real, patchFile: patchPath });
+      // upstream/ may carry the current 050 (the build prep applies the full stack), so its applied copies of those
+      // lines are dropped too: staged copies of the extension files without the patch's added tabContainer lines.
+      const added = new Set(patch.split('\n').filter(line => /^\+.*\bgBrowser\.tabContainer\b/.test(line)).map(line => line.slice(1)));
+      const extensionFiles = real.extensionFiles.map((file, i) => {
+        const text = readSource(file);
+        if (text === null || ![...added].some(a => text.includes(a))) return file;
+        const staged = join(stage, `ext-no-tabcontainer-${i}-${file.split('/').pop()}`);
+        writeFileSync(staged, text.split('\n').filter(line => !added.has(line)).join('\n'));
+        return staged;
+      });
+      const r2 = runScan({ ...real, patchFile: patchPath, extensionFiles });
       if (r2.ok || !r2.surplus?.includes('tabContainer')) {
         fail(`patch text without its tabContainer reads did not go red naming DEAD SURFACE 'tabContainer'; got: ${JSON.stringify({ reason: r2.reason, surplus: r2.surplus })}`);
       } else ok(`050 patch text without its tabContainer reads -> red, naming DEAD SURFACE 'tabContainer' (derived from the patch, not upstream/)`);
