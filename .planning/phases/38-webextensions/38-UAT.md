@@ -20,7 +20,7 @@ Patch 050 was amended in this phase (38-01, then again in 38-03) and has never b
 
 Run the binary with `-purgecaches` after any change to `powerbrowser/shell/*.js` or `*.sys.mjs`. Spectacle and the KWin raise script need the session DBus, so run the visual items with the sandbox off. The scenarios are `node scripts/verify-extension-actions-live.mjs --scenario <name>` and `node scripts/verify-extension-amo-live.mjs --scenario <name>`. Items 11 and 12 and 24 need network access to addons.mozilla.org.
 
-Items 1-13 are the live scenarios and the live self-tests. Items 14-17 are the neighbour suites 38-05 names as the phase-close regression set. Items 18-24 are visual and manual checks. Items 25-30 are the review fixes that have no live row. Item 31 is the EXT-10 password-manager decision. Items 32-40 are owner decisions. 40 items in all.
+Items 1-13 are the live scenarios and the live self-tests. Items 14-17 are the neighbour suites 38-05 names as the phase-close regression set. Items 18-24 are visual and manual checks. Items 25-30 are the review fixes that have no live row. Item 31 is the EXT-10 password-manager decision. Items 32-40 are owner decisions. Items 41-44 are the plan 38-06 gap closure (UF-31.1-01, UF-31.1-02); they need the full-stack build and both stamps (`objdir/.pb-050-build.sha256`, `objdir/.pb-060-build.sha256`, see `.planning/v1.5-LIVE-PASS.md` "## Build"). 44 items in all.
 
 ## Current Test
 
@@ -232,12 +232,32 @@ result: [pending]
 expected: Once any extension is installed the route to the add-ons site is Manage Extension, then the Add-ons Manager's "Find more add-ons". SC4 is met through the footer only on a profile with no extensions. Accept this, or add a persistent route to the site
 result: [pending]
 
+### 41. Scenario `network-wall` (UF-31.1-02, plan 38-06)
+command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario network-wall`
+expected: After the probe (webRequest, webRequestBlocking, cookies, `<all_urls>`) is installed, the Theia frame reloads and chrome scope sees it open at least one channel; the probe records no onBeforeRequest or onBeforeSendHeaders event naming the Theia origin and no Cookie header carrying the token; web tab /a reaches both listeners with its tab id in the same session (positive control); `cookies.getAll({ domain: '127.0.0.1' })` lists the probe's own `pbprobe` cookie and not POWERBROWSER_TOKEN; `cookies.set` of the token on the Theia origin is refused and the stored token is unchanged; `cookies.onChanged` reports `pbprobe` and not the token
+result: [pending]
+
+### 42. Scenario `theia-never` without the known-gap exemption (UF-31.1-02, plan 38-06)
+command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario theia-never`
+expected: The reloaded Theia frame opens channels seen in chrome scope (the new positive control, replacing the webRequest record that used to be the control), and no record of any kind names the Theia origin across four web tabs, activation, a navigation and a close; the old allowance for the frame's own tabId -1 webRequest records is gone
+result: [pending]
+
+### 43. Scenario `windows-refusal` (UF-31.1-01, plan 38-06)
+command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario windows-refusal`
+expected: On the shell window id from `windows.getCurrent`, `windows.update` with `state: 'minimized'` and with `width` both reject "This window cannot be changed by an extension.", and `windows.remove` rejects "This window cannot be closed by an extension."; the window stays open with its width and state unchanged and WebDriver still reaches the Theia frame; `windows.update({ focused: true })`, `windows.getCurrent` and `tabs.get` still work
+result: [pending]
+
+### 44. Plants for items 41-43
+command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario network-wall,windows-refusal,theia-never --self-test`
+expected: Each control is green first; `network-wall-off` (the frame loses `extensionnetworkhidden`) goes red naming "Theia frame visible to network observers"; `windows-guard-off` (the tracker stops treating the shell as a tab host window) goes red naming "not the tab host refusal"; `theia-in-tabs-late` still goes red naming "Theia frame visible to extensions"
+result: [pending]
+
 ## Summary
 
-total: 40
+total: 44
 passed: 0
 issues: 0
-pending: 40
+pending: 44
 skipped: 0
 blocked: 0
 
